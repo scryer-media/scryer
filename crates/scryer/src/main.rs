@@ -1385,7 +1385,7 @@ async fn bootstrap_application(
     {
         tracing::warn!(
             error = %e,
-            "failed to build download-client category ownership snapshot on startup; foreign-download visibility will fail open"
+            "failed to build download-client category ownership snapshot on startup; unmanaged-download visibility will fail open"
         );
     }
     let restore_restart_controller = SelfRestartController::new(Duration::from_millis(250))

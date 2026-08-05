@@ -1023,7 +1023,7 @@ pub(crate) struct DownloadClientCategoryOwnershipSnapshot {
 /// `Category1.Name` is `Movies` — accepts the grab, files it under `Movies`,
 /// and reports `Movies` in its history. Comparing those raw made Scryer's own
 /// download look like it carried a category Scryer had never configured, so it
-/// was classified foreign and filtered out of the tracked snapshot entirely:
+/// was classified unmanaged and filtered out of the tracked snapshot entirely:
 /// never imported, never shown, and re-grabbed minutes later by the RSS sweep
 /// because the wanted item was still unfilled.
 pub(crate) fn normalize_owned_download_category(category: &str) -> String {
@@ -1047,7 +1047,7 @@ impl DownloadClientCategoryOwnershipSnapshot {
     /// but only this one answers "did this download come from something Scryer
     /// set up". Users routinely move a download between clients, or point two
     /// clients at one category set, so a category that fails the per-client
-    /// test is very often still Scryer's own work — treating that as foreign
+    /// test is very often still Scryer's own work — treating that as unmanaged
     /// hides the user's download from their own activity view.
     pub(crate) fn knows_category(&self, category: &str) -> bool {
         let category = normalize_owned_download_category(category);
@@ -3559,7 +3559,7 @@ mod category_ownership_tests {
         // The real failure: Scryer is configured with `movies`, NZBGet's own
         // Category1.Name is `Movies`, and NZBGet reports ITS spelling back in
         // history. Comparing raw made Scryer's own completed download look
-        // foreign, so it was filtered out of the tracked snapshot, never
+        // unmanaged, so it was filtered out of the tracked snapshot, never
         // imported, and re-grabbed by the RSS sweep minutes later.
         let snapshot = snapshot(&["movies"], &[("client-1", &["movies"])]);
 
@@ -3575,7 +3575,7 @@ mod category_ownership_tests {
         // documented as having to agree about what counts as Scryer's own work.
         // They compare in different places, so they must fold identically —
         // normalizing only one silently splits them, and a download would be
-        // eligible by one gate and foreign by the other.
+        // eligible by one gate and unmanaged by the other.
         for (configured, reported) in [
             ("movies", "Movies"),
             ("Series", "series"),

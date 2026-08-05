@@ -59,9 +59,9 @@ pub struct TrackedDownload {
     pub path_missing_since: Option<DateTime<Utc>>,
     /// Runtime-only retry state for completed imports that temporarily contain no videos.
     pub no_video_import_retry: Option<NoVideoImportRetryState>,
-    /// Runtime-only classification for completed downloads owned by another app.
+    /// Runtime-only reason this completed download is held back and hidden.
     /// Never persisted as a tracked-download outcome.
-    pub foreign_import_classification: Option<ForeignDownloadClassification>,
+    pub import_hold: Option<ImportHold>,
     /// Manual failure actions can record the failure without reacquiring.
     pub skip_reacquire_on_failure: bool,
     /// When this download first went missing from a pruning snapshot.
@@ -78,11 +78,55 @@ pub struct TrackedDownload {
     pub snapshot_missing_since: Option<DateTime<Utc>>,
 }
 
+/// Why a completed download is held out of automatic import and hidden from
+/// user-facing download activity.
+///
+/// TWO INDEPENDENT AXES, deliberately kept apart. The predecessor type
+/// (`ForeignDownloadClassification`) put both in one flat enum, so a payload
+/// with no video was reported through a field whose name asserted whose
+/// download it was. Readers — several, repeatedly — took `NoImportableVideo`
+/// to mean "another application owns this" and reasoned about ownership from
+/// it. Nesting makes the misreading unrepresentable: you cannot reach a
+/// provenance verdict without going through `Unmanaged`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ForeignDownloadClassification {
-    ForeignCategory,
-    DroneParameter,
+pub enum ImportHold {
+    /// PROVENANCE. Scryer did not submit this download.
+    ///
+    /// Says nothing about whether the payload is importable.
+    Unmanaged(UnmanagedDownloadReason),
+    /// CONTENT. The payload holds nothing importable.
+    ///
+    /// Says nothing about who submitted it — Scryer's own grabs land here too.
     NoImportableVideo,
+}
+
+/// Why Scryer believes it did not submit a download.
+///
+/// "Unmanaged" rather than "foreign" because these downloads are usually ones
+/// Scryer SHOULD adopt once a user resolves them — a user-uploaded NZB, or one
+/// the download client's own RSS grabbed, is not another application's
+/// property; it simply was not submitted by Scryer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UnmanagedDownloadReason {
+    /// The category is not one Scryer configured for any client.
+    ///
+    /// Weak evidence, and an ABSENCE of a signal rather than a positive one: it
+    /// cannot distinguish a user upload from the download client's own RSS
+    /// grab, because no client payload is read for a source/feed marker today
+    /// (NZBGet exposes `URL`/`Kind` but Scryer does not read them; SABnzbd has
+    /// no submitter channel; qBittorrent has none). Those two origins are
+    /// indistinguishable and both land here.
+    ///
+    /// Because it is configuration-derived, this verdict is re-evaluated on
+    /// later passes rather than trusted from cache.
+    UnknownCategory,
+    /// Another download manager submitted it.
+    ///
+    /// A POSITIVE identification, unlike `UnknownCategory` — but only of one
+    /// specific marker: the `drone` parameter Sonarr/Radarr stamp on the item.
+    /// A manager that does not stamp it will not be detected here, so treat
+    /// this as "a known external manager" rather than "any external manager".
+    ExternalManager,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -112,7 +156,7 @@ pub struct TrackedDownloadQueueMetadata {
     pub status: TrackedDownloadStatus,
     pub status_messages: Vec<String>,
     pub match_type: TitleMatchType,
-    pub foreign_import_classification: Option<ForeignDownloadClassification>,
+    pub import_hold: Option<ImportHold>,
 }
 
 impl From<&TrackedDownload> for TrackedDownloadQueueMetadata {
@@ -128,7 +172,7 @@ impl From<&TrackedDownload> for TrackedDownloadQueueMetadata {
             status: value.status,
             status_messages: value.status_messages.clone(),
             match_type: value.match_type,
-            foreign_import_classification: value.foreign_import_classification,
+            import_hold: value.import_hold,
         }
     }
 }
@@ -164,7 +208,7 @@ impl TrackedDownload {
         self.waiting_for_completed_history = finished.waiting_for_completed_history;
         self.path_missing_since = finished.path_missing_since;
         self.no_video_import_retry = finished.no_video_import_retry;
-        self.foreign_import_classification = finished.foreign_import_classification;
+        self.import_hold = finished.import_hold;
     }
 
     pub(crate) fn reset_for_import_retry(&mut self) {
@@ -175,7 +219,7 @@ impl TrackedDownload {
         self.waiting_for_completed_history = false;
         self.path_missing_since = None;
         self.no_video_import_retry = None;
-        self.foreign_import_classification = None;
+        self.import_hold = None;
         self.skip_reacquire_on_failure = false;
     }
 
@@ -287,7 +331,7 @@ impl TrackedDownloadService {
             waiting_for_completed_history: false,
             path_missing_since: None,
             no_video_import_retry: None,
-            foreign_import_classification: None,
+            import_hold: None,
             skip_reacquire_on_failure: false,
             snapshot_missing_since: None,
         };
@@ -1263,6 +1307,7 @@ fn should_preserve_tracking(state: TrackedDownloadState) -> bool {
         state,
         TrackedDownloadState::ImportPending
             | TrackedDownloadState::Importing
+            | TrackedDownloadState::ImportBlocked
             | TrackedDownloadState::FailedPending
     )
 }
@@ -2499,7 +2544,7 @@ mod tests {
             waiting_for_completed_history: false,
             path_missing_since: None,
             no_video_import_retry: None,
-            foreign_import_classification: None,
+            import_hold: None,
             skip_reacquire_on_failure: false,
             snapshot_missing_since: None,
         }
@@ -3545,12 +3590,13 @@ mod tests {
     }
 
     #[test]
-    fn update_trackable_drops_import_blocked_sources_missing_from_client_snapshot() {
+    fn update_trackable_preserves_operator_actionable_sources_missing_from_client_snapshot() {
         let mut tracker = TrackedDownloadService::new();
 
         for (suffix, state) in [
             ("pending", TrackedDownloadState::ImportPending),
             ("importing", TrackedDownloadState::Importing),
+            ("blocked", TrackedDownloadState::ImportBlocked),
             ("failed", TrackedDownloadState::FailedPending),
         ] {
             tracker.cache.insert(
@@ -3575,7 +3621,7 @@ mod tests {
                     waiting_for_completed_history: false,
                     path_missing_since: None,
                     no_video_import_retry: None,
-                    foreign_import_classification: None,
+                    import_hold: None,
                     skip_reacquire_on_failure: false,
                     snapshot_missing_since: None,
                 },
@@ -3596,19 +3642,54 @@ mod tests {
         );
         assert!(
             tracker
+                .find("client-1:blocked")
+                .is_some_and(|td| td.is_trackable)
+        );
+        assert!(
+            tracker
                 .find("client-1:failed")
                 .is_some_and(|td| td.is_trackable)
         );
         assert!(unavailable_sources.is_empty());
+    }
 
+    #[test]
+    fn scoped_snapshot_pruning_preserves_import_blocked_sources_after_grace() {
+        let mut tracker = TrackedDownloadService::new();
+        let mut blocked = build_tracked_download("blocked");
+        blocked.state = TrackedDownloadState::ImportBlocked;
+        let blocked_id = blocked.id.clone();
+        tracker.cache.insert(blocked_id.clone(), blocked);
+        let scope = TrackedDownloadSnapshotScope::AuthoritativeForClient {
+            client_id: Some("client-1".to_string()),
+            client_type: "nzbget".to_string(),
+        };
+
+        let unavailable_sources = tracker.update_trackable_for_scope(&HashSet::new(), &scope);
+        expire_snapshot_absence(&mut tracker, &blocked_id);
+        let unavailable_sources_after_grace =
+            tracker.update_trackable_for_scope(&HashSet::new(), &scope);
+
+        assert!(tracker.find(&blocked_id).is_some_and(|td| td.is_trackable));
+        assert!(unavailable_sources.is_empty());
+        assert!(unavailable_sources_after_grace.is_empty());
+    }
+
+    #[test]
+    fn excluded_client_snapshot_pruning_preserves_import_blocked_after_grace() {
+        let mut tracker = TrackedDownloadService::new();
         let mut blocked = build_tracked_download("blocked");
         blocked.state = TrackedDownloadState::ImportBlocked;
         let blocked_id = blocked.id.clone();
         tracker.cache.insert(blocked_id.clone(), blocked);
 
-        let unavailable_sources = tracker.update_trackable(&HashSet::new());
-        assert!(tracker.find(&blocked_id).is_some_and(|td| !td.is_trackable));
-        assert_eq!(unavailable_sources.len(), 1);
+        tracker.update_trackable_excluding_client_types(&HashSet::new(), &[]);
+        expire_snapshot_absence(&mut tracker, &blocked_id);
+        let unavailable_sources =
+            tracker.update_trackable_excluding_client_types(&HashSet::new(), &[]);
+
+        assert!(tracker.find(&blocked_id).is_some_and(|td| td.is_trackable));
+        assert!(unavailable_sources.is_empty());
     }
 
     #[test]
@@ -3815,7 +3896,7 @@ mod tests {
             waiting_for_completed_history: false,
             path_missing_since: None,
             no_video_import_retry: None,
-            foreign_import_classification: None,
+            import_hold: None,
             skip_reacquire_on_failure: false,
             snapshot_missing_since: None,
         };
@@ -3852,7 +3933,7 @@ mod tests {
             waiting_for_completed_history: false,
             path_missing_since: None,
             no_video_import_retry: None,
-            foreign_import_classification: None,
+            import_hold: None,
             skip_reacquire_on_failure: false,
             snapshot_missing_since: None,
         };
@@ -3931,7 +4012,7 @@ mod tests {
             waiting_for_completed_history: false,
             path_missing_since: None,
             no_video_import_retry: None,
-            foreign_import_classification: None,
+            import_hold: None,
             skip_reacquire_on_failure: false,
             snapshot_missing_since: None,
         };
@@ -4137,7 +4218,7 @@ mod tests {
             waiting_for_completed_history: false,
             path_missing_since: None,
             no_video_import_retry: None,
-            foreign_import_classification: None,
+            import_hold: None,
             skip_reacquire_on_failure: false,
             snapshot_missing_since: None,
         };

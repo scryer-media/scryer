@@ -1106,7 +1106,7 @@ impl AppUseCase {
             // new grabs go, but both are categories the user configured, and
             // this set answers the broader question "is this Scryer's work at
             // all". Collecting only the winning scope meant a download tagged
-            // with the shadowed facet category looked foreign and was hidden
+            // with the shadowed facet category looked unmanaged and was hidden
             // outright, instead of reaching the auto-import gate that can
             // correctly block it as not-the-effective-category.
             if let Some(category) = self

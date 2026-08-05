@@ -22,6 +22,11 @@ import {
 } from "@/lib/graphql/queries";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { IconButton } from "@/components/ui/icon-button";
 import { cn } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -54,11 +59,7 @@ import type {
 import ruleInputContract from "@/lib/contracts/rule-input-contract.json";
 import { selectorId } from "@/lib/utils/dom-ids";
 import { isUserOwnedRuleSet } from "@/lib/utils/rule-sets";
-import {
-  formatTagFilter,
-  parseTagFilterInput,
-  trashLocalePacks,
-} from "@/lib/utils/trash-packs";
+import { trashLocalePacks } from "@/lib/utils/trash-packs";
 
 type SettingsRulesSectionProps = {
   isEditorOpen: boolean;
@@ -458,139 +459,79 @@ function ManagedBadge({ managedKey }: { managedKey: string }) {
   );
 }
 
-function TrashPackTagFilterField({
-  record,
-  disabled,
-  onSave,
-}: {
-  record: RuleSetRecord;
-  disabled: boolean;
-  onSave: (record: RuleSetRecord, raw: string) => Promise<void> | void;
-}) {
-  const t = useTranslate();
-  const persisted = formatTagFilter(record.managedTagFilter);
-  const [value, setValue] = React.useState(persisted);
-  React.useEffect(() => {
-    setValue(persisted);
-  }, [persisted]);
-  const isDirty =
-    parseTagFilterInput(value).join(",") !==
-    parseTagFilterInput(persisted).join(",");
-
-  return (
-    <div className="flex flex-wrap items-center gap-2">
-      <Label
-        htmlFor={selectorId("settings-trash-pack-filter", record.id)}
-        className="shrink-0 text-xs text-muted-foreground"
-      >
-        {t("settings.trashPackFilterLabel")}
-      </Label>
-      <Input
-        id={selectorId("settings-trash-pack-filter", record.id)}
-        value={value}
-        placeholder={t("settings.trashPackFilterPlaceholder")}
-        onChange={(event) => setValue(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" && isDirty && !disabled) {
-            event.preventDefault();
-            void onSave(record, value);
-          }
-        }}
-        disabled={disabled}
-        className="h-8 w-56 text-xs"
-      />
-      {isDirty ? (
-        <Button
-          id={selectorId("settings-trash-pack-filter-save", record.id)}
-          type="button"
-          size="sm"
-          variant="outline"
-          disabled={disabled}
-          onClick={() => void onSave(record, value)}
-        >
-          {t("label.save")}
-        </Button>
-      ) : (
-        <span className="text-[11px] text-muted-foreground">
-          {t("settings.trashPackFilterHelp")}
-        </span>
-      )}
-    </div>
-  );
-}
-
 function TrashLocalePacksCard({
   ruleSetRecords,
   mutatingRuleSetId,
   toggleRuleSetEnabled,
-  saveManagedTagFilter,
 }: {
   ruleSetRecords: RuleSetRecord[];
   mutatingRuleSetId: string | null;
   toggleRuleSetEnabled: (record: RuleSetRecord) => Promise<void> | void;
-  saveManagedTagFilter: (
-    record: RuleSetRecord,
-    raw: string,
-  ) => Promise<void> | void;
 }) {
   const t = useTranslate();
   const packs = trashLocalePacks(ruleSetRecords);
   if (packs.length === 0) return null;
+  const enabledCount = packs.filter((record) => record.enabled).length;
 
   return (
-    <div id="settings-trash-packs" className="rounded border border-border">
-      <div className="border-b border-border px-3 py-2">
-        <CardTitle className="text-base">
-          {t("settings.trashPacksTitle")}
-        </CardTitle>
-        <p className="mt-1 text-xs text-muted-foreground">
-          {t("settings.trashPacksHelp")}
-        </p>
-      </div>
-      <div className="divide-y divide-border">
-        {packs.map((record) => (
-          <div
-            key={record.id}
-            id={selectorId("settings-trash-pack-row", record.managedKey ?? record.id)}
-            className="space-y-2 px-3 py-2.5"
-          >
-            <div className="flex items-center justify-between gap-2">
-              <div className="min-w-0">
-                <span className="font-medium">{record.name}</span>
-                <p className="truncate text-xs text-muted-foreground">
-                  {record.description}
-                </p>
-              </div>
-              <div className="flex shrink-0 items-center gap-2">
-                <RenderBooleanIcon
-                  value={record.enabled}
-                  label={`${t("label.enabled")}: ${record.name}`}
-                />
-                <IconButton
+    <Collapsible id="settings-trash-packs" defaultOpen={false}>
+      <Card>
+        <CollapsibleTrigger
+          type="button"
+          className="group w-full text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+        >
+          <CardHeader className="flex-row items-center gap-3">
+            <div className="min-w-0 flex-1">
+              <CardTitle className="text-base">{t("settings.trashPacksTitle")}</CardTitle>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {t("settings.trashPacksHelp")}
+              </p>
+            </div>
+            <Badge tone="neutral">
+              {enabledCount}/{packs.length} {t("label.enabled")}
+            </Badge>
+            <ChevronDown
+              aria-hidden="true"
+              className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-180"
+            />
+          </CardHeader>
+        </CollapsibleTrigger>
+        <CollapsibleContent>
+          <CardContent className="space-y-2 border-t border-border">
+            {packs.map((record) => (
+              <div
+                key={record.id}
+                id={selectorId("settings-trash-pack-row", record.managedKey ?? record.id)}
+                className="flex items-start gap-3 rounded-md border border-border p-3"
+              >
+                <Checkbox
                   id={selectorId(
                     "settings-trash-pack-toggle",
                     record.managedKey ?? record.id,
                   )}
-                  label={
-                    record.enabled ? t("label.disable") : t("label.enable")
-                  }
-                  tone={record.enabled ? "disabled" : "enabled"}
-                  onClick={() => void toggleRuleSetEnabled(record)}
+                  checked={record.enabled}
+                  onCheckedChange={() => void toggleRuleSetEnabled(record)}
                   disabled={mutatingRuleSetId === record.id}
+                  aria-label={`${t("label.enabled")}: ${record.name}`}
+                />
+                <Label
+                  htmlFor={selectorId(
+                    "settings-trash-pack-toggle",
+                    record.managedKey ?? record.id,
+                  )}
+                  className="min-w-0 cursor-pointer"
                 >
-                  <Power className="h-4 w-4" />
-                </IconButton>
+                  <span className="block font-medium">{record.name}</span>
+                  <span className="mt-1 block text-xs font-normal text-muted-foreground">
+                    {record.description}
+                  </span>
+                </Label>
               </div>
-            </div>
-            <TrashPackTagFilterField
-              record={record}
-              disabled={mutatingRuleSetId === record.id}
-              onSave={saveManagedTagFilter}
-            />
-          </div>
-        ))}
-      </div>
-    </div>
+            ))}
+          </CardContent>
+        </CollapsibleContent>
+      </Card>
+    </Collapsible>
   );
 }
 
@@ -939,7 +880,7 @@ export function SettingsRulesSection({
       <div className="rounded border border-border">
         <div className="flex items-center justify-between border-b border-border px-3 py-2">
           <CardTitle className="text-base">
-            {t("settings.existingRules")}
+            {t("settings.rules")}
           </CardTitle>
         </div>
         <div className="overflow-x-auto">
@@ -961,7 +902,7 @@ export function SettingsRulesSection({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {ruleSetRecords.map((record) => (
+              {ruleSetRecords.filter(isUserOwnedRuleSet).map((record) => (
                 <TableRow
                   key={record.id}
                   id={selectorId("settings-rule-row", record.id)}

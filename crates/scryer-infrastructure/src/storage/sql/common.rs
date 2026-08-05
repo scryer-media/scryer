@@ -6,6 +6,10 @@ pub(crate) fn parse_utc_datetime(raw: &str) -> AppResult<DateTime<Utc>> {
         return Ok(datetime.with_timezone(&Utc));
     }
 
+    if let Ok(datetime) = DateTime::parse_from_rfc2822(raw) {
+        return Ok(datetime.with_timezone(&Utc));
+    }
+
     // Shipped migrations wrote SQLite CURRENT_TIMESTAMP values ("YYYY-MM-DD
     // HH:MM:SS", UTC, optional fraction); those rows must stay readable.
     if let Ok(datetime) = NaiveDateTime::parse_from_str(raw, "%Y-%m-%d %H:%M:%S%.f") {
@@ -29,6 +33,13 @@ mod tests {
     fn parses_rfc3339() {
         let parsed = parse_utc_datetime("2026-07-16T12:34:56+02:00").expect("rfc3339 parses");
         assert_eq!(parsed.hour(), 10);
+    }
+
+    #[test]
+    fn parses_rfc2822_newznab_pub_date() {
+        let parsed =
+            parse_utc_datetime("Wed, 05 Aug 2026 00:52:15 +0000").expect("newznab pubDate parses");
+        assert_eq!(parsed.to_rfc3339(), "2026-08-05T00:52:15+00:00");
     }
 
     #[test]

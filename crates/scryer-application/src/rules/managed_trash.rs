@@ -81,11 +81,6 @@ pub(crate) struct ManagedTrashRulePack {
     pub(crate) name: &'static str,
     pub(crate) description: &'static str,
     pub(crate) applied_facets: &'static [MediaFacet],
-    /// The `locale:*` tag this pack was gated behind before the packs became
-    /// opt-in. Reconciliation adopts it as the tag filter for rows that
-    /// predate the change, so an install that was already running the pack keeps
-    /// a gated pack rather than an open one.
-    pub(crate) historical_tag: &'static str,
     pub(crate) source: fn(Option<&[String]>) -> String,
 }
 
@@ -102,7 +97,6 @@ pub(crate) fn managed_trash_rule_packs() -> &'static [ManagedTrashRulePack] {
             name: "TRaSH Guides French (MULTi VF)",
             description: "Managed TRaSH Guides score-only locale pack for French dubbed audio intent.",
             applied_facets: &[],
-            historical_tag: "locale:french",
             source: french_vf_source,
         },
         ManagedTrashRulePack {
@@ -110,7 +104,6 @@ pub(crate) fn managed_trash_rule_packs() -> &'static [ManagedTrashRulePack] {
             name: "TRaSH Guides French (MULTi VO)",
             description: "Managed TRaSH Guides score-only locale pack for original audio from MULTi French releases.",
             applied_facets: &[],
-            historical_tag: "locale:french",
             source: french_vo_source,
         },
         ManagedTrashRulePack {
@@ -118,7 +111,6 @@ pub(crate) fn managed_trash_rule_packs() -> &'static [ManagedTrashRulePack] {
             name: "TRaSH Guides French (VOSTFR)",
             description: "Managed TRaSH Guides score-only locale pack for original audio with French subtitles.",
             applied_facets: &[],
-            historical_tag: "locale:french",
             source: french_vostfr_source,
         },
         ManagedTrashRulePack {
@@ -126,7 +118,6 @@ pub(crate) fn managed_trash_rule_packs() -> &'static [ManagedTrashRulePack] {
             name: "TRaSH Guides German Locale",
             description: "Managed TRaSH Guides score-only locale pack for German audio intent.",
             applied_facets: &[],
-            historical_tag: "locale:german",
             source: german_source,
         },
         ManagedTrashRulePack {
@@ -134,7 +125,6 @@ pub(crate) fn managed_trash_rule_packs() -> &'static [ManagedTrashRulePack] {
             name: "TRaSH Guides Asian Locale",
             description: "Managed TRaSH Guides score-only locale pack for the locale:asian tag.",
             applied_facets: &[],
-            historical_tag: "locale:asian",
             source: asian_source,
         },
     ];

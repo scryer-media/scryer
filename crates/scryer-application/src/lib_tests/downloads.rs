@@ -984,7 +984,7 @@ async fn tracked_title_assignment_fixture() -> TrackedTitleAssignmentFixture {
         waiting_for_completed_history: false,
         path_missing_since: None,
         no_video_import_retry: None,
-        foreign_import_classification: None,
+        import_hold: None,
         skip_reacquire_on_failure: false,
         snapshot_missing_since: None,
     });
@@ -1270,7 +1270,7 @@ async fn list_download_import_page_uses_runtime_tracked_snapshot_cache() {
                 status: scryer_domain::TrackedDownloadStatus::Warning,
                 status_messages: vec!["moving files to nas".to_string()],
                 match_type: scryer_domain::TitleMatchType::Submission,
-                foreign_import_classification: None,
+                import_hold: None,
             },
         );
 
@@ -1342,9 +1342,9 @@ async fn foreign_runtime_classification_hides_queue_import_and_history_with_alig
                 status: scryer_domain::TrackedDownloadStatus::Ok,
                 status_messages: Vec::new(),
                 match_type: scryer_domain::TitleMatchType::Unmatched,
-                foreign_import_classification: Some(
-                    crate::tracked_downloads::ForeignDownloadClassification::DroneParameter,
-                ),
+                import_hold: Some(crate::tracked_downloads::ImportHold::Unmanaged(
+                    crate::tracked_downloads::UnmanagedDownloadReason::ExternalManager,
+                )),
             },
         );
 
@@ -1483,7 +1483,7 @@ async fn download_import_page_renders_importing_state_from_runtime_snapshot() {
                 status: scryer_domain::TrackedDownloadStatus::Ok,
                 status_messages: vec!["Moving files to library.".to_string()],
                 match_type: scryer_domain::TitleMatchType::Submission,
-                foreign_import_classification: None,
+                import_hold: None,
             },
         );
 
@@ -3016,7 +3016,7 @@ async fn failed_tracked_cleanup_uses_facet_routing_and_exact_client_id() {
         waiting_for_completed_history: false,
         path_missing_since: None,
         no_video_import_retry: None,
-        foreign_import_classification: None,
+        import_hold: None,
         skip_reacquire_on_failure: false,
         snapshot_missing_since: None,
     };
@@ -5275,7 +5275,7 @@ async fn list_download_history_page_includes_tracked_terminal_rows_when_client_h
                 status: scryer_domain::TrackedDownloadStatus::Ok,
                 status_messages: Vec::new(),
                 match_type: scryer_domain::TitleMatchType::Submission,
-                foreign_import_classification: None,
+                import_hold: None,
             },
         );
 

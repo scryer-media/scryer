@@ -11,7 +11,7 @@ async fn foreign_category_is_runtime_classification_and_blank_category_remains_e
     )
     .await;
     assert_eq!(td.state, TrackedDownloadState::ImportPending);
-    assert_eq!(td.foreign_import_classification, None);
+    assert_eq!(td.import_hold, None);
 
     let td = run_category_gate_check(
         Arc::new(TestSettingsRepo::default()),
@@ -23,8 +23,10 @@ async fn foreign_category_is_runtime_classification_and_blank_category_remains_e
     .await;
     assert_eq!(td.state, TrackedDownloadState::Downloading);
     assert_eq!(
-        td.foreign_import_classification,
-        Some(crate::tracked_downloads::ForeignDownloadClassification::ForeignCategory)
+        td.import_hold,
+        Some(crate::tracked_downloads::ImportHold::Unmanaged(
+            crate::tracked_downloads::UnmanagedDownloadReason::UnknownCategory
+        ))
     );
     assert!(td.status_messages.is_empty());
 
@@ -70,7 +72,7 @@ async fn scryer_origin_downloads_are_never_classified_foreign_by_category() {
         true,
     )
     .await;
-    assert_eq!(td.foreign_import_classification, None);
+    assert_eq!(td.import_hold, None);
     assert_eq!(td.state, TrackedDownloadState::ImportPending);
 
     // Submission/ClientParameter matches are Scryer's work too, even when the
@@ -85,7 +87,7 @@ async fn scryer_origin_downloads_are_never_classified_foreign_by_category() {
         )
         .await;
         assert_eq!(
-            td.foreign_import_classification, None,
+            td.import_hold, None,
             "{match_type:?} must not be classified foreign"
         );
         assert_eq!(td.state, TrackedDownloadState::ImportPending);
@@ -154,7 +156,7 @@ async fn category_settings_read_failure_does_not_classify_or_hide_the_download()
     )
     .await;
 
-    assert_eq!(td.foreign_import_classification, None);
+    assert_eq!(td.import_hold, None);
 }
 
 #[tokio::test]
@@ -208,12 +210,13 @@ async fn orphan_submission_with_blank_category_remains_eligible() {
             settings,
         },
     );
-    let mut td = build_foreign_completed_tracked_download(None, TitleMatchType::TitleParse, false);
+    let mut td =
+        build_unmanaged_completed_tracked_download(None, TitleMatchType::TitleParse, false);
 
     check(&app, &mut td).await;
 
     assert_eq!(td.state, TrackedDownloadState::ImportPending);
-    assert_eq!(td.foreign_import_classification, None);
+    assert_eq!(td.import_hold, None);
 }
 
 #[tokio::test]
@@ -434,7 +437,8 @@ async fn blank_category_can_enter_normal_import_flow() {
         vec![],
         download_client,
     );
-    let mut td = build_foreign_completed_tracked_download(None, TitleMatchType::TitleParse, false);
+    let mut td =
+        build_unmanaged_completed_tracked_download(None, TitleMatchType::TitleParse, false);
 
     check(&app, &mut td).await;
     assert_eq!(td.state, TrackedDownloadState::ImportPending);
@@ -459,15 +463,20 @@ async fn drone_parameter_is_runtime_foreign_classification() {
         vec![],
         test_download_client_with_completed(completed),
     );
-    let mut td =
-        build_foreign_completed_tracked_download(Some("movie"), TitleMatchType::TitleParse, false);
+    let mut td = build_unmanaged_completed_tracked_download(
+        Some("movie"),
+        TitleMatchType::TitleParse,
+        false,
+    );
 
     check(&app, &mut td).await;
 
     assert_eq!(td.state, TrackedDownloadState::Downloading);
     assert_eq!(
-        td.foreign_import_classification,
-        Some(crate::tracked_downloads::ForeignDownloadClassification::DroneParameter)
+        td.import_hold,
+        Some(crate::tracked_downloads::ImportHold::Unmanaged(
+            crate::tracked_downloads::UnmanagedDownloadReason::ExternalManager
+        ))
     );
     assert!(!td.import_attempted);
 }
@@ -488,15 +497,15 @@ async fn unmatched_ready_nonvideo_is_runtime_foreign_classification() {
         test_download_client_with_completed(completed),
     );
     let mut td =
-        build_foreign_completed_tracked_download(Some("movie"), TitleMatchType::Unmatched, false);
+        build_unmanaged_completed_tracked_download(Some("movie"), TitleMatchType::Unmatched, false);
     td.title_id = None;
 
     check(&app, &mut td).await;
 
     assert_eq!(td.state, TrackedDownloadState::Downloading);
     assert_eq!(
-        td.foreign_import_classification,
-        Some(crate::tracked_downloads::ForeignDownloadClassification::NoImportableVideo)
+        td.import_hold,
+        Some(crate::tracked_downloads::ImportHold::NoImportableVideo)
     );
     assert!(!td.import_attempted);
 }
@@ -517,15 +526,18 @@ async fn title_parsed_ready_nonvideo_is_runtime_foreign_classification() {
         vec![],
         test_download_client_with_completed(completed),
     );
-    let mut td =
-        build_foreign_completed_tracked_download(Some("movie"), TitleMatchType::TitleParse, false);
+    let mut td = build_unmanaged_completed_tracked_download(
+        Some("movie"),
+        TitleMatchType::TitleParse,
+        false,
+    );
 
     check(&app, &mut td).await;
 
     assert_eq!(td.state, TrackedDownloadState::Downloading);
     assert_eq!(
-        td.foreign_import_classification,
-        Some(crate::tracked_downloads::ForeignDownloadClassification::NoImportableVideo)
+        td.import_hold,
+        Some(crate::tracked_downloads::ImportHold::NoImportableVideo)
     );
     assert!(!td.import_attempted);
 }
@@ -546,19 +558,19 @@ async fn no_video_classification_is_reconsidered_when_archive_arrives() {
         test_download_client_with_completed(completed),
     );
     let mut td =
-        build_foreign_completed_tracked_download(Some("movie"), TitleMatchType::Unmatched, false);
+        build_unmanaged_completed_tracked_download(Some("movie"), TitleMatchType::Unmatched, false);
     td.title_id = None;
 
     check(&app, &mut td).await;
     assert_eq!(
-        td.foreign_import_classification,
-        Some(crate::tracked_downloads::ForeignDownloadClassification::NoImportableVideo)
+        td.import_hold,
+        Some(crate::tracked_downloads::ImportHold::NoImportableVideo)
     );
 
     std::fs::write(temp_dir.path().join("release.rar"), b"archive").expect("write archive marker");
     check(&app, &mut td).await;
 
-    assert_eq!(td.foreign_import_classification, None);
+    assert_eq!(td.import_hold, None);
     assert_eq!(td.state, TrackedDownloadState::ImportBlocked);
 }
 
@@ -579,12 +591,15 @@ async fn archive_only_title_parse_remains_on_normal_import_path() {
         vec![],
         test_download_client_with_completed(completed),
     );
-    let mut td =
-        build_foreign_completed_tracked_download(Some("movie"), TitleMatchType::TitleParse, false);
+    let mut td = build_unmanaged_completed_tracked_download(
+        Some("movie"),
+        TitleMatchType::TitleParse,
+        false,
+    );
 
     check(&app, &mut td).await;
 
-    assert_eq!(td.foreign_import_classification, None);
+    assert_eq!(td.import_hold, None);
     assert_eq!(td.state, TrackedDownloadState::ImportPending);
 }
 

@@ -1587,7 +1587,7 @@ fn build_tracked_download(title_id: &str, facet: &str, release_title: &str) -> T
         waiting_for_completed_history: false,
         path_missing_since: None,
         no_video_import_retry: None,
-        foreign_import_classification: None,
+        import_hold: None,
         skip_reacquire_on_failure: false,
         snapshot_missing_since: None,
     }
@@ -1621,7 +1621,7 @@ fn test_download_client_with_completed(completed: CompletedDownload) -> Arc<Test
     })
 }
 
-fn build_foreign_completed_tracked_download(
+fn build_unmanaged_completed_tracked_download(
     category: Option<&str>,
     match_type: TitleMatchType,
     is_scryer_origin: bool,
@@ -1704,7 +1704,7 @@ async fn run_category_gate_check(
         },
     );
     let mut td =
-        build_foreign_completed_tracked_download(queue_category, match_type, is_scryer_origin);
+        build_unmanaged_completed_tracked_download(queue_category, match_type, is_scryer_origin);
 
     check(&app, &mut td).await;
     td

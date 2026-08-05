@@ -806,7 +806,7 @@ impl AppUseCase {
     }
 }
 impl AppUseCase {
-    async fn filter_foreign_download_queue_items(
+    async fn filter_unmanaged_download_queue_items(
         &self,
         items: Vec<DownloadQueueItem>,
     ) -> Vec<DownloadQueueItem> {
@@ -820,8 +820,8 @@ impl AppUseCase {
                 .iter()
                 .filter_map(|(tracked_id, metadata)| {
                     metadata
-                        .foreign_import_classification
-                        .map(|classification| (tracked_id.clone(), classification))
+                        .import_hold
+                        .map(|hold| (tracked_id.clone(), hold))
                 })
                 .collect::<HashMap<_, _>>(),
             Err(_) => HashMap::new(),
@@ -835,10 +835,18 @@ impl AppUseCase {
                 let tracked_id = tracked_download_id_for_item(item);
                 match classifications.get(&tracked_id) {
                     Some(
-                        crate::tracked_downloads::ForeignDownloadClassification::DroneParameter
-                        | crate::tracked_downloads::ForeignDownloadClassification::NoImportableVideo,
+                        crate::tracked_downloads::ImportHold::Unmanaged(
+                            crate::tracked_downloads::UnmanagedDownloadReason::ExternalManager,
+                        )
+                        | crate::tracked_downloads::ImportHold::NoImportableVideo,
                     ) => return false,
-                    Some(crate::tracked_downloads::ForeignDownloadClassification::ForeignCategory)
+                    // UnknownCategory is re-evaluated below against the current
+                    // ownership snapshot rather than trusted from the cache,
+                    // because category ownership is configuration-derived and
+                    // can change without the download changing.
+                    Some(crate::tracked_downloads::ImportHold::Unmanaged(
+                        crate::tracked_downloads::UnmanagedDownloadReason::UnknownCategory,
+                    ))
                     | None => {}
                 }
 
@@ -921,7 +929,7 @@ impl AppUseCase {
         let items = self
             .enrich_download_queue_items(&enabled_clients, items, use_tracked_runtime_snapshot)
             .await;
-        Ok(self.filter_foreign_download_queue_items(items).await)
+        Ok(self.filter_unmanaged_download_queue_items(items).await)
     }
 }
 impl AppUseCase {
@@ -962,7 +970,7 @@ impl AppUseCase {
             .enrich_download_queue_items(&enabled_clients, items, use_tracked_runtime_snapshot)
             .await;
         Ok(self
-            .filter_foreign_download_queue_items(items)
+            .filter_unmanaged_download_queue_items(items)
             .await
             .into_iter()
             .filter(|item| item.title_id.as_deref() == Some(title_id))
@@ -1264,7 +1272,7 @@ impl AppUseCase {
         let items = self
             .enrich_download_queue_items(&enabled_clients, items, use_tracked_runtime_snapshot)
             .await;
-        Ok(self.filter_foreign_download_queue_items(items).await)
+        Ok(self.filter_unmanaged_download_queue_items(items).await)
     }
 }
 impl AppUseCase {

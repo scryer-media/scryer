@@ -590,17 +590,20 @@ fn central_catalog_required_signer() -> RequiredSigner {
     }
 }
 
-async fn fetch_verified_catalog_redirect_candidate(
-    url: &str,
+fn central_catalog_redirect_policy() -> PluginRedirectPolicy {
+    PluginRedirectPolicy::FollowValidated
+}
+
+async fn fetch_verified_central_catalog_blob(
+    data_urls: &[String],
+    signature_urls: &[String],
     label: &str,
-) -> AppResult<(CatalogV3Redirect, String)> {
-    let data_urls = vec![url.to_string()];
-    let signature_urls = vec![redirect_bundle_url_for(url)];
+) -> AppResult<(Vec<u8>, String)> {
     let fetched = fetch_signed_blob_from_locations_with_redirect_policy(
-        &data_urls,
-        &signature_urls,
+        data_urls,
+        signature_urls,
         label,
-        PluginRedirectPolicy::FollowValidated,
+        central_catalog_redirect_policy(),
     )
     .await?;
     verify_signed_blob(
@@ -609,13 +612,24 @@ async fn fetch_verified_catalog_redirect_candidate(
         central_catalog_required_signer(),
     )
     .await?;
+    Ok((fetched.raw, fetched.actual_url))
+}
+
+async fn fetch_verified_catalog_redirect_candidate(
+    url: &str,
+    label: &str,
+) -> AppResult<(CatalogV3Redirect, String)> {
+    let data_urls = vec![url.to_string()];
+    let signature_urls = vec![redirect_bundle_url_for(url)];
+    let (raw, actual_url) =
+        fetch_verified_central_catalog_blob(&data_urls, &signature_urls, label).await?;
     let redirect_raw = bound_uncompressed_bytes(
-        fetched.raw,
+        raw,
         PLUGIN_CATALOG_REDIRECT_OUTPUT_LIMIT,
         "plugin catalog redirect",
     )?;
     let redirect = parse_and_validate_catalog_v3_redirect(&redirect_raw)?;
-    Ok((redirect, fetched.actual_url))
+    Ok((redirect, actual_url))
 }
 fn validate_community_catalog_v3_delegate(
     source: &CatalogV3CommunitySource,
@@ -761,6 +775,14 @@ mod tests {
             plugin_catalog_url(),
             "https://example.test/catalog-v3.redirect.json"
         );
+    }
+
+    #[test]
+    fn central_catalog_signed_blobs_follow_validated_redirects() {
+        assert!(matches!(
+            central_catalog_redirect_policy(),
+            PluginRedirectPolicy::FollowValidated
+        ));
     }
 }
 impl AppUseCase {
@@ -1044,10 +1066,6 @@ impl AppUseCase {
 impl AppUseCase {
     async fn fetch_verified_catalog_v3(&self) -> AppResult<(CatalogV3, String, u64)> {
         let (redirect, redirect_url) = self.fetch_verified_catalog_redirect().await?;
-        let signer = RequiredSigner {
-            github_repository: CENTRAL_CATALOG_REPO.to_string(),
-            github_workflow: Some(CENTRAL_CATALOG_WORKFLOW.to_string()),
-        };
         let artifact = redirect.artifacts.first().cloned().ok_or_else(|| {
             AppError::Validation(
                 "plugin catalog redirect did not contain any artifacts".to_string(),
@@ -1056,14 +1074,9 @@ impl AppUseCase {
         let data_urls = primary_and_mirrors(&artifact.url, &artifact.mirror_urls);
         let signature_urls =
             primary_and_mirrors(&artifact.signature_url, &artifact.signature_mirror_urls);
-        let (raw, actual_url) = self
-            .fetch_verified_blob_from_locations(
-                &data_urls,
-                &signature_urls,
-                &signer,
-                "plugin catalog",
-            )
-            .await?;
+        let (raw, actual_url) =
+            fetch_verified_central_catalog_blob(&data_urls, &signature_urls, "plugin catalog")
+                .await?;
         let decoded = decode_catalog_json(raw, &actual_url, "plugin catalog").await?;
         let catalog = parse_and_validate_catalog_v3(&decoded)?;
         Ok((catalog, redirect_url, redirect.catalog_version))

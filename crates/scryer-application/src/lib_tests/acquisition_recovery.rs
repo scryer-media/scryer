@@ -444,7 +444,7 @@ async fn tracked_download_failure_reuses_standby_recovery_policy() {
         waiting_for_completed_history: false,
         path_missing_since: None,
         no_video_import_retry: None,
-        foreign_import_classification: None,
+        import_hold: None,
         skip_reacquire_on_failure: false,
         snapshot_missing_since: None,
     };
@@ -1170,7 +1170,7 @@ async fn tracked_download_failure_prefers_tracked_source_title_for_blocklist_ide
         waiting_for_completed_history: false,
         path_missing_since: None,
         no_video_import_retry: None,
-        foreign_import_classification: None,
+        import_hold: None,
         skip_reacquire_on_failure: false,
         snapshot_missing_since: None,
     };
@@ -1299,7 +1299,7 @@ async fn parse_matched_foreign_failed_download_does_not_blocklist_or_requeue() {
         waiting_for_completed_history: false,
         path_missing_since: None,
         no_video_import_retry: None,
-        foreign_import_classification: None,
+        import_hold: None,
         skip_reacquire_on_failure: true,
         snapshot_missing_since: None,
     };
@@ -1534,7 +1534,7 @@ async fn season_pack_failure_processed_twice_only_requeues_once_and_blocklists_o
         waiting_for_completed_history: false,
         path_missing_since: None,
         no_video_import_retry: None,
-        foreign_import_classification: None,
+        import_hold: None,
         skip_reacquire_on_failure: false,
         snapshot_missing_since: None,
     };

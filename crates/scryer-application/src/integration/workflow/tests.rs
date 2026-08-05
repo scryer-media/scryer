@@ -82,7 +82,7 @@ mod tests {
             waiting_for_completed_history: false,
             path_missing_since: None,
             no_video_import_retry: None,
-            foreign_import_classification: None,
+            import_hold: None,
             skip_reacquire_on_failure: false,
             snapshot_missing_since: None,
         }
@@ -482,7 +482,7 @@ mod tests {
             waiting_for_completed_history: false,
             path_missing_since: None,
             no_video_import_retry: None,
-            foreign_import_classification: None,
+            import_hold: None,
             skip_reacquire_on_failure: false,
             snapshot_missing_since: None,
         };
@@ -523,7 +523,7 @@ mod tests {
             waiting_for_completed_history: false,
             path_missing_since: None,
             no_video_import_retry: None,
-            foreign_import_classification: None,
+            import_hold: None,
             skip_reacquire_on_failure: false,
             snapshot_missing_since: None,
         };
@@ -626,7 +626,7 @@ mod tests {
             waiting_for_completed_history: false,
             path_missing_since: None,
             no_video_import_retry: None,
-            foreign_import_classification: None,
+            import_hold: None,
             skip_reacquire_on_failure: false,
             snapshot_missing_since: None,
         };

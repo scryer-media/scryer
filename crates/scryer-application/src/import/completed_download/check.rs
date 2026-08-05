@@ -5,7 +5,7 @@ use super::lookup::{
 };
 use super::path_state::{CompletedDownloadPathState, evaluate_completed_download_path};
 use super::*;
-use crate::tracked_downloads::ForeignDownloadClassification;
+use crate::tracked_downloads::{ImportHold, UnmanagedDownloadReason};
 
 pub async fn check(app: &AppUseCase, td: &mut TrackedDownload) {
     check_with_lookup(app, td, None).await;
@@ -56,8 +56,10 @@ pub(crate) async fn check_with_lookup(
     }
 
     if matches!(
-        td.foreign_import_classification,
-        Some(ForeignDownloadClassification::DroneParameter)
+        td.import_hold,
+        Some(ImportHold::Unmanaged(
+            UnmanagedDownloadReason::ExternalManager
+        ))
     ) {
         return;
     }
@@ -122,8 +124,8 @@ pub(crate) async fn check_with_lookup(
         }
     }
 
-    if let Some(classification) = classify_foreign_completed_download(app, td, &completed).await {
-        mark_foreign_download(td, classification);
+    if let Some(reason) = classify_unmanaged_download(app, td, &completed).await {
+        hide_unmanaged_download(td, reason);
         return;
     }
 
@@ -226,7 +228,7 @@ pub(crate) async fn check_with_lookup(
 
     if !completed_download_allows_automatic_import(app, td, &completed).await {
         td.status_messages.clear();
-        td.warn(FOREIGN_CATEGORY_BLOCKED_MESSAGE);
+        td.warn(UNMANAGED_CATEGORY_BLOCKED_MESSAGE);
         set_state_to_import_blocked(app, td).await;
         return;
     }
@@ -244,22 +246,22 @@ pub(crate) async fn check_with_lookup(
     td.status_messages.clear();
 }
 
-async fn classify_foreign_completed_download(
+async fn classify_unmanaged_download(
     app: &AppUseCase,
     td: &mut TrackedDownload,
     completed: &CompletedDownload,
-) -> Option<ForeignDownloadClassification> {
+) -> Option<ImportHold> {
     // Category ownership is configuration-derived, so a previous category
     // classification must be reconsidered whenever this completed item is
     // checked again.
     if matches!(
-        td.foreign_import_classification,
+        td.import_hold,
         Some(
-            ForeignDownloadClassification::ForeignCategory
-                | ForeignDownloadClassification::NoImportableVideo
+            ImportHold::Unmanaged(UnmanagedDownloadReason::UnknownCategory)
+                | ImportHold::NoImportableVideo
         )
     ) {
-        td.foreign_import_classification = None;
+        td.import_hold = None;
     }
 
     // A download Scryer submitted is definitionally not another app's, so none
@@ -288,7 +290,9 @@ async fn classify_foreign_completed_download(
         .iter()
         .any(|(key, _)| key.trim().eq_ignore_ascii_case("drone"))
     {
-        return Some(ForeignDownloadClassification::DroneParameter);
+        return Some(ImportHold::Unmanaged(
+            UnmanagedDownloadReason::ExternalManager,
+        ));
     }
 
     if let Some(observed_category) = normalized_download_category(
@@ -311,7 +315,9 @@ async fn classify_foreign_completed_download(
             .await
             .is_some_and(|snapshot| !snapshot.knows_category(observed_category))
         {
-            return Some(ForeignDownloadClassification::ForeignCategory);
+            return Some(ImportHold::Unmanaged(
+                UnmanagedDownloadReason::UnknownCategory,
+            ));
         }
     }
 
@@ -328,7 +334,7 @@ async fn classify_foreign_completed_download(
                         Err(_) => return None,
                     };
                 if !archive_candidate && matches!(contains_archive_file(path), Ok(false)) {
-                    return Some(ForeignDownloadClassification::NoImportableVideo);
+                    return Some(ImportHold::NoImportableVideo);
                 }
             }
             Ok(_) | Err(_) => {}
@@ -360,8 +366,8 @@ fn contains_archive_file(path: &std::path::Path) -> std::io::Result<bool> {
     Ok(false)
 }
 
-fn mark_foreign_download(td: &mut TrackedDownload, classification: ForeignDownloadClassification) {
-    // Foreign classification is runtime-only: nothing is persisted, no status
+fn hide_unmanaged_download(td: &mut TrackedDownload, hold: ImportHold) {
+    // The hold is runtime-only: nothing is persisted, no status
     // message is set, and the row vanishes from every user-facing surface. That
     // makes a misclassification observable ONLY as an absence, which is
     // effectively undiagnosable in the field and cost a full triage cycle here.
@@ -369,15 +375,15 @@ fn mark_foreign_download(td: &mut TrackedDownload, classification: ForeignDownlo
     // from "silently lost".
     tracing::info!(
         id = %td.id,
-        classification = ?classification,
+        hold = ?hold,
         client_id = %td.client_id,
         client_type = %td.client_type,
         category = ?td.client_item.category,
         is_scryer_origin = td.client_item.is_scryer_origin,
         match_type = ?td.match_type,
-        "download classified as foreign; hidden from user-facing download activity"
+        "download held from import; hidden from user-facing download activity"
     );
-    td.foreign_import_classification = Some(classification);
+    td.import_hold = Some(hold);
     td.state = TrackedDownloadState::Downloading;
     td.waiting_for_completed_history = false;
     td.status = TrackedDownloadStatus::Ok;
