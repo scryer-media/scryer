@@ -6,7 +6,7 @@ import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import type { RuleSetRecord, RuleSetDraft, RuleValidationResult } from "@/lib/types/rule-sets";
 import { copyRuleSetDraft, createRuleSetInput } from "@/lib/utils/rule-sets";
-import { conflictingFrenchPack, parseTagFilterInput } from "@/lib/utils/trash-packs";
+import { conflictingFrenchPack } from "@/lib/utils/trash-packs";
 import { ruleSetsQuery } from "@/lib/graphql/queries";
 import {
   createRuleSetMutation,
@@ -295,31 +295,6 @@ export function SettingsRulesContainer() {
     [client, refreshRuleSets, ruleSetRecords, setGlobalStatus, t],
   );
 
-  // Managed packs reject authored-field edits, so the filter update sends only
-  // the id and the normalized tag list.
-  const saveManagedTagFilter = useCallback(
-    async (record: RuleSetRecord, raw: string) => {
-      setMutatingRuleSetId(record.id);
-      try {
-        const { error } = await client
-          .mutation(updateRuleSetMutation, {
-            input: { id: record.id, managedTagFilter: parseTagFilterInput(raw) },
-          })
-          .toPromise();
-        if (error) throw error;
-        setGlobalStatus(
-          t("settings.trashPackFilterSaved", { name: record.name }),
-        );
-        await refreshRuleSets();
-      } catch (error) {
-        setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"));
-      } finally {
-        setMutatingRuleSetId(null);
-      }
-    },
-    [client, refreshRuleSets, setGlobalStatus, t],
-  );
-
   const confirmDeleteRuleSet = async () => {
     if (!pendingDeleteRuleSet) return;
     const record = pendingDeleteRuleSet;
@@ -406,7 +381,6 @@ export function SettingsRulesContainer() {
         copyRuleSet={requestCopyRuleSet}
         editRuleSet={requestEditRuleSet}
         toggleRuleSetEnabled={toggleRuleSetEnabled}
-        saveManagedTagFilter={saveManagedTagFilter}
         deleteRuleSet={deleteRuleSet}
         validateDraft={validateDraft}
         validating={validating}

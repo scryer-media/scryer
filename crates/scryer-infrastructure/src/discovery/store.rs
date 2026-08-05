@@ -518,7 +518,20 @@ impl DiscoveryRepository for DiscoveryStore {
                         })?;
                 }
                 for item in &commit.items {
-                    insert_item_tx(tx, &datastore, item, &commit.run.language).await?;
+                    insert_item_tx(tx, &datastore, item, &commit.run.language)
+                        .await
+                        .inspect_err(|error| {
+                            tracing::warn!(
+                                run_id = %commit.run.id,
+                                item_id = %item.id,
+                                target_key = %item.target_key,
+                                target_kind = %item.target_kind,
+                                resolved_title_id = ?item.resolved_title_id,
+                                section_id = ?item.section_id,
+                                error = %error,
+                                "failed to persist discovery public-feed item"
+                            );
+                        })?;
                 }
                 Ok(())
             })
@@ -573,11 +586,7 @@ impl DiscoveryRepository for DiscoveryStore {
         SqlRuntime::execute_write(
             &self.datastore,
             "upsert_pending_discovery_context_change",
-            &upsert_sql(
-                "discovery_pending_context_changes",
-                &split_columns(PENDING_CONTEXT_CHANGE_COLUMNS),
-                &["id"],
-            ),
+            &upsert_pending_context_change_sql(),
             pending_context_change_args(&self.datastore, change)?,
         )
         .await?;
@@ -3306,6 +3315,56 @@ fn upsert_sql(table: &str, columns: &[&str], conflict_columns: &[&str]) -> Strin
         columns.join(", "),
         placeholders(columns.len()),
         conflict_columns.join(", ")
+    )
+}
+
+/// Upsert for `discovery_pending_context_changes`, resolving `title_id` through
+/// `titles` instead of binding the raw id.
+///
+/// These rows are produced by replaying the *historical* domain-event log, so an
+/// event legitimately names a title that no longer exists — a `title_deleted`
+/// event always does, and an older `title_added`/`title_updated` event does once
+/// that title is later removed. Sqlite declares
+/// `title_id TEXT REFERENCES titles(id) ON DELETE SET NULL`, so binding a
+/// dangling id raises `FOREIGN KEY constraint failed` (sqlite extended code 787)
+/// and aborts the whole discovery sync. That is unrecoverable rather than
+/// transient: the catch-up watermark (`last_seen_domain_event_sequence`) only
+/// advances when the job succeeds, so the very next run replays the same event
+/// and fails identically, freezing discovery indefinitely.
+///
+/// The `(SELECT id FROM titles WHERE id = {})` scalar subquery yields NULL when
+/// the title is gone, which is exactly the value the declared
+/// `ON DELETE SET NULL` would leave behind had the title been deleted a moment
+/// later — so the column keeps its meaning ("the live title this change refers
+/// to, if any") instead of dangling. The postgres schema declares the same
+/// column with no foreign key at all, so resolving here also makes both backends
+/// agree on that invariant. Resolution happens inside the write statement, so it
+/// stays correct when a sqlite busy-retry re-runs the whole closure.
+///
+/// The id that was replayed is not lost: `title_context_change_record` derives
+/// the row `id` (`{scope_key}:title:{title_id}`) from it before persistence, and
+/// `coalesce_pending_context_change` carries it into `previous_title_id`, which
+/// is deliberately declared without a foreign key.
+fn upsert_pending_context_change_sql() -> String {
+    let columns = split_columns(PENDING_CONTEXT_CHANGE_COLUMNS);
+    let values = columns
+        .iter()
+        .map(|column| match *column {
+            "title_id" => "(SELECT id FROM titles WHERE id = {})",
+            _ => "{}",
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let updates = columns
+        .iter()
+        .filter(|column| **column != "id")
+        .map(|column| format!("{column} = excluded.{column}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "INSERT INTO discovery_pending_context_changes ({}) VALUES ({values})
+         ON CONFLICT(id) DO UPDATE SET {updates}",
+        columns.join(", ")
     )
 }
 

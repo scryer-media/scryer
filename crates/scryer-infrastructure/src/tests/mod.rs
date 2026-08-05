@@ -30,6 +30,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, RwLock};
 use tokio::time::{Duration, timeout};
 
+mod discovery_pending_context_changes;
 mod external_import_setup_secret_drafts;
 mod imports_download_submissions;
 mod library_scan_unmatched;
@@ -408,6 +409,10 @@ fn library_scan_unmatched_store(services: &SqliteServices) -> LibraryScanUnmatch
 
 fn title_image_store(services: &SqliteServices) -> TitleImageStore {
     TitleImageStore::new(services.datastore())
+}
+
+fn discovery_store(services: &SqliteServices) -> crate::discovery::store::DiscoveryStore {
+    crate::discovery::store::DiscoveryStore::new(services.datastore())
 }
 
 async fn temp_services(prefix: &str) -> (SqliteServices, std::path::PathBuf) {

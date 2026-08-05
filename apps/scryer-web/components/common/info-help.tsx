@@ -1,4 +1,5 @@
 import { Info } from "lucide-react";
+import type { ReactNode } from "react";
 import { ActionTooltip } from "@/components/ui/tooltip";
 import {
   Popover,
@@ -8,7 +9,7 @@ import {
 import { useIsMobile } from "@/lib/hooks/use-mobile";
 
 type InfoHelpProps = {
-  text: string;
+  text: ReactNode;
   ariaLabel: string;
 };
 

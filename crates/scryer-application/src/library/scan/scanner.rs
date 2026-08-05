@@ -128,6 +128,12 @@ pub struct DiscoveryPublicFeedInput {
     pub section_types: Vec<String>,
     pub limit_per_section: i32,
     pub include_unresolved: bool,
+    /// Opt-in to un-deduplicated sections (the client owns cross-rail
+    /// presentation). Serialized even when false so the submit-json audit trail
+    /// records the choice; old gateways reject unknown fields, so this ships
+    /// only after the gateway supports it (server-before-client, SaaS order).
+    #[serde(default)]
+    pub full_sections: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]

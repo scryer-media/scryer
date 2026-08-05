@@ -89,6 +89,7 @@ impl DiscoveryContextDefaults {
             section_types: Vec::new(),
             limit_per_section: 25,
             include_unresolved: self.include_unresolved,
+            full_sections: true,
         }
     }
 }

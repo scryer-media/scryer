@@ -13,7 +13,14 @@ function item(key: string, targetKind = "MOVIE"): OrderableDiscoveryItem {
 
 function section(
   sectionType: string,
-  items: readonly OrderableDiscoveryItem[] = [item(`${sectionType}-1`)],
+  // Three distinct items by default: the thin-rail floor hides public rails
+  // under MIN_PUBLIC_RAIL_ITEMS, and per-section keys keep the cross-rail
+  // dedupe from eating fixture rails unless a test overlaps them on purpose.
+  items: readonly OrderableDiscoveryItem[] = [
+    item(`${sectionType}-1`),
+    item(`${sectionType}-2`),
+    item(`${sectionType}-3`),
+  ],
 ): OrderableDiscoverySection {
   return {
     sectionId: sectionType.toLowerCase(),
@@ -174,10 +181,16 @@ test("personalized shelf leads with the most specific reason", () => {
 });
 
 test("every Because You Like rail of a kind is kept, in payload order", () => {
-  const isekai = { ...section("BECAUSE_YOU_LIKE_TAG"), sectionId: "isekai" };
-  const slowBurn = { ...section("BECAUSE_YOU_LIKE_TAG"), sectionId: "slow_burn" };
+  const isekai = {
+    ...section("BECAUSE_YOU_LIKE_TAG", [item("isekai-1")]),
+    sectionId: "isekai",
+  };
+  const slowBurn = {
+    ...section("BECAUSE_YOU_LIKE_TAG", [item("slow-burn-1")]),
+    sectionId: "slow_burn",
+  };
   const animation = {
-    ...section("BECAUSE_YOU_LIKE_GENRE"),
+    ...section("BECAUSE_YOU_LIKE_GENRE", [item("animation-1")]),
     sectionId: "animation",
   };
   assert.deepEqual(
@@ -264,8 +277,14 @@ test("a legacy complete-collection payload never renders", () => {
 });
 
 test("duplicate section types all render, in payload order", () => {
-  const first = { ...section("POPULAR_MOVIES"), sectionId: "popular_movies_a" };
-  const second = { ...section("POPULAR_MOVIES"), sectionId: "popular_movies_b" };
+  const first = {
+    ...section("POPULAR_MOVIES", [item("pm-a1"), item("pm-a2"), item("pm-a3")]),
+    sectionId: "popular_movies_a",
+  };
+  const second = {
+    ...section("POPULAR_MOVIES", [item("pm-b1"), item("pm-b2"), item("pm-b3")]),
+    sectionId: "popular_movies_b",
+  };
   assert.deepEqual(
     order({ publicSections: [first, second] }).map((entry) => entry.sectionId),
     ["popular_movies_a", "popular_movies_b"],
@@ -290,7 +309,10 @@ test("merge: TRENDING_NOW folds into POPULAR_RIGHT_NOW, target items first", () 
 });
 
 test("merge: POPULAR_WITH_ANIME_FANS folds into ANIME_THIS_WEEK", () => {
-  const fans = section("POPULAR_WITH_ANIME_FANS", [item("f1", "ANIME")]);
+  const fans = section("POPULAR_WITH_ANIME_FANS", [
+    item("f1", "ANIME"),
+    item("f2", "ANIME"),
+  ]);
   const weekly = section("ANIME_THIS_WEEK", [item("w1", "ANIME")]);
   const ordered = order({
     publicSections: [fans, weekly, section("ANIME_SEASON_STANDOUTS")],
@@ -300,14 +322,14 @@ test("merge: POPULAR_WITH_ANIME_FANS folds into ANIME_THIS_WEEK", () => {
     ordered.map((entry) => entry.sectionType),
     ["ANIME_THIS_WEEK", "ANIME_SEASON_STANDOUTS"],
   );
-  assert.deepEqual(itemKeys([ordered[0]!]), ["ANIME:w1", "ANIME:f1"]);
+  assert.deepEqual(itemKeys([ordered[0]!]), ["ANIME:w1", "ANIME:f1", "ANIME:f2"]);
 });
 
 test("merge: a source whose target is absent renders itself in the target's slot", () => {
   const ordered = order({
     publicSections: [
       section("EVERGREEN_POPULAR"),
-      section("TRENDING_NOW", [item("t1")]),
+      section("TRENDING_NOW", [item("t1"), item("t2"), item("t3")]),
       section("POPULAR_MOVIES"),
     ],
   });
@@ -327,13 +349,19 @@ test("merge: overlapping items are deduped defensively", () => {
   assert.deepEqual(itemKeys(ordered), ["MOVIE:shared", "MOVIE:r1", "MOVIE:t1"]);
 });
 
-test("no title is ever deleted: every input item survives to the output", () => {
-  // Property check across the full current section-type surface. Only the
-  // retired legacy rails are allowed to lose their items.
+test("presentation invariant: every unique title renders exactly once", () => {
+  // Replaces the old "no title is ever deleted" property: with Scryer owning
+  // cross-rail dedupe, a title may ARRIVE in several sections but must RENDER
+  // exactly once, in its first reading-order home. Unique titles are only
+  // withheld by the thin-rail floor; nothing renders twice anywhere.
   const publicSections = CURRENT_PUBLIC_SECTION_TYPES.map((sectionType) =>
     section(sectionType, [
       item(`${sectionType}-a`),
       item(`${sectionType}-b`),
+      item(`${sectionType}-c`),
+      // Every public rail also carries the same duplicated headline title, the
+      // shape the gateway now ships (no server-side cross-section dedupe).
+      item("shared-headliner"),
     ]),
   );
   const personalizedSections = [
@@ -350,17 +378,57 @@ test("no title is ever deleted: every input item survives to the output", () => 
     personalizedSections,
     completeCollection,
   });
-  const rendered = new Set(itemKeys(ordered));
+  const renderedKeys = itemKeys(ordered);
+  const counts = new Map<string, number>();
+  for (const key of renderedKeys) {
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  for (const [key, count] of counts) {
+    assert.equal(count, 1, `item ${key} rendered ${count} times`);
+  }
+  assert.equal(counts.get("MOVIE:shared-headliner"), 1);
+
   const expected = itemKeys([
     ...publicSections,
     // FOR_YOU is a no-context fallback and is legitimately withheld here.
     ...personalizedSections.filter((entry) => entry.sectionType !== "FOR_YOU"),
     completeCollection,
   ]);
-
   for (const key of expected) {
-    assert.ok(rendered.has(key), `item ${key} vanished from the dashboard`);
+    assert.ok(counts.has(key), `unique item ${key} vanished from the dashboard`);
   }
+});
+
+test("thin-rail floor: a public rail under 3 unique items hides; personalized rails do not", () => {
+  const ordered = order({
+    publicSections: [
+      section("POPULAR_RIGHT_NOW"),
+      section("EVERGREEN_POPULAR", [item("e1"), item("e2")]),
+    ],
+    personalizedSections: [section("BECAUSE_YOU_LIKE_TAG", [item("thin-tag")])],
+  });
+  assert.deepEqual(
+    ordered.map((entry) => entry.sectionType),
+    ["BECAUSE_YOU_LIKE_TAG", "POPULAR_RIGHT_NOW"],
+  );
+});
+
+test("cross-rail dedupe: first reading-order occurrence wins across shelves", () => {
+  const shared = item("cross-shelf-title");
+  const ordered = order({
+    publicSections: [
+      section("POPULAR_RIGHT_NOW", [shared, item("p1"), item("p2"), item("p3")]),
+    ],
+    personalizedSections: [
+      section("BECAUSE_YOU_LIKE_TAG", [shared, item("tag-b")]),
+    ],
+  });
+  // The personalized shelf reads first, so it claims the shared title.
+  assert.deepEqual(itemKeys([ordered[0]!]), [
+    "MOVIE:cross-shelf-title",
+    "MOVIE:tag-b",
+  ]);
+  assert.deepEqual(itemKeys([ordered[1]!]), ["MOVIE:p1", "MOVIE:p2", "MOVIE:p3"]);
 });
 
 test("a hero sourced from TRENDING_NOW stays visible in the rendered rails", () => {

@@ -4,12 +4,7 @@ import test from "node:test";
 import type { RuleSetRecord } from "../types/rule-sets.ts";
 import {
   conflictingFrenchPack,
-  formatTagFilter,
   isTrashLocalePack,
-  localeFilterLanguageCodes,
-  localeFilterUnmappedTags,
-  localeTagsForLanguageCodes,
-  parseTagFilterInput,
   trashLocalePacks,
 } from "./trash-packs.ts";
 
@@ -84,25 +79,4 @@ test("enabling a second french pack reports the enabled one", () => {
   // is not a conflict.
   assert.equal(conflictingFrenchPack([vf, vo, german], german), null);
   assert.equal(conflictingFrenchPack([vf, vo, german], vf), null);
-});
-
-test("tag filter input normalizes and round-trips", () => {
-  assert.deepEqual(parseTagFilterInput(" Locale:French ,, locale:vf ,LOCALE:FRENCH"), [
-    "locale:french",
-    "locale:vf",
-  ]);
-  assert.deepEqual(parseTagFilterInput("   "), []);
-  assert.equal(formatTagFilter(["locale:french", "locale:vf"]), "locale:french, locale:vf");
-  assert.equal(formatTagFilter(null), "");
-});
-
-test("locale filters adapt legacy language names for the shared picker", () => {
-  const tags = ["locale:french", "locale:ger", "locale:asian", "title:kids"];
-
-  assert.deepEqual(localeFilterLanguageCodes(tags), ["fre", "ger"]);
-  assert.deepEqual(localeFilterUnmappedTags(tags), ["locale:asian", "title:kids"]);
-  assert.deepEqual(localeTagsForLanguageCodes(["fre", "ger"]), [
-    "locale:fre",
-    "locale:ger",
-  ]);
 });

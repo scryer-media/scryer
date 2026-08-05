@@ -39,7 +39,7 @@ import {
   NEW_ON_PHYSICAL_SECTION_TYPE,
   NEW_ON_STREAMING_SECTION_TYPE,
   discoverySectionType,
-  orderDiscoveryHomeSections,
+  orderDiscoveryHomeSectionsDetailed,
   sectionIsPublicPromotion,
 } from "@/lib/utils/discovery-sections";
 import {
@@ -270,9 +270,12 @@ function sectionIsCompleteCollection(section: DiscoveryHomeSection) {
 
 function orderedHomeSections(home: DiscoveryHomePayload | null) {
   if (!home) {
-    return [];
+    return { sections: [], heroVisibilitySections: [] };
   }
-  return orderDiscoveryHomeSections<DiscoveryHomeSection>({
+  // Detailed variant: hero visibility is validated against the post-dedupe
+  // PRE-floor list, so a rail hidden by the thin-rail floor can never blank a
+  // hero whose item rendered nowhere else.
+  return orderDiscoveryHomeSectionsDetailed<DiscoveryHomeSection>({
     publicSections: normalizedPublicHomeSections(home),
     personalizedSections: home.personalizedSections,
     completeCollection: home.completeCollection,
@@ -1263,10 +1266,11 @@ export function DiscoveryView({
   const [filtersOpen, setFiltersOpen] = React.useState(false);
   const [filterRailCollapsed, setFilterRailCollapsed] = React.useState(false);
   const { hiddenKeys, hideItem, resetHidden } = useHiddenDiscoveryItems();
-  const orderedSections = React.useMemo(
+  const orderedResult = React.useMemo(
     () => orderedHomeSections(home),
     [home],
   );
+  const orderedSections = orderedResult.sections;
   const capabilitySections = React.useMemo(
     () => sectionsForDiscoveryFacets(orderedSections, discoverableFacetSet),
     [discoverableFacetSet, orderedSections],
@@ -1408,8 +1412,17 @@ export function DiscoveryView({
     [rawSections],
   );
   const heroSections = React.useMemo(
-    () => sections.filter((section) => !sectionIsCompleteCollection(section)),
-    [sections],
+    () =>
+      // Pre-floor list: a thin rail hidden from the page must not blank the
+      // hero when its item rendered in no other rail.
+      sectionsWithoutHiddenItems(
+        sectionsForDiscoveryFacets(
+          orderedResult.heroVisibilitySections,
+          discoverableFacetSet,
+        ),
+        hiddenKeys,
+      ).filter((section) => !sectionIsCompleteCollection(section)),
+    [discoverableFacetSet, hiddenKeys, orderedResult.heroVisibilitySections],
   );
   const heroItem = React.useMemo(
     () => {

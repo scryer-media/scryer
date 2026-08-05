@@ -1,8 +1,4 @@
 import type { RuleSetRecord } from "@/lib/types/rule-sets";
-import {
-  getSubtitleLanguage,
-  SUBTITLE_LANGUAGES,
-} from "../constants/subtitle-languages.ts";
 
 export const TRASH_LOCALE_PACK_KEY_PREFIX = "trash-guides:locale:";
 const FRENCH_PACK_KEY_PREFIX = "trash-guides:locale:french-";
@@ -58,66 +54,4 @@ export function conflictingFrenchPack(
         isFrenchLocalePack(record),
     ) ?? null
   );
-}
-
-/**
- * Comma-separated user input to a normalized tag list: trimmed, lowercased,
- * deduplicated, empties dropped. An empty result means "no filter" — the
- * backend collapses it to an open pack.
- */
-export function parseTagFilterInput(raw: string): string[] {
-  const seen = new Set<string>();
-  const tags: string[] = [];
-  for (const part of raw.split(",")) {
-    const tag = part.trim().toLowerCase();
-    if (tag && !seen.has(tag)) {
-      seen.add(tag);
-      tags.push(tag);
-    }
-  }
-  return tags;
-}
-
-function languageCodeForLocaleTag(tag: string): string | null {
-  const normalized = tag.trim().toLowerCase();
-  if (!normalized.startsWith("locale:")) return null;
-
-  const locale = normalized.slice("locale:".length);
-  const language =
-    getSubtitleLanguage(locale) ??
-    SUBTITLE_LANGUAGES.find((candidate) => candidate.name.toLowerCase() === locale);
-  return language?.code ?? null;
-}
-
-/** Converts persisted locale tags to the shared picker’s language codes. */
-export function localeFilterLanguageCodes(
-  tags: readonly string[] | null | undefined,
-): string[] {
-  const seen = new Set<string>();
-  return (tags ?? []).flatMap((tag) => {
-    const code = languageCodeForLocaleTag(tag);
-    if (!code || seen.has(code)) return [];
-    seen.add(code);
-    return [code];
-  });
-}
-
-/** Preserves filters the language picker cannot represent when the selection changes. */
-export function localeFilterUnmappedTags(
-  tags: readonly string[] | null | undefined,
-): string[] {
-  return (tags ?? [])
-    .map((tag) => tag.trim().toLowerCase())
-    .filter((tag) => tag && !languageCodeForLocaleTag(tag));
-}
-
-/** Converts shared picker values into canonical locale tags for the managed-rule API. */
-export function localeTagsForLanguageCodes(codes: readonly string[]): string[] {
-  return codes.map((code) => `locale:${code}`);
-}
-
-export function formatTagFilter(
-  tags: readonly string[] | null | undefined,
-): string {
-  return (tags ?? []).join(", ");
 }

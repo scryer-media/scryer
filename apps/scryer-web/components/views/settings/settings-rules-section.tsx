@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { useClient } from "urql";
 import { AddNewButton } from "@/components/common/add-new-button";
+import { InfoHelp } from "@/components/common/info-help";
 import {
   RULE_TEMPLATES,
   RULE_TEMPLATE_CATEGORIES,
@@ -77,10 +78,6 @@ type SettingsRulesSectionProps = {
   copyRuleSet: (record: RuleSetRecord) => void;
   editRuleSet: (record: RuleSetRecord) => void;
   toggleRuleSetEnabled: (record: RuleSetRecord) => Promise<void> | void;
-  saveManagedTagFilter: (
-    record: RuleSetRecord,
-    raw: string,
-  ) => Promise<void> | void;
   deleteRuleSet: (record: RuleSetRecord) => Promise<void> | void;
   validateDraft: () => Promise<void> | void;
   validating: boolean;
@@ -459,6 +456,39 @@ function ManagedBadge({ managedKey }: { managedKey: string }) {
   );
 }
 
+function wrapLocalePackTooltipText(text: string): React.ReactNode {
+  const maximumLineLength = 24;
+  if (text.length <= maximumLineLength) return text;
+
+  const breakIndex = text.lastIndexOf(" ", maximumLineLength);
+  if (breakIndex <= 0) return text;
+
+  return (
+    <>
+      {text.slice(0, breakIndex)}
+      <br />
+      {wrapLocalePackTooltipText(text.slice(breakIndex + 1))}
+    </>
+  );
+}
+
+function trashLocalePackTooltip(description: string) {
+  const prefix = "Managed TRaSH Guides score-only locale pack for ";
+  if (!description.startsWith(prefix)) {
+    return wrapLocalePackTooltipText(description);
+  }
+
+  return (
+    <>
+      Managed TRaSH Guides
+      <br />
+      score-only locale pack for
+      <br />
+      {wrapLocalePackTooltipText(description.slice(prefix.length))}
+    </>
+  );
+}
+
 function TrashLocalePacksCard({
   ruleSetRecords,
   mutatingRuleSetId,
@@ -476,30 +506,31 @@ function TrashLocalePacksCard({
   return (
     <Collapsible id="settings-trash-packs" defaultOpen={false}>
       <Card>
-        <CollapsibleTrigger
-          type="button"
-          className="group w-full text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-        >
-          <CardHeader className="flex-row items-center gap-3">
+        <CardHeader className="flex items-center gap-3">
+          <CollapsibleTrigger
+            type="button"
+            className="group flex min-w-0 flex-1 items-center gap-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+          >
             <div className="min-w-0 flex-1">
               <CardTitle className="text-base">{t("settings.trashPacksTitle")}</CardTitle>
-              <p className="mt-1 text-xs text-muted-foreground">
-                {t("settings.trashPacksHelp")}
-              </p>
             </div>
-            <Badge tone="neutral">
-              {enabledCount}/{packs.length} {t("label.enabled")}
-            </Badge>
             <ChevronDown
               aria-hidden="true"
               className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-180"
             />
-          </CardHeader>
-        </CollapsibleTrigger>
+          </CollapsibleTrigger>
+          <InfoHelp
+            text={t("settings.trashPacksHelp")}
+            ariaLabel={t("settings.trashPacksTitle")}
+          />
+          <Badge tone="neutral">
+            {enabledCount}/{packs.length} {t("label.enabled")}
+          </Badge>
+        </CardHeader>
         <CollapsibleContent>
-          <CardContent className="space-y-2 border-t border-border">
+          <CardContent className="grid gap-2 md:grid-cols-2">
             {packs.map((record) => (
-              <div
+                <div
                 key={record.id}
                 id={selectorId("settings-trash-pack-row", record.managedKey ?? record.id)}
                 className="flex items-start gap-3 rounded-md border border-border p-3"
@@ -514,19 +545,22 @@ function TrashLocalePacksCard({
                   disabled={mutatingRuleSetId === record.id}
                   aria-label={`${t("label.enabled")}: ${record.name}`}
                 />
-                <Label
-                  htmlFor={selectorId(
-                    "settings-trash-pack-toggle",
-                    record.managedKey ?? record.id,
-                  )}
-                  className="min-w-0 cursor-pointer"
-                >
-                  <span className="block font-medium">{record.name}</span>
-                  <span className="mt-1 block text-xs font-normal text-muted-foreground">
-                    {record.description}
-                  </span>
-                </Label>
-              </div>
+                <div className="flex min-w-0 items-center gap-1.5">
+                  <Label
+                    htmlFor={selectorId(
+                      "settings-trash-pack-toggle",
+                      record.managedKey ?? record.id,
+                    )}
+                    className="min-w-0 cursor-pointer font-medium"
+                  >
+                    {record.name}
+                  </Label>
+                  <InfoHelp
+                    text={trashLocalePackTooltip(record.description)}
+                    ariaLabel={record.name}
+                  />
+                </div>
+                </div>
             ))}
           </CardContent>
         </CollapsibleContent>
@@ -853,7 +887,6 @@ export function SettingsRulesSection({
   copyRuleSet,
   editRuleSet,
   toggleRuleSetEnabled,
-  saveManagedTagFilter,
   deleteRuleSet,
   validateDraft,
   validating,
@@ -871,15 +904,9 @@ export function SettingsRulesSection({
       <div className="mx-auto flex w-full max-w-[2176px] flex-col gap-4 xl:flex-row xl:items-start">
         <div className="min-w-0 flex-1">
           <div className="mx-auto w-full max-w-[1280px] space-y-4">
-      <TrashLocalePacksCard
-        ruleSetRecords={ruleSetRecords}
-        mutatingRuleSetId={mutatingRuleSetId}
-        toggleRuleSetEnabled={toggleRuleSetEnabled}
-        saveManagedTagFilter={saveManagedTagFilter}
-      />
       <div className="rounded border border-border">
         <div className="flex items-center justify-between border-b border-border px-3 py-2">
-          <CardTitle className="text-base">
+          <CardTitle className="text-base text-foreground opacity-100">
             {t("settings.rules")}
           </CardTitle>
         </div>
@@ -1201,6 +1228,11 @@ export function SettingsRulesSection({
           />
         </div>
       )}
+      <TrashLocalePacksCard
+        ruleSetRecords={ruleSetRecords}
+        mutatingRuleSetId={mutatingRuleSetId}
+        toggleRuleSetEnabled={toggleRuleSetEnabled}
+      />
           </div>
         </div>
         <div className="@container w-full space-y-4 xl:w-[44%] xl:max-w-[880px] xl:shrink-0">

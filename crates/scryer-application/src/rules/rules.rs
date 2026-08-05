@@ -1502,10 +1502,7 @@ mod tests {
             let policy = scryer_rules::UserPolicy {
                 id: id.clone(),
                 name: pack.name.to_string(),
-                rego_source: scryer_rules::rewrite_package_declaration(
-                    &pack.source(None),
-                    &id,
-                ),
+                rego_source: scryer_rules::rewrite_package_declaration(&pack.source(None), &id),
                 origin: scryer_rules::PolicyOrigin::System,
                 applied_facets: vec![],
             };
@@ -1536,7 +1533,6 @@ mod tests {
                     .all(|entry| entry.origin == scryer_rules::PolicyOrigin::System)
             );
         }
-
     }
 
     /// An enabled pack with no tag filter is the user's opt-in, so

@@ -194,13 +194,13 @@ function mergeRedundantPublicSections<
     });
 }
 
-export function orderDiscoveryHomeSections<
+function orderDiscoveryHomeSectionsInternal<
   TSection extends OrderableDiscoverySection,
 >(input: {
   publicSections: readonly TSection[];
   personalizedSections: readonly TSection[];
   completeCollection: TSection | null;
-}): TSection[] {
+}): { sections: TSection[]; heroVisibilitySections: TSection[] } {
   const publicSections = mergeRedundantPublicSections(
     input.publicSections.filter(sectionIsRenderable),
   );
@@ -260,7 +260,7 @@ export function orderDiscoveryHomeSections<
     (section) => !placedPublicSections.has(section),
   );
 
-  return [
+  const ordered = [
     ...personalizedShelf,
     ...(completeCollection ? [completeCollection] : []),
     ...unknownPersonalizedSections,
@@ -270,4 +270,78 @@ export function orderDiscoveryHomeSections<
     ...remainingPublicSections,
     ...curatedSections,
   ];
+  const floorExemptIds = new Set<string>(
+    [
+      ...personalizedShelf,
+      ...(completeCollection ? [completeCollection] : []),
+      ...unknownPersonalizedSections,
+      ...fallbackSections,
+    ].map((section) => section.sectionId),
+  );
+  return applyCrossRailPresentation(ordered, floorExemptIds);
+}
+
+// orderDiscoveryHomeSections is the primary reading-order entry point; the
+// Detailed variant additionally exposes the post-dedupe PRE-floor list, which
+// is what hero visibility must be checked against — a floored thin rail must
+// never blank a hero whose item rendered nowhere else.
+export function orderDiscoveryHomeSections<
+  TSection extends OrderableDiscoverySection,
+>(input: {
+  publicSections: readonly TSection[];
+  personalizedSections: readonly TSection[];
+  completeCollection: TSection | null;
+}): TSection[] {
+  return orderDiscoveryHomeSectionsDetailed(input).sections;
+}
+
+export function orderDiscoveryHomeSectionsDetailed<
+  TSection extends OrderableDiscoverySection,
+>(input: {
+  publicSections: readonly TSection[];
+  personalizedSections: readonly TSection[];
+  completeCollection: TSection | null;
+}): { sections: TSection[]; heroVisibilitySections: TSection[] } {
+  return orderDiscoveryHomeSectionsInternal(input);
+}
+
+// MIN_PUBLIC_RAIL_ITEMS: a public rail that keeps fewer unique items than this
+// after cross-rail dedupe hides instead of rendering — a one-card rail reads as
+// breakage (owner incident 2026-08-05). Personalized rails and the collection
+// completer are exempt: a thin personal rail is still meaningful.
+export const MIN_PUBLIC_RAIL_ITEMS = 3;
+
+// applyCrossRailPresentation is the final stage of the reading order: Scryer —
+// not the gateway — owns which rail shows a title (owner directive 2026-08-05;
+// the gateway now ships public-feed sections FULL, so the same title may arrive
+// in several sections). First occurrence in reading order wins; later
+// duplicates drop; public rails falling under MIN_PUBLIC_RAIL_ITEMS hide.
+function applyCrossRailPresentation<TSection extends OrderableDiscoverySection>(
+  ordered: readonly TSection[],
+  floorExemptIds: ReadonlySet<string>,
+): { sections: TSection[]; heroVisibilitySections: TSection[] } {
+  const seen = new Set<string>();
+  const deduped: TSection[] = [];
+  for (const section of ordered) {
+    const items = section.items.filter((item) => {
+      const key = discoveryItemKey(item);
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
+    if (items.length === 0) {
+      continue;
+    }
+    deduped.push(
+      items.length === section.items.length ? section : { ...section, items },
+    );
+  }
+  const sections = deduped.filter(
+    (section) =>
+      floorExemptIds.has(section.sectionId) ||
+      section.items.length >= MIN_PUBLIC_RAIL_ITEMS,
+  );
+  return { sections, heroVisibilitySections: deduped };
 }
