@@ -114,7 +114,7 @@
     "provider_type": "newznab",
     "source_kind": "usenet"
   },
-  "sdk_constraint": ">=3.6.0, <4.0.0",
-  "sdk_version": "3.6.0",
+  "sdk_constraint": ">=3.7.0, <4.0.0",
+  "sdk_version": "3.7.0",
   "version": "0.2.22"
 }
