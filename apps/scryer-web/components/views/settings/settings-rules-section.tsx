@@ -904,9 +904,9 @@ export function SettingsRulesSection({
       <div className="mx-auto flex w-full max-w-[2176px] flex-col gap-4 xl:flex-row xl:items-start">
         <div className="min-w-0 flex-1">
           <div className="mx-auto w-full max-w-[1280px] space-y-4">
-      <div className="rounded border border-border">
+      <div className="overflow-hidden rounded border border-border bg-card">
         <div className="flex items-center justify-between border-b border-border px-3 py-2">
-          <CardTitle className="text-base text-foreground opacity-100">
+          <CardTitle className="text-base text-foreground">
             {t("settings.rules")}
           </CardTitle>
         </div>
