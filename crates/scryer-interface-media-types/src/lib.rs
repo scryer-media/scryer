@@ -1945,6 +1945,7 @@ pub struct DiscoveryHomeCardPayload {
     pub year: Option<i32>,
     pub poster_url: Option<String>,
     pub content_type: MediaFacetValue,
+    pub is_adult: bool,
     pub owned_in_input: bool,
 }
 
@@ -1961,6 +1962,7 @@ pub struct DiscoveryHomeHeroPayload {
     pub background_url: Option<String>,
     pub overview: Option<String>,
     pub content_type: MediaFacetValue,
+    pub is_adult: bool,
     pub rating: Option<f64>,
     pub rating_sources: Vec<String>,
     pub external_ratings: Vec<DiscoveryExternalRatingPayload>,
@@ -2062,6 +2064,21 @@ pub struct DiscoveryExternalIdPayload {
 }
 
 #[derive(SimpleObject, Clone)]
+pub struct DiscoveryContentCertificationPayload {
+    pub value: String,
+    pub source: String,
+    pub release_type: Option<i32>,
+}
+
+#[derive(SimpleObject, Clone)]
+pub struct DiscoveryContentRatingPayload {
+    pub country: String,
+    pub certifications: Vec<DiscoveryContentCertificationPayload>,
+    pub age_rating: Option<i32>,
+    pub age_rating_source: Option<String>,
+}
+
+#[derive(SimpleObject, Clone)]
 pub struct CanonicalMediaTagPayload {
     pub key: String,
     pub category: String,
@@ -2089,6 +2106,8 @@ pub struct DiscoveryItemPayload {
     pub overview: Option<String>,
     pub content_type: Option<String>,
     pub canonical_tags: Vec<CanonicalMediaTagPayload>,
+    pub is_adult: bool,
+    pub content_ratings: Vec<DiscoveryContentRatingPayload>,
     pub rating: Option<f64>,
     pub rating_sources: Vec<String>,
     pub external_ratings: Vec<DiscoveryExternalRatingPayload>,

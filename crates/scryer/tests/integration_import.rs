@@ -1401,13 +1401,17 @@ async fn manual_import_series_persists_media_analysis_and_acquisition_score() {
             series_movie_link_id: None,
             quality: Some("1080P".to_string()),
         }],
-        None,
+        Some(source_dir.path().to_path_buf()),
     )
     .await
     .expect("execute manual import");
 
     assert_eq!(results.len(), 1);
-    assert!(results[0].success, "manual import should succeed");
+    assert!(
+        results[0].success,
+        "manual import should succeed: {:#?}",
+        results[0]
+    );
 
     let media_files = ctx
         .media_files
@@ -1470,13 +1474,17 @@ async fn manual_import_series_reuses_existing_title_folder_path_even_when_templa
             series_movie_link_id: None,
             quality: Some("1080P".to_string()),
         }],
-        None,
+        Some(source_dir.path().to_path_buf()),
     )
     .await
     .expect("execute manual import");
 
     assert_eq!(results.len(), 1);
-    assert!(results[0].success, "manual import should succeed");
+    assert!(
+        results[0].success,
+        "manual import should succeed: {:#?}",
+        results[0]
+    );
     let dest_path = results[0].dest_path.clone().expect("dest path");
     assert!(dest_path.contains("Template Show (2024)/Season 1/"));
     assert!(!dest_path.contains("Template Show/Season 1/"));
@@ -1554,7 +1562,7 @@ async fn manual_import_series_rejects_when_incumbent_covers_broader_episode_set(
             series_movie_link_id: None,
             quality: Some("1080P".to_string()),
         }],
-        None,
+        Some(source_dir.path().to_path_buf()),
     )
     .await
     .expect("execute manual import");
@@ -1568,7 +1576,9 @@ async fn manual_import_series_rejects_when_incumbent_covers_broader_episode_set(
         results[0]
             .error_message
             .as_deref()
-            .is_some_and(|message| message.contains("broader episode set"))
+            .is_some_and(|message| message.contains("broader episode set")),
+        "unexpected manual import result: {:#?}",
+        results[0]
     );
 
     let media_files = ctx

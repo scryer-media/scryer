@@ -304,7 +304,7 @@ impl ImportRepository for ImportStore {
                 let selection = selection.clone();
                 Box::pin(async move {
                     let identity = &selection.source_identity;
-                    let identity_args = vec![
+                    let identity_args = [
                         SqlArg::Text(normalize_download_client_id(identity.client_id.as_deref())),
                         SqlArg::Text(identity.client_type.clone()),
                         SqlArg::Text(identity.item_id.clone()),

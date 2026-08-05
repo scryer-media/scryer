@@ -769,6 +769,23 @@ file = "postgres/migrations/0151_manual_import_selections.sql"
 engine = "postgres"
 scope = "all"
 
+[[migration]]
+version = 152
+description = "discovery title content classification"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0152_discovery_title_content_classification.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0152_discovery_title_content_classification.sql"
+engine = "postgres"
+scope = "all"
+
 [[baseline]]
 through_version = 140
 file = "baselines/0140_baseline.sql"

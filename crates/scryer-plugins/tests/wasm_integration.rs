@@ -13,10 +13,9 @@ static TEST_WASM_RUNTIME: Once = Once::new();
 
 fn initialize_wasm_runtime_for_tests() {
     TEST_WASM_RUNTIME.call_once(|| {
-        let cache_dir = std::env::temp_dir().join(format!(
-            "scryer-wasmtime-integration-cache-{}",
-            std::process::id()
-        ));
+        // Nextest gives each test a process, so this test-only cache is shared
+        // across the suite instead of recompiling the same modules per test.
+        let cache_dir = std::env::temp_dir().join("scryer-wasmtime-integration-cache");
         scryer_plugins::initialize_wasm_runtime_at(cache_dir)
             .expect("test Wasmtime cache must initialize");
     });

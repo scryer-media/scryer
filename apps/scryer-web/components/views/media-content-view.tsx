@@ -71,7 +71,7 @@ import {
   type ReleaseSearchSortDirection,
   type ReleaseSearchSortKey,
 } from "@/components/common/release-search-results";
-import { HorizontalScrollFade } from "@/components/common/horizontal-scroll-fade";
+import { HorizontalRail } from "@/components/common/horizontal-scroll-fade";
 import { TitlePosterSlot } from "@/components/title-poster-slot";
 import { TitleCard } from "@/components/title-card";
 import { TitleRatingsStrip } from "@/components/views/title-ratings-strip";
@@ -550,7 +550,7 @@ function TitleContextMoreLikeThisStrip({
         icon={Sparkles}
         title={t("title.contextMoreLikeThis")}
       />
-      <HorizontalScrollFade className="flex gap-[11px] overflow-x-auto pb-1">
+      <HorizontalRail className="flex gap-[11px] overflow-x-auto pb-1">
         {items.map((item) => {
           const posterUrl = selectPosterVariantUrl(item.posterUrl, "w250");
           const yearLabel =
@@ -583,7 +583,7 @@ function TitleContextMoreLikeThisStrip({
             </div>
           );
         })}
-      </HorizontalScrollFade>
+      </HorizontalRail>
     </TitleWorkspaceSectionCard>
   );
 }
@@ -649,7 +649,7 @@ function TitleContextForYouPanel({
               <h3 className="mx-0.5 mb-3.5 text-[11px] font-bold uppercase tracking-[0.06em] text-[var(--scry-muted3)]">
                 {group.label}
               </h3>
-              <HorizontalScrollFade
+              <HorizontalRail
                 className="flex gap-3.5 overflow-x-auto pb-1.5 pr-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
                 fadeClassName="to-[var(--scry-card2)]"
               >
@@ -668,7 +668,7 @@ function TitleContextForYouPanel({
                     />
                   </div>
                 ))}
-              </HorizontalScrollFade>
+              </HorizontalRail>
             </section>
           ))}
         </div>

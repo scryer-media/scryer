@@ -1610,40 +1610,37 @@ impl AppUseCase {
             return Err(error);
         }
 
-        if let Some(incumbent) = incumbent {
-            if let Err(error) = self
+        if let Some(incumbent) = incumbent
+            && let Err(error) = self
                 .delete_media_file_record_with_dependents(&incumbent.id)
                 .await
+        {
+            if let Err(remove_error) = crate::fs_safety::remove_file_safely(original_path).await {
+                return Err(AppError::Repository(format!(
+                    "failed to clean up the replaced media record after restoring {}: {error}; the restored file could not be removed for rollback: {remove_error}",
+                    original_path.display()
+                )));
+            }
+
+            match crate::recycle_bin::restore_recycled_file_exact(
+                &displaced.recycled_path,
+                original_path,
+            )
+            .await
             {
-                if let Err(remove_error) = crate::fs_safety::remove_file_safely(original_path).await
-                {
+                Ok(()) => {
+                    let _ = crate::fs_safety::remove_dir_all_safely_if_exists(&displaced.entry_dir)
+                        .await;
+                }
+                Err(rollback_error) => {
                     return Err(AppError::Repository(format!(
-                        "failed to clean up the replaced media record after restoring {}: {error}; the restored file could not be removed for rollback: {remove_error}",
+                        "failed to clean up the replaced media record after restoring {}: {error}; rollback also failed: {rollback_error}",
                         original_path.display()
                     )));
                 }
-
-                match crate::recycle_bin::restore_recycled_file_exact(
-                    &displaced.recycled_path,
-                    original_path,
-                )
-                .await
-                {
-                    Ok(()) => {
-                        let _ =
-                            crate::fs_safety::remove_dir_all_safely_if_exists(&displaced.entry_dir)
-                                .await;
-                    }
-                    Err(rollback_error) => {
-                        return Err(AppError::Repository(format!(
-                            "failed to clean up the replaced media record after restoring {}: {error}; rollback also failed: {rollback_error}",
-                            original_path.display()
-                        )));
-                    }
-                }
-
-                return Err(error);
             }
+
+            return Err(error);
         }
 
         if let Err(error) = crate::fs_safety::remove_file_safely(recycled_file).await {
@@ -1666,6 +1663,7 @@ impl AppUseCase {
         Ok(original_path.to_path_buf())
     }
 
+    #[allow(clippy::too_many_arguments)] // The spawned job boundary owns its inputs explicitly.
     async fn run_restore_recycled_items_job(
         &self,
         mut run: JobRunRecord,

@@ -32,7 +32,8 @@ pub(crate) fn command_abi_version(wasm: &[u8]) -> Result<Option<u16>, String> {
         return Ok(None);
     };
     let bytes: [u8; 2] = marker.try_into().map_err(|_| {
-        format!("plugin command ABI marker must contain exactly a two-byte little-endian version")
+        "plugin command ABI marker must contain exactly a two-byte little-endian version"
+            .to_string()
     })?;
     let version = u16::from_le_bytes(bytes);
     if version != COMMAND_ABI_VERSION {

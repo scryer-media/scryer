@@ -434,6 +434,18 @@ async fn request_count(server: &MockServer) -> usize {
     server.received_requests().await.unwrap_or_default().len()
 }
 
+async fn wait_for_request(server: &MockServer, deadline: Duration) {
+    let started = Instant::now();
+    while started.elapsed() < deadline {
+        if request_count(server).await > 0 {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
+    panic!("expected the indexer request to reach the test server within {deadline:?}");
+}
+
 fn indexer_status<'a>(
     snapshot: &'a InteractiveReleaseSearchSnapshot,
     indexer_id: &str,
@@ -655,8 +667,8 @@ async fn cancel_mid_flight_stops_job_and_outbound_requests() {
         .start_interactive_release_search(&user, title_request(&title_id))
         .await
         .expect("start job");
-    // Let the search get onto the wire before cancelling.
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    // Cancel only after the delayed request is in flight.
+    wait_for_request(&slow, Duration::from_secs(2)).await;
 
     let cancelled = app
         .cancel_interactive_release_search(&user, &start.id)

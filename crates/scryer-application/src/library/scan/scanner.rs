@@ -344,6 +344,22 @@ pub struct DiscoveryExternalId {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct DiscoveryContentCertification {
+    pub value: String,
+    pub source: String,
+    pub release_type: Option<i32>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct DiscoveryContentRating {
+    pub country: String,
+    #[serde(default)]
+    pub certifications: Vec<DiscoveryContentCertification>,
+    pub age_rating: Option<i32>,
+    pub age_rating_source: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct DiscoveryTitle {
     pub target_key: String,
     pub target_kind: String,
@@ -372,6 +388,10 @@ pub struct DiscoveryTitle {
     pub source_tags: Vec<serde_json::Value>,
     #[serde(default)]
     pub canonical_tags: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub is_adult: bool,
+    #[serde(default)]
+    pub content_ratings: Vec<DiscoveryContentRating>,
     #[serde(default)]
     pub sources: Vec<String>,
     #[serde(default)]

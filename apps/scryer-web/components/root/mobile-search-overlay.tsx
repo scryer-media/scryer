@@ -10,6 +10,7 @@ import {
   routeCommandDisplayLabel,
   type RouteCommandItem,
 } from "@/components/common/route-command-types";
+import { HorizontalRail } from "@/components/common/horizontal-scroll-fade";
 import { UnderlineFilterButton } from "@/components/common/underline-filter-button";
 import { IconButton } from "@/components/ui/icon-button";
 import {
@@ -890,9 +891,12 @@ export function MobileSearchOverlay({
         {loading ? (
           <SearchSectionLoading compact label={t("label.loading")} />
         ) : (
-          <div className="flex gap-3 overflow-x-auto pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <HorizontalRail
+            className="flex gap-3 overflow-x-auto pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+            fadeClassName="to-[var(--scry-bg)]"
+          >
             {visibleItems.map((result) => renderMetadataItem(result, facet))}
-          </div>
+          </HorizontalRail>
         )}
       </section>
     );

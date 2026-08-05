@@ -427,7 +427,7 @@ async fn preview_manual_import(
             .to_string();
         let size = std::fs::metadata(path).map(|m| m.len() as i64).unwrap_or(0);
 
-        let parsed = build_augmented_episode_import_metadata(path, &completed, other_video_files);
+        let parsed = build_augmented_episode_import_metadata(path, completed, other_video_files);
 
         let mut suggested_episode_id = None;
         let mut suggested_episode_label = None;
@@ -1268,6 +1268,12 @@ pub async fn execute_manual_import(
     let trusted_source_root = trusted_source_root.as_deref().ok_or_else(|| {
         AppError::Validation("manual import source root is required".to_string())
     })?;
+    let trusted_source_root = std::fs::canonicalize(trusted_source_root).map_err(|error| {
+        AppError::Validation(format!(
+            "manual import source root is not accessible: {} ({error})",
+            trusted_source_root.display()
+        ))
+    })?;
 
     let ImportPathSettings {
         media_root,
@@ -1285,7 +1291,7 @@ pub async fn execute_manual_import(
 
     for mapping in &files {
         let source = stored_path_to_path_buf(&mapping.file_path);
-        if let Err(err) = validate_manual_import_source_under_trusted_root(&source, trusted_source_root)
+        if let Err(err) = validate_manual_import_source_under_trusted_root(&source, &trusted_source_root)
         {
             results.push(manual_import_file_result(
                 mapping,
@@ -1732,20 +1738,19 @@ pub async fn execute_queued_manual_import(
     )
     .await;
 
-    if status == ImportStatus::Completed {
-        if let Err(error) = app
+    if status == ImportStatus::Completed
+        && let Err(error) = app
             .services
             .workflow
             .imports
             .delete_manual_import_selections_for_source(&source_identity)
             .await
-        {
-            tracing::warn!(
-                error = %error,
-                item_id = %source_identity.item_id,
-                "failed to clean up terminal manual-import selections"
-            );
-        }
+    {
+        tracing::warn!(
+            error = %error,
+            item_id = %source_identity.item_id,
+            "failed to clean up terminal manual-import selections"
+        );
     }
 
     let result_json = manual_import_result_json(

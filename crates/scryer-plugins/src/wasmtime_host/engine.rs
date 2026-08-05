@@ -247,8 +247,8 @@ fn initialize_wasm_runtime_for_tests() {
     if WASM_RUNTIME_CONFIG.get().is_some() {
         return;
     }
-    let cache_dir =
-        std::env::temp_dir().join(format!("scryer-wasmtime-test-cache-{}", std::process::id()));
+    // Unit tests also run in independent test processes under Nextest.
+    let cache_dir = std::env::temp_dir().join("scryer-wasmtime-test-cache");
     initialize_wasm_runtime_at(&cache_dir).expect("test Wasmtime cache must initialize");
 }
 

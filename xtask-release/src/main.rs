@@ -2281,14 +2281,18 @@ fn baseline_catalog_v3_zstd_artifact<'a>(
         })
 }
 
-fn require_builtin_descriptor_sdk_version(plugin_id: &str, sdk_version: &str) -> Result<()> {
-    let expected = scryer_plugin_sdk::SDK_VERSION;
-    if sdk_version != expected {
-        bail!(
-            "{plugin_id}: catalog-v3 builtin uses sdk_version {sdk_version}, expected {expected}"
-        );
-    }
-    Ok(())
+fn require_builtin_descriptor_sdk_contract(
+    plugin_id: &str,
+    sdk_version: &str,
+    sdk_constraint: &str,
+) -> Result<()> {
+    scryer_plugin_sdk::validate_sdk_contract(
+        plugin_id,
+        sdk_version,
+        sdk_constraint,
+        scryer_plugin_sdk::SDK_VERSION,
+    )
+    .map_err(|error| anyhow!(error))
 }
 
 fn release_builtin_descriptor_loader(ctx: &TaskContext) -> Result<WasmPluginDescriptorLoader> {
@@ -2320,7 +2324,11 @@ fn existing_builtin_wasm_digest(ctx: &TaskContext, spec: &BuiltinPluginSpec) -> 
                 spec.plugin_id
             )
         })?;
-    require_builtin_descriptor_sdk_version(spec.plugin_id, &descriptor.sdk_version)?;
+    require_builtin_descriptor_sdk_contract(
+        spec.plugin_id,
+        &descriptor.sdk_version,
+        &descriptor.sdk_constraint,
+    )?;
     Ok(blake3_hex(&wasm_bytes))
 }
 
@@ -2412,7 +2420,11 @@ fn sync_builtin_plugin(
             release.version
         );
     }
-    require_builtin_descriptor_sdk_version(spec.plugin_id, &descriptor.sdk_version)?;
+    require_builtin_descriptor_sdk_contract(
+        spec.plugin_id,
+        &descriptor.sdk_version,
+        &descriptor.sdk_constraint,
+    )?;
     descriptor.sdk_version = scryer_plugin_sdk::SDK_VERSION.to_string();
     descriptor.sdk_constraint = scryer_plugin_sdk::current_sdk_constraint();
 
@@ -3730,22 +3742,21 @@ mod tests {
     }
 
     #[test]
-    fn builtin_descriptor_sdk_version_must_match_host_sdk() {
+    fn builtin_descriptor_sdk_contract_must_support_host_sdk() {
         assert!(
-            require_builtin_descriptor_sdk_version("newznab", scryer_plugin_sdk::SDK_VERSION)
-                .is_ok()
+            require_builtin_descriptor_sdk_contract(
+                "newznab",
+                scryer_plugin_sdk::SDK_VERSION,
+                &scryer_plugin_sdk::current_sdk_constraint(),
+            )
+            .is_ok()
         );
 
         let current_sdk = Version::parse(scryer_plugin_sdk::SDK_VERSION).unwrap();
         let mismatched_sdk = Version::new(current_sdk.major, current_sdk.minor + 1, 0).to_string();
-        let error = require_builtin_descriptor_sdk_version("newznab", &mismatched_sdk)
+        let error = require_builtin_descriptor_sdk_contract("newznab", &mismatched_sdk, "")
             .expect_err("newer catalog SDK must be rejected");
-        assert!(
-            error
-                .to_string()
-                .contains(&format!("expected {}", scryer_plugin_sdk::SDK_VERSION)),
-            "{error:#}"
-        );
+        assert!(error.to_string().contains("host sdk_version"), "{error:#}");
     }
 
     #[test]

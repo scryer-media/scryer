@@ -371,7 +371,8 @@ pub use library::user_delete::{DeletePreview, DeleteTitlesPreview};
 pub use library_scan::{
     AnimeEpisodeMapping, AnimeMapping, AnimeMovie, BulkArtworkUrlResult, BulkMetadataResult,
     DiscoveryCollectionCompletionInput, DiscoveryCollectionCompletionResult,
-    DiscoveryContextChangeType, DiscoveryContextChangedSubjectInput, DiscoveryContextChangesInput,
+    DiscoveryContentCertification, DiscoveryContentRating, DiscoveryContextChangeType,
+    DiscoveryContextChangedSubjectInput, DiscoveryContextChangesInput,
     DiscoveryContextChangesResult, DiscoveryContextSnapshotAckResult,
     DiscoveryContextSnapshotPageResult, DiscoveryContextSnapshotStatusResult,
     DiscoveryContextSnapshotSubmitInput, DiscoveryContextSnapshotSubmitResult,

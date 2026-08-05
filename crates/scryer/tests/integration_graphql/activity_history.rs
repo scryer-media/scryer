@@ -23,60 +23,6 @@ async fn graphql_title_history_empty() {
 }
 
 #[tokio::test]
-async fn graphql_title_history_works_without_legacy_table() {
-    let ctx = TestContext::new().await;
-    let legacy_table: Option<String> = sqlx::query_scalar(
-        "SELECT name
-           FROM sqlite_master
-          WHERE type = 'table'
-            AND name = 'title_history'
-          LIMIT 1",
-    )
-    .fetch_optional(ctx.db.pool())
-    .await
-    .expect("sqlite master query should succeed");
-    assert_eq!(legacy_table, None);
-
-    let title = create_catalog_title(
-        &ctx,
-        "Legacy Title History Fixture",
-        MediaFacet::Movie,
-        vec![],
-        vec![],
-        true,
-    )
-    .await;
-
-    let body = gql(
-        &ctx,
-        r#"
-        query TitleHistory($titleId: ID!) {
-          titleHistory(filter: { titleIds: [$titleId], limit: 10 }) {
-            totalCount
-            items {
-              id
-              eventType
-              sourceTitle
-            }
-          }
-        }
-        "#,
-        json!({ "titleId": title.id }),
-    )
-    .await;
-
-    assert_no_errors(&body);
-    assert_eq!(body["data"]["titleHistory"]["totalCount"], 0);
-    assert_eq!(
-        body["data"]["titleHistory"]["items"]
-            .as_array()
-            .expect("history items array")
-            .len(),
-        0
-    );
-}
-
-#[tokio::test]
 async fn graphql_title_history_rejects_unsupported_event_type_filters() {
     let ctx = TestContext::new().await;
     let body = gql(

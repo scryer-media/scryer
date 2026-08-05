@@ -907,8 +907,7 @@ mod tests {
                 .lock()
                 .expect("cache entries lock")
                 .iter()
-                .filter(|entry| entry.token == token && entry.variant == variant)
-                .next()
+                .find(|entry| entry.token == token && entry.variant == variant)
                 .cloned())
         }
 

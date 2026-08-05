@@ -58,6 +58,9 @@ impl PluginCommandResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "family", content = "command", rename_all = "snake_case")]
+// Command envelopes are short-lived serialization values; boxing variants would be a
+// source-compatible API break without a meaningful runtime benefit.
+#[allow(clippy::large_enum_variant)]
 pub enum PluginCommand {
     Indexer(PluginIndexerCommand),
     DownloadClient(PluginDownloadClientCommand),
@@ -92,6 +95,7 @@ pub struct PluginActionResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "operation", content = "request", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)]
 pub enum PluginIndexerCommand {
     Search(PluginSearchRequest),
     Action(PluginActionRequest),
@@ -111,6 +115,7 @@ pub struct PluginDownloadGetCompletedRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "operation", content = "request", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)]
 pub enum PluginDownloadClientCommand {
     Add(PluginDownloadClientAddRequest),
     ListQueue,
@@ -141,6 +146,7 @@ pub enum PluginDownloadClientCommandResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "operation", content = "request", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)]
 pub enum PluginNotificationCommand {
     Send(PluginNotificationRequest),
     Action(PluginActionRequest),
@@ -155,6 +161,7 @@ pub enum PluginNotificationCommandResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "operation", content = "request", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)]
 pub enum PluginSubtitleCommand {
     ValidateConfig(SubtitlePluginValidateConfigRequest),
     Search(SubtitlePluginSearchRequest),

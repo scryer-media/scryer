@@ -677,6 +677,7 @@ impl AppUseCase {
         Ok(library_id)
     }
 
+    #[allow(clippy::too_many_arguments)] // The spawned job boundary owns its inputs explicitly.
     async fn run_delete_media_file_job(
         &self,
         run: JobRunRecord,
@@ -718,6 +719,7 @@ impl AppUseCase {
         }
     }
 
+    #[allow(clippy::too_many_arguments)] // Completion fields are persisted as one job outcome.
     async fn finish_media_file_deletion_job(
         &self,
         mut run: JobRunRecord,

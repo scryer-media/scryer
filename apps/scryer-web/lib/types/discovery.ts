@@ -81,6 +81,7 @@ export type DiscoveryItem = {
   backgroundUrl: string | null;
   overview: string | null;
   contentType: string | null;
+  isAdult: boolean;
   canonicalTags?: CanonicalMediaTag[];
   rating: number | null;
   ratingSources?: string[];
@@ -141,6 +142,7 @@ export type DiscoveryHomeCard = {
   year: number | null;
   posterUrl: string | null;
   contentType: Facet;
+  isAdult: boolean;
   ownedInInput: boolean;
 };
 
@@ -206,6 +208,7 @@ export type CatalogDiscoveryItem = Pick<
   | "year"
   | "posterUrl"
   | "contentType"
+  | "isAdult"
   | "statusTags"
   | "sourceTags"
   | "rankScore"

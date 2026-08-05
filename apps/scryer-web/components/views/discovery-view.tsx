@@ -5,7 +5,6 @@ import {
   Building2,
   CalendarDays,
   Check,
-  ChevronRight,
   Disc3,
   Eye,
   Film,
@@ -23,7 +22,7 @@ import {
   X,
 } from "lucide-react";
 import { useTranslate } from "@/lib/context/translate-context";
-import { HorizontalScrollFade } from "@/components/common/horizontal-scroll-fade";
+import { HorizontalRail } from "@/components/common/horizontal-scroll-fade";
 import { Button } from "@/components/ui/button";
 import { MultiSelectDropdown } from "@/components/ui/multi-select-dropdown";
 import { TitleCard } from "@/components/title-card";
@@ -429,6 +428,7 @@ function DiscoveryRailCard({
         facet={facet}
         facetLabel={itemTypeLabel(item)}
         posterUrl={selectPosterVariantUrl(item.posterUrl, "w250")}
+        isAdult={item.isAdult}
         addable={addable}
         requestable={requestable}
         compact={!fillHeight}
@@ -486,18 +486,16 @@ function DiscoverySectionRail({
           ) : null}
           {heading}
         </h3>
-        <span className="inline-flex items-center gap-1 text-[12.5px] font-medium text-[var(--scry-muted)]">
-          {t("discovery.viewAll")}
-          <ChevronRight className="h-3.5 w-3.5" />
-        </span>
       </div>
-      <HorizontalScrollFade
+      <HorizontalRail
         className={cn(
           "flex gap-3.5 overflow-x-auto pb-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
           fillHeight && "lg:h-full",
         )}
         containerClassName={cn(fillHeight && "lg:min-h-0 lg:flex-1")}
         fadeClassName="to-[var(--scry-bg)]"
+        scrollControlLabel={`${heading}: scroll right`}
+        scrollBackControlLabel={`${heading}: scroll left`}
       >
         {items.map((item) => {
           const facet = discoveryItemFacet(item);
@@ -516,7 +514,7 @@ function DiscoverySectionRail({
             />
           );
         })}
-      </HorizontalScrollFade>
+      </HorizontalRail>
     </section>
   );
 }

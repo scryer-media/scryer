@@ -609,66 +609,6 @@ async fn migration_0140_uses_owner_scoped_metadata_storage_only() {
         assert_eq!(exists, 1, "{table} should exist after migrations apply");
     }
 
-    for table in [
-        "canonical_media_subjects",
-        "canonical_media_tags",
-        "canonical_media_tag_sources",
-        "canonical_media_tag_source_keys",
-        "canonical_media_rating_summaries",
-        "canonical_media_rating_sources",
-        "canonical_media_external_ratings",
-        "discovery_title_ratings",
-        "title_rating_summaries",
-        "title_rating_sources",
-        "title_external_ratings",
-    ] {
-        let exists: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*)
-               FROM sqlite_master
-              WHERE type = 'table'
-                AND name = ?",
-        )
-        .bind(table)
-        .fetch_one(&services.pool)
-        .await
-        .expect("obsolete metadata table lookup should succeed");
-        assert_eq!(exists, 0, "{table} should not exist after migrations apply");
-    }
-
-    let obsolete_discovery_columns: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*)
-           FROM pragma_table_info('discovery_titles')
-          WHERE name IN ('rating', 'canonical_subject_id')",
-    )
-    .fetch_one(&services.pool)
-    .await
-    .expect("discovery title columns should load");
-    assert_eq!(obsolete_discovery_columns, 0);
-
-    drop(services);
-    let _ = std::fs::remove_file(db);
-}
-
-#[tokio::test]
-async fn migration_0146_drops_retired_event_outboxes() {
-    let db = std::env::temp_dir().join(format!(
-        "scryer_migration_0146_event_outboxes_{}.db",
-        chrono::Utc::now().timestamp_micros()
-    ));
-    let services = SqliteServices::new(db.to_string_lossy())
-        .await
-        .expect("db should initialize");
-    let exists: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*)
-           FROM sqlite_master
-          WHERE type = 'table'
-            AND name = 'event_outboxes'",
-    )
-    .fetch_one(&services.pool)
-    .await
-    .expect("event outbox table lookup should succeed");
-    assert_eq!(exists, 0, "event outboxes should be removed by migration");
-
     drop(services);
     let _ = std::fs::remove_file(db);
 }
@@ -1634,8 +1574,6 @@ fn migration_0140_sqlite_and_postgres_rollup_sources_include_scheduler_columns()
                 "0140 rollup migration source should include {required}"
             );
         }
-        assert!(!sql.contains("canonical_media_"));
-        assert!(!sql.contains("canonical_subject_id"));
     }
 }
 

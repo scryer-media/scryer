@@ -484,6 +484,8 @@ pub struct DiscoveryItemRecord {
     pub overview: Option<String>,
     pub content_type: Option<String>,
     pub canonical_tags: Vec<CanonicalMediaTag>,
+    pub is_adult: bool,
+    pub content_ratings: Vec<DiscoveryContentRating>,
     pub rating: Option<f64>,
     pub rating_sources: Vec<String>,
     pub external_ratings: Vec<TitleExternalRating>,

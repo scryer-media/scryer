@@ -1987,6 +1987,7 @@ fn from_discovery_home_card(
         year: item.year,
         poster_url,
         content_type,
+        is_adult: item.is_adult,
         owned_in_input: item.owned_in_input,
     })
 }
@@ -2016,6 +2017,7 @@ fn from_discovery_home_hero(
         background_url,
         overview: item.overview,
         content_type,
+        is_adult: item.is_adult,
         rating: item.rating,
         rating_sources: item.rating_sources,
         external_ratings: item
@@ -2131,6 +2133,25 @@ pub fn from_discovery_item(app: &AppUseCase, item: DiscoveryItemRecord) -> Disco
                 source_tag_keys: tag.source_tag_keys,
                 is_adult: tag.is_adult,
                 is_spoiler: tag.is_spoiler,
+            })
+            .collect(),
+        is_adult: item.is_adult,
+        content_ratings: item
+            .content_ratings
+            .into_iter()
+            .map(|rating| DiscoveryContentRatingPayload {
+                country: rating.country,
+                certifications: rating
+                    .certifications
+                    .into_iter()
+                    .map(|certification| DiscoveryContentCertificationPayload {
+                        value: certification.value,
+                        source: certification.source,
+                        release_type: certification.release_type,
+                    })
+                    .collect(),
+                age_rating: rating.age_rating,
+                age_rating_source: rating.age_rating_source,
             })
             .collect(),
         rating: item.rating,

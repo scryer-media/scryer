@@ -148,16 +148,25 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // The kind-neutral externalImportWarmupStatus supersedes
     // externalImportArrSourceWarmupStatus; deprecating the old field hides it
     // from default (includeDeprecated: false) introspection: query 120->119.
+    // The direct-path previewManualImportPath query was removed in favor of
+    // server-owned manual-import selections: query 119->118.
+    // Server-owned manual-import selection and cancellable external-source
+    // warmup add two mutation roots: mutation 167->169.
+    // The current selection and classification contract adds six payload
+    // objects and one enum: OBJECT 276->282, ENUM 92->93, public types 533->540.
     assert_eq!(
-        query_field_count, 119,
+        query_field_count, 118,
         "query fields: {query_field_names:?}"
     );
-    assert_eq!(mutation_field_count, 167);
+    assert_eq!(
+        mutation_field_count, 169,
+        "mutation fields: {mutation_field_names:?}"
+    );
     assert_eq!(subscription_field_count, 13);
-    assert_eq!(public_types.len(), 533);
-    assert_eq!(kind_count("OBJECT"), 276);
+    assert_eq!(public_types.len(), 540);
+    assert_eq!(kind_count("OBJECT"), 282);
     assert_eq!(kind_count("INPUT_OBJECT"), 153);
-    assert_eq!(kind_count("ENUM"), 92);
+    assert_eq!(kind_count("ENUM"), 93);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
     assert!(query_field_names.contains(&"backupSettings"));
@@ -177,6 +186,8 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     assert!(mutation_field_names.contains(&"createIndexerProxyConfig"));
     assert!(mutation_field_names.contains(&"deleteIndexerProxyConfig"));
     assert!(mutation_field_names.contains(&"saveExternalImportSetupSecretDraft"));
+    assert!(mutation_field_names.contains(&"beginManualImportSelection"));
+    assert!(mutation_field_names.contains(&"cancelExternalImportArrSourceWarmup"));
     assert!(mutation_field_names.contains(&"setUserLoginEnabled"));
     assert!(mutation_field_names.contains(&"testIndexerProxyConfig"));
     assert!(mutation_field_names.contains(&"updateIndexerProxyConfig"));
@@ -2421,7 +2432,7 @@ async fn graphql_introspection_media_server_delete_uses_id_and_payload_result() 
         .iter()
         .filter_map(|field| field["name"].as_str())
         .collect();
-    assert_eq!(payload_fields, vec!["id", "jobRun"]);
+    assert_eq!(payload_fields, vec!["id"]);
 }
 
 #[tokio::test]
@@ -2569,7 +2580,7 @@ async fn graphql_introspection_media_file_delete_uses_payload_result() {
         .iter()
         .filter_map(|field| field["name"].as_str())
         .collect();
-    assert_eq!(payload_fields, vec!["id"]);
+    assert_eq!(payload_fields, vec!["id", "jobRun"]);
 }
 
 #[tokio::test]

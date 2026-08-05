@@ -2667,6 +2667,7 @@ mod tests {
                 section_types: Vec::new(),
                 limit_per_section: 25,
                 include_unresolved: false,
+                full_sections: true,
             })
             .await
             .expect("discovery feed should succeed through public GET");

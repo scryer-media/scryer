@@ -77,6 +77,8 @@ export type TitleCardProps = {
   compact?: boolean;
   /** Hide title/year until the card is hovered or keyboard-focused. */
   revealTextOnHover?: boolean;
+  /** Informational adult-content marker, shown as an 18+ poster badge. */
+  isAdult?: boolean;
   /** Optional top-right corner badge (discovery relation / recency marker). */
   cornerBadge?: TitleCardCornerBadge | null;
   /**
@@ -135,6 +137,7 @@ function TitleCardImpl({
   monitored,
   compact = false,
   revealTextOnHover = false,
+  isAdult = false,
   cornerBadge,
   onDismiss,
   dismissLabel,
@@ -273,9 +276,9 @@ function TitleCardImpl({
         ) : null}
       </div>
 
-      {/* Top-right: optional corner badge (always visible) + dismiss control
+      {/* Top-right: informational adult marker, optional corner badge, and dismiss control
           (revealed on hover/focus). Kept clear of the top-left facet badge. */}
-      {cornerBadge || onDismiss ? (
+      {isAdult || cornerBadge || onDismiss ? (
         <div className="absolute right-2.5 top-2.5 z-30 flex items-center gap-1.5">
           {cornerBadge ? (
             <span
@@ -316,6 +319,17 @@ function TitleCardImpl({
                 <X className={compact ? "h-3 w-3" : "h-3.5 w-3.5"} />
               </button>
             </ActionTooltip>
+          ) : null}
+          {isAdult ? (
+            <span
+              aria-label="18 and over"
+              className={cn(
+                "pointer-events-none inline-flex items-center rounded-[8px] bg-[linear-gradient(135deg,rgba(var(--scry-danger-rgb),0.96),rgba(var(--scry-danger-rgb),0.72))] font-black tracking-[0.035em] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.28),0_8px_18px_rgba(0,0,0,0.22)]",
+                compact ? "px-2 py-1 text-[10px]" : "px-2.5 py-1 text-[11px]",
+              )}
+            >
+              18+
+            </span>
           ) : null}
         </div>
       ) : null}

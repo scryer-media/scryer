@@ -1458,7 +1458,7 @@ mod tests {
     use chrono::{Duration, Utc};
     use scryer_domain::{
         CompletedDownload, DomainEvent, DomainEventFilter, DownloadQueueState, Id, ImportRecord,
-        ImportStatus, ImportType, MediaFacet, NewDomainEvent, Title, TitleHistoryEventType, User,
+        ImportStatus, ImportType, MediaFacet, NewDomainEvent, Title, TitleHistoryEventType,
     };
     use std::sync::Arc;
     use tokio::sync::Mutex;
@@ -2442,36 +2442,6 @@ mod tests {
             },
             Arc::new(facet_registry),
         )
-    }
-
-    fn trigger_user() -> User {
-        let mut libraries = HashMap::new();
-        let permissions = scryer_domain::LibraryPermissionMask::from_permissions([
-            scryer_domain::LibraryPermission::View,
-            scryer_domain::LibraryPermission::ManageTitles,
-            scryer_domain::LibraryPermission::ResolveImports,
-            scryer_domain::LibraryPermission::ManageLibrary,
-        ]);
-        for facet in [MediaFacet::Movie, MediaFacet::Series, MediaFacet::Anime] {
-            libraries.insert(
-                scryer_domain::default_library_id_for_facet(&facet),
-                permissions,
-            );
-        }
-        User {
-            id: "user-1".to_string(),
-            username: "user@example.test".to_string(),
-            password_hash: None,
-            account_kind: Default::default(),
-            authorization: scryer_domain::UserAuthorization {
-                app: scryer_domain::AppPermissionMask::NONE,
-                libraries,
-                default_library: permissions,
-                actor_capabilities: scryer_domain::ActorCapabilityMask::MANAGE_OWN_ACCOUNT,
-                login_status: Default::default(),
-                loaded: true,
-            },
-        }
     }
 
     fn build_client_item() -> DownloadQueueItem {

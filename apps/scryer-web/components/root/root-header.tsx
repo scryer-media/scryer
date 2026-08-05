@@ -10,6 +10,7 @@ import {
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router";
 import { useClient } from "urql";
+import { HorizontalRail } from "@/components/common/horizontal-scroll-fade";
 import { Button } from "@/components/ui/button";
 import {
   Popover,
@@ -1583,19 +1584,26 @@ export const RootHeader = React.memo(function RootHeader({
                                             {t("search.noMetadataMatches")}
                                           </p>
                                         ) : (
-                                          <div
-                                            className={cn(
-                                              desktopSearchFilters.includes(f.id)
-                                                ? "flex flex-wrap gap-3 pb-1"
-                                                : "flex gap-3 overflow-x-auto overscroll-x-contain pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
-                                            )}
-                                          >
-                                            {renderMetadataSection(
-                                              items,
-                                              f.id,
-                                              f.metadataKey,
-                                            )}
-                                          </div>
+                                          desktopSearchFilters.includes(f.id) ? (
+                                            <div className="flex flex-wrap gap-3 pb-1">
+                                              {renderMetadataSection(
+                                                items,
+                                                f.id,
+                                                f.metadataKey,
+                                              )}
+                                            </div>
+                                          ) : (
+                                            <HorizontalRail
+                                              className="flex gap-3 overflow-x-auto overscroll-x-contain pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                                              fadeClassName="to-[var(--scry-bg)]"
+                                            >
+                                              {renderMetadataSection(
+                                                items,
+                                                f.id,
+                                                f.metadataKey,
+                                              )}
+                                            </HorizontalRail>
+                                          )
                                         )}
                                       </section>
                                     );

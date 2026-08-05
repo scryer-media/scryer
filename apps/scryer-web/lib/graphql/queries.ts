@@ -12,6 +12,7 @@ export const DISCOVERY_ITEM_FIELDS = `
     backgroundUrl
     overview
     contentType
+    isAdult
     canonicalTags {
       key
       category
@@ -70,6 +71,7 @@ const DISCOVERY_HOME_CARD_FIELDS = `
     year
     posterUrl
     contentType
+    isAdult
     ownedInInput`;
 
 const DISCOVERY_HOME_HERO_FIELDS = `${DISCOVERY_HOME_CARD_FIELDS}
@@ -175,6 +177,7 @@ const CATALOG_DISCOVERY_ITEM_FIELDS = `
     posterUrl
     backgroundUrl
     contentType
+    isAdult
     canonicalTags {
       key
       category

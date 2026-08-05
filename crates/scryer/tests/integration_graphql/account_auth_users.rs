@@ -1424,7 +1424,7 @@ async fn graphql_reset_user_mfa_clears_totp_state_and_preserves_passkeys() {
         digits: 6,
         period_seconds: 30,
         created_at: now_string.clone(),
-        expires_at: (now + Duration::minutes(10)).to_rfc3339(),
+        expires_at: (now + chrono::Duration::minutes(10)).to_rfc3339(),
     };
     let totp_store = TotpStore::new(ctx.db.datastore(), ctx.db.encryption_key_state());
     totp_store
@@ -1481,7 +1481,10 @@ async fn graphql_reset_user_mfa_clears_totp_state_and_preserves_passkeys() {
         "recovery codes should be removed"
     );
     let failed_attempts = totp_store
-        .count_failed_attempts_since(&target.id, &(Utc::now() - Duration::hours(1)).to_rfc3339())
+        .count_failed_attempts_since(
+            &target.id,
+            &(Utc::now() - chrono::Duration::hours(1)).to_rfc3339(),
+        )
         .await
         .expect("count failed attempts");
     assert_eq!(failed_attempts, 0);
@@ -1994,6 +1997,9 @@ async fn delete_media_file_honors_custom_library_permissions_after_library_refac
             loaded: true,
         },
     };
+    UserRepository::create(&ctx.users, actor.clone())
+        .await
+        .expect("create scoped-delete actor");
 
     let preview_body = schema_exec(
         &ctx,
@@ -2152,7 +2158,7 @@ async fn delete_media_file_honors_custom_library_permissions_after_library_refac
             }}
             "#
         ),
-        Some(actor),
+        Some(actor.clone()),
     )
     .await;
     assert_no_errors(&catalog_only_delete_body);

@@ -1,6 +1,6 @@
 import { Sparkles } from "lucide-react";
 
-import { HorizontalScrollFade } from "@/components/common/horizontal-scroll-fade";
+import { HorizontalRail } from "@/components/common/horizontal-scroll-fade";
 import { TitleCard } from "@/components/title-card";
 import { useTranslate } from "@/lib/context/translate-context";
 import type { CatalogDiscoveryItem } from "@/lib/types/discovery";
@@ -43,7 +43,7 @@ export function TitleMoreLikeThisStrip({
           {t("title.contextMoreLikeThis")}
         </h2>
       </div>
-      <HorizontalScrollFade className="flex gap-3 overflow-x-auto pb-1">
+      <HorizontalRail className="flex gap-3 overflow-x-auto pb-1">
         {items.map((item) => {
           const year =
             typeof item.year === "number" && Number.isFinite(item.year)
@@ -64,6 +64,7 @@ export function TitleMoreLikeThisStrip({
                 title={discoveryItemDisplayTitle(item)}
                 year={year}
                 posterUrl={selectPosterVariantUrl(item.posterUrl, "w250")}
+                isAdult={item.isAdult}
                 addable={addable}
                 requestable={requestable}
                 onAdd={addable ? handleAction : undefined}
@@ -74,7 +75,7 @@ export function TitleMoreLikeThisStrip({
             </div>
           );
         })}
-      </HorizontalScrollFade>
+      </HorizontalRail>
     </section>
   );
 }

@@ -132,13 +132,6 @@ pub(crate) fn managed_trash_rule_packs() -> &'static [ManagedTrashRulePack] {
     &PACKS
 }
 
-/// The registry entry a stored managed row belongs to, if any.
-pub(crate) fn managed_trash_rule_pack(managed_key: &str) -> Option<&'static ManagedTrashRulePack> {
-    managed_trash_rule_packs()
-        .iter()
-        .find(|pack| pack.key == managed_key)
-}
-
 /// Apps are tried in the order that owns the fact's facet, so a format scored
 /// in only one app still resolves.
 fn app_preference(code: &str) -> [&'static str; 2] {

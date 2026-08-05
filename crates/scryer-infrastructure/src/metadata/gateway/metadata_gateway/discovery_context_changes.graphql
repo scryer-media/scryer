@@ -68,6 +68,17 @@ fragment DiscoveryContextChangesTitleFields on DiscoveryContextChangesTitle {
     is_adult
     is_spoiler
   }
+  is_adult
+  content_ratings {
+    country
+    certifications {
+      value
+      source
+      release_type
+    }
+    age_rating
+    age_rating_source
+  }
   sources
   relation_types
   relation_subtypes

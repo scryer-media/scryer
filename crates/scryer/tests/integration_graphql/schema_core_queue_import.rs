@@ -2076,7 +2076,7 @@ async fn graphql_manual_import_rejects_the_removed_path_contract() {
         &ctx,
         r#"
         mutation {
-          queueManualImport(input: { filePath: "/etc/passwd" files: [] }) { importId }
+          queueManualImport(input: { selectionId: "selection-1" filePath: "/etc/passwd" files: [] }) { importId }
         }
         "#,
         None,

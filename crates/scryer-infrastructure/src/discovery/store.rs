@@ -2,9 +2,9 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use scryer_application::{
     AppError, AppResult, CatalogDiscoveryCandidatesRecord, CatalogDiscoverySectionCandidatesRecord,
-    DiscoveryCanonicalTagFilterOption, DiscoveryContextIncrementalCommit,
-    DiscoveryContextSnapshotCommit, DiscoveryExternalIdRecord, DiscoveryFacetRecord,
-    DiscoveryHomeCandidate, DiscoveryHomeFilterOptions, DiscoveryHomeFilters,
+    DiscoveryCanonicalTagFilterOption, DiscoveryContentCertification, DiscoveryContentRating,
+    DiscoveryContextIncrementalCommit, DiscoveryContextSnapshotCommit, DiscoveryExternalIdRecord,
+    DiscoveryFacetRecord, DiscoveryHomeCandidate, DiscoveryHomeFilterOptions, DiscoveryHomeFilters,
     DiscoveryHomeSectionCandidatesRecord, DiscoveryItemLibraryProvenanceRecord,
     DiscoveryItemRecord, DiscoveryItemsPageRecord, DiscoveryItemsStorageQuery,
     DiscoveryPendingContextChangeRecord, DiscoveryPruneReport, DiscoveryPublicFeedCommit,
@@ -116,6 +116,8 @@ const TITLE_COLUMNS: &[&str] = &[
     "background_url",
     "overview",
     "content_type",
+    "is_adult",
+    "content_ratings_json",
     "tmdb_collection_id",
     "tmdb_collection_name",
     "created_at",
@@ -1411,6 +1413,8 @@ fn discovery_item_projection_with_presentation(
         background_url,
         overview,
         format!("{title_alias}.content_type AS content_type"),
+        format!("{title_alias}.is_adult AS is_adult"),
+        format!("{title_alias}.content_ratings_json AS content_ratings_json"),
         typed_null_rating_expression(datastore).to_string(),
         format!("{item_alias}.best_source AS best_source"),
         format!("{item_alias}.source_count AS source_count"),
@@ -1432,7 +1436,10 @@ fn discovery_item_projection_with_presentation(
 }
 
 fn discovery_item_row_columns() -> String {
-    format!("{}, discovery_title_id", ITEM_COLUMNS.join(", "))
+    format!(
+        "{}, is_adult, content_ratings_json, discovery_title_id",
+        ITEM_COLUMNS.join(", ")
+    )
 }
 
 fn discovery_home_candidate_row_columns() -> String {
@@ -1460,6 +1467,8 @@ fn title_more_like_this_projection(datastore: &StoreDatastore) -> String {
         "t.background_url AS background_url".to_string(),
         "t.overview AS overview".to_string(),
         "t.content_type AS content_type".to_string(),
+        "t.is_adult AS is_adult".to_string(),
+        "t.content_ratings_json AS content_ratings_json".to_string(),
         typed_null_rating_expression(datastore).to_string(),
         "title_more_like_this_items.best_source AS best_source".to_string(),
         "title_more_like_this_items.source_count AS source_count".to_string(),
@@ -3403,6 +3412,8 @@ fn upsert_discovery_title_sql() -> String {
                 NULLIF(excluded.content_type, ''),
                 discovery_titles.content_type
             ),
+            is_adult = excluded.is_adult,
+            content_ratings_json = excluded.content_ratings_json,
             tmdb_collection_id = COALESCE(
                 NULLIF(excluded.tmdb_collection_id, ''),
                 discovery_titles.tmdb_collection_id
@@ -3741,6 +3752,8 @@ fn item_from_row(row: &SqlRow) -> AppResult<DiscoveryItemRecord> {
         overview: row.opt_text("overview")?,
         content_type: row.opt_text("content_type")?,
         canonical_tags: Vec::new(),
+        is_adult: row.bool("is_adult")?,
+        content_ratings: discovery_content_ratings_from_json(&row.text("content_ratings_json")?)?,
         rating: row.opt_f64("rating")?,
         rating_sources: Vec::new(),
         external_ratings: Vec::new(),
@@ -4491,15 +4504,12 @@ async fn upsert_discovery_title_tx(
     let language = normalize_discovery_language(language);
     let target_key_norm = discovery_title_target_key_norm(item);
     let discovery_title_id = discovery_title_id_for(&target_key_norm, &language);
-    SqlRuntime::execute(
-        SqlExec::Tx(tx),
-        &upsert_discovery_title_sql(),
-        &title_args(item, &discovery_title_id, &target_key_norm, &language),
-    )
-    .await
-    .inspect_err(|error| {
-        log_discovery_item_persistence_failure("upsert_discovery_title", item, error);
-    })?;
+    let args = title_args(item, &discovery_title_id, &target_key_norm, &language)?;
+    SqlRuntime::execute(SqlExec::Tx(tx), &upsert_discovery_title_sql(), &args)
+        .await
+        .inspect_err(|error| {
+            log_discovery_item_persistence_failure("upsert_discovery_title", item, error);
+        })?;
     if replace_canonical_tags {
         replace_discovery_title_metadata_tags_tx(tx, &discovery_title_id, &item.canonical_tags)
             .await
@@ -4539,13 +4549,18 @@ async fn upsert_discovery_title_tx(
     Ok(discovery_title_id)
 }
 
+fn discovery_content_ratings_from_json(raw: &str) -> AppResult<Vec<DiscoveryContentRating>> {
+    serde_json::from_str(raw).map_err(repo_err)
+}
+
 fn title_args(
     item: &DiscoveryItemRecord,
     discovery_title_id: &str,
     target_key_norm: &str,
     language: &str,
-) -> Vec<SqlArg> {
-    vec![
+) -> AppResult<Vec<SqlArg>> {
+    let content_ratings_json = serde_json::to_string(&item.content_ratings).map_err(repo_err)?;
+    Ok(vec![
         SqlArg::Text(discovery_title_id.to_string()),
         SqlArg::Text(item.target_key.clone()),
         SqlArg::Text(target_key_norm.to_string()),
@@ -4562,11 +4577,13 @@ fn title_args(
         SqlArg::OptText(item.background_url.clone()),
         SqlArg::OptText(item.overview.clone()),
         SqlArg::OptText(item.content_type.clone()),
+        SqlArg::Bool(item.is_adult),
+        SqlArg::Text(content_ratings_json),
         SqlArg::OptText(item.tmdb_collection_id.clone()),
         SqlArg::OptText(item.tmdb_collection_name.clone()),
         SqlArg::Timestamp(item.created_at),
         SqlArg::Timestamp(item.updated_at),
-    ]
+    ])
 }
 
 fn occurrence_args(item: &DiscoveryItemRecord, discovery_title_id: &str) -> Vec<SqlArg> {
@@ -5430,6 +5447,17 @@ mod tests {
             votes: Some(1234),
             url: "https://www.imdb.com/title/tt0000604/".to_string(),
         }];
+        item.is_adult = true;
+        item.content_ratings = vec![DiscoveryContentRating {
+            country: "US".to_string(),
+            certifications: vec![DiscoveryContentCertification {
+                value: "R".to_string(),
+                source: "tmdb".to_string(),
+                release_type: Some(3),
+            }],
+            age_rating: Some(17),
+            age_rating_source: Some("tmdb".to_string()),
+        }];
         store
             .replace_discovery_items(run_id, &[item.clone()])
             .await
@@ -5438,10 +5466,26 @@ mod tests {
             discovery_title_rating_row_count(&services.pool, "tmdb:movie:604").await,
             3
         );
+        let stored_content_classification: (i64, String) = sqlx::query_as(
+            "SELECT is_adult, content_ratings_json
+               FROM discovery_titles
+              WHERE target_key_norm = 'tmdb:movie:604'",
+        )
+        .fetch_one(&services.pool)
+        .await
+        .expect("stored content classification should load");
+        assert_eq!(stored_content_classification.0, 1);
+        assert!(
+            stored_content_classification
+                .1
+                .contains("\"country\":\"US\"")
+        );
 
         item.rating = None;
         item.rating_sources.clear();
         item.external_ratings.clear();
+        item.is_adult = false;
+        item.content_ratings.clear();
         store
             .replace_discovery_items(run_id, &[item])
             .await
@@ -5450,6 +5494,15 @@ mod tests {
             discovery_title_rating_row_count(&services.pool, "tmdb:movie:604").await,
             0
         );
+        let cleared_content_classification: (i64, String) = sqlx::query_as(
+            "SELECT is_adult, content_ratings_json
+               FROM discovery_titles
+              WHERE target_key_norm = 'tmdb:movie:604'",
+        )
+        .fetch_one(&services.pool)
+        .await
+        .expect("cleared content classification should load");
+        assert_eq!(cleared_content_classification, (0, "[]".to_string()));
 
         let _ = std::fs::remove_file(db);
     }
@@ -6168,6 +6221,17 @@ mod tests {
                         overview: Some("Rich canonical overview".to_string()),
                         content_type: Some(String::new()),
                         canonical_tags: canonical_genre_tags(&["Drama", "Drama"]),
+                        is_adult: true,
+                        content_ratings: vec![DiscoveryContentRating {
+                            country: "US".to_string(),
+                            certifications: vec![DiscoveryContentCertification {
+                                value: "PG-13".to_string(),
+                                source: "tmdb".to_string(),
+                                release_type: Some(3),
+                            }],
+                            age_rating: Some(13),
+                            age_rating_source: Some("tmdb".to_string()),
+                        }],
                         rating: Some(7.5),
                         rating_sources: vec!["tmdb".to_string(), "tmdb".to_string()],
                         external_ratings: vec![TitleExternalRating {
@@ -6282,6 +6346,8 @@ mod tests {
                         overview: None,
                         content_type: Some("series".to_string()),
                         canonical_tags: canonical_genre_tags(&["Drama"]),
+                        is_adult: false,
+                        content_ratings: Vec::new(),
                         rating: None,
                         rating_sources: Vec::new(),
                         external_ratings: Vec::new(),
@@ -6455,6 +6521,13 @@ mod tests {
             .expect("title recommendations should list");
         assert_eq!(more_like_this.len(), 1);
         assert_eq!(more_like_this[0].target_key, "tmdb:movie:10");
+        assert!(more_like_this[0].is_adult);
+        assert_eq!(more_like_this[0].content_ratings.len(), 1);
+        assert_eq!(more_like_this[0].content_ratings[0].country, "US");
+        assert_eq!(
+            more_like_this[0].content_ratings[0].certifications[0].value,
+            "PG-13"
+        );
         assert_eq!(
             more_like_this[0].background_url.as_deref(),
             Some("https://images.example.test/movie-bg.jpg")
@@ -7412,6 +7485,8 @@ mod tests {
             overview: None,
             content_type: Some("movie".to_string()),
             canonical_tags: Vec::new(),
+            is_adult: false,
+            content_ratings: Vec::new(),
             rating: None,
             rating_sources: Vec::new(),
             external_ratings: Vec::new(),
