@@ -395,11 +395,12 @@ async fn title_deletion_job_runs_are_visible_to_actor_without_system_settings() 
 #[tokio::test]
 async fn library_managers_receive_only_their_scoped_interactive_job_events() {
     let (app, admin) = bootstrap();
+    let test_password = uuid::Uuid::new_v4().to_string();
     let manager = create_user_with_permissions(
         &app,
         &admin,
         "interactive-job-manager",
-        "password123",
+        &test_password,
         vec![TestPermissionPreset::TitleManagement],
     )
     .await
@@ -408,7 +409,7 @@ async fn library_managers_receive_only_their_scoped_interactive_job_events() {
         &app,
         &admin,
         "other-interactive-job-manager",
-        "password123",
+        &test_password,
         vec![TestPermissionPreset::TitleManagement],
     )
     .await
