@@ -2500,13 +2500,7 @@ fn parse_sort_number(value: Option<&str>) -> Option<u32> {
 }
 
 fn non_empty_owned(value: Option<String>) -> Option<String> {
-    value.and_then(|value| {
-        if value.trim().is_empty() {
-            None
-        } else {
-            Some(value)
-        }
-    })
+    value.filter(|value| !value.trim().is_empty())
 }
 
 fn normalize_absolute_episode_token(value: Option<String>) -> Option<String> {

@@ -550,11 +550,5 @@ async fn resolve_import_quality_profile(
 }
 const SAMPLE_SIZE_THRESHOLD: u64 = 50 * 1024 * 1024;
 fn non_empty_string(value: Option<String>) -> Option<String> {
-    value.and_then(|value| {
-        if value.trim().is_empty() {
-            None
-        } else {
-            Some(value)
-        }
-    })
+    value.filter(|value| !value.trim().is_empty())
 }

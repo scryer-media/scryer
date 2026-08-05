@@ -3,8 +3,13 @@
 <p align="center">
   <a href="https://github.com/scryer-media/scryer/releases"><img src="https://img.shields.io/github/v/release/scryer-media/scryer" alt="Release" /></a>
   <a href="https://ghcr.io/scryer-media/scryer"><img src="https://img.shields.io/badge/container-ghcr.io-blue" alt="Container" /></a>
+  <a href="https://securityscorecards.dev/viewer/?uri=github.com/scryer-media/scryer"><img src="https://api.scorecard.dev/projects/github.com/scryer-media/scryer/badge" alt="OpenSSF Scorecard" /></a>
+</p>
+
+<p align="center">
   <a href="https://www.scryer.media/scryer/donate/"><img src="https://img.shields.io/badge/Donate-%E2%9D%A4%EF%B8%8F-db61a2?logo=githubsponsors&logoColor=white" alt="Donate to Scryer" /></a>
   <a href="https://www.reddit.com/r/scryer_media/"><img src="https://img.shields.io/badge/Reddit-r%2Fscryer__media-FF4500?logo=reddit&logoColor=white" alt="Scryer on Reddit" /></a>
+  <a href="https://discord.gg/SQmtZTanqm"><img src="https://img.shields.io/badge/Discord-Join%20the%20community-5865F2?logo=discord&logoColor=white" alt="Scryer on Discord" /></a>
 </p>
 
 [![Scryer overview](docs/img/scryer-overview.webp)](https://www.scryer.media/scryer/)
