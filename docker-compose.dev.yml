@@ -1,7 +1,7 @@
 services:
 
   nzbget:
-    image: lscr.io/linuxserver/nzbget:latest
+    image: lscr.io/linuxserver/nzbget:latest@sha256:b22a2b8b366d1e68e6341435bdabd9ff859642cc2ff4a04243d0723521d69d2e
     container_name: scryer-nzbget
     environment:
       PUID: 1000
@@ -14,7 +14,7 @@ services:
       - ./tmp/nzbget-downloads:/nzbget-downloads
 
   nzbdav:
-    image: nzbdav/nzbdav:latest
+    image: nzbdav/nzbdav:latest@sha256:fc44a9d33adceddc4397eb660b4fcaf1917e23323fb80dea0645f56db129562f
     container_name: scryer-nzbdav
     hostname: scryer-nzbdav
     environment:
@@ -32,7 +32,7 @@ services:
           - scryer-sabnzbd
 
   altmount:
-    image: ghcr.io/javi11/altmount:latest
+    image: ghcr.io/javi11/altmount:latest@sha256:cd02c5ee4a840a6a3fef486846ab9e1e61d704d7a04def9e53783b29add2ba0b
     container_name: scryer-altmount
     hostname: scryer-altmount
     environment:
@@ -61,7 +61,7 @@ services:
     #   - apparmor:unconfined
 
   decypharr:
-    image: ghcr.io/sirrobot01/decypharr:latest
+    image: ghcr.io/sirrobot01/decypharr:latest@sha256:d9df495fd156a379abd5b760ad54ed960881408599cd045c4d552a6d20bc7ce6
     container_name: scryer-decypharr
     hostname: scryer-decypharr
     environment:
@@ -149,7 +149,7 @@ services:
       - "8080:8080"
 
   nodejs:
-    image: node:22-alpine
+    image: node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32
     container_name: scryer-nodejs
     restart: unless-stopped
     working_dir: /app
@@ -192,7 +192,7 @@ services:
       - "3000"
 
   proxy:
-    image: nginx:alpine
+    image: nginx:alpine@sha256:4a73073bd557c65b759505da037898b61f1be6cbcc3c2c3aeac22d2a470c1752
     container_name: scryer-proxy
     restart: unless-stopped
     depends_on:
