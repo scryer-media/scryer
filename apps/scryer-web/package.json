@@ -36,7 +36,7 @@
     "cmdk": "^1.1.1",
     "graphql": "^17.0.2",
     "graphql-ws": "^6.2.0",
-    "lucide-react": "^0.577.0",
+    "lucide-react": "^1.0.0",
     "next-themes": "^0.4.6",
     "radix-ui": "^1.6.7",
     "react": "^19.2.8",
