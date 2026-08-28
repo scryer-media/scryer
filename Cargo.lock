@@ -6310,7 +6310,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-plugin-sdk"
-version = "3.9.0"
+version = "3.10.0"
 dependencies = [
  "base64 0.23.1",
  "extism-pdk",
