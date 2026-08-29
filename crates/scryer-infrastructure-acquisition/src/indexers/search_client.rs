@@ -2330,11 +2330,24 @@ impl MultiIndexerSearchClient {
         .await
     }
 
-    fn search_limit_for_mode(&self, mode: SearchMode) -> Arc<Semaphore> {
-        if matches!(mode, SearchMode::Interactive) {
-            self.interactive_search_limit.clone()
-        } else {
+    /// The background lane's budget bounds machine-initiated sweeps: RSS and
+    /// the convergence lanes that consent to corpus reuse. An operator's
+    /// Auto-mode search — queue-best-release, the UI search buttons, and the
+    /// acquisition-search job they start — admits through the interactive lane
+    /// so it is never queued behind that sweep.
+    fn search_limit_for_mode(
+        &self,
+        mode: SearchMode,
+        is_rss_request: bool,
+        learning_context: Option<&IndexerSearchLearningContext>,
+    ) -> Arc<Semaphore> {
+        let background_pass = mode == SearchMode::Auto
+            && (is_rss_request
+                || learning_context.is_some_and(|context| context.candidate_reuse_allowed));
+        if background_pass {
             self.background_search_limit.clone()
+        } else {
+            self.interactive_search_limit.clone()
         }
     }
 
@@ -3668,7 +3681,8 @@ impl IndexerClient for MultiIndexerSearchClient {
             AppResult<IndexerSearchResponse>,
             bool,
         )>::new();
-        let search_limit = self.search_limit_for_mode(mode);
+        let search_limit =
+            self.search_limit_for_mode(mode, is_rss_request, learning_context.as_ref());
         for scheduler_admission in scheduler_decision.decisions {
             let candidate_id = Self::scheduler_admission_candidate_id(&scheduler_admission);
             let Some(dispatch) = scheduler_dispatches.remove(candidate_id.as_str()) else {
@@ -6841,6 +6855,21 @@ mod tests {
             .collect()
     }
 
+    /// A consenting background context: the lane a convergence sweep's
+    /// searches run in. Auto-mode admission caps only apply to these passes —
+    /// a context-less Auto search is operator-shaped and uses the interactive
+    /// lane.
+    fn background_pass_context() -> IndexerSearchLearningContext {
+        IndexerSearchLearningContext {
+            title_id: "title-1".into(),
+            facet: "movie".into(),
+            subject_kind: ReleaseSearchSubjectKind::Title,
+            search_session_id: "session".into(),
+            background_value: Some(0.5),
+            candidate_reuse_allowed: true,
+        }
+    }
+
     async fn assert_leaf_search_limit_shared_across_clones(mode: SearchMode, limit: usize) {
         let config_count = limit + 4;
         let probe = StdArc::new(SearchConcurrencyProbe::default());
@@ -6859,41 +6888,56 @@ mod tests {
         );
         let first = multi.clone();
         let second = multi.clone();
+        let operation = match mode {
+            SearchMode::Interactive => IndexerErrorOperation::InteractiveSearch,
+            SearchMode::Auto => IndexerErrorOperation::AutomaticSearch,
+        };
+        // Auto-mode admission caps apply to background passes; a context-less
+        // Auto search would take the operator's interactive lane instead.
+        let learning_context = Some(background_pass_context());
+        let first_context = learning_context.clone();
         let first_search = tokio::spawn(async move {
-            first
-                .search(
-                    "Search Limit".to_string(),
-                    HashMap::new(),
-                    None,
-                    Some("movie".to_string()),
-                    None,
-                    None,
-                    None,
-                    mode,
-                    None,
-                    None,
-                    None,
-                    vec![],
-                )
-                .await
+            <MultiIndexerSearchClient as IndexerClient>::search(
+                &first,
+                "Search Limit".to_string(),
+                HashMap::new(),
+                None,
+                Some("movie".to_string()),
+                None,
+                None,
+                None,
+                mode,
+                operation,
+                None,
+                None,
+                None,
+                vec![],
+                first_context,
+                CancellationToken::new(),
+            )
+            .await
         });
+        let second_context = learning_context.clone();
         let second_search = tokio::spawn(async move {
-            second
-                .search(
-                    "Search Limit".to_string(),
-                    HashMap::new(),
-                    None,
-                    Some("movie".to_string()),
-                    None,
-                    None,
-                    None,
-                    mode,
-                    None,
-                    None,
-                    None,
-                    vec![],
-                )
-                .await
+            <MultiIndexerSearchClient as IndexerClient>::search(
+                &second,
+                "Search Limit".to_string(),
+                HashMap::new(),
+                None,
+                Some("movie".to_string()),
+                None,
+                None,
+                None,
+                mode,
+                operation,
+                None,
+                None,
+                None,
+                vec![],
+                second_context,
+                CancellationToken::new(),
+            )
+            .await
         });
 
         wait_for_started(&probe, limit).await;
@@ -10689,6 +10733,68 @@ mod tests {
         assert!(
             !candidate_reuse_permitted(SearchMode::Interactive, Some(&background)),
             "interactive searches never reused"
+        );
+    }
+
+    #[test]
+    fn operator_auto_searches_admit_through_the_interactive_lane() {
+        let multi = MultiIndexerSearchClient::new(
+            Arc::new(MockIndexerConfigRepository {
+                configs: vec![mock_indexer_config()],
+            }),
+            Arc::new(MockIndexerStatsTracker),
+            Arc::new(MockIndexerPluginProvider {
+                rss: false,
+                calls: Arc::new(AtomicUsize::new(0)),
+            }),
+        );
+        let background = IndexerSearchLearningContext {
+            title_id: "title-1".into(),
+            facet: "series".into(),
+            subject_kind: ReleaseSearchSubjectKind::Episode,
+            search_session_id: "session".into(),
+            background_value: Some(0.5),
+            candidate_reuse_allowed: true,
+        };
+        let operator = IndexerSearchLearningContext {
+            candidate_reuse_allowed: false,
+            background_value: None,
+            ..background.clone()
+        };
+
+        let background_lane =
+            |limit: &Arc<Semaphore>| Arc::ptr_eq(limit, &multi.background_search_limit);
+        assert!(
+            background_lane(&multi.search_limit_for_mode(SearchMode::Auto, true, None)),
+            "RSS stays on the bounded background lane"
+        );
+        assert!(
+            background_lane(&multi.search_limit_for_mode(
+                SearchMode::Auto,
+                false,
+                Some(&background)
+            )),
+            "consenting convergence passes stay on the background lane"
+        );
+        assert!(
+            !background_lane(&multi.search_limit_for_mode(
+                SearchMode::Auto,
+                false,
+                Some(&operator)
+            )),
+            "an operator's Auto search must not queue behind the background sweep"
+        );
+        assert!(
+            !background_lane(&multi.search_limit_for_mode(SearchMode::Auto, false, None)),
+            "a context-less non-RSS Auto pass is operator-shaped"
+        );
+        assert!(
+            !background_lane(&multi.search_limit_for_mode(
+                SearchMode::Interactive,
+                false,
+                Some(&background)
+            )),
+            "interactive mode always uses the interactive lane"
         );
     }
 
