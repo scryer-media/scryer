@@ -495,8 +495,10 @@ impl SolvedSessionCache {
         session.headers.clone()
     }
 
-    /// Store the reusable parts of a solution. Solutions without cookies or a
-    /// user agent are not worth caching.
+    /// Store a reusable clearance session. A user agent alone is not proof of
+    /// clearance: an unchallenged endpoint can replay successfully with it and
+    /// otherwise poison later requests to the same origin. Keep the user agent
+    /// alongside the session, but only admit solutions with a solver cookie.
     pub fn store_solution(
         &self,
         proxy_config_id: &str,
@@ -504,7 +506,10 @@ impl SolvedSessionCache {
         solution: &ChallengeSolverSolution,
     ) {
         let headers = solution_retry_headers(solution);
-        if headers.is_empty() {
+        if !headers
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case("cookie"))
+        {
             return;
         }
         let Some(key) = Self::key(proxy_config_id, url) else {
@@ -945,6 +950,23 @@ mod tests {
     fn solved_session_cache_skips_empty_solutions() {
         let cache = SolvedSessionCache::with_ttl(Duration::from_secs(60));
         let solution = solution_from_json(serde_json::json!({"status": 200}));
+
+        cache.store_solution("proxy-1", "https://indexer.example/api", &solution);
+
+        assert!(
+            cache
+                .session_headers("proxy-1", "https://indexer.example/api")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn solved_session_cache_skips_user_agent_only_solutions() {
+        let cache = SolvedSessionCache::with_ttl(Duration::from_secs(60));
+        let solution = solution_from_json(serde_json::json!({
+            "status": 200,
+            "userAgent": "Mozilla/5.0",
+        }));
 
         cache.store_solution("proxy-1", "https://indexer.example/api", &solution);
 

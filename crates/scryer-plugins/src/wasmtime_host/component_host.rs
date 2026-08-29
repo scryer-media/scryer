@@ -340,11 +340,13 @@ impl ComponentHost {
             return Ok(direct.response);
         };
 
-        // A configured solver owns the initial target attempt. A successful
-        // solve can require one replay against the already-prepared origin so
-        // the guest receives raw origin bytes rather than browser-rendered
-        // solver content. Together, the solve and optional replay are one
-        // logical guest operation under the existing deadline.
+        // A configured solver owns the initial target attempt. A guest GET may
+        // first validate a cached clearance session; if that response is still
+        // challenged, the stale session is invalidated and the same request
+        // falls through to a fresh solve. A successful solve can require one
+        // replay against the already-prepared origin so the guest receives raw
+        // origin bytes rather than browser-rendered solver content. These
+        // attempts remain one logical guest operation under the same deadline.
         let session_headers = request.method.eq_ignore_ascii_case("GET").then(|| {
             solver::SolvedSessionCache::shared().session_headers(&policy.config.id, &request.url)
         });
@@ -352,15 +354,16 @@ impl ComponentHost {
             let direct = self
                 .send_direct_request(target.client(), target.url(), &request, &session_headers)
                 .await?;
-            self.capture_indexer_response(direct.captured_response.clone());
             if solver::looks_like_challenge_response(
                 direct.response.status,
                 &component_header_map(&direct.response.headers),
                 &direct.response.body,
             ) {
                 solver::SolvedSessionCache::shared().invalidate(&policy.config.id, &request.url);
+            } else {
+                self.capture_indexer_response(direct.captured_response.clone());
+                return Ok(direct.response);
             }
-            return Ok(direct.response);
         }
         if !request.method.eq_ignore_ascii_case("GET") {
             return Err(TransportError::Transport);
@@ -1621,6 +1624,194 @@ mod tests {
                 .len(),
             3,
             "the second request must use the cached clearance without another solver call"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn component_http_does_not_cache_an_unchallenged_user_agent_only_replay() {
+        use wiremock::matchers::{body_json, header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let connection_url = format!("{}/connection", server.uri());
+        let search_url = format!("{}/search", server.uri());
+        Mock::given(method("POST"))
+            .and(path("/v1"))
+            .and(body_json(serde_json::json!({
+                "cmd": "request.get",
+                "url": connection_url,
+                "maxTimeout": 60_000,
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "ok",
+                "solution": {
+                    "url": connection_url,
+                    "status": 200,
+                    "headers": {},
+                    "cookies": [],
+                    "userAgent": "connection-agent",
+                    "response": "connection validation",
+                },
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/connection"))
+            .and(header("user-agent", "connection-agent"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("connection origin"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/search"))
+            .and(header("user-agent", "connection-agent"))
+            .respond_with(
+                ResponseTemplate::new(403)
+                    .insert_header("content-type", "text/html")
+                    .set_body_string("<html><title>Just a moment</title><div>cf-chl</div></html>"),
+            )
+            .expect(0)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1"))
+            .and(body_json(serde_json::json!({
+                "cmd": "request.get",
+                "url": search_url,
+                "maxTimeout": 60_000,
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "ok",
+                "solution": {
+                    "url": search_url,
+                    "status": 200,
+                    "headers": {},
+                    "cookies": [{"name": "clearance", "value": "fresh"}],
+                    "userAgent": "search-agent",
+                    "response": "search validation",
+                },
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/search"))
+            .and(header("user-agent", "search-agent"))
+            .and(header("cookie", "clearance=fresh"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("search origin"))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let host = component_solver_test_host(server.uri(), "component-solver-cache-admission");
+        let connection = host
+            .http(component_solver_request(connection_url, Vec::new()))
+            .await
+            .expect("connection validation should replay its origin response");
+        let search = host
+            .http(component_solver_request(search_url, Vec::new()))
+            .await
+            .expect("the challenged search should invoke the solver");
+
+        assert_eq!(connection.body, b"connection origin");
+        assert_eq!(search.body, b"search origin");
+        assert_eq!(
+            server
+                .received_requests()
+                .await
+                .expect("recorded requests")
+                .len(),
+            4,
+            "a user-agent-only connection response must not seed the origin cache"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn component_http_recovers_a_challenged_cached_session_in_the_same_request() {
+        use wiremock::matchers::{body_json, header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let target_url = format!("{}/search", server.uri());
+        let proxy_id = "component-solver-stale-cache-recovery";
+        let stale_solution = solver::ChallengeSolverSolution {
+            url: Some(target_url.clone()),
+            status: Some(200),
+            cookies: Some(vec![serde_json::json!({
+                "name": "clearance",
+                "value": "stale",
+            })]),
+            user_agent: Some("stale-agent".to_string()),
+            headers: None,
+            response: None,
+        };
+        solver::SolvedSessionCache::shared().store_solution(proxy_id, &target_url, &stale_solution);
+
+        Mock::given(method("GET"))
+            .and(path("/search"))
+            .and(header("user-agent", "stale-agent"))
+            .and(header("cookie", "clearance=stale"))
+            .respond_with(
+                ResponseTemplate::new(403)
+                    .insert_header("content-type", "text/html")
+                    .set_body_string("<html><title>Just a moment</title><div>cf-chl</div></html>"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1"))
+            .and(body_json(serde_json::json!({
+                "cmd": "request.get",
+                "url": target_url,
+                "maxTimeout": 60_000,
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "ok",
+                "solution": {
+                    "url": target_url,
+                    "status": 200,
+                    "headers": {},
+                    "cookies": [{"name": "clearance", "value": "fresh"}],
+                    "userAgent": "fresh-agent",
+                    "response": "fresh solver response",
+                },
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/search"))
+            .and(header("user-agent", "fresh-agent"))
+            .and(header("cookie", "clearance=fresh"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("fresh origin response"))
+            .expect(2)
+            .mount(&server)
+            .await;
+
+        let host = component_solver_test_host(server.uri(), proxy_id);
+        let recovered = host
+            .http(component_solver_request(target_url.clone(), Vec::new()))
+            .await
+            .expect("a stale cache entry should recover within the same request");
+        let cached = host
+            .http(component_solver_request(target_url, Vec::new()))
+            .await
+            .expect("the refreshed clearance should be cached");
+
+        assert_eq!(recovered.status, 200);
+        assert_eq!(recovered.body, b"fresh origin response");
+        assert_eq!(cached.status, 200);
+        assert_eq!(cached.body, b"fresh origin response");
+        assert_eq!(
+            server
+                .received_requests()
+                .await
+                .expect("recorded requests")
+                .len(),
+            4,
+            "recovery should perform one stale attempt, one solve, one replay, and one cached request"
         );
     }
 
