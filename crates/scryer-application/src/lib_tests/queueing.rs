@@ -566,6 +566,114 @@ async fn concurrent_different_releases_for_one_scope_leave_the_second_as_a_confl
 }
 
 #[tokio::test]
+async fn a_settled_download_stops_conflicting_new_submissions_for_its_scope() {
+    // The 30s cached submission state remembers an accepted download so a
+    // repeat search cannot double-grab it while the client snapshot is stale.
+    // Once that download settles, the terminal transition calls
+    // `forget_settled_download`; without it, an upgrade queued inside the
+    // cache window is refused as a phantom non-replaceable conflict even
+    // though the first grab already imported.
+    let download_client = Arc::new(StubDownloadClient::default());
+    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
+    let (app, user) = bootstrap_with_cleanup_tracking(
+        download_client.clone(),
+        download_submissions.clone(),
+        pending_releases,
+    );
+    let title = app
+        .add_title(
+            &user,
+            NewTitle {
+                name: "Settled Upgrade".into(),
+                facet: MediaFacet::Movie,
+                monitored: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create title");
+
+    let first = app
+        .queue_existing_title_download(
+            &user,
+            &title.id,
+            QueuedReleaseSelection {
+                source_hint: Some("https://example.invalid/releases/original.nzb".to_string()),
+                source_kind: Some(DownloadSourceKind::NzbUrl),
+                source_title: Some("Settled.Upgrade.2026.720p.WEB-DL".to_string()),
+                ..Default::default()
+            },
+            SubmissionScope::Title,
+            SubmissionConflictPolicy::Abort,
+        )
+        .await
+        .expect("first queue");
+    assert!(matches!(first, QueueDownloadOutcome::Queued(_)));
+
+    // Inside the cache window the accepted set still blocks the scope: the
+    // guard reports a synthetic queued, non-replaceable conflict.
+    let blocked = app
+        .queue_existing_title_download(
+            &user,
+            &title.id,
+            QueuedReleaseSelection {
+                source_hint: Some("https://example.invalid/releases/upgrade.nzb".to_string()),
+                source_kind: Some(DownloadSourceKind::NzbUrl),
+                source_title: Some("Settled.Upgrade.2026.1080p.WEB-DL".to_string()),
+                ..Default::default()
+            },
+            SubmissionScope::Title,
+            SubmissionConflictPolicy::Abort,
+        )
+        .await
+        .expect("second queue outcome");
+    let QueueDownloadOutcome::Conflict(conflict) = blocked else {
+        panic!("an accepted in-flight download should conflict its scope");
+    };
+    assert_eq!(conflict.state, Some(DownloadQueueState::Queued));
+    assert!(!conflict.replaceable);
+
+    // The download settles: the client reports it completed, and the terminal
+    // transition invalidates the guard (the production hook in
+    // `finalize_tracked_terminal_state_with` calls this same method).
+    let job_id = format!("job-for-{}", title.id);
+    *download_client.queue_items.lock().await = vec![queue_history_fixture_item(
+        &job_id,
+        DownloadQueueState::Completed,
+        0,
+    )];
+    app.runtime
+        .acquisition
+        .download_submission_guards
+        .forget_settled_download(&title.id);
+
+    let upgraded = app
+        .queue_existing_title_download(
+            &user,
+            &title.id,
+            QueuedReleaseSelection {
+                source_hint: Some("https://example.invalid/releases/upgrade.nzb".to_string()),
+                source_kind: Some(DownloadSourceKind::NzbUrl),
+                source_title: Some("Settled.Upgrade.2026.1080p.WEB-DL".to_string()),
+                ..Default::default()
+            },
+            SubmissionScope::Title,
+            SubmissionConflictPolicy::Abort,
+        )
+        .await
+        .expect("upgrade queue");
+    assert!(
+        matches!(upgraded, QueueDownloadOutcome::Queued(_)),
+        "a settled download must not block an upgrade for its scope"
+    );
+    assert_eq!(
+        download_client.submitted_release_titles.lock().await.len(),
+        2
+    );
+}
+
+#[tokio::test]
 async fn queue_existing_title_download_submits_source_password_hint() {
     let download_client = Arc::new(StubDownloadClient::default());
     let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());

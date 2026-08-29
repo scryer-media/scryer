@@ -144,6 +144,22 @@ impl DownloadSubmissionGuardTable {
             .remove(title_id);
     }
 
+    /// A download for `title_id` reached a terminal state (imported, failed,
+    /// removed). Both caches may still describe it as in flight — the accepted
+    /// set marks it queued and the shared snapshot predates the transition —
+    /// and a stale entry turns the next submission for an overlapping scope
+    /// (an upgrade, most visibly) into a phantom non-replaceable conflict.
+    /// Drop both so the next attempt re-reads authoritative state; terminal
+    /// transitions are rare next to searches, so the bounded-work intent of
+    /// the caches survives.
+    pub(crate) fn forget_settled_download(&self, title_id: &str) {
+        self.clear_title_state(title_id);
+        *self
+            .client_snapshot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+    }
+
     pub(crate) fn prime_title_state(
         &self,
         title_id: &str,
