@@ -336,12 +336,22 @@ function Get-MsiRegistryStringValue {
   $query = 'SELECT `Value` FROM `Registry` WHERE `Root`=2 AND `Key`=''{0}'' AND `Name`=''{1}''' -f $escapedKey, $escapedName
   $view = $database.OpenView($query)
   $view.Execute()
-  $record = $view.Fetch()
-  $view.Close()
-  if (-not $record) {
-    throw "MSI did not contain HKLM\\${Key}::$Name in its Registry table: $MsiPath"
+  try {
+    $record = $view.Fetch()
+    if (-not $record) {
+      throw "MSI did not contain HKLM\\${Key}::$Name in its Registry table: $MsiPath"
+    }
+
+    # Materialize the field before closing its Windows Installer view.
+    $value = $record.StringData(1)
+    if ($null -eq $value) {
+      throw "MSI registry row HKLM\\${Key}::$Name had no value: $MsiPath"
+    }
+
+    return $value
+  } finally {
+    $view.Close()
   }
-  return $record.StringData(1)
 }
 
 function Assert-MsiDistributionOwner {
