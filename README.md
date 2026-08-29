@@ -21,10 +21,14 @@
   <img src="docs/img/scryer-introduction.webp" alt="Introducing Scryer" width="960" />
   <img src="docs/img/scryer-overview.webp" alt="Introducing Scryer" width="960" href="https://www.scryer.media/scryer/" target="_blank"/>
 </p>
+<p align="center">
+  <a href="https://www.reddit.com/r/scryer_media/"><img alt="Join us on Reddit!" src="docs/img/Scryer_Reddit.webp" width="47.3%" /></a>
+  <a href="https://discord.gg/RAVvb2enhz"><img alt="Join us on Discord!" src="docs/img/Scryer_Discord.webp" width="47.3%" /></a>
+</p>
 
 
 <h3 align="center">
-    <a href="https://www.scryer.media/scryer/docs/getting-started/">Getting Started Guide</a>
+    <a href="https://www.scryer.media/scryer/docs/getting-started/"><h3>Getting Started Guide<h3></a>
 </h3>
 
 <p align="center">
@@ -41,10 +45,11 @@ At a high level, it:
 - searches for releases through indexers
 - evaluates releases against quality and rules policies
 - coordinates downloads and imports
-- organizes you files for media servers
+- organizes your files for media servers
 - manages subtitles (finds missing ones, time aligns when needed)
 - deeply multi-lingual, interface and metadata (where available)
 - helps you discover new media based on trends and what you already have
+All packaged inside one binary.
 
 Conceptually it is "Sonarr + Radarr + Seerr + Bazarr, with some extra bits from other *arr tools", however Scryer is a single machine-code compiled binary that runs very efficiently compared to the *arr tools.
 
@@ -77,6 +82,25 @@ For Docker installation, Compose examples, environment variables, volumes, and
 deployment notes, see the [Docker install
 docs](https://www.scryer.media/scryer/docs/getting-started/#docker-compose).
 
+## Windows
+
+Scryer publishes two forms of installation for Windows:
+
+- scryer-windows-x86_64.zip, in which contains: scryer.exe | best ran as an [nssm (the Non-Sucking Service Manager)](https://nssm.cc/download) service (Not Recommended)
+- scryer.msi | Windows service install that's completely effortless. Install's the same way as the ARR* stack. (Recommended)
+
+## Unraid
+
+Scryer publishes a first-party unraid application, [view unraid community appication here](https://ca.unraid.net/apps/scryer-1ess99l0zy36id).
+
+Installation Steps:
+- Open your Unraid Dashboard.
+- Navigate to the apps page.
+- Search "Scryer" and click install!
+
+### Support
+If you're facing any issues with installation or issues, feel free to use any of our social platforms (Discord, Reddit, Github) for support!
+
 ## Development
 
 - [Contributing guide](CONTRIBUTING.md)
@@ -84,3 +108,7 @@ docs](https://www.scryer.media/scryer/docs/getting-started/#docker-compose).
 - [Issues](https://github.com/scryer-media/scryer/issues)
 
 For installation, upgrade guidance, and end-user documentation, use the website links at the top of this file.
+
+<p align="center">
+  <a href="https://www.scryer.media/scryer/donate/"><img src="docs/img/scryer-donate.webp" alt="Donate to Scryer" /></a>
+</p>
