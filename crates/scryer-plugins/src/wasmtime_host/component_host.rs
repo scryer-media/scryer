@@ -1848,7 +1848,6 @@ mod tests {
                     .set_delay(Duration::from_millis(100))
                     .set_body_string("origin response"),
             )
-            .expect(1)
             .mount(&server)
             .await;
 

@@ -25,6 +25,7 @@ jobs:
       scope: ${{ steps.classify.outputs.scope }}
       web: ${{ steps.classify.outputs.web }}
       full: ${{ steps.classify.outputs.full }}
+      xtask: ${{ steps.classify.outputs.xtask }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -47,8 +48,10 @@ jobs:
             test -n "$PR_BASE_SHA"
             test -n "$PR_HEAD_SHA"
             scope="$(git diff --name-only --no-renames -z "$PR_BASE_SHA" "$PR_HEAD_SHA" | python3 .github/scripts/classify_scryer_ci_paths.py)"
+            run_xtask="$(git diff --name-only --no-renames -z "$PR_BASE_SHA" "$PR_HEAD_SHA" | python3 .github/scripts/classify_scryer_ci_paths.py --output xtask)"
           else
             scope=full
+            run_xtask=true
           fi
 
           case "$scope" in
@@ -76,6 +79,7 @@ jobs:
             echo "scope=$scope"
             echo "web=$run_web"
             echo "full=$run_full"
+            echo "xtask=$run_xtask"
           } >> "$GITHUB_OUTPUT"
 
   web:
@@ -483,7 +487,7 @@ jobs:
           df -h | tee rust-nextest-disk-start.txt
           du -sh target "$CARGO_HOME" 2>/dev/null | tee -a rust-nextest-disk-start.txt || true
 
-      - name: Run full-feature workspace tests
+      - name: Run full-feature Scryer tests
         shell: bash
         run: |
           set -euo pipefail
@@ -499,8 +503,37 @@ jobs:
           export RUST_MIN_STACK="4194304"
           cargo nextest run --target x86_64-unknown-linux-musl --locked \
             --workspace \
+            --exclude xtask \
+            --exclude xtask-release \
+            --exclude xtask-migrations \
+            --exclude xtask-support \
+            --exclude xtask-trash-guides \
             --all-features \
             --no-fail-fast 2>&1 | tee rust-nextest.log
+
+      - name: Run full-feature xtask tests
+        if: ${{ needs.changes.outputs.xtask == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          export SCRYER_EMBED_UI_DIR="${GITHUB_WORKSPACE}/scryer-web-out"
+          export SCRYER_SMG_REGISTRATION_SECRET="${{ secrets.SMG_REGISTRATION_SECRET }}"
+          export SCRYER_SMG_GRAPHQL_URL="https://smg.scryer.media/graphql"
+          if [ "${SCRYER_SCCACHE_ENABLED:-false}" = "true" ]; then
+            export CC_x86_64_unknown_linux_musl="sccache musl-gcc"
+          else
+            export CC_x86_64_unknown_linux_musl="musl-gcc"
+          fi
+          export RUSTFLAGS="--remap-path-prefix=${GITHUB_WORKSPACE}=. -C link-arg=-fuse-ld=mold -W linker-messages"
+          export RUST_MIN_STACK="4194304"
+          cargo nextest run --target x86_64-unknown-linux-musl --locked \
+            -p xtask \
+            -p xtask-release \
+            -p xtask-migrations \
+            -p xtask-support \
+            -p xtask-trash-guides \
+            --all-features \
+            --no-fail-fast 2>&1 | tee -a rust-nextest.log
 
       - name: Show ending disk usage
         if: always()
