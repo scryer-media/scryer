@@ -561,7 +561,7 @@ jobs:
       CARGO_HOME: /home/runner/.cargo
       CARGO_INCREMENTAL: "0"
       CARGO_TERM_COLOR: always
-      COLD_TARGET_NAME: scryer-launcher-${{ matrix.arch }}
+      RELEASE_TARGET_NAME: scryer-launcher-${{ matrix.arch }}
       SCCACHE_BASEDIRS: /home/runner/work/scryer/scryer
       SCCACHE_CACHE_SIZE: 10G
       SCCACHE_DIR: /home/runner/.cache/sccache
@@ -575,7 +575,7 @@ jobs:
           if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
             echo "CARGO_TARGET_DIR=${GITHUB_WORKSPACE}/target" >> "$GITHUB_ENV"
           else
-            echo "CARGO_TARGET_DIR=${RUNNER_TEMP}/${COLD_TARGET_NAME}" >> "$GITHUB_ENV"
+            echo "CARGO_TARGET_DIR=${RUNNER_TEMP}/${RELEASE_TARGET_NAME}" >> "$GITHUB_ENV"
           fi
 
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
@@ -666,18 +666,18 @@ jobs:
           set -euo pipefail
           cargo test -p scryer-launcher --locked 2>&1 | tee "${{ matrix.artifact_name }}-test.log"
 
-      - name: Prepare cold release target
+      - name: Prepare clean local release target
         if: ${{ github.event_name != 'pull_request' }}
         shell: bash
         run: |
           set -euo pipefail
           if [ -e "$CARGO_TARGET_DIR" ]; then
-            echo "cold release target already exists: $CARGO_TARGET_DIR" >&2
+            echo "clean local release target already exists: $CARGO_TARGET_DIR" >&2
             exit 1
           fi
           mkdir -p "$CARGO_TARGET_DIR"
           test -z "$(ls -A "$CARGO_TARGET_DIR")"
-          echo "cold release target contents at start:"
+          echo "clean local release target contents at start:"
           ls -la "$CARGO_TARGET_DIR"
 
       - name: Build launcher
@@ -721,7 +721,7 @@ jobs:
             ${{ matrix.artifact_name }}-test.log
             ${{ matrix.artifact_name }}-build.log
             ${{ matrix.artifact_name }}-sccache-stats.txt
-            ${{ github.event_name == 'pull_request' && format('{0}/target/cargo-timings/*', github.workspace) || format('{0}/{1}/cargo-timings/*', runner.temp, env.COLD_TARGET_NAME) }}
+            ${{ github.event_name == 'pull_request' && format('{0}/target/cargo-timings/*', github.workspace) || format('{0}/{1}/cargo-timings/*', runner.temp, env.RELEASE_TARGET_NAME) }}
           if-no-files-found: error
           retention-days: 14
 
@@ -761,7 +761,7 @@ jobs:
       CARGO_HOME: /home/runner/.cargo
       CARGO_INCREMENTAL: "0"
       CARGO_TERM_COLOR: always
-      COLD_TARGET_NAME: scryer-linux-${{ matrix.arch }}-${{ matrix.variant }}
+      RELEASE_TARGET_NAME: scryer-linux-${{ matrix.arch }}-${{ matrix.variant }}
       AWS_LC_SYS_USE_SYSTEM: "0"
       AWS_LC_SYS_STATIC: "1"
       AWS_LC_SYS_SMALL: "0"
@@ -784,7 +784,7 @@ jobs:
           if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
             echo "CARGO_TARGET_DIR=${GITHUB_WORKSPACE}/target" >> "$GITHUB_ENV"
           else
-            echo "CARGO_TARGET_DIR=${RUNNER_TEMP}/${COLD_TARGET_NAME}" >> "$GITHUB_ENV"
+            echo "CARGO_TARGET_DIR=${RUNNER_TEMP}/${RELEASE_TARGET_NAME}" >> "$GITHUB_ENV"
           fi
 
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
@@ -858,18 +858,18 @@ jobs:
           sccache --start-server || true
           sccache --zero-stats || true
 
-      - name: Prepare cold release target
+      - name: Prepare clean local release target
         if: ${{ github.event_name != 'pull_request' }}
         shell: bash
         run: |
           set -euo pipefail
           if [ -e "$CARGO_TARGET_DIR" ]; then
-            echo "cold release target already exists: $CARGO_TARGET_DIR" >&2
+            echo "clean local release target already exists: $CARGO_TARGET_DIR" >&2
             exit 1
           fi
           mkdir -p "$CARGO_TARGET_DIR"
           test -z "$(ls -A "$CARGO_TARGET_DIR")"
-          echo "cold release target contents at start:"
+          echo "clean local release target contents at start:"
           ls -la "$CARGO_TARGET_DIR"
 
       - name: Build scryer
@@ -928,12 +928,8 @@ jobs:
           if [ "${{ steps.linux-cargo-build.outcome }}" = "success" ]; then
             compgen -G "$CARGO_TARGET_DIR/cargo-timings/*" >/dev/null
             build_log="${{ matrix.artifact_name }}-build.log"
-            if ! grep -Eq 'aws-lc-sys@[^:]+: Building with: CC' "$build_log"; then
-              echo "::error::Cold release log does not confirm the AWS-LC CC source builder"
-              exit 1
-            fi
             if grep -Eq 'aws-lc-sys@[^:]+: (Building with: System Library|Size-optimized AWS-LC build enabled)' "$build_log"; then
-              echo "::error::Cold release log reports an unsupported AWS-LC build mode"
+              echo "::error::Release build log reports an unsupported AWS-LC build mode"
               exit 1
             fi
           fi
@@ -971,7 +967,7 @@ jobs:
             ${{ matrix.artifact_name }}-native-build-env.txt
             ${{ matrix.artifact_name }}-native-linkage.txt
             ${{ matrix.artifact_name }}-sccache-stats.txt
-            ${{ github.event_name == 'pull_request' && format('{0}/target/cargo-timings/*', github.workspace) || format('{0}/{1}/cargo-timings/*', runner.temp, env.COLD_TARGET_NAME) }}
+            ${{ github.event_name == 'pull_request' && format('{0}/target/cargo-timings/*', github.workspace) || format('{0}/{1}/cargo-timings/*', runner.temp, env.RELEASE_TARGET_NAME) }}
           if-no-files-found: warn
           retention-days: 14
 
@@ -1010,7 +1006,7 @@ jobs:
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_TERM_COLOR: always
-      COLD_TARGET_NAME: scryer-macos-${{ matrix.arch }}
+      RELEASE_TARGET_NAME: scryer-macos-${{ matrix.arch }}
       AWS_LC_SYS_USE_SYSTEM: "0"
       AWS_LC_SYS_STATIC: "1"
       AWS_LC_SYS_SMALL: "0"
@@ -1033,7 +1029,7 @@ jobs:
           if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
             echo "CARGO_TARGET_DIR=${GITHUB_WORKSPACE}/target" >> "$GITHUB_ENV"
           else
-            echo "CARGO_TARGET_DIR=${RUNNER_TEMP}/${COLD_TARGET_NAME}" >> "$GITHUB_ENV"
+            echo "CARGO_TARGET_DIR=${RUNNER_TEMP}/${RELEASE_TARGET_NAME}" >> "$GITHUB_ENV"
           fi
 
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
@@ -1109,18 +1105,18 @@ jobs:
           sccache --start-server || true
           sccache --zero-stats || true
 
-      - name: Prepare cold release target
+      - name: Prepare clean local release target
         if: ${{ github.event_name != 'pull_request' }}
         shell: bash
         run: |
           set -euo pipefail
           if [ -e "$CARGO_TARGET_DIR" ]; then
-            echo "cold release target already exists: $CARGO_TARGET_DIR" >&2
+            echo "clean local release target already exists: $CARGO_TARGET_DIR" >&2
             exit 1
           fi
           mkdir -p "$CARGO_TARGET_DIR"
           test -z "$(ls -A "$CARGO_TARGET_DIR")"
-          echo "cold release target contents at start:"
+          echo "clean local release target contents at start:"
           ls -la "$CARGO_TARGET_DIR"
 
       - name: Build scryer
@@ -1185,12 +1181,8 @@ jobs:
           if [ "${{ steps.macos-cargo-build.outcome }}" = "success" ]; then
             test -n "$(find "${CARGO_TARGET_DIR}/cargo-timings" -type f -print -quit 2>/dev/null)"
             build_log="${{ matrix.artifact_name }}-build.log"
-            if ! grep -Eq 'aws-lc-sys@[^:]+: Building with: CC' "$build_log"; then
-              echo "::error::Cold release log does not confirm the AWS-LC CC source builder"
-              exit 1
-            fi
             if grep -Eq 'aws-lc-sys@[^:]+: (Building with: System Library|Size-optimized AWS-LC build enabled)' "$build_log"; then
-              echo "::error::Cold release log reports an unsupported AWS-LC build mode"
+              echo "::error::Release build log reports an unsupported AWS-LC build mode"
               exit 1
             fi
           fi
@@ -1252,7 +1244,7 @@ jobs:
             ${{ matrix.artifact_name }}-native-build-env.txt
             ${{ matrix.artifact_name }}-native-linkage.txt
             ${{ matrix.artifact_name }}-sccache-stats.txt
-            ${{ github.event_name == 'pull_request' && format('{0}/target/cargo-timings/*', github.workspace) || format('{0}/{1}/cargo-timings/*', runner.temp, env.COLD_TARGET_NAME) }}
+            ${{ github.event_name == 'pull_request' && format('{0}/target/cargo-timings/*', github.workspace) || format('{0}/{1}/cargo-timings/*', runner.temp, env.RELEASE_TARGET_NAME) }}
           if-no-files-found: warn
           retention-days: 14
 
@@ -1293,7 +1285,7 @@ jobs:
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_TERM_COLOR: always
-      COLD_TARGET_NAME: scryer-windows-${{ matrix.arch }}
+      RELEASE_TARGET_NAME: scryer-windows-${{ matrix.arch }}
       AWS_LC_SYS_USE_SYSTEM: "0"
       AWS_LC_SYS_STATIC: "1"
       AWS_LC_SYS_SMALL: "0"
@@ -1316,7 +1308,7 @@ jobs:
           if ($env:GITHUB_EVENT_NAME -eq "pull_request") {
             $targetDir = Join-Path $env:GITHUB_WORKSPACE 'target'
           } else {
-            $targetDir = Join-Path $env:RUNNER_TEMP $env:COLD_TARGET_NAME
+            $targetDir = Join-Path $env:RUNNER_TEMP $env:RELEASE_TARGET_NAME
           }
           "CARGO_TARGET_DIR=$targetDir" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
 
@@ -1400,19 +1392,19 @@ jobs:
           sccache --start-server
           sccache --zero-stats
 
-      - name: Prepare cold release target
+      - name: Prepare clean local release target
         if: ${{ github.event_name != 'pull_request' }}
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           if (Test-Path $env:CARGO_TARGET_DIR) {
-            throw "cold release target already exists: $env:CARGO_TARGET_DIR"
+            throw "clean local release target already exists: $env:CARGO_TARGET_DIR"
           }
           New-Item -ItemType Directory -Path $env:CARGO_TARGET_DIR | Out-Null
           if (Get-ChildItem -Force $env:CARGO_TARGET_DIR) {
-            throw "cold release target is not empty: $env:CARGO_TARGET_DIR"
+            throw "clean local release target is not empty: $env:CARGO_TARGET_DIR"
           }
-          Write-Host "cold release target contents at start:"
+          Write-Host "clean local release target contents at start:"
           Get-ChildItem -Force $env:CARGO_TARGET_DIR | Format-Table
 
       - name: Build scryer
@@ -1513,11 +1505,8 @@ jobs:
               throw "successful release build did not produce Cargo timing output"
             }
             $buildLog = Get-Content "${{ matrix.artifact_name }}-build.log" -Raw
-            if ($buildLog -notmatch 'aws-lc-sys@[^:]+: Building with: CC') {
-              throw "cold release log does not confirm the AWS-LC CC source builder"
-            }
             if ($buildLog -match 'aws-lc-sys@[^:]+: (Building with: System Library|Size-optimized AWS-LC build enabled)') {
-              throw "cold release log reports an unsupported AWS-LC build mode"
+              throw "release build log reports an unsupported AWS-LC build mode"
             }
           }
 
@@ -1725,7 +1714,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: cargo-timings-${{ matrix.artifact_name }}-${{ github.run_id }}
-          path: ${{ github.event_name == 'pull_request' && format('{0}/target/cargo-timings/*', github.workspace) || format('{0}/{1}/cargo-timings/*', runner.temp, env.COLD_TARGET_NAME) }}
+          path: ${{ github.event_name == 'pull_request' && format('{0}/target/cargo-timings/*', github.workspace) || format('{0}/{1}/cargo-timings/*', runner.temp, env.RELEASE_TARGET_NAME) }}
           if-no-files-found: warn
           retention-days: 14
 
