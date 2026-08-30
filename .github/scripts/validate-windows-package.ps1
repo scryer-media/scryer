@@ -342,13 +342,14 @@ function Get-MsiRegistryStringValue {
       throw "MSI did not contain HKLM\\${Key}::$Name in its Registry table: $MsiPath"
     }
 
-    # Materialize the field before closing its Windows Installer view.
+    # Convert the COM field to a plain string while its view remains open. Raw
+    # Windows Installer record values are not reliable after their view closes.
     $value = $record.StringData(1)
     if ($null -eq $value) {
       throw "MSI registry row HKLM\\${Key}::$Name had no value: $MsiPath"
     }
 
-    return $value
+    return $value.ToString()
   } finally {
     [void]$view.Close()
   }
