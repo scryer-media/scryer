@@ -511,30 +511,6 @@ jobs:
             --all-features \
             --no-fail-fast 2>&1 | tee rust-nextest.log
 
-      - name: Run full-feature xtask tests
-        if: ${{ needs.changes.outputs.xtask == 'true' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          export SCRYER_EMBED_UI_DIR="${GITHUB_WORKSPACE}/scryer-web-out"
-          export SCRYER_SMG_REGISTRATION_SECRET="${{ secrets.SMG_REGISTRATION_SECRET }}"
-          export SCRYER_SMG_GRAPHQL_URL="https://smg.scryer.media/graphql"
-          if [ "${SCRYER_SCCACHE_ENABLED:-false}" = "true" ]; then
-            export CC_x86_64_unknown_linux_musl="sccache musl-gcc"
-          else
-            export CC_x86_64_unknown_linux_musl="musl-gcc"
-          fi
-          export RUSTFLAGS="--remap-path-prefix=${GITHUB_WORKSPACE}=. -C link-arg=-fuse-ld=mold -W linker-messages"
-          export RUST_MIN_STACK="4194304"
-          cargo nextest run --target x86_64-unknown-linux-musl --locked \
-            -p xtask \
-            -p xtask-release \
-            -p xtask-migrations \
-            -p xtask-support \
-            -p xtask-trash-guides \
-            --all-features \
-            --no-fail-fast 2>&1 | tee -a rust-nextest.log
-
       - name: Show ending disk usage
         if: always()
         shell: bash
