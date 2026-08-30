@@ -692,6 +692,14 @@ fn release_hygiene_line_has_local_path_token(line: &str) -> bool {
                     RELEASE_MACOS_HOME_PATH_COMPONENTS.contains(&component)
                 })
             })
+        } else if *token == "/home/" {
+            line.split(token).skip(1).any(|tail| {
+                tail.split(|character: char| {
+                    !character.is_ascii_alphanumeric() && character != '-' && character != '_'
+                })
+                .next()
+                .is_none_or(|component| component != "linuxbrew")
+            })
         } else {
             line.contains(token)
         }
@@ -5483,6 +5491,32 @@ mod tests {
             violations,
             vec![
                 "crates/scryer-application/src/lib.rs:1: local absolute path reference: const DESIGN: &str = \"~/private/design.md\";"
+                    .to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn release_hygiene_allows_linuxbrew_installation_paths() {
+        let violations = scan_release_hygiene_content(
+            Path::new("crates/scryer-application/src/application_upgrade/installation.rs"),
+            "const BINARY: &str = \"/home/linuxbrew/.linuxbrew/bin/scryer\";",
+        );
+
+        assert!(violations.is_empty());
+    }
+
+    #[test]
+    fn release_hygiene_flags_linux_user_home_paths() {
+        let violations = scan_release_hygiene_content(
+            Path::new("crates/scryer-application/src/lib.rs"),
+            "const DESIGN: &str = \"/home/developer/private/design.md\";",
+        );
+
+        assert_eq!(
+            violations,
+            vec![
+                "crates/scryer-application/src/lib.rs:1: local absolute path reference: const DESIGN: &str = \"/home/developer/private/design.md\";"
                     .to_string()
             ]
         );
