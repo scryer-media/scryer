@@ -1,6 +1,6 @@
 [package]
 name = "scryer-application"
-version = "0.18.22"
+version = "0.19.0"
 edition.workspace = true
 
 [features]
