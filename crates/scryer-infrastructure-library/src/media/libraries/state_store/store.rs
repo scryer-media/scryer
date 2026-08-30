@@ -1265,7 +1265,7 @@ impl HousekeepingRepository for HousekeepingStore {
                             SELECT id,
                                    ROW_NUMBER() OVER (
                                        PARTITION BY job_key
-                                       ORDER BY started_at DESC, id DESC
+                                       ORDER BY started_at DESC NULLS LAST, id DESC
                                    ) AS retention_rank
                               FROM workflow_operations
                              WHERE job_key IS NOT NULL
