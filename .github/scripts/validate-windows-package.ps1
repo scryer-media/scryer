@@ -350,7 +350,7 @@ function Get-MsiRegistryStringValue {
 
     return $value
   } finally {
-    $view.Close()
+    [void]$view.Close()
   }
 }
 

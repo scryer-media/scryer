@@ -220,8 +220,8 @@ jobs:
         run: |
           set -euo pipefail
           cargo tree -p scryer-plugins -e features --locked | tee wasmtime-feature-tree.txt
-          if ! grep -Fq 'wasmtime feature "threads"' wasmtime-feature-tree.txt; then
-            echo "required Wasmtime threads feature is not enabled" >&2
+          if ! grep -Fq 'wasmtime-environ feature "threads"' wasmtime-feature-tree.txt; then
+            echo "required Wasmtime threads runtime support is not enabled" >&2
             exit 1
           fi
           if grep -Eq 'wasmtime feature "(gc|gc-null|wat)"' wasmtime-feature-tree.txt; then
