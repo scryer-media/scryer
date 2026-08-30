@@ -1,6 +1,6 @@
 [package]
 name = "scryer-infrastructure-workflow"
-version = "0.19.1"
+version = "0.19.2"
 edition.workspace = true
 publish = false
 
