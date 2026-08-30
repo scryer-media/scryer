@@ -345,7 +345,9 @@ async fn reconcile_interrupted_job_runs_preserves_a_reboot_required_upgrade_run(
 
 #[tokio::test]
 async fn migration_registers_job_run_listing_indexes() {
-    let (services, _db) = temp_services("workflow_operation_indexes").await;
+    let services = SqliteServices::new("sqlite::memory:")
+        .await
+        .expect("in-memory db should initialize");
     let rows = sqlx::query("PRAGMA index_list('workflow_operations')")
         .fetch_all(&services.pool)
         .await
