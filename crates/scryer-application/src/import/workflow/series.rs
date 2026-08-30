@@ -642,7 +642,8 @@ async fn expected_episode_ids_for_completed_download(
     release_evidence: &ReleaseEvidence,
 ) -> Option<HashSet<String>> {
     if let Some(scope) = release_evidence.scope()
-        && let Some(ids) = expected_episode_ids_from_submission_scope(app, title, scope).await
+        && let Some(ids) =
+            expected_episode_ids_from_submission_scope(app, title, scope, false).await
         && !ids.is_empty()
     {
         return Some(ids);
@@ -652,21 +653,28 @@ async fn expected_episode_ids_for_completed_download(
 }
 /// The episodes a grab's submission scope names outright — the one derivation
 /// both the import's grabbed-release gate and the post-import verification use.
-/// A collection (season) scope expects its monitored episodes, or every episode
-/// when none is monitored; title/series-movie/orphan scopes name none.
+/// A collection (season) scope names every episode of the season: monitoring
+/// decides what Scryer searches for, never which downloaded file belongs to
+/// the grab. Verification alone passes `monitored_collection_preference` so a
+/// season pack that lacks a file for an unmonitored episode still counts as
+/// complete; title/series-movie/orphan scopes name none.
 pub(crate) async fn expected_episode_ids_from_submission_scope(
     app: &AppUseCase,
     title: &scryer_domain::Title,
     scope: &SubmissionScope,
+    monitored_collection_preference: bool,
 ) -> Option<HashSet<String>> {
     match scope {
         SubmissionScope::Episode { episode_id } => Some(HashSet::from([episode_id.clone()])),
         SubmissionScope::EpisodeSet { episode_ids } => Some(episode_ids.iter().cloned().collect()),
         SubmissionScope::Collection { collection_id } => {
-            match episode_ids_for_collection(app, title, collection_id, true).await {
-                Some(monitored) => Some(monitored),
-                None => episode_ids_for_collection(app, title, collection_id, false).await,
+            if monitored_collection_preference
+                && let Some(monitored) =
+                    episode_ids_for_collection(app, title, collection_id, true).await
+            {
+                return Some(monitored);
             }
+            episode_ids_for_collection(app, title, collection_id, false).await
         }
         SubmissionScope::Title | SubmissionScope::SeriesMovie { .. } | SubmissionScope::Orphan => {
             None
@@ -682,17 +690,6 @@ async fn expected_episode_ids_from_release_title(
     let ep_meta = parsed.episode.as_ref()?;
     let season = ep_meta.season.unwrap_or(1).to_string();
     let mut episodes = resolve_target_episodes(app, title, ep_meta, &season).await;
-
-    if ep_meta.release_type == crate::ParsedEpisodeReleaseType::SeasonPack {
-        let monitored: Vec<_> = episodes
-            .iter()
-            .filter(|episode| episode.monitored)
-            .map(|episode| episode.id.clone())
-            .collect();
-        if !monitored.is_empty() {
-            return Some(monitored.into_iter().collect());
-        }
-    }
 
     if episodes.is_empty() {
         None

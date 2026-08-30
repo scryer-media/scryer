@@ -6615,8 +6615,11 @@ async fn automatic_multi_season_pack_imports_explicit_members_from_each_declared
     }
 }
 
+/// Monitoring decides what Scryer searches for, never what it keeps: like
+/// Sonarr, a pack member that resolves to an unmonitored catalog episode
+/// imports with the rest of the pack.
 #[tokio::test]
-async fn automatic_pack_records_unmonitored_catalog_members_as_ignored() {
+async fn automatic_pack_imports_unmonitored_catalog_members() {
     let (
         FailClosedPackFixture {
             app,
@@ -6663,7 +6666,7 @@ async fn automatic_pack_records_unmonitored_catalog_members_as_ignored() {
     let completed =
         series_pack_completed_download(item_id, &title.id, release_name, source_dir.path());
     let result = {
-        let _probe = probe_agrees_with_the_name(1280, 720);
+        let _probe = probe_sequence_agrees_with_the_names([(1280, 720), (1280, 720)]);
         crate::import::import::import_completed_download(&app, &user, &completed)
             .await
             .expect("pack import should run")
@@ -6674,19 +6677,15 @@ async fn automatic_pack_records_unmonitored_catalog_members_as_ignored() {
         scryer_domain::ImportDecision::Imported,
         "{result:?}"
     );
-    assert_eq!(library_video_file_names(library_dir.path()).len(), 1);
+    assert_eq!(library_video_file_names(library_dir.path()).len(), 2);
     assert!(monitored_file.exists() && unmonitored_file.exists());
-    let ignored = import_artifacts
+    let imported = import_artifacts
         .artifacts_for_file("fail.closed.pack.s01e02.720p.web-dl.mkv")
         .await;
-    assert_eq!(ignored.len(), 1, "{ignored:?}");
-    assert_eq!(ignored[0].result, "ignored", "{ignored:?}");
+    assert_eq!(imported.len(), 1, "{imported:?}");
+    assert_eq!(imported[0].result, "imported", "{imported:?}");
     assert_eq!(
-        ignored[0].reason_code.as_deref(),
-        Some("unmonitored_pack_episode")
-    );
-    assert_eq!(
-        ignored[0].episode_id.as_deref(),
+        imported[0].episode_id.as_deref(),
         Some(unmonitored_episode.id.as_str())
     );
     assert_eq!(
@@ -6698,7 +6697,10 @@ async fn automatic_pack_records_unmonitored_catalog_members_as_ignored() {
                 .await
                 .expect("list imported media files")
         ),
-        std::collections::BTreeSet::from([monitored_episode.id.clone()])
+        std::collections::BTreeSet::from([
+            monitored_episode.id.clone(),
+            unmonitored_episode.id.clone()
+        ])
     );
 }
 

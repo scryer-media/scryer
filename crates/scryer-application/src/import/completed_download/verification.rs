@@ -405,9 +405,10 @@ async fn expected_episode_units_with_release_evidence(
     };
 
     if let Some(scope) = release_evidence.and_then(crate::import_workflow::ReleaseEvidence::scope)
-        && let Some(expected) =
-            crate::import_workflow::expected_episode_ids_from_submission_scope(app, &title, scope)
-                .await
+        && let Some(expected) = crate::import_workflow::expected_episode_ids_from_submission_scope(
+            app, &title, scope, true,
+        )
+        .await
     {
         return ExpectedEpisodeResolution::Resolved(expected);
     }

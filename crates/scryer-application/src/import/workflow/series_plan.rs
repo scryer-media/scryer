@@ -274,7 +274,7 @@ fn reconcile_pack_member_from_absolute_numbering(
     if absolute_matches.next().is_some() {
         return ScopedPackMemberReconciliation::Unresolved;
     }
-    if !episode.monitored || episode.episode_type != scryer_domain::EpisodeType::Standard {
+    if episode.episode_type != scryer_domain::EpisodeType::Standard {
         return ScopedPackMemberReconciliation::Unresolved;
     }
     if declared_seasons.is_some_and(|seasons| {
@@ -289,7 +289,7 @@ fn reconcile_pack_member_from_absolute_numbering(
 }
 
 /// Reconcile a pack member only when its local scene numbering is corroborated
-/// by one monitored catalog episode in the verified submission scope.
+/// by one catalog episode in the verified submission scope.
 fn reconcile_pack_member_from_scene_numbering(
     title: &scryer_domain::Title,
     pack: &VerifiedEpisodePack,
@@ -335,7 +335,6 @@ fn reconcile_pack_member_from_scene_numbering(
         .iter()
         .filter(|episode| {
             expected_episode_ids.contains(&episode.id)
-                && episode.monitored
                 && episode.episode_type == scryer_domain::EpisodeType::Standard
                 && catalog_episode_number(episode) == Some(*episode_number)
                 && catalog_episode_season(episode)
@@ -886,16 +885,10 @@ fn finalize_pack_member_disposition(
                         .to_string(),
                 };
             }
-            if episodes.iter().any(|episode| episode.monitored) {
-                PlannedEpisodeMemberDisposition::Import { episodes }
-            } else {
-                PlannedEpisodeMemberDisposition::Ignore {
-                    episodes,
-                    reason_code: "unmonitored_pack_episode",
-                    message: "Unmonitored catalog episode in a verified pack was intentionally ignored."
-                        .to_string(),
-                }
-            }
+            // Monitoring decides what Scryer goes and gets, never what it
+            // keeps: like Sonarr, a resolved pack member imports even when
+            // its episodes are unmonitored — the bytes are already here.
+            PlannedEpisodeMemberDisposition::Import { episodes }
         }
         PlannedMemberDraft::Ignore {
             reason_code,

@@ -1055,7 +1055,7 @@ async fn preview_manual_import(
     let verified_pack = verified_episode_pack(release_evidence, title);
     let expected_pack_episode_ids = match (verified_pack.as_ref(), release_evidence.scope()) {
         (Some(_), Some(scope)) => {
-            expected_episode_ids_from_submission_scope(app, title, scope).await
+            expected_episode_ids_from_submission_scope(app, title, scope, false).await
         }
         _ => None,
     };
