@@ -1251,7 +1251,7 @@ fn candidate_numbering_contradicts_subject(
     candidate: &IndexerSearchResult,
     subject: &ResolvedReleaseSearchSubject,
 ) -> bool {
-    if subject.season.is_none() && subject.episode.is_none() {
+    if subject.season.is_none() && subject.episode.is_none() && subject.absolute_episode.is_none() {
         return false;
     }
     let Some(parsed) = candidate.parsed_release_metadata.as_ref() else {
@@ -1260,18 +1260,12 @@ fn candidate_numbering_contradicts_subject(
     let Some(episode) = parsed.episode.as_ref() else {
         return true;
     };
-    if let (Some(expected_season), Some(found_season)) = (subject.season, episode.season)
-        && expected_season != found_season
-    {
-        return true;
-    }
-    if let Some(expected_episode) = subject.episode
-        && !episode.episode_numbers.is_empty()
-        && !episode.episode_numbers.contains(&expected_episode)
-    {
-        return true;
-    }
-    false
+    crate::acquisition_coverage::parsed_numbering_contradicts_episode(
+        subject.season,
+        subject.episode,
+        subject.absolute_episode,
+        episode,
+    )
 }
 
 /// A candidate's PROPER/REPACK rank, `0` when it could not be parsed.

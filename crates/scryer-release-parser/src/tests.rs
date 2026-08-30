@@ -1020,6 +1020,30 @@ fn enrichment_canonicalizes_french_language_codes_to_fra() {
 }
 
 #[test]
+fn enrichment_scopes_language_before_subtitle_marker_to_subtitles() {
+    let mut target = context(ContextFacetHint::Anime, "Clockwork Cat");
+    target.episodes = vec![ContextEpisode {
+        absolute_number: Some(911),
+        ..Default::default()
+    }];
+
+    let analysis = analyze_release_for_target(
+        "[Ommex] Clockwork Cat - 911 [ENG-Sub][1080p x265 AAC]",
+        &target,
+    );
+    let candidate = analysis.best_candidate().expect("best candidate");
+    let enrichment = enrich_candidate(&analysis.tokens, candidate, &analysis.raw_input);
+    let projected = project_final_metadata(candidate.projected.clone(), &enrichment);
+
+    assert_eq!(projected.languages_subtitles, vec!["eng".to_string()]);
+    assert!(
+        projected.languages_audio.is_empty(),
+        "an English-subbed release must not claim English audio, got {:?}",
+        projected.languages_audio
+    );
+}
+
+#[test]
 fn enrichment_extracts_affixed_language_before_video_anchor() {
     let analysis = analyze_release_for_target(
         "Rooftop.Neon.Shell.Squad.S05E07.HebDub.XviD",

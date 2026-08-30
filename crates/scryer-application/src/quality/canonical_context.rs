@@ -681,9 +681,10 @@ impl AppUseCase {
             })
             .filter(|submission| {
                 let identity = crate::contracts::ClientJobLocator::from_submission(submission);
-                crate::acquisition_workflow::submission_is_queued(
+                crate::acquisition_workflow::submission_is_live_claim(
+                    submission,
                     tracked_states.get(&identity).copied(),
-                    crate::acquisition_workflow::submission_is_active(submission, dl_snapshot),
+                    dl_snapshot,
                 )
             })
             .filter_map(|submission| {

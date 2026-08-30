@@ -911,6 +911,32 @@ impl AppUseCase {
         );
         let pending_scope = pending_coverage.submission_scope_or(&pending_scope_fallback);
 
+        // A parked release adopted onto an episode scope must not contradict
+        // that episode's numbering. The Unknown-coverage fallback above
+        // otherwise stamps a release numbered for a *different* episode (an
+        // absolute-numbered anime release, most commonly) as covering the
+        // wanted one, and the standby walk then burns the whole parked
+        // sequence — grab, import mismatch, next — one release per pass.
+        if let SubmissionScope::Episode { episode_id } = &pending_scope
+            && let Some(requested) = catalog_episodes
+                .iter()
+                .find(|episode| &episode.id == episode_id)
+            && crate::acquisition_coverage::parsed_release_contradicts_requested_episode(
+                &pending_parsed,
+                requested,
+            )
+        {
+            info!(
+                release = pr.release_title.as_str(),
+                episode_id = episode_id.as_str(),
+                reason =
+                    crate::acquisition_release_search::ReleaseAutoDecisionCode::EpisodeMismatch
+                        .as_str(),
+                "pending release: rejecting, parsed numbering contradicts the wanted episode"
+            );
+            return Ok(PendingGrabOutcome::Rejected);
+        }
+
         let is_series_pack = pending_parsed
             .episode
             .as_ref()

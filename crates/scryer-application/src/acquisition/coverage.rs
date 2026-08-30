@@ -209,6 +209,79 @@ pub(crate) fn resolve_release_coverage(
     coverage_from_episode_ids(covered).unwrap_or(ReleaseCoverage::Unknown)
 }
 
+/// Whether a release's parsed numbering actively contradicts a wanted
+/// episode's numbering, absolute numbering included.
+///
+/// A veto fires only on a positive contradiction: the release asserts a
+/// numbering scheme the subject also carries, and the assertion cannot cover
+/// the subject. A release that asserts nothing comparable is left alone — the
+/// coverage resolver and the admission ladder own the benefit-of-the-doubt
+/// cases. An explicit episode-number agreement wins outright, so a stray
+/// absolute parse can never veto a release that already names the wanted
+/// episode.
+///
+/// The absolute arm is what keeps an absolute-numbered release for a *different*
+/// episode from being adopted by an episode-scoped search: without it, an anime
+/// release named only by absolute number sails past the season/episode checks
+/// and the Unknown-coverage fallback stamps it as covering the wanted episode.
+pub(crate) fn parsed_numbering_contradicts_episode(
+    expected_season: Option<u32>,
+    expected_episode: Option<u32>,
+    expected_absolute: Option<u32>,
+    episode: &ParsedEpisodeMetadata,
+) -> bool {
+    if expected_season.is_none() && expected_episode.is_none() && expected_absolute.is_none() {
+        return false;
+    }
+    if let (Some(expected), Some(found)) = (expected_season, episode.season)
+        && expected != found
+    {
+        return true;
+    }
+    if let Some(expected) = expected_episode
+        && !episode.episode_numbers.is_empty()
+        && !episode.episode_numbers.contains(&expected)
+    {
+        return true;
+    }
+    if expected_episode.is_some_and(|expected| episode.episode_numbers.contains(&expected)) {
+        return false;
+    }
+    if let Some(expected) = expected_absolute
+        && (episode.absolute_episode.is_some() || !episode.absolute_episode_numbers.is_empty())
+        && episode.absolute_episode != Some(expected)
+        && !episode.absolute_episode_numbers.contains(&expected)
+    {
+        return true;
+    }
+    false
+}
+
+/// [`parsed_numbering_contradicts_episode`] against a catalog episode record.
+pub(crate) fn parsed_release_contradicts_requested_episode(
+    parsed: &ParsedReleaseMetadata,
+    requested: &Episode,
+) -> bool {
+    let Some(episode) = parsed.episode.as_ref() else {
+        return false;
+    };
+    parsed_numbering_contradicts_episode(
+        requested
+            .season_number
+            .as_deref()
+            .and_then(|value| value.parse::<u32>().ok()),
+        requested
+            .episode_number
+            .as_deref()
+            .and_then(|value| value.parse::<u32>().ok()),
+        requested
+            .absolute_number
+            .as_deref()
+            .and_then(|value| value.parse::<u32>().ok()),
+        episode,
+    )
+}
+
 /// A series pack is worth considering only when it can fill more than 30% of
 /// the regular, already-aired episodes the operator monitors. This deliberately
 /// counts episodes not already owned by a primary file or an in-flight
@@ -315,9 +388,10 @@ pub(crate) fn in_flight_series_pack_episode_ids(
             };
             submissions.iter().any(|submission| {
                 let identity = crate::contracts::ClientJobLocator::from_submission(submission);
-                crate::acquisition_workflow::submission_is_queued(
+                crate::acquisition_workflow::submission_is_live_claim(
+                    submission,
                     tracked_states.get(&identity).copied(),
-                    crate::acquisition_workflow::submission_is_active(submission, dl_snapshot),
+                    dl_snapshot,
                 ) && crate::acquisition_workflow::submission_scope_intersects(
                     &submission.scope,
                     &membership,
@@ -657,6 +731,110 @@ mod tests {
         let mut parsed = ParsedReleaseMetadata::empty("release", "test");
         parsed.episode = Some(episode);
         parsed
+    }
+
+    #[test]
+    fn absolute_only_release_for_a_different_episode_contradicts_the_wanted_episode() {
+        let mismatched = ParsedEpisodeMetadata {
+            absolute_episode: Some(18),
+            absolute_episode_numbers: vec![18],
+            ..Default::default()
+        };
+        assert!(parsed_numbering_contradicts_episode(
+            Some(20),
+            Some(122),
+            Some(1344),
+            &mismatched
+        ));
+
+        let matching = ParsedEpisodeMetadata {
+            absolute_episode: Some(1344),
+            absolute_episode_numbers: vec![1344],
+            ..Default::default()
+        };
+        assert!(!parsed_numbering_contradicts_episode(
+            Some(20),
+            Some(122),
+            Some(1344),
+            &matching
+        ));
+    }
+
+    #[test]
+    fn explicit_episode_agreement_overrides_a_stray_absolute_parse() {
+        let episode = ParsedEpisodeMetadata {
+            season: Some(20),
+            episode_numbers: vec![122],
+            absolute_episode: Some(3),
+            ..Default::default()
+        };
+        assert!(!parsed_numbering_contradicts_episode(
+            Some(20),
+            Some(122),
+            Some(1344),
+            &episode
+        ));
+    }
+
+    #[test]
+    fn release_without_numbering_assertions_is_not_a_contradiction() {
+        let episode = ParsedEpisodeMetadata::default();
+        assert!(!parsed_numbering_contradicts_episode(
+            Some(20),
+            Some(122),
+            Some(1344),
+            &episode
+        ));
+        assert!(!parsed_numbering_contradicts_episode(
+            None, None, None, &episode
+        ));
+    }
+
+    #[test]
+    fn season_and_episode_number_contradictions_still_veto() {
+        let wrong_season = ParsedEpisodeMetadata {
+            season: Some(1),
+            episode_numbers: vec![122],
+            ..Default::default()
+        };
+        assert!(parsed_numbering_contradicts_episode(
+            Some(20),
+            Some(122),
+            None,
+            &wrong_season
+        ));
+
+        let wrong_episode = ParsedEpisodeMetadata {
+            season: Some(20),
+            episode_numbers: vec![121],
+            ..Default::default()
+        };
+        assert!(parsed_numbering_contradicts_episode(
+            Some(20),
+            Some(122),
+            Some(1344),
+            &wrong_episode
+        ));
+    }
+
+    #[test]
+    fn contradiction_against_catalog_episode_reads_absolute_number() {
+        let requested = episode("ep-122", "20", "122", Some("1344"));
+        let mismatched = parsed_with_episode(ParsedEpisodeMetadata {
+            absolute_episode: Some(18),
+            absolute_episode_numbers: vec![18],
+            ..Default::default()
+        });
+        assert!(parsed_release_contradicts_requested_episode(
+            &mismatched,
+            &requested
+        ));
+
+        let unnumbered = ParsedReleaseMetadata::empty("release", "test");
+        assert!(!parsed_release_contradicts_requested_episode(
+            &unnumbered,
+            &requested
+        ));
     }
 
     #[test]
