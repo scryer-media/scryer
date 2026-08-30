@@ -10,7 +10,6 @@ import {
   buildQueueStatusDetail,
   downloadQueueItemIdentityKey,
 } from "@/lib/utils/download-queue";
-import { isImportedSeedingRow } from "@/lib/utils/seeding-progress";
 
 const queueStateClasses: Record<string, string> = {
   QUEUED: "border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] text-[var(--scry-warning-text)]",
@@ -131,6 +130,7 @@ function formatRemainingDuration(remainingSeconds: number | null): string | null
 function getProgressBarColor(stateKey: string): string {
   switch (stateKey) {
     case "COMPLETED":
+    case "IMPORTED_SEEDING":
       return "bg-[var(--scry-success-solid)]";
     case "FAILED":
     case "REMOVE_FAILED":
@@ -153,18 +153,8 @@ function getProgressBarColor(stateKey: string): string {
   }
 }
 
-/**
- * Badge key for a queue row. `IMPORTED_SEEDING` is a tracked state whose
- * display state stays `COMPLETED`, so it has to be read off the tracked record
- * or an imported-and-still-seeding torrent is indistinguishable from a
- * finished download. `WARNING` is the exception: there the display state is
- * already the specific one, and burying it under the seeding badge would make
- * a stuck torrent look healthy.
- */
 function queueBadgeStateKey(queueItem: DownloadQueueItem): string {
-  return isImportedSeedingRow(queueItem) && queueItem.displayState !== "WARNING"
-    ? "IMPORTED_SEEDING"
-    : queueItem.displayState;
+  return queueItem.displayState;
 }
 
 function queueStatusLabel(

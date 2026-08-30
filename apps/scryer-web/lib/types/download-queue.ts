@@ -63,6 +63,7 @@ export type DownloadDisplayState =
   | "PAUSED"
   | "POST_PROCESSING"
   | "COMPLETED"
+  | "IMPORTED_SEEDING"
   | "FAILED"
   | "WARNING"
   | "IMPORTING"
@@ -79,6 +80,7 @@ export type DownloadActivityFilter =
   | "QUEUED"
   | "PAUSED"
   | "POST_PROCESSING"
+  | "SEEDING"
   | "WARNING";
 
 export type DownloadImportFilter =

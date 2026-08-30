@@ -162,6 +162,12 @@ const activityFilterOptions: ActivityFilterChipOption<DownloadActivityStatus>[] 
     iconClassName: "text-[var(--scry-info-text-soft)]",
   },
   {
+    value: "SEEDING",
+    labelKey: "activity.activityFilter.seeding",
+    icon: ArrowUp,
+    iconClassName: "text-[var(--scry-success-text)]",
+  },
+  {
     value: "WARNING",
     labelKey: "activity.activityFilter.warning",
     icon: CircleAlert,

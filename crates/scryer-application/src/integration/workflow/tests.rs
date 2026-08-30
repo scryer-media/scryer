@@ -780,7 +780,7 @@ mod tests {
         assert_eq!(projected.progress_percent, 100);
         assert_eq!(
             derive_download_queue_display_state(&projected),
-            DownloadDisplayState::Completed
+            DownloadDisplayState::ImportedSeeding
         );
     }
 
@@ -1082,26 +1082,54 @@ mod tests {
 
     #[test]
     fn a_settled_import_without_a_warning_still_reads_as_completed() {
-        for tracked_state in [
+        let mut queue_item = item("job-imported", DownloadQueueState::Downloading);
+        let metadata = tracked_download_queue_snapshot(&tracked_in_state(
+            &queue_item,
             TrackedDownloadState::Imported,
-            TrackedDownloadState::ImportedSeeding,
-        ] {
-            let mut queue_item = item("job-imported", DownloadQueueState::Downloading);
-            let metadata =
-                tracked_download_queue_snapshot(&tracked_in_state(&queue_item, tracked_state));
-            apply_tracked_download_activity_projection(&mut queue_item, &metadata);
+        ));
+        apply_tracked_download_activity_projection(&mut queue_item, &metadata);
 
-            assert_eq!(
-                queue_item.state,
-                DownloadQueueState::Completed,
-                "{tracked_state:?}"
-            );
-            assert_eq!(
-                derive_download_queue_display_state(&queue_item),
-                DownloadDisplayState::Completed,
-                "{tracked_state:?}"
-            );
-        }
+        assert_eq!(queue_item.state, DownloadQueueState::Completed);
+        assert_eq!(
+            derive_download_queue_display_state(&queue_item),
+            DownloadDisplayState::Completed
+        );
+    }
+
+    #[test]
+    fn an_imported_seeding_row_remains_visible_in_activity() {
+        let mut queue_item = item("job-imported-seeding", DownloadQueueState::Downloading);
+        let metadata = tracked_download_queue_snapshot(&tracked_in_state(
+            &queue_item,
+            TrackedDownloadState::ImportedSeeding,
+        ));
+        apply_tracked_download_activity_projection(&mut queue_item, &metadata);
+
+        assert_eq!(queue_item.state, DownloadQueueState::Completed);
+        assert_eq!(
+            derive_download_queue_display_state(&queue_item),
+            DownloadDisplayState::ImportedSeeding
+        );
+        assert!(crate::matches_download_activity_filter(
+            &queue_item,
+            crate::DownloadActivityFilter::Seeding
+        ));
+        assert!(crate::matches_download_activity_filter(
+            &queue_item,
+            crate::DownloadActivityFilter::All
+        ));
+    }
+
+    #[test]
+    fn an_import_failure_outranks_the_imported_seeding_projection() {
+        let mut queue_item = item("job-seeding-import-failed", DownloadQueueState::Completed);
+        queue_item.tracked_state = Some(TrackedDownloadState::ImportedSeeding);
+        queue_item.import_status = Some(ImportStatus::Failed);
+
+        assert_eq!(
+            derive_download_queue_display_state(&queue_item),
+            DownloadDisplayState::ImportFailed
+        );
     }
 
     #[test]

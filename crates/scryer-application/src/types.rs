@@ -728,6 +728,7 @@ pub enum DownloadDisplayState {
     Paused,
     PostProcessing,
     Completed,
+    ImportedSeeding,
     Failed,
     /// The client reports a recoverable problem; the row stays in the activity
     /// list with its message instead of being presented as a dead grab.
@@ -748,6 +749,7 @@ pub enum DownloadActivityFilter {
     Queued,
     Paused,
     PostProcessing,
+    Seeding,
     Warning,
 }
 

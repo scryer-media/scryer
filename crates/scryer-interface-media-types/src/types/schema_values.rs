@@ -486,6 +486,8 @@ pub enum DownloadDisplayStateValue {
     PostProcessing,
     /// Download and processing completed.
     Completed,
+    /// Import completed, but the torrent remains managed while seeding.
+    ImportedSeeding,
     /// Download or processing failed.
     Failed,
     /// The client reports a recoverable problem on a download that is still
@@ -537,6 +539,8 @@ pub enum DownloadActivityFilterValue {
     Paused,
     /// Include post-processing items.
     PostProcessing,
+    /// Include imported torrents still retained for seeding.
+    Seeding,
     /// Include items the client reported a recoverable problem for.
     Warning,
 }

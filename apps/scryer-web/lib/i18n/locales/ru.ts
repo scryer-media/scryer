@@ -1415,6 +1415,7 @@ const ru: LocaleDictionary = {
     "activity.activityFilter.queued": "В очереди",
     "activity.activityFilter.paused": "Приостановлено",
     "activity.activityFilter.postProcessing": "Постобработка",
+    "activity.activityFilter.seeding": "Раздаётся",
     "activity.historyFilter.all": "Все",
     "activity.historyFilter.success": "Успешно",
     "activity.historyFilter.failed": "Ошибка",

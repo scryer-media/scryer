@@ -1359,6 +1359,7 @@ const en: LocaleDictionary = {
   "activity.activityFilter.queued": "Queued",
   "activity.activityFilter.paused": "Paused",
   "activity.activityFilter.postProcessing": "Post-Processing",
+  "activity.activityFilter.seeding": "Seeding",
   "activity.activityFilter.warning": "Warning",
   "activity.historyFilter.all": "All",
   "activity.historyFilter.success": "Success",

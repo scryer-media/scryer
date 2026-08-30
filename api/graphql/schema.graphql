@@ -4025,6 +4025,10 @@ enum DownloadActivityFilterValue {
 	"""
 	POST_PROCESSING
 	"""
+	Include imported torrents still retained for seeding.
+	"""
+	SEEDING
+	"""
 	Include items the client reported a recoverable problem for.
 	"""
 	WARNING
@@ -4230,6 +4234,10 @@ enum DownloadDisplayStateValue {
 	Download and processing completed.
 	"""
 	COMPLETED
+	"""
+	Import completed, but the torrent remains managed while seeding.
+	"""
+	IMPORTED_SEEDING
 	"""
 	Download or processing failed.
 	"""
