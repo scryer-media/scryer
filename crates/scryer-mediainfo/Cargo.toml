@@ -21,9 +21,4 @@ bytes = "1"
 isolang = "2.4"
 
 [dev-dependencies]
-criterion.workspace = true
 toml.workspace = true
-
-[[bench]]
-name = "scan_hotpaths"
-harness = false

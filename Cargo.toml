@@ -44,7 +44,7 @@ members = [
     "crates/scryer-mock-apis",
     "crates/scryer-mediainfo",
 ]
-exclude = ["test-plugins/test-indexer"]
+exclude = ["test-plugins/test-indexer", "benchmarks/criterion"]
 resolver = "2"
 
 [workspace.package]
@@ -85,7 +85,6 @@ windows-native-keyring-store = "1"
 wiremock = "0.6"
 strum = { version = "0.28", features = ["derive"] }
 governor = "0.10.4"
-criterion = "0.8.2"
 fixedbitset = "0.5"
 
 [profile.release]

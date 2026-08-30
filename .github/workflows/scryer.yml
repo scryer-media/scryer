@@ -450,7 +450,7 @@ jobs:
           endpoint: ${{ secrets.SCCACHE_ENDPOINT }}
           access-key-id: ${{ secrets.SCCACHE_S3_ACCESS_ID }}
           secret-access-key: ${{ secrets.SCCACHE_S3_SECRET }}
-          key-prefix: scryer/trusted-pr/v1/rust-1.97.1/x86_64-unknown-linux-musl/
+          key-prefix: scryer/trusted-pr/v1/rust-1.97.1/x86_64-unknown-linux-gnu/
 
       - name: Configure fork PR sccache
         if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
@@ -469,10 +469,7 @@ jobs:
           sccache --zero-stats || true
 
       - name: Install system dependencies
-        run: sudo apt-get install -y --no-install-recommends musl-tools mold nasm
-
-      - name: Add musl target
-        run: rustup target add x86_64-unknown-linux-musl
+        run: sudo apt-get install -y --no-install-recommends mold nasm
 
       - uses: taiki-e/install-action@cb33e69fad06166ca28a42b2575e4dadabf62ee8 # v2
         with:
@@ -498,14 +495,9 @@ jobs:
           export SCRYER_EMBED_UI_DIR="${GITHUB_WORKSPACE}/scryer-web-out"
           export SCRYER_SMG_REGISTRATION_SECRET="${{ secrets.SMG_REGISTRATION_SECRET }}"
           export SCRYER_SMG_GRAPHQL_URL="https://smg.scryer.media/graphql"
-          if [ "${SCRYER_SCCACHE_ENABLED:-false}" = "true" ]; then
-            export CC_x86_64_unknown_linux_musl="sccache musl-gcc"
-          else
-            export CC_x86_64_unknown_linux_musl="musl-gcc"
-          fi
           export RUSTFLAGS="--remap-path-prefix=${GITHUB_WORKSPACE}=. -C link-arg=-fuse-ld=mold -W linker-messages"
           export RUST_MIN_STACK="4194304"
-          cargo nextest run --target x86_64-unknown-linux-musl --locked \
+          cargo nextest run --locked \
             --workspace \
             --exclude xtask \
             --exclude xtask-release \

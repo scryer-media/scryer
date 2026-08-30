@@ -1,0 +1,21 @@
+[workspace]
+resolver = "2"
+
+[package]
+name = "scryer-criterion-benchmarks"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+criterion = "0.8.2"
+scryer-mediainfo = { path = "../../crates/scryer-mediainfo" }
+scryer-release-parser = { path = "../../crates/scryer-release-parser" }
+
+[[bench]]
+name = "scan_hotpaths"
+harness = false
+
+[[bench]]
+name = "parser_bench"
+harness = false
