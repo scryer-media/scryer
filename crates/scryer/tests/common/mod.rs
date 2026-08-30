@@ -525,6 +525,16 @@ impl BlocklistRepository for TestLibraryStateStore {
 
 #[async_trait]
 impl HousekeepingRepository for TestLibraryStateStore {
+    async fn delete_stale_workflow_operations(
+        &self,
+        completed_days: i64,
+        warning_failed_days: i64,
+    ) -> AppResult<u32> {
+        self.housekeeping
+            .delete_stale_workflow_operations(completed_days, warning_failed_days)
+            .await
+    }
+
     async fn delete_release_decisions_older_than(&self, days: i64) -> AppResult<u32> {
         self.housekeeping
             .delete_release_decisions_older_than(days)

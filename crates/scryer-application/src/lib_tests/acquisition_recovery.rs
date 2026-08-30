@@ -4467,6 +4467,22 @@ async fn title_search_success_does_not_converge_an_episode_when_scoped_queries_f
     );
 }
 
+#[tokio::test]
+async fn background_search_scopes_do_not_emit_search_completed_events() {
+    let (app, _, _) = seed_recent_failed_season_pack_fixture().await;
+    let domain_events = Arc::new(MockDomainEventRepo::default());
+    let app = app.with_test_overrides(|builder| builder.with_domain_events(domain_events.clone()));
+
+    app.run_background_acquisition_cycle_once().await;
+
+    assert!(domain_events.events.lock().await.iter().all(|event| {
+        !matches!(
+            event.payload,
+            DomainEventPayload::AcquisitionSearchCompleted(_)
+        )
+    }));
+}
+
 /// Anime title with two due Season 7 episodes (so the cycle attempts a season
 /// pack first) and a tracking indexer that answers every query.
 async fn seed_recent_failed_season_pack_fixture() -> (AppUseCase, Title, Arc<TrackingIndexerClient>)

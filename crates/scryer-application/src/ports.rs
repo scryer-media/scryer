@@ -3207,6 +3207,11 @@ pub trait LogicalBackupExporter: Send + Sync {
 
 #[async_trait]
 pub trait HousekeepingRepository: Send + Sync {
+    async fn delete_stale_workflow_operations(
+        &self,
+        completed_days: i64,
+        warning_failed_days: i64,
+    ) -> AppResult<u32>;
     async fn delete_release_decisions_older_than(&self, days: i64) -> AppResult<u32>;
     async fn delete_release_attempts_older_than(&self, days: i64) -> AppResult<u32>;
     async fn delete_history_events_older_than(&self, days: i64) -> AppResult<u32>;

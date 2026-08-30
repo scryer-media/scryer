@@ -399,6 +399,10 @@ async fn housekeeping_respects_configured_history_retention() {
     let stale_at = (now - Duration::days(40)).to_rfc3339();
     let very_stale_at = (now - Duration::days(120)).to_rfc3339();
     let fresh_at = (now - Duration::days(5)).to_rfc3339();
+    let expired_operational_at = (now - Duration::days(4)).to_rfc3339();
+    let fresh_operational_at = (now - Duration::days(2)).to_rfc3339();
+    let expired_acquisition_telemetry_at = (now - Duration::days(2)).to_rfc3339();
+    let fresh_acquisition_telemetry_at = (now - Duration::hours(12)).to_rfc3339();
     let wanted_item_id = Id::new().0;
     let stale_completed_import_id = Id::new().0;
     let fresh_completed_import_id = Id::new().0;
@@ -483,16 +487,22 @@ async fn housekeeping_respects_configured_history_retention() {
          VALUES (?, ?, NULL, NULL, NULL, NULL, NULL, 1, 'test', NULL, 'title_added', '{}'),
                 (?, ?, NULL, NULL, NULL, NULL, NULL, 1, 'test', NULL, 'import_requested', '{}'),
                 (?, ?, NULL, NULL, NULL, NULL, NULL, 1, 'test', NULL, 'library_scan_progressed', '{}'),
-                (?, ?, NULL, NULL, NULL, NULL, NULL, 1, 'test', NULL, 'job_run_started', '{}')",
+                (?, ?, NULL, NULL, NULL, NULL, NULL, 1, 'test', NULL, 'job_run_started', '{}'),
+                (?, ?, NULL, NULL, NULL, NULL, NULL, 1, 'test', NULL, 'acquisition_search_completed', '{}'),
+                (?, ?, NULL, NULL, NULL, NULL, NULL, 1, 'test', NULL, 'acquisition_candidate_rejected', '{}')",
     )
     .bind(Id::new().0)
     .bind(&stale_at)
     .bind(Id::new().0)
     .bind(&fresh_at)
     .bind(Id::new().0)
-    .bind(&stale_at)
+    .bind(&expired_operational_at)
     .bind(Id::new().0)
-    .bind(&fresh_at)
+    .bind(&fresh_operational_at)
+    .bind(Id::new().0)
+    .bind(&expired_acquisition_telemetry_at)
+    .bind(Id::new().0)
+    .bind(&fresh_acquisition_telemetry_at)
     .execute(ctx.db.pool())
     .await
     .expect("domain events should insert");
@@ -584,7 +594,7 @@ async fn housekeeping_respects_configured_history_retention() {
     assert_eq!(report.stale_release_decisions, 1);
     assert_eq!(report.stale_release_attempts, 1);
     assert_eq!(report.stale_history_events, 1);
-    assert_eq!(report.stale_history_records, 8);
+    assert_eq!(report.stale_history_records, 9);
 
     let remaining_release_decisions: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM release_decisions")
@@ -610,7 +620,7 @@ async fn housekeeping_respects_configured_history_retention() {
         .fetch_one(ctx.db.pool())
         .await
         .expect("domain events count");
-    assert_eq!(remaining_domain_events, baseline_domain_events + 3);
+    assert_eq!(remaining_domain_events, baseline_domain_events + 4);
 
     let remaining_imports: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM imports")
         .fetch_one(ctx.db.pool())

@@ -12,6 +12,8 @@ use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 
 const RELEASE_DECISION_RETENTION_DAYS: i64 = 30;
+const WORKFLOW_COMPLETED_RETENTION_DAYS: i64 = 7;
+const WORKFLOW_WARNING_FAILED_RETENTION_DAYS: i64 = 30;
 const RELEASE_ATTEMPT_RETENTION_DAYS: i64 = 90;
 pub const INDEXER_ERROR_RETENTION_DAYS: i64 = 30;
 const DOWNLOAD_DELETE_RETENTION_DAYS: i64 = 7;
@@ -686,6 +688,15 @@ impl AppUseCase {
         let user_facing_domain_event_types = user_facing_domain_event_types();
         let operational_domain_event_types = operational_domain_event_types();
 
+        let stale_workflow_operations = self
+            .services
+            .workflow
+            .housekeeping
+            .delete_stale_workflow_operations(
+                WORKFLOW_COMPLETED_RETENTION_DAYS,
+                WORKFLOW_WARNING_FAILED_RETENTION_DAYS,
+            )
+            .await?;
         let stale_release_decisions = self
             .services
             .workflow
@@ -776,6 +787,7 @@ impl AppUseCase {
             .await?;
 
         let stale_history_records = stale_release_decisions
+            + stale_workflow_operations
             + stale_release_attempts
             + stale_operational_domain_events
             + stale_acquisition_telemetry
@@ -889,6 +901,7 @@ impl AppUseCase {
             orphaned_media_files,
             stale_release_decisions,
             stale_release_attempts,
+            stale_workflow_operations,
             stale_indexer_errors,
             stale_history_events,
             stale_operational_domain_events,

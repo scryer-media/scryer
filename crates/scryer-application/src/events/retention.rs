@@ -1,6 +1,6 @@
 use scryer_domain::DomainEventType;
 
-pub(crate) const OPERATIONAL_DOMAIN_EVENT_RETENTION_DAYS: i64 = 7;
+pub(crate) const OPERATIONAL_DOMAIN_EVENT_RETENTION_DAYS: i64 = 3;
 pub(crate) const ACQUISITION_TELEMETRY_RETENTION_DAYS: i64 = 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

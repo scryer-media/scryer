@@ -36,6 +36,33 @@ use super::{decode_release_decision_explanation, encode_release_decision_explana
 const SQLITE_VACUUM_MIN_FREELIST_FRACTION: f64 = 0.10;
 const SQLITE_VACUUM_MIN_FREELIST_PAGES: i64 = 2_000;
 
+fn validate_sqlite_checkpoint_result(
+    busy: i64,
+    log_frames: i64,
+    checkpointed_frames: i64,
+) -> AppResult<()> {
+    if busy == 0 && (log_frames < 0 || checkpointed_frames >= log_frames) {
+        return Ok(());
+    }
+
+    Err(scryer_application::AppError::Repository(format!(
+        "sqlite WAL checkpoint incomplete: busy={busy}, log_frames={log_frames}, checkpointed_frames={checkpointed_frames}"
+    )))
+}
+
+#[cfg(test)]
+mod sqlite_checkpoint_tests {
+    use super::validate_sqlite_checkpoint_result;
+
+    #[test]
+    fn checkpoint_result_requires_no_busy_or_uncheckpointed_frames() {
+        assert!(validate_sqlite_checkpoint_result(0, 0, 0).is_ok());
+        assert!(validate_sqlite_checkpoint_result(0, -1, -1).is_ok());
+        assert!(validate_sqlite_checkpoint_result(1, 10, 10).is_err());
+        assert!(validate_sqlite_checkpoint_result(0, 10, 9).is_err());
+    }
+}
+
 const LIBRARY_PROBE_COLUMNS: &str = "title_id, path, probe_signature_scheme, probe_signature_value, last_probed_at, last_changed_at";
 
 const UPSERT_LIBRARY_PROBE_SIGNATURE_SQL: &str = "INSERT INTO library_probe_signatures (
@@ -1217,6 +1244,43 @@ async fn delete_media_files_by_ids_shared(
 
 #[async_trait]
 impl HousekeepingRepository for HousekeepingStore {
+    async fn delete_stale_workflow_operations(
+        &self,
+        completed_days: i64,
+        warning_failed_days: i64,
+    ) -> AppResult<u32> {
+        let now = Utc::now();
+        execute_housekeeping_delete(
+            &self.datastore,
+            "delete_stale_workflow_operations",
+            "DELETE FROM workflow_operations
+              WHERE job_key IS NOT NULL
+                AND (
+                    (status = 'completed' AND started_at <= {})
+                    OR (status IN ('warning', 'failed') AND started_at <= {})
+                )
+                AND id NOT IN (
+                    SELECT id
+                      FROM (
+                            SELECT id,
+                                   ROW_NUMBER() OVER (
+                                       PARTITION BY job_key
+                                       ORDER BY started_at DESC, id DESC
+                                   ) AS retention_rank
+                              FROM workflow_operations
+                             WHERE job_key IS NOT NULL
+                               AND status IN ('completed', 'warning', 'failed')
+                      ) terminal_workflow_operations
+                     WHERE retention_rank = 1
+                )",
+            vec![
+                SqlArg::Timestamp(now - Duration::days(completed_days)),
+                SqlArg::Timestamp(now - Duration::days(warning_failed_days)),
+            ],
+        )
+        .await
+    }
+
     async fn delete_release_decisions_older_than(&self, days: i64) -> AppResult<u32> {
         execute_housekeeping_delete(
             &self.datastore,
@@ -1470,10 +1534,6 @@ impl HousekeepingRepository for HousekeepingStore {
                             .execute(&pool)
                             .await
                             .map_err(repo_err)?;
-                        sqlx::query("PRAGMA wal_checkpoint(PASSIVE)")
-                            .execute(&pool)
-                            .await
-                            .map_err(repo_err)?;
                         // Throttled full VACUUM: only reclaim when
                         // the free-page ratio shows meaningful bloat, so the daily
                         // maintenance tick does not pay the VACUUM cost every run.
@@ -1507,7 +1567,26 @@ impl HousekeepingRepository for HousekeepingStore {
                         Ok(())
                     },
                 )
-                .await
+                .await?;
+
+                let (busy, log_frames, checkpointed_frames) = SqlRuntime::run_serialized_sqlite(
+                    &self.datastore,
+                    "sqlite_database_checkpoint",
+                    |pool| async move {
+                        sqlx::query_as::<_, (i64, i64, i64)>("PRAGMA wal_checkpoint(TRUNCATE)")
+                            .fetch_one(&pool)
+                            .await
+                            .map_err(repo_err)
+                    },
+                )
+                .await?;
+                tracing::info!(
+                    busy,
+                    log_frames,
+                    checkpointed_frames,
+                    "completed sqlite WAL checkpoint"
+                );
+                validate_sqlite_checkpoint_result(busy, log_frames, checkpointed_frames)
             }
             StoreDatastore::Postgres { pool } => sqlx::query("VACUUM (ANALYZE)")
                 .execute(pool)

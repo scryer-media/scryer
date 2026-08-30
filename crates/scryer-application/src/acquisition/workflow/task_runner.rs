@@ -2813,9 +2813,6 @@ async fn process_single_target(
         .record_acquisition_scope_search_attempt(&item.id, &now.to_rfc3339())
         .await;
 
-    app.emit_acquisition_search_completed_event(None, title, results.len() as i64)
-        .await;
-
     if results.is_empty() {
         debug!(
             title_id = title.id.as_str(),

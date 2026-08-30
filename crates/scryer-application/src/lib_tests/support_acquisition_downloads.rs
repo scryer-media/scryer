@@ -1582,6 +1582,14 @@ impl TrackingHousekeepingRepo {
 
 #[async_trait]
 impl HousekeepingRepository for TrackingHousekeepingRepo {
+    async fn delete_stale_workflow_operations(
+        &self,
+        _completed_days: i64,
+        _warning_failed_days: i64,
+    ) -> AppResult<u32> {
+        Ok(0)
+    }
+
     async fn delete_release_decisions_older_than(&self, _days: i64) -> AppResult<u32> {
         Ok(0)
     }
