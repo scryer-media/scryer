@@ -1,12 +1,12 @@
-# Scryer 0.18.22 release notes
+# Scryer 0.19.0 release notes
 
 > Draft — these notes describe the net change from `scryer-v0.18.21` to
-> `scryer-v0.18.22`. They intentionally describe the completed release rather
+> `scryer-v0.19.0`. They intentionally describe the completed release rather
 > than the order individual release-branch changes landed.
 
 ## Highlights
 
-0.18.22 is a substantial reliability and operations release. It adds supported
+0.19.0 is a substantial reliability and operations release. It adds supported
 in-app updates for eligible Windows installations, makes large import backlogs
 move through the system without one slow copy holding everything else up, and
 removes several sources of lost download/import evidence. Acquisition now works
@@ -86,6 +86,11 @@ plugin, and GraphQL hardening work.
 - Activity now includes live import streams and clearer import/history detail,
   making long placement, verification, and reconciliation work visible while it
   is happening.
+- **Verified season, multi-season, and complete-series packs now retain every
+  catalog-resolved member.** Monitoring controls what Scryer searches for; it
+  does not discard an already-downloaded, safely identified episode merely
+  because that episode is currently unmonitored. Members that cannot be
+  identified safely remain held for Manual Import.
 
 ### Acquisition now converges a large wanted backlog in parallel
 
@@ -127,6 +132,12 @@ plugin, and GraphQL hardening work.
 - Indexer requests now have a 120-second operation budget, with admission waits
   accounted for separately. Slow but healthy indexers therefore have time to
   answer without allowing a queue wait to consume their entire request window.
+- **Operator-started searches always query providers live.** They no longer
+  reuse a background candidate corpus or reject a viable pack solely because it
+  contains an unmonitored episode; background convergence remains governed by
+  its normal monitoring and reuse rules.
+- Operators that need a different RSS cadence can now set
+  `SCRYER_RSS_TARGET_INTERVAL_SECS`; the existing default behavior is unchanged.
 
 ### More transparent and isolated indexer behavior
 
@@ -170,13 +181,17 @@ plugin, and GraphQL hardening work.
 - The completed-download pipeline has stronger state reconciliation and more
   precise activity-vs-import handling, reducing duplicate work and making
   recoverable outcomes visible rather than disappearing from the queue.
+- Download history remains available when a client evicts its completed item,
+  and queue recovery restores the configured client binding from the durable
+  submission. A settled download no longer continues to conflict with the
+  acquisition scope it has already satisfied.
 
 ### Quality profiles: Balanced favors sensible releases
 
 - **Balanced no longer rewards progressively larger releases.** Its size curve
   now peaks around the expected file size and penalizes large, very large,
-  massive, and excessive releases while preserving the existing implausible-size
-  hard veto.
+  massive, and excessive releases while retaining a hard veto for clearly
+  impossible excessive sizes.
 - For a two-hour 2160p movie, Balanced uses a 32 Mbps baseline: roughly 28.5
   GiB for an H.265 Blu-ray and roughly 38 GiB when the codec is unknown. Runtime
   scaling remains proportional for longer films.
@@ -193,6 +208,14 @@ plugin, and GraphQL hardening work.
   quality-tier settings and has an explicit size expectation. Existing
   system-owned defaults move the Anime facet to this profile automatically;
   customized profile catalogs and explicit user choices are left untouched.
+- **Pack size scoring is coverage-aware.** A credible per-episode size reported
+  for a season or complete pack can avoid an inappropriate small-file penalty,
+  but that inferred reading can never add a size bonus. The same basis is used
+  when choosing, importing, and later comparing an incumbent.
+- Small releases are now ranked down by the size curve rather than rejected
+  solely for being small. At import, an advertised size is retained only when
+  it is reasonably close to the landed bytes; a material mismatch is scored on
+  the bytes actually received.
 
 ### Playback and library experience
 
@@ -214,6 +237,9 @@ plugin, and GraphQL hardening work.
   views have been tightened around live import state, episode work, pending
   imports, and the actions appropriate to each state. Activity displays the raw
   release name submitted by the provider rather than a parser-normalized title.
+- Torrents whose media import has completed but which remain retained for
+  seeding now have an explicit **Imported · Seeding** activity state and
+  filter, rather than looking indistinguishable from fully completed work.
 - Fix Match uses the GraphQL facet data directly, avoiding stale client-side
   assumptions. The updated manual-import UI includes the completed download
   identity needed to resume work correctly.
@@ -249,6 +275,13 @@ plugin, and GraphQL hardening work.
   indexers can therefore fan out safely while telling the host whether a result
   set is complete; legacy plugins remain conservative and cannot attest an
   incomplete empty response as coverage.
+- Component-based challenge solvers now share one deadline across solving and
+  any clearance replay, preventing a retry from silently extending the
+  operator-visible request budget.
+- `cargo xtask serve` now verifies the catalog-pinned built-in plugin assets
+  before startup and materializes missing or stale bytes locally. Development
+  and CI therefore exercise the published artifacts rather than checked-in
+  binaries.
 - Normal runtime logs now default to one JSON object per line across stdout,
   rotating files, and the in-app stream. Request, actor, workflow, and resource
   context is attached centrally without requiring individual log calls to
@@ -275,6 +308,8 @@ plugin, and GraphQL hardening work.
   API keys, canonical download identities, grab-time infohashes, media-server
   playback links, BLAKE3 identity backfills, compact event storage, and durable
   manual-import selection identity.
+- The canonical-default migration preserves existing configured library roots;
+  established library paths are not rewritten during upgrade.
 - The BLAKE3 authorization-fingerprint change invalidates existing interactive
   sessions, so users will need to sign in again after the upgrade. Accounts
   still carrying the retired v1 password format require a password change.
@@ -310,6 +345,8 @@ plugin, and GraphQL hardening work.
   indexer error-history data, active-import streams, exact media-server playback
   links, series-movie rating and locally loaded credit data, and
   download/manual-import identity fields.
+- Queue clients that exhaustively match GraphQL enums must also handle
+  `IMPORTED_SEEDING` and the `SEEDING` activity filter.
 - Download-client and indexer plugin hosts receive the runtime, timeout, and
   compatibility improvements in this release. Existing supported plugins remain
   protected by capability/version gates where a newer host command is required.
