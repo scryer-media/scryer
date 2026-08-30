@@ -1542,11 +1542,15 @@ pub(crate) fn evaluate_auto_candidate(
     // by target derivation and by the RSS lane. A `Collection` is exempt because
     // a season pack's scope *is* its monitored members; refusing a whole season
     // because one episode is unmonitored would reintroduce the partial-monitoring
-    // trap.
-    if !matches!(
-        context.subject.submission_scope,
-        SubmissionScope::Collection { .. }
-    ) && let Some(SubmissionScope::EpisodeSet { episode_ids }) = &candidate.coverage_scope
+    // trap. An operator-started search is exempt the way Sonarr's spec skips
+    // the monitored check for user searches: the operator asking for a release
+    // outranks the monitoring flags it happens to touch.
+    if !context.user_invoked
+        && !matches!(
+            context.subject.submission_scope,
+            SubmissionScope::Collection { .. }
+        )
+        && let Some(SubmissionScope::EpisodeSet { episode_ids }) = &candidate.coverage_scope
         && episode_ids
             .iter()
             .any(|episode_id| context.unmonitored_episode_ids.contains(episode_id))
@@ -4588,9 +4592,21 @@ mod tests {
             ReleaseAutoDecisionCode::EpisodeNotMonitored
         );
 
+        // An operator-started search skips the monitored check the way
+        // Sonarr's spec does for user searches: the same batch is fine.
+        let context = AutoCandidateEvaluationContext {
+            user_invoked: true,
+            ..context
+        };
+        assert_eq!(
+            evaluate_auto_candidate(&candidate, &context),
+            ReleaseAutoDecisionCode::Eligible
+        );
+
         // Every episode monitored: the same batch is fine.
         let all_monitored = HashSet::new();
         let context = AutoCandidateEvaluationContext {
+            user_invoked: false,
             unmonitored_episode_ids: &all_monitored,
             ..context
         };

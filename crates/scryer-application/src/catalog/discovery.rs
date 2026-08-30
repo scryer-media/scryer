@@ -1569,7 +1569,11 @@ impl AppUseCase {
                 title,
                 subject,
                 outcome.results,
-                matches!(mode, SearchMode::Interactive),
+                // A background value is the mark of the convergence sweep; a
+                // search without one was started by an operator even when it
+                // runs auto decisioning (`queue_best_release`), and Sonarr
+                // skips the monitored check for exactly those searches.
+                matches!(mode, SearchMode::Interactive) || background_value.is_none(),
             )
             .await;
         if self
