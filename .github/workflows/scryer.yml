@@ -17,10 +17,73 @@ env:
   CARGO_BUILD_WARNINGS: deny
 
 jobs:
+  changes:
+    name: changes
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    outputs:
+      scope: ${{ steps.classify.outputs.scope }}
+      web: ${{ steps.classify.outputs.web }}
+      full: ${{ steps.classify.outputs.full }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Test changed-path classifier
+        run: python3 .github/scripts/test_classify_scryer_ci_paths.py
+
+      - name: Classify validation scope
+        id: classify
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            test -n "$PR_BASE_SHA"
+            test -n "$PR_HEAD_SHA"
+            scope="$(git diff --name-only --no-renames -z "$PR_BASE_SHA" "$PR_HEAD_SHA" | python3 .github/scripts/classify_scryer_ci_paths.py)"
+          else
+            scope=full
+          fi
+
+          case "$scope" in
+            none)
+              run_web=false
+              run_full=false
+              ;;
+            web)
+              run_web=true
+              run_full=false
+              ;;
+            full)
+              run_web=true
+              run_full=true
+              ;;
+            *)
+              echo "unexpected Scryer CI validation scope: $scope" >&2
+              exit 1
+              ;;
+          esac
+
+          echo "Scryer CI validation scope: $scope"
+
+          {
+            echo "scope=$scope"
+            echo "web=$run_web"
+            echo "full=$run_full"
+          } >> "$GITHUB_OUTPUT"
+
   web:
     name: web
     runs-on: ubuntu-26.04
     timeout-minutes: 40
+    needs: [changes]
+    if: ${{ needs.changes.outputs.web == 'true' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -65,8 +128,8 @@ jobs:
     name: builtins-provenance
     runs-on: ubuntu-26.04
     timeout-minutes: 20
-    needs: [release-trust]
-    if: ${{ always() && (github.event_name == 'pull_request' || needs.release-trust.result == 'success') }}
+    needs: [changes, release-trust]
+    if: ${{ always() && needs.changes.outputs.full == 'true' && (github.event_name == 'pull_request' || needs.release-trust.result == 'success') }}
     permissions:
       contents: read
     steps:
@@ -174,8 +237,8 @@ jobs:
     name: rust-clippy
     runs-on: ubuntu-26.04
     timeout-minutes: 50
-    needs: [web, builtins-provenance, release-trust]
-    if: ${{ always() && needs.web.result == 'success' && needs.builtins-provenance.result == 'success' && (github.event_name == 'pull_request' || needs.release-trust.result == 'success') }}
+    needs: [changes, web, builtins-provenance, release-trust]
+    if: ${{ always() && needs.changes.outputs.full == 'true' && needs.web.result == 'success' && needs.builtins-provenance.result == 'success' && (github.event_name == 'pull_request' || needs.release-trust.result == 'success') }}
     env:
       CARGO_HOME: /home/runner/.cargo
       CARGO_INCREMENTAL: "0"
@@ -184,6 +247,10 @@ jobs:
       CARGO_PROFILE_TEST_DEBUG: "0"
       CARGO_PROFILE_TEST_STRIP: debuginfo
       CARGO_TERM_COLOR: always
+      SCCACHE_BASEDIRS: /home/runner/work/scryer/scryer
+      SCCACHE_CACHE_SIZE: 10G
+      SCCACHE_DIR: /home/runner/.cache/sccache
+      SCCACHE_IDLE_TIMEOUT: "0"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -195,6 +262,36 @@ jobs:
         with:
           toolchain: "1.97.1"
           components: clippy
+
+      - name: Install sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.17.0
+
+      - name: Configure trusted internal PR sccache
+        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+        uses: ./.github/actions/configure-sccache-r2
+        with:
+          endpoint: ${{ secrets.SCCACHE_ENDPOINT }}
+          access-key-id: ${{ secrets.SCCACHE_S3_ACCESS_ID }}
+          secret-access-key: ${{ secrets.SCCACHE_S3_SECRET }}
+          key-prefix: scryer/trusted-pr/v1/rust-1.97.1/x86_64-unknown-linux-musl/
+
+      - name: Configure fork PR sccache
+        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+        shell: bash
+        run: |
+          {
+            echo "RUSTC_WRAPPER=sccache"
+            echo "SCRYER_SCCACHE_ENABLED=true"
+          } >> "$GITHUB_ENV"
+
+      - name: Prime sccache server
+        shell: bash
+        run: |
+          set -euo pipefail
+          sccache --start-server || true
+          sccache --zero-stats || true
 
       - name: Install system dependencies
         run: sudo apt-get install -y --no-install-recommends musl-tools mold nasm
@@ -236,7 +333,11 @@ jobs:
           export SCRYER_EMBED_UI_DIR="${GITHUB_WORKSPACE}/scryer-web-out"
           export SCRYER_SMG_REGISTRATION_SECRET="${{ secrets.SMG_REGISTRATION_SECRET }}"
           export SCRYER_SMG_GRAPHQL_URL="https://smg.scryer.media/graphql"
-          export CC_x86_64_unknown_linux_musl="musl-gcc"
+          if [ "${SCRYER_SCCACHE_ENABLED:-false}" = "true" ]; then
+            export CC_x86_64_unknown_linux_musl="sccache musl-gcc"
+          else
+            export CC_x86_64_unknown_linux_musl="musl-gcc"
+          fi
           export RUSTFLAGS="--remap-path-prefix=${GITHUB_WORKSPACE}=. -C link-arg=-fuse-ld=mold -W linker-messages"
           cargo clippy --target x86_64-unknown-linux-musl --locked \
             -p scryer \
@@ -279,6 +380,13 @@ jobs:
           df -h | tee rust-clippy-disk-end.txt
           du -sh target "$CARGO_HOME" 2>/dev/null | tee -a rust-clippy-disk-end.txt || true
 
+      - name: Show sccache stats
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          sccache --show-stats | tee rust-clippy-sccache-stats.txt
+
       - name: Upload rust-clippy artifacts
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -288,6 +396,7 @@ jobs:
             rust-clippy.log
             rust-clippy-disk-start.txt
             rust-clippy-disk-end.txt
+            rust-clippy-sccache-stats.txt
             wasmtime-feature-tree.txt
           if-no-files-found: error
           retention-days: 14
@@ -296,8 +405,8 @@ jobs:
     name: rust-nextest
     runs-on: ubuntu-26.04
     timeout-minutes: 50
-    needs: [web, builtins-provenance, release-trust]
-    if: ${{ always() && needs.web.result == 'success' && needs.builtins-provenance.result == 'success' && (github.event_name == 'pull_request' || needs.release-trust.result == 'success') }}
+    needs: [changes, web, builtins-provenance, release-trust]
+    if: ${{ always() && needs.changes.outputs.full == 'true' && needs.web.result == 'success' && needs.builtins-provenance.result == 'success' && (github.event_name == 'pull_request' || needs.release-trust.result == 'success') }}
     env:
       CARGO_HOME: /home/runner/.cargo
       CARGO_INCREMENTAL: "0"
@@ -306,6 +415,10 @@ jobs:
       CARGO_PROFILE_TEST_DEBUG: "0"
       CARGO_PROFILE_TEST_STRIP: debuginfo
       CARGO_TERM_COLOR: always
+      SCCACHE_BASEDIRS: /home/runner/work/scryer/scryer
+      SCCACHE_CACHE_SIZE: 10G
+      SCCACHE_DIR: /home/runner/.cache/sccache
+      SCCACHE_IDLE_TIMEOUT: "0"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -316,6 +429,36 @@ jobs:
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
           toolchain: "1.97.1"
+
+      - name: Install sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.17.0
+
+      - name: Configure trusted internal PR sccache
+        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+        uses: ./.github/actions/configure-sccache-r2
+        with:
+          endpoint: ${{ secrets.SCCACHE_ENDPOINT }}
+          access-key-id: ${{ secrets.SCCACHE_S3_ACCESS_ID }}
+          secret-access-key: ${{ secrets.SCCACHE_S3_SECRET }}
+          key-prefix: scryer/trusted-pr/v1/rust-1.97.1/x86_64-unknown-linux-musl/
+
+      - name: Configure fork PR sccache
+        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+        shell: bash
+        run: |
+          {
+            echo "RUSTC_WRAPPER=sccache"
+            echo "SCRYER_SCCACHE_ENABLED=true"
+          } >> "$GITHUB_ENV"
+
+      - name: Prime sccache server
+        shell: bash
+        run: |
+          set -euo pipefail
+          sccache --start-server || true
+          sccache --zero-stats || true
 
       - name: Install system dependencies
         run: sudo apt-get install -y --no-install-recommends musl-tools mold nasm
@@ -347,7 +490,11 @@ jobs:
           export SCRYER_EMBED_UI_DIR="${GITHUB_WORKSPACE}/scryer-web-out"
           export SCRYER_SMG_REGISTRATION_SECRET="${{ secrets.SMG_REGISTRATION_SECRET }}"
           export SCRYER_SMG_GRAPHQL_URL="https://smg.scryer.media/graphql"
-          export CC_x86_64_unknown_linux_musl="musl-gcc"
+          if [ "${SCRYER_SCCACHE_ENABLED:-false}" = "true" ]; then
+            export CC_x86_64_unknown_linux_musl="sccache musl-gcc"
+          else
+            export CC_x86_64_unknown_linux_musl="musl-gcc"
+          fi
           export RUSTFLAGS="--remap-path-prefix=${GITHUB_WORKSPACE}=. -C link-arg=-fuse-ld=mold -W linker-messages"
           export RUST_MIN_STACK="4194304"
           cargo nextest run --target x86_64-unknown-linux-musl --locked \
@@ -363,6 +510,13 @@ jobs:
           df -h | tee rust-nextest-disk-end.txt
           du -sh target "$CARGO_HOME" 2>/dev/null | tee -a rust-nextest-disk-end.txt || true
 
+      - name: Show sccache stats
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          sccache --show-stats | tee rust-nextest-sccache-stats.txt
+
       - name: Upload rust-nextest artifacts
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -372,6 +526,7 @@ jobs:
             rust-nextest.log
             rust-nextest-disk-start.txt
             rust-nextest-disk-end.txt
+            rust-nextest-sccache-stats.txt
           if-no-files-found: error
           retention-days: 14
 
@@ -379,8 +534,8 @@ jobs:
     name: launcher-${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 50
-    needs: [release-trust]
-    if: ${{ always() && (github.event_name == 'pull_request' || needs.release-trust.result == 'success') }}
+    needs: [changes, release-trust]
+    if: ${{ always() && needs.changes.outputs.full == 'true' && (github.event_name == 'pull_request' || needs.release-trust.result == 'success') }}
     strategy:
       fail-fast: false
       matrix:
@@ -429,7 +584,7 @@ jobs:
         run: rustup target add ${{ matrix.target }}
 
       - name: Resolve sccache lane metadata
-        if: ${{ github.event_name == 'pull_request' }}
+        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
         id: launcher-sccache-metadata
         shell: bash
         run: |
@@ -449,7 +604,7 @@ jobs:
           echo "version_line=${version_line}" >> "$GITHUB_OUTPUT"
 
       - name: Restore sccache directory
-        if: ${{ github.event_name == 'pull_request' }}
+        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
         id: launcher-sccache-restore
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
@@ -466,13 +621,22 @@ jobs:
           version: v0.17.0
 
       - name: Configure sccache
-        if: ${{ github.event_name == 'pull_request' }}
+        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
         shell: bash
         run: |
           {
             echo "RUSTC_WRAPPER=sccache"
             echo "SCRYER_SCCACHE_ENABLED=true"
           } >> "$GITHUB_ENV"
+
+      - name: Configure trusted internal PR sccache
+        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+        uses: ./.github/actions/configure-sccache-r2
+        with:
+          endpoint: ${{ secrets.SCCACHE_ENDPOINT }}
+          access-key-id: ${{ secrets.SCCACHE_S3_ACCESS_ID }}
+          secret-access-key: ${{ secrets.SCCACHE_S3_SECRET }}
+          key-prefix: scryer/trusted-pr/v1/rust-1.97.1/${{ matrix.target }}/
 
       - name: Configure trusted tag sccache
         if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/scryer-v') }}
@@ -556,19 +720,12 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Save sccache directory
-        if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && steps.launcher-sccache-restore.outcome == 'success'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
-        with:
-          path: /home/runner/.cache/sccache
-          key: ${{ steps.launcher-sccache-restore.outputs.cache-primary-key }}
-
   linux-build:
     name: linux-${{ matrix.arch }}-${{ matrix.variant }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
-    needs: [web, builtins-provenance, release-trust]
-    if: ${{ always() && needs.web.result == 'success' && needs.builtins-provenance.result == 'success' && (github.event_name == 'pull_request' || needs.release-trust.result == 'success') }}
+    needs: [changes, web, builtins-provenance, release-trust]
+    if: ${{ always() && needs.changes.outputs.full == 'true' && needs.web.result == 'success' && needs.builtins-provenance.result == 'success' && (github.event_name == 'pull_request' || needs.release-trust.result == 'success') }}
     strategy:
       fail-fast: false
       matrix:
@@ -643,7 +800,7 @@ jobs:
         run: rustup target add ${{ matrix.target }}
 
       - name: Restore sccache directory
-        if: ${{ github.event_name == 'pull_request' }}
+        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
         id: linux-sccache-restore
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
@@ -659,13 +816,22 @@ jobs:
           version: v0.17.0
 
       - name: Configure sccache
-        if: ${{ github.event_name == 'pull_request' }}
+        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
         shell: bash
         run: |
           {
             echo "RUSTC_WRAPPER=sccache"
             echo "SCRYER_SCCACHE_ENABLED=true"
           } >> "$GITHUB_ENV"
+
+      - name: Configure trusted internal PR sccache
+        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+        uses: ./.github/actions/configure-sccache-r2
+        with:
+          endpoint: ${{ secrets.SCCACHE_ENDPOINT }}
+          access-key-id: ${{ secrets.SCCACHE_S3_ACCESS_ID }}
+          secret-access-key: ${{ secrets.SCCACHE_S3_SECRET }}
+          key-prefix: scryer/trusted-pr/v1/rust-1.97.1/${{ matrix.target }}/
 
       - name: Configure trusted tag sccache
         if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/scryer-v') }}
@@ -804,19 +970,12 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-      - name: Save sccache directory
-        if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && steps.linux-sccache-restore.outcome == 'success'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
-        with:
-          path: /home/runner/.cache/sccache
-          key: ${{ steps.linux-sccache-restore.outputs.cache-primary-key }}
-
   macos-build:
     name: macos-${{ matrix.arch }}-${{ matrix.variant }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
-    needs: [web, builtins-provenance, release-trust]
-    if: ${{ always() && needs.web.result == 'success' && needs.builtins-provenance.result == 'success' && (github.event_name == 'pull_request' || needs.release-trust.result == 'success') }}
+    needs: [changes, web, builtins-provenance, release-trust]
+    if: ${{ always() && needs.changes.outputs.full == 'true' && needs.web.result == 'success' && needs.builtins-provenance.result == 'success' && (github.event_name == 'pull_request' || needs.release-trust.result == 'success') }}
     strategy:
       fail-fast: false
       matrix:
@@ -878,7 +1037,7 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Restore sccache directory
-        if: ${{ github.event_name == 'pull_request' }}
+        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
         id: macos-sccache-restore
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
@@ -894,13 +1053,22 @@ jobs:
           version: v0.17.0
 
       - name: Configure sccache
-        if: ${{ github.event_name == 'pull_request' }}
+        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
         shell: bash
         run: |
           {
             echo "RUSTC_WRAPPER=sccache"
             echo "SCRYER_SCCACHE_ENABLED=true"
           } >> "$GITHUB_ENV"
+
+      - name: Configure trusted internal PR sccache
+        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+        uses: ./.github/actions/configure-sccache-r2
+        with:
+          endpoint: ${{ secrets.SCCACHE_ENDPOINT }}
+          access-key-id: ${{ secrets.SCCACHE_S3_ACCESS_ID }}
+          secret-access-key: ${{ secrets.SCCACHE_S3_SECRET }}
+          key-prefix: scryer/trusted-pr/v1/rust-1.97.1/${{ matrix.target }}/
 
       - name: Configure trusted tag sccache
         if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/scryer-v') }}
@@ -1083,19 +1251,12 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-      - name: Save sccache directory
-        if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && steps.macos-sccache-restore.outcome == 'success'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
-        with:
-          path: ${{ github.workspace }}/.sccache
-          key: ${{ steps.macos-sccache-restore.outputs.cache-primary-key }}
-
   windows-build:
     name: windows-${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
-    needs: [web, builtins-provenance, release-trust]
-    if: ${{ always() && needs.web.result == 'success' && needs.builtins-provenance.result == 'success' && (github.event_name == 'pull_request' || needs.release-trust.result == 'success') }}
+    needs: [changes, web, builtins-provenance, release-trust]
+    if: ${{ always() && needs.changes.outputs.full == 'true' && needs.web.result == 'success' && needs.builtins-provenance.result == 'success' && (github.event_name == 'pull_request' || needs.release-trust.result == 'success') }}
     strategy:
       fail-fast: false
       matrix:
@@ -1159,7 +1320,7 @@ jobs:
           toolchain: ${{ matrix.toolchain }}
 
       - name: Restore sccache directory
-        if: ${{ github.event_name == 'pull_request' }}
+        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
         id: windows-sccache-restore
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
@@ -1175,11 +1336,20 @@ jobs:
           version: v0.17.0
 
       - name: Configure sccache
-        if: ${{ github.event_name == 'pull_request' }}
+        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
         shell: pwsh
         run: |
           "RUSTC_WRAPPER=sccache" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
           "SCRYER_SCCACHE_ENABLED=true" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - name: Configure trusted internal PR sccache
+        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+        uses: ./.github/actions/configure-sccache-r2
+        with:
+          endpoint: ${{ secrets.SCCACHE_ENDPOINT }}
+          access-key-id: ${{ secrets.SCCACHE_S3_ACCESS_ID }}
+          secret-access-key: ${{ secrets.SCCACHE_S3_SECRET }}
+          key-prefix: scryer/trusted-pr/v1/rust-1.97.1/${{ matrix.target }}/
 
       - name: Configure trusted tag sccache
         if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/scryer-v') }}
@@ -1554,19 +1724,12 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-      - name: Save sccache directory
-        if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && steps.windows-sccache-restore.outcome == 'success'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
-        with:
-          path: ${{ github.workspace }}\.sccache
-          key: ${{ steps.windows-sccache-restore.outputs.cache-primary-key }}
-
   docker-publish-pr-rc:
     name: docker-publish-pr-rc
-    if: ${{ always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && needs.rust-clippy.result == 'success' && needs.rust-nextest.result == 'success' && needs.launcher-build.result == 'success' && needs.linux-build.result == 'success' }}
+    if: ${{ always() && needs.changes.outputs.full == 'true' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && needs.rust-clippy.result == 'success' && needs.rust-nextest.result == 'success' && needs.launcher-build.result == 'success' && needs.linux-build.result == 'success' }}
     runs-on: ubuntu-26.04
     timeout-minutes: 20
-    needs: [rust-clippy, rust-nextest, launcher-build, linux-build]
+    needs: [changes, rust-clippy, rust-nextest, launcher-build, linux-build]
     permissions:
       contents: read
       id-token: write

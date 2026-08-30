@@ -1817,18 +1817,13 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn component_http_shares_one_deadline_across_solver_and_clearance_replay() {
-        use wiremock::matchers::{body_json, method, path};
+        use wiremock::matchers::{method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
         let server = MockServer::start().await;
         let target_url = format!("{}/search", server.uri());
         Mock::given(method("POST"))
             .and(path("/v1"))
-            .and(body_json(serde_json::json!({
-                "cmd": "request.get",
-                "url": target_url,
-                "maxTimeout": 60_000,
-            })))
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_delay(Duration::from_millis(100))
@@ -1864,11 +1859,30 @@ mod tests {
             Duration::from_millis(150),
         );
         let error = host
-            .http(component_solver_request(target_url, Vec::new()))
+            .http(component_solver_request(target_url.clone(), Vec::new()))
             .await
             .expect_err("the replay must use only the solver operation's remaining budget");
 
         assert_eq!(error, TransportError::Timeout);
+
+        let solver_request = server
+            .received_requests()
+            .await
+            .expect("recorded requests")
+            .into_iter()
+            .find(|request| request.url.path() == "/v1")
+            .expect("the solver command should be sent to /v1");
+        assert_eq!(solver_request.method.as_str(), "POST");
+        let solver_command: serde_json::Value = serde_json::from_slice(&solver_request.body)
+            .expect("the solver command should contain JSON");
+        assert_eq!(
+            solver_command,
+            serde_json::json!({
+                "cmd": "request.get",
+                "url": target_url,
+                "maxTimeout": 60_000,
+            })
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]

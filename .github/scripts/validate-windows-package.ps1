@@ -317,44 +317,6 @@ function Invoke-MsiExec {
   return (Start-Process -FilePath $msiExec -ArgumentList $Arguments -PassThru -Wait).ExitCode
 }
 
-function Get-MsiRegistryStringValue {
-  param(
-    [Parameter(Mandatory = $true)]
-    [string]$MsiPath,
-
-    [Parameter(Mandatory = $true)]
-    [string]$Key,
-
-    [Parameter(Mandatory = $true)]
-    [string]$Name
-  )
-
-  $escapedKey = $Key.Replace("'", "''")
-  $escapedName = $Name.Replace("'", "''")
-  $installer = New-Object -ComObject WindowsInstaller.Installer
-  $database = $installer.OpenDatabase($MsiPath, 0)
-  $query = 'SELECT `Value` FROM `Registry` WHERE `Root`=2 AND `Key`=''{0}'' AND `Name`=''{1}''' -f $escapedKey, $escapedName
-  $view = $database.OpenView($query)
-  $view.Execute()
-  try {
-    $record = $view.Fetch()
-    if (-not $record) {
-      throw "MSI did not contain HKLM\\${Key}::$Name in its Registry table: $MsiPath"
-    }
-
-    # Convert the COM field to a plain string while its view remains open. Raw
-    # Windows Installer record values are not reliable after their view closes.
-    $value = $record.StringData(1)
-    if ($null -eq $value) {
-      throw "MSI registry row HKLM\\${Key}::$Name had no value: $MsiPath"
-    }
-
-    return $value.ToString()
-  } finally {
-    [void]$view.Close()
-  }
-}
-
 function Assert-MsiDistributionOwner {
   param(
     [Parameter(Mandatory = $true)]
@@ -364,12 +326,28 @@ function Assert-MsiDistributionOwner {
     [string]$ExpectedOwner
   )
 
-  $actualOwner = (Get-MsiRegistryStringValue `
-    -MsiPath $MsiPath `
-    -Key "Software\Scryer Media\Scryer" `
-    -Name "DistributionOwner").Trim()
-  if ($actualOwner -ne $ExpectedOwner) {
-    throw "MSI DistributionOwner was '$actualOwner', expected '$ExpectedOwner': $MsiPath"
+  $key = "Software\Scryer Media\Scryer"
+  $installer = New-Object -ComObject WindowsInstaller.Installer
+  $database = $installer.OpenDatabase($MsiPath, 0)
+  $query = 'SELECT `Value` FROM `Registry` WHERE `Root`=2 AND `Key`=''{0}'' AND `Name`=''DistributionOwner''' -f $key.Replace("'", "''")
+  $view = $database.OpenView($query)
+  $view.Execute()
+  try {
+    $record = $view.Fetch()
+    if (-not $record) {
+      throw "MSI did not contain HKLM\\${key}::DistributionOwner in its Registry table: $MsiPath"
+    }
+
+    # The COM record's field must be consumed while its view remains open.
+    $actualOwner = $record.StringData(1)
+    if ($null -eq $actualOwner) {
+      throw "MSI registry row HKLM\\${key}::DistributionOwner had no value: $MsiPath"
+    }
+    if ($actualOwner.ToString().Trim() -ne $ExpectedOwner) {
+      throw "MSI DistributionOwner was '$actualOwner', expected '$ExpectedOwner': $MsiPath"
+    }
+  } finally {
+    [void]$view.Close()
   }
 }
 
