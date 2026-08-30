@@ -169,10 +169,10 @@ jobs:
     name: winget-xtask-build
     runs-on: ubuntu-26.04
     timeout-minutes: 50
-    needs: [release-trust]
+    needs: [release-trust, builtins-provenance]
     permissions:
       contents: read
-    if: ${{ always() && github.ref_type == 'tag' && startsWith(github.ref_name, 'scryer-v') && needs.release-trust.result == 'success' }}
+    if: ${{ always() && github.ref_type == 'tag' && startsWith(github.ref_name, 'scryer-v') && needs.release-trust.result == 'success' && needs.builtins-provenance.result == 'success' }}
     env:
       CARGO_INCREMENTAL: "0"
       SCCACHE_BASEDIRS: /home/runner/work/scryer/scryer
@@ -181,6 +181,10 @@ jobs:
       SCCACHE_IDLE_TIMEOUT: "0"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: ./.github/actions/download-builtins
+        with:
+          run-id: ${{ github.run_id }}
 
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
