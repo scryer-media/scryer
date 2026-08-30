@@ -62,14 +62,25 @@ pub(crate) fn schedule_non_destructive_import_mark(
                         );
                         break;
                     }
-                    tracing::debug!(
-                        client_id,
-                        client_item_id = %request.client_item_id,
-                        attempt,
-                        retry_seconds,
-                        error = %error,
-                        "failed to mark imported download in client; retrying"
-                    );
+                    if attempt == 1 {
+                        tracing::warn!(
+                            client_id,
+                            client_item_id = %request.client_item_id,
+                            attempt,
+                            retry_seconds,
+                            error = %error,
+                            "failed to mark imported download in client; retrying"
+                        );
+                    } else {
+                        tracing::debug!(
+                            client_id,
+                            client_item_id = %request.client_item_id,
+                            attempt,
+                            retry_seconds,
+                            error = %error,
+                            "failed to mark imported download in client; retrying"
+                        );
+                    }
                     tokio::time::sleep(std::time::Duration::from_secs(retry_seconds)).await;
                     retry_seconds = retry_seconds
                         .saturating_mul(2)

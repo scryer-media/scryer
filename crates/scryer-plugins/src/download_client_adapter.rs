@@ -25,7 +25,7 @@ use scryer_plugin_sdk::{
     PluginDownloadScopedListResponse, PluginDownloadScopedRecentCompletedRequest, PluginError,
     PluginErrorCode, PluginResult,
 };
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::blocking::run_blocking_plugin_call;
 use crate::legacy_runtime::LegacyPlugin;
@@ -1815,12 +1815,22 @@ impl DownloadClient for WasmDownloadClient {
         &self,
         request: &DownloadClientMarkImportedRequest,
     ) -> AppResult<()> {
-        let supported = self.command.is_some()
-            && self
-                .descriptor
-                .download_client()
-                .is_some_and(|provider| provider.capabilities.mark_imported_non_destructive);
+        let command_available = self.command.is_some();
+        let capability_advertised = self
+            .descriptor
+            .download_client()
+            .is_some_and(|provider| provider.capabilities.mark_imported_non_destructive);
+        let supported = command_available && capability_advertised;
         if !supported {
+            info!(
+                plugin_id = %self.descriptor.id,
+                client_id = %self.client_id,
+                client_name = %self.client_name,
+                client_item_id = %request.client_item_id,
+                command_available,
+                capability_advertised,
+                "skipping non-destructive import mark because plugin command or capability support is unavailable"
+            );
             return Ok(());
         }
 
@@ -1852,7 +1862,15 @@ impl DownloadClient for WasmDownloadClient {
                     .to_string(),
             ));
         };
-        decode_command_result(result, "download mark_imported_non_destructive")
+        decode_command_result(result, "download mark_imported_non_destructive")?;
+        info!(
+            plugin_id = %self.descriptor.id,
+            client_id = %self.client_id,
+            client_name = %self.client_name,
+            client_item_id = %request.client_item_id,
+            "marked imported download in client non-destructively"
+        );
+        Ok(())
     }
 
     async fn get_client_status(&self) -> AppResult<DownloadClientStatus> {
