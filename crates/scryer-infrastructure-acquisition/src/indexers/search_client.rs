@@ -2152,10 +2152,15 @@ impl MultiIndexerSearchClient {
             .target_interval
             .and_then(|duration| chrono::Duration::from_std(duration).ok())
             .unwrap_or_else(|| Duration::seconds(rss_target_interval_secs));
-        let latest_safe_poll_at = last_successful_poll_at
-            .map(|last_activity| last_activity + target_interval)
-            .or(activity.latest_safe_poll_at)
-            .unwrap_or(phased_safe_poll_at);
+        let latest_safe_poll_at = [
+            last_successful_poll_at.map(|last_activity| last_activity + target_interval),
+            last_attempt_at.map(|last_activity| last_activity + target_interval),
+            activity.latest_safe_poll_at,
+        ]
+        .into_iter()
+        .flatten()
+        .max()
+        .unwrap_or(phased_safe_poll_at);
         let freshness_risk = activity.freshness_risk.unwrap_or_else(|| {
             last_successful_poll_at
                 .map(|last_activity| {
@@ -6539,6 +6544,213 @@ mod tests {
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }
+    }
+
+    #[tokio::test]
+    async fn failed_rss_attempt_defers_until_its_cadence_boundary() {
+        let now = Utc::now();
+        let scheduler = crate::upstream_scheduler::InMemoryUpstreamScheduler::new();
+        let host_key = HostKey::from("failed-rss-cadence.example.test");
+        let destination_key = DestinationKey::from(host_key.to_string());
+        let rss_request_key = "rss:*".to_string();
+        let target_interval = crate::upstream_scheduler::rss_target_interval();
+        let target_interval_chrono =
+            Duration::from_std(target_interval).expect("RSS target interval should fit chrono");
+        let last_successful_poll_at = now - target_interval_chrono - Duration::minutes(5);
+        let expected_latest_safe_poll_at = now + target_interval_chrono;
+        let lease = |issued_at| SchedulerLease {
+            lease_id: uuid::Uuid::new_v4().to_string(),
+            candidate_id: SchedulerCandidateId::new(),
+            host_key: host_key.clone(),
+            destination_key: destination_key.clone(),
+            account_quota_key: None,
+            rss_request_key: Some(rss_request_key.clone()),
+            operation: SchedulerOperation::Rss,
+            intent: SchedulerIntent::BackgroundRss,
+            issued_at,
+        };
+
+        scheduler
+            .record_feedback(SchedulerFeedback {
+                lease: Some(lease(last_successful_poll_at)),
+                host_key: host_key.clone(),
+                destination_key: destination_key.clone(),
+                account_quota_key: None,
+                outcome: SchedulerFeedbackOutcome::Success,
+                observed_api_current: None,
+                observed_api_max: None,
+                observed_grab_current: None,
+                observed_grab_max: None,
+                retry_after: None,
+                cooldown_action: RateLimitCooldownAction::None,
+                rss_last_seen_release_identity: None,
+                rss_last_seen_release_published_at: None,
+                rss_feed_result_count: Some(0),
+                rss_seen_release_identities: Vec::new(),
+                observed_at: last_successful_poll_at,
+            })
+            .await
+            .expect("successful RSS feedback should be recorded");
+        scheduler
+            .record_feedback(SchedulerFeedback {
+                lease: Some(lease(now)),
+                host_key: host_key.clone(),
+                destination_key: destination_key.clone(),
+                account_quota_key: None,
+                outcome: SchedulerFeedbackOutcome::RateLimited,
+                observed_api_current: None,
+                observed_api_max: None,
+                observed_grab_current: None,
+                observed_grab_max: None,
+                retry_after: None,
+                cooldown_action: RateLimitCooldownAction::AlreadyRecorded,
+                rss_last_seen_release_identity: None,
+                rss_last_seen_release_published_at: None,
+                rss_feed_result_count: None,
+                rss_seen_release_identities: Vec::new(),
+                observed_at: now,
+            })
+            .await
+            .expect("rate-limited RSS feedback should be recorded");
+
+        let snapshot = scheduler
+            .snapshot(scryer_application::SchedulerSnapshotFilter::default())
+            .await
+            .expect("scheduler snapshot should succeed");
+        let activity = MultiIndexerSearchClient::scheduler_rss_activity(
+            Some(&snapshot),
+            &host_key,
+            &destination_key,
+            None,
+            Some(&rss_request_key),
+        );
+        assert_eq!(
+            activity.last_successful_poll_at,
+            Some(last_successful_poll_at)
+        );
+        assert_eq!(activity.last_attempt_at, Some(now));
+        assert_eq!(
+            activity.latest_safe_poll_at,
+            Some(expected_latest_safe_poll_at)
+        );
+
+        let freshness =
+            MultiIndexerSearchClient::rss_freshness_context(&mock_indexer_config(), now, activity);
+        assert_eq!(freshness.latest_safe_poll_at, expected_latest_safe_poll_at);
+
+        let candidate = |candidate_id| SchedulerCandidate {
+            candidate_id,
+            plugin_config_id: Some("idx-1".to_string()),
+            plugin_kind: SchedulerPluginKind::Indexer,
+            operation: SchedulerOperation::Rss,
+            intent: SchedulerIntent::BackgroundRss,
+            host_key: host_key.clone(),
+            destination_key: destination_key.clone(),
+            account_quota_key: None,
+            rss_request_key: Some(rss_request_key.clone()),
+            estimated_cost: EstimatedCost::ONE_API_CALL,
+            expected_value: ExpectedValueHint::default(),
+            learning_context: None,
+            deadline_at: None,
+            freshness: Some(freshness.clone()),
+            cancel_token: CancellationToken::new(),
+        };
+
+        let next_tick_delay =
+            std::cmp::min(std::time::Duration::from_secs(60), target_interval / 2);
+        let deferred = scheduler
+            .admit_batch(SchedulerBatchRequest {
+                batch_id: "failed-rss-next-tick".to_string(),
+                now: now
+                    + Duration::from_std(next_tick_delay)
+                        .expect("next RSS tick delay should fit chrono"),
+                candidates: vec![candidate(SchedulerCandidateId::new())],
+            })
+            .await
+            .expect("scheduler should evaluate the next RSS tick");
+        assert!(matches!(
+            deferred.decisions.as_slice(),
+            [SchedulerAdmission::Defer {
+                reason: scryer_application::DeferralReason::RssCadence,
+                ..
+            }]
+        ));
+
+        let admitted = scheduler
+            .admit_batch(SchedulerBatchRequest {
+                batch_id: "failed-rss-boundary".to_string(),
+                now: expected_latest_safe_poll_at,
+                candidates: vec![candidate(SchedulerCandidateId::new())],
+            })
+            .await
+            .expect("scheduler should evaluate the RSS cadence boundary");
+        assert!(matches!(
+            admitted.decisions.as_slice(),
+            [SchedulerAdmission::Admit {
+                reason: scryer_application::AdmissionReason::RssFreshness,
+                ..
+            }]
+        ));
+    }
+
+    #[test]
+    fn persisted_rss_boundary_is_not_shortened_by_activity_timestamps() {
+        let now = Utc::now();
+        let persisted_latest_safe_poll_at = now + Duration::minutes(30);
+        let freshness = MultiIndexerSearchClient::rss_freshness_context(
+            &mock_indexer_config(),
+            now,
+            SchedulerRssActivity {
+                last_successful_poll_at: Some(now - Duration::minutes(20)),
+                last_attempt_at: Some(now),
+                target_interval: Some(std::time::Duration::from_secs(15 * 60)),
+                latest_safe_poll_at: Some(persisted_latest_safe_poll_at),
+                freshness_risk: Some(0.5),
+                ..SchedulerRssActivity::default()
+            },
+        );
+
+        assert_eq!(freshness.latest_safe_poll_at, persisted_latest_safe_poll_at);
+    }
+
+    #[test]
+    fn successful_rss_poll_keeps_the_normal_target_interval() {
+        let now = Utc::now();
+        let target_interval = std::time::Duration::from_secs(15 * 60);
+        let freshness = MultiIndexerSearchClient::rss_freshness_context(
+            &mock_indexer_config(),
+            now,
+            SchedulerRssActivity {
+                last_successful_poll_at: Some(now),
+                last_attempt_at: Some(now),
+                target_interval: Some(target_interval),
+                latest_safe_poll_at: Some(now + Duration::minutes(15)),
+                freshness_risk: Some(0.0),
+                ..SchedulerRssActivity::default()
+            },
+        );
+
+        assert_eq!(freshness.target_interval, target_interval);
+        assert_eq!(freshness.latest_safe_poll_at, now + Duration::minutes(15));
+    }
+
+    #[test]
+    fn first_rss_poll_keeps_its_stable_phase() {
+        let now = DateTime::<Utc>::from_timestamp(1_700_000_000, 0).expect("valid timestamp");
+        let target_interval = crate::upstream_scheduler::rss_target_interval();
+        let interval_seconds = target_interval.as_secs() as i64;
+        let window_start = now.timestamp() - now.timestamp().rem_euclid(interval_seconds);
+        let phase = stable_phase_seconds("idx-1", target_interval.as_secs()) as i64;
+        let expected =
+            DateTime::<Utc>::from_timestamp(window_start + phase, 0).expect("valid phase");
+
+        let freshness = MultiIndexerSearchClient::rss_freshness_context(
+            &mock_indexer_config(),
+            now,
+            SchedulerRssActivity::default(),
+        );
+
+        assert_eq!(freshness.latest_safe_poll_at, expected);
     }
 
     fn managed_auto_mode_metadata(enable_rss: bool, enable_automatic_search: bool) -> String {
