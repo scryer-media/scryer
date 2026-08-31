@@ -5685,9 +5685,12 @@ async fn automatic_season_pack_import_rejects_member_without_a_matching_episode(
         "Fail.Closed.Pack.S01.1080p.WEB-DL",
         source_dir.path(),
     );
-    let result = crate::import::import::import_completed_download(&app, &user, &completed)
-        .await
-        .expect("completed season pack import should run");
+    let result = {
+        let _probe = probe_agrees_with_the_name(1920, 1080);
+        crate::import::import::import_completed_download(&app, &user, &completed)
+            .await
+            .expect("completed season pack import should run")
+    };
 
     // The unmatched member is rejected on its own, without transfer, and
     // without any record that could later be resolved as a library file.
@@ -5735,74 +5738,70 @@ async fn automatic_season_pack_import_rejects_member_without_a_matching_episode(
     assert_eq!(rejected_artifacts[0].episode_id, None);
     assert_eq!(rejected_artifacts[0].imported_media_file_id, None);
 
-    // Partial-pack behaviour: the catalogued episode still imports, because the
-    // rejection is per file, not per pack. Synthetic pack members cannot be
-    // probed, so with `runtime-media-analysis` enabled the matched file is
-    // rejected by the sample gate for an unrelated reason and only the
-    // fail-closed assertions above apply.
-    if cfg!(not(feature = "runtime-media-analysis")) {
-        assert_eq!(
-            result.decision,
-            scryer_domain::ImportDecision::Imported,
-            "unexpected import result: {result:?}"
-        );
-        assert_eq!(
-            result.episode_ids,
-            vec![episode.id.clone()],
-            "unexpected import result: {result:?}"
-        );
-        assert!(
-            result.error_message.as_deref().is_some_and(|message| {
-                message.contains("1 imported, 0 skipped, 1 rejected, 0 failed")
-            }),
-            "expected partial pack summary, got {:?}",
-            result.error_message
-        );
-        assert_eq!(
-            library_files.len(),
-            1,
-            "matched episode should be the only library file: {library_files:?}"
-        );
-        assert!(
-            library_files[0].contains("S01E01"),
-            "unexpected library file: {library_files:?}"
-        );
-        assert_eq!(
-            media_files.len(),
-            1,
-            "unexpected media files: {media_files:?}"
-        );
-        assert_eq!(
-            media_files[0].episode_id.as_deref(),
-            Some(episode.id.as_str()),
-            "unexpected media files: {media_files:?}"
-        );
+    // The safe member still imports, but the rejected member keeps the overall
+    // download blocked for operator review.
+    assert_eq!(
+        result.decision,
+        scryer_domain::ImportDecision::Rejected,
+        "unexpected import result: {result:?}"
+    );
+    assert_eq!(result.skip_reason, Some(ImportSkipReason::PolicyMismatch));
+    assert_eq!(
+        result.episode_ids,
+        vec![episode.id.clone()],
+        "unexpected import result: {result:?}"
+    );
+    assert!(
+        result.error_message.as_deref().is_some_and(|message| {
+            message.contains("1 imported, 0 ignored, 0 skipped, 1 rejected, 0 failed")
+        }),
+        "expected partial pack summary, got {:?}",
+        result.error_message
+    );
+    assert_eq!(
+        library_files.len(),
+        1,
+        "matched episode should be the only library file: {library_files:?}"
+    );
+    assert!(
+        library_files[0].contains("S01E01"),
+        "unexpected library file: {library_files:?}"
+    );
+    assert_eq!(
+        media_files.len(),
+        1,
+        "unexpected media files: {media_files:?}"
+    );
+    assert_eq!(
+        media_files[0].episode_id.as_deref(),
+        Some(episode.id.as_str()),
+        "unexpected media files: {media_files:?}"
+    );
 
-        let imported_artifacts = import_artifacts
-            .artifacts_for_file("fail.closed.pack.s01e01.1080p.web-dl.mkv")
-            .await;
-        assert_eq!(
-            imported_artifacts.len(),
-            1,
-            "unexpected artifacts: {imported_artifacts:?}"
-        );
-        assert_eq!(imported_artifacts[0].result, "imported");
-        assert_eq!(
-            imported_artifacts[0].episode_id.as_deref(),
-            Some(episode.id.as_str())
-        );
+    let imported_artifacts = import_artifacts
+        .artifacts_for_file("fail.closed.pack.s01e01.1080p.web-dl.mkv")
+        .await;
+    assert_eq!(
+        imported_artifacts.len(),
+        1,
+        "unexpected artifacts: {imported_artifacts:?}"
+    );
+    assert_eq!(imported_artifacts[0].result, "imported");
+    assert_eq!(
+        imported_artifacts[0].episode_id.as_deref(),
+        Some(episode.id.as_str())
+    );
 
-        // A rejected pack member must not leave the import pending for a later
-        // sweep to pick up again.
-        let statuses: Vec<ImportStatus> = import_repo
-            .records
-            .lock()
-            .await
-            .iter()
-            .map(|record| record.status)
-            .collect();
-        assert_eq!(statuses, vec![ImportStatus::Completed]);
-    }
+    // A rejected pack member must not leave the import pending for a later
+    // sweep to pick up again.
+    let statuses: Vec<ImportStatus> = import_repo
+        .records
+        .lock()
+        .await
+        .iter()
+        .map(|record| record.status)
+        .collect();
+    assert_eq!(statuses, vec![ImportStatus::Failed]);
     assert!(matched_file.exists());
 }
 
