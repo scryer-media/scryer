@@ -2770,6 +2770,76 @@ async fn migration_0173_requeues_only_unhydrated_movie_titles_without_tvdb_ids()
 }
 
 #[tokio::test]
+async fn migration_0200_queues_idle_supported_movies_without_interrupting_active_retries() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .expect("migration test database should open");
+    sqlx::raw_sql(
+        r#"CREATE TABLE titles (
+               id TEXT PRIMARY KEY,
+               facet TEXT NOT NULL,
+               external_ids TEXT NOT NULL,
+               metadata_fetched_at TEXT,
+               metadata_hydration_next_attempt_at TEXT,
+               metadata_hydration_attempt_count INTEGER NOT NULL DEFAULT 0
+           );
+           INSERT INTO titles VALUES
+             ('smg-only', 'movie', '[{"source":"smg","value":"101"}]', NULL, NULL, 0),
+             ('tmdb-only', 'movie', '[{"source":"tmdb","value":"102"}]', NULL, NULL, 0),
+             ('imdb-only', 'movie', '[{"source":"imdb","value":"tt0000103"}]', NULL, NULL, 0),
+             ('tvdb-only', 'movie', '[{"source":"tvdb","value":"104"}]', NULL, NULL, 0),
+             ('blank-id', 'movie', '[{"source":"tmdb","value":"  "}]', NULL, NULL, 0),
+             ('unsupported-id', 'movie', '[{"source":"wikidata","value":"Q105"}]', NULL, NULL, 0),
+             ('series-smg', 'series', '[{"source":"smg","value":"106"}]', NULL, NULL, 0),
+             ('already-fetched', 'movie', '[{"source":"smg","value":"107"}]', '2026-01-01T00:00:00Z', NULL, 0),
+             ('already-scheduled', 'movie', '[{"source":"tmdb","value":"108"}]', NULL, 'preserve', 0),
+             ('already-attempted', 'movie', '[{"source":"imdb","value":"tt0000109"}]', NULL, NULL, 2);"#,
+    )
+    .execute(&pool)
+    .await
+    .expect("title fixture should initialize");
+
+    sqlx::raw_sql(include_str!(
+        "../../../scryer/src/db/migrations/0200_movie_supported_identity_hydration.sql"
+    ))
+    .execute(&pool)
+    .await
+    .expect("migration 0200 should apply");
+
+    let states = sqlx::query_as::<_, (String, Option<String>, i64)>(
+        "SELECT id, metadata_hydration_next_attempt_at, metadata_hydration_attempt_count
+           FROM titles ORDER BY id",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("hydration states should load")
+    .into_iter()
+    .map(|(id, next_attempt, attempt_count)| (id, (next_attempt, attempt_count)))
+    .collect::<std::collections::BTreeMap<_, _>>();
+
+    for id in ["smg-only", "tmdb-only", "imdb-only", "tvdb-only"] {
+        assert!(states[id].0.is_some(), "{id} should be queued");
+        assert_eq!(states[id].1, 0);
+    }
+    for id in [
+        "blank-id",
+        "unsupported-id",
+        "series-smg",
+        "already-fetched",
+        "already-attempted",
+    ] {
+        assert_eq!(states[id].0, None, "{id} should remain unscheduled");
+    }
+    assert_eq!(states["already-attempted"].1, 2);
+    assert_eq!(
+        states["already-scheduled"],
+        (Some("preserve".to_string()), 0)
+    );
+}
+
+#[tokio::test]
 async fn migrations_0179_and_0180_backfill_and_finalize_canonical_download_identity() {
     crate::spellfix::register_spellfix_auto_extension()
         .expect("spellfix auto-extension should register");

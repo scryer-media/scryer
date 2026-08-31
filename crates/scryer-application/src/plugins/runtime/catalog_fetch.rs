@@ -615,6 +615,7 @@ fn central_catalog_required_signer() -> RequiredSigner {
     RequiredSigner {
         github_repository: CENTRAL_CATALOG_REPO.to_string(),
         github_workflow: Some(CENTRAL_CATALOG_WORKFLOW.to_string()),
+        github_ref: None,
     }
 }
 
@@ -1122,6 +1123,7 @@ impl AppUseCase {
         let signer = RequiredSigner {
             github_repository: repo.slug(),
             github_workflow: None,
+            github_ref: None,
         };
         let data_urls = vec![catalog_url.clone()];
         let signature_urls = vec![signed_catalog_json_bundle_url(&catalog_url)];
@@ -1400,6 +1402,7 @@ impl AppUseCase {
         let signer = RequiredSigner {
             github_repository: CENTRAL_CATALOG_REPO.to_string(),
             github_workflow: Some(CENTRAL_CATALOG_WORKFLOW.to_string()),
+            github_ref: None,
         };
         let (compressed_manifest, actual_url) = self
             .fetch_verified_blob_from_locations(

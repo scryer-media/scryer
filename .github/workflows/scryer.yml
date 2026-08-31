@@ -766,7 +766,7 @@ jobs:
             sccache_lane: pr-linux-arm64-cpu
             artifact_name: scryer-linux-arm64-portable
             archive_name: scryer-linux-arm64-portable.tar.gz
-            release_profile: release-thin
+            release_profile: release
             install_nasm: false
             extra_rustflags: ""
     env:

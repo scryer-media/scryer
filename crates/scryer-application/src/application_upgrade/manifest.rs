@@ -192,10 +192,11 @@ pub fn parse_and_validate_upgrade_manifest(raw: &[u8]) -> AppResult<UpgradeManif
 }
 
 /// Returns the Sigstore identity required for Scryer's release workflow.
-pub fn scryer_release_required_signer() -> RequiredSigner {
+pub fn scryer_release_required_signer(release_tag: &str) -> RequiredSigner {
     RequiredSigner {
         github_repository: SCRYER_RELEASE_REPOSITORY.to_string(),
         github_workflow: Some(SCRYER_RELEASE_WORKFLOW.to_string()),
+        github_ref: Some(format!("refs/tags/{release_tag}")),
     }
 }
 
@@ -591,13 +592,15 @@ mod tests {
 
     #[test]
     fn release_signer_is_pinned_to_the_release_workflow() {
+        let signer = scryer_release_required_signer("scryer-v0.19.4");
+        assert_eq!(signer.github_repository, SCRYER_RELEASE_REPOSITORY);
         assert_eq!(
-            scryer_release_required_signer().github_repository,
-            SCRYER_RELEASE_REPOSITORY
+            signer.github_workflow.as_deref(),
+            Some(SCRYER_RELEASE_WORKFLOW)
         );
         assert_eq!(
-            scryer_release_required_signer().github_workflow.as_deref(),
-            Some(SCRYER_RELEASE_WORKFLOW)
+            signer.github_ref.as_deref(),
+            Some("refs/tags/scryer-v0.19.4")
         );
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "scryer-infrastructure-runtime"
-version = "0.19.3"
+version = "0.19.4"
 edition.workspace = true
 publish = false
 
@@ -25,7 +25,7 @@ scryer-infrastructure-configuration = { path = "../scryer-infrastructure-configu
 scryer-infrastructure-identity = { path = "../scryer-infrastructure-identity" }
 scryer-infrastructure-notifications = { path = "../scryer-infrastructure-notifications" }
 async-trait = { workspace = true }
-base64 = "0.23"
+base64 = { workspace = true }
 blake3 = "1"
 chrono = { workspace = true }
 serde = { workspace = true }

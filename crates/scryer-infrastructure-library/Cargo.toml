@@ -1,12 +1,12 @@
 [package]
 name = "scryer-infrastructure-library"
-version = "0.19.3"
+version = "0.19.4"
 edition.workspace = true
 publish = false
 
 [features]
 default = ["image-processing"]
-image-processing = ["dep:fast_image_resize", "dep:image", "dep:kamadak-exif", "dep:ravif", "dep:zune-core"]
+image-processing = ["dep:fast_image_resize", "dep:image", "dep:kamadak-exif", "dep:zune-core"]
 
 [dependencies]
 scryer-domain = { path = "../scryer-domain" }
@@ -34,12 +34,6 @@ url = "2"
 uuid = { workspace = true }
 zstd = { version = "0.13", default-features = false }
 zune-core = { version = "=0.5.3", optional = true }
-
-[target.'cfg(all(target_os = "windows", target_arch = "aarch64"))'.dependencies]
-ravif = { version = "0.13", default-features = false, features = ["threading"], optional = true }
-
-[target.'cfg(not(all(target_os = "windows", target_arch = "aarch64")))'.dependencies]
-ravif = { version = "0.13", features = ["threading"], optional = true }
 
 [dev-dependencies]
 scryer-infrastructure-datastore = { path = "../scryer-infrastructure-datastore" }

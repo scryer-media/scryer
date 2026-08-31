@@ -11,7 +11,7 @@ readme = "README.md"
 default = []
 
 [dependencies]
-base64 = "0.23"
+base64 = { workspace = true }
 schemars = "1"
 semver = { workspace = true }
 serde = { workspace = true }

@@ -2338,6 +2338,10 @@ fn merge_bulk_artwork_url_partial(
     }
 }
 
+fn normalize_gateway_year(year: Option<i32>) -> Option<i32> {
+    year.filter(|year| *year > 0)
+}
+
 fn movie_metadata_from_item(m: MovieItem) -> MovieMetadata {
     let primary_source = if m.primary_source.trim().is_empty() {
         if m.tvdb_id.is_some() {
@@ -2355,7 +2359,7 @@ fn movie_metadata_from_item(m: MovieItem) -> MovieMetadata {
         tvdb_id: m.tvdb_id,
         name: m.name,
         slug: m.slug,
-        year: m.year,
+        year: normalize_gateway_year(m.year),
         content_status: m.status,
         overview: m.overview,
         poster_url: normalize_artwork_url(&m.poster_url),
@@ -2383,7 +2387,7 @@ fn series_metadata_from_item(s: SeriesItem) -> SeriesMetadata {
         name: s.name,
         sort_name: s.sort_name,
         slug: s.slug,
-        year: s.year,
+        year: normalize_gateway_year(s.year),
         content_status: s.status,
         first_aired: s.first_aired,
         overview: s.overview,
@@ -2474,7 +2478,7 @@ fn series_metadata_from_item(s: SeriesItem) -> SeriesMetadata {
                 movie_anidb_id: movie.movie_anidb_id,
                 name: movie.name,
                 slug: movie.slug,
-                year: movie.year,
+                year: normalize_gateway_year(movie.year),
                 content_status: movie.content_status,
                 overview: movie.overview,
                 poster_url: movie.poster_url,
@@ -4496,6 +4500,14 @@ mod tests {
     }
 
     #[test]
+    fn gateway_year_normalization_rejects_non_positive_sentinels() {
+        assert_eq!(super::normalize_gateway_year(Some(2026)), Some(2026));
+        assert_eq!(super::normalize_gateway_year(Some(0)), None);
+        assert_eq!(super::normalize_gateway_year(Some(-1)), None);
+        assert_eq!(super::normalize_gateway_year(None), None);
+    }
+
+    #[test]
     fn movie_response_deserializes_tmdb_id() {
         let data: super::MovieResponse = serde_json::from_value(json!({
             "movie": {
@@ -4751,7 +4763,7 @@ fn rich_metadata_from_title_search_item(item: TitleSearchItem) -> RichMetadataSe
         imdb_id: Some(item.imdb_id),
         slug: Some(item.slug),
         type_hint: Some(item.type_hint),
-        year: Some(item.year),
+        year: normalize_gateway_year(Some(item.year)),
         status: Some(item.status),
         overview: Some(item.overview),
         popularity: Some(item.popularity),
@@ -5458,7 +5470,7 @@ impl MetadataGateway for MetadataGatewayClient {
                 primary_source: None,
                 external_ids: external_ids_from_gateway(item.external_ids),
                 name: item.name,
-                year: item.year,
+                year: normalize_gateway_year(item.year),
                 auto_match_safe: item.auto_match_safe,
                 auto_match_signals: item.auto_match_signals,
             })
@@ -5541,7 +5553,7 @@ impl MetadataGateway for MetadataGatewayClient {
                         primary_source: None,
                         external_ids: external_ids_from_gateway(entry.external_ids),
                         name: entry.name,
-                        year: entry.year,
+                        year: normalize_gateway_year(entry.year),
                         auto_match_safe: entry.auto_match_safe,
                         auto_match_signals: entry.auto_match_signals,
                     })
@@ -5612,7 +5624,7 @@ impl MetadataGateway for MetadataGatewayClient {
                 imdb_id: item.imdb_id,
                 slug: item.slug,
                 type_hint: item.type_hint,
-                year: item.year,
+                year: normalize_gateway_year(item.year),
                 status: item.status,
                 overview: item.overview,
                 popularity: item.popularity,
@@ -5657,7 +5669,7 @@ impl MetadataGateway for MetadataGatewayClient {
                     imdb_id: item.imdb_id,
                     slug: item.slug,
                     type_hint: item.type_hint,
-                    year: item.year,
+                    year: normalize_gateway_year(item.year),
                     status: item.status,
                     overview: item.overview,
                     popularity: item.popularity,
@@ -5716,7 +5728,7 @@ impl MetadataGateway for MetadataGatewayClient {
             name: s.name,
             sort_name: s.sort_name,
             slug: s.slug,
-            year: s.year,
+            year: normalize_gateway_year(s.year),
             content_status: s.status,
             first_aired: s.first_aired,
             overview: s.overview,
@@ -5807,7 +5819,7 @@ impl MetadataGateway for MetadataGatewayClient {
                     movie_anidb_id: movie.movie_anidb_id,
                     name: movie.name,
                     slug: movie.slug,
-                    year: movie.year,
+                    year: normalize_gateway_year(movie.year),
                     content_status: movie.content_status,
                     overview: movie.overview,
                     poster_url: movie.poster_url,
@@ -6179,7 +6191,7 @@ impl MetadataGateway for MetadataGatewayClient {
                         primary_source: Some(entry.primary_source),
                         external_ids: external_ids_from_gateway(entry.external_ids),
                         name: entry.name,
-                        year: entry.year,
+                        year: normalize_gateway_year(entry.year),
                         auto_match_safe: entry.auto_match_safe,
                         auto_match_signals: entry.auto_match_signals,
                     })

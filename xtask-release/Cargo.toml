@@ -6,7 +6,7 @@ publish = false
 
 [dependencies]
 anyhow = "1"
-base64 = "0.23"
+base64 = { workspace = true }
 blake3 = "1.8"
 chrono = { version = "0.4", features = ["clock"] }
 clap = { version = "4", features = ["derive"] }

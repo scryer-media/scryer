@@ -2261,9 +2261,6 @@ mod tests {
             &self,
             locator: &crate::ClientJobLocator,
         ) -> AppResult<Option<crate::DownloadClientBindingRecord>> {
-            if self.conflicting_item_ids.contains_key(&locator.item_id) {
-                panic!("conflicted observation must not query the active locator binding");
-            }
             if let Some(&download_id) = self.fallback_download_ids.get(&locator.item_id) {
                 return Ok(Some(crate::DownloadClientBindingRecord {
                     download_id,

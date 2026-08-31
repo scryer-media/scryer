@@ -1,0 +1,115 @@
+{
+  "id": "fanzub",
+  "name": "Fanzub Indexer",
+  "description": "Fanzub RSS indexer for anime Usenet releases",
+  "plugin_type": "usenet_indexer",
+  "provider_type": "fanzub",
+  "publisher": "scryer",
+  "support_tier": "official",
+  "status": "beta",
+  "docs_url": "https://github.com/scryer-media/scryer-plugins/tree/main/indexers/fanzub",
+  "source_repo": "https://github.com/scryer-media/scryer-plugins/tree/main/indexers/fanzub",
+  "required_signer": {
+    "github_repository": "scryer-media/scryer-plugins",
+    "github_workflow": ".github/workflows/release-plugin-v3.yml"
+  },
+  "releases": [
+    {
+      "version": "2.1.0",
+      "sdk_constraint": ">=3.10.0, <4.0.0",
+      "min_scryer_version": "0.18.22",
+      "artifacts": [
+        {
+          "runtime": "wasm32-wasip2",
+          "required_features": [],
+          "wasm_digests": [
+            "blake3:feb142d9347e0c621e425019bf80b814fedb8d45487893725865bf0b8ff20b0c",
+            "shake256:1238d452a2e8eb15a0289b705c5e5678ce0c9692614a31c6ab2de82fd0762c78"
+          ],
+          "bytes": 1918613,
+          "url": "https://cdn.scryer.media/scryer/plugins-v3/fanzub/v2.1.0/plugin-v3.34e4aa92be329bd8ca34117b5d8fd4b0e533ebdafa617bc7d13be8ce473bdaf5.wasm.zst",
+          "mirror_urls": [
+            "https://github.com/scryer-media/scryer-plugins/releases/download/plugins-v3%2Ffanzub%2Fv2.1.0/plugin-v3.34e4aa92be329bd8ca34117b5d8fd4b0e533ebdafa617bc7d13be8ce473bdaf5.wasm.zst"
+          ],
+          "signature_url": "https://cdn.scryer.media/scryer/plugins-v3/fanzub/v2.1.0/plugin-v3.34e4aa92be329bd8ca34117b5d8fd4b0e533ebdafa617bc7d13be8ce473bdaf5.wasm.zst.bundle.zst",
+          "signature_mirror_urls": [
+            "https://github.com/scryer-media/scryer-plugins/releases/download/plugins-v3%2Ffanzub%2Fv2.1.0/plugin-v3.34e4aa92be329bd8ca34117b5d8fd4b0e533ebdafa617bc7d13be8ce473bdaf5.wasm.zst.bundle.zst"
+          ],
+          "digests": [
+            "blake3:34e4aa92be329bd8ca34117b5d8fd4b0e533ebdafa617bc7d13be8ce473bdaf5",
+            "shake256:88567b851b791987558bfdc67e726ea3916dd0b0b9bf94c5d4da344a6a11e069"
+          ]
+        },
+        {
+          "runtime": "wasm32-wasip2",
+          "required_features": [],
+          "wasm_digests": [
+            "blake3:feb142d9347e0c621e425019bf80b814fedb8d45487893725865bf0b8ff20b0c",
+            "shake256:1238d452a2e8eb15a0289b705c5e5678ce0c9692614a31c6ab2de82fd0762c78"
+          ],
+          "bytes": 1918613,
+          "url": "https://cdn.scryer.media/scryer/plugins-v3/fanzub/v2.1.0/plugin-v3.fc7b98e620b2bc38ee9fe2057d2297c0391fe634ae351d3627c0436d73ea3719.wasm.br",
+          "mirror_urls": [
+            "https://github.com/scryer-media/scryer-plugins/releases/download/plugins-v3%2Ffanzub%2Fv2.1.0/plugin-v3.fc7b98e620b2bc38ee9fe2057d2297c0391fe634ae351d3627c0436d73ea3719.wasm.br"
+          ],
+          "signature_url": "https://cdn.scryer.media/scryer/plugins-v3/fanzub/v2.1.0/plugin-v3.fc7b98e620b2bc38ee9fe2057d2297c0391fe634ae351d3627c0436d73ea3719.wasm.br.bundle.zst",
+          "signature_mirror_urls": [
+            "https://github.com/scryer-media/scryer-plugins/releases/download/plugins-v3%2Ffanzub%2Fv2.1.0/plugin-v3.fc7b98e620b2bc38ee9fe2057d2297c0391fe634ae351d3627c0436d73ea3719.wasm.br.bundle.zst"
+          ],
+          "digests": [
+            "blake3:fc7b98e620b2bc38ee9fe2057d2297c0391fe634ae351d3627c0436d73ea3719",
+            "shake256:edfce87129e64bd89272630e4032bb45a0e8c450bc8c35016271f346bce64ed2"
+          ]
+        },
+        {
+          "runtime": "wasm32-wasip2",
+          "required_features": [
+            "simd128",
+            "relaxed-simd"
+          ],
+          "wasm_digests": [
+            "blake3:32906657d50e0d566326756dd7e8834ef27c328b7b0e29eb0ea348b5891e5113",
+            "shake256:98a8e74b3f7688c8a7ba6dc5604eb8066bcc7ae0229d68c01ea6cd932a5c0f1c"
+          ],
+          "bytes": 1908400,
+          "url": "https://cdn.scryer.media/scryer/plugins-v3/fanzub/v2.1.0/plugin-v3-simd128-relaxed-simd.578b2a23df6b4f2c59fb02f8d2024089fdba9256a912eda8090be990f2b5ba31.wasm.zst",
+          "mirror_urls": [
+            "https://github.com/scryer-media/scryer-plugins/releases/download/plugins-v3%2Ffanzub%2Fv2.1.0/plugin-v3-simd128-relaxed-simd.578b2a23df6b4f2c59fb02f8d2024089fdba9256a912eda8090be990f2b5ba31.wasm.zst"
+          ],
+          "signature_url": "https://cdn.scryer.media/scryer/plugins-v3/fanzub/v2.1.0/plugin-v3-simd128-relaxed-simd.578b2a23df6b4f2c59fb02f8d2024089fdba9256a912eda8090be990f2b5ba31.wasm.zst.bundle.zst",
+          "signature_mirror_urls": [
+            "https://github.com/scryer-media/scryer-plugins/releases/download/plugins-v3%2Ffanzub%2Fv2.1.0/plugin-v3-simd128-relaxed-simd.578b2a23df6b4f2c59fb02f8d2024089fdba9256a912eda8090be990f2b5ba31.wasm.zst.bundle.zst"
+          ],
+          "digests": [
+            "blake3:578b2a23df6b4f2c59fb02f8d2024089fdba9256a912eda8090be990f2b5ba31",
+            "shake256:aa97f1a983a9fbf773316007a26f2e06d8fb7198261f0e0859ea6f16d6963db2"
+          ]
+        },
+        {
+          "runtime": "wasm32-wasip2",
+          "required_features": [
+            "simd128",
+            "relaxed-simd"
+          ],
+          "wasm_digests": [
+            "blake3:32906657d50e0d566326756dd7e8834ef27c328b7b0e29eb0ea348b5891e5113",
+            "shake256:98a8e74b3f7688c8a7ba6dc5604eb8066bcc7ae0229d68c01ea6cd932a5c0f1c"
+          ],
+          "bytes": 1908400,
+          "url": "https://cdn.scryer.media/scryer/plugins-v3/fanzub/v2.1.0/plugin-v3-simd128-relaxed-simd.f5d914a9b3a522a13f3f2fc227d0dc316deeb23cfb6ee90252dc903760b4a1a3.wasm.br",
+          "mirror_urls": [
+            "https://github.com/scryer-media/scryer-plugins/releases/download/plugins-v3%2Ffanzub%2Fv2.1.0/plugin-v3-simd128-relaxed-simd.f5d914a9b3a522a13f3f2fc227d0dc316deeb23cfb6ee90252dc903760b4a1a3.wasm.br"
+          ],
+          "signature_url": "https://cdn.scryer.media/scryer/plugins-v3/fanzub/v2.1.0/plugin-v3-simd128-relaxed-simd.f5d914a9b3a522a13f3f2fc227d0dc316deeb23cfb6ee90252dc903760b4a1a3.wasm.br.bundle.zst",
+          "signature_mirror_urls": [
+            "https://github.com/scryer-media/scryer-plugins/releases/download/plugins-v3%2Ffanzub%2Fv2.1.0/plugin-v3-simd128-relaxed-simd.f5d914a9b3a522a13f3f2fc227d0dc316deeb23cfb6ee90252dc903760b4a1a3.wasm.br.bundle.zst"
+          ],
+          "digests": [
+            "blake3:f5d914a9b3a522a13f3f2fc227d0dc316deeb23cfb6ee90252dc903760b4a1a3",
+            "shake256:5d986476606b3b1742e4167fb5db4743dc7f4e72469defaf1a1c761a47519724"
+          ]
+        }
+      ]
+    }
+  ]
+}

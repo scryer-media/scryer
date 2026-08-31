@@ -44,7 +44,7 @@ async fn enrich_queue_item_import_states(app: &AppUseCase, items: &mut [Download
         .services
         .workflow
         .download_queue_commands
-        .list_latest_delete_commands_for_sources(&delete_sources)
+        .list_latest_delete_commands_for_sources(&delete_sources, false)
         .await
     {
         Ok(commands) => commands,

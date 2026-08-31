@@ -1588,6 +1588,23 @@ file = "postgres/migrations/0199_housekeeping_index_compaction.sql"
 engine = "postgres"
 scope = "all"
 
+[[migration]]
+version = 200
+description = "queue movie hydration for supported identities"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0200_movie_supported_identity_hydration.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0200_movie_supported_identity_hydration.sql"
+engine = "postgres"
+scope = "all"
+
 [[baseline]]
 through_version = 140
 file = "baselines/0140_baseline.sql"

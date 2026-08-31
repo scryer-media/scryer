@@ -233,6 +233,7 @@ mod catalog_artifact_selection_tests {
             required_signer: RequiredSigner {
                 github_repository: "scryer-media/alpha".to_string(),
                 github_workflow: None,
+                github_ref: None,
             },
             releases,
         }

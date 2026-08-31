@@ -1,0 +1,161 @@
+{
+  "schema": "scryer.upgrade.manifest.v1",
+  "tag": "scryer-v0.19.3",
+  "version": "0.19.3",
+  "artifacts": [
+    {
+      "platform": "darwin",
+      "arch": "arm64",
+      "channel": "portable",
+      "asset_name": "scryer-darwin-arm64-portable.tar.gz",
+      "url": "https://github.com/scryer-media/scryer/releases/download/scryer-v0.19.3/scryer-darwin-arm64-portable.tar.gz",
+      "size": 37490876,
+      "blake3": "d97b1e1b90445f7da54580aa3f2e43e5a12e027ad19ca9c8fa6ad14dcf03b4df",
+      "archive": "tar.gz",
+      "members": [
+        {
+          "path": "scryer",
+          "size": 80068960,
+          "executable": true
+        }
+      ]
+    },
+    {
+      "platform": "darwin",
+      "arch": "x86_64",
+      "channel": "portable",
+      "asset_name": "scryer-darwin-x86_64-portable.tar.gz",
+      "url": "https://github.com/scryer-media/scryer/releases/download/scryer-v0.19.3/scryer-darwin-x86_64-portable.tar.gz",
+      "size": 55802165,
+      "blake3": "2bf69e01d309eb60324012aa52d261445f365b7f8d65e815946cc80094815fda",
+      "archive": "tar.gz",
+      "members": [
+        {
+          "path": "scryer",
+          "size": 144935680,
+          "executable": true
+        }
+      ]
+    },
+    {
+      "platform": "linux",
+      "arch": "arm64",
+      "channel": "portable",
+      "asset_name": "scryer-linux-arm64-portable.tar.gz",
+      "url": "https://github.com/scryer-media/scryer/releases/download/scryer-v0.19.3/scryer-linux-arm64-portable.tar.gz",
+      "size": 40110491,
+      "blake3": "451117fbbcc2afe391e8897c06995008453b065d91755ff9bc4e2cd91a2e1636",
+      "archive": "tar.gz",
+      "members": [
+        {
+          "path": "scryer",
+          "size": 87833536,
+          "executable": true
+        }
+      ]
+    },
+    {
+      "platform": "linux",
+      "arch": "x86_64",
+      "channel": "portable",
+      "asset_name": "scryer-linux-x86_64-portable.tar.gz",
+      "url": "https://github.com/scryer-media/scryer/releases/download/scryer-v0.19.3/scryer-linux-x86_64-portable.tar.gz",
+      "size": 44229270,
+      "blake3": "c24efbee43045b00c9a0d84a9cc3db02996141dbe958b537040695fc5e21d8c1",
+      "archive": "tar.gz",
+      "members": [
+        {
+          "path": "scryer",
+          "size": 107914120,
+          "executable": true
+        }
+      ]
+    },
+    {
+      "platform": "windows",
+      "arch": "arm64",
+      "channel": "msi",
+      "asset_name": "scryer-windows-arm64.msi",
+      "url": "https://github.com/scryer-media/scryer/releases/download/scryer-v0.19.3/scryer-windows-arm64.msi",
+      "size": 31764480,
+      "blake3": "40e9b057730cf0e4e19e087635585b759415a948a04316fd8dd4c3dd4525298a",
+      "archive": "msi",
+      "members": []
+    },
+    {
+      "platform": "windows",
+      "arch": "arm64",
+      "channel": "portable",
+      "asset_name": "scryer-windows-arm64-portable.tar.gz",
+      "url": "https://github.com/scryer-media/scryer/releases/download/scryer-v0.19.3/scryer-windows-arm64-portable.tar.gz",
+      "size": 38166910,
+      "blake3": "f16b605486a64382063d2a68716fc98b03524fb08cd962beadb6bd18e6002765",
+      "archive": "tar.gz",
+      "members": [
+        {
+          "path": "LICENSE",
+          "size": 35587,
+          "executable": false
+        },
+        {
+          "path": "README.txt",
+          "size": 1855,
+          "executable": false
+        },
+        {
+          "path": "scryer-tray.exe",
+          "size": 735744,
+          "executable": true
+        },
+        {
+          "path": "scryer.exe",
+          "size": 84658176,
+          "executable": true
+        }
+      ]
+    },
+    {
+      "platform": "windows",
+      "arch": "x86_64",
+      "channel": "msi",
+      "asset_name": "scryer-windows-x86_64.msi",
+      "url": "https://github.com/scryer-media/scryer/releases/download/scryer-v0.19.3/scryer-windows-x86_64.msi",
+      "size": 35336192,
+      "blake3": "5697122d1737c7685730a72d380f3d4ad531f1e39578ea766cb7a8e56f2ff45b",
+      "archive": "msi",
+      "members": []
+    },
+    {
+      "platform": "windows",
+      "arch": "x86_64",
+      "channel": "portable",
+      "asset_name": "scryer-windows-x86_64-portable.tar.gz",
+      "url": "https://github.com/scryer-media/scryer/releases/download/scryer-v0.19.3/scryer-windows-x86_64-portable.tar.gz",
+      "size": 42085540,
+      "blake3": "9da8a30f76a2594650add79256bf1e2c6595f040c7cdf41b130cf6c5b085a988",
+      "archive": "tar.gz",
+      "members": [
+        {
+          "path": "LICENSE",
+          "size": 35587,
+          "executable": false
+        },
+        {
+          "path": "README.txt",
+          "size": 1855,
+          "executable": false
+        },
+        {
+          "path": "scryer-tray.exe",
+          "size": 751616,
+          "executable": true
+        },
+        {
+          "path": "scryer.exe",
+          "size": 99522048,
+          "executable": true
+        }
+      ]
+    }
+  ]
+}
