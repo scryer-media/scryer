@@ -729,6 +729,30 @@ impl AppUseCase {
         grant_id: &str,
         authorization_source: OAuthAuthorizationSource,
     ) -> AppResult<String> {
+        let expected_auth_session_version = self
+            .services
+            .identity
+            .users
+            .auth_session_version(&actor.id)
+            .await?;
+        self.issue_oauth_access_token_with_source_at_auth_session_version(
+            actor,
+            client_id,
+            grant_id,
+            authorization_source,
+            &expected_auth_session_version,
+        )
+        .await
+    }
+
+    pub async fn issue_oauth_access_token_with_source_at_auth_session_version(
+        &self,
+        actor: &User,
+        client_id: &str,
+        grant_id: &str,
+        authorization_source: OAuthAuthorizationSource,
+        expected_auth_session_version: &Option<String>,
+    ) -> AppResult<String> {
         self.issue_access_token_with_mfa_scope_and_oauth(
             actor,
             AccessTokenOptions {
@@ -745,7 +769,7 @@ impl AppUseCase {
                     authorization_source,
                 )),
             },
-            None,
+            Some(expected_auth_session_version),
         )
         .await
     }

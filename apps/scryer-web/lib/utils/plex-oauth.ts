@@ -19,12 +19,21 @@ function getPlexClientIdentifier(): string {
     return existing;
   }
 
-  const generated =
-    typeof window.crypto?.randomUUID === "function"
-      ? window.crypto.randomUUID()
-      : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const generated = createPlexClientIdentifier();
   window.localStorage.setItem(PLEX_CLIENT_IDENTIFIER_KEY, generated);
   return generated;
+}
+
+function createPlexClientIdentifier(): string {
+  if (typeof window.crypto?.randomUUID === "function") {
+    return window.crypto.randomUUID();
+  }
+  if (typeof window.crypto?.getRandomValues !== "function") {
+    throw new Error("Secure browser randomness is required for Plex sign-in.");
+  }
+  const bytes = new Uint8Array(16);
+  window.crypto.getRandomValues(bytes);
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 function plexHeaders(clientIdentifier: string): Record<string, string> {
@@ -45,6 +54,19 @@ function plexHeaders(clientIdentifier: string): Record<string, string> {
   };
 }
 
+export function isolatePlexPopup(popup: Window): void {
+  try {
+    popup.opener = null;
+  } catch {
+    popup.close();
+    throw new Error("Unable to isolate the Plex login window.");
+  }
+  if (popup.opener !== null) {
+    popup.close();
+    throw new Error("Unable to isolate the Plex login window.");
+  }
+}
+
 function openPlexPopup(): Window {
   const width = 600;
   const height = 700;
@@ -58,6 +80,7 @@ function openPlexPopup(): Window {
   if (!popup) {
     throw new Error("Unable to open the Plex login window. Allow popups and try again.");
   }
+  isolatePlexPopup(popup);
   popup.focus();
   return popup;
 }

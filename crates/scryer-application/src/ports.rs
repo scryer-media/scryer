@@ -2188,6 +2188,14 @@ pub trait OAuthRepository: Send + Sync {
         id: &str,
         consumed_at: chrono::DateTime<chrono::Utc>,
     ) -> AppResult<bool>;
+    async fn consume_authorization_code_and_create_refresh_grant(
+        &self,
+        code: OAuthAuthorizationCodeRecord,
+        consumed_at: chrono::DateTime<chrono::Utc>,
+        grant: OAuthRefreshGrantRecord,
+        token: OAuthRefreshTokenRecord,
+        require_active_client_registration: bool,
+    ) -> AppResult<Option<OAuthRefreshGrantRecord>>;
     async fn create_refresh_grant(
         &self,
         grant: OAuthRefreshGrantRecord,

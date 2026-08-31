@@ -2788,6 +2788,9 @@ pub struct OAuthAuthorizationCodeRecord {
     pub code_hash: String,
     pub client_id: String,
     pub user_id: String,
+    /// Exact session epoch that approved this short-lived authorization code.
+    /// The empty string represents an intentional database NULL epoch.
+    pub auth_session_version: String,
     pub authorization_source: OAuthAuthorizationSource,
     pub redirect_uri: String,
     pub scope: String,

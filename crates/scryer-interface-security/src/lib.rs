@@ -476,7 +476,7 @@ impl UserMutations {
             input.persist_session,
             default_persist_session_from_ctx(ctx),
         );
-        let user = match app
+        let (user, auth_session_version) = match app
             .federated_login_with_plex(input.connection_id.to_string(), input.plex_auth_token)
             .await
         {
@@ -491,7 +491,16 @@ impl UserMutations {
                 .await);
             }
         };
-        login_payload_from_user(&app, user, None, None, persist_session, None, false).await
+        login_payload_from_user(
+            &app,
+            user,
+            None,
+            None,
+            persist_session,
+            Some(&auth_session_version),
+            false,
+        )
+        .await
     }
 
     /// Authenticates through Jellyfin, applies configured TOTP requirements, and issues a session or MFA-enrollment token.
@@ -509,7 +518,7 @@ impl UserMutations {
             input.persist_session,
             default_persist_session_from_ctx(ctx),
         );
-        let user = match app
+        let (user, auth_session_version) = match app
             .federated_login_with_jellyfin(
                 input.connection_id.to_string(),
                 input.username,
@@ -544,29 +553,24 @@ impl UserMutations {
                 jellyfin_mfa_required,
                 persist_session,
                 input.totp_code.as_deref(),
+                Some(&auth_session_version),
             )
             .await
             .map_err(to_gql_error)?
         {
             LoginVerificationRequirement::Satisfied(satisfied) => {
-                let expected_auth_session_version = satisfied
-                    .mfa_verified_until
-                    .is_some()
-                    .then_some(&satisfied.auth_session_version);
                 login_payload_from_user(
                     &app,
                     user,
                     satisfied.mfa_verified_until,
                     None,
                     persist_session,
-                    expected_auth_session_version,
+                    Some(&auth_session_version),
                     false,
                 )
                 .await
             }
-            LoginVerificationRequirement::EnrollmentRequired {
-                auth_session_version,
-            } => {
+            LoginVerificationRequirement::EnrollmentRequired { .. } => {
                 login_mfa_enrollment_payload_from_user(
                     &app,
                     user,
@@ -602,7 +606,7 @@ impl UserMutations {
             input.persist_session,
             default_persist_session_from_ctx(ctx),
         );
-        let user = match app
+        let (user, auth_session_version) = match app
             .federated_login_with_emby(
                 input.connection_id.to_string(),
                 emby_connection_mode(input.mode),
@@ -637,29 +641,24 @@ impl UserMutations {
                 emby_mfa_required,
                 persist_session,
                 input.totp_code.as_deref(),
+                Some(&auth_session_version),
             )
             .await
             .map_err(to_gql_error)?
         {
             LoginVerificationRequirement::Satisfied(satisfied) => {
-                let expected_auth_session_version = satisfied
-                    .mfa_verified_until
-                    .is_some()
-                    .then_some(&satisfied.auth_session_version);
                 login_payload_from_user(
                     &app,
                     user,
                     satisfied.mfa_verified_until,
                     None,
                     persist_session,
-                    expected_auth_session_version,
+                    Some(&auth_session_version),
                     false,
                 )
                 .await
             }
-            LoginVerificationRequirement::EnrollmentRequired {
-                auth_session_version,
-            } => {
+            LoginVerificationRequirement::EnrollmentRequired { .. } => {
                 login_mfa_enrollment_payload_from_user(
                     &app,
                     user,

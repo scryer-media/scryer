@@ -117,14 +117,21 @@ async fn oauth_authorize_decision_inner(
     input: OAuthAuthorizeDecisionRequest,
 ) -> Result<OAuthAuthorizeDecisionResponse, Response> {
     let authless_authorization = !state.auth_runtime.snapshot().effective_form_login_enabled;
-    let (user, authorization_source) = if authless_authorization {
+    let (user, authorization_source, auth_session_version) = if authless_authorization {
+        let user = state
+            .app
+            .find_or_create_default_user()
+            .await
+            .map_err(oauth_app_error)?;
+        let auth_session_version = state
+            .app
+            .current_actor_auth_session_version(&user)
+            .await
+            .map_err(oauth_app_error)?;
         (
-            state
-                .app
-                .find_or_create_default_user()
-                .await
-                .map_err(oauth_app_error)?,
+            user,
             OAuthAuthorizationSource::Authless,
+            auth_session_version,
         )
     } else {
         let token = bearer_token_from_headers(&headers).ok_or_else(|| {
@@ -155,7 +162,21 @@ async fn oauth_authorize_decision_inner(
                 "this session cannot authorize OAuth clients",
             ));
         }
-        (user, OAuthAuthorizationSource::Authenticated)
+        if claims
+            .security_action_verified_until
+            .is_none_or(|verified_until| verified_until <= chrono::Utc::now().timestamp())
+        {
+            return Err(oauth_error(
+                StatusCode::UNAUTHORIZED,
+                "reauthentication_required",
+                "sign in again before authorizing this OAuth client",
+            ));
+        }
+        (
+            user,
+            OAuthAuthorizationSource::Authenticated,
+            claims.auth_session_version,
+        )
     };
     state
         .app
@@ -208,6 +229,7 @@ async fn oauth_authorize_decision_inner(
             &input.code_challenge,
             &input.code_challenge_method,
             authorization_source,
+            auth_session_version.as_deref(),
         )
         .await
         .map_err(oauth_validation_error)?;
@@ -398,8 +420,13 @@ fn oauth_redirect_error(
 
 fn oauth_validation_error(err: AppError) -> Response {
     match err {
-        AppError::Unauthorized(message) => {
-            oauth_error(StatusCode::UNAUTHORIZED, "invalid_grant", message)
+        AppError::Unauthorized(error) => {
+            tracing::debug!(error = %error, "OAuth validation rejected an authorization grant");
+            oauth_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_grant",
+                "OAuth grant is invalid",
+            )
         }
         AppError::Validation(message) if message == "invalid OAuth scope" => {
             oauth_error(StatusCode::BAD_REQUEST, "invalid_scope", message)
@@ -407,30 +434,46 @@ fn oauth_validation_error(err: AppError) -> Response {
         AppError::Validation(message) => {
             oauth_error(StatusCode::BAD_REQUEST, "invalid_request", message)
         }
-        other => oauth_error(
-            StatusCode::BAD_REQUEST,
-            "invalid_request",
-            other.to_string(),
-        ),
+        other => {
+            tracing::error!(error = %other, "OAuth validation failed unexpectedly");
+            oauth_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                "OAuth request could not be processed",
+            )
+        }
     }
 }
 
 fn oauth_app_error(err: AppError) -> Response {
     match err {
-        AppError::Unauthorized(message) => {
-            oauth_error(StatusCode::UNAUTHORIZED, "invalid_grant", message)
+        AppError::Unauthorized(error) => {
+            tracing::debug!(error = %error, "OAuth grant was rejected");
+            oauth_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_grant",
+                "OAuth grant is invalid",
+            )
         }
         AppError::Validation(message) if message == "invalid OAuth scope" => {
             oauth_error(StatusCode::BAD_REQUEST, "invalid_scope", message)
         }
-        AppError::Validation(message) => {
-            oauth_error(StatusCode::BAD_REQUEST, "invalid_request", message)
+        AppError::Validation(error) => {
+            tracing::debug!(error = %error, "OAuth request validation failed");
+            oauth_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                "OAuth request is invalid",
+            )
         }
-        other => oauth_error(
-            StatusCode::BAD_REQUEST,
-            "invalid_request",
-            other.to_string(),
-        ),
+        other => {
+            tracing::error!(error = %other, "OAuth request failed unexpectedly");
+            oauth_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                "OAuth request could not be processed",
+            )
+        }
     }
 }
 

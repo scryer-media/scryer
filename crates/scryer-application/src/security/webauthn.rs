@@ -477,113 +477,46 @@ impl AppUseCase {
 
     pub async fn webauthn_authenticate_start(
         &self,
-        username: Option<&str>,
+        _username: Option<&str>,
         form_login_enabled: bool,
     ) -> AppResult<WebauthnChallengeStart> {
         self.ensure_passkey_authentication_enabled(form_login_enabled)?;
         self.cleanup_expired_webauthn_challenges().await?;
 
-        let (record, options_json) = if let Some(username) = username
-            .map(Self::normalize_local_username)
-            .filter(|value| !value.is_empty())
-        {
-            let invalid_username_passkey =
-                || AppError::Unauthorized("invalid passkey credentials".into());
-            let user = self
-                .services
-                .identity
-                .users
-                .get_by_username(username)
-                .await?
-                .ok_or_else(invalid_username_passkey)?;
-
-            if !user.login_status().is_enabled() {
-                return Err(invalid_username_passkey());
-            }
-
-            let records = self
-                .services
-                .identity
-                .webauthn
-                .list_credentials_for_user(&user.id)
-                .await?;
-            let passkeys = records
-                .iter()
-                .map(Self::deserialize_passkey)
-                .collect::<AppResult<Vec<_>>>()?;
-
-            if passkeys.is_empty() {
-                return Err(invalid_username_passkey());
-            }
-
-            let (options, state) = self
-                .webauthn_runtime()?
-                .start_passkey_authentication(&passkeys)
-                .map_err(|error| {
-                    AppError::Validation(format!("failed to start passkey authentication: {error}"))
-                })?;
-
-            let record = WebauthnChallengeRecord {
-                id: Id::new().0,
-                user_id: Some(user.id),
-                challenge_type: WebauthnChallengeType::Authentication,
-                purpose: WebauthnChallengePurpose::StandaloneAuthentication,
-                login_verification_challenge_id: None,
-                auth_session_version: None,
-                state_json: serde_json::to_string(&StoredChallengeState::Authentication(
-                    StoredAuthenticationState::Passkey(state),
-                ))
-                .map_err(|error| {
-                    AppError::Repository(format!(
-                        "failed to persist passkey authentication state: {error}"
-                    ))
-                })?,
-                created_at: Utc::now().to_rfc3339(),
-                expires_at: (Utc::now() + Duration::minutes(WEBAUTHN_CHALLENGE_TTL_MINUTES))
-                    .to_rfc3339(),
-            };
-            let options_json = serde_json::to_string(&options).map_err(|error| {
-                AppError::Repository(format!(
-                    "failed to encode passkey authentication options: {error}"
+        // Username remains accepted for GraphQL compatibility but is deliberately
+        // not an account selector: every public start is discoverable.
+        let (options, state) = self
+            .webauthn_runtime()?
+            .start_discoverable_authentication()
+            .map_err(|error| {
+                AppError::Validation(format!(
+                    "failed to start discoverable passkey authentication: {error}"
                 ))
             })?;
-            (record, options_json)
-        } else {
-            let (options, state) = self
-                .webauthn_runtime()?
-                .start_discoverable_authentication()
-                .map_err(|error| {
-                    AppError::Validation(format!(
-                        "failed to start discoverable passkey authentication: {error}"
-                    ))
-                })?;
-
-            let record = WebauthnChallengeRecord {
-                id: Id::new().0,
-                user_id: None,
-                challenge_type: WebauthnChallengeType::Authentication,
-                purpose: WebauthnChallengePurpose::StandaloneAuthentication,
-                login_verification_challenge_id: None,
-                auth_session_version: None,
-                state_json: serde_json::to_string(&StoredChallengeState::Authentication(
-                    StoredAuthenticationState::Discoverable(state),
-                ))
-                .map_err(|error| {
-                    AppError::Repository(format!(
-                        "failed to persist discoverable passkey authentication state: {error}"
-                    ))
-                })?,
-                created_at: Utc::now().to_rfc3339(),
-                expires_at: (Utc::now() + Duration::minutes(WEBAUTHN_CHALLENGE_TTL_MINUTES))
-                    .to_rfc3339(),
-            };
-            let options_json = serde_json::to_string(&options).map_err(|error| {
+        let record = WebauthnChallengeRecord {
+            id: Id::new().0,
+            user_id: None,
+            challenge_type: WebauthnChallengeType::Authentication,
+            purpose: WebauthnChallengePurpose::StandaloneAuthentication,
+            login_verification_challenge_id: None,
+            auth_session_version: None,
+            state_json: serde_json::to_string(&StoredChallengeState::Authentication(
+                StoredAuthenticationState::Discoverable(state),
+            ))
+            .map_err(|error| {
                 AppError::Repository(format!(
-                    "failed to encode discoverable passkey authentication options: {error}"
+                    "failed to persist discoverable passkey authentication state: {error}"
                 ))
-            })?;
-            (record, options_json)
+            })?,
+            created_at: Utc::now().to_rfc3339(),
+            expires_at: (Utc::now() + Duration::minutes(WEBAUTHN_CHALLENGE_TTL_MINUTES))
+                .to_rfc3339(),
         };
+        let options_json = serde_json::to_string(&options).map_err(|error| {
+            AppError::Repository(format!(
+                "failed to encode discoverable passkey authentication options: {error}"
+            ))
+        })?;
 
         self.services
             .identity

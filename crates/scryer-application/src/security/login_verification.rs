@@ -16,19 +16,31 @@ impl AppUseCase {
         policy_requires_mfa: bool,
         persist_session: bool,
         legacy_totp_code: Option<&str>,
+        expected_auth_session_version: Option<&Option<String>>,
     ) -> AppResult<LoginVerificationRequirement> {
         self.cleanup_expired_login_verification_challenges().await?;
         let factors = self.user_auth_factor_status(&user.id).await?;
+        let current_auth_session_version = self
+            .services
+            .identity
+            .users
+            .auth_session_version(&user.id)
+            .await?;
+        let auth_session_version =
+            if let Some(expected_auth_session_version) = expected_auth_session_version {
+                if current_auth_session_version != *expected_auth_session_version {
+                    return Err(AppError::Unauthorized(
+                        "authentication session was invalidated".into(),
+                    ));
+                }
+                expected_auth_session_version.clone()
+            } else {
+                current_auth_session_version
+            };
 
         if factors.has_mfa
             && let Some(code) = legacy_totp_code.filter(|code| !code.trim().is_empty())
         {
-            let auth_session_version = self
-                .services
-                .identity
-                .users
-                .auth_session_version(&user.id)
-                .await?;
             return self
                 .verify_totp_for_user(user, code)
                 .await
@@ -41,15 +53,9 @@ impl AppUseCase {
         }
 
         if !factors.has_mfa && !factors.has_passkey {
-            let auth_session_version = self
-                .services
-                .identity
-                .users
-                .auth_session_version(&user.id)
-                .await?;
             return Ok(if policy_requires_mfa {
                 LoginVerificationRequirement::EnrollmentRequired {
-                    auth_session_version,
+                    auth_session_version: auth_session_version.clone(),
                 }
             } else {
                 LoginVerificationRequirement::Satisfied(LoginVerificationSatisfied {
@@ -67,12 +73,7 @@ impl AppUseCase {
             persist_session,
             allow_passkey: factors.has_passkey,
             allow_totp: factors.has_mfa,
-            auth_session_version: self
-                .services
-                .identity
-                .users
-                .auth_session_version(&user.id)
-                .await?,
+            auth_session_version,
             created_at: now.to_rfc3339(),
             expires_at: (now + Duration::minutes(LOGIN_VERIFICATION_CHALLENGE_TTL_MINUTES))
                 .to_rfc3339(),

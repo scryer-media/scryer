@@ -317,14 +317,15 @@ impl OAuthRepository for OAuthStore {
             &self.datastore,
             "create_oauth_authorization_code",
             "INSERT INTO oauth_authorization_codes
-                (id, code_hash, client_id, user_id, redirect_uri, scope, code_challenge,
+                (id, code_hash, client_id, user_id, auth_session_version, redirect_uri, scope, code_challenge,
                  code_challenge_method, authorization_source, created_at, expires_at, consumed_at)
-             VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+             VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
             vec![
                 SqlArg::Text(record.id.clone()),
                 SqlArg::Text(record.code_hash.clone()),
                 SqlArg::Text(record.client_id.clone()),
                 SqlArg::Text(record.user_id.clone()),
+                SqlArg::Text(record.auth_session_version.clone()),
                 SqlArg::Text(record.redirect_uri.clone()),
                 SqlArg::Text(record.scope.clone()),
                 SqlArg::Text(record.code_challenge.clone()),
@@ -362,6 +363,81 @@ impl OAuthRepository for OAuthStore {
         )
         .await?;
         Ok(rows > 0)
+    }
+
+    async fn consume_authorization_code_and_create_refresh_grant(
+        &self,
+        code: OAuthAuthorizationCodeRecord,
+        consumed_at: chrono::DateTime<chrono::Utc>,
+        grant: OAuthRefreshGrantRecord,
+        token: OAuthRefreshTokenRecord,
+        require_active_client_registration: bool,
+    ) -> AppResult<Option<OAuthRefreshGrantRecord>> {
+        SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "exchange_oauth_authorization_code",
+            move |tx| {
+                let code = code.clone();
+                let grant = grant.clone();
+                let token = token.clone();
+                Box::pin(async move {
+                    let rows = tx
+                        .execute(
+                            "UPDATE oauth_authorization_codes
+                                SET consumed_at = {}
+                              WHERE id = {}
+                                AND code_hash = {}
+                                AND client_id = {}
+                                AND user_id = {}
+                                AND auth_session_version = {}
+                                AND redirect_uri = {}
+                                AND scope = {}
+                                AND code_challenge = {}
+                                AND code_challenge_method = {}
+                                AND authorization_source = {}
+                                AND expires_at > {}
+                                AND consumed_at IS NULL",
+                            &[
+                                SqlArg::Timestamp(consumed_at),
+                                SqlArg::Text(code.id.clone()),
+                                SqlArg::Text(code.code_hash.clone()),
+                                SqlArg::Text(code.client_id.clone()),
+                                SqlArg::Text(code.user_id.clone()),
+                                SqlArg::Text(code.auth_session_version.clone()),
+                                SqlArg::Text(code.redirect_uri.clone()),
+                                SqlArg::Text(code.scope.clone()),
+                                SqlArg::Text(code.code_challenge.clone()),
+                                SqlArg::Text(code.code_challenge_method.clone()),
+                                SqlArg::Text(code.authorization_source.as_str().to_string()),
+                                SqlArg::Timestamp(consumed_at),
+                            ],
+                        )
+                        .await?;
+                    if rows == 0 {
+                        return Ok(None);
+                    }
+                    if require_active_client_registration {
+                        let rows = tx
+                            .execute(
+                                "UPDATE oauth_client_registrations
+                                    SET updated_at = updated_at
+                                  WHERE client_id = {} AND enabled = {}",
+                                &[SqlArg::Text(grant.client_id.clone()), SqlArg::Bool(true)],
+                            )
+                            .await?;
+                        if rows == 0 {
+                            return Err(AppError::Unauthorized(
+                                "OAuth client is disabled or unavailable".into(),
+                            ));
+                        }
+                    }
+                    insert_refresh_grant_tx(tx, &grant).await?;
+                    insert_refresh_token_tx(tx, &token).await?;
+                    Ok(Some(grant))
+                })
+            },
+        )
+        .await
     }
 
     async fn create_refresh_grant(
@@ -762,7 +838,7 @@ async fn load_authorization_code(
 ) -> AppResult<Option<OAuthAuthorizationCodeRecord>> {
     let row = SqlRuntime::fetch_optional(
         exec,
-        "SELECT id, code_hash, client_id, user_id, redirect_uri, scope, code_challenge,
+        "SELECT id, code_hash, client_id, user_id, auth_session_version, redirect_uri, scope, code_challenge,
                 code_challenge_method, authorization_source, created_at, expires_at, consumed_at
            FROM oauth_authorization_codes
           WHERE id = {}",
@@ -868,6 +944,7 @@ fn row_to_authorization_code(row: &SqlRow) -> AppResult<OAuthAuthorizationCodeRe
         code_hash: row.text("code_hash")?,
         client_id: row.text("client_id")?,
         user_id: row.text("user_id")?,
+        auth_session_version: row.text("auth_session_version")?,
         redirect_uri: row.text("redirect_uri")?,
         scope: row.text("scope")?,
         code_challenge: row.text("code_challenge")?,

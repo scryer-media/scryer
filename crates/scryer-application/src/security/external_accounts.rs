@@ -736,7 +736,7 @@ impl AppUseCase {
         &self,
         connection_id: String,
         plex_auth_token: String,
-    ) -> AppResult<User> {
+    ) -> AppResult<(User, Option<String>)> {
         let provider = scryer_domain::ExternalAccountProvider::Plex;
         let connection_id = normalize_connection_id(connection_id);
         let connection = self
@@ -762,7 +762,7 @@ impl AppUseCase {
         connection_id: String,
         username: String,
         password: String,
-    ) -> AppResult<User> {
+    ) -> AppResult<(User, Option<String>)> {
         // A Jellyfin account with no password authenticates against an empty
         // `Pw`, so without this an attacker who knows such a username could sign
         // in with no secret at all. Linking a passwordless account stays allowed
@@ -808,7 +808,7 @@ impl AppUseCase {
         mode: EmbyConnectionMode,
         username: String,
         password: String,
-    ) -> AppResult<User> {
+    ) -> AppResult<(User, Option<String>)> {
         if password.is_empty() {
             return Err(AppError::Unauthorized("Emby sign-in failed".into()));
         }
@@ -835,7 +835,7 @@ impl AppUseCase {
         &self,
         verified: VerifiedExternalIdentity,
         connection: scryer_domain::MediaServerConnection,
-    ) -> AppResult<User> {
+    ) -> AppResult<(User, Option<String>)> {
         let provider = verified.provider.clone();
         let account = self
             .services
@@ -902,8 +902,14 @@ impl AppUseCase {
             .update(account.clone())
             .await?;
 
+        let auth_session_version = self
+            .services
+            .identity
+            .users
+            .auth_session_version(&user.id)
+            .await?;
         self.cache_jwt_signing_key(&user).await?;
-        Ok(user)
+        Ok((user, auth_session_version))
     }
 
     async fn create_auto_added_external_account(
@@ -2884,7 +2890,7 @@ mod tests {
             .await
             .expect("login succeeds");
 
-        assert_eq!(logged_in.id, user.id);
+        assert_eq!(logged_in.0.id, user.id);
         let updated = external_accounts
             .get_by_provider_identity(
                 ExternalAccountProvider::Jellyfin,
@@ -3140,8 +3146,8 @@ mod tests {
             )
             .await;
 
-        assert_eq!(local.id, user.id);
-        assert_eq!(connect.id, user.id);
+        assert_eq!(local.0.id, user.id);
+        assert_eq!(connect.0.id, user.id);
         assert!(
             matches!(empty, Err(AppError::Unauthorized(message)) if message == "Emby sign-in failed")
         );
@@ -3204,7 +3210,7 @@ mod tests {
             )
             .await
             .expect("local authentication remains enabled");
-        assert_eq!(local.id, user.id);
+        assert_eq!(local.0.id, user.id);
 
         let connect = app
             .federated_login_with_emby(
@@ -3380,13 +3386,13 @@ mod tests {
             )
             .await
             .expect("auto-add Emby account");
-        assert_eq!(added.username, "EmbyUser-2");
+        assert_eq!(added.0.username, "EmbyUser-2");
         assert_eq!(
-            added.account_kind,
+            added.0.account_kind,
             scryer_domain::UserAccountKind::ExternalAutoProvisioned
         );
         let accounts = external_accounts
-            .list_by_user_id(&added.id)
+            .list_by_user_id(&added.0.id)
             .await
             .expect("list auto-added account");
         assert_eq!(accounts.len(), 1);

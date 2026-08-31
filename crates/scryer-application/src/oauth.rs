@@ -353,6 +353,7 @@ impl AppUseCase {
         code_challenge: &str,
         code_challenge_method: &str,
         authorization_source: OAuthAuthorizationSource,
+        auth_session_version: Option<&str>,
     ) -> AppResult<OAuthIssuedCode> {
         let (_, redirect_uri) = self
             .validated_oauth_redirect_uri(client_id, redirect_uri)
@@ -368,6 +369,7 @@ impl AppUseCase {
             code_hash: self.oauth_token_hash("authorization_code", &code),
             client_id: client_id.to_string(),
             user_id: user.id.clone(),
+            auth_session_version: auth_session_version.unwrap_or_default().to_string(),
             redirect_uri,
             scope,
             code_challenge: code_challenge.to_string(),
@@ -395,7 +397,7 @@ impl AppUseCase {
         authless_codes_allowed: bool,
     ) -> AppResult<OAuthTokenPair> {
         validate_pkce_code_verifier(code_verifier)?;
-        let (_, redirect_uri) = self
+        let (client, redirect_uri) = self
             .validated_oauth_redirect_uri(client_id, redirect_uri)
             .await?;
         let code_id = oauth_token_id(code, CODE_PREFIX)?;
@@ -438,17 +440,6 @@ impl AppUseCase {
         {
             return Err(AppError::Unauthorized("PKCE verification failed".into()));
         }
-        if !self
-            .services
-            .identity
-            .oauth
-            .consume_authorization_code(&record.id, Utc::now())
-            .await?
-        {
-            return Err(AppError::Unauthorized(
-                "authorization code is already used".into(),
-            ));
-        }
         let user = self
             .services
             .identity
@@ -456,8 +447,79 @@ impl AppUseCase {
             .get_by_id(&record.user_id)
             .await?
             .ok_or_else(|| AppError::Unauthorized("OAuth user no longer exists".into()))?;
-        self.issue_oauth_token_pair(&user, client_id, &record.scope, record.authorization_source)
+        let expected_auth_session_version =
+            (!record.auth_session_version.is_empty()).then(|| record.auth_session_version.clone());
+        let current_auth_session_version = self
+            .services
+            .identity
+            .users
+            .auth_session_version(&user.id)
+            .await?;
+        if current_auth_session_version != expected_auth_session_version {
+            return Err(AppError::Unauthorized(
+                "authorization code session is no longer valid".into(),
+            ));
+        }
+
+        let grant_id = Id::new().0;
+        let family_id = Id::new().0;
+        let now = Utc::now();
+        let grant = OAuthRefreshGrantRecord {
+            id: grant_id.clone(),
+            family_id: family_id.clone(),
+            user_id: user.id.clone(),
+            client_id: client_id.to_string(),
+            scope: record.scope.clone(),
+            auth_session_version: record.auth_session_version.clone(),
+            authorization_source: record.authorization_source,
+            created_at: now,
+            updated_at: now,
+            last_used_at: None,
+            revoked_at: None,
+            revoked_reason: None,
+        };
+        let (refresh_token, token_record) = self.new_refresh_token_record(&grant_id, &family_id)?;
+        let grant = self
+            .services
+            .identity
+            .oauth
+            .consume_authorization_code_and_create_refresh_grant(
+                record,
+                now,
+                grant,
+                token_record,
+                client.source == OAuthClientSource::Custom,
+            )
+            .await?
+            .ok_or_else(|| {
+                AppError::Unauthorized("authorization code is no longer valid".into())
+            })?;
+        let access_token = match self
+            .issue_oauth_access_token_with_source_at_auth_session_version(
+                &user,
+                &grant.client_id,
+                &grant.id,
+                grant.authorization_source,
+                &expected_auth_session_version,
+            )
             .await
+        {
+            Ok(token) => token,
+            Err(error) => {
+                self.services
+                    .identity
+                    .oauth
+                    .revoke_refresh_family(&grant.family_id, Utc::now(), "auth_session_changed")
+                    .await?;
+                return Err(error);
+            }
+        };
+        Ok(OAuthTokenPair {
+            access_token,
+            refresh_token,
+            expires_in: Self::OAUTH_ACCESS_TOKEN_TTL_SECONDS,
+            scope: grant.scope,
+        })
     }
 
     pub async fn revoke_authless_oauth_refresh_grants(&self, reason: &str) -> AppResult<u64> {
@@ -577,14 +639,32 @@ impl AppUseCase {
                 return Err(AppError::Unauthorized("refresh token is invalid".into()));
             }
         };
-        let access_token = self
-            .issue_oauth_access_token_with_source(
+        let expected_auth_session_version = (!rotation.grant.auth_session_version.is_empty())
+            .then(|| rotation.grant.auth_session_version.clone());
+        let access_token = match self
+            .issue_oauth_access_token_with_source_at_auth_session_version(
                 &user,
                 &rotation.grant.client_id,
                 &rotation.grant.id,
                 rotation.grant.authorization_source,
+                &expected_auth_session_version,
             )
-            .await?;
+            .await
+        {
+            Ok(token) => token,
+            Err(error) => {
+                self.services
+                    .identity
+                    .oauth
+                    .revoke_refresh_family(
+                        &rotation.grant.family_id,
+                        Utc::now(),
+                        "auth_session_changed",
+                    )
+                    .await?;
+                return Err(error);
+            }
+        };
         Ok(OAuthTokenPair {
             access_token,
             refresh_token: next_token,
@@ -679,74 +759,6 @@ impl AppUseCase {
     fn oauth_token_hash(&self, context: &str, token: &str) -> String {
         let key = hmac::Key::new(hmac::HMAC_SHA256, self.auth.jwt_signing_salt.as_bytes());
         crate::to_hex(hmac::sign(&key, format!("oauth:{context}:{token}").as_bytes()).as_ref())
-    }
-
-    async fn issue_oauth_token_pair(
-        &self,
-        user: &User,
-        client_id: &str,
-        scope: &str,
-        authorization_source: OAuthAuthorizationSource,
-    ) -> AppResult<OAuthTokenPair> {
-        let disabled_authless_grant_allowed = authorization_source
-            == OAuthAuthorizationSource::Authless
-            && Self::is_default_admin_username(&user.username);
-        if !(user.login_status().is_enabled() || disabled_authless_grant_allowed) {
-            return Err(AppError::Unauthorized("credentials unavailable".into()));
-        }
-        let client = self.oauth_client_info(client_id).await?.ok_or_else(|| {
-            AppError::Unauthorized("OAuth client is disabled or unavailable".into())
-        })?;
-        let scope = self.validate_oauth_scope(Some(scope))?;
-        let auth_session_version = self
-            .services
-            .identity
-            .users
-            .auth_session_version(&user.id)
-            .await?
-            .unwrap_or_default();
-        let grant_id = Id::new().0;
-        let family_id = Id::new().0;
-        let now = Utc::now();
-        let grant = OAuthRefreshGrantRecord {
-            id: grant_id.clone(),
-            family_id: family_id.clone(),
-            user_id: user.id.clone(),
-            client_id: client_id.to_string(),
-            scope,
-            auth_session_version,
-            authorization_source,
-            created_at: now,
-            updated_at: now,
-            last_used_at: None,
-            revoked_at: None,
-            revoked_reason: None,
-        };
-        let (refresh_token, token_record) = self.new_refresh_token_record(&grant_id, &family_id)?;
-        let grant = self
-            .services
-            .identity
-            .oauth
-            .create_refresh_grant(
-                grant,
-                token_record,
-                client.source == OAuthClientSource::Custom,
-            )
-            .await?;
-        let access_token = self
-            .issue_oauth_access_token_with_source(
-                user,
-                &grant.client_id,
-                &grant.id,
-                grant.authorization_source,
-            )
-            .await?;
-        Ok(OAuthTokenPair {
-            access_token,
-            refresh_token,
-            expires_in: Self::OAUTH_ACCESS_TOKEN_TTL_SECONDS,
-            scope: grant.scope,
-        })
     }
 
     fn new_refresh_token_record(

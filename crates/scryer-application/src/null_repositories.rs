@@ -2837,6 +2837,17 @@ impl OAuthRepository for NullOAuthRepository {
         Ok(false)
     }
 
+    async fn consume_authorization_code_and_create_refresh_grant(
+        &self,
+        _: OAuthAuthorizationCodeRecord,
+        _: chrono::DateTime<chrono::Utc>,
+        _: OAuthRefreshGrantRecord,
+        _: OAuthRefreshTokenRecord,
+        _: bool,
+    ) -> AppResult<Option<OAuthRefreshGrantRecord>> {
+        Ok(None)
+    }
+
     async fn create_refresh_grant(
         &self,
         _: OAuthRefreshGrantRecord,

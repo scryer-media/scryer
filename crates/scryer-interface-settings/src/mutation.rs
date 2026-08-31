@@ -2012,7 +2012,7 @@ impl SettingsMutations {
         &self,
         ctx: &Context<'_>,
         #[graphql(
-            desc = "Optional username to narrow passkey discovery; omit or pass null for usernameless authentication."
+            desc = "Optional compatibility hint that is not used to select or reveal an account; passkeys always start discoverable authentication."
         )]
         username: Option<String>,
     ) -> GqlResult<WebauthnChallengePayload> {
@@ -2293,6 +2293,7 @@ impl SettingsMutations {
                 password_login_mfa_required,
                 persist_session,
                 input.totp_code.as_deref(),
+                None,
             )
             .await
             .map_err(to_gql_error)?

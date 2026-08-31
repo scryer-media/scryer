@@ -1,13 +1,14 @@
+use std::collections::{HashMap, VecDeque};
 use std::net::IpAddr;
 use std::num::NonZeroU32;
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use async_graphql::{
-    BatchRequest, BatchResponse, ErrorExtensionValues, Response, ServerError,
+    BatchRequest, BatchResponse, ErrorExtensionValues, Response, ServerError, Value,
     parser::{
         parse_query,
-        types::{ExecutableDocument, OperationType, Selection, SelectionSet},
+        types::{ExecutableDocument, Field, OperationType, Selection, SelectionSet},
     },
 };
 use governor::clock::Clock;
@@ -21,6 +22,9 @@ pub(crate) struct ScryerRateLimiter {
 struct RateLimitBuckets {
     bypass: Vec<IpMatcher>,
     login: Bucket,
+    auth_start: Bucket,
+    auth_peer: Bucket,
+    principal_failures: PrincipalFailureBucket,
     search: Bucket,
     mutation: Bucket,
     api: Bucket,
@@ -32,9 +36,16 @@ struct Bucket {
     limiter: DefaultKeyedRateLimiter<String>,
 }
 
+struct PrincipalFailureBucket {
+    requests: usize,
+    window: Duration,
+    failures: Mutex<HashMap<String, VecDeque<Instant>>>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GraphqlRateLimitClass {
     Login,
+    AuthStart,
     Search,
     Mutation,
     Api,
@@ -50,16 +61,34 @@ pub(crate) enum HttpRateLimitClass {
 #[derive(Clone, Debug)]
 pub(crate) struct RateLimitKey {
     value: String,
-    client_ip: IpAddr,
+    peer_value: String,
+    peer_ip: IpAddr,
 }
 
 impl RateLimitKey {
+    #[cfg(test)]
     pub(crate) fn new(client_ip: IpAddr, user_id: Option<&str>) -> Self {
+        Self::for_client_and_peer(client_ip, client_ip, user_id)
+    }
+
+    pub(crate) fn for_client_and_peer(
+        client_ip: IpAddr,
+        peer_ip: IpAddr,
+        user_id: Option<&str>,
+    ) -> Self {
         let value = match user_id {
             Some(user_id) => format!("user:{user_id}:ip:{client_ip}"),
             None => format!("ip:{client_ip}"),
         };
-        Self { value, client_ip }
+        let peer_value = match user_id {
+            Some(user_id) => format!("user:{user_id}:peer:{peer_ip}"),
+            None => format!("peer:{peer_ip}"),
+        };
+        Self {
+            value,
+            peer_value,
+            peer_ip,
+        }
     }
 }
 
@@ -89,6 +118,24 @@ impl ScryerRateLimiter {
                     "SCRYER_LOGIN_RATE_LIMIT_WINDOW_SECS",
                     5,
                     60,
+                ),
+                auth_start: Bucket::from_env(
+                    "SCRYER_AUTH_START_RATE_LIMIT_REQUESTS",
+                    "SCRYER_AUTH_START_RATE_LIMIT_WINDOW_SECS",
+                    30,
+                    60,
+                ),
+                auth_peer: Bucket::from_env(
+                    "SCRYER_AUTH_PEER_RATE_LIMIT_REQUESTS",
+                    "SCRYER_AUTH_PEER_RATE_LIMIT_WINDOW_SECS",
+                    60,
+                    60,
+                ),
+                principal_failures: PrincipalFailureBucket::from_env(
+                    "SCRYER_LOGIN_PRINCIPAL_FAILURES",
+                    "SCRYER_LOGIN_PRINCIPAL_FAILURE_WINDOW_SECS",
+                    20,
+                    300,
                 ),
                 search: Bucket::from_env(
                     "SCRYER_SEARCH_RATE_LIMIT_REQUESTS",
@@ -129,26 +176,51 @@ impl ScryerRateLimiter {
         class: GraphqlRateLimitClass,
         key: &RateLimitKey,
     ) -> Result<(), RateLimitDecision> {
-        if self.is_bypassed(key.client_ip) {
+        if self.is_bypassed(key) {
             return Ok(());
         }
 
         let bucket = match class {
             GraphqlRateLimitClass::Login => &self.inner.login,
+            GraphqlRateLimitClass::AuthStart => &self.inner.auth_start,
             GraphqlRateLimitClass::Search => &self.inner.search,
             GraphqlRateLimitClass::Mutation => &self.inner.mutation,
             GraphqlRateLimitClass::Api => &self.inner.api,
         };
-        bucket.check(&key.value, class)
+        bucket.check(&key.value, class)?;
+        if matches!(
+            class,
+            GraphqlRateLimitClass::Login | GraphqlRateLimitClass::AuthStart
+        ) {
+            self.inner.auth_peer.check(&key.peer_value, class)?;
+        }
+        Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn record_failed_login(&self, key: &RateLimitKey) -> Result<(), RateLimitDecision> {
-        if self.is_bypassed(key.client_ip) {
+        self.check_graphql(GraphqlRateLimitClass::Login, key)
+    }
+
+    pub(crate) fn check_login_principal(
+        &self,
+        key: &RateLimitKey,
+        principal: &str,
+    ) -> Result<(), RateLimitDecision> {
+        if self.is_bypassed(key) {
             return Ok(());
         }
-        self.inner
-            .login
-            .check(&key.value, GraphqlRateLimitClass::Login)
+        self.inner.principal_failures.check(principal)
+    }
+
+    pub(crate) fn record_login_principal_failure(&self, key: &RateLimitKey, principal: &str) {
+        if !self.is_bypassed(key) {
+            self.inner.principal_failures.record(principal);
+        }
+    }
+
+    pub(crate) fn clear_login_principal_failures(&self, principal: &str) {
+        self.inner.principal_failures.clear(principal);
     }
 
     pub(crate) fn check_http(
@@ -156,7 +228,7 @@ impl ScryerRateLimiter {
         class: HttpRateLimitClass,
         key: &RateLimitKey,
     ) -> Result<(), RateLimitDecision> {
-        if self.is_bypassed(key.client_ip) {
+        if self.is_bypassed(key) {
             return Ok(());
         }
         let bucket = match class {
@@ -167,8 +239,11 @@ impl ScryerRateLimiter {
         bucket.check(&key.value, class)
     }
 
-    fn is_bypassed(&self, ip: IpAddr) -> bool {
-        self.inner.bypass.iter().any(|matcher| matcher.matches(ip))
+    fn is_bypassed(&self, key: &RateLimitKey) -> bool {
+        self.inner
+            .bypass
+            .iter()
+            .any(|matcher| matcher.matches(key.peer_ip))
     }
 }
 
@@ -206,6 +281,71 @@ impl Bucket {
     }
 }
 
+impl PrincipalFailureBucket {
+    fn from_env(
+        requests_env: &str,
+        window_env: &str,
+        default_requests: u32,
+        default_window: u64,
+    ) -> Self {
+        Self {
+            requests: read_env_u32(requests_env)
+                .unwrap_or(default_requests)
+                .max(1) as usize,
+            window: Duration::from_secs(read_env_u64(window_env).unwrap_or(default_window).max(1)),
+            failures: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn check(&self, principal: &str) -> Result<(), RateLimitDecision> {
+        let now = Instant::now();
+        let mut failures = self
+            .failures
+            .lock()
+            .expect("principal login failure lock must not be poisoned");
+        let entries = failures.entry(principal.to_string()).or_default();
+        Self::prune(entries, now, self.window);
+        if entries.len() < self.requests {
+            return Ok(());
+        }
+        let retry_after = entries.front().map(|attempt| {
+            self.window
+                .saturating_sub(now.saturating_duration_since(*attempt))
+        });
+        Err(RateLimitDecision {
+            message: rate_limited_message(GraphqlRateLimitClass::Login),
+            retry_after,
+        })
+    }
+
+    fn record(&self, principal: &str) {
+        let now = Instant::now();
+        let mut failures = self
+            .failures
+            .lock()
+            .expect("principal login failure lock must not be poisoned");
+        let entries = failures.entry(principal.to_string()).or_default();
+        Self::prune(entries, now, self.window);
+        entries.push_back(now);
+    }
+
+    fn clear(&self, principal: &str) {
+        self.failures
+            .lock()
+            .expect("principal login failure lock must not be poisoned")
+            .remove(principal);
+    }
+
+    fn prune(entries: &mut VecDeque<Instant>, now: Instant, window: Duration) {
+        while entries
+            .front()
+            .is_some_and(|attempt| now.saturating_duration_since(*attempt) >= window)
+        {
+            entries.pop_front();
+        }
+    }
+}
+
 pub(crate) fn classify_graphql(batch: &BatchRequest) -> GraphqlRateLimitClass {
     let mut class = GraphqlRateLimitClass::Api;
     for request in batch.iter() {
@@ -219,11 +359,67 @@ pub(crate) fn classify_graphql(batch: &BatchRequest) -> GraphqlRateLimitClass {
 }
 
 pub(crate) fn classify_graphql_request(request: &async_graphql::Request) -> GraphqlRateLimitClass {
-    classify_query(&request.query)
+    analyze_authentication_request(request)
+        .class
+        .unwrap_or_else(|| classify_query(&request.query))
 }
 
+#[cfg(test)]
 pub(crate) fn should_precheck_graphql_login(batch: &BatchRequest) -> bool {
-    classify_graphql(batch) == GraphqlRateLimitClass::Login
+    batch
+        .iter()
+        .any(|request| analyze_authentication_request(request).class.is_some())
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct AuthenticationRequestAnalysis {
+    pub(crate) class: Option<GraphqlRateLimitClass>,
+    pub(crate) principal: Option<String>,
+    pub(crate) rejected: bool,
+}
+
+pub(crate) fn analyze_authentication_request(
+    request: &async_graphql::Request,
+) -> AuthenticationRequestAnalysis {
+    let Ok(document) = parse_query(&request.query) else {
+        return AuthenticationRequestAnalysis::default();
+    };
+    let Some(operation) = selected_operation(&document, request.operation_name.as_deref()) else {
+        return AuthenticationRequestAnalysis::default();
+    };
+    if operation.node.ty != OperationType::Mutation {
+        return AuthenticationRequestAnalysis::default();
+    }
+    let mut fields = Vec::new();
+    if !collect_top_level_fields(
+        &document,
+        &operation.node.selection_set.node,
+        0,
+        &mut fields,
+    ) {
+        return AuthenticationRequestAnalysis::default();
+    }
+    let authentication_fields = fields
+        .iter()
+        .filter_map(|field| {
+            authentication_rate_limit_class(field.name.node.as_str()).map(|class| (*field, class))
+        })
+        .collect::<Vec<_>>();
+    if authentication_fields.is_empty() {
+        return AuthenticationRequestAnalysis::default();
+    }
+    if fields.len() != 1 || authentication_fields.len() != 1 {
+        return AuthenticationRequestAnalysis {
+            rejected: true,
+            ..AuthenticationRequestAnalysis::default()
+        };
+    }
+    let (field, class) = authentication_fields[0];
+    AuthenticationRequestAnalysis {
+        class: Some(class),
+        principal: login_principal_for_field(request, field),
+        rejected: false,
+    }
 }
 
 pub(crate) fn rate_limited_graphql_response(decision: &RateLimitDecision) -> BatchResponse {
@@ -245,6 +441,7 @@ pub(crate) fn rate_limited_graphql_single_response(decision: &RateLimitDecision)
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RateLimitMessageClass {
     Login,
+    AuthStart,
     Search,
     Mutation,
     Api,
@@ -256,6 +453,7 @@ impl From<GraphqlRateLimitClass> for RateLimitMessageClass {
     fn from(class: GraphqlRateLimitClass) -> Self {
         match class {
             GraphqlRateLimitClass::Login => Self::Login,
+            GraphqlRateLimitClass::AuthStart => Self::AuthStart,
             GraphqlRateLimitClass::Search => Self::Search,
             GraphqlRateLimitClass::Mutation => Self::Mutation,
             GraphqlRateLimitClass::Api => Self::Api,
@@ -277,6 +475,7 @@ pub(crate) fn rate_limited_message(class: impl Into<RateLimitMessageClass>) -> S
     let class = class.into();
     match class {
         RateLimitMessageClass::Login => "too many login attempts".to_string(),
+        RateLimitMessageClass::AuthStart => "too many authentication starts".to_string(),
         RateLimitMessageClass::Search => "search rate limit exceeded".to_string(),
         RateLimitMessageClass::Mutation => "mutation rate limit exceeded".to_string(),
         RateLimitMessageClass::Api => "API rate limit exceeded".to_string(),
@@ -356,6 +555,26 @@ fn selection_set_contains_login_mutation_field(
         })
 }
 
+fn authentication_rate_limit_class(name: &str) -> Option<GraphqlRateLimitClass> {
+    if is_authentication_start_mutation_field(name) {
+        Some(GraphqlRateLimitClass::AuthStart)
+    } else if is_login_mutation_field(name) {
+        Some(GraphqlRateLimitClass::Login)
+    } else {
+        None
+    }
+}
+
+fn is_authentication_start_mutation_field(name: &str) -> bool {
+    matches!(
+        name,
+        "webauthnAuthenticateStart"
+            | "loginVerificationPasskeyStart"
+            | "accountSecurityPasskeyStart"
+            | "webauthnLoginEnrollmentStart"
+    )
+}
+
 fn is_login_mutation_field(name: &str) -> bool {
     matches!(
         name,
@@ -364,12 +583,9 @@ fn is_login_mutation_field(name: &str) -> bool {
             | "loginWithEmby"
             | "loginWithPlex"
             | "completeLoginMfaEnrollment"
-            | "webauthnAuthenticateStart"
             | "webauthnAuthenticateComplete"
-            | "loginVerificationPasskeyStart"
             | "loginVerificationPasskeyComplete"
             | "loginVerificationTotpComplete"
-            | "webauthnLoginEnrollmentStart"
             | "webauthnLoginEnrollmentComplete"
             | "completeRequiredPasswordChange"
             | "accountSecurityPasswordVerify"
@@ -379,6 +595,98 @@ fn is_login_mutation_field(name: &str) -> bool {
             | "totpDisable"
             | "totpRegenerateRecoveryCodes"
     )
+}
+
+fn selected_operation<'a>(
+    document: &'a ExecutableDocument,
+    operation_name: Option<&str>,
+) -> Option<&'a async_graphql::Positioned<async_graphql::parser::types::OperationDefinition>> {
+    match operation_name {
+        Some(operation_name) => document.operations.iter().find_map(|(name, operation)| {
+            (name
+                .as_ref()
+                .is_some_and(|name| name.as_str() == operation_name))
+            .then_some(operation)
+        }),
+        None => {
+            let mut operations = document.operations.iter();
+            let (_, operation) = operations.next()?;
+            operations.next().is_none().then_some(operation)
+        }
+    }
+}
+
+fn collect_top_level_fields<'a>(
+    document: &'a ExecutableDocument,
+    selection_set: &'a SelectionSet,
+    depth: usize,
+    fields: &mut Vec<&'a Field>,
+) -> bool {
+    if depth > 16 {
+        return false;
+    }
+    for selection in &selection_set.items {
+        match &selection.node {
+            Selection::Field(field) => fields.push(&field.node),
+            Selection::FragmentSpread(spread) => {
+                let Some(fragment) = document.fragments.get(&spread.node.fragment_name.node) else {
+                    return false;
+                };
+                if !collect_top_level_fields(
+                    document,
+                    &fragment.node.selection_set.node,
+                    depth + 1,
+                    fields,
+                ) {
+                    return false;
+                }
+            }
+            Selection::InlineFragment(fragment) => {
+                if !collect_top_level_fields(
+                    document,
+                    &fragment.node.selection_set.node,
+                    depth + 1,
+                    fields,
+                ) {
+                    return false;
+                }
+            }
+        }
+    }
+    true
+}
+
+fn login_principal_for_field(request: &async_graphql::Request, field: &Field) -> Option<String> {
+    let provider = match field.name.node.as_str() {
+        "login" => "local",
+        "loginWithJellyfin" => "jellyfin",
+        "loginWithEmby" => "emby",
+        _ => return None,
+    };
+    let input = field
+        .get_argument("input")?
+        .node
+        .clone()
+        .into_const_with(|name| request.variables.get(&name).cloned().ok_or(()))
+        .ok()?;
+    let Value::Object(input) = input else {
+        return None;
+    };
+    let Value::String(username) = input.get("username")? else {
+        return None;
+    };
+    let username = username.trim();
+    if username.is_empty() {
+        return None;
+    }
+    if provider == "local" {
+        return Some(format!("local:{username}"));
+    }
+    let Value::String(connection_id) = input.get("connectionId")? else {
+        return None;
+    };
+    let connection_id = connection_id.trim();
+    (!connection_id.is_empty()).then(|| format!("{provider}:{connection_id}:{username}"))
 }
 
 fn contains_expensive_field(query: &str) -> bool {
@@ -413,9 +721,10 @@ fn stricter_class(
 fn class_rank(class: GraphqlRateLimitClass) -> u8 {
     match class {
         GraphqlRateLimitClass::Login => 0,
-        GraphqlRateLimitClass::Search => 1,
-        GraphqlRateLimitClass::Mutation => 2,
-        GraphqlRateLimitClass::Api => 3,
+        GraphqlRateLimitClass::AuthStart => 1,
+        GraphqlRateLimitClass::Search => 2,
+        GraphqlRateLimitClass::Mutation => 3,
+        GraphqlRateLimitClass::Api => 4,
     }
 }
 
@@ -524,11 +833,14 @@ mod tests {
     }
 
     #[test]
-    fn passkey_authenticate_mutations_use_login_bucket() {
+    fn passkey_authentication_starts_use_the_start_bucket() {
         let start_batch = BatchRequest::Single(async_graphql::Request::new(
             "mutation PasskeyStart { webauthnAuthenticateStart(username: \"a\") { challengeId } }",
         ));
-        assert_eq!(classify_graphql(&start_batch), GraphqlRateLimitClass::Login);
+        assert_eq!(
+            classify_graphql(&start_batch),
+            GraphqlRateLimitClass::AuthStart
+        );
         assert!(should_precheck_graphql_login(&start_batch));
 
         let complete_batch = BatchRequest::Single(async_graphql::Request::new(
@@ -545,7 +857,6 @@ mod tests {
     fn account_security_verification_mutations_use_login_bucket() {
         for mutation in [
             "accountSecurityPasswordVerify(currentPassword: \"password\") { token }",
-            "accountSecurityPasskeyStart { challengeId }",
             "accountSecurityPasskeyComplete(input: { challengeId: \"c\", responseJson: \"{}\" }) { token }",
             "mfaVerifyStepUp(input: { code: \"123456\" }) { token }",
             "totpDisable(input: { code: \"123456\" }) { enabled }",
@@ -557,6 +868,52 @@ mod tests {
             assert_eq!(classify_graphql(&batch), GraphqlRateLimitClass::Login);
             assert!(should_precheck_graphql_login(&batch));
         }
+    }
+
+    #[test]
+    fn authentication_mutations_are_rejected_when_batched_in_one_operation() {
+        let aliased = async_graphql::Request::new(
+            "mutation { password: accountSecurityPasswordVerify(currentPassword: \"password\") { token } totp: mfaVerifyStepUp(input: { code: \"123456\" }) { token } }",
+        );
+        assert!(analyze_authentication_request(&aliased).rejected);
+
+        let fragment = async_graphql::Request::new(
+            "mutation { ...Authentication } fragment Authentication on Mutation { login(input: { username: \"a\", password: \"b\" }) { token } updateSecuritySettings(input: {}) { formLoginEnabled } }",
+        );
+        assert!(analyze_authentication_request(&fragment).rejected);
+    }
+
+    #[test]
+    fn authentication_mutation_analysis_uses_the_selected_operation() {
+        let request = async_graphql::Request::new(
+            "mutation Authenticate { login(input: { username: \"a\", password: \"b\" }) { token } } mutation Update { updateSecuritySettings(input: {}) { formLoginEnabled } }",
+        )
+        .operation_name("Update");
+        assert_eq!(
+            analyze_authentication_request(&request),
+            AuthenticationRequestAnalysis::default()
+        );
+    }
+
+    #[test]
+    fn authentication_mutation_analysis_uses_a_single_named_operation_without_an_explicit_name() {
+        let request = async_graphql::Request::new(
+            "mutation Authenticate { login(input: { username: \"a\", password: \"b\" }) { token } mfaVerifyStepUp(input: { code: \"123456\" }) { token } }",
+        );
+        assert!(analyze_authentication_request(&request).rejected);
+    }
+
+    #[test]
+    fn principal_failures_are_cleared_after_a_non_failure_result() {
+        let bucket = PrincipalFailureBucket {
+            requests: 1,
+            window: Duration::from_secs(60),
+            failures: Mutex::new(HashMap::new()),
+        };
+        bucket.record("local:alice");
+        assert!(bucket.check("local:alice").is_err());
+        bucket.clear("local:alice");
+        assert!(bucket.check("local:alice").is_ok());
     }
 
     #[test]

@@ -11110,7 +11110,7 @@ type MutationRoot {
 	"""
 	webauthnAuthenticateStart(
 		"""
-		Optional username to narrow passkey discovery; omit or pass null for usernameless authentication.
+		Optional compatibility hint that is not used to select or reveal an account; passkeys always start discoverable authentication.
 		"""
 		username: String
 	): WebauthnChallengePayload!
