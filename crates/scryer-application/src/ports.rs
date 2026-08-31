@@ -4876,6 +4876,33 @@ pub trait FileImporter: Send + Sync {
         source: &Path,
     ) -> AppResult<scryer_domain::ImportSourceSnapshot>;
 
+    /// Put the operator's configured permissions on a file a *location
+    /// operation* placed (FR-031).
+    ///
+    /// Imports get their modes as part of `import_file_with_…_permissions`,
+    /// but a verified move writes the destination itself, so it needs a way to
+    /// ask for the same treatment afterwards. The default is deliberately a
+    /// no-op: an importer that cannot set modes must never guess at them, and a
+    /// move must not silently change access an operator did not configure.
+    async fn apply_placed_file_permissions(
+        &self,
+        path: &Path,
+        permissions: &ImportFilePermissions,
+    ) -> AppResult<()> {
+        let _ = (path, permissions);
+        Ok(())
+    }
+
+    /// Directory twin of [`FileImporter::apply_placed_file_permissions`].
+    async fn apply_placed_directory_permissions(
+        &self,
+        path: &Path,
+        permissions: &ImportFilePermissions,
+    ) -> AppResult<()> {
+        let _ = (path, permissions);
+        Ok(())
+    }
+
     async fn import_file(
         &self,
         source: &Path,

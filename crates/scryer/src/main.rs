@@ -1519,6 +1519,21 @@ async fn bootstrap_application(
         tracing::warn!(error = %e, "failed to reconcile default library roots on startup");
     }
 
+    // A location operation is persisted and checkpointed precisely so a restart
+    // can pick it up where it stopped, without repeating verified work
+    // (FR-033). This runs after root reconciliation because a resumed move
+    // needs its roots to be the ones the plan was confirmed against.
+    match app_use_case.resume_interrupted_location_operations().await {
+        Ok(0) => {}
+        Ok(resumed) => tracing::info!(
+            resumed,
+            "resumed interrupted location operations from their last verified checkpoints"
+        ),
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to resume interrupted location operations on startup");
+        }
+    }
+
     if let Err(e) = app_use_case.migrate_legacy_persona_preferences().await {
         tracing::warn!(error = %e, "failed to migrate legacy persona preferences on startup");
     }

@@ -13,6 +13,10 @@
 //! | [`model`] | Operation, checkpoint, and verification-record types shared by every workflow. |
 //! | [`preview`] | Plan building, plan fingerprinting, complete counts with sampled items, free-space estimation, typed confirmation (FR-080–082). |
 //! | [`classify`] | Per-title classification of a requested destination (FR-015, FR-076). |
+//! | [`folder_match`] | Folder-match correction: preview, assign, swap, take over — catalog only, never a file operation (FR-001–008, FR-014). |
+//! | [`root_move`] | Title-scoped root-move planner: calculated destination folders, per-title plan items, execution instructions (FR-012–013, FR-076). |
+//! | [`execution`] | The root-move runner seams: mover, reconciler, admission check (FR-031–032, FR-044, FR-089). |
+//! | [`operations`] | The use-case API GraphQL calls: preview, confirm-and-start, cancel, restart resume (FR-030, FR-033, FR-083). |
 //! | [`executor`] | The operation runner: state machine, per-title checkpoints, safe-cancel points, restart resume (FR-030–033, FR-089, FR-092). |
 //! | [`verify`] | Verified streaming copy: CRC + full BLAKE3 in one pass, depth-governed read-back (FR-040–044). |
 //! | [`collisions`] | Destination-wins naming, disambiguation, sidecar grouping, BLAKE3 dedup (FR-072–075). |
@@ -24,10 +28,16 @@
 pub mod adoption;
 pub mod classify;
 pub mod collisions;
+pub mod execution;
 pub mod executor;
+pub mod folder_match;
 pub mod hardlinks;
 pub mod merge;
 pub mod model;
+pub mod operations;
 pub mod ownership_guard;
 pub mod preview;
+pub mod root_move;
+#[cfg(test)]
+pub(crate) mod test_support;
 pub mod verify;

@@ -2605,6 +2605,42 @@ async fn next_import_worker_event(
 
 #[async_trait]
 impl FileImporter for FsFileImporter {
+    /// A location operation writes its own destination, then asks for the same
+    /// modes an import would have applied (FR-031). Best-effort for the same
+    /// reason imports are: a filesystem that refuses a chmod or a chown is not
+    /// a reason to fail a move whose bytes are already verified.
+    async fn apply_placed_file_permissions(
+        &self,
+        path: &Path,
+        permissions: &ImportFilePermissions,
+    ) -> AppResult<()> {
+        let path = path.to_path_buf();
+        let permissions = permissions.clone();
+        tokio::task::spawn_blocking(move || {
+            apply_file_permissions_best_effort(&path, &permissions);
+        })
+        .await
+        .map_err(|error| {
+            AppError::Repository(format!("permission task panicked: {error}"))
+        })
+    }
+
+    async fn apply_placed_directory_permissions(
+        &self,
+        path: &Path,
+        permissions: &ImportFilePermissions,
+    ) -> AppResult<()> {
+        let path = path.to_path_buf();
+        let permissions = permissions.clone();
+        tokio::task::spawn_blocking(move || {
+            apply_directory_permissions_best_effort(&path, &permissions);
+        })
+        .await
+        .map_err(|error| {
+            AppError::Repository(format!("permission task panicked: {error}"))
+        })
+    }
+
     async fn snapshot_import_source(&self, source: &Path) -> AppResult<ImportSourceSnapshot> {
         if let Some(executable) = &self.worker_executable {
             let nonce = IMPORT_FILE_WORKER_NONCE.fetch_add(1, Ordering::Relaxed);

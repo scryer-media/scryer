@@ -799,14 +799,17 @@ impl<'a> NameIndex<'a> {
     }
 
     fn destination_item(&self, name: &str) -> Option<&'a DestinationItem> {
-        self.destination
-            .get(self.case_rule.fold(name).as_ref())
-            .copied()
+        // The `&str` is explicit because `Cow<str>` also implements `AsRef` for
+        // path types some workspace dependencies bring in, which leaves the
+        // lookup's key type ambiguous in a feature-unified build.
+        let key: &str = &self.case_rule.fold(name);
+        self.destination.get(key).copied()
     }
 
     fn is_taken(&self, name: &str) -> bool {
-        let key = self.case_rule.fold(name);
-        self.destination.contains_key(key.as_ref()) || self.reserved.contains_key(key.as_ref())
+        let folded = self.case_rule.fold(name);
+        let key: &str = &folded;
+        self.destination.contains_key(key) || self.reserved.contains_key(key)
     }
 
     fn reserve(&mut self, name: &str) {
