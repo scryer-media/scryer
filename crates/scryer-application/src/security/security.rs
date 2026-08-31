@@ -1441,6 +1441,16 @@ impl AppUseCase {
         username: &str,
         password: &str,
     ) -> AppResult<User> {
+        self.authenticate_local_credentials(username, password)
+            .await
+            .map(|verified| verified.user)
+    }
+
+    pub async fn authenticate_local_credentials(
+        &self,
+        username: &str,
+        password: &str,
+    ) -> AppResult<crate::types::VerifiedLocalCredentials> {
         let started_at = Instant::now();
         let username = Self::normalize_local_username(username);
         if username.is_empty() {
@@ -1459,17 +1469,18 @@ impl AppUseCase {
             return Err(AppError::Unauthorized("credentials unavailable".into()));
         }
 
-        let Some(user) = self
+        let Some(snapshot) = self
             .services
             .identity
             .users
-            .get_by_username(username)
+            .get_login_snapshot_by_username(username)
             .await?
         else {
             self.verify_dummy_login_password(password);
             Self::apply_login_failure_timing(LoginFailureTimingClass::FastMasked, started_at).await;
             return Err(AppError::NotFound(format!("user {username} not found")));
         };
+        let user = snapshot.user;
 
         if !user.login_status().is_enabled() {
             if let Some(password_hash) = user.password_hash.as_deref() {
@@ -1505,8 +1516,10 @@ impl AppUseCase {
         // The former online v1 → v2 re-hash on login is gone with the v1 format
         // itself. Migration 0191 retires surviving v1 rows directly.
 
-        self.cache_jwt_signing_key(&user).await?;
-        Ok(user)
+        Ok(crate::types::VerifiedLocalCredentials {
+            user,
+            auth_session_version: snapshot.auth_session_version,
+        })
     }
 
     /// Verifies the current local password before issuing an account-security grant.

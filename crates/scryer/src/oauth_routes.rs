@@ -117,67 +117,60 @@ async fn oauth_authorize_decision_inner(
     input: OAuthAuthorizeDecisionRequest,
 ) -> Result<OAuthAuthorizeDecisionResponse, Response> {
     let authless_authorization = !state.auth_runtime.snapshot().effective_form_login_enabled;
-    let (user, authorization_source, auth_session_version) = if authless_authorization {
-        let user = state
-            .app
-            .find_or_create_default_user()
-            .await
-            .map_err(oauth_app_error)?;
-        let auth_session_version = state
-            .app
-            .current_actor_auth_session_version(&user)
-            .await
-            .map_err(oauth_app_error)?;
-        (
-            user,
-            OAuthAuthorizationSource::Authless,
-            auth_session_version,
-        )
-    } else {
-        let token = bearer_token_from_headers(&headers).ok_or_else(|| {
-            oauth_error(
-                StatusCode::UNAUTHORIZED,
-                "invalid_request",
-                "authorization requires a logged-in Scryer session",
+    let (user, authorization_source, auth_session_version, security_action_verified_until) =
+        if authless_authorization {
+            let user = state
+                .app
+                .find_or_create_default_user()
+                .await
+                .map_err(oauth_app_error)?;
+            let auth_session_version = state
+                .app
+                .current_actor_auth_session_version(&user)
+                .await
+                .map_err(oauth_app_error)?;
+            (
+                user,
+                OAuthAuthorizationSource::Authless,
+                auth_session_version,
+                None,
             )
-        })?;
-        let (user, claims) = state
-            .app
-            .authenticate_token_with_claims(token)
-            .await
-            .map_err(|_| {
+        } else {
+            let token = bearer_token_from_headers(&headers).ok_or_else(|| {
                 oauth_error(
                     StatusCode::UNAUTHORIZED,
                     "invalid_request",
-                    "invalid session",
+                    "authorization requires a logged-in Scryer session",
                 )
             })?;
-        if claims.session_scope != JwtSessionScope::Full
-            || claims.is_oauth_access_token()
-            || AppUseCase::is_reserved_recovery_username(&user.username)
-        {
-            return Err(oauth_error(
-                StatusCode::FORBIDDEN,
-                "access_denied",
-                "this session cannot authorize OAuth clients",
-            ));
-        }
-        if claims
-            .security_action_verified_until
-            .is_none_or(|verified_until| verified_until <= chrono::Utc::now().timestamp())
-        {
-            return Err(oauth_error(
-                StatusCode::UNAUTHORIZED,
-                "reauthentication_required",
-                "sign in again before authorizing this OAuth client",
-            ));
-        }
-        (
-            user,
-            OAuthAuthorizationSource::Authenticated,
-            claims.auth_session_version,
-        )
-    };
+            let (user, claims) = state
+                .app
+                .authenticate_token_with_claims(token)
+                .await
+                .map_err(|_| {
+                    oauth_error(
+                        StatusCode::UNAUTHORIZED,
+                        "invalid_request",
+                        "invalid session",
+                    )
+                })?;
+            if claims.session_scope != JwtSessionScope::Full
+                || claims.is_oauth_access_token()
+                || AppUseCase::is_reserved_recovery_username(&user.username)
+            {
+                return Err(oauth_error(
+                    StatusCode::FORBIDDEN,
+                    "access_denied",
+                    "this session cannot authorize OAuth clients",
+                ));
+            }
+            (
+                user,
+                OAuthAuthorizationSource::Authenticated,
+                claims.auth_session_version,
+                claims.security_action_verified_until,
+            )
+        };
     state
         .app
         .validate_oauth_redirect_uri(&input.client_id, &input.redirect_uri)
@@ -218,6 +211,16 @@ async fn oauth_authorize_decision_inner(
             )
             .map_err(|response| *response)?,
         });
+    }
+    if authorization_source == OAuthAuthorizationSource::Authenticated
+        && security_action_verified_until
+            .is_none_or(|verified_until| verified_until <= chrono::Utc::now().timestamp())
+    {
+        return Err(oauth_error(
+            StatusCode::UNAUTHORIZED,
+            "reauthentication_required",
+            "sign in again before authorizing this OAuth client",
+        ));
     }
     let code = state
         .app

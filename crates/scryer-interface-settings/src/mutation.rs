@@ -22,11 +22,12 @@ use super::{
     from_ui_settings, ui_settings_update_from_input,
 };
 use scryer_interface_core::{
-    AuthlessDefaultSession, account_security_actor_from_ctx, actor_from_ctx,
+    AuthlessDefaultSession, LoginAttemptPrincipal, account_security_actor_from_ctx, actor_from_ctx,
     api_key_management_actor_from_ctx, app_from_ctx, auth_runtime_from_ctx,
     default_persist_session_from_ctx, interactive_session_actor_from_ctx,
-    login_verification_required_gql_error, mfa_enrollment_actor_from_ctx,
-    mfa_verification_from_ctx, password_change_required_actor_from_ctx, persist_session_or_default,
+    login_attempt_limiter_from_ctx, login_verification_required_gql_error,
+    mfa_enrollment_actor_from_ctx, mfa_verification_from_ctx,
+    password_change_required_actor_from_ctx, persist_session_or_default,
     require_config_app_permission, to_gql_error, to_login_gql_error,
     to_login_gql_error_after_timing, totp_enrollment_actor_from_ctx,
     totp_management_actor_from_ctx,
@@ -437,12 +438,13 @@ async fn login_payload_from_user(
     mfa_step_up_verified_until: Option<chrono::DateTime<Utc>>,
     persist_session: bool,
     expected_auth_session_version: Option<&Option<String>>,
-    password_change_required: bool,
+    _password_change_required: bool,
 ) -> Result<LoginPayload, Error> {
     let user = app
         .load_user_for_auth_payload(&user)
         .await
         .map_err(to_gql_error)?;
+    let password_change_required = user.password_change_required;
     let token = if password_change_required {
         app.issue_password_change_required_token(
             &user,
@@ -502,13 +504,14 @@ async fn login_mfa_enrollment_payload_from_user(
     app: &scryer_application::AppUseCase,
     user: scryer_domain::User,
     persist_session: bool,
-    password_change_required_after_enrollment: bool,
+    _password_change_required_after_enrollment: bool,
     expected_auth_session_version: &Option<String>,
 ) -> Result<LoginPayload, Error> {
     let user = app
         .load_user_for_auth_payload(&user)
         .await
         .map_err(to_gql_error)?;
+    let password_change_required_after_enrollment = user.password_change_required;
     let token = app
         .issue_mfa_enrollment_token(
             &user,
@@ -2266,13 +2269,36 @@ impl SettingsMutations {
         input: LoginInput,
     ) -> GqlResult<LoginPayload> {
         let app = app_from_ctx(ctx)?;
-        let user = match app
-            .authenticate_credentials(&input.username, &input.password)
+        let principal = LoginAttemptPrincipal::local(&input.username);
+        if let Some(principal) = principal.as_ref()
+            && let Some(limiter) = login_attempt_limiter_from_ctx(ctx)
+        {
+            limiter.check(principal)?;
+        }
+        let verified = match app
+            .authenticate_local_credentials(&input.username, &input.password)
             .await
         {
-            Ok(user) => user,
-            Err(err) => return Err(to_login_gql_error("local", err)),
+            Ok(verified) => {
+                if let Some(principal) = principal.as_ref()
+                    && let Some(limiter) = login_attempt_limiter_from_ctx(ctx)
+                {
+                    limiter.clear_success(principal);
+                }
+                verified
+            }
+            Err(err) => {
+                if matches!(&err, AppError::Unauthorized(_) | AppError::NotFound(_))
+                    && let Some(principal) = principal.as_ref()
+                    && let Some(limiter) = login_attempt_limiter_from_ctx(ctx)
+                {
+                    limiter.record_failure(principal);
+                }
+                return Err(to_login_gql_error("local", err));
+            }
         };
+        let auth_session_version = verified.auth_session_version;
+        let user = verified.user;
         let effective_login_enabled = auth_runtime_from_ctx(ctx)
             .snapshot()
             .effective_form_login_enabled;
@@ -2293,7 +2319,7 @@ impl SettingsMutations {
                 password_login_mfa_required,
                 persist_session,
                 input.totp_code.as_deref(),
-                None,
+                Some(&auth_session_version),
             )
             .await
             .map_err(to_gql_error)?

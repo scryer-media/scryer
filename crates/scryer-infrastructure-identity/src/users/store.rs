@@ -3,7 +3,8 @@ use chrono::Utc;
 use scryer_application::{
     AppError, AppResult, UiDateTimeFormat, UiDefaultLandingView, UiDensity, UiSettings,
     UiSettingsFacet, UiSettingsUpdate, UiSidebarMode, UiTableColumnSetting, UiTableViewMode,
-    UiTheme, UserExternalAccountRepository, UserRepository, UserUiSettingsRepository,
+    UiTheme, UserExternalAccountRepository, UserLoginSnapshot, UserRepository,
+    UserUiSettingsRepository,
 };
 use scryer_domain::{
     AppPermissionMask, ExternalAccountProvider, ExternalAccountStatus, LibraryGrant, User,
@@ -27,6 +28,13 @@ impl UserStore {
 impl UserRepository for UserStore {
     async fn get_by_username(&self, username: &str) -> AppResult<Option<User>> {
         load_user_by_username(self.datastore.read_exec(), username).await
+    }
+
+    async fn get_login_snapshot_by_username(
+        &self,
+        username: &str,
+    ) -> AppResult<Option<UserLoginSnapshot>> {
+        load_user_login_snapshot_by_username(self.datastore.read_exec(), username).await
     }
 
     async fn create(&self, user: User) -> AppResult<User> {
@@ -578,6 +586,26 @@ async fn load_user_by_username(exec: SqlExec<'_, '_>, username: &str) -> AppResu
     )
     .await?;
     row.as_ref().map(row_to_user).transpose()
+}
+
+async fn load_user_login_snapshot_by_username(
+    exec: SqlExec<'_, '_>,
+    username: &str,
+) -> AppResult<Option<UserLoginSnapshot>> {
+    let row = SqlRuntime::fetch_optional(
+        exec,
+        "SELECT id, username, password_hash, password_change_required, account_kind, status, auth_session_version FROM users WHERE username = {}",
+        &[SqlArg::Text(username.to_string())],
+    )
+    .await?;
+    row.as_ref()
+        .map(|row| {
+            Ok(UserLoginSnapshot {
+                user: row_to_user(row)?,
+                auth_session_version: row.opt_text("auth_session_version")?,
+            })
+        })
+        .transpose()
 }
 
 async fn load_user_by_id(exec: SqlExec<'_, '_>, id: &str) -> AppResult<Option<User>> {

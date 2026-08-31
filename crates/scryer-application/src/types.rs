@@ -2645,6 +2645,18 @@ pub struct UserAuthFactorStatus {
     pub has_passkey: bool,
 }
 
+#[derive(Clone, Debug)]
+pub struct UserLoginSnapshot {
+    pub user: scryer_domain::User,
+    pub auth_session_version: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct VerifiedLocalCredentials {
+    pub user: scryer_domain::User,
+    pub auth_session_version: Option<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TotpStatus {
     pub enabled: bool,

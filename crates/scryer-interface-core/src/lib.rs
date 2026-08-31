@@ -150,12 +150,102 @@ pub struct MfaVerification {
     pub oauth_authorization_source: OAuthAuthorizationSource,
 }
 
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+pub enum LoginAttemptPrincipal {
+    Local {
+        username: String,
+    },
+    Jellyfin {
+        connection_id: String,
+        username: String,
+    },
+    Emby {
+        connection_id: String,
+        username: String,
+    },
+}
+
+impl LoginAttemptPrincipal {
+    pub fn local(username: &str) -> Option<Self> {
+        let username = username.trim();
+        (!username.is_empty()).then(|| Self::Local {
+            username: username.to_string(),
+        })
+    }
+
+    pub fn jellyfin(connection_id: &str, username: &str) -> Option<Self> {
+        Self::external(connection_id, username, |connection_id, username| {
+            Self::Jellyfin {
+                connection_id,
+                username,
+            }
+        })
+    }
+
+    pub fn emby(connection_id: &str, username: &str) -> Option<Self> {
+        Self::external(connection_id, username, |connection_id, username| {
+            Self::Emby {
+                connection_id,
+                username,
+            }
+        })
+    }
+
+    fn external(
+        connection_id: &str,
+        username: &str,
+        build: impl FnOnce(String, String) -> Self,
+    ) -> Option<Self> {
+        let connection_id = connection_id.trim();
+        let username = username.trim();
+        (!connection_id.is_empty() && !username.is_empty())
+            .then(|| build(connection_id.to_string(), username.to_ascii_lowercase()))
+    }
+}
+
+#[derive(Clone)]
+pub struct LoginAttemptLimiter {
+    check: Arc<dyn Fn(&LoginAttemptPrincipal) -> GqlResult<()> + Send + Sync>,
+    record_failure: Arc<dyn Fn(&LoginAttemptPrincipal) + Send + Sync>,
+    clear_success: Arc<dyn Fn(&LoginAttemptPrincipal) + Send + Sync>,
+}
+
+impl LoginAttemptLimiter {
+    pub fn new(
+        check: impl Fn(&LoginAttemptPrincipal) -> GqlResult<()> + Send + Sync + 'static,
+        record_failure: impl Fn(&LoginAttemptPrincipal) + Send + Sync + 'static,
+        clear_success: impl Fn(&LoginAttemptPrincipal) + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            check: Arc::new(check),
+            record_failure: Arc::new(record_failure),
+            clear_success: Arc::new(clear_success),
+        }
+    }
+
+    pub fn check(&self, principal: &LoginAttemptPrincipal) -> GqlResult<()> {
+        (self.check)(principal)
+    }
+
+    pub fn record_failure(&self, principal: &LoginAttemptPrincipal) {
+        (self.record_failure)(principal);
+    }
+
+    pub fn clear_success(&self, principal: &LoginAttemptPrincipal) {
+        (self.clear_success)(principal);
+    }
+}
+
 #[derive(Clone)]
 pub struct ApiContext {
     pub app: AppUseCase,
     pub auth_runtime: AuthRuntimeStateHandle,
     pub restore: Option<RestoreContext>,
     pub application_upgrade_assessment: InstallationAssessment,
+}
+
+pub fn login_attempt_limiter_from_ctx<'a>(ctx: &'a Context<'a>) -> Option<&'a LoginAttemptLimiter> {
+    ctx.data_opt::<LoginAttemptLimiter>()
 }
 
 /// Per-HTTP-request session persistence policy. This is intentionally absent

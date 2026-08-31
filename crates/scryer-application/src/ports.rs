@@ -2070,6 +2070,19 @@ pub trait ShowRepository: Send + Sync {
 #[async_trait]
 pub trait UserRepository: Send + Sync {
     async fn get_by_username(&self, username: &str) -> AppResult<Option<User>>;
+    async fn get_login_snapshot_by_username(
+        &self,
+        username: &str,
+    ) -> AppResult<Option<crate::types::UserLoginSnapshot>> {
+        let Some(user) = self.get_by_username(username).await? else {
+            return Ok(None);
+        };
+        let auth_session_version = self.auth_session_version(&user.id).await?;
+        Ok(Some(crate::types::UserLoginSnapshot {
+            user,
+            auth_session_version,
+        }))
+    }
     async fn create(&self, user: User) -> AppResult<User>;
     async fn list_all(&self) -> AppResult<Vec<User>>;
     async fn get_by_id(&self, id: &str) -> AppResult<Option<User>>;
@@ -2839,6 +2852,7 @@ pub trait WebauthnRepository: Send + Sync {
     async fn create_login_verification_challenge(
         &self,
         _challenge: LoginVerificationChallengeRecord,
+        _expected_auth_session_version: &Option<String>,
     ) -> AppResult<LoginVerificationChallengeRecord> {
         Err(AppError::Repository(
             "login verification challenges are not configured".into(),

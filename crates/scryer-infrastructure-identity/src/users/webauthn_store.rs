@@ -422,17 +422,25 @@ impl WebauthnRepository for WebauthnStore {
     async fn create_login_verification_challenge(
         &self,
         challenge: LoginVerificationChallengeRecord,
+        expected_auth_session_version: &Option<String>,
     ) -> AppResult<LoginVerificationChallengeRecord> {
+        let expected_auth_session_version = expected_auth_session_version.clone();
         SqlRuntime::run_in_transaction(
             &self.datastore,
             "create_login_verification_challenge",
             move |tx| {
                 let challenge = challenge.clone();
+                let expected_auth_session_version = expected_auth_session_version.clone();
                 Box::pin(async move {
-                    tx.execute(
+                    let rows = tx.execute(
                         "INSERT INTO login_verification_challenges
                          (id, user_id, login_method, persist_session, allow_passkey, allow_totp, auth_session_version, created_at, expires_at)
-                         VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {})",
+                         SELECT {}, {}, {}, {}, {}, {}, {}, {}, {}
+                           WHERE EXISTS (
+                               SELECT 1 FROM users
+                                WHERE id = {}
+                                  AND (auth_session_version = {} OR (auth_session_version IS NULL AND {} IS NULL))
+                           )",
                         &[
                             SqlArg::Text(challenge.id.clone()),
                             SqlArg::Text(challenge.user_id.clone()),
@@ -443,9 +451,17 @@ impl WebauthnRepository for WebauthnStore {
                             SqlArg::OptText(challenge.auth_session_version.clone()),
                             timestamp_arg(&challenge.created_at)?,
                             timestamp_arg(&challenge.expires_at)?,
+                            SqlArg::Text(challenge.user_id.clone()),
+                            SqlArg::OptText(expected_auth_session_version.clone()),
+                            SqlArg::OptText(expected_auth_session_version),
                         ],
                     )
                     .await?;
+                    if rows == 0 {
+                        return Err(AppError::Unauthorized(
+                            "authentication session was invalidated".into(),
+                        ));
+                    }
                     load_login_verification_challenge_by_id_tx(tx, &challenge.id)
                         .await?
                         .ok_or_else(|| {

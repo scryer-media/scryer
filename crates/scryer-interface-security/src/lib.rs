@@ -3,12 +3,13 @@ use std::time::Instant;
 use async_graphql::{Context, ID, Object, Result as GqlResult};
 use chrono::Utc;
 use scryer_application::{
-    LoginFailureTimingClass, LoginVerificationMethod, LoginVerificationRequirement,
+    AppError, LoginFailureTimingClass, LoginVerificationMethod, LoginVerificationRequirement,
 };
 use scryer_domain::AppPermission;
 
 use scryer_interface_core::{
-    actor_from_ctx, app_from_ctx, auth_runtime_from_ctx, default_persist_session_from_ctx,
+    LoginAttemptPrincipal, actor_from_ctx, app_from_ctx, auth_runtime_from_ctx,
+    default_persist_session_from_ctx, login_attempt_limiter_from_ctx,
     login_verification_required_gql_error, persist_session_or_default,
     require_config_app_permission, to_gql_error, to_login_gql_error_after_timing,
 };
@@ -518,16 +519,32 @@ impl UserMutations {
             input.persist_session,
             default_persist_session_from_ctx(ctx),
         );
+        let connection_id = input.connection_id.to_string();
+        let principal = LoginAttemptPrincipal::jellyfin(&connection_id, &input.username);
+        if let Some(principal) = principal.as_ref()
+            && let Some(limiter) = login_attempt_limiter_from_ctx(ctx)
+        {
+            limiter.check(principal)?;
+        }
         let (user, auth_session_version) = match app
-            .federated_login_with_jellyfin(
-                input.connection_id.to_string(),
-                input.username,
-                input.password,
-            )
+            .federated_login_with_jellyfin(connection_id, input.username, input.password)
             .await
         {
-            Ok(user) => user,
+            Ok(user) => {
+                if let Some(principal) = principal.as_ref()
+                    && let Some(limiter) = login_attempt_limiter_from_ctx(ctx)
+                {
+                    limiter.clear_success(principal);
+                }
+                user
+            }
             Err(err) => {
+                if matches!(&err, AppError::Unauthorized(_) | AppError::NotFound(_))
+                    && let Some(principal) = principal.as_ref()
+                    && let Some(limiter) = login_attempt_limiter_from_ctx(ctx)
+                {
+                    limiter.record_failure(principal);
+                }
                 return Err(to_login_gql_error_after_timing(
                     "jellyfin",
                     LoginFailureTimingClass::FastMasked,
@@ -606,17 +623,37 @@ impl UserMutations {
             input.persist_session,
             default_persist_session_from_ctx(ctx),
         );
+        let connection_id = input.connection_id.to_string();
+        let principal = LoginAttemptPrincipal::emby(&connection_id, &input.username);
+        if let Some(principal) = principal.as_ref()
+            && let Some(limiter) = login_attempt_limiter_from_ctx(ctx)
+        {
+            limiter.check(principal)?;
+        }
         let (user, auth_session_version) = match app
             .federated_login_with_emby(
-                input.connection_id.to_string(),
+                connection_id,
                 emby_connection_mode(input.mode),
                 input.username,
                 input.password,
             )
             .await
         {
-            Ok(user) => user,
+            Ok(user) => {
+                if let Some(principal) = principal.as_ref()
+                    && let Some(limiter) = login_attempt_limiter_from_ctx(ctx)
+                {
+                    limiter.clear_success(principal);
+                }
+                user
+            }
             Err(err) => {
+                if matches!(&err, AppError::Unauthorized(_) | AppError::NotFound(_))
+                    && let Some(principal) = principal.as_ref()
+                    && let Some(limiter) = login_attempt_limiter_from_ctx(ctx)
+                {
+                    limiter.record_failure(principal);
+                }
                 return Err(to_login_gql_error_after_timing(
                     "emby",
                     LoginFailureTimingClass::FastMasked,

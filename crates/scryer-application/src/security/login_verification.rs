@@ -78,11 +78,12 @@ impl AppUseCase {
             expires_at: (now + Duration::minutes(LOGIN_VERIFICATION_CHALLENGE_TTL_MINUTES))
                 .to_rfc3339(),
         };
+        let expected_auth_session_version = challenge.auth_session_version.clone();
         let challenge = self
             .services
             .identity
             .webauthn
-            .create_login_verification_challenge(challenge)
+            .create_login_verification_challenge(challenge, &expected_auth_session_version)
             .await?;
         Ok(LoginVerificationRequirement::Challenge(challenge))
     }

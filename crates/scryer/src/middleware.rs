@@ -24,7 +24,8 @@ use scryer_domain::{ActorCapabilityMask, AppPermissionMask, Id};
 use scryer_interface::RequestLoaders;
 use scryer_interface::context::{
     ApiKeyManagementSession, AuthRuntimeStateHandle, AuthlessDefaultSession, ConnectionAuthEpoch,
-    InteractiveSession, MfaVerification, OAuthActorSession, RequestSessionPersistence,
+    InteractiveSession, LoginAttemptLimiter, MfaVerification, OAuthActorSession,
+    RequestSessionPersistence,
 };
 use scryer_logging::{ActorContext, LogContext, RequestContext, context_span, update_context};
 use std::collections::HashMap;
@@ -42,8 +43,8 @@ use crate::base_path::BasePath;
 use crate::http_error::ErrorResponse;
 use crate::rate_limit::{
     HttpRateLimitClass, RateLimitKey, ScryerRateLimiter, analyze_authentication_request,
-    classify_graphql, classify_graphql_request, rate_limited_graphql_response,
-    rate_limited_graphql_single_response,
+    classify_graphql, classify_graphql_request, rate_limited_graphql_error,
+    rate_limited_graphql_response, rate_limited_graphql_single_response,
 };
 
 const X_FORWARDED_PROTO: &str = "x-forwarded-proto";
@@ -1103,16 +1104,16 @@ pub(crate) async fn graphql_ws_handler(
             let oauth_session_for_init = oauth_session_for_init.clone();
             let rate_limit_user_id_for_init = rate_limit_user_id_for_init.clone();
             let rate_limiter = rate_limiter.clone();
-            let executor = ContextualGraphqlExecutor::new(
+            let executor = ContextualGraphqlExecutor::new(ContextualGraphqlExecutorConfig {
                 schema,
-                app.clone(),
-                connection_context.clone(),
+                app: app.clone(),
+                connection_context: connection_context.clone(),
                 oauth_session,
                 rate_limit_user_id,
                 rate_limiter,
                 client_ip,
                 peer_ip,
-            );
+            });
             GraphQLWebSocket::new(stream, executor, protocol)
                 .with_data(initial_data)
                 .on_connection_init(move |value: serde_json::Value| {
@@ -1185,26 +1186,28 @@ struct ContextualGraphqlExecutor {
     peer_ip: IpAddr,
 }
 
+struct ContextualGraphqlExecutorConfig {
+    schema: scryer_interface::ApiSchema,
+    app: AppUseCase,
+    connection_context: Arc<StdRwLock<LogContext>>,
+    oauth_session: Arc<StdRwLock<Option<OAuthActorSession>>>,
+    rate_limit_user_id: Arc<StdRwLock<Option<String>>>,
+    rate_limiter: ScryerRateLimiter,
+    client_ip: IpAddr,
+    peer_ip: IpAddr,
+}
+
 impl ContextualGraphqlExecutor {
-    fn new(
-        schema: scryer_interface::ApiSchema,
-        app: AppUseCase,
-        connection_context: Arc<StdRwLock<LogContext>>,
-        oauth_session: Arc<StdRwLock<Option<OAuthActorSession>>>,
-        rate_limit_user_id: Arc<StdRwLock<Option<String>>>,
-        rate_limiter: ScryerRateLimiter,
-        client_ip: IpAddr,
-        peer_ip: IpAddr,
-    ) -> Self {
+    fn new(config: ContextualGraphqlExecutorConfig) -> Self {
         Self {
-            schema,
-            app,
-            connection_context,
-            oauth_session,
-            rate_limit_user_id,
-            rate_limiter,
-            client_ip,
-            peer_ip,
+            schema: config.schema,
+            app: config.app,
+            connection_context: config.connection_context,
+            oauth_session: config.oauth_session,
+            rate_limit_user_id: config.rate_limit_user_id,
+            rate_limiter: config.rate_limiter,
+            client_ip: config.client_ip,
+            peer_ip: config.peer_ip,
         }
     }
 
@@ -1221,6 +1224,25 @@ impl ContextualGraphqlExecutor {
         }
         context
     }
+}
+
+fn login_attempt_limiter(
+    rate_limiter: ScryerRateLimiter,
+    rate_limit_key: RateLimitKey,
+) -> LoginAttemptLimiter {
+    let check_limiter = rate_limiter.clone();
+    let check_key = rate_limit_key.clone();
+    let record_limiter = rate_limiter.clone();
+    let record_key = rate_limit_key;
+    LoginAttemptLimiter::new(
+        move |principal| {
+            check_limiter
+                .check_login_principal(&check_key, principal)
+                .map_err(|decision| rate_limited_graphql_error(&decision))
+        },
+        move |principal| record_limiter.record_login_principal_failure(&record_key, principal),
+        move |principal| rate_limiter.clear_login_principal_failures(principal),
+    )
 }
 
 impl Executor for ContextualGraphqlExecutor {
@@ -1246,7 +1268,7 @@ impl Executor for ContextualGraphqlExecutor {
                 return authentication_mutation_single_field_response();
             }
             let principal = authentication.principal;
-            if let Some(principal) = principal.as_deref()
+            if let Some(principal) = principal.as_ref()
                 && let Err(decision) =
                     rate_limiter.check_login_principal(&rate_limit_key, principal)
             {
@@ -1264,15 +1286,9 @@ impl Executor for ContextualGraphqlExecutor {
             {
                 return oauth_access_revoked_response();
             }
-            let response = schema.execute(request).await;
-            if let Some(principal) = principal.as_deref() {
-                if response_has_error_code(&response, "LOGIN_FAILED") {
-                    rate_limiter.record_login_principal_failure(&rate_limit_key, principal);
-                } else {
-                    rate_limiter.clear_login_principal_failures(principal);
-                }
-            }
-            response
+            schema
+                .execute(request.data(login_attempt_limiter(rate_limiter, rate_limit_key)))
+                .await
         }
         .instrument(span)
     }
@@ -1299,7 +1315,7 @@ impl Executor for ContextualGraphqlExecutor {
             self.peer_ip,
             rate_limit_user_id.as_deref(),
         );
-        if let Some(principal) = authentication.principal.as_deref()
+        if let Some(principal) = authentication.principal.as_ref()
             && let Err(decision) = self
                 .rate_limiter
                 .check_login_principal(&rate_limit_key, principal)
@@ -1316,6 +1332,10 @@ impl Executor for ContextualGraphqlExecutor {
                 rate_limited_graphql_single_response(&decision)
             }));
         }
+        let request = request.data(login_attempt_limiter(
+            self.rate_limiter.clone(),
+            rate_limit_key,
+        ));
         let app = self.app.clone();
         let oauth_session = self.oauth_session.clone();
         Box::pin(ContextualGraphqlResponseStream {
@@ -1504,7 +1524,7 @@ pub(crate) async fn graphql_handler(
         .any(|analysis| analysis.class.is_some());
     let rate_limit_key = RateLimitKey::for_client_and_peer(client_ip, peer_ip, None);
     for (request, authentication) in batch.iter().zip(&authentication_requests) {
-        if let Some(principal) = authentication.principal.as_deref()
+        if let Some(principal) = authentication.principal.as_ref()
             && let Err(decision) = state
                 .rate_limiter
                 .check_login_principal(&rate_limit_key, principal)
@@ -1561,6 +1581,7 @@ pub(crate) async fn graphql_handler(
     let session_persistence = RequestSessionPersistence {
         default_persist_session: default_persist_session_for_request(&headers, Some(remote_addr)),
     };
+    let login_attempt_limiter = login_attempt_limiter(state.rate_limiter.clone(), rate_limit_key);
     if let Some(actor) = actor.as_ref()
         && !has_authentication_request
         && let Err(decision) = state.rate_limiter.check_graphql(
@@ -1630,18 +1651,20 @@ pub(crate) async fn graphql_handler(
     };
 
     let batch = match batch {
-        async_graphql::BatchRequest::Single(req) => {
-            async_graphql::BatchRequest::Single(req.data(session_persistence))
-        }
+        async_graphql::BatchRequest::Single(req) => async_graphql::BatchRequest::Single(
+            req.data(session_persistence).data(login_attempt_limiter),
+        ),
         async_graphql::BatchRequest::Batch(reqs) => async_graphql::BatchRequest::Batch(
             reqs.into_iter()
-                .map(|req| req.data(session_persistence))
+                .map(|req| {
+                    req.data(session_persistence)
+                        .data(login_attempt_limiter.clone())
+                })
                 .collect(),
         ),
     };
 
     let schema = state.schema.clone();
-    let rate_limiter = state.rate_limiter.clone();
     let execution_timeout = graphql_post_execution_timeout();
     let batch_response = match tokio::time::timeout(
         execution_timeout,
@@ -1661,12 +1684,6 @@ pub(crate) async fn graphql_handler(
             graphql_execution_timeout_response()
         }
     };
-    update_login_principal_failures(
-        &rate_limiter,
-        &rate_limit_key,
-        &authentication_requests,
-        &batch_response,
-    );
     if let Err(error) = state
         .app
         .image_proxy_repository()
@@ -1840,38 +1857,6 @@ fn response_has_error_code(response: &GraphQLResponse, code: &str) -> bool {
         };
         matches!(extensions.get("code"), Some(async_graphql::Value::String(value)) if value == code)
     })
-}
-
-fn update_login_principal_failures(
-    rate_limiter: &ScryerRateLimiter,
-    rate_limit_key: &RateLimitKey,
-    analyses: &[crate::rate_limit::AuthenticationRequestAnalysis],
-    response: &async_graphql::BatchResponse,
-) {
-    let apply = |analysis: &crate::rate_limit::AuthenticationRequestAnalysis,
-                 response: &GraphQLResponse| {
-        let Some(principal) = analysis.principal.as_deref() else {
-            return;
-        };
-        if response_has_error_code(response, "LOGIN_FAILED") {
-            rate_limiter.record_login_principal_failure(rate_limit_key, principal);
-        } else {
-            rate_limiter.clear_login_principal_failures(principal);
-        }
-    };
-
-    match response {
-        async_graphql::BatchResponse::Single(response) => {
-            if let Some(analysis) = analyses.first() {
-                apply(analysis, response);
-            }
-        }
-        async_graphql::BatchResponse::Batch(responses) => {
-            for (analysis, response) in analyses.iter().zip(responses) {
-                apply(analysis, response);
-            }
-        }
-    }
 }
 
 fn graphql_execution_timeout_response() -> async_graphql::BatchResponse {

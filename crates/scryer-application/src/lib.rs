@@ -611,9 +611,9 @@ pub use types::{
     TotpEnrollmentComplete, TotpEnrollmentStart, TotpFailedAttemptRecord, TotpRecoveryCodeRecord,
     TotpStatus, UiDateTimeFormat, UiDefaultLandingView, UiDensity, UiSettings, UiSettingsFacet,
     UiSettingsUpdate, UiSidebarMode, UiTableColumnSetting, UiTableViewMode, UiTheme,
-    UpdateRecycleBinSettings, UserAuthFactorStatus, WantedKind, WantedStatusCount,
-    WebauthnChallengePurpose, WebauthnChallengeRecord, WebauthnChallengeStart,
-    WebauthnChallengeType, WebauthnCredentialRecord,
+    UpdateRecycleBinSettings, UserAuthFactorStatus, UserLoginSnapshot, VerifiedLocalCredentials,
+    WantedKind, WantedStatusCount, WebauthnChallengePurpose, WebauthnChallengeRecord,
+    WebauthnChallengeStart, WebauthnChallengeType, WebauthnCredentialRecord,
 };
 pub use types::{
     CapturedIndexerHttpHeader, CapturedIndexerHttpResponse, INDEXER_CAPS_REFRESH_ERROR_PREFIX,

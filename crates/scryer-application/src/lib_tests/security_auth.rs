@@ -1880,7 +1880,7 @@ async fn passkey_management_requires_enabled_form_login() {
 }
 
 #[tokio::test]
-async fn disabled_user_cannot_start_passkey_authentication() {
+async fn disabled_user_passkey_start_remains_discoverable() {
     let users = Arc::new(MockUserRepo::default());
     let mut user = User::with_password_hash("disabled_passkey", TEST_PASSWORD_HASH);
     user.set_login_status(scryer_domain::UserLoginStatus::Disabled);
@@ -1894,10 +1894,11 @@ async fn disabled_user_cannot_start_passkey_authentication() {
         .expect("valid WebAuthn runtime");
     app.webauthn = services::RuntimeFeature::enabled(Arc::new(webauthn));
 
-    let result = app
+    let challenge = app
         .webauthn_authenticate_start(Some(&user.username), true)
-        .await;
-    assert!(matches!(result, Err(AppError::Unauthorized(_))));
+        .await
+        .expect("discoverable authentication start should not enumerate disabled users");
+    assert!(!challenge.challenge_id.is_empty());
 }
 
 #[tokio::test]
