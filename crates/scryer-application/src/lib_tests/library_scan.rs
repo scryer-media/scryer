@@ -7428,12 +7428,13 @@ async fn background_hydration_completes_without_inline_recommendation_refresh() 
 }
 
 #[tokio::test]
-async fn interactive_hydration_refreshes_recommendations_inline() {
+async fn interactive_hydration_queues_recommendations_off_the_hydration_path() {
     let recommendation_calls = Arc::new(AtomicUsize::new(0));
+    let recommendation_release = Arc::new(Notify::new());
     let metadata_gateway = Arc::new(CountingRecommendationMetadataGateway {
         movies: HashMap::from([(91_602, make_movie_metadata(91_602, "Hydrated Movie"))]),
         title_recommendation_calls: Arc::clone(&recommendation_calls),
-        recommendation_release: None,
+        recommendation_release: Some(Arc::clone(&recommendation_release)),
     });
     let (app, _user, titles) = bootstrap_with_metadata_gateway_and_titles(metadata_gateway);
     let title = make_due_hydration_title("movie-interactive-hydration", MediaFacet::Movie, 91_602);
@@ -7441,21 +7442,33 @@ async fn interactive_hydration_refreshes_recommendations_inline() {
         .await
         .expect("seed due movie title");
 
-    app.hydrate_titles_bulk(vec![crate::catalog_workflow::HydrationTarget {
-        title,
-        requested_tvdb_id: None,
-        requested_movie_ref: None,
-        sync_wanted_after_completion: false,
-        source: crate::catalog_workflow::HydrationSource::Interactive,
-    }])
+    timeout(
+        Duration::from_secs(2),
+        app.hydrate_titles_bulk(vec![crate::catalog_workflow::HydrationTarget {
+            title,
+            requested_tvdb_id: None,
+            requested_movie_ref: None,
+            sync_wanted_after_completion: false,
+            source: crate::catalog_workflow::HydrationSource::Interactive,
+        }]),
+    )
     .await
+    .expect("interactive hydration should not wait for recommendation refresh")
     .expect("hydrate title");
 
+    timeout(Duration::from_secs(2), async {
+        while recommendation_calls.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("queued recommendation refresh should reach the metadata gateway");
     assert_eq!(
         recommendation_calls.load(Ordering::SeqCst),
         1,
-        "interactive hydration should keep recommendation refresh inline"
+        "interactive hydration should queue one recommendation refresh"
     );
+    recommendation_release.notify_one();
 }
 
 #[tokio::test]

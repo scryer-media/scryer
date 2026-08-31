@@ -12,6 +12,7 @@ use scryer_application::{
     DiscoverySourceTagRecord, DiscoverySubmittedSubjectRecord, DiscoverySyncRunRecord,
     DiscoverySyncStateRecord, TitleRatingSummary,
 };
+use scryer_infrastructure_sql::json::{decode_compressed_json, encode_compressed_json};
 use serde_json::Value as JsonValue;
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
@@ -41,9 +42,13 @@ const DISCOVERY_SYNC_STATE_COLUMNS: &str = "scope_key, last_success_generation_i
 const DISCOVERY_SYNC_RUN_COLUMNS: &str = "id, kind, status, trigger_source, region, language,
     subject_count, subject_fingerprint, previous_subject_fingerprint, base_generation_id,
     changed_subject_count, affected_target_count, smg_request_id, smg_status,
-    discovery_index_watermark, page_count, item_count, facet_count, raw_submit_json,
-    raw_changes_json, raw_final_status_json, raw_ack_json, error_text, started_at, completed_at,
+    discovery_index_watermark, page_count, item_count, facet_count, acknowledged_at,
+    error_text, started_at, completed_at,
     created_at, updated_at";
+
+const DISCOVERY_INDEXED_TITLE_LIMIT: usize = 1_000;
+const TITLE_RECOMMENDATION_CARD_LIMIT: usize = 24;
+const TITLE_RECOMMENDATION_PAYLOAD_VERSION: i32 = 1;
 
 const PENDING_CONTEXT_CHANGE_COLUMNS: &str = "id, scope_key, subject_key, previous_subject_key,
     change_type, title_id, previous_title_id, library_facet, raw_subject_json,
@@ -319,7 +324,7 @@ impl DiscoveryRepository for DiscoveryStore {
                  WHERE kind = 'context_snapshot'
                    AND status IN ('complete', 'warning')
                    AND smg_request_id IS NOT NULL
-                   AND raw_ack_json IS NULL
+                   AND acknowledged_at IS NULL
                  ORDER BY COALESCE(completed_at, updated_at, created_at) ASC,
                           created_at ASC
                  LIMIT {{}}"
@@ -390,6 +395,8 @@ impl DiscoveryRepository for DiscoveryStore {
                         .await?;
                     }
 
+                    enforce_discovery_indexed_title_limit_tx(tx, &commit.state.scope_key).await?;
+
                     Ok(())
                 })
             },
@@ -434,6 +441,7 @@ impl DiscoveryRepository for DiscoveryStore {
                         )
                         .await?;
                     }
+                    enforce_discovery_indexed_title_limit_tx(tx, &commit.state.scope_key).await?;
                     Ok(())
                 })
             },
@@ -535,6 +543,7 @@ impl DiscoveryRepository for DiscoveryStore {
                             );
                         })?;
                 }
+                enforce_discovery_indexed_title_limit_tx(tx, &commit.state.scope_key).await?;
                 Ok(())
             })
         })
@@ -1021,23 +1030,25 @@ impl DiscoveryRepository for DiscoveryStore {
         let datastore = self.datastore.clone();
         let title_id = title_id.to_string();
         let language = normalize_discovery_language(language);
-        let items = items.to_vec();
+        let mut items = items
+            .iter()
+            .take(TITLE_RECOMMENDATION_CARD_LIMIT)
+            .cloned()
+            .collect::<Vec<_>>();
+        enrich_recommendation_items_from_normalized(&datastore, &language, &mut items).await?;
         SqlRuntime::run_in_transaction(
             &self.datastore,
             "replace_title_more_like_this_items",
             move |tx| {
-                let datastore = datastore.clone();
                 let title_id = title_id.clone();
                 let language = language.clone();
                 let items = items.clone();
                 Box::pin(async move {
                     delete_title_more_like_this_items_tx(tx, &title_id).await?;
                     for item in &items {
-                        insert_title_more_like_this_item_tx(
-                            tx, &datastore, &title_id, item, &language,
-                        )
-                        .await?;
+                        insert_title_more_like_this_item_tx(tx, &title_id, item, &language).await?;
                     }
+                    delete_orphan_title_recommendation_cards_tx(tx).await?;
                     delete_unreferenced_discovery_titles_tx(tx).await?;
                     Ok(())
                 })
@@ -1053,35 +1064,50 @@ impl DiscoveryRepository for DiscoveryStore {
     ) -> AppResult<Vec<DiscoveryItemRecord>> {
         let rows = SqlRuntime::fetch_all(
             self.datastore.read_exec(),
-            &format!(
-                "SELECT {}
-                 FROM title_more_like_this_items
-                 JOIN discovery_titles t
-                   ON t.id = title_more_like_this_items.discovery_title_id
-                 WHERE source_title_id = {{}}
-                   AND {}
-                 ORDER BY sort_index ASC,
-                          COALESCE(rank_score, 0) DESC,
-                          discovery_title_id ASC
-                 LIMIT {{}}",
-                title_more_like_this_projection(&self.datastore),
-                displayable_discovery_title_clause(&self.datastore, "t")
-            ),
+            "SELECT m.source_title_id, m.discovery_title_id, m.sort_index, m.rank_score,
+                    m.best_source, m.source_count, m.edge_count, m.relation_count,
+                    m.source_subject_count, m.created_at, m.updated_at,
+                    c.payload_version, c.payload_blob
+                 FROM title_more_like_this_items m
+                 JOIN title_recommendation_cards c
+                   ON c.discovery_title_id = m.discovery_title_id
+                 WHERE m.source_title_id = {}
+                 ORDER BY m.sort_index ASC,
+                          COALESCE(m.rank_score, 0) DESC,
+                          m.discovery_title_id ASC
+                 LIMIT {}",
             &[
                 SqlArg::Text(title_id.to_string()),
                 SqlArg::I64(limit.clamp(0, 100)),
             ],
         )
         .await?;
-        let mut items = rows
+        let needs_legacy = rows
             .iter()
-            .map(item_from_row)
-            .collect::<AppResult<Vec<_>>>()?;
-        let title_ids = rows
-            .iter()
-            .map(|row| row.text("discovery_title_id"))
-            .collect::<AppResult<Vec<_>>>()?;
-        hydrate_discovery_title_children(&self.datastore, &mut items, &title_ids).await?;
+            .any(|row| row.opt_bytes("payload_blob").ok().flatten().is_none());
+        let mut legacy_by_item_id = if needs_legacy {
+            legacy_title_more_like_this_items(&self.datastore, title_id, limit)
+                .await?
+                .into_iter()
+                .map(|item| (item.id.clone(), item))
+                .collect::<HashMap<_, _>>()
+        } else {
+            HashMap::new()
+        };
+
+        let mut items = Vec::with_capacity(rows.len());
+        for row in &rows {
+            let item_id = format!(
+                "{}:more-like-this:{}",
+                row.text("source_title_id")?,
+                row.text("discovery_title_id")?
+            );
+            let item =
+                recommendation_item_from_row(row)?.or_else(|| legacy_by_item_id.remove(&item_id));
+            if let Some(item) = item.filter(recommendation_item_is_displayable) {
+                items.push(item);
+            }
+        }
         Ok(items)
     }
 
@@ -1134,6 +1160,7 @@ impl DiscoveryRepository for DiscoveryStore {
         retain_successful_per_kind: usize,
         diagnostic_cutoff: DateTime<Utc>,
     ) -> AppResult<DiscoveryPruneReport> {
+        backfill_title_recommendation_cards(&self.datastore).await?;
         // Prune runs from the housekeeping job, NOT under the
         // discovery sync lease, so it can race a concurrent commit. The whole
         // candidate read + keep-set decision + delete loop now runs inside one
@@ -1208,6 +1235,13 @@ impl DiscoveryRepository for DiscoveryStore {
 
                     let mut retained_successful_by_kind = HashMap::<String, usize>::new();
                     for candidate in &candidates {
+                        if keep_ids.contains(&candidate.id)
+                            && discovery_run_status_is_successful(&candidate.status)
+                        {
+                            retained_successful_by_kind.insert(candidate.kind.clone(), 1);
+                        }
+                    }
+                    for candidate in &candidates {
                         if discovery_run_status_is_successful(&candidate.status) {
                             let retained = retained_successful_by_kind
                                 .entry(candidate.kind.clone())
@@ -1241,6 +1275,8 @@ impl DiscoveryRepository for DiscoveryStore {
                         )
                         .await?;
                     }
+                    enforce_discovery_indexed_title_limit_tx(tx, &scope_key).await?;
+                    delete_orphan_title_recommendation_cards_tx(tx).await?;
                     delete_unreferenced_discovery_titles_tx(tx).await?;
 
                     Ok(runs_deleted)
@@ -1274,6 +1310,121 @@ fn keep_optional_id(keep_ids: &mut HashSet<String>, id: Option<&str>) {
     if let Some(id) = id {
         keep_ids.insert(id.to_string());
     }
+}
+
+async fn enforce_discovery_indexed_title_limit_tx(
+    tx: &mut SqlTx<'_>,
+    scope_key: &str,
+) -> AppResult<()> {
+    let Some(state) = SqlRuntime::fetch_optional(
+        SqlExec::Tx(tx),
+        "SELECT last_success_generation_id, last_public_feed_generation_id
+         FROM discovery_sync_state
+         WHERE scope_key = {}",
+        &[SqlArg::Text(scope_key.to_string())],
+    )
+    .await?
+    else {
+        return Ok(());
+    };
+
+    let context_run_id = state.opt_text("last_success_generation_id")?;
+    let public_run_id = state.opt_text("last_public_feed_generation_id")?;
+    let mut keep_title_ids = HashSet::new();
+
+    if let Some(public_run_id) = public_run_id.as_deref() {
+        for row in SqlRuntime::fetch_all(
+            SqlExec::Tx(tx),
+            "SELECT DISTINCT discovery_title_id
+             FROM discovery_items
+             WHERE run_id = {}",
+            &[SqlArg::Text(public_run_id.to_string())],
+        )
+        .await?
+        {
+            keep_title_ids.insert(row.text("discovery_title_id")?);
+        }
+    }
+
+    if keep_title_ids.len() < DISCOVERY_INDEXED_TITLE_LIMIT
+        && let Some(context_run_id) = context_run_id.as_deref()
+    {
+        let candidates = SqlRuntime::fetch_all(
+            SqlExec::Tx(tx),
+            "SELECT discovery_title_id,
+                        MIN(CASE WHEN owned_in_input = FALSE THEN 0 ELSE 1 END) AS owned_rank,
+                        MAX(COALESCE(rank_score, 0)) AS best_rank_score,
+                        MAX(matched_subject_count) AS best_matched_subject_count,
+                        MAX(COALESCE(source_count, 0)) AS best_source_count
+                 FROM discovery_items
+                 WHERE tombstoned_at IS NULL
+                   AND (run_id = {} OR base_generation_id = {})
+                 GROUP BY discovery_title_id
+                 ORDER BY owned_rank ASC,
+                          best_rank_score DESC,
+                          best_matched_subject_count DESC,
+                          best_source_count DESC,
+                          discovery_title_id ASC",
+            &[
+                SqlArg::Text(context_run_id.to_string()),
+                SqlArg::Text(context_run_id.to_string()),
+            ],
+        )
+        .await?;
+        for candidate in candidates {
+            if keep_title_ids.len() >= DISCOVERY_INDEXED_TITLE_LIMIT {
+                break;
+            }
+            keep_title_ids.insert(candidate.text("discovery_title_id")?);
+        }
+    }
+
+    let mut active_args = Vec::new();
+    let mut active_clauses = Vec::new();
+    if let Some(public_run_id) = public_run_id.as_deref() {
+        active_clauses.push("run_id = {}".to_string());
+        active_args.push(SqlArg::Text(public_run_id.to_string()));
+    }
+    if let Some(context_run_id) = context_run_id.as_deref() {
+        active_clauses.push("(run_id = {} OR base_generation_id = {})".to_string());
+        active_args.push(SqlArg::Text(context_run_id.to_string()));
+        active_args.push(SqlArg::Text(context_run_id.to_string()));
+    }
+    if active_clauses.is_empty() {
+        return Ok(());
+    }
+
+    let active_rows = SqlRuntime::fetch_all(
+        SqlExec::Tx(tx),
+        &format!(
+            "SELECT id, discovery_title_id
+             FROM discovery_items
+             WHERE {}",
+            active_clauses.join(" OR ")
+        ),
+        &active_args,
+    )
+    .await?;
+    let mut delete_item_ids = Vec::new();
+    for row in active_rows {
+        if !keep_title_ids.contains(&row.text("discovery_title_id")?) {
+            delete_item_ids.push(row.text("id")?);
+        }
+    }
+    for chunk in delete_item_ids.chunks(500) {
+        let args = chunk.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>();
+        SqlRuntime::execute(
+            SqlExec::Tx(tx),
+            &format!(
+                "DELETE FROM discovery_items WHERE id IN ({})",
+                placeholders(args.len())
+            ),
+            &args,
+        )
+        .await?;
+    }
+    delete_unreferenced_discovery_titles_tx(tx).await?;
+    Ok(())
 }
 
 fn discovery_run_status_is_successful(status: &str) -> bool {
@@ -1487,6 +1638,310 @@ fn title_more_like_this_projection(datastore: &StoreDatastore) -> String {
         "t.id AS discovery_title_id".to_string(),
     ]
     .join(", ")
+}
+
+async fn legacy_title_more_like_this_items(
+    datastore: &StoreDatastore,
+    title_id: &str,
+    limit: i64,
+) -> AppResult<Vec<DiscoveryItemRecord>> {
+    let rows = SqlRuntime::fetch_all(
+        datastore.read_exec(),
+        &format!(
+            "SELECT {}
+             FROM title_more_like_this_items
+             JOIN discovery_titles t
+               ON t.id = title_more_like_this_items.discovery_title_id
+             WHERE source_title_id = {{}}
+               AND EXISTS (
+                   SELECT 1
+                   FROM title_recommendation_cards c
+                   WHERE c.discovery_title_id = title_more_like_this_items.discovery_title_id
+                     AND c.payload_blob IS NULL
+               )
+               AND {}
+             ORDER BY sort_index ASC,
+                      COALESCE(rank_score, 0) DESC,
+                      title_more_like_this_items.discovery_title_id ASC
+             LIMIT {{}}",
+            title_more_like_this_projection(datastore),
+            displayable_discovery_title_clause(datastore, "t")
+        ),
+        &[
+            SqlArg::Text(title_id.to_string()),
+            SqlArg::I64(limit.clamp(0, 100)),
+        ],
+    )
+    .await?;
+    let mut items = rows
+        .iter()
+        .map(item_from_row)
+        .collect::<AppResult<Vec<_>>>()?;
+    let title_ids = discovery_title_ids_from_rows(&rows)?;
+    hydrate_discovery_title_children(datastore, &mut items, &title_ids).await?;
+    Ok(items)
+}
+
+async fn backfill_title_recommendation_cards(datastore: &StoreDatastore) -> AppResult<()> {
+    let rows = SqlRuntime::fetch_all(
+        datastore.read_exec(),
+        &format!(
+            "SELECT {}
+             FROM title_more_like_this_items
+             JOIN discovery_titles t
+               ON t.id = title_more_like_this_items.discovery_title_id
+             WHERE EXISTS (
+                 SELECT 1
+                 FROM title_recommendation_cards c
+                 WHERE c.discovery_title_id = title_more_like_this_items.discovery_title_id
+                   AND c.payload_blob IS NULL
+             )
+             ORDER BY title_more_like_this_items.discovery_title_id ASC,
+                      source_title_id ASC",
+            title_more_like_this_projection(datastore)
+        ),
+        &[],
+    )
+    .await?;
+    if rows.is_empty() {
+        return Ok(());
+    }
+
+    let mut items = rows
+        .iter()
+        .map(item_from_row)
+        .collect::<AppResult<Vec<_>>>()?;
+    let title_ids = discovery_title_ids_from_rows(&rows)?;
+    hydrate_discovery_title_children(datastore, &mut items, &title_ids).await?;
+
+    let mut seen = HashSet::new();
+    let cards = title_ids
+        .into_iter()
+        .zip(items)
+        .filter(|(discovery_title_id, _)| seen.insert(discovery_title_id.clone()))
+        .collect::<Vec<_>>();
+    let cards = std::sync::Arc::new(cards);
+    SqlRuntime::run_in_transaction(
+        datastore,
+        "backfill_title_recommendation_cards",
+        move |tx| {
+            let cards = std::sync::Arc::clone(&cards);
+            Box::pin(async move {
+                for (discovery_title_id, item) in cards.iter() {
+                    upsert_title_recommendation_card_tx(tx, discovery_title_id, item).await?;
+                }
+                Ok(())
+            })
+        },
+    )
+    .await
+}
+
+async fn enrich_recommendation_items_from_normalized(
+    datastore: &StoreDatastore,
+    language: &str,
+    items: &mut [DiscoveryItemRecord],
+) -> AppResult<()> {
+    if items.is_empty() {
+        return Ok(());
+    }
+    let requested_title_ids = items
+        .iter()
+        .map(|item| {
+            discovery_title_id_for(
+                &discovery_title_target_key_norm(item),
+                &normalize_discovery_language(language),
+            )
+        })
+        .collect::<Vec<_>>();
+    let rows = fetch_child_rows(
+        datastore,
+        &format!(
+            "SELECT {}
+             FROM discovery_items i
+             JOIN discovery_titles t ON t.id = i.discovery_title_id
+             WHERE i.discovery_title_id IN ({{}})
+             ORDER BY i.updated_at DESC, i.id ASC",
+            discovery_item_projection(datastore, "i", "t")
+        ),
+        &requested_title_ids,
+    )
+    .await?;
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let mut normalized_items = rows
+        .iter()
+        .map(item_from_row)
+        .collect::<AppResult<Vec<_>>>()?;
+    let normalized_title_ids = discovery_title_ids_from_rows(&rows)?;
+    hydrate_discovery_title_children(datastore, &mut normalized_items, &normalized_title_ids)
+        .await?;
+    let mut normalized_by_title_id = HashMap::new();
+    for (discovery_title_id, item) in normalized_title_ids.into_iter().zip(normalized_items) {
+        normalized_by_title_id
+            .entry(discovery_title_id)
+            .or_insert(item);
+    }
+    for (item, discovery_title_id) in items.iter_mut().zip(requested_title_ids) {
+        if let Some(normalized) = normalized_by_title_id.get(&discovery_title_id) {
+            merge_recommendation_item_from_normalized(item, normalized);
+        }
+    }
+    Ok(())
+}
+
+fn merge_recommendation_item_from_normalized(
+    item: &mut DiscoveryItemRecord,
+    normalized: &DiscoveryItemRecord,
+) {
+    if !useful_recommendation_title(&item.display_title) {
+        item.display_title.clone_from(&normalized.display_title);
+    }
+    if item.target_kind.trim().is_empty() {
+        item.target_kind.clone_from(&normalized.target_kind);
+    }
+    item.resolved |= normalized.resolved;
+    fill_missing(&mut item.resolved_title_id, &normalized.resolved_title_id);
+    fill_missing(&mut item.original_title, &normalized.original_title);
+    fill_missing(&mut item.sort_title, &normalized.sort_title);
+    fill_missing(&mut item.year, &normalized.year);
+    fill_missing(&mut item.poster_path, &normalized.poster_path);
+    fill_missing(&mut item.poster_url, &normalized.poster_url);
+    fill_missing(&mut item.background_url, &normalized.background_url);
+    fill_missing(&mut item.overview, &normalized.overview);
+    fill_missing(&mut item.content_type, &normalized.content_type);
+    fill_missing(&mut item.rating, &normalized.rating);
+    fill_missing(&mut item.tmdb_collection_id, &normalized.tmdb_collection_id);
+    fill_missing(
+        &mut item.tmdb_collection_name,
+        &normalized.tmdb_collection_name,
+    );
+    fill_missing(&mut item.studio_slug, &normalized.studio_slug);
+    item.is_adult |= normalized.is_adult;
+    fill_empty(&mut item.canonical_tags, &normalized.canonical_tags);
+    fill_empty(&mut item.content_ratings, &normalized.content_ratings);
+    fill_empty(&mut item.rating_sources, &normalized.rating_sources);
+    fill_empty(&mut item.external_ratings, &normalized.external_ratings);
+    fill_empty(&mut item.external_ids, &normalized.external_ids);
+    fill_empty(&mut item.status_tags, &normalized.status_tags);
+    fill_empty(&mut item.source_tags, &normalized.source_tags);
+    fill_empty(&mut item.sources, &normalized.sources);
+    fill_empty(&mut item.relation_types, &normalized.relation_types);
+    fill_empty(&mut item.relation_subtypes, &normalized.relation_subtypes);
+    fill_empty(&mut item.chart_signals, &normalized.chart_signals);
+    fill_empty(&mut item.provider_signals, &normalized.provider_signals);
+    fill_empty(&mut item.person_ids, &normalized.person_ids);
+    fill_empty(&mut item.facet_terms, &normalized.facet_terms);
+    fill_empty(&mut item.context_terms, &normalized.context_terms);
+}
+
+fn fill_missing<T: Clone>(target: &mut Option<T>, source: &Option<T>) {
+    if target.is_none() {
+        target.clone_from(source);
+    }
+}
+
+fn fill_empty<T: Clone>(target: &mut Vec<T>, source: &[T]) {
+    if target.is_empty() {
+        target.extend_from_slice(source);
+    }
+}
+
+fn recommendation_item_from_row(row: &SqlRow) -> AppResult<Option<DiscoveryItemRecord>> {
+    let payload_version = row.i32("payload_version")?;
+    if payload_version != TITLE_RECOMMENDATION_PAYLOAD_VERSION {
+        tracing::warn!(
+            discovery_title_id = %row.text("discovery_title_id")?,
+            payload_version,
+            "skipping recommendation card with unsupported payload version"
+        );
+        return Ok(None);
+    }
+    let Some(payload_blob) = row.opt_bytes("payload_blob")? else {
+        return Ok(None);
+    };
+    let mut item = match decode_compressed_json::<DiscoveryItemRecord>(&payload_blob) {
+        Ok(item) => item,
+        Err(error) => {
+            tracing::warn!(
+                discovery_title_id = %row.text("discovery_title_id")?,
+                error = %error,
+                "skipping invalid recommendation card payload"
+            );
+            return Ok(None);
+        }
+    };
+    let source_title_id = row.text("source_title_id")?;
+    let discovery_title_id = row.text("discovery_title_id")?;
+    item.id = format!("{source_title_id}:more-like-this:{discovery_title_id}");
+    item.run_id = source_title_id;
+    item.base_generation_id = None;
+    item.source_run_kind = "title_more_like_this".to_string();
+    item.section_id = None;
+    item.sort_index = row.i32("sort_index")?;
+    item.rank_score = row.opt_f64("rank_score")?;
+    item.best_source = row.opt_text("best_source")?;
+    item.source_count = row.opt_i32("source_count")?;
+    item.edge_count = row.opt_i32("edge_count")?;
+    item.relation_count = row.opt_i32("relation_count")?;
+    item.source_subject_count = row.opt_i32("source_subject_count")?;
+    item.matched_subject_count = 0;
+    item.matched_subject_keys.clear();
+    item.matched_subject_titles.clear();
+    item.library_provenance.clear();
+    item.owned_in_input = false;
+    item.tombstoned_by_run_id = None;
+    item.tombstoned_at = None;
+    item.created_at = row.timestamp("created_at")?;
+    item.updated_at = row.timestamp("updated_at")?;
+    Ok(Some(item))
+}
+
+fn recommendation_item_is_displayable(item: &DiscoveryItemRecord) -> bool {
+    !item
+        .poster_url
+        .as_deref()
+        .unwrap_or_default()
+        .trim()
+        .is_empty()
+        && [
+            Some(item.display_title.as_str()),
+            item.sort_title.as_deref(),
+            item.original_title.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .any(useful_recommendation_title)
+}
+
+fn useful_recommendation_title(value: &str) -> bool {
+    let value = value.trim();
+    !value.is_empty()
+        && !value.chars().all(|character| character.is_ascii_digit())
+        && !recommendation_title_is_source_identifier(value)
+}
+
+fn recommendation_title_is_source_identifier(value: &str) -> bool {
+    let normalized = value.trim().to_ascii_lowercase();
+    let mut parts = normalized.split(':');
+    let Some(source) = parts.next() else {
+        return false;
+    };
+    let Some(kind) = parts.next() else {
+        return false;
+    };
+    if parts.next().is_none()
+        || !source.starts_with(|character: char| character.is_ascii_alphabetic())
+    {
+        return false;
+    }
+    let allowed = |character: char| {
+        character.is_ascii_lowercase()
+            || character.is_ascii_digit()
+            || matches!(character, '_' | '+' | '-')
+    };
+    source.chars().all(allowed) && !kind.is_empty() && kind.chars().all(allowed)
 }
 
 fn storage_text(value: Option<&str>) -> String {
@@ -3609,7 +4064,7 @@ fn sync_state_from_row(row: &SqlRow) -> AppResult<DiscoverySyncStateRecord> {
 }
 
 fn sync_run_args(
-    datastore: &StoreDatastore,
+    _datastore: &StoreDatastore,
     run: &DiscoverySyncRunRecord,
 ) -> AppResult<Vec<SqlArg>> {
     Ok(vec![
@@ -3631,10 +4086,7 @@ fn sync_run_args(
         SqlArg::OptI32(run.page_count),
         SqlArg::OptI64(run.item_count),
         SqlArg::OptI64(run.facet_count),
-        opt_json_arg(datastore, run.raw_submit_json.as_deref())?,
-        opt_json_arg(datastore, run.raw_changes_json.as_deref())?,
-        opt_json_arg(datastore, run.raw_final_status_json.as_deref())?,
-        opt_json_arg(datastore, run.raw_ack_json.as_deref())?,
+        SqlArg::OptTimestamp(run.acknowledged_at),
         SqlArg::OptText(run.error_text.clone()),
         SqlArg::OptTimestamp(run.started_at),
         SqlArg::OptTimestamp(run.completed_at),
@@ -3663,10 +4115,7 @@ fn sync_run_from_row(row: &SqlRow) -> AppResult<DiscoverySyncRunRecord> {
         page_count: row.opt_i32("page_count")?,
         item_count: row.opt_i64("item_count")?,
         facet_count: row.opt_i64("facet_count")?,
-        raw_submit_json: opt_json_text(row, "raw_submit_json")?,
-        raw_changes_json: opt_json_text(row, "raw_changes_json")?,
-        raw_final_status_json: opt_json_text(row, "raw_final_status_json")?,
-        raw_ack_json: opt_json_text(row, "raw_ack_json")?,
+        acknowledged_at: row.opt_timestamp("acknowledged_at")?,
         error_text: row.opt_text("error_text")?,
         started_at: row.opt_timestamp("started_at")?,
         completed_at: row.opt_timestamp("completed_at")?,
@@ -4420,8 +4869,9 @@ async fn delete_unreferenced_discovery_titles_tx(tx: &mut SqlTx<'_>) -> AppResul
          )
          AND NOT EXISTS (
             SELECT 1
-            FROM title_more_like_this_items m
-            WHERE m.discovery_title_id = discovery_titles.id
+            FROM title_recommendation_cards c
+            WHERE c.discovery_title_id = discovery_titles.id
+              AND c.payload_blob IS NULL
          )",
         &[],
     )
@@ -4429,14 +4879,69 @@ async fn delete_unreferenced_discovery_titles_tx(tx: &mut SqlTx<'_>) -> AppResul
     Ok(())
 }
 
+async fn delete_orphan_title_recommendation_cards_tx(tx: &mut SqlTx<'_>) -> AppResult<()> {
+    SqlRuntime::execute(
+        SqlExec::Tx(tx),
+        "DELETE FROM title_recommendation_cards
+         WHERE NOT EXISTS (
+            SELECT 1
+            FROM title_more_like_this_items m
+            WHERE m.discovery_title_id = title_recommendation_cards.discovery_title_id
+         )",
+        &[],
+    )
+    .await?;
+    Ok(())
+}
+
+async fn upsert_title_recommendation_card_tx(
+    tx: &mut SqlTx<'_>,
+    discovery_title_id: &str,
+    item: &DiscoveryItemRecord,
+) -> AppResult<()> {
+    let payload_blob = encode_compressed_json(item)?;
+    SqlRuntime::execute(
+        SqlExec::Tx(tx),
+        "INSERT INTO title_recommendation_cards
+         (discovery_title_id, payload_version, payload_blob, created_at, updated_at)
+         VALUES ({}, {}, {}, {}, {})
+         ON CONFLICT(discovery_title_id) DO UPDATE SET
+            payload_version = excluded.payload_version,
+            payload_blob = excluded.payload_blob,
+            updated_at = excluded.updated_at",
+        &[
+            SqlArg::Text(discovery_title_id.to_string()),
+            SqlArg::I32(TITLE_RECOMMENDATION_PAYLOAD_VERSION),
+            SqlArg::OptBytes(Some(payload_blob)),
+            SqlArg::Timestamp(item.created_at),
+            SqlArg::Timestamp(item.updated_at),
+        ],
+    )
+    .await?;
+    Ok(())
+}
+
 async fn insert_title_more_like_this_item_tx(
     tx: &mut SqlTx<'_>,
-    _datastore: &StoreDatastore,
     title_id: &str,
     item: &DiscoveryItemRecord,
     language: &str,
 ) -> AppResult<()> {
-    let discovery_title_id = upsert_discovery_title_tx(tx, item, language, false, false).await?;
+    let discovery_title_id = discovery_title_id_for(
+        &discovery_title_target_key_norm(item),
+        &normalize_discovery_language(language),
+    );
+    if SqlRuntime::fetch_optional(
+        SqlExec::Tx(tx),
+        "SELECT id FROM discovery_titles WHERE id = {}",
+        &[SqlArg::Text(discovery_title_id.clone())],
+    )
+    .await?
+    .is_some()
+    {
+        upsert_discovery_title_tx(tx, item, language, false, false).await?;
+    }
+    upsert_title_recommendation_card_tx(tx, &discovery_title_id, item).await?;
     SqlRuntime::execute(
         SqlExec::Tx(tx),
         "INSERT INTO title_more_like_this_items
@@ -6098,10 +6603,7 @@ mod tests {
             page_count: None,
             item_count: Some(0),
             facet_count: Some(0),
-            raw_submit_json: None,
-            raw_changes_json: Some(json!({"status": "COMPLETE"}).to_string()),
-            raw_final_status_json: None,
-            raw_ack_json: None,
+            acknowledged_at: None,
             error_text: None,
             started_at: Some(now),
             completed_at: Some(now),
@@ -6120,10 +6622,7 @@ mod tests {
             .expect("run should exist");
         assert_eq!(loaded_run.kind, "context_incremental");
         assert_eq!(loaded_run.smg_status.as_deref(), Some("COMPLETE"));
-        assert_eq!(
-            loaded_run.raw_changes_json.as_deref(),
-            Some(r#"{"status":"COMPLETE"}"#)
-        );
+        assert!(loaded_run.acknowledged_at.is_none());
         let recent_runs = store
             .list_recent_discovery_sync_runs(5)
             .await
@@ -6785,10 +7284,7 @@ mod tests {
             page_count: Some(1),
             item_count: Some(0),
             facet_count: Some(0),
-            raw_submit_json: Some(json!({"status": "ACCEPTED"}).to_string()),
-            raw_changes_json: None,
-            raw_final_status_json: Some(json!({"status": "COMPLETE"}).to_string()),
-            raw_ack_json: None,
+            acknowledged_at: None,
             error_text: None,
             started_at: Some(now),
             completed_at: Some(now),
@@ -6882,10 +7378,7 @@ mod tests {
             page_count: None,
             item_count: Some(0),
             facet_count: None,
-            raw_submit_json: None,
-            raw_changes_json: Some(json!({"status": "COMPLETE"}).to_string()),
-            raw_final_status_json: None,
-            raw_ack_json: None,
+            acknowledged_at: None,
             error_text: None,
             started_at: Some(now),
             completed_at: Some(now),
@@ -6944,10 +7437,7 @@ mod tests {
             page_count: Some(1),
             item_count: Some(0),
             facet_count: Some(0),
-            raw_submit_json: Some(json!({"region": "US"}).to_string()),
-            raw_changes_json: None,
-            raw_final_status_json: Some(json!({"sections": []}).to_string()),
-            raw_ack_json: None,
+            acknowledged_at: None,
             error_text: None,
             started_at: Some(now),
             completed_at: Some(now),
@@ -7091,6 +7581,374 @@ mod tests {
                 .expect("missing pending change delete should be harmless"),
             0
         );
+
+        let _ = std::fs::remove_file(db);
+    }
+
+    #[tokio::test]
+    async fn sqlite_store_bounds_and_garbage_collects_recommendation_cards() {
+        let db = std::env::temp_dir().join(format!(
+            "scryer_discovery_recommendation_cards_{}.db",
+            Utc::now().timestamp_micros()
+        ));
+        let services = SqliteServices::new(db.to_string_lossy())
+            .await
+            .expect("sqlite services should initialize");
+        let store = DiscoveryStore::new(services.datastore());
+        let now = Utc::now();
+
+        for source_title_id in ["source-title-a", "source-title-b"] {
+            SqlRuntime::execute(
+                store.datastore.read_exec(),
+                "INSERT INTO titles (
+                    id, library_id, name, name_normalized, facet, root_folder_id, created_at
+                 )
+                 VALUES ({}, {}, {}, {}, {}, {}, {})",
+                &[
+                    SqlArg::Text(source_title_id.to_string()),
+                    SqlArg::Text("movie_default_library".to_string()),
+                    SqlArg::Text(source_title_id.to_string()),
+                    SqlArg::Text(source_title_id.to_string()),
+                    SqlArg::Text("movie".to_string()),
+                    SqlArg::Text("canonical_root_for_movie_default_library".to_string()),
+                    SqlArg::Timestamp(now),
+                ],
+            )
+            .await
+            .expect("source title should insert");
+        }
+
+        let recommendations = (0..30)
+            .map(|index| {
+                let mut item = discovery_prune_item("recommendations", now);
+                item.id = format!("recommendation-{index}");
+                item.target_key = format!("tmdb:movie:{}", 20_000 + index);
+                item.display_title = format!("Recommendation {index}");
+                item.sort_title = Some(item.display_title.clone());
+                item.poster_url = Some(format!("https://images.test/{index}.jpg"));
+                item.sort_index = index;
+                item
+            })
+            .collect::<Vec<_>>();
+        store
+            .replace_title_more_like_this_items("source-title-a", "eng", &recommendations)
+            .await
+            .expect("recommendations should replace");
+
+        let edge_count = SqlRuntime::fetch_optional(
+            store.datastore.read_exec(),
+            "SELECT COUNT(*) AS count FROM title_more_like_this_items",
+            &[],
+        )
+        .await
+        .expect("edge count should query")
+        .expect("edge count should exist")
+        .i64("count")
+        .expect("edge count should parse");
+        let card_count = SqlRuntime::fetch_optional(
+            store.datastore.read_exec(),
+            "SELECT COUNT(*) AS count FROM title_recommendation_cards",
+            &[],
+        )
+        .await
+        .expect("card count should query")
+        .expect("card count should exist")
+        .i64("count")
+        .expect("card count should parse");
+        assert_eq!(edge_count, 24);
+        assert_eq!(card_count, 24);
+
+        store
+            .replace_title_more_like_this_items("source-title-b", "eng", &recommendations[..12])
+            .await
+            .expect("shared recommendations should replace");
+        store
+            .replace_title_more_like_this_items("source-title-a", "eng", &[])
+            .await
+            .expect("source recommendations should clear");
+
+        let remaining_cards = SqlRuntime::fetch_optional(
+            store.datastore.read_exec(),
+            "SELECT COUNT(*) AS count FROM title_recommendation_cards",
+            &[],
+        )
+        .await
+        .expect("remaining card count should query")
+        .expect("remaining card count should exist")
+        .i64("count")
+        .expect("remaining card count should parse");
+        let normalized_titles = SqlRuntime::fetch_optional(
+            store.datastore.read_exec(),
+            "SELECT COUNT(*) AS count FROM discovery_titles",
+            &[],
+        )
+        .await
+        .expect("normalized title count should query")
+        .expect("normalized title count should exist")
+        .i64("count")
+        .expect("normalized title count should parse");
+        assert_eq!(remaining_cards, 12);
+        assert_eq!(normalized_titles, 0);
+
+        let _ = std::fs::remove_file(db);
+    }
+
+    #[tokio::test]
+    async fn sqlite_housekeeping_backfills_legacy_recommendation_cards_before_pruning() {
+        let db = std::env::temp_dir().join(format!(
+            "scryer_discovery_legacy_recommendation_cards_{}.db",
+            Utc::now().timestamp_micros()
+        ));
+        let services = SqliteServices::new(db.to_string_lossy())
+            .await
+            .expect("sqlite services should initialize");
+        let store = DiscoveryStore::new(services.datastore());
+        let now = Utc::now();
+        let old_at = now - chrono::Duration::days(60);
+
+        store
+            .upsert_discovery_sync_run(&discovery_prune_run(
+                "legacy-run",
+                "context_snapshot",
+                "complete",
+                old_at,
+            ))
+            .await
+            .expect("legacy run should insert");
+        let mut legacy_item = discovery_prune_item("legacy-run", old_at);
+        legacy_item.poster_url = Some("https://images.test/legacy.jpg".to_string());
+        legacy_item.display_title = "Legacy Recommendation".to_string();
+        legacy_item.sort_title = Some(legacy_item.display_title.clone());
+        store
+            .replace_discovery_items("legacy-run", std::slice::from_ref(&legacy_item))
+            .await
+            .expect("legacy item should insert");
+        SqlRuntime::execute(
+            store.datastore.read_exec(),
+            "INSERT INTO titles (
+                id, library_id, name, name_normalized, facet, root_folder_id, created_at
+             )
+             VALUES ({}, {}, {}, {}, {}, {}, {})",
+            &[
+                SqlArg::Text("legacy-source".to_string()),
+                SqlArg::Text("movie_default_library".to_string()),
+                SqlArg::Text("Legacy Source".to_string()),
+                SqlArg::Text("legacy source".to_string()),
+                SqlArg::Text("movie".to_string()),
+                SqlArg::Text("canonical_root_for_movie_default_library".to_string()),
+                SqlArg::Timestamp(old_at),
+            ],
+        )
+        .await
+        .expect("legacy source title should insert");
+        let discovery_title_id = SqlRuntime::fetch_optional(
+            store.datastore.read_exec(),
+            "SELECT discovery_title_id FROM discovery_items WHERE id = {}",
+            &[SqlArg::Text(legacy_item.id.clone())],
+        )
+        .await
+        .expect("legacy title id should query")
+        .expect("legacy title id should exist")
+        .text("discovery_title_id")
+        .expect("legacy title id should parse");
+        SqlRuntime::execute(
+            store.datastore.read_exec(),
+            "INSERT INTO title_recommendation_cards
+             (discovery_title_id, payload_version, payload_blob, created_at, updated_at)
+             VALUES ({}, {}, {}, {}, {})",
+            &[
+                SqlArg::Text(discovery_title_id.clone()),
+                SqlArg::I32(TITLE_RECOMMENDATION_PAYLOAD_VERSION),
+                SqlArg::OptBytes(None),
+                SqlArg::Timestamp(old_at),
+                SqlArg::Timestamp(old_at),
+            ],
+        )
+        .await
+        .expect("legacy card placeholder should insert");
+        SqlRuntime::execute(
+            store.datastore.read_exec(),
+            "INSERT INTO title_more_like_this_items
+             (source_title_id, discovery_title_id, sort_index, created_at, updated_at)
+             VALUES ({}, {}, {}, {}, {})",
+            &[
+                SqlArg::Text("legacy-source".to_string()),
+                SqlArg::Text(discovery_title_id),
+                SqlArg::I32(0),
+                SqlArg::Timestamp(old_at),
+                SqlArg::Timestamp(old_at),
+            ],
+        )
+        .await
+        .expect("legacy edge should insert");
+
+        let legacy_fallback = store
+            .list_title_more_like_this_items("legacy-source", 10)
+            .await
+            .expect("legacy recommendation should use normalized fallback");
+        assert_eq!(legacy_fallback.len(), 1);
+        assert_eq!(legacy_fallback[0].display_title, "Legacy Recommendation");
+
+        store
+            .replace_title_more_like_this_items("unrelated-source", "eng", &[])
+            .await
+            .expect("unrelated refresh should preserve legacy placeholders");
+        assert_eq!(
+            store
+                .list_title_more_like_this_items("legacy-source", 10)
+                .await
+                .expect("legacy fallback should survive normal repository cleanup")
+                .len(),
+            1
+        );
+
+        store
+            .prune_discovery_history(
+                DISCOVERY_DEFAULT_SCOPE_KEY,
+                0,
+                now - chrono::Duration::days(30),
+            )
+            .await
+            .expect("legacy history should prune after card backfill");
+        let payload_present = SqlRuntime::fetch_optional(
+            store.datastore.read_exec(),
+            "SELECT payload_blob IS NOT NULL AS present FROM title_recommendation_cards",
+            &[],
+        )
+        .await
+        .expect("card payload should query")
+        .expect("card payload should exist")
+        .bool("present")
+        .expect("card payload presence should parse");
+        let normalized_title_count = SqlRuntime::fetch_optional(
+            store.datastore.read_exec(),
+            "SELECT COUNT(*) AS count FROM discovery_titles",
+            &[],
+        )
+        .await
+        .expect("normalized title count should query")
+        .expect("normalized title count should exist")
+        .i64("count")
+        .expect("normalized title count should parse");
+        assert!(payload_present);
+        assert_eq!(normalized_title_count, 0);
+        assert_eq!(
+            store
+                .list_title_more_like_this_items("legacy-source", 10)
+                .await
+                .expect("backfilled recommendation should remain readable")
+                .len(),
+            1
+        );
+
+        let _ = std::fs::remove_file(db);
+    }
+
+    #[tokio::test]
+    async fn sqlite_context_commit_enforces_merged_indexed_title_limit() {
+        let db = std::env::temp_dir().join(format!(
+            "scryer_discovery_indexed_title_limit_{}.db",
+            Utc::now().timestamp_micros()
+        ));
+        let services = SqliteServices::new(db.to_string_lossy())
+            .await
+            .expect("sqlite services should initialize");
+        let store = DiscoveryStore::new(services.datastore());
+        let now = Utc::now();
+
+        let public_run_id = "public-active";
+        let mut public_items = Vec::new();
+        for index in 0..2 {
+            let mut item = discovery_prune_item(public_run_id, now);
+            item.id = format!("public-item-{index}");
+            item.base_generation_id = None;
+            item.source_run_kind = "public_feed".to_string();
+            item.target_key = format!("tmdb:movie:{}", 30_000 + index);
+            item.display_title = format!("Public {index}");
+            item.sort_title = Some(item.display_title.clone());
+            public_items.push(item);
+        }
+        let public_state = DiscoverySyncStateRecord {
+            last_public_feed_generation_id: Some(public_run_id.to_string()),
+            updated_at: now,
+            ..DiscoverySyncStateRecord::default()
+        };
+        store
+            .commit_discovery_public_feed(&DiscoveryPublicFeedCommit {
+                state: public_state,
+                run: discovery_prune_run(public_run_id, "public_feed", "complete", now),
+                sections: Vec::new(),
+                items: public_items,
+            })
+            .await
+            .expect("public feed should commit");
+
+        let context_run_id = "context-active";
+        let mut context_items = Vec::new();
+        for index in 0..1_005 {
+            let mut item = discovery_prune_item(context_run_id, now);
+            item.id = format!("context-item-{index}");
+            item.target_key = format!("tmdb:movie:{}", 40_000 + index);
+            item.display_title = format!("Context {index}");
+            item.sort_title = Some(item.display_title.clone());
+            item.rank_score = Some(index as f64);
+            item.sort_index = index;
+            context_items.push(item);
+        }
+        let context_state = DiscoverySyncStateRecord {
+            last_success_generation_id: Some(context_run_id.to_string()),
+            last_public_feed_generation_id: Some(public_run_id.to_string()),
+            updated_at: now,
+            ..DiscoverySyncStateRecord::default()
+        };
+        store
+            .commit_discovery_context_snapshot(&DiscoveryContextSnapshotCommit {
+                state: context_state,
+                run: discovery_prune_run(context_run_id, "context_snapshot", "complete", now),
+                submitted_subjects: Vec::new(),
+                items: context_items,
+                facets: Vec::new(),
+                clear_pending_through_sequence: None,
+            })
+            .await
+            .expect("context snapshot should commit");
+
+        let counts = SqlRuntime::fetch_optional(
+            store.datastore.read_exec(),
+            "SELECT COUNT(DISTINCT discovery_title_id) AS title_count,
+                    SUM(CASE WHEN run_id = {} THEN 1 ELSE 0 END) AS public_count,
+                    SUM(CASE WHEN run_id = {} THEN 1 ELSE 0 END) AS context_count
+             FROM discovery_items",
+            &[
+                SqlArg::Text(public_run_id.to_string()),
+                SqlArg::Text(context_run_id.to_string()),
+            ],
+        )
+        .await
+        .expect("active counts should query")
+        .expect("active counts should exist");
+        assert_eq!(counts.i64("title_count").expect("title count"), 1_000);
+        assert_eq!(counts.i64("public_count").expect("public count"), 2);
+        assert_eq!(counts.i64("context_count").expect("context count"), 998);
+
+        let low_rank_exists = SqlRuntime::fetch_optional(
+            store.datastore.read_exec(),
+            "SELECT 1 AS present FROM discovery_items WHERE id = {}",
+            &[SqlArg::Text("context-item-0".to_string())],
+        )
+        .await
+        .expect("low-rank item should query")
+        .is_some();
+        let high_rank_exists = SqlRuntime::fetch_optional(
+            store.datastore.read_exec(),
+            "SELECT 1 AS present FROM discovery_items WHERE id = {}",
+            &[SqlArg::Text("context-item-1004".to_string())],
+        )
+        .await
+        .expect("high-rank item should query")
+        .is_some();
+        assert!(!low_rank_exists);
+        assert!(high_rank_exists);
 
         let _ = std::fs::remove_file(db);
     }
@@ -7442,10 +8300,7 @@ mod tests {
             page_count: None,
             item_count: Some(0),
             facet_count: Some(0),
-            raw_submit_json: None,
-            raw_changes_json: None,
-            raw_final_status_json: None,
-            raw_ack_json: None,
+            acknowledged_at: None,
             error_text: None,
             started_at: Some(observed_at),
             completed_at: if status == "running" {
