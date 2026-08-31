@@ -324,6 +324,7 @@ pub struct LocationOperationRunner<'a> {
     mover: &'a dyn TitleFileMover,
     admission: &'a dyn TitleAdmissionCheck,
     reconciler: &'a dyn TitleReconciler,
+    registry: Option<&'a crate::location::ownership_guard::LocationOwnershipRegistry>,
 }
 
 impl<'a> LocationOperationRunner<'a> {
@@ -338,7 +339,18 @@ impl<'a> LocationOperationRunner<'a> {
             mover,
             admission,
             reconciler,
+            registry: None,
         }
+    }
+
+    /// Mirrors this run's claims into the in-process guard registry (D7), so a
+    /// same-process scan or import is refused without a query.
+    pub fn with_ownership_registry(
+        mut self,
+        registry: &'a crate::location::ownership_guard::LocationOwnershipRegistry,
+    ) -> Self {
+        self.registry = Some(registry);
+        self
     }
 
     /// Operations a restart should pick back up (FR-033). Non-terminal
@@ -394,12 +406,17 @@ impl<'a> LocationOperationRunner<'a> {
         )
         .await?;
 
+        let entities = owned_entities(&operation, plan);
         match self
             .store
-            .claim_location_operation_ownership(operation_id, &owned_entities(&operation, plan))
+            .claim_location_operation_ownership(operation_id, &entities)
             .await?
         {
-            LocationOwnershipOutcome::Claimed => {}
+            LocationOwnershipOutcome::Claimed => {
+                if let Some(registry) = self.registry {
+                    registry.claim_all(operation_id, &entities);
+                }
+            }
             LocationOwnershipOutcome::Conflict(conflicts) => {
                 let detail = describe_ownership_conflicts(&conflicts);
                 return self
@@ -809,6 +826,9 @@ impl<'a> LocationOperationRunner<'a> {
         self.store
             .release_location_operation_ownership(&operation.id)
             .await?;
+        if let Some(registry) = self.registry {
+            registry.release_operation(&operation.id);
+        }
 
         Ok(OperationRunOutcome {
             operation_id: operation.id.clone(),

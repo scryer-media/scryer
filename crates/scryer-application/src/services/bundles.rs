@@ -64,6 +64,8 @@ pub struct AppLibraryServices {
     pub(crate) title_image_processor: Arc<dyn TitleImageProcessor>,
     pub(crate) library_probe_signatures: Arc<dyn LibraryProbeRepository>,
     pub(crate) library_scan_unmatched_items: Arc<dyn LibraryScanUnmatchedItemRepository>,
+    /// Persisted location-operation state, read by the ownership guard (FR-084).
+    pub(crate) location_operations: Arc<dyn crate::ports::LocationOperationRepository>,
 }
 
 #[derive(Clone)]
@@ -299,6 +301,7 @@ impl AppServices {
                 library_scan_unmatched_items: Arc::new(
                     null_repositories::NullLibraryScanUnmatchedItemRepository,
                 ),
+                location_operations: Arc::new(null_repositories::NullLocationOperationRepository),
             },
             integrations: AppIntegrationServices {
                 indexer_configs,

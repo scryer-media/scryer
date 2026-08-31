@@ -597,6 +597,13 @@ impl AppUseCase {
             scryer_domain::LibraryPermission::ManageTitles,
         )
         .await?;
+        // Which file a title serves is part of the state an operation
+        // reconciles at its title checkpoint (FR-084).
+        self.ensure_location_ownership_allows_title(
+            &crate::location::ownership_guard::MEDIA_FILE_PRIMARY_ENTRY,
+            &title.id,
+        )
+        .await?;
 
         let media_files = self
             .services

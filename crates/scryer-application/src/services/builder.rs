@@ -141,6 +141,13 @@ impl AppServicesBuilder {
         integrations.indexer_errors,
         Arc<dyn IndexerErrorRepository>
     );
+    // Optional: an unconfigured location store answers "nothing is owned", so
+    // the ownership guard stays correct before the subsystem is wired up.
+    app_services_builder_setter!(
+        with_location_operation_repository,
+        library.location_operations,
+        Arc<dyn crate::ports::LocationOperationRepository>
+    );
     app_services_builder_runtime_feature_setter!(
         with_plugin_http_trust_runtime,
         config.plugin_http_trust_runtime,

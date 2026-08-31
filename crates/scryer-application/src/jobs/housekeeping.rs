@@ -1474,6 +1474,16 @@ impl AppUseCase {
         context: RestoreRecycledItemContext,
         conflict_policy: crate::RecycleRestoreConflictPolicy,
     ) -> AppResult<bool> {
+        // Restoring writes a file back into the title's folder, which an
+        // in-flight operation is copying out of (FR-084). Entries with no title
+        // (orphaned files) overlap nothing and pass through.
+        if let Some(title_id) = context.manifest.title_id.as_deref() {
+            self.ensure_location_ownership_allows_title(
+                &crate::location::ownership_guard::RECYCLE_RESTORE_ENTRY,
+                title_id,
+            )
+            .await?;
+        }
         let original_path = context.manifest.original_path_buf();
         let file_name = original_path
             .file_name()

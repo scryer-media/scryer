@@ -644,6 +644,16 @@ impl AppUseCase {
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| existing.name.clone());
         let roots_were_provided = roots.is_some();
+        if roots_were_provided {
+            // Retiring or repointing a root under a running operation would move
+            // the ground out from under it; a name-only edit is harmless
+            // (FR-084).
+            self.ensure_location_ownership_allows_library_roots(
+                &crate::location::ownership_guard::LIBRARY_ROOTS_UPDATE_ENTRY,
+                &existing.id,
+            )
+            .await?;
+        }
         let roots = match roots {
             Some(roots) => normalize_library_root_drafts(roots)?,
             None => existing
@@ -726,6 +736,12 @@ impl AppUseCase {
                 "default libraries cannot be deleted".into(),
             ));
         }
+        // Deleting the library retires every root it configures (FR-084).
+        self.ensure_location_ownership_allows_library_roots(
+            &crate::location::ownership_guard::LIBRARY_DELETE_ENTRY,
+            &library.id,
+        )
+        .await?;
 
         for session in self
             .active_library_scan_sessions()
@@ -1120,6 +1136,14 @@ impl AppUseCase {
         &self,
         request: &StartedLibraryScanRequest,
     ) -> AppResult<StartedLibraryScanOutcome> {
+        // Every scan trigger funnels here, so one check covers them all: a scan
+        // must not walk a root a location operation is moving files under
+        // (FR-084).
+        self.ensure_location_ownership_allows_library_roots(
+            &crate::location::ownership_guard::LIBRARY_SCAN_ENTRY,
+            &request.library_id,
+        )
+        .await?;
         let cancel_token = self
             .library_scan_cancellation_token(&request.session_id)
             .await;

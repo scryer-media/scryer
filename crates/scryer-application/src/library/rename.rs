@@ -611,6 +611,25 @@ impl AppUseCase {
         actor: &User,
         preview: RenamePlan,
     ) -> AppResult<RenameApplyResult> {
+        // A rename rewrites the very paths an in-flight operation is copying
+        // from (FR-084). A title-scoped plan names its title; a facet-wide plan
+        // names none, so the facet variant intersects the open claims instead.
+        match preview.title_id.as_deref() {
+            Some(title_id) => {
+                self.ensure_location_ownership_allows_title(
+                    &crate::location::ownership_guard::RENAME_APPLY_ENTRY,
+                    title_id,
+                )
+                .await?
+            }
+            None => {
+                self.ensure_location_ownership_allows_facet(
+                    &crate::location::ownership_guard::RENAME_APPLY_ENTRY,
+                    &preview.facet,
+                )
+                .await?
+            }
+        }
         self.preflight_rename_folder_ownership(&preview).await?;
         self.services
             .library
