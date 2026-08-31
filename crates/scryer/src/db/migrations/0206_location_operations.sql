@@ -20,7 +20,8 @@ CREATE TABLE location_operations (
     -- folder_reassignment | root_move | root_change | root_consolidation
     -- | cross_library_transfer | adoption
     operation_type TEXT NOT NULL,
-    -- move | adopt | catalog_only
+    -- move_with_scryer | files_already_there | catalog_only
+    -- (`LocationExecutionMode` in scryer-application::location::model)
     execution_mode TEXT NOT NULL,
     -- queued | preparing | moving | verifying | reconciling | cleaning_up
     -- | completed | completed_with_warnings | canceled | failed
@@ -125,7 +126,8 @@ CREATE TABLE location_operation_verifications (
     applied_depth TEXT NOT NULL,
     fell_back INTEGER NOT NULL DEFAULT 0,
     fallback_reason TEXT,
-    -- passed | failed | skipped
+    -- verified | mismatch | unavailable
+    -- (`FileVerificationOutcome` in scryer-application::location::model)
     outcome TEXT NOT NULL,
     move_crc TEXT,
     move_crc_algorithm TEXT,
