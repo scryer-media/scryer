@@ -1,10 +1,12 @@
+use crate::maintenance::{self, USER_PACKAGE_PREFIX as MAINTENANCE_USER_PACKAGE_PREFIX};
+use crate::runtime::{self, RuntimeLimits};
 use crate::{
     AudioStreamDoc, BuiltinScoreDoc, ContextDoc, FileDoc, ProfileDoc, ReleaseDoc, RulesError,
-    SubtitleStreamDoc, UserRuleInput, builtins, score_entry_wrapper_policy_path,
+    SubtitleStreamDoc, UserRuleInput, score_entry_wrapper_policy_path,
     score_entry_wrapper_rule_path, score_entry_wrapper_source,
 };
 use regorus::{
-    Engine, Value,
+    Value,
     unstable::{Expr, Literal, Module, Parser, Query, Rule, RuleBody, RuleHead, Source},
 };
 use std::{
@@ -34,6 +36,32 @@ struct RuleInputContractField {
 struct RuleInputCatalog {
     known_paths: HashSet<String>,
     array_container_paths: HashSet<String>,
+}
+
+/// Everything the input-path walker needs to judge one policy family's paths.
+///
+/// The release family alone allows `input.release.extra.<key>`, whose keys come
+/// from indexer-supplied attributes and so cannot be catalogued.
+#[derive(Debug, Clone, Copy)]
+struct InputPathContext {
+    catalog: &'static RuleInputCatalog,
+    allow_release_extra: bool,
+}
+
+impl InputPathContext {
+    fn release() -> Self {
+        Self {
+            catalog: release_input_catalog(),
+            allow_release_extra: true,
+        }
+    }
+
+    fn maintenance() -> Self {
+        Self {
+            catalog: maintenance_input_catalog(),
+            allow_release_extra: false,
+        }
+    }
 }
 
 /// Result of validating a user-authored Rego rule.
@@ -109,37 +137,53 @@ impl InputReferencePath {
     }
 }
 
-fn rule_input_catalog() -> &'static RuleInputCatalog {
+fn build_input_catalog(contract_json: &str, contract_name: &str) -> RuleInputCatalog {
+    let contract: RuleInputContract = serde_json::from_str(contract_json)
+        .unwrap_or_else(|e| panic!("{contract_name} should be valid: {e}"));
+
+    let mut known_paths = HashSet::new();
+    let mut array_container_paths = HashSet::new();
+    known_paths.insert("input".to_string());
+
+    for section in contract.sections {
+        known_paths.insert(section.path.clone());
+        if let Some(base_path) = section.path.strip_suffix("[]") {
+            array_container_paths.insert(base_path.to_string());
+        }
+
+        for field in section.fields {
+            let field_path = format!("{}.{}", section.path, field.field);
+            known_paths.insert(field_path.clone());
+            if field.field_type.ends_with("[]") {
+                array_container_paths.insert(field_path.clone());
+                known_paths.insert(format!("{field_path}[]"));
+            }
+        }
+    }
+
+    RuleInputCatalog {
+        known_paths,
+        array_container_paths,
+    }
+}
+
+fn release_input_catalog() -> &'static RuleInputCatalog {
     static CATALOG: OnceLock<RuleInputCatalog> = OnceLock::new();
     CATALOG.get_or_init(|| {
-        let contract: RuleInputContract =
-            serde_json::from_str(include_str!("../rule-input-contract.json"))
-                .expect("rule-input-contract.json should be valid");
+        build_input_catalog(
+            include_str!("../rule-input-contract.json"),
+            "rule-input-contract.json",
+        )
+    })
+}
 
-        let mut known_paths = HashSet::new();
-        let mut array_container_paths = HashSet::new();
-        known_paths.insert("input".to_string());
-
-        for section in contract.sections {
-            known_paths.insert(section.path.clone());
-            if let Some(base_path) = section.path.strip_suffix("[]") {
-                array_container_paths.insert(base_path.to_string());
-            }
-
-            for field in section.fields {
-                let field_path = format!("{}.{}", section.path, field.field);
-                known_paths.insert(field_path.clone());
-                if field.field_type.ends_with("[]") {
-                    array_container_paths.insert(field_path.clone());
-                    known_paths.insert(format!("{field_path}[]"));
-                }
-            }
-        }
-
-        RuleInputCatalog {
-            known_paths,
-            array_container_paths,
-        }
+fn maintenance_input_catalog() -> &'static RuleInputCatalog {
+    static CATALOG: OnceLock<RuleInputCatalog> = OnceLock::new();
+    CATALOG.get_or_init(|| {
+        build_input_catalog(
+            include_str!("../maintenance-input-contract.json"),
+            "maintenance-input-contract.json",
+        )
     })
 }
 
@@ -160,90 +204,120 @@ fn unsupported_dynamic_input_path_message(path: &str) -> String {
     )
 }
 
-fn collect_unknown_input_path_errors(
-    rego_source: &str,
-    policy_path: &str,
-) -> Result<Vec<String>, String> {
+fn parse_module(rego_source: &str, policy_path: &str) -> Result<Module, String> {
     let source = Source::from_contents(policy_path.to_string(), rego_source.to_string())
         .map_err(|e| e.to_string())?;
     let mut parser = Parser::new(&source).map_err(|e| e.to_string())?;
     parser.enable_rego_v1().map_err(|e| e.to_string())?;
-    let module: Module = parser.parse().map_err(|e| e.to_string())?;
-
-    let mut errors = BTreeSet::new();
-    for rule in &module.policy {
-        visit_rule(rule, &mut errors);
-    }
-
-    Ok(errors.into_iter().collect())
+    parser.parse().map_err(|e| e.to_string())
 }
 
-fn visit_rule(rule: &Rule, errors: &mut BTreeSet<String>) {
+fn collect_unknown_input_path_errors(
+    rego_source: &str,
+    policy_path: &str,
+    ctx: InputPathContext,
+) -> Result<Vec<String>, String> {
+    let module = parse_module(rego_source, policy_path)?;
+    Ok(module_input_path_errors(&module, ctx))
+}
+
+fn module_input_path_errors(module: &Module, ctx: InputPathContext) -> Vec<String> {
+    let mut errors = BTreeSet::new();
+    for rule in &module.policy {
+        visit_rule(rule, &mut errors, ctx);
+    }
+    errors.into_iter().collect()
+}
+
+/// Leading name of a rule head reference, e.g. `match` for `match["x"]`.
+fn rule_head_name(expr: &Expr) -> Option<&str> {
+    match expr {
+        Expr::Var { span, .. } => Some(span.text()),
+        Expr::RefDot { refr, .. } | Expr::RefBrack { refr, .. } => rule_head_name(refr),
+        _ => None,
+    }
+}
+
+fn module_defines_rule(module: &Module, name: &str) -> bool {
+    module.policy.iter().any(|rule| {
+        let refr = match rule.as_ref() {
+            Rule::Spec { head, .. } => match head {
+                RuleHead::Compr { refr, .. }
+                | RuleHead::Set { refr, .. }
+                | RuleHead::Func { refr, .. } => refr,
+            },
+            Rule::Default { refr, .. } => refr,
+        };
+        rule_head_name(refr) == Some(name)
+    })
+}
+
+fn visit_rule(rule: &Rule, errors: &mut BTreeSet<String>, ctx: InputPathContext) {
     match rule {
         Rule::Spec { head, bodies, .. } => {
-            visit_rule_head(head, errors);
+            visit_rule_head(head, errors, ctx);
             for body in bodies {
-                visit_rule_body(body, errors);
+                visit_rule_body(body, errors, ctx);
             }
         }
         Rule::Default {
             refr, args, value, ..
         } => {
-            visit_expr(refr, errors);
+            visit_expr(refr, errors, ctx);
             for arg in args {
-                visit_expr(arg, errors);
+                visit_expr(arg, errors, ctx);
             }
-            visit_expr(value, errors);
+            visit_expr(value, errors, ctx);
         }
     }
 }
 
-fn visit_rule_head(head: &RuleHead, errors: &mut BTreeSet<String>) {
+fn visit_rule_head(head: &RuleHead, errors: &mut BTreeSet<String>, ctx: InputPathContext) {
     match head {
         RuleHead::Compr { refr, assign, .. } => {
-            visit_expr(refr, errors);
+            visit_expr(refr, errors, ctx);
             if let Some(assign) = assign {
-                visit_expr(&assign.value, errors);
+                visit_expr(&assign.value, errors, ctx);
             }
         }
         RuleHead::Set { refr, key, .. } => {
-            visit_expr(refr, errors);
+            visit_expr(refr, errors, ctx);
             if let Some(key) = key {
-                visit_expr(key, errors);
+                visit_expr(key, errors, ctx);
             }
         }
         RuleHead::Func {
             refr, args, assign, ..
         } => {
-            visit_expr(refr, errors);
+            visit_expr(refr, errors, ctx);
             for arg in args {
-                visit_expr(arg, errors);
+                visit_expr(arg, errors, ctx);
             }
             if let Some(assign) = assign {
-                visit_expr(&assign.value, errors);
+                visit_expr(&assign.value, errors, ctx);
             }
         }
     }
 }
 
-fn visit_rule_body(body: &RuleBody, errors: &mut BTreeSet<String>) {
+fn visit_rule_body(body: &RuleBody, errors: &mut BTreeSet<String>, ctx: InputPathContext) {
     if let Some(assign) = &body.assign {
-        visit_expr(&assign.value, errors);
+        visit_expr(&assign.value, errors, ctx);
     }
-    visit_query(&body.query, errors);
+    visit_query(&body.query, errors, ctx);
 }
 
-fn visit_query(query: &Query, errors: &mut BTreeSet<String>) {
+fn visit_query(query: &Query, errors: &mut BTreeSet<String>, ctx: InputPathContext) {
     for stmt in &query.stmts {
-        visit_literal(&stmt.literal, errors);
+        visit_literal(&stmt.literal, errors, ctx);
         for with_mod in &stmt.with_mods {
-            visit_expr(&with_mod.refr, errors);
-            visit_expr(&with_mod.r#as, errors);
+            visit_expr(&with_mod.refr, errors, ctx);
+            visit_expr(&with_mod.r#as, errors, ctx);
         }
     }
 }
 
-fn visit_literal(literal: &Literal, errors: &mut BTreeSet<String>) {
+fn visit_literal(literal: &Literal, errors: &mut BTreeSet<String>, ctx: InputPathContext) {
     match literal {
         Literal::SomeVars { .. } => {}
         Literal::SomeIn {
@@ -253,22 +327,22 @@ fn visit_literal(literal: &Literal, errors: &mut BTreeSet<String>) {
             ..
         } => {
             if let Some(key) = key {
-                visit_expr(key, errors);
+                visit_expr(key, errors, ctx);
             }
-            visit_expr(value, errors);
-            visit_expr(collection, errors);
+            visit_expr(value, errors, ctx);
+            visit_expr(collection, errors, ctx);
         }
-        Literal::Expr { expr, .. } | Literal::NotExpr { expr, .. } => visit_expr(expr, errors),
+        Literal::Expr { expr, .. } | Literal::NotExpr { expr, .. } => visit_expr(expr, errors, ctx),
         Literal::Every { domain, query, .. } => {
-            visit_expr(domain, errors);
-            visit_query(query, errors);
+            visit_expr(domain, errors, ctx);
+            visit_query(query, errors, ctx);
         }
     }
 }
 
-fn visit_expr(expr: &Expr, errors: &mut BTreeSet<String>) {
-    if let Some(path) = extract_input_reference_path(expr)
-        && let Some(error) = validate_input_reference_path(&path)
+fn visit_expr(expr: &Expr, errors: &mut BTreeSet<String>, ctx: InputPathContext) {
+    if let Some(path) = extract_input_reference_path(expr, ctx)
+        && let Some(error) = validate_input_reference_path(&path, ctx)
     {
         errors.insert(error);
     }
@@ -276,44 +350,44 @@ fn visit_expr(expr: &Expr, errors: &mut BTreeSet<String>) {
     match expr {
         Expr::Array { items, .. } | Expr::Set { items, .. } => {
             for item in items {
-                visit_expr(item, errors);
+                visit_expr(item, errors, ctx);
             }
         }
         Expr::Object { fields, .. } => {
             for (_, key, value) in fields {
-                visit_expr(key, errors);
-                visit_expr(value, errors);
+                visit_expr(key, errors, ctx);
+                visit_expr(value, errors, ctx);
             }
         }
         Expr::ArrayCompr { term, query, .. } | Expr::SetCompr { term, query, .. } => {
-            visit_expr(term, errors);
-            visit_query(query, errors);
+            visit_expr(term, errors, ctx);
+            visit_query(query, errors, ctx);
         }
         Expr::ObjectCompr {
             key, value, query, ..
         } => {
-            visit_expr(key, errors);
-            visit_expr(value, errors);
-            visit_query(query, errors);
+            visit_expr(key, errors, ctx);
+            visit_expr(value, errors, ctx);
+            visit_query(query, errors, ctx);
         }
         Expr::Call { fcn, params, .. } => {
-            visit_expr(fcn, errors);
+            visit_expr(fcn, errors, ctx);
             for param in params {
-                visit_expr(param, errors);
+                visit_expr(param, errors, ctx);
             }
         }
-        Expr::UnaryExpr { expr, .. } => visit_expr(expr, errors),
-        Expr::RefDot { refr, .. } => visit_expr(refr, errors),
+        Expr::UnaryExpr { expr, .. } => visit_expr(expr, errors, ctx),
+        Expr::RefDot { refr, .. } => visit_expr(refr, errors, ctx),
         Expr::RefBrack { refr, index, .. } => {
-            visit_expr(refr, errors);
-            visit_expr(index, errors);
+            visit_expr(refr, errors, ctx);
+            visit_expr(index, errors, ctx);
         }
         Expr::BinExpr { lhs, rhs, .. }
         | Expr::BoolExpr { lhs, rhs, .. }
         | Expr::ArithExpr { lhs, rhs, .. }
         | Expr::AssignExpr { lhs, rhs, .. } => {
-            visit_expr(lhs, errors);
-            visit_expr(rhs, errors);
+            visit_expr(lhs, errors, ctx);
+            visit_expr(rhs, errors, ctx);
         }
         Expr::Membership {
             key,
@@ -322,10 +396,10 @@ fn visit_expr(expr: &Expr, errors: &mut BTreeSet<String>) {
             ..
         } => {
             if let Some(key) = key {
-                visit_expr(key, errors);
+                visit_expr(key, errors, ctx);
             }
-            visit_expr(value, errors);
-            visit_expr(collection, errors);
+            visit_expr(value, errors, ctx);
+            visit_expr(collection, errors, ctx);
         }
         Expr::String { .. }
         | Expr::RawString { .. }
@@ -334,20 +408,20 @@ fn visit_expr(expr: &Expr, errors: &mut BTreeSet<String>) {
         | Expr::Null { .. }
         | Expr::Var { .. } => {}
         Expr::OrExpr { lhs, rhs, .. } => {
-            visit_expr(lhs, errors);
-            visit_expr(rhs, errors);
+            visit_expr(lhs, errors, ctx);
+            visit_expr(rhs, errors, ctx);
         }
     }
 }
 
-fn extract_input_reference_path(expr: &Expr) -> Option<InputReferencePath> {
+fn extract_input_reference_path(expr: &Expr, ctx: InputPathContext) -> Option<InputReferencePath> {
     match expr {
         Expr::Var { span, .. } if span.text() == "input" => Some(InputReferencePath {
             components: vec![InputPathComponent::Field("input".to_string())],
             display: "input".to_string(),
         }),
         Expr::RefDot { refr, field, .. } => {
-            let mut path = extract_input_reference_path(refr)?;
+            let mut path = extract_input_reference_path(refr, ctx)?;
             let field_name = field.1.as_string().ok()?.to_string();
             path.display.push('.');
             path.display.push_str(&field_name);
@@ -355,13 +429,14 @@ fn extract_input_reference_path(expr: &Expr) -> Option<InputReferencePath> {
             Some(path)
         }
         Expr::RefBrack { refr, index, .. } => {
-            let mut path = extract_input_reference_path(refr)?;
+            let mut path = extract_input_reference_path(refr, ctx)?;
             path.display.push('[');
             path.display.push_str(index.span().text());
             path.display.push(']');
 
             let current_path = path.normalized();
-            if rule_input_catalog()
+            if ctx
+                .catalog
                 .array_container_paths
                 .contains(current_path.as_str())
             {
@@ -385,8 +460,11 @@ fn extract_input_reference_path(expr: &Expr) -> Option<InputReferencePath> {
     }
 }
 
-fn validate_input_reference_path(path: &InputReferencePath) -> Option<String> {
-    if path.is_dynamic_extra_path() {
+fn validate_input_reference_path(
+    path: &InputReferencePath,
+    ctx: InputPathContext,
+) -> Option<String> {
+    if ctx.allow_release_extra && path.is_dynamic_extra_path() {
         return None;
     }
 
@@ -395,10 +473,7 @@ fn validate_input_reference_path(path: &InputReferencePath) -> Option<String> {
     }
 
     let normalized = path.normalized();
-    if rule_input_catalog()
-        .known_paths
-        .contains(normalized.as_str())
-    {
+    if ctx.catalog.known_paths.contains(normalized.as_str()) {
         None
     } else {
         Some(unknown_rule_input_path_message(&normalized))
@@ -431,8 +506,7 @@ pub fn validate_user_rule(
     }
 
     // Compile in a throwaway engine
-    let mut engine = Engine::new();
-    builtins::register_builtins(&mut engine);
+    let mut engine = runtime::configured_engine(&RuntimeLimits::release_defaults());
 
     let policy_path = format!("user/{rule_set_id}.rego");
     if let Err(e) = engine.add_policy(policy_path.clone(), rego_source.to_string()) {
@@ -445,8 +519,9 @@ pub fn validate_user_rule(
         return Ok(ValidationResult::invalid(format!("compilation error: {e}")));
     }
 
-    let input_path_errors = collect_unknown_input_path_errors(rego_source, &policy_path)
-        .map_err(RulesError::Compilation)?;
+    let input_path_errors =
+        collect_unknown_input_path_errors(rego_source, &policy_path, InputPathContext::release())
+            .map_err(RulesError::Compilation)?;
     if !input_path_errors.is_empty() {
         return Ok(ValidationResult {
             valid: false,
@@ -506,8 +581,7 @@ pub fn validate_runtime_wrapper(
         )));
     }
 
-    let mut engine = Engine::new();
-    builtins::register_builtins(&mut engine);
+    let mut engine = runtime::configured_engine(&RuntimeLimits::release_defaults());
 
     let policy_path = format!("user/{rule_set_id}.rego");
     if let Err(e) = engine.add_policy(policy_path, rego_source.to_string()) {
@@ -545,6 +619,73 @@ pub fn validate_managed_rule(
     rule_set_id: &str,
 ) -> Result<ValidationResult, RulesError> {
     validate_user_rule(rego_source, rule_set_id)
+}
+
+/// Validate a user-authored maintenance matcher without persisting it.
+///
+/// The caller is expected to have already called
+/// [`crate::maintenance::rewrite_package_declaration`] on the source.
+///
+/// Checks:
+/// 1. Package declaration matches `scryer.maintenance.user.<rule_set_id>`.
+/// 2. Source and the generated decision wrapper both compile.
+/// 3. The source defines a rule named `match`. The wrapper defaults an
+///    undefined `match` to false, so a matcher that never defines one would
+///    quietly evaluate to no-match forever — this is the only place that catches
+///    it.
+/// 4. Every `input.*` reference resolves in the maintenance catalog.
+/// 5. A dry run against synthetic input yields a well-formed decision.
+pub fn validate_maintenance_rule(
+    rego_source: &str,
+    rule_set_id: &str,
+) -> Result<ValidationResult, RulesError> {
+    let expected_pkg = format!("package {MAINTENANCE_USER_PACKAGE_PREFIX}.{rule_set_id}");
+    if !rego_source.lines().any(|line| line.trim() == expected_pkg) {
+        return Ok(ValidationResult::invalid(format!(
+            "package declaration must be: {expected_pkg}"
+        )));
+    }
+
+    let mut engine = runtime::configured_engine(&RuntimeLimits::maintenance_defaults());
+
+    let policy_path = maintenance::user_policy_path(rule_set_id);
+    if let Err(e) = engine.add_policy(policy_path.clone(), rego_source.to_string()) {
+        return Ok(ValidationResult::invalid(format!("compilation error: {e}")));
+    }
+    if let Err(e) = engine.add_policy(
+        maintenance::decision_wrapper_policy_path(rule_set_id),
+        maintenance::decision_wrapper_source(rule_set_id),
+    ) {
+        return Ok(ValidationResult::invalid(format!("compilation error: {e}")));
+    }
+
+    let module = parse_module(rego_source, &policy_path).map_err(RulesError::Compilation)?;
+
+    let input_path_errors = module_input_path_errors(&module, InputPathContext::maintenance());
+    if !input_path_errors.is_empty() {
+        return Ok(ValidationResult {
+            valid: false,
+            errors: input_path_errors,
+        });
+    }
+
+    if !module_defines_rule(&module, "match") {
+        return Ok(ValidationResult::invalid(
+            "maintenance rule must define a boolean 'match' rule, for example: match if { ... }",
+        ));
+    }
+
+    let input_value = serde_json::to_value(maintenance::synthetic_maintenance_input())
+        .map_err(RulesError::Serialization)?;
+    engine.set_input(input_value.into());
+
+    match engine.eval_rule(maintenance::decision_wrapper_rule_path(rule_set_id)) {
+        Ok(value) => match maintenance::decode_decision(&value) {
+            Ok(_) => Ok(ValidationResult::valid()),
+            Err(e) => Ok(ValidationResult::invalid(format!("output error: {e}"))),
+        },
+        Err(e) => Ok(ValidationResult::invalid(format!("runtime error: {e}"))),
+    }
 }
 
 /// Verify that the evaluation result is a map of string → integer.
@@ -842,6 +983,98 @@ mod tests {
             "crates/scryer-rules/rule-input-contract.json and \
              apps/scryer-web/lib/contracts/rule-input-contract.json must stay byte-identical"
         );
+    }
+
+    #[test]
+    fn maintenance_input_contract_copies_are_byte_identical() {
+        assert_eq!(
+            include_str!("../maintenance-input-contract.json"),
+            include_str!("../../../apps/scryer-web/lib/contracts/maintenance-input-contract.json"),
+            "crates/scryer-rules/maintenance-input-contract.json and \
+             apps/scryer-web/lib/contracts/maintenance-input-contract.json must stay byte-identical"
+        );
+    }
+
+    fn validate_maintenance_body(id: &str, body: &str) -> ValidationResult {
+        let source = maintenance::rewrite_package_declaration(body, id);
+        validate_maintenance_rule(&source, id).expect("validation should not fail outright")
+    }
+
+    #[test]
+    fn valid_maintenance_rule_passes_validation() {
+        let result = validate_maintenance_body(
+            "unmonitored_and_stale",
+            "match if {\n  \
+               input.facts.monitored.status == \"known\"\n  \
+               not input.facts.monitored.value\n  \
+               input.facts.files.value[0].quality == \"2160P\"\n\
+             }\n\n\
+             reasons contains \"unmonitored\"\n",
+        );
+        assert!(result.valid, "errors: {:?}", result.errors);
+    }
+
+    #[test]
+    fn maintenance_rule_without_match_is_rejected() {
+        let result = validate_maintenance_body(
+            "no_match_rule",
+            "unknown if {\n  input.facts.monitored.status != \"known\"\n}\n",
+        );
+        assert!(!result.valid);
+        assert!(
+            result.errors[0].contains("must define a boolean 'match' rule"),
+            "{:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn maintenance_rule_with_non_boolean_match_is_rejected() {
+        let result = validate_maintenance_body("numeric_match", "match := 42\n");
+        assert!(!result.valid);
+        assert!(
+            result.errors[0].contains("'match' must be a boolean"),
+            "{:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn maintenance_rule_with_unknown_input_path_is_rejected() {
+        let result = validate_maintenance_body(
+            "watch_count",
+            "match if {\n  input.facts.watch_count.value == 0\n}\n",
+        );
+        assert!(!result.valid);
+        assert!(
+            result.errors[0].contains("Unknown rule input path 'input.facts.watch_count'"),
+            "{:?}",
+            result.errors
+        );
+    }
+
+    /// The `input.release.extra.<key>` escape hatch is release-only: maintenance
+    /// facts are all catalogued, so an uncatalogued path is always a typo.
+    #[test]
+    fn maintenance_rule_cannot_use_release_extra_paths() {
+        let result = validate_maintenance_body(
+            "extra_path",
+            "match if {\n  input.release.extra.anything == \"x\"\n}\n",
+        );
+        assert!(!result.valid);
+        assert!(
+            result.errors[0].contains("Unknown rule input path 'input.release'"),
+            "{:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn maintenance_rule_with_wrong_package_is_rejected() {
+        let source = maintenance::rewrite_package_declaration("match := true\n", "actual_id");
+        let result = validate_maintenance_rule(&source, "expected_id").unwrap();
+        assert!(!result.valid);
+        assert!(result.errors[0].contains("package declaration"));
     }
 
     /// Opt-in managed packs may veto, so the builtin is accepted

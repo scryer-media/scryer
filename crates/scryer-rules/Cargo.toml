@@ -4,6 +4,8 @@ version = "0.19.4"
 edition.workspace = true
 
 [dependencies]
+blake3 = "1"
+chrono = { workspace = true }
 regorus = { version = "0.11.0", default-features = false, features = ["arc", "std", "rego-extensions", "regex"] }
 serde = { workspace = true }
 serde_json = { workspace = true }

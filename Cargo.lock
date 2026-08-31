@@ -6210,6 +6210,8 @@ dependencies = [
 name = "scryer-rules"
 version = "0.19.4"
 dependencies = [
+ "blake3",
+ "chrono",
  "regorus",
  "serde",
  "serde_json",
