@@ -309,8 +309,16 @@ fn map_download_add_plugin_error(error: PluginError, context: &str) -> AppError 
 }
 
 fn parse_timestamp(raw: Option<String>) -> Option<DateTime<Utc>> {
-    raw.and_then(|value| chrono::DateTime::parse_from_rfc3339(&value).ok())
+    let value = raw?.trim().to_string();
+    chrono::DateTime::parse_from_rfc3339(&value)
+        .ok()
         .map(|value| value.with_timezone(&Utc))
+        .or_else(|| {
+            value
+                .parse::<i64>()
+                .ok()
+                .and_then(|seconds| DateTime::<Utc>::from_timestamp(seconds, 0))
+        })
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -1966,6 +1974,20 @@ mod tests {
     use super::*;
     use chrono::Utc;
     use scryer_plugin_sdk::PluginTorrentItem;
+
+    #[test]
+    fn parse_timestamp_accepts_rfc3339_and_unix_seconds() {
+        let expected = DateTime::<Utc>::from_timestamp(1_700_000_000, 0).unwrap();
+        assert_eq!(
+            parse_timestamp(Some("2023-11-14T22:13:20Z".to_string())),
+            Some(expected)
+        );
+        assert_eq!(
+            parse_timestamp(Some(" 1700000000 ".to_string())),
+            Some(expected)
+        );
+        assert_eq!(parse_timestamp(Some("not-a-time".to_string())), None);
+    }
 
     fn queue_filter_item(state: DownloadItemState) -> PluginDownloadItem {
         PluginDownloadItem {
