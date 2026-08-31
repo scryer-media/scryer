@@ -22,11 +22,11 @@ use super::{
     from_ui_settings, ui_settings_update_from_input,
 };
 use scryer_interface_core::{
-    account_security_actor_from_ctx, actor_from_ctx, api_key_management_actor_from_ctx,
-    app_from_ctx, auth_runtime_from_ctx, default_persist_session_from_ctx,
-    interactive_session_actor_from_ctx, login_verification_required_gql_error,
-    mfa_enrollment_actor_from_ctx, mfa_verification_from_ctx,
-    password_change_required_actor_from_ctx, persist_session_or_default,
+    AuthlessDefaultSession, account_security_actor_from_ctx, actor_from_ctx,
+    api_key_management_actor_from_ctx, app_from_ctx, auth_runtime_from_ctx,
+    default_persist_session_from_ctx, interactive_session_actor_from_ctx,
+    login_verification_required_gql_error, mfa_enrollment_actor_from_ctx,
+    mfa_verification_from_ctx, password_change_required_actor_from_ctx, persist_session_or_default,
     require_config_app_permission, to_gql_error, to_login_gql_error,
     to_login_gql_error_after_timing, totp_enrollment_actor_from_ctx,
     totp_management_actor_from_ctx,
@@ -1871,7 +1871,7 @@ impl SettingsMutations {
             None,
             Some(mfa_step_up_verified_until),
             mfa.persist_session,
-            None,
+            Some(&mfa.auth_session_version),
             false,
         )
         .await
@@ -1962,10 +1962,21 @@ impl SettingsMutations {
         let app = app_from_ctx(ctx)?;
         let mfa = mfa_verification_from_ctx(ctx);
         let actor = totp_management_actor_from_ctx(ctx)?;
-        app.totp_disable(&actor, &input.code, mfa.auth_session_version.as_deref())
-            .await
-            .map(from_totp_status)
-            .map_err(to_gql_error)
+        let expected_auth_session_version = if ctx.data_opt::<AuthlessDefaultSession>().is_some() {
+            app.current_actor_auth_session_version(&actor)
+                .await
+                .map_err(to_gql_error)?
+        } else {
+            mfa.auth_session_version.clone()
+        };
+        app.totp_disable(
+            &actor,
+            &input.code,
+            expected_auth_session_version.as_deref(),
+        )
+        .await
+        .map(from_totp_status)
+        .map_err(to_gql_error)
     }
 
     /// Regenerates recovery codes after verifying TOTP; returned codes are one-time secrets.
@@ -1978,11 +1989,18 @@ impl SettingsMutations {
         let app = app_from_ctx(ctx)?;
         let mfa = mfa_verification_from_ctx(ctx);
         let actor = totp_management_actor_from_ctx(ctx)?;
+        let expected_auth_session_version = if ctx.data_opt::<AuthlessDefaultSession>().is_some() {
+            app.current_actor_auth_session_version(&actor)
+                .await
+                .map_err(to_gql_error)?
+        } else {
+            mfa.auth_session_version.clone()
+        };
         let complete = app
             .totp_regenerate_recovery_codes(
                 &actor,
                 &input.code,
-                mfa.auth_session_version.as_deref(),
+                expected_auth_session_version.as_deref(),
             )
             .await
             .map_err(to_gql_error)?;

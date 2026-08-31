@@ -492,6 +492,19 @@ impl AppUseCase {
         Ok(user)
     }
 
+    /// Reads the actor's current session version for a transaction that cannot
+    /// rely on an interactive token claim.
+    pub async fn current_actor_auth_session_version(
+        &self,
+        actor: &User,
+    ) -> AppResult<Option<String>> {
+        self.services
+            .identity
+            .users
+            .auth_session_version(&actor.id)
+            .await
+    }
+
     async fn derive_jwt_key_for_user(&self, user: &User) -> AppResult<Option<Vec<u8>>> {
         let user = self.user_with_authorization(user).await?;
         let signing_seed = user

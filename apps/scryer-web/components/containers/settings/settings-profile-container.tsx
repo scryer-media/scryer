@@ -68,6 +68,12 @@ import {
   reauthenticateAccountSecurityWithPasskey,
   registerPasskey,
 } from "@/lib/utils/passkeys";
+import {
+  consumeReauthenticatedAction,
+  dismissReauthenticationAction,
+  queueReauthenticationAction,
+  type PendingReauthenticationAction,
+} from "@/lib/utils/security-factor-reauthentication";
 import { authenticateWithPlexPin } from "@/lib/utils/plex-oauth";
 import {
   canSubmitJellyfinLink,
@@ -174,7 +180,7 @@ export function SettingsProfileContainer({ userId, username }: Props) {
   const [securityReauthenticationCode, setSecurityReauthenticationCode] = useState("");
   const [securityReauthenticationBusy, setSecurityReauthenticationBusy] = useState(false);
   const [pendingSecurityFactorAction, setPendingSecurityFactorAction] =
-    useState<PendingSecurityFactorAction | null>(null);
+    useState<PendingReauthenticationAction<PendingSecurityFactorAction> | null>(null);
   const [securityReauthenticationGeneration, setSecurityReauthenticationGeneration] = useState(0);
   const [totpRecoveryCodes, setTotpRecoveryCodes] = useState<string[]>([]);
   const [linkedAccounts, setLinkedAccounts] = useState<LinkedAccount[]>([]);
@@ -239,14 +245,25 @@ export function SettingsProfileContainer({ userId, username }: Props) {
       return false;
     }
     if (pendingAction) {
-      setPendingSecurityFactorAction(pendingAction);
+      setPendingSecurityFactorAction(
+        queueReauthenticationAction(pendingAction, securityReauthenticationGeneration),
+      );
     }
     setSecurityReauthenticationMethod(
       hasPassword ? "password" : passkeys.length > 0 ? "passkey" : "totp",
     );
     setSecurityReauthenticationOpen(true);
     return true;
-  }, [hasPassword, passkeys.length]);
+  }, [hasPassword, passkeys.length, securityReauthenticationGeneration]);
+
+  const handleSecurityReauthenticationOpenChange = useCallback((open: boolean) => {
+    setSecurityReauthenticationOpen(open);
+    if (!open) {
+      setPendingSecurityFactorAction(dismissReauthenticationAction());
+      setSecurityReauthenticationPassword("");
+      setSecurityReauthenticationCode("");
+    }
+  }, []);
 
   const handlePasswordSecurityReauthentication = useCallback(async () => {
     if (!securityReauthenticationPassword) return;
@@ -931,10 +948,14 @@ export function SettingsProfileContainer({ userId, username }: Props) {
   }, [client, setGlobalStatus, t, totpActionCode]);
 
   useEffect(() => {
-    if (!pendingSecurityFactorAction || securityReauthenticationGeneration === 0) return;
+    const resumed = consumeReauthenticatedAction(
+      pendingSecurityFactorAction,
+      securityReauthenticationGeneration,
+    );
+    if (!resumed.action) return;
 
-    const action = pendingSecurityFactorAction;
-    setPendingSecurityFactorAction(null);
+    const action = resumed.action;
+    setPendingSecurityFactorAction(resumed.pending);
     void (async () => {
       switch (action.kind) {
         case "add-passkey":
@@ -1265,7 +1286,7 @@ export function SettingsProfileContainer({ userId, username }: Props) {
     <ApiKeysPanel />
     <Dialog
       open={securityReauthenticationOpen}
-      onOpenChange={setSecurityReauthenticationOpen}
+      onOpenChange={handleSecurityReauthenticationOpenChange}
     >
       <DialogContent>
         <DialogHeader>
