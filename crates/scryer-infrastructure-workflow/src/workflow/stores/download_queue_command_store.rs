@@ -130,7 +130,7 @@ impl DownloadQueueCommandRepository for DownloadQueueCommandStore {
                         &[
                             SqlArg::Text(id),
                             SqlArg::Text(DownloadQueueCommandAction::Delete.as_str().to_string()),
-                            SqlArg::OptText(canonical_download_id),
+                            SqlArg::OptText(canonical_download_id.clone()),
                             SqlArg::Text(normalized_client_id.clone()),
                             SqlArg::Text(client_type.clone()),
                             SqlArg::Text(download_client_item_id.clone()),
@@ -142,6 +142,28 @@ impl DownloadQueueCommandRepository for DownloadQueueCommandStore {
                         ],
                     )
                     .await?;
+                    if let Some(canonical_download_id) = canonical_download_id {
+                        SqlRuntime::execute(
+                            SqlExec::Tx(tx),
+                            "UPDATE download_queue_commands
+                             SET canonical_download_id = {}
+                             WHERE action = 'delete'
+                               AND COALESCE(client_id, '') = {}
+                               AND client_type = {}
+                               AND download_client_item_id = {}
+                               AND is_history = {}
+                               AND status IN ('queued', 'running')
+                               AND canonical_download_id IS NULL",
+                            &[
+                                SqlArg::Text(canonical_download_id),
+                                SqlArg::Text(normalized_client_id.clone()),
+                                SqlArg::Text(client_type.clone()),
+                                SqlArg::Text(download_client_item_id.clone()),
+                                SqlArg::Bool(is_history),
+                            ],
+                        )
+                        .await?;
+                    }
                     fetch_optional_delete_command(
                         SqlExec::Tx(tx),
                         "WHERE action = {}
@@ -236,6 +258,7 @@ impl DownloadQueueCommandRepository for DownloadQueueCommandStore {
     async fn list_latest_delete_commands_for_sources(
         &self,
         sources: &[(Option<String>, String, String, bool)],
+        completed_only: bool,
     ) -> AppResult<Vec<DownloadQueueCommandRecord>> {
         if sources.is_empty() {
             return Ok(Vec::new());
@@ -257,10 +280,15 @@ impl DownloadQueueCommandRepository for DownloadQueueCommandStore {
                 "({client_clause} AND client_type = {{}} AND download_client_item_id = {{}} AND is_history = {{}})"
             ));
         }
+        let completed_clause = if completed_only {
+            " AND status = 'completed'"
+        } else {
+            ""
+        };
         let rows = fetch_delete_commands(
             self.datastore.read_exec(),
             &format!(
-                "WHERE action = 'delete' AND ({}) ORDER BY created_at DESC, id DESC",
+                "WHERE action = 'delete'{completed_clause} AND ({}) ORDER BY created_at DESC, id DESC",
                 clauses.join(" OR ")
             ),
             &args,
@@ -365,9 +393,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn queue_delete_dedup_remains_tuple_keyed_with_or_without_canonical_id() {
+    async fn queue_delete_dedup_enriches_but_never_replaces_canonical_id() {
         let store = store().await;
         let canonical_download_id = scryer_domain::download_identity::DownloadId::new();
+        let other_download_id = scryer_domain::download_identity::DownloadId::new();
 
         let legacy = store
             .queue_delete_command(None, "nzbget", "legacy-first", false, None)
@@ -385,7 +414,11 @@ mod tests {
             .await
             .expect("dedupe canonical delete command");
         assert_eq!(deduped_canonical.id, legacy.id);
-        assert_eq!(deduped_canonical.canonical_download_id, None);
+        assert_eq!(
+            deduped_canonical.canonical_download_id,
+            Some(canonical_download_id)
+        );
+        assert_eq!(deduped_canonical.updated_at, legacy.updated_at);
 
         let canonical = store
             .queue_delete_command_for_download(
@@ -407,5 +440,63 @@ mod tests {
             deduped_legacy.canonical_download_id,
             Some(canonical_download_id)
         );
+
+        let deduped_other = store
+            .queue_delete_command_for_download(
+                Some(&other_download_id),
+                Some("client-2"),
+                "nzbget",
+                "canonical-first",
+                true,
+                None,
+            )
+            .await
+            .expect("dedupe conflicting canonical delete command");
+        assert_eq!(deduped_other.id, canonical.id);
+        assert_eq!(
+            deduped_other.canonical_download_id,
+            Some(canonical_download_id)
+        );
+    }
+
+    #[tokio::test]
+    async fn completed_delete_evidence_ignores_newer_noncompleted_commands() {
+        let store = store().await;
+        let completed = store
+            .queue_delete_command(Some("client-1"), "weaver", "job-1", false, None)
+            .await
+            .expect("queue completed command");
+        store
+            .mark_delete_command_completed(&completed.id)
+            .await
+            .expect("complete first command");
+        let failed = store
+            .queue_delete_command(Some("client-1"), "weaver", "job-1", false, None)
+            .await
+            .expect("queue failed command");
+        store
+            .mark_delete_command_failed(&failed.id, Some("fixture failure"))
+            .await
+            .expect("fail second command");
+        store
+            .queue_delete_command(Some("client-1"), "weaver", "job-1", false, None)
+            .await
+            .expect("queue pending command");
+
+        let evidence = store
+            .list_latest_delete_commands_for_sources(
+                &[(
+                    Some("client-1".to_string()),
+                    "weaver".to_string(),
+                    "job-1".to_string(),
+                    false,
+                )],
+                true,
+            )
+            .await
+            .expect("load completed evidence");
+
+        assert_eq!(evidence.len(), 1);
+        assert_eq!(evidence[0].id, completed.id);
     }
 }

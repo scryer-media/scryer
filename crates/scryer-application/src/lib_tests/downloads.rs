@@ -3,10 +3,25 @@ use super::*;
 #[derive(Default)]
 struct RecordingDownloadRegistry {
     rows: Arc<Mutex<HashMap<ClientJobLocator, scryer_domain::download_identity::DownloadId>>>,
+    binding_times: Arc<
+        Mutex<
+            HashMap<
+                scryer_domain::download_identity::DownloadId,
+                (chrono::DateTime<Utc>, Option<chrono::DateTime<Utc>>),
+            >,
+        >,
+    >,
     ended: Arc<Mutex<HashSet<scryer_domain::download_identity::DownloadId>>>,
     terminal: Arc<Mutex<HashSet<scryer_domain::download_identity::DownloadId>>>,
     reconcile_candidates: Arc<Mutex<Vec<DownloadClientBindingRecord>>>,
     failing_bindings: Arc<Mutex<HashSet<ClientJobLocator>>>,
+    strict_conflicts: bool,
+}
+
+fn fixed_time(value: &str) -> chrono::DateTime<Utc> {
+    chrono::DateTime::parse_from_rfc3339(value)
+        .expect("valid fixed test timestamp")
+        .with_timezone(&Utc)
 }
 
 impl RecordingDownloadRegistry {
@@ -20,6 +35,20 @@ impl RecordingDownloadRegistry {
         download_id: scryer_domain::download_identity::DownloadId,
     ) {
         self.rows.lock().await.insert(locator, download_id);
+    }
+
+    async fn bind_at(
+        &self,
+        locator: ClientJobLocator,
+        download_id: scryer_domain::download_identity::DownloadId,
+        created_at: chrono::DateTime<Utc>,
+        last_seen_at: Option<chrono::DateTime<Utc>>,
+    ) {
+        self.bind(locator, download_id).await;
+        self.binding_times
+            .lock()
+            .await
+            .insert(download_id, (created_at, last_seen_at));
     }
 
     async fn fail_binding_lookup(&self, locator: ClientJobLocator) {
@@ -51,6 +80,15 @@ impl DownloadRegistryRepository for RecordingDownloadRegistry {
             .wire_token
             .as_deref()
             .and_then(scryer_domain::download_identity::DownloadId::from_wire);
+        if self.strict_conflicts
+            && let (Some(binding_download_id), Some(token_id)) = (known, token)
+            && binding_download_id != token_id
+        {
+            return Ok(ObservationResolution::Conflict {
+                token_id,
+                binding_download_id,
+            });
+        }
         let download_id = token
             .or(known)
             .unwrap_or_else(scryer_domain::download_identity::DownloadId::new);
@@ -98,14 +136,21 @@ impl DownloadRegistryRepository for RecordingDownloadRegistry {
             return Ok(None);
         };
         let ended_at = self.ended.lock().await.contains(id).then(Utc::now);
+        let (created_at, last_seen_at) = self
+            .binding_times
+            .lock()
+            .await
+            .get(id)
+            .copied()
+            .unwrap_or_else(|| (Utc::now(), None));
         Ok(Some(DownloadClientBindingRecord {
             download_id: *id,
             client_config_id: locator.client_id,
             client_type_snapshot: Some(locator.client_type),
             client_name_snapshot: None,
             native_item_id: Some(locator.item_id),
-            created_at: Utc::now(),
-            last_seen_at: None,
+            created_at,
+            last_seen_at,
             ended_at,
         }))
     }
@@ -125,14 +170,21 @@ impl DownloadRegistryRepository for RecordingDownloadRegistry {
         if self.ended.lock().await.contains(&download_id) {
             return Ok(None);
         }
+        let (created_at, last_seen_at) = self
+            .binding_times
+            .lock()
+            .await
+            .get(&download_id)
+            .copied()
+            .unwrap_or_else(|| (Utc::now(), None));
         Ok(Some(DownloadClientBindingRecord {
             download_id,
             client_config_id: locator.client_id.clone(),
             client_type_snapshot: Some(locator.client_type.clone()),
             client_name_snapshot: None,
             native_item_id: Some(locator.item_id.clone()),
-            created_at: Utc::now(),
-            last_seen_at: None,
+            created_at,
+            last_seen_at,
             ended_at: None,
         }))
     }
@@ -9448,6 +9500,207 @@ async fn queue_delete_ends_bound_download_when_client_is_unavailable() {
 }
 
 #[tokio::test]
+async fn legacy_queue_delete_ends_binding_that_predates_the_command() {
+    let download_client = Arc::new(StubDownloadClient::default());
+    download_client
+        .set_delete_error(Some("download client item not found"))
+        .await;
+    let download_queue_commands = Arc::new(TrackingDownloadQueueCommandRepo::default());
+    let registry = Arc::new(RecordingDownloadRegistry::default());
+    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let canonical_download_id = scryer_domain::download_identity::DownloadId::new();
+    let source_identity = ClientJobLocator::new(Some("client-legacy"), "nzbget", "legacy-job");
+    let command_id = download_queue_commands
+        .seed_pending(Some("client-legacy"), "nzbget", "legacy-job", false)
+        .await;
+    let command_created_at = fixed_time("2026-08-29T12:00:00Z");
+    {
+        let mut commands = download_queue_commands.queued.lock().await;
+        let command = commands
+            .iter_mut()
+            .find(|command| command.id == command_id)
+            .expect("seeded legacy delete command");
+        command.created_at = command_created_at.to_rfc3339();
+        command.updated_at = command.created_at.clone();
+    }
+    registry
+        .bind_at(
+            source_identity.clone(),
+            canonical_download_id,
+            command_created_at - chrono::Duration::minutes(2),
+            Some(command_created_at - chrono::Duration::minutes(1)),
+        )
+        .await;
+    download_submissions
+        .record_submission(DownloadSubmission {
+            download_id: canonical_download_id,
+            title_id: "title-legacy".to_string(),
+            purpose: crate::DownloadSubmissionPurpose::Standard,
+            facet: "series".to_string(),
+            download_client_id: Some("client-legacy".to_string()),
+            download_client_type: "nzbget".to_string(),
+            download_client_item_id: "legacy-job".to_string(),
+            source_hint: None,
+            source_provider_id: None,
+            source_provider_name: None,
+            source_kind: None,
+            source_title: Some("Fixture.Release".to_string()),
+            info_hash: None,
+            release_size_bytes: None,
+            request_signature: None,
+            scope: SubmissionScope::Title,
+        })
+        .await
+        .expect("record matching submission");
+    let (base_app, _) =
+        bootstrap_with_delete_queue(download_client, download_queue_commands.clone());
+    let app = base_app.with_test_overrides(|services| {
+        services
+            .with_download_registry(registry.clone())
+            .with_download_submissions(download_submissions.clone())
+    });
+
+    let token = tokio_util::sync::CancellationToken::new();
+    let handle = tokio::spawn(start_background_download_delete_poller(
+        app,
+        token.child_token(),
+    ));
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if download_queue_commands
+                .get(&command_id)
+                .await
+                .is_some_and(|record| {
+                    record.status == scryer_domain::DownloadQueueDeleteStatus::Completed
+                })
+            {
+                break;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("legacy delete should complete");
+    token.cancel();
+    handle.await.expect("delete poller should stop cleanly");
+
+    assert!(registry.ended.lock().await.contains(&canonical_download_id));
+    assert_eq!(
+        download_submissions
+            .get_identity_tracked_state_for_download(
+                Some(&canonical_download_id),
+                &DownloadSubmissionIdentity::default(),
+                Some(&source_identity),
+            )
+            .await
+            .expect("load canonical ignored state")
+            .as_deref(),
+        Some(TrackedDownloadState::Ignored.as_str())
+    );
+}
+
+#[tokio::test]
+async fn completed_legacy_delete_heals_a_conflicting_reused_locator() {
+    let download_queue_commands = Arc::new(TrackingDownloadQueueCommandRepo::default());
+    let registry = Arc::new(RecordingDownloadRegistry {
+        strict_conflicts: true,
+        ..Default::default()
+    });
+    let locator = ClientJobLocator::new(Some("client-heal"), "weaver", "job-heal");
+    let stale_download_id = scryer_domain::download_identity::DownloadId::new();
+    let command = download_queue_commands
+        .queue_delete_command(
+            Some("client-heal"),
+            "weaver",
+            "job-heal",
+            false,
+            Some("admin"),
+        )
+        .await
+        .expect("queue legacy delete");
+    download_queue_commands
+        .mark_delete_command_completed(&command.id)
+        .await
+        .expect("complete legacy delete");
+    let command_created_at = fixed_time("2026-08-29T12:00:00Z");
+    {
+        let mut commands = download_queue_commands.queued.lock().await;
+        let command = commands
+            .iter_mut()
+            .find(|candidate| candidate.id == command.id)
+            .expect("queued legacy delete command");
+        command.created_at = command_created_at.to_rfc3339();
+    }
+    registry
+        .bind_at(
+            locator.clone(),
+            stale_download_id,
+            command_created_at - chrono::Duration::minutes(2),
+            Some(command_created_at - chrono::Duration::minutes(1)),
+        )
+        .await;
+    let (base_app, _) = bootstrap_with_delete_queue(
+        Arc::new(StubDownloadClient::default()),
+        download_queue_commands,
+    );
+    let app =
+        base_app.with_test_overrides(|services| services.with_download_registry(registry.clone()));
+    let replacement_download_id = scryer_domain::download_identity::DownloadId::new();
+
+    let resolution = crate::download_identity::resolve_observed_client_job(
+        &app,
+        ObservedClientJob {
+            locator,
+            wire_token: Some(replacement_download_id.to_wire()),
+            observed_name: Some("Replacement job".to_string()),
+            observed_at: Utc::now(),
+        },
+    )
+    .await;
+
+    assert_eq!(
+        resolution,
+        crate::download_identity::ObservedClientJobResolution::Resolved(replacement_download_id)
+    );
+    assert!(registry.ended.lock().await.contains(&stale_download_id));
+}
+
+#[tokio::test]
+async fn identity_conflict_without_completed_delete_evidence_remains_blocked() {
+    let download_queue_commands = Arc::new(TrackingDownloadQueueCommandRepo::default());
+    let registry = Arc::new(RecordingDownloadRegistry {
+        strict_conflicts: true,
+        ..Default::default()
+    });
+    let locator = ClientJobLocator::new(Some("client-missing"), "weaver", "job-missing");
+    let stale_download_id = scryer_domain::download_identity::DownloadId::new();
+    registry.bind(locator.clone(), stale_download_id).await;
+    let (base_app, _) = bootstrap_with_delete_queue(
+        Arc::new(StubDownloadClient::default()),
+        download_queue_commands,
+    );
+    let app =
+        base_app.with_test_overrides(|services| services.with_download_registry(registry.clone()));
+
+    let resolution = crate::download_identity::resolve_observed_client_job(
+        &app,
+        ObservedClientJob {
+            locator,
+            wire_token: Some(scryer_domain::download_identity::DownloadId::new().to_wire()),
+            observed_name: Some("Unproven job".to_string()),
+            observed_at: Utc::now(),
+        },
+    )
+    .await;
+
+    assert_eq!(
+        resolution,
+        crate::download_identity::ObservedClientJobResolution::Conflict
+    );
+    assert!(!registry.ended.lock().await.contains(&stale_download_id));
+}
+
+#[tokio::test]
 async fn queue_delete_registry_miss_or_error_uses_legacy_command_and_still_executes() {
     let download_client = Arc::new(StubDownloadClient::default());
     let download_queue_commands = Arc::new(TrackingDownloadQueueCommandRepo::default());
@@ -9508,20 +9761,32 @@ async fn queue_delete_registry_miss_or_error_uses_legacy_command_and_still_execu
 }
 
 #[tokio::test]
-async fn legacy_delete_command_does_not_end_an_unrelated_binding() {
+async fn legacy_delete_command_does_not_end_binding_created_after_command() {
     let download_client = Arc::new(StubDownloadClient::default());
     let download_queue_commands = Arc::new(TrackingDownloadQueueCommandRepo::default());
     let command_id = download_queue_commands
         .seed_pending(Some("client-legacy"), "nzbget", "legacy-job", false)
         .await;
+    let command_created_at = fixed_time("2026-08-29T12:00:00Z");
+    {
+        let mut commands = download_queue_commands.queued.lock().await;
+        let command = commands
+            .iter_mut()
+            .find(|command| command.id == command_id)
+            .expect("seeded legacy delete command");
+        command.created_at = command_created_at.to_rfc3339();
+        command.updated_at = command.created_at.clone();
+    }
     let (base_app, _) =
         bootstrap_with_delete_queue(download_client, download_queue_commands.clone());
     let registry = Arc::new(RecordingDownloadRegistry::default());
     let canonical_download_id = scryer_domain::download_identity::DownloadId::new();
     registry
-        .bind(
+        .bind_at(
             ClientJobLocator::new(Some("client-legacy"), "nzbget", "legacy-job"),
             canonical_download_id,
+            command_created_at + chrono::Duration::minutes(1),
+            None,
         )
         .await;
     let app =

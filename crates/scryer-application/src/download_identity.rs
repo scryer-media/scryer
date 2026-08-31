@@ -64,6 +64,115 @@ pub(crate) enum ObservedClientJobResolution {
     Unavailable,
 }
 
+pub(crate) fn legacy_binding_predates_delete(
+    binding: &crate::DownloadClientBindingRecord,
+    command_created_at: chrono::DateTime<Utc>,
+) -> bool {
+    binding.last_seen_at.unwrap_or(binding.created_at) <= command_created_at
+}
+
+fn completed_delete_proves_stale_binding(
+    command: &crate::DownloadQueueCommandRecord,
+    binding: &crate::DownloadClientBindingRecord,
+    locator: &ClientJobLocator,
+) -> bool {
+    if command.status != scryer_domain::DownloadQueueDeleteStatus::Completed {
+        return false;
+    }
+    let Ok(created_at) = chrono::DateTime::parse_from_rfc3339(&command.created_at) else {
+        return false;
+    };
+    let Some(finished_at) = command
+        .finished_at
+        .as_deref()
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+    else {
+        return false;
+    };
+    if finished_at < created_at {
+        return false;
+    }
+
+    match command.canonical_download_id {
+        Some(download_id) => download_id == binding.download_id,
+        None => {
+            ClientJobLocator::new(
+                command.client_id.as_deref(),
+                &command.client_type,
+                &command.download_client_item_id,
+            ) == *locator
+                && legacy_binding_predates_delete(binding, created_at.with_timezone(&Utc))
+        }
+    }
+}
+
+async fn heal_binding_after_completed_delete(
+    app: &AppUseCase,
+    observation: &ObservedClientJob,
+    conflicting_download_id: DownloadId,
+) -> bool {
+    let binding = match app
+        .services
+        .workflow
+        .download_registry
+        .find_active_binding_by_locator(&observation.locator)
+        .await
+    {
+        Ok(Some(binding)) if binding.download_id == conflicting_download_id => binding,
+        Ok(_) | Err(_) => return false,
+    };
+    let sources = [
+        (
+            observation.locator.client_id.clone(),
+            observation.locator.client_type.clone(),
+            observation.locator.item_id.clone(),
+            false,
+        ),
+        (
+            observation.locator.client_id.clone(),
+            observation.locator.client_type.clone(),
+            observation.locator.item_id.clone(),
+            true,
+        ),
+    ];
+    let commands = match app
+        .services
+        .workflow
+        .download_queue_commands
+        .list_latest_delete_commands_for_sources(&sources, true)
+        .await
+    {
+        Ok(commands) => commands,
+        Err(_) => return false,
+    };
+    if !commands.iter().any(|command| {
+        completed_delete_proves_stale_binding(command, &binding, &observation.locator)
+    }) {
+        return false;
+    }
+
+    if app
+        .services
+        .workflow
+        .download_registry
+        .end_binding(&binding.download_id)
+        .await
+        .is_err()
+    {
+        return false;
+    }
+
+    tracing::info!(
+        target: "download_identity_resolver",
+        download_id = %binding.download_id,
+        config_id = observation.locator.client_id.as_deref().unwrap_or(""),
+        client_type = %observation.locator.client_type,
+        native_item_id = %observation.locator.item_id,
+        "retired stale binding proven by completed delete"
+    );
+    true
+}
+
 /// Resolve an observation to the sole workflow identity.
 pub(crate) async fn resolve_observed_client_job(
     app: &AppUseCase,
@@ -78,13 +187,27 @@ pub(crate) async fn resolve_observed_client_job(
     let client_type = observation.locator.client_type.as_str();
     let native_item_id = observation.locator.item_id.as_str();
 
-    match app
+    let mut resolution = app
         .services
         .workflow
         .download_registry
         .resolve_observation(&observation)
-        .await
+        .await;
+    if let Ok(ObservationResolution::Conflict {
+        binding_download_id,
+        ..
+    }) = &resolution
+        && heal_binding_after_completed_delete(app, &observation, *binding_download_id).await
     {
+        resolution = app
+            .services
+            .workflow
+            .download_registry
+            .resolve_observation(&observation)
+            .await;
+    }
+
+    match resolution {
         Ok(ObservationResolution::Resolved {
             download_id,
             newly_foreign,
@@ -381,5 +504,95 @@ mod tests {
         });
 
         assert_eq!(identity.download_id.as_deref(), Some("SABnzbd_nzo_abc"));
+    }
+
+    #[test]
+    fn completed_delete_evidence_requires_exact_identity_and_safe_time_ordering() {
+        let command_at = chrono::DateTime::parse_from_rfc3339("2026-08-29T12:00:00Z")
+            .expect("valid command timestamp")
+            .with_timezone(&Utc);
+        let locator = ClientJobLocator::new(Some("client-1"), "weaver", "job-1");
+        let binding_id = DownloadId::new();
+        let binding = crate::DownloadClientBindingRecord {
+            download_id: binding_id,
+            client_config_id: locator.client_id.clone(),
+            client_type_snapshot: Some(locator.client_type.clone()),
+            client_name_snapshot: None,
+            native_item_id: Some(locator.item_id.clone()),
+            created_at: command_at - chrono::Duration::minutes(2),
+            last_seen_at: Some(command_at - chrono::Duration::minutes(1)),
+            ended_at: None,
+        };
+        let command = crate::DownloadQueueCommandRecord {
+            id: "delete-1".to_string(),
+            action: scryer_domain::DownloadQueueCommandAction::Delete,
+            canonical_download_id: None,
+            client_id: locator.client_id.clone(),
+            client_type: locator.client_type.clone(),
+            download_client_item_id: locator.item_id.clone(),
+            is_history: false,
+            status: scryer_domain::DownloadQueueDeleteStatus::Completed,
+            error_text: None,
+            requested_by_user_id: None,
+            started_at: Some(command_at.to_rfc3339()),
+            finished_at: Some((command_at + chrono::Duration::seconds(1)).to_rfc3339()),
+            created_at: command_at.to_rfc3339(),
+            updated_at: command_at.to_rfc3339(),
+        };
+        assert!(completed_delete_proves_stale_binding(
+            &command, &binding, &locator
+        ));
+        let binding_at_boundary = crate::DownloadClientBindingRecord {
+            last_seen_at: Some(command_at),
+            ..binding.clone()
+        };
+        assert!(completed_delete_proves_stale_binding(
+            &command,
+            &binding_at_boundary,
+            &locator
+        ));
+        let binding_seen_later = crate::DownloadClientBindingRecord {
+            last_seen_at: Some(command_at + chrono::Duration::seconds(1)),
+            ..binding.clone()
+        };
+        assert!(!completed_delete_proves_stale_binding(
+            &command,
+            &binding_seen_later,
+            &locator
+        ));
+
+        let wrong_locator = ClientJobLocator::new(Some("client-1"), "weaver", "job-2");
+        let mut altered = command.clone();
+        altered.canonical_download_id = Some(binding_id);
+        assert!(completed_delete_proves_stale_binding(
+            &altered,
+            &binding_seen_later,
+            &wrong_locator
+        ));
+        altered.canonical_download_id = Some(DownloadId::new());
+        assert!(!completed_delete_proves_stale_binding(
+            &altered, &binding, &locator
+        ));
+        assert!(!completed_delete_proves_stale_binding(
+            &command,
+            &binding,
+            &wrong_locator
+        ));
+
+        altered = command.clone();
+        altered.status = scryer_domain::DownloadQueueDeleteStatus::Failed;
+        assert!(!completed_delete_proves_stale_binding(
+            &altered, &binding, &locator
+        ));
+        altered = command.clone();
+        altered.finished_at = None;
+        assert!(!completed_delete_proves_stale_binding(
+            &altered, &binding, &locator
+        ));
+        altered = command.clone();
+        altered.created_at = "not-a-timestamp".to_string();
+        assert!(!completed_delete_proves_stale_binding(
+            &altered, &binding, &locator
+        ));
     }
 }

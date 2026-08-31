@@ -756,6 +756,7 @@ impl DownloadQueueCommandRepository for NullDownloadQueueCommandRepository {
     async fn list_latest_delete_commands_for_sources(
         &self,
         _: &[(Option<String>, String, String, bool)],
+        _: bool,
     ) -> AppResult<Vec<DownloadQueueCommandRecord>> {
         Ok(vec![])
     }

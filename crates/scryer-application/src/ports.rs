@@ -4494,6 +4494,7 @@ pub trait DownloadQueueCommandRepository: Send + Sync {
     async fn list_latest_delete_commands_for_sources(
         &self,
         sources: &[(Option<String>, String, String, bool)],
+        completed_only: bool,
     ) -> AppResult<Vec<crate::DownloadQueueCommandRecord>>;
 
     async fn prune_terminal_delete_commands_older_than(&self, days: i64) -> AppResult<u32>;

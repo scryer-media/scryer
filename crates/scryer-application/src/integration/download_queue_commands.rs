@@ -4,6 +4,42 @@ use crate::polling_worker::PollingWorker;
 const DOWNLOAD_DELETE_POLLER_INTERVAL_SECONDS: u64 = 2;
 const DOWNLOAD_DELETE_STALE_RECOVERY_SECONDS: i64 = 120;
 
+async fn delete_command_download_id(
+    app: &AppUseCase,
+    command: &crate::DownloadQueueCommandRecord,
+    source_identity: &crate::ClientJobLocator,
+) -> Option<scryer_domain::download_identity::DownloadId> {
+    if let Some(download_id) = command.canonical_download_id {
+        return Some(download_id);
+    }
+
+    let command_created_at = chrono::DateTime::parse_from_rfc3339(&command.created_at)
+        .ok()?
+        .with_timezone(&chrono::Utc);
+    let binding = match app
+        .services
+        .workflow
+        .download_registry
+        .find_active_binding_by_locator(source_identity)
+        .await
+    {
+        Ok(binding) => binding?,
+        Err(error) => {
+            tracing::warn!(
+                error = %error,
+                client_id = ?source_identity.client_id,
+                client_type = %source_identity.client_type,
+                native_item_id = %source_identity.item_id,
+                "failed to recover canonical binding for legacy delete command"
+            );
+            return None;
+        }
+    };
+
+    crate::download_identity::legacy_binding_predates_delete(&binding, command_created_at)
+        .then_some(binding.download_id)
+}
+
 pub async fn start_background_download_delete_poller(
     app: AppUseCase,
     token: tokio_util::sync::CancellationToken,
@@ -64,6 +100,14 @@ pub async fn start_background_download_delete_poller(
                 continue;
             }
 
+            let source_identity = crate::ClientJobLocator::new(
+                command.client_id.as_deref(),
+                &command.client_type,
+                &command.download_client_item_id,
+            );
+            let canonical_download_id =
+                delete_command_download_id(&app, &command, &source_identity).await;
+
             let result = if let Some(client_id) = command.client_id.as_deref() {
                 app.services
                     .integrations
@@ -103,15 +147,10 @@ pub async fn start_background_download_delete_poller(
                 .clone()
                 .map(crate::domain_events::DomainEventActor::user_id)
                 .unwrap_or_else(crate::domain_events::DomainEventActor::system);
-            let source_identity = crate::ClientJobLocator::new(
-                command.client_id.as_deref(),
-                &command.client_type,
-                &command.download_client_item_id,
-            );
             match crate::integration::workflow::finalize_scryer_download_ignored_for_download(
                 &app,
                 actor,
-                command.canonical_download_id.as_ref(),
+                canonical_download_id.as_ref(),
                 source_identity.clone(),
             )
             .await
@@ -177,7 +216,7 @@ pub async fn start_background_download_delete_poller(
             {
                 worker.warn_error("mark_delete_command_completed", &error);
             }
-            if let Some(canonical_download_id) = command.canonical_download_id.as_ref()
+            if let Some(canonical_download_id) = canonical_download_id.as_ref()
                 && let Err(error) = app
                     .services
                     .workflow
