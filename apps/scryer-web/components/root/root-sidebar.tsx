@@ -51,6 +51,7 @@ import {
   Rss,
   Server,
   Settings2,
+  Wrench,
   ShieldCheck,
   SlidersHorizontal,
   Sun,
@@ -182,6 +183,7 @@ const TOP_NAV_GROUPS: TopNavGroupDefinition[] = [
       { kind: "view", id: "activity" },
       { kind: "settings", id: "subtitles", icon: Captions },
       { kind: "settings", id: "rules", icon: SlidersHorizontal },
+      { kind: "settings", id: "maintenanceRules", icon: Wrench },
       { kind: "settings", id: "post-processing", icon: FolderCog },
     ],
   },
@@ -347,6 +349,12 @@ const settingsEntries: Array<{
   {
     id: "rules",
     label: (t) => t("settings.rules"),
+    requiredAnyAppPermission: [APP_PERMISSIONS.manageCatalogSettings],
+  },
+  {
+    id: "maintenanceRules",
+    label: (t) => t("settings.maintenanceRules"),
+    icon: Wrench,
     requiredAnyAppPermission: [APP_PERMISSIONS.manageCatalogSettings],
   },
   {

@@ -28,6 +28,7 @@ export type SettingsSection =
   | "delayProfiles"
   | "acquisition"
   | "rules"
+  | "maintenanceRules"
   | "plugins"
   | "notifications"
   | "post-processing"

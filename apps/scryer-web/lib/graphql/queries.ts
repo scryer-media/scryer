@@ -3339,6 +3339,76 @@ export const ruleSetsQuery = `query RuleSets {
   }
 }`;
 
+// ── Maintenance Rules ─────────────────────────────────────────────────
+
+export const MAINTENANCE_RULE_SET_FIELDS = `
+    id
+    name
+    description
+    enabled
+    evaluationMode
+    libraryIds
+    subjectKind
+    currentRevisionNumber
+    graceDays
+    actionSpec {
+      kind
+      schemaVersion
+      targetQualityProfileId
+    }
+    createdAt
+    updatedAt`;
+
+const maintenanceRuleRevisionFieldSelection = `
+    id
+    ruleSetId
+    revisionNumber
+    regoSource
+    graceDays
+    matcherContentHash
+    createdBy
+    createdAt`;
+
+export const maintenanceRuleSetsQuery = `query MaintenanceRuleSets {
+  maintenanceRuleSets {${MAINTENANCE_RULE_SET_FIELDS}
+  }
+}`;
+
+/// Detail payload shared by the rule-set query and every mutation that returns
+/// a rule set with its current revision and action.
+export const MAINTENANCE_RULE_SET_DETAIL_FIELDS = `
+    ruleSet {${MAINTENANCE_RULE_SET_FIELDS}
+    }
+    revision {${maintenanceRuleRevisionFieldSelection}
+    }
+    actionSpec {
+      kind
+      schemaVersion
+      targetQualityProfileId
+    }`;
+
+export const maintenanceRuleSetQuery = `query MaintenanceRuleSet($id: ID!) {
+  maintenanceRuleSet(id: $id) {${MAINTENANCE_RULE_SET_DETAIL_FIELDS}
+  }
+}`;
+
+export const maintenanceRuleRevisionsQuery = `query MaintenanceRuleRevisions($ruleSetId: ID!) {
+  maintenanceRuleRevisions(ruleSetId: $ruleSetId) {${maintenanceRuleRevisionFieldSelection}
+  }
+}`;
+
+export const maintenanceActionDescriptorsQuery = `query MaintenanceActionDescriptors {
+  maintenanceActionDescriptors {
+    kind
+    supportedSubjects
+    riskClass
+    effectClasses
+    timingMode
+    allowedRepeatModes
+    requiresTargetQualityProfile
+  }
+}`;
+
 // ── Community Rule Packs ──────────────────────────────────────────────
 
 export const rulePackRegistryQuery = `query RulePackRegistry {
