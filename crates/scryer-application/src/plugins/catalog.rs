@@ -103,6 +103,14 @@ pub const CATALOG_V3_SCHEMA_VERSION: &str = "scryer.plugin.catalog.v3";
 pub const CATALOG_V3_REDIRECT_SCHEMA_VERSION: &str = "scryer.plugin.catalog.v3.redirect";
 pub const CATALOG_V3_REDIRECT_BUNDLE_SUFFIX: &str = ".bundle.json";
 pub const CATALOG_V3_RUNTIME_WASIP1: &str = "wasm32-wasip1";
+pub const CATALOG_V3_RUNTIME_WASIP2: &str = "wasm32-wasip2";
+
+pub(super) fn catalog_v3_runtime_is_supported(runtime: &str) -> bool {
+    matches!(
+        runtime,
+        CATALOG_V3_RUNTIME_WASIP1 | CATALOG_V3_RUNTIME_WASIP2
+    )
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -902,7 +910,7 @@ fn validate_plugin_release_set(plugin: &CatalogV3PluginEntry) -> AppResult<()> {
         let mut artifact_keys = HashSet::new();
         for artifact in &release.artifacts {
             require_non_empty("artifact runtime", &artifact.runtime)?;
-            if artifact.runtime != CATALOG_V3_RUNTIME_WASIP1 {
+            if !catalog_v3_runtime_is_supported(&artifact.runtime) {
                 return Err(AppError::Validation(format!(
                     "plugin '{}' release '{}' has unsupported runtime '{}'",
                     plugin.id, release.version, artifact.runtime
@@ -1120,6 +1128,10 @@ fn verify_rekor_hashedrekord_binding(
         &["spec", "data", "hash", "value"],
         "Rekor hashedrekord digest",
     )?;
+    // Compatibility only: Rekor recorded a SHA-256 digest of the artifact in the
+    // transparency log, and verification means recomputing exactly that. The
+    // algorithm is asserted against the entry above. First-party hashing uses
+    // `crate::helpers::blake3_identity_hex`.
     let digest = Sha256::digest(raw);
     let expected_hex = digest
         .iter()
@@ -1599,6 +1611,13 @@ mod tests {
             parse_digest_string("blake3:0123456789abcdef").expect("digest should parse");
         assert_eq!(algorithm, "blake3");
         assert_eq!(digest, "0123456789abcdef");
+    }
+
+    #[test]
+    fn catalog_v3_accepts_wasip1_and_wasip2_runtimes() {
+        assert!(catalog_v3_runtime_is_supported("wasm32-wasip1"));
+        assert!(catalog_v3_runtime_is_supported("wasm32-wasip2"));
+        assert!(!catalog_v3_runtime_is_supported("wasm32-unknown"));
     }
 
     #[test]

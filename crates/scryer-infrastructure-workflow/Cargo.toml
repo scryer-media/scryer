@@ -1,6 +1,6 @@
 [package]
 name = "scryer-infrastructure-workflow"
-version = "0.18.21"
+version = "0.19.3"
 edition.workspace = true
 publish = false
 
@@ -11,6 +11,8 @@ scryer-infrastructure-sql = { path = "../scryer-infrastructure-sql" }
 scryer-infrastructure-crypto = { path = "../scryer-infrastructure-crypto" }
 async-trait = { workspace = true }
 chrono = { workspace = true }
+metrics = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 sqlx = { workspace = true }
 tokio = { workspace = true }

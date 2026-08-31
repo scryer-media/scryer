@@ -1,4 +1,5 @@
 import type { SeriesMovieLink } from "@/components/containers/series-overview-container";
+import type { ReactNode } from "react";
 import { useTranslate } from "@/lib/context/translate-context";
 import { selectPosterVariantUrl } from "@/lib/utils/poster-images";
 import { TitlePoster } from "@/components/title-poster";
@@ -11,13 +12,22 @@ import {
   TvdbMovieExternalLink,
 } from "@/components/common/external-media-links";
 import { formatRuntimeFromMinutes } from "./helpers";
+import { TitleRatingsStrip } from "../title-ratings-strip";
+import { TitleCastStrip } from "../title-cast-strip";
+import { TitleDubCastStrip } from "../title-dub-cast-strip";
+import { titleCastOriginalCredits } from "@/lib/utils/title-cast";
 
 type SeriesMoviePanelProps = {
   link: SeriesMovieLink;
   hasFile?: boolean;
+  filesOnDisk?: ReactNode;
 };
 
-export function SeriesMoviePanel({ link, hasFile }: SeriesMoviePanelProps) {
+export function SeriesMoviePanel({
+  link,
+  hasFile,
+  filesOnDisk,
+}: SeriesMoviePanelProps) {
   const t = useTranslate();
   const movie = link.movie;
   const runtime = formatRuntimeFromMinutes(movie.runtimeMinutes);
@@ -26,55 +36,67 @@ export function SeriesMoviePanel({ link, hasFile }: SeriesMoviePanelProps) {
   const localizedStatus = localizedTitleStatus(t, movie.contentStatus);
 
   return (
-    <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
-      <div className="shrink-0">
-        {posterUrl ? (
-          <TitlePoster
-            src={posterUrl}
-            alt={movie.title}
-            className="h-auto w-28 rounded-lg object-cover shadow-md sm:w-[140px]"
-          />
-        ) : (
-          <div className="flex h-40 w-28 items-center justify-center rounded-lg bg-muted text-sm text-muted-foreground/60 sm:h-[210px] sm:w-[140px]">
-            {t("title.noPoster")}
-          </div>
-        )}
-      </div>
-      <div className="min-w-0 flex-1">
-        <p className="text-sm font-semibold text-card-foreground">{movie.title}</p>
-        {badges.length > 0 ? (
-          <div className="mt-2 flex flex-wrap gap-2">
-            {badges.map((badge) => (
-              <span
-                key={`${badge.label}-${badge.tone}`}
-                className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${badgeClassName(badge.tone)}`}
-              >
-                {badge.label}
-              </span>
-            ))}
-          </div>
-        ) : null}
-        <div className="mt-1 flex flex-wrap gap-2 text-xs text-muted-foreground">
-          {movie.year ? <span>{movie.year}</span> : null}
-          {runtime ? <span>{runtime}</span> : null}
-          {localizedStatus ? <span>{localizedStatus}</span> : null}
+    <div className="space-y-5">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
+        <div className="shrink-0">
+          {posterUrl ? (
+            <TitlePoster
+              src={posterUrl}
+              alt={movie.title}
+              className="h-auto w-28 rounded-lg object-cover shadow-md sm:w-[140px]"
+            />
+          ) : (
+            <div className="flex h-40 w-28 items-center justify-center rounded-lg bg-muted text-sm text-muted-foreground/60 sm:h-[210px] sm:w-[140px]">
+              {t("title.noPoster")}
+            </div>
+          )}
         </div>
-        {movie.overview ? (
-          <p className="mt-3 text-sm leading-relaxed text-muted-foreground">{movie.overview}</p>
-        ) : (
-          <p className="mt-3 text-sm italic text-muted-foreground/60">{t("title.descriptionUnavailable")}</p>
-        )}
-        {link.signalSummary ? (
-          <p className="mt-2 text-xs text-muted-foreground/80">{link.signalSummary}</p>
-        ) : null}
-        <div className="mt-3 flex flex-wrap gap-3 text-sm">
-          <ImdbExternalLink imdbId={movie.imdbId} />
-          <TvdbMovieExternalLink tvdbId={movie.tvdbId} slug={movie.slug} />
-          <TmdbExternalLink mediaType="movie" tmdbId={movie.tmdbId} />
-          <MalExternalLink malId={movie.malId} />
-          <AnidbExternalLink anidbId={movie.anidbId} />
+        <div className="min-w-0 flex-1">
+          <h3 className="text-xl font-bold leading-tight text-card-foreground">
+            {movie.title}
+            {movie.year ? (
+              <span className="font-medium text-muted-foreground"> ({movie.year})</span>
+            ) : null}
+          </h3>
+          {badges.length > 0 ? (
+            <div className="mt-2 flex flex-wrap gap-2">
+              {badges.map((badge) => (
+                <span
+                  key={`${badge.label}-${badge.tone}`}
+                  className={`inline-flex h-6 items-center rounded-[7px] border px-2.5 text-[11px] font-semibold ${badgeClassName(badge.tone)}`}
+                >
+                  {badge.label}
+                </span>
+              ))}
+            </div>
+          ) : null}
+          <div className="mt-2 flex flex-wrap gap-2 text-xs font-medium text-muted-foreground">
+            {runtime ? <span>{runtime}</span> : null}
+            {localizedStatus ? <span>{localizedStatus}</span> : null}
+          </div>
+          <TitleRatingsStrip ratings={movie.ratings} />
+          {movie.overview ? (
+            <p className="mt-3 text-sm leading-relaxed text-muted-foreground">{movie.overview}</p>
+          ) : (
+            <p className="mt-3 text-sm italic text-muted-foreground/60">
+              {t("title.descriptionUnavailable")}
+            </p>
+          )}
+          {link.signalSummary ? (
+            <p className="mt-2 text-xs text-muted-foreground/80">{link.signalSummary}</p>
+          ) : null}
+          <div className="mt-3 flex flex-wrap gap-2 text-sm">
+            <ImdbExternalLink imdbId={movie.imdbId} size="compact" />
+            <TvdbMovieExternalLink tvdbId={movie.tvdbId} slug={movie.slug} size="compact" />
+            <TmdbExternalLink mediaType="movie" tmdbId={movie.tmdbId} size="compact" />
+            <MalExternalLink malId={movie.malId} size="compact" />
+            <AnidbExternalLink anidbId={movie.anidbId} size="compact" />
+          </div>
         </div>
       </div>
+      {filesOnDisk}
+      <TitleCastStrip credits={titleCastOriginalCredits(movie.credits)} />
+      <TitleDubCastStrip credits={movie.credits} />
     </div>
   );
 }
@@ -92,6 +114,10 @@ function buildMovieBadges(
     badges.push({ label: t("episode.missing"), tone: "red" });
   } else {
     badges.push({ label: t("search.monitorType.unmonitored"), tone: "slate" });
+  }
+
+  if (link.metadataActive === false) {
+    badges.push({ label: "Metadata inactive", tone: "amber" });
   }
 
   if (link.movieForm === "recap") {

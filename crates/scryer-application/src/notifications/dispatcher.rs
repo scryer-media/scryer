@@ -1308,7 +1308,11 @@ fn external_ids_payload_from_title(title: &Title) -> NotificationExternalIdsPayl
 }
 
 fn push_external_id(payload: &mut NotificationExternalIdsPayload, external_id: &ExternalId) {
-    let source = external_id.source.to_ascii_lowercase();
+    let source = external_id.source.trim().to_ascii_lowercase();
+    if source == "smg" {
+        // SMG identifies Scryer's metadata source; third-party provider payloads must not expose it.
+        return;
+    }
     payload
         .by_source
         .entry(source.clone())
@@ -2021,6 +2025,28 @@ mod tests {
             notification_scope_title_id(&media_request_events[1]),
             Some("title-requested-show")
         );
+    }
+
+    #[test]
+    fn notification_external_ids_exclude_smg_source() {
+        let mut payload = NotificationExternalIdsPayload::default();
+        push_external_id(
+            &mut payload,
+            &ExternalId {
+                source: "smg".to_string(),
+                value: "101".to_string(),
+            },
+        );
+        push_external_id(
+            &mut payload,
+            &ExternalId {
+                source: "tmdb".to_string(),
+                value: "603".to_string(),
+            },
+        );
+
+        assert!(!payload.by_source.contains_key("smg"));
+        assert_eq!(payload.tmdb_id.as_deref(), Some("603"));
     }
 
     #[tokio::test]

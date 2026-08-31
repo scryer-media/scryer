@@ -1,5 +1,6 @@
-const REMATCH_REPLACED_EXTERNAL_ID_SOURCES: &[&str] =
-    &["tvdb", "imdb", "tmdb", "mal", "anilist", "anidb", "kitsu"];
+const REMATCH_REPLACED_EXTERNAL_ID_SOURCES: &[&str] = &[
+    "smg", "tvdb", "imdb", "tmdb", "mal", "anilist", "anidb", "kitsu",
+];
 const REMATCH_DERIVED_TAG_PREFIXES: &[&str] = &[
     "scryer:mal-score:",
     "scryer:anime-media-type:",
@@ -104,26 +105,19 @@ impl AppUseCase {
     }
 
     pub(crate) async fn resolve_metadata_language_for_title(&self, title: &Title) -> String {
-        if let Ok(Some(language)) = self
-            .read_setting_string_value_explicit(
+        let (title_override, library_override, global_language) = tokio::join!(
+            self.read_setting_string_value_explicit(
                 TITLE_METADATA_LANGUAGE_OVERRIDE_KEY,
                 Some(&title.id),
-            )
-            .await
-            && let Some(language) = crate::normalize_metadata_language_code(&language)
-        {
-            return language;
-        }
-
-        if let Ok(Some(language)) = self
-            .read_setting_string_value_explicit(METADATA_LANGUAGE_KEY, Some(&title.library_id))
-            .await
-            && let Some(language) = crate::normalize_metadata_language_code(&language)
-        {
-            return language;
-        }
-
-        self.metadata_language().await
+            ),
+            self.read_setting_string_value_explicit(METADATA_LANGUAGE_KEY, Some(&title.library_id)),
+            self.metadata_language(),
+        );
+        resolve_metadata_language_overrides(
+            title_override.ok().flatten().as_deref(),
+            library_override.ok().flatten().as_deref(),
+            &global_language,
+        )
     }
 
     /// Resolve a collection of titles with one read per override tier.
@@ -160,11 +154,11 @@ impl AppUseCase {
         titles
             .iter()
             .map(|title| {
-                let language = title_overrides
-                    .get(&title.id)
-                    .or_else(|| library_overrides.get(&title.library_id))
-                    .cloned()
-                    .unwrap_or_else(|| global_language.clone());
+                let language = resolve_metadata_language_overrides(
+                    title_overrides.get(&title.id).map(String::as_str),
+                    library_overrides.get(&title.library_id).map(String::as_str),
+                    &global_language,
+                );
                 (title.id.clone(), language)
             })
             .collect()
@@ -181,7 +175,21 @@ impl AppUseCase {
         .await
         .map(|value| value.and_then(|language| crate::normalize_metadata_language_code(&language)))
     }
+}
 
+fn resolve_metadata_language_overrides(
+    title_override: Option<&str>,
+    library_override: Option<&str>,
+    global_language: &str,
+) -> String {
+    title_override
+        .and_then(crate::normalize_metadata_language_code)
+        .or_else(|| library_override.and_then(crate::normalize_metadata_language_code))
+        .or_else(|| crate::normalize_metadata_language_code(global_language))
+        .unwrap_or_else(|| "eng".to_string())
+}
+
+impl AppUseCase {
     pub async fn effective_metadata_language_for_title(&self, title_id: &str) -> AppResult<String> {
         let title = self
             .services
@@ -193,10 +201,7 @@ impl AppUseCase {
         Ok(self.resolve_metadata_language_for_title(&title).await)
     }
 
-    pub async fn effective_use_season_folders_for_title(
-        &self,
-        title_id: &str,
-    ) -> AppResult<bool> {
+    pub async fn effective_use_season_folders_for_title(&self, title_id: &str) -> AppResult<bool> {
         let title = self
             .services
             .catalog
@@ -227,14 +232,15 @@ impl AppUseCase {
             .map(str::to_owned);
         Ok(Some(match policy {
             Some(policy) => policy,
-            None => self
-                .resolve_library_string_setting(
+            None => {
+                self.resolve_library_string_setting(
                     "anime.filler_policy",
                     Some(&title.library_id),
                     Some(title.facet.as_str()),
                     "download_all",
                 )
-                .await?,
+                .await?
+            }
         }))
     }
 
@@ -258,14 +264,15 @@ impl AppUseCase {
             .map(str::to_owned);
         Ok(Some(match policy {
             Some(policy) => policy,
-            None => self
-                .resolve_library_string_setting(
+            None => {
+                self.resolve_library_string_setting(
                     "anime.recap_policy",
                     Some(&title.library_id),
                     Some(title.facet.as_str()),
                     "download_all",
                 )
-                .await?,
+                .await?
+            }
         }))
     }
 
@@ -564,6 +571,9 @@ impl AppUseCase {
             .update_metadata(id, name, facet, tags, resolved_root_folder_id)
             .await?;
 
+        self.reconcile_series_movie_link_monitoring_for_title(&title)
+            .await?;
+
         self.emit_title_updated_activity(actor, &title).await;
         Ok(title)
     }
@@ -684,15 +694,19 @@ impl AppUseCase {
         &self,
         actor: &User,
         title_id: &str,
-        target_tvdb_id: &str,
+        target_tvdb_id: Option<&str>,
+        target_smg_id: Option<i64>,
     ) -> AppResult<FixTitleMatchResult> {
-        let target_tvdb_id = target_tvdb_id.trim();
-        if target_tvdb_id.is_empty() {
-            return Err(AppError::Validation("tvdb id is required".into()));
-        }
+        let target_tvdb_id = target_tvdb_id
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
         let target_tvdb_numeric = target_tvdb_id
-            .parse::<i64>()
-            .map_err(|_| AppError::Validation("tvdb id must be numeric".into()))?;
+            .map(|value| {
+                value
+                    .parse::<i64>()
+                    .map_err(|_| AppError::Validation("tvdb id must be numeric".into()))
+            })
+            .transpose()?;
 
         let existing_title = self
             .services
@@ -708,23 +722,126 @@ impl AppUseCase {
         )
         .await?;
 
-        let duplicate = self
-            .services
-            .catalog
-            .titles
-            .find_by_external_id_in_library_and_facet(
-                &existing_title.library_id,
-                existing_title.facet.clone(),
-                "tvdb",
-                target_tvdb_id,
-            )
-            .await?
-            .filter(|title| title.id != existing_title.id);
-        if let Some(duplicate) = duplicate {
-            return Err(AppError::Validation(format!(
-                "tvdb id {target_tvdb_id} is already assigned to title {}",
-                duplicate.name
-            )));
+        let (replacement_identity_ids, requested_movie_ref) = match existing_title.facet {
+            MediaFacet::Movie => {
+                if target_smg_id.is_some_and(|id| id <= 0) {
+                    return Err(AppError::Validation("smg id must be positive".into()));
+                }
+                let requested_ref = MovieTitleRef {
+                    smg_id: target_smg_id,
+                    tvdb_id: target_tvdb_numeric,
+                    tmdb_id: None,
+                    imdb_id: None,
+                };
+                if requested_ref.smg_id.is_none() && requested_ref.tvdb_id.is_none() {
+                    return Err(AppError::Validation("a title identity is required".into()));
+                }
+
+                if requested_ref.smg_id.is_none() {
+                    (
+                        vec![ExternalId {
+                            source: "tvdb".into(),
+                            value: requested_ref
+                                .tvdb_id
+                                .expect("movie rematch reference requires an identity")
+                                .to_string(),
+                        }],
+                        Some(requested_ref),
+                    )
+                } else {
+                    let language = self
+                        .resolve_metadata_language_for_title(&existing_title)
+                        .await;
+                    let movie = match self
+                        .services
+                        .library
+                        .metadata_gateway
+                        .get_movie_titles(std::slice::from_ref(&requested_ref), &language)
+                        .await
+                    {
+                        Ok(result) => result.by_ref_index.get(&0).cloned().ok_or_else(|| {
+                            AppError::NotFound("movie metadata response missing title".into())
+                        })?,
+                        Err(error) if movie_title_queries_not_supported(&error) => {
+                            let tvdb_id = requested_ref.tvdb_id.ok_or_else(|| {
+                                AppError::Repository(
+                                    "legacy metadata gateway requires a tvdb id".into(),
+                                )
+                            })?;
+                            self.services
+                                .library
+                                .metadata_gateway
+                                .get_movie(tvdb_id, &language)
+                                .await?
+                        }
+                        Err(error) => return Err(error),
+                    };
+                    let resolved_ref = MovieTitleRef {
+                        smg_id: movie.smg_id.or(requested_ref.smg_id),
+                        tvdb_id: movie.tvdb_id.or(requested_ref.tvdb_id),
+                        tmdb_id: movie.tmdb_id,
+                        imdb_id: crate::normalize::normalize_imdb_id(&movie.imdb_id),
+                    };
+                    let mut identity_ids = Vec::new();
+                    if let Some(smg_id) = resolved_ref.smg_id {
+                        identity_ids.push(ExternalId {
+                            source: "smg".into(),
+                            value: smg_id.to_string(),
+                        });
+                    }
+                    if let Some(tvdb_id) = resolved_ref.tvdb_id {
+                        identity_ids.push(ExternalId {
+                            source: "tvdb".into(),
+                            value: tvdb_id.to_string(),
+                        });
+                    }
+                    if let Some(tmdb_id) = resolved_ref.tmdb_id {
+                        identity_ids.push(ExternalId {
+                            source: "tmdb".into(),
+                            value: tmdb_id.to_string(),
+                        });
+                    }
+                    if let Some(imdb_id) = resolved_ref.imdb_id.as_deref() {
+                        identity_ids.push(ExternalId {
+                            source: "imdb".into(),
+                            value: imdb_id.to_string(),
+                        });
+                    }
+                    (identity_ids, Some(resolved_ref))
+                }
+            }
+            MediaFacet::Series | MediaFacet::Anime => {
+                let tvdb_id = target_tvdb_id
+                    .ok_or_else(|| AppError::Validation("tvdb id is required".into()))?;
+                (
+                    vec![ExternalId {
+                        source: "tvdb".into(),
+                        value: tvdb_id.to_string(),
+                    }],
+                    None,
+                )
+            }
+        };
+
+        for identity_id in &replacement_identity_ids {
+            let duplicate = self
+                .services
+                .catalog
+                .titles
+                .find_by_external_id_in_library_and_facet(
+                    &existing_title.library_id,
+                    existing_title.facet.clone(),
+                    &identity_id.source,
+                    &identity_id.value,
+                )
+                .await?
+                .filter(|title| title.id != existing_title.id);
+            if let Some(duplicate) = duplicate {
+                return Err(AppError::Validation(format!(
+                    "{} id {} is already assigned to title {}",
+                    identity_id.source, identity_id.value, duplicate.name
+                )));
+            }
         }
 
         let handler = self
@@ -759,8 +876,7 @@ impl AppUseCase {
 
         let replacement_external_ids = build_rematched_external_ids(
             &existing_title,
-            target_tvdb_id,
-            None,
+            &replacement_identity_ids,
             REMATCH_REPLACED_EXTERNAL_ID_SOURCES,
         );
         let replacement_tags =
@@ -789,7 +905,10 @@ impl AppUseCase {
         let mut hydration_outcome = self
             .hydrate_titles_bulk(vec![HydrationTarget {
                 title: reset_title.clone(),
-                requested_tvdb_id: Some(target_tvdb_numeric),
+                requested_tvdb_id: (reset_title.facet != MediaFacet::Movie)
+                    .then_some(target_tvdb_numeric)
+                    .flatten(),
+                requested_movie_ref,
                 sync_wanted_after_completion: false,
                 source: HydrationSource::Interactive,
             }])
@@ -832,13 +951,23 @@ impl AppUseCase {
             .unwrap_or(hydrated_title);
 
         let old_tvdb_id = extract_tvdb_id(&existing_title).map(|id| id.to_string());
+        let new_identity_id = |source: &str| {
+            refreshed_title
+                .external_ids
+                .iter()
+                .find(|external_id| external_id.source.eq_ignore_ascii_case(source))
+                .map(|external_id| external_id.value.trim())
+                .filter(|value| !value.is_empty())
+        };
         self.append_domain_event(new_title_domain_event(
             actor,
             &refreshed_title,
             DomainEventPayload::TitleRematched(TitleRematchedEventData {
                 title: title_context_snapshot(&refreshed_title),
                 old_tvdb_id,
-                new_tvdb_id: target_tvdb_id.to_string(),
+                new_tvdb_id: new_identity_id("tvdb").unwrap_or_default().to_string(),
+                smg_id: new_identity_id("smg").and_then(|value| value.parse().ok()),
+                tmdb_id: new_identity_id("tmdb").and_then(|value| value.parse().ok()),
                 source: "manual".to_string(),
             }),
         ))
@@ -895,9 +1024,7 @@ pub(crate) fn select_title_credits(
     let allowed = kinds.filter(|kinds| !kinds.is_empty());
     let mut selected = credits
         .into_iter()
-        .filter(|credit| {
-            allowed.is_none_or(|kinds| kinds.iter().any(|kind| kind == &credit.kind))
-        })
+        .filter(|credit| allowed.is_none_or(|kinds| kinds.iter().any(|kind| kind == &credit.kind)))
         .collect::<Vec<_>>();
     selected.sort_by_key(|credit| credit.billing_order);
     selected.truncate(limit);
@@ -910,4 +1037,51 @@ pub(crate) fn extract_tvdb_id(title: &scryer_domain::Title) -> Option<i64> {
         .iter()
         .find(|eid| eid.source == "tvdb")
         .and_then(|eid| eid.value.parse::<i64>().ok())
+}
+
+#[cfg(test)]
+mod metadata_language_tests {
+    use super::resolve_metadata_language_overrides;
+
+    #[test]
+    fn metadata_language_overrides_prefer_title_then_library_then_global() {
+        assert_eq!(
+            resolve_metadata_language_overrides(Some("jpn"), Some("deu"), "eng"),
+            "jpn"
+        );
+        assert_eq!(
+            resolve_metadata_language_overrides(None, Some("deu"), "eng"),
+            "deu"
+        );
+        assert_eq!(
+            resolve_metadata_language_overrides(None, None, "spa"),
+            "spa"
+        );
+    }
+
+    #[test]
+    fn metadata_language_overrides_ignore_invalid_values() {
+        assert_eq!(
+            resolve_metadata_language_overrides(Some("not-a-language"), Some("jpn"), "eng"),
+            "jpn"
+        );
+        assert_eq!(
+            resolve_metadata_language_overrides(Some("not-a-language"), None, "also-invalid"),
+            "eng"
+        );
+    }
+}
+
+pub(crate) fn extract_smg_id(title: &scryer_domain::Title) -> Option<i64> {
+    title
+        .external_ids
+        .iter()
+        .find(|external_id| external_id.source.eq_ignore_ascii_case("smg"))
+        .and_then(|external_id| external_id.value.trim().parse::<i64>().ok())
+}
+
+pub(crate) fn movie_title_ref(title: &scryer_domain::Title) -> Option<crate::MovieTitleRef> {
+    let mut reference = crate::MovieTitleRef::from_title(title)?;
+    reference.smg_id = extract_smg_id(title);
+    Some(reference)
 }

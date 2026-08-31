@@ -789,7 +789,7 @@ async fn graphql_episode_history_omits_ambiguous_source_path_for_multi_file_even
 #[tokio::test]
 async fn graphql_search_metadata_movie() {
     let ctx = TestContext::new().await;
-    let fixture = load_fixture("smg/search_tvdb_rich.json");
+    let fixture = load_fixture("smg/search_titles.json");
     Mock::given(method("GET"))
         .and(path("/graphql"))
         .respond_with(ResponseTemplate::new(200).set_body_string(fixture.clone()))

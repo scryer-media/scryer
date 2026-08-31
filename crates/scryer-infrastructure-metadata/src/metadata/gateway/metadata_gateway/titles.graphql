@@ -1,0 +1,36 @@
+query Titles($ids: [Int!]!, $language: String!) {
+  titles(ids: $ids, language: $language) {
+    movies {
+      id
+      kind
+      primary_source
+      tvdb_id
+      name
+      slug
+      type
+      year
+      status
+      overview
+      poster_url
+      language
+      original_language
+      runtime_minutes
+      sort_title
+      imdb_id
+      tmdb_id
+      tmdb_popularity
+      anidb_id
+      canonical_tags { key category name confidence sources source_tag_keys is_adult is_spoiler }
+      external_ids { source kind id key }
+      studio
+      tmdb_release_date
+      rating
+      rating_sources
+      external_ratings { source value score normalized votes url }
+      credits { kind person_id person_name person_original_name person_image_url person_source person_external_id character_name language billing_order episode_count }
+      artworks { kind url }
+    }
+    missing_ids
+    redirects { from_id to_id }
+  }
+}

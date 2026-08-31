@@ -2,18 +2,21 @@ use std::collections::HashSet;
 
 use chrono::{DateTime, Utc};
 use scryer_application::{
-    AcquisitionScopeStatus, AppError, AppResult, DownloadQueueCommandRecord,
-    DownloadSourceIdentity, DownloadSubmission, DownloadSubmissionActorSnapshot,
-    DownloadSubmissionIdentity, ExternalImportMonitorSnapshotChunk,
-    ExternalImportMonitorSnapshotEntryKind, ImportArtifact, JobKey, JobRunRecord, JobRunStatus,
-    JobTriggerSource, PendingReleaseStatus, SubmissionScope, SuccessfulGrabCommit,
-    WorkflowOperationInfo,
+    AcquisitionScopeStatus, AppError, AppResult, ClientJobLocator, DownloadQueueCommandRecord,
+    DownloadSubmission, DownloadSubmissionActorSnapshot, DownloadSubmissionIdentity,
+    ExternalImportMonitorSnapshotChunk, ExternalImportMonitorSnapshotEntryKind, ImportArtifact,
+    JobKey, JobRunRecord, JobRunStatus, JobTriggerSource, PendingReleaseStatus, SubmissionScope,
+    SuccessfulGrabCommit, WorkflowOperationInfo,
 };
+use scryer_domain::download_identity::DownloadId;
 use scryer_domain::{
     DomainEvent, DomainEventActorKind, DomainEventFilter, DomainEventStream, DomainEventType,
     DownloadQueueCommandAction, DownloadQueueDeleteStatus, Id, ImportRecord, ImportStatus,
     ImportTransferPhase, ImportType, MediaFacet, MediaFileDeletedReason, NewDomainEvent,
     TitleHistoryEventType,
+};
+use scryer_infrastructure_sql::domain_event_payload::{
+    decode_domain_event_payload, derive_domain_event_projections, encode_domain_event_payload,
 };
 use serde_json::Value as JsonValue;
 use sqlx::{Row, types::Json};
@@ -23,10 +26,12 @@ use crate::queries::sql_runtime::{
 };
 use crate::types::WorkflowOperationRecord;
 
-pub const DOMAIN_EVENT_COLUMNS: &str = "sequence, event_id, occurred_at, actor_kind, actor_user_id, actor_display_name, title_id, facet, correlation_id, causation_id, schema_version, stream_kind, stream_id, payload_json";
-pub const DOWNLOAD_SUBMISSION_COLUMNS: &str = "title_id, facet, download_client_id, download_client_type, download_client_item_id, source_hint, source_provider_id, source_provider_name, source_kind, source_title, release_size_bytes, request_signature, purpose, episode_id, collection_id, series_movie_link_id";
+use super::download_submission_store::claim_or_create_binding_download_id_tx;
+
+pub const DOMAIN_EVENT_COLUMNS: &str = "sequence, event_id, occurred_at, actor_kind, actor_user_id, actor_display_name, title_id, facet, correlation_id, causation_id, schema_version, stream_kind, stream_id, event_type, payload_json, import_status, media_file_delete_reason, download_id";
+pub const DOWNLOAD_SUBMISSION_COLUMNS: &str = "id, title_id, facet, download_client_id, download_client_type, download_client_item_id, source_hint, source_provider_id, source_provider_name, source_kind, source_title, info_hash, release_size_bytes, request_signature, purpose, episode_id, collection_id, series_movie_link_id";
 pub const IMPORT_COLUMNS: &str = "id, source_client_id, source_system, source_ref, import_type, status, payload_json, result_json, download_id, import_transfer_phase, import_transfer_bytes, import_transfer_total_bytes, import_transfer_started_at, import_transfer_updated_at, started_at, finished_at, created_at, updated_at";
-pub const DOWNLOAD_QUEUE_COMMAND_COLUMNS: &str = "id, action, client_id, client_type, download_client_item_id, is_history, status, error_text, requested_by_user_id, started_at, finished_at, created_at, updated_at";
+pub const DOWNLOAD_QUEUE_COMMAND_COLUMNS: &str = "id, action, canonical_download_id, client_id, client_type, download_client_item_id, is_history, status, error_text, requested_by_user_id, started_at, finished_at, created_at, updated_at";
 
 #[derive(Clone)]
 pub struct NewWorkflowOperation {
@@ -53,13 +58,22 @@ pub async fn append_domain_events(
             let mut out = Vec::with_capacity(events.len());
             for event in events {
                 let payload = serde_json::to_value(&event.payload).map_err(repo_err)?;
+                let event_type = event.payload.event_type().as_str();
+                let encoded_payload = encode_domain_event_payload(&payload).map_err(|error| {
+                    AppError::Repository(format!(
+                        "failed to encode domain event {} ({event_type}): {error}",
+                        event.event_id
+                    ))
+                })?;
+                let projections = derive_domain_event_projections(event_type, &payload);
                 SqlRuntime::execute(
                     SqlExec::Tx(tx),
                     "INSERT INTO domain_events (
                         event_id, occurred_at, actor_kind, actor_user_id, actor_display_name,
                         title_id, facet, correlation_id, causation_id, schema_version,
-                        stream_kind, stream_id, event_type, payload_json
-                     ) VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+                        stream_kind, stream_id, event_type, payload_json, import_status,
+                        media_file_delete_reason, download_id
+                     ) VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
                     &[
                         SqlArg::Text(event.event_id.clone()),
                         SqlArg::Timestamp(event.occurred_at),
@@ -76,7 +90,10 @@ pub async fn append_domain_events(
                         SqlArg::Text(event.stream.kind().to_string()),
                         SqlArg::OptText(event.stream.identifier().map(str::to_string)),
                         SqlArg::Text(event.payload.event_type().as_str().to_string()),
-                        SqlArg::Json(payload),
+                        SqlArg::OptBytes(Some(encoded_payload)),
+                        SqlArg::OptText(projections.import_status),
+                        SqlArg::OptText(projections.media_file_delete_reason),
+                        SqlArg::OptText(projections.download_id),
                     ],
                 )
                 .await?;
@@ -98,13 +115,22 @@ pub async fn append_domain_event_tx(
     event: NewDomainEvent,
 ) -> AppResult<DomainEvent> {
     let payload = serde_json::to_value(&event.payload).map_err(repo_err)?;
+    let event_type = event.payload.event_type().as_str();
+    let encoded_payload = encode_domain_event_payload(&payload).map_err(|error| {
+        AppError::Repository(format!(
+            "failed to encode domain event {} ({event_type}): {error}",
+            event.event_id
+        ))
+    })?;
+    let projections = derive_domain_event_projections(event_type, &payload);
     SqlRuntime::execute(
         SqlExec::Tx(tx),
         "INSERT INTO domain_events (
             event_id, occurred_at, actor_kind, actor_user_id, actor_display_name,
             title_id, facet, correlation_id, causation_id, schema_version,
-            stream_kind, stream_id, event_type, payload_json
-         ) VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+            stream_kind, stream_id, event_type, payload_json, import_status,
+            media_file_delete_reason, download_id
+         ) VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
         &[
             SqlArg::Text(event.event_id.clone()),
             SqlArg::Timestamp(event.occurred_at),
@@ -119,7 +145,10 @@ pub async fn append_domain_event_tx(
             SqlArg::Text(event.stream.kind().to_string()),
             SqlArg::OptText(event.stream.identifier().map(str::to_string)),
             SqlArg::Text(event.payload.event_type().as_str().to_string()),
-            SqlArg::Json(payload),
+            SqlArg::OptBytes(Some(encoded_payload)),
+            SqlArg::OptText(projections.import_status),
+            SqlArg::OptText(projections.media_file_delete_reason),
+            SqlArg::OptText(projections.download_id),
         ],
     )
     .await?;
@@ -133,14 +162,6 @@ pub async fn commit_successful_grab_tx(
     tx: &mut SqlTx<'_>,
     commit: &SuccessfulGrabCommit,
 ) -> AppResult<()> {
-    let submission_recorded =
-        record_download_submission_tx(tx, &commit.download_submission).await?;
-    if submission_recorded
-        && let Some(submission_identity) = commit.download_submission_identity.as_ref()
-    {
-        let identity = DownloadSourceIdentity::from_submission(&commit.download_submission);
-        record_download_submission_identity_tx(tx, &identity, submission_identity).await?;
-    }
     let mut wanted_item_ids = commit.covered_wanted_item_ids.clone();
     if !wanted_item_ids
         .iter()
@@ -218,16 +239,162 @@ pub async fn commit_successful_grab_tx(
 pub async fn record_download_submission_tx(
     tx: &mut SqlTx<'_>,
     submission: &DownloadSubmission,
-) -> AppResult<bool> {
+) -> AppResult<Option<DownloadId>> {
+    record_download_submission_tx_inner(tx, submission).await
+}
+
+async fn ensure_submission_download_tx(
+    tx: &mut SqlTx<'_>,
+    submission: &DownloadSubmission,
+    origin: &str,
+) -> AppResult<()> {
+    SqlRuntime::execute(
+        SqlExec::Tx(tx),
+        "INSERT INTO downloads (id, origin, created_at)
+         VALUES ({}, {}, {})
+         ON CONFLICT(id) DO NOTHING",
+        &[
+            SqlArg::Text(submission.download_id.to_string()),
+            SqlArg::Text(origin.to_string()),
+            SqlArg::Timestamp(Utc::now()),
+        ],
+    )
+    .await?;
+    Ok(())
+}
+
+/// Persist a submit whose HTTP request may have reached the client but whose
+/// response never supplied a native client item identifier. The row remains
+/// deliberately unbound so legacy tuple readers cannot mistake it for a
+/// tracked client job.
+pub async fn record_ambiguous_download_submission_tx(
+    tx: &mut SqlTx<'_>,
+    submission: &DownloadSubmission,
+) -> AppResult<()> {
+    let download_client_id = normalize_download_client_id(submission.download_client_id.as_deref());
+    let canonical_id = submission.download_id.to_string();
+    let client_config_id = submission
+        .download_client_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let client_type_snapshot = (!submission.download_client_type.trim().is_empty())
+        .then(|| submission.download_client_type.clone());
+    let client_name_snapshot = if let Some(client_config_id) = client_config_id.as_deref() {
+        SqlRuntime::fetch_optional(
+            SqlExec::Tx(tx),
+            "SELECT name FROM download_clients WHERE id = {} LIMIT 1",
+            &[SqlArg::Text(client_config_id.to_string())],
+        )
+        .await?
+        .map(|row| row.text("name"))
+        .transpose()?
+        .or_else(|| client_type_snapshot.clone())
+    } else {
+        client_type_snapshot.clone()
+    };
+    let now = Utc::now();
+    let origin = if submission.title_id.trim().is_empty() {
+        "foreign_observation"
+    } else {
+        "scryer_submission"
+    };
+
+    ensure_submission_download_tx(tx, submission, origin).await?;
+
+    SqlRuntime::execute(
+        SqlExec::Tx(tx),
+        "INSERT INTO download_submissions
+         (id, title_id, facet, download_client_id, download_client_type,
+          download_client_item_id, source_hint, source_provider_id,
+          source_provider_name, source_kind, source_title, info_hash,
+          release_size_bytes, request_signature, purpose, episode_id,
+          collection_id, series_movie_link_id, download_id)
+         VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})
+         ON CONFLICT(id) DO NOTHING",
+        &[
+            SqlArg::Text(canonical_id.clone()),
+            SqlArg::Text(submission.title_id.clone()),
+            SqlArg::Text(submission.facet.clone()),
+            SqlArg::Text(download_client_id),
+            SqlArg::Text(submission.download_client_type.clone()),
+            SqlArg::OptText(None),
+            SqlArg::OptText(submission.source_hint.clone()),
+            SqlArg::OptText(submission.source_provider_id.clone()),
+            SqlArg::OptText(submission.source_provider_name.clone()),
+            SqlArg::OptText(
+                submission
+                    .source_kind
+                    .map(|value| value.as_str().to_string()),
+            ),
+            SqlArg::OptText(submission.source_title.clone()),
+            SqlArg::OptText(submission.info_hash.clone()),
+            SqlArg::OptI64(submission.release_size_bytes),
+            SqlArg::OptText(submission.request_signature.clone()),
+            SqlArg::Text(submission.purpose.as_str().to_string()),
+            SqlArg::OptText(None),
+            SqlArg::OptText(None),
+            SqlArg::OptText(None),
+            SqlArg::OptText(Some(submission.download_id.to_wire())),
+        ],
+    )
+    .await?;
+
+    SqlRuntime::execute(
+        SqlExec::Tx(tx),
+        "INSERT INTO download_client_bindings
+         (download_id, client_config_id, client_type_snapshot, client_name_snapshot,
+          native_item_id, created_at, ended_at)
+         VALUES ({}, {}, {}, {}, {}, {}, {})
+         ON CONFLICT(download_id) DO NOTHING",
+        &[
+            SqlArg::Text(canonical_id),
+            SqlArg::OptText(client_config_id),
+            SqlArg::OptText(client_type_snapshot),
+            SqlArg::OptText(client_name_snapshot),
+            SqlArg::OptText(None),
+            SqlArg::Timestamp(now),
+            SqlArg::OptTimestamp(None),
+        ],
+    )
+    .await?;
+    Ok(())
+}
+
+async fn record_download_submission_tx_inner(
+    tx: &mut SqlTx<'_>,
+    submission: &DownloadSubmission,
+) -> AppResult<Option<DownloadId>> {
+    let mut submission = submission.clone();
+    let download_client_id = normalize_download_client_id(submission.download_client_id.as_deref());
+    if !download_client_id.is_empty()
+        && !submission.download_client_type.trim().is_empty()
+        && !submission.download_client_item_id.trim().is_empty()
+    {
+        let locator = ClientJobLocator::from_submission(&submission);
+        submission.download_id =
+            claim_or_create_binding_download_id_tx(tx, &locator, Some(submission.download_id))
+                .await?;
+    }
     let (episode_id, collection_id, series_movie_link_id) =
         persisted_submission_scope(&submission.scope);
-    let download_client_id = normalize_download_client_id(submission.download_client_id.as_deref());
     let is_orphan = matches!(&submission.scope, SubmissionScope::Orphan)
         && submission.title_id.trim().is_empty();
+    ensure_submission_download_tx(
+        tx,
+        &submission,
+        if is_orphan {
+            "foreign_observation"
+        } else {
+            "scryer_submission"
+        },
+    )
+    .await?;
     let conflict_clause = if is_orphan {
-        "ON CONFLICT(download_client_id, download_client_type, download_client_item_id) DO NOTHING"
+        "ON CONFLICT(id) DO NOTHING"
     } else {
-        "ON CONFLICT(download_client_id, download_client_type, download_client_item_id) DO UPDATE
+        "ON CONFLICT(id) DO UPDATE
          SET title_id = excluded.title_id,
              facet = excluded.facet,
              source_hint = excluded.source_hint,
@@ -235,6 +402,7 @@ pub async fn record_download_submission_tx(
              source_provider_name = excluded.source_provider_name,
              source_kind = excluded.source_kind,
              source_title = excluded.source_title,
+             info_hash = excluded.info_hash,
              release_size_bytes = excluded.release_size_bytes,
              request_signature = excluded.request_signature,
              purpose = excluded.purpose,
@@ -244,8 +412,8 @@ pub async fn record_download_submission_tx(
     };
     let sql = [
         "INSERT INTO download_submissions
-         (id, title_id, facet, download_client_id, download_client_type, download_client_item_id, source_hint, source_provider_id, source_provider_name, source_kind, source_title, release_size_bytes, request_signature, purpose, episode_id, collection_id, series_movie_link_id)
-         VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+         (id, title_id, facet, download_client_id, download_client_type, download_client_item_id, source_hint, source_provider_id, source_provider_name, source_kind, source_title, info_hash, release_size_bytes, request_signature, purpose, episode_id, collection_id, series_movie_link_id)
+         VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
         conflict_clause,
     ]
     .join(" ");
@@ -253,7 +421,7 @@ pub async fn record_download_submission_tx(
         SqlExec::Tx(tx),
         &sql,
         &[
-            SqlArg::Text(Id::new().0),
+            SqlArg::Text(submission.download_id.to_string()),
             SqlArg::Text(submission.title_id.clone()),
             SqlArg::Text(submission.facet.clone()),
             SqlArg::Text(download_client_id.clone()),
@@ -268,6 +436,7 @@ pub async fn record_download_submission_tx(
                     .map(|value| value.as_str().to_string()),
             ),
             SqlArg::OptText(submission.source_title.clone()),
+            SqlArg::OptText(submission.info_hash.clone()),
             SqlArg::OptI64(submission.release_size_bytes),
             SqlArg::OptText(submission.request_signature.clone()),
             SqlArg::Text(submission.purpose.as_str().to_string()),
@@ -278,25 +447,22 @@ pub async fn record_download_submission_tx(
     )
     .await?;
     if rows_affected == 0 {
-        return Ok(false);
+        return Ok(None);
     }
     replace_download_submission_episode_links_tx(
         tx,
-        &download_client_id,
-        &submission.download_client_type,
-        &submission.download_client_item_id,
+        &submission.download_id,
         persisted_episode_set_ids(&submission.scope),
     )
     .await?;
-    Ok(true)
+    Ok(Some(submission.download_id))
 }
 
 pub async fn record_download_submission_identity_tx(
     tx: &mut SqlTx<'_>,
-    identity: &DownloadSourceIdentity,
+    canonical_download_id: &DownloadId,
     submission_identity: &DownloadSubmissionIdentity,
 ) -> AppResult<()> {
-    let download_client_id = normalize_download_client_id(identity.client_id.as_deref());
     SqlRuntime::execute(
         SqlExec::Tx(tx),
         "UPDATE download_submissions
@@ -311,16 +477,12 @@ pub async fn record_download_submission_identity_tx(
                  ELSE tracked_state_at
              END,
              download_id = {}
-         WHERE download_client_id = {}
-           AND download_client_type = {}
-           AND download_client_item_id = {}",
+         WHERE id = {}",
         &[
             SqlArg::OptText(submission_identity.download_id.clone()),
             SqlArg::OptText(submission_identity.download_id.clone()),
             SqlArg::OptText(submission_identity.download_id.clone()),
-            SqlArg::Text(download_client_id),
-            SqlArg::Text(identity.client_type.clone()),
-            SqlArg::Text(identity.item_id.clone()),
+            SqlArg::Text(canonical_download_id.to_string()),
         ],
     )
     .await?;
@@ -331,45 +493,36 @@ pub async fn record_download_submission_with_identity_tx(
     tx: &mut SqlTx<'_>,
     submission: &DownloadSubmission,
     submission_identity: &DownloadSubmissionIdentity,
-) -> AppResult<()> {
-    if !record_download_submission_tx(tx, submission).await? {
-        return Ok(());
-    }
-    let identity = DownloadSourceIdentity::from_submission(submission);
-    record_download_submission_identity_tx(tx, &identity, submission_identity).await
+) -> AppResult<Option<DownloadId>> {
+    let Some(effective_download_id) = record_download_submission_tx_inner(tx, submission).await?
+    else {
+        return Ok(None);
+    };
+    record_download_submission_identity_tx(tx, &effective_download_id, submission_identity).await?;
+    Ok(Some(effective_download_id))
 }
 
 pub async fn replace_download_submission_episode_links_tx(
     tx: &mut SqlTx<'_>,
-    download_client_id: &str,
-    download_client_type: &str,
-    download_client_item_id: &str,
+    download_id: &DownloadId,
     episode_ids: &[String],
 ) -> AppResult<()> {
     SqlRuntime::execute(
         SqlExec::Tx(tx),
         "DELETE FROM download_submission_episode_links
-         WHERE download_client_id = {}
-           AND download_client_type = {}
-           AND download_client_item_id = {}",
-        &[
-            SqlArg::Text(download_client_id.to_string()),
-            SqlArg::Text(download_client_type.to_string()),
-            SqlArg::Text(download_client_item_id.to_string()),
-        ],
+         WHERE download_id = {}",
+        &[SqlArg::Text(download_id.to_string())],
     )
     .await?;
     for episode_id in episode_ids {
         SqlRuntime::execute(
             SqlExec::Tx(tx),
             "INSERT INTO download_submission_episode_links
-             (download_client_id, download_client_type, download_client_item_id, episode_id)
-             VALUES ({}, {}, {}, {})
+             (download_id, episode_id)
+             VALUES ({}, {})
              ON CONFLICT DO NOTHING",
             &[
-                SqlArg::Text(download_client_id.to_string()),
-                SqlArg::Text(download_client_type.to_string()),
-                SqlArg::Text(download_client_item_id.to_string()),
+                SqlArg::Text(download_id.to_string()),
                 SqlArg::Text(episode_id.clone()),
             ],
         )
@@ -380,7 +533,7 @@ pub async fn replace_download_submission_episode_links_tx(
 
 pub async fn queue_import_request(
     datastore: &StoreDatastore,
-    source_identity: DownloadSourceIdentity,
+    source_identity: ClientJobLocator,
     import_type: String,
     payload_json: String,
 ) -> AppResult<String> {
@@ -390,10 +543,29 @@ pub async fn queue_import_request(
 
 pub async fn queue_import_request_with_identity(
     datastore: &StoreDatastore,
-    source_identity: DownloadSourceIdentity,
+    source_identity: ClientJobLocator,
     import_type: String,
     payload_json: String,
     submission_identity: Option<DownloadSubmissionIdentity>,
+) -> AppResult<String> {
+    queue_import_request_with_identity_for_download(
+        datastore,
+        source_identity,
+        import_type,
+        payload_json,
+        submission_identity,
+        None,
+    )
+    .await
+}
+
+pub async fn queue_import_request_with_identity_for_download(
+    datastore: &StoreDatastore,
+    source_identity: ClientJobLocator,
+    import_type: String,
+    payload_json: String,
+    submission_identity: Option<DownloadSubmissionIdentity>,
+    canonical_download_id: Option<&DownloadId>,
 ) -> AppResult<String> {
     let normalized_client_id = source_identity
         .client_id
@@ -410,6 +582,7 @@ pub async fn queue_import_request_with_identity(
     let download_id = submission_identity
         .as_ref()
         .and_then(|identity| identity.download_id.clone());
+    let canonical_download_id = canonical_download_id.map(ToString::to_string);
     let has_download_id = download_id
         .as_deref()
         .map(str::trim)
@@ -426,6 +599,7 @@ pub async fn queue_import_request_with_identity(
         let rename_arg = rename_arg.clone();
         let result_arg = result_arg.clone();
         let download_id = download_id.clone();
+        let canonical_download_id = canonical_download_id.clone();
         let has_download_id = has_download_id;
         let id = id.clone();
         Box::pin(async move {
@@ -462,6 +636,7 @@ pub async fn queue_import_request_with_identity(
                     rename_arg,
                     result_arg,
                     SqlArg::OptText(download_id.clone()),
+                    SqlArg::OptText(canonical_download_id.clone()),
                     SqlArg::OptTimestamp(None),
                     SqlArg::OptTimestamp(None),
                     SqlArg::Timestamp(now),
@@ -536,8 +711,8 @@ async fn find_active_import_by_download_id_tx(
 
 pub fn import_request_insert_sql() -> String {
     "INSERT INTO imports
-     (id, source_client_id, source_system, source_ref, import_type, status, payload_json, rename_plan_json, result_json, download_id, started_at, finished_at, created_at, updated_at)
-     VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})"
+     (id, source_client_id, source_system, source_ref, import_type, status, payload_json, rename_plan_json, result_json, download_id, canonical_download_id, started_at, finished_at, created_at, updated_at)
+     VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})"
         .to_string()
 }
 
@@ -555,12 +730,11 @@ pub fn import_request_insert_active_download_id_sql(tx: &SqlTx<'_>) -> String {
 }
 
 pub fn import_request_upsert_sql(tx: &SqlTx<'_>) -> String {
-    let conflict_clause = match tx {
-        SqlTx::Sqlite(_) => "ON CONFLICT DO UPDATE",
-        SqlTx::Postgres(_) => {
-            "ON CONFLICT ((COALESCE(source_client_id, '')), source_system, source_ref, import_type) WHERE download_id IS NULL DO UPDATE"
-        }
-    };
+    import_request_upsert_sql_for_backend(matches!(tx, SqlTx::Postgres(_)))
+}
+
+fn import_request_upsert_sql_for_backend(is_postgres: bool) -> String {
+    let conflict_clause = import_request_upsert_conflict_clause(is_postgres);
 
     format!(
         "{} {conflict_clause} SET
@@ -570,6 +744,7 @@ pub fn import_request_upsert_sql(tx: &SqlTx<'_>) -> String {
             rename_plan_json = excluded.rename_plan_json,
             result_json = NULL,
             download_id = excluded.download_id,
+            canonical_download_id = COALESCE(excluded.canonical_download_id, imports.canonical_download_id),
             import_transfer_phase = NULL,
             import_transfer_bytes = NULL,
             import_transfer_total_bytes = NULL,
@@ -580,6 +755,14 @@ pub fn import_request_upsert_sql(tx: &SqlTx<'_>) -> String {
             updated_at = excluded.updated_at",
         import_request_insert_sql()
     )
+}
+
+fn import_request_upsert_conflict_clause(is_postgres: bool) -> &'static str {
+    if is_postgres {
+        "ON CONFLICT ((COALESCE(source_client_id, '')), source_system, source_ref, import_type) WHERE download_id IS NULL DO UPDATE"
+    } else {
+        "ON CONFLICT DO UPDATE"
+    }
 }
 
 pub async fn recover_stale_processing_imports(
@@ -630,8 +813,18 @@ pub async fn recover_stale_processing_imports(
 /// acquisition-search view both surface these), so at boot we fail them and
 /// clear `progress_json` so any state derived from it (e.g. the
 /// acquisition-search view) falls back to the now-terminal `failed` status.
-pub async fn reconcile_interrupted_job_runs(datastore: &StoreDatastore) -> AppResult<u64> {
+pub async fn reconcile_interrupted_job_runs(
+    datastore: &StoreDatastore,
+    excluded_run_ids: &[String],
+) -> AppResult<u64> {
     let now = Utc::now();
+    let excluded_clause = if excluded_run_ids.is_empty() {
+        String::new()
+    } else {
+        format!(" AND id NOT IN ({})", placeholders(excluded_run_ids.len()))
+    };
+    let mut args = vec![SqlArg::Timestamp(now), SqlArg::Timestamp(now)];
+    args.extend(excluded_run_ids.iter().cloned().map(SqlArg::Text));
     let rows = execute_write(
         datastore,
         "reconcile_interrupted_job_runs",
@@ -643,13 +836,13 @@ pub async fn reconcile_interrupted_job_runs(datastore: &StoreDatastore) -> AppRe
                  completed_at = {{}},
                  updated_at = {{}}
              WHERE job_key IS NOT NULL
-               AND status IN ('{}', '{}', '{}')",
+               AND status IN ('{}', '{}', '{}'){excluded_clause}",
             JobRunStatus::Failed.as_str(),
             JobRunStatus::Queued.as_str(),
             JobRunStatus::Running.as_str(),
             JobRunStatus::Discovering.as_str(),
         ),
-        vec![SqlArg::Timestamp(now), SqlArg::Timestamp(now)],
+        args,
     )
     .await?;
     Ok(rows)
@@ -770,7 +963,7 @@ pub fn build_domain_event_list_sql(filter: &DomainEventFilter) -> (String, Vec<S
 }
 
 pub fn build_title_history_filter_sql(
-    datastore: &StoreDatastore,
+    _datastore: &StoreDatastore,
     event_types: Option<&[TitleHistoryEventType]>,
     title_ids: Option<&[String]>,
     download_id: Option<&str>,
@@ -831,20 +1024,14 @@ pub fn build_title_history_filter_sql(
                         ));
                     }
                     TitleHistoryEventType::ImportFailed => {
-                        parts.push(format!(
-                            "(event_type = {{}} AND {} = {{}})",
-                            json_extract(datastore, "payload_json", "data", "status")
-                        ));
+                        parts.push("(event_type = {} AND import_status = {})".to_string());
                         args.push(SqlArg::Text(
                             DomainEventType::ImportRejected.as_str().into(),
                         ));
                         args.push(SqlArg::Text(ImportStatus::Failed.as_str().into()));
                     }
                     TitleHistoryEventType::ImportSkipped => {
-                        parts.push(format!(
-                            "(event_type = {{}} AND {} = {{}})",
-                            json_extract(datastore, "payload_json", "data", "status")
-                        ));
+                        parts.push("(event_type = {} AND import_status = {})".to_string());
                         args.push(SqlArg::Text(
                             DomainEventType::ImportRejected.as_str().into(),
                         ));
@@ -857,10 +1044,9 @@ pub fn build_title_history_filter_sql(
                         ));
                     }
                     TitleHistoryEventType::FileRecycled => {
-                        parts.push(format!(
-                            "(event_type = {{}} AND {} = {{}})",
-                            json_extract(datastore, "payload_json", "data", "reason")
-                        ));
+                        parts.push(
+                            "(event_type = {} AND media_file_delete_reason = {})".to_string(),
+                        );
                         args.push(SqlArg::Text(
                             DomainEventType::MediaFileDeleted.as_str().into(),
                         ));
@@ -869,11 +1055,7 @@ pub fn build_title_history_filter_sql(
                         ));
                     }
                     TitleHistoryEventType::FileDeleted => {
-                        let reason = json_extract(datastore, "payload_json", "data", "reason");
-                        parts.push(format!(
-                            "(event_type = {{}} AND ({} IS NULL OR {} <> {{}}))",
-                            reason, reason
-                        ));
+                        parts.push("(event_type = {} AND (media_file_delete_reason IS NULL OR media_file_delete_reason <> {}))".to_string());
                         args.push(SqlArg::Text(
                             DomainEventType::MediaFileDeleted.as_str().into(),
                         ));
@@ -934,10 +1116,7 @@ pub fn build_title_history_filter_sql(
         }
     }
     if let Some(download_id) = download_id {
-        clauses.push(format!(
-            "{} = {{}}",
-            json_extract(datastore, "payload_json", "data", "download_id")
-        ));
+        clauses.push("download_id = {}".to_string());
         args.push(SqlArg::Text(download_id.to_string()));
     }
     (format!(" WHERE {}", clauses.join(" AND ")), args)
@@ -965,13 +1144,12 @@ pub const DASHBOARD_ACTIVITY_DOMAIN_EVENT_TYPES: &[DomainEventType] = &[
 /// Callers must reject an empty `library_ids` before calling: an empty `IN ()`
 /// list is not valid SQL on either dialect.
 pub fn build_dashboard_activity_stats_sql(
-    datastore: &StoreDatastore,
+    _datastore: &StoreDatastore,
     library_ids: &[String],
     previous_start: DateTime<Utc>,
     current_start: DateTime<Utc>,
     current_end: DateTime<Utc>,
 ) -> (String, Vec<SqlArg>) {
-    let import_status = json_extract(datastore, "domain_events.payload_json", "data", "status");
     let mut args = vec![SqlArg::Timestamp(current_start)];
     args.push(SqlArg::Timestamp(previous_start));
     args.push(SqlArg::Timestamp(current_end));
@@ -990,14 +1168,14 @@ pub fn build_dashboard_activity_stats_sql(
         "SELECT
              CASE WHEN domain_events.occurred_at >= {{}} THEN 'current' ELSE 'previous' END AS window_key,
              domain_events.event_type AS event_type,
-             {import_status} AS import_status,
+             domain_events.import_status AS import_status,
              COUNT(*) AS event_count
            FROM domain_events
            JOIN titles ON titles.id = domain_events.title_id
           WHERE domain_events.occurred_at >= {{}}
             AND domain_events.occurred_at < {{}}
             AND domain_events.event_type IN ({event_type_placeholders})
-            AND (domain_events.event_type <> {{}} OR {import_status} = {{}})
+            AND (domain_events.event_type <> {{}} OR domain_events.import_status = {{}})
             AND titles.library_id IN ({library_placeholders})
           GROUP BY window_key, event_type, import_status",
         event_type_placeholders = placeholders(DASHBOARD_ACTIVITY_DOMAIN_EVENT_TYPES.len()),
@@ -1034,16 +1212,12 @@ pub fn download_submission_select_sql(datastore: &StoreDatastore, suffix: &str) 
         StoreDatastore::Sqlite { .. } => {
             "(SELECT group_concat(link.episode_id, char(31))
                 FROM download_submission_episode_links link
-               WHERE link.download_client_id = download_submissions.download_client_id
-                 AND link.download_client_type = download_submissions.download_client_type
-                 AND link.download_client_item_id = download_submissions.download_client_item_id)"
+               WHERE link.download_id = download_submissions.id)"
         }
         StoreDatastore::Postgres { .. } => {
             "(SELECT string_agg(link.episode_id, chr(31))
                 FROM download_submission_episode_links link
-               WHERE link.download_client_id = download_submissions.download_client_id
-                 AND link.download_client_type = download_submissions.download_client_type
-                 AND link.download_client_item_id = download_submissions.download_client_item_id)"
+               WHERE link.download_id = download_submissions.id)"
         }
     };
     format!(
@@ -1160,11 +1334,27 @@ pub async fn fetch_optional_workflow_operation(
 }
 
 pub fn domain_event_from_row(row: &SqlRow) -> AppResult<DomainEvent> {
+    let event_id = row.text("event_id")?;
+    let event_type = row.text("event_type")?;
     let stream_kind = row.text("stream_kind")?;
-    let payload = serde_json::from_value(json_from_row(row, "payload_json")?).map_err(repo_err)?;
+    let encoded_payload = row.opt_bytes("payload_json")?.ok_or_else(|| {
+        AppError::Repository(format!(
+            "domain event {event_id} ({event_type}) payload is null"
+        ))
+    })?;
+    let decoded_payload = decode_domain_event_payload(&encoded_payload).map_err(|error| {
+        AppError::Repository(format!(
+            "failed to decode domain event {event_id} ({event_type}): {error}"
+        ))
+    })?;
+    let payload = serde_json::from_value(decoded_payload).map_err(|error| {
+        AppError::Repository(format!(
+            "failed to deserialize domain event {event_id} ({event_type}): {error}"
+        ))
+    })?;
     Ok(DomainEvent {
         sequence: row.i64("sequence")?,
-        event_id: row.text("event_id")?,
+        event_id,
         occurred_at: row.timestamp("occurred_at")?,
         actor_kind: DomainEventActorKind::parse(row.text("actor_kind")?.as_str())
             .unwrap_or(DomainEventActorKind::System),
@@ -1209,6 +1399,12 @@ pub fn stream_from_parts(kind: &str, identifier: Option<String>) -> AppResult<Do
 }
 
 pub fn download_submission_from_row(row: &SqlRow) -> AppResult<DownloadSubmission> {
+    let download_id = row.text("id")?;
+    let download_id = DownloadId::parse(&download_id).ok_or_else(|| {
+        AppError::Repository(format!(
+            "invalid canonical download id {download_id:?} in download submission"
+        ))
+    })?;
     let title_id = row.text("title_id")?;
     let episode_id = opt_text_lenient(row, "episode_id")?;
     let collection_id = opt_text_lenient(row, "collection_id")?;
@@ -1225,6 +1421,7 @@ pub fn download_submission_from_row(row: &SqlRow) -> AppResult<DownloadSubmissio
         .as_deref()
         .and_then(scryer_application::DownloadSourceKind::parse);
     Ok(DownloadSubmission {
+        download_id,
         scope: SubmissionScope::from_persisted(
             &title_id,
             episode_id,
@@ -1244,6 +1441,7 @@ pub fn download_submission_from_row(row: &SqlRow) -> AppResult<DownloadSubmissio
         source_provider_name: row.opt_text("source_provider_name")?,
         source_kind,
         source_title: row.opt_text("source_title")?,
+        info_hash: row.opt_text("info_hash")?,
         release_size_bytes: row.opt_i64("release_size_bytes")?,
         request_signature: row.opt_text("request_signature")?,
         purpose: row
@@ -1361,6 +1559,10 @@ pub fn download_queue_command_from_row(row: &SqlRow) -> AppResult<DownloadQueueC
         action: DownloadQueueCommandAction::parse(&action).ok_or_else(|| {
             AppError::Repository(format!("unknown download queue action: {action}"))
         })?,
+        canonical_download_id: row
+            .opt_text("canonical_download_id")?
+            .as_deref()
+            .and_then(DownloadId::parse),
         client_id: row
             .opt_text("client_id")?
             .filter(|value| !value.trim().is_empty()),
@@ -1528,8 +1730,8 @@ pub fn persisted_episode_set_ids(scope: &SubmissionScope) -> &[String] {
 const DOWNLOAD_SUBMISSION_BATCH_LOOKUP_CHUNK_SIZE: usize = 400;
 
 pub fn chunk_download_submission_client_items(
-    client_items: &[DownloadSourceIdentity],
-) -> Vec<Vec<DownloadSourceIdentity>> {
+    client_items: &[ClientJobLocator],
+) -> Vec<Vec<ClientJobLocator>> {
     let deduped = dedupe_identities(client_items);
     deduped
         .chunks(DOWNLOAD_SUBMISSION_BATCH_LOOKUP_CHUNK_SIZE)
@@ -1537,7 +1739,7 @@ pub fn chunk_download_submission_client_items(
         .collect()
 }
 
-pub fn dedupe_identities(identities: &[DownloadSourceIdentity]) -> Vec<DownloadSourceIdentity> {
+pub fn dedupe_identities(identities: &[ClientJobLocator]) -> Vec<ClientJobLocator> {
     let mut seen = HashSet::with_capacity(identities.len());
     let mut deduped = Vec::with_capacity(identities.len());
     for identity in identities {
@@ -1695,5 +1897,14 @@ mod tests {
         assert!(sql.contains("sequence > {}"));
         assert!(sql.contains("ORDER BY sequence ASC"));
         assert_eq!(args.len(), 4);
+    }
+
+    #[test]
+    fn postgres_import_request_upsert_qualifies_target_canonical_download_id() {
+        let sql = import_request_upsert_sql_for_backend(true);
+
+        assert!(sql.contains(
+            "canonical_download_id = COALESCE(excluded.canonical_download_id, imports.canonical_download_id)"
+        ));
     }
 }

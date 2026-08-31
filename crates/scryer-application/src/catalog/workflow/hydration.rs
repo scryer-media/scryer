@@ -139,6 +139,7 @@ impl TitleRecommendationRefreshQueue {
 pub(crate) struct HydrationTarget {
     pub(crate) title: Title,
     pub(crate) requested_tvdb_id: Option<i64>,
+    pub(crate) requested_movie_ref: Option<MovieTitleRef>,
     pub(crate) sync_wanted_after_completion: bool,
     pub(crate) source: HydrationSource,
 }
@@ -146,11 +147,91 @@ pub(crate) struct HydrationTarget {
 pub(crate) struct HydrationBatchOutcome {
     pub(crate) hydrated_titles: HashMap<String, Title>,
     pub(crate) failed_titles: HashMap<String, String>,
+    pub(crate) deferred_titles: HashSet<String>,
+}
+
+/// The selections the SMG title-id surface introduced, lowercased and quoted the
+/// way a GraphQL validation error names an unknown field. A gateway that
+/// predates the surface answers any of them with `Cannot query field "<name>"`,
+/// which is the same capability signal as the mapped gateway error -- and is
+/// what a caller sees when the raw validation error reaches this layer.
+const TITLE_ID_UNKNOWN_FIELD_MARKERS: [&str; 5] = [
+    "\"titles\"",
+    "\"resolvetitles\"",
+    "\"searchtitles\"",
+    "\"searchtitlesbatch\"",
+    "\"title_id\"",
+];
+
+pub(crate) fn movie_title_queries_not_supported(error: &AppError) -> bool {
+    let AppError::Repository(message) = error else {
+        return false;
+    };
+    let message = message.to_ascii_lowercase();
+    if message.contains("title-id")
+        && (message.contains("does not support")
+            || message.contains("not supported")
+            || message.contains("unsupported"))
+    {
+        return true;
+    }
+
+    message.contains("cannot query field")
+        && TITLE_ID_UNKNOWN_FIELD_MARKERS
+            .iter()
+            .any(|marker| message.contains(marker))
 }
 impl AppUseCase {
     async fn emit_hydration_started(&self, title: &Title) {
         self.emit_metadata_hydration_updated_event(title, MetadataHydrationState::Started, None)
             .await;
+    }
+}
+
+#[cfg(test)]
+mod title_id_capability_tests {
+    use super::*;
+
+    #[test]
+    fn the_mapped_gateway_error_is_a_capability_error() {
+        assert!(movie_title_queries_not_supported(&AppError::Repository(
+            "metadata gateway does not support title-id queries".into()
+        )));
+    }
+
+    /// Every title-id operation names its own root field when an old gateway
+    /// rejects it, so the raw validation error must be read as the same
+    /// capability signal no matter which operation hit the gateway first.
+    #[test]
+    fn a_raw_unknown_field_error_is_a_capability_error_for_every_operation() {
+        for field in [
+            "titles",
+            "resolveTitles",
+            "searchTitles",
+            "searchTitlesBatch",
+            "title_id",
+        ] {
+            let error = AppError::Repository(format!(
+                "Cannot query field \"{field}\" on type \"Query\"."
+            ));
+            assert!(
+                movie_title_queries_not_supported(&error),
+                "unknown field {field} should be read as a capability error"
+            );
+        }
+    }
+
+    #[test]
+    fn unrelated_gateway_failures_are_not_capability_errors() {
+        assert!(!movie_title_queries_not_supported(&AppError::Repository(
+            "metadata gateway request failed (503): upstream unavailable".into()
+        )));
+        assert!(!movie_title_queries_not_supported(&AppError::Repository(
+            "Cannot query field \"seedMinimums\" on type \"Query\".".into()
+        )));
+        assert!(!movie_title_queries_not_supported(&AppError::Validation(
+            "metadata gateway does not support title-id queries".into()
+        )));
     }
 }
 
@@ -530,6 +611,58 @@ impl AppUseCase {
     }
 }
 impl AppUseCase {
+    async fn complete_movie_hydration(
+        &self,
+        target: &HydrationTarget,
+        movie: MovieMetadata,
+        language: &str,
+        redirects: &[(i64, i64)],
+    ) -> AppResult<Title> {
+        let movie_smg_id = movie.smg_id;
+        let redirected_from = extract_smg_id(&target.title).filter(|stored_smg_id| {
+            movie_smg_id.is_some_and(|movie_smg_id| movie_smg_id != *stored_smg_id)
+                && redirects.iter().any(|(from, to)| {
+                    *from == *stored_smg_id && Some(*to) == movie_smg_id
+                })
+        });
+        let result = super::movie_to_hydration_result(movie, language);
+        let hydrated = self
+            .apply_hydration_result(target.title.clone(), result, target.source)
+            .await;
+
+        if let (Some(movie_smg_id), Some(redirected_from)) = (movie_smg_id, redirected_from)
+            && let Err(error) = self
+                .services
+                .catalog
+                .titles
+                .persist_smg_id(&hydrated.id, movie_smg_id, Some(redirected_from))
+                .await
+        {
+            warn!(
+                title_id = %hydrated.id,
+                smg_id = movie_smg_id,
+                redirected_from,
+                error = %error,
+                "failed to persist redirected movie SMG title id"
+            );
+        }
+
+        self.complete_title_hydration(
+            &hydrated,
+            HydrationCompletionOptions {
+                sync_wanted_after_completion: target.sync_wanted_after_completion,
+            },
+        )
+        .await;
+        self.services
+            .catalog
+            .titles
+            .get_by_id(&hydrated.id)
+            .await
+            .map(|title| title.unwrap_or(hydrated))
+    }
+}
+impl AppUseCase {
     pub(crate) async fn hydrate_titles_bulk_cancellable(
         &self,
         targets: Vec<HydrationTarget>,
@@ -553,249 +686,325 @@ impl AppUseCase {
 
         'languages: for (language, targets) in targets_by_language {
             for chunk in targets.chunks(HYDRATION_BULK_BATCH_SIZE) {
-            if crate::library::library::library_scan_cancel_requested(cancel_token) {
-                break 'languages;
-            }
-            let chunk_started_at = Instant::now();
-            let chunk_len = chunk.len();
-            let hydrated_before = outcome.hydrated_titles.len();
-            let failed_before = outcome.failed_titles.len();
-            let mut movie_targets = Vec::new();
-            let mut series_targets = Vec::new();
+                if crate::library::library::library_scan_cancel_requested(cancel_token) {
+                    break 'languages;
+                }
+                let chunk_started_at = Instant::now();
+                let chunk_len = chunk.len();
+                let hydrated_before = outcome.hydrated_titles.len();
+                let failed_before = outcome.failed_titles.len();
+                let mut movie_targets = Vec::new();
+                let mut series_targets = Vec::new();
 
-            for target in chunk.iter().cloned() {
-                self.emit_hydration_started(&target.title).await;
-
-                let Some(tvdb_id) = target
-                    .requested_tvdb_id
-                    .or_else(|| extract_tvdb_id(&target.title))
-                else {
-                    warn!(
-                        hydration_source = target.source.as_str(),
-                        facet = target.title.facet.as_str(),
-                        title_id = %target.title.id,
-                        "title hydration failed: no tvdb external id found"
-                    );
-                    self.emit_hydration_failed(&target.title, "no tvdb external id found")
-                        .await;
-                    outcome.failed_titles.insert(
-                        target.title.id.clone(),
-                        "no tvdb external id found".to_string(),
-                    );
-                    continue;
-                };
-
-                match target.title.facet {
-                    MediaFacet::Movie => movie_targets.push((target, tvdb_id)),
-                    MediaFacet::Series | MediaFacet::Anime => {
-                        series_targets.push((target, tvdb_id))
+                for target in chunk.iter().cloned() {
+                    self.emit_hydration_started(&target.title).await;
+                    match target.title.facet {
+                        MediaFacet::Movie => {
+                            let movie_ref = target
+                                .requested_movie_ref
+                                .clone()
+                                .or_else(|| movie_title_ref(&target.title));
+                            let Some(movie_ref) = movie_ref else {
+                                self.emit_hydration_failed(
+                                    &target.title,
+                                    "no movie external id found",
+                                )
+                                .await;
+                                outcome.failed_titles.insert(
+                                    target.title.id.clone(),
+                                    "no movie external id found".to_string(),
+                                );
+                                continue;
+                            };
+                            movie_targets.push((target, movie_ref));
+                        }
+                        MediaFacet::Series | MediaFacet::Anime => {
+                            let Some(tvdb_id) = target
+                                .requested_tvdb_id
+                                .or_else(|| extract_tvdb_id(&target.title))
+                            else {
+                                self.emit_hydration_failed(
+                                    &target.title,
+                                    "no tvdb external id found",
+                                )
+                                .await;
+                                outcome.failed_titles.insert(
+                                    target.title.id.clone(),
+                                    "no tvdb external id found".to_string(),
+                                );
+                                continue;
+                            };
+                            series_targets.push((target, tvdb_id));
+                        }
                     }
                 }
-            }
 
-            if movie_targets.is_empty() && series_targets.is_empty() {
+                let movie_count = movie_targets.len();
+                let series_count = series_targets.len();
+
+                if !movie_targets.is_empty() {
+                    let refs = movie_targets
+                        .iter()
+                        .map(|(_, movie_ref)| movie_ref.clone())
+                        .collect::<Vec<_>>();
+                    let movie_result = await_cancellable(
+                        cancel_token,
+                        self.services
+                            .library
+                            .metadata_gateway
+                            .get_movie_titles(&refs, &language),
+                    )
+                    .await;
+                    let Some(movie_result) = movie_result else {
+                        break 'languages;
+                    };
+
+                    match movie_result {
+                        Ok(movie_result) => {
+                            for (ref_index, (target, _)) in movie_targets.iter().enumerate() {
+                                if crate::library::library::library_scan_cancel_requested(cancel_token)
+                                {
+                                    break 'languages;
+                                }
+                                let title_id = target.title.id.clone();
+                                let Some(movie) = movie_result.by_ref_index.get(&ref_index) else {
+                                    self.emit_hydration_failed(
+                                        &target.title,
+                                        "bulk metadata response missing title",
+                                    )
+                                    .await;
+                                    outcome.failed_titles.insert(
+                                        title_id,
+                                        "bulk metadata response missing title".to_string(),
+                                    );
+                                    continue;
+                                };
+                                let refreshed = self
+                                    .complete_movie_hydration(
+                                        target,
+                                        movie.clone(),
+                                        &language,
+                                        &movie_result.redirects,
+                                    )
+                                    .await?;
+                                if refreshed.metadata_fetched_at.is_some() {
+                                    outcome
+                                        .hydrated_titles
+                                        .insert(refreshed.id.clone(), refreshed);
+                                } else {
+                                    outcome.failed_titles.insert(
+                                        title_id,
+                                        "metadata could not be persisted".to_string(),
+                                    );
+                                }
+                            }
+                        }
+                        Err(error) if movie_title_queries_not_supported(&error) => {
+                            let fallback_targets = movie_targets
+                                .iter()
+                                .filter(|(_, movie_ref)| movie_ref.tvdb_id.is_some())
+                                .collect::<Vec<_>>();
+                            let fallback_ids = fallback_targets
+                                .iter()
+                                .filter_map(|(_, movie_ref)| movie_ref.tvdb_id)
+                                .collect::<Vec<_>>();
+                            for (target, movie_ref) in &movie_targets {
+                                if movie_ref.tvdb_id.is_none() {
+                                    outcome.deferred_titles.insert(target.title.id.clone());
+                                }
+                            }
+                            if !fallback_ids.is_empty() {
+                                let legacy_result = await_cancellable(
+                                    cancel_token,
+                                    self.services.library.metadata_gateway.get_metadata_bulk(
+                                        &fallback_ids,
+                                        &[],
+                                        &language,
+                                    ),
+                                )
+                                .await;
+                                let Some(legacy_result) = legacy_result else {
+                                    break 'languages;
+                                };
+                                match legacy_result {
+                                    Ok(legacy_result) => {
+                                        for (target, movie_ref) in fallback_targets {
+                                            let title_id = target.title.id.clone();
+                                            let tvdb_id = movie_ref.tvdb_id.expect("filtered above");
+                                            let Some(movie) = legacy_result.movies.get(&tvdb_id) else {
+                                                self.emit_hydration_failed(
+                                                    &target.title,
+                                                    "bulk metadata response missing title",
+                                                )
+                                                .await;
+                                                outcome.failed_titles.insert(
+                                                    title_id,
+                                                    "bulk metadata response missing title".to_string(),
+                                                );
+                                                continue;
+                                            };
+                                            let refreshed = self
+                                                .complete_movie_hydration(
+                                                    target,
+                                                    movie.clone(),
+                                                    &language,
+                                                    &[],
+                                                )
+                                                .await?;
+                                            if refreshed.metadata_fetched_at.is_some() {
+                                                outcome
+                                                    .hydrated_titles
+                                                    .insert(refreshed.id.clone(), refreshed);
+                                            } else {
+                                                outcome.failed_titles.insert(
+                                                    title_id,
+                                                    "metadata could not be persisted".to_string(),
+                                                );
+                                            }
+                                        }
+                                    }
+                                    Err(error) => {
+                                        let reason = error.to_string();
+                                        for (target, _) in fallback_targets {
+                                            self.emit_hydration_failed(&target.title, &reason).await;
+                                            outcome
+                                                .failed_titles
+                                                .insert(target.title.id.clone(), reason.clone());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            let reason = error.to_string();
+                            for (target, _) in &movie_targets {
+                                self.emit_hydration_failed(&target.title, &reason).await;
+                                outcome
+                                    .failed_titles
+                                    .insert(target.title.id.clone(), reason.clone());
+                            }
+                        }
+                    }
+                }
+
+                if !series_targets.is_empty() {
+                    let series_ids = series_targets
+                        .iter()
+                        .map(|(_, tvdb_id)| *tvdb_id)
+                        .collect::<Vec<_>>();
+                    let series_result = await_cancellable(
+                        cancel_token,
+                        self.services.library.metadata_gateway.get_metadata_bulk(
+                            &[],
+                            &series_ids,
+                            &language,
+                        ),
+                    )
+                    .await;
+                    let Some(series_result) = series_result else {
+                        break 'languages;
+                    };
+                    match series_result {
+                        Ok(series_result) => {
+                            let series_items = series_result.series.values().collect::<Vec<_>>();
+                            let movie_metadata = await_cancellable(
+                                cancel_token,
+                                crate::catalog::facets::handler::hydrate_referenced_movie_metadata(
+                                    self.services.library.metadata_gateway.as_ref(),
+                                    &series_items,
+                                    &language,
+                                ),
+                            )
+                            .await;
+                            let Some(movie_metadata) = movie_metadata else {
+                                break 'languages;
+                            };
+                            let movie_metadata = movie_metadata
+                                .inspect_err(|error| {
+                                    warn!(error = %error, "linked movie metadata hydration failed");
+                                })
+                                .unwrap_or_default();
+                            for (target, tvdb_id) in series_targets {
+                                if crate::library::library::library_scan_cancel_requested(cancel_token)
+                                {
+                                    break 'languages;
+                                }
+                                let title_id = target.title.id.clone();
+                                let title_facet = target.title.facet.clone();
+                                let title_source = target.source;
+                                if let Some(series) = series_result.series.get(&tvdb_id) {
+                                    let mut result =
+                                        super::series_to_hydration_result(series.clone(), &language);
+                                    result.movie_metadata = movie_metadata.clone();
+                                    let hydrated = self
+                                        .apply_hydration_result(target.title, result, title_source)
+                                        .await;
+                                    self.complete_title_hydration(
+                                        &hydrated,
+                                        HydrationCompletionOptions {
+                                            sync_wanted_after_completion: target
+                                                .sync_wanted_after_completion,
+                                        },
+                                    )
+                                    .await;
+                                    let refreshed = self
+                                        .services
+                                        .catalog
+                                        .titles
+                                        .get_by_id(&hydrated.id)
+                                        .await?
+                                        .unwrap_or(hydrated);
+                                    if refreshed.metadata_fetched_at.is_some() {
+                                        outcome
+                                            .hydrated_titles
+                                            .insert(refreshed.id.clone(), refreshed);
+                                    } else {
+                                        outcome.failed_titles.insert(
+                                            title_id,
+                                            "metadata could not be persisted".to_string(),
+                                        );
+                                    }
+                                } else {
+                                    warn!(
+                                        hydration_source = title_source.as_str(),
+                                        facet = title_facet.as_str(),
+                                        title_id = %title_id,
+                                        "title hydration failed: bulk metadata response missing series title"
+                                    );
+                                    self.emit_hydration_failed(
+                                        &target.title,
+                                        "bulk metadata response missing title",
+                                    )
+                                    .await;
+                                    outcome.failed_titles.insert(
+                                        title_id,
+                                        "bulk metadata response missing title".to_string(),
+                                    );
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            let reason = error.to_string();
+                            for (target, _) in series_targets {
+                                self.emit_hydration_failed(&target.title, &reason).await;
+                                outcome
+                                    .failed_titles
+                                    .insert(target.title.id.clone(), reason.clone());
+                            }
+                        }
+                    }
+                }
+
                 info!(
                     target_count = chunk_len,
-                    movie_count = 0,
-                    series_count = 0,
+                    movie_count,
+                    series_count,
                     hydrated_delta = outcome.hydrated_titles.len() - hydrated_before,
                     failed_delta = outcome.failed_titles.len() - failed_before,
                     elapsed_ms = chunk_started_at.elapsed().as_millis(),
+                    total_elapsed_ms = hydration_started_at.elapsed().as_millis(),
                     "metadata hydration chunk complete"
                 );
-                continue;
-            }
-
-            let movie_ids = movie_targets
-                .iter()
-                .map(|(_, tvdb_id)| *tvdb_id)
-                .collect::<Vec<_>>();
-            let series_ids = series_targets
-                .iter()
-                .map(|(_, tvdb_id)| *tvdb_id)
-                .collect::<Vec<_>>();
-
-            let bulk_started_at = Instant::now();
-            let bulk_result = await_cancellable(
-                cancel_token,
-                self.services.library.metadata_gateway.get_metadata_bulk(
-                    &movie_ids,
-                    &series_ids,
-                    &language,
-                ),
-            )
-            .await;
-
-            let Some(bulk_result) = bulk_result else {
-                break 'languages;
-            };
-
-            let bulk_result = match bulk_result {
-                Ok(result) => {
-                    info!(
-                        target_count = chunk_len,
-                        movie_count = movie_ids.len(),
-                        series_count = series_ids.len(),
-                        elapsed_ms = bulk_started_at.elapsed().as_millis(),
-                        "metadata hydration bulk request complete"
-                    );
-                    result
-                }
-                Err(error) => {
-                    let reason = error.to_string();
-                    for (target, _) in movie_targets.iter().chain(series_targets.iter()) {
-                        warn!(
-                            hydration_source = target.source.as_str(),
-                            facet = target.title.facet.as_str(),
-                            title_id = %target.title.id,
-                            error = %error,
-                            "title hydration bulk metadata request failed"
-                        );
-                        self.emit_hydration_failed(&target.title, &reason).await;
-                        outcome
-                            .failed_titles
-                            .insert(target.title.id.clone(), reason.clone());
-                    }
-                    info!(
-                        target_count = chunk_len,
-                        movie_count = movie_ids.len(),
-                        series_count = series_ids.len(),
-                        failed_delta = outcome.failed_titles.len() - failed_before,
-                        elapsed_ms = chunk_started_at.elapsed().as_millis(),
-                        "metadata hydration chunk complete"
-                    );
-                    continue;
-                }
-            };
-
-            for (target, tvdb_id) in movie_targets {
-                if crate::library::library::library_scan_cancel_requested(cancel_token) {
-                    break 'languages;
-                }
-                let title_id = target.title.id.clone();
-                let title_facet = target.title.facet.clone();
-                let title_source = target.source;
-                if let Some(movie) = bulk_result.movies.get(&tvdb_id) {
-                    let result = super::movie_to_hydration_result(movie.clone(), &language);
-                    let hydrated = self
-                        .apply_hydration_result(target.title, result, title_source)
-                        .await;
-                    self.complete_title_hydration(
-                        &hydrated,
-                        HydrationCompletionOptions {
-                            sync_wanted_after_completion: target.sync_wanted_after_completion,
-                        },
-                    )
-                    .await;
-                    let refreshed = self
-                        .services
-                        .catalog
-                        .titles
-                        .get_by_id(&hydrated.id)
-                        .await?
-                        .unwrap_or(hydrated);
-                    if refreshed.metadata_fetched_at.is_some() {
-                        outcome
-                            .hydrated_titles
-                            .insert(refreshed.id.clone(), refreshed);
-                    } else {
-                        warn!(
-                            hydration_source = title_source.as_str(),
-                            facet = title_facet.as_str(),
-                            title_id = %title_id,
-                            "title hydration failed: metadata could not be persisted"
-                        );
-                        outcome
-                            .failed_titles
-                            .insert(title_id, "metadata could not be persisted".to_string());
-                    }
-                } else {
-                    warn!(
-                        hydration_source = title_source.as_str(),
-                        facet = title_facet.as_str(),
-                        title_id = %title_id,
-                        "title hydration failed: bulk metadata response missing movie title"
-                    );
-                    self.emit_hydration_failed(
-                        &target.title,
-                        "bulk metadata response missing title",
-                    )
-                    .await;
-                    outcome
-                        .failed_titles
-                        .insert(title_id, "bulk metadata response missing title".to_string());
-                }
-            }
-
-            for (target, tvdb_id) in series_targets {
-                if crate::library::library::library_scan_cancel_requested(cancel_token) {
-                    break 'languages;
-                }
-                let title_id = target.title.id.clone();
-                let title_facet = target.title.facet.clone();
-                let title_source = target.source;
-                if let Some(series) = bulk_result.series.get(&tvdb_id) {
-                    let result = super::series_to_hydration_result(series.clone(), &language);
-                    let hydrated = self
-                        .apply_hydration_result(target.title, result, title_source)
-                        .await;
-                    self.complete_title_hydration(
-                        &hydrated,
-                        HydrationCompletionOptions {
-                            sync_wanted_after_completion: target.sync_wanted_after_completion,
-                        },
-                    )
-                    .await;
-                    let refreshed = self
-                        .services
-                        .catalog
-                        .titles
-                        .get_by_id(&hydrated.id)
-                        .await?
-                        .unwrap_or(hydrated);
-                    if refreshed.metadata_fetched_at.is_some() {
-                        outcome
-                            .hydrated_titles
-                            .insert(refreshed.id.clone(), refreshed);
-                    } else {
-                        warn!(
-                            hydration_source = title_source.as_str(),
-                            facet = title_facet.as_str(),
-                            title_id = %title_id,
-                            "title hydration failed: metadata could not be persisted"
-                        );
-                        outcome
-                            .failed_titles
-                            .insert(title_id, "metadata could not be persisted".to_string());
-                    }
-                } else {
-                    warn!(
-                        hydration_source = title_source.as_str(),
-                        facet = title_facet.as_str(),
-                        title_id = %title_id,
-                        "title hydration failed: bulk metadata response missing series title"
-                    );
-                    self.emit_hydration_failed(
-                        &target.title,
-                        "bulk metadata response missing title",
-                    )
-                    .await;
-                    outcome
-                        .failed_titles
-                        .insert(title_id, "bulk metadata response missing title".to_string());
-                }
-            }
-
-            info!(
-                target_count = chunk_len,
-                movie_count = movie_ids.len(),
-                series_count = series_ids.len(),
-                hydrated_delta = outcome.hydrated_titles.len() - hydrated_before,
-                failed_delta = outcome.failed_titles.len() - failed_before,
-                elapsed_ms = chunk_started_at.elapsed().as_millis(),
-                total_elapsed_ms = hydration_started_at.elapsed().as_millis(),
-                "metadata hydration chunk complete"
-            );
             }
         }
 
@@ -808,57 +1017,101 @@ impl AppUseCase {
         target: HydrationTarget,
     ) -> AppResult<Title> {
         let language = self.resolve_metadata_language_for_title(&target.title).await;
-        self.emit_hydration_started(&target.title).await;
-        let tvdb_id = target
-            .requested_tvdb_id
-            .or_else(|| extract_tvdb_id(&target.title))
-            .ok_or_else(|| AppError::Repository("no tvdb external id found".to_string()))?;
+        self.hydrate_title_single_apq_with_language(target, &language)
+            .await
+    }
 
-        let result = match target.title.facet {
+    pub(crate) async fn hydrate_title_single_apq_with_language(
+        &self,
+        target: HydrationTarget,
+        language: &str,
+    ) -> AppResult<Title> {
+        self.emit_hydration_started(&target.title).await;
+        match target.title.facet {
             MediaFacet::Movie => {
-                let movie = self
+                let movie_ref = target
+                    .requested_movie_ref
+                    .clone()
+                    .or_else(|| movie_title_ref(&target.title))
+                    .ok_or_else(|| {
+                        AppError::Repository("no movie external id found".to_string())
+                    })?;
+                let (movie, redirects) = match self
                     .services
                     .library
                     .metadata_gateway
-                    .get_movie(tvdb_id, &language)
+                    .get_movie_titles(std::slice::from_ref(&movie_ref), language)
+                    .await
+                {
+                    Ok(result) => (
+                        result.by_ref_index.get(&0).cloned().ok_or_else(|| {
+                            AppError::NotFound("movie metadata response missing title".to_string())
+                        })?,
+                        result.redirects,
+                    ),
+                    Err(error) if movie_title_queries_not_supported(&error) => {
+                        let tvdb_id = movie_ref.tvdb_id.ok_or_else(|| {
+                            AppError::Repository("no tvdb external id found".to_string())
+                        })?;
+                        (
+                            self.services
+                                .library
+                                .metadata_gateway
+                                .get_movie(tvdb_id, language)
+                                .await?,
+                            Vec::new(),
+                        )
+                    }
+                    Err(error) => return Err(error),
+                };
+                let refreshed = self
+                    .complete_movie_hydration(&target, movie, language, &redirects)
                     .await?;
-                super::movie_to_hydration_result(movie, &language)
+                if refreshed.metadata_fetched_at.is_some() {
+                    Ok(refreshed)
+                } else {
+                    Err(AppError::Repository(
+                        "metadata could not be persisted".to_string(),
+                    ))
+                }
             }
             MediaFacet::Series | MediaFacet::Anime => {
+                let tvdb_id = target
+                    .requested_tvdb_id
+                    .or_else(|| extract_tvdb_id(&target.title))
+                    .ok_or_else(|| AppError::Repository("no tvdb external id found".to_string()))?;
                 let series = self
                     .services
                     .library
                     .metadata_gateway
-                    .get_series(tvdb_id, &language)
+                    .get_series(tvdb_id, language)
                     .await?;
-                super::series_to_hydration_result(series, &language)
+                let result = super::series_to_hydration_result(series, language);
+                let hydrated = self
+                    .apply_hydration_result(target.title, result, target.source)
+                    .await;
+                self.complete_title_hydration(
+                    &hydrated,
+                    HydrationCompletionOptions {
+                        sync_wanted_after_completion: target.sync_wanted_after_completion,
+                    },
+                )
+                .await;
+                let refreshed = self
+                    .services
+                    .catalog
+                    .titles
+                    .get_by_id(&hydrated.id)
+                    .await?
+                    .unwrap_or(hydrated);
+                if refreshed.metadata_fetched_at.is_some() {
+                    Ok(refreshed)
+                } else {
+                    Err(AppError::Repository(
+                        "metadata could not be persisted".to_string(),
+                    ))
+                }
             }
-        };
-
-        let source = target.source;
-        let hydrated = self
-            .apply_hydration_result(target.title, result, source)
-            .await;
-        self.complete_title_hydration(
-            &hydrated,
-            HydrationCompletionOptions {
-                sync_wanted_after_completion: target.sync_wanted_after_completion,
-            },
-        )
-        .await;
-        let refreshed = self
-            .services
-            .catalog
-            .titles
-            .get_by_id(&hydrated.id)
-            .await?
-            .unwrap_or(hydrated);
-        if refreshed.metadata_fetched_at.is_some() {
-            Ok(refreshed)
-        } else {
-            Err(AppError::Repository(
-                "metadata could not be persisted".to_string(),
-            ))
         }
     }
 
@@ -945,12 +1198,13 @@ impl AppUseCase {
         };
 
         if !result.seasons.is_empty() || !result.episodes.is_empty() {
-            self.create_series_seasons_and_episodes(
+            self.create_series_seasons_and_episodes_with_movie_metadata(
                 &title,
                 &result.seasons,
                 &result.episodes,
                 &result.anime_mappings,
                 &result.anime_movies,
+                &result.movie_metadata,
             )
             .await;
         }
@@ -1320,6 +1574,7 @@ impl AppUseCase {
                 .map(|title| HydrationTarget {
                     title,
                     requested_tvdb_id: None,
+                    requested_movie_ref: None,
                     sync_wanted_after_completion: false,
                     source: HydrationSource::Maintenance,
                 })

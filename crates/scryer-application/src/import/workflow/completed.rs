@@ -70,8 +70,8 @@ async fn analyze_and_persist_imported_media_file(
     .await;
 }
 
-fn completed_download_identity(completed: &CompletedDownload) -> DownloadSourceIdentity {
-    DownloadSourceIdentity::new(
+fn completed_download_identity(completed: &CompletedDownload) -> ClientJobLocator {
+    ClientJobLocator::new(
         Some(completed.client_id.as_str()),
         &completed.client_type,
         &completed.download_client_item_id,
@@ -396,7 +396,7 @@ pub(crate) struct TerminalCleanupTickCache {
 impl TerminalCleanupTickCache {
     /// Prefetch the seed goals for every settled row in this tick in one query.
     /// The memoized caches start empty and fill as rows are reconciled.
-    pub(crate) async fn prefetch(app: &AppUseCase, identities: &[DownloadSourceIdentity]) -> Self {
+    pub(crate) async fn prefetch(app: &AppUseCase, identities: &[ClientJobLocator]) -> Self {
         Self {
             goals: crate::seeding_gate::SeedGoalBatch::prefetch(app, identities).await,
             routing_scopes: std::sync::Mutex::new(HashMap::new()),
@@ -509,7 +509,7 @@ async fn terminal_failure_origin_for_tracked(
     if crate::download_submission_identity_is_empty(&identity) {
         return TerminalFailureOrigin::ClientFailure;
     }
-    let source_identity = DownloadSourceIdentity::new(
+    let source_identity = ClientJobLocator::new(
         Some(tracked.client_id.as_str()),
         &tracked.client_type,
         &tracked.client_item.download_client_item_id,
@@ -568,6 +568,7 @@ pub(crate) async fn reconcile_terminal_download_cleanup_for_tracked(
     let failure_origin = terminal_failure_origin_for_tracked(app, tracked, state).await;
     reconcile_terminal_download_cleanup(
         app,
+        tracked.canonical_download_id(),
         &tracked.client_id,
         &tracked.client_type,
         &tracked.client_item.download_client_item_id,
@@ -596,15 +597,12 @@ pub(crate) async fn reconcile_terminal_download_cleanup_for_tracked(
 /// `ImportDecision::Failed` and are retried by the phase rule in
 /// `completed_import_result_is_retryable` regardless of the message (Sonarr's
 /// model — no error-string catalogue). This list only recognises the transient
-/// conditions Scryer itself reports as a `Skipped`/`Rejected` result: a source
-/// still being unpacked or changing under the importer, or an active-download
-/// marker.
+/// conditions Scryer itself reports as a `Skipped`/`Rejected` result after an
+/// execution race. Import-check outcomes such as a source still unpacking are
+/// represented by `ImportSkipReason`, never their message text.
 fn completed_import_error_message_is_retryable(message: &str) -> bool {
     let normalized = message.to_ascii_lowercase();
     const SCRYER_TRANSIENT_PHRASES: &[&str] = &[
-        "active-download marker",
-        "still being unpacked",
-        "still_unpacking",
         "source changed",
         "temporarily",
         "not found or inaccessible",
@@ -661,22 +659,12 @@ async fn resolve_import_quality_profile(
         )),
     })
 }
+/// "Not media at all" — a sample, a promo, a zero-length placeholder. Owned by
+/// the import pipeline alone: scoring no longer has a floor to keep in step with
+/// it, because the smallness it used to veto below is now a penalty read off the
+/// size curve like any other band.
 const SAMPLE_SIZE_THRESHOLD: u64 = 50 * 1024 * 1024;
 
-/// The sample filter and the scorer's minimum-size veto floor are the same
-/// number, and they have to stay that way: the veto refuses "too small to be
-/// what it claims" and stops exactly where the sample filter takes over ("not
-/// media at all"). A gap between them is either a sample the scorer vetoes as a
-/// lie — a blocklist for a file the pipeline was going to discard anyway — or a
-/// band of files neither rule covers.
-///
-/// The assert lives here rather than beside the constant so the dependency runs
-/// one way: the import module already knows about scoring, scoring must never
-/// know about import.
-const _: () = assert!(
-    SAMPLE_SIZE_THRESHOLD as i64 == crate::quality_profile::MINIMUM_SIZE_VETO_FLOOR_BYTES,
-    "the sample-file threshold and the minimum-size veto floor must stay identical"
-);
 fn non_empty_string(value: Option<String>) -> Option<String> {
     value.filter(|value| !value.trim().is_empty())
 }

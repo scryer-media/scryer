@@ -1,7 +1,9 @@
 use async_trait::async_trait;
 use scryer_domain::MediaFacet;
 
-use crate::facet_handler::{FacetHandler, HydrationResult, series_to_hydration_result};
+use crate::facet_handler::{
+    FacetHandler, HydrationResult, hydrate_referenced_movie_metadata, series_to_hydration_result,
+};
 use crate::{AppResult, MetadataGateway};
 
 /// Handles both TV and Anime facets (they share series behavior
@@ -69,6 +71,14 @@ impl FacetHandler for SeriesFacetHandler {
         language: &str,
     ) -> AppResult<HydrationResult> {
         let series = gateway.get_series(tvdb_id, language).await?;
-        Ok(series_to_hydration_result(series, language))
+        let movie_metadata = hydrate_referenced_movie_metadata(gateway, &[&series], language)
+            .await
+            .inspect_err(|error| {
+                tracing::warn!(tvdb_id, error = %error, "linked movie metadata hydration failed");
+            })
+            .unwrap_or_default();
+        let mut result = series_to_hydration_result(series, language);
+        result.movie_metadata = movie_metadata;
+        Ok(result)
     }
 }

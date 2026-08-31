@@ -14,7 +14,7 @@ export type ViewId =
 export type SystemSection = "overview" | "jobs" | "recycleBin";
 export type LogsSection = "logs" | "audit";
 export type ActivitySection = "activity" | "import" | "history";
-export type WantedSection = "wanted" | "cutoff" | "pending" | "history";
+export type WantedSection = "wanted" | "cutoff" | "pending";
 export type SettingsSection =
   | "profile"
   | "general"

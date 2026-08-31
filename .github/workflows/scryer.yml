@@ -17,10 +17,77 @@ env:
   CARGO_BUILD_WARNINGS: deny
 
 jobs:
+  changes:
+    name: changes
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    outputs:
+      scope: ${{ steps.classify.outputs.scope }}
+      web: ${{ steps.classify.outputs.web }}
+      full: ${{ steps.classify.outputs.full }}
+      xtask: ${{ steps.classify.outputs.xtask }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Test changed-path classifier
+        run: python3 .github/scripts/test_classify_scryer_ci_paths.py
+
+      - name: Classify validation scope
+        id: classify
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            test -n "$PR_BASE_SHA"
+            test -n "$PR_HEAD_SHA"
+            scope="$(git diff --name-only --no-renames -z "$PR_BASE_SHA" "$PR_HEAD_SHA" | python3 .github/scripts/classify_scryer_ci_paths.py)"
+            run_xtask="$(git diff --name-only --no-renames -z "$PR_BASE_SHA" "$PR_HEAD_SHA" | python3 .github/scripts/classify_scryer_ci_paths.py --output xtask)"
+          else
+            scope=full
+            run_xtask=true
+          fi
+
+          case "$scope" in
+            none)
+              run_web=false
+              run_full=false
+              ;;
+            web)
+              run_web=true
+              run_full=false
+              ;;
+            full)
+              run_web=true
+              run_full=true
+              ;;
+            *)
+              echo "unexpected Scryer CI validation scope: $scope" >&2
+              exit 1
+              ;;
+          esac
+
+          echo "Scryer CI validation scope: $scope"
+
+          {
+            echo "scope=$scope"
+            echo "web=$run_web"
+            echo "full=$run_full"
+            echo "xtask=$run_xtask"
+          } >> "$GITHUB_OUTPUT"
+
   web:
     name: web
     runs-on: ubuntu-26.04
     timeout-minutes: 40
+    needs: [changes]
+    if: ${{ needs.changes.outputs.web == 'true' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -61,14 +128,51 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  builtins-provenance:
+    name: builtins-provenance
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    needs: [changes, release-trust]
+    if: ${{ always() && needs.changes.outputs.full == 'true' && (github.event_name == 'pull_request' || needs.release-trust.result == 'success') }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v2.6.5
+
+      - name: Install provenance verification tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends b3sum zstd
+
+      - name: Materialize verified pinned built-ins
+        shell: bash
+        run: python3 scripts/materialize-builtins.py --repo-root "$GITHUB_WORKSPACE"
+
+      - name: Upload verified built-ins
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: scryer-builtins-${{ github.run_id }}
+          path: crates/scryer-plugins/builtins
+          if-no-files-found: error
+          retention-days: 14
+
   winget-xtask-build:
     name: winget-xtask-build
     runs-on: ubuntu-26.04
-    timeout-minutes: 20
-    needs: [release-trust]
+    timeout-minutes: 50
+    needs: [release-trust, builtins-provenance]
     permissions:
       contents: read
-    if: ${{ always() && github.ref_type == 'tag' && startsWith(github.ref_name, 'scryer-v') && needs.release-trust.result == 'success' }}
+    if: ${{ always() && github.ref_type == 'tag' && startsWith(github.ref_name, 'scryer-v') && needs.release-trust.result == 'success' && needs.builtins-provenance.result == 'success' }}
     env:
       CARGO_INCREMENTAL: "0"
       SCCACHE_BASEDIRS: /home/runner/work/scryer/scryer
@@ -77,6 +181,10 @@ jobs:
       SCCACHE_IDLE_TIMEOUT: "0"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: ./.github/actions/download-builtins
+        with:
+          run-id: ${{ github.run_id }}
 
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
@@ -137,8 +245,8 @@ jobs:
     name: rust-clippy
     runs-on: ubuntu-26.04
     timeout-minutes: 50
-    needs: [web, release-trust]
-    if: ${{ always() && needs.web.result == 'success' && (github.event_name == 'pull_request' || needs.release-trust.result == 'success') }}
+    needs: [changes, web, builtins-provenance, release-trust]
+    if: ${{ always() && needs.changes.outputs.full == 'true' && needs.web.result == 'success' && needs.builtins-provenance.result == 'success' && (github.event_name == 'pull_request' || needs.release-trust.result == 'success') }}
     env:
       CARGO_HOME: /home/runner/.cargo
       CARGO_INCREMENTAL: "0"
@@ -147,13 +255,51 @@ jobs:
       CARGO_PROFILE_TEST_DEBUG: "0"
       CARGO_PROFILE_TEST_STRIP: debuginfo
       CARGO_TERM_COLOR: always
+      SCCACHE_BASEDIRS: /home/runner/work/scryer/scryer
+      SCCACHE_CACHE_SIZE: 10G
+      SCCACHE_DIR: /home/runner/.cache/sccache
+      SCCACHE_IDLE_TIMEOUT: "0"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: ./.github/actions/download-builtins
+        with:
+          run-id: ${{ github.run_id }}
 
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
           toolchain: "1.97.1"
           components: clippy
+
+      - name: Install sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.17.0
+
+      - name: Configure trusted internal PR sccache
+        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+        uses: ./.github/actions/configure-sccache-r2
+        with:
+          endpoint: ${{ secrets.SCCACHE_ENDPOINT }}
+          access-key-id: ${{ secrets.SCCACHE_S3_ACCESS_ID }}
+          secret-access-key: ${{ secrets.SCCACHE_S3_SECRET }}
+          key-prefix: scryer/trusted-pr/v1/rust-1.97.1/x86_64-unknown-linux-musl/
+
+      - name: Configure fork PR sccache
+        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+        shell: bash
+        run: |
+          {
+            echo "RUSTC_WRAPPER=sccache"
+            echo "SCRYER_SCCACHE_ENABLED=true"
+          } >> "$GITHUB_ENV"
+
+      - name: Prime sccache server
+        shell: bash
+        run: |
+          set -euo pipefail
+          sccache --start-server || true
+          sccache --zero-stats || true
 
       - name: Install system dependencies
         run: sudo apt-get install -y --no-install-recommends musl-tools mold nasm
@@ -179,8 +325,8 @@ jobs:
         run: |
           set -euo pipefail
           cargo tree -p scryer-plugins -e features --locked | tee wasmtime-feature-tree.txt
-          if ! grep -Fq 'wasmtime feature "threads"' wasmtime-feature-tree.txt; then
-            echo "required Wasmtime threads feature is not enabled" >&2
+          if ! grep -Fq 'wasmtime-environ feature "threads"' wasmtime-feature-tree.txt; then
+            echo "required Wasmtime threads runtime support is not enabled" >&2
             exit 1
           fi
           if grep -Eq 'wasmtime feature "(gc|gc-null|wat)"' wasmtime-feature-tree.txt; then
@@ -195,7 +341,11 @@ jobs:
           export SCRYER_EMBED_UI_DIR="${GITHUB_WORKSPACE}/scryer-web-out"
           export SCRYER_SMG_REGISTRATION_SECRET="${{ secrets.SMG_REGISTRATION_SECRET }}"
           export SCRYER_SMG_GRAPHQL_URL="https://smg.scryer.media/graphql"
-          export CC_x86_64_unknown_linux_musl="musl-gcc"
+          if [ "${SCRYER_SCCACHE_ENABLED:-false}" = "true" ]; then
+            export CC_x86_64_unknown_linux_musl="sccache musl-gcc"
+          else
+            export CC_x86_64_unknown_linux_musl="musl-gcc"
+          fi
           export RUSTFLAGS="--remap-path-prefix=${GITHUB_WORKSPACE}=. -C link-arg=-fuse-ld=mold -W linker-messages"
           cargo clippy --target x86_64-unknown-linux-musl --locked \
             -p scryer \
@@ -238,6 +388,13 @@ jobs:
           df -h | tee rust-clippy-disk-end.txt
           du -sh target "$CARGO_HOME" 2>/dev/null | tee -a rust-clippy-disk-end.txt || true
 
+      - name: Show sccache stats
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          sccache --show-stats | tee rust-clippy-sccache-stats.txt
+
       - name: Upload rust-clippy artifacts
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -247,6 +404,7 @@ jobs:
             rust-clippy.log
             rust-clippy-disk-start.txt
             rust-clippy-disk-end.txt
+            rust-clippy-sccache-stats.txt
             wasmtime-feature-tree.txt
           if-no-files-found: error
           retention-days: 14
@@ -255,8 +413,8 @@ jobs:
     name: rust-nextest
     runs-on: ubuntu-26.04
     timeout-minutes: 50
-    needs: [web, release-trust]
-    if: ${{ always() && needs.web.result == 'success' && (github.event_name == 'pull_request' || needs.release-trust.result == 'success') }}
+    needs: [changes, web, builtins-provenance, release-trust]
+    if: ${{ always() && needs.changes.outputs.full == 'true' && needs.web.result == 'success' && needs.builtins-provenance.result == 'success' && (github.event_name == 'pull_request' || needs.release-trust.result == 'success') }}
     env:
       CARGO_HOME: /home/runner/.cargo
       CARGO_INCREMENTAL: "0"
@@ -265,18 +423,53 @@ jobs:
       CARGO_PROFILE_TEST_DEBUG: "0"
       CARGO_PROFILE_TEST_STRIP: debuginfo
       CARGO_TERM_COLOR: always
+      SCCACHE_BASEDIRS: /home/runner/work/scryer/scryer
+      SCCACHE_CACHE_SIZE: 10G
+      SCCACHE_DIR: /home/runner/.cache/sccache
+      SCCACHE_IDLE_TIMEOUT: "0"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: ./.github/actions/download-builtins
+        with:
+          run-id: ${{ github.run_id }}
 
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
           toolchain: "1.97.1"
 
-      - name: Install system dependencies
-        run: sudo apt-get install -y --no-install-recommends musl-tools mold nasm
+      - name: Install sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.17.0
 
-      - name: Add musl target
-        run: rustup target add x86_64-unknown-linux-musl
+      - name: Configure trusted internal PR sccache
+        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+        uses: ./.github/actions/configure-sccache-r2
+        with:
+          endpoint: ${{ secrets.SCCACHE_ENDPOINT }}
+          access-key-id: ${{ secrets.SCCACHE_S3_ACCESS_ID }}
+          secret-access-key: ${{ secrets.SCCACHE_S3_SECRET }}
+          key-prefix: scryer/trusted-pr/v1/rust-1.97.1/x86_64-unknown-linux-gnu/
+
+      - name: Configure fork PR sccache
+        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+        shell: bash
+        run: |
+          {
+            echo "RUSTC_WRAPPER=sccache"
+            echo "SCRYER_SCCACHE_ENABLED=true"
+          } >> "$GITHUB_ENV"
+
+      - name: Prime sccache server
+        shell: bash
+        run: |
+          set -euo pipefail
+          sccache --start-server || true
+          sccache --zero-stats || true
+
+      - name: Install system dependencies
+        run: sudo apt-get install -y --no-install-recommends mold nasm
 
       - uses: taiki-e/install-action@cb33e69fad06166ca28a42b2575e4dadabf62ee8 # v2
         with:
@@ -295,18 +488,22 @@ jobs:
           df -h | tee rust-nextest-disk-start.txt
           du -sh target "$CARGO_HOME" 2>/dev/null | tee -a rust-nextest-disk-start.txt || true
 
-      - name: Run full-feature workspace tests
+      - name: Run full-feature Scryer tests
         shell: bash
         run: |
           set -euo pipefail
           export SCRYER_EMBED_UI_DIR="${GITHUB_WORKSPACE}/scryer-web-out"
           export SCRYER_SMG_REGISTRATION_SECRET="${{ secrets.SMG_REGISTRATION_SECRET }}"
           export SCRYER_SMG_GRAPHQL_URL="https://smg.scryer.media/graphql"
-          export CC_x86_64_unknown_linux_musl="musl-gcc"
           export RUSTFLAGS="--remap-path-prefix=${GITHUB_WORKSPACE}=. -C link-arg=-fuse-ld=mold -W linker-messages"
           export RUST_MIN_STACK="4194304"
-          cargo nextest run --target x86_64-unknown-linux-musl --locked \
+          cargo nextest run --locked \
             --workspace \
+            --exclude xtask \
+            --exclude xtask-release \
+            --exclude xtask-migrations \
+            --exclude xtask-support \
+            --exclude xtask-trash-guides \
             --all-features \
             --no-fail-fast 2>&1 | tee rust-nextest.log
 
@@ -318,6 +515,13 @@ jobs:
           df -h | tee rust-nextest-disk-end.txt
           du -sh target "$CARGO_HOME" 2>/dev/null | tee -a rust-nextest-disk-end.txt || true
 
+      - name: Show sccache stats
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          sccache --show-stats | tee rust-nextest-sccache-stats.txt
+
       - name: Upload rust-nextest artifacts
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -327,15 +531,16 @@ jobs:
             rust-nextest.log
             rust-nextest-disk-start.txt
             rust-nextest-disk-end.txt
+            rust-nextest-sccache-stats.txt
           if-no-files-found: error
           retention-days: 14
 
   launcher-build:
     name: launcher-${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 40
-    needs: [release-trust]
-    if: ${{ always() && (github.event_name == 'pull_request' || needs.release-trust.result == 'success') }}
+    timeout-minutes: 50
+    needs: [changes, release-trust]
+    if: ${{ always() && needs.changes.outputs.full == 'true' && (github.event_name == 'pull_request' || needs.release-trust.result == 'success') }}
     strategy:
       fail-fast: false
       matrix:
@@ -356,7 +561,7 @@ jobs:
       CARGO_HOME: /home/runner/.cargo
       CARGO_INCREMENTAL: "0"
       CARGO_TERM_COLOR: always
-      COLD_TARGET_NAME: scryer-launcher-${{ matrix.arch }}
+      RELEASE_TARGET_NAME: scryer-launcher-${{ matrix.arch }}
       SCCACHE_BASEDIRS: /home/runner/work/scryer/scryer
       SCCACHE_CACHE_SIZE: 10G
       SCCACHE_DIR: /home/runner/.cache/sccache
@@ -370,7 +575,7 @@ jobs:
           if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
             echo "CARGO_TARGET_DIR=${GITHUB_WORKSPACE}/target" >> "$GITHUB_ENV"
           else
-            echo "CARGO_TARGET_DIR=${RUNNER_TEMP}/${COLD_TARGET_NAME}" >> "$GITHUB_ENV"
+            echo "CARGO_TARGET_DIR=${RUNNER_TEMP}/${RELEASE_TARGET_NAME}" >> "$GITHUB_ENV"
           fi
 
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
@@ -384,7 +589,7 @@ jobs:
         run: rustup target add ${{ matrix.target }}
 
       - name: Resolve sccache lane metadata
-        if: ${{ github.event_name == 'pull_request' }}
+        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
         id: launcher-sccache-metadata
         shell: bash
         run: |
@@ -404,7 +609,7 @@ jobs:
           echo "version_line=${version_line}" >> "$GITHUB_OUTPUT"
 
       - name: Restore sccache directory
-        if: ${{ github.event_name == 'pull_request' }}
+        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
         id: launcher-sccache-restore
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
@@ -421,13 +626,22 @@ jobs:
           version: v0.17.0
 
       - name: Configure sccache
-        if: ${{ github.event_name == 'pull_request' }}
+        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
         shell: bash
         run: |
           {
             echo "RUSTC_WRAPPER=sccache"
             echo "SCRYER_SCCACHE_ENABLED=true"
           } >> "$GITHUB_ENV"
+
+      - name: Configure trusted internal PR sccache
+        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+        uses: ./.github/actions/configure-sccache-r2
+        with:
+          endpoint: ${{ secrets.SCCACHE_ENDPOINT }}
+          access-key-id: ${{ secrets.SCCACHE_S3_ACCESS_ID }}
+          secret-access-key: ${{ secrets.SCCACHE_S3_SECRET }}
+          key-prefix: scryer/trusted-pr/v1/rust-1.97.1/${{ matrix.target }}/
 
       - name: Configure trusted tag sccache
         if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/scryer-v') }}
@@ -452,18 +666,18 @@ jobs:
           set -euo pipefail
           cargo test -p scryer-launcher --locked 2>&1 | tee "${{ matrix.artifact_name }}-test.log"
 
-      - name: Prepare cold release target
+      - name: Prepare clean local release target
         if: ${{ github.event_name != 'pull_request' }}
         shell: bash
         run: |
           set -euo pipefail
           if [ -e "$CARGO_TARGET_DIR" ]; then
-            echo "cold release target already exists: $CARGO_TARGET_DIR" >&2
+            echo "clean local release target already exists: $CARGO_TARGET_DIR" >&2
             exit 1
           fi
           mkdir -p "$CARGO_TARGET_DIR"
           test -z "$(ls -A "$CARGO_TARGET_DIR")"
-          echo "cold release target contents at start:"
+          echo "clean local release target contents at start:"
           ls -la "$CARGO_TARGET_DIR"
 
       - name: Build launcher
@@ -479,7 +693,6 @@ jobs:
               --output "${{ matrix.artifact_name }}-heartbeat.log" \
               --build-log "${{ matrix.artifact_name }}-build.log" \
               --status-file "${{ matrix.artifact_name }}-build-status.json" \
-              --timeout-seconds 2100 \
               -- cargo build --timings -p scryer-launcher --profile release-launcher --locked --target "${{ matrix.target }}"
           fi
 
@@ -517,26 +730,19 @@ jobs:
             ${{ matrix.artifact_name }}.tar.gz
             ${{ matrix.artifact_name }}-test.log
             ${{ matrix.artifact_name }}-build.log
-            ${{ matrix.artifact_name }}-sccache-stats.txt
             ${{ matrix.artifact_name }}-heartbeat.log
             ${{ matrix.artifact_name }}-build-status.json
-            ${{ github.event_name == 'pull_request' && format('{0}/target/cargo-timings/*', github.workspace) || format('{0}/{1}/cargo-timings/*', runner.temp, env.COLD_TARGET_NAME) }}
+            ${{ matrix.artifact_name }}-sccache-stats.txt
+            ${{ github.event_name == 'pull_request' && format('{0}/target/cargo-timings/*', github.workspace) || format('{0}/{1}/cargo-timings/*', runner.temp, env.RELEASE_TARGET_NAME) }}
           if-no-files-found: error
           retention-days: 14
-
-      - name: Save sccache directory
-        if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && steps.launcher-sccache-restore.outcome == 'success'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
-        with:
-          path: /home/runner/.cache/sccache
-          key: ${{ steps.launcher-sccache-restore.outputs.cache-primary-key }}
 
   linux-build:
     name: linux-${{ matrix.arch }}-${{ matrix.variant }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
-    needs: [web, release-trust]
-    if: ${{ always() && needs.web.result == 'success' && (github.event_name == 'pull_request' || needs.release-trust.result == 'success') }}
+    timeout-minutes: 90
+    needs: [changes, web, builtins-provenance, release-trust]
+    if: ${{ always() && needs.changes.outputs.full == 'true' && needs.web.result == 'success' && needs.builtins-provenance.result == 'success' && (github.event_name == 'pull_request' || needs.release-trust.result == 'success') }}
     strategy:
       fail-fast: false
       matrix:
@@ -560,14 +766,18 @@ jobs:
             sccache_lane: pr-linux-arm64-cpu
             artifact_name: scryer-linux-arm64-portable
             archive_name: scryer-linux-arm64-portable.tar.gz
-            release_profile: release
+            release_profile: release-thin
             install_nasm: false
             extra_rustflags: ""
     env:
       CARGO_HOME: /home/runner/.cargo
       CARGO_INCREMENTAL: "0"
       CARGO_TERM_COLOR: always
-      COLD_TARGET_NAME: scryer-linux-${{ matrix.arch }}-${{ matrix.variant }}
+      RELEASE_TARGET_NAME: scryer-linux-${{ matrix.arch }}-${{ matrix.variant }}
+      AWS_LC_SYS_USE_SYSTEM: "0"
+      AWS_LC_SYS_STATIC: "1"
+      AWS_LC_SYS_SMALL: "0"
+      AWS_LC_SYS_CMAKE_BUILDER: "0"
       SCRYER_CARGO_PROFILE: ${{ github.event_name == 'pull_request' && 'rc' || matrix.release_profile }}
       SCCACHE_BASEDIRS: /home/runner/work/scryer/scryer
       SCCACHE_CACHE_SIZE: 10G
@@ -576,13 +786,17 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      - uses: ./.github/actions/download-builtins
+        with:
+          run-id: ${{ github.run_id }}
+
       - name: Configure build target
         shell: bash
         run: |
           if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
             echo "CARGO_TARGET_DIR=${GITHUB_WORKSPACE}/target" >> "$GITHUB_ENV"
           else
-            echo "CARGO_TARGET_DIR=${RUNNER_TEMP}/${COLD_TARGET_NAME}" >> "$GITHUB_ENV"
+            echo "CARGO_TARGET_DIR=${RUNNER_TEMP}/${RELEASE_TARGET_NAME}" >> "$GITHUB_ENV"
           fi
 
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
@@ -603,7 +817,7 @@ jobs:
         run: rustup target add ${{ matrix.target }}
 
       - name: Restore sccache directory
-        if: ${{ github.event_name == 'pull_request' }}
+        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
         id: linux-sccache-restore
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
@@ -619,13 +833,22 @@ jobs:
           version: v0.17.0
 
       - name: Configure sccache
-        if: ${{ github.event_name == 'pull_request' }}
+        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
         shell: bash
         run: |
           {
             echo "RUSTC_WRAPPER=sccache"
             echo "SCRYER_SCCACHE_ENABLED=true"
           } >> "$GITHUB_ENV"
+
+      - name: Configure trusted internal PR sccache
+        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+        uses: ./.github/actions/configure-sccache-r2
+        with:
+          endpoint: ${{ secrets.SCCACHE_ENDPOINT }}
+          access-key-id: ${{ secrets.SCCACHE_S3_ACCESS_ID }}
+          secret-access-key: ${{ secrets.SCCACHE_S3_SECRET }}
+          key-prefix: scryer/trusted-pr/v1/rust-1.97.1/${{ matrix.target }}/
 
       - name: Configure trusted tag sccache
         if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/scryer-v') }}
@@ -647,18 +870,18 @@ jobs:
           sccache --start-server || true
           sccache --zero-stats || true
 
-      - name: Prepare cold release target
+      - name: Prepare clean local release target
         if: ${{ github.event_name != 'pull_request' }}
         shell: bash
         run: |
           set -euo pipefail
           if [ -e "$CARGO_TARGET_DIR" ]; then
-            echo "cold release target already exists: $CARGO_TARGET_DIR" >&2
+            echo "clean local release target already exists: $CARGO_TARGET_DIR" >&2
             exit 1
           fi
           mkdir -p "$CARGO_TARGET_DIR"
           test -z "$(ls -A "$CARGO_TARGET_DIR")"
-          echo "cold release target contents at start:"
+          echo "clean local release target contents at start:"
           ls -la "$CARGO_TARGET_DIR"
 
       - name: Build scryer
@@ -670,16 +893,32 @@ jobs:
           export SCRYER_BUILD_LANE="${{ matrix.build_lane }}"
           export SCRYER_SMG_REGISTRATION_SECRET="${{ secrets.SMG_REGISTRATION_SECRET }}"
           export SCRYER_SMG_GRAPHQL_URL="https://smg.scryer.media/graphql"
-          target_cc_var="CC_$(printf '%s' "${{ matrix.target }}" | tr '-' '_')"
+          target_env_suffix="$(printf '%s' "${{ matrix.target }}" | tr '-' '_')"
+          target_cc_var="CC_${target_env_suffix}"
+          target_cflags_var="CFLAGS_${target_env_suffix}"
+          target_cxxflags_var="CXXFLAGS_${target_env_suffix}"
           if [ "${SCRYER_SCCACHE_ENABLED:-false}" = "true" ]; then
             export "${target_cc_var}=sccache musl-gcc"
           else
             export "${target_cc_var}=musl-gcc"
           fi
+          native_flags="-O3 -DNDEBUG -ffunction-sections -fdata-sections -fvisibility=hidden"
+          export "${target_cflags_var}=${native_flags}"
+          export "${target_cxxflags_var}=${native_flags}"
           export RUSTFLAGS="--remap-path-prefix=${GITHUB_WORKSPACE}=. -C link-arg=-fuse-ld=mold -W linker-messages"
           if [ -n "${{ matrix.extra_rustflags }}" ]; then
             export RUSTFLAGS="${RUSTFLAGS} ${{ matrix.extra_rustflags }}"
           fi
+          {
+            musl-gcc --version
+            printf '%s=%s\n' "${target_cc_var}" "${!target_cc_var}"
+            printf '%s=%s\n' "${target_cflags_var}" "${!target_cflags_var}"
+            printf '%s=%s\n' "${target_cxxflags_var}" "${!target_cxxflags_var}"
+            printf 'AWS_LC_SYS_USE_SYSTEM=%s\n' "${AWS_LC_SYS_USE_SYSTEM}"
+            printf 'AWS_LC_SYS_STATIC=%s\n' "${AWS_LC_SYS_STATIC}"
+            printf 'AWS_LC_SYS_SMALL=%s\n' "${AWS_LC_SYS_SMALL}"
+            printf 'AWS_LC_SYS_CMAKE_BUILDER=%s\n' "${AWS_LC_SYS_CMAKE_BUILDER}"
+          } | tee "${{ matrix.artifact_name }}-native-build-env.txt"
           if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
             cargo build --timings -p scryer --profile "${SCRYER_CARGO_PROFILE}" --locked --target "${{ matrix.target }}" 2>&1 | tee "${{ matrix.artifact_name }}-build.log"
           else
@@ -687,8 +926,18 @@ jobs:
               --output "${{ matrix.artifact_name }}-heartbeat.log" \
               --build-log "${{ matrix.artifact_name }}-build.log" \
               --status-file "${{ matrix.artifact_name }}-build-status.json" \
-              --timeout-seconds 3300 \
               -- cargo build --timings -p scryer --profile "${SCRYER_CARGO_PROFILE}" --locked --target "${{ matrix.target }}"
+          fi
+
+      - name: Validate native linkage
+        shell: bash
+        run: |
+          set -euo pipefail
+          binary="$CARGO_TARGET_DIR/${{ matrix.target }}/$SCRYER_CARGO_PROFILE/scryer"
+          readelf -d "$binary" | tee "${{ matrix.artifact_name }}-native-linkage.txt"
+          if grep -q '(NEEDED)' "${{ matrix.artifact_name }}-native-linkage.txt"; then
+            echo "::error::Linux release binary has dynamic NEEDED libraries"
+            exit 1
           fi
 
       - name: Validate release build diagnostics
@@ -700,6 +949,11 @@ jobs:
           test -s "${{ matrix.artifact_name }}-build-status.json"
           if [ "${{ steps.linux-cargo-build.outcome }}" = "success" ]; then
             compgen -G "$CARGO_TARGET_DIR/cargo-timings/*" >/dev/null
+            build_log="${{ matrix.artifact_name }}-build.log"
+            if grep -Eq 'aws-lc-sys@[^:]+: (Building with: System Library|Size-optimized AWS-LC build enabled)' "$build_log"; then
+              echo "::error::Release build log reports an unsupported AWS-LC build mode"
+              exit 1
+            fi
           fi
 
       - name: Package tarball
@@ -732,26 +986,21 @@ jobs:
           name: build-diagnostics-${{ matrix.artifact_name }}-${{ github.run_id }}
           path: |
             ${{ matrix.artifact_name }}-build.log
-            ${{ matrix.artifact_name }}-sccache-stats.txt
             ${{ matrix.artifact_name }}-heartbeat.log
             ${{ matrix.artifact_name }}-build-status.json
-            ${{ github.event_name == 'pull_request' && format('{0}/target/cargo-timings/*', github.workspace) || format('{0}/{1}/cargo-timings/*', runner.temp, env.COLD_TARGET_NAME) }}
+            ${{ matrix.artifact_name }}-native-build-env.txt
+            ${{ matrix.artifact_name }}-native-linkage.txt
+            ${{ matrix.artifact_name }}-sccache-stats.txt
+            ${{ github.event_name == 'pull_request' && format('{0}/target/cargo-timings/*', github.workspace) || format('{0}/{1}/cargo-timings/*', runner.temp, env.RELEASE_TARGET_NAME) }}
           if-no-files-found: warn
           retention-days: 14
-
-      - name: Save sccache directory
-        if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && steps.linux-sccache-restore.outcome == 'success'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
-        with:
-          path: /home/runner/.cache/sccache
-          key: ${{ steps.linux-sccache-restore.outputs.cache-primary-key }}
 
   macos-build:
     name: macos-${{ matrix.arch }}-${{ matrix.variant }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
-    needs: [web, release-trust]
-    if: ${{ always() && needs.web.result == 'success' && (github.event_name == 'pull_request' || needs.release-trust.result == 'success') }}
+    needs: [changes, web, builtins-provenance, release-trust]
+    if: ${{ always() && needs.changes.outputs.full == 'true' && needs.web.result == 'success' && needs.builtins-provenance.result == 'success' && (github.event_name == 'pull_request' || needs.release-trust.result == 'success') }}
     strategy:
       fail-fast: false
       matrix:
@@ -781,7 +1030,11 @@ jobs:
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_TERM_COLOR: always
-      COLD_TARGET_NAME: scryer-macos-${{ matrix.arch }}
+      RELEASE_TARGET_NAME: scryer-macos-${{ matrix.arch }}
+      AWS_LC_SYS_USE_SYSTEM: "0"
+      AWS_LC_SYS_STATIC: "1"
+      AWS_LC_SYS_SMALL: "0"
+      AWS_LC_SYS_CMAKE_BUILDER: "0"
       SCRYER_CARGO_PROFILE: ${{ github.event_name == 'pull_request' && 'rc' || matrix.release_profile }}
       SCCACHE_BASEDIRS: ${{ github.workspace }}
       SCCACHE_CACHE_SIZE: 10G
@@ -790,13 +1043,17 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      - uses: ./.github/actions/download-builtins
+        with:
+          run-id: ${{ github.run_id }}
+
       - name: Configure build target
         shell: bash
         run: |
           if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
             echo "CARGO_TARGET_DIR=${GITHUB_WORKSPACE}/target" >> "$GITHUB_ENV"
           else
-            echo "CARGO_TARGET_DIR=${RUNNER_TEMP}/${COLD_TARGET_NAME}" >> "$GITHUB_ENV"
+            echo "CARGO_TARGET_DIR=${RUNNER_TEMP}/${RELEASE_TARGET_NAME}" >> "$GITHUB_ENV"
           fi
 
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
@@ -805,7 +1062,7 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Restore sccache directory
-        if: ${{ github.event_name == 'pull_request' }}
+        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
         id: macos-sccache-restore
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
@@ -821,13 +1078,22 @@ jobs:
           version: v0.17.0
 
       - name: Configure sccache
-        if: ${{ github.event_name == 'pull_request' }}
+        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
         shell: bash
         run: |
           {
             echo "RUSTC_WRAPPER=sccache"
             echo "SCRYER_SCCACHE_ENABLED=true"
           } >> "$GITHUB_ENV"
+
+      - name: Configure trusted internal PR sccache
+        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+        uses: ./.github/actions/configure-sccache-r2
+        with:
+          endpoint: ${{ secrets.SCCACHE_ENDPOINT }}
+          access-key-id: ${{ secrets.SCCACHE_S3_ACCESS_ID }}
+          secret-access-key: ${{ secrets.SCCACHE_S3_SECRET }}
+          key-prefix: scryer/trusted-pr/v1/rust-1.97.1/${{ matrix.target }}/
 
       - name: Configure trusted tag sccache
         if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/scryer-v') }}
@@ -863,18 +1129,18 @@ jobs:
           sccache --start-server || true
           sccache --zero-stats || true
 
-      - name: Prepare cold release target
+      - name: Prepare clean local release target
         if: ${{ github.event_name != 'pull_request' }}
         shell: bash
         run: |
           set -euo pipefail
           if [ -e "$CARGO_TARGET_DIR" ]; then
-            echo "cold release target already exists: $CARGO_TARGET_DIR" >&2
+            echo "clean local release target already exists: $CARGO_TARGET_DIR" >&2
             exit 1
           fi
           mkdir -p "$CARGO_TARGET_DIR"
           test -z "$(ls -A "$CARGO_TARGET_DIR")"
-          echo "cold release target contents at start:"
+          echo "clean local release target contents at start:"
           ls -la "$CARGO_TARGET_DIR"
 
       - name: Build scryer
@@ -897,10 +1163,27 @@ jobs:
             export CC="clang"
             export CXX="clang++"
           fi
+          target_env_suffix="$(printf '%s' "${{ matrix.target }}" | tr '-' '_')"
+          target_cflags_var="CFLAGS_${target_env_suffix}"
+          target_cxxflags_var="CXXFLAGS_${target_env_suffix}"
+          native_flags="-O3 -DNDEBUG -ffunction-sections -fdata-sections -fvisibility=hidden"
+          export "${target_cflags_var}=${native_flags}"
+          export "${target_cxxflags_var}=${native_flags}"
           export RUSTFLAGS="--remap-path-prefix=${GITHUB_WORKSPACE}=. -A linker-messages"
           if [ -n "${{ matrix.extra_rustflags }}" ]; then
             export RUSTFLAGS="${RUSTFLAGS} ${{ matrix.extra_rustflags }}"
           fi
+          {
+            clang --version
+            printf 'CC=%s\n' "${CC}"
+            printf 'CXX=%s\n' "${CXX}"
+            printf '%s=%s\n' "${target_cflags_var}" "${!target_cflags_var}"
+            printf '%s=%s\n' "${target_cxxflags_var}" "${!target_cxxflags_var}"
+            printf 'AWS_LC_SYS_USE_SYSTEM=%s\n' "${AWS_LC_SYS_USE_SYSTEM}"
+            printf 'AWS_LC_SYS_STATIC=%s\n' "${AWS_LC_SYS_STATIC}"
+            printf 'AWS_LC_SYS_SMALL=%s\n' "${AWS_LC_SYS_SMALL}"
+            printf 'AWS_LC_SYS_CMAKE_BUILDER=%s\n' "${AWS_LC_SYS_CMAKE_BUILDER}"
+          } | tee "${{ matrix.artifact_name }}-native-build-env.txt"
           if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
             cargo build --timings -p scryer --profile "${SCRYER_CARGO_PROFILE}" --locked --target "${{ matrix.target }}" 2>&1 | tee "${{ matrix.artifact_name }}-build.log"
           else
@@ -908,8 +1191,18 @@ jobs:
               --output "${{ matrix.artifact_name }}-heartbeat.log" \
               --build-log "${{ matrix.artifact_name }}-build.log" \
               --status-file "${{ matrix.artifact_name }}-build-status.json" \
-              --timeout-seconds 3300 \
               -- cargo build --timings -p scryer --profile "${SCRYER_CARGO_PROFILE}" --locked --target "${{ matrix.target }}"
+          fi
+
+      - name: Validate native linkage
+        shell: bash
+        run: |
+          set -euo pipefail
+          binary="$CARGO_TARGET_DIR/${{ matrix.target }}/$SCRYER_CARGO_PROFILE/scryer"
+          otool -L "$binary" | tee "${{ matrix.artifact_name }}-native-linkage.txt"
+          if grep -Eiq 'aws[-_]?lc|libcrypto' "${{ matrix.artifact_name }}-native-linkage.txt"; then
+            echo "::error::macOS release binary links an external AWS-LC or libcrypto library"
+            exit 1
           fi
 
       - name: Validate release build diagnostics
@@ -921,6 +1214,11 @@ jobs:
           test -s "${{ matrix.artifact_name }}-build-status.json"
           if [ "${{ steps.macos-cargo-build.outcome }}" = "success" ]; then
             test -n "$(find "${CARGO_TARGET_DIR}/cargo-timings" -type f -print -quit 2>/dev/null)"
+            build_log="${{ matrix.artifact_name }}-build.log"
+            if grep -Eq 'aws-lc-sys@[^:]+: (Building with: System Library|Size-optimized AWS-LC build enabled)' "$build_log"; then
+              echo "::error::Release build log reports an unsupported AWS-LC build mode"
+              exit 1
+            fi
           fi
 
       - name: Codesign binary
@@ -977,26 +1275,21 @@ jobs:
           name: build-diagnostics-${{ matrix.artifact_name }}-${{ github.run_id }}
           path: |
             ${{ matrix.artifact_name }}-build.log
-            ${{ matrix.artifact_name }}-sccache-stats.txt
             ${{ matrix.artifact_name }}-heartbeat.log
             ${{ matrix.artifact_name }}-build-status.json
-            ${{ github.event_name == 'pull_request' && format('{0}/target/cargo-timings/*', github.workspace) || format('{0}/{1}/cargo-timings/*', runner.temp, env.COLD_TARGET_NAME) }}
+            ${{ matrix.artifact_name }}-native-build-env.txt
+            ${{ matrix.artifact_name }}-native-linkage.txt
+            ${{ matrix.artifact_name }}-sccache-stats.txt
+            ${{ github.event_name == 'pull_request' && format('{0}/target/cargo-timings/*', github.workspace) || format('{0}/{1}/cargo-timings/*', runner.temp, env.RELEASE_TARGET_NAME) }}
           if-no-files-found: warn
           retention-days: 14
-
-      - name: Save sccache directory
-        if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && steps.macos-sccache-restore.outcome == 'success'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
-        with:
-          path: ${{ github.workspace }}/.sccache
-          key: ${{ steps.macos-sccache-restore.outputs.cache-primary-key }}
 
   windows-build:
     name: windows-${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
-    needs: [web, release-trust]
-    if: ${{ always() && needs.web.result == 'success' && (github.event_name == 'pull_request' || needs.release-trust.result == 'success') }}
+    needs: [changes, web, builtins-provenance, release-trust]
+    if: ${{ always() && needs.changes.outputs.full == 'true' && needs.web.result == 'success' && needs.builtins-provenance.result == 'success' && (github.event_name == 'pull_request' || needs.release-trust.result == 'success') }}
     strategy:
       fail-fast: false
       matrix:
@@ -1021,14 +1314,18 @@ jobs:
             sccache_lane: scryer-windows-arm64-msvc
             sccache_writer_id: scryer-windows-arm64
             artifact_name: scryer-windows-arm64
-            release_profile: release
+            release_profile: release-thin
             install_nasm: false
             use_clang_cl: true
             use_lld_link: true
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_TERM_COLOR: always
-      COLD_TARGET_NAME: scryer-windows-${{ matrix.arch }}
+      RELEASE_TARGET_NAME: scryer-windows-${{ matrix.arch }}
+      AWS_LC_SYS_USE_SYSTEM: "0"
+      AWS_LC_SYS_STATIC: "1"
+      AWS_LC_SYS_SMALL: "0"
+      AWS_LC_SYS_CMAKE_BUILDER: "0"
       SCRYER_CARGO_PROFILE: ${{ github.event_name == 'pull_request' && 'rc' || matrix.release_profile }}
       SCCACHE_BASEDIRS: ${{ github.workspace }}
       SCCACHE_CACHE_SIZE: 10G
@@ -1037,13 +1334,17 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      - uses: ./.github/actions/download-builtins
+        with:
+          run-id: ${{ github.run_id }}
+
       - name: Configure build target
         shell: pwsh
         run: |
           if ($env:GITHUB_EVENT_NAME -eq "pull_request") {
             $targetDir = Join-Path $env:GITHUB_WORKSPACE 'target'
           } else {
-            $targetDir = Join-Path $env:RUNNER_TEMP $env:COLD_TARGET_NAME
+            $targetDir = Join-Path $env:RUNNER_TEMP $env:RELEASE_TARGET_NAME
           }
           "CARGO_TARGET_DIR=$targetDir" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
 
@@ -1052,7 +1353,7 @@ jobs:
           toolchain: ${{ matrix.toolchain }}
 
       - name: Restore sccache directory
-        if: ${{ github.event_name == 'pull_request' }}
+        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
         id: windows-sccache-restore
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
@@ -1068,11 +1369,20 @@ jobs:
           version: v0.17.0
 
       - name: Configure sccache
-        if: ${{ github.event_name == 'pull_request' }}
+        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
         shell: pwsh
         run: |
           "RUSTC_WRAPPER=sccache" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
           "SCRYER_SCCACHE_ENABLED=true" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - name: Configure trusted internal PR sccache
+        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+        uses: ./.github/actions/configure-sccache-r2
+        with:
+          endpoint: ${{ secrets.SCCACHE_ENDPOINT }}
+          access-key-id: ${{ secrets.SCCACHE_S3_ACCESS_ID }}
+          secret-access-key: ${{ secrets.SCCACHE_S3_SECRET }}
+          key-prefix: scryer/trusted-pr/v1/rust-1.97.1/${{ matrix.target }}/
 
       - name: Configure trusted tag sccache
         if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/scryer-v') }}
@@ -1118,25 +1428,26 @@ jobs:
           sccache --start-server
           sccache --zero-stats
 
-      - name: Prepare cold release target
+      - name: Prepare clean local release target
         if: ${{ github.event_name != 'pull_request' }}
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           if (Test-Path $env:CARGO_TARGET_DIR) {
-            throw "cold release target already exists: $env:CARGO_TARGET_DIR"
+            throw "clean local release target already exists: $env:CARGO_TARGET_DIR"
           }
           New-Item -ItemType Directory -Path $env:CARGO_TARGET_DIR | Out-Null
           if (Get-ChildItem -Force $env:CARGO_TARGET_DIR) {
-            throw "cold release target is not empty: $env:CARGO_TARGET_DIR"
+            throw "clean local release target is not empty: $env:CARGO_TARGET_DIR"
           }
-          Write-Host "cold release target contents at start:"
+          Write-Host "clean local release target contents at start:"
           Get-ChildItem -Force $env:CARGO_TARGET_DIR | Format-Table
 
       - name: Build scryer
         id: windows-cargo-build
         shell: pwsh
         env:
+          INSTALL_NASM: ${{ matrix.install_nasm }}
           USE_CLANG_CL: ${{ matrix.use_clang_cl }}
           USE_LLD_LINK: ${{ matrix.use_lld_link }}
         run: |
@@ -1174,6 +1485,30 @@ jobs:
           if ($env:USE_LLD_LINK -eq "true") {
             $env:RUSTFLAGS = "$env:RUSTFLAGS -Clinker=lld-link"
           }
+          $targetEnvSuffix = "${{ matrix.target }}".Replace("-", "_")
+          $cFlagsName = "CFLAGS_$targetEnvSuffix"
+          $cxxFlagsName = "CXXFLAGS_$targetEnvSuffix"
+          Set-Item -Path "Env:$cFlagsName" -Value "/O2 /DNDEBUG /Gy /Gw"
+          Set-Item -Path "Env:$cxxFlagsName" -Value "/O2 /DNDEBUG /Gy /Gw"
+          if ($env:INSTALL_NASM -eq "true") {
+            $env:AWS_LC_SYS_PREBUILT_NASM = "0"
+          }
+          $cFlagsValue = (Get-Item -Path "Env:$cFlagsName").Value
+          $cxxFlagsValue = (Get-Item -Path "Env:$cxxFlagsName").Value
+          $nativeDiagnostics = @(
+            "CC=$env:CC"
+            "CXX=$env:CXX"
+            "${cFlagsName}=$cFlagsValue"
+            "${cxxFlagsName}=$cxxFlagsValue"
+            "AWS_LC_SYS_USE_SYSTEM=$env:AWS_LC_SYS_USE_SYSTEM"
+            "AWS_LC_SYS_STATIC=$env:AWS_LC_SYS_STATIC"
+            "AWS_LC_SYS_SMALL=$env:AWS_LC_SYS_SMALL"
+            "AWS_LC_SYS_CMAKE_BUILDER=$env:AWS_LC_SYS_CMAKE_BUILDER"
+            "AWS_LC_SYS_PREBUILT_NASM=$env:AWS_LC_SYS_PREBUILT_NASM"
+          )
+          $nativeDiagnostics | Tee-Object -FilePath "${{ matrix.artifact_name }}-native-build-env.txt"
+          clang-cl --version 2>&1 | Tee-Object -FilePath "${{ matrix.artifact_name }}-native-build-env.txt" -Append
+          lld-link --version 2>&1 | Tee-Object -FilePath "${{ matrix.artifact_name }}-native-build-env.txt" -Append
           if ($env:GITHUB_EVENT_NAME -eq "pull_request") {
             cargo build --timings -p scryer --bin scryer --bin scryer-tray --profile $env:SCRYER_CARGO_PROFILE --locked --target ${{ matrix.target }} 2>&1 | Tee-Object -FilePath "${{ matrix.artifact_name }}-build.log"
             $cargoExitCode = $LASTEXITCODE
@@ -1182,12 +1517,26 @@ jobs:
               --output "${{ matrix.artifact_name }}-heartbeat.log" `
               --build-log "${{ matrix.artifact_name }}-build.log" `
               --status-file "${{ matrix.artifact_name }}-build-status.json" `
-              --timeout-seconds 5400 `
               -- cargo build --timings -p scryer --bin scryer --bin scryer-tray --profile $env:SCRYER_CARGO_PROFILE --locked --target ${{ matrix.target }}
             $cargoExitCode = $LASTEXITCODE
           }
           if ($cargoExitCode -ne 0) {
             exit $cargoExitCode
+          }
+
+      - name: Validate native linkage
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $binary = Join-Path $env:CARGO_TARGET_DIR "${{ matrix.target }}\$env:SCRYER_CARGO_PROFILE\scryer.exe"
+          $imports = & llvm-readobj --coff-imports $binary 2>&1
+          if ($LASTEXITCODE -ne 0) {
+            $imports | Write-Host
+            throw "llvm-readobj failed while inspecting PE imports"
+          }
+          $imports | Tee-Object -FilePath "${{ matrix.artifact_name }}-native-linkage.txt"
+          if ($imports -match '(?i)aws[-_]?lc|libcrypto[^\s]*\.dll|(^|\s)crypto\.dll(\s|$)') {
+            throw "Windows release binary imports an external AWS-LC or crypto DLL"
           }
 
       - name: Validate release build diagnostics
@@ -1196,15 +1545,19 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           if (-not (Test-Path "${{ matrix.artifact_name }}-heartbeat.log" -PathType Leaf)) {
-            throw "release heartbeat log was not created"
+            throw "release build heartbeat log is missing"
           }
           if (-not (Test-Path "${{ matrix.artifact_name }}-build-status.json" -PathType Leaf)) {
-            throw "release build status was not created"
+            throw "release build status is missing"
           }
           if ("${{ steps.windows-cargo-build.outcome }}" -eq "success") {
             $timing = Get-ChildItem -Path (Join-Path $env:CARGO_TARGET_DIR "cargo-timings") -File -ErrorAction SilentlyContinue | Select-Object -First 1
             if (-not $timing) {
               throw "successful release build did not produce Cargo timing output"
+            }
+            $buildLog = Get-Content "${{ matrix.artifact_name }}-build.log" -Raw
+            if ($buildLog -match 'aws-lc-sys@[^:]+: (Building with: System Library|Size-optimized AWS-LC build enabled)') {
+              throw "release build log reports an unsupported AWS-LC build mode"
             }
           }
 
@@ -1300,7 +1653,26 @@ jobs:
             "$env:CARGO_TARGET_DIR\${{ matrix.target }}\$env:SCRYER_CARGO_PROFILE\scryer-tray.exe", `
             LICENSE, README.txt `
             -Destination $stage -Force
+          # The human-facing download. Built with the runner's own zip tooling so
+          # no Rust ZIP crate is needed anywhere in the workspace.
           Compress-Archive -Path "$stage\*" -DestinationPath "${{ matrix.artifact_name }}.zip"
+
+      # The upgrade channel consumes tar.gz on every platform, Windows included,
+      # so the in-app upgrade engine only ever walks one container format. Member
+      # names are passed explicitly: bsdtar would otherwise prefix them with "./",
+      # which the signed manifest's member paths do not use.
+      - name: Package portable tarball
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $stage = "${{ matrix.artifact_name }}-stage"
+          tar --create --gzip `
+            --file "${{ matrix.artifact_name }}-portable.tar.gz" `
+            --directory $stage `
+            scryer.exe scryer-tray.exe LICENSE README.txt
+          if ($LASTEXITCODE -ne 0) {
+            throw "tar failed to package the portable upgrade artifact"
+          }
 
       - name: Install WiX v4
         shell: pwsh
@@ -1321,7 +1693,14 @@ jobs:
             -Architecture ${{ matrix.msi_arch }} `
             -StageDir "${{ matrix.artifact_name }}-stage" `
             -Version $version `
-            -OutputPath "${{ matrix.artifact_name }}.msi"
+            -OutputPath "${{ matrix.artifact_name }}.msi" `
+            -DistributionOwner msi
+          .\packaging\windows\build-msi.ps1 `
+            -Architecture ${{ matrix.msi_arch }} `
+            -StageDir "${{ matrix.artifact_name }}-stage" `
+            -Version $version `
+            -OutputPath "${{ matrix.artifact_name }}-winget.msi" `
+            -DistributionOwner winget
 
       - name: Validate packaged Windows artifact
         shell: pwsh
@@ -1329,8 +1708,11 @@ jobs:
           .\.github\scripts\validate-windows-package.ps1 `
             -Architecture ${{ matrix.arch }} `
             -ZipPath "${{ matrix.artifact_name }}.zip" `
+            -TarballPath "${{ matrix.artifact_name }}-portable.tar.gz" `
             -MsiPath "${{ matrix.artifact_name }}.msi" `
             -MsiMetadataPath "${{ matrix.artifact_name }}.msi.json" `
+            -WingetMsiPath "${{ matrix.artifact_name }}-winget.msi" `
+            -WingetMsiMetadataPath "${{ matrix.artifact_name }}-winget.msi.json" `
             -BuiltExePath "$env:CARGO_TARGET_DIR\${{ matrix.target }}\$env:SCRYER_CARGO_PROFILE\scryer.exe" `
             -BuiltTrayPath "$env:CARGO_TARGET_DIR\${{ matrix.target }}\$env:SCRYER_CARGO_PROFILE\scryer-tray.exe"
 
@@ -1352,8 +1734,11 @@ jobs:
           name: ${{ matrix.artifact_name }}-${{ github.run_id }}
           path: |
             ${{ matrix.artifact_name }}.zip
+            ${{ matrix.artifact_name }}-portable.tar.gz
             ${{ matrix.artifact_name }}.msi
             ${{ matrix.artifact_name }}.msi.json
+            ${{ matrix.artifact_name }}-winget.msi
+            ${{ matrix.artifact_name }}-winget.msi.json
           if-no-files-found: error
           retention-days: 14
 
@@ -1364,14 +1749,16 @@ jobs:
           name: build-diagnostics-${{ matrix.artifact_name }}-${{ github.run_id }}
           path: |
             ${{ matrix.artifact_name }}-build.log
+            ${{ matrix.artifact_name }}-heartbeat.log
+            ${{ matrix.artifact_name }}-build-status.json
+            ${{ matrix.artifact_name }}-native-build-env.txt
+            ${{ matrix.artifact_name }}-native-linkage.txt
             ${{ matrix.artifact_name }}-defender-scan.log
             ${{ matrix.artifact_name }}-attachment-services.log
             ${{ matrix.artifact_name }}-noarg-startup.log
             ${{ matrix.artifact_name }}-winget-install.log
             ${{ matrix.artifact_name }}-msi-install.log
             ${{ matrix.artifact_name }}-sccache-stats.txt
-            ${{ matrix.artifact_name }}-heartbeat.log
-            ${{ matrix.artifact_name }}-build-status.json
           if-no-files-found: warn
           retention-days: 14
 
@@ -1380,23 +1767,16 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: cargo-timings-${{ matrix.artifact_name }}-${{ github.run_id }}
-          path: ${{ github.event_name == 'pull_request' && format('{0}/target/cargo-timings/*', github.workspace) || format('{0}/{1}/cargo-timings/*', runner.temp, env.COLD_TARGET_NAME) }}
+          path: ${{ github.event_name == 'pull_request' && format('{0}/target/cargo-timings/*', github.workspace) || format('{0}/{1}/cargo-timings/*', runner.temp, env.RELEASE_TARGET_NAME) }}
           if-no-files-found: warn
           retention-days: 14
 
-      - name: Save sccache directory
-        if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && steps.windows-sccache-restore.outcome == 'success'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
-        with:
-          path: ${{ github.workspace }}\.sccache
-          key: ${{ steps.windows-sccache-restore.outputs.cache-primary-key }}
-
   docker-publish-pr-rc:
     name: docker-publish-pr-rc
-    if: ${{ always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && needs.rust-clippy.result == 'success' && needs.rust-nextest.result == 'success' && needs.launcher-build.result == 'success' && needs.linux-build.result == 'success' }}
+    if: ${{ always() && needs.changes.outputs.full == 'true' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && needs.rust-clippy.result == 'success' && needs.rust-nextest.result == 'success' && needs.launcher-build.result == 'success' && needs.linux-build.result == 'success' }}
     runs-on: ubuntu-26.04
     timeout-minutes: 20
-    needs: [rust-clippy, rust-nextest, launcher-build, linux-build]
+    needs: [changes, rust-clippy, rust-nextest, launcher-build, linux-build]
     permissions:
       contents: read
       id-token: write
@@ -1852,10 +2232,14 @@ jobs:
             scryer-darwin-x86_64-portable.tar.gz \
             scryer-linux-arm64-portable.tar.gz \
             scryer-linux-x86_64-portable.tar.gz \
+            scryer-windows-arm64-portable.tar.gz \
+            scryer-windows-x86_64-portable.tar.gz \
             scryer-windows-arm64.zip \
             scryer-windows-x86_64.zip \
             scryer-windows-arm64.msi \
             scryer-windows-x86_64.msi \
+            scryer-windows-arm64-winget.msi \
+            scryer-windows-x86_64-winget.msi \
             scryer-winget-manifests.tar.gz
 
       - name: Generate deterministic checksums
@@ -1868,10 +2252,14 @@ jobs:
             scryer-darwin-x86_64-portable.tar.gz \
             scryer-linux-arm64-portable.tar.gz \
             scryer-linux-x86_64-portable.tar.gz \
+            scryer-windows-arm64-portable.tar.gz \
+            scryer-windows-x86_64-portable.tar.gz \
             scryer-windows-arm64.zip \
             scryer-windows-x86_64.zip \
             scryer-windows-arm64.msi \
             scryer-windows-x86_64.msi \
+            scryer-windows-arm64-winget.msi \
+            scryer-windows-x86_64-winget.msi \
             scryer-winget-manifests.tar.gz > scryer-checksums.txt
 
       - name: Install Cosign
@@ -1893,6 +2281,34 @@ jobs:
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
             scryer-checksums.txt
 
+      - name: Download WinGet xtask binary
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: winget-xtask-release-${{ github.run_id }}
+          path: winget-tools
+
+      - name: Generate and sign upgrade manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ github.ref_name }}"
+          VERSION="${VERSION#scryer-v}"
+          chmod +x winget-tools/xtask-release
+          ./winget-tools/xtask-release ci upgrade-manifest \
+            --version "$VERSION" \
+            --tag "${{ github.ref_name }}" \
+            --repository "${{ github.repository }}" \
+            --artifacts-dir release-artifacts \
+            --output release-artifacts/scryer-upgrade-manifest.json
+          cosign sign-blob --yes \
+            --bundle release-artifacts/scryer-upgrade-manifest.json.sigstore.json \
+            release-artifacts/scryer-upgrade-manifest.json
+          cosign verify-blob \
+            --bundle release-artifacts/scryer-upgrade-manifest.json.sigstore.json \
+            --certificate-identity "https://github.com/${{ github.repository }}/.github/workflows/scryer.yml@refs/tags/${{ github.ref_name }}" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            release-artifacts/scryer-upgrade-manifest.json
+
       - name: Verify release notes
         run: test -s "release-notes/${{ steps.release_meta.outputs.tag_name }}.md"
 
@@ -1905,9 +2321,14 @@ jobs:
           files: |
             release-artifacts/scryer-*.tar.gz
             release-artifacts/scryer-*.zip
-            release-artifacts/scryer-*.msi
+            release-artifacts/scryer-windows-arm64.msi
+            release-artifacts/scryer-windows-x86_64.msi
+            release-artifacts/scryer-windows-arm64-winget.msi
+            release-artifacts/scryer-windows-x86_64-winget.msi
             release-artifacts/scryer-checksums.txt
             release-artifacts/scryer-checksums.txt.sigstore.json
+            release-artifacts/scryer-upgrade-manifest.json
+            release-artifacts/scryer-upgrade-manifest.json.sigstore.json
             release-artifacts/scryer-provenance.intoto.jsonl
           fail_on_unmatched_files: true
 
@@ -1950,6 +2371,9 @@ jobs:
                   . "\$CONFIG_FILE"
                   set +a
                 fi
+
+                SCRYER_PACKAGE=homebrew
+                export SCRYER_PACKAGE
 
                 exec "#{opt_bin}/scryer" --data-dir "#{var}/scryer" "\$@"
               SH
@@ -2151,10 +2575,14 @@ jobs:
             scryer-darwin-x86_64-portable.tar.gz \
             scryer-linux-arm64-portable.tar.gz \
             scryer-linux-x86_64-portable.tar.gz \
+            scryer-windows-arm64-portable.tar.gz \
+            scryer-windows-x86_64-portable.tar.gz \
             scryer-windows-arm64.zip \
             scryer-windows-x86_64.zip \
             scryer-windows-arm64.msi \
             scryer-windows-x86_64.msi \
+            scryer-windows-arm64-winget.msi \
+            scryer-windows-x86_64-winget.msi \
             scryer-winget-manifests.tar.gz > scryer-subjects.sha256
           echo "base64_subjects=$(base64 < scryer-subjects.sha256 | tr -d '\n')" >> "$GITHUB_OUTPUT"
 
@@ -2201,7 +2629,7 @@ jobs:
 
   winget-submit:
     name: winget-submit
-    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/scryer-v') }}
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/scryer-v') && vars.WINGET_AUTO_SUBMISSION_ENABLED == 'true' }}
     needs: [winget-published-install]
     runs-on: ubuntu-26.04
     timeout-minutes: 15

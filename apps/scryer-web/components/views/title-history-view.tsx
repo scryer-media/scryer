@@ -2,7 +2,7 @@ import { Loader2 } from "lucide-react";
 import { LibraryMultiSelect } from "@/components/common/library-multi-select";
 import { TitleAutocompletePicker } from "@/components/common/title-autocomplete-picker";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { UnderlineFilterButton } from "@/components/common/underline-filter-button";
 import { HistoryEventTable } from "@/components/common/history-event-table";
 import type { LibraryRecord, TitleHistoryEvent, TitleRecord } from "@/lib/types";
@@ -61,42 +61,7 @@ export function TitleHistoryView({
 
   return (
     <Card className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-none border-0 bg-transparent shadow-none">
-      <CardHeader className="border-b border-[var(--scry-border3)] bg-[linear-gradient(180deg,var(--scry-surfD),transparent)] px-4 py-4 sm:px-5">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="space-y-1">
-            <p className="text-[12.5px] text-[var(--scry-muted3)]">
-              {t("pendingImports.pageRange", {
-                start: pageStart,
-                end: pageEnd,
-                total: totalCount,
-              })}
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              className="h-9 rounded-[10px] border-[var(--scry-border2)] bg-[var(--scry-inset)] px-3 text-[13px] text-[var(--scry-body)] shadow-none hover:bg-[var(--scry-hover)]"
-              disabled={!hasPreviousPage || loading}
-              onClick={onPreviousPage}
-            >
-              {t("pendingImports.prev")}
-            </Button>
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              className="h-9 rounded-[10px] border-[var(--scry-border2)] bg-[var(--scry-inset)] px-3 text-[13px] text-[var(--scry-body)] shadow-none hover:bg-[var(--scry-hover)]"
-              disabled={!hasNextPage || loading}
-              onClick={onNextPage}
-            >
-              {t("pendingImports.next")}
-            </Button>
-          </div>
-        </div>
-      </CardHeader>
-      <CardContent className="flex min-h-0 flex-1 flex-col space-y-3 bg-[color-mix(in_srgb,var(--scry-bg)_52%,transparent)] p-4 sm:p-5">
+      <CardContent className="flex min-h-0 flex-1 flex-col gap-3 bg-[color-mix(in_srgb,var(--scry-bg)_52%,transparent)] p-4 sm:p-5">
         <div className="flex flex-col gap-3 rounded-[14px] border border-[var(--scry-border3)] bg-[var(--scry-surfC)] p-3">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
             <TitleAutocompletePicker
@@ -146,13 +111,43 @@ export function TitleHistoryView({
             <HistoryEventTable
               events={events}
               showTitle
-              showFacet
               showActor
               onRetry={onRetry}
               emptyMessage={t("history.empty")}
             />
           </div>
         )}
+        <div className="flex shrink-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-[12.5px] text-[var(--scry-muted3)]">
+            {t("pendingImports.pageRange", {
+              start: pageStart,
+              end: pageEnd,
+              total: totalCount,
+            })}
+          </p>
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              className="h-9 rounded-[10px] border-[var(--scry-border2)] bg-[var(--scry-inset)] px-3 text-[13px] text-[var(--scry-body)] shadow-none hover:bg-[var(--scry-hover)]"
+              disabled={!hasPreviousPage || loading}
+              onClick={onPreviousPage}
+            >
+              {t("pendingImports.prev")}
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              className="h-9 rounded-[10px] border-[var(--scry-border2)] bg-[var(--scry-inset)] px-3 text-[13px] text-[var(--scry-body)] shadow-none hover:bg-[var(--scry-hover)]"
+              disabled={!hasNextPage || loading}
+              onClick={onNextPage}
+            >
+              {t("pendingImports.next")}
+            </Button>
+          </div>
+        </div>
       </CardContent>
     </Card>
   );

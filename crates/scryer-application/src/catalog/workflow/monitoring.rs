@@ -30,6 +30,9 @@ impl AppUseCase {
             .update_monitored(title_id, monitored)
             .await?;
 
+        self.reconcile_series_movie_link_monitoring_for_title(&title)
+            .await?;
+
         if title.monitored {
             self.sync_title_for_immediate_acquisition(&title).await;
         } else if let Err(err) = self
@@ -47,6 +50,81 @@ impl AppUseCase {
         }
 
         Ok(title)
+    }
+}
+fn title_policy_monitors_series_movie(
+    title: &Title,
+    continuity_status: &str,
+    metadata_active: bool,
+) -> bool {
+    if title.facet != MediaFacet::Anime || !title.monitored || !metadata_active {
+        return false;
+    }
+    if !continuity_status.eq_ignore_ascii_case("canon") {
+        return false;
+    }
+    title.tags.iter().any(|tag| {
+        tag.strip_prefix("scryer:monitor-type:")
+            .is_some_and(|value| {
+                matches!(
+                    value.trim().to_ascii_lowercase().as_str(),
+                    "allepisodes" | "monitored" | "missing" | "missingandfutureepisodes"
+                )
+            })
+    })
+}
+
+impl AppUseCase {
+    async fn reconcile_series_movie_link_monitoring_for_title(
+        &self,
+        title: &Title,
+    ) -> AppResult<()> {
+        if title.facet != MediaFacet::Anime {
+            return Ok(());
+        }
+
+        for mut link in self
+            .services
+            .catalog
+            .shows
+            .list_series_movie_links_for_title(&title.id)
+            .await?
+        {
+            if link.monitoring_override.is_some() {
+                continue;
+            }
+            let monitored = title_policy_monitors_series_movie(
+                title,
+                link.continuity_status.as_deref().unwrap_or_default(),
+                link.metadata_active,
+            );
+            if link.monitored == monitored {
+                continue;
+            }
+
+            link.monitored = monitored;
+            let link = self
+                .services
+                .catalog
+                .shows
+                .upsert_series_movie_link(link)
+                .await?;
+            if !link.monitored
+                && let Err(err) = self
+                    .services
+                    .workflow
+                    .acquisition_scope_states
+                    .delete_acquisition_scope_states_for_series_movie_link(&link.id)
+                    .await
+            {
+                warn!(
+                    series_movie_link_id = link.id.as_str(),
+                    error = %err,
+                    "failed to delete wanted items after policy disabled series movie monitoring"
+                );
+            }
+        }
+        Ok(())
     }
 }
 impl AppUseCase {
@@ -767,11 +845,8 @@ impl AppUseCase {
         )
         .await?;
 
-        if link.monitored == monitored {
-            return Ok(link);
-        }
-
         link.monitored = monitored;
+        link.monitoring_override = Some(monitored);
         let link = self
             .services
             .catalog

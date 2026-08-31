@@ -1,6 +1,7 @@
 use crate::{
     AudioStreamDoc, BuiltinScoreDoc, ContextDoc, FileDoc, ProfileDoc, ReleaseDoc, RulesError,
-    SubtitleStreamDoc, UserRuleInput, builtins,
+    SubtitleStreamDoc, UserRuleInput, builtins, score_entry_wrapper_policy_path,
+    score_entry_wrapper_rule_path, score_entry_wrapper_source,
 };
 use regorus::{
     Engine, Value,
@@ -414,6 +415,7 @@ fn validate_input_reference_path(path: &InputReferencePath) -> Option<String> {
 /// 2. Source compiles without errors.
 /// 3. Dry-run against synthetic input succeeds.
 /// 4. Output shape is a map of string keys to integer values.
+/// 5. The generated runtime `eval_rule` wrapper evaluates successfully.
 pub fn validate_user_rule(
     rego_source: &str,
     rule_set_id: &str,
@@ -434,6 +436,12 @@ pub fn validate_user_rule(
 
     let policy_path = format!("user/{rule_set_id}.rego");
     if let Err(e) = engine.add_policy(policy_path.clone(), rego_source.to_string()) {
+        return Ok(ValidationResult::invalid(format!("compilation error: {e}")));
+    }
+    if let Err(e) = engine.add_policy(
+        score_entry_wrapper_policy_path(rule_set_id),
+        score_entry_wrapper_source(rule_set_id),
+    ) {
         return Ok(ValidationResult::invalid(format!("compilation error: {e}")));
     }
 
@@ -465,8 +473,62 @@ pub fn validate_user_rule(
             {
                 return Ok(ValidationResult::invalid(format!("output error: {e}")));
             }
-            Ok(ValidationResult::valid())
+            match engine.eval_rule(score_entry_wrapper_rule_path(rule_set_id)) {
+                Ok(value) => {
+                    if let Err(e) = validate_score_entry_shape(&value) {
+                        return Ok(ValidationResult::invalid(format!("output error: {e}")));
+                    }
+                    Ok(ValidationResult::valid())
+                }
+                Err(e) => Ok(ValidationResult::invalid(format!("runtime error: {e}"))),
+            }
         }
+        Err(e) => Ok(ValidationResult::invalid(format!("runtime error: {e}"))),
+    }
+}
+
+/// Validate that a persisted user rule can execute through the generated
+/// runtime `eval_rule` wrapper.
+///
+/// This deliberately checks only the runtime path. New edits continue to use
+/// [`validate_user_rule`] so the editor keeps its richer `eval_query`
+/// diagnostics; migrations use this narrower check to protect existing rules
+/// when the runtime entry point changes.
+pub fn validate_runtime_wrapper(
+    rego_source: &str,
+    rule_set_id: &str,
+) -> Result<ValidationResult, RulesError> {
+    let expected_pkg = format!("package scryer.rules.user.{rule_set_id}");
+    let has_pkg = rego_source.lines().any(|line| line.trim() == expected_pkg);
+    if !has_pkg {
+        return Ok(ValidationResult::invalid(format!(
+            "package declaration must be: {expected_pkg}"
+        )));
+    }
+
+    let mut engine = Engine::new();
+    builtins::register_builtins(&mut engine);
+
+    let policy_path = format!("user/{rule_set_id}.rego");
+    if let Err(e) = engine.add_policy(policy_path, rego_source.to_string()) {
+        return Ok(ValidationResult::invalid(format!("compilation error: {e}")));
+    }
+    if let Err(e) = engine.add_policy(
+        score_entry_wrapper_policy_path(rule_set_id),
+        score_entry_wrapper_source(rule_set_id),
+    ) {
+        return Ok(ValidationResult::invalid(format!("compilation error: {e}")));
+    }
+
+    let input_value =
+        serde_json::to_value(synthetic_test_input()).map_err(RulesError::Serialization)?;
+    engine.set_input(input_value.into());
+
+    match engine.eval_rule(score_entry_wrapper_rule_path(rule_set_id)) {
+        Ok(value) => match validate_score_entry_shape(&value) {
+            Ok(()) => Ok(ValidationResult::valid()),
+            Err(e) => Ok(ValidationResult::invalid(format!("output error: {e}"))),
+        },
         Err(e) => Ok(ValidationResult::invalid(format!("runtime error: {e}"))),
     }
 }
@@ -741,6 +803,35 @@ mod tests {
         "#;
         let result = validate_user_rule(source, "test_rule").unwrap();
         assert!(result.valid, "errors: {:?}", result.errors);
+    }
+
+    #[test]
+    fn runtime_wrapper_validation_accepts_persisted_rule() {
+        let source = r#"
+            package scryer.rules.user.persisted_rule
+            import rego.v1
+
+            score_entry["bonus"] := 100
+        "#;
+
+        let result = validate_runtime_wrapper(source, "persisted_rule").unwrap();
+
+        assert!(result.valid, "errors: {:?}", result.errors);
+    }
+
+    #[test]
+    fn runtime_wrapper_validation_rejects_persisted_rule_that_fails_at_runtime() {
+        let source = r#"
+            package scryer.rules.user.runtime_failure
+            import rego.v1
+
+            score_entry["bonus"] := lower(input.release.year)
+        "#;
+
+        let result = validate_runtime_wrapper(source, "runtime_failure").unwrap();
+
+        assert!(!result.valid);
+        assert!(result.errors[0].contains("runtime error"));
     }
 
     #[test]

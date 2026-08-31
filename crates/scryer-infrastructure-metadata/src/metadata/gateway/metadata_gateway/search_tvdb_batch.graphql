@@ -5,6 +5,13 @@ query SearchTvdbBatch($requests: [TvdbSearchBatchRequestInput!]!, $language: Str
     year
     results {
       tvdb_id
+      title_id
+      external_ids {
+        source
+        kind
+        id
+        key
+      }
       name
       year
       auto_match_safe

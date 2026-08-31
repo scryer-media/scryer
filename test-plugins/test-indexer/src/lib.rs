@@ -14,6 +14,7 @@ pub fn scryer_describe(_input: String) -> FnResult<String> {
         provider: ProviderDescriptor::Indexer(IndexerDescriptor {
             provider_type: "test".to_string(),
             provider_aliases: vec![],
+            provider_profiles: vec![],
             source_kind: IndexerSourceKind::Generic,
             capabilities: IndexerCapabilities {
                 supported_ids: HashMap::from([("movie".into(), vec!["imdb_id".into()])]),
@@ -38,6 +39,8 @@ pub fn scryer_describe(_input: String) -> FnResult<String> {
             }],
             allowed_hosts: vec![],
             rate_limit_seconds: None,
+            search_semantics_version: Some(1),
+            strategy_plan: None,
         }),
     };
     Ok(serde_json::to_string(&descriptor)?)

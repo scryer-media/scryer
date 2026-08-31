@@ -91,6 +91,9 @@ pub enum ParsedEpisodeReleaseType {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct ParsedEpisodeMetadata {
     pub season: Option<u32>,
+    /// Every explicitly named season in a pack. Empty means a complete-series
+    /// marker that covers the title rather than an enumerated season range.
+    pub season_numbers: Vec<u32>,
     pub episode_numbers: Vec<u32>,
     pub absolute_episode: Option<u32>,
     pub absolute_episode_numbers: Vec<u32>,
@@ -100,6 +103,8 @@ pub struct ParsedEpisodeMetadata {
     pub full_season: bool,
     pub is_partial_season: bool,
     pub is_multi_season: bool,
+    /// A release that packages a whole series or several explicit seasons.
+    pub is_series_pack: bool,
     pub season_part: Option<u32>,
     pub is_season_extra: bool,
     pub is_split_episode: bool,
@@ -1024,6 +1029,7 @@ pub enum ReleaseIdentity {
         seasons: Vec<u32>,
         is_partial: bool,
         season_part: Option<u32>,
+        is_series_pack: bool,
     },
     RangePackIdentity {
         season: Option<u32>,

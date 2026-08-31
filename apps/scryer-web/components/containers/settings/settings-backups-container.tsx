@@ -33,6 +33,8 @@ import {
   Table,
   TableBody,
   TableCell,
+  TableCheckboxCell,
+  TableCheckboxHead,
   TableHead,
   TableHeader,
   TableRow,
@@ -343,8 +345,11 @@ export function SettingsBackupsContainer() {
   const [password, setPassword] = React.useState("");
   const [confirmPassword, setConfirmPassword] = React.useState("");
   const [creatingRequest, setCreatingRequest] = React.useState(false);
-  const [pendingDelete, setPendingDelete] = React.useState<BackupInfoRecord | null>(null);
-  const [deletingFilename, setDeletingFilename] = React.useState<string | null>(null);
+  const [selectedBackupFilenames, setSelectedBackupFilenames] = React.useState<Set<string>>(
+    () => new Set(),
+  );
+  const [pendingDeleteFilenames, setPendingDeleteFilenames] = React.useState<string[]>([]);
+  const [deletingFilenames, setDeletingFilenames] = React.useState<Set<string>>(() => new Set());
   const [downloadingFilename, setDownloadingFilename] = React.useState<string | null>(null);
   const hasCreatingManualBackup = backups.some(
     (backup) => backup.status === "creating" && backup.trigger === "manual",
@@ -377,6 +382,18 @@ export function SettingsBackupsContainer() {
     !confirmPasswordRequired &&
     !passwordMismatch;
   const pageLoading = loading || autoBackupLoading || backupSettingsLoading;
+  const selectableBackups = backups.filter(
+    (backup) => backup.status !== "creating" && !deletingFilenames.has(backup.filename),
+  );
+  const selectedBackups = selectableBackups.filter((backup) =>
+    selectedBackupFilenames.has(backup.filename),
+  );
+  const selectAllState =
+    selectedBackups.length === 0
+      ? false
+      : selectedBackups.length === selectableBackups.length
+        ? true
+        : "indeterminate";
   const autoBackupNextRunLabel =
     autoBackupSettings.enabled && autoBackupSettings.nextRunAt
       ? formatDateTime(autoBackupSettings.nextRunAt, dateTimeFormat)
@@ -557,33 +574,79 @@ export function SettingsBackupsContainer() {
     }
   }, [canCreateBackup, client, password, setGlobalStatus, t]);
 
-  const handleDeleteBackup = React.useCallback(async () => {
-    if (!pendingDelete) {
+  const toggleBackupSelection = React.useCallback(
+    (filenames: string[], shouldSelect: boolean) => {
+      setSelectedBackupFilenames((current) => {
+        const next = new Set(current);
+        for (const filename of filenames) {
+          if (shouldSelect) {
+            next.add(filename);
+          } else {
+            next.delete(filename);
+          }
+        }
+        return next;
+      });
+    },
+    [],
+  );
+
+  const handleDeleteBackups = React.useCallback(async () => {
+    if (pendingDeleteFilenames.length === 0) {
       return;
     }
 
-    setDeletingFilename(pendingDelete.filename);
+    const filenames = pendingDeleteFilenames;
+    const deletedFilenames = new Set<string>();
+    const failedFilenames = new Set<string>();
+    let firstFailureMessage: string | null = null;
+    setDeletingFilenames(new Set(filenames));
     try {
-      const { data, error } = await client
-        .mutation<DeleteBackupMutationResult>(deleteBackupMutation, {
-          input: { filename: pendingDelete.filename },
-        })
-        .toPromise();
-      if (error || data?.deleteBackup?.deleted !== true) {
-        throw error ?? new Error(t("status.failedToDelete"));
+      for (const filename of filenames) {
+        try {
+          const { data, error } = await client
+            .mutation<DeleteBackupMutationResult>(deleteBackupMutation, {
+              input: { filename },
+            })
+            .toPromise();
+          if (error || data?.deleteBackup?.deleted !== true) {
+            throw error ?? new Error(t("status.failedToDelete"));
+          }
+          deletedFilenames.add(filename);
+        } catch (error) {
+          failedFilenames.add(filename);
+          firstFailureMessage ??= mutationErrorMessage(error, t("status.failedToDelete"));
+        }
       }
 
-      setBackups((current) =>
-        current.filter((backup) => backup.filename !== pendingDelete.filename),
-      );
-      setPendingDelete(null);
-      setGlobalStatus(t("settings.backupsDeleted"));
-    } catch (error) {
-      setGlobalStatus(mutationErrorMessage(error, t("status.failedToDelete")));
+      if (deletedFilenames.size > 0) {
+        setBackups((current) =>
+          current.filter((backup) => !deletedFilenames.has(backup.filename)),
+        );
+        setSelectedBackupFilenames((current) => {
+          const next = new Set(current);
+          for (const filename of deletedFilenames) {
+            next.delete(filename);
+          }
+          return next;
+        });
+      }
+
+      if (failedFilenames.size > 0) {
+        setGlobalStatus(
+          firstFailureMessage ??
+            t("settings.backupsDeleteFailedCount", { count: failedFilenames.size }),
+        );
+      } else {
+        setGlobalStatus(
+          t("settings.backupsDeletedCount", { count: deletedFilenames.size }),
+        );
+      }
     } finally {
-      setDeletingFilename(null);
+      setDeletingFilenames(new Set());
+      setPendingDeleteFilenames([]);
     }
-  }, [client, pendingDelete, setGlobalStatus, t]);
+  }, [client, pendingDeleteFilenames, setGlobalStatus, t]);
 
   const handleDownloadBackup = React.useCallback(async (backup: BackupInfoRecord) => {
     setDownloadingFilename(backup.filename);
@@ -971,15 +1034,28 @@ export function SettingsBackupsContainer() {
 
         <section className={BACKUPS_PANEL_CLASS}>
           <div className={BACKUPS_PANEL_HEADER_CLASS}>
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <h2 className={BACKUPS_PANEL_TITLE_CLASS}>
-                {t("settings.backupsSection")}
-              </h2>
+            <div className="grid grid-cols-[1fr_auto_1fr] items-center">
+              {selectedBackups.length > 0 ? (
+                <div className="col-start-2">
+                  <Button
+                    id={selectorId("settings-backups-delete-selected")}
+                    type="button"
+                    variant="outline"
+                    className="text-[var(--scry-danger-text-soft)] hover:text-[var(--scry-danger-text)]"
+                    onClick={() =>
+                      setPendingDeleteFilenames(selectedBackups.map((backup) => backup.filename))
+                    }
+                  >
+                    <Trash2 className="h-4 w-4" />
+                    {t("settings.backupsDeleteSelected")}
+                  </Button>
+                </div>
+              ) : null}
               <Button
                 id={selectorId("settings-backups-create-open")}
                 type="button"
                 variant="primary"
-                className="shrink-0"
+                className="col-start-3 shrink-0 justify-self-end"
                 onClick={() => setCreateDialogOpen(true)}
                 disabled={hasCreatingManualBackup}
               >
@@ -999,6 +1075,21 @@ export function SettingsBackupsContainer() {
               <Table>
                 <TableHeader>
                   <TableRow className="border-[var(--scry-border3)] bg-[var(--scry-inset)] hover:bg-[var(--scry-inset)]">
+                    <TableCheckboxHead>
+                      <Checkbox
+                        id="settings-backups-select-all"
+                        size="table"
+                        checked={selectAllState}
+                        disabled={selectableBackups.length === 0}
+                        aria-label={t("settings.backupsSelectAll")}
+                        onCheckedChange={(checked) =>
+                          toggleBackupSelection(
+                            selectableBackups.map((backup) => backup.filename),
+                            checked === true,
+                          )
+                        }
+                      />
+                    </TableCheckboxHead>
                     <TableHead className={`font-semibold ${BACKUPS_MUTED_TEXT_CLASS}`}>Bundle</TableHead>
                     <TableHead className={`font-semibold ${BACKUPS_MUTED_TEXT_CLASS}`}>Created</TableHead>
                     <TableHead className={`font-semibold ${BACKUPS_MUTED_TEXT_CLASS}`}>
@@ -1012,7 +1103,7 @@ export function SettingsBackupsContainer() {
                 </TableHeader>
                 <TableBody>
                   {backups.map((backup) => {
-                    const isDeleting = deletingFilename === backup.filename;
+                    const isDeleting = deletingFilenames.has(backup.filename);
                     const isDownloading = downloadingFilename === backup.filename;
                     const disableActions = backup.status === "creating" || isDeleting;
                     const statusLabel =
@@ -1031,6 +1122,18 @@ export function SettingsBackupsContainer() {
                         id={selectorId("settings-backup-row", "created-at", backup.createdAt)}
                         className="border-[var(--scry-border3)] hover:bg-[var(--scry-rowHover)]"
                       >
+                        <TableCheckboxCell>
+                          <Checkbox
+                            id={selectorId("settings-backup-select", "created-at", backup.createdAt)}
+                            size="table"
+                            checked={selectedBackupFilenames.has(backup.filename)}
+                            disabled={disableActions}
+                            aria-label={t("settings.backupsSelect", { name: backup.filename })}
+                            onCheckedChange={(checked) =>
+                              toggleBackupSelection([backup.filename], checked === true)
+                            }
+                          />
+                        </TableCheckboxCell>
                         <TableCell className="align-top">
                           <div className="space-y-1">
                             <div
@@ -1105,7 +1208,7 @@ export function SettingsBackupsContainer() {
                               label={t("settings.backupsDelete")}
                               tone="delete"
                               disabled={disableActions}
-                              onClick={() => setPendingDelete(backup)}
+                              onClick={() => setPendingDeleteFilenames([backup.filename])}
                             >
                               {isDeleting ? (
                                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -1224,18 +1327,24 @@ export function SettingsBackupsContainer() {
       </Dialog>
 
       <ConfirmDialog
-        open={pendingDelete !== null}
+        open={pendingDeleteFilenames.length > 0}
         title={t("settings.backupsDelete")}
-        description={t("settings.backupsDeleteConfirm")}
+        description={
+          pendingDeleteFilenames.length === 1
+            ? t("settings.backupsDeleteConfirm")
+            : t("settings.backupsDeleteSelectedConfirm", {
+                count: pendingDeleteFilenames.length,
+              })
+        }
         confirmLabel={t("settings.backupsDelete")}
         cancelLabel={t("label.cancel")}
-        isBusy={deletingFilename !== null}
-        onConfirm={handleDeleteBackup}
+        isBusy={deletingFilenames.size > 0}
+        onConfirm={handleDeleteBackups}
         onCancel={() => {
-          if (deletingFilename !== null) {
+          if (deletingFilenames.size > 0) {
             return;
           }
-          setPendingDelete(null);
+          setPendingDeleteFilenames([]);
         }}
       />
       <ConfirmDialog

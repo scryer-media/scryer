@@ -3,7 +3,8 @@ use crate::domain_events::{
     DomainEventActor, deleted_media_update, new_title_domain_event, title_context_snapshot,
 };
 use crate::events::retention::{
-    OPERATIONAL_DOMAIN_EVENT_RETENTION_DAYS, operational_domain_event_types,
+    ACQUISITION_TELEMETRY_RETENTION_DAYS, OPERATIONAL_DOMAIN_EVENT_RETENTION_DAYS,
+    acquisition_telemetry_domain_event_types, operational_domain_event_types,
     user_facing_domain_event_types,
 };
 use std::collections::{HashMap, HashSet};
@@ -11,7 +12,10 @@ use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 
 const RELEASE_DECISION_RETENTION_DAYS: i64 = 30;
+const WORKFLOW_COMPLETED_RETENTION_DAYS: i64 = 7;
+const WORKFLOW_WARNING_FAILED_RETENTION_DAYS: i64 = 30;
 const RELEASE_ATTEMPT_RETENTION_DAYS: i64 = 90;
+pub const INDEXER_ERROR_RETENTION_DAYS: i64 = 30;
 const DOWNLOAD_DELETE_RETENTION_DAYS: i64 = 7;
 const DISCOVERY_SUCCESSFUL_GENERATIONS_TO_RETAIN: usize = 2;
 const DISCOVERY_DIAGNOSTIC_RETENTION_DAYS: i64 = 30;
@@ -160,12 +164,20 @@ fn recycled_item_from_entry(
     entry: crate::recycle_bin::RecycleEntry,
     library: &RecycleEntryLibrary,
     title_name: Option<String>,
+    retention_days: u32,
 ) -> RecycledItem {
     let original_path = entry.manifest.original_path_buf();
     let file_name = original_path
         .file_name()
         .map(|name| name.to_string_lossy().to_string())
         .unwrap_or_default();
+    let scheduled_deletion_at = chrono::DateTime::parse_from_rfc3339(&entry.manifest.recycled_at)
+        .map(|recycled_at| {
+            (recycled_at.with_timezone(&chrono::Utc)
+                + chrono::Duration::days(i64::from(retention_days)))
+            .to_rfc3339()
+        })
+        .unwrap_or_else(|_| entry.manifest.recycled_at.clone());
 
     RecycledItem {
         id: entry.entry_id,
@@ -176,6 +188,7 @@ fn recycled_item_from_entry(
         title_name,
         reason: entry.manifest.reason,
         recycled_at: entry.manifest.recycled_at,
+        scheduled_deletion_at,
         media_root: entry.media_root,
         library_id: library.id.clone(),
         library_name: library.name.clone(),
@@ -675,6 +688,15 @@ impl AppUseCase {
         let user_facing_domain_event_types = user_facing_domain_event_types();
         let operational_domain_event_types = operational_domain_event_types();
 
+        let stale_workflow_operations = self
+            .services
+            .workflow
+            .housekeeping
+            .delete_stale_workflow_operations(
+                WORKFLOW_COMPLETED_RETENTION_DAYS,
+                WORKFLOW_WARNING_FAILED_RETENTION_DAYS,
+            )
+            .await?;
         let stale_release_decisions = self
             .services
             .workflow
@@ -686,6 +708,15 @@ impl AppUseCase {
             .workflow
             .housekeeping
             .delete_release_attempts_older_than(RELEASE_ATTEMPT_RETENTION_DAYS)
+            .await?;
+        let stale_indexer_errors = self
+            .services
+            .integrations
+            .indexer_errors
+            .delete_older_than(
+                self.runtime.environment.now()
+                    - chrono::Duration::days(INDEXER_ERROR_RETENTION_DAYS),
+            )
             .await?;
 
         let (
@@ -745,10 +776,21 @@ impl AppUseCase {
                 &operational_domain_event_types,
             )
             .await?;
+        let stale_acquisition_telemetry = self
+            .services
+            .workflow
+            .housekeeping
+            .delete_domain_events_older_than_for_types(
+                ACQUISITION_TELEMETRY_RETENTION_DAYS,
+                &acquisition_telemetry_domain_event_types(),
+            )
+            .await?;
 
         let stale_history_records = stale_release_decisions
+            + stale_workflow_operations
             + stale_release_attempts
             + stale_operational_domain_events
+            + stale_acquisition_telemetry
             + stale_history_events
             + stale_domain_events
             + stale_download_import_artifacts
@@ -845,6 +887,7 @@ impl AppUseCase {
             orphaned_media_files,
             stale_release_decisions,
             stale_release_attempts,
+            stale_indexer_errors,
             stale_history_events,
             stale_history_records,
             staged_nzb_artifacts_pruned,
@@ -858,6 +901,8 @@ impl AppUseCase {
             orphaned_media_files,
             stale_release_decisions,
             stale_release_attempts,
+            stale_workflow_operations,
+            stale_indexer_errors,
             stale_history_events,
             stale_operational_domain_events,
             stale_domain_events,
@@ -896,17 +941,18 @@ impl AppUseCase {
         let mut list_tasks = tokio::task::JoinSet::new();
         for (media_root, config) in self.resolve_all_recycle_configs().await {
             list_tasks.spawn(async move {
+                let retention_days = config.retention_days;
                 let entries = crate::recycle_bin::list_entries(&config, &media_root).await;
-                (media_root, entries)
+                (media_root, retention_days, entries)
             });
         }
 
         while let Some(result) = list_tasks.join_next().await {
             match result {
-                Ok((_media_root, Ok(entries))) => {
-                    all_entries.extend(entries);
+                Ok((_media_root, retention_days, Ok(entries))) => {
+                    all_entries.extend(entries.into_iter().map(|entry| (entry, retention_days)));
                 }
-                Ok((media_root, Err(e))) => {
+                Ok((media_root, _, Err(e))) => {
                     info!(error = %e, media_root = %media_root, "failed to list recycle entries")
                 }
                 Err(error) => {
@@ -917,14 +963,14 @@ impl AppUseCase {
 
         let mut title_ids = all_entries
             .iter()
-            .filter_map(|entry| entry.manifest.title_id.clone())
+            .filter_map(|(entry, _)| entry.manifest.title_id.clone())
             .collect::<Vec<_>>();
         title_ids.sort();
         title_ids.dedup();
         let titles_by_id = self.recycle_entry_titles_by_id(title_ids).await?;
 
         let mut items = Vec::new();
-        for entry in all_entries {
+        for (entry, retention_days) in all_entries {
             let title = entry
                 .manifest
                 .title_id
@@ -942,6 +988,7 @@ impl AppUseCase {
                     entry,
                     &library,
                     title.map(|(_, title_name)| title_name.clone()),
+                    retention_days,
                 ));
             }
         }

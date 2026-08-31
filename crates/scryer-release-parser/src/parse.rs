@@ -103,6 +103,22 @@ pub(crate) fn analyze_inputs(inputs: AnalysisInputs<'_>) -> ReleaseParseAnalysis
         ParseDisposition::Parsed
     };
     let is_ambiguous = matches!(disposition, ParseDisposition::Ambiguous);
+    // Zones an ambiguous winner may safely treat as title text: the union over
+    // every contender close enough to have caused the ambiguity. Tokens outside
+    // this union are release metadata under *every* competing interpretation,
+    // so extracting structure-independent facts from them cannot leak a title
+    // word (issue #170).
+    let ambiguous_title_zone_union = (is_ambiguous && best_candidate_index.is_some()).then(|| {
+        let best_score = best_candidate_index
+            .and_then(|index| candidates.get(index))
+            .map(|candidate| candidate.raw_score)
+            .unwrap_or_default();
+        candidates
+            .iter()
+            .filter(|candidate| candidate.raw_score >= best_score.saturating_sub(8))
+            .flat_map(|candidate| candidate.zones.title_zones.iter().copied())
+            .collect::<Vec<_>>()
+    });
 
     if let Some(best_index) = best_candidate_index
         && let Some(best_candidate) = candidates.get_mut(best_index)
@@ -115,9 +131,21 @@ pub(crate) fn analyze_inputs(inputs: AnalysisInputs<'_>) -> ReleaseParseAnalysis
                 best_candidate.enrichment = Some(enrichment);
             }
             ParseDisposition::Ambiguous => {
-                // Full enrichment is zone-dependent and unsafe on an ambiguous
-                // winner, but service-based source normalization is static and
-                // keeps AMZN/NF WEBRips reporting as WEB-DL.
+                // Title, season and episode assignment stay unresolved on an
+                // ambiguous winner, but the token-derived facts — languages,
+                // codecs, HDR, proper/repack — read the same under every
+                // competing interpretation. Enrich over the tokens outside the
+                // contenders' combined title zones so a required-language rule
+                // can still see `iTALiAN` on a parse whose numbering is
+                // ambiguous (issue #170).
+                if let Some(title_zone_union) = ambiguous_title_zone_union.as_ref() {
+                    let mut scoped = best_candidate.clone();
+                    scoped.zones.title_zones = title_zone_union.clone();
+                    let enrichment = enrich_candidate(&lexed.tokens, &scoped, inputs.raw_input);
+                    best_candidate.projected =
+                        project_final_metadata(best_candidate.projected.clone(), &enrichment);
+                    best_candidate.enrichment = Some(enrichment);
+                }
                 if let Some(normalized_source) = normalize_source_for_service(
                     best_candidate
                         .projected
@@ -141,7 +169,7 @@ pub(crate) fn analyze_inputs(inputs: AnalysisInputs<'_>) -> ReleaseParseAnalysis
                 best_candidate
                     .projected
                     .parse_hints
-                    .push("enrichment_skipped_ambiguous".to_string());
+                    .push("enrichment:ambiguous_structure_independent".to_string());
             }
             ParseDisposition::Unparseable => {
                 if let Some(normalized_source) = normalize_source_for_service(
@@ -929,15 +957,37 @@ fn score_candidates(
     candidates
 }
 
+/// Identity evidence codes whose season/episode numbering came from the search
+/// context rather than the release name. Extend this list when a new identity
+/// family starts inferring; every entry is penalized by
+/// [`INFERRED_IDENTITY_PENALTY`] and excluded from manufacturing ambiguity
+/// against an explicitly parsed rival.
+const INFERRED_IDENTITY_EVIDENCE: &[&str] = &["context:season_episode_hint"];
+const INFERRED_IDENTITY_PENALTY: i32 = 12;
+const INFERRED_IDENTITY_PENALTY_REASON: &str = "identity:inferred_from_context";
+
+fn candidate_identity_is_inferred(candidate: &ReleaseParseCandidate) -> bool {
+    candidate
+        .reasons
+        .iter()
+        .any(|reason| reason.code == INFERRED_IDENTITY_PENALTY_REASON)
+}
+
 fn semantic_ambiguity_margin(candidates: &[ReleaseParseCandidate], best_index: usize) -> i32 {
     let Some(best_candidate) = candidates.get(best_index) else {
         return 0;
     };
     let best_signature = candidate_ambiguity_signature(best_candidate);
+    let best_is_inferred = candidate_identity_is_inferred(best_candidate);
     let second_best = candidates
         .iter()
         .enumerate()
         .filter(|(index, _)| *index != best_index)
+        // A context-inferred candidate is a fallback reading, not a competing
+        // interpretation of the name; it never renders an explicit winner
+        // ambiguous (issue #170). An inferred winner still contends with
+        // everything.
+        .filter(|(_, candidate)| best_is_inferred || !candidate_identity_is_inferred(candidate))
         .filter(|(_, candidate)| candidate_ambiguity_signature(candidate) != best_signature)
         .map(|(_, candidate)| candidate.raw_score)
         .max();
@@ -1568,6 +1618,22 @@ fn branch_identity(
     next.cursor = last_token + 1;
     next.raw_evidence.push(evidence.to_string());
     next.reasons.push(reason(evidence, family_bonus, None));
+    if INFERRED_IDENTITY_EVIDENCE.contains(&evidence) {
+        // Identity inferred from the search context, not read out of the name.
+        // Explicit release evidence must always outrank inferred numbering —
+        // a bare `S01` season pack is what the name *says*, while the episode
+        // number here is only what the search *asked for* — so context-only
+        // identity carries a confidence penalty large enough that a competing
+        // explicit parse clears the ambiguity margin. When inference is the
+        // only plausible reading, nothing explicit competes and the penalized
+        // candidate still wins (issue #170).
+        next.score -= INFERRED_IDENTITY_PENALTY;
+        next.reasons.push(reason(
+            INFERRED_IDENTITY_PENALTY_REASON,
+            -INFERRED_IDENTITY_PENALTY,
+            None,
+        ));
+    }
     for token_index in identity_start..=last_token {
         next.consumed_tokens.insert(token_index);
         if let Some(annotation) = annotations.get(token_index) {
@@ -1735,6 +1801,7 @@ fn identity_shape_key(identity: &ReleaseIdentity) -> IdentityShapeKey {
             seasons,
             is_partial,
             season_part,
+            ..
         } => IdentityShapeKey::SeasonPack {
             seasons: seasons.iter().copied().collect(),
             is_partial: *is_partial,
@@ -2458,6 +2525,7 @@ fn parse_identity_at(
                  consumed,
                  is_partial,
                  season_part,
+                 is_series_pack,
              }| {
                 let explicit = tokens
                     .get(index)
@@ -2467,9 +2535,16 @@ fn parse_identity_at(
                         seasons,
                         is_partial,
                         season_part,
+                        is_series_pack,
                     },
                     consumed.iter().max().copied().unwrap_or(index),
-                    if explicit { 38 } else { 30 },
+                    if is_series_pack {
+                        50
+                    } else if explicit {
+                        38
+                    } else {
+                        30
+                    },
                     "family:season_pack",
                 )
             },
@@ -3743,6 +3818,7 @@ fn project_episode(
             episode_numbers,
         } => Some(ParsedEpisodeMetadata {
             season: *season,
+            season_numbers: season.iter().copied().collect(),
             episode_numbers: episode_numbers.clone(),
             absolute_episode: contextual_absolute_companion(identity, tokens, context)
                 .first()
@@ -3754,6 +3830,7 @@ fn project_episode(
             full_season: false,
             is_partial_season: false,
             is_multi_season: false,
+            is_series_pack: false,
             season_part: None,
             is_season_extra: false,
             is_split_episode: episode_numbers.len() > 1,
@@ -3768,6 +3845,7 @@ fn project_episode(
         }),
         ReleaseIdentity::DailyIdentity { air_date, part } => Some(ParsedEpisodeMetadata {
             season: None,
+            season_numbers: Vec::new(),
             episode_numbers: Vec::new(),
             absolute_episode: contextual_absolute_companion(identity, tokens, context)
                 .first()
@@ -3779,6 +3857,7 @@ fn project_episode(
             full_season: false,
             is_partial_season: false,
             is_multi_season: false,
+            is_series_pack: false,
             season_part: None,
             is_season_extra: false,
             is_split_episode: false,
@@ -3792,6 +3871,7 @@ fn project_episode(
             ..
         } => Some(ParsedEpisodeMetadata {
             season: None,
+            season_numbers: Vec::new(),
             episode_numbers: Vec::new(),
             absolute_episode: absolute_episode_numbers.first().copied(),
             absolute_episode_numbers: absolute_episode_numbers.clone(),
@@ -3801,6 +3881,7 @@ fn project_episode(
             full_season: false,
             is_partial_season: false,
             is_multi_season: false,
+            is_series_pack: false,
             season_part: None,
             is_season_extra: false,
             is_split_episode: false,
@@ -3817,9 +3898,11 @@ fn project_episode(
             seasons,
             is_partial,
             season_part,
+            is_series_pack,
             ..
         } => Some(ParsedEpisodeMetadata {
-            season: (seasons.len() == 1).then_some(seasons[0]),
+            season: (seasons.len() == 1).then(|| seasons[0]),
+            season_numbers: seasons.clone(),
             episode_numbers: Vec::new(),
             absolute_episode: None,
             absolute_episode_numbers: Vec::new(),
@@ -3829,6 +3912,7 @@ fn project_episode(
             full_season: !is_partial,
             is_partial_season: *is_partial,
             is_multi_season: seasons.len() > 1,
+            is_series_pack: *is_series_pack,
             season_part: *season_part,
             is_season_extra: detect_season_extra_tokens(tokens),
             is_split_episode: false,
@@ -3843,6 +3927,7 @@ fn project_episode(
             range_end,
         } => Some(ParsedEpisodeMetadata {
             season: *season,
+            season_numbers: season.iter().copied().collect(),
             episode_numbers: if season.is_some() {
                 (*range_start..=*range_end).collect()
             } else {
@@ -3860,6 +3945,7 @@ fn project_episode(
             full_season: false,
             is_partial_season: false,
             is_multi_season: false,
+            is_series_pack: false,
             season_part: None,
             is_season_extra: false,
             is_split_episode: false,
@@ -3874,6 +3960,7 @@ fn project_episode(
             ..
         } => Some(ParsedEpisodeMetadata {
             season: None,
+            season_numbers: Vec::new(),
             episode_numbers: Vec::new(),
             absolute_episode: None,
             absolute_episode_numbers: Vec::new(),
@@ -3883,6 +3970,7 @@ fn project_episode(
             full_season: false,
             is_partial_season: false,
             is_multi_season: false,
+            is_series_pack: false,
             season_part: None,
             is_season_extra: false,
             is_split_episode: false,
@@ -4655,6 +4743,15 @@ fn parse_standard_episode_token(token: &str) -> Option<(Option<u32>, Vec<u32>)> 
     None
 }
 
+fn has_explicit_single_standard_episode_marker(tokens: &[Token]) -> bool {
+    tokens.iter().any(|token| {
+        matches!(
+            parse_standard_episode_token(&token.normalized),
+            Some((Some(_), episode_numbers)) if episode_numbers.len() == 1
+        )
+    })
+}
+
 fn parse_season_keyword_episode_at(
     tokens: &[Token],
     index: usize,
@@ -4874,6 +4971,109 @@ struct SeasonPackParse {
     consumed: Vec<usize>,
     is_partial: bool,
     season_part: Option<u32>,
+    is_series_pack: bool,
+}
+
+fn series_pack(seasons: Vec<u32>, consumed: Vec<usize>) -> Option<SeasonPackParse> {
+    let mut seasons = seasons;
+    seasons.sort_unstable();
+    seasons.dedup();
+    (seasons.len() > 1).then_some(SeasonPackParse {
+        seasons,
+        consumed,
+        is_partial: false,
+        season_part: None,
+        is_series_pack: true,
+    })
+}
+
+/// Parse the compact no-whitespace season forms that the lexer keeps inside one
+/// token, such as `S01+S02+OVAs`.
+fn parse_compact_series_seasons(token: &str) -> Option<Vec<u32>> {
+    let mut seasons = Vec::new();
+
+    for component in token.split('+') {
+        let component_seasons = if let Some(season) = parse_season_token(component) {
+            Some(vec![season])
+        } else if let Some((start, end)) = component.split_once('-') {
+            match (parse_season_token(start), parse_season_token(end)) {
+                (Some(start), Some(end)) if end > start => Some((start..=end).collect()),
+                _ => None,
+            }
+        } else {
+            None
+        };
+
+        let Some(component_seasons) = component_seasons else {
+            break;
+        };
+        seasons.extend(component_seasons);
+    }
+
+    series_pack(seasons, vec![0]).map(|pack| pack.seasons)
+}
+
+/// Recognize only the empirically observed high-signal series-pack markers.
+/// Bare episode batches and a bare `COMPLETE` are deliberately not enough.
+fn parse_series_pack_at(tokens: &[Token], index: usize) -> Option<SeasonPackParse> {
+    // An explicit `SxxEyy` names one episode, even when its episode title
+    // happens to contain a whole-series marker. Keep batches and ranges out of
+    // this guard: those still deliberately describe pack-shaped releases.
+    if has_explicit_single_standard_episode_marker(tokens) {
+        return None;
+    }
+    let token = tokens.get(index)?.normalized.as_str();
+
+    if token == "COMPLETE" {
+        let marker = tokens.get(index + 1).map(|token| token.normalized.as_str());
+        let complete_series = marker.is_some_and(|value| value.split('+').next() == Some("SERIES"));
+        let complete_tv_series = marker == Some("TV")
+            && tokens
+                .get(index + 2)
+                .is_some_and(|token| token.normalized.split('+').next() == Some("SERIES"));
+        if complete_series || complete_tv_series {
+            let end = if complete_tv_series { 2 } else { 1 };
+            return Some(SeasonPackParse {
+                seasons: Vec::new(),
+                consumed: (index..=index + end).collect(),
+                is_partial: false,
+                season_part: None,
+                is_series_pack: true,
+            });
+        }
+    }
+
+    if let Some(seasons) = parse_compact_series_seasons(token) {
+        return series_pack(seasons, vec![index]);
+    }
+
+    let (first, next, second, consumed) = if token == "SEASONS" {
+        let first = tokens
+            .get(index + 1)
+            .and_then(|token| parse_numeric_token(&token.normalized))?;
+        let next_index = index + 2;
+        let next = tokens.get(next_index)?;
+        let second = parse_numeric_token(&next.normalized)?;
+        (first, next, second, vec![index, index + 1, next_index])
+    } else {
+        let first = parse_season_token(token)?;
+        let next_index = index + 1;
+        let next = tokens.get(next_index)?;
+        let second = parse_season_token(&next.normalized)?;
+        (first, next, second, vec![index, next_index])
+    };
+    if !matches!(
+        next.separator_before,
+        SeparatorKind::Hyphen | SeparatorKind::Other
+    ) {
+        return None;
+    }
+    let seasons = if next.separator_before == SeparatorKind::Hyphen && second > first {
+        (first..=second).collect()
+    } else {
+        vec![first, second]
+    };
+    series_pack(seasons, consumed)
 }
 
 struct RangePackParse {
@@ -4884,6 +5084,10 @@ struct RangePackParse {
 }
 
 fn parse_season_pack_at(tokens: &[Token], index: usize) -> Option<SeasonPackParse> {
+    if let Some(series_pack) = parse_series_pack_at(tokens, index) {
+        return Some(series_pack);
+    }
+
     let token = tokens.get(index)?.normalized.as_str();
     if token == "SEASON" {
         if season_scoped_range_after(tokens, index).is_some()
@@ -4928,6 +5132,7 @@ fn parse_season_pack_at(tokens: &[Token], index: usize) -> Option<SeasonPackPars
             consumed,
             is_partial,
             season_part,
+            is_series_pack: false,
         });
     }
     if let Some(season) = parse_season_token(token) {
@@ -4940,12 +5145,14 @@ fn parse_season_pack_at(tokens: &[Token], index: usize) -> Option<SeasonPackPars
             && next.separator_before == SeparatorKind::Hyphen
             && let Some(end_season) = parse_season_token(next.normalized.as_str())
             && end_season > season
+            && !has_explicit_single_standard_episode_marker(tokens)
         {
             return Some(SeasonPackParse {
                 seasons: (season..=end_season).collect(),
                 consumed: vec![index, index + 1],
                 is_partial: false,
                 season_part: None,
+                is_series_pack: true,
             });
         }
         if tokens.get(index + 1).is_some_and(|token| {
@@ -4969,6 +5176,7 @@ fn parse_season_pack_at(tokens: &[Token], index: usize) -> Option<SeasonPackPars
                 season_part: (!part_sequence_is_full_season(parts.as_slice()))
                     .then(|| parts.last().copied())
                     .flatten(),
+                is_series_pack: false,
             });
         }
         return Some(SeasonPackParse {
@@ -4976,6 +5184,7 @@ fn parse_season_pack_at(tokens: &[Token], index: usize) -> Option<SeasonPackPars
             consumed: vec![index],
             is_partial: false,
             season_part: None,
+            is_series_pack: false,
         });
     }
     None

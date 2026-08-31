@@ -127,7 +127,7 @@ export function AddToCatalogDialog({
   );
   const draftResetKey = catalogAddDraftResetKey(
     facet,
-    String(result.tvdbId),
+    String(result.smgId ?? result.tvdbId ?? result.name),
     nextDefaultLibraryId,
     nextDefaultRootFolderId,
   );

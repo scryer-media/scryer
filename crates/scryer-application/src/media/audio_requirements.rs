@@ -2,6 +2,7 @@ use crate::{ParsedReleaseMetadata, normalize_detected_audio_language_code};
 
 const DEFAULT_NON_ANIME_AUDIO_LANGUAGE: &str = "eng";
 const DEFAULT_ANIME_AUDIO_LANGUAGE: &str = "jpn";
+pub(crate) const ORIGINAL_AUDIO_LANGUAGE_REQUIREMENT: &str = "original";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TitleAudioLanguageContext {
@@ -23,6 +24,46 @@ pub(crate) fn normalize_required_audio_languages(
         }
     }
     normalized
+}
+
+/// Normalize configured audio requirements without confusing the dynamic
+/// `original` selector with an observed language code.
+pub(crate) fn normalize_required_audio_requirements(
+    requirements: impl IntoIterator<Item = String>,
+) -> Vec<String> {
+    let mut normalized = Vec::new();
+    for requirement in requirements {
+        let value = if requirement
+            .trim()
+            .eq_ignore_ascii_case(ORIGINAL_AUDIO_LANGUAGE_REQUIREMENT)
+        {
+            Some(ORIGINAL_AUDIO_LANGUAGE_REQUIREMENT.to_string())
+        } else {
+            normalize_detected_audio_language_code(&requirement)
+        };
+        if let Some(value) = value
+            && !normalized.contains(&value)
+        {
+            normalized.push(value);
+        }
+    }
+    normalized
+}
+
+/// Expand configured requirements into concrete per-title language codes.
+/// Multiple requirements retain their existing AND semantics.
+pub(crate) fn resolve_required_audio_requirements(
+    requirements: &[String],
+    title_context: &TitleAudioLanguageContext,
+) -> Vec<String> {
+    let resolved = requirements.iter().filter_map(|requirement| {
+        if requirement.eq_ignore_ascii_case(ORIGINAL_AUDIO_LANGUAGE_REQUIREMENT) {
+            Some(title_context.inferred_original_audio_language.clone())
+        } else {
+            normalize_detected_audio_language_code(requirement)
+        }
+    });
+    normalize_required_audio_languages(resolved)
 }
 
 pub(crate) fn normalize_title_country_code(country: &str) -> Option<String> {
@@ -328,10 +369,14 @@ pub(crate) fn classify_required_audio(
         }
     }
 
-    // Release-name / indexer hints are explicit claims about this release.
-    for hint in normalize_required_audio_languages(release_hints.iter().cloned()) {
-        if !resolved.contains(&hint) {
-            resolved.push(hint);
+    // A release-name or indexer label can resolve an otherwise untagged stream,
+    // but it cannot override a probe that has already proved every track is a
+    // different language.
+    if has_unresolved_track {
+        for hint in normalize_required_audio_languages(release_hints.iter().cloned()) {
+            if !resolved.contains(&hint) {
+                resolved.push(hint);
+            }
         }
     }
 
@@ -353,9 +398,10 @@ pub(crate) fn classify_required_audio(
 mod tests {
     use super::{
         RequiredAudioVerdict, classify_required_audio, missing_required_audio_languages,
-        normalize_required_audio_languages, normalize_title_country_code,
-        release_audio_language_hints_for_title, required_audio_languages_match,
-        resolve_audio_languages_from_track_title, title_audio_language_context,
+        normalize_required_audio_languages, normalize_required_audio_requirements,
+        normalize_title_country_code, release_audio_language_hints_for_title,
+        required_audio_languages_match, resolve_audio_languages_from_track_title,
+        resolve_required_audio_requirements, title_audio_language_context,
     };
     use crate::AudioStreamDetail;
     use crate::normalize_detected_audio_language_code;
@@ -417,6 +463,76 @@ mod tests {
             ]),
             vec!["eng".to_string(), "jpn".to_string()]
         );
+    }
+
+    #[test]
+    fn configured_audio_requirements_preserve_original_selector() {
+        assert_eq!(
+            normalize_required_audio_requirements(vec![
+                "Original".to_string(),
+                "original".to_string(),
+                "English".to_string(),
+            ]),
+            vec!["original".to_string(), "eng".to_string()]
+        );
+    }
+
+    #[test]
+    fn original_requirement_resolves_and_keeps_and_semantics() {
+        let context = title_audio_language_context(Some("jpn"), None, Some("movie"), &[]);
+        assert_eq!(
+            resolve_required_audio_requirements(
+                &["original".to_string(), "eng".to_string()],
+                &context,
+            ),
+            vec!["jpn".to_string(), "eng".to_string()]
+        );
+    }
+
+    #[test]
+    fn original_requirement_deduplicates_matching_concrete_language() {
+        let context = title_audio_language_context(Some("eng"), None, Some("movie"), &[]);
+        assert_eq!(
+            resolve_required_audio_requirements(
+                &["original".to_string(), "eng".to_string()],
+                &context,
+            ),
+            vec!["eng".to_string()]
+        );
+    }
+
+    #[test]
+    fn japanese_original_requirement_accepts_unlabeled_original_and_rejects_explicit_english() {
+        let context = title_audio_language_context(Some("jpn"), None, Some("anime"), &[]);
+        let required = resolve_required_audio_requirements(&["original".to_string()], &context);
+
+        let unlabeled = parse_release_metadata("[Group] Example Title 1080p");
+        let unlabeled_audio =
+            release_audio_language_hints_for_title(&unlabeled, None, Some(&context), true);
+        assert!(required_audio_languages_match(&required, &unlabeled_audio));
+
+        let english = parse_release_metadata("[Group] Example Title ENG 1080p");
+        let english_audio =
+            release_audio_language_hints_for_title(&english, None, Some(&context), true);
+        assert!(!required_audio_languages_match(&required, &english_audio));
+    }
+
+    #[test]
+    fn japanese_original_and_english_requirement_needs_dual_audio() {
+        let context = title_audio_language_context(Some("jpn"), None, Some("anime"), &[]);
+        let required = resolve_required_audio_requirements(
+            &["original".to_string(), "eng".to_string()],
+            &context,
+        );
+
+        let dual = parse_release_metadata("[Group] Example Title DUAL AUDIO 1080p");
+        let dual_audio = release_audio_language_hints_for_title(&dual, None, Some(&context), true);
+        assert!(required_audio_languages_match(&required, &dual_audio));
+
+        let unlabeled = parse_release_metadata("[Group] Example Title 1080p");
+        let unlabeled_audio =
+            release_audio_language_hints_for_title(&unlabeled, None, Some(&context), true);
+        assert!(!required_audio_languages_match(&required, &unlabeled_audio));
     }
 
     #[test]
@@ -716,6 +832,24 @@ mod tests {
         assert_eq!(
             verdict,
             RequiredAudioVerdict::Missing(vec!["eng".to_string()])
+        );
+    }
+
+    #[test]
+    fn inferred_unlabeled_original_cannot_override_known_conflicting_track() {
+        let context = title_audio_language_context(Some("jpn"), None, Some("movie"), &[]);
+        let parsed = parse_release_metadata("Example Title 1080p");
+        let inferred = release_audio_language_hints_for_title(&parsed, None, Some(&context), true);
+        assert_eq!(inferred, vec!["jpn".to_string()]);
+
+        let verdict = classify_required_audio(
+            &["jpn".to_string()],
+            &[audio_stream(Some("eng"), None)],
+            &inferred,
+        );
+        assert_eq!(
+            verdict,
+            RequiredAudioVerdict::Missing(vec!["jpn".to_string()])
         );
     }
 

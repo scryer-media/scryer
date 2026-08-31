@@ -190,76 +190,142 @@ impl AppUseCase {
             titles_scanned: titles.len() as u64,
             ..Default::default()
         };
-        let mut movie_ids = Vec::new();
+        let mut movie_targets = Vec::new();
         let mut series_ids = Vec::new();
-        let mut movie_title_by_tvdb = HashMap::<i64, &Title>::new();
         let mut series_title_by_tvdb = HashMap::<i64, &Title>::new();
 
         for title in titles {
-            let Some(tvdb_id) = title_tvdb_id(title) else {
-                continue;
-            };
-            summary.titles_linked += 1;
             match title.facet {
                 MediaFacet::Movie => {
-                    movie_ids.push(tvdb_id);
-                    movie_title_by_tvdb.insert(tvdb_id, title);
+                    if let Some(movie_ref) = crate::catalog_workflow::movie_title_ref(title) {
+                        summary.titles_linked += 1;
+                        movie_targets.push((title, movie_ref));
+                    }
                 }
                 MediaFacet::Series | MediaFacet::Anime => {
+                    let Some(tvdb_id) = title_tvdb_id(title) else {
+                        continue;
+                    };
+                    summary.titles_linked += 1;
                     series_ids.push(tvdb_id);
                     series_title_by_tvdb.insert(tvdb_id, title);
                 }
             }
         }
 
-        if movie_ids.is_empty() && series_ids.is_empty() {
+        if movie_targets.is_empty() && series_ids.is_empty() {
             return Ok(summary);
         }
 
-        let artwork = self
-            .services
-            .library
-            .metadata_gateway
-            .get_artwork_urls_bulk(&movie_ids, &series_ids, language)
-            .await?;
         let mut title_updates = Vec::new();
         let mut episode_updates = Vec::new();
 
-        for tvdb_id in movie_ids {
-            let Some(title) = movie_title_by_tvdb.get(&tvdb_id) else {
-                continue;
-            };
-            let Some(urls) = artwork.movies.get(&tvdb_id) else {
-                summary.missing_artwork_results += 1;
-                summary.missing_title_artwork_results += 1;
-                tracing::debug!(
-                    title_id = %title.id,
-                    tvdb_id,
-                    "title image cache refresh skipped movie with missing artwork result"
-                );
-                continue;
-            };
-            if urls.poster_url.is_none() && urls.background_url.is_none() {
-                summary.missing_artwork_results += 1;
-                summary.missing_incoming_image_urls += 1;
-                tracing::debug!(
-                    title_id = %title.id,
-                    tvdb_id,
-                    "title image cache refresh skipped movie artwork update with no usable image URLs"
-                );
-            }
-            if let Some(update) =
-                title_artwork_update(title, urls.poster_url.as_ref(), urls.background_url.as_ref())
+        if !movie_targets.is_empty() {
+            let refs = movie_targets
+                .iter()
+                .map(|(_, movie_ref)| movie_ref.clone())
+                .collect::<Vec<_>>();
+            match self
+                .services
+                .library
+                .metadata_gateway
+                .get_movie_titles(&refs, language)
+                .await
             {
-                title_updates.push(update);
+                Ok(movie_result) => {
+                    for (ref_index, (title, _)) in movie_targets.iter().enumerate() {
+                        let title = *title;
+                        let Some(movie) = movie_result.by_ref_index.get(&ref_index) else {
+                            summary.missing_artwork_results += 1;
+                            summary.missing_title_artwork_results += 1;
+                            continue;
+                        };
+                        let poster_url = (!movie.poster_url.trim().is_empty())
+                            .then_some(&movie.poster_url);
+                        let background_url = movie
+                            .background_url
+                            .as_ref()
+                            .filter(|url| !url.trim().is_empty());
+                        if poster_url.is_none() && background_url.is_none() {
+                            summary.missing_artwork_results += 1;
+                            summary.missing_incoming_image_urls += 1;
+                        }
+                        if let Some(update) = title_artwork_update(title, poster_url, background_url)
+                        {
+                            title_updates.push(update);
+                        }
+                    }
+                }
+                Err(error)
+                    if crate::catalog_workflow::movie_title_queries_not_supported(&error) =>
+                {
+                    let legacy_movie_ids = movie_targets
+                        .iter()
+                        .filter_map(|(_, movie_ref)| movie_ref.tvdb_id)
+                        .collect::<Vec<_>>();
+                    let legacy_artwork = if legacy_movie_ids.is_empty() {
+                        None
+                    } else {
+                        Some(
+                            self.services
+                                .library
+                                .metadata_gateway
+                                .get_artwork_urls_bulk(&legacy_movie_ids, &[], language)
+                                .await?,
+                        )
+                    };
+                    for (title, movie_ref) in &movie_targets {
+                        let title = *title;
+                        let Some(tvdb_id) = movie_ref.tvdb_id else {
+                            summary.missing_artwork_results += 1;
+                            summary.missing_title_artwork_results += 1;
+                            continue;
+                        };
+                        let Some(urls) = legacy_artwork
+                            .as_ref()
+                            .and_then(|artwork| artwork.movies.get(&tvdb_id))
+                        else {
+                            summary.missing_artwork_results += 1;
+                            summary.missing_title_artwork_results += 1;
+                            continue;
+                        };
+                        if urls.poster_url.is_none() && urls.background_url.is_none() {
+                            summary.missing_artwork_results += 1;
+                            summary.missing_incoming_image_urls += 1;
+                        }
+                        if let Some(update) = title_artwork_update(
+                            title,
+                            urls.poster_url.as_ref(),
+                            urls.background_url.as_ref(),
+                        ) {
+                            title_updates.push(update);
+                        }
+                    }
+                }
+                Err(error) => return Err(error),
             }
         }
+
+        let series_artwork = if series_ids.is_empty() {
+            None
+        } else {
+            Some(
+                self.services
+                    .library
+                    .metadata_gateway
+                    .get_artwork_urls_bulk(&[], &series_ids, language)
+                    .await?,
+            )
+        };
 
         for tvdb_id in series_ids {
             let Some(title) = series_title_by_tvdb.get(&tvdb_id) else {
                 continue;
             };
-            let Some(urls) = artwork.series.get(&tvdb_id) else {
+            let Some(urls) = series_artwork
+                .as_ref()
+                .and_then(|artwork| artwork.series.get(&tvdb_id))
+            else {
                 summary.missing_artwork_results += 1;
                 summary.missing_title_artwork_results += 1;
                 tracing::debug!(

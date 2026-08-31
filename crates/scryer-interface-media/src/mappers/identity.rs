@@ -90,6 +90,7 @@ pub fn from_media_server_connection(
         provider: MediaServerProviderValue::from_domain(connection.provider),
         display_name: connection.display_name,
         base_url: connection.base_url,
+        external_url: connection.external_url,
         enabled: connection.enabled,
         login_enabled: connection.login_enabled,
         linking_enabled: connection.linking_enabled,
@@ -202,6 +203,7 @@ pub fn from_activity_event(event: ActivityEvent) -> ActivityEventPayload {
         actor_display_name: event.actor_display_name,
         title_id: event.title_id.map(Into::into),
         facet: event.facet.as_deref().and_then(MediaFacetValue::parse),
+        episode_ids: event.episode_ids.into_iter().map(Into::into).collect(),
         message: event.message,
         occurred_at: event.occurred_at,
     }

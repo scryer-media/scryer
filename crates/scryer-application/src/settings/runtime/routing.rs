@@ -772,6 +772,7 @@ impl AppUseCase {
     ) -> AppResult<Vec<IndexerRoutingSettingsEntry>> {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageCatalogSettings)
             .await?;
+        let previous = self.get_indexer_routing(actor, scope_id).await?;
 
         let mut payload = serde_json::Map::new();
         for entry in entries {
@@ -820,7 +821,37 @@ impl AppUseCase {
         )
         .await;
 
-        self.get_indexer_routing(actor, scope_id).await
+        let updated = self.get_indexer_routing(actor, scope_id).await?;
+        let canonical = |entries: &[IndexerRoutingSettingsEntry]| {
+            entries
+                .iter()
+                .map(|entry| {
+                    let mut categories = entry.categories.clone();
+                    categories.sort();
+                    categories.dedup();
+                    (
+                        entry.indexer_id.clone(),
+                        (entry.enabled, categories, entry.priority),
+                    )
+                })
+                .collect::<std::collections::HashMap<_, _>>()
+        };
+        let previous_by_id = canonical(&previous);
+        let updated_by_id = canonical(&updated);
+        let changed_indexers = previous_by_id
+            .keys()
+            .chain(updated_by_id.keys())
+            .filter(|indexer_id| previous_by_id.get(*indexer_id) != updated_by_id.get(*indexer_id))
+            .cloned()
+            .collect::<std::collections::HashSet<_>>();
+        for indexer_id in changed_indexers {
+            self.prune_indexer_search_learning_best_effort(
+                &indexer_id,
+                "indexer_routing_change",
+            )
+            .await;
+        }
+        Ok(updated)
     }
 }
 impl AppUseCase {

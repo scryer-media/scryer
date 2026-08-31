@@ -1,4 +1,4 @@
-const CACHE_VERSION = "v1";
+const CACHE_VERSION = "v2";
 const SHELL_CACHE = `scryer-shell-${CACHE_VERSION}`;
 const ASSET_CACHE = `scryer-assets-${CACHE_VERSION}`;
 const RESERVED_PREFIXES = [
@@ -18,10 +18,10 @@ const STATIC_PATH_PREFIXES = [
 const STATIC_PATHS = new Set([
   "/",
   "/manifest.json",
-  "/favicon.webp",
-  "/logo.svg",
-  "/logo.webp",
-  "/scryer-favicon.svg",
+  "/scryer-logo.svg",
+  "/scryer-wordmark.svg",
+  "/scryer-lockup-dark.webp",
+  "/scryer-lockup-light.webp",
 ]);
 
 function getScopeUrl() {
@@ -100,13 +100,10 @@ async function putIfFresh(cacheName, requestInfo, requestInit) {
 async function precacheShell() {
   const shellUrl = resolveScopeUrl("./");
   const iconUrls = [
-    resolveScopeUrl("./icons/apple-touch-icon.png"),
-    resolveScopeUrl("./icons/icon-192.png"),
-    resolveScopeUrl("./icons/icon-512.png"),
-    resolveScopeUrl("./icons/icon-maskable-512.png"),
-    resolveScopeUrl("./favicon-light.png"),
-    resolveScopeUrl("./favicon-dark.png"),
-    resolveScopeUrl("./favicon.webp"),
+    resolveScopeUrl("./scryer-logo.svg"),
+    resolveScopeUrl("./scryer-wordmark.svg"),
+    resolveScopeUrl("./scryer-lockup-dark.webp"),
+    resolveScopeUrl("./scryer-lockup-light.webp"),
     resolveScopeUrl("./manifest.json"),
   ];
 

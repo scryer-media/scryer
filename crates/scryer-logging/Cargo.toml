@@ -1,0 +1,11 @@
+[package]
+name = "scryer-logging"
+version = "0.19.3"
+edition.workspace = true
+
+[dependencies]
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

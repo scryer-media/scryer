@@ -389,6 +389,7 @@ async fn form_login_prevents_disabling_last_usable_full_admin() {
             form_login_enabled: true,
             password_min_length: 8,
             skip_login_for_local_ips: false,
+            api_keys_restrict_to_system_settings_users: Some(false),
             mfa_require_config_step_up: false,
             mfa_require_password_login: false,
             totp_require_jellyfin_login: false,
@@ -415,6 +416,7 @@ async fn form_login_transition_requires_usable_admin_and_repairs_default_identit
         form_login_enabled,
         password_min_length: 8,
         skip_login_for_local_ips: false,
+        api_keys_restrict_to_system_settings_users: Some(false),
         mfa_require_config_step_up: false,
         mfa_require_password_login: false,
         totp_require_jellyfin_login: false,
@@ -521,4 +523,64 @@ async fn disabled_default_admin_remains_available_only_for_authless_oauth() {
         .await
         .expect("authenticate authless OAuth token");
     assert_eq!(authenticated.id, repaired.id);
+}
+
+#[tokio::test]
+async fn update_security_settings_preserves_api_key_policy_when_omitted() {
+    let (app, admin) = bootstrap();
+    app.update_security_settings(
+        &admin,
+        UpdateSecuritySettings {
+            form_login_enabled: false,
+            password_min_length: 8,
+            skip_login_for_local_ips: false,
+            api_keys_restrict_to_system_settings_users: Some(true),
+            mfa_require_config_step_up: false,
+            mfa_require_password_login: false,
+            totp_require_jellyfin_login: false,
+            totp_require_emby_login: Some(false),
+        },
+    )
+    .await
+    .expect("enable API-key restriction");
+
+    let users_manager = app
+        .create_user(
+            &admin,
+            "api-key-policy-user-manager".into(),
+            "password123".into(),
+            scryer_domain::AppPermissionMask::MANAGE_USERS,
+            Vec::new(),
+        )
+        .await
+        .expect("create ManageUsers actor");
+    let users_manager = app
+        .attach_user_authorization(users_manager)
+        .await
+        .expect("attach ManageUsers authorization");
+
+    let updated = app
+        .update_security_settings(
+            &users_manager,
+            UpdateSecuritySettings {
+                form_login_enabled: false,
+                password_min_length: 8,
+                skip_login_for_local_ips: false,
+                api_keys_restrict_to_system_settings_users: None,
+                mfa_require_config_step_up: false,
+                mfa_require_password_login: false,
+                totp_require_jellyfin_login: false,
+                totp_require_emby_login: Some(false),
+            },
+        )
+        .await
+        .expect("save unrelated security settings");
+
+    assert!(updated.api_keys_restrict_to_system_settings_users);
+    assert!(
+        app.security_settings()
+            .await
+            .expect("load security settings")
+            .api_keys_restrict_to_system_settings_users
+    );
 }

@@ -3552,9 +3552,14 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       }
 
       const tvdbId = String(candidate.tvdbId).trim();
+      const smgId = candidate.smgId == null ? "" : String(candidate.smgId).trim();
+      const tmdbId = candidate.tmdbId == null ? "" : String(candidate.tmdbId).trim();
       const imdbId = candidate.imdbId?.trim();
       const externalIds = [
-        { source: "tvdb", value: tvdbId },
+        ...(candidate.externalIds ?? []),
+        ...(smgId ? [{ source: "smg", value: smgId }] : []),
+        ...(tvdbId ? [{ source: "tvdb", value: tvdbId }] : []),
+        ...(tmdbId ? [{ source: "tmdb", value: tmdbId }] : []),
         ...(imdbId ? [{ source: "imdb", value: imdbId }] : []),
       ];
 
@@ -3580,6 +3585,10 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
                   : {}),
               },
               externalIds,
+              smgId: candidate.smgId ?? undefined,
+              tvdbId: tvdbId || undefined,
+              tmdbId: candidate.tmdbId ?? undefined,
+              imdbId: imdbId || undefined,
               ...(queueFacet === "MOVIE"
                 ? { minAvailability: minAvailabilityForQueue }
                 : {}),

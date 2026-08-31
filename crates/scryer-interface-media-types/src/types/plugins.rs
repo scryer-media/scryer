@@ -255,12 +255,23 @@ pub struct TogglePluginInput {
 // ── Provider Type Config Schema ─────────────────────────────────────────
 
 #[derive(SimpleObject, Clone)]
+/// One field value supplied by a selected plugin configuration preset.
+pub struct PluginConfigFieldOverridePayload {
+    /// Configuration field key to populate.
+    pub key: String,
+    /// Configuration field value to populate.
+    pub value: String,
+}
+
+#[derive(SimpleObject, Clone)]
 /// One selectable value for a plugin configuration field.
 pub struct PluginConfigFieldOptionPayload {
     /// Machine-readable option value.
     pub value: String,
     /// Display label for the option.
     pub label: String,
+    /// Other configuration fields populated when this option is selected.
+    pub config_overrides: Vec<PluginConfigFieldOverridePayload>,
 }
 
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]

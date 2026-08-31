@@ -7,6 +7,19 @@ use async_graphql::{Enum, ID, InputObject, SimpleObject};
 use chrono::{DateTime, Utc};
 
 #[derive(SimpleObject, Clone)]
+/// A provider-native playback link for a server linked to the current user.
+pub struct MediaServerPlaybackLinkPayload {
+    /// Connection identity. This is not a credential or provider token.
+    pub connection_id: ID,
+    /// User-configured server name.
+    pub display_name: String,
+    /// Provider that owns the destination item.
+    pub provider: MediaServerProviderValue,
+    /// Browser URL for the exact provider media item.
+    pub href: String,
+}
+
+#[derive(SimpleObject, Clone)]
 /// Runtime state for one external authentication connection.
 pub struct ExternalAuthRuntimeConnectionPayload {
     /// Connection identity.
@@ -96,6 +109,8 @@ pub struct MediaServerConnectionPayload {
     pub display_name: String,
     /// Server base URL.
     pub base_url: String,
+    /// Browser-facing URL used for playback deep links.
+    pub external_url: Option<String>,
     /// Whether the connection is active.
     pub enabled: bool,
     /// Whether login through this server is enabled.
@@ -258,6 +273,8 @@ pub struct CreateMediaServerConnectionInput {
     pub display_name: String,
     /// Server base URL.
     pub base_url: String,
+    /// Browser-facing URL used for playback deep links. Omit to disable deep links for Jellyfin and Emby.
+    pub external_url: Option<String>,
     /// Whether the connection is enabled, defaulting to true.
     pub enabled: Option<bool>,
     /// Whether login through the server is enabled, defaulting to false.
@@ -309,6 +326,8 @@ pub struct UpdateMediaServerConnectionInput {
     pub display_name: Option<String>,
     /// Replacement base URL; omission preserves the current value.
     pub base_url: Option<String>,
+    /// Replacement browser-facing URL; omission preserves the current value and an empty value clears it.
+    pub external_url: Option<String>,
     /// Replacement enabled state; omission preserves the current value.
     pub enabled: Option<bool>,
     /// Replacement login-enabled state; omission preserves the current value.

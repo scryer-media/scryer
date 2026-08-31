@@ -101,7 +101,7 @@ function CatalogAddToastCard({
         </div>
         {onView ? (
           <Button
-            variant="secondary"
+            variant="primary"
             size="sm"
             className="self-start"
             onClick={() => {

@@ -1224,7 +1224,7 @@ export const RootHeader = React.memo(function RootHeader({
         return (
           <SearchMetadataPosterButton
             id={globalSearchMetadataResultId(facet, result)}
-            key={`${facet}-${result.tvdbId}-${result.name}`}
+            key={`${facet}-${result.smgId ?? result.tvdbId ?? result.name}`}
             onClick={handleMetadataAction}
             onKeyDown={handleSearchResultKeyDown}
             disabled={disabled}
@@ -1235,6 +1235,7 @@ export const RootHeader = React.memo(function RootHeader({
             name={result.name}
             posterUrl={posterUrl}
             resultAttribute="data-global-search-result"
+            smgId={result.smgId}
             tvdbId={result.tvdbId}
             year={result.year}
             yearLabel={result.year ? result.year : t("label.yearUnknown")}
@@ -1357,7 +1358,7 @@ export const RootHeader = React.memo(function RootHeader({
                         onKeyDown={handleSearchPanelKeyDown}
                       >
                         <div className="flex items-center gap-[13px] border-b border-[var(--scry-border)] px-[18px] py-4">
-                          <div className="relative flex h-12 min-w-0 flex-1 items-center gap-3 rounded-[14px] border-2 border-primary/70 bg-[var(--scry-bg)] px-4 shadow-[0_0_0_1px_rgba(var(--scry-accent-rgb),0.10),0_12px_28px_rgba(var(--scry-accent-rgb),0.08)]">
+                          <div className="relative flex h-12 min-w-0 flex-1 items-center gap-3 rounded-[14px] border-2 border-primary/70 bg-[var(--scry-bg)] px-4 shadow-none dark:shadow-[0_0_0_1px_rgba(var(--scry-accent-rgb),0.10),0_12px_28px_rgba(var(--scry-accent-rgb),0.08)]">
                             <Search className="h-[22px] w-[22px] shrink-0 text-primary" />
                             <input
                               type="text"

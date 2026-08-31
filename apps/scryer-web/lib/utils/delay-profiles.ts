@@ -9,6 +9,44 @@ export const DELAY_PROFILE_CATALOG_KEY = "acquisition.delay_profiles";
 
 const FACET_OPTIONS: readonly DelayProfileFacet[] = ["MOVIE", "SERIES", "ANIME"];
 
+export type DelayProfileProtocolMode =
+  | "preferUsenet"
+  | "preferTorrent"
+  | "onlyUsenet"
+  | "onlyTorrent";
+
+export const DELAY_PROFILE_PROTOCOL_MODES: readonly DelayProfileProtocolMode[] = [
+  "preferUsenet",
+  "preferTorrent",
+  "onlyUsenet",
+  "onlyTorrent",
+];
+
+export function delayProfileProtocolMode(profile: Pick<
+  DelayProfileDraft,
+  "enable_usenet" | "enable_torrent" | "preferred_protocol"
+>): DelayProfileProtocolMode {
+  if (!profile.enable_usenet) return "onlyTorrent";
+  if (!profile.enable_torrent) return "onlyUsenet";
+  return profile.preferred_protocol === "USENET" ? "preferUsenet" : "preferTorrent";
+}
+
+export function applyDelayProfileProtocolMode(
+  profile: DelayProfileDraft,
+  mode: DelayProfileProtocolMode,
+): DelayProfileDraft {
+  switch (mode) {
+    case "preferUsenet":
+      return { ...profile, enable_usenet: true, enable_torrent: true, preferred_protocol: "USENET" };
+    case "preferTorrent":
+      return { ...profile, enable_usenet: true, enable_torrent: true, preferred_protocol: "TORRENT" };
+    case "onlyUsenet":
+      return { ...profile, enable_usenet: true, enable_torrent: false, preferred_protocol: "USENET" };
+    case "onlyTorrent":
+      return { ...profile, enable_usenet: false, enable_torrent: true, preferred_protocol: "TORRENT" };
+  }
+}
+
 export function buildDelayProfileTemplate(existing: ParsedDelayProfile[]): DelayProfileDraft {
   const maxPriority = existing.reduce((max, p) => Math.max(max, p.priority), 0);
   return {
@@ -16,9 +54,12 @@ export function buildDelayProfileTemplate(existing: ParsedDelayProfile[]): Delay
     name: "",
     usenet_delay_minutes: 0,
     torrent_delay_minutes: 0,
+    enable_usenet: true,
+    enable_torrent: true,
     preferred_protocol: "USENET",
     min_age_minutes: 0,
     bypass_score_threshold: null,
+    bypass_if_highest_quality: false,
     applies_to_facets: [],
     tags: [],
     priority: maxPriority + 1,
@@ -81,12 +122,18 @@ function normalizeDelayProfile(raw: Record<string, unknown>): ParsedDelayProfile
     name: String(raw.name ?? "").trim(),
     usenet_delay_minutes: normalizeWholeNumber(raw.usenet_delay_minutes),
     torrent_delay_minutes: normalizeWholeNumber(raw.torrent_delay_minutes),
+    enable_usenet: typeof raw.enable_usenet === "boolean" ? raw.enable_usenet : true,
+    enable_torrent: typeof raw.enable_torrent === "boolean" ? raw.enable_torrent : true,
     preferred_protocol: normalizeProtocol(raw.preferred_protocol),
     min_age_minutes: normalizeWholeNumber(raw.min_age_minutes),
     bypass_score_threshold:
       typeof raw.bypass_score_threshold === "number"
         ? Math.max(0, Math.trunc(raw.bypass_score_threshold))
         : null,
+    bypass_if_highest_quality:
+      typeof raw.bypass_if_highest_quality === "boolean"
+        ? raw.bypass_if_highest_quality
+        : false,
     applies_to_facets: Array.from(new Set(appliesToFacets)),
     tags: Array.isArray(raw.tags)
       ? raw.tags

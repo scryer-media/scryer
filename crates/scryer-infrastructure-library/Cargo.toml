@@ -1,6 +1,6 @@
 [package]
 name = "scryer-infrastructure-library"
-version = "0.18.21"
+version = "0.19.3"
 edition.workspace = true
 publish = false
 
@@ -11,6 +11,7 @@ image-processing = ["dep:fast_image_resize", "dep:image", "dep:kamadak-exif", "d
 [dependencies]
 scryer-domain = { path = "../scryer-domain" }
 scryer-application = { path = "../scryer-application" }
+scryer-plugin-sdk = { path = "../scryer-plugin-sdk" }
 scryer-outbound-http = { path = "../scryer-outbound-http" }
 scryer-infrastructure-sql = { path = "../scryer-infrastructure-sql" }
 scryer-infrastructure-crypto = { path = "../scryer-infrastructure-crypto" }
@@ -31,7 +32,8 @@ tracing = { workspace = true }
 unicode-normalization = "0.1"
 url = "2"
 uuid = { workspace = true }
-zune-core = { version = "=0.5.1", optional = true }
+zstd = { version = "0.13", default-features = false }
+zune-core = { version = "=0.5.3", optional = true }
 
 [target.'cfg(all(target_os = "windows", target_arch = "aarch64"))'.dependencies]
 ravif = { version = "0.13", default-features = false, features = ["threading"], optional = true }
@@ -42,3 +44,4 @@ ravif = { version = "0.13", features = ["threading"], optional = true }
 [dev-dependencies]
 scryer-infrastructure-datastore = { path = "../scryer-infrastructure-datastore" }
 tempfile = "3"
+zstd = { version = "0.13", default-features = false, features = ["zdict_builder"] }

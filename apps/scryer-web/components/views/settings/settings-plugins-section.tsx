@@ -712,6 +712,7 @@ export function SettingsPluginsSection({
         id="settings-plugins-manual-toggle"
         variant="outline"
         size="sm"
+        className="h-9"
         onClick={onToggleManualInstall}
       >
         {t("settings.pluginInstallManually")}
@@ -720,6 +721,7 @@ export function SettingsPluginsSection({
         id="settings-plugins-refresh"
         variant="outline"
         size="sm"
+        className="h-9"
         disabled={refreshing || remoteActionsBlocked.refresh}
         onClick={onRefreshRegistry}
       >

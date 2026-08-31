@@ -2,7 +2,7 @@ type ScryerLogoProps = {
   className?: string;
 };
 
-const logoUrl = `${import.meta.env.BASE_URL}logo.webp`;
+const logoUrl = `${import.meta.env.BASE_URL}scryer-logo.svg`;
 
 export default function ScryerLogo({ className = "" }: ScryerLogoProps) {
   return (

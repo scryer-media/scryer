@@ -1,52 +1,86 @@
-use super::verification::verify_import_inner_with_release_evidence;
+use super::verification::{
+    verify_import_inner_with_release_evidence, verify_skipped_import_with_release_evidence,
+};
 use super::*;
 
 const IMPORT_MARK_RETRY_INITIAL_SECONDS: u64 = 15;
 const IMPORT_MARK_RETRY_MAX_SECONDS: u64 = 300;
+const IMPORT_MARK_RETRY_MAX_ATTEMPTS: usize = 5;
 
-fn schedule_non_destructive_import_mark(
+pub(crate) fn schedule_non_destructive_import_mark(
     app: &AppUseCase,
     td: &TrackedDownload,
     result: &ImportResult,
     completed: Option<&CompletedDownload>,
 ) {
-    let client_id = td.client_id.trim();
+    let client_id = completed
+        .map(|item| item.client_id.trim())
+        .filter(|client_id| !client_id.is_empty())
+        .unwrap_or_else(|| td.client_id.trim());
     if client_id.is_empty() {
         return;
     }
 
-    let request = crate::DownloadClientMarkImportedRequest {
-        client_item_id: completed
-            .map(|item| item.download_client_item_id.clone())
-            .unwrap_or_else(|| td.client_item.download_client_item_id.clone()),
-        info_hash: None,
-        title_id: td.title_id.clone(),
-        title_name: Some(td.client_item.title_name.clone()),
-        category: completed
-            .and_then(|item| item.category.clone())
-            .or_else(|| td.client_item.category.clone()),
-        imported_path: result.dest_path.clone(),
-        download_path: completed.map(|item| item.dest_dir.clone()),
+    let request = if let Some(completed) = completed {
+        download_client_mark_imported_request(td, completed, result)
+    } else {
+        crate::DownloadClientMarkImportedRequest {
+            client_item_id: td.client_item.download_client_item_id.clone(),
+            info_hash: crate::normalize_torrent_info_hash(td.client_item.download_id.as_deref())
+                .or_else(|| {
+                    crate::normalize_torrent_info_hash(Some(
+                        &td.client_item.download_client_item_id,
+                    ))
+                }),
+            title_id: td.title_id.clone(),
+            title_name: (!td.client_item.title_name.trim().is_empty())
+                .then(|| td.client_item.title_name.clone()),
+            category: td.client_item.category.clone(),
+            imported_path: result.dest_path.clone(),
+            download_path: None,
+        }
     };
     let client_id = client_id.to_string();
     let download_client = app.services.integrations.download_client.clone();
 
     tokio::spawn(async move {
         let mut retry_seconds = IMPORT_MARK_RETRY_INITIAL_SECONDS;
-        loop {
+        for attempt in 1..=IMPORT_MARK_RETRY_MAX_ATTEMPTS {
             match download_client
                 .mark_imported_non_destructive_for_client_id(&client_id, &request)
                 .await
             {
                 Ok(()) => break,
                 Err(error) => {
-                    tracing::warn!(
-                        client_id,
-                        client_item_id = %request.client_item_id,
-                        retry_seconds,
-                        error = %error,
-                        "failed to mark imported download in client; retrying"
-                    );
+                    if attempt == IMPORT_MARK_RETRY_MAX_ATTEMPTS {
+                        tracing::warn!(
+                            client_id,
+                            client_item_id = %request.client_item_id,
+                            attempts = attempt,
+                            error = %error,
+                            "giving up marking imported download in client after bounded retries"
+                        );
+                        break;
+                    }
+                    if attempt == 1 {
+                        tracing::warn!(
+                            client_id,
+                            client_item_id = %request.client_item_id,
+                            attempt,
+                            retry_seconds,
+                            error = %error,
+                            "failed to mark imported download in client; retrying"
+                        );
+                    } else {
+                        tracing::debug!(
+                            client_id,
+                            client_item_id = %request.client_item_id,
+                            attempt,
+                            retry_seconds,
+                            error = %error,
+                            "failed to mark imported download in client; retrying"
+                        );
+                    }
                     tokio::time::sleep(std::time::Duration::from_secs(retry_seconds)).await;
                     retry_seconds = retry_seconds
                         .saturating_mul(2)
@@ -174,6 +208,15 @@ fn update_no_video_signature_mtime(
     }
 }
 
+fn schedule_import_verification_retry(td: &mut TrackedDownload) {
+    td.schedule_import_execution_retry(Utc::now(), |_, next_retry_at| {
+        format!(
+            "Import verification is temporarily unavailable. Retrying at {}.",
+            next_retry_at.to_rfc3339()
+        )
+    });
+}
+
 #[cfg(test)]
 pub(super) async fn apply_import_result(
     app: &AppUseCase,
@@ -194,18 +237,46 @@ pub(super) async fn apply_import_result_with_completed(
 ) -> bool {
     let already_imported = result.decision == ImportDecision::Skipped
         && result.skip_reason == Some(ImportSkipReason::AlreadyImported);
-    if result.decision == ImportDecision::Imported || already_imported {
-        td.clear_no_video_import_retry();
-        td.clear_import_execution_retry();
-        if verify_import_inner_with_release_evidence(
-            app,
-            td,
-            files_imported_this_pass,
-            completed,
-            release_evidence,
-        )
-        .await
-        {
+    let intentionally_ignored_aggregate =
+        result.decision == ImportDecision::Skipped && result.skip_reason.is_none();
+    if result.decision == ImportDecision::Imported
+        || already_imported
+        || intentionally_ignored_aggregate
+    {
+        if result.decision == ImportDecision::Imported || already_imported {
+            td.clear_no_video_import_retry();
+            td.clear_import_execution_retry();
+        }
+        let verification = if intentionally_ignored_aggregate {
+            verify_skipped_import_with_release_evidence(
+                app,
+                td,
+                files_imported_this_pass,
+                completed,
+                release_evidence,
+            )
+            .await
+        } else {
+            verify_import_inner_with_release_evidence(
+                app,
+                td,
+                files_imported_this_pass,
+                completed,
+                release_evidence,
+            )
+            .await
+        };
+        let verified = match verification {
+            Ok(verified) => verified,
+            Err(error) => {
+                tracing::warn!(tracked_id = %td.id, error = %error, "import verification evidence is unavailable");
+                schedule_import_verification_retry(td);
+                return false;
+            }
+        };
+        if verified {
+            td.clear_no_video_import_retry();
+            td.clear_import_execution_retry();
             td.state = TrackedDownloadState::Imported;
             td.status = TrackedDownloadStatus::Ok;
             td.status_messages.clear();
@@ -316,8 +387,64 @@ pub(super) async fn apply_import_result_with_completed(
         return false;
     }
 
-    if apply_no_video_import_backoff(app, td, &result).await {
-        return false;
+    if result.skip_reason == Some(ImportSkipReason::NoVideoFiles) {
+        match import_artifacts_for_completed_download(app, td, completed).await {
+            Err(error) => {
+                tracing::warn!(
+                    tracked_id = %td.id,
+                    error = %error,
+                    "no-video retry cannot read artifact evidence; preserving retryable state"
+                );
+                schedule_import_verification_retry(td);
+                return false;
+            }
+            Ok(artifacts) => {
+                let successful_artifacts = artifacts
+                    .iter()
+                    .filter(|artifact| {
+                        matches!(artifact.result.as_str(), "imported" | "already_present")
+                    })
+                    .count();
+                if successful_artifacts > 0 {
+                    let verified = match verify_import_inner_with_release_evidence(
+                        app,
+                        td,
+                        files_imported_this_pass,
+                        completed,
+                        release_evidence,
+                    )
+                    .await
+                    {
+                        Ok(verified) => verified,
+                        Err(error) => {
+                            tracing::warn!(tracked_id = %td.id, error = %error, "import verification evidence is unavailable");
+                            schedule_import_verification_retry(td);
+                            return false;
+                        }
+                    };
+                    if verified {
+                        td.clear_no_video_import_retry();
+                        td.clear_import_execution_retry();
+                        td.state = TrackedDownloadState::Imported;
+                        td.status = TrackedDownloadStatus::Ok;
+                        td.status_messages.clear();
+                        schedule_non_destructive_import_mark(app, td, &result, completed);
+                        return true;
+                    }
+                    td.state = TrackedDownloadState::ImportPending;
+                    td.status = TrackedDownloadStatus::Warning;
+                    td.status_messages = vec![
+                        "Import partially completed; waiting for remaining files or verification."
+                            .to_string(),
+                    ];
+                    return false;
+                }
+            }
+        }
+
+        if apply_no_video_import_backoff(app, td, &result).await {
+            return false;
+        }
     }
 
     td.clear_no_video_import_retry();
@@ -366,6 +493,32 @@ pub(super) async fn apply_import_result_with_completed(
             td.status_messages = vec![import_result_message(&result, ImportStatus::Skipped)];
             false
         }
+    }
+}
+
+fn download_client_mark_imported_request(
+    td: &TrackedDownload,
+    completed: &CompletedDownload,
+    result: &ImportResult,
+) -> crate::DownloadClientMarkImportedRequest {
+    crate::DownloadClientMarkImportedRequest {
+        client_item_id: completed.download_client_item_id.clone(),
+        info_hash: crate::normalize_torrent_info_hash(completed.download_id.as_deref()).or_else(
+            || crate::normalize_torrent_info_hash(Some(&completed.download_client_item_id)),
+        ),
+        title_id: td.title_id.clone(),
+        title_name: (!td.client_item.title_name.trim().is_empty())
+            .then(|| td.client_item.title_name.clone()),
+        category: completed
+            .category
+            .clone()
+            .or_else(|| td.client_item.category.clone()),
+        imported_path: result
+            .dest_path
+            .as_deref()
+            .filter(|path| !path.trim().is_empty())
+            .map(str::to_string),
+        download_path: (!completed.dest_dir.trim().is_empty()).then(|| completed.dest_dir.clone()),
     }
 }
 

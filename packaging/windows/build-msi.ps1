@@ -11,7 +11,11 @@ param(
   [string]$Version,
 
   [Parameter(Mandatory = $true)]
-  [string]$OutputPath
+  [string]$OutputPath,
+
+  [Parameter(Mandatory = $true)]
+  [ValidateSet("msi", "winget")]
+  [string]$DistributionOwner
 )
 
 $ErrorActionPreference = "Stop"
@@ -63,6 +67,7 @@ New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
   -d "StageDir=$stageDir" `
   -d "ProductVersion=$Version" `
   -d "UpgradeCode=$($upgradeCodes[$Architecture])" `
+  -d "DistributionOwner=$DistributionOwner" `
   -d "ApplicationFilesComponentGuid=$($componentGuids[$Architecture].applicationFiles)" `
   -d "StartMenuShortcutsComponentGuid=$($componentGuids[$Architecture].startMenuShortcuts)" `
   -o $outputPath `
@@ -87,6 +92,7 @@ $view.Close()
   product_code = $productCode
   upgrade_code = $upgradeCodes[$Architecture]
   version = $Version
+  distribution_owner = $DistributionOwner
 } | ConvertTo-Json | Set-Content -Encoding utf8 "$outputPath.json"
 
-Write-Host "Built $outputPath with ProductCode $productCode"
+Write-Host "Built $outputPath with ProductCode $productCode and DistributionOwner $DistributionOwner"

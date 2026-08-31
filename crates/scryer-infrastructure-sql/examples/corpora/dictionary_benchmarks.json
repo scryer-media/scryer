@@ -1,0 +1,26 @@
+{
+  "format_byte": 1,
+  "compression_level": 3,
+  "dictionary_bytes": 8192,
+  "sanitizer_version": 1,
+  "domain_events": {
+    "corpus_samples": 70,
+    "corpus_blake3": "878cc0df6db956eb79a35589765855fc914da0113e722f9807dbbaf1969388a5",
+    "production_shape_training_samples": 56,
+    "held_out_samples": 14,
+    "dictionary_blake3": "9ea5863fd17f94ff47c512f32c113bf15df343621d61d1ab88acb99a6e57e48d",
+    "held_out_raw_bytes": 4058,
+    "plain_zstd3_ratio": 0.5784,
+    "dictionary_zstd3_ratio": 0.2969
+  },
+  "release_decisions": {
+    "corpus_samples": 369,
+    "corpus_blake3": "6445c720811438288ecd9f5ef2279b883226ab48a4d8e1110463decd213a5208",
+    "production_shape_training_samples": 295,
+    "held_out_samples": 74,
+    "dictionary_blake3": "3c837a8f2ff701b4ba29266fd4a3f2e7e0648f4265def397cd253fd44a0af084",
+    "held_out_raw_bytes": 88026,
+    "plain_zstd3_ratio": 0.3639,
+    "dictionary_zstd3_ratio": 0.0796
+  }
+}

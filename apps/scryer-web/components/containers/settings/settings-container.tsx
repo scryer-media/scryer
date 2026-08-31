@@ -128,6 +128,14 @@ const STANDARD_FILTERED_PLUGIN_LAYOUT: DockedReferenceLayout = {
   railClass: "sticky top-[26px] z-auto min-w-[288px] max-w-[720px] flex-[1_1_720px]",
 };
 
+const INDEXERS_FILTERED_PLUGIN_LAYOUT: DockedReferenceLayout = {
+  mainMinWidth: 1360,
+  railMinWidth: 288,
+  contentClass: "max-w-none",
+  mainClass: "min-w-[1360px] max-w-[1520px] flex-[1_1_1520px]",
+  railClass: "sticky top-[26px] z-auto min-w-[288px] max-w-[720px] flex-[1_1_720px]",
+};
+
 const SUBTITLES_FILTERED_PLUGIN_LAYOUT: DockedReferenceLayout = {
   mainMinWidth: 960,
   railMinWidth: 320,
@@ -318,7 +326,9 @@ export const SettingsContainer = memo(function SettingsContainer({
   const referenceLayout = showReferenceRail
     ? isSubtitlesSection
       ? SUBTITLES_FILTERED_PLUGIN_LAYOUT
-      : STANDARD_FILTERED_PLUGIN_LAYOUT
+      : settingsSection === "indexers"
+        ? INDEXERS_FILTERED_PLUGIN_LAYOUT
+        : STANDARD_FILTERED_PLUGIN_LAYOUT
     : null;
   const settingsContentRef = useRef<HTMLElement | null>(null);
   const [referenceRailOpen, setReferenceRailOpen] = useState(false);
@@ -577,7 +587,9 @@ export const SettingsContainer = memo(function SettingsContainer({
             showReferenceRail
               ? referenceRailDocked
                 ? referenceLayout?.contentClass
-                : "max-w-[1280px]"
+                : settingsSection === "indexers"
+                  ? "max-w-none"
+                  : "max-w-[1280px]"
               : settingsSection === "rules" ||
                   settingsSection === "post-processing"
                 ? "max-w-none"

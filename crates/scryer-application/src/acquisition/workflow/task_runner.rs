@@ -1,15 +1,42 @@
-/// Scheduler value hint for a hot convergence target (recent air/release/add):
-/// high value so the scope converges promptly and keeps admitting
+/// Scheduler value hint for a hot acquisition target (recent air/release/add):
+/// high value so the scope is processed promptly and keeps admitting
 /// even while the account's API quota is under pressure. Equals the neutral
 /// baseline, so hot work is never shed by the low-value pressure gate.
 const BACKGROUND_HOT_TARGET_VALUE: f64 = 1.0;
 
-/// Scheduler value hint for a cold convergence target (long-tail / upgrades):
+/// Scheduler value hint for a cold acquisition target (long-tail / upgrades):
 /// low value so the quota-pressure gate drains it first,
 /// yielding shared account quota to RSS polls and hot acquisition. Above the
 /// absolute `LOW_VALUE_BACKGROUND_THRESHOLD` floor, so a cold scope still
 /// admits when quota is healthy — it only defers once quota tightens.
 const BACKGROUND_COLD_TARGET_VALUE: f64 = 0.25;
+
+/// Maximum number of titles whose missing-media acquisition pipelines may be
+/// evaluated concurrently. Indexer strategy admission is bounded separately.
+const BACKGROUND_ACQUISITION_TITLE_LIMIT: usize = 4;
+
+#[derive(Debug, Clone, Copy)]
+struct BackgroundAcquisitionSettings {
+    max_scopes_per_cycle: usize,
+}
+
+impl AppUseCase {
+    async fn background_acquisition_settings(&self) -> AppResult<BackgroundAcquisitionSettings> {
+        let max_scopes_per_cycle = self
+            .read_setting_i64_value(
+                crate::acquisition::convergence::ACQUISITION_LONG_TAIL_BACKFILL_MAX_SCOPES_PER_CYCLE_KEY,
+                None,
+            )
+            .await?
+            .filter(|value| *value > 0)
+            .unwrap_or(
+                crate::acquisition::convergence::DEFAULT_LONG_TAIL_BACKFILL_MAX_SCOPES_PER_CYCLE,
+            ) as usize;
+        Ok(BackgroundAcquisitionSettings {
+            max_scopes_per_cycle,
+        })
+    }
+}
 
 async fn blocked_acquisition_facets_after_quiet_wait(app: &AppUseCase) -> Vec<MediaFacet> {
     let blocked_facets = app
@@ -54,17 +81,16 @@ async fn blocked_acquisition_facets_after_quiet_wait(app: &AppUseCase) -> Vec<Me
 
     blocked_facets
 }
-/// Run one convergence cycle: recover failed downloads, derive
-/// the target set, rotate the cursor over it, and search each selected scope's
-/// uncovered indexers. Plan-112 admission inside the search is the only rate
-/// authority; the cycle merely bounds evaluation cost and pre-skips scopes the
-/// scheduler could not serve right now.
-async fn run_convergence_cycle(app: &AppUseCase) {
+/// Run one background acquisition cycle: recover failed downloads, derive the
+/// missing-media target set, rotate the cursor, and process at most four titles
+/// concurrently. Fingerprinted convergence coverage only decides which indexer
+/// corpus searches may be skipped; it is not the activity being scheduled.
+async fn run_background_acquisition_cycle(app: &AppUseCase) {
     let blocked_facets = blocked_acquisition_facets_after_quiet_wait(app).await;
-    run_convergence_cycle_with_blocked_facets(app, &blocked_facets).await;
+    run_background_acquisition_cycle_with_blocked_facets(app, &blocked_facets).await;
 }
 
-pub(crate) async fn run_convergence_cycle_with_blocked_facets(
+pub(crate) async fn run_background_acquisition_cycle_with_blocked_facets(
     app: &AppUseCase,
     blocked_facets: &[MediaFacet],
 ) {
@@ -78,10 +104,10 @@ pub(crate) async fn run_convergence_cycle_with_blocked_facets(
     check_grabbed_for_failures(app, &dl_snapshot).await;
 
     let now = Utc::now();
-    let settings = match app.convergence_settings().await {
+    let settings = match app.background_acquisition_settings().await {
         Ok(settings) => settings,
         Err(err) => {
-            warn!(error = %err, "failed to load convergence settings, skipping cycle");
+            warn!(error = %err, "failed to load background acquisition settings, skipping cycle");
             return;
         }
     };
@@ -108,14 +134,14 @@ pub(crate) async fn run_convergence_cycle_with_blocked_facets(
         return;
     }
 
-    let resume = app.convergence_cursor_resume_position().await;
-    let max_scopes = settings.long_tail_backfill_max_scopes_per_cycle.max(1) as usize;
-    let selection = crate::acquisition::targets::select_convergence_batch(
+    let resume = app.background_acquisition_resume_position().await;
+    let max_scopes = settings.max_scopes_per_cycle.max(1);
+    let selection = crate::acquisition::targets::select_background_acquisition_batch(
         &targets,
         resume.as_deref(),
         max_scopes,
     );
-    app.store_convergence_cursor_resume_position(selection.resume_after.as_deref())
+    app.store_background_acquisition_resume_position(selection.resume_after.as_deref())
         .await;
     if selection.indices.is_empty() {
         return;
@@ -124,33 +150,14 @@ pub(crate) async fn run_convergence_cycle_with_blocked_facets(
     debug!(
         target_count = targets.len(),
         selected_count = selection.indices.len(),
-        "convergence cycle: evaluating scopes"
+        "background acquisition cycle: evaluating missing scopes"
     );
 
     // Scheduler availability, resolved once per cycle for the pre-skip.
     let availability = app.scheduler_availability().await;
     let indexer_hosts = app.indexer_scheduler_host_keys().await;
 
-    // Track URLs already submitted this cycle to avoid sending the same NZB
-    // multiple times after a successful or ambiguous submission.
-    let mut grabbed_urls: std::collections::HashSet<String> = std::collections::HashSet::new();
-    // Failed attempts are deduplicated only within their source/indexer route.
-    let mut attempted_urls_by_route: Vec<(DownloadRouteKey, String)> = Vec::new();
-    // A transiently unavailable route is suppressed across every target in this cycle.
-    let mut failed_routes: Vec<DownloadRouteKey> = Vec::new();
-    // Track (title_id, season_num) for which a season pack search was attempted this cycle.
-    let mut season_pack_attempted: std::collections::HashSet<(String, u32)> =
-        std::collections::HashSet::new();
-    // Track (title_id, season_num) for which a season pack was successfully grabbed this cycle.
-    let mut season_pack_grabbed: std::collections::HashSet<(String, u32)> =
-        std::collections::HashSet::new();
-    // Track seasons where a viable season-pack candidate was found but not
-    // definitively failed. This avoids spending per-episode searches behind a
-    // pack that is pending delay or waiting on transient download-client state.
-    let mut season_pack_viable: std::collections::HashSet<(String, u32)> =
-        std::collections::HashSet::new();
-    let mut recent_failed_season_packs_by_title: std::collections::HashMap<String, HashSet<u32>> =
-        std::collections::HashMap::new();
+    let cycle = Arc::new(BackgroundAcquisitionCycleCoordinator::default());
 
     // Count selected episode scopes per (title_id, season_num). Season pack
     // search is only worthwhile when >= 2 episodes from the same season are in
@@ -171,37 +178,88 @@ pub(crate) async fn run_convergence_cycle_with_blocked_facets(
         }
     }
 
-    let mut processed_in_slice = 0usize;
-    for index in selection.indices {
-        let target = &targets[index];
-        if let Err(err) = process_single_target(
-            app,
-            target,
-            &now,
-            &availability,
-            &indexer_hosts,
-            &mut grabbed_urls,
-            &mut attempted_urls_by_route,
-            &mut failed_routes,
-            &mut season_pack_attempted,
-            &mut season_pack_grabbed,
-            &mut season_pack_viable,
-            &mut recent_failed_season_packs_by_title,
-            &season_due_counts,
-            &dl_snapshot,
-        )
-        .await
-        {
-            warn!(
-                scope_key = target.scope_key.as_str(),
-                title_id = target.title_id.as_str(),
-                error = %err,
-                "failed to process acquisition target"
-            );
+    let mut ready_titles = build_background_acquisition_title_work(&targets, &selection.indices);
+    let title_ids = ready_titles
+        .iter()
+        .map(|work| work.title_id.clone())
+        .collect::<Vec<_>>();
+    let titles_by_id = match app.services.catalog.titles.get_by_ids(&title_ids).await {
+        Ok(titles) => titles
+            .into_iter()
+            .map(|title| (title.id.clone(), title))
+            .collect::<HashMap<_, _>>(),
+        Err(error) => {
+            warn!(error = %error, "background acquisition: failed to load selected titles");
+            return;
         }
-        processed_in_slice += 1;
-        if processed_in_slice.is_multiple_of(ACQUISITION_SLICE_YIELD_INTERVAL) {
-            tokio::task::yield_now().await;
+    };
+    let mut in_flight = FuturesUnordered::new();
+    let availability = &availability;
+    let indexer_hosts = &indexer_hosts;
+    let season_due_counts = &season_due_counts;
+    let dl_snapshot = &dl_snapshot;
+    let now = &now;
+    let targets = &targets;
+
+    debug!(
+        selected_count = selection.indices.len(),
+        title_count = ready_titles.len(),
+        title_limit = BACKGROUND_ACQUISITION_TITLE_LIMIT,
+        "background acquisition cycle: dispatching title work"
+    );
+
+    loop {
+        while in_flight.len() < BACKGROUND_ACQUISITION_TITLE_LIMIT {
+            let Some(title_work) = ready_titles.pop_front() else {
+                break;
+            };
+            let Some(title) = titles_by_id.get(&title_work.title_id).cloned() else {
+                warn!(
+                    title_id = title_work.title_id.as_str(),
+                    "background acquisition target references missing title"
+                );
+                continue;
+            };
+            let cycle = Arc::clone(&cycle);
+            debug!(
+                title_id = title_work.title_id.as_str(),
+                queued_titles = ready_titles.len(),
+                active_titles = in_flight.len() + 1,
+                "background acquisition title work started"
+            );
+            in_flight.push(async move {
+                let title_id = title_work.title_id.clone();
+                let result = process_background_acquisition_title(
+                    app,
+                    title,
+                    title_work,
+                    targets,
+                    now,
+                    availability,
+                    indexer_hosts,
+                    &cycle,
+                    season_due_counts,
+                    dl_snapshot,
+                )
+                .await;
+                (title_id, result)
+            });
+        }
+
+        let Some((title_id, result)) = in_flight.next().await else {
+            break;
+        };
+        if let Err(err) = result {
+            warn!(
+                title_id = title_id.as_str(),
+                error = %err,
+                "failed to process background acquisition title"
+            );
+            metrics::counter!("scryer_background_acquisition_title_work_total", "outcome" => "failed")
+                .increment(1);
+        } else {
+            metrics::counter!("scryer_background_acquisition_title_work_total", "outcome" => "completed")
+                .increment(1);
         }
     }
 }
@@ -237,9 +295,9 @@ fn submission_blocks_search_for_wanted_item(
     // races that, and the release it would find is very likely the one that just
     // failed. Sonarr excludes `FailedPending` from `QueueSpecification` for the
     // same reason — it wants the failure resolved first, not the scope frozen.
-    if tracked_state.is_some_and(|state| {
-        matches!(state, scryer_domain::TrackedDownloadState::FailedPending)
-    }) {
+    if tracked_state
+        .is_some_and(|state| matches!(state, scryer_domain::TrackedDownloadState::FailedPending))
+    {
         return true;
     }
 
@@ -250,11 +308,37 @@ fn submission_blocks_search_for_wanted_item(
         return true;
     }
 
-    // Everything genuinely in flight — `Downloading | ImportPending | Importing`,
-    // `ImportBlocked`, or active in the client — is **not** a skip any more. It
-    // becomes a queued pseudo-incumbent on the admission ladder (D18), so a
-    // better release can still be grabbed over a slow or stuck one while an
-    // equal-or-worse one is refused with a reason that says so.
+    // An initial acquisition already claiming an empty scope must finish (or
+    // fail authoritatively) before another corpus search is admitted. This is
+    // especially important for a season/title pack: its submission covers the
+    // child episodes across later scheduler cycles, after the cycle-local pack
+    // proposal is gone. Occupied scopes retain queued-pseudo-incumbent behavior
+    // so genuine upgrade searches can still compare against an in-flight grab.
+    //
+    // One escape: a claim still `Downloading` past the staleness bound is a
+    // stalled swarm, not a claim — a dead torrent never fails on its own, and
+    // without this the scope would freeze until an operator noticed. The scope
+    // re-enters the D18 comparison (Sonarr's `QueueSpecification` shape), so
+    // only a strictly better release is grabbed beside the stall.
+    let tracked_submission_is_live = tracked_state.is_some_and(|state| {
+        matches!(
+            state,
+            scryer_domain::TrackedDownloadState::Downloading
+                | scryer_domain::TrackedDownloadState::ImportPending
+                | scryer_domain::TrackedDownloadState::Importing
+                | scryer_domain::TrackedDownloadState::ImportBlocked
+        )
+    });
+    if !scope_is_occupied
+        && !dl_snapshot.active_downloading_is_stale(
+            submission.download_client_id.as_deref(),
+            &submission.download_client_item_id,
+        )
+        && (tracked_submission_is_live
+            || submission_is_active(submission, dl_snapshot))
+    {
+        return true;
+    }
 
     // A completed download for a scope with nothing in it is on its way to
     // becoming that file. Searching again would fetch the same episode twice,
@@ -266,13 +350,1758 @@ fn submission_blocks_search_for_wanted_item(
 
 impl AppUseCase {
     #[cfg(test)]
-    pub(crate) async fn run_convergence_cycle_once(&self) {
-        run_convergence_cycle(self).await;
+    pub(crate) async fn run_background_acquisition_cycle_once(&self) {
+        run_background_acquisition_cycle(self).await;
     }
 }
+
+#[derive(Default)]
+struct BackgroundAcquisitionCycleCoordinator {
+    state: Mutex<BackgroundAcquisitionCycleState>,
+}
+
+#[derive(Default)]
+struct BackgroundAcquisitionCycleState {
+    attempted_titles: HashSet<String>,
+    claimed_episode_ids: HashSet<String>,
+    season_pack_attempted: HashSet<(String, u32)>,
+    season_pack_grabbed: HashSet<(String, u32)>,
+    season_pack_viable: HashSet<(String, u32)>,
+    /// Episode-shaped releases a season query surfaced. Merged into the episode
+    /// scope's own results — never a substitute for its query.
+    season_candidates: HashMap<(String, u32), Vec<IndexerSearchResult>>,
+    grabbed_urls: HashSet<String>,
+    attempted_urls_by_route: Vec<(DownloadRouteKey, String)>,
+    failed_routes: Vec<DownloadRouteKey>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SubmissionClaim {
+    Granted,
+    AlreadySubmitted,
+    AlreadyAttempted,
+    RouteUnavailable,
+}
+
+impl BackgroundAcquisitionCycleCoordinator {
+    fn lock(&self) -> std::sync::MutexGuard<'_, BackgroundAcquisitionCycleState> {
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn claimed_episode_ids(&self) -> HashSet<String> {
+        self.lock().claimed_episode_ids.clone()
+    }
+
+    fn is_episode_claimed(&self, episode_id: &str) -> bool {
+        self.lock().claimed_episode_ids.contains(episode_id)
+    }
+
+    fn claim_episode_ids<I>(&self, episode_ids: I)
+    where
+        I: IntoIterator<Item = String>,
+    {
+        self.lock().claimed_episode_ids.extend(episode_ids);
+    }
+
+    fn begin_title_pack(&self, title_id: &str) -> bool {
+        self.lock().attempted_titles.insert(title_id.to_string())
+    }
+
+    fn complete_title_pack_stage(&self, title_id: &str) {
+        self.lock().attempted_titles.insert(title_id.to_string());
+    }
+
+    fn begin_season_pack(&self, key: &(String, u32)) -> bool {
+        self.lock().season_pack_attempted.insert(key.clone())
+    }
+
+    fn complete_season_pack_stage(&self, key: &(String, u32)) {
+        self.lock().season_pack_attempted.insert(key.clone());
+    }
+
+    fn cache_season_candidates(
+        &self,
+        key: &(String, u32),
+        candidates: impl IntoIterator<Item = IndexerSearchResult>,
+    ) {
+        let mut state = self.lock();
+        let cached = state.season_candidates.entry(key.clone()).or_default();
+        for candidate in candidates {
+            let duplicate = cached
+                .iter()
+                .any(|existing| same_indexer_release(existing, &candidate));
+            if !duplicate {
+                cached.push(candidate);
+            }
+        }
+    }
+
+    fn season_candidates(&self, key: &(String, u32)) -> Vec<IndexerSearchResult> {
+        self.lock()
+            .season_candidates
+            .get(key)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    fn season_pack_grabbed(&self, key: &(String, u32)) -> bool {
+        self.lock().season_pack_grabbed.contains(key)
+    }
+
+    fn season_pack_viable(&self, key: &(String, u32)) -> bool {
+        self.lock().season_pack_viable.contains(key)
+    }
+
+    fn mark_season_pack_grabbed(&self, key: &(String, u32)) {
+        let mut state = self.lock();
+        state.season_pack_grabbed.insert(key.clone());
+        state.season_pack_viable.insert(key.clone());
+    }
+
+    fn mark_season_pack_viable(&self, key: &(String, u32)) {
+        self.lock().season_pack_viable.insert(key.clone());
+    }
+
+    fn clear_season_pack_viable(&self, key: &(String, u32)) {
+        self.lock().season_pack_viable.remove(key);
+    }
+
+    fn failed_routes(&self) -> Vec<DownloadRouteKey> {
+        self.lock().failed_routes.clone()
+    }
+
+    fn mark_failed_route(&self, route: DownloadRouteKey) {
+        let mut state = self.lock();
+        if !state.failed_routes.contains(&route) {
+            state.failed_routes.push(route);
+        }
+    }
+
+    fn claim_submission(&self, route: DownloadRouteKey, url: &str) -> SubmissionClaim {
+        let mut state = self.lock();
+        if state.failed_routes.contains(&route) {
+            return SubmissionClaim::RouteUnavailable;
+        }
+        if state.grabbed_urls.contains(url) {
+            return SubmissionClaim::AlreadySubmitted;
+        }
+        let attempted = (route, url.to_string());
+        if state.attempted_urls_by_route.contains(&attempted) {
+            return SubmissionClaim::AlreadyAttempted;
+        }
+        state.attempted_urls_by_route.push(attempted);
+        SubmissionClaim::Granted
+    }
+
+    fn mark_submitted(&self, url: &str) {
+        self.lock().grabbed_urls.insert(url.to_string());
+    }
+}
+
+/// A grab one stage of a title's walk *would* make, held back so the title is
+/// arbitrated once instead of the first stage to reach a submission winning by
+/// arrival order.
+///
+/// Proposals are title-local — the walk that builds them is strictly sequential
+/// and lives in a single future — so they are owned by
+/// `process_background_acquisition_title` and never enter the cycle
+/// coordinator, which is cross-title state.
+struct GrabProposal {
+    stage: BackgroundAcquisitionWorkKind,
+    /// The episodes this proposal may claim, sorted and deduped.
+    ///
+    /// It must never under-state what the stage can actually take — a set that
+    /// does lets two lanes grab the same episode. Over-stating it only defers a
+    /// scope, because the greedy pass re-tests against the episodes a winner
+    /// *actually* claimed: a proposal set aside here still gets its turn when
+    /// the winner took less than it could have, or took nothing at all.
+    ///
+    /// Each stage supplies the narrowest set that satisfies that: the season
+    /// pack its whole season, an episode-evidence proposal the union over its
+    /// eligible candidates, and the series pack only its *best* candidate's
+    /// coverage — its runner-ups are saved against other anchors and are
+    /// deliberately left for those scopes to pick up.
+    episode_ids: Vec<String>,
+    /// The `(title, season)` a pack proposal speaks for.
+    ///
+    /// A season pack covers its season whether or not the catalog gave the
+    /// episodes a collection to resolve through — and when it did not,
+    /// `episode_ids` is empty. This is the same suppression
+    /// `mark_season_pack_grabbed` used to provide the moment the pack was
+    /// submitted; the submission now happens too late to protect the walk.
+    season_key: Option<(String, u32)>,
+    /// Best-first: the walk the inline site used to run, relocated.
+    ///
+    /// The *whole* ranked list, not just the submittable rows — the standby
+    /// persistence the commit performs indexes into it.
+    ranked_candidates: Vec<IndexerSearchResult>,
+    /// Indices into `ranked_candidates`, best-first, of the rows the stage-time
+    /// evaluation found submittable.
+    eligible: Vec<usize>,
+    commit: GrabProposalCommit,
+}
+
+enum GrabProposalCommit {
+    /// Reachable only if the series-pack lane is ever deferred — it commits
+    /// inline today, for the reasons on [`try_series_pack_for_title`]. The arm
+    /// is kept so that flipping the lane is a matter of pushing the proposal
+    /// instead of committing it.
+    SeriesPack(Box<SeriesPackCommit>),
+    SeasonPack(Box<SeasonPackCommit>),
+    /// A covered episode scope's in-hand evidence (Phase B): candidates a
+    /// season query already surfaced, ranked but never searched for.
+    EpisodeEvidence(Box<EpisodeEvidenceCommit>),
+}
+
+struct SeriesPackCommit {
+    anchors: HashMap<String, AcquisitionScopeState>,
+    episodes: Vec<Episode>,
+    blocklist: crate::app_usecase_discovery::TitleReleaseBlocklistSignatures,
+}
+
+struct SeasonPackCommit {
+    season: u32,
+    season_key: (String, u32),
+    item: AcquisitionScopeState,
+    episode: Option<Episode>,
+    /// The proposal's declared season-wide episode set, unioned into the
+    /// commit's actual claims so a grab claims exactly what was declared even
+    /// when the submission scope resolves narrower (no collection row).
+    season_episode_ids: Vec<String>,
+}
+
+struct EpisodeEvidenceCommit {
+    context: ScopeGrabContext,
+    blocklist: crate::app_usecase_discovery::TitleReleaseBlocklistSignatures,
+}
+
+/// Everything the episode-scope submission walk needs that is not the candidate
+/// list itself. Owned, because the walk now runs after the stage that built it
+/// has returned.
+struct ScopeGrabContext {
+    item: AcquisitionScopeState,
+    episode: Option<Episode>,
+    media_type: String,
+    download_category: String,
+    /// `None` for a scope that recorded no coverage; the ambiguous-submit
+    /// re-open has nothing to prune in that case.
+    convergence_scope_key: Option<String>,
+}
+
+/// What the episode-scope submission walk did, from the caller's point of view.
+enum ScopeGrabOutcome {
+    /// A release was submitted (or the submit was ambiguous, or a conflicting
+    /// submission already existed). The scope's saved list was handled by the
+    /// walk itself, so retention must not run over it.
+    Settled { claimed_episode_ids: Vec<String> },
+    /// Every candidate was tried and none was grabbed. The scope keeps its
+    /// ranked remainder through standby retention.
+    Exhausted,
+}
+
+impl GrabProposal {
+    fn covers_episode(&self, episode_id: &str) -> bool {
+        self.episode_ids.iter().any(|id| id == episode_id)
+    }
+
+    fn owns_season(&self, season_key: &(String, u32)) -> bool {
+        self.season_key.as_ref() == Some(season_key)
+    }
+
+    /// The candidate whose release worth stands for the whole proposal.
+    fn best_candidate(&self) -> Option<&IndexerSearchResult> {
+        self.eligible
+            .first()
+            .and_then(|index| self.ranked_candidates.get(*index))
+    }
+}
+
+/// Arbitrate this title's held-back grabs and commit the winners.
+///
+/// Best-first by release worth, greedy on episode conflicts: a proposal whose
+/// episodes are already claimed — by an earlier cycle, another title, or a
+/// winner committed moments ago — is set aside. Conflicts are tested against
+/// what has actually been claimed rather than what the winners declared, so a
+/// winner that grabbed less than its candidate list could have (or grabbed
+/// nothing at all, every submit having failed) hands the next-best proposal for
+/// those episodes its turn.
+async fn arbitrate_and_commit_title_grabs(
+    app: &AppUseCase,
+    title: &Title,
+    mut proposals: Vec<GrabProposal>,
+    cycle: &BackgroundAcquisitionCycleCoordinator,
+    dl_snapshot: &DownloadClientSnapshot,
+    now: &DateTime<Utc>,
+) {
+    if proposals.is_empty() {
+        return;
+    }
+
+    // `RankHead::compare` is the half of the search comparator that reads off a
+    // scored result alone — allowed, tier, revision, score — so it is the only
+    // part that means anything *between* two searches. The listing tie-breakers
+    // below it (indexer priority, seeders, age) order rows within one query and
+    // would be comparing unrelated things here.
+    proposals.sort_by(
+        |left, right| match (left.best_candidate(), right.best_candidate()) {
+            (Some(left), Some(right)) => crate::acquisition::scoring::RankHead::compare(left, right),
+            // A proposal with no candidate cannot win; it sorts last rather than
+            // being dropped, so nothing it still owes gets skipped.
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => std::cmp::Ordering::Equal,
+        },
+    );
+
+    let mut claimed = cycle.claimed_episode_ids();
+    for proposal in proposals {
+        if proposal
+            .episode_ids
+            .iter()
+            .any(|episode_id| claimed.contains(episode_id))
+        {
+            debug!(
+                title_id = title.id.as_str(),
+                stage = ?proposal.stage,
+                episode_count = proposal.episode_ids.len(),
+                "grab arbitration: proposal set aside, its episodes are already claimed"
+            );
+            continue;
+        }
+
+        let grabbed = commit_grab_proposal(app, title, proposal, cycle, dl_snapshot, now).await;
+        if !grabbed.is_empty() {
+            cycle.claim_episode_ids(grabbed.iter().cloned());
+            claimed.extend(grabbed);
+        }
+    }
+}
+
+/// Run one proposal's submission walk. Returns the episodes it actually claimed.
+async fn commit_grab_proposal(
+    app: &AppUseCase,
+    title: &Title,
+    proposal: GrabProposal,
+    cycle: &BackgroundAcquisitionCycleCoordinator,
+    dl_snapshot: &DownloadClientSnapshot,
+    now: &DateTime<Utc>,
+) -> Vec<String> {
+    let GrabProposal {
+        stage,
+        ranked_candidates,
+        eligible,
+        commit,
+        ..
+    } = proposal;
+    match commit {
+        GrabProposalCommit::SeriesPack(commit) => {
+            match commit_series_pack_proposal(
+                app,
+                title,
+                &ranked_candidates,
+                &commit,
+                cycle,
+                dl_snapshot,
+                now,
+            )
+            .await
+            {
+                Ok(episode_ids) => episode_ids,
+                Err(error) => {
+                    warn!(
+                        title_id = title.id.as_str(),
+                        error = %error,
+                        "series-pack grab commit failed"
+                    );
+                    Vec::new()
+                }
+            }
+        }
+        GrabProposalCommit::SeasonPack(commit) => {
+            match commit_season_pack_proposal(
+                app,
+                title,
+                &ranked_candidates,
+                &eligible,
+                &commit,
+                cycle,
+                now,
+            )
+            .await
+            {
+                Ok(episode_ids) => episode_ids,
+                Err(error) => {
+                    warn!(
+                        title_id = title.id.as_str(),
+                        error = %error,
+                        "season-pack grab commit failed"
+                    );
+                    Vec::new()
+                }
+            }
+        }
+        GrabProposalCommit::EpisodeEvidence(commit) => {
+            let EpisodeEvidenceCommit {
+                mut context,
+                blocklist,
+            } = *commit;
+            let mut failed_routes = cycle.failed_routes();
+            match commit_scope_grab(
+                app,
+                title,
+                &mut context,
+                &ranked_candidates,
+                &eligible,
+                &mut failed_routes,
+                &blocklist,
+                cycle,
+                now,
+            )
+            .await
+            {
+                Ok(ScopeGrabOutcome::Settled {
+                    claimed_episode_ids,
+                }) => claimed_episode_ids,
+                // In-hand evidence that could not be grabbed leaves no trace:
+                // the scope ran no query, recorded no coverage and saved no
+                // standby list, so it is still a target next cycle.
+                Ok(ScopeGrabOutcome::Exhausted) => Vec::new(),
+                Err(error) => {
+                    warn!(
+                        title_id = title.id.as_str(),
+                        stage = ?stage,
+                        error = %error,
+                        "episode-evidence grab commit failed"
+                    );
+                    Vec::new()
+                }
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+enum BackgroundAcquisitionWorkKind {
+    TitlePack,
+    SeasonPack { season: u32 },
+    Scope,
+}
+
+#[derive(Clone, Debug)]
+struct BackgroundAcquisitionWork {
+    target_index: usize,
+    kind: BackgroundAcquisitionWorkKind,
+}
+
+#[derive(Debug)]
+struct BackgroundAcquisitionTitleWork {
+    title_id: String,
+    ready: VecDeque<BackgroundAcquisitionWork>,
+}
+
+fn build_background_acquisition_title_work(
+    targets: &[crate::acquisition::targets::AcquisitionTarget],
+    selected_indices: &[usize],
+) -> VecDeque<BackgroundAcquisitionTitleWork> {
+    let mut title_order = Vec::new();
+    let mut indices_by_title = HashMap::<String, Vec<usize>>::new();
+    for &target_index in selected_indices {
+        let title_id = targets[target_index].title_id.clone();
+        if !indices_by_title.contains_key(&title_id) {
+            title_order.push(title_id.clone());
+        }
+        indices_by_title
+            .entry(title_id)
+            .or_default()
+            .push(target_index);
+    }
+
+    title_order
+        .into_iter()
+        .filter_map(|title_id| {
+            let indices = indices_by_title.remove(&title_id)?;
+            let mut ready = VecDeque::new();
+            let episode_indices = indices
+                .iter()
+                .copied()
+                .filter(|index| targets[*index].media_type == "episode")
+                .collect::<Vec<_>>();
+            if let Some(&title_pack_index) = episode_indices.first() {
+                ready.push_back(BackgroundAcquisitionWork {
+                    target_index: title_pack_index,
+                    kind: BackgroundAcquisitionWorkKind::TitlePack,
+                });
+                let mut seen_seasons = HashSet::new();
+                for target_index in episode_indices {
+                    let Some(season) = targets[target_index]
+                        .season_number
+                        .as_deref()
+                        .and_then(|value| value.parse::<u32>().ok())
+                        .filter(|season| *season > 0)
+                    else {
+                        continue;
+                    };
+                    if !seen_seasons.insert(season) || target_index == title_pack_index {
+                        continue;
+                    }
+                    ready.push_back(BackgroundAcquisitionWork {
+                        target_index,
+                        kind: BackgroundAcquisitionWorkKind::SeasonPack { season },
+                    });
+                }
+            }
+            ready.extend(
+                indices
+                    .into_iter()
+                    .map(|target_index| BackgroundAcquisitionWork {
+                        target_index,
+                        kind: BackgroundAcquisitionWorkKind::Scope,
+                    }),
+            );
+            Some(BackgroundAcquisitionTitleWork { title_id, ready })
+        })
+        .collect()
+}
+
+fn episode_ids_for_scope(scope: &SubmissionScope) -> Option<&[String]> {
+    match scope {
+        SubmissionScope::EpisodeSet { episode_ids } => Some(episode_ids),
+        _ => None,
+    }
+}
+
+async fn recovered_scope_episode_ids(app: &AppUseCase, scope: &SubmissionScope) -> Vec<String> {
+    match scope {
+        SubmissionScope::EpisodeSet { episode_ids } => episode_ids.clone(),
+        SubmissionScope::Episode { episode_id } => vec![episode_id.clone()],
+        SubmissionScope::Collection { collection_id } => match app
+            .services
+            .catalog
+            .shows
+            .list_episodes_for_collection(collection_id)
+            .await
+        {
+            Ok(episodes) => episodes.into_iter().map(|episode| episode.id).collect(),
+            Err(error) => {
+                warn!(
+                    collection_id,
+                    error = %error,
+                    "series-pack search: failed to expand recovered collection coverage"
+                );
+                Vec::new()
+            }
+        },
+        SubmissionScope::Title | SubmissionScope::SeriesMovie { .. } | SubmissionScope::Orphan => {
+            Vec::new()
+        }
+    }
+}
+
+/// Put back a standby list that a replacement write cleared but did not
+/// refill. `persist_standby_candidates` deletes before it inserts, so every
+/// caller that can fail partway needs this.
+async fn restore_standby_releases(
+    app: &AppUseCase,
+    anchor: &AcquisitionScopeState,
+    standby_releases: &[PendingRelease],
+) {
+    let _ = app
+        .services
+        .workflow
+        .pending_releases
+        .delete_standby_pending_releases_for_wanted_item(&anchor.id)
+        .await;
+    for standby in standby_releases {
+        if let Err(error) = app
+            .services
+            .workflow
+            .pending_releases
+            .insert_pending_release(standby)
+            .await
+        {
+            warn!(
+                wanted_item_id = anchor.id.as_str(),
+                release = standby.release_title.as_str(),
+                error = %error,
+                "failed to restore standby candidate"
+            );
+        }
+    }
+}
+
+/// Two results that are the same posting from the same indexer.
+fn same_indexer_release(left: &IndexerSearchResult, right: &IndexerSearchResult) -> bool {
+    left.indexer_id == right.indexer_id && left.guid == right.guid && left.title == right.title
+}
+
+fn is_series_pack_candidate(candidate: &IndexerSearchResult) -> bool {
+    candidate
+        .parsed_release_metadata
+        .as_ref()
+        .and_then(|parsed| parsed.episode.as_ref())
+        .is_some_and(|episode| episode.is_series_pack)
+}
+
+/// One title lookup for a whole-series or multi-season release, planned and
+/// committed back to back.
+///
+/// **This lane still commits inline, and deliberately so.** Its runner-ups are
+/// persisted against their own anchors the moment a pack is grabbed, and the
+/// sibling episode scopes later in the same walk pick a *disjoint* pack up
+/// through their saved-candidate walks — which only works because the winner
+/// has already claimed its episodes by then. Holding the grab back until the
+/// end of the walk would leave those scopes with nothing saved to find, and
+/// nothing claimed to exclude the overlapping runner-up by. The lane also runs
+/// before any season query, so at the point it decides there is no in-hand
+/// episode evidence for it to be ranked against anyway.
+///
+/// The split into [`plan_series_pack_for_title`] and
+/// [`commit_series_pack_proposal`] is kept: deferring this lane later is a
+/// matter of moving the second call, not of taking the function apart again.
 #[expect(
     clippy::too_many_arguments,
-    reason = "target processing coordinates shared acquisition state across a single cycle"
+    reason = "the one-shot title lookup needs the cycle search state"
+)]
+async fn try_series_pack_for_title(
+    app: &AppUseCase,
+    title: &Title,
+    search_title: &Title,
+    target: &crate::acquisition::targets::AcquisitionTarget,
+    now: &DateTime<Utc>,
+    availability: &crate::acquisition::convergence::SchedulerAvailability,
+    indexer_hosts: &HashMap<String, String>,
+    dl_snapshot: &DownloadClientSnapshot,
+    submissions: &[DownloadSubmission],
+    tracked_states: &HashMap<
+        crate::contracts::ClientJobLocator,
+        scryer_domain::TrackedDownloadState,
+    >,
+    claimed_episode_ids: &HashSet<String>,
+    cycle: &BackgroundAcquisitionCycleCoordinator,
+) -> AppResult<Option<Vec<String>>> {
+    let Some(proposal) = plan_series_pack_for_title(
+        app,
+        title,
+        search_title,
+        target,
+        availability,
+        indexer_hosts,
+        dl_snapshot,
+        submissions,
+        tracked_states,
+        claimed_episode_ids,
+    )
+    .await?
+    else {
+        return Ok(None);
+    };
+    let GrabProposalCommit::SeriesPack(commit) = &proposal.commit else {
+        return Ok(None);
+    };
+    let episode_ids = commit_series_pack_proposal(
+        app,
+        title,
+        &proposal.ranked_candidates,
+        commit,
+        cycle,
+        dl_snapshot,
+        now,
+    )
+    .await?;
+    Ok((!episode_ids.is_empty()).then_some(episode_ids))
+}
+
+/// Search for a whole-series or multi-season release and, if one qualifies,
+/// describe it as a proposal.
+///
+/// Everything that is a fact about what the indexers hold happens here — the
+/// query, the evaluation, the anchor resolution and the coverage record. Only
+/// the submission walk is left to the commit half.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the one-shot title lookup needs the cycle search state"
+)]
+async fn plan_series_pack_for_title(
+    app: &AppUseCase,
+    title: &Title,
+    search_title: &Title,
+    target: &crate::acquisition::targets::AcquisitionTarget,
+    availability: &crate::acquisition::convergence::SchedulerAvailability,
+    indexer_hosts: &HashMap<String, String>,
+    dl_snapshot: &DownloadClientSnapshot,
+    submissions: &[DownloadSubmission],
+    tracked_states: &HashMap<
+        crate::contracts::ClientJobLocator,
+        scryer_domain::TrackedDownloadState,
+    >,
+    claimed_episode_ids: &HashSet<String>,
+) -> AppResult<Option<GrabProposal>> {
+    let mut title_subject = app
+        .resolve_release_search_subject_for_title(search_title)
+        .await?;
+    title_subject.submission_scope = SubmissionScope::Title;
+    let episodes = match app
+        .services
+        .catalog
+        .shows
+        .list_episodes_for_title(&title.id)
+        .await
+    {
+        Ok(episodes) => episodes,
+        Err(error) => {
+            warn!(
+                title_id = title.id.as_str(),
+                error = %error,
+                "series-pack search: failed to load episodes"
+            );
+            return Ok(None);
+        }
+    };
+    let mut owned_episode_ids = match app
+        .services
+        .library
+        .media_files
+        .list_media_files_for_title(&title.id)
+        .await
+    {
+        Ok(files) => files
+            .into_iter()
+            .filter(|file| file.role.is_primary())
+            .filter_map(|file| file.episode_id)
+            .collect::<HashSet<_>>(),
+        Err(error) => {
+            warn!(
+                title_id = title.id.as_str(),
+                error = %error,
+                "series-pack search: failed to load media ownership"
+            );
+            return Ok(None);
+        }
+    };
+    owned_episode_ids.extend(
+        crate::acquisition_coverage::in_flight_series_pack_episode_ids(
+            &episodes,
+            submissions,
+            tracked_states,
+            dl_snapshot,
+        ),
+    );
+    let eligible_collection_ids =
+        crate::acquisition_coverage::eligible_series_pack_collection_ids(&episodes);
+    if eligible_collection_ids.is_empty()
+        || crate::acquisition_coverage::eligible_missing_series_pack_episode_count(
+            &episodes,
+            &owned_episode_ids,
+        ) < 2
+        || !crate::acquisition_coverage::title_series_pack_missing_ratio_qualifies(
+            &episodes,
+            &owned_episode_ids,
+        )
+    {
+        return Ok(None);
+    }
+
+    let Some(convergence) = app
+        .resolve_series_pack_convergence(search_title, &title_subject, &eligible_collection_ids)
+        .await
+    else {
+        return Ok(None);
+    };
+    let uncovered = match app
+        .uncovered_indexers_for_scope(
+            &convergence.scope_key,
+            &convergence.facet,
+            &convergence.fingerprint,
+            &convergence.routed_indexer_ids,
+        )
+        .await
+    {
+        Ok(uncovered) => uncovered,
+        Err(error) => {
+            warn!(
+                title_id = title.id.as_str(),
+                scope_key = convergence.scope_key.as_str(),
+                error = %error,
+                "series-pack search: failed to read set coverage; searching all routed indexers"
+            );
+            convergence.routed_indexer_ids.clone()
+        }
+    };
+    if uncovered.is_empty()
+        || !uncovered.iter().any(|indexer_id| {
+            availability.indexer_available(
+                indexer_hosts.get(indexer_id).map(String::as_str),
+                indexer_id,
+            )
+        })
+    {
+        return Ok(None);
+    }
+    let search_outcome = app
+        .search_and_score_subject_restricted_with_fired_indexers(
+            search_title,
+            &title_subject,
+            "background_acquisition_series_pack",
+            SearchMode::Auto,
+            tokio_util::sync::CancellationToken::new(),
+            Some(uncovered.into_iter().collect()),
+            Some(if target.is_hot {
+                BACKGROUND_HOT_TARGET_VALUE
+            } else {
+                BACKGROUND_COLD_TARGET_VALUE
+            }),
+        )
+        .await?;
+
+    let (evaluated_candidates, qualifying_collection_ids) = evaluate_series_pack_candidates(
+        app,
+        title,
+        &title_subject,
+        search_outcome.results,
+        &episodes,
+        &owned_episode_ids,
+        claimed_episode_ids,
+    )
+    .await;
+    let session_finalized = app
+        .finalize_evaluated_search_session_or_warn(
+            &search_outcome.search_session_id,
+            &evaluated_candidates,
+            &title.id,
+        )
+        .await;
+
+    if evaluated_candidates.is_empty() {
+        if session_finalized {
+            record_series_pack_search_coverage(
+                app,
+                &convergence,
+                &search_outcome.complete_indexer_ids,
+                &qualifying_collection_ids,
+            )
+            .await;
+        }
+        return Ok(None);
+    }
+
+    let anchors =
+        series_pack_candidate_anchors(app, title, &evaluated_candidates, &episodes).await?;
+    if session_finalized {
+        record_series_pack_search_coverage(
+            app,
+            &convergence,
+            &search_outcome.complete_indexer_ids,
+            &qualifying_collection_ids,
+        )
+        .await;
+    }
+    let blocklist = app.load_title_release_blocklist_signatures(&title.id).await;
+
+    // Only the *best* candidate's coverage here, not the union across the list.
+    //
+    // The runner-ups are not this proposal's fallbacks in the usual sense:
+    // `persist_series_pack_runner_ups` saves each against its own anchor, and a
+    // later episode scope picks a disjoint one up through its saved-candidate
+    // walk — that is how two non-overlapping packs are grabbed in one cycle.
+    // Declaring the union would suppress exactly those scopes.
+    let episode_ids = match evaluated_candidates
+        .first()
+        .and_then(|candidate| candidate.parsed_release_metadata.as_ref())
+    {
+        Some(parsed) => {
+            let scope = crate::acquisition_coverage::resolve_release_coverage(
+                parsed, &episodes, &[], None,
+            )
+            .submission_scope();
+            let mut episode_ids = recovered_scope_episode_ids(app, &scope).await;
+            episode_ids.sort();
+            episode_ids.dedup();
+            episode_ids
+        }
+        None => Vec::new(),
+    };
+
+    // `evaluate_series_pack_candidates` has already dropped everything the
+    // walk would refuse, so the whole ranked list is submittable.
+    let eligible = (0..evaluated_candidates.len()).collect();
+
+    Ok(Some(GrabProposal {
+        stage: BackgroundAcquisitionWorkKind::TitlePack,
+        episode_ids,
+        season_key: None,
+        ranked_candidates: evaluated_candidates,
+        eligible,
+        commit: GrabProposalCommit::SeriesPack(Box::new(SeriesPackCommit {
+            anchors,
+            episodes,
+            blocklist,
+        })),
+    }))
+}
+
+/// Submit the winning series-pack proposal, walking its ranked list exactly as
+/// the inline lookup used to. Returns the episodes the grab covers.
+async fn commit_series_pack_proposal(
+    app: &AppUseCase,
+    title: &Title,
+    evaluated_candidates: &[IndexerSearchResult],
+    commit: &SeriesPackCommit,
+    cycle: &BackgroundAcquisitionCycleCoordinator,
+    dl_snapshot: &DownloadClientSnapshot,
+    now: &DateTime<Utc>,
+) -> AppResult<Vec<String>> {
+    let SeriesPackCommit {
+        anchors,
+        episodes,
+        blocklist,
+    } = commit;
+    let failed_routes = cycle.failed_routes();
+    let claimed_episode_ids = &cycle.claimed_episode_ids();
+    let failed_routes = failed_routes.as_slice();
+
+    for (candidate_index, candidate) in evaluated_candidates.iter().enumerate() {
+        let key = crate::app_usecase_discovery::release_search_key(candidate);
+        let Some(anchor) = anchors.get(&key) else {
+            continue;
+        };
+        let preserved_standby = match app
+            .services
+            .workflow
+            .pending_releases
+            .list_standby_pending_releases_for_wanted_item(&anchor.id)
+            .await
+        {
+            Ok(standby) => standby,
+            Err(error) => {
+                warn!(
+                    wanted_item_id = anchor.id.as_str(),
+                    error = %error,
+                    "series-pack search: failed to snapshot anchor standby candidates"
+                );
+                continue;
+            }
+        };
+        if !persist_standby_candidates(
+            app,
+            anchor,
+            title,
+            evaluated_candidates,
+            candidate_index,
+            now,
+            failed_routes,
+            blocklist,
+            |saved| crate::app_usecase_discovery::release_search_key(saved) == key,
+        )
+        .await
+        {
+            restore_standby_releases(app, anchor, &preserved_standby).await;
+            continue;
+        }
+
+        let Some(candidate_scope) = candidate.parsed_release_metadata.as_ref().map(|parsed| {
+            crate::acquisition_coverage::resolve_release_coverage(parsed, episodes, &[], None)
+                .submission_scope()
+        }) else {
+            warn!(
+                release = candidate.title.as_str(),
+                "series-pack search: evaluated candidate lost parsed metadata"
+            );
+            restore_standby_releases(app, anchor, &preserved_standby).await;
+            continue;
+        };
+        let outcome = try_saved_candidates(
+            app,
+            anchor,
+            None,
+            Some(claimed_episode_ids),
+            dl_snapshot,
+            now,
+        )
+        .await;
+        let (scope, standby_start, recovered) = match outcome {
+            StandbyRecoveryOutcome::Recovered { scope } => (Some(scope), candidate_index + 1, true),
+            StandbyRecoveryOutcome::Active { scope } => (Some(scope), candidate_index + 1, false),
+            StandbyRecoveryOutcome::Deferred { scope } => (scope, candidate_index, false),
+            StandbyRecoveryOutcome::Parked { scope } => {
+                let candidate_is_parked = scope.as_ref() == Some(&candidate_scope);
+                (
+                    scope,
+                    if candidate_is_parked {
+                        candidate_index + 1
+                    } else {
+                        candidate_index
+                    },
+                    false,
+                )
+            }
+            StandbyRecoveryOutcome::Exhausted { .. } => {
+                restore_standby_releases(app, anchor, &preserved_standby).await;
+                continue;
+            }
+        };
+        if recovered {
+            persist_series_pack_runner_ups(
+                app,
+                title,
+                evaluated_candidates,
+                standby_start,
+                anchors,
+                now,
+                failed_routes,
+                blocklist,
+            )
+            .await;
+        } else {
+            restore_standby_releases(app, anchor, &preserved_standby).await;
+        }
+        return Ok(match scope {
+            Some(scope) => recovered_scope_episode_ids(app, &scope).await,
+            None => Vec::new(),
+        });
+    }
+
+    Ok(Vec::new())
+}
+
+/// Submit the winning season-pack proposal, walking its ranked list exactly as
+/// the inline season stage used to. Returns the episodes the grab covers.
+async fn commit_season_pack_proposal(
+    app: &AppUseCase,
+    title: &Title,
+    pack_results: &[IndexerSearchResult],
+    eligible: &[usize],
+    commit: &SeasonPackCommit,
+    cycle: &BackgroundAcquisitionCycleCoordinator,
+    now: &DateTime<Utc>,
+) -> AppResult<Vec<String>> {
+    let season_num = commit.season;
+    let season_key = commit.season_key.clone();
+    let item = &commit.item;
+    let episode = &commit.episode;
+    let mut failed_routes = cycle.failed_routes();
+
+    'season_pack_candidates: for best_pack_index in eligible.iter().copied() {
+        let best_pack = &pack_results[best_pack_index];
+        let pack_route = DownloadRouteKey::for_candidate(best_pack)
+            .expect("candidate route key always exists, including unknown source kind");
+        if failed_routes.contains(&pack_route) {
+            continue;
+        }
+        let pack_url = best_pack
+            .canonical_download_source()
+            .map(|(source, _)| source);
+        let url_str = pack_url.as_deref().unwrap_or("").to_string();
+        if !url_str.is_empty()
+            && matches!(
+                cycle.claim_submission(pack_route.clone(), &url_str),
+                SubmissionClaim::Granted
+            )
+        {
+            let download_cat = app.derive_download_category(&title.facet).await;
+            let is_recent = app.is_recent_for_queue_priority(
+                best_pack
+                    .published_at
+                    .as_deref()
+                    .or(episode.as_ref().and_then(|item| item.air_date.as_deref()))
+                    .or(title.first_aired.as_deref())
+                    .or(title.digital_release_date.as_deref()),
+            );
+            let pack_title = Some(best_pack.title.clone());
+            let pack_hint = normalize_release_attempt_hint(pack_url.as_deref());
+            let pack_title_norm = normalize_release_name(pack_title.as_deref());
+            let pack_password =
+                normalize_release_password(best_pack.password_hint.as_deref());
+            let request_signature = normalize_release_selection_signature(
+                pack_url.as_deref(),
+                pack_title.as_deref(),
+                best_pack.source_kind,
+            );
+            let info_hash_hint = best_pack.info_hash().map(str::to_string);
+            let seed_minimums =
+                crate::ReleaseSeedMinimums::from_release_extra(&best_pack.extra);
+            let download_id = scryer_domain::download_identity::DownloadId::new();
+            let submission_scope = collection_download_submission_scope_for_wanted_item(
+                item,
+                episode.as_ref(),
+            );
+
+            let canonical_result = app
+                .submit_canonical_download(CanonicalDownloadSubmissionIntent {
+                    request: DownloadClientAddRequest {
+                        title: title.clone(),
+                        search_facet: None,
+                        purpose: crate::DownloadSubmissionPurpose::Standard,
+                        download_id: Some(download_id),
+                        source_hint: pack_url.clone(),
+                        staged_nzb: None,
+                        resolved_download_artifact: None,
+                        source_kind: best_pack.source_kind,
+                        source_title: pack_title.clone(),
+                        source_password: pack_password.clone(),
+                        category: Some(download_cat),
+                        queue_priority: None,
+                        download_directory: None,
+                        release_title: Some(best_pack.title.clone()),
+                        indexer_name: Some(best_pack.source.clone()),
+                        indexer_id: best_pack.indexer_id.clone(),
+                        info_hash_hint: info_hash_hint.clone(),
+                        seed_goal_ratio: None,
+                        seed_goal_seconds: None,
+                        tracker_min_seed_ratio: seed_minimums.min_seed_ratio,
+                        tracker_min_seed_time_minutes: seed_minimums
+                            .min_seed_time_minutes,
+                        season_pack_seed_ratio: seed_minimums.season_pack_seed_ratio,
+                        season_pack_seed_time_minutes: seed_minimums
+                            .season_pack_seed_time_minutes,
+                        is_recent,
+                        season_pack: Some(true),
+                    },
+                    scope: submission_scope.clone(),
+                    conflict_policy: SubmissionConflictPolicy::Skip,
+                    request_signature: request_signature.clone(),
+                    source_provider_name: Some(best_pack.source.clone()),
+                    release_size_bytes: best_pack.size_bytes,
+                })
+                .await;
+
+            let canonical_submission = match canonical_result {
+                Ok(CanonicalDownloadSubmissionOutcome::Accepted(submission)) => {
+                    Ok(submission)
+                }
+                Ok(CanonicalDownloadSubmissionOutcome::Conflict(_)) => {
+                    break 'season_pack_candidates;
+                }
+                Err(error) => Err(error),
+            };
+
+            match canonical_submission {
+                Ok(canonical_submission) => {
+                    let grab = canonical_submission.grab;
+                    let download_job_id = grab.job_id.clone();
+                    let facet_label = serde_json::to_string(&title.facet)
+                        .unwrap_or_else(|_| "\"other\"".to_string())
+                        .trim_matches('"')
+                        .to_string();
+                    metrics::counter!("scryer_grabs_total", "indexer" => best_pack.source.clone(), "facet" => facet_label).increment(1);
+                    app.record_indexer_grab(
+                        best_pack.indexer_id.as_deref(),
+                        Some(best_pack.source.as_str()),
+                    );
+                    cycle.mark_submitted(&url_str);
+                    cycle.mark_season_pack_grabbed(&season_key);
+                    let _ = app
+                        .services
+                        .workflow
+                        .release_attempts
+                        .record_release_attempt(
+                            Some(title.id.clone()),
+                            pack_hint,
+                            pack_title_norm,
+                            ReleaseDownloadAttemptOutcome::Success,
+                            None,
+                            pack_password,
+                        )
+                        .await;
+                    let mut grabbed_episode_ids = match &submission_scope {
+                        SubmissionScope::Episode { episode_id } => {
+                            vec![episode_id.clone()]
+                        }
+                        SubmissionScope::EpisodeSet { episode_ids } => {
+                            episode_ids.clone()
+                        }
+                        SubmissionScope::Collection { collection_id } => app
+                            .services
+                            .catalog
+                            .shows
+                            .list_episodes_for_collection(collection_id)
+                            .await
+                            .map(|episodes| {
+                                episodes.into_iter().map(|episode| episode.id).collect()
+                            })
+                            .unwrap_or_default(),
+                        SubmissionScope::Title
+                        | SubmissionScope::SeriesMovie { .. }
+                        | SubmissionScope::Orphan => Vec::new(),
+                    };
+                    // Claim what was declared: the arbitration's conflict test
+                    // reads these actual claims, and a claim narrower than the
+                    // season-wide declaration would let a covered episode
+                    // proposal commit on top of this pack.
+                    grabbed_episode_ids.extend(commit.season_episode_ids.iter().cloned());
+                    grabbed_episode_ids.sort();
+                    grabbed_episode_ids.dedup();
+                    let covered_wanted_item_ids = app
+                        .covered_wanted_item_ids_for_submission_scope(
+                            &title.id,
+                            &submission_scope,
+                            &item.id,
+                        )
+                        .await?;
+                    let grabbed_json = serde_json::json!({
+                        "title": best_pack.title,
+                        "score": best_pack
+                            .quality_profile_decision
+                            .as_ref()
+                            .map(|decision| decision.preference_score)
+                            .unwrap_or(0),
+                        "grabbed_at": now.to_rfc3339(),
+                        "season_pack": true,
+                        "source_provider": best_pack.source.clone(),
+                    })
+                    .to_string();
+                    app.services
+                        .workflow
+                        .acquisition_state
+                        .commit_successful_grab(&SuccessfulGrabCommit {
+                            wanted_item_id: item.id.clone(),
+                            covered_wanted_item_ids,
+                            grabbed_release: grabbed_json,
+                            last_search_at: Some(now.to_rfc3339()),
+                            grabbed_pending_release_id: None,
+                            grabbed_at: Some(now.to_rfc3339()),
+                        })
+                        .await?;
+                    let pack_blocklist =
+                        app.load_title_release_blocklist_signatures(&title.id).await;
+                    persist_standby_candidates(
+                        app,
+                        item,
+                        title,
+                        pack_results,
+                        best_pack_index + 1,
+                        now,
+                        &failed_routes,
+                        &pack_blocklist,
+                        |candidate| {
+                            candidate_is_season_pack_for_season(candidate, season_num)
+                        },
+                    )
+                    .await;
+                    let pack_score = best_pack
+                        .quality_profile_decision
+                        .as_ref()
+                        .map(|d| d.preference_score)
+                        .unwrap_or(0);
+                    let mut grab_meta = HashMap::new();
+                    grab_meta.insert(
+                        "title_name".to_string(),
+                        serde_json::json!(title.name),
+                    );
+                    grab_meta.insert(
+                        "release_title".to_string(),
+                        serde_json::json!(best_pack.title),
+                    );
+                    grab_meta.insert(
+                        "indexer".to_string(),
+                        serde_json::json!(best_pack.source),
+                    );
+                    grab_meta
+                        .insert("score".to_string(), serde_json::json!(pack_score));
+                    let _ = app
+                        .append_domain_event(new_title_domain_event(
+                            None,
+                            title,
+                            DomainEventPayload::ReleaseGrabbed(
+                                ReleaseGrabbedEventData {
+                                    title: title_context_snapshot(title),
+                                    source_title: Some(best_pack.title.clone()),
+                                    source_hint: Some(best_pack.source.clone()),
+                                    source_provider: Some(best_pack.source.clone()),
+                                    download_id: Some(download_job_id),
+                                    episode_ids: grabbed_episode_ids.clone(),
+                                },
+                            ),
+                        ))
+                        .await;
+                    info!(
+                        title = title.name.as_str(),
+                        season = season_num,
+                        release = best_pack.title.as_str(),
+                        "season pack grabbed; skipping individual episode searches for this season"
+                    );
+                    return Ok(grabbed_episode_ids);
+                }
+                Err(err) => {
+                    let submit_unavailable = is_download_submit_unavailable_error(&err);
+                    let ambiguous = err.is_download_submit_ambiguous();
+                    if submit_unavailable && !failed_routes.contains(&pack_route) {
+                        failed_routes.push(pack_route.clone());
+                        cycle.mark_failed_route(pack_route.clone());
+                    }
+                    if ambiguous {
+                        cycle.mark_submitted(&url_str);
+                        cycle.mark_season_pack_viable(&season_key);
+                    } else if !submit_unavailable {
+                        cycle.clear_season_pack_viable(&season_key);
+                    }
+                    warn!(
+                        title = title.name.as_str(),
+                        season = season_num,
+                        error = %err,
+                        retry_alternate_route = submit_unavailable,
+                        "season pack grab failed"
+                    );
+                    // Transient (client unavailable) and ambiguous
+                    // (request may have been accepted) submits are
+                    // deferred: Pending attempt, never blocklisted.
+                    // Only a definitive failure burns the pack.
+                    let source_gone = err.is_download_source_gone();
+                    let defer = submit_unavailable || ambiguous || source_gone;
+                    let _ = app
+                        .services
+                        .workflow
+                        .release_attempts
+                        .record_release_attempt(
+                            Some(title.id.clone()),
+                            pack_hint.clone(),
+                            pack_title_norm.clone(),
+                            if defer {
+                                ReleaseDownloadAttemptOutcome::Pending
+                            } else {
+                                ReleaseDownloadAttemptOutcome::Failed
+                            },
+                            Some(err.to_string()),
+                            pack_password,
+                        )
+                        .await;
+                    if !defer && let Some(release_name) = pack_title_norm
+                        && let Err(error) = app
+                            .services
+                            .workflow
+                            .blocklist_repo
+                            .block(&NewBlocklistEntry {
+                                title_id: title.id.clone(),
+                                release_name,
+                                indexer_id: best_pack
+                                    .indexer_id
+                                    .clone()
+                                    .unwrap_or_default(),
+                                info_hash: best_pack.info_hash().map(str::to_string),
+                                reason: Some(format!("season pack grab failed: {err}")),
+                            })
+                            .await
+                        {
+                            warn!(
+                                error = %error,
+                                title_id = title.id.as_str(),
+                                release = best_pack.title.as_str(),
+                                "failed to persist blocklist entry for failed season pack grab"
+                            );
+                        }
+                    if !submit_unavailable {
+                        break 'season_pack_candidates;
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(Vec::new())
+}
+
+async fn evaluate_series_pack_candidates(
+    app: &AppUseCase,
+    title: &Title,
+    title_subject: &crate::acquisition_release_search::ResolvedReleaseSearchSubject,
+    candidates: Vec<IndexerSearchResult>,
+    episodes: &[Episode],
+    owned_episode_ids: &HashSet<String>,
+    claimed_episode_ids: &HashSet<String>,
+) -> (Vec<IndexerSearchResult>, HashSet<String>) {
+    let mut groups = HashMap::<Vec<String>, Vec<(usize, IndexerSearchResult)>>::new();
+    let mut collection_ids = HashSet::new();
+
+    for (rank, candidate) in candidates.into_iter().enumerate() {
+        if !is_series_pack_candidate(&candidate) {
+            continue;
+        }
+        let Some(parsed) = candidate.parsed_release_metadata.as_ref() else {
+            continue;
+        };
+        if !crate::acquisition_coverage::series_pack_missing_ratio_qualifies(
+            parsed,
+            episodes,
+            owned_episode_ids,
+        ) {
+            continue;
+        }
+
+        collection_ids.extend(crate::acquisition_coverage::series_pack_collection_ids(
+            parsed, episodes,
+        ));
+        let scope =
+            crate::acquisition_coverage::resolve_release_coverage(parsed, episodes, &[], None)
+                .submission_scope();
+        let Some(mut episode_ids) = episode_ids_for_scope(&scope).map(<[String]>::to_vec) else {
+            continue;
+        };
+        episode_ids.sort();
+        episode_ids.dedup();
+        if episode_ids
+            .iter()
+            .any(|episode_id| claimed_episode_ids.contains(episode_id))
+        {
+            continue;
+        }
+        groups
+            .entry(episode_ids)
+            .or_default()
+            .push((rank, candidate));
+    }
+
+    let mut evaluated = Vec::new();
+    for (episode_ids, ranked_candidates) in groups {
+        let mut ranks_by_key = HashMap::new();
+        let mut candidates = Vec::with_capacity(ranked_candidates.len());
+        for (rank, candidate) in ranked_candidates {
+            ranks_by_key.insert(
+                crate::app_usecase_discovery::release_search_key(&candidate),
+                rank,
+            );
+            candidates.push(candidate);
+        }
+
+        let mut scoped_subject = title_subject.clone();
+        scoped_subject.submission_scope = SubmissionScope::EpisodeSet { episode_ids };
+        for candidate in app
+            .evaluate_search_results_for_subject(title, &scoped_subject, candidates, false)
+            .await
+        {
+            let key = crate::app_usecase_discovery::release_search_key(&candidate);
+            if let Some(rank) = ranks_by_key.remove(&key) {
+                evaluated.push((rank, candidate));
+            }
+        }
+    }
+
+    evaluated.sort_by_key(|(rank, _)| *rank);
+    (
+        evaluated
+            .into_iter()
+            .filter(|(_, candidate)| {
+                matches!(
+                    annotated_auto_decision_code(candidate),
+                    ReleaseAutoDecisionCode::Eligible
+                        | ReleaseAutoDecisionCode::PendingDelay
+                        | ReleaseAutoDecisionCode::AlreadyActive
+                )
+            })
+            .map(|(_, candidate)| candidate)
+            .collect(),
+        collection_ids,
+    )
+}
+
+async fn series_pack_candidate_anchors(
+    app: &AppUseCase,
+    title: &Title,
+    candidates: &[IndexerSearchResult],
+    episodes: &[Episode],
+) -> AppResult<HashMap<String, AcquisitionScopeState>> {
+    let states = app
+        .services
+        .workflow
+        .acquisition_scope_states
+        .list_acquisition_scope_states_for_title_ids(std::slice::from_ref(&title.id))
+        .await?;
+    let mut states_by_episode = states
+        .into_iter()
+        .filter_map(|state| {
+            state
+                .episode_id
+                .clone()
+                .map(|episode_id| (episode_id, state))
+        })
+        .collect::<HashMap<_, _>>();
+    let mut anchors = HashMap::new();
+
+    for candidate in candidates {
+        let Some(parsed) = candidate.parsed_release_metadata.as_ref() else {
+            continue;
+        };
+        let scope =
+            crate::acquisition_coverage::resolve_release_coverage(parsed, episodes, &[], None)
+                .submission_scope();
+        let Some(anchor_episode_id) =
+            episode_ids_for_scope(&scope).and_then(|episode_ids| episode_ids.first())
+        else {
+            continue;
+        };
+        let anchor = if let Some(anchor) = states_by_episode.get(anchor_episode_id).cloned() {
+            anchor
+        } else {
+            let Some(anchor_episode) = episodes
+                .iter()
+                .find(|episode| episode.id == *anchor_episode_id)
+            else {
+                continue;
+            };
+            let mut anchor = app.new_wanted_state_view(
+                title,
+                "episode",
+                Some(anchor_episode.id.clone()),
+                anchor_episode.collection_id.clone(),
+                None,
+                anchor_episode.season_number.clone(),
+            );
+            anchor.id = app
+                .services
+                .workflow
+                .acquisition_scope_states
+                .ensure_acquisition_scope_state(&anchor)
+                .await?;
+            states_by_episode.insert(anchor_episode.id.clone(), anchor.clone());
+            anchor
+        };
+        anchors.insert(
+            crate::app_usecase_discovery::release_search_key(candidate),
+            anchor,
+        );
+    }
+
+    Ok(anchors)
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "series-pack runner-ups retain their exact covered anchor and global rank"
+)]
+async fn persist_series_pack_runner_ups(
+    app: &AppUseCase,
+    title: &Title,
+    candidates: &[IndexerSearchResult],
+    start_index: usize,
+    anchors: &HashMap<String, AcquisitionScopeState>,
+    now: &DateTime<Utc>,
+    failed_routes: &[DownloadRouteKey],
+    blocklist: &crate::app_usecase_discovery::TitleReleaseBlocklistSignatures,
+) {
+    let mut anchor_ids = candidates
+        .iter()
+        .skip(start_index)
+        .filter_map(|candidate| {
+            anchors.get(&crate::app_usecase_discovery::release_search_key(candidate))
+        })
+        .map(|anchor| anchor.id.clone())
+        .collect::<Vec<_>>();
+    anchor_ids.sort();
+    anchor_ids.dedup();
+
+    for anchor_id in anchor_ids {
+        let Some(anchor) = anchors.values().find(|anchor| anchor.id == anchor_id) else {
+            continue;
+        };
+        persist_standby_candidates(
+            app,
+            anchor,
+            title,
+            candidates,
+            start_index,
+            now,
+            failed_routes,
+            blocklist,
+            |candidate| {
+                anchors
+                    .get(&crate::app_usecase_discovery::release_search_key(candidate))
+                    .is_some_and(|candidate_anchor| candidate_anchor.id == anchor_id)
+            },
+        )
+        .await;
+    }
+}
+
+async fn record_series_pack_search_coverage(
+    app: &AppUseCase,
+    convergence: &crate::acquisition::convergence::ScopeConvergence,
+    fired_indexer_ids: &[String],
+    collection_ids: &HashSet<String>,
+) {
+    app.record_convergence_coverage(convergence, fired_indexer_ids)
+        .await;
+    for collection_id in collection_ids {
+        let Some(scope_key) =
+            crate::acquisition::convergence::series_pack_collection_scope_key(collection_id)
+        else {
+            continue;
+        };
+        let mut collection_convergence = convergence.clone();
+        collection_convergence.scope_key = scope_key;
+        app.record_convergence_coverage(&collection_convergence, fired_indexer_ids)
+            .await;
+    }
+}
+
+struct BackgroundAcquisitionTitleContext {
+    title: scryer_domain::Title,
+    episodes_by_id: HashMap<String, scryer_domain::Episode>,
+    submissions: Vec<DownloadSubmission>,
+    tracked_states:
+        HashMap<crate::contracts::ClientJobLocator, scryer_domain::TrackedDownloadState>,
+}
+
+impl BackgroundAcquisitionTitleContext {
+    async fn load(app: &AppUseCase, title: scryer_domain::Title) -> AppResult<Self> {
+        let episodes = app
+            .services
+            .catalog
+            .shows
+            .list_episodes_for_title(&title.id)
+            .await?;
+        let submission_guard = app
+            .runtime
+            .acquisition
+            .download_submission_guards
+            .acquire_title(&title.id)
+            .await;
+        let submissions = app
+            .services
+            .workflow
+            .download_submissions
+            .list_for_title(&title.id)
+            .await?;
+        if app
+            .services
+            .workflow
+            .download_submissions
+            .list_active_unbound_for_title(&title.id)
+            .await?
+            .is_empty()
+        {
+            app.runtime
+                .acquisition
+                .download_submission_guards
+                .prime_title_state(&title.id, submissions.clone(), episodes.clone());
+        } else {
+            app.runtime
+                .acquisition
+                .download_submission_guards
+                .clear_title_state(&title.id);
+        }
+        drop(submission_guard);
+        let submission_identities = submissions
+            .iter()
+            .map(crate::contracts::ClientJobLocator::from_submission)
+            .collect::<Vec<_>>();
+        let tracked_states = app
+            .services
+            .workflow
+            .download_submissions
+            .list_identity_tracked_states_for_client_items(&submission_identities)
+            .await?
+            .into_iter()
+            .filter_map(|(identity, state)| {
+                scryer_domain::TrackedDownloadState::from_str_opt(&state)
+                    .map(|state| (identity, state))
+            })
+            .collect();
+
+        Ok(Self {
+            title,
+            episodes_by_id: episodes
+                .into_iter()
+                .map(|episode| (episode.id.clone(), episode))
+                .collect(),
+            submissions,
+            tracked_states,
+        })
+    }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one title coordinator owns the cycle-wide acquisition inputs"
+)]
+async fn process_background_acquisition_title(
+    app: &AppUseCase,
+    title: scryer_domain::Title,
+    mut title_work: BackgroundAcquisitionTitleWork,
+    targets: &[crate::acquisition::targets::AcquisitionTarget],
+    now: &DateTime<Utc>,
+    availability: &crate::acquisition::convergence::SchedulerAvailability,
+    indexer_hosts: &HashMap<String, String>,
+    cycle: &BackgroundAcquisitionCycleCoordinator,
+    season_due_counts: &HashMap<(String, u32), usize>,
+    dl_snapshot: &DownloadClientSnapshot,
+) -> AppResult<usize> {
+    let context = BackgroundAcquisitionTitleContext::load(app, title).await?;
+    let mut completed = 0usize;
+    // Title-local, and deliberately not in the cycle coordinator: the walk
+    // below is strictly sequential inside one future, so these need no locking,
+    // and they are meaningless to another title.
+    let mut proposals: Vec<GrabProposal> = Vec::new();
+
+    while let Some(work) = title_work.ready.pop_front() {
+        let target = &targets[work.target_index];
+        let pack_stage_only = !matches!(work.kind, BackgroundAcquisitionWorkKind::Scope);
+        debug!(
+            title_id = title_work.title_id.as_str(),
+            scope_key = target.scope_key.as_str(),
+            work = ?work.kind,
+            "background acquisition target work started"
+        );
+        if let Err(error) = process_single_target(
+            app,
+            target,
+            now,
+            availability,
+            indexer_hosts,
+            cycle,
+            season_due_counts,
+            dl_snapshot,
+            &context,
+            pack_stage_only,
+            &mut proposals,
+        )
+        .await
+        {
+            warn!(
+                scope_key = target.scope_key.as_str(),
+                title_id = target.title_id.as_str(),
+                error = %error,
+                "failed to process background acquisition target"
+            );
+            metrics::counter!("scryer_background_acquisition_target_work_total", "outcome" => "failed")
+                .increment(1);
+        } else {
+            metrics::counter!("scryer_background_acquisition_target_work_total", "outcome" => "completed")
+                .increment(1);
+        }
+
+        match work.kind {
+            BackgroundAcquisitionWorkKind::TitlePack => {
+                cycle.complete_title_pack_stage(&title_work.title_id);
+                if let Some(season) = target
+                    .season_number
+                    .as_deref()
+                    .and_then(|value| value.parse::<u32>().ok())
+                {
+                    cycle.complete_season_pack_stage(&(title_work.title_id.clone(), season));
+                }
+            }
+            BackgroundAcquisitionWorkKind::SeasonPack { season } => {
+                cycle.complete_season_pack_stage(&(title_work.title_id.clone(), season));
+            }
+            BackgroundAcquisitionWorkKind::Scope => {}
+        }
+
+        completed += 1;
+        if completed.is_multiple_of(ACQUISITION_SLICE_YIELD_INTERVAL) {
+            tokio::task::yield_now().await;
+        }
+    }
+
+    // Every stage has had its say; the arbitration point is the end of the
+    // sequential walk, in the same future that built the proposals.
+    arbitrate_and_commit_title_grabs(app, &context.title, proposals, cycle, dl_snapshot, now).await;
+
+    Ok(completed)
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "target processing coordinates shared acquisition state across a title pass"
 )]
 async fn process_single_target(
     app: &AppUseCase,
@@ -280,47 +2109,22 @@ async fn process_single_target(
     now: &DateTime<Utc>,
     availability: &crate::acquisition::convergence::SchedulerAvailability,
     indexer_hosts: &std::collections::HashMap<String, String>,
-    grabbed_urls: &mut std::collections::HashSet<String>,
-    attempted_urls_by_route: &mut Vec<(DownloadRouteKey, String)>,
-    failed_routes: &mut Vec<DownloadRouteKey>,
-    season_pack_attempted: &mut std::collections::HashSet<(String, u32)>,
-    season_pack_grabbed: &mut std::collections::HashSet<(String, u32)>,
-    season_pack_viable: &mut std::collections::HashSet<(String, u32)>,
-    recent_failed_season_packs_by_title: &mut std::collections::HashMap<String, HashSet<u32>>,
+    cycle: &BackgroundAcquisitionCycleCoordinator,
     season_due_counts: &std::collections::HashMap<(String, u32), usize>,
     dl_snapshot: &DownloadClientSnapshot,
+    context: &BackgroundAcquisitionTitleContext,
+    pack_stage_only: bool,
+    proposals: &mut Vec<GrabProposal>,
 ) -> AppResult<()> {
-    // Load the title to get search context
-    let title = match app
-        .services
-        .catalog
-        .titles
-        .get_by_id(&target.title_id)
-        .await?
-    {
-        Some(t) => t,
-        None => {
-            warn!(
-                title_id = target.title_id.as_str(),
-                "acquisition target references missing title"
-            );
-            return Ok(());
-        }
-    };
+    let title = &context.title;
 
     // Load episode data for episode-scoped targets
     let episode = if target.media_type == "episode" {
-        if let Some(ep_id) = target.episode_id.as_deref() {
-            match app.services.catalog.shows.get_episode_by_id(ep_id).await {
-                Ok(ep) => ep,
-                Err(err) => {
-                    warn!(episode_id = ep_id, error = %err, "failed to load episode for acquisition target");
-                    None
-                }
-            }
-        } else {
-            None
-        }
+        target
+            .episode_id
+            .as_deref()
+            .and_then(|episode_id| context.episodes_by_id.get(episode_id))
+            .cloned()
     } else {
         None
     };
@@ -328,6 +2132,31 @@ async fn process_single_target(
         .collection_id
         .clone()
         .or_else(|| episode.as_ref().and_then(|ep| ep.collection_id.clone()));
+    if episode
+        .as_ref()
+        .is_some_and(|episode| cycle.is_episode_claimed(&episode.id))
+    {
+        return Ok(());
+    }
+    // A pack this title's walk already proposed covers these episodes. Nothing
+    // here may spend an indexer query on them: until the pack has been
+    // arbitrated it is still the presumptive grab, and the old code reached this
+    // point only after the pack had already been submitted and claimed them.
+    let proposed_season_key = episode.as_ref().and_then(|episode| {
+        episode
+            .season_number
+            .as_deref()
+            .and_then(|season| season.parse::<u32>().ok())
+            .map(|season| (title.id.clone(), season))
+    });
+    let covered_by_proposed_pack = episode.as_ref().is_some_and(|episode| {
+        proposals.iter().any(|held| {
+            held.covers_episode(&episode.id)
+                || proposed_season_key
+                    .as_ref()
+                    .is_some_and(|season_key| held.owns_season(season_key))
+        })
+    });
 
     // The scope's acquisition-state row, or an unpersisted view when nothing
     // has happened to the scope yet — persisted the moment it is actually
@@ -343,7 +2172,7 @@ async fn process_single_target(
     {
         Ok(Some(row)) => row,
         Ok(None) => app.new_wanted_state_view(
-            &title,
+            title,
             &target.media_type,
             target.episode_id.clone(),
             effective_collection_id.clone(),
@@ -363,54 +2192,12 @@ async fn process_single_target(
 
     // Item-aware gate: skip only when an active/recent submission blocks this
     // wanted item, not every sibling episode on the same title.
-    let submissions = match app
-        .services
-        .workflow
-        .download_submissions
-        .list_for_title(&item.title_id)
-        .await
-    {
-        Ok(submissions) => submissions,
-        Err(error) => {
-            warn!(
-                title_id = item.title_id.as_str(),
-                error = %error,
-                "background acquisition: submission lookup failed; skipping target"
-            );
-            return Ok(());
-        }
-    };
-    let submission_identities = submissions
-        .iter()
-        .map(crate::contracts::DownloadSourceIdentity::from_submission)
-        .collect::<Vec<_>>();
-    let tracked_states = match app
-        .services
-        .workflow
-        .download_submissions
-        .list_identity_tracked_states_for_client_items(&submission_identities)
-        .await
-    {
-        Ok(states) => states
-            .into_iter()
-            .filter_map(|(identity, state)| {
-                scryer_domain::TrackedDownloadState::from_str_opt(&state)
-                    .map(|state| (identity, state))
-            })
-            .collect::<HashMap<_, _>>(),
-        Err(error) => {
-            warn!(
-                title_id = item.title_id.as_str(),
-                error = %error,
-                "background acquisition: tracked-state lookup failed; skipping target"
-            );
-            return Ok(());
-        }
-    };
+    let submissions = &context.submissions;
+    let tracked_states = &context.tracked_states;
     let episode_collection_id = episode_collection_id_for_wanted_item(item, episode.as_ref());
 
     let has_blocking_download_submission = submissions.iter().any(|submission| {
-        let identity = crate::contracts::DownloadSourceIdentity::from_submission(submission);
+        let identity = crate::contracts::ClientJobLocator::from_submission(submission);
         submission_blocks_search_for_wanted_item(
             submission,
             item,
@@ -434,60 +2221,115 @@ async fn process_single_target(
         return Ok(());
     }
 
+    if covered_by_proposed_pack {
+        // A pack stage is the *only* thing that can already cover these
+        // episodes here, and its search ran before this one would have. Two
+        // rules follow.
+        //
+        // **Economy.** No query is spent to find out whether the pack should
+        // win: a comparison never justifies a dispatch, and today's code spends
+        // nothing at all once a pack has taken the episodes. That also rules
+        // out the saved-standby walk, which grabs as it goes — the waiting lane
+        // and the arbitration must never both hold a claim on one release.
+        //
+        // **Default.** With no evidence already in hand, the pack wins
+        // unopposed, which is exactly what happens today.
+        if pack_stage_only {
+            return Ok(());
+        }
+        return propose_covered_episode_evidence(
+            app,
+            target,
+            context,
+            item,
+            episode.as_ref(),
+            cycle,
+            proposals,
+        )
+        .await;
+    }
+
     // Saved search results first: a failure never costs an indexer query. A
     // `wanted` scope that still holds ranked results from its last search —
     // the remainder after a grab that later failed — walks them in order,
     // re-judged against the blocklist, the swarm and admission. Only an
     // exhausted list (or a scope that never saved one) reaches the convergence
     // gate below.
-    let stale_standby_indexer_ids = if item.status == AcquisitionScopeStatus::Wanted && !item.id.is_empty() {
-        match try_saved_candidates(app, item, None, dl_snapshot, now).await {
-            StandbyRecoveryOutcome::Recovered { season_pack } => {
-                if season_pack
-                    && let Some(season) = target
-                        .season_number
-                        .as_deref()
-                        .or(episode.as_ref().and_then(|episode| episode.season_number.as_deref()))
-                        .and_then(|season| season.parse::<u32>().ok())
-                {
-                    season_pack_grabbed.insert((title.id.clone(), season));
+    let claimed_episode_ids = cycle.claimed_episode_ids();
+    let stale_standby_indexer_ids =
+        if item.status == AcquisitionScopeStatus::Wanted && !item.id.is_empty() {
+            match try_saved_candidates(
+                app,
+                item,
+                None,
+                Some(&claimed_episode_ids),
+                dl_snapshot,
+                now,
+            )
+            .await
+            {
+                StandbyRecoveryOutcome::Recovered { scope }
+                | StandbyRecoveryOutcome::Active { scope } => {
+                    if let Some(episode_ids) = episode_ids_for_scope(&scope) {
+                        cycle.claim_episode_ids(episode_ids.iter().cloned());
+                    }
+                    if let SubmissionScope::Collection { collection_id } = &scope {
+                        if let Ok(episodes) = app
+                            .services
+                            .catalog
+                            .shows
+                            .list_episodes_for_collection(collection_id)
+                            .await
+                        {
+                            cycle.claim_episode_ids(episodes.into_iter().map(|episode| episode.id));
+                        }
+                        if let Some(season) = target
+                            .season_number
+                            .as_deref()
+                            .or(episode
+                                .as_ref()
+                                .and_then(|episode| episode.season_number.as_deref()))
+                            .and_then(|season| season.parse::<u32>().ok())
+                        {
+                            cycle.mark_season_pack_grabbed(&(title.id.clone(), season));
+                        }
+                    }
+                    info!(
+                        title = title.name.as_str(),
+                        scope_key = target.scope_key.as_str(),
+                        "grabbed the next saved search result; no indexer query spent"
+                    );
+                    return Ok(());
                 }
-                info!(
-                    title = title.name.as_str(),
-                    scope_key = target.scope_key.as_str(),
-                    "grabbed the next saved search result; no indexer query spent"
-                );
-                return Ok(());
+                StandbyRecoveryOutcome::Deferred { .. } => {
+                    info!(
+                        title = title.name.as_str(),
+                        scope_key = target.scope_key.as_str(),
+                        "saved search result kept pending until the download client recovers"
+                    );
+                    return Ok(());
+                }
+                StandbyRecoveryOutcome::Parked { .. } => {
+                    info!(
+                        title = title.name.as_str(),
+                        scope_key = target.scope_key.as_str(),
+                        "best saved search result is held by its delay profile"
+                    );
+                    return Ok(());
+                }
+                StandbyRecoveryOutcome::Exhausted { stale_indexer_ids } => stale_indexer_ids,
             }
-            StandbyRecoveryOutcome::Deferred => {
-                info!(
-                    title = title.name.as_str(),
-                    scope_key = target.scope_key.as_str(),
-                    "saved search result kept pending until the download client recovers"
-                );
-                return Ok(());
-            }
-            StandbyRecoveryOutcome::Parked => {
-                info!(
-                    title = title.name.as_str(),
-                    scope_key = target.scope_key.as_str(),
-                    "best saved search result is held by its delay profile"
-                );
-                return Ok(());
-            }
-            StandbyRecoveryOutcome::Exhausted { stale_indexer_ids } => stale_indexer_ids,
-        }
-    } else {
-        Vec::new()
-    };
+        } else {
+            Vec::new()
+        };
 
     let search_title = app
-        .release_search_title_for_wanted_item(&title, item, episode.as_ref())
+        .release_search_title_for_wanted_item(title, item, episode.as_ref())
         .await;
 
     let subject = app
         .resolve_release_search_subject_for_wanted_item(
-            &title,
+            title,
             &search_title,
             item,
             episode.as_ref(),
@@ -495,78 +2337,127 @@ async fn process_single_target(
         .await;
     let search_season = subject.season;
 
-    // Convergence gate: a converged scope rides RSS; an
-    // unconverged one is searched against exactly its uncovered indexer subset.
-    // Resolved once here and reused for the restricted search below.
-    let Some(convergence) = app.resolve_scope_convergence(&search_title, &subject).await else {
-        debug!(
-            title_id = title.id.as_str(),
-            scope_key = target.scope_key.as_str(),
-            "background acquisition: scope has no routed indexers, skipping"
-        );
-        return Ok(());
-    };
+    // Exhausting saved results is a recovery action, not a new search. Preserve
+    // that contract before either the title or episode lane spends an indexer
+    // query.
     if !stale_standby_indexer_ids.is_empty() {
-        info!(
-            title_id = title.id.as_str(),
-            scope_key = convergence.scope_key.as_str(),
-            stale_indexer_ids = ?stale_standby_indexer_ids,
-            "background acquisition: pruned stale standby coverage; the next cycle will refresh these indexers"
-        );
-        for indexer_id in stale_standby_indexer_ids {
-            app.prune_scope_key_coverage(&convergence.scope_key, Some(&indexer_id))
-                .await;
+        if let Some(convergence) = app.resolve_scope_convergence(&search_title, &subject).await {
+            info!(
+                title_id = title.id.as_str(),
+                scope_key = convergence.scope_key.as_str(),
+                stale_indexer_ids = ?stale_standby_indexer_ids,
+                "background acquisition: pruned stale standby coverage; the next cycle will refresh these indexers"
+            );
+            for indexer_id in stale_standby_indexer_ids {
+                app.prune_scope_key_coverage(&convergence.scope_key, Some(&indexer_id))
+                    .await;
+            }
         }
-        // A stale standby list earns a fresh view from only the affected
-        // indexer, but never within the same walk that exhausted it.
         return Ok(());
     }
-    let uncovered = match app
-        .uncovered_indexers_for_scope(
-            &convergence.scope_key,
-            &convergence.facet,
-            &convergence.fingerprint,
-            &convergence.routed_indexer_ids,
+
+    // One title lookup per cycle discovers a qualifying whole-series or
+    // multi-season release before the established season and episode paths.
+    if target.media_type == "episode"
+        && title.facet != MediaFacet::Movie
+        && let Some(target_episode) = episode.as_ref()
+        && cycle.begin_title_pack(&title.id)
+    {
+        let claimed_episode_ids = cycle.claimed_episode_ids();
+        match try_series_pack_for_title(
+            app,
+            title,
+            &search_title,
+            target,
+            now,
+            availability,
+            indexer_hosts,
+            dl_snapshot,
+            submissions,
+            tracked_states,
+            &claimed_episode_ids,
+            cycle,
         )
         .await
-    {
-        Ok(uncovered) => uncovered,
-        Err(err) => {
-            warn!(
-                scope_key = convergence.scope_key.as_str(),
-                error = %err,
-                "failed to read scope coverage; searching all routed indexers"
-            );
-            convergence.routed_indexer_ids.clone()
+        {
+            Ok(Some(episode_ids)) => {
+                let claims_target = episode_ids.contains(&target_episode.id);
+                cycle.claim_episode_ids(episode_ids);
+                if claims_target {
+                    return Ok(());
+                }
+            }
+            Ok(None) => {}
+            Err(error) => {
+                warn!(
+                    title_id = title.id.as_str(),
+                    error = %error,
+                    "series-pack title search failed"
+                );
+            }
         }
+    }
+
+    // Pack stages own distinct fingerprints; only the later scope stage may be
+    // short-circuited by episode/title coverage.
+    let (uncovered, convergence_scope_key) = if pack_stage_only {
+        (HashSet::new(), None)
+    } else {
+        let Some(convergence) = app.resolve_scope_convergence(&search_title, &subject).await else {
+            debug!(
+                title_id = title.id.as_str(),
+                scope_key = target.scope_key.as_str(),
+                "background acquisition: scope has no routed indexers, skipping"
+            );
+            return Ok(());
+        };
+        let uncovered = match app
+            .uncovered_indexers_for_scope(
+                &convergence.scope_key,
+                &convergence.facet,
+                &convergence.fingerprint,
+                &convergence.routed_indexer_ids,
+            )
+            .await
+        {
+            Ok(uncovered) => uncovered,
+            Err(err) => {
+                warn!(
+                    scope_key = convergence.scope_key.as_str(),
+                    error = %err,
+                    "failed to read scope coverage; searching all routed indexers"
+                );
+                convergence.routed_indexer_ids.clone()
+            }
+        };
+        if uncovered.is_empty() {
+            debug!(
+                title_id = title.id.as_str(),
+                title_name = title.name.as_str(),
+                media_type = target.media_type.as_str(),
+                "background acquisition: scope converged across routed indexers, riding RSS"
+            );
+            return Ok(());
+        }
+        // Scheduler pre-skip: every uncovered indexer is cooling down or quota
+        // exhausted — spend nothing; the scope stays a target and the cursor
+        // returns to it once the scheduler frees capacity.
+        if !uncovered.iter().any(|indexer_id| {
+            availability.indexer_available(
+                indexer_hosts.get(indexer_id).map(String::as_str),
+                indexer_id,
+            )
+        }) {
+            debug!(
+                title_id = title.id.as_str(),
+                scope_key = target.scope_key.as_str(),
+                uncovered_count = uncovered.len(),
+                "background acquisition: uncovered indexers unavailable this cycle, deferring scope"
+            );
+            return Ok(());
+        }
+        (uncovered.into_iter().collect(), Some(convergence.scope_key))
     };
-    if uncovered.is_empty() {
-        debug!(
-            title_id = title.id.as_str(),
-            title_name = title.name.as_str(),
-            media_type = target.media_type.as_str(),
-            "background acquisition: scope converged across routed indexers, riding RSS"
-        );
-        return Ok(());
-    }
-    // Scheduler pre-skip: every uncovered indexer is cooling down or quota
-    // exhausted — spend nothing; the scope stays a target and the cursor
-    // returns to it once the scheduler frees capacity.
-    if !uncovered.iter().any(|indexer_id| {
-        availability.indexer_available(
-            indexer_hosts.get(indexer_id).map(String::as_str),
-            indexer_id,
-        )
-    }) {
-        debug!(
-            title_id = title.id.as_str(),
-            scope_key = target.scope_key.as_str(),
-            uncovered_count = uncovered.len(),
-            "background acquisition: uncovered indexers unavailable this cycle, deferring scope"
-        );
-        return Ok(());
-    }
-    let uncovered: std::collections::HashSet<String> = uncovered.into_iter().collect();
 
     // The scope is about to be searched — its state row exists from here on,
     // so release decisions and grabs have their anchor.
@@ -576,6 +2467,7 @@ async fn process_single_target(
         .acquisition_scope_states
         .ensure_acquisition_scope_state(item)
         .await?;
+    let mut failed_routes = cycle.failed_routes();
 
     // Derive the download client category separately — search_category ("series")
     // is for Newznab query type, download_category ("series") is for NZBGet routing.
@@ -594,18 +2486,9 @@ async fn process_single_target(
         // are due this cycle (mirrors Sonarr: count > 1 missing → SeasonSearchCriteria).
         let due_count = season_due_counts.get(&season_key).copied().unwrap_or(0);
 
-        if due_count >= 2 && !season_pack_attempted.contains(&season_key) {
-            season_pack_attempted.insert(season_key.clone());
-
+        if due_count >= 2 && cycle.begin_season_pack(&season_key) {
             let recent_failed_seasons =
-                if let Some(cached) = recent_failed_season_packs_by_title.get(&title.id) {
-                    cached.clone()
-                } else {
-                    let loaded =
-                        load_recent_failed_season_pack_seasons_for_title(app, &title.id, now).await;
-                    recent_failed_season_packs_by_title.insert(title.id.clone(), loaded.clone());
-                    loaded
-                };
+                load_recent_failed_season_pack_seasons_for_title(app, &title.id, now).await;
 
             if recent_failed_seasons.contains(&season_num) {
                 info!(
@@ -706,6 +2589,19 @@ async fn process_single_target(
                     }
                 };
 
+                // The season query can surface episode-shaped releases the
+                // narrower episode query never returns. Keep them for the
+                // episode scopes; only the *substitution* was the defect.
+                cycle.cache_season_candidates(
+                    &season_key,
+                    pack_results
+                        .iter()
+                        .filter(|candidate| {
+                            !candidate_is_season_pack_for_season(candidate, season_num)
+                        })
+                        .cloned(),
+                );
+
                 for candidate in pack_results
                     .iter()
                     .filter(|candidate| candidate_is_season_pack_for_season(candidate, season_num))
@@ -713,380 +2609,79 @@ async fn process_single_target(
                     let decision_code = annotated_auto_decision_code(candidate);
                     // Recorded before any gate ran for this pack, so there is no
                     // bar to name.
-                    record_release_decision(app, item, &title, candidate, decision_code, None, now)
+                    record_release_decision(app, item, title, candidate, decision_code, None, now)
                         .await;
-                    if matches!(
-                        decision_code,
-                        ReleaseAutoDecisionCode::PendingDelay
-                            | ReleaseAutoDecisionCode::AlreadyActive
-                    ) {
-                        season_pack_viable.insert(season_key.clone());
+                    // `AlreadyActive` only. That pack is already downloading,
+                    // so searching its episodes would duplicate it. `PendingDelay`
+                    // means the delay profile chose to *wait* — not that the pack
+                    // won — and suppressing the episode lane for the whole delay
+                    // window is a decision the profile never made. The delayed
+                    // pack still parks in `pending_releases` and is re-judged
+                    // against whatever lands meanwhile when the window expires.
+                    if matches!(decision_code, ReleaseAutoDecisionCode::AlreadyActive) {
+                        cycle.mark_season_pack_viable(&season_key);
                     }
                 }
 
-                'season_pack_candidates: for (best_pack_index, best_pack) in pack_results
+                // The submission walk is held back so the pack is ranked
+                // against whatever else this title's walk turns up. Everything
+                // above stays: the query, the decision rows, and the
+                // `AlreadyActive` suppression are facts about the world, not
+                // preferences waiting on an arbitration.
+                let eligible = pack_results
                     .iter()
                     .enumerate()
                     .filter(|(_, candidate)| {
                         candidate_is_season_pack_for_season(candidate, season_num)
                             && candidate.auto_eligible == Some(true)
                     })
-                {
-                    let pack_route = DownloadRouteKey::for_candidate(best_pack).expect(
-                        "candidate route key always exists, including unknown source kind",
-                    );
-                    if failed_routes.contains(&pack_route) {
-                        continue;
-                    }
-                    let pack_url = best_pack
-                        .canonical_download_source()
-                        .map(|(source, _)| source);
-                    let url_str = pack_url.as_deref().unwrap_or("").to_string();
-                    let pack_attempt = (pack_route.clone(), url_str.clone());
-
-                    if !url_str.is_empty()
-                        && !grabbed_urls.contains(&url_str)
-                        && !attempted_urls_by_route.contains(&pack_attempt)
-                    {
-                        attempted_urls_by_route.push(pack_attempt);
-                        let download_cat = app.derive_download_category(&title.facet).await;
-                        let is_recent = app.is_recent_for_queue_priority(
-                            best_pack
-                                .published_at
-                                .as_deref()
-                                .or(episode.as_ref().and_then(|item| item.air_date.as_deref()))
-                                .or(title.first_aired.as_deref())
-                                .or(title.digital_release_date.as_deref()),
-                        );
-                        let pack_title = Some(best_pack.title.clone());
-                        let pack_hint = normalize_release_attempt_hint(pack_url.as_deref());
-                        let pack_title_norm =
-                            normalize_release_attempt_title(pack_title.as_deref());
-                        let pack_password =
-                            normalize_release_password(best_pack.password_hint.as_deref());
-                        let request_signature = normalize_release_selection_signature(
-                            pack_url.as_deref(),
-                            pack_title.as_deref(),
-                            best_pack.source_kind,
-                        );
-                        let info_hash_hint = best_pack
-                            .extra
-                            .get("info_hash")
-                            .and_then(|value| value.as_str())
-                            .map(str::to_string);
-                        let seed_minimums =
-                            crate::ReleaseSeedMinimums::from_release_extra(&best_pack.extra);
-                        let download_id = crate::download_identity::new_download_id();
-                        let submission_identity = DownloadSubmissionIdentity {
-                            download_id: Some(download_id.clone()),
-                        };
-
-                        let grab_result = app
-                            .services
-                            .integrations
-                            .download_client
-                            .submit_download(&DownloadClientAddRequest {
-                                title: title.clone(),
-                                search_facet: None,
-                                purpose: crate::DownloadSubmissionPurpose::Standard,
-                                download_id: Some(download_id),
-                                source_hint: pack_url.clone(),
-                                staged_nzb: None,
-                                resolved_download_artifact: None,
-                                source_kind: best_pack.source_kind,
-                                source_title: pack_title.clone(),
-                                source_password: pack_password.clone(),
-                                category: Some(download_cat),
-                                queue_priority: None,
-                                download_directory: None,
-                                release_title: Some(best_pack.title.clone()),
-                                indexer_name: Some(best_pack.source.clone()),
-                                indexer_id: best_pack.indexer_id.clone(),
-                                info_hash_hint: info_hash_hint.clone(),
-                                seed_goal_ratio: None,
-                                seed_goal_seconds: None,
-                                tracker_min_seed_ratio: seed_minimums.min_seed_ratio,
-                                tracker_min_seed_time_minutes: seed_minimums
-                                    .min_seed_time_minutes,
-                                season_pack_seed_ratio: seed_minimums.season_pack_seed_ratio,
-                                season_pack_seed_time_minutes: seed_minimums
-                                    .season_pack_seed_time_minutes,
-                                is_recent,
-                                season_pack: Some(true),
+                    .map(|(index, _)| index)
+                    .collect::<Vec<_>>();
+                if !eligible.is_empty() {
+                    let mut episode_ids = recovered_scope_episode_ids(
+                        app,
+                        &collection_download_submission_scope_for_wanted_item(
+                            item,
+                            episode.as_ref(),
+                        ),
+                    )
+                    .await;
+                    // A season pack speaks for its whole season, collection row
+                    // or not. The submission scope alone under-states that when
+                    // the catalog gave the season no collection to resolve
+                    // through — and an under-stated set is the one thing the
+                    // proposal invariant forbids: the arbitration's conflict
+                    // test could then commit a covered episode grab alongside
+                    // the pack.
+                    episode_ids.extend(
+                        context
+                            .episodes_by_id
+                            .values()
+                            .filter(|episode| {
+                                episode
+                                    .season_number
+                                    .as_deref()
+                                    .and_then(|season| season.parse::<u32>().ok())
+                                    == Some(season_num)
                             })
-                            .await;
-
-                        match grab_result {
-                            Ok(grab) => {
-                                let download_job_id = grab.job_id.clone();
-                                let facet_label = serde_json::to_string(&title.facet)
-                                    .unwrap_or_else(|_| "\"other\"".to_string())
-                                    .trim_matches('"')
-                                    .to_string();
-                                metrics::counter!("scryer_grabs_total", "indexer" => best_pack.source.clone(), "facet" => facet_label).increment(1);
-                                app.record_indexer_grab(
-                                    best_pack.indexer_id.as_deref(),
-                                    Some(best_pack.source.as_str()),
-                                );
-                                let accepted_identity =
-                                    crate::download_identity::accepted_download_submission_identity(
-                                        crate::download_identity::AcceptedDownloadIdentityInput {
-                                            initial_download_id: submission_identity
-                                                .download_id
-                                                .as_deref(),
-                                            source_kind: best_pack.source_kind,
-                                            source_hint: pack_url.as_deref(),
-                                            info_hash_hint: info_hash_hint.as_deref(),
-                                            client_type: Some(grab.client_type.as_str()),
-                                            client_item_id: Some(grab.job_id.as_str()),
-                                            accepted_info_hash: grab.info_hash.as_deref(),
-                                        },
-                                );
-                                grabbed_urls.insert(url_str.clone());
-                                season_pack_grabbed.insert(season_key.clone());
-                                season_pack_viable.insert(season_key.clone());
-                                let _ = app
-                                    .services
-                                    .workflow
-                                    .release_attempts
-                                    .record_release_attempt(
-                                        Some(title.id.clone()),
-                                        pack_hint,
-                                        pack_title_norm,
-                                        ReleaseDownloadAttemptOutcome::Success,
-                                        None,
-                                        pack_password,
-                                    )
-                                    .await;
-                                let facet_str = serde_json::to_string(&title.facet)
-                                    .unwrap_or_else(|_| "\"other\"".to_string());
-                                let submission_scope =
-                                    collection_download_submission_scope_for_wanted_item(
-                                        item,
-                                        episode.as_ref(),
-                                    );
-                                let mut grabbed_episode_ids = match &submission_scope {
-                                    SubmissionScope::Episode { episode_id } => {
-                                        vec![episode_id.clone()]
-                                    }
-                                    SubmissionScope::EpisodeSet { episode_ids } => {
-                                        episode_ids.clone()
-                                    }
-                                    SubmissionScope::Collection { collection_id } => app
-                                        .services
-                                        .catalog
-                                        .shows
-                                        .list_episodes_for_collection(collection_id)
-                                        .await
-                                        .map(|episodes| {
-                                            episodes
-                                                .into_iter()
-                                                .map(|episode| episode.id)
-                                                .collect()
-                                        })
-                                        .unwrap_or_default(),
-                                    SubmissionScope::Title
-                                    | SubmissionScope::SeriesMovie { .. }
-                                    | SubmissionScope::Orphan => Vec::new(),
-                                };
-                                grabbed_episode_ids.sort();
-                                grabbed_episode_ids.dedup();
-                                let covered_wanted_item_ids = app
-                                    .covered_wanted_item_ids_for_submission_scope(
-                                        &title.id,
-                                        &submission_scope,
-                                        &item.id,
-                                    )
-                                    .await?;
-                                let grabbed_json = serde_json::json!({
-                                    "title": best_pack.title,
-                                    "score": best_pack
-                                        .quality_profile_decision
-                                        .as_ref()
-                                        .map(|decision| decision.preference_score)
-                                        .unwrap_or(0),
-                                    "grabbed_at": now.to_rfc3339(),
-                                    "season_pack": true,
-                                    "source_provider": best_pack.source.clone(),
-                                })
-                                .to_string();
-                                app.services
-                                    .workflow
-                                    .acquisition_state
-                                    .commit_successful_grab(&SuccessfulGrabCommit {
-                                        wanted_item_id: item.id.clone(),
-                                        covered_wanted_item_ids,
-                                        grabbed_release: grabbed_json,
-                                        last_search_at: Some(now.to_rfc3339()),
-                                        download_submission: DownloadSubmission {
-                                            title_id: title.id.clone(),
-                                            purpose: crate::DownloadSubmissionPurpose::Standard,
-                                            facet: facet_str.trim_matches('"').to_string(),
-                                            download_client_id: grab.client_id.clone(),
-                                            download_client_type: grab.client_type.clone(),
-                                            download_client_item_id: grab.job_id.clone(),
-                                            source_hint: None,
-                                            source_provider_id: best_pack.indexer_id.clone(),
-                                            release_size_bytes: best_pack.size_bytes,
-                                            source_provider_name: Some(
-                                                best_pack.source.clone(),
-                                            ),
-                                            source_kind: None,
-                                            source_title: Some(best_pack.title.clone()),
-                                            request_signature: request_signature.clone(),
-                                            scope: submission_scope,
-                                        },
-                                        download_submission_identity: Some(accepted_identity),
-                                        grabbed_pending_release_id: None,
-                                        grabbed_at: Some(now.to_rfc3339()),
-                                    })
-                                    .await?;
-                                let pack_blocklist = app
-                                    .load_title_release_blocklist_signatures(&title.id)
-                                    .await
-                                    .source_titles;
-                                persist_standby_candidates(
-                                    app,
-                                    item,
-                                    &title,
-                                    &pack_results,
-                                    best_pack_index + 1,
-                                    now,
-                                    failed_routes,
-                                    &pack_blocklist,
-                                    |candidate| {
-                                        candidate_is_season_pack_for_season(candidate, season_num)
-                                    },
-                                )
-                                .await;
-                                let pack_score = best_pack
-                                    .quality_profile_decision
-                                    .as_ref()
-                                    .map(|d| d.preference_score)
-                                    .unwrap_or(0);
-                                let mut grab_meta = HashMap::new();
-                                grab_meta.insert(
-                                    "title_name".to_string(),
-                                    serde_json::json!(title.name),
-                                );
-                                grab_meta.insert(
-                                    "release_title".to_string(),
-                                    serde_json::json!(best_pack.title),
-                                );
-                                grab_meta.insert(
-                                    "indexer".to_string(),
-                                    serde_json::json!(best_pack.source),
-                                );
-                                grab_meta
-                                    .insert("score".to_string(), serde_json::json!(pack_score));
-                                let _ = app
-                                    .append_domain_event(new_title_domain_event(
-                                        None,
-                                        &title,
-                                        DomainEventPayload::ReleaseGrabbed(
-                                            ReleaseGrabbedEventData {
-                                                title: title_context_snapshot(&title),
-                                                source_title: Some(best_pack.title.clone()),
-                                                source_hint: Some(best_pack.source.clone()),
-                                                source_provider: Some(best_pack.source.clone()),
-                                                download_id: Some(download_job_id),
-                                                episode_ids: grabbed_episode_ids,
-                                            },
-                                        ),
-                                    ))
-                                    .await;
-                                info!(
-                                    title = title.name.as_str(),
-                                    season = season_num,
-                                    release = best_pack.title.as_str(),
-                                    "season pack grabbed; skipping individual episode searches for this season"
-                                );
-                                break 'season_pack_candidates;
-                            }
-                            Err(err) => {
-                                let submit_unavailable =
-                                    is_download_submit_unavailable_error(&err);
-                                let ambiguous = err.is_download_submit_ambiguous();
-                                if submit_unavailable && !failed_routes.contains(&pack_route) {
-                                    failed_routes.push(pack_route.clone());
-                                }
-                                if ambiguous {
-                                    grabbed_urls.insert(url_str.clone());
-                                    season_pack_viable.insert(season_key.clone());
-                                } else if !submit_unavailable {
-                                    season_pack_viable.remove(&season_key);
-                                }
-                                warn!(
-                                    title = title.name.as_str(),
-                                    season = season_num,
-                                    error = %err,
-                                    retry_alternate_route = submit_unavailable,
-                                    "season pack grab failed"
-                                );
-                                // Transient (client unavailable) and ambiguous
-                                // (request may have been accepted) submits are
-                                // deferred: Pending attempt, never blocklisted.
-                                // Only a definitive failure burns the pack.
-                                let source_gone = err.is_download_source_gone();
-                                let defer = submit_unavailable || ambiguous || source_gone;
-                                let _ = app
-                                    .services
-                                    .workflow
-                                    .release_attempts
-                                    .record_release_attempt(
-                                        Some(title.id.clone()),
-                                        pack_hint.clone(),
-                                        pack_title_norm.clone(),
-                                        if defer {
-                                            ReleaseDownloadAttemptOutcome::Pending
-                                        } else {
-                                            ReleaseDownloadAttemptOutcome::Failed
-                                        },
-                                        Some(err.to_string()),
-                                        pack_password,
-                                    )
-                                    .await;
-                                if !defer {
-                                    let pack_scope =
-                                        collection_download_submission_scope_for_wanted_item(
-                                            item,
-                                            episode.as_ref(),
-                                        );
-                                    if let Err(error) = app
-                                        .services
-                                        .workflow
-                                        .blocklist_repo
-                                        .add(&NewBlocklistEntry {
-                                            title_id: title.id.clone(),
-                                            source_title: pack_title_norm,
-                                            source_hint: pack_hint,
-                                            quality: None,
-                                            download_id: None,
-                                            reason: Some(format!(
-                                                "season pack grab failed: {err}"
-                                            )),
-                                            data: blocklist_entry_data(
-                                                item.episode_id.as_slice(),
-                                                pack_scope.collection_id(),
-                                                pack_scope.series_movie_link_id(),
-                                            ),
-                                        })
-                                        .await
-                                    {
-                                        warn!(
-                                            error = %error,
-                                            title_id = title.id.as_str(),
-                                            release = best_pack.title.as_str(),
-                                            "failed to persist blocklist entry for failed season pack grab"
-                                        );
-                                    }
-                                }
-                                if !submit_unavailable {
-                                    break 'season_pack_candidates;
-                                }
-                            }
-                        }
-                    }
+                            .map(|episode| episode.id.clone()),
+                    );
+                    episode_ids.sort();
+                    episode_ids.dedup();
+                    proposals.push(GrabProposal {
+                        stage: BackgroundAcquisitionWorkKind::SeasonPack { season: season_num },
+                        episode_ids: episode_ids.clone(),
+                        season_key: Some(season_key.clone()),
+                        ranked_candidates: pack_results,
+                        eligible,
+                        commit: GrabProposalCommit::SeasonPack(Box::new(SeasonPackCommit {
+                            season: season_num,
+                            season_key: season_key.clone(),
+                            item: item.clone(),
+                            episode: episode.clone(),
+                            season_episode_ids: episode_ids,
+                        })),
+                    });
                 }
             }
         }
@@ -1094,10 +2689,10 @@ async fn process_single_target(
         // If a season pack was grabbed or remains viable this cycle (by this
         // item or an earlier item for the same season), skip the individual
         // episode search unless the pack submission definitively failed.
-        if season_pack_grabbed.contains(&season_key) {
+        if cycle.season_pack_grabbed(&season_key) {
             return Ok(());
         }
-        if season_pack_viable.contains(&season_key) {
+        if cycle.season_pack_viable(&season_key) {
             info!(
                 title = title.name.as_str(),
                 season = season_num,
@@ -1107,6 +2702,9 @@ async fn process_single_target(
         }
     }
     // ── End season pack priority ──────────────────────────────────────────────
+    if pack_stage_only {
+        return Ok(());
+    }
     // Uses the per-facet default download category; the selected client's
     // explicit routing category overrides this inside the router.
     let download_cat = app.derive_download_category(&title.facet).await;
@@ -1131,10 +2729,24 @@ async fn process_single_target(
         "background acquisition: searching indexers"
     );
 
-    // Search and score releases against the uncovered indexer subset only —
-    // covered indexers hold no new information for this scope (§D2).
-    let results = match app
-        .search_and_evaluate_subject_restricted(
+    // Anything this scope's season query already surfaced, restricted to the
+    // indexers this scope still needs. It is *added* to the episode query's own
+    // results, not used in place of them: substituting converged the scope on a
+    // query it never ran.
+    let season_extras = search_season
+        .map(|season| cycle.season_candidates(&(title.id.clone(), season)))
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|candidate| {
+            candidate
+                .indexer_id
+                .as_ref()
+                .is_some_and(|indexer_id| uncovered.contains(indexer_id))
+        })
+        .collect::<Vec<_>>();
+
+    let search_outcome = match app
+        .search_and_score_subject_restricted(
             &search_title,
             &subject,
             "background_acquisition",
@@ -1159,6 +2771,38 @@ async fn process_single_target(
             return Ok(());
         }
     };
+    let mut scored = search_outcome.results;
+    for candidate in season_extras {
+        if !scored
+            .iter()
+            .any(|existing| same_indexer_release(existing, &candidate))
+        {
+            scored.push(candidate);
+        }
+    }
+    // One evaluation over the union, so the merged rows are ranked by the same
+    // comparator as the rest rather than appended past it.
+    let results = app
+        .evaluate_search_results_for_subject(&search_title, &subject, scored, false)
+        .await;
+    // A finalize failure withholds coverage (the scope re-searches next cycle)
+    // but never the grab walk below: these are live results in hand, and
+    // retention bookkeeping does not outrank acquiring with them.
+    if app
+        .finalize_evaluated_search_session_or_warn(
+            &search_outcome.search_session_id,
+            &results,
+            &title.id,
+        )
+        .await
+    {
+        app.record_search_coverage(
+            &search_title,
+            &subject,
+            &search_outcome.complete_indexer_ids,
+        )
+        .await;
+    }
 
     // Cooldown state, not cadence: the upgrade policy and failed-grab handling
     // read when this scope last actually searched.
@@ -1167,9 +2811,6 @@ async fn process_single_target(
         .workflow
         .acquisition_scope_states
         .record_acquisition_scope_search_attempt(&item.id, &now.to_rfc3339())
-        .await;
-
-    app.emit_acquisition_search_completed_event(None, &title, results.len() as i64)
         .await;
 
     if results.is_empty() {
@@ -1191,10 +2832,7 @@ async fn process_single_target(
     // Load the per-title blocklist (covers post-import failures like fake/non-video
     // files, in addition to the download-client snapshot checked below). It is the
     // single, removable exclusion source; the failed-attempt log never gates.
-    let db_blocklist = app
-        .load_title_release_blocklist_signatures(&title.id)
-        .await
-        .source_titles;
+    let db_blocklist = app.load_title_release_blocklist_signatures(&title.id).await;
     let existing_files = app
         .services
         .library
@@ -1237,11 +2875,9 @@ async fn process_single_target(
     // than a number remembered on the scope row — and so the cutoff check below
     // can ask about the *score* half of the cutoff, not just the quality half.
     let admission = {
-        let scoring_context = app
-            .resolve_canonical_scoring_context(&title, profile)
-            .await;
+        let scoring_context = app.resolve_canonical_scoring_context(title, profile).await;
         app.admission_subject_for_scope(
-            &title,
+            title,
             &item.submission_scope(),
             &scoring_context,
             title.runtime_minutes,
@@ -1301,7 +2937,7 @@ async fn process_single_target(
             .as_ref()
             .is_some_and(|decision| decision.allowed)
             && matches!(
-                effective_auto_decision_code_for_route(candidate, failed_routes, &db_blocklist),
+                effective_auto_decision_code_for_route(candidate, &failed_routes, &db_blocklist),
                 ReleaseAutoDecisionCode::AmbiguousIdentity
             )
     }) {
@@ -1313,14 +2949,15 @@ async fn process_single_target(
             .unwrap_or_default();
         app.park_pending_release_for_review(
             item,
-            &title,
+            title,
             candidate,
             candidate_score,
             serialize_decision_explanation(candidate),
         )
         .await;
     }
-    let mut grab_attempts: usize = 0;
+    let mut eligible: Vec<usize> = Vec::new();
+    let mut next_pending_role = PendingReleaseRole::Primary;
 
     for (candidate_index, candidate) in results.iter().enumerate() {
         let is_allowed = candidate
@@ -1329,16 +2966,16 @@ async fn process_single_target(
             .map(|d| d.allowed)
             .unwrap_or(false);
         let decision_code = if is_allowed {
-            effective_auto_decision_code_for_route(candidate, failed_routes, &db_blocklist)
+            effective_auto_decision_code_for_route(candidate, &failed_routes, &db_blocklist)
         } else {
             ReleaseAutoDecisionCode::QualityBlocked
         };
         if !is_allowed {
             // Blocked on quality alone: admission never looked at an incumbent.
-            record_release_decision(app, item, &title, candidate, decision_code, None, now).await;
+            record_release_decision(app, item, title, candidate, decision_code, None, now).await;
             app.emit_acquisition_candidate_rejected_event(
                 None,
-                &title,
+                title,
                 candidate.title.clone(),
                 decision_code.as_str().to_string(),
             )
@@ -1376,13 +3013,21 @@ async fn process_single_target(
             skipped_for_failed = true;
         }
 
-        record_release_decision(app, item, &title, candidate, decision_code, incumbent_bar, now)
-            .await;
+        record_release_decision(
+            app,
+            item,
+            title,
+            candidate,
+            decision_code,
+            incumbent_bar,
+            now,
+        )
+        .await;
 
         if !decision_code.is_eligible() {
             app.emit_acquisition_candidate_rejected_event(
                 None,
-                &title,
+                title,
                 candidate.title.clone(),
                 decision_code.as_str().to_string(),
             )
@@ -1409,7 +3054,7 @@ async fn process_single_target(
                 parked_ambiguous_identity = true;
                 app.park_pending_release_for_review(
                     item,
-                    &title,
+                    title,
                     candidate,
                     candidate_score,
                     serialize_decision_explanation(candidate),
@@ -1419,7 +3064,12 @@ async fn process_single_target(
                 // does present a disambiguator is still grabbable this cycle.
                 continue;
             }
-            if matches!(decision_code, ReleaseAutoDecisionCode::PendingDelay) {
+            if matches!(
+                decision_code,
+                ReleaseAutoDecisionCode::PendingDelay
+                    | ReleaseAutoDecisionCode::MinimumAge
+                    | ReleaseAutoDecisionCode::ReleaseAgeUnknown
+            ) {
                 let scoring_json = candidate.quality_profile_decision.as_ref().map(|decision| {
                     serde_json::to_string(
                         &decision
@@ -1432,50 +3082,443 @@ async fn process_single_target(
                 });
 
                 let canonical_source = candidate.canonical_download_source();
-                app.insert_pending_release(
-                    item,
-                    &title,
-                    &candidate.title,
-                    canonical_source.as_ref().map(|(source, _)| source.as_str()),
-                    canonical_source
+                let parsed_published_at = candidate
+                    .published_at
+                    .as_deref()
+                    .and_then(crate::quality_profile::parse_published_at);
+                let normalized_published_at =
+                    parsed_published_at.map(|published_at| published_at.to_rfc3339());
+                let delay = automatic_candidate_delay_decision(
+                    candidate,
+                    &search_title,
+                    &admission,
+                    profile,
+                    &delay_profiles,
+                    false,
+                    None,
+                    now,
+                );
+                let eligible_at =
+                    if matches!(decision_code, ReleaseAutoDecisionCode::ReleaseAgeUnknown) {
+                        crate::delay_profile::resolve_delay_profile(
+                            &delay_profiles,
+                            &search_title.tags,
+                            &search_title.facet,
+                        )
+                        .map(|profile| {
+                            profile.release_age_unknown_escalation_deadline(
+                                candidate.source_kind,
+                                *now,
+                            )
+                        })
+                        .unwrap_or(*now)
+                    } else {
+                        delay
+                            .and_then(|decision| decision.eligible_at)
+                            .unwrap_or(*now)
+                    };
+                let pending = PendingRelease {
+                    id: Id::new().0,
+                    wanted_item_id: item.id.clone(),
+                    title_id: title.id.clone(),
+                    release_title: candidate.title.clone(),
+                    release_url: canonical_source.as_ref().map(|(source, _)| source.clone()),
+                    source_kind: canonical_source
                         .as_ref()
                         .map(|(_, kind)| *kind)
                         .or(candidate.source_kind),
-                    candidate.size_bytes,
-                    candidate_score,
-                    scoring_json,
-                    Some(candidate.source.as_str()),
-                    candidate.indexer_id.as_deref(),
-                    candidate.guid.as_deref(),
-                    crate::delay_profile::grab_time_delay_decision(
-                        &delay_profiles,
-                        &search_title.tags,
-                        &search_title.facet,
-                        candidate.source_kind,
-                        candidate
-                            .published_at
-                            .as_deref()
-                            .and_then(crate::quality_profile::parse_published_at),
-                        candidate_score,
-                        None,
-                        now,
-                    )
-                    .map(|delay| delay.effective_delay_minutes)
-                    .unwrap_or_default(),
-                    candidate.password_hint.as_deref(),
-                    candidate.published_at.as_deref(),
-                    candidate
+                    release_size_bytes: candidate.size_bytes,
+                    release_score: candidate_score,
+                    scoring_log_json: scoring_json,
+                    indexer_source: Some(candidate.source.clone()),
+                    indexer_id: candidate.indexer_id.clone(),
+                    release_guid: candidate.guid.clone(),
+                    added_at: now.to_rfc3339(),
+                    last_observed_at: now.to_rfc3339(),
+                    delay_until: eligible_at.to_rfc3339(),
+                    status: PendingReleaseStatus::Waiting,
+                    grabbed_at: None,
+                    source_password: crate::normalize_release_password(
+                        candidate.password_hint.as_deref(),
+                    ),
+                    published_at: normalized_published_at,
+                    info_hash: candidate
                         .extra
                         .get("info_hash")
-                        .and_then(|value| value.as_str()),
-                    crate::ReleaseSeedMinimums::from_release_extra(&candidate.extra),
-                    crate::acquisition::seed_goals::seeders_from_extra(&candidate.extra),
-                )
-                .await;
-                return Ok(());
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string),
+                    seed_minimums: crate::ReleaseSeedMinimums::from_release_extra(&candidate.extra),
+                    seeders: crate::acquisition::seed_goals::seeders_from_extra(&candidate.extra),
+                    release_identity: String::new(),
+                    coverage_identity: String::new(),
+                    role: next_pending_role,
+                    last_decision_code: Some(decision_code.as_str().to_string()),
+                    release_age_unknown: matches!(
+                        decision_code,
+                        ReleaseAutoDecisionCode::ReleaseAgeUnknown
+                    ),
+                };
+                let observation = PendingReleaseObservation::derived(&pending, next_pending_role);
+                match app
+                    .insert_pending_release_observation(&pending, &observation)
+                    .await
+                {
+                    Ok(_) => next_pending_role = PendingReleaseRole::Fallback,
+                    Err(error) => {
+                        warn!(
+                            error = %error,
+                            title = title.name.as_str(),
+                            release = candidate.title.as_str(),
+                            decision = decision_code.as_str(),
+                            "pending release: failed to persist automatic search hold"
+                        );
+                    }
+                }
             }
             continue;
         }
+
+        // The submission itself is deferred: this walk decides *whether* the
+        // candidate may be grabbed, and arbitration decides which of the
+        // title's stages actually spends the grab.
+        eligible.push(candidate_index);
+    }
+    // ── End candidate fallthrough loop ───────────────────────────────────────
+
+    // No pack proposal covers this scope — every pack stage for the title was
+    // planned before any scope stage ran, so nothing can start covering it
+    // now — which leaves this grab with nobody to be arbitrated against. It
+    // commits in place, exactly where it always did.
+    let mut grab_context = ScopeGrabContext {
+        item: item.clone(),
+        episode: episode.clone(),
+        media_type: target.media_type.clone(),
+        download_category: download_cat.clone(),
+        convergence_scope_key: convergence_scope_key.clone(),
+    };
+    if let ScopeGrabOutcome::Settled {
+        claimed_episode_ids,
+    } = commit_scope_grab(
+        app,
+        title,
+        &mut grab_context,
+        &results,
+        &eligible,
+        &mut failed_routes,
+        &db_blocklist,
+        cycle,
+        now,
+    )
+    .await?
+    {
+        // Claimed even though no sibling scope can want these episodes: the
+        // pack proposals held back for the end of the walk are committed *after*
+        // this, and their overlap guard reads the claim set.
+        cycle.claim_episode_ids(claimed_episode_ids);
+        return Ok(());
+    }
+
+    // All candidates exhausted without a successful grab.
+    if !eligible.is_empty() {
+        warn!(
+            title = title.name.as_str(),
+            attempts = eligible.len(),
+            "all grab attempts failed, re-queuing for next cycle"
+        );
+    } else if had_allowed_candidate && skipped_for_failed {
+        warn!(
+            title_id = title.id.as_str(),
+            title_name = title.name.as_str(),
+            "background acquisition: no suitable candidates found after skipping blocklisted or active releases"
+        );
+    } else if had_allowed_candidate {
+        debug!(
+            title_id = title.id.as_str(),
+            title_name = title.name.as_str(),
+            "background acquisition: all allowed candidates were already active or had negative scores"
+        );
+    } else if had_quality_allowed_candidate && skipped_for_title_mismatch {
+        debug!(
+            title_id = title.id.as_str(),
+            title_name = title.name.as_str(),
+            result_count = results.len(),
+            "background acquisition: quality-allowed candidates were rejected by title matching"
+        );
+    } else {
+        debug!(
+            title_id = title.id.as_str(),
+            title_name = title.name.as_str(),
+            result_count = results.len(),
+            "background acquisition: no allowed candidates found (all blocked by quality profile)"
+        );
+    }
+
+    // No grab this cycle. Coverage was recorded when the search returned, so
+    // the cursor will not re-search these indexers — retain the ranked
+    // remainder as standby and the next cycle replays it without an indexer
+    // query. Without this the scope is converged with no corpus behind it, and
+    // acquisition stops for it until the long-tail backstop, an RSS hit, or an
+    // operator trigger.
+    //
+    // A partial write is the same failure one step later: `persist_standby_candidates`
+    // clears the existing list before inserting, so a `false` return can leave
+    // fewer rows than it removed. Drop the coverage in that case and let the
+    // cursor come back.
+    let preserved_standby = match app
+        .services
+        .workflow
+        .pending_releases
+        .list_standby_pending_releases_for_wanted_item(&item.id)
+        .await
+    {
+        Ok(preserved) => preserved,
+        Err(error) => {
+            // `persist_standby_candidates` clears before it writes, so a list we
+            // could not snapshot is a list we must not touch.
+            warn!(
+                wanted_item_id = item.id.as_str(),
+                error = %error,
+                "failed to snapshot standby candidates; leaving the saved list untouched"
+            );
+            return Ok(());
+        }
+    };
+    // The walk above parks delayed and age-held candidates as `Waiting`. A
+    // second `Standby` row for one of those would give two lanes a claim on the
+    // same release: the standby walk re-parks its copy as `Waiting` too, and the
+    // delay promoter then has two rows to grab. Ambiguous-identity parks are
+    // `NeedsReview` and are never grabbed automatically, so they need no
+    // exclusion — which is what makes this waiting-only listing the right one.
+    let waiting_urls = match app
+        .services
+        .workflow
+        .pending_releases
+        .list_pending_releases_for_wanted_item(&item.id)
+        .await
+    {
+        Ok(waiting) => waiting
+            .into_iter()
+            .filter_map(|release| release.release_url)
+            .collect::<HashSet<String>>(),
+        Err(error) => {
+            warn!(
+                wanted_item_id = item.id.as_str(),
+                error = %error,
+                "failed to read waiting pending releases; leaving the saved standby list untouched"
+            );
+            return Ok(());
+        }
+    };
+    // Re-read the blocklist: a definitive grab failure in the walk above wrote
+    // entries the loop's snapshot predates, and retaining a release this cycle
+    // just burned would hand the next walk a row it must immediately skip.
+    let retention_blocklist = app.load_title_release_blocklist_signatures(&title.id).await;
+    let retention_complete = persist_standby_candidates(
+        app,
+        item,
+        title,
+        &results,
+        0,
+        now,
+        &failed_routes,
+        &retention_blocklist,
+        |candidate| {
+            candidate
+                .canonical_download_source()
+                .is_some_and(|(source, _)| !waiting_urls.contains(&source))
+        },
+    )
+    .await;
+    // `persist_standby_candidates` clears before it inserts, so both an empty
+    // list and an incomplete write mean the scope may now hold less than it did.
+    // Neither may leave it converged with nothing to walk.
+    let retained_standby = app
+        .services
+        .workflow
+        .pending_releases
+        .list_standby_pending_releases_for_wanted_item(&item.id)
+        .await
+        .unwrap_or_default();
+    if !retention_complete || retained_standby.is_empty() {
+        if !preserved_standby.is_empty() {
+            // An upgrade search that rejects everything must not cost the scope
+            // the corpus its last search earned.
+            restore_standby_releases(app, item, &preserved_standby).await;
+        } else if let Some(scope_key) = convergence_scope_key.as_deref()
+            && !retention_complete
+        {
+            warn!(
+                title_id = title.id.as_str(),
+                scope_key,
+                "standby retention failed with nothing to fall back on; re-opening scope coverage"
+            );
+            app.prune_scope_key_coverage(scope_key, None).await;
+        }
+        // A complete write with nothing worth keeping is a scope with no
+        // acceptable release. It stays converged, or it re-searches forever.
+    }
+
+    Ok(())
+}
+
+/// Build an episode-scope proposal out of evidence already in hand, for a scope
+/// a proposed pack covers.
+///
+/// The free evidence is what a season query for this title already surfaced
+/// this cycle: episode-shaped rows the narrower episode query never returns,
+/// cached on the coordinator. Re-ranking them costs nothing, and it is the only
+/// way an episode can outbid the pack without a query being spent to find out.
+///
+/// The scope neither records nor consumes convergence coverage here — it ran no
+/// query — so it remains a target for a later cycle if the pack wins, and its
+/// saved standby list is left exactly as the pack-covered scope found it.
+async fn propose_covered_episode_evidence(
+    app: &AppUseCase,
+    target: &crate::acquisition::targets::AcquisitionTarget,
+    context: &BackgroundAcquisitionTitleContext,
+    item: &AcquisitionScopeState,
+    episode: Option<&Episode>,
+    cycle: &BackgroundAcquisitionCycleCoordinator,
+    proposals: &mut Vec<GrabProposal>,
+) -> AppResult<()> {
+    let title = &context.title;
+    let Some(season) = episode
+        .and_then(|episode| episode.season_number.as_deref())
+        .and_then(|season| season.parse::<u32>().ok())
+    else {
+        return Ok(());
+    };
+    let extras = cycle.season_candidates(&(title.id.clone(), season));
+    if extras.is_empty() {
+        return Ok(());
+    }
+
+    let search_title = app
+        .release_search_title_for_wanted_item(title, item, episode)
+        .await;
+    let subject = app
+        .resolve_release_search_subject_for_wanted_item(title, &search_title, item, episode)
+        .await;
+    // One evaluation, the same one the live path runs, so a pack and an episode
+    // are compared on scores produced by the same comparator.
+    let results = app
+        .evaluate_search_results_for_subject(&search_title, &subject, extras, false)
+        .await;
+
+    let failed_routes = cycle.failed_routes();
+    let db_blocklist = app.load_title_release_blocklist_signatures(&title.id).await;
+    let eligible = results
+        .iter()
+        .enumerate()
+        .filter(|(_, candidate)| {
+            candidate
+                .quality_profile_decision
+                .as_ref()
+                .is_some_and(|decision| decision.allowed)
+                && effective_auto_decision_code_for_route(candidate, &failed_routes, &db_blocklist)
+                    .is_eligible()
+        })
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    if eligible.is_empty() {
+        return Ok(());
+    }
+
+    let catalog_episodes = context
+        .episodes_by_id
+        .values()
+        .cloned()
+        .collect::<Vec<Episode>>();
+    let catalog_collections = app
+        .services
+        .catalog
+        .shows
+        .list_collections_for_title(&title.id)
+        .await
+        .unwrap_or_default();
+    let mut episode_ids = Vec::new();
+    for index in &eligible {
+        let candidate = &results[*index];
+        let scope = match candidate.parsed_release_metadata.as_ref() {
+            Some(parsed) => crate::acquisition_coverage::resolve_release_coverage(
+                parsed,
+                &catalog_episodes,
+                &catalog_collections,
+                episode,
+            )
+            .submission_scope_or(&direct_download_submission_scope_for_wanted_item(
+                item, episode,
+            )),
+            None => direct_download_submission_scope_for_wanted_item(item, episode),
+        };
+        episode_ids.extend(recovered_scope_episode_ids(app, &scope).await);
+    }
+    episode_ids.sort();
+    episode_ids.dedup();
+
+    proposals.push(GrabProposal {
+        stage: BackgroundAcquisitionWorkKind::Scope,
+        episode_ids,
+        season_key: None,
+        ranked_candidates: results,
+        eligible,
+        commit: GrabProposalCommit::EpisodeEvidence(Box::new(EpisodeEvidenceCommit {
+            context: ScopeGrabContext {
+                item: item.clone(),
+                episode: episode.cloned(),
+                media_type: target.media_type.clone(),
+                download_category: app.derive_download_category(&title.facet).await,
+                convergence_scope_key: None,
+            },
+            blocklist: db_blocklist,
+        })),
+    });
+    Ok(())
+}
+
+/// Walk an episode scope's eligible candidates, best-first, and submit the
+/// first one the download client accepts.
+///
+/// Relocated wholesale from the inline scope stage so a proposal that wins
+/// arbitration commits through exactly the machinery that used to run in place:
+/// the cycle-wide submission claim, the failed-route suppression, the blocklist
+/// write on a definitive failure, and the walk to the next candidate.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the relocated submission walk carries the scope context explicitly"
+)]
+async fn commit_scope_grab(
+    app: &AppUseCase,
+    title: &Title,
+    context: &mut ScopeGrabContext,
+    results: &[IndexerSearchResult],
+    eligible: &[usize],
+    failed_routes: &mut Vec<DownloadRouteKey>,
+    db_blocklist: &crate::app_usecase_discovery::TitleReleaseBlocklistSignatures,
+    cycle: &BackgroundAcquisitionCycleCoordinator,
+    now: &DateTime<Utc>,
+) -> AppResult<ScopeGrabOutcome> {
+    // A proposal built from in-hand evidence never reached the inline
+    // `ensure_acquisition_scope_state`, and a grab needs its anchor row.
+    if context.item.id.is_empty() {
+        context.item.id = app
+            .services
+            .workflow
+            .acquisition_scope_states
+            .ensure_acquisition_scope_state(&context.item)
+            .await?;
+    }
+    let item = &context.item;
+    let episode = &context.episode;
+    let mut grab_attempts: usize = 0;
+
+    for candidate_index in eligible.iter().copied() {
+        let candidate = &results[candidate_index];
+        let candidate_score = candidate
+            .quality_profile_decision
+            .as_ref()
+            .map(|decision| decision.preference_score)
+            .unwrap_or(0);
 
         // ── Grab attempt ────────────────────────────────────────────────────
         grab_attempts += 1;
@@ -1489,41 +3532,43 @@ async fn process_single_target(
 
         // Submit to download client
         let canonical_source = candidate.canonical_download_source();
-        let source_hint = canonical_source
-            .as_ref()
-            .map(|(source, _)| source.clone());
+        let source_hint = canonical_source.as_ref().map(|(source, _)| source.clone());
 
         // Successful or ambiguous submissions stay globally deduplicated, but
         // a failed URL is suppressed only within its source/indexer route.
         if let Some(url) = source_hint.as_deref() {
-            if grabbed_urls.contains(url) {
-                info!(
-                    title = title.name.as_str(),
-                    release = candidate.title.as_str(),
-                    "skipping duplicate release already submitted this cycle"
-                );
-                continue;
-            }
             let route = DownloadRouteKey::for_candidate(candidate)
                 .expect("candidate route key always exists, including unknown source kind");
-            let attempted = (route, url.to_string());
-            if attempted_urls_by_route.contains(&attempted) {
-                info!(
-                    title = title.name.as_str(),
-                    release = candidate.title.as_str(),
-                    indexer_id = ?candidate.indexer_id,
-                    source_kind = ?candidate.source_kind,
-                    "skipping duplicate release already attempted on this route"
-                );
-                continue;
+            match cycle.claim_submission(route, url) {
+                SubmissionClaim::Granted => {}
+                SubmissionClaim::AlreadySubmitted => {
+                    info!(
+                        title = title.name.as_str(),
+                        release = candidate.title.as_str(),
+                        "skipping duplicate release already submitted this cycle"
+                    );
+                    continue;
+                }
+                SubmissionClaim::AlreadyAttempted | SubmissionClaim::RouteUnavailable => {
+                    info!(
+                        title = title.name.as_str(),
+                        release = candidate.title.as_str(),
+                        indexer_id = ?candidate.indexer_id,
+                        source_kind = ?candidate.source_kind,
+                        "skipping duplicate release already attempted or unavailable this cycle"
+                    );
+                    continue;
+                }
             }
-            attempted_urls_by_route.push(attempted);
         }
 
         let source_title = Some(candidate.title.clone());
-        let canonical_source_kind = canonical_source.as_ref().map(|(_, kind)| *kind).or(candidate.source_kind);
+        let canonical_source_kind = canonical_source
+            .as_ref()
+            .map(|(_, kind)| *kind)
+            .or(candidate.source_kind);
         let source_hint_for_attempt = normalize_release_attempt_hint(source_hint.as_deref());
-        let source_title_for_attempt = normalize_release_attempt_title(source_title.as_deref());
+        let source_title_for_attempt = normalize_release_name(source_title.as_deref());
         let source_password = normalize_release_password(candidate.password_hint.as_deref());
         let request_signature = normalize_release_selection_signature(
             source_hint.as_deref(),
@@ -1558,16 +3603,15 @@ async fn process_single_target(
             title = title.name.as_str(),
             release = candidate.title.as_str(),
             score = candidate_score,
-            decision = decision_code.as_str(),
+            // Re-read rather than carried from the evaluation: a route another
+            // candidate burned moments ago is part of why this one is next.
+            decision = effective_auto_decision_code_for_route(candidate, failed_routes, db_blocklist)
+                .as_str(),
             attempt = grab_attempts,
             "auto-grabbing release"
         );
 
-        let info_hash_hint = candidate
-            .extra
-            .get("info_hash")
-            .and_then(|value| value.as_str())
-            .map(str::to_string);
+        let info_hash_hint = candidate.info_hash().map(str::to_string);
         let seed_minimums = crate::ReleaseSeedMinimums::from_release_extra(&candidate.extra);
         // This path used to hardcode `season_pack: false`; the scored candidate
         // already carries a parse, so the seeding resolver can see a real pack.
@@ -1576,49 +3620,92 @@ async fn process_single_target(
             .as_ref()
             .and_then(|parsed| parsed.episode.as_ref())
             .is_some_and(|episode| episode.full_season);
-        let download_id = crate::download_identity::new_download_id();
-        let submission_identity = DownloadSubmissionIdentity {
-            download_id: Some(download_id.clone()),
+        let download_id = scryer_domain::download_identity::DownloadId::new();
+        let submission_scope = if let Some(parsed) = candidate.parsed_release_metadata.as_ref() {
+            let catalog_episodes = app
+                .services
+                .catalog
+                .shows
+                .list_episodes_for_title(&title.id)
+                .await
+                .unwrap_or_default();
+            let catalog_collections = app
+                .services
+                .catalog
+                .shows
+                .list_collections_for_title(&title.id)
+                .await
+                .unwrap_or_default();
+            crate::acquisition_coverage::resolve_release_coverage(
+                parsed,
+                &catalog_episodes,
+                &catalog_collections,
+                episode.as_ref(),
+            )
+            .submission_scope_or(&direct_download_submission_scope_for_wanted_item(
+                item,
+                episode.as_ref(),
+            ))
+        } else {
+            direct_download_submission_scope_for_wanted_item(item, episode.as_ref())
         };
 
-        let grab_result = app
-            .services
-            .integrations
-            .download_client
-            .submit_download(&DownloadClientAddRequest {
-                title: title.clone(),
-                search_facet: (target.media_type == "series_movie").then_some(MediaFacet::Movie),
-                purpose: crate::DownloadSubmissionPurpose::Standard,
-                download_id: Some(download_id),
-                source_hint: source_hint.clone(),
-                staged_nzb: None,
-                resolved_download_artifact: None,
-                source_kind: canonical_source_kind,
-                source_title: source_title.clone(),
-                source_password: source_password.clone(),
-                category: Some(download_cat.clone()),
-                queue_priority: None,
-                download_directory: None,
-                release_title: Some(candidate.title.clone()),
-                indexer_name: Some(candidate.source.clone()),
-                indexer_id: candidate.indexer_id.clone(),
-                info_hash_hint: info_hash_hint.clone(),
-                seed_goal_ratio: None,
-                seed_goal_seconds: None,
-                tracker_min_seed_ratio: seed_minimums.min_seed_ratio,
-                tracker_min_seed_time_minutes: seed_minimums.min_seed_time_minutes,
-                season_pack_seed_ratio: seed_minimums.season_pack_seed_ratio,
-                season_pack_seed_time_minutes: seed_minimums.season_pack_seed_time_minutes,
-                is_recent,
-                season_pack: Some(is_season_pack),
+        let canonical_result = app
+            .submit_canonical_download(CanonicalDownloadSubmissionIntent {
+                request: DownloadClientAddRequest {
+                    title: title.clone(),
+                    search_facet: (context.media_type == "series_movie")
+                        .then_some(MediaFacet::Movie),
+                    purpose: crate::DownloadSubmissionPurpose::Standard,
+                    download_id: Some(download_id),
+                    source_hint: source_hint.clone(),
+                    staged_nzb: None,
+                    resolved_download_artifact: None,
+                    source_kind: canonical_source_kind,
+                    source_title: source_title.clone(),
+                    source_password: source_password.clone(),
+                    category: Some(context.download_category.clone()),
+                    queue_priority: None,
+                    download_directory: None,
+                    release_title: Some(candidate.title.clone()),
+                    indexer_name: Some(candidate.source.clone()),
+                    indexer_id: candidate.indexer_id.clone(),
+                    info_hash_hint: info_hash_hint.clone(),
+                    seed_goal_ratio: None,
+                    seed_goal_seconds: None,
+                    tracker_min_seed_ratio: seed_minimums.min_seed_ratio,
+                    tracker_min_seed_time_minutes: seed_minimums.min_seed_time_minutes,
+                    season_pack_seed_ratio: seed_minimums.season_pack_seed_ratio,
+                    season_pack_seed_time_minutes: seed_minimums.season_pack_seed_time_minutes,
+                    is_recent,
+                    season_pack: Some(is_season_pack),
+                },
+                scope: submission_scope.clone(),
+                conflict_policy: SubmissionConflictPolicy::Skip,
+                request_signature: request_signature.clone(),
+                source_provider_name: Some(candidate.source.clone()),
+                release_size_bytes: candidate.size_bytes,
             })
             .await;
 
-        match grab_result {
-            Ok(grab) => {
+        let canonical_submission = match canonical_result {
+            Ok(CanonicalDownloadSubmissionOutcome::Accepted(submission)) => Ok(submission),
+            Ok(CanonicalDownloadSubmissionOutcome::Conflict(_)) => {
+                // A submission for this release already exists: the scope is
+                // spoken for, and its saved list was handled when that grab ran.
+                return Ok(ScopeGrabOutcome::Settled {
+                    claimed_episode_ids: recovered_scope_episode_ids(app, &submission_scope).await,
+                });
+            }
+            Err(error) => Err(error),
+        };
+
+        match canonical_submission {
+            Ok(canonical_submission) => {
+                let grab = canonical_submission.grab;
                 // ── Success ─────────────────────────────────────────────────
                 if let Some(url) = source_hint.as_deref() {
-                    grabbed_urls.insert(url.to_string());
+                    cycle.mark_submitted(url);
                 }
                 {
                     let facet_label = serde_json::to_string(&title.facet)
@@ -1631,19 +3718,6 @@ async fn process_single_target(
                     candidate.indexer_id.as_deref(),
                     Some(candidate.source.as_str()),
                 );
-                let accepted_identity =
-                    crate::download_identity::accepted_download_submission_identity(
-                        crate::download_identity::AcceptedDownloadIdentityInput {
-                            initial_download_id: submission_identity.download_id.as_deref(),
-                            source_kind: candidate.source_kind,
-                            source_hint: source_hint.as_deref(),
-                            info_hash_hint: info_hash_hint.as_deref(),
-                            client_type: Some(grab.client_type.as_str()),
-                            client_item_id: Some(grab.job_id.as_str()),
-                            accepted_info_hash: grab.info_hash.as_deref(),
-                        },
-                    );
-
                 let _ = app
                     .services
                     .workflow
@@ -1660,8 +3734,6 @@ async fn process_single_target(
 
                 // Record title history: Grabbed
                 // Record download submission for auto-import matching
-                let facet_str =
-                    serde_json::to_string(&title.facet).unwrap_or_else(|_| "\"other\"".to_string());
                 let grabbed_json = serde_json::json!({
                     "title": candidate.title,
                     "score": candidate_score,
@@ -1670,35 +3742,6 @@ async fn process_single_target(
                 })
                 .to_string();
                 let download_job_id = grab.job_id.clone();
-                let submission_scope = if let Some(parsed) =
-                    candidate.parsed_release_metadata.as_ref()
-                {
-                    let catalog_episodes = app
-                        .services
-                        .catalog
-                        .shows
-                        .list_episodes_for_title(&title.id)
-                        .await
-                        .unwrap_or_default();
-                    let catalog_collections = app
-                        .services
-                        .catalog
-                        .shows
-                        .list_collections_for_title(&title.id)
-                        .await
-                        .unwrap_or_default();
-                    crate::acquisition_coverage::resolve_release_coverage(
-                        parsed,
-                        &catalog_episodes,
-                        &catalog_collections,
-                        episode.as_ref(),
-                    )
-                    .submission_scope_or(
-                        &direct_download_submission_scope_for_wanted_item(item, episode.as_ref()),
-                    )
-                } else {
-                    direct_download_submission_scope_for_wanted_item(item, episode.as_ref())
-                };
                 let covered_wanted_item_ids = app
                     .covered_wanted_item_ids_for_submission_scope(
                         &title.id,
@@ -1715,37 +3758,19 @@ async fn process_single_target(
                         covered_wanted_item_ids,
                         grabbed_release: grabbed_json,
                         last_search_at: Some(now.to_rfc3339()),
-                        download_submission: DownloadSubmission {
-                            title_id: title.id.clone(),
-                            purpose: crate::DownloadSubmissionPurpose::Standard,
-                            facet: facet_str.trim_matches('"').to_string(),
-                            download_client_id: grab.client_id.clone(),
-                            download_client_type: grab.client_type.clone(),
-                            download_client_item_id: grab.job_id.clone(),
-                            source_hint: None,
-                            source_provider_id: candidate.indexer_id.clone(),
-                            source_provider_name: Some(candidate.source.clone()),
-                            release_size_bytes: candidate.size_bytes,
-                            source_kind: None,
-                            source_title: source_title.clone(),
-                            request_signature: request_signature.clone(),
-                            scope: submission_scope,
-                        },
-                        download_submission_identity: Some(accepted_identity),
                         grabbed_pending_release_id: None,
                         grabbed_at: Some(now.to_rfc3339()),
                     })
                     .await?;
-
                 persist_standby_candidates(
                     app,
                     item,
-                    &title,
-                    &results,
+                    title,
+                    results,
                     candidate_index + 1,
                     now,
                     failed_routes,
-                    &db_blocklist,
+                    db_blocklist,
                     |_| true,
                 )
                 .await;
@@ -1753,9 +3778,9 @@ async fn process_single_target(
                 let _ = app
                     .append_domain_event(new_title_domain_event(
                         None,
-                        &title,
+                        title,
                         DomainEventPayload::ReleaseGrabbed(ReleaseGrabbedEventData {
-                            title: title_context_snapshot(&title),
+                            title: title_context_snapshot(title),
                             source_title: Some(candidate.title.clone()),
                             source_hint: Some(candidate.source.clone()),
                             source_provider: Some(candidate.source.clone()),
@@ -1765,12 +3790,14 @@ async fn process_single_target(
                     ))
                     .await;
 
-                return Ok(());
+                return Ok(ScopeGrabOutcome::Settled {
+                    claimed_episode_ids: recovered_scope_episode_ids(app, &submission_scope).await,
+                });
             }
             Err(err) => {
-                if matches!(err, AppError::DownloadSubmitAmbiguous(_)) {
+                if err.is_download_submit_ambiguous() {
                     if let Some(url) = source_hint.as_deref() {
-                        grabbed_urls.insert(url.to_string());
+                        cycle.mark_submitted(url);
                     }
                     warn!(
                         title = title.name.as_str(),
@@ -1780,13 +3807,17 @@ async fn process_single_target(
                         "download submission result is ambiguous; re-opening scope without blocklisting or failover"
                     );
 
-                    app.prune_scope_key_coverage(
-                        &convergence.scope_key,
-                        candidate.indexer_id.as_deref(),
-                    )
-                    .await;
+                    if let Some(scope_key) = context.convergence_scope_key.as_deref() {
+                        app.prune_scope_key_coverage(scope_key, candidate.indexer_id.as_deref())
+                            .await;
+                    }
 
-                    return Ok(());
+                    // The request may have been accepted. Treat the episodes as
+                    // taken so no other proposal grabs them behind it.
+                    return Ok(ScopeGrabOutcome::Settled {
+                        claimed_episode_ids: recovered_scope_episode_ids(app, &submission_scope)
+                            .await,
+                    });
                 }
 
                 // ── Grab failed — try next candidate ────────────────────────
@@ -1853,6 +3884,8 @@ async fn process_single_target(
                         &attribution,
                         Some(candidate.title.clone()),
                         Some(candidate_source_hint),
+                        candidate.indexer_id.clone().unwrap_or_default(),
+                        candidate.info_hash().map(str::to_string),
                         None,
                         None,
                         None,
@@ -1872,6 +3905,7 @@ async fn process_single_target(
                 {
                     if !failed_routes.contains(&route) {
                         failed_routes.push(route.clone());
+                        cycle.mark_failed_route(route.clone());
                     }
                     info!(
                         source_kind = ?route.source_kind,
@@ -1884,47 +3918,8 @@ async fn process_single_target(
             }
         }
     }
-    // ── End candidate fallthrough loop ───────────────────────────────────────
 
-    // All candidates exhausted without a successful grab.
-    if grab_attempts > 0 {
-        warn!(
-            title = title.name.as_str(),
-            attempts = grab_attempts,
-            "all grab attempts failed, re-queuing for next cycle"
-        );
-    } else if had_allowed_candidate && skipped_for_failed {
-        warn!(
-            title_id = title.id.as_str(),
-            title_name = title.name.as_str(),
-            "background acquisition: no suitable candidates found after skipping blocklisted or active releases"
-        );
-    } else if had_allowed_candidate {
-        debug!(
-            title_id = title.id.as_str(),
-            title_name = title.name.as_str(),
-            "background acquisition: all allowed candidates were already active or had negative scores"
-        );
-    } else if had_quality_allowed_candidate && skipped_for_title_mismatch {
-        debug!(
-            title_id = title.id.as_str(),
-            title_name = title.name.as_str(),
-            result_count = results.len(),
-            "background acquisition: quality-allowed candidates were rejected by title matching"
-        );
-    } else {
-        debug!(
-            title_id = title.id.as_str(),
-            title_name = title.name.as_str(),
-            result_count = results.len(),
-            "background acquisition: no allowed candidates found (all blocked by quality profile)"
-        );
-    }
-
-    // No grab this cycle: the scope's coverage now reflects every indexer that
-    // answered, so the cursor will not re-search them — new postings arrive via
-    // RSS, and any still-uncovered indexers are retried on a later rotation.
-    Ok(())
+    Ok(ScopeGrabOutcome::Exhausted)
 }
 
 pub async fn start_background_acquisition_poller(
@@ -2018,7 +4013,7 @@ pub async fn start_background_acquisition_poller(
 
     app.set_job_next_run_at(
         JobKey::PluginRegistryRefresh,
-        Utc::now() + chrono::Duration::hours(24),
+        Utc::now() + chrono::Duration::hours(1),
     )
     .await;
     app.set_job_next_run_at(
@@ -2052,7 +4047,7 @@ pub async fn start_background_acquisition_poller(
     let mut poll_interval = new_skip_interval(std::time::Duration::from_secs(
         settings.poll_interval_seconds.max(1) as u64,
     ));
-    let mut registry_refresh_interval = tokio::time::interval(std::time::Duration::from_hours(24));
+    let mut registry_refresh_interval = tokio::time::interval(std::time::Duration::from_hours(1));
     let mut health_check_interval = tokio::time::interval(std::time::Duration::from_hours(6));
     let mut staged_nzb_prune_interval = tokio::time::interval(std::time::Duration::from_hours(1));
     let mut housekeeping_interval = tokio::time::interval(std::time::Duration::from_hours(24));
@@ -2114,14 +4109,14 @@ pub async fn start_background_acquisition_poller(
             }
             _ = wake.notified() => {
                 let app = app.clone();
-                run_task("convergence_cycle", async move {
-                    run_convergence_cycle(&app).await;
+                run_task("background_acquisition_cycle", async move {
+                    run_background_acquisition_cycle(&app).await;
                 }).await;
             }
             _ = poll_interval.tick() => {
                 let app = app.clone();
-                run_task("convergence_cycle", async move {
-                    run_convergence_cycle(&app).await;
+                run_task("background_acquisition_cycle", async move {
+                    run_background_acquisition_cycle(&app).await;
                 }).await;
             }
             _ = registry_refresh_interval.tick() => {
@@ -2129,7 +4124,7 @@ pub async fn start_background_acquisition_poller(
                 run_task("registry_refresh", async move {
                     app.set_job_next_run_at(
                         JobKey::PluginRegistryRefresh,
-                        Utc::now() + chrono::Duration::hours(24),
+                        Utc::now() + chrono::Duration::hours(1),
                     ).await;
                     if let Err(e) = app.run_scheduled_job_now(JobKey::PluginRegistryRefresh, JobTriggerSource::ScheduledInterval).await {
                         warn!(error = %e, "periodic plugin registry refresh failed");
@@ -2300,13 +4295,14 @@ fn discovery_sync_delay_until(next_run_at: DateTime<Utc>) -> std::time::Duration
 #[cfg(test)]
 mod task_runner_tests {
     use super::*;
+    use crate::acquisition::targets::AcquisitionTarget;
 
     #[test]
     fn non_metadata_scheduled_job_intervals_remain_unchanged() {
         assert_eq!(JobKey::RssSync.interval_seconds(), Some(15 * 60));
         assert_eq!(
             JobKey::PluginRegistryRefresh.interval_seconds(),
-            Some(24 * 60 * 60)
+            Some(60 * 60)
         );
         assert_eq!(JobKey::HealthChecks.interval_seconds(), Some(6 * 60 * 60));
         assert_eq!(JobKey::StagedNzbPrune.interval_seconds(), Some(60 * 60));
@@ -2354,6 +4350,7 @@ mod task_runner_tests {
 
     fn episode_submission(title_id: &str, episode_id: &str, job_id: &str) -> DownloadSubmission {
         DownloadSubmission {
+            download_id: scryer_domain::download_identity::DownloadId::new(),
             title_id: title_id.to_string(),
             purpose: DownloadSubmissionPurpose::Standard,
             facet: "series".to_string(),
@@ -2365,6 +4362,7 @@ mod task_runner_tests {
             source_provider_name: None,
             source_kind: Some(DownloadSourceKind::NzbUrl),
             source_title: Some("Bluey.S01E01.720p.WEB-DL.AV1.AAC2.0-NTb".to_string()),
+            info_hash: None,
             release_size_bytes: None,
             request_signature: None,
             scope: SubmissionScope::Episode {
@@ -2379,6 +4377,8 @@ mod task_runner_tests {
             active_titles: Default::default(),
             active_client_ids: Default::default(),
             active_raw_item_id_counts: Default::default(),
+            stale_downloading_client_ids: Default::default(),
+            stale_downloading_raw_item_ids: Default::default(),
             completed_client_ids: Default::default(),
             completed_raw_item_id_counts: Default::default(),
             failed_by_download_id: Default::default(),
@@ -2399,6 +4399,8 @@ mod task_runner_tests {
             active_titles: Default::default(),
             active_client_ids: Default::default(),
             active_raw_item_id_counts: Default::default(),
+            stale_downloading_client_ids: Default::default(),
+            stale_downloading_raw_item_ids: Default::default(),
             completed_client_ids: Default::default(),
             completed_raw_item_id_counts: Default::default(),
             failed_by_download_id: Default::default(),
@@ -2463,45 +4465,90 @@ mod task_runner_tests {
         ));
     }
 
-    /// **D18.** An active download no longer freezes its scope. It becomes a
-    /// queued pseudo-incumbent instead, so a genuinely better release can be
-    /// grabbed over a slow one and an equal-or-worse one is refused by the
-    /// admission ladder with `queued_better_or_equal` — a reason an operator can
-    /// read, rather than a silent scope-level skip.
+    /// An active initial acquisition owns an empty scope. Episode search must
+    /// wait for the existing download or pack to resolve.
     #[test]
-    fn an_active_submission_no_longer_freezes_the_scope() {
-        let item = wanted_episode_item("title-bluey", "Bluey", 1);
+    fn an_active_submission_blocks_an_empty_scope() {
+        let item = wanted_episode_item("title-synthetic", "Synthetic Show", 1);
         let episode_id = item.episode_id.as_deref().expect("episode id");
         let submission = episode_submission(&item.title_id, episode_id, "job-upgrade");
         let snapshot = snapshot_with_job("job-upgrade", false);
 
-        assert!(!submission_blocks_search_for_wanted_item(
+        assert!(submission_blocks_search_for_wanted_item(
             &submission,
             &item,
             None,
             &snapshot,
             None,
-            true,
+            false,
         ));
     }
 
-    /// A held import is a real claim on the scope, so it still counts as
-    /// queued — but it no longer *blocks*, which is the behaviour change D18
-    /// makes deliberately: a stuck download used to make its scope permanently
-    /// unsearchable.
+    /// Import-blocked media still owns an empty scope until an operator resolves
+    /// or removes that manual import.
     #[test]
-    fn an_import_blocked_submission_no_longer_freezes_the_scope() {
-        let item = wanted_episode_item("title-bluey", "Bluey", 1);
+    fn an_import_blocked_submission_blocks_an_empty_scope() {
+        let item = wanted_episode_item("title-synthetic", "Synthetic Show", 1);
         let episode_id = item.episode_id.as_deref().expect("episode id");
         let submission = episode_submission(&item.title_id, episode_id, "job-blocked");
         let snapshot = snapshot_with_job("job-blocked", true);
 
-        assert!(!submission_blocks_search_for_wanted_item(
+        assert!(submission_blocks_search_for_wanted_item(
             &submission,
             &item,
             None,
             &snapshot,
             Some(scryer_domain::TrackedDownloadState::ImportBlocked),
+            false,
+        ));
+    }
+
+    /// A claim still `Downloading` past the staleness bound stops suppressing
+    /// its empty scope: a dead swarm never fails on its own, and without the
+    /// escape the scope froze until an operator noticed. The scope falls back
+    /// to the D18 pseudo-incumbent comparison; a fresh download keeps the
+    /// suppression, and so does a stale one on a blind cycle.
+    #[test]
+    fn a_stale_downloading_claim_stops_blocking_its_empty_scope() {
+        let item = wanted_episode_item("title-bluey", "Bluey", 1);
+        let episode_id = item.episode_id.as_deref().expect("episode id");
+        let submission = episode_submission(&item.title_id, episode_id, "job-stalled");
+
+        // Fresh active download: suppressed, exactly the new rule.
+        let fresh = snapshot_with_job("job-stalled", false);
+        assert!(submission_blocks_search_for_wanted_item(
+            &submission,
+            &item,
+            None,
+            &fresh,
+            Some(scryer_domain::TrackedDownloadState::Downloading),
+            false,
+        ));
+
+        // The same download past the staleness bound: back to D18 comparison.
+        let mut stale = snapshot_with_job("job-stalled", false);
+        stale
+            .stale_downloading_client_ids
+            .insert(download_client_item_identity(Some("primary"), "job-stalled"));
+        stale
+            .stale_downloading_raw_item_ids
+            .insert("job-stalled".to_string());
+        assert!(!submission_blocks_search_for_wanted_item(
+            &submission,
+            &item,
+            None,
+            &stale,
+            Some(scryer_domain::TrackedDownloadState::Downloading),
+            false,
+        ));
+
+        // An occupied scope was never suppressed and stays comparison-based.
+        assert!(!submission_blocks_search_for_wanted_item(
+            &submission,
+            &item,
+            None,
+            &stale,
+            Some(scryer_domain::TrackedDownloadState::Downloading),
             true,
         ));
     }
@@ -2553,5 +4600,121 @@ mod task_runner_tests {
             Some(scryer_domain::TrackedDownloadState::Imported),
             true,
         ));
+    }
+
+    fn background_acquisition_episode_target(
+        title_id: &str,
+        season: u32,
+        episode: u32,
+    ) -> AcquisitionTarget {
+        AcquisitionTarget {
+            scope_key: format!("{title_id}-s{season}-e{episode}"),
+            title_id: title_id.to_string(),
+            library_id: "library".to_string(),
+            facet: MediaFacet::Series,
+            media_type: "episode".to_string(),
+            episode_id: Some(format!("{title_id}-s{season}-e{episode}")),
+            collection_id: Some(format!("{title_id}-s{season}")),
+            series_movie_link_id: None,
+            season_number: Some(season.to_string()),
+            episode_number: Some(episode.to_string()),
+            is_hot: false,
+            occupied: false,
+        }
+    }
+
+    #[test]
+    fn background_acquisition_title_queue_enforces_pack_first_order() {
+        let targets = vec![
+            background_acquisition_episode_target("synthetic-title", 1, 1),
+            background_acquisition_episode_target("synthetic-title", 1, 2),
+            background_acquisition_episode_target("synthetic-title", 2, 1),
+            background_acquisition_episode_target("synthetic-title", 2, 2),
+        ];
+        let ready_titles = build_background_acquisition_title_work(&targets, &[0, 1, 2, 3]);
+
+        assert_eq!(ready_titles.len(), 1);
+        let title_work = ready_titles.front().expect("title work");
+        assert_eq!(
+            title_work
+                .ready
+                .iter()
+                .map(|work| work.target_index)
+                .collect::<Vec<_>>(),
+            vec![0, 2, 0, 1, 2, 3]
+        );
+        assert!(matches!(
+            title_work.ready[0].kind,
+            BackgroundAcquisitionWorkKind::TitlePack
+        ));
+        assert!(matches!(
+            title_work.ready[1].kind,
+            BackgroundAcquisitionWorkKind::SeasonPack { season: 2 }
+        ));
+        assert!(
+            title_work
+                .ready
+                .iter()
+                .skip(2)
+                .all(|work| matches!(&work.kind, BackgroundAcquisitionWorkKind::Scope))
+        );
+    }
+
+    #[test]
+    fn background_acquisition_submission_claims_are_atomic_and_route_scoped() {
+        let cycle = BackgroundAcquisitionCycleCoordinator::default();
+        let route = DownloadRouteKey {
+            source_kind: Some(DownloadSourceKind::NzbUrl),
+            indexer_id: Some("indexer-a".to_string()),
+        };
+
+        assert_eq!(
+            cycle.claim_submission(route.clone(), "https://indexer.example/a"),
+            SubmissionClaim::Granted
+        );
+        assert_eq!(
+            cycle.claim_submission(route.clone(), "https://indexer.example/a"),
+            SubmissionClaim::AlreadyAttempted
+        );
+        cycle.mark_submitted("https://indexer.example/a");
+        assert_eq!(
+            cycle.claim_submission(route.clone(), "https://indexer.example/a"),
+            SubmissionClaim::AlreadySubmitted
+        );
+        cycle.mark_failed_route(route.clone());
+        assert_eq!(
+            cycle.claim_submission(route, "https://indexer.example/b"),
+            SubmissionClaim::RouteUnavailable
+        );
+    }
+
+    #[test]
+    fn poisoned_background_acquisition_state_remains_recoverable() {
+        let cycle = Arc::new(BackgroundAcquisitionCycleCoordinator::default());
+        let poisoned = Arc::clone(&cycle);
+        assert!(
+            std::thread::spawn(move || {
+                let _guard = poisoned.state.lock().expect("test lock");
+                panic!("poison the test lock");
+            })
+            .join()
+            .is_err()
+        );
+
+        assert_eq!(
+            cycle.claim_submission(
+                DownloadRouteKey {
+                    source_kind: Some(DownloadSourceKind::NzbUrl),
+                    indexer_id: Some("indexer-a".to_string()),
+                },
+                "https://indexer.example/a",
+            ),
+            SubmissionClaim::Granted
+        );
+    }
+
+    #[test]
+    fn background_acquisition_title_limit_is_four() {
+        assert_eq!(BACKGROUND_ACQUISITION_TITLE_LIMIT, 4);
     }
 }

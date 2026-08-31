@@ -203,57 +203,6 @@ export function SettingsRulesContainer() {
     void refreshRuleSets();
   }, [refreshRuleSets]);
 
-  const submitRuleSet = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const payload = {
-      name: ruleSetDraft.name.trim(),
-      description: ruleSetDraft.description.trim(),
-      regoSource: ruleSetDraft.regoSource,
-      enabled: ruleSetDraft.enabled,
-      priority: ruleSetDraft.priority,
-      appliedFacets: ruleSetDraft.appliedFacets,
-    };
-
-    if (!payload.name || !payload.regoSource.trim()) {
-      setGlobalStatus(t("settings.ruleValidationRequired"));
-      return;
-    }
-
-    setMutatingRuleSetId(editingRuleSetId || "new");
-    try {
-      if (editingRuleSetId) {
-        const { error } = await client
-          .mutation(updateRuleSetMutation, {
-            input: {
-              id: editingRuleSetId,
-              name: payload.name,
-              description: payload.description,
-              regoSource: payload.regoSource,
-              priority: payload.priority,
-              appliedFacets: payload.appliedFacets,
-            },
-          })
-          .toPromise();
-        if (error) throw error;
-        setGlobalStatus(t("status.ruleUpdated"));
-      } else {
-        const { error } = await client
-          .mutation(createRuleSetMutation, {
-            input: createRuleSetInput(payload),
-          })
-          .toPromise();
-        if (error) throw error;
-        setGlobalStatus(t("status.ruleCreated"));
-      }
-      closeRuleSetEditor();
-      await refreshRuleSets();
-    } catch (error) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.failedToUpdate"));
-    } finally {
-      setMutatingRuleSetId(null);
-    }
-  };
-
   const deleteRuleSet = async (record: RuleSetRecord) => {
     setPendingDeleteRuleSet(record);
   };
@@ -340,8 +289,8 @@ export function SettingsRulesContainer() {
     pendingEditorAction,
   ]);
 
-  const validateDraft = async () => {
-    if (!ruleSetDraft.regoSource.trim()) return;
+  const validateDraft = useCallback(async (): Promise<RuleValidationResult | null> => {
+    if (!ruleSetDraft.regoSource.trim()) return null;
     setValidating(true);
     setValidationResult(null);
     try {
@@ -354,14 +303,90 @@ export function SettingsRulesContainer() {
         })
         .toPromise();
       if (error) throw error;
-      setValidationResult(data.validateRuleSet);
+      const result = data.validateRuleSet;
+      setValidationResult(result);
+      return result;
     } catch (error) {
-      setValidationResult({
+      const result = {
         valid: false,
         errors: [error instanceof Error ? error.message : "Validation failed"],
-      });
+      };
+      setValidationResult(result);
+      return result;
     } finally {
       setValidating(false);
+    }
+  }, [client, editingRuleSetId, ruleSetDraft.regoSource]);
+
+  const submitRuleSet = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const payload = {
+      name: ruleSetDraft.name.trim(),
+      description: ruleSetDraft.description.trim(),
+      regoSource: ruleSetDraft.regoSource,
+      enabled: ruleSetDraft.enabled,
+      priority: ruleSetDraft.priority,
+      appliedFacets: ruleSetDraft.appliedFacets,
+    };
+
+    if (!payload.name || !payload.regoSource.trim()) {
+      setValidationResult({
+        valid: false,
+        errors: [t("settings.ruleValidationRequired")],
+      });
+      return;
+    }
+
+    const validation = await validateDraft();
+    if (!validation?.valid) {
+      return;
+    }
+
+    setMutatingRuleSetId(editingRuleSetId || "new");
+    try {
+      if (editingRuleSetId) {
+        const { error } = await client
+          .mutation(updateRuleSetMutation, {
+            input: {
+              id: editingRuleSetId,
+              name: payload.name,
+              description: payload.description,
+              regoSource: payload.regoSource,
+              priority: payload.priority,
+              appliedFacets: payload.appliedFacets,
+            },
+          })
+          .toPromise();
+        if (error) throw error;
+        setGlobalStatus(t("status.ruleUpdated"));
+      } else {
+        const { error } = await client
+          .mutation(createRuleSetMutation, {
+            input: createRuleSetInput(payload),
+          })
+          .toPromise();
+        if (error) throw error;
+        setGlobalStatus(t("status.ruleCreated"));
+      }
+      closeRuleSetEditor();
+      await refreshRuleSets();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : null;
+      const validationErrorIndex = message?.indexOf("Rule validation failed:") ?? -1;
+      if (validationErrorIndex >= 0 && message) {
+        setValidationResult({
+          valid: false,
+          errors: [
+            message
+              .slice(validationErrorIndex + "Rule validation failed:".length)
+              .replace(/^\s*-?\s*/, ""),
+          ],
+        });
+        return;
+      }
+      setGlobalStatus(message || t("status.failedToUpdate"));
+    } finally {
+      setMutatingRuleSetId(null);
     }
   };
 

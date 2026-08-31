@@ -21,9 +21,12 @@ type DelayProfilePayload = {
   name: string;
   usenetDelayMinutes: number;
   torrentDelayMinutes: number;
+  enableUsenet?: boolean;
+  enableTorrent?: boolean;
   preferredProtocol: "USENET" | "TORRENT";
   minAgeMinutes: number;
   bypassScoreThreshold?: number | null;
+  bypassIfHighestQuality?: boolean;
   appliesToFacets: Array<"MOVIE" | "SERIES" | "ANIME">;
   tags: string[];
   priority: number;
@@ -36,9 +39,12 @@ function fromDelayProfilePayload(profile: DelayProfilePayload): ParsedDelayProfi
     name: profile.name,
     usenet_delay_minutes: profile.usenetDelayMinutes,
     torrent_delay_minutes: profile.torrentDelayMinutes,
+    enable_usenet: profile.enableUsenet ?? true,
+    enable_torrent: profile.enableTorrent ?? true,
     preferred_protocol: profile.preferredProtocol,
     min_age_minutes: profile.minAgeMinutes,
     bypass_score_threshold: profile.bypassScoreThreshold ?? null,
+    bypass_if_highest_quality: profile.bypassIfHighestQuality ?? false,
     applies_to_facets: profile.appliesToFacets,
     tags: profile.tags,
     priority: profile.priority,
@@ -52,9 +58,12 @@ function toDelayProfileInput(profile: ParsedDelayProfile) {
     name: profile.name.trim(),
     usenetDelayMinutes: profile.usenet_delay_minutes,
     torrentDelayMinutes: profile.torrent_delay_minutes,
+    enableUsenet: profile.enable_usenet,
+    enableTorrent: profile.enable_torrent,
     preferredProtocol: profile.preferred_protocol,
     minAgeMinutes: profile.min_age_minutes,
     bypassScoreThreshold: profile.bypass_score_threshold,
+    bypassIfHighestQuality: profile.bypass_if_highest_quality,
     appliesToFacets: profile.applies_to_facets,
     tags: profile.tags,
     priority: profile.priority,

@@ -16,9 +16,9 @@ use crate::null_repositories::test_nulls::{
     NullReleaseAttemptRepository, NullUserRepository,
 };
 use crate::{
-    ActivityKind, AppError, AppResult, AppServices, AppUseCase, CollectionUpdate,
+    ActivityKind, AppError, AppResult, AppServices, AppUseCase, ClientJobLocator, CollectionUpdate,
     CreateTitleOutcome, DomainEventRepository, DownloadClient, DownloadClientAddRequest,
-    DownloadClientConfigRepository, DownloadGrabResult, DownloadSourceIdentity, DownloadSubmission,
+    DownloadClientConfigRepository, DownloadGrabResult, DownloadSubmission,
     DownloadSubmissionIdentity, DownloadSubmissionRepository, EpisodeUpdate, FacetRegistry,
     ImportArtifact, ImportArtifactRepository, IndexerConfigRepository, JwtAuthConfig,
     PendingTitleHydration, QualityProfile, QualityProfileRepository, ScopedExternalId,
@@ -574,7 +574,7 @@ impl TestImportRepo {
 
 fn test_import_record(
     id: &str,
-    source_identity: &DownloadSourceIdentity,
+    source_identity: &ClientJobLocator,
     status: ImportStatus,
     payload_json: String,
 ) -> scryer_domain::ImportRecord {
@@ -605,7 +605,7 @@ fn test_import_record(
 impl crate::ImportRepository for TestImportRepo {
     async fn queue_import_request(
         &self,
-        source_identity: DownloadSourceIdentity,
+        source_identity: ClientJobLocator,
         import_type: String,
         payload_json: String,
     ) -> AppResult<String> {
@@ -696,7 +696,7 @@ impl crate::ImportRepository for TestImportRepo {
 
     async fn list_imports_for_identities(
         &self,
-        identities: &[DownloadSourceIdentity],
+        identities: &[ClientJobLocator],
     ) -> AppResult<Vec<scryer_domain::ImportRecord>> {
         Ok(self
             .records
@@ -714,15 +714,6 @@ impl crate::ImportRepository for TestImportRepo {
             })
             .cloned()
             .collect())
-    }
-
-    async fn is_already_imported(&self, identity: &DownloadSourceIdentity) -> AppResult<bool> {
-        Ok(self.records.lock().await.iter().any(|record| {
-            record.source_client_id.as_deref().unwrap_or("") == identity.client_id_or_empty()
-                && record.source_system == identity.client_type
-                && record.source_ref == identity.item_id
-                && record.status == ImportStatus::Completed
-        }))
     }
 
     async fn list_imports(&self, _: usize) -> AppResult<Vec<scryer_domain::ImportRecord>> {
@@ -744,7 +735,7 @@ impl ImportArtifactRepository for TestImportArtifactRepo {
 
     async fn list_by_source_identity(
         &self,
-        identity: &DownloadSourceIdentity,
+        identity: &ClientJobLocator,
     ) -> AppResult<Vec<ImportArtifact>> {
         let artifacts = self.artifacts.lock().await;
         Ok(artifacts
@@ -756,7 +747,7 @@ impl ImportArtifactRepository for TestImportArtifactRepo {
 
     async fn count_by_result_for_source_identity(
         &self,
-        identity: &DownloadSourceIdentity,
+        identity: &ClientJobLocator,
         result: &str,
     ) -> AppResult<u64> {
         let artifacts = self.artifacts.lock().await;
@@ -767,16 +758,45 @@ impl ImportArtifactRepository for TestImportArtifactRepo {
     }
 }
 
+struct UnavailableImportArtifactRepo;
+
+#[async_trait]
+impl ImportArtifactRepository for UnavailableImportArtifactRepo {
+    async fn insert_artifact(&self, _artifact: ImportArtifact) -> AppResult<()> {
+        Ok(())
+    }
+
+    async fn list_by_source_identity(
+        &self,
+        _identity: &ClientJobLocator,
+    ) -> AppResult<Vec<ImportArtifact>> {
+        Err(AppError::Repository(
+            "import artifact evidence unavailable".to_string(),
+        ))
+    }
+
+    async fn count_by_result_for_source_identity(
+        &self,
+        _identity: &ClientJobLocator,
+        _result: &str,
+    ) -> AppResult<u64> {
+        Err(AppError::Repository(
+            "import artifact evidence unavailable".to_string(),
+        ))
+    }
+}
+
 #[derive(Default)]
 struct TestDownloadSubmissionRepo {
     rows: Arc<Mutex<Vec<(DownloadSubmission, DownloadSubmissionIdentity)>>>,
-    tracked_states: Arc<Mutex<Vec<(DownloadSourceIdentity, String)>>>,
+    tracked_states: Arc<Mutex<Vec<(ClientJobLocator, String)>>>,
     identity_tracked_states: Arc<Mutex<Vec<(String, String)>>>,
+    canonical_identity_tracked_state_reasons: Arc<Mutex<Vec<(String, String)>>>,
 }
 
-fn test_download_identity_state_key(
+fn test_tracked_state_key(
     identity: &DownloadSubmissionIdentity,
-    source_identity: Option<&DownloadSourceIdentity>,
+    source_identity: Option<&ClientJobLocator>,
 ) -> Option<String> {
     let download_id = identity
         .download_id
@@ -817,30 +837,33 @@ impl DownloadSubmissionRepository for TestDownloadSubmissionRepo {
         Ok(())
     }
 
+    async fn record_ambiguous_submission(&self, submission: DownloadSubmission) -> AppResult<()> {
+        self.record_submission(submission).await
+    }
+
     async fn record_submission_with_identity(
         &self,
         submission: DownloadSubmission,
         submission_identity: DownloadSubmissionIdentity,
-    ) -> AppResult<()> {
+        _seed_goals: Option<crate::PersistedSeedGoals>,
+    ) -> AppResult<crate::CanonicalDownloadIdentityDisposition> {
         self.rows
             .lock()
             .await
             .push((submission, submission_identity));
-        Ok(())
+        Ok(crate::CanonicalDownloadIdentityDisposition::Requested)
     }
 
     async fn find_by_client_item_id(
         &self,
-        identity: &DownloadSourceIdentity,
+        identity: &ClientJobLocator,
     ) -> AppResult<Option<DownloadSubmission>> {
         Ok(self
             .rows
             .lock()
             .await
             .iter()
-            .find(|(submission, _)| {
-                DownloadSourceIdentity::from_submission(submission) == *identity
-            })
+            .find(|(submission, _)| ClientJobLocator::from_submission(submission) == *identity)
             .map(|(submission, _)| submission.clone()))
     }
 
@@ -868,28 +891,26 @@ impl DownloadSubmissionRepository for TestDownloadSubmissionRepo {
 
     async fn get_submission_identity(
         &self,
-        identity: &DownloadSourceIdentity,
+        identity: &ClientJobLocator,
     ) -> AppResult<Option<DownloadSubmissionIdentity>> {
         Ok(self
             .rows
             .lock()
             .await
             .iter()
-            .find(|(submission, _)| {
-                DownloadSourceIdentity::from_submission(submission) == *identity
-            })
+            .find(|(submission, _)| ClientJobLocator::from_submission(submission) == *identity)
             .map(|(_, submission_identity)| submission_identity.clone()))
     }
 
     async fn record_identity_tracked_state(
         &self,
         identity: &DownloadSubmissionIdentity,
-        source_identity: Option<&DownloadSourceIdentity>,
+        source_identity: Option<&ClientJobLocator>,
         tracked_state: &str,
         _reason: Option<&str>,
         _detail: Option<&str>,
     ) -> AppResult<()> {
-        let Some(key) = test_download_identity_state_key(identity, source_identity) else {
+        let Some(key) = test_tracked_state_key(identity, source_identity) else {
             return Ok(());
         };
         let mut states = self.identity_tracked_states.lock().await;
@@ -901,12 +922,44 @@ impl DownloadSubmissionRepository for TestDownloadSubmissionRepo {
         Ok(())
     }
 
+    async fn record_identity_tracked_state_for_download(
+        &self,
+        canonical_download_id: Option<&scryer_domain::download_identity::DownloadId>,
+        identity: &DownloadSubmissionIdentity,
+        source_identity: Option<&ClientJobLocator>,
+        tracked_state: &str,
+        reason: Option<&str>,
+        detail: Option<&str>,
+    ) -> AppResult<()> {
+        self.record_identity_tracked_state(
+            identity,
+            source_identity,
+            tracked_state,
+            reason,
+            detail,
+        )
+        .await?;
+        if let (Some(download_id), Some(reason)) = (canonical_download_id, reason) {
+            let download_id = download_id.to_string();
+            let mut reasons = self.canonical_identity_tracked_state_reasons.lock().await;
+            if let Some((_, stored_reason)) = reasons
+                .iter_mut()
+                .find(|(stored_id, _)| stored_id == &download_id)
+            {
+                *stored_reason = reason.to_string();
+            } else {
+                reasons.push((download_id, reason.to_string()));
+            }
+        }
+        Ok(())
+    }
+
     async fn get_identity_tracked_state(
         &self,
         identity: &DownloadSubmissionIdentity,
-        source_identity: Option<&DownloadSourceIdentity>,
+        source_identity: Option<&ClientJobLocator>,
     ) -> AppResult<Option<String>> {
-        let Some(key) = test_download_identity_state_key(identity, source_identity) else {
+        let Some(key) = test_tracked_state_key(identity, source_identity) else {
             return Ok(None);
         };
         Ok(self
@@ -918,9 +971,27 @@ impl DownloadSubmissionRepository for TestDownloadSubmissionRepo {
             .map(|(_, state)| state.clone()))
     }
 
+    async fn get_identity_tracked_state_reason_for_download(
+        &self,
+        canonical_download_id: Option<&scryer_domain::download_identity::DownloadId>,
+        _identity: &DownloadSubmissionIdentity,
+        _source_identity: Option<&ClientJobLocator>,
+    ) -> AppResult<Option<String>> {
+        let Some(canonical_download_id) = canonical_download_id else {
+            return Ok(None);
+        };
+        Ok(self
+            .canonical_identity_tracked_state_reasons
+            .lock()
+            .await
+            .iter()
+            .find(|(stored_id, _)| stored_id == &canonical_download_id.to_string())
+            .map(|(_, reason)| reason.clone()))
+    }
+
     async fn list_for_client_items(
         &self,
-        client_items: &[DownloadSourceIdentity],
+        client_items: &[ClientJobLocator],
     ) -> AppResult<Vec<DownloadSubmission>> {
         Ok(self
             .rows
@@ -928,7 +999,7 @@ impl DownloadSubmissionRepository for TestDownloadSubmissionRepo {
             .await
             .iter()
             .filter(|(submission, _)| {
-                let identity = DownloadSourceIdentity::from_submission(submission);
+                let identity = ClientJobLocator::from_submission(submission);
                 client_items.contains(&identity)
             })
             .map(|(submission, _)| submission.clone())
@@ -975,16 +1046,17 @@ impl DownloadSubmissionRepository for TestDownloadSubmissionRepo {
         Ok(())
     }
 
-    async fn delete_by_client_item_id(&self, identity: &DownloadSourceIdentity) -> AppResult<()> {
-        self.rows.lock().await.retain(|(submission, _)| {
-            DownloadSourceIdentity::from_submission(submission) != *identity
-        });
+    async fn delete_by_client_item_id(&self, identity: &ClientJobLocator) -> AppResult<()> {
+        self.rows
+            .lock()
+            .await
+            .retain(|(submission, _)| ClientJobLocator::from_submission(submission) != *identity);
         Ok(())
     }
 
     async fn update_tracked_state(
         &self,
-        identity: &DownloadSourceIdentity,
+        identity: &ClientJobLocator,
         tracked_state: &str,
     ) -> AppResult<()> {
         let mut states = self.tracked_states.lock().await;
@@ -999,10 +1071,7 @@ impl DownloadSubmissionRepository for TestDownloadSubmissionRepo {
         Ok(())
     }
 
-    async fn get_tracked_state(
-        &self,
-        identity: &DownloadSourceIdentity,
-    ) -> AppResult<Option<String>> {
+    async fn get_tracked_state(&self, identity: &ClientJobLocator) -> AppResult<Option<String>> {
         Ok(self
             .tracked_states
             .lock()
@@ -1444,6 +1513,46 @@ fn build_app_with_download_client_configs_submissions_and_settings(
     artifacts: Vec<ImportArtifact>,
     repositories: TestAppRepositories,
 ) -> AppUseCase {
+    build_app_with_import_artifact_repository_and_repositories(
+        titles,
+        collections,
+        episodes,
+        Arc::new(TestImportArtifactRepo {
+            artifacts: Arc::new(Mutex::new(artifacts)),
+        }),
+        repositories,
+    )
+}
+
+fn build_app_with_import_artifact_repository(
+    titles: Vec<Title>,
+    collections: Vec<Collection>,
+    episodes: Vec<Episode>,
+    import_artifacts: Arc<dyn ImportArtifactRepository>,
+) -> AppUseCase {
+    build_app_with_import_artifact_repository_and_repositories(
+        titles,
+        collections,
+        episodes,
+        import_artifacts,
+        TestAppRepositories {
+            download_client: Arc::new(NullDownloadClient),
+            download_client_configs: Arc::new(NullDownloadClientConfigRepository),
+            download_submissions: Arc::new(
+                crate::null_repositories::NullDownloadSubmissionRepository,
+            ),
+            settings: Arc::new(crate::null_repositories::NullSettingsRepository),
+        },
+    )
+}
+
+fn build_app_with_import_artifact_repository_and_repositories(
+    titles: Vec<Title>,
+    collections: Vec<Collection>,
+    episodes: Vec<Episode>,
+    import_artifacts: Arc<dyn ImportArtifactRepository>,
+    repositories: TestAppRepositories,
+) -> AppUseCase {
     let services = AppServices::builder(
         Arc::new(TestTitleRepo {
             titles: Arc::new(Mutex::new(titles)),
@@ -1464,9 +1573,7 @@ fn build_app_with_download_client_configs_submissions_and_settings(
         String::new(),
     )
     .with_domain_events(Arc::new(TestDomainEventRepo::default()))
-    .with_import_artifacts(Arc::new(TestImportArtifactRepo {
-        artifacts: Arc::new(Mutex::new(artifacts)),
-    }))
+    .with_import_artifacts(import_artifacts)
     .with_download_submissions(repositories.download_submissions)
     .build_partial_for_tests();
 
@@ -1646,6 +1753,7 @@ fn build_artifact_with_result(
 
 fn build_tracked_download(title_id: &str, facet: &str, release_title: &str) -> TrackedDownload {
     TrackedDownload {
+        download_id: scryer_domain::download_identity::DownloadId::new(),
         id: format!("nzbget:{release_title}"),
         client_id: "client-1".to_string(),
         client_type: "nzbget".to_string(),

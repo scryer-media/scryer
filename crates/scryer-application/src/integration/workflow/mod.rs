@@ -6,6 +6,7 @@ use crate::tracked_downloads::{
     tracked_download_id_for_item,
 };
 use crate::types::{DownloadClientFilterOption, DownloadQueuePage};
+use futures_util::FutureExt;
 use scryer_domain::{
     CompletedDownload, DownloadQueueDeleteStatus, ImportType, TrackedDownloadState,
     TrackedDownloadStatus,

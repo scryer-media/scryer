@@ -131,6 +131,17 @@ export const revokeMyOauthAppMutation = `mutation RevokeMyOauthApp($grantId: ID!
   }
 }`;
 
+export const createMyApiKeyMutation = `mutation CreateMyApiKey($input: CreateMyApiKeyInput!) {
+  createMyApiKey(input: $input) {
+    apiKey
+    key { id label actor expiresAt revokedAt lastUsedAt createdAt provisioningSource }
+  }
+}`;
+
+export const revokeMyApiKeyMutation = `mutation RevokeMyApiKey($id: ID!) {
+  revokeMyApiKey(id: $id) { id revoked }
+}`;
+
 export const totpEnrollmentStartMutation = `mutation TotpEnrollmentStart {
   totpEnrollmentStart {
     challengeId
@@ -866,6 +877,7 @@ export const updateSecuritySettingsMutation = `mutation UpdateSecuritySettings($
     formLoginEnabled
     passwordMinLength
     skipLoginForLocalIps
+    apiKeysRestrictToSystemSettingsUsers
     mfaRequireConfigStepUp
     mfaRequirePasswordLogin
     mfaRequireJellyfinLogin
@@ -873,6 +885,30 @@ export const updateSecuritySettingsMutation = `mutation UpdateSecuritySettings($
     effectiveFormLoginEnabled
     envOverrideActive
     envOverrideDescription
+  }
+}`;
+
+const OAUTH_CLIENT_REGISTRATION_FIELDS = `
+    clientId
+    displayName
+    redirectUris
+    enabled
+    source`;
+
+export const createOAuthClientRegistrationMutation = `mutation CreateOAuthClientRegistration($input: CreateOAuthClientRegistrationInput!) {
+  createOauthClientRegistration(input: $input) {${OAUTH_CLIENT_REGISTRATION_FIELDS}
+  }
+}`;
+
+export const updateOAuthClientRegistrationMutation = `mutation UpdateOAuthClientRegistration($clientId: String!, $input: UpdateOAuthClientRegistrationInput!) {
+  updateOauthClientRegistration(clientId: $clientId, input: $input) {${OAUTH_CLIENT_REGISTRATION_FIELDS}
+  }
+}`;
+
+export const deleteOAuthClientRegistrationMutation = `mutation DeleteOAuthClientRegistration($clientId: String!) {
+  deleteOauthClientRegistration(clientId: $clientId) {
+    clientId
+    deleted
   }
 }`;
 
@@ -994,9 +1030,12 @@ export const upsertDelayProfileMutation = `mutation UpsertDelayProfile($input: D
     name
     usenetDelayMinutes
     torrentDelayMinutes
+    enableUsenet
+    enableTorrent
     preferredProtocol
     minAgeMinutes
     bypassScoreThreshold
+    bypassIfHighestQuality
     appliesToFacets
     tags
     priority
@@ -1297,10 +1336,19 @@ export const queueManualImportMutation = `mutation QueueManualImport($input: Que
 export const beginManualImportSelectionMutation = `mutation BeginManualImportSelection($input: BeginManualImportSelectionInput!) {
   beginManualImportSelection(input: $input) {
     selectionId
+    archiveExtractionNeeded
     files {
       candidateId
       fileName
       sizeBytes
+      videoFacts {
+        containerFormat
+        videoCodec
+        audioCodec
+        videoWidth
+        videoHeight
+        durationSeconds
+      }
       quality
       parsedSeason
       parsedEpisodes
@@ -1315,7 +1363,7 @@ export const beginManualImportSelectionMutation = `mutation BeginManualImportSel
       episodeType
       episodeNumber
       seasonNumber
-      episodeLabel
+      absoluteNumber
       title
       monitored
     }
@@ -2378,6 +2426,10 @@ export const retryImportMutation = `mutation RetryImport($input: RetryImportInpu
     destPath
     errorMessage
   }
+}`;
+
+export const cancelActiveImportMutation = `mutation CancelActiveImport($streamId: ID!) {
+  cancelActiveImport(streamId: $streamId)
 }`;
 
 export const ignoreTrackedDownloadMutation = `mutation IgnoreTrackedDownload($input: IgnoreTrackedDownloadInput!) {

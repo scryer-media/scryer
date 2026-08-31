@@ -187,10 +187,112 @@ fn render_missing_token_empty() {
 }
 
 #[test]
+fn render_rename_template_optional_group_includes_present_guard() {
+    let t = tokens(&[
+        ("title", "Quiet Meridian"),
+        ("season_order", "0"),
+        ("episode", "4"),
+        ("absolute_episode", ""),
+        ("episode_title", "The Sudden Signal Rehearsal"),
+        ("quality", "2160p"),
+        ("ext", "mkv"),
+    ]);
+    let template = "{title} - S{season_order:2}E{episode:2}{?absolute_episode: ({absolute_episode})}{?episode_title: - {episode_title|truncate:64}} - {quality}.{ext}";
+
+    assert_eq!(
+        render_rename_template(template, &t),
+        "Quiet Meridian - S00E04 - The Sudden Signal Rehearsal - 2160p.mkv"
+    );
+
+    let numbered = tokens(&[
+        ("title", "Quiet Meridian"),
+        ("season_order", "1"),
+        ("episode", "1"),
+        ("absolute_episode", "1"),
+        (
+            "episode_title",
+            "A title that is deliberately longer than sixty-four characters to verify truncation",
+        ),
+        ("quality", "1080p"),
+        ("ext", "mkv"),
+    ]);
+    assert_eq!(
+        render_rename_template(template, &numbered),
+        "Quiet Meridian - S01E01 (1) - A title that is deliberately longer than sixty-four characters t - 1080p.mkv"
+    );
+}
+
+#[test]
+fn render_rename_template_optional_group_supports_literal_braces_and_filters() {
+    let t = tokens(&[("edition", "Directors Cut")]);
+    let result = render_rename_template("{?edition:{{cut-{edition|space:_}}}}", &t);
+
+    assert_eq!(result, "{cut-Directors_Cut}");
+}
+
+#[test]
+fn validate_rename_template_optional_groups() {
+    validate_rename_template_for_facet(
+        "{title}{?absolute_episode: ({absolute_episode})}{?episode_title: - {episode_title|truncate:64}}.{ext}",
+        &MediaFacet::Anime,
+    )
+    .expect("anime optional groups should allow episode tokens and filters");
+    validate_rename_template("{?edition:{{literal|else:edition}}}")
+        .expect("escaped literal text is not an optional fallback branch");
+
+    let unavailable_guard = validate_rename_template_for_facet(
+        "{title}{?absolute_episode: ({absolute_episode})}.{ext}",
+        &MediaFacet::Movie,
+    )
+    .expect_err("movie templates cannot use anime optional guards");
+    assert!(
+        unavailable_guard
+            .to_string()
+            .contains("unsupported rename template token")
+    );
+
+    let nested = validate_rename_template("{?title: {?edition: ({edition})}}");
+    assert!(
+        nested
+            .expect_err("nested optional groups are unsupported")
+            .to_string()
+            .contains("does not support nested optional groups")
+    );
+
+    let fallback = validate_rename_template("{?title: {title}|else: fallback}");
+    assert!(
+        fallback
+            .expect_err("optional fallback branches are unsupported")
+            .to_string()
+            .contains("does not support optional-group fallback branches")
+    );
+}
+
+#[test]
 fn render_title_folder_template_trims_empty_year_group() {
     let t = tokens(&[("title", "Movie")]);
     let result = render_title_folder_template("{title} ({year})", &t);
     assert_eq!(result, "Movie");
+}
+
+#[test]
+fn title_folder_template_optional_group_omits_missing_values() {
+    validate_title_folder_template("{title}{?year: ({year})}")
+        .expect("title folder optional groups should be supported");
+    validate_season_folder_template("{?season:Season {season}}")
+        .expect("the required season token can be an optional group guard");
+
+    let without_year = tokens(&[("title", "Movie")]);
+    assert_eq!(
+        render_title_folder_template("{title}{?year: ({year})}", &without_year),
+        "Movie"
+    );
+
+    let with_year = tokens(&[("title", "Movie"), ("year", "2004")]);
+    assert_eq!(
+        render_title_folder_template("{title}{?year: ({year})}", &with_year),
+        "Movie (2004)"
+    );
 }
 
 #[test]
@@ -522,9 +624,8 @@ fn sanitize_leaves_non_reserved_device_prefixes_unchanged() {
     }
 }
 
-#[cfg(windows)]
 #[test]
-fn truncate_generated_filename_preserves_extension_and_byte_budget() {
+fn truncate_generated_filename_preserves_extension_and_utf8_byte_budget() {
     let long_stem = "長".repeat(120);
     let filename = format!("{long_stem}.mkv");
     let result = truncate_generated_filename_component(&filename);
@@ -536,15 +637,6 @@ fn truncate_generated_filename_preserves_extension_and_byte_budget() {
         result.len()
     );
     assert!(std::str::from_utf8(result.as_bytes()).is_ok());
-}
-
-#[cfg(not(windows))]
-#[test]
-fn truncate_generated_filename_preserves_long_utf8_component() {
-    let long_stem = "長".repeat(120);
-    let filename = format!("{long_stem}.mkv");
-
-    assert_eq!(truncate_generated_filename_component(&filename), filename);
 }
 
 #[test]
@@ -573,14 +665,15 @@ fn configured_title_folder_path_truncates_generated_folder_component() {
 
 #[cfg(not(windows))]
 #[test]
-fn configured_title_folder_path_preserves_long_component() {
+fn configured_title_folder_path_caps_long_component() {
     let title_name = format!("{}Long", "Long ".repeat(99));
     let title = test_movie_title(&title_name);
     let path = configured_title_folder_path("/library", &title, "{title}", None);
+    let expected = truncate_generated_folder_component(&title_name);
 
     assert_eq!(
         path.file_name().and_then(|folder| folder.to_str()),
-        Some(title_name.as_str())
+        Some(expected.as_str())
     );
 }
 

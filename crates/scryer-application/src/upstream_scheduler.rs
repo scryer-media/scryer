@@ -256,6 +256,7 @@ pub enum SchedulerAdmission {
     Skip {
         candidate_id: SchedulerCandidateId,
         reason: SkipReason,
+        retry_after: Option<Duration>,
     },
 }
 

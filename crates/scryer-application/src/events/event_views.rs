@@ -270,6 +270,11 @@ pub(crate) fn activity_event_from_domain_event(event: &DomainEvent) -> Option<Ac
         _ => return None,
     };
 
+    let episode_ids = match &event.payload {
+        DomainEventPayload::ImportCompleted(data) => data.episode_ids.clone(),
+        _ => Vec::new(),
+    };
+
     Some(ActivityEvent {
         id: event.event_id.clone(),
         kind,
@@ -280,6 +285,7 @@ pub(crate) fn activity_event_from_domain_event(event: &DomainEvent) -> Option<Ac
         actor_display_name: event.actor_display_name.clone(),
         title_id: event.title_id.clone(),
         facet: event.facet.as_ref().map(|facet| facet.as_str().to_string()),
+        episode_ids,
         message,
         occurred_at: event.occurred_at,
     })
@@ -1326,11 +1332,12 @@ mod tests {
     use super::*;
     use chrono::{Duration, Utc};
     use scryer_domain::{
-        DomainEventStream, DomainExternalIds, DownloadFailedEventData, DownloadQueueState,
-        ImportCompletedEventData, JobRunStartedEventData, LibraryScanCompletedEventData,
-        LibraryScanProgressedEventData, MediaFacet, MediaFileAnalyzedEventData,
-        MediaFileDeletedEventData, MediaFileDeletedReason, MediaFileUpgradedEventData,
-        MediaPathUpdate, MediaUpdateType, ReleaseGrabbedEventData, TitleContextSnapshot,
+        DomainEventStream, DomainExternalIds, DownloadFailedEventData, DownloadQueueCommandAction,
+        DownloadQueueItemCommandIssuedEventData, DownloadQueueState, ImportCompletedEventData,
+        JobRunStartedEventData, LibraryScanCompletedEventData, LibraryScanProgressedEventData,
+        MediaFacet, MediaFileAnalyzedEventData, MediaFileDeletedEventData, MediaFileDeletedReason,
+        MediaFileUpgradedEventData, MediaPathUpdate, MediaUpdateType, ReleaseGrabbedEventData,
+        TitleContextSnapshot,
     };
 
     fn title_snapshot(name: &str, facet: MediaFacet) -> TitleContextSnapshot {
@@ -1340,6 +1347,122 @@ mod tests {
             external_ids: DomainExternalIds::default(),
             poster_url: None,
             year: Some(2024),
+        }
+    }
+
+    #[test]
+    fn download_activity_payload_freeze_fixtures_are_byte_identical() {
+        let title = title_snapshot("Fixture", MediaFacet::Series);
+        let fixtures = [
+            (
+                DomainEventPayload::ReleaseGrabbed(ReleaseGrabbedEventData {
+                    title: title.clone(),
+                    source_title: Some("Grab.Release".to_string()),
+                    source_hint: Some("rss".to_string()),
+                    source_provider: None,
+                    download_id: Some("download-1".to_string()),
+                    episode_ids: vec!["episode-1".to_string()],
+                }),
+                r#"{"type":"release_grabbed","data":{"title":{"title_name":"Fixture","facet":"series","external_ids":{"imdb_id":null,"tmdb_id":null,"tvdb_id":null,"anidb_id":null},"poster_url":null,"year":2024},"source_title":"Grab.Release","source_hint":"rss","source_provider":null,"download_id":"download-1","episode_ids":["episode-1"]}}"#,
+                ActivityKind::AcquisitionCandidateAccepted,
+                ActivitySeverity::Success,
+                "Grabbed 'Grab.Release' for 'Fixture'.",
+            ),
+            (
+                DomainEventPayload::DownloadQueueItemCommandIssued(
+                    DownloadQueueItemCommandIssuedEventData {
+                        item_id: "queue-1".to_string(),
+                        action: DownloadQueueCommandAction::Delete,
+                    },
+                ),
+                r#"{"type":"download_queue_item_command_issued","data":{"item_id":"queue-1","action":"delete"}}"#,
+                ActivityKind::SystemNotice,
+                ActivitySeverity::Info,
+                "download delete queued: queue-1",
+            ),
+            (
+                DomainEventPayload::DownloadFailed(DownloadFailedEventData {
+                    title: Some(title.clone()),
+                    source_title: Some("Broken.Release".to_string()),
+                    source_hint: Some("client".to_string()),
+                    download_id: Some("download-1".to_string()),
+                    client_id: Some("client-1".to_string()),
+                    client_name: Some("Fixture Client".to_string()),
+                    client_type: Some("nzbget".to_string()),
+                    quality: Some("1080p".to_string()),
+                    reason: Some("archive corrupt".to_string()),
+                    episode_ids: vec!["episode-1".to_string()],
+                    collection_id: Some("collection-1".to_string()),
+                }),
+                r#"{"type":"download_failed","data":{"title":{"title_name":"Fixture","facet":"series","external_ids":{"imdb_id":null,"tmdb_id":null,"tvdb_id":null,"anidb_id":null},"poster_url":null,"year":2024},"source_title":"Broken.Release","source_hint":"client","download_id":"download-1","client_id":"client-1","client_name":"Fixture Client","client_type":"nzbget","quality":"1080p","reason":"archive corrupt","episode_ids":["episode-1"],"collection_id":"collection-1"}}"#,
+                ActivityKind::AcquisitionDownloadFailed,
+                ActivitySeverity::Warning,
+                "Download failed for 'Broken.Release'.",
+            ),
+            (
+                DomainEventPayload::ImportCompleted(ImportCompletedEventData {
+                    title,
+                    media_updates: vec![MediaPathUpdate {
+                        path: "/library/Fixture.mkv".to_string(),
+                        update_type: MediaUpdateType::Created,
+                    }],
+                    imported_count: 1,
+                    import_id: Some("import-1".to_string()),
+                    source_system: Some("nzbget".to_string()),
+                    source_ref: Some("queue-1".to_string()),
+                    source_title: Some("Imported.Release".to_string()),
+                    source_path: Some("/downloads/Fixture.mkv".to_string()),
+                    dest_path: Some("/library/Fixture.mkv".to_string()),
+                    quality: Some("1080p".to_string()),
+                    episode_ids: vec!["episode-1".to_string()],
+                    size_bytes: Some(1024),
+                }),
+                r#"{"type":"import_completed","data":{"title":{"title_name":"Fixture","facet":"series","external_ids":{"imdb_id":null,"tmdb_id":null,"tvdb_id":null,"anidb_id":null},"poster_url":null,"year":2024},"media_updates":[{"path":"/library/Fixture.mkv","update_type":"created"}],"imported_count":1,"import_id":"import-1","source_system":"nzbget","source_ref":"queue-1","source_title":"Imported.Release","source_path":"/downloads/Fixture.mkv","dest_path":"/library/Fixture.mkv","quality":"1080p","episode_ids":["episode-1"],"size_bytes":1024}}"#,
+                ActivityKind::SeriesEpisodeImported,
+                ActivitySeverity::Success,
+                "Imported 1 file for 'Fixture'.",
+            ),
+        ];
+
+        for (index, (payload, expected_json, kind, severity, message)) in
+            fixtures.into_iter().enumerate()
+        {
+            assert_eq!(
+                serde_json::to_vec(&payload).expect("fixture payload should serialize"),
+                expected_json.as_bytes(),
+                "fixture {index} payload changed",
+            );
+
+            let domain_event = event(index as i64, Utc::now(), payload);
+            let activity = activity_event_from_domain_event(&domain_event)
+                .expect("fixture should project to activity");
+            assert_eq!(activity.kind, kind, "fixture {index} activity kind changed");
+            assert_eq!(
+                activity.severity, severity,
+                "fixture {index} activity severity changed"
+            );
+            assert_eq!(
+                activity.message, message,
+                "fixture {index} activity message changed"
+            );
+            assert_eq!(
+                activity.episode_ids,
+                match &domain_event.payload {
+                    DomainEventPayload::ImportCompleted(data) => data.episode_ids.clone(),
+                    _ => Vec::new(),
+                },
+                "fixture {index} import episode context changed"
+            );
+
+            if index != 1 {
+                let history = title_history_record_from_domain_event(&domain_event)
+                    .expect("title-scoped fixture should project to history");
+                assert_eq!(
+                    history.data_json.as_deref(),
+                    Some(expected_json),
+                    "fixture {index} history payload changed"
+                );
+            }
         }
     }
 
@@ -1403,6 +1526,36 @@ mod tests {
         assert_eq!(history.source_hint.as_deref(), Some("Configured Indexer"));
         let data_json = history.data_json.expect("history event data");
         assert!(data_json.contains("indexer.example"));
+    }
+
+    #[test]
+    fn manually_grabbed_release_preserves_the_requesting_user_in_history() {
+        let mut event = event(
+            1,
+            Utc::now(),
+            DomainEventPayload::ReleaseGrabbed(ReleaseGrabbedEventData {
+                title: title_snapshot("Example", MediaFacet::Movie),
+                source_title: Some("Example.2026.1080p.WEB-DL".to_string()),
+                source_hint: Some("Indexer".to_string()),
+                source_provider: Some("Indexer".to_string()),
+                download_id: Some("download-1".to_string()),
+                episode_ids: Vec::new(),
+            }),
+        );
+        event.actor_kind = scryer_domain::DomainEventActorKind::User;
+        event.actor_user_id = Some("user-1".to_string());
+        event.actor_display_name = "Manual Grabber".to_string();
+
+        let history = title_history_record_from_domain_event(&event).expect("history record");
+        assert_eq!(
+            history.actor_kind,
+            Some(scryer_domain::DomainEventActorKind::User)
+        );
+        assert_eq!(history.actor_user_id.as_deref(), Some("user-1"));
+        assert_eq!(
+            history.actor_display_name.as_deref(),
+            Some("Manual Grabber")
+        );
     }
 
     #[test]

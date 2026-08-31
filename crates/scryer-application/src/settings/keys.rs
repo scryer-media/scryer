@@ -60,6 +60,8 @@ pub const PASSWORD_MIN_LENGTH_KEY: &str = "auth.password_min_length";
 pub const PASSWORD_MIN_LENGTH_MIN: i64 = 8;
 pub const SKIP_LOGIN_FOR_LOCAL_IPS_KEY: &str = "auth.skip_login_for_local_ips";
 pub const MFA_REQUIRE_CONFIG_STEP_UP_KEY: &str = "auth.mfa.require_config_step_up";
+pub const API_KEYS_RESTRICT_TO_SYSTEM_SETTINGS_USERS_KEY: &str =
+    "auth.api_keys.restrict_to_system_settings_users";
 pub const MFA_REQUIRE_PASSWORD_LOGIN_KEY: &str = "auth.mfa.require_password_login";
 pub const LEGACY_TOTP_REQUIRE_CONFIG_STEP_UP_KEY: &str = "auth.totp.require_config_step_up";
 pub const LEGACY_TOTP_REQUIRE_PASSWORD_LOGIN_KEY: &str = "auth.totp.require_local_login";
@@ -144,8 +146,7 @@ pub const DEFAULT_ANIME_LIBRARY_PATH: &str = "/data/anime";
 pub const DEFAULT_RENAME_TEMPLATE_MOVIE: &str = "{title} ({year}) - {quality}.{ext}";
 pub const DEFAULT_RENAME_TEMPLATE_SERIES: &str =
     "{title} - S{season:2}E{episode:2} - {quality}.{ext}";
-pub const DEFAULT_RENAME_TEMPLATE_ANIME: &str =
-    "{title} - S{season_order:2}E{episode:2} ({absolute_episode}) - {quality}.{ext}";
+pub const DEFAULT_RENAME_TEMPLATE_ANIME: &str = "{title} - S{season_order:2}E{episode:2}{?absolute_episode: ({absolute_episode})}{?episode_title: - {episode_title|truncate:64}} - {quality}.{ext}";
 pub const DEFAULT_FOLDER_TEMPLATE_MOVIE: &str = "{title} ({year})";
 pub const DEFAULT_FOLDER_TEMPLATE_SERIES: &str = "{title} ({year})";
 pub const DEFAULT_FOLDER_TEMPLATE_ANIME: &str = "{title} ({year})";

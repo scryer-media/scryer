@@ -67,12 +67,10 @@ use std::collections::{HashMap, HashSet};
 use chrono::{DateTime, Utc};
 use scryer_domain::{
     CompletedDownload, DownloadQueueItem, DownloadSeedingSnapshot, ImportMode, MediaFacet,
-    SeedGoalMetAction,
+    SeedGoalMetAction, download_identity::DownloadId,
 };
 
-use crate::{
-    AppResult, AppUseCase, DownloadSourceIdentity, DownloadSourceKind, PersistedSeedGoals,
-};
+use crate::{AppResult, AppUseCase, ClientJobLocator, DownloadSourceKind, PersistedSeedGoals};
 
 /// The reasons the gate reports, verbatim, in logs and outcomes.
 ///
@@ -115,6 +113,9 @@ fn goal_met_action_for(goals: &PersistedSeedGoals) -> SeedGoalMetAction {
 /// Identifies the download whose goals are being looked up.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct SeedGoalLookupKey {
+    /// Present for tracked downloads whose registry resolution is already in
+    /// hand. The queue-projection batch remains identity-keyed.
+    pub canonical_download_id: Option<DownloadId>,
     pub client_id: String,
     pub client_type: String,
     pub client_item_id: String,
@@ -138,8 +139,8 @@ pub(crate) struct SeedGoalLookupKey {
 /// per-row path.
 #[derive(Debug, Default)]
 pub(crate) struct SeedGoalBatch {
-    covered: HashSet<DownloadSourceIdentity>,
-    resolved: HashMap<DownloadSourceIdentity, PersistedSeedGoals>,
+    covered: HashSet<ClientJobLocator>,
+    resolved: HashMap<ClientJobLocator, PersistedSeedGoals>,
 }
 
 /// What a batch can say about one identity.
@@ -159,12 +160,12 @@ impl SeedGoalBatch {
     /// A failed read yields an empty (uncovering) batch rather than an empty
     /// answer: "the prefetch failed" must degrade to per-row reads, never to
     /// "these torrents have no obligation".
-    pub(crate) async fn prefetch(app: &AppUseCase, identities: &[DownloadSourceIdentity]) -> Self {
+    pub(crate) async fn prefetch(app: &AppUseCase, identities: &[ClientJobLocator]) -> Self {
         if identities.is_empty() {
             return Self::default();
         }
-        let covered: HashSet<DownloadSourceIdentity> = identities.iter().cloned().collect();
-        let unique: Vec<DownloadSourceIdentity> = covered.iter().cloned().collect();
+        let covered: HashSet<ClientJobLocator> = identities.iter().cloned().collect();
+        let unique: Vec<ClientJobLocator> = covered.iter().cloned().collect();
         match app
             .services
             .workflow
@@ -187,7 +188,7 @@ impl SeedGoalBatch {
         }
     }
 
-    fn answer(&self, identity: &DownloadSourceIdentity) -> SeedGoalBatchAnswer {
+    fn answer(&self, identity: &ClientJobLocator) -> SeedGoalBatchAnswer {
         if let Some(goals) = self.resolved.get(identity) {
             return SeedGoalBatchAnswer::Resolved(goals.clone());
         }
@@ -225,7 +226,7 @@ impl SeedGoalsRead for AppUseCase {
         batch: Option<&SeedGoalBatch>,
     ) -> Option<PersistedSeedGoals> {
         let submissions = &self.services.workflow.download_submissions;
-        let identity = DownloadSourceIdentity::new(
+        let identity = ClientJobLocator::new(
             Some(key.client_id.as_str()),
             key.client_type.as_str(),
             key.client_item_id.as_str(),
@@ -240,7 +241,10 @@ impl SeedGoalsRead for AppUseCase {
             SeedGoalBatchAnswer::Resolved(goals) => return Some(goals),
             // The tick already asked this question for every row it holds.
             SeedGoalBatchAnswer::NoIdentityResolution => {}
-            SeedGoalBatchAnswer::Uncovered => match submissions.get_seed_goals(&identity).await {
+            SeedGoalBatchAnswer::Uncovered => match submissions
+                .get_seed_goals_for_download(key.canonical_download_id.as_ref(), &identity)
+                .await
+            {
                 Ok(Some(goals)) => return Some(goals),
                 Ok(None) => {}
                 Err(error) => {
@@ -709,6 +713,7 @@ pub(crate) fn seed_goal_lookup_key_for_completed(
     completed: &CompletedDownload,
 ) -> SeedGoalLookupKey {
     SeedGoalLookupKey {
+        canonical_download_id: None,
         client_id: completed.client_id.trim().to_string(),
         client_type: completed.client_type.trim().to_string(),
         client_item_id: completed.download_client_item_id.trim().to_string(),

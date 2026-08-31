@@ -321,7 +321,7 @@ fn artifact_required_features_supported(
     artifact: &CatalogV3PluginArtifact,
     supported_features: &HashSet<String>,
 ) -> bool {
-    artifact.runtime == CATALOG_V3_RUNTIME_WASIP1
+    catalog_v3_runtime_is_supported(&artifact.runtime)
         && artifact
             .required_features
             .iter()
@@ -848,7 +848,7 @@ impl AppUseCase {
                         StoredPluginCatalogStatusPayload {
                             github_available: false,
                             blocked_actions: plugin_catalog_blocked_actions(),
-                            message: Some(PLUGIN_CATALOG_OUTAGE_MESSAGE.to_string()),
+                            message: Some(format!("Plugin catalog refresh failed: {last_error}")),
                             restore_warnings: stored_status.restore_warnings,
                             last_error: Some(last_error),
                         },

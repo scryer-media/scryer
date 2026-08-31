@@ -1,13 +1,19 @@
-use super::Date;
+use super::{Date, ExternalIdPayload, MediaServerPlaybackLinkPayload};
 use async_graphql::{Enum, ID, InputObject, SimpleObject};
 
 // ── Metadata Gateway (proxied from SMG) ────────────────────────────────────
 
 #[derive(InputObject, Clone)]
-/// Metadata gateway movie lookup by provider ID and language.
+/// Metadata gateway movie lookup by one supported identity and language.
 pub struct MetadataMovieInput {
-    /// TVDB movie ID.
-    pub tvdb_id: String,
+    /// TVDB movie ID, when known.
+    pub tvdb_id: Option<String>,
+    /// SMG canonical movie title ID, when known.
+    pub smg_id: Option<i64>,
+    /// TMDB movie ID, when known.
+    pub tmdb_id: Option<i64>,
+    /// IMDb movie ID, when known.
+    pub imdb_id: Option<String>,
     /// Optional metadata language code.
     pub language: Option<String>,
 }
@@ -28,6 +34,14 @@ pub struct MetadataSeriesInput {
 pub struct MetadataSearchItemPayload {
     /// TVDB provider ID.
     pub tvdb_id: String,
+    /// SMG canonical title ID, or null for legacy-only results.
+    pub smg_id: Option<i64>,
+    /// TMDB provider ID, or null when unavailable.
+    pub tmdb_id: Option<i64>,
+    /// Primary metadata-provider source, or null for legacy-only results.
+    pub primary_source: Option<String>,
+    /// Every external identity supplied by the metadata provider.
+    pub external_ids: Vec<ExternalIdPayload>,
     /// Metadata title.
     pub name: String,
     /// IMDb ID, or null when unavailable.
@@ -71,6 +85,10 @@ pub struct MetadataSearchMultiPayload {
 pub struct MetadataMoviePayload {
     /// TVDB movie ID.
     pub tvdb_id: String,
+    /// SMG canonical movie title ID, or null when unavailable.
+    pub smg_id: Option<i64>,
+    /// TMDB movie ID, or null when unavailable.
+    pub tmdb_id: Option<i64>,
     /// Movie title.
     pub name: String,
     /// Provider slug.
@@ -226,4 +244,6 @@ pub struct CalendarEpisodePayload {
     pub monitored: bool,
     /// Compact availability derived from the episode's primary media file.
     pub media_availability: EpisodeMediaAvailabilityPayload,
+    /// Provider-native playback links available to the current user.
+    pub playback_links: Vec<MediaServerPlaybackLinkPayload>,
 }

@@ -1,22 +1,9 @@
-fn apply_manual_import_record_to_queue_item(item: &mut DownloadQueueItem, record: &ImportRecord) {
-    apply_import_record_overlay_to_queue_item(item, record);
-
-    if let Some(result_json) = record.result_json.as_deref()
-        && let Ok(result) = serde_json::from_str::<crate::ManualImportExecutionResult>(result_json)
-    {
-        item.import_error_code = result.error_code;
-        item.import_error_message = result.error_message.clone();
-        if let Some(message) = result.error_message {
-            item.attention_reason = Some(message);
-        }
-    }
-}
 async fn enrich_queue_item_import_states(app: &AppUseCase, items: &mut [DownloadQueueItem]) {
     let import_sources = items
         .iter()
         .filter(|item| queue_item_import_state_eligible(item))
         .map(|item| {
-            DownloadSourceIdentity::new(
+            ClientJobLocator::new(
                 Some(item.client_id.as_str()).filter(|value| !value.trim().is_empty()),
                 &item.client_type,
                 &item.download_client_item_id,
@@ -74,7 +61,7 @@ async fn enrich_queue_item_import_states(app: &AppUseCase, items: &mut [Download
     let mut fallback_records = HashMap::new();
     let mut delete_records = HashMap::new();
     for record in records {
-        let key = DownloadSourceIdentity::new(
+        let key = ClientJobLocator::new(
             record.source_client_id.as_deref(),
             &record.source_system,
             &record.source_ref,
@@ -96,7 +83,7 @@ async fn enrich_queue_item_import_states(app: &AppUseCase, items: &mut [Download
     }
 
     for item in items.iter_mut() {
-        let import_key = DownloadSourceIdentity::new(
+        let import_key = ClientJobLocator::new(
             Some(item.client_id.as_str()).filter(|value| !value.trim().is_empty()),
             &item.client_type,
             &item.download_client_item_id,
@@ -115,7 +102,7 @@ async fn enrich_queue_item_import_states(app: &AppUseCase, items: &mut [Download
         );
         if queue_item_import_state_eligible(item) {
             if let Some(record) = manual_records.get(&import_key) {
-                apply_manual_import_record_to_queue_item(item, record);
+                apply_import_record_to_queue_item(item, record);
             } else if let Some(record) = fallback_records.get(&import_key) {
                 apply_import_record_to_queue_item(item, record);
             }
@@ -134,7 +121,7 @@ impl AppUseCase {
         actor: &User,
         selection_id: String,
         mappings: Vec<crate::ManualImportCandidateMapping>,
-    ) -> AppResult<String> {
+    ) -> AppResult<crate::QueuedManualImport> {
         let selection = self
             .services
             .workflow
@@ -213,23 +200,34 @@ impl AppUseCase {
                     .to_string(),
             ));
         }
-        let trusted_root = std::fs::canonicalize(&completed.dest_dir).map_err(|_| {
-            AppError::Validation("download is no longer available for manual import".to_string())
-        })?;
+        let trusted_root = if selection.trusted_source_root.trim().is_empty() {
+            std::fs::canonicalize(&completed.dest_dir)
+        } else {
+            std::fs::canonicalize(crate::stored_paths::stored_path_to_path_buf(
+                &selection.trusted_source_root,
+            ))
+        }
+        .map_err(|_| AppError::Validation("manual import files are no longer available".to_string()))?;
         for candidate in selection.candidates.iter().filter(|candidate| {
             mappings
                 .iter()
                 .any(|mapping| mapping.candidate_id == candidate.id)
         }) {
-            crate::import_workflow::validate_manual_import_source_under_trusted_root(
+            let qualified = crate::import_workflow::qualify_manual_import_video_candidate(
                 &crate::stored_paths::stored_path_to_path_buf(&candidate.canonical_path),
                 &trusted_root,
             )
+            .await
             .map_err(|_| {
                 AppError::Validation(
                     "download is no longer available for manual import".to_string(),
                 )
             })?;
+            if qualified.is_none() {
+                return Err(AppError::Validation(
+                    "download is no longer available for manual import".to_string(),
+                ));
+            }
         }
 
         if let Some(existing) = crate::import_workflow::find_active_manual_import_for_source(
@@ -239,8 +237,13 @@ impl AppUseCase {
             &source_identity.item_id,
         )
         .await?
+        && !crate::import_workflow::manual_import_record_requires_reconciliation(&existing)
         {
-            return Ok(existing.id);
+            self.refresh_import_record_queue_snapshot(&existing.id).await;
+            return Ok(crate::QueuedManualImport {
+                import_id: existing.id,
+                source_identity,
+            });
         }
 
         let candidate_ids = mappings
@@ -289,18 +292,23 @@ impl AppUseCase {
             requested_at: Utc::now().to_rfc3339(),
             selection_id: Some(selection.id),
             release_evidence: Some(release_evidence),
+            trusted_source_root: Some(crate::stored_paths::path_to_stored_string(&trusted_root)),
+            archive_workspace_root: selection.archive_workspace_root.clone(),
         })
         .map_err(|error| AppError::Repository(error.to_string()))?;
         let import_id = self
             .services
             .workflow
             .imports
-            .queue_import_request(
+            .queue_import_request_with_identity_for_download(
                 source_identity.clone(),
                 ImportType::ManualImport.as_str().to_string(),
                 payload_json,
+                None,
+                selection.canonical_download_id.as_ref(),
             )
             .await?;
+        self.refresh_import_record_queue_snapshot(&import_id).await;
         let title = self
             .services
             .catalog
@@ -310,12 +318,15 @@ impl AppUseCase {
         self.emit_import_requested_event(
             actor,
             title.as_ref(),
-            source_identity.client_type,
-            source_identity.item_id,
+            source_identity.client_type.clone(),
+            source_identity.item_id.clone(),
             scryer_domain::ImportRequestKind::Manual,
         )
         .await;
-        Ok(import_id)
+        Ok(crate::QueuedManualImport {
+            import_id,
+            source_identity,
+        })
     }
 }
 impl AppUseCase {
@@ -325,7 +336,7 @@ impl AppUseCase {
         completed: &CompletedDownload,
         override_title_id: Option<&str>,
     ) -> AppResult<scryer_domain::ImportResult> {
-        self.trigger_manual_import_inner(actor, completed, override_title_id, false)
+        self.trigger_manual_import_inner(actor, completed, override_title_id)
             .await
     }
 
@@ -334,7 +345,6 @@ impl AppUseCase {
         actor: &User,
         completed: &CompletedDownload,
         override_title_id: Option<&str>,
-        import_permit_held: bool,
     ) -> AppResult<scryer_domain::ImportResult> {
         // If a title_id override is provided, inject it into the parameters
         let mut completed = completed.clone();
@@ -361,13 +371,7 @@ impl AppUseCase {
                 actor,
                 &completed,
                 title_id,
-                import_permit_held,
                 None,
-            )
-            .await
-        } else if import_permit_held {
-            crate::import_workflow::import_completed_download_for_manual_review_with_permit(
-                self, actor, &completed,
             )
             .await
         } else {

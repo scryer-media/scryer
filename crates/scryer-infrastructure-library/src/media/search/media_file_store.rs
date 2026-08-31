@@ -1,9 +1,10 @@
 use async_trait::async_trait;
 use chrono::Utc;
 use scryer_application::{
-    AppError, AppResult, CollectionEpisodeProgressSummary, CutoffUnmetQualitySummary,
-    EpisodeMediaAvailability, EpisodeMediaAvailabilityState, EpisodeScopedMediaFile,
-    InsertMediaFileInput, MediaFileAnalysis, MediaFileRepository, MissingEpisodeCandidate,
+    AppError, AppResult, ClaimedMediaFile, CollectionEpisodeProgressSummary,
+    CutoffUnmetQualitySummary, EpisodeMediaAvailability, EpisodeMediaAvailabilityState,
+    EpisodeScopedMediaFile, InsertMediaFileInput, MediaFileAnalysis, MediaFileAssociations,
+    MediaFileCatalogDisposition, MediaFileRepository, MissingEpisodeCandidate,
     MissingScopeCandidates, MissingSeriesMovieLinkCandidate, MissingTitleCandidate,
     TitleEpisodeProgressSummary, TitleMediaFile, TitleMediaSizeSummary, TitleMovieMediaSummary,
     TitleQualitySummary, derive_primary_quality_label,
@@ -14,7 +15,9 @@ use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 
 use crate::queries::common::parse_utc_datetime;
-use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, StoreDatastore, repo_err};
+use crate::queries::sql_runtime::{
+    SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTx, StoreDatastore, repo_err,
+};
 use crate::storage::sql::json::{canonical_json_text, json_text_or};
 
 const RECYCLE_BIN_PATH_SEGMENT: &str = "/.scryer-recycle/";
@@ -36,83 +39,297 @@ impl MediaFileStore {
     }
 }
 
+const INSERT_MEDIA_FILE_SQL: &str =
+    "INSERT INTO media_files
+     (id, title_id, file_path, size_bytes, announced_size_bytes, role, quality_id, scan_status, created_at,
+      source_signature_scheme, source_signature_value,
+      scene_name, release_group, source_type, resolution,
+      video_codec_parsed, audio_codec_parsed, audio_channels_parsed,
+      acquisition_score, scoring_log,
+      indexer_source, grabbed_release_title, grabbed_at,
+      edition, original_file_path, release_hash)
+     VALUES ({}, {}, {}, {}, {}, {}, {}, 'imported', {},
+             {}, {},
+             {}, {}, {}, {},
+             {}, {}, {},
+             {}, {},
+             {}, {}, {},
+             {}, {}, {})
+     ON CONFLICT(file_path) DO UPDATE SET
+        title_id = excluded.title_id,
+        size_bytes = excluded.size_bytes,
+        announced_size_bytes = excluded.announced_size_bytes,
+        role = excluded.role,
+        quality_id = excluded.quality_id,
+        scan_status = excluded.scan_status,
+        source_signature_scheme = excluded.source_signature_scheme,
+        source_signature_value = excluded.source_signature_value,
+        scene_name = excluded.scene_name,
+        release_group = excluded.release_group,
+        source_type = excluded.source_type,
+        resolution = excluded.resolution,
+        video_codec_parsed = excluded.video_codec_parsed,
+        audio_codec_parsed = excluded.audio_codec_parsed,
+        audio_channels_parsed = excluded.audio_channels_parsed,
+        acquisition_score = excluded.acquisition_score,
+        scoring_log = excluded.scoring_log,
+        indexer_source = excluded.indexer_source,
+        grabbed_release_title = excluded.grabbed_release_title,
+        grabbed_at = excluded.grabbed_at,
+        edition = excluded.edition,
+        original_file_path = excluded.original_file_path,
+        release_hash = excluded.release_hash";
+
+fn media_file_insert_args(
+    datastore: &StoreDatastore,
+    input: &InsertMediaFileInput,
+    id: &str,
+) -> AppResult<Vec<SqlArg>> {
+    Ok(vec![
+        SqlArg::Text(id.to_string()),
+        SqlArg::Text(input.title_id.clone()),
+        SqlArg::Text(input.file_path.clone()),
+        SqlArg::I64(input.size_bytes),
+        SqlArg::OptI64(input.announced_size_bytes),
+        SqlArg::Text(input.role.as_str().to_string()),
+        SqlArg::OptText(input.quality_label.clone()),
+        SqlArg::Timestamp(Utc::now()),
+        SqlArg::OptText(input.source_signature_scheme.clone()),
+        SqlArg::OptText(input.source_signature_value.clone()),
+        SqlArg::OptText(input.scene_name.clone()),
+        SqlArg::OptText(input.release_group.clone()),
+        SqlArg::OptText(input.source_type.clone()),
+        SqlArg::OptText(input.resolution.clone()),
+        SqlArg::OptText(input.video_codec_parsed.as_ref().map(ToString::to_string)),
+        SqlArg::OptText(input.audio_codec_parsed.clone()),
+        SqlArg::OptText(input.audio_channels_parsed.clone()),
+        SqlArg::OptI32(input.acquisition_score),
+        SqlArg::OptText(input.scoring_log.clone()),
+        SqlArg::OptText(input.indexer_source.clone()),
+        SqlArg::OptText(input.grabbed_release_title.clone()),
+        opt_timestamp_arg_for_datastore(datastore, input.grabbed_at.as_deref())?,
+        SqlArg::OptText(input.edition.clone()),
+        SqlArg::OptText(input.original_file_path.clone()),
+        SqlArg::OptText(input.release_hash.clone()),
+    ])
+}
+
+async fn insert_media_file_tx(
+    tx: &mut SqlTx<'_>,
+    file_path: &str,
+    args: &[SqlArg],
+) -> AppResult<String> {
+    SqlRuntime::execute(SqlExec::Tx(tx), INSERT_MEDIA_FILE_SQL, args).await?;
+    SqlRuntime::fetch_optional(
+        SqlExec::Tx(tx),
+        "SELECT id FROM media_files WHERE file_path = {} LIMIT 1",
+        &[SqlArg::Text(file_path.to_string())],
+    )
+    .await?
+    .ok_or_else(|| AppError::Repository(format!("inserted media file {file_path} was not found")))?
+    .text("id")
+}
+
+async fn reconcile_media_file_associations_tx(
+    tx: &mut SqlTx<'_>,
+    file_id: &str,
+    associations: &MediaFileAssociations,
+) -> AppResult<()> {
+    for episode_id in &associations.episode_ids {
+        SqlRuntime::execute(
+            SqlExec::Tx(tx),
+            "INSERT INTO file_episode_map (file_id, episode_id)
+             VALUES ({}, {})
+             ON CONFLICT(file_id, episode_id) DO NOTHING",
+            &[
+                SqlArg::Text(file_id.to_string()),
+                SqlArg::Text(episode_id.clone()),
+            ],
+        )
+        .await?;
+    }
+    for series_movie_link_id in &associations.series_movie_link_ids {
+        SqlRuntime::execute(
+            SqlExec::Tx(tx),
+            "INSERT INTO file_series_movie_link_map (file_id, series_movie_link_id)
+             VALUES ({}, {})
+             ON CONFLICT(file_id, series_movie_link_id) DO NOTHING",
+            &[
+                SqlArg::Text(file_id.to_string()),
+                SqlArg::Text(series_movie_link_id.clone()),
+            ],
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+struct StoredMediaFileOwnership {
+    media_file_id: String,
+    title_id: String,
+    original_file_path: Option<String>,
+    episode_ids: Vec<String>,
+    series_movie_link_ids: Vec<String>,
+}
+
+async fn load_media_file_ownership_tx(
+    tx: &mut SqlTx<'_>,
+    file_path: &str,
+) -> AppResult<Option<StoredMediaFileOwnership>> {
+    let (where_clause, args) = media_file_path_predicate(file_path);
+    let Some(row) = SqlRuntime::fetch_optional(
+        SqlExec::Tx(tx),
+        &format!(
+            "SELECT mf.id, mf.title_id, mf.original_file_path
+               FROM media_files mf
+              WHERE {where_clause}
+              LIMIT 1"
+        ),
+        &args,
+    )
+    .await?
+    else {
+        return Ok(None);
+    };
+    let media_file_id = row.text("id")?;
+    let title_id = row.text("title_id")?;
+    let original_file_path = row.opt_text("original_file_path")?;
+    let episode_ids = SqlRuntime::fetch_all(
+        SqlExec::Tx(tx),
+        "SELECT episode_id FROM file_episode_map WHERE file_id = {} ORDER BY episode_id",
+        &[SqlArg::Text(media_file_id.clone())],
+    )
+    .await?
+    .into_iter()
+    .map(|row| row.text("episode_id"))
+    .collect::<AppResult<Vec<_>>>()?;
+    let series_movie_link_ids = SqlRuntime::fetch_all(
+        SqlExec::Tx(tx),
+        "SELECT series_movie_link_id
+           FROM file_series_movie_link_map
+          WHERE file_id = {}
+          ORDER BY series_movie_link_id",
+        &[SqlArg::Text(media_file_id.clone())],
+    )
+    .await?
+    .into_iter()
+    .map(|row| row.text("series_movie_link_id"))
+    .collect::<AppResult<Vec<_>>>()?;
+    Ok(Some(StoredMediaFileOwnership {
+        media_file_id,
+        title_id,
+        original_file_path,
+        episode_ids,
+        series_movie_link_ids,
+    }))
+}
+
+fn import_destination_ownership_matches(
+    input: &InsertMediaFileInput,
+    expected: &MediaFileAssociations,
+    actual: &StoredMediaFileOwnership,
+) -> bool {
+    fn associations_are_compatible(
+        expected: &[String],
+        actual: &[String],
+        missing_is_recoverable: bool,
+    ) -> bool {
+        if expected.is_empty() {
+            actual.is_empty()
+        } else {
+            (missing_is_recoverable || !actual.is_empty())
+                && actual.iter().all(|id| expected.contains(id))
+        }
+    }
+
+    let has_any_association =
+        !actual.episode_ids.is_empty() || !actual.series_movie_link_ids.is_empty();
+    let source_matches = actual
+        .original_file_path
+        .as_deref()
+        .zip(input.original_file_path.as_deref())
+        .is_some_and(|(actual, expected)| {
+            media_file_path_match_key(actual) == media_file_path_match_key(expected)
+        });
+    let missing_is_recoverable = has_any_association || source_matches;
+    actual.title_id == input.title_id
+        && missing_is_recoverable
+        && associations_are_compatible(
+            &expected.episode_ids,
+            &actual.episode_ids,
+            missing_is_recoverable,
+        )
+        && associations_are_compatible(
+            &expected.series_movie_link_ids,
+            &actual.series_movie_link_ids,
+            missing_is_recoverable,
+        )
+}
+
 #[async_trait]
 impl MediaFileRepository for MediaFileStore {
     async fn insert_media_file(&self, input: &InsertMediaFileInput) -> AppResult<String> {
         let id = Id::new().0;
-        let now = Utc::now();
-        execute_write(
+        let args = media_file_insert_args(&self.datastore, input, &id)?;
+        let file_path = input.file_path.clone();
+        SqlRuntime::run_in_transaction(&self.datastore, "insert_media_file", move |tx| {
+            let args = args.clone();
+            let file_path = file_path.clone();
+            Box::pin(async move { insert_media_file_tx(tx, &file_path, &args).await })
+        })
+        .await
+    }
+
+    async fn claim_import_destination(
+        &self,
+        input: &InsertMediaFileInput,
+        associations: &MediaFileAssociations,
+    ) -> AppResult<ClaimedMediaFile> {
+        let id = Id::new().0;
+        let args = media_file_insert_args(&self.datastore, input, &id)?;
+        let file_path = input.file_path.clone();
+        let input = input.clone();
+        let associations = associations.clone();
+        SqlRuntime::run_in_transaction(
             &self.datastore,
-            "insert_media_file",
-            "INSERT INTO media_files
-             (id, title_id, file_path, size_bytes, announced_size_bytes, role, quality_id, scan_status, created_at,
-              source_signature_scheme, source_signature_value,
-              scene_name, release_group, source_type, resolution,
-              video_codec_parsed, audio_codec_parsed, audio_channels_parsed,
-              acquisition_score, scoring_log,
-              indexer_source, grabbed_release_title, grabbed_at,
-              edition, original_file_path, release_hash)
-             VALUES ({}, {}, {}, {}, {}, {}, {}, 'imported', {},
-                     {}, {},
-                     {}, {}, {}, {},
-                     {}, {}, {},
-                     {}, {},
-                     {}, {}, {},
-                     {}, {}, {})
-             ON CONFLICT(file_path) DO UPDATE SET
-                title_id = excluded.title_id,
-                size_bytes = excluded.size_bytes,
-                announced_size_bytes = excluded.announced_size_bytes,
-                role = excluded.role,
-                quality_id = excluded.quality_id,
-                scan_status = excluded.scan_status,
-                source_signature_scheme = excluded.source_signature_scheme,
-                source_signature_value = excluded.source_signature_value,
-                scene_name = excluded.scene_name,
-                release_group = excluded.release_group,
-                source_type = excluded.source_type,
-                resolution = excluded.resolution,
-                video_codec_parsed = excluded.video_codec_parsed,
-                audio_codec_parsed = excluded.audio_codec_parsed,
-                audio_channels_parsed = excluded.audio_channels_parsed,
-                acquisition_score = excluded.acquisition_score,
-                scoring_log = excluded.scoring_log,
-                indexer_source = excluded.indexer_source,
-                grabbed_release_title = excluded.grabbed_release_title,
-                grabbed_at = excluded.grabbed_at,
-                edition = excluded.edition,
-                original_file_path = excluded.original_file_path,
-                release_hash = excluded.release_hash",
-            vec![
-                SqlArg::Text(id.clone()),
-                SqlArg::Text(input.title_id.clone()),
-                SqlArg::Text(input.file_path.clone()),
-                SqlArg::I64(input.size_bytes),
-                SqlArg::OptI64(input.announced_size_bytes),
-                SqlArg::Text(input.role.as_str().to_string()),
-                SqlArg::OptText(input.quality_label.clone()),
-                SqlArg::Timestamp(now),
-                SqlArg::OptText(input.source_signature_scheme.clone()),
-                SqlArg::OptText(input.source_signature_value.clone()),
-                SqlArg::OptText(input.scene_name.clone()),
-                SqlArg::OptText(input.release_group.clone()),
-                SqlArg::OptText(input.source_type.clone()),
-                SqlArg::OptText(input.resolution.clone()),
-                SqlArg::OptText(input.video_codec_parsed.as_ref().map(ToString::to_string)),
-                SqlArg::OptText(input.audio_codec_parsed.clone()),
-                SqlArg::OptText(input.audio_channels_parsed.clone()),
-                SqlArg::OptI32(input.acquisition_score),
-                SqlArg::OptText(input.scoring_log.clone()),
-                SqlArg::OptText(input.indexer_source.clone()),
-                SqlArg::OptText(input.grabbed_release_title.clone()),
-                opt_timestamp_arg_for_datastore(&self.datastore, input.grabbed_at.as_deref())?,
-                SqlArg::OptText(input.edition.clone()),
-                SqlArg::OptText(input.original_file_path.clone()),
-                SqlArg::OptText(input.release_hash.clone()),
-            ],
+            "claim_import_destination",
+            move |tx| {
+                let args = args.clone();
+                let file_path = file_path.clone();
+                let input = input.clone();
+                let associations = associations.clone();
+                Box::pin(async move {
+                    if let Some(existing) = load_media_file_ownership_tx(tx, &file_path).await? {
+                        if !import_destination_ownership_matches(
+                            &input,
+                            &associations,
+                            &existing,
+                        ) {
+                            return Err(AppError::ManualReconciliationRequired(format!(
+                                "import destination {file_path} is cataloged for a different logical import target"
+                            )));
+                        }
+                        reconcile_media_file_associations_tx(
+                            tx,
+                            &existing.media_file_id,
+                            &associations,
+                        )
+                        .await?;
+                        return Ok(ClaimedMediaFile {
+                            media_file_id: existing.media_file_id,
+                            disposition: MediaFileCatalogDisposition::Reused,
+                        });
+                    }
+                    let file_id = insert_media_file_tx(tx, &file_path, &args).await?;
+                    reconcile_media_file_associations_tx(tx, &file_id, &associations).await?;
+                    Ok(ClaimedMediaFile {
+                        media_file_id: file_id,
+                        disposition: MediaFileCatalogDisposition::Created,
+                    })
+                })
+            },
         )
-        .await?;
-        Ok(id)
+        .await
     }
 
     async fn link_file_to_episode(&self, file_id: &str, episode_id: &str) -> AppResult<()> {
@@ -614,6 +831,7 @@ impl MediaFileRepository for MediaFileStore {
               INNER JOIN titles t ON t.id = sml.series_title_id
               INNER JOIN movie_entities me ON me.id = sml.movie_entity_id
               WHERE {} AND {}
+                AND ({} OR {})
                 AND t.deleted_at IS NULL
                 AND NOT EXISTS (
                     SELECT 1 FROM file_series_movie_link_map fsmlm
@@ -624,6 +842,8 @@ impl MediaFileRepository for MediaFileStore {
               ORDER BY sml.id",
             bool_column_is_true(dialect, "sml.monitored"),
             bool_column_is_true(dialect, "t.monitored"),
+            bool_column_is_true(dialect, "sml.metadata_active"),
+            bool_column_is_true(dialect, "sml.monitoring_override"),
         );
         let series_movie_links = SqlRuntime::fetch_all(self.datastore.read_exec(), &link_sql, &[])
             .await?
@@ -1741,8 +1961,8 @@ mod tests {
     use crate::media::titles::store::TitleStore;
     use chrono::Utc;
     use scryer_application::{
-        AudioStreamDetail, MediaFileAnalysis, MediaFileRepository, MediaFileRole, ShowRepository,
-        TitleRepository,
+        AudioStreamDetail, MediaFileAnalysis, MediaFileAssociations, MediaFileRepository,
+        MediaFileRole, ShowRepository, TitleRepository,
     };
     use scryer_domain::{
         Collection, CollectionType, Episode, MediaFacet, MovieEntity, SeriesMovieLink, Title,
@@ -1978,6 +2198,227 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn destination_claim_reuses_the_row_with_every_episode_association() {
+        let db = std::env::temp_dir().join(format!(
+            "scryer_media_file_path_ownership_{}.db",
+            chrono::Utc::now().timestamp_micros()
+        ));
+        let services = SqliteServices::new(db.to_string_lossy())
+            .await
+            .expect("db should initialize");
+        let titles = title_store(&services);
+        let shows = show_store(&services);
+        let media_files = media_file_store(&services);
+        let title = make_test_series_title("title-path-ownership");
+        titles
+            .create(title.clone())
+            .await
+            .expect("title should insert");
+        let collection = Collection {
+            id: "collection-path-ownership".to_string(),
+            title_id: title.id.clone(),
+            collection_type: CollectionType::Season,
+            collection_index: "1".to_string(),
+            label: Some("Season 1".to_string()),
+            ordered_path: None,
+            narrative_order: None,
+            first_episode_number: Some("1".to_string()),
+            last_episode_number: Some("2".to_string()),
+            monitored: true,
+            created_at: Utc::now(),
+        };
+        ShowRepository::create_collection(&shows, collection.clone())
+            .await
+            .expect("collection should insert");
+        for (id, number) in [
+            ("episode-path-ownership-1", "1"),
+            ("episode-path-ownership-2", "2"),
+        ] {
+            ShowRepository::create_episode(
+                &shows,
+                Episode {
+                    id: id.to_string(),
+                    title_id: title.id.clone(),
+                    collection_id: Some(collection.id.clone()),
+                    episode_type: scryer_domain::EpisodeType::Standard,
+                    episode_number: Some(number.to_string()),
+                    season_number: Some("1".to_string()),
+                    episode_label: Some(format!("S01E0{number}")),
+                    title: Some(format!("Episode {number}")),
+                    air_date: None,
+                    duration_seconds: None,
+                    has_multi_audio: false,
+                    has_subtitle: false,
+                    is_filler: false,
+                    is_recap: false,
+                    absolute_number: None,
+                    overview: None,
+                    tvdb_id: None,
+                    image_url: None,
+                    monitored: true,
+                    created_at: Utc::now(),
+                },
+            )
+            .await
+            .expect("episode should insert");
+        }
+        let path = "C:\\Media\\Show\\Season 01\\Show - S01E01-E02.mkv";
+        let input = InsertMediaFileInput {
+            title_id: title.id.clone(),
+            file_path: path.to_string(),
+            original_file_path: Some("C:\\Downloads\\Show.S01E01-E02.mkv".to_string()),
+            size_bytes: 1_000,
+            ..Default::default()
+        };
+        let associations = MediaFileAssociations {
+            episode_ids: vec![
+                "episode-path-ownership-1".to_string(),
+                "episode-path-ownership-2".to_string(),
+            ],
+            series_movie_link_ids: Vec::new(),
+        };
+        let created = media_files
+            .claim_import_destination(&input, &associations)
+            .await
+            .expect("media file and associations should insert atomically");
+        assert_eq!(created.disposition, MediaFileCatalogDisposition::Created);
+
+        #[cfg(windows)]
+        let lookup_path = "c:/media/show/season 01/show - s01e01-e02.mkv";
+        #[cfg(not(windows))]
+        let lookup_path = path;
+        let reused = media_files
+            .claim_import_destination(
+                &InsertMediaFileInput {
+                    file_path: lookup_path.to_string(),
+                    ..input.clone()
+                },
+                &associations,
+            )
+            .await
+            .expect("matching ownership should be reusable");
+        assert_eq!(reused.media_file_id, created.media_file_id);
+        assert_eq!(reused.disposition, MediaFileCatalogDisposition::Reused);
+
+        let link_count =
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM file_episode_map WHERE file_id = ?")
+                .bind(&created.media_file_id)
+                .fetch_one(services.pool())
+                .await
+                .expect("episode associations should load");
+        assert_eq!(link_count, 2);
+
+        let partial_input = InsertMediaFileInput {
+            file_path: "C:\\Media\\Show\\Season 01\\Show - S01E01-E02 partial.mkv".to_string(),
+            original_file_path: Some("C:\\Downloads\\Show.partial.mkv".to_string()),
+            ..input.clone()
+        };
+        let partial_id = media_files
+            .insert_media_file(&partial_input)
+            .await
+            .expect("partial media row should insert");
+        media_files
+            .link_file_to_episode(&partial_id, "episode-path-ownership-1")
+            .await
+            .expect("partial association should insert");
+        let recovered = media_files
+            .claim_import_destination(&partial_input, &associations)
+            .await
+            .expect("a partial same-target pack should be recovered");
+        assert_eq!(recovered.media_file_id, partial_id);
+        assert_eq!(recovered.disposition, MediaFileCatalogDisposition::Reused);
+        let recovered_link_count =
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM file_episode_map WHERE file_id = ?")
+                .bind(&partial_id)
+                .fetch_one(services.pool())
+                .await
+                .expect("recovered episode associations should load");
+        assert_eq!(recovered_link_count, 2);
+        media_files
+            .claim_import_destination(
+                &partial_input,
+                &MediaFileAssociations {
+                    episode_ids: vec!["episode-path-ownership-1".to_string()],
+                    series_movie_link_ids: Vec::new(),
+                },
+            )
+            .await
+            .expect_err("an additional existing association must remain a conflict");
+
+        let unassociated_input = InsertMediaFileInput {
+            file_path: "C:\\Media\\Show\\Movie.mkv".to_string(),
+            original_file_path: Some("C:\\Downloads\\Movie.mkv".to_string()),
+            ..input
+        };
+        let unassociated_id = media_files
+            .insert_media_file(&unassociated_input)
+            .await
+            .expect("unassociated media row should insert");
+        media_files
+            .claim_import_destination(
+                &InsertMediaFileInput {
+                    original_file_path: Some("C:\\Downloads\\Other.mkv".to_string()),
+                    ..unassociated_input.clone()
+                },
+                &MediaFileAssociations::default(),
+            )
+            .await
+            .expect_err("unassociated rows require matching source provenance");
+        let recovered = media_files
+            .claim_import_destination(&unassociated_input, &MediaFileAssociations::default())
+            .await
+            .expect("matching source provenance should recover an unassociated row");
+        assert_eq!(recovered.media_file_id, unassociated_id);
+        assert_eq!(recovered.disposition, MediaFileCatalogDisposition::Reused);
+
+        let _ = std::fs::remove_file(db);
+    }
+
+    #[tokio::test]
+    async fn atomic_media_file_association_failure_rolls_back_the_media_row() {
+        let db = std::env::temp_dir().join(format!(
+            "scryer_media_file_association_rollback_{}.db",
+            chrono::Utc::now().timestamp_micros()
+        ));
+        let services = SqliteServices::new(db.to_string_lossy())
+            .await
+            .expect("db should initialize");
+        let titles = title_store(&services);
+        let media_files = media_file_store(&services);
+        let title = make_test_series_title("title-association-rollback");
+        titles
+            .create(title.clone())
+            .await
+            .expect("title should insert");
+        let path = "/library/Show/Season 01/Show - S01E01.mkv";
+
+        media_files
+            .claim_import_destination(
+                &InsertMediaFileInput {
+                    title_id: title.id,
+                    file_path: path.to_string(),
+                    size_bytes: 1_000,
+                    ..Default::default()
+                },
+                &MediaFileAssociations {
+                    episode_ids: vec!["missing-episode".to_string()],
+                    series_movie_link_ids: Vec::new(),
+                },
+            )
+            .await
+            .expect_err("a missing association must roll back the media row");
+
+        assert!(
+            media_files
+                .get_media_file_by_path(path)
+                .await
+                .expect("media lookup should succeed")
+                .is_none()
+        );
+        let _ = std::fs::remove_file(db);
+    }
+
+    #[tokio::test]
     async fn missing_scope_candidates_include_monitored_titles_episodes_and_series_movies() {
         let db = std::env::temp_dir().join(format!(
             "scryer_missing_scope_candidates_{}.db",
@@ -2062,6 +2503,8 @@ mod tests {
                 tmdb_id: None,
                 mal_id: None,
                 anidb_id: None,
+                ratings: None,
+                credits: None,
                 created_at: now,
                 updated_at: now,
             },
@@ -2075,7 +2518,9 @@ mod tests {
             movie_form: Some("movie".to_string()),
             confidence: Some("high".to_string()),
             signal_summary: None,
-            source: Some("test".to_string()),
+            source: Some("anibridge".to_string()),
+            monitoring_override: None,
+            metadata_active: true,
             monitored: true,
             legacy_collection_id: None,
             created_at: now,
@@ -2126,6 +2571,47 @@ mod tests {
         assert!(
             !link_candidate.link_created_at.is_empty(),
             "series movie link timestamp should be serialized"
+        );
+
+        ShowRepository::delete_stale_series_movie_links(&shows, &title.id, &[])
+            .await
+            .expect("stale series movie link should become inactive");
+        let mut inactive_link =
+            ShowRepository::list_series_movie_links_for_title(&shows, &title.id)
+                .await
+                .expect("series movie links should list")
+                .into_iter()
+                .find(|candidate| candidate.id == link.id)
+                .expect("stale series movie link should be retained");
+        assert!(!inactive_link.metadata_active);
+        assert!(!inactive_link.monitored);
+        let inactive = media_files
+            .list_missing_scope_candidates()
+            .await
+            .expect("missing scope candidates should load");
+        assert!(
+            inactive
+                .series_movie_links
+                .iter()
+                .all(|candidate| candidate.series_movie_link_id != link.id),
+            "policy-disabled inactive links must not be acquired"
+        );
+
+        inactive_link.monitoring_override = Some(true);
+        inactive_link.monitored = true;
+        ShowRepository::upsert_series_movie_link(&shows, inactive_link)
+            .await
+            .expect("explicitly enabled inactive series movie link should update");
+        let explicitly_enabled = media_files
+            .list_missing_scope_candidates()
+            .await
+            .expect("missing scope candidates should load");
+        assert!(
+            explicitly_enabled
+                .series_movie_links
+                .iter()
+                .any(|candidate| candidate.series_movie_link_id == link.id),
+            "an explicit operator choice remains eligible after metadata retires the link"
         );
 
         let _ = std::fs::remove_file(db);

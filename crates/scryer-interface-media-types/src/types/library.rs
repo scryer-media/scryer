@@ -32,9 +32,9 @@ pub struct LibraryRootPayload {
 #[derive(SimpleObject, Clone)]
 /// Effective library settings together with nullable per-library overrides.
 pub struct LibrarySettingsPayload {
-    /// Library override for required audio language codes; null means inherit.
+    /// Library override for required audio language codes; `original` resolves per title.
     pub required_audio_languages_override: Option<Vec<String>>,
-    /// Effective required audio language codes after inheritance.
+    /// Effective configured requirements after inheritance; `original` remains unchanged.
     pub required_audio_languages: Vec<String>,
     /// Library metadata-language override; null means inherit the global default.
     pub metadata_language_override: Option<String>,
@@ -349,7 +349,7 @@ pub struct NavigationBadgeCountsPayload {
     pub pending_import_counts: PendingImportCountsPayload,
     /// Pending media requests visible to the caller.
     pub pending_media_request_counts: MediaRequestCountsPayload,
-    /// Count of import activity visible to the caller.
+    /// Count of imports awaiting operator attention and visible to the caller.
     pub activity_import_count: i32,
     /// Count of available plugin updates visible to the caller.
     pub plugin_update_count: i32,
@@ -702,6 +702,14 @@ pub struct AddTitleInput {
     pub options: Option<TitleOptionsInput>,
     /// External provider identifiers for the title.
     pub external_ids: Option<Vec<ExternalIdInput>>,
+    /// SMG canonical movie title ID, when supplied by metadata search.
+    pub smg_id: Option<i64>,
+    /// TVDB title ID, when supplied by metadata search.
+    pub tvdb_id: Option<String>,
+    /// TMDB title ID, when supplied by metadata search.
+    pub tmdb_id: Option<i64>,
+    /// IMDb title ID, when supplied by metadata search.
+    pub imdb_id: Option<String>,
     /// Download source locator, such as an NZB URL or magnet URI, used when queuing the title.
     pub source_hint: Option<String>,
     /// Optional source category for the title.
@@ -748,6 +756,8 @@ pub struct BeginManualImportSelectionInput {
     pub download_client_item_id: String,
     /// Title identity used to suggest import targets.
     pub title_id: ID,
+    /// Explicitly extract an archive-only download before building the preview.
+    pub extract_archives: Option<bool>,
 }
 
 #[derive(InputObject, Clone)]
@@ -912,8 +922,10 @@ pub struct SetPrimaryMovieFileInput {
 pub struct FixTitleMatchInput {
     /// Title identity to rematch.
     pub title_id: ID,
-    /// TVDB identity to associate with the title.
-    pub tvdb_id: String,
+    /// TVDB identity to associate with the title. Required for Series and Anime.
+    pub tvdb_id: Option<String>,
+    /// SMG canonical movie title ID to associate with a Movie title.
+    pub smg_id: Option<i64>,
 }
 
 #[derive(InputObject, Clone)]
@@ -990,7 +1002,7 @@ pub struct UpdateLibraryInput {
 #[derive(InputObject, Clone)]
 /// Acquisition, import, routing, and filesystem settings for a library.
 pub struct LibrarySettingsInput {
-    /// Required audio-language codes.
+    /// Required audio-language codes; use `original` to resolve per title.
     pub required_audio_languages: Option<Vec<String>>,
     /// Metadata language override; null inherits the global default.
     pub metadata_language: Option<String>,

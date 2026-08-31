@@ -81,6 +81,7 @@ export type IndexerProxyDraft = {
 export type ConfigFieldOption = {
   value: string;
   label: string;
+  configOverrides?: Array<{ key: string; value: string }>;
 };
 
 export type ConfigFieldTypeValue =

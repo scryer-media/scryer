@@ -2,6 +2,13 @@ query GetMovie($tvdbId: Int!, $language: String!) {
   movie(tvdbId: $tvdbId, language: $language) {
     movie {
       tvdb_id
+      title_id
+      external_ids {
+        source
+        kind
+        id
+        key
+      }
       name
       slug
       year

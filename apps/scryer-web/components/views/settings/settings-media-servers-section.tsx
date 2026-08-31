@@ -509,6 +509,28 @@ export function SettingsMediaServersSection({
                   </label>
                 </div>
 
+                {draft.provider !== "PLEX" ? (
+                  <label className="block">
+                    <Label className="mb-2 block" htmlFor="settings-media-server-external-url">
+                      {t("settings.externalUrl")}
+                    </Label>
+                    <Input
+                      id="settings-media-server-external-url"
+                      value={draft.externalUrl}
+                      onChange={(event) =>
+                        setDraft((previous) => ({
+                          ...previous,
+                          externalUrl: event.target.value,
+                        }))
+                      }
+                      placeholder={`https://${draft.provider}.example.test`}
+                    />
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {t("settings.externalUrlHint")}
+                    </p>
+                  </label>
+                ) : null}
+
                 <div className="rounded border border-border bg-background/40 p-3">
                   <label className="flex items-center gap-3">
                     <Checkbox

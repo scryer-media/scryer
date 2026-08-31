@@ -121,19 +121,22 @@ function normalizeOrderedLookupValues(values: string[]): string[] {
   return normalized;
 }
 
-function titleTvdbIds(title: TitleRecord): string[] {
+function titleMetadataIds(title: TitleRecord, source: "smg" | "tvdb"): string[] {
   return (title.externalIds ?? [])
-    .filter((externalId) => externalId.source.toLowerCase() === "tvdb")
+    .filter((externalId) => externalId.source.toLowerCase() === source)
     .map((externalId) => externalId.value.trim())
     .filter(Boolean);
 }
 
-function buildCatalogTitleLookupByTvdbId(titles: TitleRecord[]): Record<string, TitleRecord> {
+function buildCatalogTitleLookupByMetadataId(titles: TitleRecord[]): Record<string, TitleRecord> {
   const lookup: Record<string, TitleRecord> = {};
   for (const title of titles) {
-    for (const tvdbId of titleTvdbIds(title)) {
-      if (!(tvdbId in lookup)) {
-        lookup[tvdbId] = title;
+    for (const source of ["smg", "tvdb"] as const) {
+      for (const id of titleMetadataIds(title, source)) {
+        const key = `${source}:${id}`;
+        if (!(key in lookup)) {
+          lookup[key] = title;
+        }
       }
     }
   }
@@ -144,12 +147,24 @@ function metadataResultTvdbId(result: MetadataTvdbSearchItem): string {
   return String(result.tvdbId).trim();
 }
 
+function metadataResultSmgId(result: MetadataTvdbSearchItem): string {
+  return result.smgId == null ? "" : String(result.smgId).trim();
+}
+
+function metadataResultCatalogLookupKeys(result: MetadataTvdbSearchItem): string[] {
+  const smgId = metadataResultSmgId(result);
+  const tvdbId = metadataResultTvdbId(result);
+  return [
+    ...(smgId ? [`smg:${smgId}`] : []),
+    ...(tvdbId ? [`tvdb:${tvdbId}`] : []),
+  ];
+}
+
 function isMetadataResultCataloged(
   lookup: Record<string, TitleRecord>,
   result: MetadataTvdbSearchItem,
 ): boolean {
-  const tvdbId = metadataResultTvdbId(result);
-  return tvdbId !== "" && lookup[tvdbId] !== undefined;
+  return metadataResultCatalogLookupKeys(result).some((key) => lookup[key] !== undefined);
 }
 
 function filterCatalogedMetadataResults(
@@ -345,13 +360,17 @@ function normalizeCatalogAddRequestKey(
 }
 
 function metadataResultExternalIds(result: MetadataTvdbSearchItem): ExternalId[] {
+  const smgId = metadataResultSmgId(result);
   const tvdbId = String(result.tvdbId).trim();
+  const tmdbId = result.tmdbId == null ? "" : String(result.tmdbId).trim();
   const imdbId = result.imdbId?.trim();
   const seen = new Set<string>();
   const ids: ExternalId[] = [];
   for (const externalId of [
     ...(result.externalIds ?? []),
+    ...(smgId ? [{ source: "smg", value: smgId }] : []),
     ...(tvdbId ? [{ source: "tvdb", value: tvdbId }] : []),
+    ...(tmdbId ? [{ source: "tmdb", value: tmdbId }] : []),
     ...(imdbId ? [{ source: "imdb", value: imdbId }] : []),
   ]) {
     const source = externalId.source.trim().toLowerCase();
@@ -846,7 +865,13 @@ export function useGlobalSearch({
       const tvdbId = (title.externalIds ?? [])
         .find((externalId) => externalId.source.toLowerCase() === "tvdb")
         ?.value.trim();
-      if (!tvdbId) {
+      const smgId = (title.externalIds ?? [])
+        .find((externalId) => externalId.source.toLowerCase() === "smg")
+        ?.value.trim();
+      if (title.facet === "MOVIE" && !smgId && !tvdbId) {
+        return title;
+      }
+      if (title.facet !== "MOVIE" && !tvdbId) {
         return title;
       }
 
@@ -854,7 +879,8 @@ export function useGlobalSearch({
         if (title.facet === "MOVIE") {
           const { data, error } = await client.query(metadataMovieQuery, {
             input: {
-              tvdbId,
+              smgId: smgId ? Number(smgId) : undefined,
+              tvdbId: tvdbId || undefined,
               language: uiLanguage,
             },
           }).toPromise();
@@ -929,6 +955,27 @@ export function useGlobalSearch({
     [lookupCatalogTitlesByExternalIds],
   );
 
+  const lookupCatalogTitlesForMetadataResults = useCallback(
+    async (
+      results: MetadataTvdbSearchItem[],
+      fetchOverride?: typeof fetch,
+    ): Promise<TitleRecord[]> => {
+      const [smgMatches, tvdbMatches] = await Promise.all([
+        lookupCatalogTitlesByExternalIds(
+          "smg",
+          results.map(metadataResultSmgId),
+          fetchOverride,
+        ),
+        lookupCatalogTitlesByTvdbIds(
+          results.map(metadataResultTvdbId),
+          fetchOverride,
+        ),
+      ]);
+      return mergeCatalogResults(smgMatches, tvdbMatches);
+    },
+    [lookupCatalogTitlesByExternalIds, lookupCatalogTitlesByTvdbIds],
+  );
+
   const runTvdbSearch = useCallback(
     async (query: string) => {
       setGlobalStatus(t("status.searchingTvdb", { query }));
@@ -945,10 +992,8 @@ export function useGlobalSearch({
           query,
         );
         const catalogLookup = canViewCatalog
-          ? buildCatalogTitleLookupByTvdbId(
-              await lookupCatalogTitlesByTvdbIds(
-                rankedMatches.map((item) => metadataResultTvdbId(item)),
-              ),
+          ? buildCatalogTitleLookupByMetadataId(
+              await lookupCatalogTitlesForMetadataResults(rankedMatches),
             )
           : {};
         const matches = rankedMatches.filter(
@@ -966,7 +1011,7 @@ export function useGlobalSearch({
     [
       client,
       canViewCatalog,
-      lookupCatalogTitlesByTvdbIds,
+      lookupCatalogTitlesForMetadataResults,
       mapFacetToTvdbType,
       queueFacet,
       setGlobalStatus,
@@ -1070,17 +1115,13 @@ export function useGlobalSearch({
             trimmed,
           );
           if (canViewCatalog) {
-            promotedCatalogEntries = await lookupCatalogTitlesByTvdbIds(
-              [
-                ...rankedMovies.map((item) => metadataResultTvdbId(item)),
-                ...rankedAnime.map((item) => metadataResultTvdbId(item)),
-                ...rankedSeries.map((item) => metadataResultTvdbId(item)),
-              ],
+            promotedCatalogEntries = await lookupCatalogTitlesForMetadataResults(
+              [...rankedMovies, ...rankedAnime, ...rankedSeries],
               abortableFetch,
             );
           }
           if (requestId !== autocompleteRequestId.current) return;
-          const nextCatalogLookup = buildCatalogTitleLookupByTvdbId(promotedCatalogEntries);
+          const nextCatalogLookup = buildCatalogTitleLookupByMetadataId(promotedCatalogEntries);
           if (canViewCatalog) {
             setCatalogTitlesByTvdbId((previous) =>
               sameCatalogLookup(previous, nextCatalogLookup) ? previous : nextCatalogLookup,
@@ -1168,7 +1209,7 @@ export function useGlobalSearch({
       canViewCatalog,
       emptyCatalogTitlesByTvdbId,
       emptyMetadataSearchResults,
-      lookupCatalogTitlesByTvdbIds,
+      lookupCatalogTitlesForMetadataResults,
       primeCatalogConfigForMetadataActions,
       resolveCatalogPosterUrl,
       setGlobalStatus,
@@ -1424,6 +1465,10 @@ export function useGlobalSearch({
                 : {}),
             },
             externalIds,
+            smgId: result.smgId ?? undefined,
+            tvdbId: metadataResultTvdbId(result) || undefined,
+            tmdbId: result.tmdbId ?? undefined,
+            imdbId: result.imdbId?.trim() || undefined,
             ...(facet === "MOVIE" && options.minAvailability ? { minAvailability: options.minAvailability } : {}),
             year: result.year ?? undefined,
             overview: result.overview || undefined,

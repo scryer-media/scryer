@@ -290,14 +290,34 @@ fn apply_import_record_overlay_to_queue_item(item: &mut DownloadQueueItem, recor
         .or(Some(record.updated_at.clone()));
 }
 
+pub(crate) fn import_record_error_overlay(
+    record: &ImportRecord,
+) -> (Option<scryer_domain::ImportErrorCode>, Option<String>) {
+    if record.import_type == ImportType::ManualImport {
+        return record
+            .result_json
+            .as_deref()
+            .and_then(|json| serde_json::from_str::<crate::ManualImportExecutionResult>(json).ok())
+            .map_or((None, None), |result| {
+                (result.error_code, result.error_message)
+            });
+    }
+
+    let error_message = record
+        .result_json
+        .as_deref()
+        .and_then(|json| serde_json::from_str::<scryer_domain::ImportResult>(json).ok())
+        .and_then(|result| result.error_message);
+    (None, error_message)
+}
+
 fn apply_import_record_to_queue_item(item: &mut DownloadQueueItem, record: &ImportRecord) {
     apply_import_record_overlay_to_queue_item(item, record);
-    if let Some(result_json) = record.result_json.as_deref()
-        && let Ok(result) = serde_json::from_str::<scryer_domain::ImportResult>(result_json)
-        && let Some(error_msg) = result.error_message
-    {
-        item.import_error_message = Some(error_msg.clone());
-        item.attention_reason = Some(error_msg);
+    let (error_code, error_message) = import_record_error_overlay(record);
+    item.import_error_code = error_code;
+    item.import_error_message = error_message.clone();
+    if let Some(error_message) = error_message {
+        item.attention_reason = Some(error_message);
     }
 }
 fn apply_delete_command_to_queue_item(
@@ -327,17 +347,17 @@ fn download_queue_identity_key(
         download_client_item_id.to_string(),
     )
 }
-fn download_queue_item_source_identity(item: &DownloadQueueItem) -> DownloadSourceIdentity {
-    DownloadSourceIdentity::new(
+fn download_queue_item_source_identity(item: &DownloadQueueItem) -> ClientJobLocator {
+    ClientJobLocator::new(
         Some(item.client_id.as_str()).filter(|value| !value.trim().is_empty()),
         &item.client_type,
         &item.download_client_item_id,
     )
 }
 fn push_source_identity_candidate(
-    identities: &mut Vec<DownloadSourceIdentity>,
+    identities: &mut Vec<ClientJobLocator>,
     seen: &mut HashSet<(String, String, String)>,
-    identity: DownloadSourceIdentity,
+    identity: ClientJobLocator,
 ) {
     if identity.client_type.is_empty() || identity.item_id.is_empty() {
         return;
@@ -355,7 +375,7 @@ fn push_source_identity_candidate(
 fn push_submission_lookup_key(
     keys: &mut Vec<(String, String, String)>,
     seen: &mut HashSet<(String, String, String)>,
-    identity: &DownloadSourceIdentity,
+    identity: &ClientJobLocator,
 ) {
     if identity.client_type.is_empty() || identity.item_id.is_empty() {
         return;
@@ -373,6 +393,41 @@ fn push_submission_lookup_key(
 fn apply_submission_to_queue_item(item: &mut DownloadQueueItem, submission: &DownloadSubmission) {
     if crate::import_parameters::submission_has_scryer_origin(submission) {
         item.is_scryer_origin = true;
+    }
+    // The submission remembers exactly which configured client the grab was
+    // routed to. A client-observed row often carries only a provider-type
+    // identity ("qbittorrent" as both id and type), and the unique-type
+    // canonicalization above it cannot pick a config when two clients share the
+    // type — so the row rendered the provider type where the operator expects
+    // the configured name. Restore the real id here and let the canonicalize
+    // pass that follows enrichment resolve it to the configured name.
+    let item_client_id = item.client_id.trim();
+    let item_has_type_fallback_id =
+        item_client_id.is_empty() || item_client_id.eq_ignore_ascii_case(item.client_type.trim());
+    if item_has_type_fallback_id
+        && let Some(submission_client_id) = submission
+            .download_client_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    {
+        item.client_id = submission_client_id.to_string();
+        if item.client_type.trim().is_empty() {
+            item.client_type = submission.download_client_type.clone();
+        }
+        // The name belongs to the config, not the submission; clear a
+        // type-derived stand-in so canonicalization fills the configured name.
+        if item.client_name.trim().eq_ignore_ascii_case(item.client_type.trim()) {
+            item.client_name = String::new();
+        }
+    }
+    if let Some(source_title) = submission
+        .source_title
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        item.title_name = source_title.to_string();
     }
     if item.source_provider.is_none() {
         item.source_provider = source_provider_label(
@@ -399,7 +454,7 @@ pub async fn enrich_download_queue_items_from_submissions(
 async fn enrich_download_queue_items_from_submissions_with_original_identities(
     app: &AppUseCase,
     items: &mut [DownloadQueueItem],
-    original_source_identities: Option<&[DownloadSourceIdentity]>,
+    original_source_identities: Option<&[ClientJobLocator]>,
 ) {
     let mut client_items = Vec::new();
     let mut seen_client_items = HashSet::new();
@@ -410,7 +465,7 @@ async fn enrich_download_queue_items_from_submissions_with_original_identities(
             push_source_identity_candidate(
                 &mut client_items,
                 &mut seen_client_items,
-                DownloadSourceIdentity::new(None, &current.client_type, &current.item_id),
+                ClientJobLocator::new(None, &current.client_type, &current.item_id),
             );
         }
 
@@ -426,7 +481,7 @@ async fn enrich_download_queue_items_from_submissions_with_original_identities(
                 push_source_identity_candidate(
                     &mut client_items,
                     &mut seen_client_items,
-                    DownloadSourceIdentity::new(None, &original.client_type, &original.item_id),
+                    ClientJobLocator::new(None, &original.client_type, &original.item_id),
                 );
             }
         }
@@ -550,7 +605,7 @@ async fn enrich_download_queue_items_from_submissions_with_original_identities(
             push_submission_lookup_key(
                 &mut lookup_keys,
                 &mut seen_lookup_keys,
-                &DownloadSourceIdentity::new(None, &current.client_type, &current.item_id),
+                &ClientJobLocator::new(None, &current.client_type, &current.item_id),
             );
         }
         if let Some(original) = original
@@ -559,7 +614,7 @@ async fn enrich_download_queue_items_from_submissions_with_original_identities(
             push_submission_lookup_key(
                 &mut lookup_keys,
                 &mut seen_lookup_keys,
-                &DownloadSourceIdentity::new(None, &original.client_type, &original.item_id),
+                &ClientJobLocator::new(None, &original.client_type, &original.item_id),
             );
         }
 
@@ -615,12 +670,25 @@ fn apply_seed_goals_to_queue_item(item: &mut DownloadQueueItem, goals: &crate::P
 async fn find_submission_for_queue_item_by_download_id(
     app: &AppUseCase,
     item: &DownloadQueueItem,
-    original: Option<&DownloadSourceIdentity>,
+    original: Option<&ClientJobLocator>,
 ) -> Option<DownloadSubmission> {
     let download_id = item.download_id.as_deref().map(str::trim)?;
     if download_id.is_empty() {
         return None;
     }
+
+    let canonical_download_id = match crate::download_identity::resolve_observed_client_job(
+        app,
+        crate::download_identity::observed_queue_item_job(item),
+    )
+    .await
+    {
+        crate::download_identity::ObservedClientJobResolution::Resolved(download_id) => {
+            Some(download_id)
+        }
+        crate::download_identity::ObservedClientJobResolution::Conflict => return None,
+        crate::download_identity::ObservedClientJobResolution::Unavailable => None,
+    };
 
     let mut candidates = Vec::new();
     let mut seen = HashSet::new();
@@ -657,17 +725,22 @@ async fn find_submission_for_queue_item_by_download_id(
             .services
             .workflow
             .download_submissions
-            .find_by_download_id(
+            .list_by_download_id_for_download(
+                canonical_download_id.as_ref(),
                 Some(client_id.as_str()).filter(|value| !value.trim().is_empty()),
                 &client_type,
                 download_id,
             )
             .await
         {
-            Ok(Some(submission)) if !submission.title_id.trim().is_empty() => {
-                return Some(submission);
+            Ok(submissions) => {
+                if let Some(submission) = submissions
+                    .into_iter()
+                    .find(|submission| !submission.title_id.trim().is_empty())
+                {
+                    return Some(submission);
+                }
             }
-            Ok(_) => {}
             Err(error) => {
                 tracing::warn!(
                     error = %error,
@@ -804,6 +877,12 @@ impl AppUseCase {
 
         canonicalize_download_queue_item_clients(&mut items, enabled_clients);
         enrich_download_queue_items_from_submissions(self, &mut items).await;
+        // Submission enrichment can have just restored a row's real configured
+        // client id (a client-observed row only knows its provider type, and
+        // with two same-type clients the unique-type pass above cannot pick
+        // one). Canonicalize once more so that id resolves to the configured
+        // name before anything renders it.
+        canonicalize_download_queue_item_clients(&mut items, enabled_clients);
 
         let mut items = dedupe_download_queue_items(items)
             .into_iter()
@@ -882,44 +961,67 @@ impl AppUseCase {
         include_recent_history: bool,
         use_tracked_runtime_snapshot: bool,
         excluded_client_types: &[&str],
-    ) -> AppResult<Vec<DownloadQueueItem>> {
+    ) -> AppResult<crate::ports::DownloadClientSnapshotOutcome> {
         let enabled_clients = self.enabled_download_clients_by_priority().await?;
         if enabled_clients.is_empty() {
-            return Ok(Vec::new());
+            return Ok(crate::ports::DownloadClientSnapshotOutcome {
+                any_client_read_succeeded: true,
+                ..Default::default()
+            });
         }
 
-        let queue_items = if include_queue {
+        let snapshot = if include_queue && include_recent_history {
             self.services
                 .integrations
                 .download_client
-                .list_queue_excluding_client_types(excluded_client_types)
-                .await?
-        } else {
-            Vec::new()
-        };
-        let history_items = if include_recent_history {
-            // The queue poller and Activity snapshot only need a recent window of
-            // history. Older completed items can still be recovered through the
-            // explicit history page or manual import flows without forcing an
-            // unbounded history scan every 2 seconds.
-            self.services
-                .integrations
-                .download_client
-                .list_recent_activity_excluding_client_types(
+                .list_snapshot_outcome_excluding_client_types(
                     DOWNLOAD_QUEUE_RECENT_ACTIVITY_LIMIT,
                     excluded_client_types,
                 )
                 .await?
         } else {
-            Vec::new()
+            let queue_items = if include_queue {
+                self.services
+                    .integrations
+                    .download_client
+                    .list_queue_excluding_client_types(excluded_client_types)
+                    .await?
+            } else {
+                Vec::new()
+            };
+            let history_items = if include_recent_history {
+                self.services
+                    .integrations
+                    .download_client
+                    .list_recent_activity_excluding_client_types(
+                        DOWNLOAD_QUEUE_RECENT_ACTIVITY_LIMIT,
+                        excluded_client_types,
+                    )
+                    .await?
+            } else {
+                Vec::new()
+            };
+            let mut items = queue_items;
+            items.extend(history_items);
+            crate::ports::DownloadClientSnapshotOutcome {
+                items,
+                any_client_read_succeeded: true,
+                ..Default::default()
+            }
         };
 
-        let mut items: Vec<DownloadQueueItem> = queue_items;
-        items.extend(history_items);
         let items = self
-            .enrich_download_queue_items(&enabled_clients, items, use_tracked_runtime_snapshot)
+            .enrich_download_queue_items(
+                &enabled_clients,
+                snapshot.items,
+                use_tracked_runtime_snapshot,
+            )
             .await;
-        Ok(self.filter_ineligible_download_queue_items(items).await)
+        Ok(crate::ports::DownloadClientSnapshotOutcome {
+            items: self.filter_ineligible_download_queue_items(items).await,
+            authoritative_client_ids: snapshot.authoritative_client_ids,
+            any_client_read_succeeded: snapshot.any_client_read_succeeded,
+        })
     }
 }
 impl AppUseCase {
@@ -1535,28 +1637,7 @@ impl AppUseCase {
             .imports
             .update_import_transfer_progress(import_id, phase, bytes, total_bytes)
             .await?;
-
-        let Some(record) = self
-            .services
-            .workflow
-            .imports
-            .get_import_by_id(import_id)
-            .await?
-        else {
-            return Ok(());
-        };
-        self.runtime
-            .acquisition
-            .download_queue_snapshot
-            .stage_import_transfer_progress(
-                record.source_client_id.as_deref(),
-                record.source_system.as_str(),
-                record.source_ref.as_str(),
-                phase,
-                bytes,
-                total_bytes,
-            )
-            .await;
+        self.refresh_import_record_queue_snapshot(import_id).await;
         Ok(())
     }
 }
@@ -1575,7 +1656,7 @@ impl AppUseCase {
             .services
             .workflow
             .download_submissions
-            .find_by_client_item_id(&DownloadSourceIdentity::new(
+            .find_by_client_item_id(&ClientJobLocator::new(
                 client_id,
                 client_type,
                 download_client_item_id,
@@ -1790,6 +1871,7 @@ mod queue_query_unit_tests {
 
     fn submission(scope: SubmissionScope) -> DownloadSubmission {
         DownloadSubmission {
+            download_id: scryer_domain::download_identity::DownloadId::new(),
             title_id: "title-1".to_string(),
             purpose: DownloadSubmissionPurpose::Standard,
             facet: "movie".to_string(),
@@ -1801,6 +1883,7 @@ mod queue_query_unit_tests {
             source_provider_name: None,
             source_kind: None,
             source_title: None,
+            info_hash: None,
             release_size_bytes: None,
             request_signature: None,
             scope,
@@ -1818,5 +1901,21 @@ mod queue_query_unit_tests {
 
         apply_submission_to_queue_item(&mut item, &submission(SubmissionScope::Title));
         assert!(item.is_scryer_origin);
+    }
+
+    #[test]
+    fn submission_enrichment_prefers_raw_release_title() {
+        let mut item = queue_item();
+        let mut submitted = submission(SubmissionScope::Title);
+        submitted.source_title = Some("GroupTag.Quiet.Meridian.252-279.BD-GROUP".to_string());
+
+        apply_submission_to_queue_item(&mut item, &submitted);
+
+        assert_eq!(item.title_name, "GroupTag.Quiet.Meridian.252-279.BD-GROUP");
+
+        item.title_name = "Client Display Name".to_string();
+        submitted.source_title = Some("  ".to_string());
+        apply_submission_to_queue_item(&mut item, &submitted);
+        assert_eq!(item.title_name, "Client Display Name");
     }
 }

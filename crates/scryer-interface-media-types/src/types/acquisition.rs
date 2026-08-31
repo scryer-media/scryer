@@ -8,20 +8,16 @@ use async_graphql::{Enum, ID, InputObject, MaybeUndefined, SimpleObject};
 use chrono::{DateTime, Utc};
 
 #[derive(SimpleObject, Clone)]
-/// One title release blocklist entry and the episodes it affects.
+/// One blocked release for a title.
 pub struct TitleReleaseBlocklistEntryPayload {
     /// Blocklist entry ID.
     pub id: ID,
-    /// Download source locator used to identify the blocked release, or null when unavailable.
-    pub source_hint: Option<String>,
-    /// Release title recorded with the entry, or null when unavailable.
-    pub source_title: Option<String>,
+    /// The blocked release's name, as the indexer presented it.
+    pub release_name: String,
     /// Failure or blocklist reason, or null when unavailable.
     pub error_message: Option<String>,
     /// UTC time when the release was attempted.
     pub attempted_at: DateTime<Utc>,
-    /// Episode IDs targeted by this blocklist entry.
-    pub episode_ids: Vec<ID>,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -1118,6 +1114,23 @@ pub struct DeleteDownloadInput {
 // --- Manual Import ---
 
 #[derive(SimpleObject, Clone)]
+/// Media facts obtained while qualifying a manual-import candidate.
+pub struct ManualImportVideoFactsPayload {
+    /// Detected container format, or null when unavailable.
+    pub container_format: Option<String>,
+    /// Detected video codec, or null when unavailable.
+    pub video_codec: Option<String>,
+    /// Detected audio codec, or null when unavailable.
+    pub audio_codec: Option<String>,
+    /// Detected video width in pixels, or null when unavailable.
+    pub video_width: Option<i32>,
+    /// Detected video height in pixels, or null when unavailable.
+    pub video_height: Option<i32>,
+    /// Detected runtime in seconds, or null when unavailable.
+    pub duration_seconds: Option<i32>,
+}
+
+#[derive(SimpleObject, Clone)]
 /// Candidate file details used to preview a manual import selection.
 pub struct ManualImportFilePreviewPayload {
     /// Candidate ID within the persisted manual-import selection; use it only with that selection.
@@ -1126,6 +1139,8 @@ pub struct ManualImportFilePreviewPayload {
     pub file_name: String,
     /// Candidate file size in bytes.
     pub size_bytes: Long,
+    /// Media facts when the native content probe can identify the file.
+    pub video_facts: Option<ManualImportVideoFactsPayload>,
     /// Parsed quality label, or null when unavailable.
     pub quality: Option<String>,
     /// Parsed season number, or null when unavailable.

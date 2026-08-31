@@ -148,11 +148,9 @@ export type TitleMediaFileRecord = {
 
 export type TitleReleaseBlocklistEntry = {
   id: string;
-  sourceHint: string | null;
-  sourceTitle: string | null;
+  releaseName: string;
   errorMessage: string | null;
   attemptedAt: string;
-  episodeIds: string[];
 };
 
 export type TitleRecord = {
@@ -163,6 +161,7 @@ export type TitleRecord = {
   libraryName?: string | null;
   librarySlug?: string | null;
   monitored: boolean;
+  playbackLinks?: import("@/components/common/watch-in-media-server-menu").MediaServerPlaybackLink[];
   tags: string[];
   createdAt?: string | null;
   year?: number | null;

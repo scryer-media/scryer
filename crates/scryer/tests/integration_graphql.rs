@@ -416,6 +416,16 @@ impl MediaFileRepository for FailingMediaFileRepo {
         self.inner.insert_media_file(input).await
     }
 
+    async fn claim_import_destination(
+        &self,
+        input: &InsertMediaFileInput,
+        associations: &scryer_application::MediaFileAssociations,
+    ) -> AppResult<scryer_application::ClaimedMediaFile> {
+        self.inner
+            .claim_import_destination(input, associations)
+            .await
+    }
+
     async fn link_file_to_episode(&self, file_id: &str, episode_id: &str) -> AppResult<()> {
         self.inner.link_file_to_episode(file_id, episode_id).await
     }
@@ -692,6 +702,16 @@ struct CountingMediaFileRepo {
 impl MediaFileRepository for CountingMediaFileRepo {
     async fn insert_media_file(&self, input: &InsertMediaFileInput) -> AppResult<String> {
         self.inner.insert_media_file(input).await
+    }
+
+    async fn claim_import_destination(
+        &self,
+        input: &InsertMediaFileInput,
+        associations: &scryer_application::MediaFileAssociations,
+    ) -> AppResult<scryer_application::ClaimedMediaFile> {
+        self.inner
+            .claim_import_destination(input, associations)
+            .await
     }
 
     async fn link_file_to_episode(&self, file_id: &str, episode_id: &str) -> AppResult<()> {
@@ -1763,9 +1783,23 @@ async fn seed_typed_settings_definitions(ctx: &TestContext) {
 
 async fn mount_smg_mocks(ctx: &TestContext, fixture_path: &str) {
     let fixture = load_fixture(fixture_path);
+    let get_fixture = fixture.clone();
+    let titles_fixture = load_fixture("smg/titles_movie.json");
+    let resolve_titles_fixture = load_fixture("smg/resolve_titles.json");
     Mock::given(method("GET"))
         .and(path("/graphql"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(fixture.clone()))
+        .respond_with(move |request: &wiremock::Request| {
+            let operation_name = request
+                .url
+                .query_pairs()
+                .find_map(|(name, value)| (name == "operationName").then(|| value.into_owned()));
+            let response = match operation_name.as_deref() {
+                Some("ResolveTitles") => &resolve_titles_fixture,
+                Some("Titles") => &titles_fixture,
+                _ => &get_fixture,
+            };
+            ResponseTemplate::new(200).set_body_string(response.clone())
+        })
         .mount(&ctx.smg_server)
         .await;
     Mock::given(method("POST"))
@@ -2086,6 +2120,28 @@ async fn create_test_series_movie_link(
             tmdb_id: None,
             mal_id: None,
             anidb_id: None,
+            ratings: Some(scryer_domain::TitleRatingSummary {
+                rating: Some(8.7),
+                rating_sources: vec!["tmdb".to_string()],
+                external_ratings: vec![scryer_domain::TitleExternalRating {
+                    source: "tmdb".to_string(),
+                    value: Some(8.7),
+                    normalized: 8.7,
+                    votes: Some(1_234),
+                    url: "https://www.themoviedb.org/movie/fixture".to_string(),
+                    ..Default::default()
+                }],
+            }),
+            credits: Some(vec![scryer_domain::TitleCredit {
+                kind: "voice_actor".to_string(),
+                person_id: "movie-cast-1".to_string(),
+                person_name: "Fixture Performer".to_string(),
+                person_image_url: "https://images.example.com/private-upstream.jpg".to_string(),
+                character_name: "Fixture Character".to_string(),
+                language: "eng".to_string(),
+                billing_order: 1,
+                ..Default::default()
+            }]),
             created_at: now,
             updated_at: now,
         },
@@ -2100,6 +2156,8 @@ async fn create_test_series_movie_link(
         confidence: Some("high".to_string()),
         signal_summary: Some("test fixture".to_string()),
         source: Some("test".to_string()),
+        monitoring_override: None,
+        metadata_active: true,
         monitored: true,
         legacy_collection_id,
         created_at: now,

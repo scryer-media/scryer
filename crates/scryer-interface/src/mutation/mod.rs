@@ -1,3 +1,4 @@
+mod application_upgrade;
 mod collections;
 mod config;
 mod interactive_search;
@@ -21,6 +22,7 @@ use scryer_interface_settings::SettingsMutations;
 
 #[derive(MergedObject, Default)]
 pub struct MutationRoot(
+    application_upgrade::ApplicationUpgradeMutations,
     titles::TitleMutations,
     collections::CollectionMutations,
     DownloadMutations,

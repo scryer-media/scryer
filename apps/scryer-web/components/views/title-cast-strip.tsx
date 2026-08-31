@@ -13,6 +13,7 @@ import {
   titleCastCreditEpisodeCount,
   titleCastCreditKey,
   titleCastCredits,
+  type TitleCastDisplayCredit,
 } from "@/lib/utils/title-cast";
 
 /**
@@ -22,7 +23,7 @@ import {
 export type TitleCastStripVariant = "panel" | "workspace";
 
 type Props = {
-  credits?: TitleCreditRecord[] | null;
+  credits?: TitleCastDisplayCredit[] | null;
   variant?: TitleCastStripVariant;
   /** i18n heading key; the dub rail passes `title.dubCast`. */
   titleKey?: string;
@@ -53,6 +54,7 @@ export function TitleCastStrip({
 }: Props) {
   const t = useTranslate();
   const cast = keepPlaceholders ? (credits ?? []) : titleCastCredits(credits);
+  const cardGapPx = variant === "workspace" ? 11 : 12;
 
   if (cast.length === 0) {
     return null;
@@ -72,6 +74,7 @@ export function TitleCastStrip({
           key={titleCastCreditKey(credit, index)}
           credit={credit}
           episodeLabel={castCreditEpisodeLabel(credit, t)}
+          gapPx={cardGapPx}
         />
       ))}
     </HorizontalRail>
@@ -123,9 +126,11 @@ function castCreditEpisodeLabel(
 function TitleCastCard({
   credit,
   episodeLabel,
+  gapPx,
 }: {
-  credit: TitleCreditRecord;
+  credit: TitleCastDisplayCredit;
   episodeLabel: string | null;
+  gapPx: number;
 }) {
   const character = titleCastCreditCharacter(credit);
   // The server hands back the `w185` portrait variant, which is already the
@@ -135,40 +140,50 @@ function TitleCastCard({
   // is deliberately dimmed rather than hidden, since hiding it would shift
   // every later portrait out from under its original-cast counterpart.
   const placeholder = isTitleCastPlaceholder(credit);
+  const slotSpan = Math.max(1, Math.trunc(credit.slotSpan ?? 1));
 
   return (
-    <div className={placeholder ? "w-24 shrink-0 opacity-45" : "w-24 shrink-0"}>
-      <div className="aspect-[2/3] w-full overflow-hidden rounded-[10px] border border-border/60 bg-muted">
-        {portraitUrl ? (
-          <img
-            src={portraitUrl}
-            alt=""
-            loading="lazy"
-            decoding="async"
-            className="h-full w-full object-cover"
-          />
-        ) : (
-          <div className="flex h-full w-full items-center justify-center text-muted-foreground">
-            <Users className="h-5 w-5" aria-hidden="true" />
-          </div>
-        )}
+    <div
+      className={placeholder ? "flex shrink-0 justify-center opacity-45" : "flex shrink-0 justify-center"}
+      style={
+        slotSpan > 1
+          ? { width: `calc(${slotSpan * 6}rem + ${(slotSpan - 1) * gapPx}px)` }
+          : undefined
+      }
+    >
+      <div className="w-24">
+        <div className="aspect-[2/3] w-full overflow-hidden rounded-[10px] border border-border/60 bg-muted">
+          {portraitUrl ? (
+            <img
+              src={portraitUrl}
+              alt=""
+              loading="lazy"
+              decoding="async"
+              className="h-full w-full object-cover"
+            />
+          ) : (
+            <div className="flex h-full w-full items-center justify-center text-muted-foreground">
+              <Users className="h-5 w-5" aria-hidden="true" />
+            </div>
+          )}
+        </div>
+        <p
+          className="mt-1.5 truncate text-[12px] font-semibold text-foreground"
+          title={placeholder ? undefined : credit.personName}
+        >
+          {placeholder ? "—" : credit.personName}
+        </p>
+        {character ? (
+          <p className="truncate text-[11px] text-muted-foreground" title={character}>
+            {character}
+          </p>
+        ) : null}
+        {episodeLabel ? (
+          <p className="truncate text-[11px] text-muted-foreground">
+            {episodeLabel}
+          </p>
+        ) : null}
       </div>
-      <p
-        className="mt-1.5 truncate text-[12px] font-semibold text-foreground"
-        title={placeholder ? undefined : credit.personName}
-      >
-        {placeholder ? "—" : credit.personName}
-      </p>
-      {character ? (
-        <p className="truncate text-[11px] text-muted-foreground" title={character}>
-          {character}
-        </p>
-      ) : null}
-      {episodeLabel ? (
-        <p className="truncate text-[11px] text-muted-foreground">
-          {episodeLabel}
-        </p>
-      ) : null}
     </div>
   );
 }

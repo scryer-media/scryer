@@ -6,7 +6,7 @@ fn graphql_fix_title_match_movie_updates_identity_and_history() {
         "graphql_fix_title_match_movie_updates_identity_and_history",
         || async {
             let ctx = TestContext::new().await;
-            mount_smg_mocks(&ctx, "smg/metadata_bulk_movie.json").await;
+            mount_smg_mocks(&ctx, "smg/titles_movie.json").await;
 
             let title = create_catalog_title(
                 &ctx,
@@ -51,7 +51,7 @@ fn graphql_fix_title_match_movie_updates_identity_and_history() {
           }
         }
         "#,
-                json!({ "input": { "titleId": title.id, "tvdbId": "123456" } }),
+                json!({ "input": { "titleId": title.id, "smgId": 101 } }),
             )
             .await;
             assert_no_errors(&body);
@@ -74,6 +74,11 @@ fn graphql_fix_title_match_movie_updates_identity_and_history() {
             assert!(
                 external_ids
                     .iter()
+                    .any(|value| { value["source"] == "smg" && value["value"] == "101" })
+            );
+            assert!(
+                external_ids
+                    .iter()
                     .any(|value| { value["source"] == "tvdb" && value["value"] == "123456" })
             );
             assert!(
@@ -86,7 +91,16 @@ fn graphql_fix_title_match_movie_updates_identity_and_history() {
                     .iter()
                     .any(|value| { value["source"] == "tvdb" && value["value"] == "999" })
             );
-            assert!(!external_ids.iter().any(|value| value["source"] == "tmdb"));
+            assert!(
+                !external_ids
+                    .iter()
+                    .any(|value| { value["source"] == "tmdb" && value["value"] == "4444" })
+            );
+            assert!(
+                external_ids
+                    .iter()
+                    .any(|value| { value["source"] == "tmdb" && value["value"] == "111" })
+            );
 
             let events = gql(
                 &ctx,
@@ -115,6 +129,8 @@ fn graphql_fix_title_match_movie_updates_identity_and_history() {
             assert!(data_value.is_object(), "dataJson should be a JSON object");
             assert_eq!(data_value["old_tvdb_id"], "999");
             assert_eq!(data_value["new_tvdb_id"], "123456");
+            assert_eq!(data_value["smg_id"], 101);
+            assert_eq!(data_value["tmdb_id"], 111);
             assert_eq!(data_value["source"], "manual");
 
             let history = gql(

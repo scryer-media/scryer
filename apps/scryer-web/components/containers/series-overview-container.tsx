@@ -8,9 +8,9 @@ import {
   episodeSidePanelDetailQuery,
   librariesQuery,
   seriesCollectionEpisodesQuery,
+  movieEntityDetailQuery,
   seriesSidePanelOverviewQuery,
   seriesOverviewSettingsInitQuery,
-  titleMediaFilesQuery,
 } from "@/lib/graphql/queries";
 import {
   clearTitleReleaseBlocklistEntryMutation,
@@ -29,6 +29,7 @@ import {
   updateTitleMutation,
 } from "@/lib/graphql/mutations";
 import type { DownloadQueueItem } from "@/lib/types/download-queue";
+import { reconcileDownloadQueueItems } from "@/lib/utils/download-queue";
 import type { Release } from "@/lib/types";
 import type { CatalogDiscoveryItem } from "@/lib/types/discovery";
 import type { TitleRatings } from "@/components/views/title-ratings-strip";
@@ -191,6 +192,8 @@ export type MovieEntity = {
   tmdbId: string | null;
   malId: string | null;
   anidbId: string | null;
+  ratings?: TitleRatings | null;
+  credits?: TitleCreditRecord[] | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -210,6 +213,8 @@ export type SeriesMovieLink = {
   confidence: string | null;
   signalSummary: string | null;
   source: string | null;
+  monitoringOverride: boolean | null;
+  metadataActive: boolean;
   monitored: boolean;
   createdAt: string;
   updatedAt: string;
@@ -220,11 +225,9 @@ export type { TitleHistoryEvent };
 
 export type TitleReleaseBlocklistEntry = {
   id: string;
-  sourceHint: string | null;
-  sourceTitle: string | null;
+  releaseName: string;
   errorMessage: string | null;
   attemptedAt: string;
-  episodeIds: string[];
 };
 
 export type CollectionEpisode = {
@@ -244,6 +247,7 @@ export type CollectionEpisode = {
   absoluteNumber: string | null;
   imageUrl?: string | null;
   monitored: boolean;
+  playbackLinks?: import("@/components/common/watch-in-media-server-menu").MediaServerPlaybackLink[];
   mediaAvailability: {
     state: "AVAILABLE" | "PENDING_SCAN" | "SCAN_FAILED" | "MISSING" | "UNMONITORED";
     primaryQualityLabel: string | null;
@@ -304,6 +308,7 @@ type SeriesOverviewSnapshotTitle = TitleDetail & {
 
 type SeriesOverviewContainerProps = {
   titleId: string;
+  fullBleedHero?: boolean;
   onTitleNotFound?: () => void;
   onBackToList?: () => void;
   onTitleResolved?: (title: OverviewTitleTarget) => void;
@@ -333,8 +338,16 @@ function groupMediaFilesBySeriesMovieLink(
   return grouped;
 }
 
+function retainEquivalentSnapshot<T>(current: T, next: T): T {
+  if (Object.is(current, next) || JSON.stringify(current) === JSON.stringify(next)) {
+    return current;
+  }
+  return next;
+}
+
 export const SeriesOverviewContainer = React.memo(function SeriesOverviewContainer({
   titleId,
+  fullBleedHero,
   onTitleNotFound,
   onBackToList,
   onTitleResolved,
@@ -473,8 +486,12 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
 
   const applyDownloadFeedbackSnapshot = React.useCallback(
     (snapshot: TitleOverviewDownloadFeedbackSnapshot) => {
-      setDownloadQueueSeed(snapshot.downloadQueueItems);
-      setCompletedDownloads(snapshot.completedDownloadQueueItems);
+      setDownloadQueueSeed((current) =>
+        reconcileDownloadQueueItems(current, snapshot.downloadQueueItems),
+      );
+      setCompletedDownloads((current) =>
+        reconcileDownloadQueueItems(current, snapshot.completedDownloadQueueItems),
+      );
       setDownloadFeedbackWarning(snapshot.downloadFeedbackWarning);
     },
     [],
@@ -517,15 +534,17 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
           | null
           | undefined;
         const episodes = (collectionDetail?.episodes ?? []) as CollectionEpisode[];
-        setEpisodesByCollection((current) => ({
-          ...current,
-          [collectionId]:
+        setEpisodesByCollection((current) => {
+          const nextEpisodes =
             mergeLoadedEpisodeDetailsForCollections(
               [{ id: collectionId, episodes }],
               current,
               episodeDetailsLoadedRef.current,
-            )[collectionId] ?? episodes,
-        }));
+            )[collectionId] ?? episodes;
+          return JSON.stringify(current[collectionId]) === JSON.stringify(nextEpisodes)
+            ? current
+            : { ...current, [collectionId]: nextEpisodes };
+        });
       } catch (error: unknown) {
         if (currentTitleIdRef.current === requestedTitleId) {
           // Mark the season as hydrated (empty) so the expand effect does not
@@ -552,6 +571,111 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
     [client, setGlobalStatus, t, titleId],
   );
 
+  const refreshLoadedCollectionEpisodes = React.useCallback(
+    async (collectionIds: readonly string[]) => {
+      if (!titleId) {
+        return;
+      }
+
+      const collectionIdsToRefresh = collectionIds.filter(
+        (collectionId) => !collectionEpisodesLoadingRef.current.has(collectionId),
+      );
+      if (collectionIdsToRefresh.length === 0) {
+        return;
+      }
+
+      const requestedTitleId = titleId;
+      for (const collectionId of collectionIdsToRefresh) {
+        collectionEpisodesLoadingRef.current.add(collectionId);
+      }
+      setCollectionEpisodesLoading((current) => {
+        const next = { ...current };
+        for (const collectionId of collectionIdsToRefresh) {
+          next[collectionId] = true;
+        }
+        return next;
+      });
+
+      try {
+        const settled = await Promise.allSettled(
+          collectionIdsToRefresh.map(async (collectionId) => {
+            const { data, error } = await client
+              .query(
+                seriesCollectionEpisodesQuery,
+                { id: collectionId },
+                { requestPolicy: "network-only" },
+              )
+              .toPromise();
+            if (error) {
+              throw error;
+            }
+            const collectionDetail = data?.collectionById as
+              | { episodes?: CollectionEpisode[] | null }
+              | null
+              | undefined;
+            return {
+              id: collectionId,
+              episodes: (collectionDetail?.episodes ?? []) as CollectionEpisode[],
+            };
+          }),
+        );
+        if (currentTitleIdRef.current !== requestedTitleId) {
+          return;
+        }
+
+        const results = settled.flatMap((result) =>
+          result.status === "fulfilled" ? [result.value] : [],
+        );
+
+        if (results.length > 0) {
+          setEpisodesByCollection((current) => {
+            const merged = mergeLoadedEpisodeDetailsForCollections(
+              results,
+              current,
+              episodeDetailsLoadedRef.current,
+            );
+            let next = current;
+            for (const { id, episodes } of results) {
+              const nextEpisodes = merged[id] ?? episodes;
+              if (JSON.stringify(current[id]) === JSON.stringify(nextEpisodes)) {
+                continue;
+              }
+              if (next === current) {
+                next = { ...current };
+              }
+              next[id] = nextEpisodes;
+            }
+            return next;
+          });
+        }
+        const failed = settled.find((result) => result.status === "rejected");
+        if (failed?.status === "rejected") {
+          setGlobalStatus(
+            failed.reason instanceof Error ? failed.reason.message : t("status.apiError"),
+          );
+        }
+      } catch (error: unknown) {
+        if (currentTitleIdRef.current === requestedTitleId) {
+          setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"));
+        }
+      } finally {
+        for (const collectionId of collectionIdsToRefresh) {
+          collectionEpisodesLoadingRef.current.delete(collectionId);
+        }
+        setCollectionEpisodesLoading((current) => {
+          let changed = false;
+          const next = { ...current };
+          for (const collectionId of collectionIdsToRefresh) {
+            changed ||= collectionId in next;
+            delete next[collectionId];
+          }
+          return changed ? next : current;
+        });
+      }
+    },
+    [client, setGlobalStatus, t, titleId],
+  );
+
   const applySidePanelOverviewSnapshot = React.useCallback(
     (
       snapshot: TitleSidePanelOverviewSnapshot<
@@ -566,15 +690,14 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
       const nextCollections = nextTitle?.collections ?? [];
       const nextSeriesMovieLinks = nextTitle?.seriesMovieLinks ?? [];
       setTitle((current) => {
-        if (
+        const resolvedTitle =
           nextTitle &&
           current &&
           nextTitle.moreLikeThis === undefined &&
           current.id === nextTitle.id
-        ) {
-          return { ...nextTitle, moreLikeThis: current.moreLikeThis };
-        }
-        return nextTitle ?? null;
+            ? { ...nextTitle, moreLikeThis: current.moreLikeThis }
+            : (nextTitle ?? null);
+        return retainEquivalentSnapshot(current, resolvedTitle);
       });
       if (nextTitle) {
         onTitleResolved?.({
@@ -584,8 +707,10 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
           librarySlug: nextTitle.librarySlug,
         });
       }
-      setCollections(nextCollections);
-      setSeriesMovieLinks(nextSeriesMovieLinks);
+      setCollections((current) => retainEquivalentSnapshot(current, nextCollections));
+      setSeriesMovieLinks((current) =>
+        retainEquivalentSnapshot(current, nextSeriesMovieLinks),
+      );
       // Episodes hydrate per collection as seasons are opened; the overview
       // snapshot only prunes cached seasons that no longer exist and refreshes
       // the ones already loaded.
@@ -600,7 +725,9 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
       const retainedEpisodeIds = episodeIdsForEpisodeRecord(
         retainedEpisodesByCollection,
       );
-      setEpisodesByCollection(retainedEpisodesByCollection);
+      setEpisodesByCollection((current) =>
+        retainEquivalentSnapshot(current, retainedEpisodesByCollection),
+      );
       setEpisodeDetailsLoaded((current) => {
         const retained = new Set<string>();
         for (const episodeId of current) {
@@ -608,7 +735,7 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
             retained.add(episodeId);
           }
         }
-        return retained;
+        return retained.size === current.size ? current : retained;
       });
       setEpisodeDetailsLoading((current) =>
         pruneEpisodeRecord(current, retainedEpisodeIds),
@@ -619,25 +746,31 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
       setMediaFilesBySeriesMovieLink((current) =>
         pruneSeriesMovieLinkMediaFiles(current, retainedEpisodeIds),
       );
-      for (const collectionId of Object.keys(retainedEpisodesByCollection)) {
-        void loadCollectionEpisodes(collectionId, { force: true });
-      }
+      void refreshLoadedCollectionEpisodes(Object.keys(retainedEpisodesByCollection));
       if (!nextTitle) {
         setMediaFilesByEpisode({});
         setMediaFilesBySeriesMovieLink({});
         setEpisodeDetailsLoaded(new Set());
         setEpisodeDetailsLoading({});
       }
-      setEvents(snapshot.titleHistory);
-      setReleaseBlocklistEntries(snapshot.titleReleaseBlocklist);
-      setSubtitleDownloads(snapshot.externalSubtitles);
+      setEvents((current) => retainEquivalentSnapshot(current, snapshot.titleHistory));
+      setReleaseBlocklistEntries((current) =>
+        retainEquivalentSnapshot(current, snapshot.titleReleaseBlocklist),
+      );
+      setSubtitleDownloads((current) =>
+        retainEquivalentSnapshot(current, snapshot.externalSubtitles),
+      );
       setHasDownloadClients(snapshot.hasDownloadClients);
       if (!nextTitle || !snapshot.hasDownloadClients) {
         applyDownloadFeedbackSnapshot(createEmptyTitleOverviewDownloadFeedbackSnapshot());
         setDownloadFeedbackSettled(true);
       }
     },
-    [applyDownloadFeedbackSnapshot, loadCollectionEpisodes, onTitleResolved],
+    [
+      applyDownloadFeedbackSnapshot,
+      onTitleResolved,
+      refreshLoadedCollectionEpisodes,
+    ],
   );
 
   useTitleOverviewReactiveRefresh<
@@ -718,7 +851,7 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
         }
         setTitle((current) =>
           current?.id === requestedTitleId
-            ? { ...current, moreLikeThis }
+            ? retainEquivalentSnapshot(current, { ...current, moreLikeThis })
             : current,
         );
       } catch (error) {
@@ -766,11 +899,25 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
     refreshTitleMoreLikeThis,
     titleId,
   ]);
+  const handleMoreLikeThisCatalogChanged = React.useCallback(
+    () => refreshTitleDetail({ refreshMoreLikeThis: true }),
+    [refreshTitleDetail],
+  );
   const moreLikeThisActions = useTitleMoreLikeThisActions({
     canAddItems: canAddDiscoveryItems,
     canRequestItems: canRequestDiscoveryItems,
-    onCatalogChanged: () => refreshTitleDetail({ refreshMoreLikeThis: true }),
+    onCatalogChanged: handleMoreLikeThisCatalogChanged,
   });
+  const {
+    canAddItem,
+    canRequestItem,
+    onAction,
+    onOpenResolved,
+  } = moreLikeThisActions.stripProps;
+  const moreLikeThisStripProps = React.useMemo(
+    () => ({ canAddItem, canRequestItem, onAction, onOpenResolved }),
+    [canAddItem, canRequestItem, onAction, onOpenResolved],
+  );
   const refreshTitleDetailRef = React.useRef(refreshTitleDetail);
   React.useEffect(() => {
     refreshTitleDetailRef.current = refreshTitleDetail;
@@ -822,6 +969,8 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
                       ...episode,
                       overview: episodeDetail?.overview ?? episode.overview ?? null,
                       imageUrl: episodeDetail?.imageUrl ?? episode.imageUrl ?? null,
+                      playbackLinks:
+                        episodeDetail?.playbackLinks ?? episode.playbackLinks ?? [],
                     }
                   : episode,
               ),
@@ -884,8 +1033,8 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
       try {
         const { data, error } = await client
           .query(
-            titleMediaFilesQuery,
-            { id: requestedTitleId },
+            movieEntityDetailQuery,
+            { titleId: requestedTitleId, movieId: link.movie.id },
             { requestPolicy: "network-only" },
           )
           .toPromise();
@@ -901,6 +1050,10 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
           | null
           | undefined;
         const mediaFiles = (titleDetail?.mediaFiles ?? []) as EpisodeMediaFile[];
+        const movieDetail = data?.movieEntity as
+          | { id: string; credits?: TitleCreditRecord[] | null }
+          | null
+          | undefined;
         const linkFiles = mediaFiles.filter((file) =>
           (file.seriesMovieLinkIds ?? []).includes(link.id),
         );
@@ -913,6 +1066,21 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
           ...current,
           [link.id]: linkFiles,
         }));
+        if (movieDetail) {
+          setSeriesMovieLinks((current) =>
+            current.map((currentLink) =>
+              currentLink.id === link.id
+                ? {
+                    ...currentLink,
+                    movie: {
+                      ...currentLink.movie,
+                      credits: movieDetail.credits ?? [],
+                    },
+                  }
+                : currentLink,
+            ),
+          );
+        }
         setMediaFilesByEpisode((current) => {
           const next = { ...current };
           for (const [episodeId, files] of Object.entries(mediaFilesByEpisode)) {
@@ -1622,11 +1790,15 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
   const handleManualImportComplete = React.useCallback(async () => {
     await refreshTitleDetail();
   }, [refreshTitleDetail]);
+  const handleOpenFixMatch = React.useCallback(() => {
+    setFixMatchOpen(true);
+  }, []);
 
   return (
     <>
       <SeriesOverviewView
         canManageTitle={canManageTitle}
+        fullBleedHero={fullBleedHero}
         loading={loading}
         hydrating={hydrating}
         title={title}
@@ -1678,8 +1850,8 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
         onDeleteFile={handleDeleteMediaFile}
         onMakePrimaryFile={canManageTitle ? handleMakePrimaryMovieFile : undefined}
         primaryMovieFileUpdatingId={primaryMovieFileUpdatingId}
-        onOpenFixMatch={() => setFixMatchOpen(true)}
-        moreLikeThisActions={moreLikeThisActions.stripProps}
+        onOpenFixMatch={handleOpenFixMatch}
+        moreLikeThisActions={moreLikeThisStripProps}
       />
       {moreLikeThisActions.dialogs}
       <FixTitleMatchDialog
@@ -1757,7 +1929,7 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
           clientId={manualImportItem.clientId}
           clientType={manualImportItem.clientType}
           downloadClientItemId={manualImportItem.downloadClientItemId}
-          onImportComplete={() => void handleManualImportComplete()}
+          onImportQueued={() => void handleManualImportComplete()}
         />
       )}
       {replaceConflictDialog}

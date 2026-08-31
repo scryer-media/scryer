@@ -31,6 +31,9 @@ pub struct UpgradeOutcome {
     /// without re-reading the media file row.
     pub new_size_bytes: i64,
     pub recycle_entry_committed: bool,
+    pub source_cleanup: Option<Box<ImportSourceCleanupGuard>>,
+    pub final_path_string: String,
+    pub(crate) destination_permit: crate::import_workflow::ImportDestinationPermit,
 }
 
 pub enum UpgradeResult {
@@ -141,6 +144,7 @@ pub(crate) async fn execute_upgrade(
     recycle_config: &RecycleBinConfig,
     import_mode: ImportMode,
     announced_size_bytes: Option<i64>,
+    completed: Option<&scryer_domain::CompletedDownload>,
 ) -> AppResult<UpgradeResult> {
     let audit_actor = DomainEventActor::from(actor);
 
@@ -181,6 +185,7 @@ pub(crate) async fn execute_upgrade(
         &source_path_string,
         import_mode,
         announced_size_bytes,
+        completed,
     )
     .await?;
 
@@ -223,21 +228,45 @@ pub(crate) async fn execute_upgrade(
         .await;
     }
 
-    if import_mode == ImportMode::Move {
-        remove_upgrade_import_source_after_verified_commit(app, &replacement).await?;
-    }
-
     Ok(UpgradeResult::Upgraded(UpgradeOutcome {
         old_score,
         new_score: final_score,
         new_file_id: replacement.new_file_id,
         new_size_bytes: replacement.new_size_bytes,
         recycle_entry_committed,
+        source_cleanup: replacement.source_cleanup.map(Box::new),
+        final_path_string: replacement.final_path_string,
+        destination_permit: replacement.destination_permit,
     }))
+}
+
+pub async fn finalize_upgrade_source_cleanup(
+    app: &AppUseCase,
+    outcome: &UpgradeOutcome,
+    completed: Option<&scryer_domain::CompletedDownload>,
+) -> AppResult<()> {
+    let Some(guard) = outcome.source_cleanup.as_deref().cloned() else {
+        return Ok(());
+    };
+    let execution_context = crate::ImportFileExecutionContext::new(
+        completed.map_or("", |item| item.client_id.as_str()),
+        completed.map_or("", |item| item.client_type.as_str()),
+    );
+    app.services
+        .workflow
+        .file_importer
+        .remove_import_source_after_verified_import_with_context(
+            guard,
+            &stored_path_to_path_buf(&outcome.final_path_string),
+            &execution_context,
+        )
+        .await
 }
 
 struct PreparedUpgradeReplacement {
     new_file_id: String,
+    reused_existing: bool,
+    destination_created: bool,
     /// Size of the replacement file, captured from the import result so the
     /// upgrade event can report it without a second stat or media-file read.
     new_size_bytes: i64,
@@ -245,6 +274,7 @@ struct PreparedUpgradeReplacement {
     final_path_string: String,
     same_final_path: bool,
     source_cleanup: Option<ImportSourceCleanupGuard>,
+    destination_permit: crate::import_workflow::ImportDestinationPermit,
 }
 
 enum OldFileDisposition {
@@ -982,6 +1012,7 @@ async fn prepare_replacement_before_old_removal(
     source_path_string: &str,
     import_mode: ImportMode,
     announced_size_bytes: Option<i64>,
+    completed: Option<&scryer_domain::CompletedDownload>,
 ) -> AppResult<PreparedUpgradeReplacement> {
     let import_path_string = path_to_stored_string(import_path);
     // The replacement is transferred exactly like a first import: through the
@@ -990,15 +1021,21 @@ async fn prepare_replacement_before_old_removal(
     // upgrade used the raw importer and never wrote progress) and the
     // library's resolved file permissions are applied instead of the
     // importer defaults.
+    let destination_ownership = crate::import_workflow::ImportDestinationOwnership::upgrade(
+        target_episode_ids,
+        existing_file,
+    );
     let file_result = crate::import_workflow::import_file_with_record_progress(
         app,
         import_id,
         &title.library_id,
         &title.facet,
+        &destination_ownership,
         source_path,
         import_path,
         import_mode,
         Some(&prepared.source_snapshot),
+        completed,
     )
     .await
     .map_err(|err| {
@@ -1032,35 +1069,32 @@ async fn prepare_replacement_before_old_removal(
         scoring_log: Some(scoring_log.to_string()),
         ..Default::default()
     };
-    let new_file_id = match app
-        .services
-        .library
-        .media_files
-        .insert_media_file(&media_file_input)
+    let persistence = match file_result
+        .insert_or_reuse_media_file(app, &media_file_input)
         .await
     {
-        Ok(id) => id,
+        Ok(persistence) => persistence,
         Err(err) => {
-            remove_imported_replacement(import_path).await;
+            if matches!(
+                file_result.destination_disposition,
+                scryer_domain::ImportDestinationDisposition::Created
+            ) {
+                remove_imported_replacement(import_path).await;
+            }
             return Err(AppError::Repository(format!(
                 "failed to insert replacement media file before old file removal: {err}"
             )));
         }
     };
+    let new_file_id = persistence.media_file_id;
+    let reused_existing = persistence.reused_existing;
+    let destination_created = persistence.destination_created;
     crate::post_download_gate::persist_media_analysis_result(
         &app.services.library.media_files,
         &new_file_id,
         prepared.accepted.as_ref(),
     )
     .await;
-
-    if !write_replacement_episode_links(app, &new_file_id, existing_file, target_episode_ids).await
-    {
-        rollback_new_replacement(app, &new_file_id, import_path).await;
-        return Err(AppError::Repository(
-            "failed to link replacement media file before old file removal".to_string(),
-        ));
-    }
 
     if let Err(reason) = validate_replacement_media_file(
         app,
@@ -1071,7 +1105,14 @@ async fn prepare_replacement_before_old_removal(
     )
     .await
     {
-        rollback_new_replacement(app, &new_file_id, import_path).await;
+        rollback_new_replacement(
+            app,
+            &new_file_id,
+            import_path,
+            reused_existing,
+            destination_created,
+        )
+        .await;
         return Err(AppError::Repository(format!(
             "replacement validation failed before old file removal: {reason}"
         )));
@@ -1079,11 +1120,14 @@ async fn prepare_replacement_before_old_removal(
 
     Ok(PreparedUpgradeReplacement {
         new_file_id,
+        reused_existing,
+        destination_created,
         new_size_bytes: file_result.size_bytes as i64,
         import_path: import_path.to_path_buf(),
         final_path_string,
         same_final_path,
-        source_cleanup: file_result.source_cleanup,
+        source_cleanup: file_result.source_cleanup.clone(),
+        destination_permit: file_result.destination_permit(),
     })
 }
 
@@ -1154,7 +1198,14 @@ async fn finalize_distinct_path_upgrade(
     {
         Ok(disposition) => disposition,
         Err(error) => {
-            rollback_new_replacement(app, &replacement.new_file_id, &replacement.import_path).await;
+            rollback_new_replacement(
+                app,
+                &replacement.new_file_id,
+                &replacement.import_path,
+                replacement.reused_existing,
+                replacement.destination_created,
+            )
+            .await;
             return Err(error);
         }
     };
@@ -1171,7 +1222,14 @@ async fn finalize_distinct_path_upgrade(
         .await
     {
         let rollback_result = rollback_old_file_disposition(&old_disposition, old_path).await;
-        rollback_new_replacement(app, &replacement.new_file_id, &replacement.import_path).await;
+        rollback_new_replacement(
+            app,
+            &replacement.new_file_id,
+            &replacement.import_path,
+            replacement.reused_existing,
+            replacement.destination_created,
+        )
+        .await;
         return match rollback_result {
             Ok(()) => Err(AppError::Repository(format!(
                 "failed to replace media file record after old-file disposition; restored old file: {error}"
@@ -1398,7 +1456,14 @@ async fn finalize_same_path_upgrade(
 
     if let Err(error) = tokio::fs::rename(old_path, &backup_path).await {
         remove_same_path_upgrade_guard_file(&guard_path).await;
-        rollback_new_replacement(app, &replacement.new_file_id, &replacement.import_path).await;
+        rollback_new_replacement(
+            app,
+            &replacement.new_file_id,
+            &replacement.import_path,
+            replacement.reused_existing,
+            replacement.destination_created,
+        )
+        .await;
         return Err(AppError::Repository(format!(
             "failed to move old file aside before same-path upgrade: {} -> {}: {}",
             old_path.display(),
@@ -1416,7 +1481,14 @@ async fn finalize_same_path_upgrade(
                 final_path = %old_path.display(),
                 "failed to restore old file after same-path replacement move failure; the original is preserved at the backup path"
             );
-            rollback_new_replacement(app, &replacement.new_file_id, &replacement.import_path).await;
+            rollback_new_replacement(
+                app,
+                &replacement.new_file_id,
+                &replacement.import_path,
+                replacement.reused_existing,
+                replacement.destination_created,
+            )
+            .await;
             return Err(AppError::Repository(format!(
                 "failed to move verified replacement into final path: {} -> {}: {}; failed to restore old file from backup {} to {}: {restore_error}",
                 replacement.import_path.display(),
@@ -1427,7 +1499,14 @@ async fn finalize_same_path_upgrade(
             )));
         }
         remove_same_path_upgrade_guard_file(&guard_path).await;
-        rollback_new_replacement(app, &replacement.new_file_id, &replacement.import_path).await;
+        rollback_new_replacement(
+            app,
+            &replacement.new_file_id,
+            &replacement.import_path,
+            replacement.reused_existing,
+            replacement.destination_created,
+        )
+        .await;
         return Err(AppError::Repository(format!(
             "failed to move verified replacement into final path: {} -> {}: {}",
             replacement.import_path.display(),
@@ -1456,7 +1535,14 @@ async fn finalize_same_path_upgrade(
                 final_path = %old_path.display(),
                 "failed to restore old file after same-path DB swap failure; the original is preserved at the backup path"
             );
-            rollback_new_replacement(app, &replacement.new_file_id, &replacement.import_path).await;
+            rollback_new_replacement(
+                app,
+                &replacement.new_file_id,
+                &replacement.import_path,
+                replacement.reused_existing,
+                replacement.destination_created,
+            )
+            .await;
             return Err(AppError::Repository(format!(
                 "failed to replace same-path media file record after guarded swap: {error}; failed to restore old file from backup {} to {}: {restore_error}",
                 backup_path.display(),
@@ -1464,7 +1550,14 @@ async fn finalize_same_path_upgrade(
             )));
         }
         remove_same_path_upgrade_guard_file(&guard_path).await;
-        rollback_new_replacement(app, &replacement.new_file_id, &replacement.import_path).await;
+        rollback_new_replacement(
+            app,
+            &replacement.new_file_id,
+            &replacement.import_path,
+            replacement.reused_existing,
+            replacement.destination_created,
+        )
+        .await;
         return Err(AppError::Repository(format!(
             "failed to replace same-path media file record after guarded swap: {error}"
         )));
@@ -1570,52 +1663,6 @@ async fn dispose_old_file_after_verified_upgrade(
     Ok(true)
 }
 
-async fn write_replacement_episode_links(
-    app: &AppUseCase,
-    new_file_id: &str,
-    existing_file: &TitleMediaFile,
-    target_episode_ids: &[String],
-) -> bool {
-    let mut links_written = true;
-    if target_episode_ids.is_empty() {
-        if let Some(ref episode_id) = existing_file.episode_id
-            && let Err(error) = app
-                .services
-                .library
-                .media_files
-                .link_file_to_episode(new_file_id, episode_id)
-                .await
-        {
-            links_written = false;
-            tracing::warn!(
-                error = %error,
-                file_id = %new_file_id,
-                episode_id,
-                "failed to link replacement file to episode"
-            );
-        }
-    } else {
-        for episode_id in target_episode_ids {
-            if let Err(error) = app
-                .services
-                .library
-                .media_files
-                .link_file_to_episode(new_file_id, episode_id)
-                .await
-            {
-                links_written = false;
-                tracing::warn!(
-                    error = %error,
-                    file_id = %new_file_id,
-                    episode_id,
-                    "failed to link replacement file to episode"
-                );
-            }
-        }
-    }
-    links_written
-}
-
 async fn validate_replacement_media_file(
     app: &AppUseCase,
     replacement_file_id: &str,
@@ -1702,11 +1749,21 @@ async fn validate_original_inactive_for_delete(
     Ok(())
 }
 
-async fn rollback_new_replacement(app: &AppUseCase, new_file_id: &str, path: &Path) {
-    let _ = app
-        .delete_media_file_record_with_dependents(new_file_id)
-        .await;
-    remove_imported_replacement(path).await;
+async fn rollback_new_replacement(
+    app: &AppUseCase,
+    new_file_id: &str,
+    path: &Path,
+    reused_existing: bool,
+    destination_created: bool,
+) {
+    if !reused_existing {
+        let _ = app
+            .delete_media_file_record_with_dependents(new_file_id)
+            .await;
+    }
+    if !reused_existing && destination_created {
+        remove_imported_replacement(path).await;
+    }
 }
 
 fn sibling_guard_path(path: &Path, label: &str) -> PathBuf {
@@ -1840,24 +1897,6 @@ async fn remove_old_file_after_verified_upgrade(path: &Path) -> AppResult<()> {
         )));
     }
     Ok(())
-}
-
-async fn remove_upgrade_import_source_after_verified_commit(
-    app: &AppUseCase,
-    replacement: &PreparedUpgradeReplacement,
-) -> AppResult<()> {
-    let guard = replacement.source_cleanup.clone().ok_or_else(|| {
-        AppError::Repository(format!(
-            "move upgrade did not return a source cleanup guard for {}",
-            replacement.import_path.display()
-        ))
-    })?;
-    let final_path = stored_path_to_path_buf(&replacement.final_path_string);
-    app.services
-        .workflow
-        .file_importer
-        .remove_import_source_after_verified_import(guard, &final_path)
-        .await
 }
 
 struct UpgradeEventDetails<'a> {

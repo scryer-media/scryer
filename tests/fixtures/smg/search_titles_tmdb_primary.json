@@ -1,0 +1,36 @@
+{
+  "data": {
+    "searchTitles": {
+      "source": "smg",
+      "query": "TMDB Primary",
+      "generated_at": "2026-08-21T00:00:00Z",
+      "total_results": 1,
+      "results": [
+        {
+          "title_id": 202,
+          "kind": "movie",
+          "primary_source": "tmdb",
+          "tvdb_id": null,
+          "tmdb_id": 2020,
+          "imdb_id": "tt7654321",
+          "external_ids": [
+            { "source": "smg", "kind": "movie", "id": "202", "key": "smg:title:202" },
+            { "source": "tmdb", "kind": "movie", "id": "2020", "key": "tmdb:movie:2020" }
+          ],
+          "name": "TMDB Primary Movie",
+          "slug": "tmdb-primary-movie",
+          "type": "movie",
+          "year": 2025,
+          "status": "Released",
+          "overview": "A movie whose primary identifier is TMDB.",
+          "poster_url": "https://image.tmdb.org/t/p/original/tmdb-primary.jpg",
+          "language": "eng",
+          "runtime_minutes": 110,
+          "popularity": 12.0,
+          "sort_title": "TMDB Primary Movie",
+          "normalization_notes": []
+        }
+      ]
+    }
+  }
+}

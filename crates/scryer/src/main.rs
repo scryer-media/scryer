@@ -1,8 +1,12 @@
 // async-graphql schema expansion exceeded the default macro recursion depth.
 #![recursion_limit = "256"]
 
+mod application_upgrade_evidence;
+mod application_upgrade_helper;
 mod backup_routes;
 mod base_path;
+#[cfg(any(debug_assertions, test))]
+mod dev_api_keys;
 mod http_error;
 mod init;
 mod log_buffer;
@@ -14,6 +18,8 @@ mod splash;
 mod startup_auth;
 mod startup_migrations;
 mod ui_assets;
+#[cfg(windows)]
+mod windows_startup;
 
 use std::ffi::OsString;
 use std::io;
@@ -33,17 +39,18 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use scryer_application::{
     AUTO_BACKUP_POST_UPGRADE_PENDING_VERSION_KEY, AppUseCase, ArchiveExtractorPluginProvider,
-    AutoBackupRunOutcome, DownloadClientPluginProvider, DownloadQueuePollerOptions, FacetRegistry,
-    IndexerPluginProvider, JobTriggerSource, MovieFacetHandler, NotificationPluginProvider,
-    PLUGIN_HTTP_CA_BUNDLE_PEM_KEY, PluginHttpTrustConfigRuntime, PluginInstallationRepository,
-    RUNTIME_PLUGIN_LOAD_CONCURRENCY, RuntimePluginLoad, SETTINGS_SCOPE_SYSTEM, SeriesFacetHandler,
-    SubtitlePluginProvider, SystemInfoProvider, TitleImageKind, TitleImageRepository,
+    AutoBackupRunOutcome, DownloadClientCategorySnapshotStore, DownloadClientPluginProvider,
+    DownloadQueuePollerOptions, FacetRegistry, IndexerPluginProvider, JobTriggerSource,
+    MovieFacetHandler, NotificationPluginProvider, PLUGIN_HTTP_CA_BUNDLE_PEM_KEY,
+    PluginHttpTrustConfigRuntime, PluginInstallationRepository, RUNTIME_PLUGIN_LOAD_CONCURRENCY,
+    RuntimePluginLoad, SETTINGS_SCOPE_SYSTEM, SeriesFacetHandler, SubtitlePluginProvider,
+    SystemInfoProvider, TitleImageKind, TitleImageRepository,
     load_runtime_plugin_from_persisted_installation_payload, start_background_acquisition_poller,
     start_background_auto_backup_scheduler, start_background_download_delete_poller,
     start_background_library_refresh_loop, start_background_manual_import_poller,
-    start_background_subtitle_poller, start_background_title_hydration_loop,
-    start_background_title_image_loop, start_download_queue_poller_with_options,
-    start_notification_dispatcher,
+    start_background_media_server_playback_reconciliation_loop, start_background_subtitle_poller,
+    start_background_title_hydration_loop, start_background_title_image_loop,
+    start_download_queue_poller_with_options, start_notification_dispatcher,
     tracked_downloads::{
         BridgedClientTypesHandle, TrackedDownloadHandle, TrackedDownloadSnapshotIngestHandle,
     },
@@ -57,7 +64,8 @@ use scryer_infrastructure_acquisition::{
         staged_nzb_store::FileSystemStagedNzbStore,
     },
     indexers::{
-        caps::DirectNabCapsSnapshotRefresher, providers::prowlarr::NativeProwlarrIndexerProvider,
+        caps::DirectNabCapsSnapshotRefresher, error_store::BlockingIndexerErrorRecorder,
+        providers::prowlarr::NativeProwlarrIndexerProvider,
         search_client::MultiIndexerSearchClient,
     },
 };
@@ -81,7 +89,10 @@ use scryer_interface::context::{
     RestoreDatastoreEngine, RestoreDatastoreHandle, RestoreMigrationMode, RestoreRestartHandle,
     RestoreSqliteDatastoreRequest,
 };
-use scryer_interface::{LogBuffer, build_schema_with_log_buffer_and_restore};
+use scryer_interface::{
+    LogBuffer, build_schema_with_log_buffer_and_restore_and_application_upgrade,
+};
+use scryer_logging::{JsonContextFormatter, LogContextLayer, enable_context_spans};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
@@ -119,8 +130,10 @@ include!(concat!(env!("OUT_DIR"), "/smg_build_assets.rs"));
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const LEGACY_NZBGEEK_PLUGIN_ID: &str = "nzbgeek";
 const RECOVERY_ADMIN_PASSWORD_ENV: &str = "SCRYER_RECOVERY_ADMIN_PASSWORD";
+const DEVELOPMENT_MODE_ENV: &str = "SCRYER_DEVELOPMENT_MODE";
 const ALLOW_UNAUTHENTICATED_PUBLIC_ACCESS_ENV: &str = "SCRYER_ALLOW_UNAUTHENTICATED_PUBLIC_ACCESS";
 const LOG_FILE_ENV: &str = "SCRYER_LOG_FILE";
+const LOG_FORMAT_ENV: &str = "SCRYER_LOG_FORMAT";
 
 fn compiled_binary_lane() -> scryer_runtime_info::BinaryLane {
     scryer_runtime_info::BinaryLane::parse(env!("SCRYER_COMPILED_BUILD_LANE"))
@@ -294,6 +307,20 @@ fn restart_current_process(spec: &RestartSpec) -> io::Result<()> {
     Err(command.exec())
 }
 
+#[cfg(windows)]
+fn application_upgrade_boot_time() -> Option<std::time::SystemTime> {
+    use windows_sys::Win32::System::SystemInformation::GetTickCount64;
+
+    // SAFETY: GetTickCount64 has no arguments and is safe to call for the current host.
+    let uptime_millis = unsafe { GetTickCount64() };
+    std::time::SystemTime::now().checked_sub(std::time::Duration::from_millis(uptime_millis))
+}
+
+#[cfg(not(windows))]
+fn application_upgrade_boot_time() -> Option<std::time::SystemTime> {
+    None
+}
+
 #[cfg(not(unix))]
 fn restart_current_process(spec: &RestartSpec) -> io::Result<()> {
     let mut command = Command::new(&spec.executable);
@@ -345,6 +372,17 @@ impl SelfRestartController {
         RestoreRestartHandle::new(move || controller.schedule_restart())
     }
 
+    fn application_upgrade_handle(
+        &self,
+    ) -> scryer_application::application_upgrade::ApplicationUpgradeRestartHandle {
+        let restart_controller = self.clone();
+        let exit_controller = self.clone();
+        scryer_application::application_upgrade::ApplicationUpgradeRestartHandle::new_with_exit(
+            move || restart_controller.schedule_restart(),
+            move || exit_controller.schedule_exit_only(),
+        )
+    }
+
     fn schedule_restart(&self) {
         if self.inner.scheduled.swap(true, Ordering::SeqCst) {
             tracing::info!("restore restart already scheduled");
@@ -358,6 +396,18 @@ impl SelfRestartController {
                 tracing::error!(error = %error, "failed to restart after restore");
                 inner.scheduled.store(false, Ordering::SeqCst);
             }
+        });
+    }
+
+    fn schedule_exit_only(&self) {
+        if self.inner.scheduled.swap(true, Ordering::SeqCst) {
+            tracing::info!("restart or exit already scheduled");
+            return;
+        }
+        let delay = self.inner.delay;
+        std::thread::spawn(move || {
+            std::thread::sleep(delay);
+            std::process::exit(0);
         });
     }
 }
@@ -460,8 +510,25 @@ fn install_panic_logging_hook() {
     }));
 }
 
+fn main() {
+    if std::env::args().nth(1).as_deref() == Some("__import-file-worker") {
+        std::process::exit(
+            scryer_infrastructure_workflow::workflow::file_importer::run_import_file_worker(),
+        );
+    }
+    match application_upgrade_helper::maybe_run_upgrade_helper() {
+        Ok(true) => return,
+        Ok(false) => {}
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+    }
+    run_application();
+}
+
 #[tokio::main]
-async fn main() {
+async fn run_application() {
     // Phase 1: Extract startup path flags before subcommand dispatch.
     let mut args: Vec<String> = std::env::args().collect();
     let data_dir_override = match extract_data_dir(&mut args) {
@@ -516,6 +583,10 @@ async fn main() {
 
     load_env_file(Some(&data_dir), false);
 
+    let configured_log_format = normalize_env_option(LOG_FORMAT_ENV);
+    let invalid_log_format = invalid_log_format(configured_log_format.as_deref());
+    let log_format = resolve_log_format(configured_log_format.as_deref());
+
     scryer_outbound_http::install_default_rustls_provider();
 
     let log_ring_buffer = log_buffer::LogRingBuffer::with_default_capacity();
@@ -553,27 +624,63 @@ async fn main() {
         use tracing_subscriber::layer::SubscriberExt;
         use tracing_subscriber::util::SubscriberInitExt;
 
-        let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+        let env_filter = enable_context_spans(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        );
 
-        let stdout_layer = tracing_subscriber::fmt::layer();
-        let buffer_layer = tracing_subscriber::fmt::layer()
-            .with_writer(log_buffer::LogBufferWriter::new(log_ring_buffer.clone()))
-            .with_ansi(false);
-        let file_layer = log_file_writer.map(|writer| {
-            tracing_subscriber::fmt::layer()
-                .with_writer(writer)
-                .with_ansi(false)
-        });
+        match log_format {
+            LogFormat::Json => {
+                let stdout_layer = tracing_subscriber::fmt::layer()
+                    .event_format(JsonContextFormatter)
+                    .with_ansi(false);
+                let buffer_layer = tracing_subscriber::fmt::layer()
+                    .event_format(JsonContextFormatter)
+                    .with_writer(log_buffer::LogBufferWriter::new(log_ring_buffer.clone()))
+                    .with_ansi(false);
+                let file_layer = log_file_writer.map(|writer| {
+                    tracing_subscriber::fmt::layer()
+                        .event_format(JsonContextFormatter)
+                        .with_writer(writer)
+                        .with_ansi(false)
+                });
 
-        tracing_subscriber::registry()
-            .with(env_filter)
-            .with(stdout_layer)
-            .with(buffer_layer)
-            .with(file_layer)
-            .init();
+                tracing_subscriber::registry()
+                    .with(env_filter)
+                    .with(LogContextLayer)
+                    .with(stdout_layer)
+                    .with(buffer_layer)
+                    .with(file_layer)
+                    .init();
+            }
+            LogFormat::Text => {
+                let stdout_layer = tracing_subscriber::fmt::layer();
+                let buffer_layer = tracing_subscriber::fmt::layer()
+                    .with_writer(log_buffer::LogBufferWriter::new(log_ring_buffer.clone()))
+                    .with_ansi(false);
+                let file_layer = log_file_writer.map(|writer| {
+                    tracing_subscriber::fmt::layer()
+                        .with_writer(writer)
+                        .with_ansi(false)
+                });
+
+                tracing_subscriber::registry()
+                    .with(env_filter)
+                    .with(stdout_layer)
+                    .with(buffer_layer)
+                    .with(file_layer)
+                    .init();
+            }
+        }
     }
     install_panic_logging_hook();
+    if let Some(value) = invalid_log_format {
+        tracing::warn!(
+            value,
+            default = "json",
+            "unrecognized SCRYER_LOG_FORMAT; falling back to the default log format"
+        );
+    }
     if let Some(path) = file_logging_path.as_ref() {
         tracing::info!(path = %path.display(), "file logging enabled");
     }
@@ -624,6 +731,10 @@ async fn main() {
     let jwt_issuer = std::env::var("SCRYER_JWT_ISSUER").unwrap_or_else(|_| "scryer".to_string());
     let jwt_access_ttl_seconds = parse_env_u64("SCRYER_JWT_ACCESS_TTL_SECONDS", 86_400);
     let bind = std::env::var("SCRYER_BIND").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
+    let development_mode = resolve_development_mode_from_env().unwrap_or_else(|error| {
+        eprintln!("invalid {DEVELOPMENT_MODE_ENV}: {error}");
+        std::process::exit(1);
+    });
     let base_path = BasePath::from_env();
 
     // Install Prometheus metrics recorder when enabled.
@@ -643,6 +754,13 @@ async fn main() {
     };
 
     tracing::info!(version = VERSION, "starting scryer");
+
+    let application_upgrade_assessment =
+        application_upgrade_evidence::collect_installation_assessment();
+    tracing::info!(
+        kind = ?application_upgrade_assessment.kind,
+        "application upgrade installation assessment"
+    );
 
     // ValidateOnly mode: check for pending migrations and exit immediately (no server).
     if matches!(migration_mode, MigrationMode::ValidateOnly) {
@@ -677,6 +795,7 @@ async fn main() {
     // Spawn the full application bootstrap in the background.
     let bootstrap_shutdown = shutdown_token.clone();
     let bootstrap_bind = bind.clone();
+    let bootstrap_development_mode = development_mode;
     let runtime_handle = tokio::runtime::Handle::current();
     std::thread::Builder::new()
         .name("scryer-bootstrap".to_string())
@@ -689,12 +808,14 @@ async fn main() {
                     jwt_issuer,
                     jwt_access_ttl_seconds,
                     bootstrap_bind,
+                    bootstrap_development_mode,
                     cors,
                     bootstrap_shutdown,
                     log_ring_buffer,
                     metrics_handle,
                     data_dir,
                     bootstrap_base_path,
+                    application_upgrade_assessment,
                 )
                 .await
                 {
@@ -779,13 +900,15 @@ async fn bootstrap_application(
     finalized_pending_restore: bool,
     jwt_issuer: String,
     jwt_access_ttl_seconds: u64,
-    _bind: String,
+    bind: String,
+    development_mode: bool,
     cors: CorsConfig,
     shutdown_token: CancellationToken,
     log_ring_buffer: log_buffer::LogRingBuffer,
     metrics_handle: Option<metrics_exporter_prometheus::PrometheusHandle>,
     data_dir: PathBuf,
     base_path: BasePath,
+    application_upgrade_assessment: scryer_application::application_upgrade::InstallationAssessment,
 ) -> Result<Router, Box<dyn std::error::Error + Send + Sync>> {
     let bootstrap_start = std::time::Instant::now();
 
@@ -847,13 +970,20 @@ async fn bootstrap_application(
 
     // Detect version upgrades by comparing with last-run version stored in DB
     let version_lifecycle = check_version_upgrade(bootstrap_settings_store.clone()).await;
+    let customization_store = datastore.customization_store();
+    let mut application_migrator = startup_migrations::runner::ApplicationMigrator::load(
+        datastore.datastore(),
+        bootstrap_settings_store.clone(),
+    )
+    .await
+    .map_err(|error| format!("failed to initialize application migrator: {error}"))?;
+    application_migrator
+        .run_early(datastore.indexer_configs(), &customization_store)
+        .await
+        .map_err(|error| format!("required early application migration failed: {error}"))?;
     record_post_upgrade_auto_backup_pending_if_needed(
         bootstrap_settings_store.clone(),
         &version_lifecycle,
-    )
-    .await;
-    startup_migrations::_0001_legacy_history_retention_forever_override::clear_legacy_history_retention_forever_override(
-        bootstrap_settings_store.clone(),
     )
     .await;
 
@@ -970,7 +1100,6 @@ async fn bootstrap_application(
         .map_err(|error| {
             format!("failed to initialize plugin HTTP trusted certificates: {error}")
         })?;
-    let customization_store = datastore.customization_store();
     let staged_nzb_store = Arc::new(
         FileSystemStagedNzbStore::new_with_startup_purge(datastore.staged_nzb_path(), true)
             .await
@@ -1017,6 +1146,7 @@ async fn bootstrap_application(
                 &disabled_builtin_plugins,
             ),
         ));
+    let download_client_category_snapshot_store = DownloadClientCategorySnapshotStore::default();
     let download_client = Arc::new(
         PrioritizedDownloadClientRouter::new(
             download_client_configs.clone(),
@@ -1029,13 +1159,16 @@ async fn bootstrap_application(
             indexer_configs.clone(),
             datastore.indexer_proxy_configs(),
         )
-        .with_seed_goal_resolution(
-            datastore.seeding_profiles(),
-            datastore.download_submissions(),
-        ),
+        .with_download_client_category_snapshot_store(
+            download_client_category_snapshot_store.clone(),
+        )
+        .with_seed_goal_resolution(datastore.seeding_profiles()),
     );
     let indexer_stats = datastore.indexer_stats_tracker();
     let indexer_learning = datastore.indexer_search_learning_repository();
+    let indexer_errors = datastore.indexer_errors();
+    let indexer_error_recorder =
+        Arc::new(BlockingIndexerErrorRecorder::new(indexer_errors.clone()));
     let upstream_scheduler = datastore
         .upstream_scheduler()
         .await
@@ -1045,10 +1178,15 @@ async fn bootstrap_application(
         scryer_plugins::build_indexer_plugin_provider_from_runtime_plugins(
             &indexer_runtime_plugins,
             &disabled_builtin_plugins,
-        ),
+        )
+        .with_indexer_error_recorder(indexer_error_recorder),
     ));
-    let plugin_provider: Arc<dyn IndexerPluginProvider> =
-        Arc::new(NativeProwlarrIndexerProvider::new(dynamic_provider));
+    let plugin_provider: Arc<dyn IndexerPluginProvider> = Arc::new(
+        NativeProwlarrIndexerProvider::new_with_indexer_error_repository(
+            dynamic_provider,
+            indexer_errors.clone(),
+        ),
+    );
     let subtitle_plugin_provider: Arc<dyn SubtitlePluginProvider> =
         Arc::new(scryer_plugins::DynamicSubtitlePluginProvider::new(
             scryer_plugins::build_subtitle_plugin_provider_from_runtime_plugins(
@@ -1071,6 +1209,7 @@ async fn bootstrap_application(
     )
     .with_indexer_proxy_config_repository(datastore.indexer_proxy_configs())
     .with_search_learning_repository(indexer_learning)
+    .with_indexer_error_repository(indexer_errors.clone())
     .with_upstream_scheduler(upstream_scheduler.clone());
 
     let indexer_client = Arc::new(indexer_client);
@@ -1181,6 +1320,7 @@ async fn bootstrap_application(
             data_dir.clone(),
             scryer_plugins::detect_supported_plugin_required_features(),
         )
+        .with_download_client_category_snapshot_store(download_client_category_snapshot_store)
         .with_smg_registration_secret(
             SMG_REGISTRATION_SECRET
                 .map(String::from)
@@ -1198,7 +1338,9 @@ async fn bootstrap_application(
         .with_image_proxy_cache_control(image_proxy_runtime.clone())
         .with_library_scanner(library_scanner)
         .with_library_renamer(library_renamer)
-        .with_file_importer(Arc::new(FsFileImporter::new()))
+        .with_file_importer(Arc::new(FsFileImporter::with_worker_executable(
+            std::env::current_exe().expect("current Scryer executable must be available"),
+        )))
         .with_staged_nzb_store(staged_nzb_store)
         .with_staged_nzb_pipeline_limit(staged_nzb_pipeline_limit)
         .with_indexer_stats(indexer_stats)
@@ -1233,6 +1375,15 @@ async fn bootstrap_application(
         facet_registry,
         webauthn,
     );
+    if let Err(error) = app_use_case
+        .refresh_download_client_category_admission()
+        .await
+    {
+        tracing::warn!(
+            error = %error,
+            "failed to initialize download-client category feedback scopes; using unfiltered polling until a refresh succeeds"
+        );
+    }
     if let Err(error) = app_use_case.sync_image_cache_runtime_limit().await {
         tracing::warn!(error = %error, "failed to apply configured image cache limit");
     }
@@ -1311,51 +1462,14 @@ async fn bootstrap_application(
         VersionLifecycle::Upgraded { previous } => Some(previous.as_str()),
         VersionLifecycle::FirstRun | VersionLifecycle::Unchanged => None,
     };
-    startup_migrations::_0002_enhanced_subsync_plugin_016::migrate_enhanced_subsync_plugin_for_016_upgrade(
-        &app_use_case,
-        bootstrap_settings_store.clone(),
-        previous_version,
-        VERSION,
-    )
-    .await;
-    startup_migrations::_0003_title_image_artwork_url_refresh::refresh_title_image_artwork_urls_for_upgrade(
-        &app_use_case,
-        bootstrap_settings_store.clone(),
-        previous_version,
-        VERSION,
-    )
-    .await;
-    startup_migrations::_0004_auto_backup_missing_key_disable::disable_auto_backups_without_key(
-        bootstrap_settings_store.clone(),
-    )
-    .await;
-    startup_migrations::_0005_title_metadata_rehydration_017::rehydrate_title_metadata_for_017_upgrade(
-        &app_use_case,
-        bootstrap_settings_store.clone(),
-        VERSION,
-    )
-    .await;
-    startup_migrations::_0006_quality_profile_default_1080p::clear_system_written_legacy_default_global_profile(
-        bootstrap_settings_store.clone(),
-        bootstrap_quality_profile_store.clone(),
-    )
-    .await;
-    startup_migrations::_0007_emby_plugin_compatibility::migrate_emby_plugin_compatibility(
-        &app_use_case,
-        bootstrap_settings_store.clone(),
-    )
-    .await;
-    startup_migrations::_0008_title_credits_rehydration_018::rehydrate_title_credits_for_018_upgrade(
-        &app_use_case,
-        bootstrap_settings_store.clone(),
-        VERSION,
-    )
-    .await;
-    startup_migrations::_0010_download_client_remove_failed_default::flip_download_client_remove_failed_default(
-        &app_use_case,
-        bootstrap_settings_store.clone(),
-    )
-    .await;
+    application_migrator
+        .run_application_ready(
+            &app_use_case,
+            bootstrap_quality_profile_store.clone(),
+            previous_version,
+            VERSION,
+        )
+        .await;
     spawn_post_upgrade_auto_backup_if_pending(
         app_use_case.clone(),
         bootstrap_settings_store.clone(),
@@ -1375,9 +1489,29 @@ async fn bootstrap_application(
     spawn_sigstore_trust_root_prime_task(app_use_case.clone());
     spawn_plugin_catalog_refresh_task(app_use_case.clone());
 
+    let restore_restart_controller = SelfRestartController::new(Duration::from_millis(250))
+        .map_err(|error| format!("failed to prepare restore restart controller: {error}"))?;
+    app_use_case.set_application_upgrade_restart_handle(
+        restore_restart_controller.application_upgrade_handle(),
+    );
+
+    let upgrade_reconcile_exclusions = match app_use_case
+        .finalize_application_upgrade_journal_with_boot_time(application_upgrade_boot_time())
+        .await
+    {
+        Ok(exclusions) => exclusions,
+        Err(error) => {
+            tracing::warn!(error = %error, "failed to finalize application upgrade journal on startup");
+            Vec::new()
+        }
+    };
+
     // A persisted running job run whose worker died in a previous process is
     // unfinishable; fail those rows before any poller can wait on them forever.
-    if let Err(e) = app_use_case.reconcile_interrupted_job_runs().await {
+    if let Err(e) = app_use_case
+        .reconcile_interrupted_job_runs(&upgrade_reconcile_exclusions)
+        .await
+    {
         tracing::warn!(error = %e, "failed to reconcile interrupted job runs on startup");
     }
 
@@ -1433,9 +1567,6 @@ async fn bootstrap_application(
             "failed to build download-client category admission snapshot on startup; untracked observations will be deferred"
         );
     }
-    let restore_restart_controller = SelfRestartController::new(Duration::from_millis(250))
-        .map_err(|error| format!("failed to prepare restore restart controller: {error}"))?;
-
     let auth_mode = resolve_auth_mode_from_env()?;
     app_use_case.set_recovery_admin_login_enabled(auth_mode.recovery_active());
     if auth_mode.recovery_active() {
@@ -1475,7 +1606,7 @@ async fn bootstrap_application(
     });
     let log_buf_snapshot = log_ring_buffer.clone();
     let log_buf_subscribe = log_ring_buffer.clone();
-    let schema = build_schema_with_log_buffer_and_restore(
+    let schema = build_schema_with_log_buffer_and_restore_and_application_upgrade(
         app_use_case.clone(),
         auth_runtime.clone(),
         Some(LogBuffer::new(
@@ -1488,6 +1619,7 @@ async fn bootstrap_application(
             datastore: restore_datastore_handle(),
             restart: restore_restart_controller.handle(),
         }),
+        application_upgrade_assessment,
     );
     let authless_access_allowlist_raw =
         normalize_env_option(UNAUTHENTICATED_PUBLIC_ACCESS_ALLOWLIST_ENV).unwrap_or_default();
@@ -1499,6 +1631,18 @@ async fn bootstrap_application(
         authless_access_allowlist.is_configured(),
     )
     .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { error.into() })?;
+    validate_authless_runtime_config(
+        !cfg!(debug_assertions),
+        development_mode,
+        &auth_mode,
+        authless_access_allowlist_env_configured,
+    )
+    .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { error.into() })?;
+    warn_about_deprecated_public_authless_release_bind(
+        !cfg!(debug_assertions),
+        &bind,
+        auth_runtime.snapshot().effective_form_login_enabled,
+    );
     if auth_mode.used_legacy_dev_auto_login {
         tracing::warn!(
             "SCRYER_DEV_AUTO_LOGIN is deprecated; use SCRYER_AUTH_ENABLED=false instead"
@@ -1550,6 +1694,11 @@ async fn bootstrap_application(
             );
         }
     }
+    #[cfg(any(debug_assertions, test))]
+    if let Err(error) = dev_api_keys::sync_from_env(&app_use_case).await {
+        tracing::error!(error = %error, "failed to synchronize development API keys");
+        std::process::exit(1);
+    }
     // Bridge coverage is decided at runtime, not at boot. Resolving the
     // weaver subscription bridge once at startup meant a weaver client added
     // or promoted after boot (every fresh install) never got realtime
@@ -1584,6 +1733,10 @@ async fn bootstrap_application(
         shutdown_token.child_token(),
     ));
     tokio::spawn(start_background_library_refresh_loop(
+        app_use_case.clone(),
+        shutdown_token.child_token(),
+    ));
+    tokio::spawn(start_background_media_server_playback_reconciliation_loop(
         app_use_case.clone(),
         shutdown_token.child_token(),
     ));
@@ -2062,6 +2215,24 @@ struct ResolvedLogFileConfig {
     explicit: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LogFormat {
+    Json,
+    Text,
+}
+
+fn resolve_log_format(value: Option<&str>) -> LogFormat {
+    match value.unwrap_or("json").trim().to_ascii_lowercase().as_str() {
+        "json" => LogFormat::Json,
+        "text" => LogFormat::Text,
+        _ => LogFormat::Json,
+    }
+}
+
+fn invalid_log_format(value: Option<&str>) -> Option<&str> {
+    value.filter(|value| !matches!(value.trim().to_ascii_lowercase().as_str(), "json" | "text"))
+}
+
 fn resolve_log_file_config(
     cli_override: Option<&Path>,
     env_override: Option<&str>,
@@ -2302,6 +2473,95 @@ fn validate_unauthenticated_public_access_allowlist_config(
         ));
     }
     Ok(())
+}
+
+fn resolve_development_mode_from_env() -> Result<bool, String> {
+    resolve_development_mode(
+        normalize_env_option(DEVELOPMENT_MODE_ENV).as_deref(),
+        !cfg!(debug_assertions),
+    )
+}
+
+fn resolve_development_mode(raw: Option<&str>, release_build: bool) -> Result<bool, String> {
+    let Some(raw) = raw else {
+        return Ok(false);
+    };
+    let enabled = parse_env_bool_value(raw)
+        .ok_or_else(|| format!("expected a boolean value, received {:?}", raw.trim()))?;
+    if enabled && release_build {
+        return Err("development mode is unavailable in release builds".to_string());
+    }
+    Ok(enabled)
+}
+
+fn validate_authless_runtime_config(
+    release_build: bool,
+    development_mode: bool,
+    auth_mode: &AuthModeConfig,
+    allowlist_env_configured: bool,
+) -> Result<(), String> {
+    if release_build {
+        if auth_mode.used_legacy_dev_auto_login {
+            return Err(
+                "SCRYER_DEV_AUTO_LOGIN is unavailable in release builds; use authenticated sessions"
+                    .to_string(),
+            );
+        }
+        if auth_mode.allow_unauthenticated_public_access {
+            return Err(format!(
+                "{ALLOW_UNAUTHENTICATED_PUBLIC_ACCESS_ENV}=true is unavailable in release builds"
+            ));
+        }
+        if allowlist_env_configured {
+            return Err(format!(
+                "{UNAUTHENTICATED_PUBLIC_ACCESS_ALLOWLIST_ENV} is unavailable in release builds"
+            ));
+        }
+        if development_mode {
+            return Err("development mode is unavailable in release builds".to_string());
+        }
+        return Ok(());
+    }
+
+    if !development_mode
+        && (auth_mode.used_legacy_dev_auto_login
+            || auth_mode.allow_unauthenticated_public_access
+            || allowlist_env_configured)
+    {
+        return Err(format!(
+            "{DEVELOPMENT_MODE_ENV}=true is required for development authless access overrides"
+        ));
+    }
+    Ok(())
+}
+
+fn warn_about_deprecated_public_authless_release_bind(
+    release_build: bool,
+    bind: &str,
+    effective_form_login_enabled: bool,
+) {
+    if should_warn_about_public_authless_release_bind(
+        release_build,
+        bind,
+        effective_form_login_enabled,
+    ) {
+        tracing::warn!(
+            bind,
+            "authless browser access on a non-loopback bind is deprecated and will be disabled in a future release; set SCRYER_BIND to a loopback address and place any reverse proxy in front of it, or enable authentication"
+        );
+    }
+}
+
+fn should_warn_about_public_authless_release_bind(
+    release_build: bool,
+    bind: &str,
+    effective_form_login_enabled: bool,
+) -> bool {
+    release_build
+        && !effective_form_login_enabled
+        && bind
+            .parse::<SocketAddr>()
+            .is_ok_and(|addr| !addr.ip().is_loopback())
 }
 
 fn resolve_auth_mode(
@@ -2976,13 +3236,15 @@ async fn seed_builtin_plugin_installations(
 #[cfg(test)]
 mod tests {
     use super::{
-        ALLOW_UNAUTHENTICATED_PUBLIC_ACCESS_ENV, AuthModeConfig, ImageProxyBlob,
+        ALLOW_UNAUTHENTICATED_PUBLIC_ACCESS_ENV, AuthModeConfig, ImageProxyBlob, LogFormat,
         RECOVERY_ADMIN_PASSWORD_ENV, ResolvedLogFileConfig, SelfRestartController,
         UNAUTHENTICATED_PUBLIC_ACCESS_ALLOWLIST_ENV, bootstrap_plugin_installations,
         collect_runtime_plugin_load_candidates, comma_separated_env_has_entries, extract_data_dir,
         extract_log_file, flush_upstream_scheduler_after_shutdown, image_proxy_response,
-        load_runtime_plugin_state, resolve_auth_mode, resolve_log_file_config,
-        resolve_wasmtime_cache_dir, restart_spec_from_parts, title_image_handler,
+        invalid_log_format, load_runtime_plugin_state, resolve_auth_mode, resolve_development_mode,
+        resolve_log_file_config, resolve_log_format, resolve_wasmtime_cache_dir,
+        restart_spec_from_parts, should_warn_about_public_authless_release_bind,
+        title_image_handler, validate_authless_runtime_config,
         validate_unauthenticated_public_access_allowlist_config,
     };
     use chrono::Utc;
@@ -3271,6 +3533,19 @@ mod tests {
                 explicit: true,
             })
         );
+    }
+
+    #[test]
+    fn log_format_defaults_to_json_and_allows_explicit_text() {
+        assert_eq!(resolve_log_format(None), LogFormat::Json);
+        assert_eq!(resolve_log_format(Some("JSON")), LogFormat::Json);
+        assert_eq!(resolve_log_format(Some("text")), LogFormat::Text);
+    }
+
+    #[test]
+    fn log_format_falls_back_to_json_for_unknown_values() {
+        assert_eq!(resolve_log_format(Some("logfmt")), LogFormat::Json);
+        assert_eq!(invalid_log_format(Some("logfmt")), Some("logfmt"));
     }
 
     #[derive(Default)]
@@ -3800,6 +4075,45 @@ mod tests {
     fn unauthenticated_public_access_allowlist_accepts_unset_allowlist() {
         validate_unauthenticated_public_access_allowlist_config(false, false)
             .expect("unset allowlist keeps broad public access override");
+    }
+
+    #[test]
+    fn development_mode_is_rejected_in_release_builds() {
+        assert!(resolve_development_mode(Some("true"), false).expect("debug mode"));
+        let error = resolve_development_mode(Some("true"), true)
+            .expect_err("release builds must reject development mode");
+        assert!(error.contains("unavailable in release builds"));
+    }
+
+    #[test]
+    fn release_authless_access_preserves_existing_public_bind_with_deprecation_warning() {
+        let auth_mode = resolve_auth_mode(Some("false"), None, None, None).expect("auth mode");
+
+        validate_authless_runtime_config(true, false, &auth_mode, false)
+            .expect("release authless configuration");
+
+        assert!(should_warn_about_public_authless_release_bind(
+            true,
+            "0.0.0.0:8080",
+            false
+        ));
+        assert!(!should_warn_about_public_authless_release_bind(
+            true,
+            "127.0.0.1:8080",
+            false
+        ));
+    }
+
+    #[test]
+    fn public_authless_overrides_require_explicit_development_mode() {
+        let auth_mode = resolve_auth_mode(None, None, None, Some("true")).expect("auth mode");
+
+        let error = validate_authless_runtime_config(false, false, &auth_mode, false)
+            .expect_err("public override without development mode");
+        assert!(error.contains("SCRYER_DEVELOPMENT_MODE=true"));
+
+        validate_authless_runtime_config(false, true, &auth_mode, false)
+            .expect("explicit development mode allows the override");
     }
 
     #[test]

@@ -103,14 +103,14 @@ impl<'a> LibraryFilenameParseInput<'a> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct LibraryFilenameSeriesMovieTarget {
     pub(crate) series_movie_link_id: String,
     pub(crate) movie: MovieEntity,
     pub(crate) linked_episode: Option<Episode>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum LibraryFilenameTarget {
     TitleOnly,
     Episodes {
@@ -1407,6 +1407,8 @@ mod tests {
                 tmdb_id: None,
                 mal_id: None,
                 anidb_id: None,
+                ratings: None,
+                credits: None,
                 created_at: now,
                 updated_at: now,
             },
@@ -1421,6 +1423,8 @@ mod tests {
             confidence: None,
             signal_summary: None,
             source: Some("test".into()),
+            monitoring_override: None,
+            metadata_active: true,
             monitored: true,
             legacy_collection_id: None,
             created_at: now,

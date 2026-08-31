@@ -33,7 +33,7 @@ pub use notification::{
     PluginNotificationTargetResult, coalesce_media_updates, rich_embed_from_request,
     to_script_environment, to_webhook_json,
 };
-pub const SDK_VERSION: &str = "3.8.0";
+pub const SDK_VERSION: &str = "3.10.0";
 
 pub fn current_sdk_constraint() -> String {
     legacy_sdk_constraint(SDK_VERSION)
@@ -512,6 +512,19 @@ pub struct IndexerDescriptor {
     pub provider_type: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub provider_aliases: Vec<String>,
+    /// Provider-owned setup presets and runtime defaults. Hosts may resolve
+    /// these rows for configured instances, but must not supply provider facts.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub provider_profiles: Vec<IndexerProviderProfile>,
+    /// Version of the provider's search semantics. Hosts withhold convergence
+    /// coverage when this is absent so legacy plugins cannot attest that an
+    /// empty or truncated response is complete.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search_semantics_version: Option<u32>,
+    /// Optional component capability for accepting a complete strategy tier in
+    /// one invocation. Its absence preserves the unary-search contract.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strategy_plan: Option<IndexerStrategyPlanCapability>,
     #[serde(default)]
     pub source_kind: IndexerSourceKind,
     #[serde(default)]
@@ -524,6 +537,40 @@ pub struct IndexerDescriptor {
     pub allowed_hosts: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rate_limit_seconds: Option<i64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct IndexerStrategyPlanCapability {
+    pub version: u32,
+    pub max_parallel_strategies: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct IndexerProviderProfile {
+    pub schema_version: u32,
+    pub display_name: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub legacy_provider_type_aliases: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub endpoint_aliases: Vec<IndexerProviderEndpointAlias>,
+    pub runtime_profile: PluginProviderProfile,
+    pub provenance_url: String,
+    pub reviewed_on: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct IndexerProviderEndpointAlias {
+    pub url: String,
+    pub status: IndexerProviderEndpointAliasStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum IndexerProviderEndpointAliasStatus {
+    Compatible,
+    Invalid,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -725,6 +772,8 @@ pub struct NotificationCapabilities {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct DownloadClientCapabilities {
+    #[serde(default)]
+    pub category_scoped_feedback: bool,
     #[serde(default)]
     pub pause: bool,
     #[serde(default)]
@@ -953,6 +1002,10 @@ pub struct ConfigFieldDef {
 pub struct ConfigFieldOption {
     pub value: String,
     pub label: String,
+    /// Config values supplied by this option when the corresponding stored
+    /// values are absent. Explicit configuration remains authoritative.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub config_overrides: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -967,6 +1020,52 @@ pub enum PluginErrorCode {
     Permanent,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum IndexerSearchIncompleteReason {
+    UpstreamFailure,
+    RateLimited,
+    MalformedContent,
+    PageCeilingReached,
+    FanoutBranchFailed,
+    SaturatedPartition,
+    Unattested,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum IndexerSearchInvalidResponseKind {
+    UnexpectedContentType,
+    InvalidRoot,
+    MalformedBody,
+    TruncatedBody,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "code", rename_all = "snake_case")]
+pub enum IndexerSearchPluginError {
+    PartialResults {
+        response: Box<PluginSearchResponse>,
+        reason: IndexerSearchIncompleteReason,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        retry_after_seconds: Option<i64>,
+    },
+    Deferred {
+        reason: IndexerSearchIncompleteReason,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        retry_after_seconds: Option<i64>,
+    },
+    InvalidResponse {
+        kind: IndexerSearchInvalidResponseKind,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum PluginErrorDetails {
+    IndexerSearch(IndexerSearchPluginError),
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PluginError {
     pub code: PluginErrorCode,
@@ -975,6 +1074,8 @@ pub struct PluginError {
     pub debug_message: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry_after_seconds: Option<i64>,
+    #[serde(default)]
+    pub details: Option<PluginErrorDetails>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -1770,6 +1871,38 @@ pub struct PluginDownloadListRecentCompletedRequest {
     pub limit: usize,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct PluginDownloadFeedbackScope {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub categories: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct PluginDownloadScopedListRequest {
+    #[serde(default)]
+    pub scope: PluginDownloadFeedbackScope,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct PluginDownloadScopedRecentCompletedRequest {
+    pub limit: usize,
+    #[serde(default)]
+    pub scope: PluginDownloadFeedbackScope,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PluginDownloadScopeFailure {
+    pub category: String,
+    pub error: PluginError,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PluginDownloadScopedListResponse<T> {
+    pub items: Vec<T>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failures: Vec<PluginDownloadScopeFailure>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PluginDownloadSource {
     pub kind: DownloadInputKind,
@@ -2502,6 +2635,24 @@ pub struct PluginSearchRequest {
     pub context: Option<PluginSearchContext>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PluginSearchStrategyRequest {
+    /// Credential-free, host-generated BLAKE3 identity of the effective request.
+    pub strategy_id: String,
+    /// Diagnostic labels retained when equivalent effective requests collapse
+    /// into one executable strategy.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<String>,
+    pub request: PluginSearchRequest,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PluginSearchPlanRequest {
+    pub plan_id: String,
+    #[serde(default)]
+    pub strategies: Vec<PluginSearchStrategyRequest>,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct PluginSearchResponse {
     #[serde(default)]
@@ -2514,6 +2665,88 @@ pub struct PluginSearchResponse {
     pub grab_current: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grab_max: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PluginSearchStrategyEvent {
+    pub strategy_id: String,
+    pub result: PluginResult<PluginSearchResponse>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PluginSearchPlanSummary {
+    pub plan_id: String,
+    #[serde(default)]
+    pub emitted_strategy_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", content = "profile", rename_all = "snake_case")]
+pub enum PluginProviderProfile {
+    Newznab(PluginNewznabProfile),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PluginNewznabProfile {
+    pub profile_id: String,
+    pub canonical_base_url: String,
+    pub api_path: String,
+    pub api_key_parameter: String,
+    pub request_interval_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hourly_limit: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub daily_limit: Option<u32>,
+    pub retry_default_ms: u64,
+    pub retry_max_ms: u64,
+    pub retry_max_attempts: u32,
+    pub retry_total_budget_ms: u64,
+    pub page_size: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page_ceiling: Option<u32>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub default_request_parameters: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_response_formats: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub response_attribute_mappings: Vec<PluginNewznabResponseAttributeMapping>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub quirks: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scoring_policy_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PluginNewznabResponseAttributeMapping {
+    #[serde(default)]
+    pub provider_names: Vec<String>,
+    pub canonical_field: PluginNewznabCanonicalAttribute,
+    pub value_kind: PluginNewznabAttributeValueKind,
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginNewznabCanonicalAttribute {
+    ThumbsUp,
+    ThumbsDown,
+    Languages,
+    Subtitles,
+    Grabs,
+    Password,
+    Rating,
+    Genres,
+    Comments,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginNewznabAttributeValueKind {
+    Integer,
+    DashSeparatedList,
+    CommaSeparatedList,
+    PasswordMetadata,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
@@ -2612,6 +2845,10 @@ struct PluginSdkSchemaDocument {
     host_response: host::PluginHostResponse,
     indexer_search_request: PluginSearchRequest,
     indexer_search_response: PluginSearchResponse,
+    indexer_search_plan_request: PluginSearchPlanRequest,
+    indexer_search_strategy_event: PluginSearchStrategyEvent,
+    indexer_search_plan_summary: PluginSearchPlanSummary,
+    provider_profile: PluginProviderProfile,
     subtitle_search_request: SubtitlePluginSearchRequest,
     subtitle_search_result: PluginResult<SubtitlePluginSearchResponse>,
     subtitle_download_request: SubtitlePluginDownloadRequest,
@@ -2722,12 +2959,15 @@ mod tests {
             provider: ProviderDescriptor::Indexer(IndexerDescriptor {
                 provider_type: "newznab".into(),
                 provider_aliases: vec![],
+                provider_profiles: vec![],
                 source_kind: IndexerSourceKind::Usenet,
                 capabilities: IndexerCapabilities::default(),
                 scoring_policies: vec![],
                 config_fields: vec![],
                 allowed_hosts: vec![],
                 rate_limit_seconds: None,
+                search_semantics_version: Some(1),
+                strategy_plan: None,
             }),
         };
 
@@ -2736,6 +2976,57 @@ mod tests {
         assert_eq!(parsed.id, "newznab");
         assert_eq!(parsed.provider_type(), "newznab");
         assert_eq!(parsed.plugin_type(), "usenet_indexer");
+        let ProviderDescriptor::Indexer(indexer) = parsed.provider else {
+            panic!("expected indexer descriptor");
+        };
+        assert!(indexer.strategy_plan.is_none());
+    }
+
+    #[test]
+    fn strategy_plan_models_round_trip_typed_results() {
+        let request = PluginSearchPlanRequest {
+            plan_id: "plan-1".into(),
+            strategies: vec![PluginSearchStrategyRequest {
+                strategy_id: "strategy-1".into(),
+                labels: vec!["primary:title".into(), "primary:alias".into()],
+                request: PluginSearchRequest {
+                    query: "Example".into(),
+                    ids: HashMap::new(),
+                    facet: None,
+                    category: None,
+                    categories: vec![],
+                    limit: 100,
+                    season: None,
+                    episode: None,
+                    absolute_episode: None,
+                    tagged_aliases: vec![],
+                    context: None,
+                },
+            }],
+        };
+        let parsed_request: PluginSearchPlanRequest =
+            serde_json::from_slice(&serde_json::to_vec(&request).unwrap()).unwrap();
+        assert_eq!(parsed_request.strategies[0].labels.len(), 2);
+
+        let event = PluginSearchStrategyEvent {
+            strategy_id: "strategy-1".into(),
+            result: PluginResult::Err(PluginError {
+                code: PluginErrorCode::RateLimited,
+                public_message: "deferred".into(),
+                debug_message: None,
+                retry_after_seconds: Some(30),
+                details: Some(PluginErrorDetails::IndexerSearch(
+                    IndexerSearchPluginError::Deferred {
+                        reason: IndexerSearchIncompleteReason::RateLimited,
+                        retry_after_seconds: Some(30),
+                    },
+                )),
+            }),
+        };
+        let parsed_event: PluginSearchStrategyEvent =
+            serde_json::from_slice(&serde_json::to_vec(&event).unwrap()).unwrap();
+        assert_eq!(parsed_event.strategy_id, "strategy-1");
+        assert!(matches!(parsed_event.result, PluginResult::Err(_)));
     }
 
     #[test]
@@ -3042,6 +3333,7 @@ mod tests {
             provider: ProviderDescriptor::Indexer(IndexerDescriptor {
                 provider_type: "newznab".into(),
                 provider_aliases: vec![],
+                provider_profiles: vec![],
                 source_kind: IndexerSourceKind::Usenet,
                 capabilities: IndexerCapabilities {
                     supported_ids: HashMap::from([
@@ -3055,6 +3347,8 @@ mod tests {
                 config_fields: vec![],
                 allowed_hosts: vec![],
                 rate_limit_seconds: None,
+                search_semantics_version: Some(1),
+                strategy_plan: None,
             }),
         };
 
@@ -3436,6 +3730,12 @@ mod tests {
             .join("schemas/plugin-sdk-v3.schema.json");
         let expected = std::fs::read_to_string(schema_path).unwrap();
         assert_eq!(expected, plugin_sdk_schema_json());
+    }
+
+    #[test]
+    fn category_scoped_feedback_capability_defaults_to_disabled() {
+        let capabilities: DownloadClientCapabilities = serde_json::from_str("{}").unwrap();
+        assert!(!capabilities.category_scoped_feedback);
     }
 
     #[test]

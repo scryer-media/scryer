@@ -7,7 +7,7 @@ use crate::release_parser::AudioCodec;
 use crate::{
     AppUseCase, NewBlocklistEntry, ReleaseDownloadAttemptOutcome,
     acquisition::convergence::CoverageReopen, normalize_release_attempt_hint,
-    normalize_release_attempt_title,
+    normalize_release_name,
 };
 use scryer_domain::{
     DomainEventPayload, ImportRejectedEventData, ImportSkipReason, ImportStatus, MediaFacet, Title,
@@ -314,43 +314,47 @@ pub(crate) fn replace_runtime_band_block(
 /// on both sides of every comparison. This exists only because
 /// `build_rule_input` wants a `QualityProfileDecision` to expose to rules, and
 /// it is built from the same terms the canonical pass uses.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "post-download scoring needs the complete import context to match search-time policy decisions"
-)]
 #[cfg(feature = "runtime-media-analysis")]
-pub(crate) fn build_import_profile_decision(
+fn resolved_import_profile(
     profile: &crate::QualityProfile,
     required_audio_languages: &[String],
     persona: &crate::ScoringPersona,
-    parsed: &crate::ParsedReleaseMetadata,
-    category_hint: &str,
-    runtime_minutes: Option<i32>,
-    size_bytes: Option<i64>,
-    has_existing_file: bool,
-) -> crate::QualityProfileDecision {
+) -> crate::QualityProfile {
     let mut resolved_profile = profile.clone();
     resolved_profile.criteria.required_audio_languages = required_audio_languages.to_vec();
     resolved_profile.criteria.scoring_persona = persona.clone();
     resolved_profile.criteria.facet_persona_overrides.clear();
+    resolved_profile
+}
+
+#[cfg(feature = "runtime-media-analysis")]
+pub(crate) fn build_import_profile_decision(
+    profile: &crate::QualityProfile,
+    parsed: &crate::ParsedReleaseMetadata,
+    category_hint: &str,
+    size_basis: crate::quality_profile::CoverageSizeBasis,
+    size_bytes: Option<i64>,
+    has_existing_file: bool,
+) -> crate::QualityProfileDecision {
     let weights = crate::scoring_weights::build_weights_for_category(
-        persona,
-        &resolved_profile.criteria.scoring_overrides,
+        &profile.criteria.scoring_persona,
+        &profile.criteria.scoring_overrides,
         Some(category_hint),
     );
     let mut decision = crate::quality_profile::evaluate_against_profile_for_category(
-        &resolved_profile,
+        profile,
         parsed,
         has_existing_file,
         &weights,
         Some(category_hint),
     );
-    crate::quality_profile::apply_size_scoring_for_category(
+    crate::quality_profile::apply_size_scoring_for_category_with_remux_preference(
         &mut decision,
         parsed,
         size_bytes,
         Some(category_hint),
-        runtime_minutes,
+        size_basis,
+        profile.criteria.prefer_remux,
         &weights,
     );
     decision
@@ -599,13 +603,7 @@ pub(crate) async fn probe_and_validate(
     }
 
     let category_hint = facet_to_category_hint(&title.facet);
-    let required_audio_resolution = app
-        .resolve_required_audio_languages(
-            Some(&title.id),
-            Some(title.library_id.as_str()),
-            Some(category_hint),
-        )
-        .await;
+    let required_audio_resolution = app.resolve_required_audio_languages_for_title(title).await;
     let required_audio_resolution_failed = required_audio_resolution.is_err();
     let required_audio_languages = required_audio_resolution.unwrap_or_else(|error| {
         warn!(
@@ -645,7 +643,7 @@ pub(crate) async fn probe_and_validate(
             parsed,
             None,
             Some(&title_audio_context),
-            true,
+            false,
         );
         match crate::classify_required_audio(
             &required_audio_languages,
@@ -730,19 +728,25 @@ pub(crate) async fn probe_and_validate(
                 None
             }
         };
+        let resolved_profile =
+            resolved_import_profile(quality_profile, &required_audio_languages, &persona);
         let decision = build_import_profile_decision(
-            quality_profile,
-            &required_audio_languages,
-            &persona,
+            &resolved_profile,
             &rescored_for_rules,
             category_hint,
-            title.runtime_minutes,
+            // The probe knows the title and the file, not the scope: no
+            // coverage reaches here, so this is the single-member basis the
+            // lane has always used. The canonical score — the number anything
+            // is compared by — is built in
+            // [`compute_post_download_acquisition_decision`], from the scope's
+            // real basis.
+            crate::quality_profile::CoverageSizeBasis::single(title.runtime_minutes),
             Some(size_bytes),
             has_existing_file,
         );
         let input = crate::user_rule_input::build_rule_input(
             &rescored_for_rules,
-            quality_profile,
+            &resolved_profile,
             &decision,
             crate::user_rule_input::ReleaseRuntimeInfo {
                 size_bytes: Some(size_bytes),
@@ -1341,38 +1345,57 @@ pub(crate) struct BlocklistAttribution<'a> {
 
 /// Blocklist a release for one title. The single writer, shared by the rejection
 /// path and by an accepted-but-mis-advertised import.
+///
+/// No indexer is recorded. A release rejected here failed on its *content* --
+/// it is not what it advertised -- so it is equally bad whoever served it, and
+/// the empty indexer blocks it on all of them.
+///
+/// The same content argument keys the row on the grab-time infohash when the
+/// title has a submission for this release name: a content-bad torrent is the
+/// same bad content under any name on any indexer, and the hash is the one key
+/// that follows it there. The lookup degrading to `None` degrades the block to
+/// the name, which was the whole behaviour before the hash existed.
 pub(crate) async fn blocklist_release_for_title(
     app: &AppUseCase,
     title: &Title,
     release_title: &str,
     reason: Option<String>,
-    attribution: BlocklistAttribution<'_>,
 ) {
-    let normalized_source_title = normalize_release_attempt_title(Some(release_title));
-    let blocklist_data = crate::acquisition::decision_helpers::blocklist_entry_data(
-        attribution.episode_ids,
-        attribution.collection_id,
-        attribution.series_movie_link_id,
-    );
+    let Some(release_name) = normalize_release_name(Some(release_title)) else {
+        return;
+    };
+    let info_hash = app
+        .services
+        .workflow
+        .download_submissions
+        .find_info_hash_for_title_release(&title.id, &release_name)
+        .await
+        .unwrap_or_else(|error| {
+            warn!(
+                error = %error,
+                title_id = %title.id,
+                release_name = release_name.as_str(),
+                "failed to resolve grab-time infohash for rejected import; blocking by name only"
+            );
+            None
+        });
     if let Err(error) = app
         .services
         .workflow
         .blocklist_repo
-        .add(&NewBlocklistEntry {
+        .block(&NewBlocklistEntry {
             title_id: title.id.clone(),
-            source_title: normalized_source_title.clone(),
-            source_hint: None,
-            quality: crate::parse_release_metadata(release_title).quality,
-            download_id: None,
+            release_name: release_name.clone(),
+            indexer_id: String::new(),
+            info_hash,
             reason,
-            data: blocklist_data,
         })
         .await
     {
         warn!(
             error = %error,
             title_id = %title.id,
-            source_title = normalized_source_title.as_deref().unwrap_or(""),
+            release_name = release_name.as_str(),
             "failed to persist blocklist entry for rejected import"
         );
     }
@@ -1411,7 +1434,7 @@ pub(crate) fn compute_post_download_acquisition_decision(
     title: &Title,
     parsed: &crate::ParsedReleaseMetadata,
     acceptance: &ImportedFileAcceptance,
-    runtime_minutes: Option<i32>,
+    size_basis: crate::quality_profile::CoverageSizeBasis,
     size_bytes: i64,
     prior_rescore_changes: &[String],
     is_filler: bool,
@@ -1427,7 +1450,7 @@ pub(crate) fn compute_post_download_acquisition_decision(
         }
     }
 
-    let view = context.view(runtime_minutes, is_filler);
+    let view = context.view(size_basis, is_filler);
 
     // **Parse parity with the grab lane.** Most release names say nothing about
     // audio, and the grab path fills that in from the title's original language
@@ -1440,7 +1463,7 @@ pub(crate) fn compute_post_download_acquisition_decision(
     let announced_parsed = crate::quality::canonical_context::announced_metadata_for_title(
         title,
         parsed,
-        context.profile(),
+        context.required_audio_languages(),
         None,
     );
 
@@ -1602,7 +1625,7 @@ async fn finalize_import_rejection(
     rejection: &ImportedFileRejection,
 ) {
     let episode_ids = attribution.episode_ids;
-    let normalized_source_title = normalize_release_attempt_title(Some(completed_name));
+    let normalized_source_title = normalize_release_name(Some(completed_name));
     let failure_reason = Some(rejection.message.clone());
     let _ = app
         .services
@@ -1627,7 +1650,7 @@ async fn finalize_import_rejection(
             format!(" [{}]", rejection.blocking_rule_codes.join(", "))
         }
     ));
-    blocklist_release_for_title(app, title, completed_name, reason.clone(), attribution).await;
+    blocklist_release_for_title(app, title, completed_name, reason.clone()).await;
 
     // Re-open the refused scopes under their existing coverage: the cursor
     // walks each scope's saved search results before it would spend an indexer
@@ -1859,6 +1882,60 @@ mod tests {
         ))
         .expect("profile fixture should parse")
         .criteria
+    }
+
+    #[cfg(feature = "runtime-media-analysis")]
+    #[test]
+    fn resolved_import_profile_exposes_concrete_audio_to_post_download_rules() {
+        let profile = crate::QualityProfile::parse(
+            r#"{"id":"p","name":"P","criteria":{"quality_tiers":["1080P"]}}"#,
+        )
+        .expect("profile fixture should parse");
+        let resolved = resolved_import_profile(
+            &profile,
+            &["jpn".to_string()],
+            &crate::ScoringPersona::default(),
+        );
+        let parsed = crate::parse_release_metadata("Example Title 1080p");
+        let decision = build_import_profile_decision(
+            &resolved,
+            &parsed,
+            "movie",
+            crate::quality_profile::CoverageSizeBasis::default(),
+            None,
+            false,
+        );
+        let input = crate::user_rule_input::build_rule_input(
+            &parsed,
+            &resolved,
+            &decision,
+            crate::user_rule_input::ReleaseRuntimeInfo {
+                size_bytes: None,
+                published_at: None,
+                thumbs_up: None,
+                thumbs_down: None,
+                is_password_protected: None,
+                extra: None,
+                indexer_languages: None,
+            },
+            crate::user_rule_input::RuleContextInfo {
+                title_id: None,
+                library_name: None,
+                category: Some("movie"),
+                original_language: Some("jpn"),
+                original_country: None,
+                title_tags: &[],
+                has_existing_file: false,
+                existing_score: None,
+                search_mode: "post_download",
+                runtime_minutes: None,
+                is_filler: false,
+            },
+            None,
+        );
+
+        assert_eq!(input.profile.required_audio_languages, vec!["jpn"]);
+        assert_eq!(input.release.languages_audio, vec!["jpn"]);
     }
 
     /// The tier comparison behind a `quality_contradicted:` blocklist. It reads

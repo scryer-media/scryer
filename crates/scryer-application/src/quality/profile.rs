@@ -58,6 +58,76 @@ pub struct QualityProfileCriteria {
     pub facet_persona_overrides: HashMap<String, ScoringPersona>,
 }
 
+/// The acceptance-deciding subset of [`QualityProfileCriteria`], hashed by
+/// `convergence::profile_criteria_version` to version a scope's search
+/// fingerprint.
+///
+/// Only fields that change **which releases are acceptable** belong here.
+/// Ranking-only fields (`scoring_persona`, `scoring_overrides`,
+/// `facet_persona_overrides`, `atmos_preferred`, `prefer_remux`,
+/// `prefer_dual_audio`) are deliberately absent: re-ordering candidates needs no
+/// new indexer data, so a ranking edit must not invalidate convergence coverage
+/// and force a library-wide re-search. Re-ranking happens against the results
+/// already on hand.
+///
+/// Two rules bind anyone touching `QualityProfileCriteria`:
+///
+/// 1. Every new field must be explicitly classified acceptance-vs-ranking and,
+///    if it gates acceptance, mirrored here. Silence defaults it to "ranking",
+///    which is the wrong answer for a field that vetoes releases.
+/// 2. Every `Option` here carries `skip_serializing_if = "Option::is_none"`, so
+///    an unset value is an absent key rather than a `null`. That is what lets a
+///    field be added without moving the fingerprint of every profile that does
+///    not set it (D19 — see the `cutoff_score` comment above).
+#[derive(Debug, Serialize)]
+pub(crate) struct AcceptanceCriteria<'a> {
+    pub quality_tiers: &'a [String],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub archival_quality: Option<&'a String>,
+    pub allow_unknown_quality: bool,
+    pub source_allowlist: &'a [ReleaseSource],
+    pub source_blocklist: &'a [ReleaseSource],
+    pub video_codec_allowlist: &'a [VideoCodec],
+    pub video_codec_blocklist: &'a [VideoCodec],
+    pub audio_codec_allowlist: &'a [AudioCodec],
+    pub audio_codec_blocklist: &'a [AudioCodec],
+    pub dolby_vision_allowed: bool,
+    pub detected_hdr_allowed: bool,
+    pub allow_bd_disk: bool,
+    pub allow_upgrades: bool,
+    pub required_audio_languages: &'a [String],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cutoff_tier: Option<&'a String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_score_to_grab: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cutoff_score: Option<i32>,
+}
+
+impl<'a> From<&'a QualityProfileCriteria> for AcceptanceCriteria<'a> {
+    fn from(criteria: &'a QualityProfileCriteria) -> Self {
+        Self {
+            quality_tiers: &criteria.quality_tiers,
+            archival_quality: criteria.archival_quality.as_ref(),
+            allow_unknown_quality: criteria.allow_unknown_quality,
+            source_allowlist: &criteria.source_allowlist,
+            source_blocklist: &criteria.source_blocklist,
+            video_codec_allowlist: &criteria.video_codec_allowlist,
+            video_codec_blocklist: &criteria.video_codec_blocklist,
+            audio_codec_allowlist: &criteria.audio_codec_allowlist,
+            audio_codec_blocklist: &criteria.audio_codec_blocklist,
+            dolby_vision_allowed: criteria.dolby_vision_allowed,
+            detected_hdr_allowed: criteria.detected_hdr_allowed,
+            allow_bd_disk: criteria.allow_bd_disk,
+            allow_upgrades: criteria.allow_upgrades,
+            required_audio_languages: &criteria.required_audio_languages,
+            cutoff_tier: criteria.cutoff_tier.as_ref(),
+            min_score_to_grab: criteria.min_score_to_grab,
+            cutoff_score: criteria.cutoff_score,
+        }
+    }
+}
+
 /// JSON-serializable container for all scoring-related fields.
 /// Stored in the `scoring_config` TEXT column of the `quality_profiles` table.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -327,6 +397,38 @@ pub fn builtin_1080p_profile() -> QualityProfile {
         name: "1080P".to_string(),
         criteria: QualityProfileCriteria {
             quality_tiers: vec!["1080P".to_string(), "720P".to_string()],
+            archival_quality: Some("1080P".to_string()),
+            allow_unknown_quality: false,
+            source_allowlist: Vec::new(),
+            source_blocklist: Vec::new(),
+            video_codec_allowlist: Vec::new(),
+            video_codec_blocklist: Vec::new(),
+            audio_codec_allowlist: Vec::new(),
+            audio_codec_blocklist: Vec::new(),
+            atmos_preferred: false,
+            dolby_vision_allowed: true,
+            detected_hdr_allowed: true,
+            prefer_remux: false,
+            allow_bd_disk: false,
+            allow_upgrades: true,
+            prefer_dual_audio: false,
+            required_audio_languages: vec![],
+            scoring_persona: ScoringPersona::default(),
+            scoring_overrides: ScoringOverrides::default(),
+            cutoff_tier: None,
+            min_score_to_grab: None,
+            cutoff_score: None,
+            facet_persona_overrides: HashMap::new(),
+        },
+    }
+}
+
+pub fn builtin_anime_profile() -> QualityProfile {
+    QualityProfile {
+        id: "anime".to_string(),
+        name: "Anime".to_string(),
+        criteria: QualityProfileCriteria {
+            quality_tiers: vec!["1080P".to_string(), "720P".to_string(), "576P".to_string()],
             archival_quality: Some("1080P".to_string()),
             allow_unknown_quality: false,
             source_allowlist: Vec::new(),
@@ -897,15 +999,17 @@ pub fn evaluate_against_profile_for_category(
     }
 
     // ── Remux preference ─────────────────────────────────────────────────────
-    if c.prefer_remux {
-        let (code, delta) = if release.is_remux {
+    if release.is_remux {
+        let (code, delta) = if c.prefer_remux {
             ("prefer_remux_match", weights.remux_bonus)
         } else {
-            ("prefer_remux_missing", weights.remux_missing_penalty)
+            ("remux_not_preferred", weights.remux_not_preferred_penalty)
         };
         if delta != 0 {
             d.log(code, delta);
         }
+    } else if c.prefer_remux && weights.remux_missing_penalty != 0 {
+        d.log("prefer_remux_missing", weights.remux_missing_penalty);
     }
 
     // ── Atmos preference ─────────────────────────────────────────────────────
@@ -1143,13 +1247,18 @@ fn normalize_media_size_category(category_hint: Option<&str>) -> MediaSizeCatego
 /// values produce expected GiB equivalent to the previous hardcoded table.
 /// 2160P values were intentionally recalibrated upward based on real remux and
 /// WEB-DL sizes (e.g. movie 2160P: old 22 GiB → new ~50 GiB at 120 min).
-fn expected_bitrate_mbps(quality: Option<&str>, media_category: MediaSizeCategory) -> f64 {
+fn expected_bitrate_mbps(
+    quality: Option<&str>,
+    media_category: MediaSizeCategory,
+    movie_2160p_bitrate_mbps: f64,
+) -> f64 {
     match media_category {
         MediaSizeCategory::Movie => match quality {
             Some("4320P") => 142.5,
-            Some("2160P") => 57.0,
+            Some("2160P") => movie_2160p_bitrate_mbps,
             Some("1080P") => 9.1,
             Some("720P") => 3.4,
+            Some("576P") => 2.4,
             Some("480P") => 1.4,
             _ => 6.8,
         },
@@ -1158,6 +1267,7 @@ fn expected_bitrate_mbps(quality: Option<&str>, media_category: MediaSizeCategor
             Some("2160P") => 22.0,
             Some("1080P") => 8.5,
             Some("720P") => 3.3,
+            Some("576P") => 2.4,
             Some("480P") => 1.4,
             _ => 5.5,
         },
@@ -1166,6 +1276,7 @@ fn expected_bitrate_mbps(quality: Option<&str>, media_category: MediaSizeCategor
             Some("2160P") => 28.0,
             Some("1080P") => 8.5,
             Some("720P") => 3.4,
+            Some("576P") => 2.4,
             Some("480P") => 1.4,
             _ => 5.7,
         },
@@ -1194,13 +1305,14 @@ fn source_size_factor(
     is_remux: bool,
     is_bd_disk: bool,
     is_anime: bool,
+    remux_size_factor: f64,
 ) -> f64 {
     let mut factor = 1.0;
     if matches!(source, Some(ReleaseSource::BluRay | ReleaseSource::BrDisk)) {
         factor *= 1.35;
     }
     if is_remux && !is_anime {
-        factor *= 1.45;
+        factor *= remux_size_factor;
     }
     if is_bd_disk {
         factor *= 1.8;
@@ -1231,10 +1343,19 @@ struct SizeRatioThresholds {
     slightly_small: f64,
     small: f64,
     very_small: f64,
-    /// Floor below which the file cannot be the release it claims to be.
+    /// The bottom anchor of the size curve: the ratio at which the full
+    /// `size_tiny` weight is taken.
     ///
-    /// A veto, not a penalty (D21): a step, never interpolated, the mirror of
-    /// [`SizeRatioThresholds::implausible`] at the other end of the curve.
+    /// It used to be a veto as well — a step, never interpolated, the mirror of
+    /// [`SizeRatioThresholds::implausible`] at the other end of the curve. That
+    /// veto is gone. The one shape that reliably landed under it was not a fake
+    /// release but an honest aggregate — a season pack, a multi-episode file, a
+    /// complete-series pack — whose indexer reported **one member's** size
+    /// against the whole payload's runtime, and refusing those outright cost
+    /// real releases. Implausibly small is now a penalty like every other band,
+    /// read off the curve, with the aggregate case reinterpreted first
+    /// ([`CoverageSizeBasis`]). The number itself keeps its calibration, because
+    /// it is still where the full tiny penalty is pinned.
     ///
     /// **Calibrated against Sonarr's shipped `QualityDefinition.MinSize`**, which
     /// is the only published number for "too small to be this quality":
@@ -1248,22 +1369,21 @@ struct SizeRatioThresholds {
     ///
     /// The implied floor is `bitrate × codec × source × 7.5 MB/min × factor`.
     /// The binding case for episodic content is a 1080p Bluray H.264 episode
-    /// (8.5 × 1.10 × 1.35 × 7.5 ≈ 94.7 MB/min): at the old 0.10 the floor was
-    /// 9.5 MB/min, more than twice Sonarr's 4, and it refused perfectly ordinary
-    /// releases — a 1080p WEB-DL episode at 4.5 MB/min was vetoed on every
-    /// cycle. **0.04** puts it at 3.8 MB/min, just under Sonarr, and every other
-    /// episodic combination lands further below (720p WEB-DL H.264 → 0.9 vs 3;
-    /// 2160p Bluray remux → 14.2 vs 35).
+    /// (8.5 × 1.10 × 1.35 × 7.5 ≈ 94.7 MB/min): at the old 0.10 the anchor sat
+    /// at 9.5 MB/min, more than twice Sonarr's 4. **0.04** puts it at
+    /// 3.8 MB/min, just under Sonarr, and every other episodic combination lands
+    /// further below (720p WEB-DL H.264 → 0.9 vs 3; 2160p Bluray remux → 14.2 vs
+    /// 35).
     ///
     /// **Movies keep 0.10**, because there is no parity number to match: Radarr
     /// ships `MinSize = 0` for every movie quality (`Quality.cs:170-204`), so the
-    /// floor here is Scryer's own protection rather than a port of anyone's. A
+    /// number here is Scryer's own model rather than a port of anyone's. A
     /// feature's runtime is also nearly always known, which is what made the
-    /// episodic floor unsafe.
+    /// episodic number the sensitive one.
     ///
-    /// Everything between this and `very_small` still takes the full `size_tiny`
-    /// penalty, so a merely tiny release is refused on the numbers rather than
-    /// vetoed. Specials skip the veto entirely (`release_is_a_special`).
+    /// Anything at or below this ratio takes the full `size_tiny` penalty, and a
+    /// merely tiny release is refused on the numbers — through the profile's
+    /// minimum score — rather than vetoed.
     ///
     /// Not scaled by [`SizeRatioThresholds::with_upper_multiplier`]: AV1's
     /// headroom is about large encodes, and the whole low half of the curve is
@@ -1271,29 +1391,10 @@ struct SizeRatioThresholds {
     implausibly_small: f64,
 }
 
-/// Below this the minimum-size veto does not apply, whatever the ratio says.
-///
-/// It is the boundary between two different statements. "Too small for what it
-/// claims" is a judgement about media bytes and belongs to the size curve.
-/// "Not media at all" — a stream pointer (`.strm` holds a URL), a sample, a
-/// promo, a zero-length placeholder — belongs to the import pipeline's sample
-/// filter, which already knows things the scorer cannot (that a `.strm` is
-/// exempt, that a small file beside large ones in a pack is a promo). Letting
-/// the veto reach down there would put the two rules in contradiction, and would
-/// make a stream-pointer import fail on the size of its own URL.
-///
-/// The value is the import pipeline's own sample threshold
-/// (`import::workflow::completed::SAMPLE_SIZE_THRESHOLD`), duplicated rather
-/// than imported because scoring must not depend on the import module. The
-/// import side asserts the two are equal at compile time (a `const _: () =
-/// assert!(..)` next to `SAMPLE_SIZE_THRESHOLD`), so the duplication cannot
-/// drift — the dependency runs one way only.
-pub(crate) const MINIMUM_SIZE_VETO_FLOOR_BYTES: i64 = 50 * 1024 * 1024;
-
-/// The minimum-size veto ratio for episodic content, where Sonarr publishes a
+/// The bottom curve anchor for episodic content, where Sonarr publishes a
 /// number to match. See [`SizeRatioThresholds::implausibly_small`] for the
 /// arithmetic behind it.
-const EPISODIC_MINIMUM_SIZE_VETO_RATIO: f64 = 0.04;
+const EPISODIC_IMPLAUSIBLY_SMALL_RATIO: f64 = 0.04;
 
 impl SizeRatioThresholds {
     fn with_upper_multiplier(mut self, multiplier: f64) -> Self {
@@ -1331,7 +1432,7 @@ fn size_ratio_thresholds(media_category: MediaSizeCategory) -> SizeRatioThreshol
             slightly_small: 0.75,
             small: 0.55,
             very_small: 0.35,
-            implausibly_small: EPISODIC_MINIMUM_SIZE_VETO_RATIO,
+            implausibly_small: EPISODIC_IMPLAUSIBLY_SMALL_RATIO,
         },
         MediaSizeCategory::Anime => SizeRatioThresholds {
             implausible: 6.0,
@@ -1343,7 +1444,7 @@ fn size_ratio_thresholds(media_category: MediaSizeCategory) -> SizeRatioThreshol
             slightly_small: 0.65,
             small: 0.5,
             very_small: 0.3,
-            implausibly_small: EPISODIC_MINIMUM_SIZE_VETO_RATIO,
+            implausibly_small: EPISODIC_IMPLAUSIBLY_SMALL_RATIO,
         },
     }
 }
@@ -1469,6 +1570,87 @@ fn size_ratio_thresholds_for_codec(
     }
 }
 
+/// What a reported byte count is being compared against.
+///
+/// Size scoring is runtime-derived, and an aggregate release — a multi-episode
+/// file, a season pack, a multi-season or complete-series pack — has two
+/// runtimes that matter: the whole payload's, and one member's. Indexers report
+/// both, and nothing in a listing says which. A pack whose listing carries one
+/// episode's byte count against the pack's total runtime reads as a twentieth of
+/// what it should be, which is indistinguishable from a fake until the second
+/// interpretation is tried.
+///
+/// Derived once per scope from the release's coverage
+/// (`acquisition_coverage::coverage_size_basis` and
+/// `acquisition_coverage::episode_span_size_basis`) and carried on
+/// [`crate::canonical_scoring::ScoringContext`], so grab, import and a
+/// re-derived incumbent bar read the same basis for the same evidence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CoverageSizeBasis {
+    /// Runtime of everything the release covers, in minutes.
+    pub total_runtime_minutes: Option<i32>,
+    /// Runtime of one representative member of that coverage, in minutes. Equal
+    /// to `total_runtime_minutes` whenever the coverage is a single member.
+    pub member_runtime_minutes: Option<i32>,
+    /// How many members the coverage holds, after any partial-season estimate.
+    /// Never below 1.
+    pub member_count: i32,
+}
+
+impl Default for CoverageSizeBasis {
+    fn default() -> Self {
+        Self::single(None)
+    }
+}
+
+impl CoverageSizeBasis {
+    /// A movie, a single episode, or any scope whose coverage is one member.
+    pub fn single(runtime_minutes: Option<i32>) -> Self {
+        Self {
+            total_runtime_minutes: runtime_minutes,
+            member_runtime_minutes: runtime_minutes,
+            member_count: 1,
+        }
+    }
+
+    /// A release covering several members. Collapses to [`Self::single`] when
+    /// the count does not actually make it an aggregate.
+    pub fn aggregate(
+        total_runtime_minutes: Option<i32>,
+        member_runtime_minutes: Option<i32>,
+        member_count: i32,
+    ) -> Self {
+        if member_count <= 1 {
+            return Self::single(total_runtime_minutes.or(member_runtime_minutes));
+        }
+        Self {
+            total_runtime_minutes,
+            member_runtime_minutes,
+            member_count,
+        }
+    }
+
+    /// Whether reported bytes could describe one member rather than the payload.
+    pub fn covers_multiple_members(&self) -> bool {
+        self.member_count > 1
+    }
+
+    /// Fill in whatever the catalog could not supply with the title's own
+    /// runtime, leaving the member count alone.
+    pub fn or_runtime(self, default_runtime_minutes: Option<i32>) -> Self {
+        Self {
+            total_runtime_minutes: self.total_runtime_minutes.or(default_runtime_minutes),
+            member_runtime_minutes: self.member_runtime_minutes.or(default_runtime_minutes),
+            member_count: self.member_count,
+        }
+    }
+}
+
+/// Logged, with a zero delta, when the reported size was read as one member's
+/// rather than the whole pack's. Carries no weight of its own; it is there so an
+/// explanation says which interpretation produced the band above it.
+pub const SIZE_PACK_MEMBER_BASIS_CODE: &str = "size_pack_member_basis";
+
 /// Apply category-aware size scoring using a bitrate-based model.
 ///
 /// Expected file size is derived from `bitrate × runtime × codec_factor ×
@@ -1478,12 +1660,38 @@ fn size_ratio_thresholds_for_codec(
 ///
 /// When `runtime_minutes` is not available (TVDB metadata missing), category
 /// defaults are used (120 min movies, 45 min series, 24 min anime).
+///
+/// The wrapper's `runtime_minutes` is a **single-member** basis: it is the shape
+/// a movie or a lone episode has, and the only shape a caller with nothing but a
+/// runtime can honestly claim. Aggregate callers build a
+/// [`CoverageSizeBasis`] from their coverage and go through
+/// [`apply_size_scoring_for_category_with_remux_preference`].
 pub fn apply_size_scoring_for_category(
     decision: &mut QualityProfileDecision,
     release: &ParsedReleaseMetadata,
     size_bytes: Option<i64>,
     category_hint: Option<&str>,
     runtime_minutes: Option<i32>,
+    weights: &ScoringWeights,
+) {
+    apply_size_scoring_for_category_with_remux_preference(
+        decision,
+        release,
+        size_bytes,
+        category_hint,
+        CoverageSizeBasis::single(runtime_minutes),
+        false,
+        weights,
+    );
+}
+
+pub(crate) fn apply_size_scoring_for_category_with_remux_preference(
+    decision: &mut QualityProfileDecision,
+    release: &ParsedReleaseMetadata,
+    size_bytes: Option<i64>,
+    category_hint: Option<&str>,
+    size_basis: CoverageSizeBasis,
+    prefer_remux: bool,
     weights: &ScoringWeights,
 ) {
     let Some(raw_size_bytes) = size_bytes else {
@@ -1500,43 +1708,73 @@ pub fn apply_size_scoring_for_category(
     let media_category = normalize_media_size_category(category_hint);
     let is_anime = media_category == MediaSizeCategory::Anime;
 
-    let bitrate = expected_bitrate_mbps(quality.as_deref(), media_category);
+    const PREFERRED_REMUX_SIZE_FACTOR: f64 = 1.45;
+
+    let bitrate = expected_bitrate_mbps(
+        quality.as_deref(),
+        media_category,
+        weights.movie_2160p_bitrate_mbps,
+    );
     let codec_factor = codec_efficiency_factor(release.video_codec.as_ref());
+    let remux_size_factor = if prefer_remux {
+        PREFERRED_REMUX_SIZE_FACTOR
+    } else {
+        weights.remux_size_factor_when_not_preferred
+    };
     let source_factor = source_size_factor(
         release.source.as_ref(),
         release.is_remux,
         release.is_bd_disk,
         is_anime,
+        remux_size_factor,
     );
 
-    let runtime_min = runtime_minutes
-        .filter(|&r| r > 0)
-        .map(|r| r as f64)
-        .unwrap_or_else(|| default_runtime_minutes(media_category));
+    // bitrate (Mbps) × runtime (seconds) / 8 = megabytes → convert to GiB.
+    // Floored, because the ratio divides by it.
+    let expected_gib_for = |runtime_minutes: Option<i32>| {
+        let runtime_min = runtime_minutes
+            .filter(|&r| r > 0)
+            .map(f64::from)
+            .unwrap_or_else(|| default_runtime_minutes(media_category));
+        (bitrate * codec_factor * source_factor * (runtime_min * 60.0) / 8.0 / 1024.0).max(0.5)
+    };
 
-    // bitrate (Mbps) × runtime (seconds) / 8 = megabytes → convert to GiB
-    let expected_gib = bitrate * codec_factor * source_factor * (runtime_min * 60.0) / 8.0 / 1024.0;
-
-    let ratio = size_gib / expected_gib.max(0.5);
+    let ratio = size_gib / expected_gib_for(size_basis.total_runtime_minutes);
     let thresholds = size_ratio_thresholds_for_codec(media_category, release.video_codec.as_ref());
+    let curve = size_curve(&thresholds, weights);
+
+    // **The pack-versus-member reading.** The whole payload is tried first,
+    // always: that is what a size field is supposed to mean, and a pack that is
+    // honestly sized never reaches this branch. Only when the total reading
+    // falls off the bottom of the curve *and* the release covers more than one
+    // member is the same byte count re-read as one member's — the shape an
+    // indexer produces when it lists an episode's size beside a season pack's
+    // name.
+    //
+    // Plausible means the member reading lands in the ordinary part of the
+    // curve, `small` through `very_large`. Below that it is small either way and
+    // the interpretation buys nothing; at `massive` and above it is the
+    // arithmetic of division talking, not evidence.
+    //
+    // The contribution is capped at zero. The interpretation is an inference,
+    // never a measurement, so it may spare an honest pack a penalty it did not
+    // earn but must never let ambiguity *earn* a bonus over a release whose size
+    // is not in doubt.
+    if ratio < thresholds.very_small && size_basis.covers_multiple_members() {
+        let member_ratio = size_gib / expected_gib_for(size_basis.member_runtime_minutes);
+        if member_ratio >= thresholds.small && member_ratio < thresholds.massive {
+            let delta = interpolate_size_delta(member_ratio, &curve).min(0);
+            decision.log(size_band_code(member_ratio, &thresholds), delta);
+            decision.log(SIZE_PACK_MEMBER_BASIS_CODE, 0);
+            return;
+        }
+    }
 
     // The band still names itself in the scoring log — the code is what an
     // operator reads and what tests pin — while the delta comes from the curve,
     // so two releases in the same band no longer score identically and a release
     // that drifts across a boundary no longer jumps.
-    let code = match ratio {
-        r if r >= thresholds.excessive => "size_excessive_for_quality",
-        r if r >= thresholds.massive => "size_massive_for_quality",
-        r if r >= thresholds.very_large => "size_very_large_for_quality",
-        r if r >= thresholds.large => "size_large_for_quality",
-        r if r >= thresholds.expected => "size_expected_for_quality",
-        r if r >= thresholds.slightly_small => "size_slightly_small_for_quality",
-        r if r >= thresholds.small => "size_small_for_quality",
-        r if r >= thresholds.very_small => "size_very_small_for_quality",
-        _ => "size_tiny_for_quality",
-    };
-    let delta = interpolate_size_delta(ratio, &size_curve(&thresholds, weights));
-
+    //
     // **The band is logged before the veto, always.** `total` — the bar a file
     // is compared by — is the pass's score with every `BLOCK_SCORE` entry
     // stripped out (I5, `preference_score_without_blocks`). If the veto
@@ -1547,40 +1785,36 @@ pub fn apply_size_scoring_for_category(
     // other side of the threshold, then refuses every real upgrade as
     // `NotAnUpgrade`. A veto is a verdict *on top of* the honest number, not
     // instead of it.
-    decision.log(code, delta);
+    decision.log(
+        size_band_code(ratio, &thresholds),
+        interpolate_size_delta(ratio, &curve),
+    );
 
-    // The two vetoes stay steps: a file far larger or far smaller than anything
-    // its quality and runtime could produce is not a release that scored badly,
-    // it is not that release at all. Everything between them is one continuous
-    // curve, read at `ratio` (D3, D21).
+    // One veto is left, and it stays a step: a file far larger than anything its
+    // quality and runtime could produce is not a release that scored badly, it
+    // is not that release at all. The other end is a penalty now — the smallness
+    // that used to be refused outright is far more often a pack read against the
+    // wrong runtime than a fake, and a profile minimum score refuses the genuine
+    // article on the numbers. Everything below the veto is one continuous curve,
+    // read at `ratio` (D3, D21).
     if ratio >= thresholds.implausible {
         decision.log("size_implausible_for_quality", BLOCK_SCORE);
-        return;
-    }
-    if ratio < thresholds.implausibly_small
-        && raw_size_bytes >= MINIMUM_SIZE_VETO_FLOOR_BYTES
-        && !release_is_a_special(release)
-    {
-        decision.log("size_implausibly_small_for_quality", BLOCK_SCORE);
     }
 }
 
-/// Whether the release announces itself as a special, in which case the
-/// minimum-size veto does not apply.
-///
-/// Sonarr's `AcceptableSizeSpecification.cs:29-33` — "Special release found,
-/// skipping size check" — and for the same reason: a special's runtime is
-/// whatever the studio felt like, the catalog rarely records it, so the modelled
-/// expectation is the series average and a genuine seven-minute short reads as a
-/// fraction of it. The *penalty* side of the curve still fires; only the veto is
-/// skipped, so a short is refused on the numbers if it deserves to be and never
-/// on a runtime nobody knew.
-fn release_is_a_special(release: &ParsedReleaseMetadata) -> bool {
-    release.episode.as_ref().is_some_and(|episode| {
-        episode.special_kind.is_some()
-            || !episode.special_absolute_episode_numbers.is_empty()
-            || episode.season == Some(0)
-    })
+/// The band a size ratio falls in, as it appears in the scoring log.
+fn size_band_code(ratio: f64, thresholds: &SizeRatioThresholds) -> &'static str {
+    match ratio {
+        r if r >= thresholds.excessive => "size_excessive_for_quality",
+        r if r >= thresholds.massive => "size_massive_for_quality",
+        r if r >= thresholds.very_large => "size_very_large_for_quality",
+        r if r >= thresholds.large => "size_large_for_quality",
+        r if r >= thresholds.expected => "size_expected_for_quality",
+        r if r >= thresholds.slightly_small => "size_slightly_small_for_quality",
+        r if r >= thresholds.small => "size_small_for_quality",
+        r if r >= thresholds.very_small => "size_very_small_for_quality",
+        _ => "size_tiny_for_quality",
+    }
 }
 
 #[cfg(test)]
@@ -1593,6 +1827,26 @@ mod tests {
     use scryer_release_parser::{
         ContextEpisode, ContextFacetHint, ContextTitle, ReleaseParseContext,
     };
+
+    fn apply_size_scoring_for_category(
+        decision: &mut QualityProfileDecision,
+        release: &ParsedReleaseMetadata,
+        size_bytes: Option<i64>,
+        category_hint: Option<&str>,
+        runtime_minutes: Option<i32>,
+        prefer_remux: bool,
+        weights: &ScoringWeights,
+    ) {
+        super::apply_size_scoring_for_category_with_remux_preference(
+            decision,
+            release,
+            size_bytes,
+            category_hint,
+            CoverageSizeBasis::single(runtime_minutes),
+            prefer_remux,
+            weights,
+        );
+    }
 
     #[test]
     fn parse_profile_json() {
@@ -1621,6 +1875,24 @@ mod tests {
         );
         assert!(profile.criteria.atmos_preferred);
         assert_eq!(profile.criteria.quality_tiers.len(), 3);
+    }
+
+    #[test]
+    fn builtin_anime_profile_accepts_576p() {
+        let profile = builtin_anime_profile();
+        assert_eq!(
+            profile.criteria.quality_tiers,
+            vec!["1080P".to_string(), "720P".to_string(), "576P".to_string()]
+        );
+
+        let release =
+            parse_release_metadata("Fixture.Anime.S06E01.576p.DVD.Opus.Dual.Audio.AV1-GRP");
+        assert_eq!(
+            normalize_quality_tier(release.quality.as_deref()),
+            Some("576P".to_string())
+        );
+        let result = evaluate_against_profile(&profile, &release, false, &balanced_weights());
+        assert!(result.allowed, "576p anime release was blocked: {result:?}");
     }
 
     #[test]
@@ -1964,7 +2236,7 @@ mod tests {
     }
 
     #[test]
-    fn size_scoring_heavily_prefers_larger_release_for_same_metadata() {
+    fn balanced_size_scoring_prefers_a_plausible_release_for_same_metadata() {
         let profile = builtin_4k_profile();
         let w = balanced_weights();
         let release = parse_release_metadata("Movie.2021.2160p.BluRay.Remux.H.265.DTSHD.Atmos");
@@ -1976,6 +2248,7 @@ mod tests {
             Some(7 * 1024 * 1024 * 1024),
             None,
             None,
+            false,
             &w,
         );
 
@@ -1983,14 +2256,170 @@ mod tests {
         apply_size_scoring_for_category(
             &mut large,
             &release,
-            Some(45 * 1024 * 1024 * 1024),
+            Some(35 * 1024 * 1024 * 1024),
             None,
             None,
+            false,
             &w,
         );
 
         assert!(large.preference_score > small.preference_score);
-        assert!(large.preference_score - small.preference_score >= 900);
+    }
+
+    #[test]
+    fn balanced_nonpreferred_uhd_remux_loses_to_a_sensible_release() {
+        let profile = builtin_4k_profile();
+        let weights = balanced_weights();
+        let sensible = parse_release_metadata("Movie.2021.2160p.BluRay.H.265.DTSHD");
+        let remux = parse_release_metadata("Movie.2021.2160p.BluRay.Remux.H.265.DTSHD");
+
+        let mut sensible_decision = evaluate_against_profile(&profile, &sensible, false, &weights);
+        apply_size_scoring_for_category(
+            &mut sensible_decision,
+            &sensible,
+            Some(35 * 1024 * 1024 * 1024),
+            Some("movie"),
+            Some(120),
+            false,
+            &weights,
+        );
+
+        let mut remux_decision = evaluate_against_profile(&profile, &remux, false, &weights);
+        apply_size_scoring_for_category(
+            &mut remux_decision,
+            &remux,
+            Some(78 * 1024 * 1024 * 1024),
+            Some("movie"),
+            Some(120),
+            false,
+            &weights,
+        );
+
+        assert!(remux_decision.allowed);
+        assert!(sensible_decision.preference_score > remux_decision.preference_score);
+        assert!(
+            remux_decision
+                .scoring_log
+                .iter()
+                .any(|entry| entry.code == "remux_not_preferred" && entry.delta == -400)
+        );
+        assert!(
+            remux_decision
+                .scoring_log
+                .iter()
+                .any(|entry| entry.code == "size_massive_for_quality")
+        );
+    }
+
+    #[test]
+    fn balanced_remux_preference_restores_its_size_tolerance() {
+        let mut profile = builtin_4k_profile();
+        let weights = balanced_weights();
+        let remux = parse_release_metadata("Movie.2021.2160p.BluRay.Remux.H.265.DTSHD");
+
+        let mut not_preferred = evaluate_against_profile(&profile, &remux, false, &weights);
+        apply_size_scoring_for_category(
+            &mut not_preferred,
+            &remux,
+            Some(78 * 1024 * 1024 * 1024),
+            Some("movie"),
+            Some(120),
+            false,
+            &weights,
+        );
+
+        profile.criteria.prefer_remux = true;
+        let mut preferred = evaluate_against_profile(&profile, &remux, false, &weights);
+        apply_size_scoring_for_category(
+            &mut preferred,
+            &remux,
+            Some(78 * 1024 * 1024 * 1024),
+            Some("movie"),
+            Some(120),
+            true,
+            &weights,
+        );
+
+        assert!(preferred.preference_score > not_preferred.preference_score);
+        assert!(
+            preferred
+                .scoring_log
+                .iter()
+                .any(|entry| entry.code == "prefer_remux_match" && entry.delta == 250)
+        );
+        assert!(
+            !preferred
+                .scoring_log
+                .iter()
+                .any(|entry| entry.code == "remux_not_preferred")
+        );
+    }
+
+    #[test]
+    fn balanced_1080p_remuxes_are_penalized_when_not_preferred() {
+        let profile = builtin_4k_profile();
+        let weights = balanced_weights();
+        let standard = parse_release_metadata("Movie.2021.1080p.BluRay.H.265.DTSHD");
+        let remux = parse_release_metadata("Movie.2021.1080p.BluRay.Remux.H.265.DTSHD");
+
+        let mut standard_decision = evaluate_against_profile(&profile, &standard, false, &weights);
+        apply_size_scoring_for_category(
+            &mut standard_decision,
+            &standard,
+            Some(10 * 1024 * 1024 * 1024),
+            Some("movie"),
+            Some(120),
+            false,
+            &weights,
+        );
+
+        let mut remux_decision = evaluate_against_profile(&profile, &remux, false, &weights);
+        apply_size_scoring_for_category(
+            &mut remux_decision,
+            &remux,
+            Some(25 * 1024 * 1024 * 1024),
+            Some("movie"),
+            Some(120),
+            false,
+            &weights,
+        );
+
+        assert!(remux_decision.allowed);
+        assert!(standard_decision.preference_score > remux_decision.preference_score);
+        assert!(
+            remux_decision
+                .scoring_log
+                .iter()
+                .any(|entry| entry.code == "remux_not_preferred" && entry.delta == -400)
+        );
+    }
+
+    #[test]
+    fn balanced_size_budget_scales_with_runtime() {
+        let profile = builtin_4k_profile();
+        let weights = balanced_weights();
+        let remux = parse_release_metadata("Movie.2021.2160p.BluRay.Remux.H.265.DTSHD");
+
+        let decision_for_runtime = |runtime_minutes| {
+            let mut decision = evaluate_against_profile(&profile, &remux, false, &weights);
+            apply_size_scoring_for_category(
+                &mut decision,
+                &remux,
+                Some(78 * 1024 * 1024 * 1024),
+                Some("movie"),
+                Some(runtime_minutes),
+                false,
+                &weights,
+            );
+            decision
+        };
+
+        let short = decision_for_runtime(120);
+        let long = decision_for_runtime(240);
+
+        assert!(short.allowed);
+        assert!(long.allowed);
+        assert!(long.preference_score > short.preference_score);
     }
 
     #[test]
@@ -2005,6 +2434,7 @@ mod tests {
             Some(77_514_027),
             Some("movie"),
             Some(7),
+            false,
             &weights,
         );
 
@@ -2027,6 +2457,7 @@ mod tests {
                 Some(size_bytes),
                 Some("anime"),
                 Some(24),
+                false,
                 &weights,
             );
             decision
@@ -2074,6 +2505,7 @@ mod tests {
                 Some(2 * 1024 * 1024 * 1024),
                 Some("anime"),
                 Some(24),
+                false,
                 &weights,
             );
             decision
@@ -2105,6 +2537,7 @@ mod tests {
             Some(5 * 1024 * 1024 * 1024),
             None,
             None,
+            false,
             &w,
         );
 
@@ -2116,6 +2549,7 @@ mod tests {
             Some(18 * 1024 * 1024 * 1024),
             None,
             None,
+            false,
             &w,
         );
 
@@ -2127,7 +2561,7 @@ mod tests {
         let profile = builtin_4k_profile();
         let w = balanced_weights();
 
-        let plausible_uhd = parse_release_metadata("Movie.2021.2160p.BluRay.Remux.H.265.DTSHD");
+        let plausible_uhd = parse_release_metadata("Movie.2021.2160p.BluRay.H.265.DTSHD");
         let mut plausible_uhd_decision =
             evaluate_against_profile(&profile, &plausible_uhd, false, &w);
         apply_size_scoring_for_category(
@@ -2136,6 +2570,7 @@ mod tests {
             Some(35 * 1024 * 1024 * 1024),
             None,
             None,
+            false,
             &w,
         );
 
@@ -2147,6 +2582,7 @@ mod tests {
             Some(18 * 1024 * 1024 * 1024),
             None,
             None,
+            false,
             &w,
         );
 

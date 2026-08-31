@@ -1,7 +1,4 @@
 const CATALOG_STATUS_KEY: &str = "plugin_catalog_redirect";
-const PLUGIN_CATALOG_OUTAGE_MESSAGE: &str =
-    "Plugin catalog redirects are unavailable from both the primary CDN and the GitHub mirror.";
-
 impl AppUseCase {
     pub async fn plugin_catalog_status(&self, actor: &User) -> AppResult<PluginCatalogStatus> {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)

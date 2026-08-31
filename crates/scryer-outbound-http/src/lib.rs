@@ -402,7 +402,6 @@ impl HostRateLimiterEntry {
 
 #[derive(Default)]
 struct RateLimitRegistryState {
-    deadlines: Mutex<HashMap<RateLimitScopeKey, Instant>>,
     host_rps: Mutex<HostRateLimitState>,
     destination_deadlines: Mutex<HashMap<DestinationKey, Instant>>,
     destination_cooldowns: Mutex<HashMap<DestinationKey, PersistedDestinationCooldown>>,
@@ -482,36 +481,6 @@ impl RateLimitRegistry {
             host_rps,
             destination_cooldowns,
         }
-    }
-
-    pub async fn wait_if_needed(&self, scope: &RateLimitScopeKey) -> Option<Duration> {
-        let mut total_wait = Duration::ZERO;
-
-        loop {
-            let wait_duration = {
-                let mut deadlines = self
-                    .state
-                    .deadlines
-                    .lock()
-                    .expect("rate limit deadline lock poisoned");
-                let Some(deadline) = deadlines.get(scope).copied() else {
-                    break;
-                };
-                let now = Instant::now();
-                let remaining = deadline.saturating_duration_since(now);
-                if remaining.is_zero() {
-                    deadlines.remove(scope);
-                    break;
-                } else {
-                    remaining
-                }
-            };
-
-            total_wait += wait_duration;
-            sleep(wait_duration).await;
-        }
-
-        (!total_wait.is_zero()).then_some(total_wait)
     }
 
     pub async fn wait_for_destination_if_needed(
@@ -783,45 +752,6 @@ impl RateLimitRegistry {
             .unwrap_or_else(|| classify_host_rps_profile(host.as_str()))
     }
 
-    pub async fn record_cooldown(
-        &self,
-        scope: &RateLimitScopeKey,
-        delay: Duration,
-        source: RetryAfterSource,
-    ) -> (Duration, RetryAfterSource) {
-        if delay.is_zero() {
-            return (Duration::ZERO, source);
-        }
-
-        let now = Instant::now();
-        let new_deadline = now + delay;
-        let mut deadlines = self
-            .state
-            .deadlines
-            .lock()
-            .expect("rate limit deadline lock poisoned");
-
-        let existing_deadline = deadlines
-            .get(scope)
-            .copied()
-            .filter(|deadline| *deadline > now);
-
-        let effective_deadline = match existing_deadline {
-            Some(existing) if existing > new_deadline => existing,
-            _ => new_deadline,
-        };
-
-        deadlines.insert(scope.clone(), effective_deadline);
-
-        let effective_delay = effective_deadline.saturating_duration_since(now);
-        let effective_source = match existing_deadline {
-            Some(existing) if existing > new_deadline => RetryAfterSource::ExistingCooldown,
-            _ => source,
-        };
-
-        (effective_delay, effective_source)
-    }
-
     pub async fn record_destination_cooldown(
         &self,
         destination: &DestinationKey,
@@ -955,7 +885,38 @@ impl Default for RateLimitRegistry {
 pub const DEFAULT_USER_AGENT: &str = concat!("Scryer/", env!("CARGO_PKG_VERSION"));
 pub const INDEXER_PROXY_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) \
 AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+/// Transport timeouts are per attempt; workflow-level guards own aggregate deadlines.
 pub const STANDARD_HTTP_TIMEOUT: Duration = Duration::from_secs(60);
+/// Per-attempt budget for native SABnzbd and NZBGet requests.
+pub const DOWNLOAD_CLIENT_HTTP_TIMEOUT: Duration = Duration::from_secs(90);
+/// Base wall-clock budget for indexer HTTP and plugin search operations.
+pub const INDEXER_HTTP_TIMEOUT: Duration = Duration::from_secs(120);
+/// Total invocation budget for download-client plugin operations.
+pub const DOWNLOAD_CLIENT_PLUGIN_TIMEOUT: Duration = Duration::from_secs(240);
+/// Default workflow deadline for reading download-client feedback.
+pub const DEFAULT_DOWNLOAD_CLIENT_FEEDBACK_TIMEOUT: Duration = Duration::from_secs(300);
+/// Maximum operator-configurable request budget for an indexer proxy.
+pub const MAX_INDEXER_PROXY_TIMEOUT_SECONDS: u32 = 120;
+/// Scheduling/response grace added when an indexer may invoke a configured proxy.
+pub const INDEXER_PROXY_TIMEOUT_GRACE: Duration = Duration::from_secs(5);
+/// Budget for bounded operations that legitimately outlive an ordinary request.
+pub const LONG_RUNNING_HTTP_OPERATION_TIMEOUT: Duration = Duration::from_secs(310);
+
+/// Return the canonical wall-clock budget for one indexer operation.
+///
+/// Proxies do not extend this budget; all indexer paths share the same ceiling.
+pub fn effective_indexer_timeout(_proxy_request_timeout_seconds: Option<u32>) -> Duration {
+    INDEXER_HTTP_TIMEOUT
+}
+
+/// Return the bounded request budget for a solver or proxy-health request.
+pub fn effective_indexer_proxy_request_timeout(request_timeout_seconds: u32) -> Duration {
+    Duration::from_secs(u64::from(
+        request_timeout_seconds.clamp(1, MAX_INDEXER_PROXY_TIMEOUT_SECONDS),
+    ))
+    .saturating_add(INDEXER_PROXY_TIMEOUT_GRACE)
+    .min(INDEXER_HTTP_TIMEOUT)
+}
 
 #[derive(Debug, Error)]
 pub enum OutboundDestinationError {
@@ -1361,6 +1322,48 @@ pub async fn prepare_plugin_http_target(
     prepare_plugin_http_target_from_url(url, label).await
 }
 
+/// The trust-bundle-aware counterpart to [`prepare_plugin_http_target`].
+/// Component plugins use this path so their async requests retain the same
+/// operator-installed private roots as the legacy command host while keeping
+/// DNS pinning and redirects disabled.
+pub async fn prepare_plugin_http_target_with_extra_ca(
+    raw: &str,
+    extra_ca_bundle_pem: &str,
+    label: &'static str,
+) -> Result<PinnedPluginHttpTarget, OutboundDestinationError> {
+    let url = validate_operator_http_url(raw, label)?;
+    let resolved_addrs = resolve_plugin_http_destination(&url, label).await?;
+    let host = url
+        .host_str()
+        .ok_or(OutboundDestinationError::MissingHost { label })?
+        .to_string();
+    let mut builder = reqwest_client_builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .resolve_to_addrs(&host, &resolved_addrs);
+    if !extra_ca_bundle_pem.trim().is_empty() {
+        builder =
+            builder.tls_certs_merge(uploaded_root_certificates(extra_ca_bundle_pem).map_err(
+                |source| OutboundDestinationError::TrustBundle {
+                    label,
+                    message: source,
+                },
+            )?);
+    }
+    let client = builder
+        .build()
+        .map_err(|source| OutboundDestinationError::ClientBuild {
+            label,
+            host: host.clone(),
+            source,
+        })?;
+    Ok(PinnedPluginHttpTarget {
+        url,
+        host,
+        resolved_addrs,
+        client,
+    })
+}
+
 /// Same as [`prepare_plugin_http_target`] but for an already-parsed URL; use
 /// this to re-validate a redirect location before following it.
 pub async fn prepare_plugin_http_target_from_url(
@@ -1503,6 +1506,21 @@ pub fn generic_reqwest_client() -> Client {
     CLIENT.clone()
 }
 
+/// Returns the no-redirect client for native indexer requests.
+///
+/// Request-level deadlines may shorten this budget, but native indexer paths
+/// must not inherit the shorter generic HTTP ceiling while their coordinator
+/// and plugin equivalents use `INDEXER_HTTP_TIMEOUT`.
+pub fn indexer_reqwest_client() -> Client {
+    static CLIENT: LazyLock<Client> = LazyLock::new(|| {
+        reqwest_client_builder()
+            .timeout(INDEXER_HTTP_TIMEOUT)
+            .build()
+            .expect("indexer reqwest client should build")
+    });
+    CLIENT.clone()
+}
+
 /// Returns the operator-managed client used for normal indexer-proxy solve
 /// requests. These requests deliberately present a stable browser-like user
 /// agent while retaining the shared client's no-redirect policy.
@@ -1529,9 +1547,7 @@ pub fn indexer_proxy_health_reqwest_client(timeout: Duration) -> Result<Client, 
 }
 
 pub fn external_arr_reqwest_client() -> Client {
-    let mut builder = reqwest_client_builder()
-        .timeout(Duration::from_secs(15))
-        .redirect(reqwest::redirect::Policy::none());
+    let mut builder = reqwest_client_builder().redirect(reqwest::redirect::Policy::none());
     if let Ok(proxy_url) = std::env::var("SCRYER_EXTERNAL_ARR_PROXY_URL")
         && !proxy_url.trim().is_empty()
         && let Ok(proxy) = reqwest::Proxy::all(proxy_url.trim())
@@ -1588,6 +1604,23 @@ pub fn blocking_indexer_proxy_reqwest_client(
     extra_ca_bundle_pem: &str,
 ) -> Result<BlockingClient, String> {
     let mut builder = blocking_reqwest_client_builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .user_agent(INDEXER_PROXY_USER_AGENT);
+    if !extra_ca_bundle_pem.trim().is_empty() {
+        builder = builder.tls_certs_merge(uploaded_root_certificates(extra_ca_bundle_pem)?);
+    }
+    builder
+        .build()
+        .map_err(|error| format!("failed to build indexer proxy HTTP client: {error}"))
+}
+
+/// Builds the async operator-managed client used by WASI Preview 2 indexer
+/// components for challenge-solver requests. Redirects stay disabled and the
+/// operator-installed private roots match the guarded target client.
+pub fn indexer_proxy_reqwest_client_with_extra_ca(
+    extra_ca_bundle_pem: &str,
+) -> Result<Client, String> {
+    let mut builder = reqwest_client_builder()
         .redirect(reqwest::redirect::Policy::none())
         .user_agent(INDEXER_PROXY_USER_AGENT);
     if !extra_ca_bundle_pem.trim().is_empty() {
@@ -1927,30 +1960,52 @@ impl OutboundHttpClient {
         F: Fn() -> Fut,
         Fut: Future<Output = Result<RequestBuilder, E>>,
     {
+        self.send_async_with_rate_limit_observer(policy, build_request, |_| async {})
+            .await
+    }
+
+    /// Sends a request while giving callers ownership of every 429 response
+    /// before cooldown and retry handling discards it.
+    pub async fn send_with_rate_limit_observer<F, O, OFut>(
+        &self,
+        policy: RequestPolicy,
+        build_request: F,
+        observe_rate_limited_response: O,
+    ) -> Result<Response, OutboundHttpError>
+    where
+        F: Fn() -> RequestBuilder,
+        O: Fn(Response) -> OFut,
+        OFut: Future<Output = ()>,
+    {
+        match self
+            .send_async_with_rate_limit_observer(
+                policy,
+                || async { Ok::<RequestBuilder, Infallible>(build_request()) },
+                observe_rate_limited_response,
+            )
+            .await
+        {
+            Ok(response) => Ok(response),
+            Err(OutboundRequestError::Build(_)) => unreachable!("infallible builder"),
+            Err(OutboundRequestError::Http(error)) => Err(error),
+        }
+    }
+
+    pub async fn send_async_with_rate_limit_observer<F, Fut, E, O, OFut>(
+        &self,
+        policy: RequestPolicy,
+        build_request: F,
+        observe_rate_limited_response: O,
+    ) -> Result<Response, OutboundRequestError<E>>
+    where
+        F: Fn() -> Fut,
+        Fut: Future<Output = Result<RequestBuilder, E>>,
+        O: Fn(Response) -> OFut,
+        OFut: Future<Output = ()>,
+    {
         let mut attempt = 0u32;
 
         loop {
-            if let Some(wait_duration) = self.registry.wait_if_needed(&policy.scope).await {
-                counter!(
-                    "scryer_outbound_http_cooldown_wait_total",
-                    "scope" => policy.scope.to_string(),
-                    "request_label" => policy.request_label.to_string()
-                )
-                .increment(1);
-                histogram!(
-                    "scryer_outbound_http_cooldown_wait_seconds",
-                    "scope" => policy.scope.to_string(),
-                    "request_label" => policy.request_label.to_string()
-                )
-                .record(wait_duration.as_secs_f64());
-                debug!(
-                    scope = %policy.scope,
-                    request_label = policy.request_label.as_ref(),
-                    wait_ms = wait_duration.as_millis(),
-                    "outbound HTTP cooldown wait"
-                );
-            }
-
             attempt += 1;
             let builder = build_request().await.map_err(OutboundRequestError::Build)?;
             let request_destination = policy.destination_cooldown_override.clone().or_else(|| {
@@ -2038,24 +2093,23 @@ impl OutboundHttpClient {
                     let (candidate_delay, candidate_source) =
                         retry_after_delay(response.headers(), fallback_backoff);
                     let candidate_delay = candidate_delay.min(policy.max_retry_after);
-                    let (effective_delay, effective_source) = self
-                        .registry
-                        .record_cooldown(&policy.scope, candidate_delay, candidate_source)
-                        .await;
                     let response_destination =
                         policy.destination_cooldown_override.clone().or_else(|| {
                             destination_key_from_url(response.url()).or(request_destination)
                         });
-                    if let Some(destination) = response_destination.as_ref() {
-                        let _ = self
-                            .registry
-                            .record_destination_cooldown(
-                                destination,
-                                candidate_delay,
-                                candidate_source,
-                            )
-                            .await;
-                    }
+                    observe_rate_limited_response(response).await;
+                    let (effective_delay, effective_source) =
+                        if let Some(destination) = response_destination.as_ref() {
+                            self.registry
+                                .record_destination_cooldown(
+                                    destination,
+                                    candidate_delay,
+                                    candidate_source,
+                                )
+                                .await
+                        } else {
+                            (candidate_delay, candidate_source)
+                        };
 
                     counter!(
                         "scryer_outbound_http_429_total",
@@ -2370,11 +2424,24 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
-    /// Cooldown-isolation tests assert that a just-recorded cooldown is still
-    /// pending when it is read back. `wait_*_if_needed` reports `None` once the
-    /// deadline has lapsed, so the window has to outlast any scheduling stall on
-    /// a loaded CI runner; sub-100ms windows race and fail intermittently.
-    const COOLDOWN_ISOLATION_TEST_WINDOW: Duration = Duration::from_secs(1);
+    #[test]
+    fn indexer_timeout_policy_is_fixed_for_direct_and_proxied_requests() {
+        assert_eq!(effective_indexer_timeout(None), Duration::from_secs(120));
+        assert_eq!(effective_indexer_timeout(Some(60)), INDEXER_HTTP_TIMEOUT);
+        assert_eq!(
+            effective_indexer_timeout(Some(u32::MAX)),
+            INDEXER_HTTP_TIMEOUT
+        );
+        assert_eq!(
+            effective_indexer_proxy_request_timeout(60),
+            Duration::from_secs(65)
+        );
+        assert_eq!(
+            effective_indexer_proxy_request_timeout(u32::MAX),
+            INDEXER_HTTP_TIMEOUT
+        );
+        assert!(LONG_RUNNING_HTTP_OPERATION_TIMEOUT > INDEXER_HTTP_TIMEOUT);
+    }
 
     #[test]
     fn parses_http_date_retry_after_first() {
@@ -2596,27 +2663,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cooldowns_are_isolated_per_scope() {
-        let registry = RateLimitRegistry::isolated();
-        let alpha: RateLimitScopeKey = "alpha".into();
-        let beta: RateLimitScopeKey = "beta".into();
-
-        let _ = registry
-            .record_cooldown(
-                &alpha,
-                COOLDOWN_ISOLATION_TEST_WINDOW,
-                RetryAfterSource::FallbackBackoff,
-            )
-            .await;
-
-        let alpha_wait = registry.wait_if_needed(&alpha).await;
-        let beta_wait = registry.wait_if_needed(&beta).await;
-
-        assert!(alpha_wait.is_some());
-        assert_eq!(beta_wait, None);
-    }
-
-    #[tokio::test]
     async fn destination_override_isolates_children_while_sharing_the_host_limiter() {
         let (url, hits) = spawn_http_server(vec![
             http_response(429, &[("Retry-After", "60")], "rate limited"),
@@ -2625,8 +2671,8 @@ mod tests {
         .await;
         let registry = RateLimitRegistry::isolated();
         let client = OutboundHttpClient::new(generic_reqwest_client(), registry.clone());
-        let child_a: DestinationKey = "managed-indexer:parent:1".into();
-        let child_b: DestinationKey = "managed-indexer:parent:2".into();
+        let child_a: DestinationKey = "parent:1".into();
+        let child_b: DestinationKey = "parent:2".into();
 
         let first = client
             .send(
@@ -2914,14 +2960,18 @@ mod tests {
     #[tokio::test]
     async fn existing_cooldown_source_wins_when_longer() {
         let registry = RateLimitRegistry::isolated();
-        let scope: RateLimitScopeKey = "scope".into();
+        let destination: DestinationKey = "indexer-1".into();
 
         let _ = registry
-            .record_cooldown(&scope, Duration::from_millis(50), RetryAfterSource::Seconds)
+            .record_destination_cooldown(
+                &destination,
+                Duration::from_millis(50),
+                RetryAfterSource::Seconds,
+            )
             .await;
         let (_, source) = registry
-            .record_cooldown(
-                &scope,
+            .record_destination_cooldown(
+                &destination,
                 Duration::from_millis(5),
                 RetryAfterSource::FallbackBackoff,
             )
@@ -3336,29 +3386,6 @@ mod tests {
         assert_eq!(response.status(), StatusCode::FOUND);
         assert_eq!(origin_hits.load(Ordering::SeqCst), 1);
         assert_eq!(target_hits.load(Ordering::SeqCst), 0);
-    }
-
-    #[tokio::test]
-    async fn destination_cooldowns_are_isolated_from_legacy_scopes() {
-        let registry = RateLimitRegistry::isolated();
-        let scope: RateLimitScopeKey = "legacy-scope".into();
-        let destination: DestinationKey = "cooldown.example.test".into();
-
-        let _ = registry
-            .record_destination_cooldown(
-                &destination,
-                COOLDOWN_ISOLATION_TEST_WINDOW,
-                RetryAfterSource::Seconds,
-            )
-            .await;
-
-        assert!(
-            registry
-                .wait_for_destination_if_needed(&destination)
-                .await
-                .is_some()
-        );
-        assert_eq!(registry.wait_if_needed(&scope).await, None);
     }
 
     fn http_response(status: u16, headers: &[(&str, &str)], body: &str) -> String {

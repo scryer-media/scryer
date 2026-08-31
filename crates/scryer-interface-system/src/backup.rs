@@ -221,6 +221,7 @@ impl BackupMutations {
         require_config_app_permission(ctx, AppPermission::ManageSystemSettings).await?;
         let app = app_from_ctx(ctx)?;
         ensure_setup_mode(&app).await.map_err(to_gql_error)?;
+        let _maintenance_guard = app.try_acquire_system_maintenance().map_err(to_gql_error)?;
 
         let restore = restore_context_from_ctx(ctx)?;
         ensure_restore_supported(&restore.datastore_config).map_err(to_gql_error)?;

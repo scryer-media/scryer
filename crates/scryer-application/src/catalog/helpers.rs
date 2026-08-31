@@ -122,8 +122,7 @@ pub(crate) fn parse_download_client_routing_map(
 
 pub(crate) fn build_rematched_external_ids(
     title: &Title,
-    tvdb_id: &str,
-    imdb_id: Option<&str>,
+    replacement_identity_ids: &[ExternalId],
     rematch_replaced_external_id_sources: &[&str],
 ) -> Vec<ExternalId> {
     let mut next: Vec<ExternalId> = title
@@ -137,17 +136,15 @@ pub(crate) fn build_rematched_external_ids(
         .cloned()
         .collect();
 
-    next.push(ExternalId {
-        source: "tvdb".to_string(),
-        value: tvdb_id.to_string(),
-    });
-
-    if let Some(imdb_id) = imdb_id
-        && let Some(normalized) = crate::normalize::normalize_imdb_id(imdb_id)
-    {
+    for external_id in replacement_identity_ids {
+        let source = external_id.source.trim();
+        let value = external_id.value.trim();
+        if source.is_empty() || value.is_empty() {
+            continue;
+        }
         next.push(ExternalId {
-            source: "imdb".to_string(),
-            value: normalized,
+            source: source.to_string(),
+            value: value.to_string(),
         });
     }
 
@@ -221,6 +218,8 @@ pub(crate) fn movie_entity_from_anime_movie(movie: &AnimeMovie) -> MovieEntity {
         tmdb_id: movie.movie_tmdb_id.map(|id| id.to_string()),
         mal_id: movie.movie_mal_id.map(|id| id.to_string()),
         anidb_id: movie.movie_anidb_id.map(|id| id.to_string()),
+        ratings: None,
+        credits: None,
         created_at: now,
         updated_at: now,
     }
@@ -233,6 +232,7 @@ pub(crate) fn series_movie_link_from_anime_movie(
     narrative_order: String,
     after_season: i32,
     linked_episode_id: Option<String>,
+    monitored: bool,
 ) -> SeriesMovieLink {
     let now = Utc::now();
     SeriesMovieLink {
@@ -250,7 +250,9 @@ pub(crate) fn series_movie_link_from_anime_movie(
         confidence: non_empty_owned(anime_movie.confidence.as_str()),
         signal_summary: non_empty_owned(anime_movie.signal_summary.as_str()),
         source: Some("anibridge".to_string()),
-        monitored: true,
+        monitoring_override: None,
+        metadata_active: true,
+        monitored,
         legacy_collection_id: None,
         created_at: now,
         updated_at: now,
@@ -451,6 +453,7 @@ mod anime_movie_mapping_tests {
             "1.5".to_string(),
             1,
             Some("episode-1".to_string()),
+            false,
         );
         assert_eq!(link.series_title_id, "title-1");
         assert_eq!(link.linked_episode_id.as_deref(), Some("episode-1"));

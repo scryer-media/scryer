@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use async_trait::async_trait;
 use quick_xml::Reader;
 use quick_xml::XmlVersion;
@@ -6,10 +8,12 @@ use reqwest::StatusCode;
 use scryer_application::{
     AppError, AppResult, EmbyApiKeyExchange, EmbyApiKeyExchangeCleanup, EmbyAvatar,
     EmbyConnectIdentityVerification, EmbyConnectServer, EmbyServerIdentity, EmbyServerUser,
-    ExternalIdentityVerifier, JellyfinServerUser, PlexServerDiscovery, PlexServerUser,
-    VerifiedExternalIdentity,
+    ExternalIdentityVerifier, JellyfinServerUser, MediaServerCatalogItem,
+    MediaServerCatalogItemKind, PlexServerDiscovery, PlexServerUser, VerifiedExternalIdentity,
 };
-use scryer_domain::ExternalAccountProvider;
+use scryer_domain::{
+    ExternalAccountProvider, ExternalId, MediaServerConnection, MediaServerProvider,
+};
 use scryer_outbound_http::generic_reqwest_client;
 use serde::Deserialize;
 use serde_json::Value;
@@ -21,7 +25,6 @@ const SCRYER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub struct HttpExternalIdentityVerifier {
     client: reqwest::Client,
-    emby_client: reqwest::Client,
     plex_base_url: Url,
     emby_connect_base_url: Url,
 }
@@ -30,12 +33,6 @@ impl HttpExternalIdentityVerifier {
     pub fn new() -> Self {
         Self {
             client: generic_reqwest_client(),
-            emby_client: reqwest::Client::builder()
-                .redirect(reqwest::redirect::Policy::none())
-                .connect_timeout(std::time::Duration::from_secs(5))
-                .timeout(std::time::Duration::from_secs(15))
-                .build()
-                .expect("Emby HTTP client should build"),
             plex_base_url: Url::parse(PLEX_BASE_URL).expect("valid Plex base URL"),
             emby_connect_base_url: Url::parse("https://connect.emby.media/service/")
                 .expect("valid Emby Connect base URL"),
@@ -54,12 +51,6 @@ impl HttpExternalIdentityVerifier {
     fn with_plex_base_url(plex_base_url: Url) -> Self {
         Self {
             client: generic_reqwest_client(),
-            emby_client: reqwest::Client::builder()
-                .redirect(reqwest::redirect::Policy::none())
-                .connect_timeout(std::time::Duration::from_secs(5))
-                .timeout(std::time::Duration::from_secs(15))
-                .build()
-                .expect("Emby HTTP client should build"),
             plex_base_url,
             emby_connect_base_url: Url::parse("https://connect.emby.media/service/")
                 .expect("valid Emby Connect base URL"),
@@ -127,6 +118,20 @@ impl HttpExternalIdentityVerifier {
 
 #[async_trait]
 impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
+    async fn scan_media_server_catalog(
+        &self,
+        connection: &MediaServerConnection,
+    ) -> AppResult<Vec<MediaServerCatalogItem>> {
+        scan_media_server_catalog(self, connection, false).await
+    }
+
+    async fn scan_media_server_catalog_incremental(
+        &self,
+        connection: &MediaServerConnection,
+    ) -> AppResult<Vec<MediaServerCatalogItem>> {
+        scan_media_server_catalog(self, connection, true).await
+    }
+
     async fn verify_plex(
         &self,
         connection_id: &str,
@@ -585,7 +590,7 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
         connection_id: &str,
         base_url: &str,
     ) -> AppResult<EmbyServerIdentity> {
-        super::emby::resolve_api_base(&self.emby_client, connection_id, base_url).await
+        super::emby::resolve_api_base(&self.client, connection_id, base_url).await
     }
 
     async fn test_emby_api_key(
@@ -596,7 +601,7 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
         expected_server_id: Option<&str>,
     ) -> AppResult<EmbyServerIdentity> {
         super::emby::test_api_key(
-            &self.emby_client,
+            &self.client,
             connection_id,
             base_url,
             api_key,
@@ -613,7 +618,7 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
         password: &str,
     ) -> AppResult<EmbyApiKeyExchange> {
         super::emby::exchange_local_admin_api_key(
-            &self.emby_client,
+            &self.client,
             connection_id,
             base_url,
             username,
@@ -628,7 +633,7 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
         password: &str,
     ) -> AppResult<Vec<EmbyConnectServer>> {
         super::emby::discover_connect_servers(
-            &self.emby_client,
+            &self.client,
             &self.emby_connect_base_url,
             username_or_email,
             password,
@@ -645,7 +650,7 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
         password: &str,
     ) -> AppResult<EmbyApiKeyExchange> {
         super::emby::exchange_connect_admin_api_key(
-            &self.emby_client,
+            &self.client,
             &self.emby_connect_base_url,
             connection_id,
             base_url,
@@ -663,7 +668,7 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
         compensate_created_key: bool,
     ) {
         super::emby::finish_api_key_exchange(
-            &self.emby_client,
+            &self.client,
             connection_id,
             cleanup,
             compensate_created_key,
@@ -680,7 +685,7 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
         password: &str,
     ) -> AppResult<VerifiedExternalIdentity> {
         super::emby::verify_local_identity(
-            &self.emby_client,
+            &self.client,
             connection_id,
             base_url,
             expected_server_id,
@@ -699,7 +704,7 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
         password: &str,
     ) -> AppResult<EmbyConnectIdentityVerification> {
         super::emby::verify_connect_identity(
-            &self.emby_client,
+            &self.client,
             &self.emby_connect_base_url,
             connection_id,
             base_url,
@@ -735,7 +740,7 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
         api_key: &str,
         search: Option<&str>,
     ) -> AppResult<Vec<EmbyServerUser>> {
-        super::emby::list_users(&self.emby_client, connection_id, base_url, api_key, search).await
+        super::emby::list_users(&self.client, connection_id, base_url, api_key, search).await
     }
 
     async fn fetch_emby_user_avatar(
@@ -746,7 +751,7 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
         user_id: &str,
         image_tag: &str,
     ) -> AppResult<Option<EmbyAvatar>> {
-        super::emby::fetch_avatar(&self.emby_client, base_url, api_key, user_id, image_tag).await
+        super::emby::fetch_avatar(&self.client, base_url, api_key, user_id, image_tag).await
     }
 
     async fn list_plex_users(
@@ -919,7 +924,7 @@ fn plex_server_users(users_xml: &str, search: Option<&str>) -> AppResult<Vec<Ple
     loop {
         match reader.read_event() {
             Ok(Event::Start(element)) | Ok(Event::Empty(element)) => {
-                if element.name().as_ref() != b"User" {
+                if element.name().as_ref() != "User" {
                     continue;
                 }
                 let mut id = None;
@@ -942,11 +947,11 @@ fn plex_server_users(users_xml: &str, search: Option<&str>) -> AppResult<Vec<Ple
                         continue;
                     }
                     match attribute.key.as_ref() {
-                        b"id" => id = Some(value),
-                        b"username" => username = Some(value),
-                        b"title" => title = Some(value),
-                        b"email" => email = Some(value),
-                        b"thumb" => thumb = Some(value),
+                        "id" => id = Some(value),
+                        "username" => username = Some(value),
+                        "title" => title = Some(value),
+                        "email" => email = Some(value),
+                        "thumb" => thumb = Some(value),
                         _ => {}
                     }
                 }
@@ -1012,7 +1017,7 @@ fn plex_server_discoveries(resources_xml: &str) -> AppResult<Vec<PlexServerDisco
     loop {
         match reader.read_event() {
             Ok(Event::Start(element)) | Ok(Event::Empty(element)) => {
-                if element.name().as_ref() == b"Device"
+                if element.name().as_ref() == "Device"
                     && let Some(device) = parse_plex_device(&element)?
                 {
                     servers.push(device.into_discovery());
@@ -1072,10 +1077,10 @@ fn parse_plex_device(
             continue;
         }
         match attribute.key.as_ref() {
-            b"machineIdentifier" | b"clientIdentifier" => machine_id = Some(value),
-            b"name" => name = Some(value),
-            b"product" => product = Some(value),
-            b"provides" => provides = Some(value),
+            "machineIdentifier" | "clientIdentifier" => machine_id = Some(value),
+            "name" => name = Some(value),
+            "product" => product = Some(value),
+            "provides" => provides = Some(value),
             _ => {}
         }
     }
@@ -1107,7 +1112,7 @@ fn plex_resources_include_machine(resources_xml: &str, machine_id: &str) -> AppR
                     })?;
                     if matches!(
                         attribute.key.as_ref(),
-                        b"machineIdentifier" | b"clientIdentifier"
+                        "machineIdentifier" | "clientIdentifier"
                     ) {
                         let value = attribute
                             .normalized_value(XmlVersion::Implicit1_0)
@@ -1121,6 +1126,569 @@ fn plex_resources_include_machine(resources_xml: &str, machine_id: &str) -> AppR
                 }
             }
             Ok(Event::Eof) => return Ok(false),
+            Err(error) => {
+                return Err(AppError::Repository(format!(
+                    "invalid Plex resources XML: {error}"
+                )));
+            }
+            _ => {}
+        }
+    }
+}
+
+async fn scan_media_server_catalog(
+    verifier: &HttpExternalIdentityVerifier,
+    connection: &MediaServerConnection,
+    recent_only: bool,
+) -> AppResult<Vec<MediaServerCatalogItem>> {
+    let api_key = connection
+        .api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+        .ok_or_else(|| {
+            AppError::Validation("media server catalog scan requires an API key".into())
+        })?;
+    match connection.provider {
+        MediaServerProvider::Jellyfin | MediaServerProvider::Emby => {
+            scan_emby_catalog(&verifier.client, &connection.base_url, api_key, recent_only).await
+        }
+        MediaServerProvider::Plex => {
+            let machine_id = connection
+                .machine_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+                .ok_or_else(|| {
+                    AppError::Validation("Plex catalog scan requires a selected server".into())
+                })?;
+            scan_plex_catalog(verifier, machine_id, api_key, recent_only).await
+        }
+    }
+}
+
+async fn scan_emby_catalog(
+    client: &reqwest::Client,
+    base_url: &str,
+    api_key: &str,
+    recent_only: bool,
+) -> AppResult<Vec<MediaServerCatalogItem>> {
+    let base_url = media_server_url(base_url)?;
+    let mut start = 0usize;
+    let mut catalog = Vec::new();
+    const PAGE_SIZE: usize = 500;
+    loop {
+        let mut url = base_url.join("Items").map_err(|error| {
+            AppError::Repository(format!("invalid media server catalog URL: {error}"))
+        })?;
+        url.query_pairs_mut()
+            .append_pair("Recursive", "true")
+            .append_pair("IncludeItemTypes", "Movie,Series,Episode")
+            .append_pair(
+                "Fields",
+                "ProviderIds,SeriesId,ParentIndexNumber,IndexNumber,IndexNumberEnd",
+            )
+            .append_pair("StartIndex", &start.to_string())
+            .append_pair("Limit", &PAGE_SIZE.to_string());
+        if recent_only {
+            url.query_pairs_mut()
+                .append_pair("SortBy", "DateCreated,DateLastContentAdded")
+                .append_pair("SortOrder", "Descending");
+        }
+        let response = client
+            .get(url)
+            .header("Accept", "application/json")
+            .header("X-Emby-Token", api_key)
+            .send()
+            .await
+            .map_err(|error| {
+                AppError::Repository(format!("media server catalog scan failed: {error}"))
+            })?;
+        if !response.status().is_success() {
+            return Err(AppError::Repository(format!(
+                "media server catalog scan failed with status {}",
+                response.status()
+            )));
+        }
+        let page = response.json::<Value>().await.map_err(|error| {
+            AppError::Repository(format!("invalid media server catalog response: {error}"))
+        })?;
+        let items = page
+            .get("Items")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let page_len = items.len();
+        catalog.extend(items.iter().filter_map(emby_catalog_item));
+        start += page_len;
+        let total = page
+            .get("TotalRecordCount")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as usize;
+        if recent_only || page_len < PAGE_SIZE || (total > 0 && start >= total) {
+            return hydrate_emby_parent_series(client, &base_url, api_key, catalog).await;
+        }
+    }
+}
+
+async fn hydrate_emby_parent_series(
+    client: &reqwest::Client,
+    base_url: &Url,
+    api_key: &str,
+    mut catalog: Vec<MediaServerCatalogItem>,
+) -> AppResult<Vec<MediaServerCatalogItem>> {
+    let mut known_series_ids = catalog
+        .iter()
+        .filter(|item| item.kind == MediaServerCatalogItemKind::Series)
+        .map(|item| item.provider_item_id.clone())
+        .collect::<HashSet<_>>();
+    let missing_series_ids = catalog
+        .iter()
+        .filter(|item| item.kind == MediaServerCatalogItemKind::Episode)
+        .filter_map(|item| item.series_provider_item_id.clone())
+        .filter(|series_id| known_series_ids.insert(series_id.clone()))
+        .collect::<Vec<_>>();
+
+    for series_id in missing_series_ids {
+        let mut url = base_url
+            .join(&format!("Items/{series_id}"))
+            .map_err(|error| {
+                AppError::Repository(format!("invalid media server catalog URL: {error}"))
+            })?;
+        url.query_pairs_mut().append_pair(
+            "Fields",
+            "ProviderIds,SeriesId,ParentIndexNumber,IndexNumber,IndexNumberEnd",
+        );
+        let response = client
+            .get(url)
+            .header("Accept", "application/json")
+            .header("X-Emby-Token", api_key)
+            .send()
+            .await
+            .map_err(|error| {
+                AppError::Repository(format!("media server parent-series lookup failed: {error}"))
+            })?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            continue;
+        }
+        if !response.status().is_success() {
+            return Err(AppError::Repository(format!(
+                "media server parent-series lookup failed with status {}",
+                response.status()
+            )));
+        }
+        let value = response.json::<Value>().await.map_err(|error| {
+            AppError::Repository(format!(
+                "invalid media server parent-series response: {error}"
+            ))
+        })?;
+        if let Some(series) = emby_catalog_item(&value)
+            && series.kind == MediaServerCatalogItemKind::Series
+        {
+            catalog.push(series);
+        }
+    }
+    Ok(catalog)
+}
+
+fn emby_catalog_item(value: &Value) -> Option<MediaServerCatalogItem> {
+    let kind = match value.get("Type")?.as_str()? {
+        "Movie" => MediaServerCatalogItemKind::Movie,
+        "Series" => MediaServerCatalogItemKind::Series,
+        "Episode" => MediaServerCatalogItemKind::Episode,
+        _ => return None,
+    };
+    Some(MediaServerCatalogItem {
+        kind,
+        provider_item_id: value.get("Id")?.as_str()?.trim().to_string(),
+        external_ids: provider_ids(value.get("ProviderIds")),
+        series_provider_item_id: value
+            .get("SeriesId")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        season_number: value
+            .get("ParentIndexNumber")
+            .and_then(Value::as_i64)
+            .map(|value| value as i32),
+        episode_number: value
+            .get("IndexNumber")
+            .and_then(Value::as_i64)
+            .map(|value| value as i32),
+        episode_number_end: value
+            .get("IndexNumberEnd")
+            .and_then(Value::as_i64)
+            .map(|value| value as i32),
+    })
+}
+
+async fn scan_plex_catalog(
+    verifier: &HttpExternalIdentityVerifier,
+    machine_id: &str,
+    token: &str,
+    recent_only: bool,
+) -> AppResult<Vec<MediaServerCatalogItem>> {
+    let response = verifier
+        .client
+        .get(verifier.plex_url("api/resources?includeHttps=1")?)
+        .header("Accept", "application/xml")
+        .header("X-Plex-Token", token)
+        .send()
+        .await
+        .map_err(|error| {
+            AppError::Repository(format!("failed to reach Plex resources: {error}"))
+        })?;
+    if !response.status().is_success() {
+        return Err(AppError::Repository(format!(
+            "Plex resources discovery failed with status {}",
+            response.status()
+        )));
+    }
+    let resources = response.text().await.map_err(|error| {
+        AppError::Repository(format!("invalid Plex resources response: {error}"))
+    })?;
+    let server_url = plex_server_url(&resources, machine_id)?.ok_or_else(|| {
+        AppError::Repository("configured Plex server has no reachable URI".into())
+    })?;
+    let server_url = media_server_url(&server_url)?;
+    let sections = plex_json(
+        &verifier.client,
+        server_url
+            .join("library/sections")
+            .map_err(|error| AppError::Repository(error.to_string()))?,
+        token,
+    )
+    .await?;
+    let mut catalog = Vec::new();
+    let mut catalog_keys = HashSet::new();
+    for section in plex_entries(&sections, "Directory") {
+        let section_type = section.get("type").and_then(Value::as_str);
+        if !matches!(section_type, Some("movie") | Some("show")) {
+            continue;
+        }
+        let Some(key) = section.get("key").and_then(Value::as_str) else {
+            continue;
+        };
+        let endpoint_name = if recent_only { "recentlyAdded" } else { "all" };
+        let endpoint = server_url
+            .join(&format!("library/sections/{key}/{endpoint_name}"))
+            .map_err(|error| AppError::Repository(error.to_string()))?;
+        let values = plex_paginated_entries(&verifier.client, endpoint, token, recent_only).await?;
+        for value in values {
+            let Some(item) =
+                hydrate_plex_catalog_item(&verifier.client, &server_url, token, &value).await?
+            else {
+                continue;
+            };
+            if item.kind == MediaServerCatalogItemKind::Episode
+                && let Some(series_id) = item.series_provider_item_id.as_deref()
+            {
+                let series_key = (MediaServerCatalogItemKind::Series, series_id.to_string());
+                if !catalog_keys.contains(&series_key)
+                    && let Some(series) =
+                        plex_metadata_catalog_item(&verifier.client, &server_url, token, series_id)
+                            .await?
+                {
+                    catalog_keys.insert(series_key);
+                    catalog.push(series);
+                }
+            }
+            let is_series = item.kind == MediaServerCatalogItemKind::Series;
+            let series_id = item.provider_item_id.clone();
+            if catalog_keys.insert((item.kind, item.provider_item_id.clone())) {
+                catalog.push(item);
+            }
+            if is_series {
+                let endpoint = server_url
+                    .join(&format!("library/metadata/{series_id}/allLeaves"))
+                    .map_err(|error| AppError::Repository(error.to_string()))?;
+                for episode in plex_paginated_entries(&verifier.client, endpoint, token, false)
+                    .await?
+                    .iter()
+                    .filter_map(plex_catalog_item)
+                {
+                    if catalog_keys.insert((episode.kind, episode.provider_item_id.clone())) {
+                        catalog.push(episode);
+                    }
+                }
+            }
+        }
+    }
+    Ok(catalog)
+}
+
+async fn hydrate_plex_catalog_item(
+    client: &reqwest::Client,
+    server_url: &Url,
+    token: &str,
+    value: &Value,
+) -> AppResult<Option<MediaServerCatalogItem>> {
+    let Some(item) = plex_catalog_item(value) else {
+        return Ok(None);
+    };
+    if item.kind == MediaServerCatalogItemKind::Episode || !item.external_ids.is_empty() {
+        return Ok(Some(item));
+    }
+    Ok(
+        plex_metadata_catalog_item(client, server_url, token, &item.provider_item_id)
+            .await?
+            .or(Some(item)),
+    )
+}
+
+async fn plex_metadata_catalog_item(
+    client: &reqwest::Client,
+    server_url: &Url,
+    token: &str,
+    provider_item_id: &str,
+) -> AppResult<Option<MediaServerCatalogItem>> {
+    let endpoint = server_url
+        .join(&format!("library/metadata/{provider_item_id}"))
+        .map_err(|error| AppError::Repository(error.to_string()))?;
+    let metadata = plex_json(client, endpoint, token).await?;
+    Ok(plex_entries(&metadata, "Metadata")
+        .first()
+        .and_then(plex_catalog_item))
+}
+
+async fn plex_paginated_entries(
+    client: &reqwest::Client,
+    url: Url,
+    token: &str,
+    single_page: bool,
+) -> AppResult<Vec<Value>> {
+    const PAGE_SIZE: usize = 500;
+    let mut start = 0usize;
+    let mut entries = Vec::new();
+    loop {
+        let mut page_url = url.clone();
+        page_url
+            .query_pairs_mut()
+            .append_pair("X-Plex-Container-Start", &start.to_string())
+            .append_pair("X-Plex-Container-Size", &PAGE_SIZE.to_string())
+            // Plex omits external identifiers unless this opt-in is present.
+            // Request them with each catalog page so full scans avoid one
+            // metadata request per movie or series just to obtain GUIDs.
+            .append_pair("includeGuids", "1");
+        let page = plex_json(client, page_url, token).await?;
+        let page_entries = plex_entries(&page, "Metadata");
+        let page_len = page_entries.len();
+        let container = page.get("MediaContainer");
+        let offset = container
+            .and_then(|container| json_value_usize(container.get("offset")))
+            .unwrap_or(start);
+        let total = container.and_then(|container| json_value_usize(container.get("totalSize")));
+        if start > 0 && offset < start {
+            return Ok(entries);
+        }
+        entries.extend(page_entries);
+        if single_page
+            || page_len == 0
+            || page_len < PAGE_SIZE
+            || total.is_some_and(|total| offset + page_len >= total)
+        {
+            return Ok(entries);
+        }
+        start = offset + page_len;
+    }
+}
+
+fn json_value_usize(value: Option<&Value>) -> Option<usize> {
+    value
+        .and_then(|value| {
+            value
+                .as_u64()
+                .map(|value| value.to_string())
+                .or_else(|| value.as_str().map(str::to_string))
+        })?
+        .parse()
+        .ok()
+}
+
+async fn plex_json(client: &reqwest::Client, url: Url, token: &str) -> AppResult<Value> {
+    let response = client
+        .get(url)
+        .header("Accept", "application/json")
+        .header("X-Plex-Token", token)
+        .send()
+        .await
+        .map_err(|error| AppError::Repository(format!("Plex catalog scan failed: {error}")))?;
+    if !response.status().is_success() {
+        return Err(AppError::Repository(format!(
+            "Plex catalog scan failed with status {}",
+            response.status()
+        )));
+    }
+    response
+        .json()
+        .await
+        .map_err(|error| AppError::Repository(format!("invalid Plex catalog response: {error}")))
+}
+
+fn plex_entries(value: &Value, key: &str) -> Vec<Value> {
+    value
+        .get("MediaContainer")
+        .and_then(|container| container.get(key))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+}
+
+fn plex_catalog_item(value: &Value) -> Option<MediaServerCatalogItem> {
+    let kind = match value.get("type")?.as_str()? {
+        "movie" => MediaServerCatalogItemKind::Movie,
+        "show" => MediaServerCatalogItemKind::Series,
+        "episode" => MediaServerCatalogItemKind::Episode,
+        _ => return None,
+    };
+    Some(MediaServerCatalogItem {
+        kind,
+        provider_item_id: json_value_string(value.get("ratingKey"))?,
+        external_ids: plex_provider_ids(value.get("Guid"))
+            .into_iter()
+            .chain(
+                value
+                    .get("guid")
+                    .and_then(Value::as_str)
+                    .and_then(plex_external_id),
+            )
+            .collect(),
+        series_provider_item_id: value
+            .get("grandparentRatingKey")
+            .and_then(|value| json_value_string(Some(value))),
+        season_number: value
+            .get("parentIndex")
+            .and_then(Value::as_i64)
+            .map(|value| value as i32),
+        episode_number: value
+            .get("index")
+            .and_then(Value::as_i64)
+            .map(|value| value as i32),
+        episode_number_end: None,
+    })
+}
+
+fn plex_provider_ids(value: Option<&Value>) -> Vec<ExternalId> {
+    value
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|value| value.get("id").and_then(Value::as_str))
+        .filter_map(plex_external_id)
+        .collect()
+}
+
+fn plex_external_id(value: &str) -> Option<ExternalId> {
+    let (raw_source, raw_value) = value.trim().split_once("://")?;
+    let source = match raw_source.trim().to_ascii_lowercase().as_str() {
+        "tmdb" | "themoviedb" | "com.plexapp.agents.tmdb" | "com.plexapp.agents.themoviedb" => {
+            "tmdb"
+        }
+        "tvdb" | "thetvdb" | "com.plexapp.agents.thetvdb" => "tvdb",
+        "imdb" | "com.plexapp.agents.imdb" => "imdb",
+        _ => return None,
+    };
+    let external_id = raw_value
+        .split('?')
+        .next()
+        .unwrap_or_default()
+        .split('/')
+        .next()
+        .unwrap_or_default()
+        .trim();
+    if external_id.is_empty() {
+        return None;
+    }
+    Some(ExternalId {
+        source: source.into(),
+        value: external_id.into(),
+    })
+}
+
+fn provider_ids(value: Option<&Value>) -> Vec<ExternalId> {
+    let Some(value) = value else {
+        return Vec::new();
+    };
+    match value {
+        Value::Object(values) => values
+            .iter()
+            .filter_map(|(source, value)| {
+                value.as_str().map(|value| ExternalId {
+                    source: source.clone(),
+                    value: value.to_string(),
+                })
+            })
+            .collect(),
+        Value::Array(values) => values
+            .iter()
+            .filter_map(|value| value.get("id").and_then(Value::as_str))
+            .filter_map(|value| {
+                value.split_once("://").map(|(source, id)| ExternalId {
+                    source: source.into(),
+                    value: id.into(),
+                })
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn media_server_url(value: &str) -> AppResult<Url> {
+    let mut url = Url::parse(value.trim())
+        .map_err(|error| AppError::Repository(format!("invalid media server URL: {error}")))?;
+    if !url.path().ends_with('/') {
+        url.set_path(&format!("{}/", url.path()));
+    }
+    Ok(url)
+}
+
+fn plex_server_url(resources_xml: &str, machine_id: &str) -> AppResult<Option<String>> {
+    let mut reader = Reader::from_str(resources_xml);
+    let mut selected = false;
+    let mut uris = Vec::new();
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(element)) => {
+                if element.name().as_ref() == "Device" {
+                    selected = element.attributes().flatten().any(|attribute| {
+                        matches!(
+                            attribute.key.as_ref(),
+                            "machineIdentifier" | "clientIdentifier"
+                        ) && attribute
+                            .normalized_value(XmlVersion::Implicit1_0)
+                            .ok()
+                            .as_deref()
+                            == Some(machine_id)
+                    });
+                } else if selected
+                    && element.name().as_ref() == "Connection"
+                    && let Some(uri) = element
+                        .attributes()
+                        .flatten()
+                        .find(|attribute| attribute.key.as_ref() == "uri")
+                        .and_then(|attribute| {
+                            attribute.normalized_value(XmlVersion::Implicit1_0).ok()
+                        })
+                        .map(|value| value.into_owned())
+                {
+                    uris.push(uri);
+                }
+            }
+            Ok(Event::Empty(element)) if selected && element.name().as_ref() == "Connection" => {
+                if let Some(uri) = element
+                    .attributes()
+                    .flatten()
+                    .find(|attribute| attribute.key.as_ref() == "uri")
+                    .and_then(|attribute| attribute.normalized_value(XmlVersion::Implicit1_0).ok())
+                    .map(|value| value.into_owned())
+                {
+                    uris.push(uri);
+                }
+            }
+            Ok(Event::End(element)) if element.name().as_ref() == "Device" => selected = false,
+            Ok(Event::Eof) => {
+                let https_uri = uris.iter().find(|uri| uri.starts_with("https://")).cloned();
+                return Ok(https_uri.or_else(|| uris.into_iter().next()));
+            }
             Err(error) => {
                 return Err(AppError::Repository(format!(
                     "invalid Plex resources XML: {error}"
@@ -1146,6 +1714,143 @@ mod tests {
 
     fn verifier_with_plex(plex_base_url: Url) -> HttpExternalIdentityVerifier {
         HttpExternalIdentityVerifier::with_plex_base_url(plex_base_url)
+    }
+
+    #[test]
+    fn plex_episode_catalog_item_accepts_string_parent_rating_key() {
+        let item = plex_catalog_item(&json!({
+            "type": "episode",
+            "ratingKey": "episode-12",
+            "grandparentRatingKey": "series-7",
+            "parentIndex": 2,
+            "index": 4
+        }))
+        .expect("episode should parse");
+
+        assert_eq!(item.series_provider_item_id.as_deref(), Some("series-7"));
+        assert_eq!(item.season_number, Some(2));
+        assert_eq!(item.episode_number, Some(4));
+    }
+
+    #[test]
+    fn plex_legacy_guids_map_only_compatible_external_ids() {
+        assert_eq!(
+            plex_external_id("com.plexapp.agents.themoviedb://550?lang=en"),
+            Some(ExternalId {
+                source: "tmdb".into(),
+                value: "550".into(),
+            })
+        );
+        assert_eq!(plex_external_id("plex://movie/internal-id"), None);
+        assert_eq!(
+            plex_provider_ids(Some(&json!([
+                { "id": "plex://movie/internal-id" },
+                { "id": "tmdb://550" }
+            ]))),
+            vec![ExternalId {
+                source: "tmdb".into(),
+                value: "550".into(),
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn plex_catalog_pagination_reads_every_page() {
+        let server = MockServer::start().await;
+        let first_page = (0..500)
+            .map(|index| json!({ "ratingKey": index.to_string() }))
+            .collect::<Vec<_>>();
+        Mock::given(method("GET"))
+            .and(path("/library"))
+            .and(query_param("X-Plex-Container-Start", "0"))
+            .and(query_param("X-Plex-Container-Size", "500"))
+            .and(query_param("includeGuids", "1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "MediaContainer": {
+                    "offset": 0,
+                    "size": 500,
+                    "totalSize": 501,
+                    "Metadata": first_page
+                }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/library"))
+            .and(query_param("X-Plex-Container-Start", "500"))
+            .and(query_param("X-Plex-Container-Size", "500"))
+            .and(query_param("includeGuids", "1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "MediaContainer": {
+                    "offset": 500,
+                    "size": 1,
+                    "totalSize": 501,
+                    "Metadata": [{ "ratingKey": "500" }]
+                }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let entries = plex_paginated_entries(
+            &generic_reqwest_client(),
+            Url::parse(&format!("{}/library", server.uri())).expect("mock URL"),
+            "token",
+            false,
+        )
+        .await
+        .expect("paginate Plex library");
+
+        assert_eq!(entries.len(), 501);
+        assert_eq!(
+            entries.last().and_then(|item| item.get("ratingKey")),
+            Some(&json!("500"))
+        );
+    }
+
+    #[tokio::test]
+    async fn plex_catalog_hydrates_missing_external_guids_from_metadata() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/library/metadata/10"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "MediaContainer": {
+                    "Metadata": [{
+                        "type": "movie",
+                        "ratingKey": "10",
+                        "guid": "plex://movie/internal",
+                        "Guid": [{ "id": "tmdb://550" }]
+                    }]
+                }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let server_url = media_server_url(&server.uri()).expect("server URL");
+
+        let item = hydrate_plex_catalog_item(
+            &generic_reqwest_client(),
+            &server_url,
+            "token",
+            &json!({
+                "type": "movie",
+                "ratingKey": "10",
+                "guid": "plex://movie/internal",
+                "Guid": [{ "id": "plex://movie/internal" }]
+            }),
+        )
+        .await
+        .expect("hydrate metadata")
+        .expect("movie should parse");
+
+        assert_eq!(
+            item.external_ids,
+            vec![ExternalId {
+                source: "tmdb".into(),
+                value: "550".into(),
+            }]
+        );
     }
 
     #[tokio::test]

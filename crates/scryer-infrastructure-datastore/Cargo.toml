@@ -1,6 +1,6 @@
 [package]
 name = "scryer-infrastructure-datastore"
-version = "0.18.21"
+version = "0.19.3"
 edition.workspace = true
 publish = false
 build = "build.rs"
@@ -8,6 +8,7 @@ build = "build.rs"
 [dependencies]
 scryer-domain = { path = "../scryer-domain" }
 scryer-application = { path = "../scryer-application" }
+scryer-rules = { path = "../scryer-rules" }
 scryer-infrastructure-sql = { path = "../scryer-infrastructure-sql" }
 scryer-infrastructure-crypto = { path = "../scryer-infrastructure-crypto" }
 scryer-infrastructure-library-search = { path = "../scryer-infrastructure-library-search" }

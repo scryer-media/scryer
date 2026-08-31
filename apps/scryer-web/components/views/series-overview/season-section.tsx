@@ -40,6 +40,7 @@ import type {
 } from "@/components/containers/series-overview-container";
 import type { ExternalSubtitleRecord } from "@/lib/types/subtitles";
 import type { DownloadQueueItem } from "@/lib/types/download-queue";
+import { sameDownloadQueueItem } from "@/lib/utils/download-queue";
 import {
   formatFileSize,
   isEpisodeCountableForProgress,
@@ -58,43 +59,7 @@ const EMPTY_INDEXER_PROGRESS: InteractiveSearchIndexerProgress[] = [];
 
 export { SeriesMovieTimelineSection } from "./series-movie-row";
 
-export function SeasonSection({
-  collection,
-  episodes,
-  episodesReady = true,
-  expanded,
-  facet,
-  onToggle,
-  initiallyOpenEpisodeId,
-  mediaFilesByEpisode,
-  onLoadEpisodeDetail,
-  downloadQueueItemByEpisodeId,
-  releaseBlocklistEntries,
-  clearingReleaseBlocklistEntryId,
-  subtitleDownloads,
-  onRefreshSubtitles,
-  searchResultsByEpisode,
-  searchIndexerProgressByEpisode,
-  searchLoadingByEpisode,
-  searchBlockedByEpisode,
-  onRunEpisodeSearch,
-  onOpenEpisodeHistory,
-  onQueueFromEpisodeSearch,
-  onQueueAdditionalFromEpisodeSearch,
-  autoSearchLoadingByEpisode,
-  onAutoSearchEpisode,
-  onClearReleaseBlocklistEntry,
-  onSetCollectionMonitored,
-  onSetEpisodeMonitored,
-  seasonSearchResults,
-  seasonSearchLoading,
-  searchBlocked = false,
-  onRunSeasonSearch,
-  onQueueFromSeasonSearch,
-  onDeleteFile,
-  onMakePrimaryFile,
-  primaryMovieFileUpdatingId = null,
-}: {
+type SeasonSectionProps = {
   collection: TitleCollection;
   facet: string;
   episodes: CollectionEpisode[];
@@ -104,6 +69,7 @@ export function SeasonSection({
   initiallyOpenEpisodeId?: string | null;
   mediaFilesByEpisode: Record<string, EpisodeMediaFile[]>;
   onLoadEpisodeDetail?: (episodeId: string) => Promise<void> | void;
+  activeDownloadEpisodeIds?: ReadonlySet<string>;
   downloadQueueItemByEpisodeId?: Record<string, DownloadQueueItem | undefined>;
   subtitleDownloads?: ExternalSubtitleRecord[];
   onRefreshSubtitles?: () => Promise<void> | void;
@@ -130,7 +96,101 @@ export function SeasonSection({
   onDeleteFile?: (fileId: string) => void;
   onMakePrimaryFile?: (fileId: string) => Promise<void> | void;
   primaryMovieFileUpdatingId?: string | null;
-}) {
+};
+
+const EPISODE_SCOPED_PROPS = new Set<keyof SeasonSectionProps>([
+  "activeDownloadEpisodeIds",
+  "autoSearchLoadingByEpisode",
+  "downloadQueueItemByEpisodeId",
+  "mediaFilesByEpisode",
+  "searchBlockedByEpisode",
+  "searchIndexerProgressByEpisode",
+  "searchLoadingByEpisode",
+  "searchResultsByEpisode",
+]);
+
+function sameSeasonSectionProps(
+  previous: SeasonSectionProps,
+  next: SeasonSectionProps,
+): boolean {
+  for (const key of [
+    ...new Set([...Object.keys(previous), ...Object.keys(next)]),
+  ] as (keyof SeasonSectionProps)[]) {
+    if (!EPISODE_SCOPED_PROPS.has(key) && !Object.is(previous[key], next[key])) {
+      return false;
+    }
+  }
+
+  for (const episode of previous.episodes) {
+    const episodeId = episode.id;
+    if (
+      (previous.activeDownloadEpisodeIds?.has(episodeId) ?? false) !==
+        (next.activeDownloadEpisodeIds?.has(episodeId) ?? false) ||
+      previous.autoSearchLoadingByEpisode[episodeId] !==
+        next.autoSearchLoadingByEpisode[episodeId] ||
+      previous.mediaFilesByEpisode[episodeId] !== next.mediaFilesByEpisode[episodeId] ||
+      previous.searchBlockedByEpisode[episodeId] !== next.searchBlockedByEpisode[episodeId] ||
+      previous.searchIndexerProgressByEpisode[episodeId] !==
+        next.searchIndexerProgressByEpisode[episodeId] ||
+      previous.searchLoadingByEpisode[episodeId] !== next.searchLoadingByEpisode[episodeId] ||
+      previous.searchResultsByEpisode[episodeId] !== next.searchResultsByEpisode[episodeId]
+    ) {
+      return false;
+    }
+
+    const previousQueueItem = previous.downloadQueueItemByEpisodeId?.[episodeId];
+    const nextQueueItem = next.downloadQueueItemByEpisodeId?.[episodeId];
+    if (
+      (previousQueueItem === undefined) !== (nextQueueItem === undefined) ||
+      (previousQueueItem !== undefined &&
+        nextQueueItem !== undefined &&
+        !sameDownloadQueueItem(previousQueueItem, nextQueueItem))
+    ) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function SeasonSectionImpl({
+  collection,
+  episodes,
+  episodesReady = true,
+  expanded,
+  facet,
+  onToggle,
+  initiallyOpenEpisodeId,
+  mediaFilesByEpisode,
+  onLoadEpisodeDetail,
+  activeDownloadEpisodeIds,
+  downloadQueueItemByEpisodeId,
+  releaseBlocklistEntries,
+  clearingReleaseBlocklistEntryId,
+  subtitleDownloads,
+  onRefreshSubtitles,
+  searchResultsByEpisode,
+  searchIndexerProgressByEpisode,
+  searchLoadingByEpisode,
+  searchBlockedByEpisode,
+  onRunEpisodeSearch,
+  onOpenEpisodeHistory,
+  onQueueFromEpisodeSearch,
+  onQueueAdditionalFromEpisodeSearch,
+  autoSearchLoadingByEpisode,
+  onAutoSearchEpisode,
+  onClearReleaseBlocklistEntry,
+  onSetCollectionMonitored,
+  onSetEpisodeMonitored,
+  seasonSearchResults,
+  seasonSearchLoading,
+  searchBlocked = false,
+  onRunSeasonSearch,
+  onQueueFromSeasonSearch,
+  onDeleteFile,
+  onMakePrimaryFile,
+  primaryMovieFileUpdatingId = null,
+}: SeasonSectionProps) {
   const t = useTranslate();
   const isMobile = useIsMobile();
   const Chevron = expanded ? ChevronDown : ChevronRight;
@@ -444,6 +504,7 @@ export function SeasonSection({
                       onRefreshSubtitles={onRefreshSubtitles}
                       onRunEpisodeSearch={onRunEpisodeSearch}
                       onSetEpisodeMonitored={onSetEpisodeMonitored}
+                      downloadActive={activeDownloadEpisodeIds?.has(episode.id) ?? false}
                       queueItem={downloadQueueItemByEpisodeId?.[episode.id]}
                       releaseBlocklistEntries={releaseBlocklistEntries}
                       searchBlocked={searchBlockedByEpisode[episode.id] === true}
@@ -495,6 +556,7 @@ export function SeasonSection({
                         onRefreshSubtitles={onRefreshSubtitles}
                         onRunEpisodeSearch={onRunEpisodeSearch}
                         onSetEpisodeMonitored={onSetEpisodeMonitored}
+                        downloadActive={activeDownloadEpisodeIds?.has(episode.id) ?? false}
                         queueItem={downloadQueueItemByEpisodeId?.[episode.id]}
                         releaseBlocklistEntries={releaseBlocklistEntries}
                         searchBlocked={searchBlockedByEpisode[episode.id] === true}
@@ -512,3 +574,5 @@ export function SeasonSection({
     </div>
   );
 }
+
+export const SeasonSection = React.memo(SeasonSectionImpl, sameSeasonSectionProps);

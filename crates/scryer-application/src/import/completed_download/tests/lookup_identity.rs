@@ -1,4 +1,92 @@
 use super::*;
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+struct CompletedLookupRegistry {
+    ids: HashMap<String, scryer_domain::download_identity::DownloadId>,
+    failing_item_ids: HashSet<String>,
+}
+
+#[async_trait]
+impl crate::DownloadRegistryRepository for CompletedLookupRegistry {
+    async fn resolve_observation(
+        &self,
+        observation: &crate::ObservedClientJob,
+    ) -> AppResult<crate::ObservationResolution> {
+        if self.failing_item_ids.contains(&observation.locator.item_id) {
+            return Err(AppError::Repository(
+                "injected completed lookup registry failure".to_string(),
+            ));
+        }
+        let download_id = self
+            .ids
+            .get(&observation.locator.item_id)
+            .copied()
+            .ok_or_else(|| AppError::Repository("missing completed lookup registry id".into()))?;
+        Ok(crate::ObservationResolution::Resolved {
+            download_id,
+            newly_foreign: false,
+            attached: false,
+        })
+    }
+
+    async fn load_download(
+        &self,
+        _: &scryer_domain::download_identity::DownloadId,
+    ) -> AppResult<Option<crate::DownloadRecord>> {
+        Ok(None)
+    }
+
+    async fn load_binding(
+        &self,
+        _: &scryer_domain::download_identity::DownloadId,
+    ) -> AppResult<Option<crate::DownloadClientBindingRecord>> {
+        Ok(None)
+    }
+
+    async fn find_active_binding_by_locator(
+        &self,
+        _: &crate::ClientJobLocator,
+    ) -> AppResult<Option<crate::DownloadClientBindingRecord>> {
+        Ok(None)
+    }
+
+    async fn end_binding(&self, _: &scryer_domain::download_identity::DownloadId) -> AppResult<()> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Default)]
+struct DownloadIdentityResolverWarningRecorder {
+    warnings: Arc<AtomicUsize>,
+}
+
+impl tracing::Subscriber for DownloadIdentityResolverWarningRecorder {
+    fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+        metadata.target() == "download_identity_resolver"
+            && *metadata.level() == tracing::Level::WARN
+    }
+
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+
+    fn event(&self, event: &tracing::Event<'_>) {
+        if event.metadata().target() == "download_identity_resolver"
+            && *event.metadata().level() == tracing::Level::WARN
+        {
+            self.warnings.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    fn enter(&self, _: &tracing::span::Id) {}
+
+    fn exit(&self, _: &tracing::span::Id) {}
+}
 
 #[test]
 fn completed_download_lookup_keeps_same_native_id_from_different_clients() {
@@ -132,6 +220,7 @@ async fn check_with_lookup_matches_qbit_torrent_hash_download_id() {
     submission_repo
         .record_submission_with_identity(
             DownloadSubmission {
+    download_id: scryer_domain::download_identity::DownloadId::new(),
                 title_id: title.id.clone(),
                 purpose: crate::DownloadSubmissionPurpose::Standard,
                 facet: title.facet.as_str().to_string(),
@@ -143,6 +232,7 @@ async fn check_with_lookup_matches_qbit_torrent_hash_download_id() {
                 source_provider_name: None,
                 source_kind: Some(crate::DownloadSourceKind::TorrentFile),
                 source_title: Some(release_title.to_string()),
+                info_hash: None,
                 release_size_bytes: None,
                 request_signature: Some(
                     "torrent_file|http://torrent-indexer/download/paperman.torrent|Paperman.2012.720p.WEB-DL.AV1.AAC2.0-NTb"
@@ -151,6 +241,7 @@ async fn check_with_lookup_matches_qbit_torrent_hash_download_id() {
                 scope: crate::SubmissionScope::Title,
             },
             accepted_identity,
+            None,
         )
         .await
         .expect("record submission");
@@ -366,7 +457,7 @@ async fn check_with_recent_lookup_retries_local_identity_miss_without_manual_blo
     let identity = DownloadSubmissionIdentity {
         download_id: Some(download_id.to_string()),
     };
-    let source_identity = DownloadSourceIdentity::new(Some("client-1"), "nzbget", "dl-1");
+    let source_identity = ClientJobLocator::new(Some("client-1"), "nzbget", "dl-1");
     let submission_repo = Arc::new(TestDownloadSubmissionRepo::default());
     let app = build_app_with_download_client_configs_and_submissions(
         vec![title.clone()],
@@ -413,11 +504,7 @@ async fn check_with_lookup_uses_durable_terminal_state_before_redispatch() {
     submission_repo
         .record_identity_tracked_state(
             &identity,
-            Some(&DownloadSourceIdentity::new(
-                Some("client-1"),
-                "nzbget",
-                "dl-1",
-            )),
+            Some(&ClientJobLocator::new(Some("client-1"), "nzbget", "dl-1")),
             TrackedDownloadState::Imported.as_str(),
             None,
             None,
@@ -457,8 +544,8 @@ async fn check_with_lookup_does_not_apply_client_local_terminal_state_from_other
     let identity = DownloadSubmissionIdentity {
         download_id: Some(download_id.to_string()),
     };
-    let other_client_source = DownloadSourceIdentity::new(Some("client-2"), "nzbget", "dl-1");
-    let current_client_source = DownloadSourceIdentity::new(Some("client-1"), "nzbget", "dl-1");
+    let other_client_source = ClientJobLocator::new(Some("client-2"), "nzbget", "dl-1");
+    let current_client_source = ClientJobLocator::new(Some("client-1"), "nzbget", "dl-1");
     let submission_repo = Arc::new(TestDownloadSubmissionRepo::default());
     submission_repo
         .record_identity_tracked_state(
@@ -697,4 +784,145 @@ async fn load_completed_download_lookup_for_items_uses_type_scope_for_idless_ite
     assert_eq!(calls.len(), 1);
     assert!(calls[0].0.is_empty());
     assert_eq!(calls[0].1, vec!["qbittorrent".to_string()]);
+}
+
+#[tokio::test]
+async fn completed_lookup_indexes_token_locator_and_legacy_identity_observations_by_one_canonical_id()
+ {
+    let canonical_download_id = scryer_domain::download_identity::DownloadId::new();
+    let registry = Arc::new(CompletedLookupRegistry {
+        ids: HashMap::from([
+            ("token-observation".to_string(), canonical_download_id),
+            ("locator-observation".to_string(), canonical_download_id),
+            ("legacy-observation".to_string(), canonical_download_id),
+        ]),
+        failing_item_ids: HashSet::new(),
+    });
+    let app = build_app(vec![], vec![], vec![], vec![])
+        .with_test_overrides(|services| services.with_download_registry(registry));
+
+    let mut token = build_completed_download("Token", "/downloads/token", Some("movie"));
+    token.download_client_item_id = "token-observation".to_string();
+    token.download_id = Some(canonical_download_id.to_wire());
+    let mut locator = build_completed_download("Locator", "/downloads/locator", Some("movie"));
+    locator.download_client_item_id = "locator-observation".to_string();
+    locator.download_id = None;
+    let mut legacy = build_completed_download("Legacy", "/downloads/legacy", Some("movie"));
+    legacy.download_client_item_id = "legacy-observation".to_string();
+    legacy.download_id = Some("legacy-client-identity".to_string());
+    let completed_downloads = vec![token, locator, legacy];
+
+    let resolutions = resolve_completed_download_observations(&app, &completed_downloads).await;
+    assert_eq!(
+        resolutions,
+        vec![
+            crate::download_identity::ObservedClientJobResolution::Resolved(canonical_download_id,),
+            crate::download_identity::ObservedClientJobResolution::Resolved(canonical_download_id,),
+            crate::download_identity::ObservedClientJobResolution::Resolved(canonical_download_id,),
+        ]
+    );
+    let canonical_download_ids = resolutions
+        .into_iter()
+        .map(|resolution| match resolution {
+            crate::download_identity::ObservedClientJobResolution::Resolved(download_id) => {
+                Some(download_id)
+            }
+            crate::download_identity::ObservedClientJobResolution::Conflict
+            | crate::download_identity::ObservedClientJobResolution::Unavailable => {
+                panic!("canonical observations should resolve")
+            }
+        })
+        .collect();
+    let lookup = index_completed_downloads_with_canonical_download_ids(
+        completed_downloads,
+        canonical_download_ids,
+        CompletedDownloadLookupCoverage::Recent,
+    );
+    assert_eq!(lookup.by_canonical.len(), 1);
+
+    for observation_shape in ["token", "locator", "legacy"] {
+        let mut td = build_tracked_download("title-1", "movie", observation_shape);
+        td.download_id = canonical_download_id;
+        td.client_item.download_client_item_id = format!("tracked-{observation_shape}");
+
+        let found = find_completed_download_in_lookup(&lookup, &td)
+            .expect("canonical lookup should resolve the completed download");
+        assert_eq!(found.download_client_item_id, "legacy-observation");
+    }
+}
+
+#[test]
+fn completed_lookup_without_canonical_id_uses_the_legacy_route() {
+    let completed = build_completed_download("Legacy", "/downloads/legacy", Some("movie"));
+    let lookup =
+        index_completed_downloads(vec![completed], CompletedDownloadLookupCoverage::Recent);
+    let mut td = build_tracked_download("title-1", "movie", "Legacy");
+    td.download_id =
+        scryer_domain::download_identity::DownloadId::parse("00000000-0000-0000-0000-000000000000")
+            .expect("legacy fallback id");
+
+    assert_lookup_matches_tracked_download(&lookup, &td, true);
+}
+
+#[tokio::test]
+async fn completed_lookup_registry_failure_keeps_that_item_available_to_legacy_matching() {
+    let registry = Arc::new(CompletedLookupRegistry {
+        ids: HashMap::new(),
+        failing_item_ids: HashSet::from(["failed-observation".to_string()]),
+    });
+    let app = build_app(vec![], vec![], vec![], vec![])
+        .with_test_overrides(|services| services.with_download_registry(registry));
+    let mut completed = build_completed_download("Legacy", "/downloads/legacy", Some("movie"));
+    completed.download_client_item_id = "failed-observation".to_string();
+    let resolutions = resolve_completed_download_observations(&app, &[completed.clone()]).await;
+    assert_eq!(
+        resolutions,
+        vec![crate::download_identity::ObservedClientJobResolution::Unavailable]
+    );
+    let canonical_download_ids = resolutions
+        .into_iter()
+        .map(|resolution| match resolution {
+            crate::download_identity::ObservedClientJobResolution::Unavailable => None,
+            crate::download_identity::ObservedClientJobResolution::Resolved(_)
+            | crate::download_identity::ObservedClientJobResolution::Conflict => {
+                panic!("registry failure should remain unavailable")
+            }
+        })
+        .collect();
+    let lookup = index_completed_downloads_with_canonical_download_ids(
+        vec![completed],
+        canonical_download_ids,
+        CompletedDownloadLookupCoverage::Recent,
+    );
+    let mut td = build_tracked_download("title-1", "movie", "Legacy");
+    td.download_id =
+        scryer_domain::download_identity::DownloadId::parse("00000000-0000-0000-0000-000000000000")
+            .expect("legacy fallback id");
+    td.client_item.download_client_item_id = "failed-observation".to_string();
+
+    assert_lookup_matches_tracked_download(&lookup, &td, true);
+}
+
+#[test]
+fn completed_lookup_divergence_uses_legacy_result_and_warns() {
+    let canonical_download_id = scryer_domain::download_identity::DownloadId::new();
+    let legacy = build_completed_download("Legacy", "/downloads/legacy", Some("movie"));
+    let mut canonical =
+        build_completed_download("Canonical", "/downloads/canonical", Some("movie"));
+    canonical.download_client_item_id = "canonical-observation".to_string();
+    let mut lookup =
+        index_completed_downloads(vec![legacy], CompletedDownloadLookupCoverage::Recent);
+    lookup.by_canonical.insert(canonical_download_id, canonical);
+    let mut td = build_tracked_download("title-1", "movie", "Legacy");
+    td.download_id = canonical_download_id;
+
+    let recorder = DownloadIdentityResolverWarningRecorder::default();
+    let warnings = recorder.warnings.clone();
+    let found = tracing::subscriber::with_default(recorder, || {
+        find_completed_download_in_lookup(&lookup, &td)
+            .expect("the legacy result should be selected")
+    });
+
+    assert_eq!(found.download_client_item_id, "dl-1");
+    assert_eq!(warnings.load(Ordering::SeqCst), 1);
 }

@@ -486,6 +486,8 @@ pub enum DownloadDisplayStateValue {
     PostProcessing,
     /// Download and processing completed.
     Completed,
+    /// Import completed, but the torrent remains managed while seeding.
+    ImportedSeeding,
     /// Download or processing failed.
     Failed,
     /// The client reports a recoverable problem on a download that is still
@@ -537,6 +539,8 @@ pub enum DownloadActivityFilterValue {
     Paused,
     /// Include post-processing items.
     PostProcessing,
+    /// Include imported torrents still retained for seeding.
+    Seeding,
     /// Include items the client reported a recoverable problem for.
     Warning,
 }
@@ -547,6 +551,8 @@ pub enum DownloadActivityFilterValue {
 pub enum DownloadImportFilterValue {
     /// Include every import state.
     All,
+    /// Include imports awaiting attention rather than actively executing.
+    Attention,
     /// Include imports currently running.
     Importing,
     /// Include imports awaiting action.
@@ -1092,12 +1098,18 @@ pub enum ImportSkipReasonValue {
     UnparseableEpisode,
     /// No video files were found.
     NoVideoFiles,
+    /// The download client is still writing or unpacking the source file.
+    DownloadInProgress,
     /// Storage is full.
     DiskFull,
     /// Permission was denied.
     PermissionDenied,
     /// A password is required before retrying.
     PasswordRequired,
+    /// An archive extractor must be installed or enabled before retrying.
+    ArchiveExtractionPluginRequired,
+    /// Archive extraction exceeded its configured time limit.
+    ArchiveExtractionTimedOut,
 }
 
 impl ImportSkipReasonValue {
@@ -1110,9 +1122,14 @@ impl ImportSkipReasonValue {
             ImportSkipReason::UnresolvedIdentity => Self::UnresolvedIdentity,
             ImportSkipReason::UnparseableEpisode => Self::UnparseableEpisode,
             ImportSkipReason::NoVideoFiles => Self::NoVideoFiles,
+            ImportSkipReason::DownloadInProgress => Self::DownloadInProgress,
             ImportSkipReason::DiskFull => Self::DiskFull,
             ImportSkipReason::PermissionDenied => Self::PermissionDenied,
             ImportSkipReason::PasswordRequired => Self::PasswordRequired,
+            ImportSkipReason::ArchiveExtractionPluginRequired => {
+                Self::ArchiveExtractionPluginRequired
+            }
+            ImportSkipReason::ArchiveExtractionTimedOut => Self::ArchiveExtractionTimedOut,
         }
     }
 }
@@ -1176,6 +1193,8 @@ impl RecapPolicyValue {
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
 #[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
 pub enum ImportTransferPhaseValue {
+    /// Archive contents are being extracted before file transfer.
+    Extracting,
     /// File bytes are being copied.
     Copying,
     /// Transfer is finalizing metadata and filesystem state.
@@ -1185,6 +1204,7 @@ pub enum ImportTransferPhaseValue {
 impl From<ImportTransferPhase> for ImportTransferPhaseValue {
     fn from(value: ImportTransferPhase) -> Self {
         match value {
+            ImportTransferPhase::Extracting => Self::Extracting,
             ImportTransferPhase::Copying => Self::Copying,
             ImportTransferPhase::Finalizing => Self::Finalizing,
         }
@@ -1614,4 +1634,14 @@ pub enum PendingReleaseStatusValue {
     Dismissed,
     /// Candidate needs manual review.
     NeedsReview,
+}
+
+/// Arbitration role of an active pending release candidate.
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+pub enum PendingReleaseRoleValue {
+    /// The highest-ranked active candidate for its overlap group.
+    Primary,
+    /// A lower-ranked active candidate retained as a fallback.
+    Fallback,
 }

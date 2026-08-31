@@ -4,8 +4,8 @@ use crate::import_title_resolution::normalize_imdb_id;
 use crate::stored_paths::{path_to_stored_string, stored_path_to_path_buf};
 use crate::{
     AcquisitionScopeCompleteTransition, AcquisitionScopeStatesQuery, AppError, AppResult,
-    AppUseCase, DownloadSourceIdentity, DownloadSubmission, DownloadSubmissionIdentity,
-    ImportArtifact, ParsedReleaseMetadata, SubmissionScope,
+    AppUseCase, ClientJobLocator, DownloadSubmission, DownloadSubmissionIdentity, ImportArtifact,
+    ParsedReleaseMetadata, SubmissionScope,
     activity::NotificationMediaUpdate,
     app_usecase_post_processing::{PostProcessingContext, spawn_post_processing},
     apply_remote_path_mappings_to_completed_download,
@@ -29,6 +29,7 @@ use scryer_domain::{
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const IMPORT_TRANSFER_PROGRESS_MIN_INTERVAL: Duration = Duration::from_secs(1);
@@ -58,6 +59,57 @@ fn should_persist_import_transfer_heartbeat(last_emit: Option<Instant>) -> bool 
     last_emit.is_none_or(|instant| instant.elapsed() >= IMPORT_TRANSFER_HEARTBEAT_INTERVAL)
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ImportDestinationOwnership {
+    episode_ids: Vec<String>,
+    series_movie_link_ids: Vec<String>,
+}
+
+impl ImportDestinationOwnership {
+    pub(crate) fn title() -> Self {
+        Self {
+            episode_ids: Vec::new(),
+            series_movie_link_ids: Vec::new(),
+        }
+    }
+
+    pub(crate) fn episodes(episode_ids: &[String]) -> Self {
+        Self {
+            episode_ids: episode_ids.to_vec(),
+            series_movie_link_ids: Vec::new(),
+        }
+    }
+
+    pub(crate) fn series_movie(
+        series_movie_link_id: &str,
+        linked_episode_id: Option<&str>,
+    ) -> Self {
+        Self {
+            episode_ids: linked_episode_id.map(str::to_string).into_iter().collect(),
+            series_movie_link_ids: vec![series_movie_link_id.to_string()],
+        }
+    }
+
+    pub(crate) fn upgrade(episode_ids: &[String], existing_file: &crate::TitleMediaFile) -> Self {
+        let episode_ids = if episode_ids.is_empty() {
+            existing_file.episode_id.iter().cloned().collect()
+        } else {
+            episode_ids.to_vec()
+        };
+        Self {
+            episode_ids,
+            series_movie_link_ids: existing_file.series_movie_link_ids.clone(),
+        }
+    }
+
+    fn associations(&self) -> crate::MediaFileAssociations {
+        crate::MediaFileAssociations {
+            episode_ids: self.episode_ids.clone(),
+            series_movie_link_ids: self.series_movie_link_ids.clone(),
+        }
+    }
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "import progress wiring carries source, destination, library, and source validation context"
@@ -67,18 +119,33 @@ pub(crate) async fn import_file_with_record_progress(
     import_id: &str,
     library_id: &str,
     facet: &scryer_domain::MediaFacet,
+    ownership: &ImportDestinationOwnership,
     source: &Path,
     dest: &Path,
     mode: scryer_domain::ImportMode,
     expected_source: Option<&scryer_domain::ImportSourceSnapshot>,
-) -> AppResult<scryer_domain::ImportFileResult> {
+    completed: Option<&scryer_domain::CompletedDownload>,
+) -> AppResult<CoordinatedImportFileResult> {
+    let destination_permit = app
+        .runtime
+        .imports
+        .execution_coordinator
+        .acquire_destination(dest)
+        .await;
     let permissions = app
         .resolve_import_file_permissions(Some(library_id), facet)
         .await?;
+    let active_stream = app
+        .runtime
+        .imports
+        .active_streams
+        .register(import_id, library_id, facet.clone(), source, dest)
+        .await;
     let (progress_tx, mut progress_rx) =
         tokio::sync::mpsc::unbounded_channel::<crate::ImportFileTransferProgress>();
     let progress_app = app.clone();
     let progress_import_id = import_id.to_string();
+    let progress_stream = active_stream.clone();
     let progress_task = tokio::spawn(async move {
         let mut last_phase = None;
         let mut last_bytes = 0u64;
@@ -93,6 +160,9 @@ pub(crate) async fn import_file_with_record_progress(
                     let Some(progress) = maybe_progress else {
                         break;
                     };
+                    progress_stream
+                        .update_transfer(progress.phase, progress.bytes, progress.total_bytes)
+                        .await;
                     last_progress = Some(progress.clone());
                     if !should_persist_import_transfer_progress(
                         &progress, last_phase, last_bytes, last_emit,
@@ -158,25 +228,179 @@ pub(crate) async fn import_file_with_record_progress(
         }
     });
 
+    let execution_context = crate::ImportFileExecutionContext::new(
+        completed.map_or("", |item| item.client_id.as_str()),
+        completed.map_or("", |item| item.client_type.as_str()),
+    )
+    .with_active_import_stream(active_stream.clone());
     let result = app
         .services
         .workflow
         .file_importer
-        .import_file_with_progress_and_permissions(
+        .import_file_with_execution_context(
             source,
             dest,
             mode,
             expected_source,
             Some(progress_tx),
             &permissions,
+            &execution_context,
         )
         .await;
+
+    if matches!(&result, Err(AppError::Canceled(_))) {
+        let temporary_destination = dest.with_extension("tmp_import");
+        if let Err(error) = std::fs::remove_file(&temporary_destination)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(
+                import_id,
+                path = %temporary_destination.display(),
+                error = %error,
+                "failed to remove cancelled import temporary destination"
+            );
+        }
+    }
 
     if let Err(error) = progress_task.await {
         tracing::warn!(import_id, error = %error, "import transfer progress task failed");
     }
 
-    result
+    active_stream.finish().await;
+
+    let result = result?;
+    let finalization_permit = app
+        .runtime
+        .imports
+        .execution_coordinator
+        .acquire_finalization()
+        .await;
+    Ok(CoordinatedImportFileResult {
+        result,
+        ownership: ownership.clone(),
+        _finalization_permit: finalization_permit,
+        destination_permit: Arc::new(destination_permit),
+    })
+}
+
+impl AppUseCase {
+    pub async fn list_active_import_streams(
+        &self,
+        actor: &User,
+    ) -> AppResult<Vec<crate::ActiveImportStream>> {
+        let allowed_library_ids = self
+            .authorized_library_ids(actor, None, scryer_domain::LibraryPermission::View)
+            .await?;
+        Ok(self
+            .runtime
+            .imports
+            .active_streams
+            .snapshot()
+            .await
+            .into_iter()
+            .filter(|stream| allowed_library_ids.contains(&stream.library_id))
+            .collect())
+    }
+
+    pub async fn subscribe_active_import_streams(
+        &self,
+        actor: &User,
+    ) -> AppResult<tokio::sync::watch::Receiver<crate::ActiveImportStreamSync>> {
+        if self
+            .authorized_library_ids(actor, None, scryer_domain::LibraryPermission::View)
+            .await?
+            .is_empty()
+        {
+            return Err(AppError::Unauthorized(
+                "You do not have access to any libraries".to_string(),
+            ));
+        }
+        Ok(self.runtime.imports.active_streams.subscribe())
+    }
+
+    pub async fn cancel_active_import_stream(
+        &self,
+        actor: &User,
+        stream_id: &str,
+    ) -> AppResult<()> {
+        let stream = self
+            .runtime
+            .imports
+            .active_streams
+            .get(stream_id)
+            .await
+            .ok_or_else(|| AppError::NotFound(format!("active import stream {stream_id}")))?;
+        self.require_library_permission(
+            actor,
+            &stream.library_id,
+            scryer_domain::LibraryPermission::ResolveImports,
+        )
+        .await?;
+        self.runtime
+            .imports
+            .active_streams
+            .request_cancel(stream_id)
+            .await
+            .ok_or_else(|| {
+                AppError::Validation("The import is no longer cancellable".to_string())
+            })?;
+        Ok(())
+    }
+}
+
+pub(crate) struct CoordinatedImportFileResult {
+    result: scryer_domain::ImportFileResult,
+    ownership: ImportDestinationOwnership,
+    _finalization_permit: tokio::sync::OwnedSemaphorePermit,
+    destination_permit: ImportDestinationPermit,
+}
+
+pub(crate) type ImportDestinationPermit = Arc<tokio::sync::OwnedMutexGuard<()>>;
+
+pub(crate) struct CoordinatedMediaFilePersistence {
+    pub(crate) media_file_id: String,
+    pub(crate) reused_existing: bool,
+    pub(crate) destination_created: bool,
+}
+
+impl CoordinatedImportFileResult {
+    pub(crate) async fn insert_or_reuse_media_file(
+        &self,
+        app: &AppUseCase,
+        input: &crate::InsertMediaFileInput,
+    ) -> AppResult<CoordinatedMediaFilePersistence> {
+        let associations = self.ownership.associations();
+        let destination_created = matches!(
+            self.result.destination_disposition,
+            scryer_domain::ImportDestinationDisposition::Created
+        );
+        let claimed = app
+            .services
+            .library
+            .media_files
+            .claim_import_destination(input, &associations)
+            .await?;
+        Ok(CoordinatedMediaFilePersistence {
+            media_file_id: claimed.media_file_id,
+            reused_existing: matches!(
+                claimed.disposition,
+                crate::MediaFileCatalogDisposition::Reused
+            ),
+            destination_created,
+        })
+    }
+
+    pub(crate) fn destination_permit(&self) -> ImportDestinationPermit {
+        Arc::clone(&self.destination_permit)
+    }
+}
+
+impl std::ops::Deref for CoordinatedImportFileResult {
+    type Target = scryer_domain::ImportFileResult;
+
+    fn deref(&self) -> &Self::Target {
+        &self.result
+    }
 }
 
 // This facade keeps the previous module scope while the former junk drawer is
@@ -185,6 +409,7 @@ include!("poller.rs");
 include!("completed.rs");
 include!("movie.rs");
 include!("series_movie.rs");
+include!("series_plan.rs");
 include!("series.rs");
 include!("paths.rs");
 include!("metadata.rs");

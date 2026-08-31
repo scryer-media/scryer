@@ -679,6 +679,9 @@ fn fixture_descriptor(
         provider: ProviderDescriptor::Indexer(IndexerDescriptor {
             provider_type: provider_type.to_string(),
             provider_aliases: vec![],
+            provider_profiles: vec![],
+            search_semantics_version: Some(1),
+            strategy_plan: None,
             source_kind,
             capabilities,
             scoring_policies: Vec::<crate::PluginScoringPolicy>::new(),

@@ -1,7 +1,5 @@
 use std::time::{Duration as StdDuration, Instant};
 
-use argon2::password_hash::SaltString;
-use argon2::password_hash::rand_core::OsRng;
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use aws_lc_rs::hmac;
 use aws_lc_rs::rand::{SecureRandom, SystemRandom};
@@ -100,10 +98,9 @@ impl AppUseCase {
             return Err(AppError::Validation("password is required".into()));
         }
 
-        let salt = SaltString::generate(&mut OsRng);
         let argon2 = Argon2::default();
         let phc_string = argon2
-            .hash_password(password.as_bytes(), &salt)
+            .hash_password(password.as_bytes())
             .map_err(|err| AppError::Repository(format!("password hashing failed: {err}")))?
             .to_string();
         Ok(format!("v2${phc_string}"))
@@ -315,8 +312,6 @@ impl AppUseCase {
             Ok(Argon2::default()
                 .verify_password(password.as_bytes(), &parsed)
                 .is_ok())
-        } else if password_hash.starts_with("v1$") {
-            self.validate_password_v1(password, password_hash)
         } else {
             Err(AppError::Validation(
                 "unsupported password hash version".into(),
@@ -324,41 +319,22 @@ impl AppUseCase {
         }
     }
 
+    /// Only Argon2id (`v2$`) hashes are accepted.
+    ///
+    /// The legacy `v1$<salt>$<sha256(salt+password)>` form is retired. Migration
+    /// 0191 clears any surviving `v1$` row and flags it for password reset, so a
+    /// stranded account fails closed with an explicit reason instead of being
+    /// silently unable to authenticate.
     pub(crate) fn validate_password_hash(&self, password_hash: &str) -> AppResult<()> {
         if let Some(phc_string) = password_hash.strip_prefix("v2$") {
             PasswordHash::new(phc_string)
                 .map(|_| ())
                 .map_err(|err| AppError::Validation(format!("invalid v2 password hash: {err}")))
-        } else if password_hash.starts_with("v1$") {
-            let mut parts = password_hash.splitn(3, '$');
-            let _ = parts.next(); // "v1"
-            parts.next().ok_or_else(|| {
-                AppError::Validation("invalid password hash: missing salt".into())
-            })?;
-            parts.next().ok_or_else(|| {
-                AppError::Validation("invalid password hash: missing hash".into())
-            })?;
-            Ok(())
         } else {
             Err(AppError::Validation(
                 "unsupported password hash version".into(),
             ))
         }
-    }
-
-    fn validate_password_v1(&self, password: &str, password_hash: &str) -> AppResult<bool> {
-        let mut parts = password_hash.splitn(3, '$');
-        let _ = parts.next(); // "v1"
-
-        let salt = parts
-            .next()
-            .ok_or_else(|| AppError::Validation("invalid password hash: missing salt".into()))?;
-        let stored_hash = parts
-            .next()
-            .ok_or_else(|| AppError::Validation("invalid password hash: missing hash".into()))?;
-
-        let candidate = sha256_hex(format!("{salt}{}", password));
-        Ok(candidate == stored_hash)
     }
 
     fn canonical_app_permission_claims(user: &User) -> Vec<String> {
@@ -438,7 +414,10 @@ impl AppUseCase {
             .map(|grant| format!("{}:{}", grant.library_id, grant.permissions.join(",")))
             .collect::<Vec<_>>()
             .join("\n");
-        sha256_hex(format!("app\n{app_claims}\nlibrary\n{library_claims}"))
+        crate::helpers::blake3_identity_hex(
+            crate::helpers::HashDomain::AuthorizationFingerprint,
+            format!("app\n{app_claims}\nlibrary\n{library_claims}"),
+        )
     }
 
     async fn auth_session_fingerprint(
@@ -1470,28 +1449,8 @@ impl AppUseCase {
             return Err(AppError::Unauthorized("invalid credentials".into()));
         }
 
-        // Online migration: re-hash v1 passwords with Argon2id on successful login.
-        // Must return the updated user so the caller's JWT signing key matches the DB.
-        if password_hash.starts_with("v1$")
-            && let Ok(new_hash) = self.hash_password(password)
-        {
-            match self
-                .services
-                .identity
-                .users
-                .update_password_hash(&user.id, new_hash, user.password_change_required)
-                .await
-            {
-                Ok(updated) => {
-                    self.cache_jwt_signing_key(&updated).await?;
-                    tracing::info!(user_id = %user.id, "migrated password hash from v1 to v2");
-                    return Ok(updated);
-                }
-                Err(err) => {
-                    tracing::warn!(user_id = %user.id, error = %err, "failed to migrate password hash from v1 to v2");
-                }
-            }
-        }
+        // The former online v1 → v2 re-hash on login is gone with the v1 format
+        // itself. Migration 0191 retires surviving v1 rows directly.
 
         self.cache_jwt_signing_key(&user).await?;
         Ok(user)

@@ -709,6 +709,35 @@ export const SettingsPostProcessingSection = React.memo(
   },
 );
 
+const ENV_METADATA_EXAMPLE = `{
+  "event": "post_import",
+  "facet": "series",
+  "file_path": "/data/series/...",
+  "title": {
+    "id": "...",
+    "name": "...",
+    "year": 2024,
+    "imdb_id": "tt...",
+    "tvdb_id": "..."
+  },
+  "episode": {
+    "season": 1,
+    "episode": 5
+  },
+  "release": {
+    "quality": "1080p"
+  }
+}`;
+
+const ENV_VARIABLES_EXAMPLE = `SCRYER_METADATA={...}
+SCRYER_EVENT=post_import
+SCRYER_FILE_PATH=/data/series/...
+SCRYER_FACET=series
+SCRYER_TITLE_NAME=Example Title
+SCRYER_TITLE_ID=...`;
+
+const ignoreEnvReferenceCodeChange = (_value: string) => undefined;
+
 function EnvVarsReference() {
   const t = useTranslate();
   const [open, setOpen] = React.useState(true);
@@ -731,36 +760,25 @@ function EnvVarsReference() {
         </p>
       </CardHeader>
       {open ? (
-        <CardContent className="text-sm">
-          <pre className="rounded border border-border bg-muted/50 p-3 text-xs leading-relaxed">
-{`{
-  "event": "post_import",
-  "facet": "series",
-  "file_path": "/data/series/...",
-  "title": {
-    "id": "...",
-    "name": "...",
-    "year": 2024,
-    "imdb_id": "tt...",
-    "tvdb_id": "..."
-  },
-  "episode": {
-    "season": 1,
-    "episode": 5
-  },
-  "release": {
-    "quality": "1080p"
-  }
-}`}
-          </pre>
-          <pre className="mt-3 rounded border border-border bg-muted/50 p-3 text-xs leading-relaxed">
-{`SCRYER_METADATA={...}
-SCRYER_EVENT=post_import
-SCRYER_FILE_PATH=/data/series/...
-SCRYER_FACET=series
-SCRYER_TITLE_NAME=Example Title
-SCRYER_TITLE_ID=...`}
-          </pre>
+        <CardContent className="space-y-3 text-sm">
+          <LazyCodeEditor
+            id="settings-post-processing-env-metadata-example"
+            value={ENV_METADATA_EXAMPLE}
+            onChange={ignoreEnvReferenceCodeChange}
+            readOnly
+            language="javascript"
+            minLines={21}
+            maxLines={21}
+          />
+          <LazyCodeEditor
+            id="settings-post-processing-env-variables-example"
+            value={ENV_VARIABLES_EXAMPLE}
+            onChange={ignoreEnvReferenceCodeChange}
+            readOnly
+            language="shell"
+            minLines={8}
+            maxLines={8}
+          />
         </CardContent>
       ) : null}
     </Card>

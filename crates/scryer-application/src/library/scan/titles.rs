@@ -41,6 +41,7 @@ fn index_movie_title(
     title: &Title,
     index: usize,
     existing_titles_by_name: &mut TitleNameIndex,
+    existing_titles_by_smg_id: &mut HashMap<String, usize>,
     existing_titles_by_tvdb_id: &mut HashMap<String, usize>,
     existing_titles_by_imdb_id: &mut HashMap<String, usize>,
     existing_titles_by_tmdb_id: &mut HashMap<String, usize>,
@@ -50,7 +51,9 @@ fn index_movie_title(
         index_title_name(existing_titles_by_name, alias, index);
     }
     for external_id in &title.external_ids {
-        if external_id.source.eq_ignore_ascii_case("tvdb") {
+        if external_id.source.eq_ignore_ascii_case("smg") {
+            existing_titles_by_smg_id.insert(external_id.value.clone(), index);
+        } else if external_id.source.eq_ignore_ascii_case("tvdb") {
             existing_titles_by_tvdb_id.insert(external_id.value.clone(), index);
         } else if external_id.source.eq_ignore_ascii_case("imdb")
             && let Some(imdb_id) = crate::normalize::normalize_imdb_id(&external_id.value)
@@ -87,6 +90,7 @@ fn index_series_title(
 pub(crate) fn append_movie_title(
     existing_titles: &mut Vec<Title>,
     existing_titles_by_name: &mut TitleNameIndex,
+    existing_titles_by_smg_id: &mut HashMap<String, usize>,
     existing_titles_by_tvdb_id: &mut HashMap<String, usize>,
     existing_titles_by_imdb_id: &mut HashMap<String, usize>,
     existing_titles_by_tmdb_id: &mut HashMap<String, usize>,
@@ -98,6 +102,7 @@ pub(crate) fn append_movie_title(
         &existing_titles[index],
         index,
         existing_titles_by_name,
+        existing_titles_by_smg_id,
         existing_titles_by_tvdb_id,
         existing_titles_by_imdb_id,
         existing_titles_by_tmdb_id,
@@ -162,10 +167,12 @@ pub(crate) type MovieTitleIndexes = (
     HashMap<String, usize>,
     HashMap<String, usize>,
     HashMap<String, usize>,
+    HashMap<String, usize>,
 );
 
 pub(crate) fn build_movie_title_indexes(existing_titles: &[Title]) -> MovieTitleIndexes {
     let mut existing_titles_by_name = HashMap::new();
+    let mut existing_titles_by_smg_id = HashMap::new();
     let mut existing_titles_by_tvdb_id = HashMap::new();
     let mut existing_titles_by_imdb_id = HashMap::new();
     let mut existing_titles_by_tmdb_id = HashMap::new();
@@ -175,6 +182,7 @@ pub(crate) fn build_movie_title_indexes(existing_titles: &[Title]) -> MovieTitle
             title,
             index,
             &mut existing_titles_by_name,
+            &mut existing_titles_by_smg_id,
             &mut existing_titles_by_tvdb_id,
             &mut existing_titles_by_imdb_id,
             &mut existing_titles_by_tmdb_id,
@@ -183,6 +191,7 @@ pub(crate) fn build_movie_title_indexes(existing_titles: &[Title]) -> MovieTitle
 
     (
         existing_titles_by_name,
+        existing_titles_by_smg_id,
         existing_titles_by_tvdb_id,
         existing_titles_by_imdb_id,
         existing_titles_by_tmdb_id,
@@ -282,19 +291,101 @@ pub(crate) fn find_existing_title_index_for_metadata_match(
         })
 }
 
+pub(crate) fn find_existing_movie_title_index_for_metadata_match(
+    selected: &MetadataSearchItem,
+    existing_titles: &[Title],
+    existing_titles_by_name: &TitleNameIndex,
+    existing_titles_by_smg_id: &HashMap<String, usize>,
+    existing_titles_by_tvdb_id: &HashMap<String, usize>,
+    existing_titles_by_imdb_id: &HashMap<String, usize>,
+    existing_titles_by_tmdb_id: &HashMap<String, usize>,
+) -> Option<usize> {
+    if let Some(smg_id) = selected.smg_id.map(|value| value.to_string())
+        && let Some(&index) = existing_titles_by_smg_id.get(&smg_id)
+    {
+        return Some(index);
+    }
+    if !selected.tvdb_id.trim().is_empty()
+        && let Some(&index) = existing_titles_by_tvdb_id.get(&selected.tvdb_id)
+    {
+        return Some(index);
+    }
+
+    for external_id in &selected.external_ids {
+        if external_id.source.eq_ignore_ascii_case("tmdb")
+            && let Some(&index) = existing_titles_by_tmdb_id.get(external_id.value.trim())
+        {
+            return Some(index);
+        }
+        if external_id.source.eq_ignore_ascii_case("imdb")
+            && let Some(imdb_id) = crate::normalize::normalize_imdb_id(&external_id.value)
+            && let Some(&index) = existing_titles_by_imdb_id.get(&imdb_id)
+        {
+            return Some(index);
+        }
+    }
+
+    find_existing_title_index_for_metadata_match(
+        selected,
+        existing_titles,
+        existing_titles_by_name,
+        existing_titles_by_tvdb_id,
+    )
+}
+
+fn push_metadata_match_external_id(external_ids: &mut Vec<ExternalId>, source: &str, value: &str) {
+    let value = value.trim();
+    if value.is_empty()
+        || external_ids
+            .iter()
+            .any(|external_id| external_id.source.eq_ignore_ascii_case(source))
+    {
+        return;
+    }
+
+    external_ids.push(ExternalId {
+        source: source.to_string(),
+        value: value.to_string(),
+    });
+}
+
 pub(crate) fn build_new_title_from_metadata_match(
     facet: &MediaFacet,
     selected: &MetadataSearchItem,
 ) -> NewTitle {
+    // The batched search returns smg/tmdb/imdb ids for every facet, and every
+    // facet keeps them. Indexer search subjects, RSS candidate indexes,
+    // notification payloads and the `externalIds` readback all read these ids
+    // without checking the facet, so a scan-created series or anime title must
+    // carry the same identity set a movie does.
+    let mut external_ids = Vec::new();
+    if let Some(smg_id) = selected.smg_id {
+        push_metadata_match_external_id(&mut external_ids, "smg", &smg_id.to_string());
+    }
+    push_metadata_match_external_id(&mut external_ids, "tvdb", &selected.tvdb_id);
+    for external_id in &selected.external_ids {
+        let source = if external_id.source.eq_ignore_ascii_case("smg") {
+            Some("smg")
+        } else if external_id.source.eq_ignore_ascii_case("tvdb") {
+            Some("tvdb")
+        } else if external_id.source.eq_ignore_ascii_case("tmdb") {
+            Some("tmdb")
+        } else if external_id.source.eq_ignore_ascii_case("imdb") {
+            Some("imdb")
+        } else {
+            None
+        };
+        if let Some(source) = source {
+            push_metadata_match_external_id(&mut external_ids, source, &external_id.value);
+        }
+    }
+
     NewTitle {
         name: selected.name.clone(),
         facet: facet.clone(),
         monitored: false,
         tags: vec![],
-        external_ids: vec![ExternalId {
-            source: "tvdb".into(),
-            value: selected.tvdb_id.clone(),
-        }],
+        external_ids,
         min_availability: None,
         year: selected.year,
         ..Default::default()

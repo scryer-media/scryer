@@ -1,39 +1,3 @@
-fn blocklist_episode_ids(data_json: Option<&str>) -> Vec<String> {
-    let Some(raw) = data_json else {
-        return Vec::new();
-    };
-
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) else {
-        return Vec::new();
-    };
-
-    let mut ids = Vec::new();
-
-    if let Some(episode_id) = value.get("episode_id").and_then(serde_json::Value::as_str) {
-        let trimmed = episode_id.trim();
-        if !trimmed.is_empty() {
-            ids.push(trimmed.to_string());
-        }
-    }
-
-    if let Some(episode_ids) = value
-        .get("episode_ids")
-        .and_then(serde_json::Value::as_array)
-    {
-        for episode_id in episode_ids
-            .iter()
-            .filter_map(serde_json::Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            if !ids.iter().any(|existing| existing == episode_id) {
-                ids.push(episode_id.to_string());
-            }
-        }
-    }
-
-    ids
-}
 fn anibridge_scoped_external_ids_from_mappings(
     anime_mappings: &[AnimeMapping],
     season_number_to_collection: &HashMap<i32, String>,
@@ -135,6 +99,7 @@ async fn sync_series_movie_links(
     app: &AppUseCase,
     title: &Title,
     anime_movies: &[&AnimeMovie],
+    movie_metadata: &HashMap<i64, crate::MovieMetadata>,
     anime_mappings: &[AnimeMapping],
     season_last_aired: &std::collections::BTreeMap<i32, String>,
     episodes_by_number: &HashMap<(i32, i32), Episode>,
@@ -209,7 +174,14 @@ async fn sync_series_movie_links(
                         .get(&(*season, *episode_number))
                         .map(|episode| episode.id.clone())
                 });
-            let movie_entity = movie_entity_from_anime_movie(movie);
+            let mut movie_entity = movie_entity_from_anime_movie(movie);
+            if let Some(metadata) = movie
+                .movie_tvdb_id
+                .and_then(|tvdb_id| movie_metadata.get(&tvdb_id))
+            {
+                movie_entity.ratings = Some(metadata.ratings.clone());
+                movie_entity.credits = Some(metadata.credits.clone());
+            }
             let link = series_movie_link_from_anime_movie(
                 &title.id,
                 movie,
@@ -217,6 +189,7 @@ async fn sync_series_movie_links(
                 narrative_order,
                 *after_season,
                 linked_episode_id,
+                title_policy_monitors_series_movie(title, movie.continuity_status.as_str(), true),
             );
 
             match app
@@ -249,12 +222,49 @@ async fn sync_series_movie_links(
         warn!(
             title_id = %title.id,
             error = %err,
-            "failed to prune stale series movie links"
+            "failed to deactivate stale series movie links"
         );
+    }
+
+    match app
+        .services
+        .catalog
+        .shows
+        .list_series_movie_links_for_title(&title.id)
+        .await
+    {
+        Ok(links) => {
+            for link in links.into_iter().filter(|link| {
+                link.source.as_deref() == Some("anibridge")
+                    && !link.metadata_active
+                    && link.monitoring_override != Some(true)
+            }) {
+                if let Err(err) = app
+                    .services
+                    .workflow
+                    .acquisition_scope_states
+                    .delete_acquisition_scope_states_for_series_movie_link(&link.id)
+                    .await
+                {
+                    warn!(
+                        title_id = %title.id,
+                        series_movie_link_id = %link.id,
+                        error = %err,
+                        "failed to clear acquisition state for inactive series movie link"
+                    );
+                }
+            }
+        }
+        Err(err) => warn!(
+            title_id = %title.id,
+            error = %err,
+            "failed to load inactive series movie links after metadata sync"
+        ),
     }
 }
 
 impl AppUseCase {
+    #[cfg(test)]
     pub(crate) async fn create_series_seasons_and_episodes(
         &self,
         title: &Title,
@@ -262,6 +272,26 @@ impl AppUseCase {
         episodes: &[EpisodeMetadata],
         anime_mappings: &[AnimeMapping],
         anime_movies: &[AnimeMovie],
+    ) {
+        self.create_series_seasons_and_episodes_with_movie_metadata(
+            title,
+            seasons,
+            episodes,
+            anime_mappings,
+            anime_movies,
+            &HashMap::new(),
+        )
+        .await;
+    }
+
+    pub(crate) async fn create_series_seasons_and_episodes_with_movie_metadata(
+        &self,
+        title: &Title,
+        seasons: &[SeasonMetadata],
+        episodes: &[EpisodeMetadata],
+        anime_mappings: &[AnimeMapping],
+        anime_movies: &[AnimeMovie],
+        movie_metadata: &HashMap<i64, crate::MovieMetadata>,
     ) {
         let monitor_type = if title.monitored {
             extract_monitor_type(&title.tags)
@@ -698,6 +728,7 @@ impl AppUseCase {
                     self,
                     title,
                     &derived_anime_movies,
+                    movie_metadata,
                     anime_mappings,
                     &season_last_aired,
                     &episode_lookup_by_number,
@@ -981,6 +1012,36 @@ impl AppUseCase {
             .catalog
             .shows
             .list_series_movie_links_for_title(title_id)
+            .await
+    }
+
+    pub async fn get_movie_entity(
+        &self,
+        actor: &User,
+        title_id: &str,
+        movie_entity_id: &str,
+    ) -> AppResult<Option<scryer_domain::MovieEntity>> {
+        Ok(self
+            .list_series_movie_links(actor, title_id)
+            .await?
+            .into_iter()
+            .find(|link| link.movie.id == movie_entity_id)
+            .map(|link| link.movie))
+    }
+
+    pub async fn movie_entity_credits(
+        &self,
+        actor: &User,
+        title_id: &str,
+        movie_entity_id: &str,
+    ) -> AppResult<Vec<crate::TitleCredit>> {
+        self.get_movie_entity(actor, title_id, movie_entity_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("movie entity {movie_entity_id}")))?;
+        self.services
+            .catalog
+            .shows
+            .list_movie_entity_credits(movie_entity_id)
             .await
     }
 
@@ -1314,10 +1375,39 @@ impl AppUseCase {
             .await?;
         Ok(episodes
             .into_iter()
-            .filter(|episode| visible_library_ids.contains(&episode.library_id))
+            .filter(|episode| {
+                visible_library_ids.contains(&episode.library_id)
+                    && calendar_episode_is_visible(
+                        episode.season_number.as_deref(),
+                        episode.monitored,
+                    )
+            })
             .collect())
     }
 }
+
+fn calendar_episode_is_visible(season_number: Option<&str>, monitored: bool) -> bool {
+    monitored || season_number.and_then(|value| value.trim().parse::<i32>().ok()) != Some(0)
+}
+
+#[cfg(test)]
+mod calendar_episode_visibility_tests {
+    use super::calendar_episode_is_visible;
+
+    #[test]
+    fn hides_unmonitored_season_zero_episodes() {
+        assert!(!calendar_episode_is_visible(Some("0"), false));
+        assert!(!calendar_episode_is_visible(Some("00"), false));
+    }
+
+    #[test]
+    fn keeps_monitored_season_zero_and_regular_episodes() {
+        assert!(calendar_episode_is_visible(Some("0"), true));
+        assert!(calendar_episode_is_visible(Some("1"), false));
+        assert!(calendar_episode_is_visible(None, false));
+    }
+}
+
 fn normalize_episode_image_url(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {

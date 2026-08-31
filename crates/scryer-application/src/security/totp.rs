@@ -330,6 +330,32 @@ impl AppUseCase {
         ))
     }
 
+    pub async fn require_api_key_mfa_step_up(
+        &self,
+        actor: &User,
+        mfa_step_up_verified_until: Option<i64>,
+    ) -> AppResult<()> {
+        if mfa_step_up_verified_until.is_some_and(|expires_at| expires_at > Utc::now().timestamp())
+        {
+            return Ok(());
+        }
+
+        if self
+            .services
+            .identity
+            .totp
+            .get_credential_for_user(&actor.id)
+            .await?
+            .is_none()
+        {
+            return Ok(());
+        }
+
+        Err(AppError::MfaStepUpRequired(
+            "MFA verification is required before creating an API key".into(),
+        ))
+    }
+
     pub async fn verify_totp_for_user(&self, actor: &User, code: &str) -> AppResult<DateTime<Utc>> {
         let Some(mut credential) = self
             .services

@@ -223,13 +223,30 @@ pub fn from_title_credit(
     title_id: &str,
     credit: TitleCredit,
 ) -> TitleCreditPayload {
+    from_credit(app, "title", title_id, credit)
+}
+
+pub fn from_movie_entity_credit(
+    app: &AppUseCase,
+    movie_entity_id: &str,
+    credit: TitleCredit,
+) -> TitleCreditPayload {
+    from_credit(app, "movie", movie_entity_id, credit)
+}
+
+fn from_credit(
+    app: &AppUseCase,
+    owner_type: &str,
+    owner_id: &str,
+    credit: TitleCredit,
+) -> TitleCreditPayload {
     let person_image_url = Some(credit.person_image_url.trim())
         .filter(|url| !url.is_empty())
         .and_then(|url| {
             app.media_image_url(
                 Some(url),
-                Some("title"),
-                Some(title_id),
+                Some(owner_type),
+                Some(owner_id),
                 ImageProxyKind::Person,
                 "w185",
             )
@@ -648,9 +665,11 @@ pub fn from_collection(collection: Collection) -> CollectionPayload {
 
 pub fn from_movie_entity(
     app: &AppUseCase,
+    permission_title_id: String,
     movie: scryer_domain::MovieEntity,
 ) -> MovieEntityPayload {
     let owner_id = movie.id.to_string();
+    let ratings = from_title_rating_summary(movie.ratings.unwrap_or_default());
     let poster_url = app.media_image_url(
         movie.poster_url.as_deref(),
         Some("movie"),
@@ -659,6 +678,7 @@ pub fn from_movie_entity(
         "w250",
     );
     MovieEntityPayload {
+        permission_title_id: permission_title_id.into(),
         id: movie.id.into(),
         title: movie.title,
         slug: movie.slug,
@@ -672,6 +692,7 @@ pub fn from_movie_entity(
         tmdb_id: movie.tmdb_id,
         mal_id: movie.mal_id,
         anidb_id: movie.anidb_id,
+        ratings,
     }
 }
 
@@ -679,9 +700,10 @@ pub fn from_series_movie_link(
     app: &AppUseCase,
     link: scryer_domain::SeriesMovieLink,
 ) -> SeriesMovieLinkPayload {
+    let series_title_id = link.series_title_id.clone();
     SeriesMovieLinkPayload {
         id: link.id.into(),
-        movie: from_movie_entity(app, link.movie),
+        movie: from_movie_entity(app, series_title_id, link.movie),
         narrative_order: link.narrative_order,
         after_season: link.after_season,
         before_season: link.before_season,
@@ -689,6 +711,8 @@ pub fn from_series_movie_link(
         continuity_status: link.continuity_status,
         movie_form: link.movie_form,
         signal_summary: link.signal_summary,
+        monitoring_override: link.monitoring_override,
+        metadata_active: link.metadata_active,
         monitored: link.monitored,
     }
 }
@@ -759,6 +783,7 @@ pub fn from_calendar_episode(
     app: &AppUseCase,
     ep: CalendarEpisode,
     availability: Option<EpisodeMediaAvailability>,
+    playback_links: Vec<MediaServerPlaybackLinkPayload>,
 ) -> CalendarEpisodePayload {
     let media_availability = availability
         .map(from_episode_media_availability)
@@ -792,6 +817,7 @@ pub fn from_calendar_episode(
         air_date: parse_date(ep.air_date),
         monitored: ep.monitored,
         media_availability,
+        playback_links,
     }
 }
 

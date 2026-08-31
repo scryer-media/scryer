@@ -15,6 +15,7 @@ pub struct HydrationResult {
     pub episodes: Vec<EpisodeMetadata>,
     pub anime_mappings: Vec<AnimeMapping>,
     pub anime_movies: Vec<AnimeMovie>,
+    pub movie_metadata: std::collections::HashMap<i64, MovieMetadata>,
     pub more_like_this: Vec<DiscoveryTitle>,
 }
 
@@ -125,6 +126,13 @@ fn push_positive_imdb_external_id(external_ids: &mut Vec<ExternalId>, value: Opt
 /// Shared by the single-title facet handler path and the bulk hydration loop.
 pub fn movie_to_hydration_result(movie: MovieMetadata, language: &str) -> HydrationResult {
     let mut extra_external_ids = Vec::new();
+    if let Some(smg_id) = movie.smg_id {
+        extra_external_ids.push(scryer_domain::ExternalId {
+            source: "smg".into(),
+            value: smg_id.to_string(),
+        });
+    }
+    push_positive_external_id(&mut extra_external_ids, "tvdb", movie.tvdb_id);
     if let Some(imdb_id) = crate::normalize::normalize_imdb_id(movie.imdb_id.as_str()) {
         extra_external_ids.push(scryer_domain::ExternalId {
             source: "imdb".into(),
@@ -181,8 +189,31 @@ pub fn movie_to_hydration_result(movie: MovieMetadata, language: &str) -> Hydrat
         episodes: vec![],
         anime_mappings: vec![],
         anime_movies: vec![],
+        movie_metadata: std::collections::HashMap::new(),
         more_like_this: vec![],
     }
+}
+
+pub(crate) async fn hydrate_referenced_movie_metadata(
+    gateway: &dyn MetadataGateway,
+    series_items: &[&SeriesMetadata],
+    language: &str,
+) -> AppResult<std::collections::HashMap<i64, MovieMetadata>> {
+    let movie_tvdb_ids = series_items
+        .iter()
+        .flat_map(|series| series.anime_movies.iter())
+        .filter_map(|movie| movie.movie_tvdb_id)
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    if movie_tvdb_ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+
+    Ok(gateway
+        .get_metadata_bulk(&movie_tvdb_ids, &[], language)
+        .await?
+        .movies)
 }
 
 /// Build a [`HydrationResult`] from an already-fetched [`SeriesMetadata`].
@@ -224,6 +255,7 @@ pub fn series_to_hydration_result(series: SeriesMetadata, language: &str) -> Hyd
         episodes: series.episodes,
         anime_mappings: series.anime_mappings,
         anime_movies: series.anime_movies,
+        movie_metadata: std::collections::HashMap::new(),
         more_like_this: vec![],
     }
 }
@@ -271,7 +303,7 @@ pub trait FacetHandler: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::TitleCredit;
+    use crate::{TitleCredit, TitleRatingSummary};
 
     fn anime_mapping(mapping_type: &str, anidb_id: Option<i64>) -> AnimeMapping {
         AnimeMapping {
@@ -448,7 +480,9 @@ mod tests {
     fn test_movie(credits: Vec<TitleCredit>) -> MovieMetadata {
         MovieMetadata {
             target_key: None,
-            tvdb_id: 909,
+            smg_id: None,
+            primary_source: "tvdb".to_string(),
+            tvdb_id: Some(909),
             name: "Fixture Movie".to_string(),
             slug: "fixture-movie".to_string(),
             year: Some(2026),
@@ -552,11 +586,51 @@ mod tests {
 
         async fn get_metadata_bulk(
             &self,
-            _movie_tvdb_ids: &[i64],
-            _series_tvdb_ids: &[i64],
-            _language: &str,
+            movie_tvdb_ids: &[i64],
+            series_tvdb_ids: &[i64],
+            language: &str,
         ) -> AppResult<crate::BulkMetadataResult> {
-            unimplemented!("credits fixture gateway only serves single-title metadata")
+            assert_eq!(movie_tvdb_ids, &[808, 909]);
+            assert!(series_tvdb_ids.is_empty());
+            assert_eq!(language, "eng");
+            let mut movie = test_movie(test_credits());
+            movie.ratings = TitleRatingSummary {
+                rating: Some(8.4),
+                rating_sources: vec!["tmdb".to_string()],
+                external_ratings: vec![],
+            };
+            Ok(crate::BulkMetadataResult {
+                movies: std::collections::HashMap::from([(909, movie)]),
+                series: std::collections::HashMap::new(),
+            })
+        }
+    }
+
+    fn test_anime_movie(tvdb_id: Option<i64>) -> AnimeMovie {
+        AnimeMovie {
+            movie_tvdb_id: tvdb_id,
+            movie_tmdb_id: None,
+            movie_imdb_id: None,
+            movie_mal_id: None,
+            movie_anidb_id: None,
+            name: "Fixture Movie".to_string(),
+            slug: "fixture-movie".to_string(),
+            year: Some(2026),
+            content_status: "released".to_string(),
+            overview: String::new(),
+            poster_url: String::new(),
+            language: "eng".to_string(),
+            runtime_minutes: 90,
+            sort_title: "fixture movie".to_string(),
+            imdb_id: String::new(),
+            studio: String::new(),
+            digital_release_date: None,
+            association_confidence: "high".to_string(),
+            continuity_status: "canon".to_string(),
+            movie_form: "movie".to_string(),
+            placement: "ordered".to_string(),
+            confidence: "high".to_string(),
+            signal_summary: String::new(),
         }
     }
 
@@ -565,6 +639,24 @@ mod tests {
         let result = movie_to_hydration_result(test_movie(test_credits()), "eng");
 
         assert_eq!(result.metadata_update.credits, Some(test_credits()));
+    }
+
+    #[test]
+    fn movie_hydration_carries_the_smg_external_id() {
+        let mut movie = test_movie(vec![]);
+        movie.smg_id = Some(42_001);
+
+        let result = movie_to_hydration_result(movie, "eng");
+
+        assert!(
+            result
+                .metadata_update
+                .extra_external_ids
+                .contains(&ExternalId {
+                    source: "smg".to_string(),
+                    value: "42001".to_string(),
+                })
+        );
     }
 
     #[test]
@@ -611,6 +703,24 @@ mod tests {
                 handler.facet_id()
             );
         }
+    }
+
+    #[tokio::test]
+    async fn referenced_movie_hydration_deduplicates_ids() {
+        let mut first = test_series(vec![]);
+        first.anime_movies = vec![test_anime_movie(Some(909)), test_anime_movie(Some(909))];
+        let mut second = test_series(vec![]);
+        second.anime_movies = vec![test_anime_movie(Some(808)), test_anime_movie(None)];
+
+        let hydrated =
+            hydrate_referenced_movie_metadata(&CreditsMetadataGateway, &[&first, &second], "eng")
+                .await
+                .expect("linked movie metadata hydration");
+
+        assert_eq!(hydrated.len(), 1);
+        assert_eq!(hydrated[&909].ratings.rating, Some(8.4));
+        assert_eq!(hydrated[&909].credits, test_credits());
+        assert!(!hydrated.contains_key(&808));
     }
 
     #[test]

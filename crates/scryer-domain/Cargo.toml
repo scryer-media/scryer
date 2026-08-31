@@ -1,6 +1,6 @@
 [package]
 name = "scryer-domain"
-version = "0.18.21"
+version = "0.19.3"
 edition.workspace = true
 
 [dependencies]
@@ -13,8 +13,8 @@ blake3 = "1"
 # NOTE: `catalog_sort_key` bytes depend on the icu/CLDR collation data version. Bumping these
 # (or their transitive `*_data` crates) can change stored sort keys and requires a new backfill
 # migration to regenerate existing rows — see crates/scryer-domain/src/title_sort.rs.
-icu_collator = "2.2"
-icu_locale = "2.2"
+icu_collator = "2.3"
+icu_locale = "2.3"
 unicode-normalization = "0.1"
 
 [dev-dependencies]

@@ -48,6 +48,7 @@ pub struct FilesystemWalker {
     file_policy: WalkFilePolicy,
     max_depth: Option<usize>,
     follow_symlinked_directories: bool,
+    confine_to_root: bool,
 }
 
 impl Default for FilesystemWalker {
@@ -64,6 +65,7 @@ impl FilesystemWalker {
             file_policy: WalkFilePolicy::All,
             max_depth: None,
             follow_symlinked_directories: true,
+            confine_to_root: false,
         }
     }
 
@@ -104,6 +106,13 @@ impl FilesystemWalker {
 
     pub fn skip_symlinked_directories(mut self) -> Self {
         self.follow_symlinked_directories = false;
+        self
+    }
+
+    /// Follow symlinked directories only when their canonical targets remain
+    /// within the canonical walk root.
+    pub fn confine_to_root(mut self) -> Self {
+        self.confine_to_root = true;
         self
     }
 
@@ -160,7 +169,7 @@ impl FilesystemWalker {
                 root.display()
             ))
         })?;
-        let mut stack = vec![(root.to_path_buf(), root_visit_key, 0usize)];
+        let mut stack = vec![(root.to_path_buf(), root_visit_key.clone(), 0usize)];
         let mut visited = HashSet::new();
         let mut has_visited_root = false;
 
@@ -198,14 +207,15 @@ impl FilesystemWalker {
                                 || !listing.symlinked_subdirs.contains(*path)
                         })
                         .cloned()
-                        .map(|path| {
+                        .filter_map(|path| {
                             let child_visit_key = visit_key_for_child(
                                 &visit_key,
                                 &path,
                                 listing.symlinked_subdirs.contains(&path),
                             )
                             .unwrap_or_else(|_| path.clone());
-                            (path, child_visit_key, depth.saturating_add(1))
+                            (!self.confine_to_root || child_visit_key.starts_with(&root_visit_key))
+                                .then_some((path, child_visit_key, depth.saturating_add(1)))
                         }),
                 );
             }
@@ -428,6 +438,27 @@ mod tests {
 
         assert!(walked.iter().any(|entry| entry.path == dir.path()));
         assert!(!walked.iter().any(|entry| entry.path == link));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn walker_can_follow_only_symlinked_directories_contained_by_root() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().expect("root tempdir");
+        let outside = tempfile::tempdir().expect("outside tempdir");
+        fs::write(outside.path().join("episode.mkv"), b"video").expect("video");
+        let link = root.path().join("outside-link");
+        symlink(outside.path(), &link).expect("symlink");
+
+        let walked = FilesystemWalker::new()
+            .confine_to_root()
+            .walk(root.path())
+            .expect("walk");
+
+        assert!(walked.iter().any(|entry| entry.path == root.path()));
+        assert!(!walked.iter().any(|entry| entry.path == link));
+        assert!(walked.iter().all(|entry| entry.files.is_empty()));
     }
 
     #[cfg(unix)]

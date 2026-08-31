@@ -170,6 +170,11 @@ fn summarize_plugin_http_trusted_certificates(
     let mut certificates = Vec::with_capacity(blocks.len());
     for block in blocks {
         let der = parse_pem_certificate_der(&block)?;
+        // Compatibility only: this fingerprint exists to be compared by a
+        // human against what a browser, `openssl x509 -fingerprint`, or a CA
+        // portal prints, and every one of those emits SHA-256. A BLAKE3 digest
+        // here would be correct and useless. First-party hashing uses
+        // `crate::helpers::blake3_identity_hex`.
         let digest = aws_lc_digest::digest(&aws_lc_digest::SHA256, &der);
         certificates.push(GeneralSettingsTrustedCertificate {
             fingerprint_sha256: crate::helpers::to_hex(digest.as_ref()),

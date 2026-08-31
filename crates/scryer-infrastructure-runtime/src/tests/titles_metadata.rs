@@ -2393,6 +2393,31 @@ async fn replace_title_image_and_append_event_commits_image_and_event_atomically
         stored.expect("event should be stored").event_id,
         event.event_id
     );
+    let (storage_type, payload, import_status, delete_reason, download_id): (
+        String,
+        Vec<u8>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    ) = sqlx::query_as(
+        "SELECT typeof(payload_json), payload_json, import_status,
+                media_file_delete_reason, download_id
+           FROM domain_events
+          WHERE event_id = ?",
+    )
+    .bind(&event.event_id)
+    .fetch_one(services.pool())
+    .await
+    .expect("stored event payload should be inspectable");
+    assert_eq!(storage_type, "blob");
+    assert_eq!(
+        payload.first().copied(),
+        Some(scryer_infrastructure_sql::domain_event_payload::DOMAIN_EVENT_PAYLOAD_FORMAT_V1)
+    );
+    assert_eq!(
+        (import_status, delete_reason, download_id),
+        (None, None, None)
+    );
     let blob = title_images
         .get_title_image_blob(&title.id, TitleImageKind::Poster, "w250")
         .await

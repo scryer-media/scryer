@@ -23,6 +23,35 @@ test("validateRenameTemplateSyntax accepts truncate filters", () => {
   );
 });
 
+test("validateRenameTemplateSyntax accepts optional groups and rejects unsupported branches", () => {
+  const episodeTokens = new Set([
+    "title", "season_order", "episode", "absolute_episode", "episode_title", "quality", "ext",
+  ]);
+  assert.equal(
+    validateRenameTemplateSyntax(
+      "{title} - S{season_order:2}E{episode:2}{?absolute_episode: ({absolute_episode})}{?episode_title: - {episode_title|truncate:64}} - {quality}.{ext}",
+      episodeTokens,
+    ),
+    null,
+  );
+  assert.equal(
+    validateRenameTemplateSyntax("{?edition:{{literal|else:edition}}}", VALID_TOKENS),
+    null,
+  );
+  assert.deepEqual(
+    validateRenameTemplateSyntax("{?title: {?edition: ({edition})}}", VALID_TOKENS),
+    { kind: "nestedOptionalGroup" },
+  );
+  assert.deepEqual(
+    validateRenameTemplateSyntax("{?title: {title}|else: fallback}", VALID_TOKENS),
+    { kind: "unsupportedOptionalFallback" },
+  );
+  assert.deepEqual(
+    validateRenameTemplateSyntax("{?title|truncate:8: ({title})}", VALID_TOKENS),
+    { kind: "invalidOptionalGroup" },
+  );
+});
+
 test("validateRenameTemplateSyntax rejects invalid truncate filters", () => {
   assert.deepEqual(validateRenameTemplateSyntax("{title|truncate:0}", VALID_TOKENS), {
     kind: "invalidFilter",
@@ -50,6 +79,26 @@ test("validateFolderTemplateSyntax accepts season padding and escaped braces", (
   assert.equal(
     applyRenameTemplatePreview("{{S{season}}}", VALID_FOLDER_TOKENS, { season: "3" }),
     "{S3}",
+  );
+});
+
+test("validateFolderTemplateSyntax and preview support optional groups", () => {
+  const folderTokens = new Set(["title", "year", "season"]);
+  assert.equal(
+    validateFolderTemplateSyntax("{title}{?year: ({year})}", folderTokens),
+    null,
+  );
+  assert.equal(
+    validateFolderTemplateSyntax("{?season:Season {season}}", folderTokens, "season"),
+    null,
+  );
+  assert.equal(
+    applyRenameTemplatePreview("{title}{?year: ({year})}", folderTokens, { title: "Movie" }),
+    "Movie",
+  );
+  assert.equal(
+    applyRenameTemplatePreview("{title}{?year: ({year})}", folderTokens, { title: "Movie", year: "2004" }),
+    "Movie (2004)",
   );
 });
 
@@ -115,6 +164,17 @@ test("applyRenameTemplatePreview renders literal brace escapes", () => {
   );
 });
 
+test("applyRenameTemplatePreview renders literal brace escapes inside optional groups", () => {
+  assert.equal(
+    applyRenameTemplatePreview(
+      "{?edition:{{cut-{edition}}}}",
+      VALID_TOKENS,
+      SAMPLE_VALUES,
+    ),
+    "{cut-IMAX}",
+  );
+});
+
 test("applyRenameTemplatePreview preserves escaped folder tokens as literals", () => {
   assert.equal(
     applyRenameTemplatePreview(
@@ -133,11 +193,37 @@ test("applyRenameTemplatePreview renders missing sample values as empty strings"
   );
 });
 
+test("applyRenameTemplatePreview omits missing optional values and truncates present values", () => {
+  const episodeTokens = new Set([
+    "title", "season_order", "episode", "absolute_episode", "episode_title", "quality", "ext",
+  ]);
+  const template = "{title} - S{season_order:2}E{episode:2}{?absolute_episode: ({absolute_episode})}{?episode_title: - {episode_title|truncate:8}} - {quality}.{ext}";
+  assert.equal(
+    applyRenameTemplatePreview(template, episodeTokens, {
+      title: "The Grey Harbor", season_order: "0", episode: "4", absolute_episode: "",
+      episode_title: "Harbor Signal Uprising", quality: "2160p", ext: "mkv",
+    }),
+    "The Grey Harbor - S00E04 - Harbor S - 2160p.mkv",
+  );
+});
+
 test("splitRenameTemplateSegments highlights filtered token specs", () => {
   assert.deepEqual(
     splitRenameTemplateSegments("{title|truncate:8|space:_}.{ext}", VALID_TOKENS),
     [
       { text: "{title|truncate:8|space:_}", isToken: true },
+      { text: ".", isToken: false },
+      { text: "{ext}", isToken: true },
+    ],
+  );
+});
+
+test("splitRenameTemplateSegments highlights valid optional groups", () => {
+  assert.deepEqual(
+    splitRenameTemplateSegments("{title}{?edition: ({edition})}.{ext}", VALID_TOKENS),
+    [
+      { text: "{title}", isToken: true },
+      { text: "{?edition: ({edition})}", isToken: true },
       { text: ".", isToken: false },
       { text: "{ext}", isToken: true },
     ],

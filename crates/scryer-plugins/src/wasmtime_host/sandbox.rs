@@ -9,7 +9,7 @@
 use scryer_application::{AppError, AppResult};
 use wasmtime_wasi::p1::WasiP1Ctx;
 use wasmtime_wasi::p2::pipe::{MemoryInputPipe, MemoryOutputPipe};
-use wasmtime_wasi::{DirPerms, FilePerms, WasiCtxBuilder};
+use wasmtime_wasi::{FsPerms, WasiCtxBuilder};
 
 use crate::runtime_backing::PreopenSpec;
 use crate::wasmtime_host::command_host::CommandHost;
@@ -182,21 +182,13 @@ pub(crate) fn build_sandbox(
         .env("TMPDIR", SCRATCH_GUEST_PATH);
 
     for preopen in preopens {
-        let (dir_perms, file_perms) = if preopen.writable {
-            (
-                DirPerms::READ | DirPerms::MUTATE,
-                FilePerms::READ | FilePerms::WRITE,
-            )
+        let perms = if preopen.writable {
+            FsPerms::ReadWrite
         } else {
-            (DirPerms::READ, FilePerms::READ)
+            FsPerms::ReadOnly
         };
         builder
-            .preopened_dir(
-                &preopen.host_path,
-                &preopen.guest_path,
-                dir_perms,
-                file_perms,
-            )
+            .preopened_dir(&preopen.host_path, &preopen.guest_path, perms)
             .map_err(|error| {
                 AppError::Repository(format!(
                     "failed to preopen '{}' as '{}' for archive plugin: {error}",
@@ -208,12 +200,7 @@ pub(crate) fn build_sandbox(
 
     // Per-invocation rw scratch, pointed at by TMPDIR for large-member spill.
     builder
-        .preopened_dir(
-            scratch.path(),
-            SCRATCH_GUEST_PATH,
-            DirPerms::READ | DirPerms::MUTATE,
-            FilePerms::READ | FilePerms::WRITE,
-        )
+        .preopened_dir(scratch.path(), SCRATCH_GUEST_PATH, FsPerms::ReadWrite)
         .map_err(|error| {
             AppError::Repository(format!(
                 "failed to preopen archive plugin scratch dir: {error}"

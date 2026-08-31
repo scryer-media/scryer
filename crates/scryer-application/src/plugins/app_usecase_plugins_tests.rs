@@ -999,6 +999,9 @@ fn make_runtime_plugin_load(
             scryer_plugin_sdk::ProviderDescriptor::Indexer(scryer_plugin_sdk::IndexerDescriptor {
                 provider_type: provider_type.to_string(),
                 provider_aliases: vec![format!("{provider_type}-alias")],
+                provider_profiles: Vec::new(),
+                search_semantics_version: None,
+                strategy_plan: None,
                 source_kind: scryer_plugin_sdk::IndexerSourceKind::Generic,
                 capabilities: Default::default(),
                 scoring_policies: vec![],
@@ -1011,6 +1014,9 @@ fn make_runtime_plugin_load(
             scryer_plugin_sdk::ProviderDescriptor::Indexer(scryer_plugin_sdk::IndexerDescriptor {
                 provider_type: provider_type.to_string(),
                 provider_aliases: vec![format!("{provider_type}-alias")],
+                provider_profiles: Vec::new(),
+                search_semantics_version: None,
+                strategy_plan: None,
                 source_kind: scryer_plugin_sdk::IndexerSourceKind::Usenet,
                 capabilities: Default::default(),
                 scoring_policies: vec![],
@@ -1023,6 +1029,9 @@ fn make_runtime_plugin_load(
             scryer_plugin_sdk::ProviderDescriptor::Indexer(scryer_plugin_sdk::IndexerDescriptor {
                 provider_type: provider_type.to_string(),
                 provider_aliases: vec![format!("{provider_type}-alias")],
+                provider_profiles: Vec::new(),
+                search_semantics_version: None,
+                strategy_plan: None,
                 source_kind: scryer_plugin_sdk::IndexerSourceKind::Torrent,
                 capabilities: Default::default(),
                 scoring_policies: vec![],
@@ -3822,6 +3831,9 @@ fn validate_downloaded_plugin_descriptor_rejects_invalid_allowed_hosts() {
             scryer_plugin_sdk::IndexerDescriptor {
                 provider_type: "alpha".to_string(),
                 provider_aliases: Vec::new(),
+                provider_profiles: Vec::new(),
+                search_semantics_version: None,
+                strategy_plan: None,
                 source_kind: scryer_plugin_sdk::IndexerSourceKind::Generic,
                 capabilities: Default::default(),
                 scoring_policies: Vec::new(),

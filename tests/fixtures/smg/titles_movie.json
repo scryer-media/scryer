@@ -1,0 +1,77 @@
+{
+  "data": {
+    "titles": {
+      "movies": [
+        {
+          "id": 101,
+          "kind": "movie",
+          "primary_source": "tvdb",
+          "tvdb_id": 123456,
+          "name": "Test Movie Title",
+          "slug": "test-movie-title",
+          "type": "movie",
+          "year": 2024,
+          "status": "Released",
+          "overview": "A gripping tale of testing integration.",
+          "poster_url": "https://artworks.thetvdb.com/banners/movies/123456/posters/test.jpg",
+          "language": "eng",
+          "original_language": "eng",
+          "runtime_minutes": 142,
+          "sort_title": "Test Movie Title",
+          "imdb_id": "tt1234567",
+          "tmdb_id": 111,
+          "tmdb_popularity": 85.5,
+          "anidb_id": null,
+          "canonical_tags": [],
+          "external_ids": [
+            { "source": "smg", "kind": "movie", "id": "101", "key": "smg:title:101" },
+            { "source": "tvdb", "kind": "movie", "id": "123456", "key": "tvdb:movie:123456" }
+          ],
+          "studio": "Test Studios",
+          "tmdb_release_date": "2024-06-15",
+          "rating": null,
+          "rating_sources": [],
+          "external_ratings": [],
+          "credits": [],
+          "artworks": []
+        },
+        {
+          "id": 202,
+          "kind": "movie",
+          "primary_source": "tmdb",
+          "tvdb_id": null,
+          "name": "TMDB Primary Movie",
+          "slug": "tmdb-primary-movie",
+          "type": "movie",
+          "year": 2025,
+          "status": "Released",
+          "overview": "A movie whose primary identifier is TMDB.",
+          "poster_url": "https://image.tmdb.org/t/p/original/tmdb-primary.jpg",
+          "language": "eng",
+          "original_language": "eng",
+          "runtime_minutes": 110,
+          "sort_title": "TMDB Primary Movie",
+          "imdb_id": "tt7654321",
+          "tmdb_id": 2020,
+          "tmdb_popularity": 12.0,
+          "anidb_id": null,
+          "canonical_tags": [],
+          "external_ids": [
+            { "source": "smg", "kind": "movie", "id": "202", "key": "smg:title:202" },
+            { "source": "tmdb", "kind": "movie", "id": "2020", "key": "tmdb:movie:2020" },
+            { "source": "imdb", "kind": "movie", "id": "tt7654321", "key": "imdb:movie:tt7654321" }
+          ],
+          "studio": "TMDB Studios",
+          "tmdb_release_date": "2025-01-01",
+          "rating": null,
+          "rating_sources": [],
+          "external_ratings": [],
+          "credits": [],
+          "artworks": []
+        }
+      ],
+      "missing_ids": [999],
+      "redirects": [{ "from_id": 100, "to_id": 101 }]
+    }
+  }
+}

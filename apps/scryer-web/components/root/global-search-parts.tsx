@@ -38,6 +38,7 @@ type SearchResultIdentityInput = {
   facet: Facet;
   imdbId?: string | null;
   kind: SearchResultKind;
+  smgId?: string | number | null;
   titleId?: string | null;
   titleName: string;
   tvdbId?: string | number | null;
@@ -78,6 +79,7 @@ function searchResultIdentityAttributes({
   kind,
   titleId,
   titleName,
+  smgId,
   tvdbId,
   year,
 }: SearchResultIdentityInput) {
@@ -85,6 +87,8 @@ function searchResultIdentityAttributes({
     dataAttributeValue(imdbId) ?? externalIdValue(externalIds, "imdb");
   const normalizedTvdbId =
     dataAttributeValue(tvdbId) ?? externalIdValue(externalIds, "tvdb");
+  const normalizedSmgId =
+    dataAttributeValue(smgId) ?? externalIdValue(externalIds, "smg");
   return {
     "data-global-search-result-kind": kind,
     // Test-hook surface: facet is SCREAMING_SNAKE in app state, but DOM ids
@@ -102,6 +106,9 @@ function searchResultIdentityAttributes({
       : {}),
     ...(normalizedTvdbId
       ? { "data-global-search-result-tvdb-id": normalizedTvdbId }
+      : {}),
+    ...(normalizedSmgId
+      ? { "data-global-search-result-smg-id": normalizedSmgId }
       : {}),
     ...(dataAttributeValue(year)
       ? { "data-global-search-result-year": dataAttributeValue(year)! }
@@ -349,6 +356,7 @@ type SearchMetadataPosterButtonProps = {
   onKeyDown: React.KeyboardEventHandler<HTMLButtonElement>;
   posterUrl?: string | null;
   resultAttribute: SearchResultDataAttribute;
+  smgId?: string | number | null;
   tvdbId?: string | number | null;
   year?: string | number | null;
   yearLabel: string | number | null;
@@ -366,6 +374,7 @@ export function SearchMetadataPosterButton({
   onKeyDown,
   posterUrl,
   resultAttribute,
+  smgId,
   tvdbId,
   year,
   yearLabel,
@@ -375,6 +384,7 @@ export function SearchMetadataPosterButton({
     facet,
     imdbId,
     kind: "metadata",
+    smgId,
     titleName: name,
     tvdbId,
     year,

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Decoration,
   type DecorationSet,
@@ -16,16 +16,20 @@ import {
   type Range,
 } from "@codemirror/state";
 import { javascript } from "@codemirror/lang-javascript";
+import { json } from "@codemirror/legacy-modes/mode/javascript";
 import { shell } from "@codemirror/legacy-modes/mode/shell";
+import { xml } from "@codemirror/legacy-modes/mode/xml";
 import { oneDarkHighlightStyle } from "@codemirror/theme-one-dark";
 import { StreamLanguage, syntaxHighlighting } from "@codemirror/language";
 import { defaultKeymap, indentWithTab } from "@codemirror/commands";
 import { useTheme } from "next-themes";
+import { Check, Copy } from "lucide-react";
 import "@fontsource-variable/jetbrains-mono";
+import { IconButton } from "@/components/ui/icon-button";
 import { CODE_FONT } from "@/lib/fonts";
 import { isDarkTheme } from "@/lib/theme";
 
-export type CodeEditorLanguage = "plain" | "javascript" | "rego" | "shell";
+export type CodeEditorLanguage = "plain" | "javascript" | "json" | "rego" | "shell" | "xml";
 
 export type CodeEditorDiagnostic = {
   line: number;
@@ -43,6 +47,9 @@ export type CodeEditorProps = {
   maxLines?: number;
   diagnostics?: CodeEditorDiagnostic[];
   language?: CodeEditorLanguage;
+  copyable?: boolean;
+  copyLabel?: string;
+  copiedLabel?: string;
 };
 
 const regoKeywords = new Set([
@@ -355,8 +362,16 @@ function languageExtensions(language: CodeEditorLanguage): Extension[] {
     return [javascript()];
   }
 
+  if (language === "json") {
+    return [StreamLanguage.define(json)];
+  }
+
   if (language === "shell") {
     return [StreamLanguage.define(shell)];
+  }
+
+  if (language === "xml") {
+    return [StreamLanguage.define(xml)];
   }
 
   return [];
@@ -372,10 +387,15 @@ export default function CodeEditor({
   maxLines,
   diagnostics = [],
   language = "plain",
+  copyable = false,
+  copyLabel = "Copy code",
+  copiedLabel = "Copied",
 }: CodeEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const onChangeRef = useRef(onChange);
+  const copyResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [copied, setCopied] = useState(false);
   const { resolvedTheme } = useTheme();
   const lineCount = value.split("\n").length;
   const lineHeightPx = 20;
@@ -387,6 +407,22 @@ export default function CodeEditor({
   useEffect(() => {
     onChangeRef.current = onChange;
   }, [onChange]);
+
+  useEffect(
+    () => () => {
+      if (copyResetTimerRef.current) clearTimeout(copyResetTimerRef.current);
+    },
+    [],
+  );
+
+  const copyValue = async () => {
+    if (!navigator.clipboard) return;
+
+    await navigator.clipboard.writeText(value);
+    setCopied(true);
+    if (copyResetTimerRef.current) clearTimeout(copyResetTimerRef.current);
+    copyResetTimerRef.current = setTimeout(() => setCopied(false), 1500);
+  };
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -463,11 +499,23 @@ export default function CodeEditor({
   }, [diagnostics]);
 
   return (
-    <div
-      id={id}
-      ref={containerRef}
-      className="overflow-auto rounded-lg border border-border text-sm"
-      style={{ height: computedHeight, minHeight: "120px" }}
-    />
+    <div className="group/code-editor relative">
+      <div
+        id={id}
+        ref={containerRef}
+        className="overflow-auto rounded-lg border border-border text-sm"
+        style={{ height: computedHeight, minHeight: "120px" }}
+      />
+      {copyable ? (
+        <IconButton
+          label={copied ? copiedLabel : copyLabel}
+          appearance="boxed"
+          className="absolute right-2 top-2 z-10 bg-[var(--scry-surf)] opacity-0 shadow-sm transition-opacity group-hover/code-editor:opacity-100 group-focus-within/code-editor:opacity-100 focus-visible:opacity-100"
+          onClick={() => void copyValue()}
+        >
+          {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+        </IconButton>
+      ) : null}
+    </div>
   );
 }

@@ -17,6 +17,153 @@ fn non_empty_scope(value: &str) -> Option<String> {
         Some(value.to_string())
     }
 }
+
+fn record_download_client_feedback_categories(
+    client_id: &str,
+    categories: impl IntoIterator<Item = String>,
+    admission_by_client: &mut std::collections::HashMap<String, std::collections::HashSet<String>>,
+    feedback_by_client: &mut std::collections::HashMap<String, std::collections::HashSet<String>>,
+) {
+    for category in categories {
+        let category = category.trim().to_string();
+        if category.is_empty() {
+            continue;
+        }
+        let normalized = crate::services::normalize_download_client_category(&category);
+        if normalized.is_empty() {
+            continue;
+        }
+        admission_by_client
+            .entry(client_id.to_string())
+            .or_default()
+            .insert(normalized);
+        feedback_by_client
+            .entry(client_id.to_string())
+            .or_default()
+            .insert(category);
+    }
+}
+
+fn record_configured_download_client_category(
+    client_id: &str,
+    enabled: bool,
+    category: Option<String>,
+    admission_by_client: &mut std::collections::HashMap<String, std::collections::HashSet<String>>,
+    feedback_by_client: &mut std::collections::HashMap<String, std::collections::HashSet<String>>,
+) {
+    let Some(category) = category
+        .map(|category| category.trim().to_string())
+        .filter(|category| !category.is_empty())
+    else {
+        return;
+    };
+    let normalized = crate::services::normalize_download_client_category(&category);
+    if normalized.is_empty() {
+        return;
+    }
+    admission_by_client
+        .entry(client_id.to_string())
+        .or_default()
+        .insert(normalized);
+    if enabled {
+        feedback_by_client
+            .entry(client_id.to_string())
+            .or_default()
+            .insert(category);
+    }
+}
+
+#[cfg(test)]
+mod download_client_feedback_category_tests {
+    use super::*;
+
+    #[test]
+    fn inventory_combines_default_facet_and_library_routes_without_losing_spelling() {
+        let mut admission = std::collections::HashMap::new();
+        let mut feedback = std::collections::HashMap::new();
+
+        record_download_client_feedback_categories(
+            "qbit",
+            [" Movies ".to_string()],
+            &mut admission,
+            &mut feedback,
+        );
+        record_download_client_feedback_categories(
+            "qbit",
+            ["TV / Anime".to_string()],
+            &mut admission,
+            &mut feedback,
+        );
+        record_download_client_feedback_categories(
+            "qbit",
+            ["Series-HD".to_string(), "movies".to_string()],
+            &mut admission,
+            &mut feedback,
+        );
+        record_download_client_feedback_categories(
+            "other",
+            ["Other Client".to_string()],
+            &mut admission,
+            &mut feedback,
+        );
+
+        assert_eq!(
+            admission["qbit"],
+            std::collections::HashSet::from([
+                "movies".to_string(),
+                "tv / anime".to_string(),
+                "series-hd".to_string(),
+            ])
+        );
+        assert_eq!(
+            feedback["qbit"],
+            std::collections::HashSet::from([
+                "Movies".to_string(),
+                "movies".to_string(),
+                "TV / Anime".to_string(),
+                "Series-HD".to_string(),
+            ])
+        );
+        assert_eq!(
+            feedback["other"],
+            std::collections::HashSet::from(["Other Client".to_string()])
+        );
+    }
+
+    #[test]
+    fn disabled_configured_routes_remain_admissible_but_are_not_polled() {
+        let mut admission = std::collections::HashMap::new();
+        let mut feedback = std::collections::HashMap::new();
+
+        record_configured_download_client_category(
+            "qbit",
+            false,
+            Some(" Disabled Route ".to_string()),
+            &mut admission,
+            &mut feedback,
+        );
+        record_configured_download_client_category(
+            "qbit",
+            true,
+            Some("Enabled Route".to_string()),
+            &mut admission,
+            &mut feedback,
+        );
+
+        assert_eq!(
+            admission["qbit"],
+            std::collections::HashSet::from([
+                "disabled route".to_string(),
+                "enabled route".to_string(),
+            ])
+        );
+        assert_eq!(
+            feedback["qbit"],
+            std::collections::HashSet::from(["Enabled Route".to_string()])
+        );
+    }
+}
+
 impl AppUseCase {
     async fn read_download_client_routing_value(
         &self,
@@ -352,10 +499,8 @@ impl AppUseCase {
             .titles
             .list_for_libraries(facet, library_ids, None)
             .await?;
-        let monitored: Vec<scryer_domain::Title> = titles
-            .into_iter()
-            .filter(|title| title.monitored)
-            .collect();
+        let monitored: Vec<scryer_domain::Title> =
+            titles.into_iter().filter(|title| title.monitored).collect();
         if monitored.is_empty() {
             return Ok(Vec::new());
         }
@@ -781,7 +926,10 @@ impl AppUseCase {
 
         let metadata_hydration_state = if created.title.metadata_fetched_at.is_some() {
             AddTitleHydrationState::Complete
-        } else if extract_tvdb_id(&created.title).is_some() {
+        } else if matches!(created.title.facet, MediaFacet::Movie)
+            .then(|| movie_title_ref(&created.title).is_some())
+            .unwrap_or_else(|| extract_tvdb_id(&created.title).is_some())
+        {
             if created.reused_existing {
                 self.services
                     .catalog
@@ -831,32 +979,6 @@ impl AppUseCase {
     }
 }
 impl AppUseCase {
-    async fn lock_download_submission_signature(
-        &self,
-        title_id: &str,
-        request_signature: Option<&str>,
-    ) -> Option<tokio::sync::OwnedMutexGuard<()>> {
-        self.runtime
-            .acquisition
-            .download_submission_guards
-            .acquire(title_id, request_signature)
-            .await
-    }
-}
-impl AppUseCase {
-    async fn lock_download_submission_scope(
-        &self,
-        title_id: &str,
-        scope: &SubmissionScope,
-    ) -> tokio::sync::OwnedMutexGuard<()> {
-        self.runtime
-            .acquisition
-            .download_submission_guards
-            .acquire_scope(title_id, scope)
-            .await
-    }
-}
-impl AppUseCase {
     pub(crate) async fn find_blocking_download_submissions(
         &self,
         title: &Title,
@@ -872,13 +994,25 @@ impl AppUseCase {
             return Ok(Vec::new());
         }
 
-        let queue = self
+        let snapshot = self
             .services
             .integrations
             .download_client
-            .list_queue()
+            .list_snapshot_outcome_excluding_client_types(100, &[])
             .await?;
-        if queue.is_empty() {
+
+        self.find_blocking_download_submissions_from_snapshot(title, scope, &submissions, &snapshot)
+            .await
+    }
+
+    pub(crate) async fn find_blocking_download_submissions_from_snapshot(
+        &self,
+        title: &Title,
+        scope: &SubmissionScope,
+        submissions: &[DownloadSubmission],
+        snapshot: &DownloadClientSnapshotOutcome,
+    ) -> AppResult<Vec<SubmissionScopeConflict>> {
+        if submissions.is_empty() {
             return Ok(Vec::new());
         }
 
@@ -889,15 +1023,78 @@ impl AppUseCase {
             .list_episodes_for_title(&title.id)
             .await?;
 
+        Self::find_blocking_download_submissions_in_state(
+            title,
+            scope,
+            submissions,
+            snapshot,
+            &episodes,
+            &HashSet::new(),
+        )
+    }
+
+    pub(crate) fn find_blocking_download_submissions_in_state(
+        title: &Title,
+        scope: &SubmissionScope,
+        submissions: &[DownloadSubmission],
+        snapshot: &DownloadClientSnapshotOutcome,
+        episodes: &[scryer_domain::Episode],
+        accepted_download_ids: &HashSet<scryer_domain::download_identity::DownloadId>,
+    ) -> AppResult<Vec<SubmissionScopeConflict>> {
+        if submissions.is_empty() {
+            return Ok(Vec::new());
+        }
+
         let mut conflicts = Vec::new();
         for submission in submissions {
-            if !submission_scopes_overlap(&title.id, &submission.scope, scope, &episodes) {
+            if !submission_scopes_overlap(&title.id, &submission.scope, scope, episodes) {
                 continue;
             }
 
-            let Some(queue_item) = blocking_queue_item_for_submission(&queue, &submission) else {
+            if accepted_download_ids.contains(&submission.download_id) {
+                conflicts.push(SubmissionScopeConflict {
+                    title_id: title.id.clone(),
+                    title_name: title.name.clone(),
+                    download_client_id: submission.download_client_id.clone(),
+                    download_client_type: submission.download_client_type.clone(),
+                    download_client_item_id: submission.download_client_item_id.clone(),
+                    source_title: submission.source_title.clone(),
+                    source_kind: submission.source_kind,
+                    scope: submission.scope.clone(),
+                    state: Some(DownloadQueueState::Queued),
+                    replaceable: false,
+                });
+                continue;
+            }
+
+            let queue_item = snapshot
+                .items
+                .iter()
+                .find(|item| queue_item_matches_submission(item, submission));
+            let authoritative = submission
+                .download_client_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|client_id| !client_id.is_empty())
+                .is_some_and(|client_id| snapshot.authoritative_client_ids.contains(client_id));
+            let Some(queue_item) = queue_item else {
+                if !authoritative {
+                    return Err(AppError::DownloadSubmitUnavailable(format!(
+                        "download client state is unavailable for submission {} on title {}",
+                        submission.download_id, title.id
+                    )));
+                }
                 continue;
             };
+            if !queue_state_blocks_submission(queue_item.state) {
+                if !authoritative {
+                    return Err(AppError::DownloadSubmitUnavailable(format!(
+                        "download client state is unavailable for terminal submission {} on title {}",
+                        submission.download_id, title.id
+                    )));
+                }
+                continue;
+            }
 
             conflicts.push(SubmissionScopeConflict {
                 title_id: title.id.clone(),
@@ -907,7 +1104,7 @@ impl AppUseCase {
                 download_client_item_id: submission.download_client_item_id.clone(),
                 source_title: submission.source_title.clone(),
                 source_kind: submission.source_kind,
-                scope: submission.scope,
+                scope: submission.scope.clone(),
                 state: Some(queue_item.state),
                 replaceable: queue_state_is_replaceable(queue_item.state),
             });
@@ -954,7 +1151,7 @@ impl AppUseCase {
         self.services
             .workflow
             .download_submissions
-            .delete_by_client_item_id(&DownloadSourceIdentity::new(
+            .delete_by_client_item_id(&ClientJobLocator::new(
                 conflict.download_client_id.as_deref(),
                 &conflict.download_client_type,
                 &conflict.download_client_item_id,
@@ -1052,9 +1249,8 @@ impl AppUseCase {
             .runtime
             .acquisition
             .download_client_category_admission
-            .read()
+            .snapshot()
             .await
-            .clone()
         {
             return Some(snapshot);
         }
@@ -1067,19 +1263,19 @@ impl AppUseCase {
         self.runtime
             .acquisition
             .download_client_category_admission
-            .read()
+            .snapshot()
             .await
-            .clone()
     }
 
     pub async fn refresh_download_client_category_admission(&self) -> AppResult<()> {
-        let snapshot = self.load_download_client_category_admission_snapshot().await?;
-        *self
-            .runtime
+        let snapshot = self
+            .load_download_client_category_admission_snapshot()
+            .await?;
+        self.runtime
             .acquisition
             .download_client_category_admission
-            .write()
-            .await = Some(std::sync::Arc::new(snapshot));
+            .replace(snapshot)
+            .await;
         Ok(())
     }
 
@@ -1111,11 +1307,17 @@ impl AppUseCase {
             .list(None)
             .await?;
         let mut categories_by_client = std::collections::HashMap::new();
+        let mut feedback_category_sets_by_client = std::collections::HashMap::new();
         for client in clients {
-            let categories = self
-                .load_download_client_admission_categories(&client.id)
+            let feedback_categories = self
+                .load_download_client_feedback_categories(&client.id)
                 .await?;
-            categories_by_client.insert(client.id, categories);
+            record_download_client_feedback_categories(
+                &client.id,
+                feedback_categories,
+                &mut categories_by_client,
+                &mut feedback_category_sets_by_client,
+            );
         }
 
         let mut routing_scopes = std::collections::HashSet::from([
@@ -1132,13 +1334,24 @@ impl AppUseCase {
             self.collect_configured_download_client_categories(
                 &scope_id,
                 &mut categories_by_client,
+                &mut feedback_category_sets_by_client,
             )
             .await?;
         }
 
+        let feedback_categories_by_client = feedback_category_sets_by_client
+            .into_iter()
+            .map(|(client_id, categories)| {
+                let mut categories = categories.into_iter().collect::<Vec<_>>();
+                categories.sort();
+                (client_id, categories)
+            })
+            .collect();
+
         Ok(crate::services::DownloadClientCategoryAdmissionSnapshot {
             default_categories,
             categories_by_client,
+            feedback_categories_by_client,
         })
     }
 
@@ -1146,6 +1359,10 @@ impl AppUseCase {
         &self,
         scope_id: &str,
         categories_by_client: &mut std::collections::HashMap<
+            String,
+            std::collections::HashSet<String>,
+        >,
+        feedback_categories_by_client: &mut std::collections::HashMap<
             String,
             std::collections::HashSet<String>,
         >,
@@ -1164,25 +1381,20 @@ impl AppUseCase {
                 continue;
             };
             for (client_id, config) in routing_map {
-                let Some(category) = parse_download_client_routing_entry(&config)
-                    .category
-                    .map(|category| {
-                        crate::services::normalize_download_client_category(&category)
-                    })
-                    .filter(|category| !category.is_empty())
-                else {
-                    continue;
-                };
-                categories_by_client
-                    .entry(client_id)
-                    .or_default()
-                    .insert(category);
+                let entry = parse_download_client_routing_entry(&config);
+                record_configured_download_client_category(
+                    &client_id,
+                    entry.enabled,
+                    entry.category,
+                    categories_by_client,
+                    feedback_categories_by_client,
+                );
             }
         }
         Ok(())
     }
 
-    async fn load_download_client_admission_categories(
+    async fn load_download_client_feedback_categories(
         &self,
         client_id: &str,
     ) -> AppResult<std::collections::HashSet<String>> {
@@ -1198,9 +1410,7 @@ impl AppUseCase {
                 .effective_download_client_category_for_admission_scope(None, &facet, client_id)
                 .await?
             {
-                categories.insert(crate::services::normalize_download_client_category(
-                    &category,
-                ));
+                categories.insert(category.trim().to_string());
             }
             for library in libraries {
                 if let Some(category) = self
@@ -1211,13 +1421,11 @@ impl AppUseCase {
                     )
                     .await?
                 {
-                    categories.insert(crate::services::normalize_download_client_category(
-                        &category,
-                    ));
+                    categories.insert(category.trim().to_string());
                 }
             }
         }
-        categories.retain(|category| !category.is_empty());
+        categories.retain(|category| !category.trim().is_empty());
         Ok(categories)
     }
 
@@ -1386,7 +1594,7 @@ impl AppUseCase {
 
         let mut seen_downloads = HashSet::new();
         for submission in download_submissions {
-            let identity = DownloadSourceIdentity::from_submission(&submission);
+            let identity = ClientJobLocator::from_submission(&submission);
             if !seen_downloads.insert(identity.clone()) {
                 continue;
             }

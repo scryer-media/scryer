@@ -6,11 +6,10 @@ import {
   normalizeQueueState,
 } from "@/lib/utils/download-queue";
 import { manualImportActions } from "@/lib/utils/manual-import-actions";
-import { isImportedSeedingRow } from "@/lib/utils/seeding-progress";
 
 export type TranslateFn = ReturnType<typeof useTranslate>;
 
-export type ActivityTab = ActivitySection;
+export type ActivityTab = Exclude<ActivitySection, "history">;
 
 export const queueStateClasses: Record<string, string> = {
   queued: "border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] text-[var(--scry-warning-text)]",
@@ -84,18 +83,6 @@ export function activityStatusRank(tab: ActivityTab, displayState: string): numb
         default:
           return 99;
       }
-    case "history":
-      switch (displayState.toLowerCase()) {
-        case "completed":
-          return 0;
-        case "ignored":
-          return 1;
-        case "failed":
-        case "remove_failed":
-          return 2;
-        default:
-          return 99;
-      }
     case "activity":
     default:
       switch (displayState.toLowerCase()) {
@@ -120,13 +107,7 @@ export type QueueRowPresentation = {
   trackedStateKey: string;
   trackedMatchTypeKey: string;
   displayStateKey: string;
-  /**
-   * Key the status badge renders under. It is the display state for every row
-   * except one: a tracked download parked in `IMPORTED_SEEDING` displays as
-   * `COMPLETED` (the backend deliberately added no display state for it), so
-   * the badge reads the tracked state to keep "imported, still seeding" from
-   * being indistinguishable from a finished usenet download.
-   */
+  /** Key the status badge renders under; normally the projected display state. */
   statusBadgeKey: string;
   percent: number;
   remainingLabel: string | null;
@@ -155,14 +136,7 @@ export function deriveQueueRowPresentation(
   const trackedStateKey = normalizeQueueState(queueItem.trackedState);
   const trackedMatchTypeKey = normalizeQueueState(queueItem.trackedMatchType);
   const displayStateKey = queueItem.displayState;
-  // The seeding badge exists only because those rows display as `COMPLETED`. A
-  // client warning is already the specific state, so it must not be hidden
-  // behind "Imported · Seeding" — that is exactly how a stuck torrent would
-  // look healthy.
-  const statusBadgeKey =
-    isImportedSeedingRow(queueItem) && displayStateKey !== "WARNING"
-      ? "IMPORTED_SEEDING"
-      : displayStateKey;
+  const statusBadgeKey = displayStateKey;
   const reportedFailureReason = buildQueueStatusDetail(queueItem);
   const facetKey = normalizeQueueState(queueItem.facet);
   const failureReason =
@@ -202,7 +176,9 @@ export function deriveQueueRowPresentation(
   const statusLabel =
     displayStateKey === "IGNORED"
       ? t("queue.state.ignored")
-      : queueItem.importTransferPhase === "COPYING"
+      : queueItem.importTransferPhase === "EXTRACTING"
+        ? t("queue.transfer.extracting")
+        : queueItem.importTransferPhase === "COPYING"
         ? t("queue.transfer.copying")
         : queueItem.importTransferPhase === "FINALIZING"
           ? t("queue.transfer.finalizing")

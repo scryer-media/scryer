@@ -13,12 +13,52 @@ use crate::types::TitleMediaFile;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ImportVerdict {
     Accept,
-    Reject { reason: String, code: &'static str },
+    Reject {
+        reason: String,
+        code: ImportCheckCode,
+    },
 }
 
 impl ImportVerdict {
     pub fn is_accept(&self) -> bool {
         matches!(self, Self::Accept)
+    }
+}
+
+/// Stable reason for an import-check rejection.
+///
+/// The string representation is persisted with import artifacts, but import
+/// behavior must branch on this enum so additions remain exhaustive.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ImportCheckCode {
+    InvalidExtension,
+    SampleFile,
+    SampleDirectory,
+    StillUnpacking,
+    DuplicateFile,
+    InsufficientDiskSpace,
+}
+
+impl ImportCheckCode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::InvalidExtension => "invalid_extension",
+            Self::SampleFile => "sample_file",
+            Self::SampleDirectory => "sample_directory",
+            Self::StillUnpacking => "still_unpacking",
+            Self::DuplicateFile => "duplicate_file",
+            Self::InsufficientDiskSpace => "insufficient_disk_space",
+        }
+    }
+
+    pub const fn is_duplicate_file(self) -> bool {
+        matches!(self, Self::DuplicateFile)
+    }
+}
+
+impl std::fmt::Display for ImportCheckCode {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
     }
 }
 
@@ -44,7 +84,7 @@ fn disk_space_verdict(available: u64, source_size: u64) -> ImportVerdict {
                 available as f64 / 1_073_741_824.0,
                 required as f64 / 1_073_741_824.0,
             ),
-            code: "insufficient_disk_space",
+            code: ImportCheckCode::InsufficientDiskSpace,
         }
     } else {
         ImportVerdict::Accept
@@ -90,7 +130,7 @@ pub fn check_valid_extension(ctx: &ImportCheckContext<'_>) -> ImportVerdict {
             .to_string();
         ImportVerdict::Reject {
             reason: format!("unsupported extension: {ext}"),
-            code: "invalid_extension",
+            code: ImportCheckCode::InvalidExtension,
         }
     }
 }
@@ -108,7 +148,7 @@ pub fn check_not_sample(ctx: &ImportCheckContext<'_>) -> ImportVerdict {
     if filename.contains("sample") {
         return ImportVerdict::Reject {
             reason: "filename contains 'sample'".into(),
-            code: "sample_file",
+            code: ImportCheckCode::SampleFile,
         };
     }
 
@@ -122,7 +162,7 @@ pub fn check_not_sample(ctx: &ImportCheckContext<'_>) -> ImportVerdict {
         if dir_name == "sample" || dir_name == "samples" {
             return ImportVerdict::Reject {
                 reason: "file is inside a sample directory".into(),
-                code: "sample_directory",
+                code: ImportCheckCode::SampleDirectory,
             };
         }
     }
@@ -139,7 +179,7 @@ pub fn check_not_unpacking(ctx: &ImportCheckContext<'_>) -> ImportVerdict {
         if path_str.ends_with(marker) {
             return ImportVerdict::Reject {
                 reason: format!("file has active-download marker: {marker}"),
-                code: "still_unpacking",
+                code: ImportCheckCode::StillUnpacking,
             };
         }
     }
@@ -155,7 +195,7 @@ pub fn check_not_unpacking(ctx: &ImportCheckContext<'_>) -> ImportVerdict {
             if marker_path.exists() {
                 return ImportVerdict::Reject {
                     reason: format!("sibling marker file exists: {}", marker_path.display()),
-                    code: "still_unpacking",
+                    code: ImportCheckCode::StillUnpacking,
                 };
             }
         }
@@ -180,7 +220,7 @@ pub fn check_not_already_imported(ctx: &ImportCheckContext<'_>) -> ImportVerdict
                 "destination exists with identical size ({} bytes)",
                 ctx.source_size
             ),
-            code: "duplicate_file",
+            code: ImportCheckCode::DuplicateFile,
         }
     } else {
         // Different size → allow (will be handled as upgrade or overwrite)
@@ -213,9 +253,11 @@ pub fn check_disk_space(ctx: &ImportCheckContext<'_>) -> ImportVerdict {
 /// Run all pre-import checks in order. Short-circuits on the first `Reject`.
 pub fn run_import_checks(ctx: &ImportCheckContext<'_>) -> ImportVerdict {
     let checks: &[fn(&ImportCheckContext<'_>) -> ImportVerdict] = &[
+        // Active-download suffixes change the apparent extension, so this
+        // transient check must run before extension validation.
+        check_not_unpacking,
         check_valid_extension,
         check_not_sample,
-        check_not_unpacking,
         check_disk_space,
         check_not_already_imported,
     ];
@@ -318,7 +360,32 @@ mod tests {
         let src = PathBuf::from("/tmp/movie.mkv.!qB");
         let dst = PathBuf::from("/data/movie.mkv");
         let ctx = dummy_ctx(&src, &dst, 1_000_000, &parsed, &[]);
-        assert!(!check_not_unpacking(&ctx).is_accept());
+        assert!(matches!(
+            run_import_checks(&ctx),
+            ImportVerdict::Reject {
+                code: ImportCheckCode::StillUnpacking,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn sibling_unpacking_marker_rejects_with_the_same_typed_code() {
+        let temp = tempfile::tempdir().expect("create temp directory");
+        let parsed = parse_release_metadata("movie");
+        let src = temp.path().join("movie.mkv");
+        let marker = temp.path().join("movie.mkv.!qB");
+        std::fs::write(&marker, "active").expect("write sibling marker");
+        let dst = temp.path().join("destination.mkv");
+        let ctx = dummy_ctx(&src, &dst, 1_000_000, &parsed, &[]);
+
+        assert!(matches!(
+            run_import_checks(&ctx),
+            ImportVerdict::Reject {
+                code: ImportCheckCode::StillUnpacking,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -352,7 +419,7 @@ mod tests {
         assert!(matches!(
             disk_space_verdict(DISK_SPACE_RESERVE_BYTES - 1, 0),
             ImportVerdict::Reject {
-                code: "insufficient_disk_space",
+                code: ImportCheckCode::InsufficientDiskSpace,
                 ..
             }
         ));
@@ -370,7 +437,7 @@ mod tests {
         assert!(matches!(
             disk_space_verdict(available, source_size),
             ImportVerdict::Reject {
-                code: "insufficient_disk_space",
+                code: ImportCheckCode::InsufficientDiskSpace,
                 ..
             }
         ));
@@ -381,14 +448,14 @@ mod tests {
         assert!(matches!(
             disk_space_verdict(u64::MAX - 1, u64::MAX),
             ImportVerdict::Reject {
-                code: "insufficient_disk_space",
+                code: ImportCheckCode::InsufficientDiskSpace,
                 ..
             }
         ));
         assert!(matches!(
             disk_space_verdict(u64::MAX, u64::MAX),
             ImportVerdict::Reject {
-                code: "insufficient_disk_space",
+                code: ImportCheckCode::InsufficientDiskSpace,
                 ..
             }
         ));

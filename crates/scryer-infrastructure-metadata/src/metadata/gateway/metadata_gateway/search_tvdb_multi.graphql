@@ -2,6 +2,8 @@ query SearchTvdbMulti($query: String!, $limit: Int, $language: String) {
   searchTvdbMulti(query: $query, limit: $limit, language: $language) {
     movies {
       tvdb_id
+      title_id
+      external_ids { source kind id key }
       name
       imdb_id
       slug
@@ -17,6 +19,8 @@ query SearchTvdbMulti($query: String!, $limit: Int, $language: String) {
     }
     series {
       tvdb_id
+      title_id
+      external_ids { source kind id key }
       name
       imdb_id
       slug
@@ -32,6 +36,8 @@ query SearchTvdbMulti($query: String!, $limit: Int, $language: String) {
     }
     anime {
       tvdb_id
+      title_id
+      external_ids { source kind id key }
       name
       imdb_id
       slug

@@ -11,6 +11,7 @@
 //! agree.
 
 use crate::canonical_scoring::ScoringContext;
+use crate::quality_profile::CoverageSizeBasis;
 use crate::scoring_weights::{ScoringPersona, ScoringWeights};
 use crate::{AppUseCase, QualityProfile};
 use scryer_domain::Title;
@@ -34,17 +35,23 @@ pub(crate) struct ResolvedScoringContext {
 impl ResolvedScoringContext {
     /// Borrow scoring inputs.
     ///
-    /// `runtime_minutes` overrides the title's own runtime for scopes that know
-    /// better (an episode's length rather than the series average); pass `None`
-    /// to keep the title default. Size scoring is runtime-derived, so getting
-    /// this wrong moves the size bucket.
-    pub(crate) fn view(&self, runtime_minutes: Option<i32>, is_filler: bool) -> ScoringContext<'_> {
+    /// `size_basis` overrides the title's own runtime for scopes that know
+    /// better (an episode's length rather than the series average, a pack's
+    /// total and per-member runtimes); pass
+    /// [`CoverageSizeBasis::default`] to keep the title default as a
+    /// single-member basis. Size scoring is runtime-derived, so getting this
+    /// wrong moves the size bucket.
+    pub(crate) fn view(
+        &self,
+        size_basis: CoverageSizeBasis,
+        is_filler: bool,
+    ) -> ScoringContext<'_> {
         ScoringContext {
             profile: &self.profile,
             weights: &self.weights,
             required_audio_languages: &self.required_audio_languages,
             category: &self.category,
-            runtime_minutes: runtime_minutes.or(self.default_runtime_minutes),
+            size_basis: size_basis.or_runtime(self.default_runtime_minutes),
             rules: (!self.rules.is_empty()).then_some(&self.rules),
             title_id: Some(&self.title_id),
             library_name: self.library_name.as_deref(),
@@ -57,6 +64,10 @@ impl ResolvedScoringContext {
 
     pub(crate) fn profile(&self) -> &QualityProfile {
         &self.profile
+    }
+
+    pub(crate) fn required_audio_languages(&self) -> &[String] {
+        &self.required_audio_languages
     }
 
     /// The title's own runtime, used as the per-episode fallback when the
@@ -83,7 +94,7 @@ impl ResolvedScoringContext {
 pub(crate) fn announced_metadata_for_title(
     title: &Title,
     parsed: &crate::ParsedReleaseMetadata,
-    profile: &QualityProfile,
+    required_audio_languages: &[String],
     indexer_languages: Option<&[String]>,
 ) -> crate::ParsedReleaseMetadata {
     let language_context = crate::title_audio_language_context(
@@ -97,7 +108,7 @@ pub(crate) fn announced_metadata_for_title(
         parsed,
         indexer_languages,
         Some(&language_context),
-        !profile.criteria.required_audio_languages.is_empty(),
+        !required_audio_languages.is_empty(),
     );
     enriched
 }
@@ -110,8 +121,9 @@ pub(crate) fn announced_metadata_for_title(
 /// (D18) — all need the same derivation, and it is the derivation that has to
 /// agree with the search lane or the whole design is undone.
 pub(crate) struct ParkedReleaseFacts {
-    /// The D4 runtime basis for what the release covers.
-    pub runtime_minutes: Option<i32>,
+    /// The D4 runtime basis for what the release covers: total runtime, one
+    /// member's, and how many members.
+    pub size_basis: CoverageSizeBasis,
     /// The release's **block-free** score ([`crate::canonical_scoring::ScoredRelease::total`]):
     /// the number an incumbent's bar is built from, so a queued release the
     /// profile now vetoes still compares on honest terms instead of carrying
@@ -156,8 +168,9 @@ pub(crate) fn score_parked_release_title(
         catalog_collections,
         None,
     );
-    let parsed = announced_metadata_for_title(title, &raw_parsed, context.profile(), None);
-    let runtime_minutes = crate::acquisition_coverage::coverage_runtime_minutes(
+    let parsed =
+        announced_metadata_for_title(title, &raw_parsed, context.required_audio_languages(), None);
+    let size_basis = crate::acquisition_coverage::coverage_size_basis(
         &coverage,
         &parsed,
         catalog_episodes,
@@ -169,11 +182,11 @@ pub(crate) fn score_parked_release_title(
     );
     let scored = crate::canonical_scoring::score_release(
         &crate::canonical_scoring::ReleaseEvidence::announced(parsed, size_bytes),
-        &context.view(runtime_minutes, false),
+        &context.view(size_basis, false),
     );
 
     ParkedReleaseFacts {
-        runtime_minutes,
+        size_basis,
         // Block-free, like an incumbent's bar: a queued release the profile
         // now vetoes must not carry −10 000 into `queued_rejection`, where it
         // would lose to every candidate and quietly switch the queue gate off.
@@ -276,11 +289,7 @@ impl AppUseCase {
         let category = crate::post_download_gate::facet_to_category_hint(&title.facet).to_string();
 
         let required_audio_languages = self
-            .resolve_required_audio_languages(
-                Some(&title.id),
-                Some(title.library_id.as_str()),
-                Some(category.as_str()),
-            )
+            .resolve_required_audio_languages_for_title(title)
             .await
             .unwrap_or_default();
 
@@ -385,13 +394,13 @@ impl AppUseCase {
             // its size term and therefore its bar. The candidate's span is only
             // a last resort, for a scope with no episodes at all (title and
             // link scopes, where it *is* the movie's runtime).
-            let incumbent_runtime = crate::acquisition_coverage::episode_span_runtime_minutes(
+            let incumbent_basis = crate::acquisition_coverage::episode_span_size_basis(
                 &episodes,
                 &covers,
                 context.default_runtime_minutes(),
             )
-            .or(runtime_minutes);
-            let bar = self.incumbent_bar(file, context, incumbent_runtime);
+            .or_runtime(runtime_minutes);
+            let bar = self.incumbent_bar(file, context, incumbent_basis);
             (
                 Incumbent {
                     tier_index: bar.tier_index,
@@ -655,7 +664,7 @@ impl AppUseCase {
         context: &ResolvedScoringContext,
         submissions: &[crate::DownloadSubmission],
         tracked_states: &std::collections::HashMap<
-            crate::contracts::DownloadSourceIdentity,
+            crate::contracts::ClientJobLocator,
             scryer_domain::TrackedDownloadState,
         >,
         dl_snapshot: &crate::acquisition_workflow::DownloadClientSnapshot,
@@ -671,11 +680,11 @@ impl AppUseCase {
                 )
             })
             .filter(|submission| {
-                let identity =
-                    crate::contracts::DownloadSourceIdentity::from_submission(submission);
-                crate::acquisition_workflow::submission_is_queued(
+                let identity = crate::contracts::ClientJobLocator::from_submission(submission);
+                crate::acquisition_workflow::submission_is_live_claim(
+                    submission,
                     tracked_states.get(&identity).copied(),
-                    crate::acquisition_workflow::submission_is_active(submission, dl_snapshot),
+                    dl_snapshot,
                 )
             })
             .filter_map(|submission| {
@@ -735,9 +744,9 @@ impl AppUseCase {
         &self,
         file: &crate::TitleMediaFile,
         context: &ResolvedScoringContext,
-        runtime_minutes: Option<i32>,
+        size_basis: CoverageSizeBasis,
     ) -> IncumbentFacts {
-        let view = context.view(runtime_minutes, false);
+        let view = context.view(size_basis, false);
         let scored = crate::canonical_scoring::score_media_file(file, &view);
         let tier_index = crate::quality_profile::quality_tier_index(
             &context.profile().criteria,

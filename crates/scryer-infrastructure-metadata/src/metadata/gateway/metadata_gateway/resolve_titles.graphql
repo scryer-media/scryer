@@ -1,0 +1,13 @@
+query ResolveTitles($refs: [TitleRefInput!]!, $kind: String!, $createMissing: Boolean!) {
+  resolveTitles(refs: $refs, kind: $kind, createMissing: $createMissing) {
+    ref_index
+    resolved
+    title_id
+    kind
+    primary_source
+    redirected_from
+    created
+    external_ids { source kind id key }
+    reason
+  }
+}

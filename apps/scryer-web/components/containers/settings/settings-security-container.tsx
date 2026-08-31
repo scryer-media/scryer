@@ -3,6 +3,7 @@ import { useNavigate } from "react-router";
 import { useClient } from "urql";
 import { toast } from "sonner";
 import { ExternalAccountInvitesContainer } from "@/components/containers/settings/external-account-invites-container";
+import { OAuthClientRegistrationsPanel } from "@/components/containers/settings/oauth-client-registrations-panel";
 import { SettingsSecuritySection } from "@/components/views/settings/settings-security-section";
 import { disposeWsClient } from "@/lib/graphql/ws-client";
 import { updateSecuritySettingsMutation } from "@/lib/graphql/mutations";
@@ -22,6 +23,7 @@ const DEFAULT_SECURITY_SETTINGS: SecuritySettings = {
   formLoginEnabled: false,
   passwordMinLength: MIN_PASSWORD_LENGTH,
   skipLoginForLocalIps: false,
+  apiKeysRestrictToSystemSettingsUsers: false,
   mfaRequireConfigStepUp: false,
   mfaRequirePasswordLogin: false,
   mfaRequireJellyfinLogin: false,
@@ -76,6 +78,8 @@ export function SettingsSecurityContainer() {
   const passwordMinLengthSaveToastRequestedRef = React.useRef(false);
   const canManageExternalInvites =
     user != null && hasAppPermission(user, APP_PERMISSIONS.manageUsers);
+  const canManageOAuthApplications =
+    user != null && hasAppPermission(user, APP_PERMISSIONS.manageSystemSettings);
 
   React.useEffect(() => {
     settingsRef.current = settings;
@@ -136,6 +140,7 @@ export function SettingsSecurityContainer() {
     mfaRequirePasswordLogin: boolean,
     mfaRequireJellyfinLogin: boolean,
     mfaRequireEmbyLogin: boolean = settingsRef.current.mfaRequireEmbyLogin,
+    apiKeysRestrictToSystemSettingsUsers?: boolean,
   ) => {
     const { data, error } = await client
       .mutation(updateSecuritySettingsMutation, {
@@ -147,6 +152,9 @@ export function SettingsSecurityContainer() {
           mfaRequirePasswordLogin,
           mfaRequireJellyfinLogin,
           mfaRequireEmbyLogin,
+          ...(apiKeysRestrictToSystemSettingsUsers === undefined
+            ? {}
+            : { apiKeysRestrictToSystemSettingsUsers }),
         },
       })
       .toPromise();
@@ -291,6 +299,7 @@ export function SettingsSecurityContainer() {
       return;
     }
 
+    setEnableConfirmOpen(false);
     try {
       await submitPasswordMinLength(false);
       const nextSettings = await applySecuritySettings(
@@ -325,6 +334,7 @@ export function SettingsSecurityContainer() {
         return;
       }
 
+      setEnableConfirmOpen(true);
       setConfirmError(saveErrorMessage);
       toast.error(saveErrorMessage);
     } finally {
@@ -371,6 +381,7 @@ export function SettingsSecurityContainer() {
     const effectiveChangesNow =
       !settings.envOverrideActive && settings.effectiveFormLoginEnabled;
 
+    setDisableConfirmOpen(false);
     setConfirmBusy(true);
     try {
       await submitPasswordMinLength(false);
@@ -398,6 +409,7 @@ export function SettingsSecurityContainer() {
 
       setDisableConfirmOpen(false);
     } catch (error) {
+      setDisableConfirmOpen(true);
       toast.error(errorMessage(error, t("settings.securitySaveFailed")));
     } finally {
       setConfirmBusy(false);
@@ -508,6 +520,51 @@ export function SettingsSecurityContainer() {
     settings.mfaRequireConfigStepUp,
     settings.mfaRequirePasswordLogin,
     settings.mfaRequireJellyfinLogin,
+    t,
+  ]);
+
+  const handleApiKeysRestrictionChange = React.useCallback(async (enabled: boolean) => {
+    if (
+      confirmBusy
+      || saveBusy
+      || enabled === settings.apiKeysRestrictToSystemSettingsUsers
+    ) {
+      return;
+    }
+
+    await submitPasswordMinLength(false);
+    setSaveBusy(true);
+    try {
+      const nextSettings = await applySecuritySettings(
+        settings.formLoginEnabled,
+        effectivePasswordMinLength,
+        settings.skipLoginForLocalIps,
+        settings.mfaRequireConfigStepUp,
+        settings.mfaRequirePasswordLogin,
+        settings.mfaRequireJellyfinLogin,
+        settings.mfaRequireEmbyLogin,
+        enabled,
+      );
+      setSettings(nextSettings);
+      toast.success(t("settings.securityPreferenceSaved"));
+    } catch (error) {
+      toast.error(errorMessage(error, t("settings.securitySaveFailed")));
+    } finally {
+      setSaveBusy(false);
+    }
+  }, [
+    applySecuritySettings,
+    confirmBusy,
+    effectivePasswordMinLength,
+    saveBusy,
+    settings.apiKeysRestrictToSystemSettingsUsers,
+    settings.formLoginEnabled,
+    settings.mfaRequireConfigStepUp,
+    settings.mfaRequireEmbyLogin,
+    settings.mfaRequireJellyfinLogin,
+    settings.mfaRequirePasswordLogin,
+    settings.skipLoginForLocalIps,
+    submitPasswordMinLength,
     t,
   ]);
 
@@ -634,7 +691,7 @@ export function SettingsSecurityContainer() {
   return (
     <SettingsSecuritySection
       settings={settings}
-      loading={loading || saveBusy}
+      loading={loading}
       enableConfirmOpen={enableConfirmOpen}
       disableConfirmOpen={disableConfirmOpen}
       adminPasswordRequiredOpen={adminPasswordRequiredOpen}
@@ -654,6 +711,8 @@ export function SettingsSecurityContainer() {
       onPasswordMinLengthDraftChange={setPasswordMinLengthDraft}
       onPasswordMinLengthSubmit={handlePasswordMinLengthSubmit}
       onSkipLocalIpsChange={handleSkipLocalIpsChange}
+      onApiKeysRestrictionChange={handleApiKeysRestrictionChange}
+      canManageApiKeysRestriction={canManageOAuthApplications}
       onMfaConfigStepUpChange={handleMfaConfigStepUpChange}
       onMfaPasswordLoginChange={handleMfaPasswordLoginChange}
       onTotpJellyfinLoginChange={handleTotpJellyfinLoginChange}
@@ -662,6 +721,9 @@ export function SettingsSecurityContainer() {
         canManageExternalInvites ? (
           <ExternalAccountInvitesContainer showMediaServersLink />
         ) : null
+      }
+      oauthApplicationsPanel={
+        canManageOAuthApplications ? <OAuthClientRegistrationsPanel /> : null
       }
     />
   );

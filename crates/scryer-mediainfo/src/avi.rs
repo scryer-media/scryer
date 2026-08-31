@@ -513,7 +513,7 @@ fn backfill_track_bitrates<T: Read + Seek>(
     if !needs_mp3_bitrate {
         return Ok(());
     }
-    if profile == AnalysisProfile::Fast {
+    if profile.skips_deep_probes() {
         return Ok(());
     }
 

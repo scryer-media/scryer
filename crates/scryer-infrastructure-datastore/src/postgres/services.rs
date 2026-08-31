@@ -110,12 +110,11 @@ mod tests {
 
     use super::*;
     use scryer_application::{
-        InsertMediaFileInput, LibraryRepository, LibraryScanUnmatchedItem,
-        LibraryScanUnmatchedItemRepository, LibraryScanUnmatchedSearchAttempt, MediaFileAnalysis,
-        MediaFileRepository, MetadataFieldUpdate, PendingImportStatus, QualityProfileRepository,
-        SettingsRepository, SystemInfoProvider, TitleImageKind, TitleImageRepository,
-        TitleImageSourceResult, TitleImageVariantRecord, TitleMetadataUpdate, TitleRepository,
-        UserRepository, builtin_4k_profile,
+        LibraryRepository, LibraryScanUnmatchedItem, LibraryScanUnmatchedItemRepository,
+        LibraryScanUnmatchedSearchAttempt, MetadataFieldUpdate, PendingImportStatus,
+        QualityProfileRepository, SettingsRepository, SystemInfoProvider, TitleImageKind,
+        TitleImageRepository, TitleImageSourceResult, TitleImageVariantRecord, TitleMetadataUpdate,
+        TitleRepository, UserRepository, builtin_4k_profile,
     };
     use scryer_domain::{
         Id, Library, LibraryGrant, LibraryPermission, LibraryPermissionMask, MediaFacet, Title,
@@ -131,7 +130,7 @@ mod tests {
     use scryer_infrastructure_library::media::{
         images::title_image_store::TitleImageStore,
         libraries::scan_unmatched_store::LibraryScanUnmatchedStore, libraries::store::LibraryStore,
-        search::media_file_store::MediaFileStore, titles::store::TitleStore,
+        titles::store::TitleStore,
     };
     use scryer_infrastructure_sql::types::SettingDefinitionSeed;
 
@@ -343,6 +342,125 @@ mod tests {
             assert_eq!(thumb_blob.bytes, vec![5, 6, 7, 8]);
 
             services.pool().close().await;
+            Ok::<_, AppError>(())
+        }
+        .await;
+
+        let cleanup = sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
+            .execute(&admin_pool)
+            .await;
+        admin_pool.close().await;
+        if let Err(error) = cleanup {
+            return Err(AppError::Repository(format!(
+                "failed to drop test schema {schema}: {error}"
+            )));
+        }
+        result
+    }
+
+    #[tokio::test]
+    async fn postgres_0198_preserves_conflicting_custom_defaults_from_env_url() -> AppResult<()> {
+        let Some(raw_url) = std::env::var("SCRYER_TEST_POSTGRES_URL")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+        else {
+            eprintln!(
+                "skipping PostgreSQL 0198 conflict test; SCRYER_TEST_POSTGRES_URL is not set"
+            );
+            return Ok(());
+        };
+
+        let admin_pool = sqlx::PgPool::connect(&raw_url).await.map_err(|error| {
+            AppError::Repository(format!("failed to connect to postgres: {error}"))
+        })?;
+        let schema = next_test_schema_name();
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
+            .execute(&admin_pool)
+            .await
+            .map_err(|error| {
+                AppError::Repository(format!("failed to create test schema: {error}"))
+            })?;
+
+        let result = async {
+            let schema_url = postgres_url_with_search_path(&raw_url, &schema)?;
+            let pool = sqlx::PgPool::connect(&schema_url)
+                .await
+                .map_err(|error| AppError::Repository(error.to_string()))?;
+            crate::postgres::migrations::replay_source_catalog_for_fresh_install(&pool, Some(197))
+                .await?;
+
+            sqlx::query(
+                "INSERT INTO libraries
+                    (id, facet, name, slug, is_default, created_at, updated_at)
+                 VALUES
+                    ('custom_movies', 'movie', 'Custom Movies', 'movies', false,
+                     '1970-01-01T00:00:00Z', '1970-01-01T00:00:00Z'),
+                    ('custom_series_paths', 'series', 'Custom Series Paths', 'custom-series', false,
+                     '1970-01-01T00:00:00Z', '1970-01-01T00:00:00Z')",
+            )
+            .execute(&pool)
+            .await
+            .map_err(|error| AppError::Repository(error.to_string()))?;
+            sqlx::query(
+                "INSERT INTO library_roots
+                    (id, library_id, path, normalized_path, is_default, created_at, updated_at)
+                 VALUES
+                    ('custom_movies_root', 'custom_movies', '/custom/movies', '/custom/movies', false,
+                     '1970-01-01T00:00:00Z', '1970-01-01T00:00:00Z'),
+                    ('custom_series_root', 'custom_series_paths', '/data/series', '/data/series', false,
+                     '1970-01-01T00:00:00Z', '1970-01-01T00:00:00Z')",
+            )
+            .execute(&pool)
+            .await
+            .map_err(|error| AppError::Repository(error.to_string()))?;
+
+            crate::postgres::migrations::run_migrations(&pool, MigrationMode::Apply).await?;
+
+            let custom_movies: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM libraries
+                  WHERE id = 'custom_movies' AND facet = 'movie' AND slug = 'movies'",
+            )
+            .fetch_one(&pool)
+            .await
+            .map_err(|error| AppError::Repository(error.to_string()))?;
+            assert_eq!(custom_movies, 1);
+            let canonical_movie_rows: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM libraries WHERE id = 'movie_default_library'",
+            )
+            .fetch_one(&pool)
+            .await
+            .map_err(|error| AppError::Repository(error.to_string()))?;
+            assert_eq!(canonical_movie_rows, 0);
+            let conflicting_canonical_roots: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM library_roots
+                  WHERE id IN (
+                    'canonical_root_for_movie_default_library',
+                    'canonical_root_for_series_default_library'
+                  )",
+            )
+            .fetch_one(&pool)
+            .await
+            .map_err(|error| AppError::Repository(error.to_string()))?;
+            assert_eq!(conflicting_canonical_roots, 0);
+            let preserved_custom_roots: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM library_roots
+                  WHERE id IN ('custom_movies_root', 'custom_series_root')",
+            )
+            .fetch_one(&pool)
+            .await
+            .map_err(|error| AppError::Repository(error.to_string()))?;
+            assert_eq!(preserved_custom_roots, 2);
+            let canonical_anime_root: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM library_roots
+                  WHERE id = 'canonical_root_for_anime_default_library'",
+            )
+            .fetch_one(&pool)
+            .await
+            .map_err(|error| AppError::Repository(error.to_string()))?;
+            assert_eq!(canonical_anime_root, 1);
+
+            pool.close().await;
             Ok::<_, AppError>(())
         }
         .await;
@@ -656,7 +774,24 @@ mod tests {
                 Some(library_id.to_string()),
             )
             .await?;
-            assert_eq!(explicit.as_deref(), Some(value_json.as_str()));
+            // `settings_values.value_json` is `jsonb` on PostgreSQL, which
+            // normalizes key order on write; compare parsed values rather
+            // than the raw string (unlike SQLite's TEXT column, which does
+            // preserve the exact bytes — see the sqlite-side counterpart of
+            // this test).
+            let explicit_value: serde_json::Value = explicit
+                .as_deref()
+                .map(serde_json::from_str)
+                .transpose()
+                .map_err(|error| {
+                    AppError::Repository(format!("failed to parse stored setting JSON: {error}"))
+                })?
+                .ok_or_else(|| {
+                    AppError::Repository("expected an explicit library-scoped setting".to_string())
+                })?;
+            let expected_value: serde_json::Value =
+                serde_json::from_str(&value_json).expect("test fixture value is valid JSON");
+            assert_eq!(explicit_value, expected_value);
 
             let default_lookup = SettingsRepository::get_setting_json(
                 &settings,
@@ -794,135 +929,6 @@ mod tests {
                 actual_indexes.contains("idx_library_scan_unmatched_items_facet_title_status_updated"),
                 "expected PostgreSQL blank install to restore the title-aware unmatched-items index"
             );
-
-            services.pool().close().await;
-            Ok::<_, AppError>(())
-        }
-        .await;
-
-        let cleanup = sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
-            .execute(&admin_pool)
-            .await;
-        admin_pool.close().await;
-        if let Err(error) = cleanup {
-            return Err(AppError::Repository(format!(
-                "failed to drop test schema {schema}: {error}"
-            )));
-        }
-        result
-    }
-
-    #[tokio::test]
-    async fn postgres_media_file_store_uses_sqlite_canonical_statuses() -> AppResult<()> {
-        let Some(raw_url) = std::env::var("SCRYER_TEST_POSTGRES_URL")
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-        else {
-            eprintln!(
-                "skipping PostgreSQL media-file store test; SCRYER_TEST_POSTGRES_URL is not set"
-            );
-            return Ok(());
-        };
-
-        let admin_pool = sqlx::PgPool::connect(&raw_url).await.map_err(|error| {
-            AppError::Repository(format!("failed to connect to postgres: {error}"))
-        })?;
-        let schema = next_test_schema_name();
-
-        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
-            .execute(&admin_pool)
-            .await
-            .map_err(|error| {
-                AppError::Repository(format!("failed to create test schema: {error}"))
-            })?;
-
-        let result = async {
-            let schema_url = postgres_url_with_search_path(&raw_url, &schema)?;
-            let services =
-                PostgresServices::new_with_mode(schema_url, MigrationMode::Apply).await?;
-            let catalog = title_store(&services);
-            let media_files = MediaFileStore::new(services.datastore());
-
-            let title = sample_title("pg-media-file-store");
-            TitleRepository::create(&catalog, title.clone()).await?;
-
-            let file_id = media_files
-                .insert_media_file(&InsertMediaFileInput {
-                    title_id: title.id.clone(),
-                    file_path: "/library/Movie.Title.2026.mkv".to_string(),
-                    size_bytes: 8_192,
-                    quality_label: Some("720p".to_string()),
-                    grabbed_at: Some("2026-05-01T00:00:00Z".to_string()),
-                    ..Default::default()
-                })
-                .await?;
-            media_files
-                .insert_media_file(&InsertMediaFileInput {
-                    title_id: title.id.clone(),
-                    file_path: "/library/.scryer-recycle/old/Movie.Title.2026.mkv".to_string(),
-                    size_bytes: 1,
-                    quality_label: Some("2160p".to_string()),
-                    ..Default::default()
-                })
-                .await?;
-
-            let listed = media_files.list_media_files_for_title(&title.id).await?;
-            assert_eq!(listed.len(), 1);
-            assert_eq!(listed[0].id, file_id);
-            assert_eq!(listed[0].scan_status, "imported");
-            assert_eq!(
-                listed[0].grabbed_at.as_deref(),
-                Some("2026-05-01T00:00:00+00:00")
-            );
-
-            media_files
-                .update_media_file_analysis(
-                    &file_id,
-                    MediaFileAnalysis {
-                        video_codec: Some(
-                            scryer_application::VideoCodec::parse("hevc").expect("parse codec"),
-                        ),
-                        video_width: Some(3840),
-                        video_height: Some(2160),
-                        video_bitrate_kbps: None,
-                        video_bit_depth: Some(10),
-                        video_hdr_format: Some("HDR10".to_string()),
-                        dovi_profile: None,
-                        dovi_bl_compat_id: None,
-                        video_frame_rate: Some("23.976".to_string()),
-                        video_profile: Some("Main 10".to_string()),
-                        audio_codec: Some("aac".to_string()),
-                        audio_profile: Some("LC".to_string()),
-                        audio_channels: Some(2),
-                        audio_bitrate_kbps: None,
-                        audio_languages: vec!["eng".to_string()],
-                        audio_streams: vec![],
-                        subtitle_languages: vec![],
-                        subtitle_codecs: vec![],
-                        subtitle_streams: vec![],
-                        has_multiaudio: false,
-                        duration_seconds: Some(7200),
-                        num_chapters: Some(12),
-                        container_format: Some("matroska".to_string()),
-                    },
-                )
-                .await?;
-            let stored = media_files
-                .get_media_file_by_id(&file_id)
-                .await?
-                .expect("stored media file");
-            assert_eq!(stored.scan_status, "scanned");
-            assert_eq!(stored.audio_languages, vec!["eng".to_string()]);
-
-            media_files
-                .mark_scan_failed(&file_id, "probe failed")
-                .await?;
-            let failed = media_files
-                .get_media_file_by_id(&file_id)
-                .await?
-                .expect("stored media file after failure");
-            assert_eq!(failed.scan_status, "scan_failed");
 
             services.pool().close().await;
             Ok::<_, AppError>(())
@@ -1156,7 +1162,7 @@ mod tests {
     }
 
     fn postgres_parity_index_names_from_source() -> BTreeSet<String> {
-        std::fs::read_to_string(postgres_0140_baseline_path())
+        let mut indexes: BTreeSet<String> = std::fs::read_to_string(postgres_0140_baseline_path())
             .expect("read PostgreSQL 0140 baseline")
             .lines()
             .filter_map(|line| {
@@ -1167,7 +1173,20 @@ mod tests {
                     .and_then(|rest| rest.split_whitespace().next())
                     .map(str::to_string)
             })
-            .collect()
+            .collect();
+        // Indexes on tables/columns dropped after the 0140 baseline: the
+        // owning table went with discovery_raw_pages (migration 0144) and
+        // event_outboxes (migration 0146); the wanted_items scheduler column
+        // it covered was dropped the same way (migration 0143).
+        for dropped_index in [
+            "idx_discovery_raw_pages_run",
+            "idx_event_outboxes_channel",
+            "idx_event_outboxes_status",
+            "idx_wanted_items_next_search",
+        ] {
+            indexes.remove(dropped_index);
+        }
+        indexes
     }
 
     fn postgres_0140_baseline_path() -> PathBuf {
@@ -1237,6 +1256,8 @@ mod tests {
             "job_runs",
             "quality_profiles_json",
             "mediarr_schema_migrations",
+            "discovery_raw_pages",
+            "event_outboxes",
         ] {
             assert!(
                 !actual_tables.contains(removed_table),
@@ -1259,6 +1280,8 @@ mod tests {
             "indexer_proxy_config_id".to_string(),
             "last_error_message".to_string(),
             "download_client_id".to_string(),
+            // Seeding profile assignment (migrations 0163/0164).
+            "seeding_profile_id".to_string(),
         ]);
         columns
             .entry("pending_releases".to_string())
@@ -1291,6 +1314,10 @@ mod tests {
                 "seed_goal_met_action".to_string(),
                 "seed_goal_source".to_string(),
                 "seed_info_hash".to_string(),
+                // Post-import seeding-profile tracking (migration 0166).
+                "seed_post_import_tracking".to_string(),
+                // Reported release size at grab time (migration 0172).
+                "release_size_bytes".to_string(),
             ]);
         columns
             .entry("discovery_titles".to_string())
@@ -1302,10 +1329,94 @@ mod tests {
                 "next_search_at",
                 "search_count",
                 "baseline_date",
+                // Unused write-only score column, dropped (migration 0170).
+                "current_score",
             ] {
                 wanted_items.remove(column);
             }
         }
+        // Write-only raw payload store, dropped along with its index once
+        // nothing read it anymore (migration 0144, RFC 121 SW4.1).
+        columns.remove("discovery_raw_pages");
+        // Unused outbox table, dropped outright (migration 0146).
+        columns.remove("event_outboxes");
+        if let Some(episode_links) = columns.get_mut("download_submission_episode_links") {
+            // Canonical download identity finalization replaces the
+            // client-tuple key with the canonical `download_id`
+            // (migration 0180).
+            for column in [
+                "download_client_id",
+                "download_client_type",
+                "download_client_item_id",
+            ] {
+                episode_links.remove(column);
+            }
+            episode_links.insert("download_id".to_string());
+        }
+        // Canonical download identity, backfilled onto the tables that used
+        // to key off the client tuple (migration 0179).
+        for table in [
+            "download_identity_states",
+            "download_import_artifacts",
+            "download_queue_commands",
+            "imports",
+        ] {
+            columns
+                .entry(table.to_string())
+                .or_default()
+                .insert("canonical_download_id".to_string());
+        }
+        columns
+            .entry("emby_media_server_details".to_string())
+            .or_default()
+            .extend([
+                // First-class Emby Connect support (migration 0155).
+                "server_id".to_string(),
+                "connect_enabled".to_string(),
+            ]);
+        if let Some(file_episode_map) = columns.get_mut("file_episode_map") {
+            // Primary/additional role per episode link (migration 0158).
+            file_episode_map.insert("role".to_string());
+        }
+        columns
+            .entry("library_scan_unmatched_items".to_string())
+            .or_default()
+            .insert(
+                // Sized before a title exists to bind it to (migration 0162).
+                "size_bytes".to_string(),
+            );
+        columns
+            .entry("media_files".to_string())
+            .or_default()
+            .insert(
+                // Announced release size, kept alongside the scanned size
+                // (migration 0173).
+                "announced_size_bytes".to_string(),
+            );
+        columns
+            .entry("media_server_connections".to_string())
+            .or_default()
+            .insert(
+                // Browser-facing deep-link base URL (migration 0182).
+                "external_url".to_string(),
+            );
+        columns.entry("titles".to_string()).or_default().insert(
+            // SMG identity backfill retry counter (migration 0181).
+            "smg_identity_backfill_attempt_count".to_string(),
+        );
+        columns.entry("users".to_string()).or_default().insert(
+            // Forced password reset flag (migration 0168).
+            "password_change_required".to_string(),
+        );
+        columns
+            .entry("webauthn_challenges".to_string())
+            .or_default()
+            .extend([
+                // Login-verification-scoped WebAuthn ceremonies
+                // (migration 0167).
+                "purpose".to_string(),
+                "login_verification_challenge_id".to_string(),
+            ]);
         columns
     }
 

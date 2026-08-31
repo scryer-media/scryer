@@ -2,7 +2,7 @@ import * as React from "react";
 import { Languages, SlidersVertical, Sparkles } from "lucide-react";
 import { useTranslate } from "@/lib/context/translate-context";
 import { InfoHelp } from "@/components/common/info-help";
-import { SubtitleLanguagePicker } from "@/components/common/subtitle-language-picker";
+import { AudioLanguagePicker } from "@/components/common/audio-language-picker";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -240,7 +240,7 @@ export function QualitySettingsPanel({
         description={t("title.requiredAudioLanguagesFacetInfo")}
       >
         <div className="max-w-xl space-y-2">
-          <SubtitleLanguagePicker
+          <AudioLanguagePicker
             value={categoryRequiredAudioLanguages[activeQualityScopeId] ?? []}
             onChange={(languages) => {
               void saveCategoryRequiredAudioLanguages(languages);

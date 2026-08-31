@@ -47,6 +47,8 @@ pub struct ActivityEventPayload {
     pub title_id: Option<ID>,
     /// Media facet, or null when not facet-scoped.
     pub facet: Option<MediaFacetValue>,
+    /// Episodes affected by the activity when it originated from an import.
+    pub episode_ids: Vec<ID>,
     /// Human-readable activity message.
     pub message: String,
     /// UTC time when the activity occurred.

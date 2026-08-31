@@ -3,6 +3,22 @@ export type DirectMovieManualImportCandidate = {
   sizeBytes?: number | null;
 };
 
+export function compareManualImportSeasonLabels(
+  left: string,
+  right: string,
+): number {
+  const leftNumber = Number.parseInt(left.match(/\d+/)?.[0] ?? "", 10);
+  const rightNumber = Number.parseInt(right.match(/\d+/)?.[0] ?? "", 10);
+  const leftSortValue = Number.isFinite(leftNumber)
+    ? leftNumber
+    : Number.MAX_SAFE_INTEGER;
+  const rightSortValue = Number.isFinite(rightNumber)
+    ? rightNumber
+    : Number.MAX_SAFE_INTEGER;
+
+  return leftSortValue - rightSortValue || left.localeCompare(right);
+}
+
 /**
  * A movie import lands exactly one file: the primary. The direct (dialog-less)
  * movie action therefore maps only the largest candidate the selection

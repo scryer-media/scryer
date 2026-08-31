@@ -1,6 +1,6 @@
 [package]
 name = "scryer-plugin-sdk"
-version = "3.8.0"
+version = "3.10.0"
 edition.workspace = true
 description = "Deprecated direct plugin SDK; use scryer-plugin-pdk for new Scryer plugins"
 license = "GPL-3.0-only"

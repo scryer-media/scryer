@@ -1,9 +1,10 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use thiserror::Error;
 use uuid::Uuid;
 
+pub mod download_identity;
 mod title_sort;
 pub use title_sort::{
     title_catalog_name_tie_key, title_catalog_sort_input, title_catalog_sort_key,
@@ -744,7 +745,39 @@ pub struct Title {
     pub folder_path: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TitleExternalRating {
+    pub source: String,
+    pub value: Option<f64>,
+    pub score: Option<f64>,
+    pub normalized: f64,
+    pub votes: Option<i32>,
+    pub url: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TitleRatingSummary {
+    pub rating: Option<f64>,
+    pub rating_sources: Vec<String>,
+    pub external_ratings: Vec<TitleExternalRating>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TitleCredit {
+    pub kind: String,
+    pub person_id: String,
+    pub person_name: String,
+    pub person_original_name: String,
+    pub person_image_url: String,
+    pub person_source: String,
+    pub person_external_id: String,
+    pub character_name: String,
+    pub language: String,
+    pub billing_order: i32,
+    pub episode_count: Option<i32>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct MovieEntity {
     pub id: String,
     pub title: String,
@@ -764,11 +797,15 @@ pub struct MovieEntity {
     pub tmdb_id: Option<String>,
     pub mal_id: Option<String>,
     pub anidb_id: Option<String>,
+    #[serde(default)]
+    pub ratings: Option<TitleRatingSummary>,
+    #[serde(default)]
+    pub credits: Option<Vec<TitleCredit>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct SeriesMovieLink {
     pub id: String,
     pub series_title_id: String,
@@ -784,6 +821,10 @@ pub struct SeriesMovieLink {
     pub confidence: Option<String>,
     pub signal_summary: Option<String>,
     pub source: Option<String>,
+    /// Explicit operator choice; absent values follow title/metadata policy.
+    pub monitoring_override: Option<bool>,
+    /// False when metadata no longer reports this derived relationship.
+    pub metadata_active: bool,
     pub monitored: bool,
     pub legacy_collection_id: Option<String>,
     pub created_at: DateTime<Utc>,
@@ -1060,20 +1101,18 @@ impl NabTransportKind {
 pub fn is_nab_provider_type(provider_type: &str) -> bool {
     matches!(
         provider_type.trim().to_ascii_lowercase().as_str(),
-        "newznab" | "nzbgeek" | "torznab"
+        "amenzb" | "animetosho-xyz" | "dognzb" | "newznab" | "nzbgeek" | "torznab"
     )
 }
 
 impl IndexerConfig {
-    pub fn managed_destination_cooldown_key(&self) -> Option<String> {
-        let parent_id = self.managed_parent_config_id.as_deref()?.trim();
-        let child_key = self.managed_child_key.as_deref()?.trim();
-        if parent_id.is_empty() || child_key.is_empty() {
-            return None;
-        }
-        Some(managed_indexer_destination_cooldown_key(
-            parent_id, child_key,
-        ))
+    pub fn rate_limit_domain_key(&self) -> String {
+        let parent_id = self
+            .managed_parent_config_id
+            .as_deref()
+            .filter(|id| !id.trim().is_empty())
+            .unwrap_or(&self.id);
+        indexer_rate_limit_domain_key(parent_id, self.managed_child_key.as_deref())
     }
 
     pub fn nab_transport_kind(&self) -> Option<NabTransportKind> {
@@ -1097,8 +1136,12 @@ impl IndexerConfig {
     }
 }
 
-pub fn managed_indexer_destination_cooldown_key(parent_config_id: &str, child_key: &str) -> String {
-    format!("managed-indexer:{parent_config_id}:{child_key}")
+pub fn indexer_rate_limit_domain_key(config_id: &str, child_key: Option<&str>) -> String {
+    let config_id = config_id.trim();
+    match child_key.map(str::trim).filter(|key| !key.is_empty()) {
+        Some(child_key) => format!("{config_id}:{child_key}"),
+        None => config_id.to_string(),
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -1885,6 +1928,7 @@ impl ImportStatus {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ImportTransferPhase {
+    Extracting,
     Copying,
     Finalizing,
 }
@@ -1892,6 +1936,7 @@ pub enum ImportTransferPhase {
 impl ImportTransferPhase {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Extracting => "extracting",
             Self::Copying => "copying",
             Self::Finalizing => "finalizing",
         }
@@ -1899,6 +1944,7 @@ impl ImportTransferPhase {
 
     pub fn parse(value: &str) -> Option<Self> {
         match value {
+            "extracting" => Some(Self::Extracting),
             "copying" => Some(Self::Copying),
             "finalizing" => Some(Self::Finalizing),
             _ => None,
@@ -2046,9 +2092,12 @@ pub enum ImportSkipReason {
     UnresolvedIdentity,
     UnparseableEpisode,
     NoVideoFiles,
+    DownloadInProgress,
     DiskFull,
     PermissionDenied,
     PasswordRequired,
+    ArchiveExtractionPluginRequired,
+    ArchiveExtractionTimedOut,
 }
 
 impl ImportSkipReason {
@@ -2061,9 +2110,12 @@ impl ImportSkipReason {
             Self::UnresolvedIdentity => "unresolved_identity",
             Self::UnparseableEpisode => "unparseable_episode",
             Self::NoVideoFiles => "no_video_files",
+            Self::DownloadInProgress => "download_in_progress",
             Self::DiskFull => "disk_full",
             Self::PermissionDenied => "permission_denied",
             Self::PasswordRequired => "password_required",
+            Self::ArchiveExtractionPluginRequired => "archive_extraction_plugin_required",
+            Self::ArchiveExtractionTimedOut => "archive_extraction_timed_out",
         }
     }
 }
@@ -2156,16 +2208,26 @@ pub struct ImportRecord {
     pub updated_at: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ImportDestinationDisposition {
+    #[default]
+    Created,
+    AlreadyPresent,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ImportFileResult {
     pub strategy: ImportStrategy,
     pub source_path: std::path::PathBuf,
     pub dest_path: std::path::PathBuf,
     pub size_bytes: u64,
+    #[serde(default)]
+    pub destination_disposition: ImportDestinationDisposition,
     pub source_cleanup: Option<ImportSourceCleanupGuard>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ImportSourceCleanupGuard {
     pub source_path: std::path::PathBuf,
     pub dest_path: std::path::PathBuf,
@@ -2175,26 +2237,26 @@ pub struct ImportSourceCleanupGuard {
     pub dest_proof: ImportContentProof,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ImportSourceSnapshot {
     pub identity: ImportSourceIdentity,
     pub proof: ImportContentProof,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ImportContentProof {
     pub size_bytes: u64,
     pub sample_bytes: u64,
     pub sample_blake3: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ImportSourceIdentity {
     pub file: ImportFileIdentity,
     pub kind: ImportSourceIdentityKind,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ImportFileIdentity {
     pub len: u64,
     pub modified: Option<std::time::SystemTime>,
@@ -2204,7 +2266,7 @@ pub struct ImportFileIdentity {
     pub ino: u64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ImportSourceIdentityKind {
     Regular,
     Symlink {
@@ -2403,16 +2465,30 @@ pub struct TitleHistoryRecord {
     pub created_at: String,
 }
 
+/// One blocked release for one title.
+///
+/// A blocklist row blocks a *release*, not an episode and not a download. Its
+/// identity is the infohash when the release has one -- content identity is the
+/// same wherever the torrent came from -- and otherwise the indexer it failed
+/// on plus its normalized name.
 #[derive(Clone, Debug)]
 pub struct BlocklistEntry {
     pub id: String,
     pub title_id: String,
-    pub source_title: Option<String>,
-    pub source_hint: Option<String>,
-    pub quality: Option<String>,
-    pub download_id: Option<String>,
+    /// The release name as the indexer presented it. Display only.
+    pub release_name: String,
+    /// `release_name` trimmed and ASCII-lowercased: the matcher and the key.
+    pub normalized_release_name: String,
+    /// The indexer this release failed on; empty blocks it on every indexer.
+    ///
+    /// Empty is not only a pre-migration shim: a manual replacement blocklists
+    /// a name read off a file on disk, where the only recorded provenance is
+    /// the indexer's display name rather than a stable id.
+    pub indexer_id: String,
+    /// Set for a torrent whose infohash was known, which keys the block
+    /// independently of the indexer that served it.
+    pub info_hash: Option<String>,
     pub reason: Option<String>,
-    pub data_json: Option<String>,
     pub created_at: String,
 }
 
@@ -2738,6 +2814,8 @@ pub struct TitleRematchedEventData {
     pub title: TitleContextSnapshot,
     pub old_tvdb_id: Option<String>,
     pub new_tvdb_id: String,
+    pub smg_id: Option<i64>,
+    pub tmdb_id: Option<i64>,
     pub source: String,
 }
 
@@ -3790,6 +3868,9 @@ pub struct MediaServerConnection {
     pub provider: MediaServerProvider,
     pub display_name: String,
     pub base_url: String,
+    /// Browser-facing server URL used only for playback deep links.
+    #[serde(default)]
+    pub external_url: Option<String>,
     pub enabled: bool,
     pub login_enabled: bool,
     pub linking_enabled: bool,
@@ -3814,6 +3895,7 @@ impl std::fmt::Debug for MediaServerConnection {
             .field("provider", &self.provider)
             .field("display_name", &self.display_name)
             .field("base_url", &self.base_url)
+            .field("external_url", &self.external_url)
             .field("enabled", &self.enabled)
             .field("login_enabled", &self.login_enabled)
             .field("linking_enabled", &self.linking_enabled)
@@ -3837,6 +3919,39 @@ impl MediaServerConnection {
             .as_deref()
             .is_some_and(|value| !value.trim().is_empty())
     }
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaServerPlaybackEntityKind {
+    Title,
+    Episode,
+}
+
+impl MediaServerPlaybackEntityKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Title => "title",
+            Self::Episode => "episode",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "title" => Some(Self::Title),
+            "episode" => Some(Self::Episode),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MediaServerPlaybackItem {
+    pub connection_id: String,
+    pub entity_kind: MediaServerPlaybackEntityKind,
+    pub entity_id: String,
+    pub provider_item_id: String,
+    pub last_seen_at: DateTime<Utc>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -4441,6 +4556,8 @@ pub struct ConfigFieldDef {
 pub struct ConfigFieldOption {
     pub value: String,
     pub label: String,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub config_overrides: BTreeMap<String, String>,
 }
 
 // ── Notification types ──────────────────────────────────────────────
@@ -4824,6 +4941,22 @@ mod tests {
     fn id_round_trip() {
         let id = Id::new();
         assert!(!id.0.is_empty());
+    }
+
+    #[test]
+    fn direct_nab_provider_family_includes_specialized_newznab_indexers() {
+        for provider_type in [
+            "amenzb",
+            "animetosho-xyz",
+            "dognzb",
+            "newznab",
+            "nzbgeek",
+            "torznab",
+        ] {
+            assert!(is_nab_provider_type(provider_type), "{provider_type}");
+        }
+        assert!(!is_nab_provider_type("aninzb"));
+        assert!(!is_nab_provider_type("torrent-rss"));
     }
 
     #[test]

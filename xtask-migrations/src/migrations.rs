@@ -11,6 +11,22 @@ use crate::RebaselineArgs;
 
 const CANONICAL_ADMIN_USER_ID: &str = "00000000000000000000000000000001";
 const CANONICAL_TIMESTAMP: &str = "1970-01-01T00:00:00Z";
+const POSTGRES_BUILTIN_BASELINE_SEED_MIN_VERSION: i64 = 140;
+const POSTGRES_BUILTIN_BASELINE_SEED_SQL: &str = r#"INSERT INTO libraries (id, facet, name, slug, is_default, created_at, updated_at) VALUES ('anime_default_library', 'anime', 'Anime', 'anime', true, '1970-01-01T00:00:00Z', '1970-01-01T00:00:00Z');
+INSERT INTO libraries (id, facet, name, slug, is_default, created_at, updated_at) VALUES ('movie_default_library', 'movie', 'Movies', 'movies', true, '1970-01-01T00:00:00Z', '1970-01-01T00:00:00Z');
+INSERT INTO libraries (id, facet, name, slug, is_default, created_at, updated_at) VALUES ('series_default_library', 'series', 'Series', 'series', true, '1970-01-01T00:00:00Z', '1970-01-01T00:00:00Z');
+INSERT INTO library_roots (id, library_id, path, normalized_path, is_default, created_at, updated_at) VALUES ('canonical_root_for_anime_default_library', 'anime_default_library', '/data/anime', '/data/anime', true, '1970-01-01T00:00:00Z', '1970-01-01T00:00:00Z');
+INSERT INTO library_roots (id, library_id, path, normalized_path, is_default, created_at, updated_at) VALUES ('canonical_root_for_movie_default_library', 'movie_default_library', '/data/movies', '/data/movies', true, '1970-01-01T00:00:00Z', '1970-01-01T00:00:00Z');
+INSERT INTO library_roots (id, library_id, path, normalized_path, is_default, created_at, updated_at) VALUES ('canonical_root_for_series_default_library', 'series_default_library', '/data/series', '/data/series', true, '1970-01-01T00:00:00Z', '1970-01-01T00:00:00Z');
+INSERT INTO quality_profiles (id, name, scope, scope_id, archival_quality, allow_unknown_quality, atmos_preferred, dolby_vision_allowed, detected_hdr_allowed, prefer_remux, allow_bd_disk, allow_upgrades, created_at, prefer_dual_audio, required_audio_languages, scoring_config) VALUES ('1080p', '1080P', 'system', NULL, '1080P', false, true, true, true, true, false, true, '1970-01-01T00:00:00Z', false, '[]', '{}');
+INSERT INTO quality_profiles (id, name, scope, scope_id, archival_quality, allow_unknown_quality, atmos_preferred, dolby_vision_allowed, detected_hdr_allowed, prefer_remux, allow_bd_disk, allow_upgrades, created_at, prefer_dual_audio, required_audio_languages, scoring_config) VALUES ('4k', '4K', 'system', NULL, '2160P', false, true, true, true, true, false, true, '1970-01-01T00:00:00Z', false, '[]', '{}');
+INSERT INTO quality_profile_quality_tiers (profile_id, quality_tier, sort_order, created_at) VALUES ('1080p', '1080P', 0, '1970-01-01T00:00:00Z');
+INSERT INTO quality_profile_quality_tiers (profile_id, quality_tier, sort_order, created_at) VALUES ('1080p', '720P', 1, '1970-01-01T00:00:00Z');
+INSERT INTO quality_profile_quality_tiers (profile_id, quality_tier, sort_order, created_at) VALUES ('4k', '1080P', 1, '1970-01-01T00:00:00Z');
+INSERT INTO quality_profile_quality_tiers (profile_id, quality_tier, sort_order, created_at) VALUES ('4k', '2160P', 0, '1970-01-01T00:00:00Z');
+INSERT INTO quality_profile_quality_tiers (profile_id, quality_tier, sort_order, created_at) VALUES ('4k', '720P', 2, '1970-01-01T00:00:00Z');
+INSERT INTO users (id, username, display_name, status, password_hash, passkey_public_key, locale, created_at, updated_at, last_login_at, account_kind, auth_session_version) VALUES ('00000000000000000000000000000001', 'admin', NULL, 'active', NULL, NULL, NULL, '1970-01-01T00:00:00Z', '1970-01-01T00:00:00Z', NULL, 'local', NULL);
+"#;
 
 pub(crate) fn run_rebaseline(ctx: &TaskContext, args: RebaselineArgs) -> Result<()> {
     let runtime = tokio::runtime::Runtime::new().context("failed to create tokio runtime")?;
@@ -120,7 +136,10 @@ async fn run_rebaseline_inner(ctx: &TaskContext, args: RebaselineArgs) -> Result
         )
         .await
         .map_err(|error| anyhow!(error.to_string()))?;
-        let postgres_dump = container.schema_dump(&target_db)?;
+        let postgres_dump = append_postgres_builtin_baseline_seeds(
+            args.through,
+            container.schema_dump(&target_db)?,
+        );
         write_baseline_file(&postgres_baseline_path, &postgres_dump)?;
         generated_paths.push(postgres_baseline_path.clone());
     }
@@ -406,7 +425,7 @@ impl DockerPostgresContainer {
             "POSTGRES_PASSWORD=postgres",
             "-p",
             &format!("127.0.0.1:{port}:5432"),
-            "postgres:17-alpine",
+            "postgres:18-alpine",
         ]);
         run_capture(&mut command).with_context(|| {
             format!(
@@ -556,6 +575,17 @@ fn normalize_postgres_schema_dump(raw: &str) -> String {
     }
 
     out
+}
+
+fn append_postgres_builtin_baseline_seeds(through_version: i64, mut dump: String) -> String {
+    if through_version < POSTGRES_BUILTIN_BASELINE_SEED_MIN_VERSION {
+        return dump;
+    }
+    if !dump.ends_with('\n') {
+        dump.push('\n');
+    }
+    dump.push_str(POSTGRES_BUILTIN_BASELINE_SEED_SQL);
+    dump
 }
 
 fn should_skip_postgres_dump_line(line: &str) -> bool {
@@ -919,6 +949,25 @@ ALTER TABLE ONLY public.download_jobs
             normalize_postgres_schema_dump(dump),
             "CREATE TABLE download_jobs (\n    id uuid NOT NULL\n);\nALTER TABLE ONLY download_jobs\n    ADD CONSTRAINT download_jobs_pkey PRIMARY KEY (id);\n"
         );
+    }
+
+    #[test]
+    fn postgres_baseline_generation_appends_builtin_seed_data() {
+        let generated =
+            append_postgres_builtin_baseline_seeds(140, "CREATE TABLE users ();\n".into());
+        assert!(generated.ends_with(POSTGRES_BUILTIN_BASELINE_SEED_SQL));
+        assert_eq!(generated.matches("INSERT INTO ").count(), 14);
+        assert_eq!(
+            append_postgres_builtin_baseline_seeds(139, "CREATE TABLE users ();\n".into()),
+            "CREATE TABLE users ();\n"
+        );
+
+        let checked_in = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../crates/scryer/src/db/postgres/baselines/0198_baseline.sql"),
+        )
+        .expect("active PostgreSQL baseline should be readable");
+        assert!(checked_in.ends_with(POSTGRES_BUILTIN_BASELINE_SEED_SQL));
     }
 
     #[test]

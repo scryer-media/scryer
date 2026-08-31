@@ -40,11 +40,14 @@ type SettingsSecuritySectionProps = {
   onPasswordMinLengthDraftChange: (value: string) => void;
   onPasswordMinLengthSubmit: (value?: string) => Promise<void> | void;
   onSkipLocalIpsChange: (enabled: boolean) => void;
+  onApiKeysRestrictionChange: (enabled: boolean) => void;
+  canManageApiKeysRestriction: boolean;
   onMfaConfigStepUpChange: (enabled: boolean) => void;
   onMfaPasswordLoginChange: (enabled: boolean) => void;
   onTotpJellyfinLoginChange: (enabled: boolean) => void;
   onTotpEmbyLoginChange: (enabled: boolean) => void;
   externalAccountInvitesPanel: React.ReactNode;
+  oauthApplicationsPanel: React.ReactNode;
 };
 
 export function SettingsSecuritySection({
@@ -69,11 +72,14 @@ export function SettingsSecuritySection({
   onPasswordMinLengthDraftChange,
   onPasswordMinLengthSubmit,
   onSkipLocalIpsChange,
+  onApiKeysRestrictionChange,
+  canManageApiKeysRestriction,
   onMfaConfigStepUpChange,
   onMfaPasswordLoginChange,
   onTotpJellyfinLoginChange,
   onTotpEmbyLoginChange,
   externalAccountInvitesPanel,
+  oauthApplicationsPanel,
 }: SettingsSecuritySectionProps) {
   const t = useTranslate();
   const busy = loading || confirmBusy;
@@ -84,7 +90,7 @@ export function SettingsSecuritySection({
       <div id="settings-security-section" className="space-y-4 text-sm">
         <div className={SECURITY_PANEL_CLASS}>
           <div className={SECURITY_PANEL_HEADER_CLASS}>
-            <div className="flex items-start justify-between gap-3">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div className="space-y-1">
                 <h3 className={SECURITY_PANEL_TITLE_CLASS}>
                   {t("settings.securityEnableFormLogin")}
@@ -93,71 +99,113 @@ export function SettingsSecuritySection({
                   {t("settings.securityEnableFormLoginHelp")}
                 </p>
               </div>
-              {busy ? (
-                <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-[var(--scry-muted3)]" />
-              ) : null}
-            </div>
-          </div>
-          <div className="space-y-4 p-4">
-            <div className="max-w-xs space-y-1.5">
-              <Label className="text-sm font-medium" htmlFor="security-password-min-length">
-                {t("settings.securityPasswordMinLength")}
-              </Label>
-              <Input
-                id="security-password-min-length"
-                type="number"
-                inputMode="numeric"
-                min={minPasswordLength}
-                step={1}
-                value={passwordMinLengthDraft}
-                disabled={busy}
-                onBlur={(event) =>
-                  void onPasswordMinLengthSubmit(event.currentTarget.value)
-                }
-                onChange={(event) => onPasswordMinLengthDraftChange(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    void onPasswordMinLengthSubmit(event.currentTarget.value);
-                  }
-                }}
-              />
-              <p className="text-xs text-[var(--scry-muted3)]">
-                {t("settings.securityPasswordMinLengthHelp", {
-                  min: minPasswordLength,
-                })}
-              </p>
-            </div>
-            <div className="space-y-3">
               <Button
                 id="settings-security-toggle-form-login"
                 type="button"
                 aria-pressed={settings.formLoginEnabled}
                 variant={settings.formLoginEnabled ? "destructive" : "primary"}
                 disabled={busy}
+                className="shrink-0 self-start sm:self-auto"
                 onClick={() => onToggle(!settings.formLoginEnabled)}
               >
                 {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
                 {settings.formLoginEnabled ? t("label.disable") : t("label.enable")}
               </Button>
-              <CheckboxField
-                id="security-skip-local-ips"
-                checked={settings.skipLoginForLocalIps}
-                disabled={busy}
-                onCheckedChange={(checked) =>
-                  onSkipLocalIpsChange(checked === true)
-                }
-                label={t("settings.securitySkipLocalIps")}
-                labelAccessory={
-                  <InfoHelp
-                    ariaLabel={t("settings.securitySkipLocalIps")}
-                    text={t("settings.securitySkipLocalIpsHelp")}
-                  />
-                }
-                className={`${SECURITY_INSET_CLASS} w-fit max-w-full items-center px-3 py-2`}
-                checkboxClassName="mt-0"
-              />
-              <div className="grid gap-3 md:grid-cols-3">
+            </div>
+          </div>
+          <div className="grid gap-4 p-4 lg:grid-cols-2">
+            <section className={`${SECURITY_INSET_CLASS} p-4`}>
+              <div className="mb-3">
+                <h4 className="text-sm font-semibold text-[var(--scry-ink2)]">
+                  Password policy
+                </h4>
+              </div>
+              <div className="max-w-sm space-y-1.5">
+                <Label className="text-sm font-medium" htmlFor="security-password-min-length">
+                  {t("settings.securityPasswordMinLength")}
+                </Label>
+                <Input
+                  id="security-password-min-length"
+                  type="number"
+                  inputMode="numeric"
+                  min={minPasswordLength}
+                  step={1}
+                  value={passwordMinLengthDraft}
+                  disabled={busy}
+                  onBlur={(event) =>
+                    void onPasswordMinLengthSubmit(event.currentTarget.value)
+                  }
+                  onChange={(event) => onPasswordMinLengthDraftChange(event.target.value)}
+                  onWheel={(event) => event.currentTarget.blur()}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      void onPasswordMinLengthSubmit(event.currentTarget.value);
+                    }
+                  }}
+                />
+                <p className="text-xs leading-relaxed text-[var(--scry-muted3)]">
+                  {t("settings.securityPasswordMinLengthHelp", {
+                    min: minPasswordLength,
+                  })}
+                </p>
+              </div>
+            </section>
+
+            <section className={`${SECURITY_INSET_CLASS} p-4`}>
+              <div className="mb-2">
+                <h4 className="text-sm font-semibold text-[var(--scry-ink2)]">
+                  Access controls
+                </h4>
+              </div>
+              <div className="divide-y divide-[var(--scry-line2)]">
+                <CheckboxField
+                  id="security-skip-local-ips"
+                  checked={settings.skipLoginForLocalIps}
+                  disabled={busy}
+                  onCheckedChange={(checked) =>
+                    onSkipLocalIpsChange(checked === true)
+                  }
+                  label={t("settings.securitySkipLocalIps")}
+                  labelAccessory={
+                    <InfoHelp
+                      ariaLabel={t("settings.securitySkipLocalIps")}
+                      text={t("settings.securitySkipLocalIpsHelp")}
+                    />
+                  }
+                  className="w-full items-center py-3"
+                  checkboxClassName="mt-0"
+                />
+                <CheckboxField
+                  id="security-api-keys-restrict-to-system-settings-users"
+                  checked={settings.apiKeysRestrictToSystemSettingsUsers}
+                  disabled={busy || !canManageApiKeysRestriction}
+                  onCheckedChange={(checked) =>
+                    onApiKeysRestrictionChange(checked === true)
+                  }
+                  label="Restrict API keys to system-settings users"
+                  labelAccessory={
+                    <InfoHelp
+                      ariaLabel="Restrict API keys to system-settings users"
+                      text="Only users with Manage System Settings can create or use API keys. Existing keys are preserved and resume if permission is restored or this setting is disabled."
+                    />
+                  }
+                  className="w-full items-center py-3"
+                  checkboxClassName="mt-0"
+                />
+              </div>
+            </section>
+
+            <section className={`${SECURITY_INSET_CLASS} p-4 lg:col-span-2`}>
+              <div className="mb-3 space-y-1">
+                <h4 className="text-sm font-semibold text-[var(--scry-ink2)]">
+                  Multi-factor authentication
+                </h4>
+                <p className="text-xs text-[var(--scry-muted3)]">
+                  Choose where an enrolled passkey or authenticator is required.
+                </p>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2">
                 <CheckboxField
                   id="security-mfa-config-step-up"
                   checked={settings.mfaRequireConfigStepUp}
@@ -172,7 +220,7 @@ export function SettingsSecuritySection({
                       text={t("settings.securityMfaConfigStepUpHelp")}
                     />
                   }
-                  className={`${SECURITY_INSET_CLASS} max-w-full px-3 py-2`}
+                  className="max-w-full rounded-[10px] bg-[var(--scry-inset)] px-3 py-3"
                 />
                 <CheckboxField
                   id="security-mfa-password-login"
@@ -188,7 +236,7 @@ export function SettingsSecuritySection({
                       text={t("settings.securityMfaPasswordLoginHelp")}
                     />
                   }
-                  className={`${SECURITY_INSET_CLASS} max-w-full px-3 py-2`}
+                  className="max-w-full rounded-[10px] bg-[var(--scry-inset)] px-3 py-3"
                 />
                 <CheckboxField
                   id="security-mfa-jellyfin-login"
@@ -204,7 +252,7 @@ export function SettingsSecuritySection({
                       text={t("settings.securityTotpJellyfinLoginHelp")}
                     />
                   }
-                  className={`${SECURITY_INSET_CLASS} max-w-full px-3 py-2`}
+                  className="max-w-full rounded-[10px] bg-[var(--scry-inset)] px-3 py-3"
                 />
                 <CheckboxField
                   id="security-mfa-emby-login"
@@ -218,10 +266,10 @@ export function SettingsSecuritySection({
                       text="Require an enrolled Scryer passkey or authenticator factor after either Local or Connect Emby authentication."
                     />
                   }
-                  className={`${SECURITY_INSET_CLASS} max-w-full px-3 py-2`}
+                  className="max-w-full rounded-[10px] bg-[var(--scry-inset)] px-3 py-3"
                 />
               </div>
-            </div>
+            </section>
           </div>
         </div>
 
@@ -266,6 +314,7 @@ export function SettingsSecuritySection({
         ) : null}
 
         {externalAccountInvitesPanel}
+        {oauthApplicationsPanel}
       </div>
 
       <ConfirmDialog

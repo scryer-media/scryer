@@ -1,0 +1,11 @@
+-- Plan 150: the blocklist keys a failed torrent on its infohash, which is
+-- content identity and therefore indexer-independent. The failure path reads
+-- that key back off the submission long after the grab, so the hint the
+-- indexer supplied at grab time has to survive the grab.
+--
+-- `seed_info_hash` cannot serve: it is only written when a seeding profile
+-- applies to the release, so most torrents carry none.
+--
+-- Nullable, no backfill: a submission written before this column blocklists by
+-- release name, which is the pre-existing behaviour.
+ALTER TABLE download_submissions ADD COLUMN info_hash TEXT;

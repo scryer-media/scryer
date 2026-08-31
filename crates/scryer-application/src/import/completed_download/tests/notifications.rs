@@ -33,6 +33,7 @@ async fn check_emits_manual_interaction_notification_once() {
         ..Default::default()
     };
     let mut td = TrackedDownload {
+        download_id: scryer_domain::download_identity::DownloadId::new(),
         id: "nzbget:unmatched".to_string(),
         client_id: "client-1".to_string(),
         client_type: "nzbget".to_string(),

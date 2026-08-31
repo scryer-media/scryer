@@ -1,0 +1,25 @@
+query SearchTitles($query: String!, $kind: String!, $limit: Int!, $language: String!, $year: Int) {
+  searchTitles(query: $query, kind: $kind, limit: $limit, language: $language, year: $year) {
+    results {
+      title_id
+      kind
+      primary_source
+      tvdb_id
+      tmdb_id
+      imdb_id
+      external_ids { source kind id key }
+      name
+      slug
+      type
+      year
+      status
+      overview
+      poster_url
+      language
+      runtime_minutes
+      popularity
+      sort_title
+      normalization_notes
+    }
+  }
+}

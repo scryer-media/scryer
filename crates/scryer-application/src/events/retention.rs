@@ -1,11 +1,13 @@
 use scryer_domain::DomainEventType;
 
-pub(crate) const OPERATIONAL_DOMAIN_EVENT_RETENTION_DAYS: i64 = 7;
+pub(crate) const OPERATIONAL_DOMAIN_EVENT_RETENTION_DAYS: i64 = 3;
+pub(crate) const ACQUISITION_TELEMETRY_RETENTION_DAYS: i64 = 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DomainEventRetentionClass {
     UserFacingHistory,
     OperationalProjection,
+    AcquisitionTelemetry,
 }
 
 pub(crate) const fn retention_class_for_domain_event_type(
@@ -22,7 +24,6 @@ pub(crate) const fn retention_class_for_domain_event_type(
         | DomainEventType::MediaRequestRejected
         | DomainEventType::MediaRequestCanceled
         | DomainEventType::ConfigurationChanged
-        | DomainEventType::DiscoverySearchCompleted
         | DomainEventType::MetadataHydrationUpdated
         | DomainEventType::ReleaseGrabbed
         | DomainEventType::DownloadFailed
@@ -35,8 +36,6 @@ pub(crate) const fn retention_class_for_domain_event_type(
         | DomainEventType::MediaFileRenamed
         | DomainEventType::MediaFileDeleted
         | DomainEventType::MediaFileUpgraded
-        | DomainEventType::AcquisitionSearchCompleted
-        | DomainEventType::AcquisitionCandidateRejected
         | DomainEventType::ImportRequested
         | DomainEventType::ImportRecoveryCompleted
         | DomainEventType::DownloadQueueItemCommandIssued
@@ -60,6 +59,11 @@ pub(crate) const fn retention_class_for_domain_event_type(
         | DomainEventType::DownloadQueueItemRemoved => {
             DomainEventRetentionClass::OperationalProjection
         }
+        DomainEventType::DiscoverySearchCompleted
+        | DomainEventType::AcquisitionSearchCompleted
+        | DomainEventType::AcquisitionCandidateRejected => {
+            DomainEventRetentionClass::AcquisitionTelemetry
+        }
     }
 }
 
@@ -77,6 +81,10 @@ pub fn user_facing_domain_event_types() -> Vec<DomainEventType> {
 
 pub(crate) fn operational_domain_event_types() -> Vec<DomainEventType> {
     domain_event_types_for_class(DomainEventRetentionClass::OperationalProjection)
+}
+
+pub(crate) fn acquisition_telemetry_domain_event_types() -> Vec<DomainEventType> {
+    domain_event_types_for_class(DomainEventRetentionClass::AcquisitionTelemetry)
 }
 
 #[cfg(test)]
@@ -97,7 +105,9 @@ mod tests {
 
         assert_eq!(
             seen.len(),
-            user_facing_domain_event_types().len() + operational_domain_event_types().len()
+            user_facing_domain_event_types().len()
+                + operational_domain_event_types().len()
+                + acquisition_telemetry_domain_event_types().len()
         );
 
         for event_type in user_facing_domain_event_types() {
@@ -113,5 +123,14 @@ mod tests {
                 DomainEventRetentionClass::OperationalProjection
             );
         }
+
+        assert_eq!(
+            acquisition_telemetry_domain_event_types(),
+            vec![
+                DomainEventType::DiscoverySearchCompleted,
+                DomainEventType::AcquisitionSearchCompleted,
+                DomainEventType::AcquisitionCandidateRejected,
+            ]
+        );
     }
 }

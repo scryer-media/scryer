@@ -1,7 +1,90 @@
 use super::*;
+use std::path::PathBuf;
+
+use async_trait::async_trait;
+use scryer_runtime_info::BinaryLane;
+use tokio::sync::Mutex;
+
+#[derive(Default)]
+struct FixtureDownloadRegistry {
+    rows: Mutex<HashMap<ClientJobLocator, scryer_domain::download_identity::DownloadId>>,
+}
+
+#[async_trait]
+impl DownloadRegistryRepository for FixtureDownloadRegistry {
+    async fn resolve_observation(
+        &self,
+        observation: &ObservedClientJob,
+    ) -> AppResult<ObservationResolution> {
+        let mut rows = self.rows.lock().await;
+        let download_id = observation
+            .wire_token
+            .as_deref()
+            .and_then(scryer_domain::download_identity::DownloadId::from_wire)
+            .or_else(|| rows.get(&observation.locator).copied())
+            .unwrap_or_else(scryer_domain::download_identity::DownloadId::new);
+        let newly_foreign = !rows.contains_key(&observation.locator);
+        rows.insert(observation.locator.clone(), download_id);
+        Ok(ObservationResolution::Resolved {
+            download_id,
+            newly_foreign,
+            attached: false,
+        })
+    }
+
+    async fn load_download(
+        &self,
+        _: &scryer_domain::download_identity::DownloadId,
+    ) -> AppResult<Option<DownloadRecord>> {
+        Ok(None)
+    }
+
+    async fn load_binding(
+        &self,
+        _: &scryer_domain::download_identity::DownloadId,
+    ) -> AppResult<Option<DownloadClientBindingRecord>> {
+        Ok(None)
+    }
+
+    async fn find_active_binding_by_locator(
+        &self,
+        locator: &ClientJobLocator,
+    ) -> AppResult<Option<DownloadClientBindingRecord>> {
+        let Some(download_id) = self.rows.lock().await.get(locator).copied() else {
+            return Ok(None);
+        };
+        Ok(Some(DownloadClientBindingRecord {
+            download_id,
+            client_config_id: locator.client_id.clone(),
+            client_type_snapshot: Some(locator.client_type.clone()),
+            client_name_snapshot: None,
+            native_item_id: Some(locator.item_id.clone()),
+            created_at: Utc::now(),
+            last_seen_at: None,
+            ended_at: None,
+        }))
+    }
+
+    async fn end_binding(&self, _: &scryer_domain::download_identity::DownloadId) -> AppResult<()> {
+        Ok(())
+    }
+}
 
 pub(crate) fn bootstrap() -> (AppUseCase, User) {
     bootstrap_with_user_repo(Arc::new(MockUserRepo::default()))
+}
+
+pub(crate) fn bootstrap_application_upgrade(
+    config_dir: PathBuf,
+) -> (AppUseCase, User, Arc<RecordingJobRunRepo>) {
+    let job_runs = Arc::new(RecordingJobRunRepo::default());
+    let (app, user) = bootstrap();
+    let app = app.with_test_overrides(|services| {
+        services
+            .with_runtime_environment(BinaryLane::Portable, config_dir, Vec::<String>::new())
+            .with_job_runs(job_runs.clone())
+    });
+    (app, user, job_runs)
 }
 
 pub(super) fn test_quality_profile(id: &str) -> QualityProfile {
@@ -174,7 +257,10 @@ fn bootstrap_with_services(
             jwt_signing_salt: "test-salt".to_string(),
         },
         Arc::new(registry),
-    );
+    )
+    .with_test_overrides(|services| {
+        services.with_download_registry(Arc::new(FixtureDownloadRegistry::default()))
+    });
 
     (app, test_admin_user())
 }
@@ -242,7 +328,6 @@ pub(super) fn bootstrap_media_request_app() -> MediaRequestTestHarness {
     .with_download_submissions(download_submissions.clone())
     .with_blocklist_repo(Arc::new(MockBlocklistRepo::default()))
     .with_acquisition_state(Arc::new(TrackingAcquisitionStateRepo {
-        download_submissions,
         pending_releases,
         acquisition_scope_states: wanted_items,
     }))
@@ -451,7 +536,10 @@ pub(super) fn bootstrap_with_metadata_gateway_settings_and_titles(
             jwt_signing_salt: "test-salt".to_string(),
         },
         Arc::new(registry),
-    );
+    )
+    .with_test_overrides(|services| {
+        services.with_download_registry(Arc::new(FixtureDownloadRegistry::default()))
+    });
 
     (app, test_admin_user(), titles)
 }
@@ -503,7 +591,9 @@ pub(super) fn make_due_hydration_title(id: &str, facet: MediaFacet, tvdb_id: i64
 pub(super) fn make_movie_metadata(tvdb_id: i64, name: &str) -> MovieMetadata {
     MovieMetadata {
         target_key: None,
-        tvdb_id,
+        smg_id: None,
+        primary_source: "tvdb".to_string(),
+        tvdb_id: Some(tvdb_id),
         name: name.to_string(),
         slug: name.to_ascii_lowercase().replace(' ', "-"),
         year: Some(2026),
@@ -592,7 +682,10 @@ pub(super) fn bootstrap_with_cleanup_tracking_and_queue_commands(
             jwt_signing_salt: "test-salt".to_string(),
         },
         Arc::new(registry),
-    );
+    )
+    .with_test_overrides(|services| {
+        services.with_download_registry(Arc::new(FixtureDownloadRegistry::default()))
+    });
 
     (app, test_admin_user())
 }
@@ -649,7 +742,10 @@ pub(super) fn bootstrap_with_cleanup_tracking_and_tracked_handle(
             jwt_signing_salt: "test-salt".to_string(),
         },
         Arc::new(registry),
-    );
+    )
+    .with_test_overrides(|services| {
+        services.with_download_registry(Arc::new(FixtureDownloadRegistry::default()))
+    });
 
     (app, test_admin_user())
 }
@@ -706,7 +802,10 @@ pub(super) fn bootstrap_with_cleanup_tracking_and_indexer(
             jwt_signing_salt: "test-salt".to_string(),
         },
         Arc::new(registry),
-    );
+    )
+    .with_test_overrides(|services| {
+        services.with_download_registry(Arc::new(FixtureDownloadRegistry::default()))
+    });
 
     (app, test_admin_user())
 }
@@ -1093,9 +1192,9 @@ pub(super) fn bootstrap_with_acquisition_tracking_and_indexer_and_release_attemp
     .with_pending_releases(pending_releases.clone())
     .with_blocklist_repo(Arc::new(MockBlocklistRepo::default()))
     .with_libraries(Arc::new(MockLibraryRepo::default()))
-    // The convergence cursor derives targets from library state.
+    // The background acquisition cursor derives targets from library state.
     // With mock catalog stores, bridge the derivation to the seeded wanted
-    // rows so `run_convergence_cycle_once` reaches each seeded monitored scope.
+    // rows so `run_background_acquisition_cycle_once` reaches each seeded monitored scope.
     .with_media_files(Arc::new(MockMediaFileRepo::with_missing_scope_source(
         acquisition_scope_states.clone(),
         titles,
@@ -1122,7 +1221,6 @@ pub(super) fn bootstrap_with_acquisition_tracking_and_indexer_and_release_attemp
     let app = app.with_test_overrides(|services| {
         services
             .with_acquisition_state(Arc::new(TrackingAcquisitionStateRepo {
-                download_submissions,
                 pending_releases,
                 acquisition_scope_states: acquisition_scope_states.clone(),
             }))
@@ -1650,6 +1748,8 @@ pub(super) fn test_series_movie_link(
             tmdb_id: None,
             mal_id: None,
             anidb_id: None,
+            ratings: None,
+            credits: None,
             created_at: now,
             updated_at: now,
         },
@@ -1664,6 +1764,8 @@ pub(super) fn test_series_movie_link(
         confidence: None,
         signal_summary: None,
         source: Some("test".to_string()),
+        monitoring_override: None,
+        metadata_active: true,
         monitored: true,
         legacy_collection_id: None,
         created_at: now,
@@ -1924,6 +2026,7 @@ pub(super) fn pending_movie_release(
         indexer_id: None,
         release_guid: Some(format!("{release_title}-guid")),
         added_at: (now - chrono::Duration::minutes(5)).to_rfc3339(),
+        last_observed_at: now.to_rfc3339(),
         delay_until: (now - chrono::Duration::minutes(1)).to_rfc3339(),
         status,
         grabbed_at: None,
@@ -1932,6 +2035,14 @@ pub(super) fn pending_movie_release(
         info_hash: None,
         seed_minimums: Default::default(),
         seeders: None,
+        release_identity: format!("{release_title}-guid"),
+        coverage_identity: format!("scope:{wanted_id}"),
+        role: match status {
+            PendingReleaseStatus::Waiting => crate::types::PendingReleaseRole::Primary,
+            _ => crate::types::PendingReleaseRole::Fallback,
+        },
+        last_decision_code: None,
+        release_age_unknown: false,
     }
 }
 
@@ -1953,7 +2064,7 @@ pub(super) async fn seed_movie_wanted_for_acquisition(
                 monitored: true,
                 year: Some(year),
                 content_status: Some("Released".to_string()),
-                min_availability: Some("released".to_string()),
+                min_availability: Some("announced".to_string()),
                 ..Default::default()
             },
         )
@@ -2203,11 +2314,14 @@ pub(super) fn test_derive_jwt_key(
         })
         .collect::<Vec<_>>();
     library_claims.sort();
-    let authorization_fingerprint = sha256_hex(format!(
-        "app\n{}\nlibrary\n{}",
-        app_claims.join("\n"),
-        library_claims.join("\n")
-    ));
+    let authorization_fingerprint = crate::helpers::blake3_identity_hex(
+        crate::helpers::HashDomain::AuthorizationFingerprint,
+        format!(
+            "app\n{}\nlibrary\n{}",
+            app_claims.join("\n"),
+            library_claims.join("\n")
+        ),
+    );
     let signing_material = format!("{password_hash}\n{authorization_fingerprint}");
     let hmac_key = hmac::Key::new(hmac::HMAC_SHA256, salt.as_bytes());
     hmac::sign(&hmac_key, signing_material.as_bytes())

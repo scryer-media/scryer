@@ -3,8 +3,17 @@ use base64::Engine;
 use chrono::{NaiveDate, Utc};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use const_oid::db::rfc5280::ID_KP_CODE_SIGNING;
+use flate2::read::GzDecoder;
 use rustls_pki_types::{CertificateDer, TrustAnchor, UnixTime};
-use scryer_application::PluginDescriptorLoader;
+#[cfg(test)]
+use scryer_application::application_upgrade::manifest::parse_and_validate_upgrade_manifest;
+use scryer_application::{
+    PluginDescriptorLoader,
+    application_upgrade::manifest::{
+        UPGRADE_MANIFEST_SCHEMA_VERSION, UpgradeArchitecture, UpgradeArchive, UpgradeArtifact,
+        UpgradeArtifactMember, UpgradeChannel, UpgradeManifest, UpgradePlatform,
+    },
+};
 use scryer_plugins::WasmPluginDescriptorLoader;
 use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
@@ -114,6 +123,7 @@ const OFFICIAL_PLUGIN_CATALOG_V3_REDIRECT_URL: &str =
 const OFFICIAL_PLUGIN_CATALOG_V3_REDIRECT_BUNDLE_URL: &str =
     "https://cdn.scryer.media/scryer/catalog/v3/catalog-v3.redirect.bundle.json";
 const BUILTIN_ASSET_DIR: &str = "crates/scryer-plugins/builtins";
+const BUILTIN_VERSION_MANIFEST: &str = "crates/scryer-plugins/builtin-versions.json";
 const OFFICIAL_PLUGIN_REPO: &str = "scryer-media/scryer-plugins";
 const OFFICIAL_PLUGIN_V3_RELEASE_WORKFLOW: &str = ".github/workflows/release-plugin-v3.yml";
 const SIGSTORE_GITHUB_WORKFLOW_NAME_OID: &str = "1.3.6.1.4.1.57264.1.4";
@@ -153,10 +163,10 @@ const WINGET_PACKAGE_IDENTIFIER: &str = "ScryerMedia.Scryer";
 const WINGET_PACKAGE_NAME: &str = "Scryer";
 const WINGET_MONIKER: &str = "scryer";
 const WINGET_MANIFEST_VERSION: &str = "1.10.0";
-const WINGET_WINDOWS_X64_ASSET: &str = "scryer-windows-x86_64.msi";
-const WINGET_WINDOWS_ARM64_ASSET: &str = "scryer-windows-arm64.msi";
-const WINGET_WINDOWS_X64_METADATA: &str = "scryer-windows-x86_64.msi.json";
-const WINGET_WINDOWS_ARM64_METADATA: &str = "scryer-windows-arm64.msi.json";
+const WINGET_WINDOWS_X64_ASSET: &str = "scryer-windows-x86_64-winget.msi";
+const WINGET_WINDOWS_ARM64_ASSET: &str = "scryer-windows-arm64-winget.msi";
+const WINGET_WINDOWS_X64_METADATA: &str = "scryer-windows-x86_64-winget.msi.json";
+const WINGET_WINDOWS_ARM64_METADATA: &str = "scryer-windows-arm64-winget.msi.json";
 const REQUIRED_SCRYER_DRY_RUN_STEPS: &[&str] = &[
     "release_container_contract",
     "builtin_refresh",
@@ -176,6 +186,41 @@ static FULCIO_TRUST_ANCHORS: OnceLock<Result<Arc<FulcioTrustAnchors>, String>> =
 struct BuiltinPluginSpec {
     plugin_id: &'static str,
     artifact_stem: &'static str,
+}
+
+/// One built-in's pin: the version *and* the content.
+///
+/// The digest is TOFU'd from the signed catalog at sync time and asserted on
+/// every materialization thereafter (here and in
+/// `scripts/materialize-builtins.py`). The signature chain proves who built
+/// the bytes; this proves they are the bytes the repo reviewed — a catalog
+/// that re-points the same version at new artifacts fails the build instead
+/// of materializing silently. `cargo xtask builtins sync` refreshes both
+/// fields together, so a bump is always a visible diff.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+struct BuiltinVersionPin {
+    version: String,
+    /// Bare lowercase blake3 hex of the decompressed WASM artifact.
+    wasm_blake3: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+struct BuiltinVersionManifest {
+    #[serde(rename = "schemaVersion")]
+    schema_version: u32,
+    plugins: BTreeMap<String, BuiltinVersionPin>,
+}
+
+/// Digest equality across the two spellings in play: the catalog and
+/// `sync_builtin_plugin` carry `blake3:<hex>`, the manifest pins bare hex.
+fn builtin_wasm_digest_matches(pinned: &str, actual: &str) -> bool {
+    let normalize = |value: &str| {
+        value
+            .trim()
+            .trim_start_matches("blake3:")
+            .to_ascii_lowercase()
+    };
+    normalize(pinned) == normalize(actual)
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -269,6 +314,7 @@ struct BuiltinsArgs {
 #[derive(Subcommand)]
 enum BuiltinsCommand {
     Sync,
+    Materialize,
 }
 
 #[derive(Args)]
@@ -313,6 +359,7 @@ struct CiArgs {
 #[derive(Subcommand)]
 enum CiCommand {
     Clippy(ClippyArgs),
+    UpgradeManifest(UpgradeManifestArgs),
     Winget(WingetArgs),
 }
 
@@ -336,6 +383,20 @@ struct WingetArgs {
     output_dir: PathBuf,
     #[arg(long, help = "Release date in YYYY-MM-DD format; defaults to today")]
     release_date: Option<String>,
+}
+
+#[derive(Args)]
+struct UpgradeManifestArgs {
+    #[arg(long, help = "Scryer version in major.minor.patch form")]
+    version: String,
+    #[arg(long, help = "Release tag that owns the upgrade assets")]
+    tag: String,
+    #[arg(long, default_value = "scryer-media/scryer")]
+    repository: String,
+    #[arg(long, default_value = "release-artifacts")]
+    artifacts_dir: PathBuf,
+    #[arg(long, help = "Destination JSON file")]
+    output: PathBuf,
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, ValueEnum)]
@@ -463,7 +524,13 @@ fn main() -> Result<()> {
         Commands::Builtins(args) => match args.command {
             BuiltinsCommand::Sync => {
                 let scryer_version = package_version(&ctx.path("crates/scryer/Cargo.toml"))?;
-                refresh_builtin_plugins(&ctx, &scryer_version)?;
+                refresh_builtin_plugins(&ctx, &scryer_version, None, true)?;
+                Ok(())
+            }
+            BuiltinsCommand::Materialize => {
+                let scryer_version = package_version(&ctx.path("crates/scryer/Cargo.toml"))?;
+                let manifest = load_builtin_version_manifest(&ctx)?;
+                refresh_builtin_plugins(&ctx, &scryer_version, Some(&manifest), false)?;
                 Ok(())
             }
         },
@@ -472,6 +539,7 @@ fn main() -> Result<()> {
         },
         Commands::Ci(args) => match args.command {
             CiCommand::Clippy(args) => run_clippy_ci(&ctx, args),
+            CiCommand::UpgradeManifest(args) => run_ci_upgrade_manifest(&ctx, args),
             CiCommand::Winget(args) => run_ci_winget(&ctx, args),
         },
     }
@@ -623,6 +691,14 @@ fn release_hygiene_line_has_local_path_token(line: &str) -> bool {
                     };
                     RELEASE_MACOS_HOME_PATH_COMPONENTS.contains(&component)
                 })
+            })
+        } else if *token == "/home/" {
+            line.split(token).skip(1).any(|tail| {
+                tail.split(|character: char| {
+                    !character.is_ascii_alphanumeric() && character != '-' && character != '_'
+                })
+                .next()
+                .is_none_or(|component| component != "linuxbrew")
             })
         } else {
             line.contains(token)
@@ -1191,6 +1267,293 @@ fn generate_release_notes(
     Ok((final_path, digest))
 }
 
+#[derive(Clone, Copy)]
+struct UpgradeManifestAssetSpec {
+    platform: UpgradePlatform,
+    arch: UpgradeArchitecture,
+    channel: UpgradeChannel,
+    archive: UpgradeArchive,
+    asset_name: &'static str,
+}
+
+const UPGRADE_MANIFEST_ASSETS: [UpgradeManifestAssetSpec; 8] = [
+    UpgradeManifestAssetSpec {
+        platform: UpgradePlatform::Linux,
+        arch: UpgradeArchitecture::X86_64,
+        channel: UpgradeChannel::Portable,
+        archive: UpgradeArchive::TarGz,
+        asset_name: "scryer-linux-x86_64-portable.tar.gz",
+    },
+    UpgradeManifestAssetSpec {
+        platform: UpgradePlatform::Linux,
+        arch: UpgradeArchitecture::Arm64,
+        channel: UpgradeChannel::Portable,
+        archive: UpgradeArchive::TarGz,
+        asset_name: "scryer-linux-arm64-portable.tar.gz",
+    },
+    UpgradeManifestAssetSpec {
+        platform: UpgradePlatform::Darwin,
+        arch: UpgradeArchitecture::X86_64,
+        channel: UpgradeChannel::Portable,
+        archive: UpgradeArchive::TarGz,
+        asset_name: "scryer-darwin-x86_64-portable.tar.gz",
+    },
+    UpgradeManifestAssetSpec {
+        platform: UpgradePlatform::Darwin,
+        arch: UpgradeArchitecture::Arm64,
+        channel: UpgradeChannel::Portable,
+        archive: UpgradeArchive::TarGz,
+        asset_name: "scryer-darwin-arm64-portable.tar.gz",
+    },
+    // The human-facing `scryer-windows-<arch>.zip` download is deliberately not
+    // listed here: the upgrade channel ships the same `.tar.gz` container on
+    // every platform so the engine needs exactly one archive reader.
+    UpgradeManifestAssetSpec {
+        platform: UpgradePlatform::Windows,
+        arch: UpgradeArchitecture::X86_64,
+        channel: UpgradeChannel::Portable,
+        archive: UpgradeArchive::TarGz,
+        asset_name: "scryer-windows-x86_64-portable.tar.gz",
+    },
+    UpgradeManifestAssetSpec {
+        platform: UpgradePlatform::Windows,
+        arch: UpgradeArchitecture::Arm64,
+        channel: UpgradeChannel::Portable,
+        archive: UpgradeArchive::TarGz,
+        asset_name: "scryer-windows-arm64-portable.tar.gz",
+    },
+    UpgradeManifestAssetSpec {
+        platform: UpgradePlatform::Windows,
+        arch: UpgradeArchitecture::X86_64,
+        channel: UpgradeChannel::Msi,
+        archive: UpgradeArchive::Msi,
+        asset_name: "scryer-windows-x86_64.msi",
+    },
+    UpgradeManifestAssetSpec {
+        platform: UpgradePlatform::Windows,
+        arch: UpgradeArchitecture::Arm64,
+        channel: UpgradeChannel::Msi,
+        archive: UpgradeArchive::Msi,
+        asset_name: "scryer-windows-arm64.msi",
+    },
+];
+
+fn run_ci_upgrade_manifest(ctx: &TaskContext, args: UpgradeManifestArgs) -> Result<()> {
+    step("Generating signed upgrade manifest");
+    let version = normalize_upgrade_manifest_version(&args.version)?;
+    let tag = args.tag.trim();
+    if tag.is_empty() {
+        bail!("upgrade manifest tag must not be empty");
+    }
+    let repository = normalize_github_repository(&args.repository)?;
+    let artifacts_dir = resolve_ci_path(ctx, args.artifacts_dir);
+    let output = resolve_ci_path(ctx, args.output);
+    let raw = generate_upgrade_manifest(&version, tag, &repository, &artifacts_dir)?;
+
+    if let Some(parent) = output.parent().filter(|path| !path.as_os_str().is_empty()) {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    fs::write(&output, raw).with_context(|| format!("failed to write {}", output.display()))?;
+    ok(format!(
+        "Generated upgrade manifest at {}",
+        output.display()
+    ));
+    Ok(())
+}
+
+fn resolve_ci_path(ctx: &TaskContext, path: PathBuf) -> PathBuf {
+    if path.is_absolute() {
+        path
+    } else {
+        ctx.repo_root.join(path)
+    }
+}
+
+fn normalize_upgrade_manifest_version(raw: &str) -> Result<String> {
+    let version = Version::parse(raw.trim()).with_context(|| {
+        format!("upgrade manifest version must be major.minor.patch, got {raw}")
+    })?;
+    if !version.pre.is_empty() || !version.build.is_empty() {
+        bail!("upgrade manifest version must not include prerelease or build metadata");
+    }
+    Ok(version.to_string())
+}
+
+fn generate_upgrade_manifest(
+    version: &str,
+    tag: &str,
+    repository: &str,
+    artifacts_dir: &Path,
+) -> Result<Vec<u8>> {
+    let mut artifacts = UPGRADE_MANIFEST_ASSETS
+        .iter()
+        .copied()
+        .map(|spec| collect_upgrade_manifest_artifact(spec, repository, tag, artifacts_dir))
+        .collect::<Result<Vec<_>>>()?;
+    artifacts.sort_by_key(upgrade_manifest_artifact_sort_key);
+
+    let manifest = UpgradeManifest {
+        schema: UPGRADE_MANIFEST_SCHEMA_VERSION.to_string(),
+        tag: tag.to_string(),
+        version: version.to_string(),
+        artifacts,
+    };
+    let mut raw = serde_json::to_vec_pretty(&manifest)?;
+    raw.push(b'\n');
+    Ok(raw)
+}
+
+fn collect_upgrade_manifest_artifact(
+    spec: UpgradeManifestAssetSpec,
+    repository: &str,
+    tag: &str,
+    artifacts_dir: &Path,
+) -> Result<UpgradeArtifact> {
+    let path = artifacts_dir.join(spec.asset_name);
+    let bytes = fs::read(&path).with_context(|| {
+        format!(
+            "required upgrade manifest asset is missing or unreadable: {}",
+            path.display()
+        )
+    })?;
+    let members = match spec.archive {
+        UpgradeArchive::TarGz => collect_tar_gz_members(&path, spec.asset_name)?,
+        UpgradeArchive::Msi => Vec::new(),
+    };
+
+    Ok(UpgradeArtifact {
+        platform: spec.platform,
+        arch: spec.arch,
+        channel: spec.channel,
+        asset_name: spec.asset_name.to_string(),
+        url: format!(
+            "https://github.com/{repository}/releases/download/{tag}/{}",
+            spec.asset_name
+        ),
+        size: bytes.len() as u64,
+        blake3: blake3::hash(&bytes).to_hex().to_string(),
+        archive: spec.archive,
+        members,
+    })
+}
+
+fn collect_tar_gz_members(path: &Path, asset_name: &str) -> Result<Vec<UpgradeArtifactMember>> {
+    let file =
+        fs::File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
+    let decoder = GzDecoder::new(file);
+    let mut archive = tar::Archive::new(decoder);
+    let entries = archive
+        .entries()
+        .with_context(|| format!("failed to read tar archive {}", path.display()))?;
+    let mut members = Vec::new();
+    for entry in entries {
+        let entry =
+            entry.with_context(|| format!("failed to read tar entry in {}", path.display()))?;
+        let entry_type = entry.header().entry_type();
+        if entry_type.is_dir() {
+            continue;
+        }
+        if entry_type.is_symlink() || entry_type.is_hard_link() {
+            bail!("upgrade archive {asset_name} contains a link entry");
+        }
+        if !entry_type.is_file() {
+            bail!("upgrade archive {asset_name} contains a non-regular entry");
+        }
+        let member_path = archive_member_path(entry.path()?.as_ref(), asset_name)?;
+        members.push(UpgradeArtifactMember {
+            path: member_path,
+            size: entry
+                .header()
+                .size()
+                .with_context(|| format!("failed to read tar member size in {asset_name}"))?,
+            executable: entry
+                .header()
+                .mode()
+                .with_context(|| format!("failed to read tar member mode in {asset_name}"))?
+                & 0o111
+                != 0,
+        });
+    }
+    sort_and_validate_archive_members(&mut members, asset_name)?;
+    Ok(members)
+}
+
+fn archive_member_path(path: &Path, asset_name: &str) -> Result<String> {
+    let value = path
+        .to_str()
+        .ok_or_else(|| anyhow!("upgrade archive {asset_name} contains a non-UTF-8 member path"))?;
+    if value.is_empty()
+        || value.starts_with('/')
+        || path.is_absolute()
+        || has_windows_drive_prefix(value)
+    {
+        bail!("upgrade archive {asset_name} contains an absolute member path: {value}");
+    }
+    if value.contains('\\') {
+        bail!("upgrade archive {asset_name} contains a backslash member path: {value}");
+    }
+    if path
+        .components()
+        .any(|component| component == std::path::Component::ParentDir)
+    {
+        bail!("upgrade archive {asset_name} contains a parent member path: {value}");
+    }
+    Ok(value.to_string())
+}
+
+fn has_windows_drive_prefix(path: &str) -> bool {
+    path.as_bytes().get(1) == Some(&b':')
+        && path.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
+}
+
+fn sort_and_validate_archive_members(
+    members: &mut [UpgradeArtifactMember],
+    asset_name: &str,
+) -> Result<()> {
+    members.sort_by(|left, right| left.path.cmp(&right.path));
+    if let Some(duplicate) = members
+        .windows(2)
+        .find(|pair| pair[0].path == pair[1].path)
+        .map(|pair| &pair[0].path)
+    {
+        bail!("upgrade archive {asset_name} contains duplicate member path: {duplicate}");
+    }
+    Ok(())
+}
+
+fn upgrade_manifest_artifact_sort_key(
+    artifact: &UpgradeArtifact,
+) -> (&'static str, &'static str, &'static str) {
+    (
+        upgrade_platform_name(artifact.platform),
+        upgrade_architecture_name(artifact.arch),
+        upgrade_channel_name(artifact.channel),
+    )
+}
+
+fn upgrade_platform_name(platform: UpgradePlatform) -> &'static str {
+    match platform {
+        UpgradePlatform::Darwin => "darwin",
+        UpgradePlatform::Linux => "linux",
+        UpgradePlatform::Windows => "windows",
+    }
+}
+
+fn upgrade_architecture_name(architecture: UpgradeArchitecture) -> &'static str {
+    match architecture {
+        UpgradeArchitecture::Arm64 => "arm64",
+        UpgradeArchitecture::X86_64 => "x86_64",
+    }
+}
+
+fn upgrade_channel_name(channel: UpgradeChannel) -> &'static str {
+    match channel {
+        UpgradeChannel::Msi => "msi",
+        UpgradeChannel::Portable => "portable",
+    }
+}
+
 fn run_ci_winget(ctx: &TaskContext, args: WingetArgs) -> Result<()> {
     step("Preparing WinGet MSI manifests");
     let version = normalize_winget_version(&args.version)?;
@@ -1496,27 +1859,68 @@ fn cache_builtin_artifacts(cache_dir: &Path, builtins: &[PathBuf]) -> Result<()>
     Ok(())
 }
 
-fn reuse_existing_builtin_plugins(ctx: &TaskContext) -> Result<BuiltinRefresh> {
-    step("Reusing checked-in embedded plugin builtins");
-    let mut catalog_wasm_blake3 = BTreeMap::new();
-    for spec in BUILTIN_PLUGINS {
-        let paths = builtin_asset_paths(ctx, spec);
-        for path in [&paths.wasm, &paths.descriptor_json, &paths.description] {
-            if !path.is_file() {
-                bail!("checked-in builtin asset is missing: {}", path.display());
-            }
-        }
-        let compressed = fs::read(&paths.wasm)
-            .with_context(|| format!("failed to read {}", paths.wasm.display()))?;
-        let wasm = zstd::decode_all(compressed.as_slice())
-            .with_context(|| format!("failed to decompress {}", paths.wasm.display()))?;
-        catalog_wasm_blake3.insert(spec.plugin_id.to_string(), blake3_hex(&wasm));
+fn builtin_version_manifest_path(ctx: &TaskContext) -> PathBuf {
+    ctx.path(BUILTIN_VERSION_MANIFEST)
+}
+
+fn load_builtin_version_manifest(ctx: &TaskContext) -> Result<BuiltinVersionManifest> {
+    let path = builtin_version_manifest_path(ctx);
+    let manifest: BuiltinVersionManifest = serde_json::from_slice(
+        &fs::read(&path).with_context(|| format!("failed to read {}", path.display()))?,
+    )
+    .with_context(|| format!("failed to parse {}", path.display()))?;
+    validate_builtin_version_manifest(&manifest)
+        .with_context(|| format!("invalid {}", path.display()))?;
+    Ok(manifest)
+}
+
+fn validate_builtin_version_manifest(manifest: &BuiltinVersionManifest) -> Result<()> {
+    if manifest.schema_version != 2 {
+        bail!(
+            "unsupported schemaVersion {} (2 pins version and wasm_blake3; run `cargo xtask builtins sync`)",
+            manifest.schema_version
+        );
     }
-    ok("Checked-in embedded plugin builtins are complete");
-    Ok(BuiltinRefresh {
-        paths: builtin_plugin_paths(ctx),
-        catalog_wasm_blake3,
-    })
+    let expected = BUILTIN_PLUGINS
+        .iter()
+        .map(|spec| spec.plugin_id)
+        .collect::<BTreeSet<_>>();
+    let actual = manifest
+        .plugins
+        .keys()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    if actual != expected {
+        bail!("must select exactly the supported built-in plugins");
+    }
+    for (plugin_id, pin) in &manifest.plugins {
+        Version::parse(pin.version.trim_start_matches('v'))
+            .with_context(|| format!("has invalid version {} for {plugin_id}", pin.version))?;
+        if pin.wasm_blake3.len() != 64
+            || !pin
+                .wasm_blake3
+                .chars()
+                .all(|ch| ch.is_ascii_hexdigit() && !ch.is_ascii_uppercase())
+        {
+            bail!("has invalid wasm_blake3 for {plugin_id}: expected 64 lowercase hex characters");
+        }
+    }
+    Ok(())
+}
+
+fn write_builtin_version_manifest(
+    ctx: &TaskContext,
+    plugins: BTreeMap<String, BuiltinVersionPin>,
+) -> Result<()> {
+    let path = builtin_version_manifest_path(ctx);
+    fs::write(
+        &path,
+        canonical_pretty_json(&BuiltinVersionManifest {
+            schema_version: 2,
+            plugins,
+        })?,
+    )
+    .with_context(|| format!("failed to write {}", path.display()))
 }
 
 fn builtin_cache_complete(cache_dir: &Path, builtins: &[PathBuf]) -> bool {
@@ -2478,17 +2882,18 @@ fn baseline_catalog_v3_zstd_artifact<'a>(
     plugin_id: &str,
     release: &'a CatalogV3Release,
 ) -> Result<&'a CatalogV3PluginArtifact> {
-    release
-        .artifacts
-        .iter()
-        .find(|artifact| {
-            artifact.runtime == "wasm32-wasip1"
-                && artifact.required_features.is_empty()
-                && artifact.url.ends_with(".wasm.zst")
+    ["wasm32-wasip2", "wasm32-wasip1"]
+        .into_iter()
+        .find_map(|runtime| {
+            release.artifacts.iter().find(|artifact| {
+                artifact.runtime == runtime
+                    && artifact.required_features.is_empty()
+                    && artifact.url.ends_with(".wasm.zst")
+            })
         })
         .ok_or_else(|| {
             anyhow!(
-                "{plugin_id} {} has no baseline wasm32-wasip1 .wasm.zst artifact",
+                "{plugin_id} {} has no baseline WASI .wasm.zst artifact",
                 release.version
             )
         })
@@ -2519,37 +2924,12 @@ fn release_builtin_descriptor_loader(ctx: &TaskContext) -> Result<WasmPluginDesc
     Ok(WasmPluginDescriptorLoader)
 }
 
-fn existing_builtin_wasm_digest(ctx: &TaskContext, spec: &BuiltinPluginSpec) -> Result<String> {
-    let paths = builtin_asset_paths(ctx, spec);
-    let compressed_wasm = fs::read(&paths.wasm)
-        .with_context(|| format!("failed to read existing builtin {}", paths.wasm.display()))?;
-    let wasm_bytes = zstd::decode_all(compressed_wasm.as_slice()).with_context(|| {
-        format!(
-            "failed to decompress existing builtin {}",
-            paths.wasm.display()
-        )
-    })?;
-    let descriptor = release_builtin_descriptor_loader(ctx)?
-        .load_descriptor_from_wasm_bytes(&wasm_bytes)
-        .map_err(|error| {
-            anyhow!(
-                "failed to describe existing builtin {}: {error}",
-                spec.plugin_id
-            )
-        })?;
-    require_builtin_descriptor_sdk_contract(
-        spec.plugin_id,
-        &descriptor.sdk_version,
-        &descriptor.sdk_constraint,
-    )?;
-    Ok(blake3_hex(&wasm_bytes))
-}
-
 fn sync_builtin_plugin(
     ctx: &TaskContext,
     spec: &BuiltinPluginSpec,
     scryer_version: &Version,
-) -> Result<String> {
+    requested_version: Option<&str>,
+) -> Result<(String, String)> {
     let catalog_signer = official_plugin_v3_signer();
     let redirect_bytes = fetch_verified_bytes(
         ctx,
@@ -2584,16 +2964,40 @@ fn sync_builtin_plugin(
         })?;
     require_official_plugin_v3_signer(spec.plugin_id, &entry.required_signer)?;
     latest_catalog_v3_release(spec.plugin_id, &entry.releases)?;
-    let Some(release) =
+    let release = if let Some(requested_version) = requested_version {
+        let release = entry
+            .releases
+            .iter()
+            .find(|release| {
+                release.version.trim_start_matches('v') == requested_version.trim_start_matches('v')
+            })
+            .ok_or_else(|| {
+                anyhow!(
+                    "catalog-v3 no longer contains pinned builtin {} version {}",
+                    spec.plugin_id,
+                    requested_version
+                )
+            })?;
+        if !catalog_release_is_builtin_compatible(spec.plugin_id, release, scryer_version)? {
+            bail!(
+                "pinned builtin {} {} is incompatible with Scryer {} and SDK {}",
+                spec.plugin_id,
+                requested_version,
+                scryer_version,
+                scryer_plugin_sdk::SDK_VERSION
+            );
+        }
+        release
+    } else {
         latest_compatible_catalog_v3_release(spec.plugin_id, &entry.releases, scryer_version)?
-    else {
-        warn(format!(
-            "No catalog-v3 release for builtin {} is compatible with Scryer {} and SDK {}; keeping embedded builtin",
-            spec.plugin_id,
-            scryer_version,
-            scryer_plugin_sdk::SDK_VERSION
-        ));
-        return existing_builtin_wasm_digest(ctx, spec);
+            .ok_or_else(|| {
+                anyhow!(
+                    "no catalog-v3 release for builtin {} is compatible with Scryer {} and SDK {}",
+                    spec.plugin_id,
+                    scryer_version,
+                    scryer_plugin_sdk::SDK_VERSION
+                )
+            })?
     };
     let artifact = baseline_catalog_v3_zstd_artifact(spec.plugin_id, release)?;
     let compressed_wasm = fetch_verified_bytes(
@@ -2661,7 +3065,7 @@ fn sync_builtin_plugin(
         "synced builtin {} {} from official catalog-v3",
         spec.plugin_id, release.version
     ));
-    Ok(wasm_digest.to_string())
+    Ok((release.version.clone(), wasm_digest.to_string()))
 }
 
 fn remove_stale_builtin_assets(ctx: &TaskContext) -> Result<()> {
@@ -2690,16 +3094,74 @@ fn remove_stale_builtin_assets(ctx: &TaskContext) -> Result<()> {
     Ok(())
 }
 
-fn refresh_builtin_plugins(ctx: &TaskContext, scryer_version: &Version) -> Result<BuiltinRefresh> {
-    step("Syncing embedded plugin builtins from the official catalog");
+fn refresh_builtin_plugins(
+    ctx: &TaskContext,
+    scryer_version: &Version,
+    pinned_versions: Option<&BuiltinVersionManifest>,
+    update_manifest: bool,
+) -> Result<BuiltinRefresh> {
+    step(if pinned_versions.is_some() {
+        "Materializing pinned embedded plugin builtins from the official catalog"
+    } else {
+        "Syncing embedded plugin builtins from the official catalog"
+    });
     let mut catalog_wasm_blake3 = BTreeMap::new();
+    let mut selected_versions = BTreeMap::new();
     for spec in BUILTIN_PLUGINS {
-        let wasm_digest = sync_builtin_plugin(ctx, spec, scryer_version)
-            .with_context(|| format!("failed to sync builtin {}", spec.plugin_id))?;
+        let pin = pinned_versions
+            .map(|manifest| {
+                manifest.plugins.get(spec.plugin_id).ok_or_else(|| {
+                    anyhow!(
+                        "built-in manifest is missing version for {}",
+                        spec.plugin_id
+                    )
+                })
+            })
+            .transpose()?;
+        let (version, wasm_digest) = sync_builtin_plugin(
+            ctx,
+            spec,
+            scryer_version,
+            pin.map(|pin| pin.version.as_str()),
+        )
+        .with_context(|| format!("failed to sync builtin {}", spec.plugin_id))?;
+        // The version pin names a release; the digest pin names its bytes. A
+        // catalog that re-points the pinned version at different content is a
+        // hard failure, never a silent re-materialization — the only way past
+        // it is a reviewed manifest bump via `cargo xtask builtins sync`.
+        if let Some(pin) = pin
+            && !builtin_wasm_digest_matches(&pin.wasm_blake3, &wasm_digest)
+        {
+            bail!(
+                "builtin {} {} WASM digest does not match the pinned wasm_blake3 in \
+                 builtin-versions.json (pinned {}, catalog {}); if this change is intended, \
+                 refresh the pin with `cargo xtask builtins sync`",
+                spec.plugin_id,
+                version,
+                pin.wasm_blake3,
+                wasm_digest
+            );
+        }
+        selected_versions.insert(
+            spec.plugin_id.to_string(),
+            BuiltinVersionPin {
+                version,
+                wasm_blake3: wasm_digest
+                    .trim_start_matches("blake3:")
+                    .to_ascii_lowercase(),
+            },
+        );
         catalog_wasm_blake3.insert(spec.plugin_id.to_string(), wasm_digest);
     }
     remove_stale_builtin_assets(ctx)?;
-    ok("Embedded plugin builtins refreshed");
+    if update_manifest {
+        write_builtin_version_manifest(ctx, selected_versions)?;
+    }
+    ok(if update_manifest {
+        "Embedded plugin builtins refreshed and manifest updated"
+    } else {
+        "Pinned embedded plugin builtins materialized"
+    });
     Ok(BuiltinRefresh {
         paths: builtin_plugin_paths(ctx),
         catalog_wasm_blake3,
@@ -3050,11 +3512,9 @@ fn run_release(ctx: &TaskContext, args: ReleaseArgs) -> Result<()> {
         if validation_scope == ReleaseValidationScope::Full {
             sync_trash_guides_for_release(ctx)?;
         }
-        let refreshed_builtins = if validation_scope == ReleaseValidationScope::Full {
-            refresh_builtin_plugins(ctx, &next_version)?
-        } else {
-            reuse_existing_builtin_plugins(ctx)?
-        };
+        let builtin_manifest = load_builtin_version_manifest(ctx)?;
+        let refreshed_builtins =
+            refresh_builtin_plugins(ctx, &next_version, Some(&builtin_manifest), false)?;
         let validation_result = match validation_scope {
             ReleaseValidationScope::Full => {
                 step("Running web and Rust validation in parallel");
@@ -3805,6 +4265,106 @@ mod tests {
 
     const TIMED_COMMAND_CHILD_ENV: &str = "SCRYER_XTASK_TIMED_COMMAND_CHILD";
 
+    fn write_upgrade_manifest_fixture(artifacts_dir: &Path) {
+        fs::create_dir_all(artifacts_dir).expect("create fixture artifact directory");
+        for spec in UPGRADE_MANIFEST_ASSETS {
+            let path = artifacts_dir.join(spec.asset_name);
+            match spec.archive {
+                UpgradeArchive::TarGz => {
+                    write_fixture_tar_gz(&path, spec.asset_name, fixture_members(spec.platform))
+                }
+                UpgradeArchive::Msi => {
+                    fs::write(&path, format!("fixture MSI {}\n", spec.asset_name))
+                        .expect("write fixture MSI");
+                }
+            }
+        }
+    }
+
+    /// The member layout each platform's portable tarball actually ships.
+    fn fixture_members(platform: UpgradePlatform) -> &'static [(&'static str, u32)] {
+        match platform {
+            UpgradePlatform::Windows => &[
+                ("scryer.exe", 0o755),
+                ("scryer-tray.exe", 0o755),
+                ("LICENSE", 0o644),
+                ("README.txt", 0o644),
+            ],
+            UpgradePlatform::Darwin | UpgradePlatform::Linux => &[("bin/scryer", 0o755)],
+        }
+    }
+
+    fn write_fixture_tar_gz(path: &Path, asset_name: &str, members: &[(&str, u32)]) {
+        let file = fs::File::create(path).expect("create fixture tarball");
+        let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+        let mut builder = tar::Builder::new(encoder);
+        for (member, mode) in members {
+            let content = format!("fixture tar member {member} for {asset_name}\n");
+            let mut header = tar::Header::new_gnu();
+            header.set_size(content.len() as u64);
+            header.set_mode(*mode);
+            header.set_mtime(0);
+            header.set_uid(0);
+            header.set_gid(0);
+            header.set_cksum();
+            builder
+                .append_data(&mut header, member, content.as_bytes())
+                .expect("append fixture tar member");
+        }
+        let encoder = builder.into_inner().expect("finish fixture tar archive");
+        encoder.finish().expect("finish fixture gzip stream");
+    }
+
+    #[test]
+    fn upgrade_manifest_generation_is_deterministic_and_matches_the_golden_fixture() {
+        let tempdir = tempfile::tempdir().expect("create tempdir");
+        let artifacts_dir = tempdir.path().join("artifacts");
+        write_upgrade_manifest_fixture(&artifacts_dir);
+
+        let first = generate_upgrade_manifest(
+            "9.8.7",
+            "scryer-v9.8.7",
+            "scryer-media/scryer",
+            &artifacts_dir,
+        )
+        .expect("generate first upgrade manifest");
+        let second = generate_upgrade_manifest(
+            "9.8.7",
+            "scryer-v9.8.7",
+            "scryer-media/scryer",
+            &artifacts_dir,
+        )
+        .expect("generate second upgrade manifest");
+
+        assert_eq!(first, second);
+        parse_and_validate_upgrade_manifest(&first).expect("generated manifest is valid");
+        assert_eq!(
+            String::from_utf8(first).expect("manifest is UTF-8"),
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../api/upgrade/manifest.v1.example.json"
+            ))
+        );
+    }
+
+    #[test]
+    fn upgrade_manifest_generation_requires_all_expected_assets() {
+        let tempdir = tempfile::tempdir().expect("create tempdir");
+        let artifacts_dir = tempdir.path().join("artifacts");
+        write_upgrade_manifest_fixture(&artifacts_dir);
+        let missing = artifacts_dir.join("scryer-windows-arm64.msi");
+        fs::remove_file(&missing).expect("remove required fixture asset");
+
+        let error = generate_upgrade_manifest(
+            "9.8.7",
+            "scryer-v9.8.7",
+            "scryer-media/scryer",
+            &artifacts_dir,
+        )
+        .expect_err("missing asset must fail manifest generation");
+        assert!(error.to_string().contains("scryer-windows-arm64.msi"));
+    }
+
     #[test]
     fn tracked_cargo_lockfiles_include_independent_projects() {
         let ctx = TaskContext::new();
@@ -4037,6 +4597,35 @@ mod tests {
     }
 
     #[test]
+    fn baseline_catalog_v3_zstd_artifact_prefers_wasip2() {
+        let release = CatalogV3Release {
+            version: "2.0.4".to_string(),
+            min_scryer_version: Some("0.18.22".to_string()),
+            max_scryer_version: None,
+            sdk_constraint: Some(">=3.9.0, <4.0.0".to_string()),
+            artifacts: vec![
+                catalog_v3_plugin_artifact(
+                    "https://cdn.example/newznab-legacy.wasm.zst",
+                    "wasm32-wasip1",
+                    vec![],
+                ),
+                catalog_v3_plugin_artifact(
+                    "https://cdn.example/newznab-component.wasm.zst",
+                    "wasm32-wasip2",
+                    vec![],
+                ),
+            ],
+        };
+
+        let artifact = baseline_catalog_v3_zstd_artifact("newznab", &release).unwrap();
+
+        assert_eq!(
+            artifact.url,
+            "https://cdn.example/newznab-component.wasm.zst"
+        );
+    }
+
+    #[test]
     fn required_blake3_digest_ignores_other_digest_algorithms() {
         let digests = vec!["sha256:ignored".to_string(), "blake3:expected".to_string()];
 
@@ -4066,14 +4655,45 @@ mod tests {
     }
 
     #[test]
-    fn release_builtin_descriptor_loader_reuses_wasm_runtime_for_multiple_builtins() {
-        let ctx = TaskContext::new();
-        for spec in &BUILTIN_PLUGINS[..2] {
-            let digest = existing_builtin_wasm_digest(&ctx, spec)
-                .expect("release builtin descriptor should load");
-            assert!(digest.starts_with("blake3:"));
-            assert_eq!(digest.len(), 71);
-        }
+    fn builtin_version_manifest_requires_exact_builtin_set() {
+        let pin = |digest: char| BuiltinVersionPin {
+            version: "2.0.1".to_string(),
+            wasm_blake3: std::iter::repeat_n(digest, 64).collect(),
+        };
+        let valid = BuiltinVersionManifest {
+            schema_version: 2,
+            plugins: BTreeMap::from([
+                ("newznab".to_string(), pin('a')),
+                ("torznab".to_string(), pin('b')),
+            ]),
+        };
+        assert!(validate_builtin_version_manifest(&valid).is_ok());
+
+        let incomplete = BuiltinVersionManifest {
+            schema_version: 2,
+            plugins: BTreeMap::from([("newznab".to_string(), pin('a'))]),
+        };
+        assert!(validate_builtin_version_manifest(&incomplete).is_err());
+
+        let mut bad_digest = valid.clone();
+        bad_digest
+            .plugins
+            .get_mut("newznab")
+            .expect("newznab pin")
+            .wasm_blake3 = "not-hex".to_string();
+        assert!(validate_builtin_version_manifest(&bad_digest).is_err());
+    }
+
+    #[test]
+    fn builtin_wasm_digest_comparison_tolerates_the_prefix_spelling() {
+        assert!(builtin_wasm_digest_matches(
+            "b9a72d60fb1ea0a933e5c5b3caee581133e562394fc705c75c8e58c5124b9c67",
+            "blake3:B9A72D60FB1EA0A933E5C5B3CAEE581133E562394FC705C75C8E58C5124B9C67",
+        ));
+        assert!(!builtin_wasm_digest_matches(
+            "b9a72d60fb1ea0a933e5c5b3caee581133e562394fc705c75c8e58c5124b9c67",
+            "blake3:d8cb9d017659a50241b9831164662851b4393718c0f1524b2059f48f909d54c4",
+        ));
     }
 
     #[test]
@@ -4871,6 +5491,32 @@ mod tests {
             violations,
             vec![
                 "crates/scryer-application/src/lib.rs:1: local absolute path reference: const DESIGN: &str = \"~/private/design.md\";"
+                    .to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn release_hygiene_allows_linuxbrew_installation_paths() {
+        let violations = scan_release_hygiene_content(
+            Path::new("crates/scryer-application/src/application_upgrade/installation.rs"),
+            "const BINARY: &str = \"/home/linuxbrew/.linuxbrew/bin/scryer\";",
+        );
+
+        assert!(violations.is_empty());
+    }
+
+    #[test]
+    fn release_hygiene_flags_linux_user_home_paths() {
+        let violations = scan_release_hygiene_content(
+            Path::new("crates/scryer-application/src/lib.rs"),
+            "const DESIGN: &str = \"/home/developer/private/design.md\";",
+        );
+
+        assert_eq!(
+            violations,
+            vec![
+                "crates/scryer-application/src/lib.rs:1: local absolute path reference: const DESIGN: &str = \"/home/developer/private/design.md\";"
                     .to_string()
             ]
         );

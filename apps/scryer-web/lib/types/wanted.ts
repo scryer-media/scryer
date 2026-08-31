@@ -74,6 +74,8 @@ export type PendingReleaseItem = {
   seeders: number | null;
   addedAt: string;
   delayUntil: string;
+  lastDecisionCode: string | null;
+  role: "PRIMARY" | "FALLBACK";
   status: PendingReleaseStatus;
 };
 

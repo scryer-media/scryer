@@ -1,6 +1,5 @@
 import * as React from "react";
 import { useLocation } from "react-router";
-import { useClient } from "urql";
 import {
   ArrowDown,
   ArrowUp,
@@ -11,7 +10,6 @@ import {
   Edit,
   Eye,
   EyeOff,
-  FolderOpen,
   FolderPen,
   LayoutGrid,
   LayoutList,
@@ -38,6 +36,8 @@ import {
   TvdbMovieExternalLink,
   TvdbSeriesExternalLink,
 } from "@/components/common/external-media-links";
+import { FixTitleMatchDialog } from "@/components/dialogs/fix-title-match-dialog";
+import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
 import { useActiveDownloadTitleIds } from "@/lib/hooks/use-active-download-title-ids";
@@ -65,12 +65,13 @@ import {
   MediaFilesOnDiskPanel,
   type MediaFileOnDisk,
 } from "@/components/common/media-files-on-disk-panel";
+import { TitleFilesOnDiskRail } from "@/components/common/title-files-on-disk-rail";
 import {
   MediaRenamePlanPanel,
   type MediaRenamePlan,
 } from "@/components/common/media-rename-plan-panel";
 import { TitleHistoryModal } from "@/components/common/title-history-modal";
-import { TitleOptionsSettingsGrid } from "@/components/common/title-options-settings-grid";
+import { WatchInMediaServerMenu } from "@/components/common/watch-in-media-server-menu";
 import {
   SearchResultBuckets,
   type ReleaseSearchSortDirection,
@@ -180,11 +181,10 @@ import { persistOverviewWindowScroll } from "@/lib/hooks/use-overview-window-scr
 import { releaseSupportsAdditionalFileQueue } from "@/lib/utils/release-queue-scope";
 import type { LocalPathStyle } from "@/lib/utils/local-path-style";
 import type { ContentViewMode } from "./media-content/content-view-mode";
+import { MovieTitleSettingsPanel } from "./media-content/movie-title-settings-panel";
 import { localizedTitleStatus } from "./overview-localization";
 import { SeriesOverviewContainer } from "@/components/containers/series-overview-container";
-import { seriesOverviewSettingsInitQuery } from "@/lib/graphql/queries";
-import { DEFAULT_MOVIE_LIBRARY_PATH } from "@/lib/constants/settings";
-import { qualityProfileSettingsToEntries } from "@/lib/utils/quality-profiles";
+import { handleFixTitleMatchComplete } from "@/lib/fix-title-match";
 import type { TitleOptionUpdates } from "@/lib/types/title-options";
 
 type Facet = "MOVIE" | "SERIES" | "ANIME";
@@ -1009,80 +1009,6 @@ function TitleContextReleaseSearchPanel({
   );
 }
 
-function MovieTitleSettingsPanel({
-  title,
-  libraries,
-  onUpdateTitleOptions,
-  onTitleChanged,
-}: {
-  title: TitleRecord;
-  libraries: LibraryRecord[];
-  onUpdateTitleOptions: (options: TitleOptionUpdates) => Promise<void>;
-  onTitleChanged: () => Promise<void> | void;
-}) {
-  const client = useClient();
-  const [qualityProfiles, setQualityProfiles] = React.useState<
-    { id: string; name: string }[]
-  >([]);
-  const [defaultRootFolder, setDefaultRootFolder] = React.useState(
-    DEFAULT_MOVIE_LIBRARY_PATH,
-  );
-  const rootFolders = React.useMemo(
-    () => libraries.find((library) => library.id === title.libraryId)?.roots ?? [],
-    [libraries, title.libraryId],
-  );
-
-  React.useEffect(() => {
-    let cancelled = false;
-    const load = async () => {
-      try {
-        const { data, error } = await client
-          .query(
-            seriesOverviewSettingsInitQuery,
-            { scope: "MOVIE" },
-            { requestPolicy: "network-only" },
-          )
-          .toPromise();
-        if (error) {
-          throw error;
-        }
-        if (cancelled) {
-          return;
-        }
-        setQualityProfiles(
-          qualityProfileSettingsToEntries(data.qualityProfileSettings).map(
-            (profile) => ({ id: profile.id, name: profile.name }),
-          ),
-        );
-        const folder = (data.mediaSettings?.libraryPath ?? "").trim();
-        if (folder) {
-          setDefaultRootFolder(folder);
-        }
-      } catch {
-        // Settings are optional here; other title overrides remain usable.
-      }
-    };
-    void load();
-    return () => {
-      cancelled = true;
-    };
-  }, [client]);
-
-  return (
-    <div className="p-4">
-      <TitleOptionsSettingsGrid
-        title={title}
-        qualityProfiles={qualityProfiles}
-        defaultRootFolder={defaultRootFolder}
-        rootFolders={rootFolders}
-        onUpdateTitleOptions={onUpdateTitleOptions}
-        onTitleChanged={onTitleChanged}
-        idPrefix="title-overview-settings"
-      />
-    </div>
-  );
-}
-
 function TitleContextPanel({
   id,
   title,
@@ -1218,6 +1144,7 @@ function TitleContextPanel({
   className?: string;
 }) {
   const t = useTranslate();
+  const setGlobalStatus = useGlobalStatus();
   const dateTimeFormat = useUiDateTimeFormat();
   const [autoQueueLoadingTitleId, setAutoQueueLoadingTitleId] = React.useState<
     string | null
@@ -1236,6 +1163,7 @@ function TitleContextPanel({
   const [blockedReleasesOpen, setBlockedReleasesOpen] =
     React.useState(false);
   const [settingsOpen, setSettingsOpen] = React.useState(false);
+  const [fixMatchOpen, setFixMatchOpen] = React.useState(false);
   const releaseSearchOpen = title !== null && releaseSearchTitleId === title.id;
   const releaseSearchActionLoading = releaseSearchOpen && releaseSearchLoading;
   const panelClassName = cn(
@@ -1319,7 +1247,26 @@ function TitleContextPanel({
     setHistoryOpen(false);
     setBlockedReleasesOpen(false);
     setSettingsOpen(false);
+    setFixMatchOpen(false);
   }, [title?.facet, title?.id]);
+
+  const handleFixMatchComplete = React.useCallback(
+    async (warnings: string[]) => {
+      if (!title) {
+        return;
+      }
+      await handleFixTitleMatchComplete({
+        warnings,
+        refreshTitleDetail: async () => {
+          await onTitleOptionsChanged(title);
+        },
+        setGlobalStatus,
+        t,
+        titleName: title.name,
+      });
+    },
+    [onTitleOptionsChanged, setGlobalStatus, t, title],
+  );
 
   const handlePreviewRename = React.useCallback(async () => {
     if (!title) {
@@ -1468,6 +1415,15 @@ function TitleContextPanel({
             backgroundUrl={backgroundUrl}
             closeLabel={t("label.clear")}
             onClose={onClearSelection}
+            headerActions={
+              (title.playbackLinks?.length ?? 0) > 0 ? (
+                <WatchInMediaServerMenu
+                  links={title.playbackLinks}
+                  showLabel
+                  className="justify-end"
+                />
+              ) : null
+            }
           >
             <TitleWorkspacePosterFrame>
               <TitlePosterSlot
@@ -1653,6 +1609,7 @@ function TitleContextPanel({
               onTitleChanged={() =>
                 Promise.resolve(onTitleOptionsChanged(title))
               }
+              onOpenFixMatch={() => setFixMatchOpen(true)}
             />
           </div>
         ) : null}
@@ -1678,74 +1635,71 @@ function TitleContextPanel({
         ) : null}
 
         <div className="mt-3 space-y-3">
-          <TitleWorkspaceSectionCard>
-            <TitleWorkspaceSectionHeader
-              icon={FolderOpen}
-              title={t("title.filesOnDisk")}
-              action={
-                <Button
-                  id={`title-context-rename-preview-${title.id}`}
-                  data-ui="title-context-rename-preview"
-                  data-title-id={title.id}
-                  type="button"
-                  variant="primary"
-                  size="sm"
-                  className="h-[34px] shrink-0 justify-center gap-2 rounded-md border border-transparent !bg-primary px-3 text-xs font-semibold !text-primary-foreground shadow-sm hover:!bg-primary/90 focus-visible:ring-[var(--scry-accent-ring)]"
-                  onClick={() => {
-                    void handlePreviewRename();
-                  }}
-                  disabled={renamePreviewing || renameApplying}
-                >
-                  {renamePreviewing ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <Eye className="h-4 w-4" />
-                  )}
-                  <span>
-                    {renamePreviewing
-                      ? t("rename.previewing")
-                      : t("rename.previewButton")}
-                  </span>
-                </Button>
-              }
-            />
-            <div className="border-t border-[var(--scry-line3)] pt-3">
-              <MediaFilesOnDiskPanel
-                emptyMessage={t("title.noFilesTracked")}
-                emptyHint={t("title.noFilesTrackedHint")}
-                mediaFiles={titleMediaFiles}
-                subtitleDownloads={externalSubtitles}
-                onRefreshSubtitles={onRefreshSubtitles}
-                onDeleteFile={(fileId) => onDeleteMediaFile(title, fileId)}
-                deletingFileIds={deletingMediaFileIds}
-                onMakePrimaryFile={
-                  title.facet === "MOVIE"
-                    ? (fileId) => onMakePrimaryMediaFile(title, fileId)
-                    : undefined
-                }
-                primaryFileUpdatingId={primaryMediaFileUpdatingId}
-                showPrimaryRoleBadge
-                fileRowIdPrefix={`title-context-file-row-${title.id}`}
-                filePathIdPrefix={`title-context-file-path-${title.id}`}
-                roleIdPrefix={`title-context-file-role-${title.id}`}
-                subtitleSearchIdPrefix={`title-context-file-search-subtitles-${title.id}`}
-                deleteFileIdPrefix={`title-context-file-delete-${title.id}`}
-                makePrimaryFileIdPrefix={`title-context-file-make-primary-${title.id}`}
-                presentation="selected-title"
-              />
-            </div>
-            {renamePlan ? (
-              <MediaRenamePlanPanel
-                plan={renamePlan}
-                applying={renameApplying}
-                applyDisabled={renameApplying || renamePlan.renamable === 0}
-                applyButtonId={`title-context-rename-apply-${title.id}`}
-                onApply={() => {
-                  void handleApplyRename();
+          <TitleFilesOnDiskRail
+            action={
+              <Button
+                id={`title-context-rename-preview-${title.id}`}
+                data-ui="title-context-rename-preview"
+                data-title-id={title.id}
+                type="button"
+                variant="primary"
+                size="sm"
+                className="h-[34px] shrink-0 justify-center gap-2 rounded-md border border-transparent !bg-primary px-3 text-xs font-semibold !text-primary-foreground shadow-sm hover:!bg-primary/90 focus-visible:ring-[var(--scry-accent-ring)]"
+                onClick={() => {
+                  void handlePreviewRename();
                 }}
-              />
-            ) : null}
-          </TitleWorkspaceSectionCard>
+                disabled={renamePreviewing || renameApplying}
+              >
+                {renamePreviewing ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Eye className="h-4 w-4" />
+                )}
+                <span>
+                  {renamePreviewing
+                    ? t("rename.previewing")
+                    : t("rename.previewButton")}
+                </span>
+              </Button>
+            }
+            footer={
+              renamePlan ? (
+                <MediaRenamePlanPanel
+                  plan={renamePlan}
+                  applying={renameApplying}
+                  applyDisabled={renameApplying || renamePlan.renamable === 0}
+                  applyButtonId={`title-context-rename-apply-${title.id}`}
+                  onApply={() => {
+                    void handleApplyRename();
+                  }}
+                />
+              ) : null
+            }
+          >
+            <MediaFilesOnDiskPanel
+              emptyMessage={t("title.noFilesTracked")}
+              emptyHint={t("title.noFilesTrackedHint")}
+              mediaFiles={titleMediaFiles}
+              subtitleDownloads={externalSubtitles}
+              onRefreshSubtitles={onRefreshSubtitles}
+              onDeleteFile={(fileId) => onDeleteMediaFile(title, fileId)}
+              deletingFileIds={deletingMediaFileIds}
+              onMakePrimaryFile={
+                title.facet === "MOVIE"
+                  ? (fileId) => onMakePrimaryMediaFile(title, fileId)
+                  : undefined
+              }
+              primaryFileUpdatingId={primaryMediaFileUpdatingId}
+              showPrimaryRoleBadge
+              fileRowIdPrefix={`title-context-file-row-${title.id}`}
+              filePathIdPrefix={`title-context-file-path-${title.id}`}
+              roleIdPrefix={`title-context-file-role-${title.id}`}
+              subtitleSearchIdPrefix={`title-context-file-search-subtitles-${title.id}`}
+              deleteFileIdPrefix={`title-context-file-delete-${title.id}`}
+              makePrimaryFileIdPrefix={`title-context-file-make-primary-${title.id}`}
+              presentation="selected-title"
+            />
+          </TitleFilesOnDiskRail>
 
           <TitleContextMoreLikeThisStrip
             items={moreLikeThisItems}
@@ -1806,8 +1760,7 @@ function TitleContextPanel({
                         dateTimeFormat,
                       );
                       const releaseLabel =
-                        entry.sourceTitle?.trim() ||
-                        entry.sourceHint?.trim() ||
+                        entry.releaseName.trim() ||
                         t("episode.untitledRelease");
 
                       return (
@@ -1824,16 +1777,8 @@ function TitleContextPanel({
                                 {attemptedAtLabel ? (
                                   <span>{attemptedAtLabel}</span>
                                 ) : null}
-                                {entry.sourceHint ? (
-                                  <span>{entry.sourceHint}</span>
-                                ) : null}
                               </div>
                             </div>
-                            {entry.episodeIds.length > 0 ? (
-                              <span className="shrink-0 rounded-[6px] border border-[var(--scry-line3)] bg-[var(--scry-card)] px-2 py-0.5 text-[10.5px] font-semibold text-[var(--scry-muted2)]">
-                                {entry.episodeIds.length}
-                              </span>
-                            ) : null}
                           </div>
                           {entry.errorMessage ? (
                             <p className="mt-2 line-clamp-3 rounded-[8px] bg-[var(--scry-danger-bg)] px-2.5 py-1.5 text-[11px] leading-4 text-[var(--scry-danger-text)]">
@@ -1850,6 +1795,17 @@ function TitleContextPanel({
           )}
         </div>
       </div>
+      <FixTitleMatchDialog
+        open={fixMatchOpen}
+        onOpenChange={setFixMatchOpen}
+        title={{
+          id: title.id,
+          name: title.name,
+          facet: title.facet,
+          externalIds: title.externalIds ?? [],
+        }}
+        onFixed={handleFixMatchComplete}
+      />
       <TitleHistoryModal
         open={historyOpen}
         onOpenChange={setHistoryOpen}
@@ -3502,7 +3458,7 @@ export function MediaContentView({
             facetSettingsSection === "renaming"
               ? "reference"
               : facetSettingsSection === "routing"
-                ? "wide"
+                ? "full"
               : facetSettingsSection === "library" && libraryRoutingWide
               ? "wide"
               : "default"
@@ -4129,6 +4085,7 @@ export function MediaContentView({
                         ) : null}
                         <SeriesOverviewContainer
                           titleId={seriesSidePanelTitleId}
+                          fullBleedHero
                           initialEpisodeId={routeOverviewEpisodeId}
                           onTitleNotFound={handleSelectedOverviewBackToList}
                           onBackToList={handleSelectedOverviewBackToList}

@@ -239,6 +239,12 @@ function formatRenameValidationIssue(
       return t("settings.renameValidationInvalidPadding", { padding: issue.padding });
     case "invalidFilter":
       return t("settings.renameValidationInvalidFilter", { filter: issue.filter });
+    case "invalidOptionalGroup":
+      return t("settings.renameValidationInvalidOptionalGroup");
+    case "nestedOptionalGroup":
+      return t("settings.renameValidationNestedOptionalGroup");
+    case "unsupportedOptionalFallback":
+      return t("settings.renameValidationUnsupportedOptionalFallback");
   }
 
   return null;
@@ -274,6 +280,12 @@ function validateFolderTemplate(
       return t("settings.renameValidationInvalidPadding", { padding: issue.padding });
     case "invalidFilter":
       return t("settings.renameValidationInvalidFilter", { filter: issue.filter });
+    case "invalidOptionalGroup":
+      return t("settings.renameValidationInvalidOptionalGroup");
+    case "nestedOptionalGroup":
+      return t("settings.renameValidationNestedOptionalGroup");
+    case "unsupportedOptionalFallback":
+      return t("settings.renameValidationUnsupportedOptionalFallback");
     case "illegalCharacter":
       return t("settings.folderValidationIllegalCharacter", {
         character: JSON.stringify(issue.character),
@@ -420,18 +432,23 @@ function resolveTemplateTokenContext(
   if (!tokenBody || tokenBody.includes("{") || tokenBody.includes("}")) {
     return null;
   }
+  const isOptionalGroupGuard = tokenBody.startsWith("?");
+  const guardOrTokenBody = isOptionalGroupGuard ? tokenBody.slice(1) : tokenBody;
 
   const nextOpen = value.indexOf("{", lastOpen + 1);
   const nextClose = value.indexOf("}", lastOpen + 1);
   const shouldCloseBrace =
     nextClose === -1 || (nextOpen !== -1 && nextOpen < nextClose);
-  const pipeIndex = tokenBody.lastIndexOf("|");
+  const pipeIndex = guardOrTokenBody.lastIndexOf("|");
   if (pipeIndex !== -1) {
-    const tokenName = tokenBody.slice(0, pipeIndex).split("|", 1)[0]?.trim();
+    if (isOptionalGroupGuard) {
+      return null;
+    }
+    const tokenName = guardOrTokenBody.slice(0, pipeIndex).split("|", 1)[0]?.trim();
     if (!tokenName || tokenName.includes(":")) {
       return null;
     }
-    const query = tokenBody.slice(pipeIndex + 1).trim().toLowerCase();
+    const query = guardOrTokenBody.slice(pipeIndex + 1).trim().toLowerCase();
     return {
       kind: "filter",
       key: `filter:${lastOpen}:${pipeIndex}:${query}`,
@@ -442,12 +459,12 @@ function resolveTemplateTokenContext(
     };
   }
 
-  const colonIndex = tokenBody.indexOf(":");
+  const colonIndex = guardOrTokenBody.indexOf(":");
   if (colonIndex !== -1) {
     return null;
   }
 
-  const query = tokenBody.trim().toLowerCase();
+  const query = guardOrTokenBody.trim().toLowerCase();
 
   const matches = tokenDescriptions
     .filter(({ token }) => token.toLowerCase().includes(query))
@@ -464,11 +481,11 @@ function resolveTemplateTokenContext(
 
   return {
     kind: "token",
-    key: `${lastOpen}:${query}`,
+    key: `${lastOpen}:${isOptionalGroupGuard ? "?" : ""}${query}`,
     query,
-    replaceStart: lastOpen + 1,
+    replaceStart: lastOpen + 1 + (isOptionalGroupGuard ? 1 : 0),
     replaceEnd: lastOpen + 1 + tokenBody.length,
-    shouldCloseBrace,
+    shouldCloseBrace: isOptionalGroupGuard ? false : shouldCloseBrace,
   };
 }
 
@@ -847,6 +864,18 @@ function RenameFunctionReference({ t }: { t: Translate }) {
           </code>
           <p className="mt-1 text-xs leading-snug text-muted-foreground">
             {t("settings.renameTruncateFilterLabel")}
+          </p>
+        </div>
+
+        <div className="rounded-md border border-border/70 bg-muted/40 px-3 py-2.5">
+          <p className="text-sm font-medium text-card-foreground">
+            {t("settings.renameFunctionOptionalGroupTitle")}
+          </p>
+          <code className="mt-1 block break-all font-[var(--font-code)] text-xs text-[var(--scry-accent-text)]">
+            {"{?absolute_episode: ({absolute_episode})}"}
+          </code>
+          <p className="mt-1 text-xs leading-snug text-muted-foreground">
+            {t("settings.renameOptionalGroupDescription")}
           </p>
         </div>
 

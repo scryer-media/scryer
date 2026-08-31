@@ -1134,6 +1134,460 @@ file = "postgres/migrations/0173_media_file_announced_size.sql"
 engine = "postgres"
 scope = "all"
 
+[[migration]]
+version = 174
+description = "persist durable indexer HTTP error history"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0174_indexer_error_history.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0174_indexer_error_history.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 175
+description = "persist OAuth client registrations"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0175_oauth_client_registrations.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0175_oauth_client_registrations.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 176
+description = "persist manual archive extraction workspaces"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0176_manual_import_archive_workspaces.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0176_manual_import_archive_workspaces.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 177
+description = "backfill movie SMG identities and requeue legacy movie hydration"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0177_movie_smg_identity_backfill.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0177_movie_smg_identity_backfill.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 178
+description = "persist user API keys"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0178_api_keys.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0178_api_keys.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 179
+description = "canonical download identity registry"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0179_canonical_download_identity.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0179_canonical_download_identity.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration.steps]]
+kind = "rust"
+hook_id = "backfill_canonical_download_identity"
+engine = "all"
+scope = "all"
+
+[[migration]]
+version = 180
+description = "canonical download identity finalization"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0180_canonical_download_identity_finalization.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0180_canonical_download_identity_finalization.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 181
+description = "bound unresolved movie SMG identity backfill attempts"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0181_movie_smg_identity_backfill_attempts.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0181_movie_smg_identity_backfill_attempts.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 182
+description = "persist media server playback links"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0182_media_server_playback_links.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0182_media_server_playback_links.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 183
+description = "manual import selection durable identity"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0183_manual_import_selection_durable_identity.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0183_manual_import_selection_durable_identity.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 184
+description = "normalized indexer search diagnostics and reusable candidates"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0184_indexer_search_diagnostics.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0184_indexer_search_diagnostics.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 185
+description = "pending release identity and arbitration history"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0185_pending_release_identity_arbitration.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0185_pending_release_identity_arbitration.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 186
+description = "canonical download identity states without the legacy wire token"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0186_download_identity_states_token_optional.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0186_download_identity_states_token_optional.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 187
+description = "derived series movie monitoring policy"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0187_series_movie_monitoring_policy.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0187_series_movie_monitoring_policy.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 188
+description = "classify unverified already imported download blocks"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0188_unverified_already_imported_blocks.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0188_unverified_already_imported_blocks.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 189
+description = "disable user rules incompatible with eval rule runtime wrappers"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "rust"
+hook_id = "disable_invalid_user_rule_runtime_wrappers"
+engine = "all"
+scope = "upgrade_only"
+
+[[migration]]
+version = 190
+description = "allow movie entities to own hydrated ratings and credits"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0190_movie_entity_metadata_ownership.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0190_movie_entity_metadata_ownership.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 191
+description = "indexer candidate session identities"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0191_indexer_search_run_offsets.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0191_indexer_search_run_offsets.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 192
+description = "retire v1 password hashes and re-key identity digests to blake3"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0192_blake3_identity_migration.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0192_blake3_identity_migration.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration.steps]]
+kind = "rust"
+hook_id = "backfill_blake3_identities"
+engine = "all"
+scope = "upgrade_only"
+
+[[migration]]
+version = 193
+description = "persist the grab-time infohash on download submissions"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0193_download_submission_info_hash.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0193_download_submission_info_hash.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 194
+description = "key the blocklist on release name and infohash, one row per block"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0194_blocklist_release_identity.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0194_blocklist_release_identity.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 195
+description = "application migration success ledger"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0195_application_migrations.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0195_application_migrations.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 196
+description = "refresh title catalog sort keys for ICU 2 3"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "rust"
+hook_id = "migrate_title_catalog_sort_keys"
+engine = "all"
+scope = "all"
+
+[[migration]]
+version = 197
+description = "compact domain events and release decision explanations"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0197_compact_event_storage_pre.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0197_compact_event_storage.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration.steps]]
+kind = "rust"
+hook_id = "compact_event_storage"
+engine = "all"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0197_compact_event_storage_post.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration]]
+version = 198
+description = "seed canonical postgres defaults outside the released baseline"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0198_seed_canonical_defaults.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0198_seed_canonical_defaults.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 199
+description = "compact housekeeping indexes"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0199_housekeeping_index_compaction.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0199_housekeeping_index_compaction.sql"
+engine = "postgres"
+scope = "all"
+
 [[baseline]]
 through_version = 140
 file = "baselines/0140_baseline.sql"
@@ -1142,4 +1596,14 @@ engine = "sqlite"
 [[baseline]]
 through_version = 140
 file = "postgres/baselines/0140_baseline.sql"
+engine = "postgres"
+
+[[baseline]]
+through_version = 198
+file = "baselines/0198_baseline.sql"
+engine = "sqlite"
+
+[[baseline]]
+through_version = 198
+file = "postgres/baselines/0198_baseline.sql"
 engine = "postgres"

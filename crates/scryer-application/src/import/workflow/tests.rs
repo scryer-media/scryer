@@ -8,9 +8,11 @@ mod tests {
         CompletedImportIdentityPolicy, CompletedImportRequestPayload,
         IMPORT_TRANSFER_HEARTBEAT_INTERVAL, ManualImportCandidateMapping, ReleaseEvidence,
         SelectedCompletedImportEvidence, StoredCompletedImportRequestPayload,
-        completed_import_error_message_is_retryable, completed_import_status_for_result, download_submission_persistence_may_be_in_flight,
+        completed_import_error_message_is_retryable, completed_import_status_for_result,
+        discover_manual_import_video_candidates, download_submission_persistence_may_be_in_flight,
         manual_episode_suggestion_for_grabbed_scope, parse_import_release_for_title,
-        resolved_episode_ids_are_within_expected, sanitized_title_folder_component,
+        qualify_manual_import_video_candidate, resolved_episode_ids_are_within_expected,
+        sanitized_title_folder_component,
         select_completed_import_evidence, should_persist_import_transfer_heartbeat,
         skip_reason_for_import_check_code, stamp_scryer_submission_origin,
         submission_has_scryer_origin, validate_manual_import_candidate_mapping_targets,
@@ -269,6 +271,7 @@ mod tests {
     ) -> CompletedDownloadSubmissionResolution {
         CompletedDownloadSubmissionResolution::Matched(Box::new(CompletedDownloadSubmissionMatch {
             submission: DownloadSubmission {
+    download_id: scryer_domain::download_identity::DownloadId::new(),
                 title_id: title_id.to_string(),
                 facet: facet.to_string(),
                 download_client_id: Some("client-1".to_string()),
@@ -279,6 +282,7 @@ mod tests {
                 source_provider_name: None,
                 source_kind: None,
                 source_title: source_title.map(str::to_string),
+                info_hash: None,
                 release_size_bytes: None,
                 request_signature: None,
                 purpose: DownloadSubmissionPurpose::Standard,
@@ -1084,16 +1088,22 @@ mod tests {
     #[test]
     fn invalid_and_sample_check_codes_are_permanent_policy_mismatches() {
         assert_eq!(
-            skip_reason_for_import_check_code("invalid_extension"),
+            skip_reason_for_import_check_code(crate::import_checks::ImportCheckCode::InvalidExtension),
             ImportSkipReason::PolicyMismatch
         );
         assert_eq!(
-            skip_reason_for_import_check_code("sample_file"),
+            skip_reason_for_import_check_code(crate::import_checks::ImportCheckCode::SampleFile),
             ImportSkipReason::PolicyMismatch
         );
         assert_eq!(
-            skip_reason_for_import_check_code("sample_directory"),
+            skip_reason_for_import_check_code(
+                crate::import_checks::ImportCheckCode::SampleDirectory,
+            ),
             ImportSkipReason::PolicyMismatch
+        );
+        assert_eq!(
+            skip_reason_for_import_check_code(crate::import_checks::ImportCheckCode::StillUnpacking),
+            ImportSkipReason::DownloadInProgress
         );
     }
 
@@ -1155,12 +1165,9 @@ mod tests {
             ImportStatus::Pending
         );
 
-        // Scryer's own transient markers are the only message-based hint.
-        for transient in [
-            "source is still being unpacked by the client",
-            "active-download marker present",
-            "destination temporarily unavailable",
-        ] {
+        // These execution races lack a structured outcome and remain the only
+        // message-based retry hints. Import-check rejection reasons are typed.
+        for transient in ["source changed during copy", "destination temporarily unavailable"] {
             result.error_message = Some(transient.to_string());
             assert_eq!(
                 completed_import_status_for_result(&result, ImportStatus::Failed),
@@ -1218,10 +1225,18 @@ mod tests {
             ImportStatus::Failed
         );
 
+        result.skip_reason = Some(ImportSkipReason::ArchiveExtractionTimedOut);
+        result.error_message = Some("archive plugin timed out after 3600 seconds".to_string());
+        assert_eq!(
+            completed_import_status_for_result(&result, ImportStatus::Failed),
+            ImportStatus::Failed
+        );
+
         // Environmental skips clear on their own and are retried.
         result.decision = ImportDecision::Skipped;
         result.error_message = Some("not enough room".to_string());
         for environmental in [
+            ImportSkipReason::DownloadInProgress,
             ImportSkipReason::DiskFull,
             ImportSkipReason::PermissionDenied,
         ] {
@@ -1323,6 +1338,225 @@ mod tests {
         )
         .expect_err("outside file should be rejected");
         assert!(err.to_string().contains("outside the trusted source root"));
+    }
+
+    #[cfg(feature = "runtime-media-analysis")]
+    fn copy_mediainfo_fixture(destination: &std::path::Path) {
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../scryer-mediainfo/tests/media/hevc_hdr10plus.mkv");
+        std::fs::copy(fixture, destination).expect("copy MediaInfo fixture");
+    }
+
+    #[cfg(feature = "runtime-media-analysis")]
+    #[tokio::test]
+    async fn manual_import_content_probe_accepts_large_extensionless_video_source() {
+        let source = tempfile::tempdir().expect("source tempdir");
+        let opaque_file = source.path().join("dXRUKoYEAJ58jradJdxMKKxgczVTvt");
+        copy_mediainfo_fixture(&opaque_file);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&opaque_file)
+            .expect("open fixture")
+            .set_len(16 * 1024 * 1024)
+            .expect("pad fixture");
+        let trusted_root = std::fs::canonicalize(&opaque_file).expect("canonical source file");
+
+        let candidate = qualify_manual_import_video_candidate(&opaque_file, &trusted_root)
+            .await
+            .expect("qualify candidate")
+            .expect("extensionless video candidate");
+
+        assert_eq!(candidate.canonical_path, trusted_root);
+        let facts = candidate.video_facts.expect("video facts");
+        assert_eq!(facts.container_format.as_deref(), Some("matroska"));
+        assert_eq!(facts.video_codec.as_deref(), Some("hevc"));
+        assert!(facts.duration_seconds.is_some_and(|duration| duration > 0));
+    }
+
+    #[cfg(feature = "runtime-media-analysis")]
+    #[tokio::test]
+    async fn manual_import_known_extensions_skip_content_probing() {
+        let source = tempfile::tempdir().expect("source tempdir");
+        let known_video = source.path().join("Example.Show.S01E02.1080p.mkv");
+        copy_mediainfo_fixture(&known_video);
+        let trusted_root = std::fs::canonicalize(source.path()).expect("canonical source root");
+
+        let candidate = qualify_manual_import_video_candidate(&known_video, &trusted_root)
+            .await
+            .expect("qualify candidate")
+            .expect("known-extension video candidate");
+
+        assert!(candidate.video_facts.is_none());
+    }
+
+    #[cfg(feature = "runtime-media-analysis")]
+    #[tokio::test]
+    async fn manual_import_unrecognized_extensions_skip_content_probing() {
+        let source = tempfile::tempdir().expect("source tempdir");
+        let unrecognized_extension = source.path().join("Example.Show.S01E02.1080p.download");
+        copy_mediainfo_fixture(&unrecognized_extension);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&unrecognized_extension)
+            .expect("open fixture")
+            .set_len(16 * 1024 * 1024)
+            .expect("pad fixture");
+        let trusted_root = std::fs::canonicalize(source.path()).expect("canonical source root");
+
+        assert!(
+            qualify_manual_import_video_candidate(&unrecognized_extension, &trusted_root)
+                .await
+                .expect("qualify candidate")
+                .is_none()
+        );
+    }
+
+    #[cfg(all(feature = "runtime-media-analysis", unix))]
+    #[tokio::test]
+    async fn manual_import_discovery_surfaces_an_unavailable_only_candidate() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let source = tempfile::tempdir().expect("source tempdir");
+        let trusted_root = std::fs::canonicalize(source.path()).expect("canonical source root");
+        let unavailable = source.path().join("unavailable.mkv");
+        copy_mediainfo_fixture(&unavailable);
+        std::fs::set_permissions(&unavailable, std::fs::Permissions::from_mode(0o000))
+            .expect("make candidate unavailable");
+
+        let result = discover_manual_import_video_candidates(&trusted_root).await;
+
+        std::fs::set_permissions(&unavailable, std::fs::Permissions::from_mode(0o644))
+            .expect("restore candidate permissions");
+        let error = result.expect_err("unavailable-only candidate should surface an error");
+        assert!(error.to_string().contains("not accessible"));
+    }
+
+    #[cfg(feature = "runtime-media-analysis")]
+    #[tokio::test]
+    async fn manual_import_content_probe_rejects_small_opaque_files() {
+        let source = tempfile::tempdir().expect("source tempdir");
+        let trusted_root = std::fs::canonicalize(source.path()).expect("canonical source root");
+        let small_opaque = source.path().join("opaque");
+        copy_mediainfo_fixture(&small_opaque);
+
+        assert!(
+            qualify_manual_import_video_candidate(&small_opaque, &trusted_root)
+                .await
+                .expect("qualify small opaque file")
+                .is_none()
+        );
+    }
+
+    #[cfg(all(feature = "runtime-media-analysis", unix))]
+    #[tokio::test]
+    async fn manual_import_discovery_preserves_symlink_entry_name_and_rejects_escape() {
+        let source = tempfile::tempdir().expect("source tempdir");
+        let trusted_root = std::fs::canonicalize(source.path()).expect("canonical source root");
+        let opaque_target = source.path().join("opaque-target");
+        copy_mediainfo_fixture(&opaque_target);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&opaque_target)
+            .expect("open fixture")
+            .set_len(16 * 1024 * 1024)
+            .expect("pad fixture");
+        let release_entry = source.path().join("Example.Show.S01E02.1080p.mkv");
+        std::os::unix::fs::symlink(&opaque_target, &release_entry)
+            .expect("create contained source symlink");
+
+        let outside = tempfile::tempdir().expect("outside tempdir");
+        copy_mediainfo_fixture(&outside.path().join("Outside.Show.S01E03.mkv"));
+        std::os::unix::fs::symlink(outside.path(), source.path().join("outside-link"))
+            .expect("create escaping directory symlink");
+
+        let candidates = discover_manual_import_video_candidates(&trusted_root)
+            .await
+            .expect("discover manual import candidates");
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(
+            candidates[0].source_entry_path.file_name(),
+            release_entry.file_name()
+        );
+        assert_eq!(
+            candidates[0].canonical_path,
+            std::fs::canonicalize(&opaque_target).expect("canonical target")
+        );
+        assert!(candidates[0].video_facts.is_none());
+    }
+
+    #[cfg(all(feature = "runtime-media-analysis", unix))]
+    #[tokio::test]
+    async fn manual_import_content_probe_accepts_symlinked_trusted_root() {
+        let actual_parent = tempfile::tempdir().expect("actual parent tempdir");
+        let actual_root = actual_parent.path().join("source");
+        std::fs::create_dir(&actual_root).expect("create source root");
+        let actual_file = actual_root.join("Example.Show.S01E02.1080p.mkv");
+        copy_mediainfo_fixture(&actual_file);
+
+        let alias_parent = tempfile::tempdir().expect("alias parent tempdir");
+        let alias_root = alias_parent.path().join("source-alias");
+        std::os::unix::fs::symlink(&actual_root, &alias_root).expect("create source root alias");
+
+        let candidate = qualify_manual_import_video_candidate(
+            &alias_root.join("Example.Show.S01E02.1080p.mkv"),
+            &alias_root,
+        )
+        .await
+        .expect("qualify symlinked source root")
+        .expect("valid video candidate");
+
+        assert_eq!(
+            candidate.canonical_path,
+            std::fs::canonicalize(&actual_file).expect("canonical source file")
+        );
+    }
+
+    #[cfg(feature = "runtime-media-analysis")]
+    #[tokio::test]
+    async fn manual_import_content_probe_keeps_known_extension_parse_failures() {
+        let source = tempfile::tempdir().expect("source tempdir");
+        let trusted_root = std::fs::canonicalize(source.path()).expect("canonical source root");
+        let stream_pointer = source.path().join("movie.strm");
+        std::fs::write(&stream_pointer, b"https://media.example/movie").expect("write pointer");
+
+        let candidate = qualify_manual_import_video_candidate(&stream_pointer, &trusted_root)
+            .await
+            .expect("qualify stream pointer")
+            .expect("recognized extension fallback");
+        assert!(candidate.video_facts.is_none());
+
+        let malformed = source.path().join("broken.mkv");
+        std::fs::write(&malformed, b"not a Matroska file").expect("write malformed fixture");
+        let candidate = qualify_manual_import_video_candidate(&malformed, &trusted_root)
+            .await
+            .expect("qualify malformed known-extension file")
+            .expect("manual fallback for a known extension");
+        assert!(candidate.video_facts.is_none());
+
+        let empty = source.path().join("empty.mkv");
+        std::fs::write(&empty, b"").expect("write empty fixture");
+        assert!(
+            qualify_manual_import_video_candidate(&empty, &trusted_root)
+                .await
+                .expect("qualify empty file")
+                .is_none()
+        );
+
+        let opaque_malformed = source.path().join("opaque");
+        std::fs::write(&opaque_malformed, [0x1A, 0x45, 0xDF, 0xA3])
+            .expect("write malformed opaque fixture");
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&opaque_malformed)
+            .expect("open malformed opaque fixture")
+            .set_len(16 * 1024 * 1024)
+            .expect("pad malformed opaque fixture");
+        assert!(
+            qualify_manual_import_video_candidate(&opaque_malformed, &trusted_root)
+                .await
+                .expect("qualify malformed opaque file")
+                .is_none()
+        );
     }
 
     #[test]
@@ -1587,10 +1821,16 @@ mod tests {
         );
 
         let grab_enriched = crate::quality::canonical_context::announced_metadata_for_title(
-            &title, &at_grab, &profile, None,
+            &title,
+            &at_grab,
+            &profile.criteria.required_audio_languages,
+            None,
         );
         let import_enriched = crate::quality::canonical_context::announced_metadata_for_title(
-            &title, &at_import, &profile, None,
+            &title,
+            &at_import,
+            &profile.criteria.required_audio_languages,
+            None,
         );
 
         assert_eq!(

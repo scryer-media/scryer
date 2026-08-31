@@ -1,8 +1,18 @@
 pub mod assets;
+pub mod blake3_identities;
+#[cfg(test)]
+#[path = "blake3_identities_upgrade_tests.rs"]
+mod blake3_identities_upgrade_tests;
+#[cfg(test)]
+#[path = "blocklist_release_identity_upgrade_tests.rs"]
+mod blocklist_release_identity_upgrade_tests;
+pub mod canonical_download_identity;
+pub mod event_storage;
 pub mod hook_ids;
 pub mod known_bad;
 pub mod notification_targets;
 pub mod post_0_16_6_prerelease;
+pub mod rule_set_runtime_wrapper;
 pub mod title_catalog_sort_keys;
 pub mod title_folder_ownership;
 pub mod title_folder_ownership_safe;
@@ -769,6 +779,16 @@ async fn run_rust_hook(
         "converge_post_0_16_6_prerelease_schema" => {
             post_0_16_6_prerelease::converge_post_0_16_6_prerelease_schema_sqlite(tx).await
         }
+        "backfill_canonical_download_identity" => {
+            canonical_download_identity::backfill_canonical_download_identity_sqlite(tx).await
+        }
+        "disable_invalid_user_rule_runtime_wrappers" => {
+            rule_set_runtime_wrapper::disable_invalid_user_rule_runtime_wrappers_sqlite(tx).await
+        }
+        "backfill_blake3_identities" => {
+            blake3_identities::backfill_blake3_identities_sqlite(tx).await
+        }
+        "compact_event_storage" => event_storage::compact_event_storage_sqlite(tx).await,
         #[cfg(test)]
         "test_insert_hook_marker" => {
             let marker = match install_kind {

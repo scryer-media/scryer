@@ -42,19 +42,19 @@ impl AppUseCase {
             config_json,
             persisted_config_json,
         )?;
-        let base_url = crate::app_usecase_integration::derive_indexer_base_url_from_config_fields(
-            &fields,
-            Some(&normalized_config_json),
-        )?;
-        let validated_base_url = validate_test_flight_url(&base_url)?;
-        preflight_test_flight_url(&validated_base_url).await?;
-
         let provider = self
             .services
             .integrations
             .plugin_provider
             .available()
             .ok_or_else(|| AppError::Repository("indexer provider not available".into()))?;
+        provider.validate_config_for_provider(provider_type, &normalized_config_json)?;
+        let base_url = crate::app_usecase_integration::derive_indexer_base_url_from_config_fields(
+            &fields,
+            Some(&normalized_config_json),
+        )?;
+        let validated_base_url = validate_test_flight_url(&base_url)?;
+        preflight_test_flight_url(&validated_base_url).await?;
 
         let now = Utc::now();
 
@@ -109,8 +109,13 @@ impl AppUseCase {
             None
         };
 
+        // The probe deliberately runs under a synthetic id: it must exercise the
+        // submitted configuration, not whatever is stored. Nothing may persist
+        // against that id — `indexer_error_history_is_persistable` is what the
+        // capture paths ask before writing error history, so a failed probe
+        // reports its own error instead of a foreign-key failure behind it.
         let temp_config = IndexerConfig {
-            id: "test-connection".to_string(),
+            id: crate::CONNECTION_TEST_INDEXER_ID.to_string(),
             name: "Test Connection".to_string(),
             provider_type: provider_type.to_string(),
             base_url,
@@ -183,6 +188,7 @@ impl AppUseCase {
                 None,
                 None,
                 SearchMode::Interactive,
+                IndexerErrorOperation::ConnectionTest,
                 None,
                 None,
                 None,
@@ -193,9 +199,21 @@ impl AppUseCase {
             .await
             .map_err(map_indexer_connection_test_error)?;
 
-        let _ = self
-            .refresh_caps_snapshot_json_best_effort(&temp_config, None)
-            .await;
+        let caps_refresh_available = self
+            .services
+            .integrations
+            .indexer_caps_refresher
+            .available()
+            .is_some();
+        let caps_snapshot = self
+            .fetch_caps_snapshot_json_for_config(&temp_config)
+            .await
+            .map_err(map_indexer_connection_test_error)?;
+        if caps_refresh_available && temp_config.is_direct_nab() && caps_snapshot.is_none() {
+            return Err(AppError::Validation(
+                "indexer connection test did not return a valid Newznab caps document".to_string(),
+            ));
+        }
 
         if let Some(config) = persisted_config.as_ref() {
             self.services
@@ -424,6 +442,10 @@ const KNOWN_NEWZNAB_API_ERRORS: &[NewznabApiError] = &[
 ];
 
 fn known_newznab_error_message(message: &str) -> Option<String> {
+    if let Some(classified) = crate::classify_newznab_error_message(message) {
+        return Some(classified.message.to_string());
+    }
+
     let code = extract_newznab_error_code(message)?;
     let known_error = KNOWN_NEWZNAB_API_ERRORS
         .iter()
@@ -575,7 +597,7 @@ fn format_preflight_transport_error(url: &url::Url, origin: &str, error: &str) -
 #[cfg(not(test))]
 async fn preflight_test_flight_url(url: &url::Url) -> AppResult<()> {
     let origin = url.origin().ascii_serialization();
-    let client = scryer_outbound_http::no_redirect_reqwest_client();
+    let client = scryer_outbound_http::indexer_reqwest_client();
     let outbound_http = scryer_outbound_http::OutboundHttpClient::new(
         client,
         scryer_outbound_http::RateLimitRegistry::new(),
@@ -694,6 +716,7 @@ mod tests {
 
     struct RecordingIndexerClient {
         calls: Arc<std::sync::Mutex<Vec<RecordedSearchCall>>>,
+        pruned_indexers: Arc<std::sync::Mutex<Vec<String>>>,
         search_error: Option<String>,
     }
 
@@ -706,8 +729,13 @@ mod tests {
         fn with_search_error(search_error: Option<String>) -> Self {
             Self {
                 calls: Arc::new(std::sync::Mutex::new(Vec::new())),
+                pruned_indexers: Arc::new(std::sync::Mutex::new(Vec::new())),
                 search_error,
             }
+        }
+
+        fn pruned_indexers(&self) -> Vec<String> {
+            self.pruned_indexers.lock().unwrap().clone()
         }
     }
 
@@ -723,6 +751,7 @@ mod tests {
             _newznab_categories: Option<Vec<String>>,
             _indexer_routing: Option<IndexerRoutingPlan>,
             _mode: SearchMode,
+            _operation: IndexerErrorOperation,
             _season: Option<u32>,
             _episode: Option<u32>,
             _absolute_episode: Option<u32>,
@@ -740,6 +769,8 @@ mod tests {
             }
 
             Ok(IndexerSearchResponse {
+                completion: crate::IndexerSearchCompletion::Complete,
+
                 indexer_outcomes: Vec::new(),
                 results: vec![],
                 api_current: None,
@@ -748,11 +779,123 @@ mod tests {
                 grab_max: None,
             })
         }
+
+        async fn prune_search_learning(&self, indexer_id: &str) -> AppResult<()> {
+            self.pruned_indexers
+                .lock()
+                .unwrap()
+                .push(indexer_id.to_string());
+            Ok(())
+        }
     }
+
+    #[derive(Default)]
+    struct RecordingScopeCoverageRepository {
+        pruned_indexers: Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    #[async_trait]
+    impl ScopeIndexerCoverageRepository for RecordingScopeCoverageRepository {
+        async fn record_coverage(
+            &self,
+            _scope_key: &str,
+            _facet: &str,
+            _indexer_id: &str,
+            _fingerprint: &str,
+        ) -> AppResult<()> {
+            Ok(())
+        }
+
+        async fn covered_indexers(
+            &self,
+            _scope_key: &str,
+            _facet: &str,
+            _fingerprint: &str,
+            _stale_before: Option<chrono::DateTime<Utc>>,
+        ) -> AppResult<Vec<String>> {
+            Ok(Vec::new())
+        }
+
+        async fn prune_scope(&self, _scope_key: &str) -> AppResult<()> {
+            Ok(())
+        }
+
+        async fn prune_scope_indexer(&self, _scope_key: &str, _indexer_id: &str) -> AppResult<()> {
+            Ok(())
+        }
+
+        async fn prune_indexer(&self, indexer_id: &str) -> AppResult<()> {
+            self.pruned_indexers
+                .lock()
+                .unwrap()
+                .push(indexer_id.to_string());
+            Ok(())
+        }
+
+        async fn list_coverage_for_scope_keys(
+            &self,
+            _scope_keys: &[String],
+        ) -> AppResult<Vec<ScopeCoverageRow>> {
+            Ok(Vec::new())
+        }
+    }
+
+    struct EmptyCapsSnapshotRefresher;
+
+    #[async_trait]
+    impl IndexerCapsSnapshotRefresher for EmptyCapsSnapshotRefresher {
+        async fn fetch_for_config(
+            &self,
+            _config: &IndexerConfig,
+        ) -> AppResult<Option<scryer_domain::IndexerCapsSnapshot>> {
+            Ok(None)
+        }
+    }
+
+    struct SuccessfulCapsSnapshotRefresher;
+
+    #[async_trait]
+    impl IndexerCapsSnapshotRefresher for SuccessfulCapsSnapshotRefresher {
+        async fn fetch_for_config(
+            &self,
+            _config: &IndexerConfig,
+        ) -> AppResult<Option<scryer_domain::IndexerCapsSnapshot>> {
+            Ok(Some(scryer_domain::IndexerCapsSnapshot::default()))
+        }
+    }
+
+    struct SuccessfulValidationThenFailingCapsSnapshotRefresher {
+        calls: AtomicUsize,
+    }
+
+    impl SuccessfulValidationThenFailingCapsSnapshotRefresher {
+        fn new() -> Self {
+            Self {
+                calls: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl IndexerCapsSnapshotRefresher for SuccessfulValidationThenFailingCapsSnapshotRefresher {
+        async fn fetch_for_config(
+            &self,
+            _config: &IndexerConfig,
+        ) -> AppResult<Option<scryer_domain::IndexerCapsSnapshot>> {
+            if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                Ok(Some(scryer_domain::IndexerCapsSnapshot::default()))
+            } else {
+                Err(AppError::Repository("synthetic caps failure".into()))
+            }
+        }
+    }
+
+    type RecordedIndexerErrors = Arc<Mutex<Vec<(String, Option<String>)>>>;
 
     struct RecordingIndexerConfigRepo {
         created: Arc<Mutex<Vec<IndexerConfig>>>,
         cleared_ids: Arc<Mutex<Vec<String>>>,
+        recorded_errors: RecordedIndexerErrors,
     }
 
     impl RecordingIndexerConfigRepo {
@@ -760,6 +903,7 @@ mod tests {
             Self {
                 created: Arc::new(Mutex::new(Vec::new())),
                 cleared_ids: Arc::new(Mutex::new(Vec::new())),
+                recorded_errors: Arc::new(Mutex::new(Vec::new())),
             }
         }
 
@@ -848,6 +992,14 @@ mod tests {
 
         async fn clear_last_error(&self, id: &str) -> AppResult<()> {
             self.cleared_ids.lock().await.push(id.to_string());
+            Ok(())
+        }
+
+        async fn record_last_error(&self, id: &str, message: Option<String>) -> AppResult<()> {
+            self.recorded_errors
+                .lock()
+                .await
+                .push((id.to_string(), message));
             Ok(())
         }
     }
@@ -1223,12 +1375,26 @@ mod tests {
         plugin_provider: Option<Arc<dyn IndexerPluginProvider>>,
         settings: Arc<dyn SettingsRepository>,
     ) -> AppUseCase {
+        test_app_with_indexer_client(
+            indexer_configs,
+            plugin_provider,
+            settings,
+            Arc::new(NullIndexerClient),
+        )
+    }
+
+    fn test_app_with_indexer_client(
+        indexer_configs: Arc<dyn IndexerConfigRepository>,
+        plugin_provider: Option<Arc<dyn IndexerPluginProvider>>,
+        settings: Arc<dyn SettingsRepository>,
+        indexer_client: Arc<dyn IndexerClient>,
+    ) -> AppUseCase {
         let services = AppServices::builder(
             Arc::new(NullTitleRepository),
             Arc::new(NullShowRepository),
             Arc::new(NullUserRepository),
             indexer_configs,
-            Arc::new(NullIndexerClient),
+            indexer_client,
             Arc::new(NullDownloadClient),
             Arc::new(NullDownloadClientConfigRepository),
             Arc::new(NullReleaseAttemptRepository),
@@ -1607,7 +1773,7 @@ mod tests {
             updated_at: Utc::now(),
         });
         let client = Arc::new(RecordingIndexerClient::new(true));
-        let app = test_app(
+        let app = test_app_with_indexer_client(
             indexer_repo.clone(),
             Some(Arc::new(RecordingPluginProvider::new(
                 "nzbgeek",
@@ -1623,6 +1789,7 @@ mod tests {
                 client.clone(),
             ))),
             Arc::new(NullSettingsRepository),
+            client.clone(),
         );
 
         let updated = app
@@ -1653,6 +1820,7 @@ mod tests {
 
         assert_eq!(updated.name, "NZBGeek Mirror");
         assert!(client.calls.lock().unwrap().is_empty());
+        assert!(client.pruned_indexers().is_empty());
         assert!(indexer_repo.cleared_ids().await.is_empty());
     }
 
@@ -1687,7 +1855,8 @@ mod tests {
             created_at: Utc::now(),
             updated_at: Utc::now(),
         });
-        let app = test_app(
+        let client = Arc::new(RecordingIndexerClient::new(false));
+        let app = test_app_with_indexer_client(
             indexer_repo.clone(),
             Some(Arc::new(RecordingPluginProvider::new(
                 "nzbgeek",
@@ -1700,9 +1869,10 @@ mod tests {
                     password_field("api_key", "API Key"),
                 ],
                 searchable_capabilities(),
-                Arc::new(RecordingIndexerClient::new(false)),
+                client.clone(),
             ))),
             Arc::new(NullSettingsRepository),
+            client.clone(),
         );
 
         app.update_indexer_config(
@@ -1734,6 +1904,273 @@ mod tests {
         .expect("validated update should succeed");
 
         assert_eq!(indexer_repo.cleared_ids().await, vec!["cfg-1".to_string()]);
+        assert_eq!(client.pruned_indexers(), vec!["cfg-1".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn missing_caps_snapshot_prunes_coverage_and_learning() {
+        let indexer_repo = Arc::new(RecordingIndexerConfigRepo::new());
+        indexer_repo.created.lock().await.push(IndexerConfig {
+            id: "cfg-caps".into(),
+            name: "Synthetic Indexer".into(),
+            provider_type: "newznab".into(),
+            base_url: "https://indexer.example.test".into(),
+            api_key_encrypted: None,
+            rate_limit_seconds: None,
+            rate_limit_burst: None,
+            disabled_until: None,
+            is_enabled: true,
+            enable_interactive_search: true,
+            enable_auto_search: true,
+            indexer_proxy_config_id: None,
+            download_client_id: None,
+            seeding_profile_id: None,
+            managed_parent_config_id: None,
+            managed_child_key: None,
+            managed_metadata_json: None,
+            caps_snapshot_json: None,
+            last_health_status: None,
+            last_error_message: None,
+            last_error_at: None,
+            config_json: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        });
+        let indexer_client = Arc::new(RecordingIndexerClient::new(false));
+        let coverage = Arc::new(RecordingScopeCoverageRepository::default());
+        let services = AppServices::builder(
+            Arc::new(NullTitleRepository),
+            Arc::new(NullShowRepository),
+            Arc::new(NullUserRepository),
+            indexer_repo.clone(),
+            indexer_client.clone(),
+            Arc::new(NullDownloadClient),
+            Arc::new(NullDownloadClientConfigRepository),
+            Arc::new(NullReleaseAttemptRepository),
+            Arc::new(NullSettingsRepository),
+            Arc::new(NullQualityProfileRepository),
+            String::new(),
+        )
+        .with_scope_indexer_coverage_store(coverage.clone())
+        .with_indexer_caps_refresher(Arc::new(EmptyCapsSnapshotRefresher))
+        .build_partial_for_tests();
+        let app = AppUseCase::new(
+            services,
+            JwtAuthConfig {
+                issuer: "test".into(),
+                access_ttl_seconds: 3_600,
+                jwt_signing_salt: "test-salt".into(),
+            },
+            Arc::new(FacetRegistry::new()),
+        );
+
+        let (refreshed, failures) = app
+            .refresh_enabled_direct_nab_caps_snapshots(&test_admin())
+            .await
+            .expect("caps refresh pass should report provider failures");
+
+        assert_eq!(refreshed, 0);
+        assert_eq!(failures.len(), 1);
+        assert_eq!(indexer_client.pruned_indexers(), vec!["cfg-caps"]);
+        assert_eq!(
+            coverage.pruned_indexers.lock().unwrap().as_slice(),
+            &["cfg-caps"]
+        );
+        let errors = indexer_repo.recorded_errors.lock().await;
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].0, "cfg-caps");
+        assert!(
+            errors[0]
+                .1
+                .as_deref()
+                .is_some_and(|message| message.starts_with("caps refresh failed:"))
+        );
+    }
+
+    #[tokio::test]
+    async fn successful_caps_refresh_clears_only_caps_health_errors() {
+        let indexer_repo = Arc::new(RecordingIndexerConfigRepo::new());
+        let now = Utc::now();
+        let caps_error = IndexerConfig {
+            id: "cfg-caps-error".into(),
+            name: "Synthetic Indexer A".into(),
+            provider_type: "newznab".into(),
+            base_url: "https://indexer-a.example.test".into(),
+            api_key_encrypted: None,
+            rate_limit_seconds: None,
+            rate_limit_burst: None,
+            disabled_until: None,
+            is_enabled: true,
+            enable_interactive_search: true,
+            enable_auto_search: true,
+            indexer_proxy_config_id: None,
+            download_client_id: None,
+            seeding_profile_id: None,
+            managed_parent_config_id: None,
+            managed_child_key: None,
+            managed_metadata_json: None,
+            caps_snapshot_json: None,
+            last_health_status: None,
+            last_error_message: Some("caps refresh failed: synthetic failure".into()),
+            last_error_at: Some(now),
+            config_json: None,
+            created_at: now,
+            updated_at: now,
+        };
+        let mut unrelated_error = caps_error.clone();
+        unrelated_error.id = "cfg-other-error".into();
+        unrelated_error.name = "Synthetic Indexer B".into();
+        unrelated_error.base_url = "https://indexer-b.example.test".into();
+        unrelated_error.last_error_message = Some("authentication failed".into());
+        indexer_repo
+            .created
+            .lock()
+            .await
+            .extend([caps_error, unrelated_error]);
+        let services = AppServices::builder(
+            Arc::new(NullTitleRepository),
+            Arc::new(NullShowRepository),
+            Arc::new(NullUserRepository),
+            indexer_repo.clone(),
+            Arc::new(RecordingIndexerClient::new(false)),
+            Arc::new(NullDownloadClient),
+            Arc::new(NullDownloadClientConfigRepository),
+            Arc::new(NullReleaseAttemptRepository),
+            Arc::new(NullSettingsRepository),
+            Arc::new(NullQualityProfileRepository),
+            String::new(),
+        )
+        .with_indexer_caps_refresher(Arc::new(SuccessfulCapsSnapshotRefresher))
+        .build_partial_for_tests();
+        let app = AppUseCase::new(
+            services,
+            JwtAuthConfig {
+                issuer: "test".into(),
+                access_ttl_seconds: 3_600,
+                jwt_signing_salt: "test-salt".into(),
+            },
+            Arc::new(FacetRegistry::new()),
+        );
+
+        let (refreshed, failures) = app
+            .refresh_enabled_direct_nab_caps_snapshots(&test_admin())
+            .await
+            .expect("valid caps should refresh both indexers");
+
+        assert_eq!(refreshed, 2);
+        assert!(failures.is_empty());
+        assert_eq!(
+            indexer_repo.cleared_ids().await,
+            vec!["cfg-caps-error".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn validated_update_does_not_clear_a_caps_refresh_failure() {
+        let indexer_repo = Arc::new(RecordingIndexerConfigRepo::new());
+        indexer_repo.created.lock().await.push(IndexerConfig {
+            id: "cfg-update-caps".into(),
+            name: "Synthetic Indexer".into(),
+            provider_type: "newznab".into(),
+            base_url: "https://indexer.example.test".into(),
+            api_key_encrypted: None,
+            rate_limit_seconds: None,
+            rate_limit_burst: None,
+            disabled_until: None,
+            is_enabled: true,
+            enable_interactive_search: true,
+            enable_auto_search: true,
+            indexer_proxy_config_id: None,
+            download_client_id: None,
+            seeding_profile_id: None,
+            managed_parent_config_id: None,
+            managed_child_key: None,
+            managed_metadata_json: None,
+            caps_snapshot_json: None,
+            last_health_status: None,
+            last_error_message: None,
+            last_error_at: None,
+            config_json: Some(
+                serde_json::json!({
+                    "base_url": "https://indexer.example.test",
+                    "api_key": "old-key",
+                })
+                .to_string(),
+            ),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        });
+        let indexer_client = Arc::new(RecordingIndexerClient::new(false));
+        let coverage = Arc::new(RecordingScopeCoverageRepository::default());
+        let plugin_provider = Arc::new(RecordingPluginProvider::new(
+            "newznab",
+            vec![
+                string_field(
+                    "base_url",
+                    "Base URL",
+                    Some(scryer_domain::ConfigFieldRole::ConnectionUrl),
+                ),
+                password_field("api_key", "API Key"),
+            ],
+            searchable_capabilities(),
+            indexer_client.clone(),
+        ));
+        let services = AppServices::builder(
+            Arc::new(NullTitleRepository),
+            Arc::new(NullShowRepository),
+            Arc::new(NullUserRepository),
+            indexer_repo.clone(),
+            indexer_client.clone(),
+            Arc::new(NullDownloadClient),
+            Arc::new(NullDownloadClientConfigRepository),
+            Arc::new(NullReleaseAttemptRepository),
+            Arc::new(NullSettingsRepository),
+            Arc::new(NullQualityProfileRepository),
+            String::new(),
+        )
+        .with_scope_indexer_coverage_store(coverage)
+        .with_indexer_caps_refresher(Arc::new(
+            SuccessfulValidationThenFailingCapsSnapshotRefresher::new(),
+        ))
+        .with_plugin_provider(plugin_provider)
+        .build_partial_for_tests();
+        let app = AppUseCase::new(
+            services,
+            JwtAuthConfig {
+                issuer: "test".into(),
+                access_ttl_seconds: 3_600,
+                jwt_signing_salt: "test-salt".into(),
+            },
+            Arc::new(FacetRegistry::new()),
+        );
+
+        app.update_indexer_config(
+            &test_admin(),
+            IndexerConfigUpdate {
+                id: "cfg-update-caps".into(),
+                config_json: Some(
+                    serde_json::json!({
+                        "base_url": "https://indexer.example.test",
+                        "api_key": "new-key",
+                    })
+                    .to_string(),
+                ),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("caps failure remains non-blocking after connection validation");
+
+        assert!(indexer_repo.cleared_ids().await.is_empty());
+        assert_eq!(indexer_client.pruned_indexers(), vec!["cfg-update-caps"]);
+        let errors = indexer_repo.recorded_errors.lock().await;
+        assert_eq!(errors.len(), 1);
+        assert!(
+            errors[0]
+                .1
+                .as_deref()
+                .is_some_and(|message| message.starts_with("caps refresh failed:"))
+        );
     }
 
     #[tokio::test]
@@ -2217,6 +2654,62 @@ mod tests {
         );
     }
 
+    /// The probe runs under a synthetic indexer id with no `indexers` row, so
+    /// error history can never be written for it. The capture paths ask
+    /// `indexer_error_history_is_persistable` before writing, which is what
+    /// keeps a foreign-key failure from standing in for the probe's own error.
+    #[tokio::test]
+    async fn a_failing_connection_test_reports_the_probe_error_not_a_storage_error() {
+        assert!(
+            !crate::indexer_error_history_is_persistable(crate::CONNECTION_TEST_INDEXER_ID),
+            "the connection-test id must be excluded from error history"
+        );
+        assert!(
+            crate::indexer_error_history_is_persistable("indexer-1"),
+            "a stored indexer id still records history"
+        );
+
+        let client = Arc::new(RecordingIndexerClient::with_search_error(Some(
+            "plugin scryer_indexer_search() failed: connection refused".to_string(),
+        )));
+        let provider = Arc::new(RecordingPluginProvider::new(
+            "newznab",
+            vec![string_field(
+                "base_url",
+                "Base URL",
+                Some(scryer_domain::ConfigFieldRole::ConnectionUrl),
+            )],
+            searchable_capabilities(),
+            client,
+        ));
+        let app = test_app(
+            Arc::new(RecordingIndexerConfigRepo::new()),
+            Some(provider),
+            Arc::new(NullSettingsRepository),
+        );
+
+        let error = app
+            .test_indexer_connection(
+                &test_admin(),
+                "newznab",
+                Some(r#"{"base_url":"https://api.nzbgeek.info/"}"#),
+                None,
+                None,
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            error.contains("connection refused"),
+            "the probe's own error must survive: {error}"
+        );
+        assert!(
+            !error.to_ascii_lowercase().contains("foreign key"),
+            "a storage failure must never replace the probe error: {error}"
+        );
+    }
+
     #[tokio::test]
     async fn test_indexer_connection_surfaces_invalid_api_key_search_failures() {
         let client = Arc::new(RecordingIndexerClient::with_search_error(Some(
@@ -2560,7 +3053,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn enabling_managed_parent_resyncs_and_reenables_children() {
+    async fn managed_child_local_disable_survives_sync_until_reenabled() {
         let indexer_repo = Arc::new(RecordingIndexerConfigRepo::new());
         let now = Utc::now();
         indexer_repo
@@ -2573,7 +3066,7 @@ mod tests {
                 rate_limit_seconds: None,
                 rate_limit_burst: None,
                 disabled_until: None,
-                is_enabled: false,
+                is_enabled: true,
                 enable_interactive_search: false,
                 enable_auto_search: false,
                 indexer_proxy_config_id: None,
@@ -2581,7 +3074,9 @@ mod tests {
                 seeding_profile_id: None,
                 managed_parent_config_id: None,
                 managed_child_key: None,
-                managed_metadata_json: None,
+                managed_metadata_json: Some(
+                    r#"{"locally_disabled_children":["keep","upstream-disabled"]}"#.to_string(),
+                ),
                 caps_snapshot_json: None,
                 last_health_status: None,
                 last_error_message: None,
@@ -2622,19 +3117,50 @@ mod tests {
             .await
             .unwrap();
 
+        let mut upstream_disabled_child = indexer_repo.get_by_id("child").await.unwrap().unwrap();
+        upstream_disabled_child.id = "upstream-disabled-child".to_string();
+        upstream_disabled_child.name = "Upstream Disabled Child".to_string();
+        upstream_disabled_child.managed_child_key = Some("upstream-disabled".to_string());
+        indexer_repo.create(upstream_disabled_child).await.unwrap();
+
+        let removal_app = test_app(
+            indexer_repo.clone(),
+            Some(Arc::new(RecordingPluginProvider::with_sync_plan(
+                crate::IndexerSyncPlan::default(),
+            ))),
+            Arc::new(NullSettingsRepository),
+        );
+        removal_app
+            .sync_indexer_config(&test_admin(), "parent")
+            .await
+            .unwrap();
+        assert!(indexer_repo.get_by_id("child").await.unwrap().is_none());
+        assert!(
+            indexer_repo
+                .get_by_id("upstream-disabled-child")
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        let enabled_child_plan = crate::ManagedIndexerChildPlan {
+            child_key: "keep".to_string(),
+            name: "Managed Child".to_string(),
+            provider_type: "torrent_rss".to_string(),
+            config_json: r#"{"feed_url":"https://child.example/rss"}"#.to_string(),
+            is_enabled: true,
+            enable_interactive_search: true,
+            enable_auto_search: false,
+            managed_metadata_json: None,
+            caps_snapshot_json: None,
+            routing_scopes: vec![],
+        };
+        let mut upstream_disabled_plan = enabled_child_plan.clone();
+        upstream_disabled_plan.child_key = "upstream-disabled".to_string();
+        upstream_disabled_plan.name = "Upstream Disabled Child".to_string();
+        upstream_disabled_plan.is_enabled = false;
         let sync_plan = crate::IndexerSyncPlan {
-            children: vec![crate::ManagedIndexerChildPlan {
-                child_key: "keep".to_string(),
-                name: "Managed Child".to_string(),
-                provider_type: "torrent_rss".to_string(),
-                config_json: r#"{"feed_url":"https://child.example/rss"}"#.to_string(),
-                is_enabled: true,
-                enable_interactive_search: true,
-                enable_auto_search: false,
-                managed_metadata_json: None,
-                caps_snapshot_json: None,
-                routing_scopes: vec![],
-            }],
+            children: vec![enabled_child_plan, upstream_disabled_plan],
         };
         let provider = Arc::new(RecordingPluginProvider::with_sync_plan(sync_plan));
         let app = test_app(
@@ -2643,25 +3169,76 @@ mod tests {
             Arc::new(NullSettingsRepository),
         );
 
-        let updated = app
+        app.sync_indexer_config(&test_admin(), "parent")
+            .await
+            .unwrap();
+        let child = indexer_repo
+            .list(None)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|config| config.managed_child_key.as_deref() == Some("keep"))
+            .unwrap();
+        let child_id = child.id.clone();
+        assert!(!child.is_enabled);
+        assert!(child.enable_interactive_search);
+        assert!(!child.enable_auto_search);
+        let upstream_disabled_child_id = indexer_repo
+            .list(None)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|config| config.managed_child_key.as_deref() == Some("upstream-disabled"))
+            .unwrap()
+            .id;
+
+        let reenabled = app
             .update_indexer_config(
                 &test_admin(),
                 IndexerConfigUpdate {
-                    id: "parent".to_string(),
+                    id: child_id,
                     is_enabled: Some(true),
                     ..Default::default()
                 },
             )
             .await
             .unwrap();
+        assert!(reenabled.is_enabled);
+        assert_eq!(reenabled.managed_metadata_json, None);
+        assert_eq!(
+            indexer_repo
+                .get_by_id("parent")
+                .await
+                .unwrap()
+                .unwrap()
+                .managed_metadata_json
+                .as_deref(),
+            Some(r#"{"locally_disabled_children":["upstream-disabled"]}"#)
+        );
 
-        assert!(updated.is_enabled);
-        wait_for_plan_sync_calls(&provider, 1).await;
-        let child = indexer_repo.get_by_id("child").await.unwrap().unwrap();
-        assert!(child.is_enabled);
-        assert!(child.enable_interactive_search);
-        assert!(!child.enable_auto_search);
-        assert_eq!(*provider.plan_sync_calls.lock().unwrap(), 1);
+        let still_disabled = app
+            .update_indexer_config(
+                &test_admin(),
+                IndexerConfigUpdate {
+                    id: upstream_disabled_child_id,
+                    is_enabled: Some(true),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert!(!still_disabled.is_enabled);
+        assert_eq!(still_disabled.managed_metadata_json, None);
+        assert_eq!(
+            indexer_repo
+                .get_by_id("parent")
+                .await
+                .unwrap()
+                .unwrap()
+                .managed_metadata_json,
+            None
+        );
+        assert_eq!(*provider.plan_sync_calls.lock().unwrap(), 3);
     }
 
     #[tokio::test]
@@ -3004,7 +3581,7 @@ mod tests {
             seeding_profile_id: None,
             managed_parent_config_id: None,
             managed_child_key: None,
-            managed_metadata_json: None,
+            managed_metadata_json: Some(r#"{"locally_disabled_children":["keep"]}"#.to_string()),
             caps_snapshot_json: None,
             last_health_status: None,
             last_error_message: None,
@@ -3180,11 +3757,16 @@ mod tests {
             .unwrap();
         assert!(!synced_parent.enable_interactive_search);
         assert!(!synced_parent.enable_auto_search);
+        assert_eq!(
+            synced_parent.managed_metadata_json.as_deref(),
+            Some(r#"{"locally_disabled_children":["keep"]}"#)
+        );
         let keep = configs
             .iter()
             .find(|config| config.id == "managed-keep")
             .unwrap();
         assert_eq!(keep.name, "Managed Keep");
+        assert!(!keep.is_enabled);
         assert_eq!(keep.base_url, "https://keep.example");
         assert_eq!(keep.managed_child_key.as_deref(), Some("keep"));
         let keep_metadata: serde_json::Value = serde_json::from_str(
@@ -3194,6 +3776,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(keep_metadata["source"], "keep");
+        assert!(keep_metadata["locally_disabled"].is_null());
         assert_eq!(keep_metadata["caps_snapshot"]["search"]["available"], true);
         assert_eq!(
             keep_metadata["caps_snapshot"]["search"]["supported_params"],
@@ -3425,9 +4008,38 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn managed_child_indexers_reject_all_direct_updates() {
+    async fn managed_child_indexers_allow_only_global_enable_updates() {
         let indexer_repo = Arc::new(RecordingIndexerConfigRepo::new());
         let now = Utc::now();
+        indexer_repo
+            .create(IndexerConfig {
+                id: "parent".to_string(),
+                name: "Parent Manager".to_string(),
+                provider_type: "manager".to_string(),
+                base_url: "https://manager.example".to_string(),
+                api_key_encrypted: None,
+                rate_limit_seconds: None,
+                rate_limit_burst: None,
+                disabled_until: None,
+                is_enabled: true,
+                enable_interactive_search: false,
+                enable_auto_search: false,
+                indexer_proxy_config_id: None,
+                download_client_id: None,
+                seeding_profile_id: None,
+                managed_parent_config_id: None,
+                managed_child_key: None,
+                managed_metadata_json: None,
+                caps_snapshot_json: None,
+                last_health_status: None,
+                last_error_message: None,
+                last_error_at: None,
+                config_json: Some(r#"{"base_url":"https://manager.example"}"#.to_string()),
+                created_at: now,
+                updated_at: now,
+            })
+            .await
+            .unwrap();
         indexer_repo
             .create(IndexerConfig {
                 id: "child".to_string(),
@@ -3458,7 +4070,7 @@ mod tests {
             .await
             .unwrap();
         let app = test_app(
-            indexer_repo,
+            indexer_repo.clone(),
             Some(Arc::new(RecordingPluginProvider::new(
                 "torrent_rss",
                 vec![string_field(
@@ -3470,6 +4082,55 @@ mod tests {
                 Arc::new(RecordingIndexerClient::new(false)),
             ))),
             Arc::new(NullSettingsRepository),
+        );
+
+        let disabled = app
+            .update_indexer_config(
+                &test_admin(),
+                IndexerConfigUpdate {
+                    id: "child".to_string(),
+                    is_enabled: Some(false),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert!(!disabled.is_enabled);
+        assert_eq!(disabled.managed_metadata_json, None);
+        let parent = indexer_repo.get_by_id("parent").await.unwrap().unwrap();
+        assert_eq!(
+            parent.managed_metadata_json.as_deref(),
+            Some(r#"{"locally_disabled_children":["child"]}"#)
+        );
+
+        let enable_error = app
+            .update_indexer_config(
+                &test_admin(),
+                IndexerConfigUpdate {
+                    id: "child".to_string(),
+                    is_enabled: Some(true),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            enable_error
+                .to_string()
+                .contains("does not support managed child sync")
+        );
+        assert!(
+            !indexer_repo
+                .get_by_id("child")
+                .await
+                .unwrap()
+                .unwrap()
+                .is_enabled
+        );
+        let parent = indexer_repo.get_by_id("parent").await.unwrap().unwrap();
+        assert_eq!(
+            parent.managed_metadata_json.as_deref(),
+            Some(r#"{"locally_disabled_children":["child"]}"#)
         );
 
         let rate_limit_error = app
@@ -3496,6 +4157,7 @@ mod tests {
                 IndexerConfigUpdate {
                     id: "child".to_string(),
                     name: Some("Renamed".to_string()),
+                    is_enabled: Some(true),
                     ..Default::default()
                 },
             )
@@ -3516,5 +4178,49 @@ mod tests {
                 .to_string()
                 .contains("managed child indexers are controlled by their parent sync")
         );
+    }
+
+    #[tokio::test]
+    async fn indexer_routing_changes_prune_learning_but_category_order_does_not() {
+        let client = Arc::new(RecordingIndexerClient::new(false));
+        let app = test_app_with_indexer_client(
+            Arc::new(RecordingIndexerConfigRepo::new()),
+            None,
+            Arc::new(RecordingSettingsRepository::default()),
+            client.clone(),
+        );
+        let entry = |enabled: bool, categories: Vec<&str>| IndexerRoutingSettingsEntry {
+            indexer_id: "idx-routing".into(),
+            enabled,
+            categories: categories.into_iter().map(str::to_string).collect(),
+            priority: 4,
+        };
+
+        app.update_indexer_routing(
+            &test_admin(),
+            "series",
+            vec![entry(true, vec!["5000", "5070"])],
+        )
+        .await
+        .expect("initial routing should persist");
+        client.pruned_indexers.lock().unwrap().clear();
+
+        app.update_indexer_routing(
+            &test_admin(),
+            "series",
+            vec![entry(true, vec!["5070", "5000", "5000"])],
+        )
+        .await
+        .expect("equivalent routing should persist");
+        assert!(client.pruned_indexers().is_empty());
+
+        app.update_indexer_routing(
+            &test_admin(),
+            "series",
+            vec![entry(false, vec!["5000", "5070"])],
+        )
+        .await
+        .expect("changed routing should persist");
+        assert_eq!(client.pruned_indexers(), vec!["idx-routing"]);
     }
 }

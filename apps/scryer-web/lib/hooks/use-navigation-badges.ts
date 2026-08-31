@@ -21,6 +21,24 @@ type NavigationBadgeCountsPayload = {
   pluginUpdateCount?: number | null;
 };
 
+const EMPTY_PENDING_IMPORT_COUNTS: PendingImportCounts = {
+  movie: 0,
+  series: 0,
+  anime: 0,
+};
+
+function samePendingImportCounts(
+  current: PendingImportCounts | null,
+  next: PendingImportCounts,
+) {
+  return (
+    current !== null &&
+    current.movie === next.movie &&
+    current.series === next.series &&
+    current.anime === next.anime
+  );
+}
+
 export function useNavigationBadges({
   serviceRestarting,
   canManageTitle,
@@ -73,15 +91,19 @@ export function useNavigationBadges({
       const badgeCounts = badgeCountsResult.data?.navigationBadgeCounts as
         | NavigationBadgeCountsPayload
         | undefined;
-      setPendingImportCounts(
-        badgeCounts?.pendingImportCounts ?? { movie: 0, series: 0, anime: 0 },
+      const nextPendingImportCounts =
+        badgeCounts?.pendingImportCounts ?? EMPTY_PENDING_IMPORT_COUNTS;
+      const nextPendingMediaRequestCounts =
+        badgeCounts?.pendingMediaRequestCounts ?? EMPTY_PENDING_IMPORT_COUNTS;
+      setPendingImportCounts((current) =>
+        samePendingImportCounts(current, nextPendingImportCounts)
+          ? current
+          : nextPendingImportCounts,
       );
-      setPendingMediaRequestCounts(
-        badgeCounts?.pendingMediaRequestCounts ?? {
-          movie: 0,
-          series: 0,
-          anime: 0,
-        },
+      setPendingMediaRequestCounts((current) =>
+        samePendingImportCounts(current, nextPendingMediaRequestCounts)
+          ? current
+          : nextPendingMediaRequestCounts,
       );
       setManualImportRequiredCount(
         Number(badgeCounts?.activityImportCount ?? 0),

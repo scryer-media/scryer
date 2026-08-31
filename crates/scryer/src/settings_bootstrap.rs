@@ -1,15 +1,16 @@
 use std::sync::Arc;
 
 use scryer_application::{
-    ANIME_PATH_KEY, ANIME_ROOT_FOLDERS_KEY, AUDIO_PERSONA_MIGRATION_SENTINEL_KEY,
-    AUTO_BACKUP_DAILY_TIME_LOCAL_KEY, AUTO_BACKUP_ENABLED_KEY, AUTO_BACKUP_KEY_KEY,
-    AUTO_BACKUP_POST_UPGRADE_PENDING_VERSION_KEY, BACKUP_PATH_KEY, CHOWN_GROUP_KEY,
-    DEFAULT_SEEDING_PROFILE_SETTING_KEY, DOWNLOAD_CLIENT_DEFAULT_CATEGORY_SETTING_KEY,
-    DOWNLOAD_CLIENT_ROUTING_SETTINGS_KEY, FILE_CHMOD_KEY, FOLDER_CHMOD_KEY, FOLDER_TEMPLATE_KEY,
-    FORM_LOGIN_ENABLED_KEY, HISTORY_KEEP_FOREVER_KEY, HISTORY_RETENTION_DAYS_KEY,
-    IMAGE_CACHE_MAX_SIZE_MB_KEY, IMPORT_MODE_KEY, INDEXER_ROUTING_SETTINGS_KEY,
-    LEGACY_NZBGET_CATEGORY_SETTING_KEY, LEGACY_NZBGET_CLIENT_ROUTING_SETTINGS_KEY,
-    METADATA_LANGUAGE_KEY, MFA_REQUIRE_CONFIG_STEP_UP_KEY, MFA_REQUIRE_PASSWORD_LOGIN_KEY,
+    ANIME_PATH_KEY, ANIME_ROOT_FOLDERS_KEY, API_KEYS_RESTRICT_TO_SYSTEM_SETTINGS_USERS_KEY,
+    AUDIO_PERSONA_MIGRATION_SENTINEL_KEY, AUTO_BACKUP_DAILY_TIME_LOCAL_KEY,
+    AUTO_BACKUP_ENABLED_KEY, AUTO_BACKUP_KEY_KEY, AUTO_BACKUP_POST_UPGRADE_PENDING_VERSION_KEY,
+    BACKUP_PATH_KEY, CHOWN_GROUP_KEY, DEFAULT_SEEDING_PROFILE_SETTING_KEY,
+    DOWNLOAD_CLIENT_DEFAULT_CATEGORY_SETTING_KEY, DOWNLOAD_CLIENT_ROUTING_SETTINGS_KEY,
+    FILE_CHMOD_KEY, FOLDER_CHMOD_KEY, FOLDER_TEMPLATE_KEY, FORM_LOGIN_ENABLED_KEY,
+    HISTORY_KEEP_FOREVER_KEY, HISTORY_RETENTION_DAYS_KEY, IMAGE_CACHE_MAX_SIZE_MB_KEY,
+    IMPORT_MODE_KEY, INDEXER_ROUTING_SETTINGS_KEY, LEGACY_NZBGET_CATEGORY_SETTING_KEY,
+    LEGACY_NZBGET_CLIENT_ROUTING_SETTINGS_KEY, METADATA_LANGUAGE_KEY,
+    MFA_REQUIRE_CONFIG_STEP_UP_KEY, MFA_REQUIRE_PASSWORD_LOGIN_KEY,
     MINIMUM_SEEDERS_FLOOR_DEFAULT_JSON, MINIMUM_SEEDERS_FLOOR_SETTING_KEY, MOVIES_ROOT_FOLDERS_KEY,
     NZBGET_OLDER_PRIORITY_SETTING_KEY, NZBGET_RECENT_PRIORITY_SETTING_KEY, PASSWORD_MIN_LENGTH_KEY,
     POST_PROCESSING_SCRIPT_ANIME_KEY, POST_PROCESSING_SCRIPT_MOVIE_KEY,
@@ -26,7 +27,8 @@ use scryer_application::{
     TITLE_METADATA_LANGUAGE_OVERRIDE_KEY, TITLE_REQUIRED_AUDIO_OVERRIDE_KEY,
     TLS_CERT_PATH_KEY as TLS_CERT_KEY, TLS_KEY_PATH_KEY as TLS_KEY_KEY,
     TOTP_REQUIRE_EMBY_LOGIN_KEY, TOTP_REQUIRE_JELLYFIN_LOGIN_KEY, USE_SEASON_FOLDERS_KEY,
-    builtin_4k_profile, builtin_1080p_profile, builtin_default_quality_profile,
+    builtin_4k_profile, builtin_1080p_profile, builtin_anime_profile,
+    builtin_default_quality_profile,
 };
 pub(crate) use scryer_application::{
     MOVIES_PATH_KEY, SERIES_PATH_KEY, SETTINGS_SCOPE_MEDIA, SETTINGS_SCOPE_SYSTEM,
@@ -365,6 +367,14 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
         ServiceSettingSeed {
             category: SETTINGS_CATEGORY_SECURITY,
             scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: API_KEYS_RESTRICT_TO_SYSTEM_SETTINGS_USERS_KEY,
+            data_type: "boolean",
+            default_value_json: "false",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_SECURITY,
+            scope: SETTINGS_SCOPE_SYSTEM,
             key_name: MFA_REQUIRE_CONFIG_STEP_UP_KEY,
             data_type: "boolean",
             default_value_json: "false",
@@ -415,7 +425,7 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
             scope: SETTINGS_SCOPE_SYSTEM,
             key_name: RENAME_TEMPLATE_ANIME_GLOBAL_KEY,
             data_type: "string",
-            default_value_json: "\"{title} - S{season_order:2}E{episode:2} ({absolute_episode}) - {quality}.{ext}\"",
+            default_value_json: "\"{title} - S{season_order:2}E{episode:2}{?absolute_episode: ({absolute_episode})}{?episode_title: - {episode_title|truncate:64}} - {quality}.{ext}\"",
             is_sensitive: false,
         },
         ServiceSettingSeed {
@@ -868,7 +878,15 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
             scope: SETTINGS_SCOPE_SYSTEM,
             key_name: "acquisition.long_tail_reconverge_days",
             data_type: "number",
-            default_value_json: "0",
+            default_value_json: "30",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_ACQUISITION,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: crate::startup_migrations::_0011_long_tail_reconverge_default::MIGRATION_STATE_KEY,
+            data_type: "string",
+            default_value_json: "null",
             is_sensitive: false,
         },
         ServiceSettingSeed {
@@ -1421,7 +1439,11 @@ pub(crate) async fn normalize_quality_profile_settings(
 
     // The built-in default leads so first-profile ordering agrees with the
     // canonical default on fresh installs.
-    let default_profiles = vec![builtin_default_quality_profile(), builtin_4k_profile()];
+    let default_profiles = vec![
+        builtin_default_quality_profile(),
+        builtin_4k_profile(),
+        builtin_anime_profile(),
+    ];
 
     let (final_profiles, changed) =
         merge_default_quality_profiles(std::mem::take(&mut profiles), default_profiles);
@@ -1446,9 +1468,8 @@ pub(crate) async fn normalize_quality_profile_settings(
         .await?;
     }
 
-    // Anime defaults to 1080p (not 4K) when the user hasn't chosen a profile
-    if profile_ids.iter().any(|id| id == "1080p") {
-        seed_scope_default_if_unset(settings.as_ref(), "anime", "1080p").await?;
+    if profile_ids.iter().any(|id| id == "anime") {
+        seed_scope_default_if_unset(settings.as_ref(), "anime", "anime", Some("1080p")).await?;
     }
 
     sync_quality_profile_catalog_setting(settings.as_ref(), &final_profiles).await?;
@@ -1521,11 +1542,21 @@ pub(crate) fn merge_default_quality_profiles(
     let mut changed =
         normalize_legacy_seeded_default_quality_profiles(&mut profiles, &default_profiles);
 
-    // Only seed defaults into an empty catalog. If profiles already exist
-    // (wizard-created, user-created, or previously seeded), leave them alone.
-    // This prevents the bootstrap from re-adding the basic 4K/1080P defaults
-    // after the setup wizard has replaced them with per-facet profiles.
+    // Add newly introduced defaults only when every existing profile still
+    // exactly matches a system default. Any customized or wizard-created
+    // profile makes the catalog user-owned and leaves it untouched.
     if !profiles.is_empty() {
+        let system_owned = profiles
+            .iter()
+            .all(|profile| default_profiles.iter().any(|default| default == profile));
+        if system_owned {
+            for default in &default_profiles {
+                if !profiles.iter().any(|profile| profile.id == default.id) {
+                    profiles.push(default.clone());
+                    changed = true;
+                }
+            }
+        }
         profiles.sort_by(|a, b| a.id.cmp(&b.id));
         return (profiles, changed);
     }
@@ -1685,6 +1716,7 @@ async fn seed_scope_default_if_unset(
     database: &SettingsStore,
     scope_id: &str,
     default_profile_id: &str,
+    previous_system_default_id: Option<&str>,
 ) -> Result<(), String> {
     let record = database
         .get_setting_with_defaults(
@@ -1697,7 +1729,18 @@ async fn seed_scope_default_if_unset(
             format!("failed to read {QUALITY_PROFILE_ID_KEY} for scope {scope_id}: {error}")
         })?;
 
-    if record.as_ref().is_none_or(|r| r.value_json.is_none()) {
+    let should_migrate_system_default = record.as_ref().is_some_and(|record| {
+        record.updated_by_user_id.is_none()
+            && record.source.as_deref() == Some("bootstrap-normalization")
+            && record
+                .value_json
+                .as_deref()
+                .and_then(parse_quality_profile_id)
+                .as_deref()
+                .is_some_and(|current| Some(current) == previous_system_default_id)
+    });
+
+    if should_migrate_system_default || record.as_ref().is_none_or(|r| r.value_json.is_none()) {
         upsert_quality_profile_setting(database, Some(scope_id.to_string()), default_profile_id)
             .await?;
     }
@@ -1892,6 +1935,111 @@ mod tests {
         assert_eq!(
             builtin_default_quality_profile().id,
             scryer_application::BUILTIN_DEFAULT_QUALITY_PROFILE_ID
+        );
+    }
+
+    #[tokio::test]
+    async fn anime_rename_template_default_migrates_without_overwriting_explicit_overrides() {
+        let (_temp, store) = bootstrap_settings_store().await;
+        let old_default =
+            "{title} - S{season_order:2}E{episode:2} ({absolute_episode}) - {quality}.{ext}";
+        store
+            .batch_ensure_setting_definitions(vec![
+                scryer_infrastructure_sql::types::SettingDefinitionSeed {
+                    category: SETTINGS_CATEGORY_MEDIA.to_string(),
+                    scope: SETTINGS_SCOPE_SYSTEM.to_string(),
+                    key_name: RENAME_TEMPLATE_ANIME_GLOBAL_KEY.to_string(),
+                    data_type: "string".to_string(),
+                    default_value_json: serde_json::json!(old_default).to_string(),
+                    is_sensitive: false,
+                    validation_json: None,
+                },
+            ])
+            .await
+            .expect("seed the previous inherited default");
+
+        seed_service_setting_definitions(store.clone())
+            .await
+            .expect("seed the updated default");
+        let inherited = store
+            .get_setting_with_defaults(
+                SETTINGS_SCOPE_SYSTEM,
+                RENAME_TEMPLATE_ANIME_GLOBAL_KEY,
+                None,
+            )
+            .await
+            .expect("read inherited template")
+            .expect("inherited template definition");
+        assert_eq!(
+            inherited.effective_value_json,
+            serde_json::json!(scryer_application::DEFAULT_RENAME_TEMPLATE_ANIME).to_string()
+        );
+
+        store
+            .upsert_setting_value(
+                SETTINGS_SCOPE_SYSTEM,
+                RENAME_TEMPLATE_ANIME_GLOBAL_KEY,
+                None,
+                serde_json::json!(old_default).to_string(),
+                "user",
+                None,
+            )
+            .await
+            .expect("save an explicit legacy template override");
+        seed_service_setting_definitions(store.clone())
+            .await
+            .expect("reseed definitions without touching overrides");
+
+        let explicit = store
+            .get_setting_with_defaults(
+                SETTINGS_SCOPE_SYSTEM,
+                RENAME_TEMPLATE_ANIME_GLOBAL_KEY,
+                None,
+            )
+            .await
+            .expect("read explicit template")
+            .expect("explicit template value");
+        assert_eq!(
+            explicit.effective_value_json,
+            serde_json::json!(old_default).to_string()
+        );
+        assert_eq!(
+            explicit.value_json,
+            Some(serde_json::json!(old_default).to_string())
+        );
+
+        let scoped_template = "{title} - {episode_title}.{ext}";
+        store
+            .upsert_setting_value(
+                SETTINGS_SCOPE_SYSTEM,
+                RENAME_TEMPLATE_KEY,
+                Some("anime".to_string()),
+                serde_json::json!(scoped_template).to_string(),
+                "user",
+                None,
+            )
+            .await
+            .expect("save an explicit scoped template override");
+        seed_service_setting_definitions(store.clone())
+            .await
+            .expect("reseed definitions without touching scoped overrides");
+
+        let scoped = store
+            .get_setting_with_defaults(
+                SETTINGS_SCOPE_SYSTEM,
+                RENAME_TEMPLATE_KEY,
+                Some("anime".to_string()),
+            )
+            .await
+            .expect("read scoped template")
+            .expect("scoped template value");
+        assert_eq!(
+            scoped.effective_value_json,
+            serde_json::json!(scoped_template).to_string()
+        );
+        assert_eq!(
+            scoped.value_json,
+            Some(serde_json::json!(scoped_template).to_string())
         );
     }
 
@@ -2278,6 +2426,28 @@ mod tests {
 
         assert!(!changed);
         assert_eq!(profiles, vec![customized_profile]);
+    }
+
+    #[test]
+    fn merge_default_quality_profiles_adds_anime_only_to_untouched_system_catalogs() {
+        let existing_profiles = vec![builtin_4k_profile(), builtin_1080p_profile()];
+        let defaults = vec![
+            builtin_4k_profile(),
+            builtin_1080p_profile(),
+            builtin_anime_profile(),
+        ];
+
+        let (profiles, changed) = merge_default_quality_profiles(existing_profiles, defaults);
+
+        assert!(changed);
+        assert!(profiles.iter().any(|profile| profile.id == "anime"));
+        assert_eq!(
+            profiles
+                .iter()
+                .find(|profile| profile.id == "anime")
+                .map(|profile| profile.criteria.quality_tiers.as_slice()),
+            Some(["1080P", "720P", "576P"].map(str::to_string).as_slice())
+        );
     }
 
     #[test]

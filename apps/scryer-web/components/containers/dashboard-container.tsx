@@ -185,7 +185,7 @@ export function DashboardContainer() {
       .query(downloadImportQuery, {
         limit: PREVIEW_FETCH_LIMIT,
         offset: 0,
-        filter: "ALL",
+        filter: "ATTENTION",
       })
       .toPromise();
     if (error) throw error;
@@ -265,7 +265,23 @@ export function DashboardContainer() {
           setGlobalStatus(selection.error.message ?? t("queue.manualImportFailed"));
           return;
         }
-        const preview = selection.data?.beginManualImportSelection;
+        let preview = selection.data?.beginManualImportSelection;
+        if (preview?.archiveExtractionNeeded) {
+          const extracted = await executeBeginManualImportSelection({
+            input: {
+              clientId: item.clientId,
+              clientType: item.clientType,
+              downloadClientItemId: item.downloadClientItemId,
+              titleId: item.titleId,
+              extractArchives: true,
+            },
+          });
+          if (extracted.error) {
+            setGlobalStatus(extracted.error.message ?? t("queue.manualImportFailed"));
+            return;
+          }
+          preview = extracted.data?.beginManualImportSelection;
+        }
         const candidates: DirectMovieManualImportCandidate[] = preview?.files ?? [];
         const files = directMovieManualImportMappings(candidates);
         if (!preview?.selectionId || files.length === 0) {
@@ -543,7 +559,7 @@ export function DashboardContainer() {
           clientId={manualImportItem.clientId}
           clientType={manualImportItem.clientType}
           downloadClientItemId={manualImportItem.downloadClientItemId}
-          onImportComplete={() => {
+          onImportQueued={() => {
             setManualImportItem(null);
             refreshAfterImportAction();
           }}

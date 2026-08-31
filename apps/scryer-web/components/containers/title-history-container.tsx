@@ -2,7 +2,6 @@ import * as React from "react";
 import { useClient } from "urql";
 import { librariesQuery, titleHistoryQuery } from "@/lib/graphql/queries";
 import { retryImportMutation } from "@/lib/graphql/mutations";
-import { useActivitySubscription } from "@/lib/hooks/use-activity-subscription";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { useTranslate } from "@/lib/context/translate-context";
 import type { LibraryRecord, TitleHistoryEvent, TitleHistoryPage, TitleRecord } from "@/lib/types";
@@ -14,15 +13,6 @@ import {
 } from "@/lib/utils/library-filter";
 
 const PAGE_SIZE = 50;
-const WANTED_HISTORY_ACTIVITY_KINDS = new Set([
-  "acquisition_candidate_accepted",
-  "acquisition_download_failed",
-  "acquisition_candidate_rejected",
-  "movie_downloaded",
-  "series_episode_imported",
-  "import_rejected",
-]);
-
 export function TitleHistoryContainer({
   showRetryActions = true,
 }: {
@@ -128,12 +118,6 @@ export function TitleHistoryContainer({
   React.useEffect(() => {
     void fetchHistory();
   }, [fetchHistory]);
-
-  useActivitySubscription(WANTED_HISTORY_ACTIVITY_KINDS, () => {
-    void fetchHistory();
-  }, {
-    debounceMs: 750,
-  });
 
   const toggleFilter = React.useCallback((eventType: string) => {
     setPage(0);

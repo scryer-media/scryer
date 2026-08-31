@@ -84,8 +84,9 @@ pub(crate) use scryer_infrastructure_acquisition::downloads::{
     staged_nzb_store::FileSystemStagedNzbStore,
 };
 pub(crate) use scryer_infrastructure_acquisition::indexers::{
-    config_store::IndexerConfigStore, proxy_config_store::IndexerProxyConfigStore,
-    search_learning::IndexerSearchLearningStore, stats::InMemoryIndexerStatsTracker,
+    config_store::IndexerConfigStore, error_store::IndexerErrorStore,
+    proxy_config_store::IndexerProxyConfigStore, search_learning::IndexerSearchLearningStore,
+    stats::InMemoryIndexerStatsTracker,
 };
 pub(crate) use scryer_infrastructure_configuration::customization::{
     plugin_store::PluginStore, post_processing_script_store::PostProcessingScriptStore,
@@ -131,9 +132,9 @@ pub(crate) use scryer_infrastructure_sql::types::SettingDefinitionSeed;
 pub(crate) use scryer_infrastructure_workflow::workflow::{
     release_store::ReleaseStore,
     stores::{
-        AcquisitionStore, DomainEventStore, DownloadQueueCommandStore, DownloadSubmissionStore,
-        ExternalImportMonitorStore, ExternalImportSetupSecretDraftStore, ImportStore,
-        WorkflowOperationStore,
+        AcquisitionStore, DomainEventStore, DownloadQueueCommandStore, DownloadRegistryStore,
+        DownloadSubmissionStore, ExternalImportMonitorStore, ExternalImportSetupSecretDraftStore,
+        ImportStore, WorkflowOperationStore,
     },
 };
 

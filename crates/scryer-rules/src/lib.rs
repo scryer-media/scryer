@@ -325,6 +325,35 @@ pub fn strip_editor_source(rego_source: &str) -> String {
     }
 }
 
+const SCORE_ENTRY_WRAPPER_RULE_PREFIX: &str = "__scryer_eval_score_entry";
+
+fn score_entry_wrapper_rule_name(rule_id: &str) -> String {
+    format!("{SCORE_ENTRY_WRAPPER_RULE_PREFIX}_{rule_id}")
+}
+
+/// Return the source for a complete internal entry point around a user policy's
+/// partial-object `score_entry` rule. The wrapper is never persisted, and its
+/// ID-derived name prevents collisions between separate rule packages.
+pub(crate) fn score_entry_wrapper_source(rule_id: &str) -> String {
+    let rule_name = score_entry_wrapper_rule_name(rule_id);
+    format!(
+        "package scryer.rules.user.{rule_id}\n\
+         import rego.v1\n\n\
+         {rule_name} := score_entry\n"
+    )
+}
+
+pub(crate) fn score_entry_wrapper_rule_path(rule_id: &str) -> String {
+    format!(
+        "data.scryer.rules.user.{rule_id}.{}",
+        score_entry_wrapper_rule_name(rule_id)
+    )
+}
+
+pub(crate) fn score_entry_wrapper_policy_path(rule_id: &str) -> String {
+    format!("internal/{rule_id}_score_entry_wrapper.rego")
+}
+
 // ── UserRulesEngine (thread-safe factory) ───────────────────────────────────
 
 /// Pre-compiled Regorus engine holding all active user rules.
@@ -362,6 +391,12 @@ impl UserRulesEngine {
             let path = format!("user/{}.rego", policy.id);
             engine
                 .add_policy(path, policy.rego_source.clone())
+                .map_err(|e| RulesError::Compilation(format!("{}: {e}", policy.id)))?;
+            engine
+                .add_policy(
+                    score_entry_wrapper_policy_path(&policy.id),
+                    score_entry_wrapper_source(&policy.id),
+                )
                 .map_err(|e| RulesError::Compilation(format!("{}: {e}", policy.id)))?;
             rules.push((
                 policy.id.clone(),
@@ -464,28 +499,24 @@ impl UserRulesEvaluator {
                 continue;
             }
 
-            let query = format!("data.scryer.rules.user.{rule_id}.score_entry");
-
-            match self.engine.eval_query(query, false) {
-                Ok(results) => {
-                    if let Some(r) = results.result.first()
-                        && let Some(expr) = r.expressions.first()
+            match self
+                .engine
+                .eval_rule(score_entry_wrapper_rule_path(rule_id))
+            {
+                Ok(value) => {
+                    let entries = Self::extract_entries(&value, rule_id, rule_name, *origin);
+                    if *origin == PolicyOrigin::System
+                        && let Err(message) = validate_managed_entries(&entries)
                     {
-                        let entries =
-                            Self::extract_entries(&expr.value, rule_id, rule_name, *origin);
-                        if *origin == PolicyOrigin::System
-                            && let Err(message) = validate_managed_entries(&entries)
-                        {
-                            warn!(rule_id = rule_id.as_str(), %message, "managed rule evaluation rejected");
-                            result.errors.push(RuleEvalError {
-                                rule_set_id: rule_id.clone(),
-                                rule_set_name: rule_name.clone(),
-                                origin: *origin,
-                                message,
-                            });
-                        } else {
-                            result.entries.extend(entries);
-                        }
+                        warn!(rule_id = rule_id.as_str(), %message, "managed rule evaluation rejected");
+                        result.errors.push(RuleEvalError {
+                            rule_set_id: rule_id.clone(),
+                            rule_set_name: rule_name.clone(),
+                            origin: *origin,
+                            message,
+                        });
+                    } else {
+                        result.entries.extend(entries);
                     }
                 }
                 Err(e) => {
@@ -1265,6 +1296,278 @@ score_entry["library_bonus"] := 75 if {
         assert_eq!(result.entries.len(), 1);
         assert_eq!(result.entries[0].code, "library_bonus");
         assert_eq!(result.entries[0].delta, 75);
+    }
+
+    #[test]
+    fn generated_wrapper_is_internal_and_does_not_change_rule_metadata() {
+        let policy = UserPolicy {
+            id: "preserved_rule".to_string(),
+            name: "Preserved rule".to_string(),
+            rego_source: rewrite_package_declaration(
+                r#"score_entry["bonus"] := 100"#,
+                "preserved_rule",
+            ),
+            origin: PolicyOrigin::User,
+            applied_facets: vec!["movie".to_string()],
+        };
+        let stored_source = policy.rego_source.clone();
+
+        let engine = UserRulesEngine::build(std::slice::from_ref(&policy)).unwrap();
+
+        assert_eq!(policy.rego_source, stored_source);
+        assert_eq!(engine.rule_count(), 1);
+        assert_eq!(engine.rule_identity(), "preserved_rule:User:movie",);
+        assert_eq!(
+            score_entry_wrapper_source("preserved_rule"),
+            "package scryer.rules.user.preserved_rule\n\
+             import rego.v1\n\n\
+             __scryer_eval_score_entry_preserved_rule := score_entry\n"
+        );
+        assert_eq!(
+            score_entry_wrapper_rule_path("preserved_rule"),
+            "data.scryer.rules.user.preserved_rule.__scryer_eval_score_entry_preserved_rule"
+        );
+    }
+
+    #[test]
+    fn eval_rule_wrapper_matches_legacy_query_for_community_rule_shapes() {
+        let policy = UserPolicy {
+            id: "community_shapes".to_string(),
+            name: "Community shapes".to_string(),
+            rego_source: rewrite_package_declaration(
+                r#"
+mini_groups := {"judas", "mini-encode"}
+
+has_japanese_audio if {
+    some lang in input.file.audio_languages
+    scryer.lang_matches(lang, "ja")
+}
+
+score_entry["lower_group"] := 400 if {
+    lower(input.release.release_group) == "subsplease"
+}
+
+score_entry["set_membership"] := scryer.block_score() if {
+    mini_groups[lower(input.release.release_group)]
+}
+
+score_entry["batch"] := 200 if {
+    contains(lower(input.release.raw_title), "batch")
+}
+
+score_entry["missing_japanese"] := scryer.block_score() if {
+    input.file != null
+    not has_japanese_audio
+}
+
+score_entry["freeleech"] := 500 if {
+    input.release.extra.freeleech == true
+}
+
+score_entry["internal"] := 300 if {
+    some tag in input.release.extra.tags
+    lower(tag) == "internal"
+}
+"#,
+                "community_shapes",
+            ),
+            origin: PolicyOrigin::User,
+            applied_facets: vec!["anime".to_string()],
+        };
+        let mut matching_input = test_input();
+        matching_input.release.release_group = Some("GroupTag".to_string());
+        matching_input.release.raw_title = "Show.Batch.1080p".to_string();
+        matching_input.file = Some(test_file_doc());
+        matching_input
+            .release
+            .extra
+            .insert("freeleech".to_string(), serde_json::json!(true));
+        matching_input
+            .release
+            .extra
+            .insert("tags".to_string(), serde_json::json!(["internal"]));
+        assert_eval_rule_matches_legacy_query(policy.clone(), matching_input, "anime");
+
+        let mut non_matching_input = test_input();
+        non_matching_input.release.release_group = Some("Other".to_string());
+        assert_eval_rule_matches_legacy_query(policy, non_matching_input, "anime");
+    }
+
+    #[test]
+    fn eval_rule_runtime_failure_stays_isolated_and_attributed_to_the_user_rule() {
+        let policies = vec![
+            UserPolicy {
+                id: "broken_rule".to_string(),
+                name: "Broken rule".to_string(),
+                rego_source: rewrite_package_declaration(
+                    r#"score_entry["broken"] := lower(input.release.year)"#,
+                    "broken_rule",
+                ),
+                origin: PolicyOrigin::User,
+                applied_facets: vec![],
+            },
+            UserPolicy {
+                id: "working_rule".to_string(),
+                name: "Working rule".to_string(),
+                rego_source: rewrite_package_declaration(
+                    r#"score_entry["working"] := 100"#,
+                    "working_rule",
+                ),
+                origin: PolicyOrigin::User,
+                applied_facets: vec![],
+            },
+        ];
+
+        let mut evaluator = UserRulesEngine::build(&policies).unwrap().evaluator();
+        let result = evaluator.evaluate(&test_input(), "movie").unwrap();
+
+        assert_eq!(result.entries.len(), 1, "{result:?}");
+        assert_eq!(result.entries[0].code, "working");
+        assert_eq!(result.errors.len(), 1, "{result:?}");
+        assert_eq!(result.errors[0].rule_set_id, "broken_rule");
+        assert_eq!(result.errors[0].rule_set_name, "Broken rule");
+        assert!(
+            !result.errors[0]
+                .message
+                .contains(SCORE_ENTRY_WRAPPER_RULE_PREFIX)
+        );
+    }
+
+    #[test]
+    #[ignore = "manual optimized Regorus scaling benchmark"]
+    fn bench_eval_rule_scaling_against_legacy_query_loop() {
+        let input = test_input();
+        println!("rules | legacy eval_query | eval_rule runtime");
+        println!("------|-------------------|------------------");
+
+        for rule_count in [1, 50, 200, 1_000] {
+            let policies = benchmark_policies(rule_count);
+            let engine = UserRulesEngine::build(&policies).unwrap();
+            let mut legacy_engine = (*engine.template).clone();
+            let mut evaluator = engine.evaluator();
+
+            evaluator.evaluate(&input, "movie").unwrap();
+            evaluate_legacy_query_loop(&mut legacy_engine, &input, &policies);
+
+            let releases_per_sample = match rule_count {
+                1..=50 => 10,
+                51..=200 => 3,
+                _ => 1,
+            };
+            let legacy_us = median_us_per_release(3, releases_per_sample, || {
+                evaluate_legacy_query_loop(&mut legacy_engine, &input, &policies);
+            });
+            let eval_rule_us = median_us_per_release(3, releases_per_sample, || {
+                std::hint::black_box(evaluator.evaluate(&input, "movie").unwrap());
+            });
+            println!("{rule_count:>5} | {legacy_us:>14.2} us | {eval_rule_us:>13.2} us");
+        }
+    }
+
+    fn assert_eval_rule_matches_legacy_query(
+        policy: UserPolicy,
+        input: UserRuleInput,
+        facet: &str,
+    ) {
+        let engine = UserRulesEngine::build(std::slice::from_ref(&policy)).unwrap();
+        let mut legacy_engine = (*engine.template).clone();
+        legacy_engine.set_input(serde_json::to_value(&input).unwrap().into());
+        let legacy_results = legacy_engine
+            .eval_query(
+                format!("data.scryer.rules.user.{}.score_entry", policy.id),
+                false,
+            )
+            .unwrap();
+        let mut expected = legacy_results
+            .result
+            .first()
+            .and_then(|result| result.expressions.first())
+            .map_or_else(Vec::new, |expression| {
+                UserRulesEvaluator::extract_entries(
+                    &expression.value,
+                    &policy.id,
+                    &policy.name,
+                    policy.origin,
+                )
+            })
+            .into_iter()
+            .map(|entry| (entry.code, entry.delta))
+            .collect::<Vec<_>>();
+        expected.sort_unstable();
+
+        let mut evaluator = engine.evaluator();
+        let result = evaluator.evaluate(&input, facet).unwrap();
+        assert!(result.errors.is_empty(), "{result:?}");
+        let mut actual = result
+            .entries
+            .into_iter()
+            .map(|entry| (entry.code, entry.delta))
+            .collect::<Vec<_>>();
+        actual.sort_unstable();
+        assert_eq!(actual, expected);
+    }
+
+    fn benchmark_policies(rule_count: usize) -> Vec<UserPolicy> {
+        (0..rule_count)
+            .map(|index| UserPolicy {
+                id: format!("benchmark_{index}"),
+                name: format!("Benchmark {index}"),
+                rego_source: rewrite_package_declaration(
+                    &format!(
+                        "score_entry[\"benchmark_{index}\"] := 1 if {{\n    input.release.year == 2024\n}}\n"
+                    ),
+                    &format!("benchmark_{index}"),
+                ),
+                origin: PolicyOrigin::User,
+                applied_facets: vec![],
+            })
+            .collect()
+    }
+
+    fn evaluate_legacy_query_loop(
+        engine: &mut Engine,
+        input: &UserRuleInput,
+        policies: &[UserPolicy],
+    ) {
+        engine.set_input(serde_json::to_value(input).unwrap().into());
+        for policy in policies {
+            let results = engine
+                .eval_query(
+                    format!("data.scryer.rules.user.{}.score_entry", policy.id),
+                    false,
+                )
+                .unwrap();
+            if let Some(expression) = results
+                .result
+                .first()
+                .and_then(|result| result.expressions.first())
+            {
+                std::hint::black_box(UserRulesEvaluator::extract_entries(
+                    &expression.value,
+                    &policy.id,
+                    &policy.name,
+                    policy.origin,
+                ));
+            }
+        }
+    }
+
+    fn median_us_per_release(
+        samples: usize,
+        releases_per_sample: usize,
+        mut run: impl FnMut(),
+    ) -> f64 {
+        let mut measurements = Vec::with_capacity(samples);
+        for _ in 0..samples {
+            let started = std::time::Instant::now();
+            for _ in 0..releases_per_sample {
+                run();
+            }
+            measurements
+                .push(started.elapsed().as_secs_f64() * 1_000_000.0 / releases_per_sample as f64);
+        }
+        measurements.sort_by(f64::total_cmp);
+        measurements[measurements.len() / 2]
     }
 
     fn test_input() -> UserRuleInput {

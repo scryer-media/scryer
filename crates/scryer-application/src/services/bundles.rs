@@ -69,6 +69,7 @@ pub struct AppLibraryServices {
 #[derive(Clone)]
 pub struct AppIntegrationServices {
     pub(crate) indexer_configs: Arc<dyn IndexerConfigRepository>,
+    pub(crate) indexer_errors: Arc<dyn IndexerErrorRepository>,
     pub(crate) indexer_proxy_configs: Arc<dyn IndexerProxyConfigRepository>,
     pub(crate) scope_indexer_coverage: Arc<dyn ScopeIndexerCoverageRepository>,
     pub(crate) indexer_caps_refresher: RuntimeFeature<Arc<dyn IndexerCapsSnapshotRefresher>>,
@@ -103,6 +104,7 @@ pub struct AppWorkflowServices {
     pub(crate) import_artifacts: Arc<dyn ImportArtifactRepository>,
     pub(crate) release_attempts: Arc<dyn ReleaseAttemptRepository>,
     pub(crate) acquisition_state: Arc<dyn AcquisitionStateRepository>,
+    pub(crate) download_registry: Arc<dyn DownloadRegistryRepository>,
     pub(crate) download_submissions: Arc<dyn DownloadSubmissionRepository>,
     pub(crate) acquisition_scope_states: Arc<dyn AcquisitionScopeStateRepository>,
     pub(crate) housekeeping: Arc<dyn HousekeepingRepository>,
@@ -300,6 +302,7 @@ impl AppServices {
             },
             integrations: AppIntegrationServices {
                 indexer_configs,
+                indexer_errors: Arc::new(null_repositories::NullIndexerErrorRepository),
                 indexer_proxy_configs: Arc::new(
                     null_repositories::NullIndexerProxyConfigRepository,
                 ),
@@ -344,6 +347,7 @@ impl AppServices {
                 import_artifacts: Arc::new(null_repositories::NullImportArtifactRepository),
                 release_attempts,
                 acquisition_state: Arc::new(NullAcquisitionStateRepository),
+                download_registry: Arc::new(null_repositories::NullDownloadRegistryRepository),
                 download_submissions: Arc::new(NullDownloadSubmissionRepository),
                 acquisition_scope_states: Arc::new(NullAcquisitionScopeStateRepository),
                 housekeeping: Arc::new(NullHousekeepingRepository),

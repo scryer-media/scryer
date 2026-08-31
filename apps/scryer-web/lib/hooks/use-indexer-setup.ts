@@ -6,6 +6,7 @@ import {
   testIndexerConnectionMutation,
 } from "@/lib/graphql/mutations";
 import {
+  applyIndexerConfigOption,
   buildSetupIndexerConfigValues,
   findMissingSetupIndexerField,
   serializeSetupIndexerConfigValues,
@@ -113,10 +114,17 @@ export function useIndexerSetup({ client, t }: UseIndexerSetupArgs) {
 
   const handleIdxConfigValueChange = useCallback(
     (key: string, value: string) => {
-      setIdxConfigValues((current) => ({ ...current, [key]: value }));
+      setIdxConfigValues((current) =>
+        applyIndexerConfigOption(
+          selectedIdxProviderFields,
+          current,
+          key,
+          value,
+        ),
+      );
       resetIndexerSavedState();
     },
-    [resetIndexerSavedState],
+    [resetIndexerSavedState, selectedIdxProviderFields],
   );
 
   const buildIndexerConfigValues = useCallback(() => {

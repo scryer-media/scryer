@@ -4,10 +4,11 @@ use std::time::{Duration, Instant};
 
 use scryer_application::{AppError, AppResult};
 use wasmtime::{Caller, ExternType, Instance, Linker, Store, ValType};
-use wasmtime_wasi::{DirPerms, FilePerms, WasiCtxBuilder};
+use wasmtime_wasi::{FsPerms, WasiCtxBuilder};
 
 use crate::plugin_http_host::{
-    HTTP_ENV_NAMESPACE, IndexerProxyPolicy, PluginHttpHost, PluginHttpRequest,
+    HTTP_ENV_NAMESPACE, IndexerErrorCaptureContext, IndexerProxyPolicy, PluginHttpHost,
+    PluginHttpRequest,
 };
 use crate::process_host::{PROCESS_HOST_NAMESPACE, ProcessHost};
 use crate::runtime_backing::PreopenSpec;
@@ -139,6 +140,17 @@ impl LegacyPlugin {
         self.instance.get_func(&mut self.store, export).is_some()
     }
 
+    pub(crate) fn begin_indexer_error_capture(&mut self, context: IndexerErrorCaptureContext) {
+        self.store.data().http.begin_indexer_error_capture(context);
+    }
+
+    pub(crate) fn finish_indexer_error_capture(&mut self, operation_failed: bool) {
+        self.store
+            .data()
+            .http
+            .finish_indexer_error_capture(operation_failed);
+    }
+
     pub(crate) fn call_string(&mut self, export: &str, input: &str) -> AppResult<String> {
         self.call(export, Some(input.as_bytes()))
     }
@@ -212,21 +224,13 @@ fn build_legacy_wasi(preopens: &[PreopenSpec]) -> AppResult<wasmtime_wasi::p1::W
     let mut builder = WasiCtxBuilder::new();
     builder.args(&[GUEST_ARGV0]);
     for preopen in preopens {
-        let (dir_perms, file_perms) = if preopen.writable {
-            (
-                DirPerms::READ | DirPerms::MUTATE,
-                FilePerms::READ | FilePerms::WRITE,
-            )
+        let perms = if preopen.writable {
+            FsPerms::ReadWrite
         } else {
-            (DirPerms::READ, FilePerms::READ)
+            FsPerms::ReadOnly
         };
         builder
-            .preopened_dir(
-                &preopen.host_path,
-                &preopen.guest_path,
-                dir_perms,
-                file_perms,
-            )
+            .preopened_dir(&preopen.host_path, &preopen.guest_path, perms)
             .map_err(|error| {
                 AppError::Repository(format!(
                     "failed to preopen '{}' as '{}' for legacy plugin: {error}",
@@ -302,12 +306,10 @@ impl LegacyHostState {
         self.call_started_at = Instant::now();
     }
 
-    fn time_remaining(&self) -> Option<Duration> {
-        Some(
-            self.timeout
-                .checked_sub(self.call_started_at.elapsed())
-                .unwrap_or_default(),
-        )
+    fn time_remaining(&self) -> Duration {
+        self.timeout
+            .checked_sub(self.call_started_at.elapsed())
+            .unwrap_or_default()
     }
 
     fn output_bytes(&self) -> Result<Vec<u8>, String> {

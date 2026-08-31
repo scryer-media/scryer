@@ -1,15 +1,24 @@
 use async_trait::async_trait;
+#[cfg(test)]
+use scryer_application::NullIndexerErrorRecorder;
 use scryer_application::{
-    AppError, AppResult, DownloadSourceKind, IndexerClient, IndexerResponseAttributes,
-    IndexerRoutingPlan, IndexerSearchResponse, IndexerSearchResult, SearchMode,
-    is_valid_magnet_uri, normalize_release_password,
+    AppError, AppResult, DownloadSourceKind, IndexerClient, IndexerErrorOperation,
+    IndexerErrorRecorder, IndexerResponseAttributes, IndexerRoutingPlan, IndexerSearchCompletion,
+    IndexerSearchIncompleteReason as HostIncompleteReason, IndexerSearchPlanCapability,
+    IndexerSearchPlanRequest, IndexerSearchPlanSummary, IndexerSearchResponse, IndexerSearchResult,
+    IndexerSearchStrategyEvent, IndexerSearchStrategyEventSink, SearchMode, is_valid_magnet_uri,
+    normalize_release_password,
 };
 use scryer_domain::{IndexerConfig, IndexerProxyConfig, TaggedAlias};
 use scryer_plugin_sdk::command::{
     PluginActionRequest, PluginActionResponse, PluginCommand, PluginCommandRequest,
     PluginCommandResult, PluginIndexerCommand, PluginIndexerCommandResult,
 };
-use scryer_plugin_sdk::{PluginError, PluginResult};
+use scryer_plugin_sdk::{
+    IndexerSearchIncompleteReason as PluginIncompleteReason, IndexerSearchPluginError, PluginError,
+    PluginErrorDetails, PluginResult, PluginSearchPlanRequest, PluginSearchPlanSummary,
+    PluginSearchStrategyEvent, PluginSearchStrategyRequest, ProviderDescriptor,
+};
 use std::{
     collections::BTreeMap,
     sync::{Arc, mpsc},
@@ -19,7 +28,7 @@ use tracing::{info, warn};
 
 use crate::legacy_runtime::{LegacyPlugin, LegacyPluginSpec};
 use crate::loader::{allowed_hosts_for_descriptor, parse_config_json_entries};
-use crate::plugin_http_host::IndexerProxyPolicy;
+use crate::plugin_http_host::{IndexerErrorCaptureContext, IndexerProxyPolicy};
 use crate::runtime_backing::PluginInstanceSpec;
 use crate::types::{
     ConfigFieldRole, EXPORT_INDEXER_ACTION, EXPORT_INDEXER_SEARCH, IndexerProtocol,
@@ -29,11 +38,16 @@ use crate::types::{
     normalize_indexer_info_hash, tagged_alias_to_sdk,
 };
 use crate::wasmtime_host::command_host::CommandHost;
+use crate::wasmtime_host::component_host::{
+    ComponentActor, ComponentContractVersion, ComponentHost, ComponentRuntime,
+    component_strategy_event_channel,
+};
+use crate::wasmtime_host::engine;
 use crate::wasmtime_host::{CommandInvocation, process_command};
 
 /// One configured indexer, backed by either runtime.
 ///
-/// Exactly one of `worker`/`command` is populated. Legacy artifacts keep the
+/// Exactly one of `worker`/`command`/`component` is populated. Legacy artifacts keep the
 /// dedicated worker thread that owns a long-lived Extism instance; command-ABI
 /// artifacts are instantiated per invocation by [`process_command`], so they
 /// need no thread of their own. Keeping both here — rather than behind a trait —
@@ -41,9 +55,12 @@ use crate::wasmtime_host::{CommandInvocation, process_command};
 /// catalog is mid-migration.
 pub struct WasmIndexerClient {
     descriptor: PluginDescriptor,
+    indexer_id: String,
     indexer_name: String,
+    indexer_error_recorder: Arc<dyn IndexerErrorRecorder>,
     worker: Option<IndexerPluginWorker>,
     command: Option<Arc<CommandIndexer>>,
+    component: Option<Arc<ComponentIndexer>>,
 }
 
 struct CommandIndexer {
@@ -62,6 +79,21 @@ struct CommandIndexer {
     invocation_lock: tokio::sync::Mutex<()>,
 }
 
+/// A retained WASI Preview 2 instance for one configured indexer. Calls are
+/// serialized at this boundary, while the component may drive as much
+/// upstream HTTP fanout as its own policy allows.
+struct ComponentIndexer {
+    runtime: Arc<ComponentRuntime>,
+    host: ComponentHost,
+    timeout: std::time::Duration,
+    actor: tokio::sync::Mutex<Option<ComponentActor>>,
+}
+
+struct PluginSearchCallResponse {
+    response: PluginSearchResponse,
+    completion: IndexerSearchCompletion,
+}
+
 struct IndexerPluginWorker {
     tx: mpsc::Sender<IndexerPluginCommand>,
 }
@@ -70,6 +102,7 @@ struct IndexerPluginCommand {
     export: &'static str,
     input: String,
     optional: bool,
+    indexer_error_capture: Option<IndexerErrorCaptureContext>,
     response: tokio::sync::oneshot::Sender<AppResult<Option<String>>>,
 }
 
@@ -101,11 +134,35 @@ impl IndexerPluginWorker {
 
                 while let Ok(command) = rx.recv() {
                     let start = std::time::Instant::now();
+                    if let Some(capture) = command.indexer_error_capture.clone() {
+                        plugin.begin_indexer_error_capture(capture);
+                    }
                     let result = if command.optional && !plugin.function_exists(command.export) {
                         Ok(None)
                     } else {
                         plugin.call_string(command.export, &command.input).map(Some)
                     };
+                    if command.indexer_error_capture.is_some() {
+                        let operation_failed =
+                            result.as_ref().map_or(true, |output| {
+                                output.as_ref().is_none_or(|output| match command.export {
+                                    EXPORT_INDEXER_SEARCH => decode_plugin_result::<
+                                        PluginSearchResponse,
+                                    >(
+                                        output, EXPORT_INDEXER_SEARCH
+                                    )
+                                    .is_err(),
+                                    EXPORT_INDEXER_ACTION => decode_plugin_result::<
+                                        PluginActionResponse,
+                                    >(
+                                        output, EXPORT_INDEXER_ACTION
+                                    )
+                                    .is_err(),
+                                    _ => true,
+                                })
+                            });
+                        plugin.finish_indexer_error_capture(operation_failed);
+                    }
                     let elapsed = start.elapsed();
 
                     tracing::debug!(
@@ -136,6 +193,7 @@ impl IndexerPluginWorker {
         &self,
         input: String,
         cancel_token: CancellationToken,
+        indexer_error_capture: IndexerErrorCaptureContext,
     ) -> AppResult<String> {
         let (response, result) = tokio::sync::oneshot::channel();
         self.tx
@@ -143,6 +201,7 @@ impl IndexerPluginWorker {
                 export: EXPORT_INDEXER_SEARCH,
                 input,
                 optional: false,
+                indexer_error_capture: Some(indexer_error_capture),
                 response,
             })
             .map_err(|_| AppError::Repository("plugin worker stopped".into()))?;
@@ -163,13 +222,18 @@ impl IndexerPluginWorker {
             })
     }
 
-    async fn call_action(&self, input: String) -> AppResult<Option<String>> {
+    async fn call_action(
+        &self,
+        input: String,
+        indexer_error_capture: IndexerErrorCaptureContext,
+    ) -> AppResult<Option<String>> {
         let (response, result) = tokio::sync::oneshot::channel();
         self.tx
             .send(IndexerPluginCommand {
                 export: EXPORT_INDEXER_ACTION,
                 input,
                 optional: true,
+                indexer_error_capture: Some(indexer_error_capture),
                 response,
             })
             .map_err(|_| AppError::Repository("plugin worker stopped".into()))?;
@@ -180,12 +244,13 @@ impl IndexerPluginWorker {
 }
 
 impl WasmIndexerClient {
-    pub fn new(
+    pub fn new_with_indexer_error_recorder(
         wasm_bytes: Vec<u8>,
         descriptor: PluginDescriptor,
         indexer_name: String,
         config: IndexerConfig,
         indexer_proxy_config: Option<IndexerProxyConfig>,
+        indexer_error_recorder: Arc<dyn IndexerErrorRecorder>,
     ) -> Result<Self, AppError> {
         let spec = build_legacy_spec(
             wasm_bytes,
@@ -204,9 +269,12 @@ impl WasmIndexerClient {
 
         Ok(Self {
             descriptor,
+            indexer_id: config.id,
             indexer_name,
+            indexer_error_recorder,
             worker: Some(worker),
             command: None,
+            component: None,
         })
     }
 
@@ -216,12 +284,31 @@ impl WasmIndexerClient {
     /// cooldown key from exactly the same helpers the legacy path uses, so the
     /// two runtimes cannot drift on what a plugin observes — a search that
     /// worked before the migration sees byte-identical config after it.
+    #[cfg(test)]
     pub fn new_command(
         wasm_bytes: Vec<u8>,
         descriptor: PluginDescriptor,
         indexer_name: String,
         config: IndexerConfig,
         indexer_proxy_config: Option<IndexerProxyConfig>,
+    ) -> Result<Self, AppError> {
+        Self::new_command_with_indexer_error_recorder(
+            wasm_bytes,
+            descriptor,
+            indexer_name,
+            config,
+            indexer_proxy_config,
+            Arc::new(NullIndexerErrorRecorder),
+        )
+    }
+
+    pub fn new_command_with_indexer_error_recorder(
+        wasm_bytes: Vec<u8>,
+        descriptor: PluginDescriptor,
+        indexer_name: String,
+        config: IndexerConfig,
+        indexer_proxy_config: Option<IndexerProxyConfig>,
+        indexer_error_recorder: Arc<dyn IndexerErrorRecorder>,
     ) -> Result<Self, AppError> {
         let inputs =
             build_runtime_inputs(&descriptor, &indexer_name, &config, indexer_proxy_config);
@@ -246,13 +333,94 @@ impl WasmIndexerClient {
 
         Ok(Self {
             descriptor,
+            indexer_id: config.id,
             indexer_name,
+            indexer_error_recorder,
             worker: None,
             command: Some(Arc::new(CommandIndexer {
                 wasm: Arc::new(wasm_bytes),
                 command_host,
                 timeout: inputs.timeout,
                 invocation_lock: tokio::sync::Mutex::new(()),
+            })),
+            component: None,
+        })
+    }
+
+    /// Build an async WASI Preview 2 component indexer. The component is
+    /// compiled once for this configured client and instantiated lazily on its
+    /// first operation; its state then remains alive until a trap, timeout,
+    /// cancellation, provider reload, or configuration change replaces this
+    /// client.
+    pub fn new_component_with_indexer_error_recorder(
+        wasm_bytes: Vec<u8>,
+        descriptor: PluginDescriptor,
+        indexer_name: String,
+        config: IndexerConfig,
+        indexer_proxy_config: Option<IndexerProxyConfig>,
+        indexer_error_recorder: Arc<dyn IndexerErrorRecorder>,
+    ) -> Result<Self, AppError> {
+        let inputs =
+            build_runtime_inputs(&descriptor, &indexer_name, &config, indexer_proxy_config);
+        let provider_profile = if descriptor.provider_type() == "newznab" {
+            let normalized_config_json =
+                serde_json::to_string(&inputs.config_entries).map_err(|error| {
+                    AppError::Repository(format!(
+                        "failed to serialize normalized Newznab configuration: {error}"
+                    ))
+                })?;
+            Some(
+                crate::newznab_profiles::resolve_newznab_profile_bytes(
+                    descriptor.indexer().ok_or_else(|| {
+                        AppError::Repository(
+                            "Newznab plugin descriptor is not an indexer".to_string(),
+                        )
+                    })?,
+                    &config.provider_type,
+                    Some(&normalized_config_json),
+                )
+                .map_err(|error| {
+                    AppError::Repository(format!(
+                        "failed to resolve Newznab provider profile: {error}"
+                    ))
+                })?,
+            )
+        } else {
+            None
+        };
+        let host = ComponentHost::for_indexer_with_provider_profile(
+            inputs
+                .config_entries
+                .into_iter()
+                .collect::<BTreeMap<_, _>>(),
+            inputs.allowed_hosts,
+            inputs.indexer_proxy_policy,
+            inputs.timeout,
+            None,
+            provider_profile,
+        )
+        .map_err(AppError::Repository)?;
+        let runtime = ComponentRuntime::new(engine::shared_async_engine(), &wasm_bytes)
+            .map_err(AppError::Repository)?;
+
+        info!(
+            indexer = indexer_name.as_str(),
+            plugin = descriptor.name.as_str(),
+            "WASI Preview 2 indexer component registered"
+        );
+
+        Ok(Self {
+            descriptor,
+            indexer_id: config.id,
+            indexer_name,
+            indexer_error_recorder,
+            worker: None,
+            command: None,
+            component: Some(Arc::new(ComponentIndexer {
+                runtime: Arc::new(runtime),
+                host,
+                timeout: inputs.timeout,
+                actor: tokio::sync::Mutex::new(None),
             })),
         })
     }
@@ -264,6 +432,18 @@ impl WasmIndexerClient {
                 self.descriptor.id
             ))
         })
+    }
+
+    fn indexer_error_capture(
+        &self,
+        operation: IndexerErrorOperation,
+    ) -> IndexerErrorCaptureContext {
+        IndexerErrorCaptureContext {
+            indexer_id: self.indexer_id.clone(),
+            indexer_name: self.indexer_name.clone(),
+            operation,
+            recorder: Arc::clone(&self.indexer_error_recorder),
+        }
     }
 
     /// Run one indexer command, or `Ok(None)` when this client is legacy-backed.
@@ -315,31 +495,311 @@ impl WasmIndexerClient {
         }
     }
 
+    /// Invoke one retained component operation. Store ownership remains inside
+    /// the actor for ordinary calls. Cancellation, timeout, and a component
+    /// trap remove the actor while holding its serialization lock, which drops
+    /// the Store and therefore every in-flight async host HTTP future before a
+    /// subsequent request recreates the instance.
+    async fn invoke_component(
+        &self,
+        command: PluginIndexerCommand,
+        operation: &'static str,
+        cancel_token: Option<&CancellationToken>,
+    ) -> AppResult<Option<PluginIndexerCommandResult>> {
+        let Some(indexer) = self.component.as_ref() else {
+            return Ok(None);
+        };
+        let (request, is_search) = match command {
+            PluginIndexerCommand::Search(request) => (serde_json::to_vec(&request), true),
+            PluginIndexerCommand::Action(request) => (serde_json::to_vec(&request), false),
+        };
+        let request = request.map_err(|error| {
+            AppError::Repository(format!(
+                "failed to encode indexer component request: {error}"
+            ))
+        })?;
+        let token = cancel_token.cloned().unwrap_or_else(CancellationToken::new);
+        let _guard = indexer.actor.lock().await;
+        indexer.host.bind_cancellation(token.clone());
+        let mut actor = _guard;
+
+        if actor.is_none() {
+            *actor = Some(
+                indexer
+                    .runtime
+                    .instantiate(&indexer.host)
+                    .await
+                    .map_err(|error| {
+                        AppError::Repository(format!(
+                            "indexer component {} could not start {operation}: {error}",
+                            self.descriptor.id
+                        ))
+                    })?,
+            );
+        }
+
+        let call = async {
+            let Some(actor) = actor.as_mut() else {
+                unreachable!("component actor was initialized above");
+            };
+            tokio::time::timeout(indexer.timeout, async move {
+                if is_search {
+                    actor.search(request).await
+                } else {
+                    actor.action(request).await
+                }
+            })
+            .await
+        };
+        let response = tokio::select! {
+            _ = token.cancelled() => {
+                actor.take();
+                return Err(AppError::canceled("plugin indexer component search canceled"));
+            }
+            result = call => match result {
+                Ok(Ok(response)) => response,
+                Ok(Err(error)) => {
+                    actor.take();
+                    return Err(AppError::Repository(format!(
+                        "indexer component {} {operation} failed: {error}",
+                        self.descriptor.id
+                    )));
+                }
+                Err(_) => {
+                    actor.take();
+                    return Err(AppError::Repository(format!(
+                        "indexer component {} {operation} timed out after {} ms",
+                        self.descriptor.id,
+                        indexer.timeout.as_millis(),
+                    )));
+                }
+            },
+        };
+        let bytes = match response {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                return Err(AppError::Repository(format!(
+                    "indexer component {} {operation} returned invocation error {error:?}",
+                    self.descriptor.id
+                )));
+            }
+        };
+        let result = if is_search {
+            serde_json::from_slice::<PluginResult<PluginSearchResponse>>(&bytes)
+                .map(PluginIndexerCommandResult::Search)
+        } else {
+            serde_json::from_slice::<PluginResult<PluginActionResponse>>(&bytes)
+                .map(PluginIndexerCommandResult::Action)
+        }
+        .map_err(|error| {
+            AppError::Repository(format!(
+                "indexer component {} {operation} returned invalid JSON response: {error}",
+                self.descriptor.id
+            ))
+        })?;
+        Ok(Some(result))
+    }
+
+    async fn invoke_component_search_plan(
+        &self,
+        request: &PluginSearchPlanRequest,
+        operation: IndexerErrorOperation,
+        cancel_token: CancellationToken,
+        event_sink: &IndexerSearchStrategyEventSink,
+    ) -> AppResult<PluginSearchPlanSummary> {
+        let Some(indexer) = self.component.as_ref() else {
+            return Err(AppError::Repository(
+                "strategy plans require a component indexer".to_string(),
+            ));
+        };
+        let request = serde_json::to_vec(request).map_err(|error| {
+            AppError::Repository(format!(
+                "failed to encode indexer component strategy plan: {error}"
+            ))
+        })?;
+        let attested = matches!(
+            &self.descriptor.provider,
+            ProviderDescriptor::Indexer(descriptor)
+                if descriptor.search_semantics_version.is_some()
+        );
+        let mut actor = indexer.actor.lock().await;
+        indexer.host.bind_cancellation(cancel_token.clone());
+        indexer
+            .host
+            .begin_indexer_error_capture(self.indexer_error_capture(operation));
+        if actor.is_none() {
+            *actor = Some(
+                indexer
+                    .runtime
+                    .instantiate(&indexer.host)
+                    .await
+                    .map_err(|error| {
+                        AppError::Repository(format!(
+                            "indexer component {} could not start strategy plan: {error}",
+                            self.descriptor.id
+                        ))
+                    })?,
+            );
+        }
+
+        let (raw_event_tx, mut raw_event_rx) = component_strategy_event_channel();
+        let mut event_error = None;
+        let call_result = {
+            let Some(component_actor) = actor.as_mut() else {
+                unreachable!("component actor was initialized above");
+            };
+            let call = tokio::time::timeout(
+                indexer.timeout,
+                component_actor.search_plan(request, raw_event_tx),
+            );
+            tokio::pin!(call);
+            loop {
+                tokio::select! {
+                    _ = cancel_token.cancelled() => {
+                        break Err(AppError::canceled("plugin indexer strategy plan canceled"));
+                    }
+                    event = raw_event_rx.recv(), if !raw_event_rx.is_closed() => {
+                        let Some(event) = event else {
+                            continue;
+                        };
+                        if let Err(error) = forward_component_strategy_event(
+                            self,
+                            &event,
+                            attested,
+                            event_sink,
+                        )
+                        .await
+                        {
+                            event_error = Some(error);
+                            cancel_token.cancel();
+                        }
+                    }
+                    result = &mut call => {
+                        break match result {
+                            Ok(Ok(response)) => Ok(response),
+                            Ok(Err(error)) => Err(AppError::Repository(format!(
+                                "indexer component {} strategy plan failed: {error}",
+                                self.descriptor.id
+                            ))),
+                            Err(_) => Err(AppError::Repository(format!(
+                                "indexer component {} strategy plan timed out after {} ms",
+                                self.descriptor.id,
+                                indexer.timeout.as_millis(),
+                            ))),
+                        };
+                    }
+                }
+            }
+        };
+
+        if let Some(error) = event_error {
+            actor.take();
+            indexer.host.finish_indexer_error_capture(true);
+            return Err(error);
+        }
+        let response = match call_result {
+            Ok(response) => response,
+            Err(error) => {
+                actor.take();
+                indexer.host.finish_indexer_error_capture(true);
+                return Err(error);
+            }
+        };
+        while let Ok(event) = raw_event_rx.try_recv() {
+            if let Err(error) =
+                forward_component_strategy_event(self, &event, attested, event_sink).await
+            {
+                actor.take();
+                indexer.host.finish_indexer_error_capture(true);
+                return Err(error);
+            }
+        }
+        let bytes = response.map_err(|error| {
+            AppError::Repository(format!(
+                "indexer component {} strategy plan returned invocation error {error:?}",
+                self.descriptor.id
+            ))
+        })?;
+        let summary = serde_json::from_slice::<PluginSearchPlanSummary>(&bytes).map_err(|error| {
+            AppError::Repository(format!(
+                "indexer component {} returned an invalid strategy summary: {error}",
+                self.descriptor.id
+            ))
+        });
+        indexer.host.finish_indexer_error_capture(summary.is_err());
+        summary
+    }
+
     #[allow(dead_code)]
     pub async fn indexer_action(
         &self,
         action: &str,
         query: BTreeMap<String, String>,
     ) -> AppResult<Option<serde_json::Value>> {
-        if let Some(result) = self
-            .invoke_command(
-                PluginIndexerCommand::Action(PluginActionRequest {
-                    action: action.to_string(),
-                    payload: serde_json::json!({ "query": query }),
-                }),
-                "indexer_action",
-                None,
-            )
-            .await?
-        {
-            let PluginIndexerCommandResult::Action(result) = result else {
-                return Err(AppError::Repository(
-                    "indexer command returned the wrong result for indexer_action".to_string(),
-                ));
+        if let Some(indexer) = self.component.as_ref() {
+            indexer.host.begin_indexer_error_capture(
+                self.indexer_error_capture(IndexerErrorOperation::IndexerAction),
+            );
+            let result = match self
+                .invoke_component(
+                    PluginIndexerCommand::Action(PluginActionRequest {
+                        action: action.to_string(),
+                        payload: serde_json::json!({ "query": query }),
+                    }),
+                    "indexer_action",
+                    None,
+                )
+                .await
+            {
+                Ok(Some(PluginIndexerCommandResult::Action(result))) => {
+                    decode_command_result::<PluginActionResponse>(
+                        result,
+                        "indexer indexer_action component",
+                    )
+                    .map(|response| Some(response.payload))
+                }
+                Ok(Some(_)) => Err(AppError::Repository(
+                    "indexer component returned the wrong result for indexer_action".to_string(),
+                )),
+                Ok(None) => Err(AppError::Repository(
+                    "component indexer unexpectedly selected another runtime".to_string(),
+                )),
+                Err(error) => Err(error),
             };
-            let response: PluginActionResponse =
-                decode_command_result(result, "indexer indexer_action")?;
-            return Ok(Some(response.payload));
+            indexer.host.finish_indexer_error_capture(result.is_err());
+            return result;
+        }
+        if let Some(indexer) = self.command.as_ref() {
+            indexer.command_host.begin_indexer_error_capture(
+                self.indexer_error_capture(IndexerErrorOperation::IndexerAction),
+            );
+            let result = match self
+                .invoke_command(
+                    PluginIndexerCommand::Action(PluginActionRequest {
+                        action: action.to_string(),
+                        payload: serde_json::json!({ "query": query }),
+                    }),
+                    "indexer_action",
+                    None,
+                )
+                .await
+            {
+                Ok(Some(PluginIndexerCommandResult::Action(result))) => {
+                    decode_command_result::<PluginActionResponse>(result, "indexer indexer_action")
+                        .map(|response| Some(response.payload))
+                }
+                Ok(Some(_)) => Err(AppError::Repository(
+                    "indexer command returned the wrong result for indexer_action".to_string(),
+                )),
+                Ok(None) => Err(AppError::Repository(
+                    "command indexer unexpectedly selected the legacy runtime".to_string(),
+                )),
+                Err(error) => Err(error),
+            };
+            indexer
+                .command_host
+                .finish_indexer_error_capture(result.is_err());
+            return result;
         }
 
         let request = serde_json::json!({
@@ -351,7 +811,10 @@ impl WasmIndexerClient {
         })?;
 
         self.legacy_worker()?
-            .call_action(input)
+            .call_action(
+                input,
+                self.indexer_error_capture(IndexerErrorOperation::IndexerAction),
+            )
             .await?
             .map(|output| decode_plugin_result(&output, EXPORT_INDEXER_ACTION))
             .transpose()
@@ -360,34 +823,77 @@ impl WasmIndexerClient {
     async fn call_search_request(
         &self,
         request: &PluginSearchRequest,
+        operation: IndexerErrorOperation,
         cancel_token: CancellationToken,
-    ) -> AppResult<PluginSearchResponse> {
-        if let Some(result) = self
-            .invoke_command(
-                PluginIndexerCommand::Search(request.clone()),
-                "indexer_search",
-                Some(&cancel_token),
-            )
-            .await?
-        {
-            let PluginIndexerCommandResult::Search(result) = result else {
-                return Err(AppError::Repository(
-                    "indexer command returned the wrong result for indexer_search".to_string(),
-                ));
-            };
-            if matches!(
-                &result,
-                PluginResult::Err(error) if error.public_message == "indexer command failed"
-            ) && let Some(message) = self
-                .command
-                .as_ref()
-                .and_then(|indexer| indexer.command_host.rate_limit_message())
+    ) -> AppResult<PluginSearchCallResponse> {
+        let attested = matches!(
+            &self.descriptor.provider,
+            ProviderDescriptor::Indexer(descriptor)
+                if descriptor.search_semantics_version.is_some()
+        );
+        if let Some(indexer) = self.component.as_ref() {
+            indexer
+                .host
+                .begin_indexer_error_capture(self.indexer_error_capture(operation));
+            let result = match self
+                .invoke_component(
+                    PluginIndexerCommand::Search(request.clone()),
+                    "indexer_search",
+                    Some(&cancel_token),
+                )
+                .await
             {
-                return Err(AppError::Repository(format!(
-                    "indexer indexer_search: plugin error RateLimited: {message}"
-                )));
-            }
-            return decode_command_result(result, "indexer indexer_search");
+                Ok(Some(PluginIndexerCommandResult::Search(result))) => {
+                    decode_search_result(result, attested, "indexer indexer_search component")
+                }
+                Ok(Some(_)) => Err(AppError::Repository(
+                    "indexer component returned the wrong result for indexer_search".to_string(),
+                )),
+                Ok(None) => Err(AppError::Repository(
+                    "component indexer unexpectedly selected another runtime".to_string(),
+                )),
+                Err(error) => Err(error),
+            };
+            indexer.host.finish_indexer_error_capture(result.is_err());
+            return result;
+        }
+        if let Some(indexer) = self.command.as_ref() {
+            indexer
+                .command_host
+                .begin_indexer_error_capture(self.indexer_error_capture(operation));
+            let result = match self
+                .invoke_command(
+                    PluginIndexerCommand::Search(request.clone()),
+                    "indexer_search",
+                    Some(&cancel_token),
+                )
+                .await
+            {
+                Ok(Some(PluginIndexerCommandResult::Search(result))) => {
+                    if matches!(
+                        &result,
+                        PluginResult::Err(error) if error.public_message == "indexer command failed"
+                    ) && let Some(message) = indexer.command_host.rate_limit_message()
+                    {
+                        Err(AppError::Repository(format!(
+                            "indexer indexer_search: plugin error RateLimited: {message}"
+                        )))
+                    } else {
+                        decode_search_result(result, attested, "indexer indexer_search")
+                    }
+                }
+                Ok(Some(_)) => Err(AppError::Repository(
+                    "indexer command returned the wrong result for indexer_search".to_string(),
+                )),
+                Ok(None) => Err(AppError::Repository(
+                    "command indexer unexpectedly selected the legacy runtime".to_string(),
+                )),
+                Err(error) => Err(error),
+            };
+            indexer
+                .command_host
+                .finish_indexer_error_capture(result.is_err());
+            return result;
         }
 
         let input = serde_json::to_string(request).map_err(|e| {
@@ -398,10 +904,17 @@ impl WasmIndexerClient {
 
         let output = self
             .legacy_worker()?
-            .call_search(input, cancel_token)
+            .call_search(input, cancel_token, self.indexer_error_capture(operation))
             .await?;
 
-        decode_plugin_result(&output, EXPORT_INDEXER_SEARCH)
+        let result = serde_json::from_str::<PluginResult<PluginSearchResponse>>(&output).map_err(
+            |error| {
+                AppError::Repository(format!(
+                    "{EXPORT_INDEXER_SEARCH}: plugin returned invalid result envelope: {error}"
+                ))
+            },
+        )?;
+        decode_search_result(result, attested, EXPORT_INDEXER_SEARCH)
     }
 }
 
@@ -415,6 +928,80 @@ fn decode_command_result<T>(result: PluginResult<T>, context: &str) -> AppResult
         }) => Err(AppError::Repository(format!(
             "{context}: plugin error {code:?}: {public_message}"
         ))),
+    }
+}
+
+fn decode_search_result(
+    result: PluginResult<PluginSearchResponse>,
+    attested: bool,
+    context: &str,
+) -> AppResult<PluginSearchCallResponse> {
+    match result {
+        PluginResult::Ok(response) => Ok(PluginSearchCallResponse {
+            response,
+            completion: if attested {
+                IndexerSearchCompletion::Complete
+            } else {
+                IndexerSearchCompletion::Partial {
+                    reason: Some(HostIncompleteReason::Unattested),
+                    retry_after: None,
+                }
+            },
+        }),
+        PluginResult::Err(PluginError {
+            details:
+                Some(PluginErrorDetails::IndexerSearch(IndexerSearchPluginError::PartialResults {
+                    response,
+                    reason,
+                    retry_after_seconds,
+                })),
+            ..
+        }) => Ok(PluginSearchCallResponse {
+            response: *response,
+            completion: IndexerSearchCompletion::Partial {
+                reason: Some(host_incomplete_reason(reason)),
+                retry_after: retry_after_seconds
+                    .and_then(|seconds| u64::try_from(seconds).ok())
+                    .map(std::time::Duration::from_secs),
+            },
+        }),
+        PluginResult::Err(PluginError {
+            public_message,
+            details:
+                Some(PluginErrorDetails::IndexerSearch(IndexerSearchPluginError::Deferred {
+                    reason,
+                    retry_after_seconds,
+                })),
+            ..
+        }) => {
+            let retry_after = retry_after_seconds
+                .and_then(|seconds| u64::try_from(seconds).ok())
+                .map(std::time::Duration::from_secs);
+            let message = match retry_after {
+                Some(retry_after) => format!(
+                    "{public_message}; indexer search deferred: {reason:?}; retry after {}s",
+                    retry_after.as_secs()
+                ),
+                None => format!("{public_message}; indexer search deferred: {reason:?}"),
+            };
+            Err(AppError::temporary_unavailable(message, retry_after))
+        }
+        PluginResult::Err(error) => Err(AppError::Repository(format!(
+            "{context}: plugin error {:?}: {}",
+            error.code, error.public_message
+        ))),
+    }
+}
+
+fn host_incomplete_reason(reason: PluginIncompleteReason) -> HostIncompleteReason {
+    match reason {
+        PluginIncompleteReason::UpstreamFailure => HostIncompleteReason::UpstreamFailure,
+        PluginIncompleteReason::RateLimited => HostIncompleteReason::RateLimited,
+        PluginIncompleteReason::MalformedContent => HostIncompleteReason::MalformedContent,
+        PluginIncompleteReason::PageCeilingReached => HostIncompleteReason::PageCeilingReached,
+        PluginIncompleteReason::FanoutBranchFailed => HostIncompleteReason::FanoutBranchFailed,
+        PluginIncompleteReason::SaturatedPartition => HostIncompleteReason::SaturatedPartition,
+        PluginIncompleteReason::Unattested => HostIncompleteReason::Unattested,
     }
 }
 
@@ -464,21 +1051,21 @@ fn build_runtime_inputs(
         connection_url.as_deref(),
         config.config_json.as_deref(),
     );
-    let timeout_seconds = 30
-        + indexer_proxy_config
+    let timeout = scryer_outbound_http::effective_indexer_timeout(
+        indexer_proxy_config
             .as_ref()
-            .map(|config| config.request_timeout_seconds as u64 + 5)
-            .unwrap_or(0);
+            .map(|config| config.request_timeout_seconds),
+    );
     IndexerRuntimeInputs {
         config_entries: config_entries.unwrap_or_default(),
         allowed_hosts,
-        timeout: std::time::Duration::from_secs(timeout_seconds),
+        timeout,
         indexer_proxy_policy: indexer_proxy_config.map(|proxy_config| IndexerProxyPolicy {
             indexer_id: config.id.clone(),
             indexer_name: indexer_name.to_string(),
             config: proxy_config,
         }),
-        destination_cooldown_key: config.managed_destination_cooldown_key(),
+        destination_cooldown_key: Some(config.rate_limit_domain_key()),
     }
 }
 
@@ -1114,8 +1701,185 @@ fn insert_value<T: serde::Serialize>(
     insert_json(extra, key, value);
 }
 
+fn host_search_response(
+    client: &WasmIndexerClient,
+    response: PluginSearchCallResponse,
+) -> IndexerSearchResponse {
+    let PluginSearchCallResponse {
+        response,
+        completion,
+    } = response;
+    let source = format!(
+        "{} ({})",
+        client.indexer_name,
+        client.descriptor.provider_type()
+    );
+    let results = response
+        .results
+        .into_iter()
+        .map(|result| {
+            let extra = merge_result_extra(&result);
+            let response_attributes = response_attributes(&extra);
+            let password_hint = plugin_password_hint(&result, &extra);
+            let source_kind = explicit_source_kind(&result, &extra).or_else(|| {
+                DownloadSourceKind::infer_from_indexer_result(
+                    Some(client.descriptor.plugin_type()),
+                    result.download_url.as_deref(),
+                    result.link.as_deref(),
+                    &extra,
+                )
+            });
+
+            IndexerSearchResult {
+                indexer_id: None,
+                source: source.clone(),
+                title: result.title,
+                link: result.link,
+                download_url: result.download_url,
+                source_kind,
+                size_bytes: result.size_bytes,
+                published_at: result.published_at,
+                thumbs_up: result.thumbs_up,
+                thumbs_down: result.thumbs_down,
+                indexer_languages: (!result.languages.is_empty()).then_some(result.languages),
+                indexer_subtitles: (!result.subtitles.is_empty()).then_some(result.subtitles),
+                indexer_grabs: result.grabs,
+                password_hint,
+                candidate_token: None,
+                parsed_release_metadata: None,
+                quality_profile_decision: None,
+                extra,
+                response_attributes,
+                guid: result.guid,
+                info_url: result.info_url,
+                provenance: None,
+                queue_scope: None,
+                coverage_scope: None,
+                auto_eligible: None,
+                auto_decision_code: None,
+                auto_decision_summary: None,
+            }
+        })
+        .collect();
+
+    IndexerSearchResponse {
+        results,
+        indexer_outcomes: Vec::new(),
+        completion,
+        api_current: response.api_current,
+        api_max: response.api_max,
+        grab_current: response.grab_current,
+        grab_max: response.grab_max,
+    }
+}
+
+async fn forward_component_strategy_event(
+    client: &WasmIndexerClient,
+    bytes: &[u8],
+    attested: bool,
+    sink: &IndexerSearchStrategyEventSink,
+) -> AppResult<()> {
+    let event = serde_json::from_slice::<PluginSearchStrategyEvent>(bytes).map_err(|error| {
+        AppError::Repository(format!(
+            "indexer component {} emitted an invalid strategy event: {error}",
+            client.descriptor.id
+        ))
+    })?;
+    let response = decode_search_result(
+        event.result,
+        attested,
+        "indexer strategy-plan component event",
+    )
+    .map(|response| host_search_response(client, response));
+    sink.send(IndexerSearchStrategyEvent {
+        strategy_id: event.strategy_id,
+        response,
+    })
+    .await
+    .map_err(|_| AppError::canceled("indexer strategy result channel closed"))
+}
+
 #[async_trait]
 impl IndexerClient for WasmIndexerClient {
+    fn search_plan_capability(&self) -> Option<IndexerSearchPlanCapability> {
+        let component = self.component.as_ref()?;
+        if component.runtime.contract_version() != ComponentContractVersion::V1_1 {
+            return None;
+        }
+        let ProviderDescriptor::Indexer(descriptor) = &self.descriptor.provider else {
+            return None;
+        };
+        let capability = descriptor.strategy_plan?;
+        (capability.version == 1).then_some(IndexerSearchPlanCapability {
+            version: capability.version,
+            max_parallel_strategies: capability.max_parallel_strategies,
+        })
+    }
+
+    async fn search_plan(
+        &self,
+        request: IndexerSearchPlanRequest,
+        mode: SearchMode,
+        operation: IndexerErrorOperation,
+        cancel_token: CancellationToken,
+        event_sink: IndexerSearchStrategyEventSink,
+    ) -> AppResult<IndexerSearchPlanSummary> {
+        if self.search_plan_capability().is_none() {
+            return Err(AppError::Repository(
+                "indexer does not support strategy-plan search".to_string(),
+            ));
+        }
+        if cancel_token.is_cancelled() {
+            return Err(AppError::canceled("plugin indexer strategy plan canceled"));
+        }
+        let plan = PluginSearchPlanRequest {
+            plan_id: request.plan_id,
+            strategies: request
+                .strategies
+                .into_iter()
+                .map(|strategy| {
+                    let context = build_search_context(
+                        &strategy.query,
+                        &strategy.ids,
+                        strategy.facet.as_deref(),
+                        mode,
+                        strategy.season,
+                        strategy.episode,
+                        strategy.absolute_episode,
+                    );
+                    PluginSearchStrategyRequest {
+                        strategy_id: strategy.strategy_id,
+                        labels: strategy.labels,
+                        request: PluginSearchRequest {
+                            query: strategy.query,
+                            ids: strategy.ids,
+                            facet: strategy.facet,
+                            category: strategy.category,
+                            categories: strategy.newznab_categories.unwrap_or_default(),
+                            limit: 1000,
+                            season: strategy.season,
+                            episode: strategy.episode,
+                            absolute_episode: strategy.absolute_episode,
+                            tagged_aliases: strategy
+                                .tagged_aliases
+                                .into_iter()
+                                .map(tagged_alias_to_sdk)
+                                .collect(),
+                            context: Some(context),
+                        },
+                    }
+                })
+                .collect(),
+        };
+        let summary = self
+            .invoke_component_search_plan(&plan, operation, cancel_token, &event_sink)
+            .await?;
+        Ok(IndexerSearchPlanSummary {
+            plan_id: summary.plan_id,
+            emitted_strategy_ids: summary.emitted_strategy_ids,
+        })
+    }
+
     async fn search(
         &self,
         query: String,
@@ -1126,6 +1890,7 @@ impl IndexerClient for WasmIndexerClient {
         newznab_categories: Option<Vec<String>>,
         _indexer_routing: Option<IndexerRoutingPlan>,
         mode: SearchMode,
+        operation: IndexerErrorOperation,
         season: Option<u32>,
         episode: Option<u32>,
         absolute_episode: Option<u32>,
@@ -1162,19 +1927,24 @@ impl IndexerClient for WasmIndexerClient {
             context: Some(context),
         };
 
+        let legacy_adapter_fallback = self.search_plan_capability().is_none();
         let response = match self
-            .call_search_request(&request, cancel_token.child_token())
+            .call_search_request(&request, operation, cancel_token.child_token())
             .await
         {
             Ok(response)
-                if response.results.is_empty() && should_try_generic_search_fallback(&request) =>
+                if response.response.results.is_empty()
+                    && legacy_adapter_fallback
+                    && should_try_generic_search_fallback(&request) =>
             {
                 let fallback_request = generic_search_fallback_request(&request, mode);
-                self.call_search_request(&fallback_request, cancel_token.child_token())
+                self.call_search_request(&fallback_request, operation, cancel_token.child_token())
                     .await?
             }
             Ok(response) => response,
-            Err(primary_error) if should_try_generic_search_fallback(&request) => {
+            Err(primary_error)
+                if legacy_adapter_fallback && should_try_generic_search_fallback(&request) =>
+            {
                 if primary_error.is_canceled() {
                     return Err(primary_error);
                 }
@@ -1184,87 +1954,113 @@ impl IndexerClient for WasmIndexerClient {
                     "plugin primary search failed; trying generic fallback"
                 );
                 let fallback_request = generic_search_fallback_request(&request, mode);
-                self.call_search_request(&fallback_request, cancel_token.child_token())
+                self.call_search_request(&fallback_request, operation, cancel_token.child_token())
                     .await?
             }
             Err(error) => return Err(error),
         };
+        Ok(host_search_response(self, response))
+    }
 
-        let source = format!(
-            "{} ({})",
-            self.indexer_name,
-            self.descriptor.provider_type()
-        );
-        let results = response
-            .results
-            .into_iter()
-            .map(|r| {
-                let extra = merge_result_extra(&r);
-                let response_attributes = response_attributes(&extra);
-                let password_hint = plugin_password_hint(&r, &extra);
-                let source_kind = explicit_source_kind(&r, &extra).or_else(|| {
-                    DownloadSourceKind::infer_from_indexer_result(
-                        Some(self.descriptor.plugin_type()),
-                        r.download_url.as_deref(),
-                        r.link.as_deref(),
-                        &extra,
-                    )
-                });
-
-                IndexerSearchResult {
-                    indexer_id: None,
-                    source: source.clone(),
-                    title: r.title,
-                    link: r.link,
-                    download_url: r.download_url,
-                    source_kind,
-                    size_bytes: r.size_bytes,
-                    published_at: r.published_at,
-                    thumbs_up: r.thumbs_up,
-                    thumbs_down: r.thumbs_down,
-                    indexer_languages: if r.languages.is_empty() {
-                        None
-                    } else {
-                        Some(r.languages)
-                    },
-                    indexer_subtitles: if r.subtitles.is_empty() {
-                        None
-                    } else {
-                        Some(r.subtitles)
-                    },
-                    indexer_grabs: r.grabs,
-                    password_hint,
-                    candidate_token: None,
-                    parsed_release_metadata: None,
-                    quality_profile_decision: None,
-                    extra,
-                    response_attributes,
-                    guid: r.guid,
-                    info_url: r.info_url,
-                    provenance: None,
-                    queue_scope: None,
-                    coverage_scope: None,
-                    auto_eligible: None,
-                    auto_decision_code: None,
-                    auto_decision_summary: None,
-                }
-            })
-            .collect();
-
-        Ok(IndexerSearchResponse {
-            results,
-            indexer_outcomes: Vec::new(),
-            api_current: response.api_current,
-            api_max: response.api_max,
-            grab_current: response.grab_current,
-            grab_max: response.grab_max,
-        })
+    async fn search_stream(
+        &self,
+        query: String,
+        ids: std::collections::HashMap<String, String>,
+        category: Option<String>,
+        facet: Option<String>,
+        id_search_facet: Option<String>,
+        newznab_categories: Option<Vec<String>>,
+        indexer_routing: Option<IndexerRoutingPlan>,
+        mode: SearchMode,
+        operation: IndexerErrorOperation,
+        season: Option<u32>,
+        episode: Option<u32>,
+        absolute_episode: Option<u32>,
+        tagged_aliases: Vec<TaggedAlias>,
+        learning_context: Option<scryer_application::IndexerSearchLearningContext>,
+        cancel_token: CancellationToken,
+        page_sink: scryer_application::IndexerSearchPageSink,
+    ) -> AppResult<IndexerSearchResponse> {
+        let mut response = self
+            .search(
+                query,
+                ids,
+                category,
+                facet,
+                id_search_facet,
+                newznab_categories,
+                indexer_routing,
+                mode,
+                operation,
+                season,
+                episode,
+                absolute_episode,
+                tagged_aliases,
+                learning_context,
+                cancel_token,
+            )
+            .await?;
+        if !response.results.is_empty() {
+            page_sink
+                .send(std::mem::take(&mut response.results))
+                .await
+                .map_err(|_| AppError::canceled("indexer scoring pipeline closed"))?;
+        }
+        Ok(response)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn partial_search_preserves_typed_reason_and_retry_delay() {
+        let decoded = decode_search_result(
+            PluginResult::Err(PluginError {
+                code: scryer_plugin_sdk::PluginErrorCode::Temporary,
+                public_message: "partial search".to_string(),
+                debug_message: None,
+                retry_after_seconds: None,
+                details: Some(PluginErrorDetails::IndexerSearch(
+                    IndexerSearchPluginError::PartialResults {
+                        response: Box::new(PluginSearchResponse::default()),
+                        reason: PluginIncompleteReason::PageCeilingReached,
+                        retry_after_seconds: Some(45),
+                    },
+                )),
+            }),
+            true,
+            "test search",
+        )
+        .expect("partial results remain usable");
+
+        assert_eq!(
+            decoded.completion,
+            IndexerSearchCompletion::Partial {
+                reason: Some(HostIncompleteReason::PageCeilingReached),
+                retry_after: Some(std::time::Duration::from_secs(45)),
+            }
+        );
+    }
+
+    #[test]
+    fn unattested_success_is_typed_as_incomplete() {
+        let decoded = decode_search_result(
+            PluginResult::Ok(PluginSearchResponse::default()),
+            false,
+            "test search",
+        )
+        .expect("legacy result remains usable");
+
+        assert_eq!(
+            decoded.completion,
+            IndexerSearchCompletion::Partial {
+                reason: Some(HostIncompleteReason::Unattested),
+                retry_after: None,
+            }
+        );
+    }
 
     #[test]
     fn builds_episode_id_context_for_auto_search() {
@@ -1590,6 +2386,7 @@ mod tests {
             provider: crate::types::ProviderDescriptor::Indexer(crate::types::IndexerDescriptor {
                 provider_type: provider_type.to_string(),
                 provider_aliases: vec![],
+                provider_profiles: vec![],
                 source_kind: crate::types::IndexerSourceKind::Usenet,
                 capabilities: crate::types::IndexerCapabilities::default(),
                 scoring_policies: vec![],
@@ -1607,6 +2404,8 @@ mod tests {
                 }],
                 allowed_hosts: vec![],
                 rate_limit_seconds: None,
+                search_semantics_version: Some(1),
+                strategy_plan: None,
             }),
         }
     }
@@ -1672,6 +2471,7 @@ mod tests {
     fn both_runtimes_receive_identical_inputs() {
         let descriptor = descriptor_with_base_url_role("newznab");
         let mut config = sample_indexer_config("newznab", Some("parent"));
+        config.managed_child_key = Some("child-42".to_string());
         config.config_json =
             Some(r#"{"base_url":"http://localhost:9696/1","api_path":"/api"}"#.to_string());
 
@@ -1679,10 +2479,15 @@ mod tests {
         let spec = build_legacy_spec(Vec::new(), &descriptor, "Managed Child", &config, None);
 
         assert_eq!(spec.timeout, inputs.timeout);
+        assert_eq!(inputs.timeout, scryer_outbound_http::INDEXER_HTTP_TIMEOUT);
         assert_eq!(spec.allowed_hosts, inputs.allowed_hosts);
         assert_eq!(
             spec.destination_cooldown_key,
             inputs.destination_cooldown_key
+        );
+        assert_eq!(
+            inputs.destination_cooldown_key.as_deref(),
+            Some("parent:child-42")
         );
         assert!(
             !inputs.config_entries.is_empty(),

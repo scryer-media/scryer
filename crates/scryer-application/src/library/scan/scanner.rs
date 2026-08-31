@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use scryer_domain::CanonicalMediaTag;
+use scryer_domain::{CanonicalMediaTag, ExternalId, MediaFacet, Title};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tokio::sync::mpsc;
@@ -51,6 +51,9 @@ impl LibraryScanSummary {
 #[derive(Debug, Clone)]
 pub struct MetadataSearchItem {
     pub tvdb_id: String,
+    pub smg_id: Option<i64>,
+    pub primary_source: Option<String>,
+    pub external_ids: Vec<ExternalId>,
     pub name: String,
     pub year: Option<i32>,
     pub auto_match_safe: bool,
@@ -70,6 +73,9 @@ pub struct MetadataSearchQuery {
 #[derive(Debug, Clone)]
 pub struct RichMetadataSearchItem {
     pub tvdb_id: String,
+    pub smg_id: Option<i64>,
+    pub primary_source: Option<String>,
+    pub external_ids: Vec<ExternalId>,
     pub name: String,
     pub imdb_id: Option<String>,
     pub slug: Option<String>,
@@ -82,6 +88,48 @@ pub struct RichMetadataSearchItem {
     pub language: Option<String>,
     pub runtime_minutes: Option<i32>,
     pub sort_title: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MovieTitleRef {
+    pub smg_id: Option<i64>,
+    pub tvdb_id: Option<i64>,
+    pub tmdb_id: Option<i64>,
+    pub imdb_id: Option<String>,
+}
+
+impl MovieTitleRef {
+    pub fn from_title(title: &Title) -> Option<Self> {
+        if title.facet != MediaFacet::Movie {
+            return None;
+        }
+
+        let external_id = |source: &str| {
+            title
+                .external_ids
+                .iter()
+                .find(|external_id| external_id.source.eq_ignore_ascii_case(source))
+                .map(|external_id| external_id.value.trim())
+                .filter(|value| !value.is_empty())
+        };
+        let reference = Self {
+            smg_id: external_id("smg").and_then(|value| value.parse().ok()),
+            tvdb_id: external_id("tvdb").and_then(|value| value.parse().ok()),
+            tmdb_id: external_id("tmdb").and_then(|value| value.parse().ok()),
+            imdb_id: external_id("imdb").map(str::to_string).or_else(|| {
+                title
+                    .imdb_id
+                    .clone()
+                    .filter(|value| !value.trim().is_empty())
+            }),
+        };
+
+        (reference.smg_id.is_some()
+            || reference.tvdb_id.is_some()
+            || reference.tmdb_id.is_some()
+            || reference.imdb_id.is_some())
+        .then_some(reference)
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -486,7 +534,9 @@ impl DiscoveryRatingProvenance {
 #[derive(Debug, Clone)]
 pub struct MovieMetadata {
     pub target_key: Option<String>,
-    pub tvdb_id: i64,
+    pub smg_id: Option<i64>,
+    pub primary_source: String,
+    pub tvdb_id: Option<i64>,
     pub name: String,
     pub slug: String,
     pub year: Option<i32>,
@@ -507,6 +557,26 @@ pub struct MovieMetadata {
     pub tmdb_release_date: Option<String>,
     pub ratings: crate::TitleRatingSummary,
     pub credits: Vec<crate::TitleCredit>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TitleResolution {
+    pub ref_index: usize,
+    pub resolved: bool,
+    pub smg_id: Option<i64>,
+    pub kind: String,
+    pub primary_source: String,
+    pub redirected_from: Option<i64>,
+    pub created: bool,
+    pub external_ids: Vec<ExternalId>,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct MovieTitleBulkResult {
+    pub by_ref_index: HashMap<usize, MovieMetadata>,
+    pub redirects: Vec<(i64, i64)>,
+    pub missing_ref_indexes: Vec<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -660,6 +730,55 @@ pub trait MetadataGateway: Send + Sync {
         series_tvdb_ids: &[i64],
         language: &str,
     ) -> AppResult<BulkMetadataResult>;
+
+    async fn get_movie_titles(
+        &self,
+        refs: &[MovieTitleRef],
+        language: &str,
+    ) -> AppResult<MovieTitleBulkResult> {
+        let _ = (refs, language);
+        Err(AppError::Repository(
+            "metadata gateway does not support title-id queries".into(),
+        ))
+    }
+
+    async fn resolve_movie_titles(
+        &self,
+        refs: &[MovieTitleRef],
+        create_missing: bool,
+    ) -> AppResult<Vec<TitleResolution>> {
+        let _ = (refs, create_missing);
+        Err(AppError::Repository(
+            "metadata gateway does not support title-id queries".into(),
+        ))
+    }
+
+    async fn search_titles(
+        &self,
+        query: &str,
+        kind: &str,
+        limit: i32,
+        language: &str,
+        year: Option<i32>,
+    ) -> AppResult<Vec<RichMetadataSearchItem>> {
+        let _ = (query, kind, limit, language, year);
+        Err(AppError::Repository(
+            "metadata gateway does not support title-id queries".into(),
+        ))
+    }
+
+    async fn search_titles_batch(
+        &self,
+        queries: &[MetadataSearchQuery],
+        kind: &str,
+        language: &str,
+        create_missing: bool,
+    ) -> AppResult<HashMap<MetadataSearchQuery, Vec<MetadataSearchItem>>> {
+        let _ = (queries, kind, language, create_missing);
+        Err(AppError::Repository(
+            "metadata gateway does not support title-id queries".into(),
+        ))
+    }
 
     async fn title_recommendations(
         &self,

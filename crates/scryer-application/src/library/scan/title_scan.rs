@@ -25,11 +25,14 @@ pub(super) async fn title_requires_scan_hydration(
     title: &Title,
     metadata_language: &str,
 ) -> AppResult<bool> {
-    if !title
-        .external_ids
-        .iter()
-        .any(|external_id| external_id.source.eq_ignore_ascii_case("tvdb"))
-    {
+    let hydratable = match title.facet {
+        MediaFacet::Movie => crate::catalog_workflow::movie_title_ref(title).is_some(),
+        MediaFacet::Series | MediaFacet::Anime => title
+            .external_ids
+            .iter()
+            .any(|external_id| external_id.source.eq_ignore_ascii_case("tvdb")),
+    };
+    if !hydratable {
         return Ok(false);
     }
 
@@ -281,7 +284,12 @@ fn rank_movie_media_file_for_primary(
     context: &crate::quality::canonical_context::ResolvedScoringContext,
     file: &TitleMediaFile,
 ) -> (usize, i32) {
-    let bar = app.incumbent_bar(file, context, None);
+    let bar = app.incumbent_bar(
+        file,
+        context,
+        // A movie is one member: the title's own runtime, filled in by `view`.
+        crate::quality_profile::CoverageSizeBasis::default(),
+    );
     (crate::admission::tier_sort_key(bar.tier_index), bar.score)
 }
 
@@ -1509,6 +1517,7 @@ async fn hydrate_enumerate_and_walk_title_work(
             let target = crate::catalog_workflow::HydrationTarget {
                 title: work.title.clone(),
                 requested_tvdb_id: None,
+                requested_movie_ref: None,
                 sync_wanted_after_completion: false,
                 source: ctx.hydration_source,
             };

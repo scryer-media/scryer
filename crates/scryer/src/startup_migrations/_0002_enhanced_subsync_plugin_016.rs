@@ -118,86 +118,42 @@ pub(crate) async fn migrate_enhanced_subsync_plugin_for_016_upgrade(
     settings_store: Arc<SettingsStore>,
     previous_version: Option<&str>,
     current_version: &str,
-) {
-    let migration_state = match read_bootstrap_system_string(
+) -> Result<(), String> {
+    let migration_state = read_bootstrap_system_string(
         settings_store.clone(),
         ENHANCED_SUBSYNC_016_MIGRATION_STATE_KEY,
         ENHANCED_SUBSYNC_016_MIGRATION_STATE_NONE,
     )
-    .await
-    {
-        Ok(state) => state,
-        Err(error) => {
-            tracing::warn!(
-                error = %error,
-                "failed to read enhanced subtitle sync migration state"
-            );
-            return;
-        }
-    };
+    .await?;
     if !should_attempt_enhanced_subsync_016_migration(
         previous_version,
         current_version,
         &migration_state,
     ) {
-        return;
+        return Ok(());
     }
 
-    let subtitles_enabled = match read_bootstrap_system_bool(
-        settings_store.clone(),
-        "subtitles.enabled",
-        false,
-    )
-    .await
-    {
-        Ok(value) => value,
-        Err(error) => {
-            tracing::warn!(
-                error = %error,
-                "failed to read subtitle management setting for enhanced sync migration"
-            );
-            return;
-        }
-    };
+    let subtitles_enabled =
+        read_bootstrap_system_bool(settings_store.clone(), "subtitles.enabled", false).await?;
     let subtitle_sync_enabled =
-        match read_bootstrap_system_bool(settings_store.clone(), "subtitles.sync_enabled", true)
-            .await
-        {
-            Ok(value) => value,
-            Err(error) => {
-                tracing::warn!(
-                    error = %error,
-                    "failed to read subtitle sync setting for enhanced sync migration"
-                );
-                return;
-            }
-        };
+        read_bootstrap_system_bool(settings_store.clone(), "subtitles.sync_enabled", true).await?;
     if !subtitles_enabled || !subtitle_sync_enabled {
-        return;
+        return Ok(());
     }
 
-    if migration_state != ENHANCED_SUBSYNC_016_MIGRATION_STATE_PENDING
-        && let Err(error) = set_enhanced_subsync_016_migration_state(
+    if migration_state != ENHANCED_SUBSYNC_016_MIGRATION_STATE_PENDING {
+        set_enhanced_subsync_016_migration_state(
             settings_store.clone(),
             ENHANCED_SUBSYNC_016_MIGRATION_STATE_PENDING,
         )
-        .await
-    {
-        tracing::warn!(
-            error = %error,
-            "failed to persist enhanced subtitle sync migration pending state"
-        );
+        .await?;
     }
 
     let actor = startup_plugin_migration_actor();
-    if let Err(error) = app_use_case.refresh_plugin_catalog(&actor).await {
-        tracing::warn!(
-            plugin_id = ENHANCED_SUBTITLE_SYNC_PLUGIN_ID,
-            error = %error,
-            "enhanced subtitle sync plugin migration deferred: catalog refresh failed"
-        );
-        return;
-    }
+    app_use_case
+        .refresh_plugin_catalog(&actor)
+        .await
+        .map_err(|error| format!("catalog refresh failed: {error}"))?;
 
     match app_use_case
         .install_plugin(&actor, ENHANCED_SUBTITLE_SYNC_PLUGIN_ID)
@@ -209,42 +165,28 @@ pub(crate) async fn migrate_enhanced_subsync_plugin_for_016_upgrade(
                 version = installation.version.as_str(),
                 "installed enhanced subtitle sync plugin during 0.16 upgrade"
             );
-            if let Err(error) = set_enhanced_subsync_016_migration_state(
+            set_enhanced_subsync_016_migration_state(
                 settings_store,
                 ENHANCED_SUBSYNC_016_MIGRATION_STATE_COMPLETED,
             )
-            .await
-            {
-                tracing::warn!(
-                    error = %error,
-                    "failed to persist enhanced subtitle sync migration completion marker"
-                );
-            }
+            .await?;
+            Ok(())
         }
         Err(error) if error.to_string().contains("already installed") => {
             tracing::info!(
                 plugin_id = ENHANCED_SUBTITLE_SYNC_PLUGIN_ID,
                 "enhanced subtitle sync plugin already installed; completing migration marker"
             );
-            if let Err(error) = set_enhanced_subsync_016_migration_state(
+            set_enhanced_subsync_016_migration_state(
                 settings_store,
                 ENHANCED_SUBSYNC_016_MIGRATION_STATE_COMPLETED,
             )
-            .await
-            {
-                tracing::warn!(
-                    error = %error,
-                    "failed to persist enhanced subtitle sync migration completion marker"
-                );
-            }
+            .await?;
+            Ok(())
         }
-        Err(error) => {
-            tracing::warn!(
-                plugin_id = ENHANCED_SUBTITLE_SYNC_PLUGIN_ID,
-                error = %error,
-                "enhanced subtitle sync plugin migration deferred: install failed"
-            );
-        }
+        Err(error) => Err(format!(
+            "enhanced subtitle sync plugin install failed: {error}"
+        )),
     }
 }
 

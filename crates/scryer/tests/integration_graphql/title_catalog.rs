@@ -1013,7 +1013,7 @@ async fn graphql_movie_required_audio_override_resolves_and_clears_to_facet_defa
         json!({
             "input": {
                 "scope": "MOVIE",
-                "requiredAudioLanguages": ["eng"]
+                "requiredAudioLanguages": ["Original"]
             }
         }),
     )
@@ -1021,7 +1021,7 @@ async fn graphql_movie_required_audio_override_resolves_and_clears_to_facet_defa
     assert_no_errors(&default_audio);
     assert_eq!(
         default_audio["data"]["updateMediaSettings"]["requiredAudioLanguages"],
-        json!(["eng"])
+        json!(["original"])
     );
 
     let set_override = gql(
@@ -1111,12 +1111,68 @@ async fn graphql_movie_required_audio_override_resolves_and_clears_to_facet_defa
     assert!(inherited_title["data"]["title"]["requiredAudioLanguagesOverride"].is_null());
     assert_eq!(
         inherited_title["data"]["title"]["effectiveRequiredAudioLanguages"],
-        json!(["eng"])
+        json!(["original"])
     );
     assert_eq!(
         inherited_title["data"]["title"]["inheritsRequiredAudioLanguages"],
         true
     );
+}
+
+#[tokio::test]
+async fn graphql_title_required_audio_inherits_original_from_library() {
+    let ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+
+    let library = create_title_catalog_library(
+        &ctx,
+        "MOVIE",
+        "Original Audio Library",
+        &[("/library/original-audio", true)],
+    )
+    .await;
+    let library_id = library_id(&library).to_string();
+    ctx.settings_store
+        .upsert_setting_json(
+            "system",
+            "audio.required_languages",
+            Some(library_id.clone()),
+            json!(["original"]).to_string(),
+            "test",
+            None,
+        )
+        .await
+        .expect("set library required audio languages");
+
+    let title = gql(
+        &ctx,
+        r#"mutation($input: AddTitleInput!) {
+            addTitle(input: $input) {
+                title {
+                    effectiveRequiredAudioLanguages
+                    inheritsRequiredAudioLanguages
+                }
+            }
+        }"#,
+        json!({
+            "input": {
+                "name": "Library Original Audio Movie",
+                "facet": "MOVIE",
+                "libraryId": library_id,
+                "monitored": true,
+                "tags": [],
+                "externalIds": [{ "source": "tvdb", "value": "923456" }]
+            }
+        }),
+    )
+    .await;
+    assert_no_errors(&title);
+    let title = &title["data"]["addTitle"]["title"];
+    assert_eq!(
+        title["effectiveRequiredAudioLanguages"],
+        json!(["original"])
+    );
+    assert_eq!(title["inheritsRequiredAudioLanguages"], true);
 }
 
 #[tokio::test]
@@ -1319,6 +1375,201 @@ async fn graphql_add_title_returns_async_hydration_payload_fields() {
         second["data"]["addTitle"]["title"]["id"],
         first["data"]["addTitle"]["title"]["id"]
     );
+}
+
+#[tokio::test]
+async fn graphql_add_movie_accepts_smg_and_tmdb_identity_without_tvdb() {
+    let ctx = TestContext::new().await;
+    let body = gql(
+        &ctx,
+        r#"mutation($input: AddTitleInput!) {
+            addTitle(input: $input) {
+                metadataHydrationState
+                title { externalIds { source value } }
+            }
+        }"#,
+        json!({
+            "input": {
+                "name": "SMG and TMDB Identity Movie",
+                "facet": "MOVIE",
+                "monitored": true,
+                "tags": [],
+                "externalIds": [],
+                "smgId": 202,
+                "tmdbId": 2020
+            }
+        }),
+    )
+    .await;
+    assert_no_errors(&body);
+    assert_eq!(
+        body["data"]["addTitle"]["metadataHydrationState"],
+        "PENDING"
+    );
+    assert_eq!(
+        body["data"]["addTitle"]["title"]["externalIds"],
+        json!([
+            { "source": "smg", "value": "202" },
+            { "source": "tmdb", "value": "2020" },
+        ])
+    );
+}
+
+/// A series holds every external id it was added with. Search subjects, RSS
+/// candidate indexes and notification payloads read imdb/tmdb/smg ids without
+/// checking the facet, so `addTitle` must store them for a series exactly as it
+/// does for a movie, and `externalIds` must read them all back.
+#[tokio::test]
+async fn graphql_add_series_keeps_every_identity_from_search_input() {
+    let ctx = TestContext::new().await;
+    let body = gql(
+        &ctx,
+        r#"mutation($input: AddTitleInput!) {
+            addTitle(input: $input) {
+                title { externalIds { source value } }
+            }
+        }"#,
+        json!({
+            "input": {
+                "name": "Series Search Result",
+                "facet": "SERIES",
+                "monitored": true,
+                "tags": [],
+                "externalIds": [
+                    { "source": "smg", "value": "202" },
+                    { "source": "tmdb", "value": "2020" },
+                    { "source": "imdb", "value": "tt0202020" },
+                    { "source": "tvdb", "value": "12345" }
+                ],
+                "smgId": 202,
+                "tvdbId": "12345",
+                "tmdbId": 2020,
+                "imdbId": "tt0202020"
+            }
+        }),
+    )
+    .await;
+
+    assert_no_errors(&body);
+    assert_eq!(
+        body["data"]["addTitle"]["title"]["externalIds"],
+        json!([
+            { "source": "smg", "value": "202" },
+            { "source": "tmdb", "value": "2020" },
+            { "source": "imdb", "value": "tt0202020" },
+            { "source": "tvdb", "value": "12345" },
+        ])
+    );
+}
+
+/// The e2e harness verifies an added series by reading its imdb id back out of
+/// `titles { items { externalIds } }`. A series added with imdb + tvdb must
+/// therefore store and list both, not just the tvdb id.
+#[tokio::test]
+async fn graphql_added_series_lists_both_its_imdb_and_tvdb_ids() {
+    let ctx = TestContext::new().await;
+    let body = gql(
+        &ctx,
+        r#"mutation($input: AddTitleInput!) {
+            addTitle(input: $input) {
+                title { id externalIds { source value } }
+            }
+        }"#,
+        json!({
+            "input": {
+                "name": "Quiet Meridian",
+                "facet": "SERIES",
+                "monitored": true,
+                "tags": [],
+                "tvdbId": "770001",
+                "imdbId": "tt0770001"
+            }
+        }),
+    )
+    .await;
+    assert_no_errors(&body);
+    let title_id = body["data"]["addTitle"]["title"]["id"]
+        .as_str()
+        .expect("added series id")
+        .to_string();
+
+    let listed = gql(
+        &ctx,
+        r#"query($facet: MediaFacetValue) { titles(facet: $facet) { items { id externalIds { source value } } } }"#,
+        json!({ "facet": "SERIES" }),
+    )
+    .await;
+    assert_no_errors(&listed);
+    let item = listed["data"]["titles"]["items"]
+        .as_array()
+        .expect("titles items")
+        .iter()
+        .find(|item| item["id"] == title_id.as_str())
+        .expect("added series in titles readback")
+        .clone();
+    let mut external_ids = item["externalIds"]
+        .as_array()
+        .expect("externalIds")
+        .iter()
+        .map(|external_id| {
+            (
+                external_id["source"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+                external_id["value"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+            )
+        })
+        .collect::<Vec<_>>();
+    external_ids.sort();
+    assert_eq!(
+        external_ids,
+        vec![
+            ("imdb".to_string(), "tt0770001".to_string()),
+            ("tvdb".to_string(), "770001".to_string()),
+        ],
+        "a series keeps both its imdb and tvdb ids through the externalIds readback"
+    );
+}
+
+/// `addTitle` accepted an identity-less movie before the title-id surface
+/// existed: the title simply parks unhydrated until an identity arrives.
+/// Teaching the mutation to reject one would be a non-additive change to an
+/// operation integrations already call.
+#[tokio::test]
+async fn graphql_add_movie_without_an_identity_parks_unhydrated() {
+    let ctx = TestContext::new().await;
+    let body = gql(
+        &ctx,
+        r#"mutation($input: AddTitleInput!) {
+            addTitle(input: $input) {
+                metadataHydrationState
+                title { id name externalIds { source value } }
+            }
+        }"#,
+        json!({
+            "input": {
+                "name": "Identity-less Movie",
+                "facet": "MOVIE",
+                "monitored": true,
+                "tags": []
+            }
+        }),
+    )
+    .await;
+    assert_no_errors(&body);
+    assert_eq!(
+        body["data"]["addTitle"]["metadataHydrationState"],
+        "NOT_REQUIRED"
+    );
+    assert_eq!(
+        body["data"]["addTitle"]["title"]["name"],
+        "Identity-less Movie"
+    );
+    assert_eq!(body["data"]["addTitle"]["title"]["externalIds"], json!([]));
 }
 
 #[tokio::test]
@@ -2287,6 +2538,219 @@ async fn graphql_titles_expose_matched_size_bytes_only_for_anime_titles() {
         json!([series_movie_link.id])
     );
     assert_eq!(series_movie_file["sizeBytes"], json!(400));
+}
+
+#[tokio::test]
+async fn graphql_movie_entity_ratings_and_credits_are_read_from_local_storage() {
+    let ctx = TestContext::new().await;
+    let title = create_catalog_title(
+        &ctx,
+        "Locally Hydrated Series Movie",
+        MediaFacet::Anime,
+        vec![],
+        vec![],
+        true,
+    )
+    .await;
+    let link =
+        create_test_series_movie_link(&ctx, &title, "Cached Cast Movie", "7654304", None, None)
+            .await;
+
+    let body = gql(
+        &ctx,
+        r#"
+        query($titleId: ID!, $movieId: ID!) {
+          title(id: $titleId) {
+            seriesMovieLinks {
+              id
+              movie {
+                id
+                ratings {
+                  rating
+                  ratingSources
+                  externalRatings { source normalized votes url }
+                }
+              }
+            }
+          }
+          movieEntity(titleId: $titleId, id: $movieId) {
+            id
+            credits {
+              kind
+              personName
+              personImageUrl
+              character
+              language
+            }
+          }
+        }
+        "#,
+        json!({ "titleId": title.id, "movieId": link.movie.id }),
+    )
+    .await;
+    assert_no_errors(&body);
+
+    let listed = &body["data"]["title"]["seriesMovieLinks"][0];
+    assert_eq!(listed["id"], link.id);
+    assert_eq!(listed["movie"]["ratings"]["rating"], json!(8.7));
+    assert_eq!(listed["movie"]["ratings"]["ratingSources"], json!(["tmdb"]));
+    assert_eq!(
+        listed["movie"]["ratings"]["externalRatings"][0]["votes"],
+        json!(1_234)
+    );
+
+    let focused = &body["data"]["movieEntity"];
+    assert_eq!(focused["id"], link.movie.id);
+    assert_eq!(focused["credits"][0]["personName"], "Fixture Performer");
+    assert_eq!(focused["credits"][0]["character"], "Fixture Character");
+    let image_url = focused["credits"][0]["personImageUrl"]
+        .as_str()
+        .expect("movie credit portrait proxy URL");
+    let token = image_url
+        .strip_prefix("/images/media/")
+        .and_then(|value| value.strip_suffix("/w185"))
+        .expect("movie credit portraits should use the local media route");
+    assert!(!image_url.contains("images.example.com"));
+
+    let persisted: (Option<String>, Option<String>) =
+        sqlx::query_as("SELECT owner_type, owner_id FROM image_proxy_sources WHERE token = ?")
+            .bind(token)
+            .fetch_one(ctx.db.pool())
+            .await
+            .expect("movie portrait source should persist");
+    assert_eq!(
+        persisted,
+        (Some("movie".to_string()), Some(link.movie.id.clone()))
+    );
+
+    let mut unavailable = link.clone();
+    unavailable.movie.ratings = None;
+    unavailable.movie.credits = None;
+    let preserved = ctx
+        .shows
+        .upsert_series_movie_link(unavailable)
+        .await
+        .expect("unavailable enrichment should preserve movie metadata");
+    assert_eq!(
+        preserved
+            .movie
+            .ratings
+            .as_ref()
+            .and_then(|ratings| ratings.rating),
+        Some(8.7)
+    );
+    assert_eq!(
+        ctx.shows
+            .list_movie_entity_credits(&link.movie.id)
+            .await
+            .expect("preserved movie credits")[0]
+            .person_name,
+        "Fixture Performer"
+    );
+
+    let mut cleared = link.clone();
+    cleared.movie.ratings = Some(scryer_domain::TitleRatingSummary::default());
+    cleared.movie.credits = Some(vec![]);
+    let cleared = ctx
+        .shows
+        .upsert_series_movie_link(cleared)
+        .await
+        .expect("empty enrichment should clear movie metadata");
+    assert!(cleared.movie.ratings.is_none());
+    assert!(
+        ctx.shows
+            .list_movie_entity_credits(&link.movie.id)
+            .await
+            .expect("cleared movie credits")
+            .is_empty()
+    );
+
+    let invalid_owner = sqlx::query(
+        "INSERT INTO title_credits (
+             title_id, movie_entity_id, position, kind, person_id
+         ) VALUES (?, ?, 999, 'actor', 'invalid-owner')",
+    )
+    .bind(&title.id)
+    .bind(&link.movie.id)
+    .execute(ctx.db.pool())
+    .await;
+    assert!(
+        invalid_owner.is_err(),
+        "credit rows must have exactly one owner"
+    );
+
+    sqlx::query("DELETE FROM movie_entities WHERE id = ?")
+        .bind(&link.movie.id)
+        .execute(ctx.db.pool())
+        .await
+        .expect("delete movie entity");
+    let remaining_metadata: (i64, i64) = sqlx::query_as(
+        "SELECT
+            (SELECT COUNT(*) FROM title_metadata_rating_summaries WHERE movie_entity_id = ?),
+            (SELECT COUNT(*) FROM title_credits WHERE movie_entity_id = ?)",
+    )
+    .bind(&link.movie.id)
+    .bind(&link.movie.id)
+    .fetch_one(ctx.db.pool())
+    .await
+    .expect("count cascaded movie metadata");
+    assert_eq!(remaining_metadata, (0, 0));
+}
+
+#[tokio::test]
+async fn batch_series_movie_links_keep_shared_entity_ratings() {
+    let ctx = TestContext::new().await;
+    let first_title = create_catalog_title(
+        &ctx,
+        "First Crossover Series",
+        MediaFacet::Anime,
+        vec![],
+        vec![],
+        true,
+    )
+    .await;
+    let second_title = create_catalog_title(
+        &ctx,
+        "Second Crossover Series",
+        MediaFacet::Anime,
+        vec![],
+        vec![],
+        true,
+    )
+    .await;
+    let first_link = create_test_series_movie_link(
+        &ctx,
+        &first_title,
+        "Shared Crossover Movie",
+        "7654305",
+        None,
+        None,
+    )
+    .await;
+    let second_link = create_test_series_movie_link(
+        &ctx,
+        &second_title,
+        "Shared Crossover Movie",
+        "7654305",
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(first_link.movie.id, second_link.movie.id);
+
+    let links = ctx
+        .shows
+        .list_series_movie_links_for_titles(&[first_title.id, second_title.id])
+        .await
+        .expect("batch series movie links");
+    assert_eq!(links.len(), 2);
+    assert!(links.iter().all(|link| {
+        link.movie
+            .ratings
+            .as_ref()
+            .and_then(|ratings| ratings.rating)
+            == Some(8.7)
+    }));
 }
 
 #[tokio::test]
@@ -3374,6 +3838,7 @@ async fn graphql_wanted_items_reports_standby_count_for_the_scope_anchor() {
                 indexer_id: None,
                 release_guid: Some(format!("guid-{score}")),
                 added_at: now.to_rfc3339(),
+                last_observed_at: now.to_rfc3339(),
                 delay_until: now.to_rfc3339(),
                 status: scryer_application::PendingReleaseStatus::Standby,
                 grabbed_at: None,
@@ -3382,6 +3847,11 @@ async fn graphql_wanted_items_reports_standby_count_for_the_scope_anchor() {
                 info_hash: None,
                 seed_minimums: Default::default(),
                 seeders: None,
+                release_identity: format!("guid:test-indexer:guid-{score}"),
+                coverage_identity: format!("scope:{wanted_item_id}"),
+                role: scryer_application::PendingReleaseRole::Fallback,
+                last_decision_code: None,
+                release_age_unknown: false,
             })
             .await
             .expect("seed standby release");
@@ -3477,6 +3947,7 @@ async fn graphql_delete_title_cleans_title_workflow_state() {
         indexer_id: None,
         release_guid: Some("guid-delete".to_string()),
         added_at: "2026-03-12T00:00:00Z".to_string(),
+        last_observed_at: "2026-03-12T00:00:00Z".to_string(),
         delay_until: "2026-03-13T00:00:00Z".to_string(),
         status: scryer_application::PendingReleaseStatus::Waiting,
         grabbed_at: None,
@@ -3485,12 +3956,18 @@ async fn graphql_delete_title_cleans_title_workflow_state() {
         info_hash: None,
         seed_minimums: Default::default(),
         seeders: None,
+        release_identity: "guid:test-indexer:guid-delete".to_string(),
+        coverage_identity: "scope:wanted-delete".to_string(),
+        role: scryer_application::PendingReleaseRole::Primary,
+        last_decision_code: None,
+        release_age_unknown: false,
     })
     .await
     .expect("seed pending release");
     let workflow_store = DownloadSubmissionStore::new(ctx.db.datastore());
     workflow_store
         .record_submission(scryer_application::DownloadSubmission {
+            download_id: scryer_domain::download_identity::DownloadId::new(),
             title_id: id.clone(),
             facet: "movie".to_string(),
             download_client_id: None,
@@ -3501,6 +3978,7 @@ async fn graphql_delete_title_cleans_title_workflow_state() {
             source_provider_name: None,
             source_kind: None,
             source_title: Some("Delete With Cleanup".to_string()),
+            info_hash: None,
             release_size_bytes: None,
             request_signature: None,
             purpose: scryer_application::DownloadSubmissionPurpose::Standard,

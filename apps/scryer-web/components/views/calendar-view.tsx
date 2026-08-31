@@ -18,6 +18,10 @@ import type {
   MountInfo,
 } from "@fullcalendar/react";
 import { LibraryMultiSelect } from "@/components/common/library-multi-select";
+import {
+  WatchInMediaServerMenu,
+  type MediaServerPlaybackLink,
+} from "@/components/common/watch-in-media-server-menu";
 import { CalendarClock, Eye, EyeOff } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -51,6 +55,7 @@ export type CalendarEpisodeItem = {
   imageUrl: string | null;
   airDate: string | null;
   monitored: boolean;
+  playbackLinks: MediaServerPlaybackLink[];
   mediaAvailability: EpisodeMediaAvailability;
 };
 
@@ -297,7 +302,15 @@ function formatAirDateLabel(airDate: string | null): string | null {
   return time ? `${dateLabel} at ${time}` : dateLabel;
 }
 
-function CalendarEventHoverCard({ preview }: { preview: CalendarHoverPreview }) {
+function CalendarEventHoverCard({
+  preview,
+  onMouseEnter,
+  onMouseLeave,
+}: {
+  preview: CalendarHoverPreview;
+  onMouseEnter: () => void;
+  onMouseLeave: () => void;
+}) {
   const t = useTranslate();
   const { episode, anchor } = preview;
   const [failedImageUrl, setFailedImageUrl] = useState<string | null>(null);
@@ -333,9 +346,12 @@ function CalendarEventHoverCard({ preview }: { preview: CalendarHoverPreview }) 
 
   return createPortal(
     <aside
-      role="tooltip"
+      role="dialog"
+      aria-label={`Watch options for ${episode.titleName}`}
       className={`fc-scryer-hover-card${isMovie ? " is-movie" : " is-episode"}`}
       style={{ left, top, width }}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
     >
       <div
         className="fc-scryer-hover-card-image-wrap"
@@ -372,6 +388,11 @@ function CalendarEventHoverCard({ preview }: { preview: CalendarHoverPreview }) 
         {episode.overview ? (
           <p className="fc-scryer-hover-card-overview">{episode.overview}</p>
         ) : null}
+        <WatchInMediaServerMenu
+          links={episode.playbackLinks}
+          showLabel
+          className="mt-2"
+        />
         <div className="fc-scryer-hover-card-footer">
           {airDate ? (
             <span>
@@ -414,11 +435,25 @@ export function CalendarView({
     }
   }, []);
 
+  const scheduleHoverPreviewClose = useCallback(() => {
+    clearHoverTimer();
+    hoverTimerRef.current = window.setTimeout(() => {
+      setHoverPreview(null);
+      hoverTimerRef.current = null;
+    }, 180);
+  }, [clearHoverTimer]);
+
+  const handleHoverCardMouseEnter = useCallback(() => {
+    clearHoverTimer();
+  }, [clearHoverTimer]);
+
   useEffect(() => () => clearHoverTimer(), [clearHoverTimer]);
 
   useEffect(() => {
     if (!hoverPreview) return;
-    const closePreview = () => setHoverPreview(null);
+    const closePreview = () => {
+      setHoverPreview(null);
+    };
     window.addEventListener("resize", closePreview);
     window.addEventListener("scroll", closePreview, true);
     return () => {
@@ -523,9 +558,8 @@ export function CalendarView({
   );
 
   const handleEventMouseLeave = useCallback(() => {
-    clearHoverTimer();
-    setHoverPreview(null);
-  }, [clearHoverTimer]);
+    scheduleHoverPreviewClose();
+  }, [scheduleHoverPreviewClose]);
 
   const handleEventDidMount = useCallback((arg: MountInfo<EventDisplayInfo>) => {
     const ep = arg.event.extendedProps as CalendarEpisodeItem;
@@ -738,7 +772,13 @@ export function CalendarView({
           ) : null}
         </CardContent>
       </Card>
-      {!isMobile && hoverPreview ? <CalendarEventHoverCard preview={hoverPreview} /> : null}
+      {!isMobile && hoverPreview ? (
+        <CalendarEventHoverCard
+          preview={hoverPreview}
+          onMouseEnter={handleHoverCardMouseEnter}
+          onMouseLeave={scheduleHoverPreviewClose}
+        />
+      ) : null}
     </>
   );
 }

@@ -176,6 +176,8 @@ impl SubmissionScope {
 
 #[derive(Clone, Debug)]
 pub struct DownloadSubmission {
+    /// Canonical identity allocated immediately before this client mutation.
+    pub download_id: scryer_domain::download_identity::DownloadId,
     pub title_id: String,
     pub facet: String,
     pub download_client_id: Option<String>,
@@ -186,6 +188,15 @@ pub struct DownloadSubmission {
     pub source_provider_name: Option<String>,
     pub source_kind: Option<DownloadSourceKind>,
     pub source_title: Option<String>,
+    /// BitTorrent v1 infohash the indexer announced at grab time.
+    ///
+    /// The blocklist keys a failed torrent on its infohash rather than its
+    /// name, because content identity is the same wherever the torrent came
+    /// from. The failure path resolves that key off the submission, so the hint
+    /// has to be persisted here — `seed_info_hash` only exists when a seeding
+    /// profile applied. `None` for usenet and for rows written before the
+    /// column, which blocklist by release name instead.
+    pub info_hash: Option<String>,
     /// The size the indexer announced for this release, when it announced one.
     ///
     /// D18 scores an in-flight submission as a pseudo-incumbent, and size is a
@@ -239,28 +250,28 @@ impl PersistedSeedGoals {
     }
 }
 
-/// One torrent grab's resolution, plus the submission identity and the minimal
-/// row context needed to seed the `download_submissions` row when the goals
-/// land before the acquisition layer records the submission itself.
-#[derive(Clone, Debug, PartialEq)]
-pub struct SeedGoalGrabRecord {
-    pub client_id: Option<String>,
-    pub client_type: String,
-    pub client_item_id: String,
-    pub title_id: String,
-    pub facet: String,
-    pub purpose: DownloadSubmissionPurpose,
-    pub goals: PersistedSeedGoals,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CanonicalDownloadIdentityDisposition {
+    Requested,
+    AdoptedExisting {
+        download_id: scryer_domain::download_identity::DownloadId,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct DownloadSourceIdentity {
+pub struct ClientJobLocator {
     pub client_id: Option<String>,
     pub client_type: String,
     pub item_id: String,
 }
 
-impl DownloadSourceIdentity {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QueuedManualImport {
+    pub import_id: String,
+    pub source_identity: ClientJobLocator,
+}
+
+impl ClientJobLocator {
     pub fn new(
         client_id: Option<&str>,
         client_type: impl AsRef<str>,
@@ -275,6 +286,16 @@ impl DownloadSourceIdentity {
             client_type: client_type.as_ref().trim().to_ascii_lowercase(),
             item_id: item_id.as_ref().trim().to_string(),
         }
+    }
+
+    pub fn for_import_artifact(
+        client_id: Option<&str>,
+        client_type: impl AsRef<str>,
+        item_id: impl AsRef<str>,
+    ) -> Self {
+        let mut identity = Self::new(client_id, client_type, item_id);
+        identity.client_id = identity.client_id.map(|value| value.to_ascii_lowercase());
+        identity
     }
 
     pub fn from_submission(submission: &DownloadSubmission) -> Self {
@@ -294,14 +315,96 @@ impl DownloadSourceIdentity {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DownloadOrigin {
+    ScryerSubmission,
+    ForeignObservation,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DownloadRecord {
+    pub id: scryer_domain::download_identity::DownloadId,
+    pub origin: DownloadOrigin,
+    pub created_at: DateTime<Utc>,
+    pub first_observed_at: Option<DateTime<Utc>>,
+    pub last_observed_at: Option<DateTime<Utc>>,
+    pub terminal_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DownloadClientBindingRecord {
+    pub download_id: scryer_domain::download_identity::DownloadId,
+    pub client_config_id: Option<String>,
+    pub client_type_snapshot: Option<String>,
+    pub client_name_snapshot: Option<String>,
+    pub native_item_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub last_seen_at: Option<DateTime<Utc>>,
+    pub ended_at: Option<DateTime<Utc>>,
+}
+
+/// One finished download, read from the durable registry/submission rows rather
+/// than from a client's live list.
+///
+/// Download history was projected only from the live tracked-download snapshot,
+/// so a client that evicts finished jobs from its own list (rTorrent does)
+/// erased history entries for downloads Scryer had already imported. These rows
+/// are the persisted side of that projection: the canonical download, its
+/// terminal tracked state, and the submission columns a history row is built
+/// from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TerminalDownloadHistoryRow {
+    pub download_id: scryer_domain::download_identity::DownloadId,
+    pub origin: DownloadOrigin,
+    /// The persisted [`scryer_domain::TrackedDownloadState`] string. Only
+    /// terminal states are returned.
+    pub tracked_state: String,
+    pub tracked_reason: Option<String>,
+    pub tracked_detail: Option<String>,
+    pub title_id: Option<String>,
+    pub episode_id: Option<String>,
+    pub facet: Option<String>,
+    pub source_title: Option<String>,
+    pub client_id: Option<String>,
+    pub client_type: Option<String>,
+    pub client_name: Option<String>,
+    pub download_client_item_id: Option<String>,
+    pub source_provider_name: Option<String>,
+    pub size_bytes: Option<i64>,
+    pub submitted_at: Option<DateTime<Utc>>,
+    /// When the row last changed state; the history sort value.
+    pub last_state_at: Option<DateTime<Utc>>,
+}
+
+/// One observed client job, keyed by the configured-client/native-item locator.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ObservedClientJob {
+    pub locator: ClientJobLocator,
+    pub wire_token: Option<String>,
+    pub observed_name: Option<String>,
+    pub observed_at: DateTime<Utc>,
+}
+
+/// Canonical identity selected for an observed client job.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ObservationResolution {
+    Resolved {
+        download_id: scryer_domain::download_identity::DownloadId,
+        newly_foreign: bool,
+        attached: bool,
+    },
+    Conflict {
+        token_id: scryer_domain::download_identity::DownloadId,
+        binding_download_id: scryer_domain::download_identity::DownloadId,
+    },
+}
+
 #[derive(Clone, Debug)]
 pub struct SuccessfulGrabCommit {
     pub wanted_item_id: String,
     pub covered_wanted_item_ids: Vec<String>,
     pub grabbed_release: String,
     pub last_search_at: Option<String>,
-    pub download_submission: DownloadSubmission,
-    pub download_submission_identity: Option<DownloadSubmissionIdentity>,
     pub grabbed_pending_release_id: Option<String>,
     pub grabbed_at: Option<String>,
 }
@@ -328,8 +431,8 @@ pub struct ImportArtifact {
 }
 
 impl ImportArtifact {
-    pub fn source_identity(&self) -> DownloadSourceIdentity {
-        DownloadSourceIdentity::new(
+    pub fn source_identity(&self) -> ClientJobLocator {
+        ClientJobLocator::for_import_artifact(
             self.source_client_id.as_deref(),
             &self.source_system,
             &self.source_ref,
@@ -894,6 +997,18 @@ pub struct InsertMediaFileInput {
     pub release_hash: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MediaFileCatalogDisposition {
+    Created,
+    Reused,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClaimedMediaFile {
+    pub media_file_id: String,
+    pub disposition: MediaFileCatalogDisposition,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct TitleHistoryFilter {
     pub event_types: Option<Vec<TitleHistoryEventType>>,
@@ -943,15 +1058,21 @@ pub struct StorageRootUsage {
     pub total_bytes: Option<i64>,
 }
 
+/// A release to block for a title.
+///
+/// `release_name` is required: acquisition's title guard means a grabbed
+/// release always had a name that resolved to its title, so a caller that
+/// cannot name the release has nothing to block.
 #[derive(Clone, Debug)]
 pub struct NewBlocklistEntry {
     pub title_id: String,
-    pub source_title: Option<String>,
-    pub source_hint: Option<String>,
-    pub quality: Option<String>,
-    pub download_id: Option<String>,
+    pub release_name: String,
+    /// The indexer the release failed on. Empty blocks it on every indexer --
+    /// correct when the caller has no stable indexer identity to record.
+    pub indexer_id: String,
+    /// The torrent's infohash when known; keys the block indexer-independently.
+    pub info_hash: Option<String>,
     pub reason: Option<String>,
-    pub data: std::collections::HashMap<String, serde_json::Value>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -985,7 +1106,8 @@ pub struct DownloadClientAddRequest {
     /// against this; `None` means the owner facet is the search facet.
     pub search_facet: Option<MediaFacet>,
     pub purpose: DownloadSubmissionPurpose,
-    pub download_id: Option<String>,
+    /// Canonical identity allocated before submitting this concrete mutation.
+    pub download_id: Option<scryer_domain::download_identity::DownloadId>,
     pub source_hint: Option<String>,
     pub staged_nzb: Option<StagedNzbRef>,
     pub resolved_download_artifact: Option<ResolvedDownloadArtifact>,
@@ -1125,4 +1247,87 @@ pub struct IndexerDownloadClientProviderCompatibility {
     pub protocol_families: Vec<String>,
     pub supports_mapping: bool,
     pub compatible_client_ids: Vec<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{fs, path::Path};
+
+    use super::ClientJobLocator;
+
+    #[test]
+    fn client_job_locator_new_normalizes_locator_values() {
+        let client_config_id = Some("  config-1  ");
+        let client_type = "  SABnzbd  ";
+        let native_item_id = "  nzo-123  ";
+
+        let locator = ClientJobLocator::new(client_config_id, client_type, native_item_id);
+        assert_eq!(locator.client_id.as_deref(), Some("config-1"));
+        assert_eq!(locator.client_type, "sabnzbd");
+        assert_eq!(locator.item_id, "nzo-123");
+
+        assert_eq!(
+            ClientJobLocator::new(Some("  \t "), " NZBGet ", " 10010 ").client_id,
+            None
+        );
+    }
+
+    #[test]
+    fn canonical_download_identity_source_guard() {
+        // Keep all forbidden patterns here; add future retired identity machinery to this list.
+        let forbidden = [
+            (
+                "global identity-state key selection",
+                "download_identity_state_",
+                "is_global",
+            ),
+            ("retired source identity type", "Download", "SourceIdentity"),
+            (
+                "tuple submission conflict target",
+                "ON CONFLICT(",
+                "download_client_id",
+            ),
+        ];
+        let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("application crate lives below the workspace root");
+        let mut files = fs::read_dir(workspace_root.join("crates"))
+            .expect("crates directory should be readable")
+            .map(|entry| {
+                entry
+                    .expect("crate directory entry should be readable")
+                    .path()
+                    .join("src")
+            })
+            .filter(|path| path.is_dir())
+            .collect::<Vec<_>>();
+        while let Some(path) = files.pop() {
+            for entry in fs::read_dir(&path).expect("source tree should be readable") {
+                let entry = entry.expect("source tree entry should be readable");
+                let path = entry.path();
+                if path.is_dir() {
+                    files.push(path);
+                    continue;
+                }
+                if path.extension().is_none_or(|extension| extension != "rs")
+                    || path.file_name().is_some_and(|name| name == "migrations.rs")
+                    || path
+                        .components()
+                        .any(|component| component.as_os_str() == "migrations")
+                {
+                    continue;
+                }
+                let source = fs::read_to_string(&path).expect("Rust source should be readable");
+                for (description, first, second) in forbidden {
+                    let pattern = format!("{first}{second}");
+                    assert!(
+                        !source.contains(&pattern),
+                        "{description} reappeared in {}",
+                        path.display()
+                    );
+                }
+            }
+        }
+    }
 }

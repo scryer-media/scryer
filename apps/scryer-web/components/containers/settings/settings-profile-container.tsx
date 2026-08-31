@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useMemo, useRef, type FormEvent } fro
 import { useClient } from "urql";
 import { notifyExternalAccountInviteSourcesChanged } from "@/components/containers/settings/external-account-invites-container";
 import { sanitizeTotpCode } from "@/components/auth/totp-code-form";
+import { ApiKeysPanel } from "@/components/containers/settings/api-keys-panel";
 import { SettingsProfileSection } from "@/components/views/settings/settings-profile-section";
 import {
   deleteMyPasskeyMutation,
@@ -968,6 +969,7 @@ export function SettingsProfileContainer({ userId, username }: Props) {
   }, [client, linkAccountDraft.connectionId, linkingProvider, loadLinkedAccounts, setGlobalStatus, t]);
 
   return (
+    <>
     <SettingsProfileSection
       username={username}
       highlightColor={uiSettings.highlightColor}
@@ -1039,5 +1041,7 @@ export function SettingsProfileContainer({ userId, username }: Props) {
       onSubmitPlexLink={handleSubmitPlexLink}
       onUnlinkExternalAccount={handleUnlinkExternalAccount}
     />
+    <ApiKeysPanel />
+    </>
   );
 }

@@ -19,7 +19,7 @@ use scryer_domain::{
 };
 use scryer_outbound_http::{
     DestinationKey, HostKey, OutboundHttpClient, OutboundHttpError, RateLimitRegistry,
-    RequestPolicy, generic_reqwest_client,
+    RequestPolicy, indexer_reqwest_client,
 };
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
@@ -278,7 +278,7 @@ impl DirectNabCapsSnapshotRefresher {
     pub fn new() -> Self {
         Self {
             outbound_http: OutboundHttpClient::new(
-                generic_reqwest_client(),
+                indexer_reqwest_client(),
                 RateLimitRegistry::new(),
             ),
             upstream_scheduler: Arc::new(NullUpstreamScheduler),
@@ -308,7 +308,7 @@ impl IndexerCapsSnapshotRefresher for DirectNabCapsSnapshotRefresher {
         }
 
         let direct_config = DirectNabConfig::from_indexer_config(config)?;
-        let (host_key, destination_key) = scheduler_keys_for_caps(&direct_config.base_url);
+        let (host_key, destination_key) = scheduler_keys_for_caps(&direct_config.base_url, config);
         let candidate_id = SchedulerCandidateId::new();
         let scheduler_decision = self
             .upstream_scheduler
@@ -371,7 +371,8 @@ impl IndexerCapsSnapshotRefresher for DirectNabCapsSnapshotRefresher {
                     ),
                 )
                 .with_max_retries(2)
-                .with_backoff(Duration::from_secs(1), Duration::from_secs(15)),
+                .with_backoff(Duration::from_secs(1), Duration::from_secs(15))
+                .with_destination_cooldown_key(destination_key.clone()),
                 || {
                     self.outbound_http
                         .client()
@@ -455,13 +456,10 @@ impl IndexerCapsSnapshotRefresher for DirectNabCapsSnapshotRefresher {
     }
 }
 
-fn scheduler_keys_for_caps(base_url: &str) -> (HostKey, DestinationKey) {
-    reqwest::Url::parse(base_url)
+fn scheduler_keys_for_caps(base_url: &str, config: &IndexerConfig) -> (HostKey, DestinationKey) {
+    let host_key = reqwest::Url::parse(base_url)
         .ok()
-        .and_then(|url| {
-            let host = url.host_str()?;
-            Some((HostKey::from(host), DestinationKey::from(host)))
-        })
+        .and_then(|url| url.host_str().map(HostKey::from))
         .unwrap_or_else(|| {
             let fallback = base_url.trim().trim_end_matches('/').trim().to_string();
             let fallback = if fallback.is_empty() {
@@ -469,11 +467,12 @@ fn scheduler_keys_for_caps(base_url: &str) -> (HostKey, DestinationKey) {
             } else {
                 fallback
             };
-            (
-                HostKey::from(fallback.clone()),
-                DestinationKey::from(fallback),
-            )
-        })
+            HostKey::from(fallback)
+        });
+    (
+        host_key,
+        DestinationKey::from(config.rate_limit_domain_key()),
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -523,37 +522,37 @@ pub fn parse_caps_snapshot_xml(body: &[u8]) -> AppResult<IndexerCapsSnapshot> {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(element)) | Ok(Event::Empty(element)) => {
                 match element.name().as_ref() {
-                    b"server" => {
-                        snapshot.server_title = attr_value(&element, b"title")?;
+                    "server" => {
+                        snapshot.server_title = attr_value(&element, "title")?;
                     }
-                    b"limits" => {
-                        snapshot.limits_default = attr_i64(&element, b"default")?;
-                        snapshot.limits_max = attr_i64(&element, b"max")?;
+                    "limits" => {
+                        snapshot.limits_default = attr_i64(&element, "default")?;
+                        snapshot.limits_max = attr_i64(&element, "max")?;
                     }
-                    b"search" => {
+                    "search" => {
                         snapshot.search = Some(parse_caps_node(&element)?);
                     }
-                    b"tv-search" => {
+                    "tv-search" => {
                         snapshot.tv_search = Some(parse_caps_node(&element)?);
                     }
-                    b"movie-search" => {
+                    "movie-search" => {
                         snapshot.movie_search = Some(parse_caps_node(&element)?);
                     }
-                    b"music-search" => {
+                    "music-search" => {
                         snapshot.music_search = Some(parse_caps_node(&element)?);
                     }
-                    b"audio-search" => {
+                    "audio-search" => {
                         snapshot.audio_search = Some(parse_caps_node(&element)?);
                     }
-                    b"book-search" => {
+                    "book-search" => {
                         snapshot.book_search = Some(parse_caps_node(&element)?);
                     }
-                    b"category" | b"subcat" => {
-                        if let Some(id) = attr_value(&element, b"id")?
+                    "category" | "subcat" => {
+                        if let Some(id) = attr_value(&element, "id")?
                             .map(|value| value.trim().to_string())
                             .filter(|value| !value.is_empty())
                         {
-                            let label = attr_value(&element, b"name")?
+                            let label = attr_value(&element, "name")?
                                 .map(|value| value.trim().to_string())
                                 .filter(|value| !value.is_empty());
                             categories
@@ -599,22 +598,22 @@ pub fn parse_caps_snapshot_xml(body: &[u8]) -> AppResult<IndexerCapsSnapshot> {
 
 fn parse_caps_node(element: &BytesStart<'_>) -> AppResult<IndexerCapsSearchNode> {
     Ok(IndexerCapsSearchNode {
-        available: attr_value(element, b"available")?
+        available: attr_value(element, "available")?
             .is_some_and(|value| value.eq_ignore_ascii_case("yes")),
-        supported_params: attr_value(element, b"supportedParams")?
+        supported_params: attr_value(element, "supportedParams")?
             .unwrap_or_default()
             .split(',')
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(|value| value.to_ascii_lowercase())
             .collect(),
-        search_engine: attr_value(element, b"searchEngine")?
+        search_engine: attr_value(element, "searchEngine")?
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty()),
     })
 }
 
-fn attr_value(element: &BytesStart<'_>, key: &[u8]) -> AppResult<Option<String>> {
+fn attr_value(element: &BytesStart<'_>, key: &str) -> AppResult<Option<String>> {
     for attribute in element.attributes().with_checks(false) {
         let attribute = attribute.map_err(|error| {
             AppError::Repository(format!(
@@ -622,19 +621,14 @@ fn attr_value(element: &BytesStart<'_>, key: &[u8]) -> AppResult<Option<String>>
             ))
         })?;
         if attribute.key.as_ref() == key {
-            let value = std::str::from_utf8(attribute.value.as_ref()).map_err(|error| {
-                AppError::Repository(format!(
-                    "indexer returned non-UTF8 caps attribute values: {error}"
-                ))
-            })?;
-            return Ok(Some(value.to_string()));
+            return Ok(Some(attribute.value.into_owned()));
         }
     }
 
     Ok(None)
 }
 
-fn attr_i64(element: &BytesStart<'_>, key: &[u8]) -> AppResult<Option<i64>> {
+fn attr_i64(element: &BytesStart<'_>, key: &str) -> AppResult<Option<i64>> {
     attr_value(element, key)?.map_or(Ok(None), |value| {
         value.trim().parse::<i64>().map(Some).map_err(|error| {
             AppError::Repository(format!(

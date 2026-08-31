@@ -6,7 +6,7 @@ import {
   shouldRetryStaleViteImport,
 } from "@/lib/utils/vite-import-recovery";
 
-const logoUrl = `${import.meta.env.BASE_URL}logo.webp`;
+const logoUrl = `${import.meta.env.BASE_URL}scryer-logo.svg`;
 const VITE_IMPORT_RECOVERY_STORAGE_KEY = "scryer:vite-import-recovery";
 const VITE_IMPORT_RECOVERY_DELAY_MS = 500;
 

@@ -1126,7 +1126,7 @@ export function TitleTableEmptyState({
   colSpan: number;
 } & TitleCollectionEmptyStateProps) {
   return (
-    <TableRow>
+    <TableRow data-ui="title-table-empty-row">
       <TableCell colSpan={colSpan} className="py-8">
         <TitleCollectionEmptyState {...emptyStateProps} />
       </TableCell>

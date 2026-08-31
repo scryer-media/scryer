@@ -113,8 +113,9 @@ pub struct SetTitleRequiredAudioInput {
     pub title_id: ID,
     /// The facet of the title: "movie", "series", or "anime"
     pub facet: MediaFacetValue,
-    /// `null` removes the override and inherits from the facet.
+    /// `null` removes the override and inherits from the library or facet.
     /// `[]` stores an explicit "no required languages" override for the title.
+    /// Use `original` to resolve the title's original language dynamically.
     pub languages: Option<Vec<String>>,
 }
 

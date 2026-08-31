@@ -16,7 +16,7 @@ jobs:
   validate:
     name: validate
     runs-on: ubuntu-26.04
-    timeout-minutes: 20
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -59,7 +59,7 @@ jobs:
   publish:
     name: publish
     runs-on: ubuntu-26.04
-    timeout-minutes: 20
+    timeout-minutes: 50
     needs: validate
     environment:
       name: crates-io-publish

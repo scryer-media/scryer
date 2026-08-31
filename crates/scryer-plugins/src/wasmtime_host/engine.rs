@@ -231,10 +231,13 @@ fn archive_engine_config() -> Config {
     config.epoch_interruption(true);
     config.wasm_simd(true);
     config.wasm_relaxed_simd(true);
-    config.wasm_threads(false);
-    // Pin the safety-relevant posture to wasmtime 46's current defaults so a
-    // future bump cannot silently weaken it. This is a sync engine (no async
-    // path), so there is no async-stack coupling to worry about.
+    // Components use Wasmtime's cooperative async path for guest-directed
+    // outbound HTTP fanout. This does not enable Wasm threads.
+    config.wasm_component_model(true);
+    config.wasm_component_model_async(true);
+    // Pin the safety-relevant posture to Wasmtime's current defaults so a
+    // future bump cannot silently weaken it. Component guest async work uses
+    // Wasmtime's cooperative scheduler; it does not enable guest threads.
     config.max_wasm_stack(512 * 1024); // 512 KiB wasm stack bound (wasmtime default).
     config.guard_before_linear_memory(true); // OOB guard page before linear memory.
     config.native_unwind_info(true); // Keep native unwind info for trap/backtrace fidelity.

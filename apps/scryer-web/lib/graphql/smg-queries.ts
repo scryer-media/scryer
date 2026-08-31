@@ -5,6 +5,9 @@ import type { TitleExternalRating } from "@/lib/utils/title-ratings";
 
 export type MetadataTvdbSearchItem = {
   tvdbId: string;
+  smgId?: number | null;
+  tmdbId?: number | null;
+  primarySource?: string | null;
   name: string;
   imdbId: string | null;
   externalIds?: Array<{ source: string; value: string }>;

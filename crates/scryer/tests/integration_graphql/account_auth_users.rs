@@ -30,6 +30,27 @@ async fn wait_for_interactive_job(
     .expect("interactive job should complete")
 }
 
+async fn api_key_management_schema_exec(
+    ctx: &TestContext,
+    actor: &User,
+    mfa_step_up_verified_until: Option<i64>,
+    query: &str,
+) -> Value {
+    let response = ctx
+        .schema
+        .execute(
+            async_graphql::Request::new(query)
+                .data(actor.clone())
+                .data(scryer_interface::context::ApiKeyManagementSession)
+                .data(scryer_interface::context::MfaVerification {
+                    step_up_verified_until: mfa_step_up_verified_until,
+                    ..Default::default()
+                }),
+        )
+        .await;
+    serde_json::to_value(response).expect("serialize GraphQL response")
+}
+
 struct PlexPersistenceVerifier;
 
 #[async_trait::async_trait]
@@ -1310,6 +1331,43 @@ async fn graphql_config_step_up_token_satisfies_protected_settings_mutation() {
 }
 
 #[tokio::test]
+async fn graphql_api_key_creation_requires_step_up_only_for_enrolled_totp() {
+    let ctx = TestContext::new().await;
+    let (mut admin, _token, _totp_code) =
+        enable_form_login_with_config_step_up(&ctx, "admin", "admin-pass1").await;
+    admin.authorization.actor_capabilities = scryer_domain::ActorCapabilityMask::MANAGE_OWN_ACCOUNT;
+    ctx.settings_store
+        .upsert_setting_value(
+            "system",
+            "auth.mfa.require_config_step_up",
+            None,
+            "false",
+            "test",
+            None,
+        )
+        .await
+        .expect("disable configuration step-up");
+
+    let create = r#"
+        mutation { createMyApiKey(input: { label: "integration" }) { apiKey key { id label } } }
+    "#;
+    let blocked = api_key_management_schema_exec(&ctx, &admin, None, create).await;
+    let (_, code) = first_graphql_error_message_and_code(&blocked);
+    assert_eq!(code, "MFA_STEP_UP_REQUIRED");
+
+    assert_no_errors(&api_key_management_schema_exec(&ctx, &admin, Some(i64::MAX), create).await);
+
+    let no_factor_ctx = TestContext::new().await;
+    let mut actor = no_factor_ctx
+        .app
+        .find_or_create_default_user()
+        .await
+        .expect("default user");
+    actor.authorization.actor_capabilities = scryer_domain::ActorCapabilityMask::MANAGE_OWN_ACCOUNT;
+    assert_no_errors(&api_key_management_schema_exec(&no_factor_ctx, &actor, None, create).await);
+}
+
+#[tokio::test]
 async fn graphql_set_own_password_does_not_require_config_step_up() {
     let ctx = TestContext::new().await;
     let (admin, token, _totp_code) =
@@ -1700,6 +1758,7 @@ async fn graphql_external_account_invites_expose_last_login() {
             provider: MediaServerProvider::Jellyfin,
             display_name: "Main Jellyfin".to_string(),
             base_url: ctx.smg_server.uri(),
+            external_url: None,
             enabled: true,
             login_enabled: true,
             linking_enabled: false,
@@ -2899,6 +2958,7 @@ async fn graphql_jellyfin_login_requires_mfa_enrollment_when_enabled() {
             provider: MediaServerProvider::Jellyfin,
             display_name: "Main Jellyfin".to_string(),
             base_url: ctx.smg_server.uri(),
+            external_url: None,
             enabled: true,
             login_enabled: true,
             linking_enabled: false,
@@ -3107,6 +3167,7 @@ async fn graphql_plex_login_omitted_and_explicit_session_persistence() {
             provider: MediaServerProvider::Plex,
             display_name: "Plex persistence".to_string(),
             base_url: "https://plex.invalid".to_string(),
+            external_url: None,
             enabled: true,
             login_enabled: true,
             linking_enabled: false,
@@ -3173,6 +3234,7 @@ async fn graphql_emby_login_omitted_and_explicit_session_persistence() {
             provider: MediaServerProvider::Emby,
             display_name: "Emby persistence".to_string(),
             base_url: ctx.smg_server.uri(),
+            external_url: None,
             enabled: true,
             login_enabled: true,
             linking_enabled: false,
@@ -3296,6 +3358,7 @@ async fn graphql_jellyfin_pending_invite_for_existing_user_starts_mfa_enrollment
             provider: MediaServerProvider::Jellyfin,
             display_name: "Jellyfin Invite MFA".to_string(),
             base_url: ctx.smg_server.uri(),
+            external_url: None,
             enabled: true,
             login_enabled: true,
             linking_enabled: false,

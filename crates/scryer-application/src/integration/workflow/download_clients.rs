@@ -146,7 +146,7 @@ impl AppUseCase {
             return Ok(None);
         }
 
-        let identity = DownloadSourceIdentity::new(
+        let identity = ClientJobLocator::new(
             Some(client_id),
             client_type,
             download_client_item_id,

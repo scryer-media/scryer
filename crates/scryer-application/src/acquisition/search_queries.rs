@@ -148,7 +148,7 @@ pub(crate) fn build_movie_search_queries(
     }
     let mut seen = std::collections::HashSet::new();
     queries.retain(|query| seen.insert(query.to_ascii_lowercase()));
-    if queries.is_empty() && imdb_id.is_some() {
+    if queries.is_empty() && (imdb_id.is_some() || tmdb_id.is_some()) {
         queries.push(String::new());
     }
     SearchQueryResult {

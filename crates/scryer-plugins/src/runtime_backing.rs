@@ -69,6 +69,8 @@ pub(crate) enum PluginRuntimeBacking {
     WasmtimeSubtitleSync,
     /// Versioned native command ABI for all descriptor families.
     WasmtimeCommand,
+    /// Versioned WASI Preview 2 component ABI for indexer plugins.
+    WasmtimeIndexerComponent,
 }
 
 impl PluginRuntimeBacking {
@@ -97,6 +99,16 @@ impl PluginRuntimeBacking {
 
     /// Select a runtime from the artifact marker before descriptor heuristics.
     pub(crate) fn for_artifact(descriptor: &PluginDescriptor, wasm: &[u8]) -> Result<Self, String> {
+        if crate::wasmtime_host::component_host::is_indexer_component(wasm)? {
+            return match descriptor.provider {
+                scryer_plugin_sdk::ProviderDescriptor::Indexer(_) => {
+                    Ok(Self::WasmtimeIndexerComponent)
+                }
+                _ => {
+                    Err("WASI component artifacts are currently supported only for indexers".into())
+                }
+            };
+        }
         if command_abi::command_abi_version(wasm)?.is_some() {
             return Ok(Self::WasmtimeCommand);
         }

@@ -1,5 +1,54 @@
 use super::*;
 
+async fn verify_import(
+    app: &AppUseCase,
+    td: &TrackedDownload,
+    files_imported_this_pass: usize,
+) -> bool {
+    super::verify_import(app, td, files_imported_this_pass)
+        .await
+        .expect("verification")
+}
+
+async fn verify_manual_import(
+    app: &AppUseCase,
+    td: &TrackedDownload,
+    files_imported_this_pass: usize,
+    expected_mapping_count: Option<usize>,
+) -> bool {
+    super::verify_manual_import(app, td, files_imported_this_pass, expected_mapping_count)
+        .await
+        .expect("verification")
+}
+
+async fn verify_import_inner(
+    app: &AppUseCase,
+    td: &TrackedDownload,
+    files_imported_this_pass: usize,
+    completed: Option<&CompletedDownload>,
+) -> bool {
+    super::verify_import_inner(app, td, files_imported_this_pass, completed)
+        .await
+        .expect("verification")
+}
+
+async fn verify_import_with_release_evidence(
+    app: &AppUseCase,
+    td: &TrackedDownload,
+    files_imported_this_pass: usize,
+    release_evidence: &crate::import_workflow::ReleaseEvidence,
+) -> bool {
+    super::verify_import_inner_with_release_evidence(
+        app,
+        td,
+        files_imported_this_pass,
+        None,
+        Some(release_evidence),
+    )
+    .await
+    .expect("verification")
+}
+
 #[tokio::test]
 async fn visible_file_count_reuses_resolved_completed_download() {
     let temp_dir = tempfile::tempdir().expect("temp dir");
@@ -50,6 +99,33 @@ async fn verify_import_terminalizes_movie_after_one_successful_file() {
 }
 
 #[tokio::test]
+async fn verify_import_uses_completed_identity_alias_with_normalized_client_fields() {
+    let title = build_title("title-1", "Paper Lantern", MediaFacet::Movie);
+    let mut artifact = build_artifact(
+        " history-item ",
+        "movie-file",
+        "Paper.Lantern.2012.1080p.mkv",
+    );
+    artifact.source_client_id = Some(" Client-A ".to_string());
+    artifact.source_system = " NZBGET ".to_string();
+    let app = build_app(vec![title], vec![], vec![], vec![artifact]);
+
+    let mut td = build_tracked_download("title-1", "movie", "Paper.Lantern.2012.1080p");
+    td.client_id = "client-a".to_string();
+    td.client_type = "nzbget".to_string();
+    td.client_item.download_client_item_id = "queue-item".to_string();
+    let mut completed = build_completed_download(
+        "Paper.Lantern.2012.1080p",
+        "/downloads/Paper.Lantern.2012.1080p",
+        Some("movie"),
+    );
+    completed.client_id = "CLIENT-A".to_string();
+    completed.download_client_item_id = "history-item".to_string();
+
+    assert!(verify_import_inner(&app, &td, 1, Some(&completed)).await);
+}
+
+#[tokio::test]
 async fn verify_manual_import_keeps_partial_unresolved_series_blocked() {
     let title = build_title("title-1", "Unparsed Series", MediaFacet::Series);
     let artifacts = vec![build_artifact("dl-1", "file-1", "Part.One.mkv")];
@@ -94,6 +170,155 @@ async fn verify_manual_import_terminalizes_complete_series_movie_source() {
 }
 
 #[tokio::test]
+async fn verify_import_terminalizes_when_every_artifact_source_is_intentionally_ignored() {
+    let title = build_title("title-1", "Show", MediaFacet::Series);
+    let collection = build_collection("season-1", "title-1", "1");
+    let mut episode = build_episode("ep-1", "title-1", "season-1", "1", "1", None);
+    episode.monitored = false;
+    let artifacts = vec![build_artifact_with_result(
+        "dl-1",
+        Some("ep-1"),
+        "Show.S01E01.mkv",
+        "ignored",
+    )];
+    let app = build_app(vec![title], vec![collection], vec![episode], artifacts);
+    let td = build_tracked_download("title-1", "series", "Show.S01E01.1080p.WEB-DL");
+
+    assert!(verify_import(&app, &td, 0).await);
+}
+
+#[tokio::test]
+async fn verify_import_does_not_terminalize_an_ignored_but_monitored_episode() {
+    let title = build_title("title-1", "Show", MediaFacet::Series);
+    let collection = build_collection("season-1", "title-1", "1");
+    let episode = build_episode("ep-1", "title-1", "season-1", "1", "1", None);
+    let artifacts = vec![build_artifact_with_result(
+        "dl-1",
+        Some("ep-1"),
+        "Show.S01E01.mkv",
+        "ignored",
+    )];
+    let app = build_app(vec![title], vec![collection], vec![episode], artifacts);
+    let td = build_tracked_download("title-1", "series", "Show.S01E01.1080p.WEB-DL");
+
+    assert!(!verify_import(&app, &td, 0).await);
+}
+
+#[tokio::test]
+async fn verify_manual_import_does_not_terminalize_all_ignored_artifacts() {
+    let title = build_title("title-1", "Show", MediaFacet::Series);
+    let collection = build_collection("season-1", "title-1", "1");
+    let episode = build_episode("ep-1", "title-1", "season-1", "1", "1", None);
+    let artifacts = vec![build_artifact_with_result(
+        "dl-1",
+        Some("ep-1"),
+        "Show.S01E01.mkv",
+        "ignored",
+    )];
+    let app = build_app(vec![title], vec![collection], vec![episode], artifacts);
+    let td = build_tracked_download("title-1", "series", "Show.S01E01.1080p.WEB-DL");
+
+    assert!(!verify_manual_import(&app, &td, 0, Some(1)).await);
+}
+
+#[tokio::test]
+async fn verify_import_does_not_terminalize_ignored_artifacts_for_a_stale_title() {
+    let title = build_title("title-2", "Replacement Show", MediaFacet::Series);
+    let collection = build_collection("season-1", "title-2", "1");
+    let episode = build_episode("ep-2", "title-2", "season-1", "1", "1", None);
+    let artifacts = vec![build_artifact_with_result(
+        "dl-1",
+        Some("ep-1"),
+        "Show.S01E01.mkv",
+        "ignored",
+    )];
+    let app = build_app(vec![title], vec![collection], vec![episode], artifacts);
+    let td = build_tracked_download("title-2", "series", "Replacement.Show.S01E01.1080p.WEB-DL");
+
+    assert!(!verify_import(&app, &td, 0).await);
+}
+
+#[tokio::test]
+async fn verify_manual_import_does_not_credit_an_ignored_source_as_successful_coverage() {
+    let title = build_title("title-1", "Show", MediaFacet::Series);
+    let collection = build_collection("season-1", "title-1", "1");
+    let episodes = vec![
+        build_episode("ep-1", "title-1", "season-1", "1", "1", None),
+        build_episode("ep-2", "title-1", "season-1", "1", "2", None),
+    ];
+    let artifacts = vec![
+        build_artifact("dl-1", "ep-1", "Show.S01E01.mkv"),
+        build_artifact_with_result("dl-1", Some("ep-2"), "Show.S01E02.mkv", "ignored"),
+    ];
+    let app = build_app(vec![title], vec![collection], episodes, artifacts);
+    let td = build_tracked_download("title-1", "series", "Show.S01.Complete.1080p.WEB-DL");
+
+    assert!(!verify_manual_import(&app, &td, 1, Some(2)).await);
+}
+
+#[tokio::test]
+async fn verify_import_excludes_only_currently_unmonitored_ignored_episodes_from_wanted_coverage() {
+    let title = build_title("title-1", "Show", MediaFacet::Series);
+    let collection = build_collection("season-1", "title-1", "1");
+    let imported_episode = build_episode("ep-1", "title-1", "season-1", "1", "1", None);
+    let mut ignored_episode = build_episode("ep-2", "title-1", "season-1", "1", "2", None);
+    ignored_episode.monitored = false;
+    let artifacts = vec![
+        build_artifact("dl-1", "ep-1", "Show.S01E01.mkv"),
+        build_artifact_with_result("dl-1", Some("ep-2"), "Show.S01E02.mkv", "ignored"),
+    ];
+    let app = build_app(
+        vec![title],
+        vec![collection],
+        vec![imported_episode, ignored_episode],
+        artifacts,
+    );
+    let td = build_tracked_download("title-1", "series", "Show.S01.Complete.1080p.WEB-DL");
+    let evidence = crate::import_workflow::ReleaseEvidence::ScryerSubmission {
+        title_id: "title-1".to_string(),
+        facet: "series".to_string(),
+        source_title: Some("Show.S01.Complete.1080p.WEB-DL".to_string()),
+        observed_release_name: None,
+        release_size_bytes: None,
+        purpose: crate::DownloadSubmissionPurpose::Standard,
+        scope: crate::SubmissionScope::EpisodeSet {
+            episode_ids: vec!["ep-1".to_string(), "ep-2".to_string()],
+        },
+    };
+
+    assert!(verify_import_with_release_evidence(&app, &td, 1, &evidence).await);
+}
+
+#[tokio::test]
+async fn verify_import_keeps_monitored_ignored_episode_in_wanted_coverage() {
+    let title = build_title("title-1", "Show", MediaFacet::Series);
+    let collection = build_collection("season-1", "title-1", "1");
+    let episodes = vec![
+        build_episode("ep-1", "title-1", "season-1", "1", "1", None),
+        build_episode("ep-2", "title-1", "season-1", "1", "2", None),
+    ];
+    let artifacts = vec![
+        build_artifact("dl-1", "ep-1", "Show.S01E01.mkv"),
+        build_artifact_with_result("dl-1", Some("ep-2"), "Show.S01E02.mkv", "ignored"),
+    ];
+    let app = build_app(vec![title], vec![collection], episodes, artifacts);
+    let td = build_tracked_download("title-1", "series", "Show.S01.Complete.1080p.WEB-DL");
+    let evidence = crate::import_workflow::ReleaseEvidence::ScryerSubmission {
+        title_id: "title-1".to_string(),
+        facet: "series".to_string(),
+        source_title: Some("Show.S01.Complete.1080p.WEB-DL".to_string()),
+        observed_release_name: None,
+        release_size_bytes: None,
+        purpose: crate::DownloadSubmissionPurpose::Standard,
+        scope: crate::SubmissionScope::EpisodeSet {
+            episode_ids: vec!["ep-1".to_string(), "ep-2".to_string()],
+        },
+    };
+
+    assert!(!verify_import_with_release_evidence(&app, &td, 1, &evidence).await);
+}
+
+#[tokio::test]
 async fn verify_import_requires_full_season_pack_coverage() {
     let title = build_title("title-1", "Lantern Watch Legacy", MediaFacet::Series);
     let collection = build_collection("season-2", "title-1", "2");
@@ -103,8 +328,8 @@ async fn verify_import_requires_full_season_pack_coverage() {
         build_episode("ep-203", "title-1", "season-2", "2", "3", None),
     ];
     let artifacts = vec![
-        build_artifact("dl-1", "ep-201", "S02E01.mkv"),
-        build_artifact("dl-1", "ep-202", "S02E02.mkv"),
+        build_artifact("dl-1", "ep-201", "Lantern.Watch.Legacy.S02E01.mkv"),
+        build_artifact("dl-1", "ep-202", "Lantern.Watch.Legacy.S02E02.mkv"),
     ];
     let app = build_app(vec![title], vec![collection], episodes, artifacts);
     let td = build_tracked_download(
@@ -152,8 +377,8 @@ async fn verify_import_accepts_resolved_season_pack_when_visible_source_units_ar
         build_episode("ep-203", "title-1", "season-2", "2", "3", None),
     ];
     let artifacts = vec![
-        build_artifact("dl-1", "ep-201", "S02E01.mkv"),
-        build_artifact("dl-1", "ep-202", "S02E02.mkv"),
+        build_artifact("dl-1", "ep-201", "Lantern.Watch.Legacy.S02E01.mkv"),
+        build_artifact("dl-1", "ep-202", "Lantern.Watch.Legacy.S02E02.mkv"),
     ];
     let app = build_app(vec![title], vec![collection], episodes, artifacts);
     let td = build_tracked_download(
@@ -168,6 +393,18 @@ async fn verify_import_accepts_resolved_season_pack_when_visible_source_units_ar
     );
 
     assert!(!verify_import(&app, &td, 0).await);
+    let artifacts = import_artifacts_for_completed_download(&app, &td, Some(&completed))
+        .await
+        .expect("load import artifacts");
+    assert_eq!(
+        visible_source_files_have_terminal_dispositions(&app, &td, &artifacts, Some(&completed),)
+            .await,
+        Some(true)
+    );
+    assert!(matches!(
+        visible_source_episode_units(&app, &td, &artifacts, Some(&completed)).await,
+        SourceVideoEpisodeResolution::Resolved(ref units) if units.len() == 2
+    ));
     assert!(verify_import_inner(&app, &td, 2, Some(&completed)).await);
 }
 

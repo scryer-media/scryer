@@ -907,7 +907,8 @@ pub(crate) fn normalize_media_request_external_ids(
 }
 
 fn media_request_identity_fingerprint(external_ids: &[ExternalId]) -> String {
-    sha256_hex(
+    crate::helpers::blake3_identity_hex(
+        crate::helpers::HashDomain::MediaRequestIdentity,
         external_ids
             .iter()
             .map(|external_id| format!("{}:{}", external_id.source, external_id.value))
@@ -963,6 +964,27 @@ fn is_smg_request_correlation_external_id(external_id: &ExternalId) -> bool {
     matches!(external_id.source.as_str(), "tvdb" | "imdb" | "tmdb")
 }
 
+fn movie_title_ref_from_external_ids(external_ids: &[ExternalId]) -> Option<crate::MovieTitleRef> {
+    let external_id = |source: &str| {
+        external_ids
+            .iter()
+            .find(|external_id| external_id.source.eq_ignore_ascii_case(source))
+            .map(|external_id| external_id.value.trim())
+            .filter(|value| !value.is_empty())
+    };
+    let movie_ref = crate::MovieTitleRef {
+        smg_id: external_id("smg").and_then(|value| value.parse().ok()),
+        tvdb_id: external_id("tvdb").and_then(|value| value.parse().ok()),
+        tmdb_id: external_id("tmdb").and_then(|value| value.parse().ok()),
+        imdb_id: external_id("imdb").map(str::to_string),
+    };
+    (movie_ref.smg_id.is_some()
+        || movie_ref.tvdb_id.is_some()
+        || movie_ref.tmdb_id.is_some()
+        || movie_ref.imdb_id.is_some())
+    .then_some(movie_ref)
+}
+
 struct MediaRequestMetadataEnrichment {
     external_ids: Vec<ExternalId>,
     poster_url: Option<String>,
@@ -974,37 +996,89 @@ impl AppUseCase {
         facet: &MediaFacet,
         external_ids: Vec<ExternalId>,
     ) -> MediaRequestMetadataEnrichment {
-        let Some(tvdb_id) = external_ids
-            .iter()
-            .find(|external_id| external_id.source == "tvdb")
-            .and_then(|external_id| external_id.value.trim().parse::<i64>().ok())
-        else {
-            return MediaRequestMetadataEnrichment {
-                external_ids,
-                poster_url: None,
-            };
-        };
-
         let language = self.metadata_language().await;
-        let Some(handler) = self.facet_registry.get(facet) else {
-            tracing::warn!(
-                tvdb_id,
-                facet = facet.as_str(),
-                "failed to enrich media request external IDs because facet handler is missing"
-            );
-            return MediaRequestMetadataEnrichment {
-                external_ids,
-                poster_url: None,
-            };
+        let result = match facet {
+            MediaFacet::Movie => {
+                let Some(movie_ref) = movie_title_ref_from_external_ids(&external_ids) else {
+                    return MediaRequestMetadataEnrichment {
+                        external_ids,
+                        poster_url: None,
+                    };
+                };
+                match self
+                    .services
+                    .library
+                    .metadata_gateway
+                    .get_movie_titles(std::slice::from_ref(&movie_ref), &language)
+                    .await
+                {
+                    Ok(result) => result
+                        .by_ref_index
+                        .get(&0)
+                        .cloned()
+                        .map(|movie| {
+                            crate::catalog::facets::handler::movie_to_hydration_result(
+                                movie, &language,
+                            )
+                        })
+                        .ok_or_else(|| {
+                            AppError::NotFound("movie metadata response missing title".to_string())
+                        }),
+                    Err(error)
+                        if crate::catalog_workflow::movie_title_queries_not_supported(&error) =>
+                    {
+                        let Some(tvdb_id) = movie_ref.tvdb_id else {
+                            return MediaRequestMetadataEnrichment {
+                                external_ids,
+                                poster_url: None,
+                            };
+                        };
+                        self.services
+                            .library
+                            .metadata_gateway
+                            .get_movie(tvdb_id, &language)
+                            .await
+                            .map(|movie| {
+                                crate::catalog::facets::handler::movie_to_hydration_result(
+                                    movie, &language,
+                                )
+                            })
+                    }
+                    Err(error) => Err(error),
+                }
+            }
+            MediaFacet::Series | MediaFacet::Anime => {
+                let Some(tvdb_id) = external_ids
+                    .iter()
+                    .find(|external_id| external_id.source == "tvdb")
+                    .and_then(|external_id| external_id.value.trim().parse::<i64>().ok())
+                else {
+                    return MediaRequestMetadataEnrichment {
+                        external_ids,
+                        poster_url: None,
+                    };
+                };
+                let Some(handler) = self.facet_registry.get(facet) else {
+                    tracing::warn!(
+                        tvdb_id,
+                        facet = facet.as_str(),
+                        "failed to enrich media request external IDs because facet handler is missing"
+                    );
+                    return MediaRequestMetadataEnrichment {
+                        external_ids,
+                        poster_url: None,
+                    };
+                };
+                handler
+                    .hydrate_metadata(
+                        self.services.library.metadata_gateway.as_ref(),
+                        tvdb_id,
+                        &language,
+                    )
+                    .await
+            }
         };
-        match handler
-            .hydrate_metadata(
-                self.services.library.metadata_gateway.as_ref(),
-                tvdb_id,
-                &language,
-            )
-            .await
-        {
+        match result {
             Ok(result) => {
                 let poster_url =
                     normalized_optional_string(result.metadata_update.poster_url.clone());
@@ -1022,7 +1096,6 @@ impl AppUseCase {
             Err(error) => {
                 tracing::warn!(
                     error = %error,
-                    tvdb_id,
                     facet = facet.as_str(),
                     "failed to enrich media request external IDs from hydrated metadata"
                 );

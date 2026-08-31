@@ -81,65 +81,34 @@ async fn upsert_bootstrap_system_bool(
         .map_err(|error| error.to_string())
 }
 
-pub(crate) async fn disable_auto_backups_without_key(settings_store: Arc<SettingsStore>) {
+pub(crate) async fn disable_auto_backups_without_key(
+    settings_store: Arc<SettingsStore>,
+) -> Result<(), String> {
     let enabled =
-        match read_bootstrap_system_bool(settings_store.clone(), AUTO_BACKUP_ENABLED_KEY, false)
-            .await
-        {
-            Ok(enabled) => enabled,
-            Err(error) => {
-                tracing::warn!(
-                    error = %error,
-                    "failed to read automatic backup enabled setting for missing-key migration"
-                );
-                return;
-            }
-        };
+        read_bootstrap_system_bool(settings_store.clone(), AUTO_BACKUP_ENABLED_KEY, false).await?;
     if !enabled {
-        return;
+        return Ok(());
     }
 
-    let key_present =
-        match read_bootstrap_system_string(settings_store.clone(), AUTO_BACKUP_KEY_KEY).await {
-            Ok(value) => value.is_some_and(|value| !value.trim().is_empty()),
-            Err(error) => {
-                tracing::warn!(
-                    error = %error,
-                    "failed to read automatic backup key for missing-key migration"
-                );
-                return;
-            }
-        };
+    let key_present = read_bootstrap_system_string(settings_store.clone(), AUTO_BACKUP_KEY_KEY)
+        .await?
+        .is_some_and(|value| !value.trim().is_empty());
     if key_present {
-        return;
+        return Ok(());
     }
 
-    if let Err(error) =
-        upsert_bootstrap_system_bool(settings_store.clone(), AUTO_BACKUP_ENABLED_KEY, false).await
-    {
-        tracing::warn!(
-            error = %error,
-            "failed to disable automatic backups after missing-key migration"
-        );
-        return;
-    }
-    if let Err(error) = upsert_bootstrap_system_bool(
+    upsert_bootstrap_system_bool(settings_store.clone(), AUTO_BACKUP_ENABLED_KEY, false).await?;
+    upsert_bootstrap_system_bool(
         settings_store,
         AUTO_BACKUP_DISABLED_MISSING_KEY_NOTICE_KEY,
         true,
     )
-    .await
-    {
-        tracing::warn!(
-            error = %error,
-            "failed to record automatic-backup missing-key notice"
-        );
-        return;
-    }
+    .await?;
 
     tracing::warn!(
         "disabled automatic backups because no automatic-backup encryption key is configured"
     );
+    Ok(())
 }
 
 #[cfg(test)]
@@ -182,7 +151,9 @@ mod tests {
             .await
             .expect("enable automatic backups");
 
-        disable_auto_backups_without_key(store.clone()).await;
+        disable_auto_backups_without_key(store.clone())
+            .await
+            .expect("migration should succeed");
 
         let enabled = read_bootstrap_system_bool(store.clone(), AUTO_BACKUP_ENABLED_KEY, true)
             .await
@@ -221,7 +192,9 @@ mod tests {
             .await
             .expect("set automatic backup key");
 
-        disable_auto_backups_without_key(store.clone()).await;
+        disable_auto_backups_without_key(store.clone())
+            .await
+            .expect("migration should succeed");
 
         let enabled = read_bootstrap_system_bool(store.clone(), AUTO_BACKUP_ENABLED_KEY, false)
             .await

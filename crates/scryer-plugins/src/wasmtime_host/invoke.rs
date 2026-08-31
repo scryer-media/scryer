@@ -257,7 +257,7 @@ pub(crate) async fn process_command(
         HostCtx::with_command_host(
             wasi,
             HostLimits::new(spec.memory_max_bytes),
-            spec.command_host.clone(),
+            spec.command_host.for_invocation(spec.timeout),
         ),
     );
     store.limiter(|ctx: &mut HostCtx| &mut ctx.limits);

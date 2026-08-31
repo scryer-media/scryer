@@ -14,12 +14,14 @@ use super::discovery::{
     QualityProfileLookup, compare_release_search_results, dedupe_cross_indexer_release_results,
 };
 use crate::acquisition_release_search::ResolvedReleaseSearchSubject;
+use scryer_logging::{ActorContext, LogContext, ResourceContext, WorkflowContext, context_span};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
-use tracing::info;
+use tracing::{Instrument, info};
 
 /// Overall deadline for a job; stragglers past this are marked failed.
-const INTERACTIVE_RELEASE_SEARCH_DEADLINE: std::time::Duration = std::time::Duration::from_secs(55);
+const INTERACTIVE_RELEASE_SEARCH_DEADLINE: std::time::Duration =
+    scryer_outbound_http::INDEXER_HTTP_TIMEOUT;
 /// Terminal jobs are evicted this long after completion.
 const COMPLETED_JOB_TTL_MINUTES: i64 = 5;
 /// Defensive cap: running jobs older than this are cancelled and evicted.
@@ -335,16 +337,6 @@ impl AppUseCase {
             );
         }
 
-        info!(
-            actor = actor.id.as_str(),
-            title_id = request.title_id.as_str(),
-            job_id = job_id.as_str(),
-            query = subject.queries.first().map(String::as_str).unwrap_or(""),
-            category = subject.category.as_str(),
-            indexers = dispatch.len(),
-            "starting interactive release search"
-        );
-
         let context = InteractiveReleaseSearchJobContext {
             job_id,
             actor: actor.clone(),
@@ -356,10 +348,50 @@ impl AppUseCase {
             preferred_source_kind,
             cancel,
         };
-        let app = self.clone();
-        tokio::spawn(async move {
-            app.run_interactive_release_search_job(context).await;
+        let log_span = context_span(
+            LogContext::workflow(WorkflowContext {
+                kind: "interactive_release_search".to_owned(),
+                id: context.job_id.clone(),
+            })
+            .with_actor(ActorContext {
+                kind: if context.actor.is_system_execution_actor() {
+                    "system".to_owned()
+                } else {
+                    "user".to_owned()
+                },
+                id: Some(context.actor.id.clone()),
+                display_name: Some(context.actor.username.clone()),
+                source: None,
+            })
+            .with_resource(ResourceContext {
+                title_id: Some(context.title_for_search.id.clone()),
+                job_id: Some(context.job_id.clone()),
+                ..ResourceContext::default()
+            }),
+        );
+        log_span.in_scope(|| {
+            info!(
+                actor = context.actor.id.as_str(),
+                title_id = context.title_for_search.id.as_str(),
+                job_id = context.job_id.as_str(),
+                query = context
+                    .subject
+                    .queries
+                    .first()
+                    .map(String::as_str)
+                    .unwrap_or(""),
+                category = context.subject.category.as_str(),
+                indexers = context.dispatch.len(),
+                "starting interactive release search"
+            );
         });
+        let app = self.clone();
+        tokio::spawn(
+            async move {
+                app.run_interactive_release_search_job(context).await;
+            }
+            .instrument(log_span),
+        );
 
         Ok(snapshot)
     }
@@ -432,7 +464,7 @@ impl AppUseCase {
             cancel,
         } = context;
 
-        let mut set: JoinSet<(String, AppResult<Vec<IndexerSearchResult>>)> = JoinSet::new();
+        let mut set = JoinSet::new();
         for indexer_id in dispatch {
             let app = self.clone();
             let actor = actor.clone();
@@ -449,7 +481,7 @@ impl AppUseCase {
                 )
                 .await;
                 let outcome = app
-                    .search_and_evaluate_subject_restricted(
+                    .search_and_evaluate_subject_restricted_with_outcome(
                         &title,
                         &subject,
                         &actor.id,
@@ -460,16 +492,19 @@ impl AppUseCase {
                     )
                     .await;
                 let outcome = match outcome {
-                    Ok(mut results) => {
+                    Ok(mut search_outcome) => {
+                        let failure_reason = search_outcome
+                            .incomplete_indexer_reasons
+                            .remove(&indexer_id);
                         app.attach_candidate_tokens(
                             &actor,
                             &title,
                             &subject,
-                            &mut results,
+                            &mut search_outcome.results,
                             preserve_subject_scope,
                         )
                         .await;
-                        Ok(results)
+                        Ok((search_outcome.results, failure_reason))
                     }
                     Err(error) => Err(error),
                 };
@@ -491,7 +526,7 @@ impl AppUseCase {
                     }
                 };
                 match outcome {
-                    Ok(batch) => {
+                    Ok((batch, failure_reason)) => {
                         self.merge_interactive_indexer_batch(
                             &job_id,
                             &indexer_id,
@@ -500,6 +535,15 @@ impl AppUseCase {
                             &preferred_source_kind,
                         )
                         .await;
+                        if let Some(reason) = failure_reason {
+                            self.set_interactive_indexer_status(
+                                &job_id,
+                                &indexer_id,
+                                InteractiveReleaseSearchIndexerStatus::Failed,
+                                Some(reason),
+                            )
+                            .await;
+                        }
                     }
                     Err(error) if error.is_canceled() => {
                         // Job is being cancelled; leave the status as-is.
@@ -522,11 +566,10 @@ impl AppUseCase {
         if timed_out {
             cancel.cancel();
             set.abort_all();
-            while set.join_next().await.is_some() {}
         }
 
         let now = self.runtime.environment.now();
-        let completion = {
+        {
             let mut registry = self
                 .runtime
                 .acquisition
@@ -551,22 +594,7 @@ impl AppUseCase {
             if entry.snapshot.state == InteractiveReleaseSearchState::Running {
                 entry.snapshot.state = InteractiveReleaseSearchState::Completed;
                 entry.snapshot.completed_at = Some(now);
-                Some(entry.snapshot.results.len())
-            } else {
-                None
             }
-        };
-
-        // Once per job (never per indexer), and only when the job actually
-        // completed — a cancelled one-shot search does not emit either.
-        if let Some(result_count) = completion {
-            self.emit_discovery_search_completed_event(
-                &actor,
-                subject.category.clone(),
-                subject.queries.first().cloned(),
-                result_count as i64,
-            )
-            .await;
         }
     }
 

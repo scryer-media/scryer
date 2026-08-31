@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Loader2, RotateCcw, Trash2 } from "lucide-react";
+import { Loader2, Trash2, Undo2 } from "lucide-react";
 import { LibraryMultiSelect } from "@/components/common/library-multi-select";
 import { SettingsToggleSwitch } from "@/components/common/settings-toggle-switch";
 import { Button } from "@/components/ui/button";
@@ -34,6 +34,7 @@ export type RecycledItem = {
   titleName: string | null;
   reason: string;
   recycledAt: string;
+  scheduledDeletionAt: string;
   mediaRoot: string;
   libraryId: string;
   libraryName: string;
@@ -216,7 +217,8 @@ export function SettingsRecycleBinSection({
               aria-label={t("settings.recycleBinFilterAria")}
               className="max-w-md"
             />
-            <div className="flex flex-wrap items-center gap-2">
+            {selectedItems.length > 0 ? (
+              <div className="flex flex-wrap items-center gap-2">
               <span className="text-sm text-muted-foreground">
                 {t("settings.recycleBinSelectedCount", { count: selectedItems.length })}
               </span>
@@ -226,7 +228,7 @@ export function SettingsRecycleBinSection({
                 disabled={selectedActionableItems.length === 0 || isBusy}
                 onClick={() => onRestoreItems(selectedActionableItems)}
               >
-                <RotateCcw className="mr-2 h-4 w-4" />
+                <Undo2 className="mr-2 h-4 w-4" />
                 {t("settings.recycleBinRestoreSelected")}
               </Button>
               <Button
@@ -247,7 +249,8 @@ export function SettingsRecycleBinSection({
               >
                 {t("settings.recycleBinClearSelection")}
               </Button>
-            </div>
+              </div>
+            ) : null}
           </div>
 
           <p className="text-sm text-muted-foreground">{t("settings.recycleBinSection")}</p>
@@ -264,7 +267,9 @@ export function SettingsRecycleBinSection({
               {t("settings.recycleBinNoFilterMatches")}
             </p>
           ) : (
-            <Table>
+            <Table
+              wrapperClassName="rounded-[14px] border border-[var(--scry-border2)] bg-[var(--scry-surfC)]"
+            >
               <TableHeader>
                 <TableRow>
                   <TableCheckboxHead>
@@ -282,6 +287,7 @@ export function SettingsRecycleBinSection({
                   <TableHead>{t("settings.recycleBinReason")}</TableHead>
                   <TableHead>{t("settings.recycleBinSize")}</TableHead>
                   <TableHead>{t("settings.recycleBinRecycled")}</TableHead>
+                  <TableHead>{t("settings.recycleBinScheduledDeletion")}</TableHead>
                   <TableHead className="text-right">{t("label.actions")}</TableHead>
                 </TableRow>
               </TableHeader>
@@ -307,7 +313,7 @@ export function SettingsRecycleBinSection({
                           onCheckedChange={(checked) => toggleItems(groupSelectableItems, checked === true)}
                         />
                       </TableCheckboxCell>
-                      <TableCell colSpan={6}>
+                      <TableCell colSpan={7}>
                         <div className="flex items-center gap-2">
                           <span className="font-medium">{group.titleName}</span>
                           <span className="text-xs text-muted-foreground">
@@ -345,6 +351,7 @@ export function SettingsRecycleBinSection({
                           <TableCell><ReasonBadge reason={item.reason} /></TableCell>
                           <TableCell className="whitespace-nowrap font-[var(--font-code)] text-sm text-muted-foreground">{formatSize(item.sizeBytes)}</TableCell>
                           <TableCell className="text-sm text-muted-foreground whitespace-nowrap">{formatDate(item.recycledAt, dateTimeFormat)}</TableCell>
+                          <TableCell className="text-sm text-muted-foreground whitespace-nowrap">{formatDate(item.scheduledDeletionAt, dateTimeFormat)}</TableCell>
                           <TableCell className="text-right">
                             <div className="flex items-center justify-end gap-1">
                               <IconButton
@@ -354,7 +361,7 @@ export function SettingsRecycleBinSection({
                                 disabled={rowBusy || isBusy}
                                 onClick={() => onRestoreItems([item])}
                               >
-                                <RotateCcw className="h-4 w-4" />
+                                <Undo2 className="h-4 w-4" />
                               </IconButton>
                               <IconButton
                                 id={selectorId("settings-recycle-bin-delete", item.id)}

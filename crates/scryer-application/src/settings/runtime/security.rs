@@ -8,6 +8,7 @@ pub struct SecuritySettings {
     pub form_login_enabled: bool,
     pub password_min_length: i32,
     pub skip_login_for_local_ips: bool,
+    pub api_keys_restrict_to_system_settings_users: bool,
     pub mfa_require_config_step_up: bool,
     pub mfa_require_password_login: bool,
     pub totp_require_jellyfin_login: bool,
@@ -18,6 +19,8 @@ pub struct UpdateSecuritySettings {
     pub form_login_enabled: bool,
     pub password_min_length: i32,
     pub skip_login_for_local_ips: bool,
+    /// When absent, preserve the current value without writing this protected setting.
+    pub api_keys_restrict_to_system_settings_users: Option<bool>,
     pub mfa_require_config_step_up: bool,
     pub mfa_require_password_login: bool,
     pub totp_require_jellyfin_login: bool,
@@ -37,6 +40,10 @@ impl AppUseCase {
         let password_min_length = self.password_min_length().await?;
         let skip_login_for_local_ips = self
             .read_setting_bool_value(SKIP_LOGIN_FOR_LOCAL_IPS_KEY, None)
+            .await?
+            .unwrap_or(false);
+        let api_keys_restrict_to_system_settings_users = self
+            .read_setting_bool_value(API_KEYS_RESTRICT_TO_SYSTEM_SETTINGS_USERS_KEY, None)
             .await?
             .unwrap_or(false);
         let mfa_require_config_step_up = self
@@ -64,6 +71,7 @@ impl AppUseCase {
             form_login_enabled,
             password_min_length,
             skip_login_for_local_ips,
+            api_keys_restrict_to_system_settings_users,
             mfa_require_config_step_up,
             mfa_require_password_login,
             totp_require_jellyfin_login,
@@ -157,8 +165,18 @@ impl AppUseCase {
     ) -> AppResult<SecuritySettings> {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageUsers)
             .await?;
+        if input.api_keys_restrict_to_system_settings_users.is_some() {
+            self.require_app_permission(
+                actor,
+                scryer_domain::AppPermission::ManageSystemSettings,
+            )
+            .await?;
+        }
 
         let current = self.load_security_settings().await?;
+        let api_keys_restrict_to_system_settings_users = input
+            .api_keys_restrict_to_system_settings_users
+            .unwrap_or(current.api_keys_restrict_to_system_settings_users);
         let totp_require_emby_login = input
             .totp_require_emby_login
             .unwrap_or(current.totp_require_emby_login);
@@ -223,6 +241,14 @@ impl AppUseCase {
             Some(actor.id.clone()),
         )
         .await?;
+        if let Some(value) = input.api_keys_restrict_to_system_settings_users {
+            self.upsert_system_setting_json(
+                API_KEYS_RESTRICT_TO_SYSTEM_SETTINGS_USERS_KEY,
+                &value,
+                Some(actor.id.clone()),
+            )
+            .await?;
+        }
         self.upsert_system_setting_json(
             MFA_REQUIRE_CONFIG_STEP_UP_KEY,
             &input.mfa_require_config_step_up,
@@ -263,6 +289,9 @@ impl AppUseCase {
             MFA_REQUIRE_PASSWORD_LOGIN_KEY.to_string(),
             TOTP_REQUIRE_JELLYFIN_LOGIN_KEY.to_string(),
         ];
+        if input.api_keys_restrict_to_system_settings_users.is_some() {
+            saved_keys.push(API_KEYS_RESTRICT_TO_SYSTEM_SETTINGS_USERS_KEY.to_string());
+        }
         if input.totp_require_emby_login.is_some() {
             saved_keys.push(TOTP_REQUIRE_EMBY_LOGIN_KEY.to_string());
         }
@@ -273,6 +302,7 @@ impl AppUseCase {
             form_login_enabled: input.form_login_enabled,
             password_min_length: input.password_min_length,
             skip_login_for_local_ips: input.skip_login_for_local_ips,
+            api_keys_restrict_to_system_settings_users,
             mfa_require_config_step_up: input.mfa_require_config_step_up,
             mfa_require_password_login: input.mfa_require_password_login,
             totp_require_jellyfin_login: input.totp_require_jellyfin_login,

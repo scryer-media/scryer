@@ -8,11 +8,14 @@ use quick_xml::events::Event;
 use quick_xml::{Reader, XmlVersion};
 use reqwest::blocking::Client;
 use reqwest::{Method, StatusCode};
-use scryer_application::challenge_solver as solver;
+use scryer_application::{
+    CapturedIndexerHttpHeader, CapturedIndexerHttpResponse, IndexerErrorOperation,
+    IndexerErrorRecorder, challenge_solver as solver, classify_indexer_http_response,
+    indexer_response_content_type, unknown_indexer_error,
+};
 
 pub(crate) const HTTP_ENV_NAMESPACE: &str = "extism:host/env";
 const DEFAULT_MAX_HTTP_RESPONSE_BYTES: u64 = 50 * 1024 * 1024;
-const DEFAULT_PLUGIN_HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const PLUGIN_HTTP_WORKER_RESPONSE_GRACE: Duration = Duration::from_secs(1);
 const PINNED_REQUEST_CLIENT_TTL: Duration = Duration::from_secs(5 * 60);
 type HostResult<T> = Result<T, String>;
@@ -43,6 +46,20 @@ struct PluginHttpHostState {
     destination_cooldown_key: Option<scryer_outbound_http::DestinationKey>,
     max_http_response_bytes: Option<u64>,
     last_responses: HashMap<String, PluginHttpLastResponse>,
+    indexer_error_capture: Option<ActiveIndexerErrorCapture>,
+}
+
+#[derive(Clone)]
+pub(crate) struct IndexerErrorCaptureContext {
+    pub(crate) indexer_id: String,
+    pub(crate) indexer_name: String,
+    pub(crate) operation: IndexerErrorOperation,
+    pub(crate) recorder: Arc<dyn IndexerErrorRecorder>,
+}
+
+struct ActiveIndexerErrorCapture {
+    context: IndexerErrorCaptureContext,
+    final_response: Option<CapturedIndexerHttpResponse>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -65,7 +82,7 @@ struct PluginHttpWork {
     plugin_id: String,
     request: PluginHttpRequest,
     body: Option<Vec<u8>>,
-    timeout: Option<Duration>,
+    timeout: Duration,
     response: mpsc::SyncSender<HostResult<Vec<u8>>>,
 }
 
@@ -109,6 +126,8 @@ struct ProxiedHttpResponse {
     status_code: u16,
     headers: BTreeMap<String, String>,
     body: Vec<u8>,
+    captured_response: CapturedIndexerHttpResponse,
+    terminal_error: Option<String>,
 }
 
 pub fn shared_plugin_http_runtime() -> PluginHttpRuntime {
@@ -135,7 +154,7 @@ impl PluginHttpRuntime {
         Ok(())
     }
 
-    fn extra_ca_bundle_pem(&self) -> HostResult<String> {
+    pub(crate) fn extra_ca_bundle_pem(&self) -> HostResult<String> {
         self.state
             .lock()
             .map_err(|error| format!("plugin HTTP runtime lock poisoned: {error}"))
@@ -218,10 +237,8 @@ fn plugin_http_request_client_key(request_url: &str) -> HostResult<PluginHttpReq
     })
 }
 
-fn worker_response_timeout(timeout: Option<Duration>) -> Duration {
-    timeout
-        .unwrap_or(DEFAULT_PLUGIN_HTTP_REQUEST_TIMEOUT)
-        .saturating_add(PLUGIN_HTTP_WORKER_RESPONSE_GRACE)
+fn worker_response_timeout(timeout: Duration) -> Duration {
+    timeout.saturating_add(PLUGIN_HTTP_WORKER_RESPONSE_GRACE)
 }
 
 impl PluginHttpHost {
@@ -240,6 +257,7 @@ impl PluginHttpHost {
                     .map(scryer_outbound_http::DestinationKey::from),
                 max_http_response_bytes,
                 last_responses: HashMap::new(),
+                indexer_error_capture: None,
             })),
             workers: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -250,7 +268,7 @@ impl PluginHttpHost {
         plugin_id: &str,
         request: PluginHttpRequest,
         body: Option<Vec<u8>>,
-        timeout: Option<Duration>,
+        timeout: Duration,
     ) -> HostResult<Vec<u8>> {
         let worker_key = plugin_http_request_client_key(&request.url)?;
         let allowed_hosts = self
@@ -292,6 +310,42 @@ impl PluginHttpHost {
                 self.reset_worker(&worker_key);
                 Err("plugin HTTP worker stopped".to_string())
             }
+        }
+    }
+
+    pub(crate) fn begin_indexer_error_capture(&self, context: IndexerErrorCaptureContext) {
+        match self.state.lock() {
+            Ok(mut state) => {
+                state.indexer_error_capture = Some(ActiveIndexerErrorCapture {
+                    context,
+                    final_response: None,
+                });
+            }
+            Err(error) => {
+                tracing::warn!(error = %error, "failed to start indexer HTTP error capture")
+            }
+        }
+    }
+
+    pub(crate) fn finish_indexer_error_capture(&self, operation_failed: bool) {
+        let capture = match self.state.lock() {
+            Ok(mut state) => state.indexer_error_capture.take(),
+            Err(error) => {
+                tracing::warn!(error = %error, "failed to finish indexer HTTP error capture");
+                None
+            }
+        };
+        let Some(capture) = capture else {
+            return;
+        };
+        let Some(response) = capture.final_response else {
+            if operation_failed {
+                Self::record_transport_failure(&capture.context);
+            }
+            return;
+        };
+        if operation_failed && (200..300).contains(&response.status) {
+            Self::record_captured_response(&capture.context, response);
         }
     }
 
@@ -380,7 +434,7 @@ impl PluginHttpHost {
         plugin_id: &str,
         request: PluginHttpRequest,
         body: Option<Vec<u8>>,
-        timeout: Option<Duration>,
+        timeout: Duration,
     ) -> HostResult<Vec<u8>> {
         let (
             runtime,
@@ -433,16 +487,25 @@ impl PluginHttpHost {
             &request_client,
             &request,
             body.clone(),
-            timeout,
+            Some(timeout),
             &session_headers,
             destination_cooldown_key.as_ref(),
         )?;
         let status = response.status();
         let status_code = status.as_u16();
         let headers = response_headers(&response);
+        let captured_headers = captured_response_headers(&response);
+        let direct_body = read_response_body(response, max_http_response_bytes)?;
+        Self::capture_indexer_response(
+            state,
+            CapturedIndexerHttpResponse {
+                status: status_code,
+                headers: captured_headers,
+                body: direct_body.clone(),
+            },
+        );
 
         if status == StatusCode::TOO_MANY_REQUESTS {
-            let direct_body = read_response_body(response, max_http_response_bytes)?;
             let response_bytes = direct_body.len();
             let rate_limit_message = direct_rate_limit_message(&headers, &direct_body);
             Self::store_last_response(state, plugin_id, status_code, headers)?;
@@ -456,14 +519,6 @@ impl PluginHttpHost {
             );
             return Ok(direct_body);
         }
-
-        let should_read_body = status.is_success()
-            || indexer_proxy_policy.is_some() && solver::challenge_candidate_status(status_code);
-        let direct_body = if should_read_body {
-            read_response_body(response, max_http_response_bytes)?
-        } else {
-            Vec::new()
-        };
 
         if let Some(policy) = indexer_proxy_policy.as_ref()
             && solver::looks_like_challenge_response(status_code, &headers, &direct_body)
@@ -503,7 +558,7 @@ impl PluginHttpHost {
                 &request,
                 ChallengeSolverRequestOptions {
                     original_body: body,
-                    original_timeout: timeout,
+                    original_timeout: Some(timeout),
                     max_http_response_bytes,
                     destination_cooldown_key: destination_cooldown_key.as_ref(),
                 },
@@ -521,6 +576,7 @@ impl PluginHttpHost {
                 }
             };
             let response_bytes = solved.body.len();
+            Self::capture_indexer_response(state, solved.captured_response.clone());
             Self::store_last_response(state, plugin_id, solved.status_code, solved.headers)?;
             tracing::debug!(
                 plugin_id,
@@ -531,6 +587,9 @@ impl PluginHttpHost {
                 response_bytes,
                 "plugin HTTP request completed through indexer proxy"
             );
+            if let Some(error) = solved.terminal_error {
+                return Err(error);
+            }
             return Ok(solved.body);
         }
 
@@ -585,6 +644,96 @@ impl PluginHttpHost {
             .and_then(|response| response.rate_limit_message.clone()))
     }
 
+    fn capture_indexer_response(
+        state: &Arc<Mutex<PluginHttpHostState>>,
+        response: CapturedIndexerHttpResponse,
+    ) {
+        let immediate_capture = match state.lock() {
+            Ok(mut host_state) => {
+                let Some(capture) = host_state.indexer_error_capture.as_mut() else {
+                    return;
+                };
+                capture.final_response = Some(response.clone());
+                (!(200..300).contains(&response.status)).then(|| capture.context.clone())
+            }
+            Err(error) => {
+                tracing::warn!(error = %error, "failed to capture indexer HTTP response");
+                None
+            }
+        };
+        if let Some(capture) = immediate_capture {
+            Self::record_captured_response(&capture, response);
+        }
+    }
+
+    pub(crate) fn record_captured_response(
+        capture: &IndexerErrorCaptureContext,
+        response: CapturedIndexerHttpResponse,
+    ) {
+        if !scryer_application::indexer_error_history_is_persistable(&capture.indexer_id) {
+            // A connection test has no stored indexer to hang history on. The
+            // probe's own error is the answer the operator is waiting for; a
+            // guaranteed foreign-key failure behind it is noise at best.
+            tracing::debug!(
+                indexer_id = capture.indexer_id.as_str(),
+                "skipping indexer error history for a synthetic indexer id"
+            );
+            return;
+        }
+
+        let classified =
+            classify_indexer_http_response(&response).unwrap_or_else(unknown_indexer_error);
+        let error = scryer_application::NewIndexerError {
+            id: uuid::Uuid::new_v4().to_string(),
+            indexer_id: capture.indexer_id.clone(),
+            indexer_name: capture.indexer_name.clone(),
+            operation: capture.operation,
+            classification: classified.classification,
+            provider_error_code: classified.provider_error_code,
+            message: classified.message.to_string(),
+            content_type: indexer_response_content_type(&response),
+            response: Some(response),
+            occurred_at: chrono::Utc::now(),
+        };
+        if let Err(error) = capture.recorder.record(error) {
+            tracing::warn!(
+                indexer_id = capture.indexer_id.as_str(),
+                error = %error,
+                "failed to persist captured indexer HTTP response"
+            );
+        }
+    }
+
+    pub(crate) fn record_transport_failure(capture: &IndexerErrorCaptureContext) {
+        tracing::warn!(
+            indexer_id = capture.indexer_id.as_str(),
+            operation = capture.operation.as_str(),
+            "indexer plugin operation failed without an HTTP response"
+        );
+        if !scryer_application::indexer_error_history_is_persistable(&capture.indexer_id) {
+            return;
+        }
+        let error = scryer_application::NewIndexerError {
+            id: uuid::Uuid::new_v4().to_string(),
+            indexer_id: capture.indexer_id.clone(),
+            indexer_name: capture.indexer_name.clone(),
+            operation: capture.operation,
+            classification: scryer_application::IndexerErrorClassification::Unknown,
+            provider_error_code: None,
+            message: "Indexer plugin command failed without an HTTP response".to_string(),
+            content_type: None,
+            response: None,
+            occurred_at: chrono::Utc::now(),
+        };
+        if let Err(error) = capture.recorder.record(error) {
+            tracing::warn!(
+                indexer_id = capture.indexer_id.as_str(),
+                error = %error,
+                "failed to persist indexer transport error"
+            );
+        }
+    }
+
     fn store_rate_limit_message(
         state: &Arc<Mutex<PluginHttpHostState>>,
         plugin_id: &str,
@@ -620,7 +769,10 @@ impl PluginHttpHost {
     }
 }
 
-fn enforce_allowed_hosts(allowed_hosts: Option<&[String]>, request_url: &str) -> HostResult<()> {
+pub(crate) fn enforce_allowed_hosts(
+    allowed_hosts: Option<&[String]>,
+    request_url: &str,
+) -> HostResult<()> {
     let url = url::Url::parse(request_url).map_err(|error| format!("Invalid URL: {error:?}"))?;
     let host = url.host_str().unwrap_or_default();
     let matches = allowed_hosts.is_some_and(|patterns| {
@@ -754,6 +906,31 @@ fn response_headers(response: &reqwest::blocking::Response) -> BTreeMap<String, 
     headers
 }
 
+fn captured_response_headers(
+    response: &reqwest::blocking::Response,
+) -> Vec<CapturedIndexerHttpHeader> {
+    response
+        .headers()
+        .iter()
+        .map(|(name, value)| CapturedIndexerHttpHeader {
+            name: name.as_str().to_string(),
+            value: value.as_bytes().to_vec(),
+        })
+        .collect()
+}
+
+fn captured_headers_from_text(
+    headers: &BTreeMap<String, String>,
+) -> Vec<CapturedIndexerHttpHeader> {
+    headers
+        .iter()
+        .map(|(name, value)| CapturedIndexerHttpHeader {
+            name: name.clone(),
+            value: value.as_bytes().to_vec(),
+        })
+        .collect()
+}
+
 fn direct_rate_limit_message(headers: &BTreeMap<String, String>, body: &[u8]) -> String {
     let mut message = prowlarr_xml_error_description(body)
         .map(|description| format!("HTTP 429: {description}"))
@@ -777,7 +954,7 @@ fn prowlarr_xml_error_description(body: &[u8]) -> Option<String> {
     loop {
         match reader.read_event_into(&mut buffer).ok()? {
             Event::Start(element) | Event::Empty(element) => {
-                if element.name().as_ref() != b"error" {
+                if element.name().as_ref() != "error" {
                     return None;
                 }
 
@@ -786,13 +963,13 @@ fn prowlarr_xml_error_description(body: &[u8]) -> Option<String> {
                 for attribute in element.attributes() {
                     let attribute = attribute.ok()?;
                     let value = attribute
-                        .decoded_and_normalized_value(XmlVersion::Explicit1_0, reader.decoder())
+                        .normalized_value(XmlVersion::Explicit1_0)
                         .ok()?
                         .trim()
                         .to_string();
                     match attribute.key.as_ref() {
-                        b"code" => code = Some(value),
-                        b"description" => description = (!value.is_empty()).then_some(value),
+                        "code" => code = Some(value),
+                        "description" => description = (!value.is_empty()).then_some(value),
                         _ => {}
                     }
                 }
@@ -854,7 +1031,9 @@ fn execute_challenge_solver_request(
     let provider = policy.config.provider_type;
     let provider_name = solver::solver_provider_name(provider);
     let endpoint = solver::solver_solve_endpoint(&policy.config.base_url);
-    let solver_timeout = Duration::from_secs(policy.config.request_timeout_seconds as u64 + 5);
+    let solver_timeout = scryer_outbound_http::effective_indexer_proxy_request_timeout(
+        policy.config.request_timeout_seconds,
+    );
     let solver_deadline = Instant::now() + solver_timeout;
     tracing::debug!(
         indexer_id = policy.indexer_id.as_str(),
@@ -912,6 +1091,19 @@ fn execute_challenge_solver_request(
 
     let solution_status = solution.status.unwrap_or_else(|| solver_status.as_u16());
     let solved_final_url = solution.url.as_deref().map(solver::sanitized_url_for_log);
+    let solved_body = solution.response.clone().unwrap_or_default().into_bytes();
+    let headers = solver::safe_solution_response_headers(solution.headers.as_ref());
+    let solved_response = |terminal_error| ProxiedHttpResponse {
+        status_code: solution_status,
+        captured_response: CapturedIndexerHttpResponse {
+            status: solution_status,
+            headers: captured_headers_from_text(&headers),
+            body: solved_body.clone(),
+        },
+        headers: headers.clone(),
+        body: solved_body.clone(),
+        terminal_error,
+    };
     if solution_status == StatusCode::TOO_MANY_REQUESTS.as_u16() {
         tracing::warn!(
             indexer_id = policy.indexer_id.as_str(),
@@ -919,12 +1111,15 @@ fn execute_challenge_solver_request(
             status = solution_status,
             "challenge solver reported target indexer rate limit"
         );
-        return Err(solver::target_rate_limit_message(&solution));
+        return Ok(solved_response(Some(solver::target_rate_limit_message(
+            &solution,
+        ))));
     }
 
-    let solved_body = solution.response.clone().unwrap_or_default().into_bytes();
     if solver::solved_body_looks_rate_limited(&solved_body) {
-        return Err(solver::target_rate_limit_message(&solution));
+        return Ok(solved_response(Some(solver::target_rate_limit_message(
+            &solution,
+        ))));
     }
     if (200..300).contains(&solution_status) && !solved_body.is_empty() {
         // Cache the clearance session so follow-up requests to this origin skip
@@ -944,8 +1139,14 @@ fn execute_challenge_solver_request(
         );
         return Ok(ProxiedHttpResponse {
             status_code: solution_status,
-            headers: solver::safe_solution_response_headers(solution.headers.as_ref()),
+            captured_response: CapturedIndexerHttpResponse {
+                status: solution_status,
+                headers: captured_headers_from_text(&headers),
+                body: solved_body.clone(),
+            },
+            headers,
             body: solved_body,
+            terminal_error: None,
         });
     }
 
@@ -966,47 +1167,146 @@ fn execute_challenge_solver_request(
         )?;
         let status = retry.status();
         let headers = response_headers(&retry);
-        if status == StatusCode::TOO_MANY_REQUESTS {
+        let captured_headers = captured_response_headers(&retry);
+        let body = read_response_body(retry, max_http_response_bytes)?;
+        let terminal_error = if status == StatusCode::TOO_MANY_REQUESTS {
             let retry_after = solver::header_value(&headers, "retry-after").and_then(|value| {
                 scryer_outbound_http::parse_retry_after(value).map(|(delay, _)| delay)
             });
-            return Err(solver::rate_limit_message_with_retry_after(retry_after));
-        }
-        if !status.is_success() {
-            return Err(solver::solver_error_message(
-                provider,
-                solver::SolverErrorKind::MissingSolution,
+            Some(solver::rate_limit_message_with_retry_after(retry_after))
+        } else if !status.is_success() {
+            Some(
+                solver::solver_error_message(provider, solver::SolverErrorKind::MissingSolution)
+                    .to_string(),
             )
-            .to_string());
+        } else {
+            None
+        };
+        if terminal_error.is_none() {
+            solver::SolvedSessionCache::shared().store_solution(
+                &policy.config.id,
+                &request.url,
+                &solution,
+            );
         }
-        let body = read_response_body(retry, max_http_response_bytes)?;
-        solver::SolvedSessionCache::shared().store_solution(
-            &policy.config.id,
-            &request.url,
-            &solution,
-        );
         return Ok(ProxiedHttpResponse {
             status_code: status.as_u16(),
+            captured_response: CapturedIndexerHttpResponse {
+                status: status.as_u16(),
+                headers: captured_headers,
+                body: body.clone(),
+            },
             headers,
             body,
+            terminal_error,
         });
     }
 
     if !(200..300).contains(&solution_status) {
-        return Err(format!(
+        return Ok(solved_response(Some(format!(
             "{provider_name} target request returned HTTP {solution_status}."
-        ));
+        ))));
     }
 
-    Err(
+    Ok(solved_response(Some(
         solver::solver_error_message(provider, solver::SolverErrorKind::MissingSolution)
             .to_string(),
-    )
+    )))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Default)]
+    struct RecordingIndexerErrorRecorder {
+        errors: Mutex<Vec<scryer_application::NewIndexerError>>,
+    }
+
+    impl IndexerErrorRecorder for RecordingIndexerErrorRecorder {
+        fn record(
+            &self,
+            error: scryer_application::NewIndexerError,
+        ) -> scryer_application::AppResult<()> {
+            self.errors.lock().expect("recorded errors").push(error);
+            Ok(())
+        }
+    }
+
+    /// Stands in for the real store, whose `indexer_errors.indexer_id` foreign
+    /// key rejects any id without an `indexers` row.
+    #[derive(Default)]
+    struct ForeignKeyRejectingRecorder {
+        attempts: Mutex<Vec<String>>,
+    }
+
+    impl IndexerErrorRecorder for ForeignKeyRejectingRecorder {
+        fn record(
+            &self,
+            error: scryer_application::NewIndexerError,
+        ) -> scryer_application::AppResult<()> {
+            self.attempts
+                .lock()
+                .expect("recorded attempts")
+                .push(error.indexer_id.clone());
+            Err(scryer_application::AppError::Repository(
+                "FOREIGN KEY constraint failed".to_string(),
+            ))
+        }
+    }
+
+    fn captured_failure_response() -> CapturedIndexerHttpResponse {
+        CapturedIndexerHttpResponse {
+            status: 401,
+            headers: Vec::new(),
+            body: b"unauthorized".to_vec(),
+        }
+    }
+
+    /// A connection test probes under a synthetic id that has no `indexers`
+    /// row. Persisting history for it can only fail the foreign key, so the
+    /// capture path must not attempt the write at all — the operator has to see
+    /// the probe's own error, not a storage failure raised behind it.
+    #[test]
+    fn the_connection_test_id_is_never_persisted_as_error_history() {
+        let recorder = Arc::new(ForeignKeyRejectingRecorder::default());
+        let capture = IndexerErrorCaptureContext {
+            indexer_id: scryer_application::CONNECTION_TEST_INDEXER_ID.to_string(),
+            indexer_name: "Test Connection".to_string(),
+            operation: IndexerErrorOperation::ConnectionTest,
+            recorder: recorder.clone(),
+        };
+
+        PluginHttpHost::record_captured_response(&capture, captured_failure_response());
+        PluginHttpHost::record_transport_failure(&capture);
+
+        assert!(
+            recorder
+                .attempts
+                .lock()
+                .expect("recorded attempts")
+                .is_empty(),
+            "the synthetic connection-test id must never reach the store"
+        );
+    }
+
+    /// The guard is scoped to the synthetic id: a real indexer still records.
+    #[test]
+    fn a_stored_indexer_id_still_records_error_history() {
+        let recorder = Arc::new(RecordingIndexerErrorRecorder::default());
+        let capture = IndexerErrorCaptureContext {
+            indexer_id: "indexer-1".to_string(),
+            indexer_name: "Test indexer".to_string(),
+            operation: IndexerErrorOperation::ConnectionTest,
+            recorder: recorder.clone(),
+        };
+
+        PluginHttpHost::record_captured_response(&capture, captured_failure_response());
+
+        let errors = recorder.errors.lock().expect("recorded errors");
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].indexer_id, "indexer-1");
+    }
 
     const TEST_PLUGIN_HTTP_CA_CERT_PEM: &str = concat!(
         "-----BEGIN CERTIFICATE-----\n",
@@ -1029,6 +1329,124 @@ mod tests {
         "dlYNMnHca3kyT/MHY4oX5MmPsHY8ANxBBz0XSKw5ysN4cNpK/Q==\n",
         "-----END CERTIFICATE-----\n",
     );
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn capture_scope_records_failed_http_and_terminal_success_responses_once() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let recorder = Arc::new(RecordingIndexerErrorRecorder::default());
+        let host = PluginHttpHost::new(vec!["127.0.0.1".to_string()], None, None, Some(64 * 1024));
+        let context = || IndexerErrorCaptureContext {
+            indexer_id: "indexer-1".to_string(),
+            indexer_name: "Test indexer".to_string(),
+            operation: IndexerErrorOperation::InteractiveSearch,
+            recorder: recorder.clone(),
+        };
+
+        Mock::given(method("GET"))
+            .and(path("/unauthorized"))
+            .respond_with(
+                ResponseTemplate::new(401)
+                    .insert_header("content-type", "application/octet-stream")
+                    .set_body_bytes(vec![0, 255, 1, 254]),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        host.begin_indexer_error_capture(context());
+        host.request(
+            "newznab",
+            PluginHttpRequest {
+                url: format!("{}/unauthorized", server.uri()),
+                method: Some("GET".to_string()),
+                headers: BTreeMap::new(),
+            },
+            None,
+            Duration::from_secs(2),
+        )
+        .expect("accepted HTTP failure response");
+        host.finish_indexer_error_capture(true);
+
+        {
+            let errors = recorder.errors.lock().expect("recorded errors");
+            assert_eq!(
+                errors.len(),
+                1,
+                "terminal completion must not duplicate 401"
+            );
+            assert_eq!(errors[0].response.as_ref().unwrap().status, 401);
+            assert_eq!(
+                errors[0].response.as_ref().unwrap().body,
+                vec![0, 255, 1, 254]
+            );
+            assert_eq!(
+                errors[0].classification,
+                scryer_application::IndexerErrorClassification::HttpUnauthorized
+            );
+        }
+
+        Mock::given(method("GET"))
+            .and(path("/malformed"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("malformed plugin result"))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        host.begin_indexer_error_capture(context());
+        host.request(
+            "newznab",
+            PluginHttpRequest {
+                url: format!("{}/malformed", server.uri()),
+                method: Some("GET".to_string()),
+                headers: BTreeMap::new(),
+            },
+            None,
+            Duration::from_secs(2),
+        )
+        .expect("accepted HTTP success response");
+        host.finish_indexer_error_capture(true);
+
+        let errors = recorder.errors.lock().expect("recorded errors");
+        assert_eq!(errors.len(), 2);
+        assert_eq!(errors[1].response.as_ref().unwrap().status, 200);
+        assert_eq!(
+            errors[1].response.as_ref().unwrap().body,
+            b"malformed plugin result"
+        );
+        assert_eq!(
+            errors[1].classification,
+            scryer_application::IndexerErrorClassification::Unknown
+        );
+    }
+
+    #[test]
+    fn capture_scope_records_failed_operations_without_an_http_response() {
+        let recorder = Arc::new(RecordingIndexerErrorRecorder::default());
+        let host = PluginHttpHost::new(vec![], None, None, Some(64 * 1024));
+        host.begin_indexer_error_capture(IndexerErrorCaptureContext {
+            indexer_id: "indexer-1".to_string(),
+            indexer_name: "Test indexer".to_string(),
+            operation: IndexerErrorOperation::AutomaticSearch,
+            recorder: recorder.clone(),
+        });
+
+        host.finish_indexer_error_capture(true);
+
+        let errors = recorder.errors.lock().expect("recorded errors");
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].response, None);
+        assert_eq!(
+            errors[0].classification,
+            scryer_application::IndexerErrorClassification::Unknown
+        );
+        assert_eq!(
+            errors[0].message,
+            "Indexer plugin command failed without an HTTP response"
+        );
+    }
 
     #[test]
     fn rate_limit_message_parses_prowlarr_newznab_429_contract() {
@@ -1098,7 +1516,7 @@ mod tests {
                             headers: BTreeMap::new(),
                         },
                         None,
-                        Some(Duration::from_secs(2)),
+                        Duration::from_secs(2),
                     )
                     .expect("sibling child request should remain dispatchable");
                 let rate_limit_message = host.rate_limit_message("newznab").unwrap();
@@ -1141,7 +1559,7 @@ mod tests {
                         headers: BTreeMap::new(),
                     },
                     None,
-                    Some(Duration::from_secs(2)),
+                    Duration::from_secs(2),
                 )
                 .expect("plugin HTTP request should succeed from an async runtime");
 
@@ -1172,13 +1590,9 @@ mod tests {
     }
 
     #[test]
-    fn worker_response_timeout_bounds_missing_request_timeouts() {
+    fn worker_response_timeout_includes_dispatch_grace() {
         assert_eq!(
-            worker_response_timeout(None),
-            DEFAULT_PLUGIN_HTTP_REQUEST_TIMEOUT + PLUGIN_HTTP_WORKER_RESPONSE_GRACE
-        );
-        assert_eq!(
-            worker_response_timeout(Some(Duration::from_secs(5))),
+            worker_response_timeout(Duration::from_secs(5)),
             Duration::from_secs(5) + PLUGIN_HTTP_WORKER_RESPONSE_GRACE
         );
     }

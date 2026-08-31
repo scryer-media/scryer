@@ -1,6 +1,9 @@
 const TRACKED_DOWNLOAD_SNAPSHOT_READ_BUDGET: Duration = Duration::from_millis(25);
-const TRACKED_DOWNLOAD_BACKGROUND_WORKER_LIMIT: usize = 1;
+const TRACKED_DOWNLOAD_FAILED_WORKER_LIMIT: usize = 4;
 const DOWNLOAD_QUEUE_POLL_INTERVAL: Duration = Duration::from_secs(10);
+const ABSENT_BINDING_RECONCILE_BATCH_SIZE: usize = 200;
+const ABSENT_BINDING_RECONCILE_RECENCY_FLOOR: chrono::Duration = chrono::Duration::minutes(10);
+const REMOVED_FROM_DOWNLOAD_CLIENT_REASON: &str = "removed from download client";
 
 /// Poll cadence for download-queue snapshots.
 ///
@@ -131,6 +134,10 @@ struct TrackedDownloadRuntimeState {
         HashMap<DownloadQueueProjectionSource, HashMap<String, DownloadQueueItem>>,
     tracked_work_in_flight: HashSet<String>,
     tracked_work_drain: TrackedDownloadWorkDrain,
+}
+
+enum TrackedDownloadBackgroundWorkEvent {
+    Finished(TrackedDownloadBackgroundWorkResult),
 }
 
 impl TrackedDownloadRuntimeState {
@@ -328,9 +335,10 @@ fn apply_tracked_download_activity_projection(
             // (a stale Failed/Skipped/Completed must not repaint the row), but
             // a manual import the operator just queued or that is copying
             // right now is live state the row has to show: keeping it is what
-            // turns the display into `Importing`, greys the actions, and lets
-            // the transfer phase render. Dropping it left blocked rows fully
-            // interactive while a manual import was in flight.
+            // turns the display into the active import state, greys the
+            // actions, and lets the transfer phase render. Dropping it left
+            // blocked rows fully interactive while a manual import was in
+            // flight.
             if !matches!(
                 item.import_status,
                 Some(ImportStatus::Pending | ImportStatus::Running | ImportStatus::Processing)
@@ -417,7 +425,7 @@ impl AppUseCase {
         )
         .await?;
         let source_identity =
-            DownloadSourceIdentity::new(client_id, client_type, download_client_item_id);
+            ClientJobLocator::new(client_id, client_type, download_client_item_id);
         let tracked_id = crate::tracked_downloads::tracked_download_id(
             client_id,
             client_type,
@@ -483,7 +491,16 @@ fn preserved_terminal_ignore_error(state: &str) -> AppError {
 pub(crate) async fn finalize_scryer_download_ignored(
     app: &AppUseCase,
     actor: crate::domain_events::DomainEventActor,
-    source_identity: DownloadSourceIdentity,
+    source_identity: ClientJobLocator,
+) -> AppResult<FinalizeIgnoredOutcome> {
+    finalize_scryer_download_ignored_for_download(app, actor, None, source_identity).await
+}
+
+pub(crate) async fn finalize_scryer_download_ignored_for_download(
+    app: &AppUseCase,
+    actor: crate::domain_events::DomainEventActor,
+    canonical_download_id: Option<&scryer_domain::download_identity::DownloadId>,
+    source_identity: ClientJobLocator,
 ) -> AppResult<FinalizeIgnoredOutcome> {
     let ignored = scryer_domain::TrackedDownloadState::Ignored.as_str();
     if let Err(error) = app
@@ -509,7 +526,7 @@ pub(crate) async fn finalize_scryer_download_ignored(
 
     let submission_repository = &app.services.workflow.download_submissions;
     let Some(submission) = submission_repository
-        .find_by_client_item_id(&source_identity)
+        .find_by_client_item_id_for_download(canonical_download_id, &source_identity)
         .await?
     else {
         return Ok(FinalizeIgnoredOutcome::NoSubmission);
@@ -530,30 +547,42 @@ pub(crate) async fn finalize_scryer_download_ignored(
         _ => {}
     }
 
-    // Legacy submissions predate download-id identity rows; for them the
-    // submission-row state above is both the durability and idempotency guard.
-    let mut identity_already_ignored = false;
-    if let Some(submission_identity) = submission_repository
+    // The durable identity-state row is keyed by the canonical download id, and
+    // since 0184 its legacy wire token is optional — so a token-less (plugin)
+    // item gets a row just like a token-bearing one. The wire token is only
+    // carried along as a compatibility column when the legacy tuple still
+    // resolves one; its absence must not skip the durable write, or the item
+    // re-enters processing on the first see after a restart.
+    //
+    // The store resolves the canonical id itself when the caller has none (from
+    // the locator's active binding) and reports `None` without writing when
+    // nothing is resolvable — for such a submission the legacy
+    // `download_submissions` state read above stays the durability and
+    // idempotency guard, exactly as it was before download-id identity rows.
+    let submission_identity = submission_repository
         .get_submission_identity(&source_identity)
         .await?
-    {
-        let previous = submission_repository
-            .upsert_identity_tracked_state_returning_previous(
-                &submission_identity,
-                Some(&source_identity),
-                ignored,
-                &preserved_states,
-                None,
-                None,
-            )
-            .await?;
-        match previous.as_deref() {
-            Some(state) if preserved_states.contains(&state) => {
-                return Ok(FinalizeIgnoredOutcome::PreservedTerminal(state.to_string()));
-            }
-            Some(state) if state == ignored => identity_already_ignored = true,
-            _ => {}
+        .unwrap_or_default();
+    let previous = submission_repository
+        .upsert_identity_tracked_state_for_download_returning_previous(
+            crate::IdentityTrackedStateTarget {
+                canonical_download_id,
+                identity: &submission_identity,
+                source_identity: Some(&source_identity),
+            },
+            ignored,
+            &preserved_states,
+            None,
+            None,
+        )
+        .await?;
+    let mut identity_already_ignored = false;
+    match previous.as_deref() {
+        Some(state) if preserved_states.contains(&state) => {
+            return Ok(FinalizeIgnoredOutcome::PreservedTerminal(state.to_string()));
         }
+        Some(state) if state == ignored => identity_already_ignored = true,
+        _ => {}
     }
 
     submission_repository
@@ -688,6 +717,7 @@ impl AppUseCase {
         )
         .await?;
         let submission = DownloadSubmission {
+            download_id: scryer_domain::download_identity::DownloadId::new(),
             title_id: title.id.clone(),
             purpose: crate::DownloadSubmissionPurpose::Standard,
             facet: title.facet.as_str().to_string(),
@@ -703,6 +733,7 @@ impl AppUseCase {
             // Filled from the existing row by the assignment command: the
             // grab-time indexer release name survives a reassignment.
             source_title: None,
+            info_hash: None,
             request_signature: None,
             scope,
         };
@@ -732,38 +763,30 @@ impl AppUseCase {
 
 /// Whether the 24 h client-warning timeout may fail this download.
 ///
-/// Operator rule: the timeout applies only when **no seeding profile is
-/// attached** to the download. A torrent grabbed under a seeding profile (the
-/// indexer's, a Prowlarr-managed one, a routing entry's or the global default —
-/// anything the grab persisted with a resolution source) is governed by that
-/// profile's rules; failing and removing it after a day would expose private
-/// tracker users to hit-and-run penalties. Such a torrent keeps its warning for
-/// the operator and is never auto-failed here. Usenet downloads and torrents
-/// grabbed with no profile keep the timeout. Anything that is not a warned,
+/// **A torrent warning is never auto-failed** — Sonarr parity, and the reason
+/// is hit-and-run: a completed torrent can sit in `Warning` on a recoverable
+/// client condition (disk, permissions, a tracker hiccup), and manufacturing a
+/// `Failed` here removes its client entry through a path the seeding gate
+/// never sees — bypassing the private rail for exactly the torrents that have
+/// no profile to protect them. The gate holds on *unknown*; a timeout that
+/// fails on unknown is the opposite rule, and 8 of 13 clients cannot report
+/// privateness at all. The warning stays visible for the operator, who can
+/// resolve or replace the download; Sonarr's `FailedDownloadService` acts only
+/// on `Failed`/`IsEncrypted` and lets warnings persist the same way.
+///
+/// Usenet downloads keep the timeout. Anything that is not a warned,
 /// Scryer-origin download is irrelevant and reports `true` (the tracker then
 /// ignores it on its own checks).
-pub(crate) async fn warning_timeout_applies(
+pub(crate) fn warning_timeout_applies(
     app: &AppUseCase,
     td: &crate::tracked_downloads::TrackedDownload,
 ) -> bool {
     if td.client_item.state != scryer_domain::DownloadQueueState::Warning
         || !td.client_item.is_scryer_origin
-        || !crate::seeding_gate::client_type_is_torrent(app, &td.client_type)
     {
         return true;
     }
-    use crate::seeding_gate::{SeedGoalLookupKey, SeedGoalsRead};
-    let key = SeedGoalLookupKey {
-        client_id: td.client_id.trim().to_string(),
-        client_type: td.client_type.trim().to_string(),
-        client_item_id: td.client_item.download_client_item_id.trim().to_string(),
-        info_hash: crate::normalize_torrent_info_hash(Some(
-            td.client_item.download_client_item_id.as_str(),
-        )),
-    };
-    !app.resolved_seed_goals(&key, None)
-        .await
-        .is_some_and(|goals| goals.resolution_source != crate::SeedGoalResolutionSource::None)
+    !crate::seeding_gate::client_type_is_torrent(app, &td.client_type)
 }
 
 #[expect(
@@ -774,7 +797,7 @@ async fn process_tracked_download_snapshot(
     app: &AppUseCase,
     actor: &User,
     runtime: &mut TrackedDownloadRuntimeState,
-    result_tx: &tokio::sync::mpsc::UnboundedSender<TrackedDownloadBackgroundWorkResult>,
+    result_tx: &tokio::sync::mpsc::UnboundedSender<TrackedDownloadBackgroundWorkEvent>,
     mut items: Vec<DownloadQueueItem>,
     completed_download_lookup: Option<crate::completed_download_handler::CompletedDownloadLookup>,
     prune: TrackedDownloadSnapshotPrune,
@@ -782,6 +805,7 @@ async fn process_tracked_download_snapshot(
     dispatch: TrackedDownloadSnapshotDispatch,
     emit_metrics: bool,
     excluded_client_type_refs: &[&str],
+    authoritative_client_ids: Option<&HashSet<String>>,
     snapshot_label: &'static str,
 ) {
     let cycle_started_at = Instant::now();
@@ -843,7 +867,7 @@ async fn process_tracked_download_snapshot(
         }
 
         let warning_timeout_applies = match runtime.tracker.find(&id) {
-            Some(td) => warning_timeout_applies(app, td).await,
+            Some(td) => warning_timeout_applies(app, td),
             None => true,
         };
         if runtime
@@ -885,13 +909,25 @@ async fn process_tracked_download_snapshot(
         }
     }
 
+    let reconcile_restart_ghosts = matches!(
+        prune,
+        TrackedDownloadSnapshotPrune::GlobalExcludingClientTypes
+    );
     let unavailable_sources = match prune {
         TrackedDownloadSnapshotPrune::GlobalExcludingClientTypes => runtime
             .tracker
-            .update_trackable_excluding_client_types(&seen_ids, excluded_client_type_refs),
+            .update_trackable_excluding_client_types_for_authoritative_clients(
+                &seen_ids,
+                excluded_client_type_refs,
+                authoritative_client_ids,
+            ),
         TrackedDownloadSnapshotPrune::Scope(scope) => runtime
             .tracker
-            .update_trackable_for_scope(&seen_ids, &scope),
+            .update_trackable_for_scope_for_authoritative_clients(
+                &seen_ids,
+                &scope,
+                authoritative_client_ids,
+            ),
         TrackedDownloadSnapshotPrune::None => Vec::new(),
     };
 
@@ -910,6 +946,19 @@ async fn process_tracked_download_snapshot(
                 "failed to clean up manual-import selections for unavailable download"
             );
         }
+
+        reconcile_authoritatively_absent_source(app, &mut runtime.tracker, &source_identity).await;
+    }
+
+    if reconcile_restart_ghosts && let Some(authoritative_client_ids) = authoritative_client_ids {
+        reconcile_restart_ghost_bindings(
+            app,
+            &mut runtime.tracker,
+            &items,
+            excluded_client_type_refs,
+            authoritative_client_ids,
+        )
+        .await;
     }
 
     reconcile_terminal_tracked_downloads(app, &mut runtime.tracker).await;
@@ -917,49 +966,47 @@ async fn process_tracked_download_snapshot(
 
     // Phase 2: Dispatch — import pending and failed items.
     let mut published_after_dispatch = false;
-    if runtime.tracked_work_in_flight.is_empty() {
-        if !runtime.tracked_work_drain.has_pending() {
-            match dispatch {
-                TrackedDownloadSnapshotDispatch::AllTrackable => {
-                    let trackable_ids = trackable_ids_excluding_client_types(
-                        &runtime.tracker,
-                        excluded_client_type_refs,
-                    );
-                    runtime.tracked_work_drain = build_tracked_download_work_drain(
-                        app,
-                        &runtime.tracker,
-                        &runtime.tracked_work_in_flight,
-                        &trackable_ids,
-                        excluded_client_type_refs,
-                    )
-                    .await;
-                }
-                TrackedDownloadSnapshotDispatch::Seen { completed_lookup } => {
-                    let trackable_ids = seen_order
-                        .iter()
-                        .filter(|id| {
-                            runtime.tracker.find(id).is_some_and(|td| {
-                                td.is_trackable
-                                    && !td.state.is_terminal()
-                                    && match td.state {
-                                        TrackedDownloadState::FailedPending => true,
-                                        TrackedDownloadState::ImportPending => {
-                                            !td.waiting_for_completed_history
-                                                && completed_lookup.matches_tracked_download(td)
-                                        }
-                                        _ => false,
+    {
+        match dispatch {
+            TrackedDownloadSnapshotDispatch::AllTrackable => {
+                let trackable_ids = trackable_ids_excluding_client_types(
+                    &runtime.tracker,
+                    excluded_client_type_refs,
+                );
+                runtime.tracked_work_drain = build_tracked_download_work_drain(
+                    app,
+                    &runtime.tracker,
+                    &runtime.tracked_work_in_flight,
+                    &trackable_ids,
+                    excluded_client_type_refs,
+                )
+                .await;
+            }
+            TrackedDownloadSnapshotDispatch::Seen { completed_lookup } => {
+                let trackable_ids = seen_order
+                    .iter()
+                    .filter(|id| {
+                        runtime.tracker.find(id).is_some_and(|td| {
+                            td.is_trackable
+                                && !td.state.is_terminal()
+                                && match td.state {
+                                    TrackedDownloadState::FailedPending => true,
+                                    TrackedDownloadState::ImportPending => {
+                                        !td.waiting_for_completed_history
+                                            && completed_lookup.matches_tracked_download(td)
                                     }
-                            })
+                                    _ => false,
+                                }
                         })
-                        .cloned()
-                        .collect();
-                    runtime.tracked_work_drain =
-                        TrackedDownloadWorkDrain::new(trackable_ids, completed_lookup);
-                }
+                    })
+                    .cloned()
+                    .collect();
+                runtime.tracked_work_drain =
+                    TrackedDownloadWorkDrain::new(trackable_ids, completed_lookup);
             }
         }
 
-        if runtime.tracked_work_drain.has_pending()
+        while runtime.tracked_work_drain.has_pending()
             && try_dispatch_next_tracked_download_background_work(
                 app,
                 actor,
@@ -1035,6 +1082,339 @@ async fn process_tracked_download_snapshot(
     );
 }
 
+async fn reconcile_restart_ghost_bindings(
+    app: &AppUseCase,
+    tracker: &mut crate::tracked_downloads::TrackedDownloadService,
+    items: &[DownloadQueueItem],
+    excluded_client_type_refs: &[&str],
+    authoritative_client_ids: &HashSet<String>,
+) {
+    let enabled_clients = match app.enabled_download_clients_by_priority().await {
+        Ok(clients) => clients,
+        Err(error) => {
+            tracing::warn!(error = %error, "skipping absent-binding reconciliation without client configuration");
+            return;
+        }
+    };
+    let observed_before = chrono::Utc::now() - ABSENT_BINDING_RECONCILE_RECENCY_FLOOR;
+    let mut remaining = ABSENT_BINDING_RECONCILE_BATCH_SIZE;
+
+    for client in enabled_clients {
+        if remaining == 0 {
+            break;
+        }
+        if crate::tracked_downloads::tracked_client_type_is_excluded(
+            &client.client_type,
+            excluded_client_type_refs,
+        ) {
+            continue;
+        }
+        if !authoritative_client_ids.contains(&client.id) {
+            continue;
+        }
+
+        let bindings = match app
+            .services
+            .workflow
+            .download_registry
+            .list_active_bindings_for_client_before(
+                &client.id,
+                &client.client_type,
+                observed_before,
+                remaining,
+            )
+            .await
+        {
+            Ok(bindings) => bindings,
+            Err(error) => {
+                tracing::warn!(
+                    error = %error,
+                    client_id = %client.id,
+                    client_type = %client.client_type,
+                    "failed to list active bindings for absent-download reconciliation"
+                );
+                continue;
+            }
+        };
+        remaining = remaining.saturating_sub(bindings.len());
+
+        for binding in bindings {
+            let Some(native_item_id) = binding.native_item_id else {
+                continue;
+            };
+            let observed = items.iter().any(|item| {
+                item.client_id == client.id
+                    && item.client_type.eq_ignore_ascii_case(&client.client_type)
+                    && item.download_client_item_id == native_item_id
+            });
+            if observed {
+                continue;
+            }
+
+            let source_identity = crate::ClientJobLocator::new(
+                Some(client.id.as_str()),
+                &client.client_type,
+                native_item_id,
+            );
+            reconcile_authoritatively_absent_source(app, tracker, &source_identity).await;
+        }
+    }
+}
+
+pub(crate) async fn reconcile_authoritatively_absent_source(
+    app: &AppUseCase,
+    tracker: &mut crate::tracked_downloads::TrackedDownloadService,
+    source_identity: &crate::ClientJobLocator,
+) {
+    let binding = match app
+        .services
+        .workflow
+        .download_registry
+        .find_active_binding_by_locator(source_identity)
+        .await
+    {
+        Ok(Some(binding)) => binding,
+        Ok(None) => return,
+        Err(error) => {
+            tracing::warn!(
+                error = %error,
+                client_id = ?source_identity.client_id,
+                client_type = %source_identity.client_type,
+                item_id = %source_identity.item_id,
+                "failed to resolve active binding for unavailable download"
+            );
+            return;
+        }
+    };
+
+    match authoritatively_absent_download_disposition(app, tracker, source_identity, &binding).await
+    {
+        AuthoritativelyAbsentDownloadDisposition::Preserve => return,
+        AuthoritativelyAbsentDownloadDisposition::Fail => {
+            fail_authoritatively_absent_download(
+                app,
+                tracker,
+                source_identity,
+                binding.download_id,
+            )
+            .await;
+        }
+        AuthoritativelyAbsentDownloadDisposition::Terminal => {}
+    }
+
+    if let Err(error) = app
+        .services
+        .workflow
+        .download_registry
+        .end_binding(&binding.download_id)
+        .await
+    {
+        tracing::warn!(
+            error = %error,
+            download_id = %binding.download_id,
+            client_id = ?source_identity.client_id,
+            client_type = %source_identity.client_type,
+            item_id = %source_identity.item_id,
+            "failed to end binding for unavailable download"
+        );
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AuthoritativelyAbsentDownloadDisposition {
+    Preserve,
+    Terminal,
+    Fail,
+}
+
+async fn authoritatively_absent_download_disposition(
+    app: &AppUseCase,
+    tracker: &crate::tracked_downloads::TrackedDownloadService,
+    source_identity: &crate::ClientJobLocator,
+    binding: &crate::DownloadClientBindingRecord,
+) -> AuthoritativelyAbsentDownloadDisposition {
+    if let Some(id) = tracker
+        .cached_id_for_source_identity_for_download(Some(&binding.download_id), source_identity)
+        && let Some(tracked) = tracker.find(&id)
+    {
+        if crate::tracked_downloads::TrackedDownloadService::should_preserve_tracking(tracked.state)
+        {
+            return AuthoritativelyAbsentDownloadDisposition::Preserve;
+        }
+        if tracked.state.is_terminal() {
+            return AuthoritativelyAbsentDownloadDisposition::Terminal;
+        }
+    }
+
+    let durable_disposition = match app
+        .services
+        .workflow
+        .download_submissions
+        .get_identity_tracked_state_for_download(
+            Some(&binding.download_id),
+            &crate::DownloadSubmissionIdentity::default(),
+            Some(source_identity),
+        )
+        .await
+    {
+        Ok(Some(state)) => match scryer_domain::TrackedDownloadState::from_str_opt(&state) {
+            Some(state)
+                if crate::tracked_downloads::TrackedDownloadService::should_preserve_tracking(
+                    state,
+                ) =>
+            {
+                AuthoritativelyAbsentDownloadDisposition::Preserve
+            }
+            Some(state) if state.is_terminal() => {
+                AuthoritativelyAbsentDownloadDisposition::Terminal
+            }
+            Some(_) | None => AuthoritativelyAbsentDownloadDisposition::Fail,
+        },
+        Ok(None) => AuthoritativelyAbsentDownloadDisposition::Fail,
+        Err(error) => {
+            tracing::warn!(
+                error = %error,
+                download_id = %binding.download_id,
+                "could not load durable unavailable download state; preserving until it can be read"
+            );
+            return AuthoritativelyAbsentDownloadDisposition::Preserve;
+        }
+    };
+    if durable_disposition != AuthoritativelyAbsentDownloadDisposition::Fail {
+        return durable_disposition;
+    }
+
+    match app
+        .services
+        .workflow
+        .download_registry
+        .load_download(&binding.download_id)
+        .await
+    {
+        Ok(Some(download)) if download.terminal_at.is_some() => {
+            AuthoritativelyAbsentDownloadDisposition::Terminal
+        }
+        Ok(Some(_)) => AuthoritativelyAbsentDownloadDisposition::Fail,
+        Ok(None) => {
+            tracing::warn!(
+                download_id = %binding.download_id,
+                "active download binding has no canonical download row; ending binding without replacing terminal state"
+            );
+            AuthoritativelyAbsentDownloadDisposition::Terminal
+        }
+        Err(error) => {
+            tracing::warn!(
+                error = %error,
+                download_id = %binding.download_id,
+                "could not determine unavailable download terminal state; ending binding without replacing terminal state"
+            );
+            AuthoritativelyAbsentDownloadDisposition::Terminal
+        }
+    }
+}
+
+async fn fail_authoritatively_absent_download(
+    app: &AppUseCase,
+    tracker: &mut crate::tracked_downloads::TrackedDownloadService,
+    source_identity: &crate::ClientJobLocator,
+    download_id: scryer_domain::download_identity::DownloadId,
+) {
+    let tracked_id =
+        tracker.cached_id_for_source_identity_for_download(Some(&download_id), source_identity);
+
+    if let Some(id) = tracked_id.as_deref() {
+        if let Some(tracked) = tracker.find_mut(id) {
+            tracked.state = scryer_domain::TrackedDownloadState::FailedPending;
+            tracked.status = scryer_domain::TrackedDownloadStatus::Error;
+            tracked.status_messages = vec![REMOVED_FROM_DOWNLOAD_CLIENT_REASON.to_string()];
+            tracked.client_item.attention_reason =
+                Some(REMOVED_FROM_DOWNLOAD_CLIENT_REASON.to_string());
+        }
+        if let Some(tracked) = tracker.find_mut(id) {
+            crate::failed_download_handler::process_failed(app, tracked).await;
+        }
+        if let Some(tracked) = tracker.find_mut(id) {
+            tracked.state = scryer_domain::TrackedDownloadState::Failed;
+            tracked.status = scryer_domain::TrackedDownloadStatus::Error;
+            if tracked.status_messages.is_empty() {
+                tracked
+                    .status_messages
+                    .push(REMOVED_FROM_DOWNLOAD_CLIENT_REASON.to_string());
+            }
+        }
+        if let Some(tracked) = tracker.find(id) {
+            crate::tracked_downloads::persist_tracked_download_state_marker(
+                app,
+                tracked,
+                scryer_domain::TrackedDownloadState::Failed,
+                Some(REMOVED_FROM_DOWNLOAD_CLIENT_REASON),
+                None,
+            )
+            .await;
+        }
+        return;
+    }
+
+    if let Err(error) = app
+        .services
+        .workflow
+        .download_submissions
+        .update_tracked_state(
+            source_identity,
+            scryer_domain::TrackedDownloadState::Failed.as_str(),
+        )
+        .await
+    {
+        tracing::warn!(
+            error = %error,
+            download_id = %download_id,
+            "failed to record legacy tracked state for unavailable download"
+        );
+        return;
+    }
+
+    // Since 0184 the durable row is keyed by the canonical download id; the
+    // wire identity is only a compatibility column, so a token-less item still
+    // gets its failed marker.
+    let identity = match app
+        .services
+        .workflow
+        .download_submissions
+        .get_submission_identity(source_identity)
+        .await
+    {
+        Ok(identity) => identity.unwrap_or_default(),
+        Err(error) => {
+            tracing::warn!(
+                error = %error,
+                download_id = %download_id,
+                "failed to load submission identity for unavailable download"
+            );
+            return;
+        }
+    };
+    if let Err(error) = app
+        .services
+        .workflow
+        .download_submissions
+        .record_identity_tracked_state_for_download(
+            Some(&download_id),
+            &identity,
+            Some(source_identity),
+            scryer_domain::TrackedDownloadState::Failed.as_str(),
+            Some(REMOVED_FROM_DOWNLOAD_CLIENT_REASON),
+            None,
+        )
+        .await
+    {
+        tracing::warn!(
+            error = %error,
+            download_id = %download_id,
+            "failed to record canonical tracked state for unavailable download"
+        );
+    }
+}
+
 fn tracked_download_snapshot_projection_key(
     scope: &crate::tracked_downloads::TrackedDownloadSnapshotScope,
 ) -> Option<DownloadQueueProjectionSource> {
@@ -1058,7 +1438,7 @@ async fn process_external_tracked_download_snapshot_update(
     app: &AppUseCase,
     actor: &User,
     runtime: &mut TrackedDownloadRuntimeState,
-    result_tx: &tokio::sync::mpsc::UnboundedSender<TrackedDownloadBackgroundWorkResult>,
+    result_tx: &tokio::sync::mpsc::UnboundedSender<TrackedDownloadBackgroundWorkEvent>,
     update: crate::tracked_downloads::TrackedDownloadSnapshotUpdate,
     excluded_client_type_refs: &[&str],
 ) {
@@ -1080,6 +1460,15 @@ async fn process_external_tracked_download_snapshot_update(
         crate::tracked_downloads::TrackedDownloadSnapshotScope::Delta => {
             TrackedDownloadSnapshotPrune::None
         }
+    };
+    let authoritative_client_ids = match &prune {
+        TrackedDownloadSnapshotPrune::Scope(
+            crate::tracked_downloads::TrackedDownloadSnapshotScope::AuthoritativeForClient {
+                client_id: Some(client_id),
+                ..
+            },
+        ) => Some(HashSet::from([client_id.clone()])),
+        _ => None,
     };
     let projection = match projection_key {
         Some(source) => TrackedDownloadSnapshotProjection::Publish { source },
@@ -1105,6 +1494,7 @@ async fn process_external_tracked_download_snapshot_update(
         dispatch,
         emit_metrics,
         excluded_client_type_refs,
+        authoritative_client_ids.as_ref(),
         "external",
     )
     .await;
@@ -1142,7 +1532,7 @@ pub async fn start_download_queue_poller_with_options(
 
     let mut runtime = TrackedDownloadRuntimeState::new();
     let (tracked_work_result_tx, mut tracked_work_result_rx) =
-        tokio::sync::mpsc::unbounded_channel::<TrackedDownloadBackgroundWorkResult>();
+        tokio::sync::mpsc::unbounded_channel::<TrackedDownloadBackgroundWorkEvent>();
 
     // Exclusions are re-derived at every use instead of once at startup: the
     // bridged set changes at runtime as the bridge supervisor starts and stops
@@ -1209,23 +1599,31 @@ pub async fn start_download_queue_poller_with_options(
                 }
             }
             maybe_result = tracked_work_result_rx.recv(), if !runtime.tracked_work_in_flight.is_empty() => {
-                if let Some(result) = maybe_result {
-                    handle_tracked_download_background_work_result(
-                        &app,
-                        &mut runtime.tracker,
-                        &mut runtime.tracked_work_in_flight,
-                        result,
-                    )
-                    .await;
-                    if try_dispatch_next_tracked_download_background_work(
-                        &app,
-                        &actor,
-                        &mut runtime.tracker,
-                        &mut runtime.tracked_work_in_flight,
-                        &tracked_work_result_tx,
-                        &mut runtime.tracked_work_drain,
-                    ) {
-                        publish_runtime_tracked_download_snapshot_cache(&app, &runtime.tracker).await;
+                if let Some(event) = maybe_result {
+                    match event {
+                        TrackedDownloadBackgroundWorkEvent::Finished(result) => {
+                            handle_tracked_download_background_work_result(
+                                &app,
+                                &mut runtime.tracker,
+                                &mut runtime.tracked_work_in_flight,
+                                result,
+                            )
+                            .await;
+                            let mut dispatched = false;
+                            while try_dispatch_next_tracked_download_background_work(
+                                &app,
+                                &actor,
+                                &mut runtime.tracker,
+                                &mut runtime.tracked_work_in_flight,
+                                &tracked_work_result_tx,
+                                &mut runtime.tracked_work_drain,
+                            ) {
+                                dispatched = true;
+                            }
+                            if dispatched {
+                                publish_runtime_tracked_download_snapshot_cache(&app, &runtime.tracker).await;
+                            }
+                        }
                     }
                 }
             }
@@ -1258,7 +1656,7 @@ pub async fn start_download_queue_poller_with_options(
                 // and it makes the tick self-sufficient rather than a
                 // best-effort sighting that history occasionally repairs.
                 let client_refresh_started_at = Instant::now();
-                match app
+                let (snapshot, collection_error) = match app
                     .collect_download_snapshot_items_excluding_client_types(
                         true,
                         true,
@@ -1267,41 +1665,56 @@ pub async fn start_download_queue_poller_with_options(
                     )
                     .await
                 {
-                    Ok(items) => {
-                        let completed_download_lookup =
-                            crate::completed_download_handler::load_completed_download_lookup_for_items_excluding_client_types(
-                                &app,
-                                &items,
-                                DOWNLOAD_QUEUE_RECENT_COMPLETED_LIMIT,
-                                &excluded_client_type_refs,
-                            )
-                            .await;
-                        process_tracked_download_snapshot(
-                            &app,
-                            &actor,
-                            &mut runtime,
-                            &tracked_work_result_tx,
-                            items,
-                            completed_download_lookup,
-                            TrackedDownloadSnapshotPrune::GlobalExcludingClientTypes,
-                            TrackedDownloadSnapshotProjection::Publish {
-                                source: DownloadQueueProjectionSource::Poller,
-                            },
-                            TrackedDownloadSnapshotDispatch::AllTrackable,
-                            true,
-                            &excluded_client_type_refs,
-                            "poller",
-                        ).await;
-                    }
+                    Ok(snapshot) => (snapshot, None),
                     Err(error) => {
-                        tracing::warn!(error = %error, "download queue poll failed");
-                        app.runtime
-                            .acquisition
-                            .download_queue_snapshot
-                            .mark_refresh_failed(error.to_string())
-                            .await;
+                        tracing::warn!(error = %error, "download queue poll collected no client snapshot");
+                        (
+                            crate::ports::DownloadClientSnapshotOutcome::default(),
+                            Some(error.to_string()),
+                        )
                     }
+                };
+                if !snapshot.any_client_read_succeeded {
+                    let error = collection_error.unwrap_or_else(|| {
+                        "all included download clients failed their queue/activity reads".to_string()
+                    });
+                    app.runtime
+                        .acquisition
+                        .download_queue_snapshot
+                        .mark_refresh_failed(error)
+                        .await;
                 }
+                let crate::ports::DownloadClientSnapshotOutcome {
+                    items,
+                    authoritative_client_ids,
+                    ..
+                } = snapshot;
+                let completed_download_lookup =
+                    crate::completed_download_handler::load_completed_download_lookup_for_items_excluding_client_types(
+                        &app,
+                        &items,
+                        DOWNLOAD_QUEUE_RECENT_COMPLETED_LIMIT,
+                        &excluded_client_type_refs,
+                    )
+                    .await;
+                process_tracked_download_snapshot(
+                    &app,
+                    &actor,
+                    &mut runtime,
+                    &tracked_work_result_tx,
+                    items,
+                    completed_download_lookup,
+                    TrackedDownloadSnapshotPrune::GlobalExcludingClientTypes,
+                    TrackedDownloadSnapshotProjection::Publish {
+                        source: DownloadQueueProjectionSource::Poller,
+                    },
+                    TrackedDownloadSnapshotDispatch::AllTrackable,
+                    true,
+                    &excluded_client_type_refs,
+                    Some(&authoritative_client_ids),
+                    "poller",
+                )
+                .await;
                 metrics::histogram!("scryer_download_client_refresh_duration_seconds")
                     .record(client_refresh_started_at.elapsed().as_secs_f64());
                 reconcile_excluded_client_recent_history(
@@ -1332,6 +1745,31 @@ fn resolve_tracked_command_id(
         .resolve_cached_id(requested_id)
         .unwrap_or_else(|| requested_id.to_string())
 }
+
+fn resolve_tracked_command_id_for_download(
+    tracker: &crate::tracked_downloads::TrackedDownloadService,
+    canonical_download_id: Option<&scryer_domain::download_identity::DownloadId>,
+    requested_id: &str,
+) -> String {
+    let legacy = tracker.resolve_cached_id(requested_id);
+    let canonical = canonical_download_id.and_then(|canonical_download_id| {
+        tracker.cached_id_for_canonical_download_id(canonical_download_id)
+    });
+    if let (Some(canonical), Some(legacy)) = (&canonical, &legacy)
+        && canonical != legacy
+    {
+        tracing::warn!(
+            target: "download_identity_resolver",
+            canonical_download_id = ?canonical_download_id,
+            canonical_tracked_id = %canonical,
+            legacy_tracked_id = %legacy,
+            "manual import canonical and legacy tracked download lookups disagreed; using legacy tracked download"
+        );
+    }
+    legacy
+        .or(canonical)
+        .unwrap_or_else(|| requested_id.to_string())
+}
 pub(crate) async fn assign_tracked_download_title_command(
     app: &AppUseCase,
     tracker: &mut crate::tracked_downloads::TrackedDownloadService,
@@ -1358,7 +1796,7 @@ pub(crate) async fn assign_tracked_download_title_command(
     // submission anyway). It names the requested scope, and it must not throw
     // away the grab-time indexer release name — that is still the best
     // release evidence for parsing and scoring, whatever title it lands in.
-    let source_identity = DownloadSourceIdentity::from_submission(&submission);
+    let source_identity = ClientJobLocator::from_submission(&submission);
     if submission
         .source_title
         .as_deref()
@@ -1408,9 +1846,7 @@ async fn handle_tracked_download_command(
     actor: &User,
     tracker: &mut crate::tracked_downloads::TrackedDownloadService,
     tracked_work_in_flight: &mut HashSet<String>,
-    tracked_work_result_tx: &tokio::sync::mpsc::UnboundedSender<
-        TrackedDownloadBackgroundWorkResult,
-    >,
+    tracked_work_result_tx: &tokio::sync::mpsc::UnboundedSender<TrackedDownloadBackgroundWorkEvent>,
     command: crate::tracked_downloads::TrackedDownloadCommand,
 ) {
     use crate::tracked_downloads::TrackedDownloadCommand;
@@ -1419,12 +1855,17 @@ async fn handle_tracked_download_command(
     match command {
         TrackedDownloadCommand::ReconcileManualImport {
             id,
+            canonical_download_id,
             files_imported_this_pass,
             expected_mapping_count,
             reply,
         } => {
             let requested_id = id;
-            let id = resolve_tracked_command_id(tracker, &requested_id);
+            let id = resolve_tracked_command_id_for_download(
+                tracker,
+                canonical_download_id.as_ref(),
+                &requested_id,
+            );
             if tracked_work_in_flight.contains(&id) {
                 let _ = reply.send(Err(AppError::Validation(format!(
                     "tracked download {requested_id} is busy processing"
@@ -1442,7 +1883,7 @@ async fn handle_tracked_download_command(
                     files_imported_this_pass,
                     expected_mapping_count,
                 )
-                .await
+                .await?
                 {
                     return Ok(false);
                 }
@@ -1468,9 +1909,17 @@ async fn handle_tracked_download_command(
             }
             let _ = reply.send(result);
         }
-        TrackedDownloadCommand::MarkImported { id, reply } => {
+        TrackedDownloadCommand::MarkImported {
+            id,
+            canonical_download_id,
+            reply,
+        } => {
             let requested_id = id;
-            let id = resolve_tracked_command_id(tracker, &requested_id);
+            let id = resolve_tracked_command_id_for_download(
+                tracker,
+                canonical_download_id.as_ref(),
+                &requested_id,
+            );
             if tracked_work_in_flight.contains(&id) {
                 let _ = reply.send(Err(AppError::Validation(format!(
                     "tracked download {requested_id} is busy processing"
@@ -1502,6 +1951,7 @@ async fn handle_tracked_download_command(
         }
         TrackedDownloadCommand::MarkImportedIfAwaitingImport {
             source_identity,
+            canonical_download_id,
             record_completed_at,
             reply,
         } => {
@@ -1510,7 +1960,10 @@ async fn handle_tracked_download_command(
                 manual_import_recovery_verdict,
             };
 
-            let Some(id) = tracker.cached_id_for_source_identity(&source_identity) else {
+            let Some(id) = tracker.cached_id_for_source_identity_for_download(
+                canonical_download_id.as_ref(),
+                &source_identity,
+            ) else {
                 let _ = reply.send(Ok(ManualImportRecoveryOutcome::Untracked));
                 return;
             };
@@ -1598,6 +2051,12 @@ async fn handle_tracked_download_command(
             }
             let _ = reply.send(result);
         }
+        TrackedDownloadCommand::Forget { id, reply } => {
+            let id = resolve_tracked_command_id(tracker, &id);
+            tracker.stop_tracking(&id);
+            publish_runtime_tracked_download_snapshot_cache(app, tracker).await;
+            let _ = reply.send(Ok(()));
+        }
         TrackedDownloadCommand::MarkFailed {
             id,
             skip_reacquire,
@@ -1611,13 +2070,12 @@ async fn handle_tracked_download_command(
                 ))));
                 return;
             }
-            let failure_identity = tracker.find(&id).and_then(
-                crate::failed_download_handler::tracked_download_failure_submission_identity,
-            );
-            let has_grabbed_submission = if let Some(identity) = failure_identity.as_ref() {
-                crate::failed_download_handler::download_submission_exists(app, identity).await
-            } else {
-                false
+            let has_grabbed_submission = match tracker.find(&id) {
+                Some(td) => {
+                    crate::failed_download_handler::tracked_download_has_grabbed_submission(app, td)
+                        .await
+                }
+                None => false,
             };
             let result = if let Some(td) = tracker.find_mut(&id) {
                 if !has_grabbed_submission {
@@ -1730,7 +2188,6 @@ fn prepare_tracked_download_background_work_dispatch(
             if td.import_retry_deferred(chrono::Utc::now()) {
                 return None;
             }
-            crate::completed_download_handler::mark_importing(td);
             Some((TrackedDownloadBackgroundWorkKind::Import, td.clone()))
         }
         TrackedDownloadState::FailedPending => {
@@ -1941,7 +2398,7 @@ async fn reconcile_excluded_client_recent_history(
     app: &AppUseCase,
     actor: &User,
     runtime: &mut TrackedDownloadRuntimeState,
-    result_tx: &tokio::sync::mpsc::UnboundedSender<TrackedDownloadBackgroundWorkResult>,
+    result_tx: &tokio::sync::mpsc::UnboundedSender<TrackedDownloadBackgroundWorkEvent>,
     excluded_client_type_refs: &[&str],
 ) {
     if excluded_client_type_refs.is_empty() {
@@ -2055,6 +2512,7 @@ async fn reconcile_excluded_client_recent_history(
         TrackedDownloadSnapshotDispatch::Seen { completed_lookup },
         false,
         excluded_client_type_refs,
+        None,
         "history-reconcile",
     )
     .await;
@@ -2064,13 +2522,10 @@ async fn try_dispatch_excluded_completed_history_retry(
     app: &AppUseCase,
     actor: &User,
     runtime: &mut TrackedDownloadRuntimeState,
-    result_tx: &tokio::sync::mpsc::UnboundedSender<TrackedDownloadBackgroundWorkResult>,
+    result_tx: &tokio::sync::mpsc::UnboundedSender<TrackedDownloadBackgroundWorkEvent>,
     excluded_client_types: &[&str],
 ) {
-    if excluded_client_types.is_empty()
-        || !runtime.tracked_work_in_flight.is_empty()
-        || runtime.tracked_work_drain.has_pending()
-    {
+    if excluded_client_types.is_empty() || runtime.tracked_work_drain.has_pending() {
         return;
     }
 
@@ -2084,15 +2539,18 @@ async fn try_dispatch_excluded_completed_history_retry(
     let revalidated = retry_drain.revalidated;
     runtime.tracked_work_drain = retry_drain.drain;
 
-    if try_dispatch_next_tracked_download_background_work(
+    let mut dispatched = false;
+    while try_dispatch_next_tracked_download_background_work(
         app,
         actor,
         &mut runtime.tracker,
         &mut runtime.tracked_work_in_flight,
         result_tx,
         &mut runtime.tracked_work_drain,
-    ) || revalidated
-    {
+    ) {
+        dispatched = true;
+    }
+    if dispatched || revalidated {
         publish_runtime_tracked_download_snapshot_cache(app, &runtime.tracker).await;
     }
 }
@@ -2130,12 +2588,11 @@ fn prepare_next_tracked_download_background_work_dispatch(
     tracked_work_in_flight: &HashSet<String>,
     drain: &mut TrackedDownloadWorkDrain,
 ) -> Option<(String, TrackedDownloadBackgroundWorkKind, TrackedDownload)> {
-    if tracked_work_in_flight.len() >= TRACKED_DOWNLOAD_BACKGROUND_WORKER_LIMIT {
-        return None;
-    }
-
-    while let Some(id) = drain.pending_ids.pop_front() {
-        if !drain.attempted_ids.insert(id.clone()) {
+    let mut remaining = drain.pending_ids.len();
+    while remaining > 0 {
+        remaining -= 1;
+        let id = drain.pending_ids.pop_front()?;
+        if drain.attempted_ids.contains(&id) {
             continue;
         }
         if tracked_work_in_flight.contains(&id) {
@@ -2144,11 +2601,34 @@ fn prepare_next_tracked_download_background_work_dispatch(
         if let Some((kind, tracked)) =
             prepare_tracked_download_background_work_dispatch(tracker, &id)
         {
+            if kind == TrackedDownloadBackgroundWorkKind::Failed
+                && failed_tracked_download_work_count(tracker, tracked_work_in_flight)
+                    >= TRACKED_DOWNLOAD_FAILED_WORKER_LIMIT
+            {
+                drain.pending_ids.push_back(id);
+                continue;
+            }
+            drain.attempted_ids.insert(id.clone());
             return Some((id, kind, tracked));
         }
+        drain.attempted_ids.insert(id);
     }
 
     None
+}
+
+fn failed_tracked_download_work_count(
+    tracker: &crate::tracked_downloads::TrackedDownloadService,
+    tracked_work_in_flight: &HashSet<String>,
+) -> usize {
+    tracked_work_in_flight
+        .iter()
+        .filter(|id| {
+            tracker
+                .find(id)
+                .is_some_and(|tracked| tracked.state == TrackedDownloadState::FailedPending)
+        })
+        .count()
 }
 
 fn try_dispatch_next_tracked_download_background_work(
@@ -2156,15 +2636,35 @@ fn try_dispatch_next_tracked_download_background_work(
     actor: &User,
     tracker: &mut crate::tracked_downloads::TrackedDownloadService,
     tracked_work_in_flight: &mut HashSet<String>,
-    result_tx: &tokio::sync::mpsc::UnboundedSender<TrackedDownloadBackgroundWorkResult>,
+    result_tx: &tokio::sync::mpsc::UnboundedSender<TrackedDownloadBackgroundWorkEvent>,
     drain: &mut TrackedDownloadWorkDrain,
 ) -> bool {
-    let Some((id, kind, tracked)) = prepare_next_tracked_download_background_work_dispatch(
+    let Some((id, kind, mut tracked)) = prepare_next_tracked_download_background_work_dispatch(
         tracker,
         tracked_work_in_flight,
         drain,
     ) else {
         return false;
+    };
+
+    let preparation_permit = if kind == TrackedDownloadBackgroundWorkKind::Import {
+        let Some(permit) = app
+            .runtime
+            .imports
+            .execution_coordinator
+            .try_acquire_preparation()
+        else {
+            drain.attempted_ids.remove(&id);
+            drain.pending_ids.push_front(id);
+            return false;
+        };
+        if let Some(live) = tracker.find_mut(&id) {
+            crate::completed_download_handler::mark_importing(live);
+            tracked = live.clone();
+        }
+        Some(permit)
+    } else {
+        None
     };
 
     dispatch_prepared_tracked_download_background_work(
@@ -2176,6 +2676,7 @@ fn try_dispatch_next_tracked_download_background_work(
         kind,
         tracked,
         drain.completed_lookup.clone(),
+        preparation_permit,
     );
     true
 }
@@ -2185,19 +2686,41 @@ fn try_dispatch_tracked_download_background_work(
     actor: &User,
     tracker: &mut crate::tracked_downloads::TrackedDownloadService,
     tracked_work_in_flight: &mut HashSet<String>,
-    result_tx: &tokio::sync::mpsc::UnboundedSender<TrackedDownloadBackgroundWorkResult>,
+    result_tx: &tokio::sync::mpsc::UnboundedSender<TrackedDownloadBackgroundWorkEvent>,
     id: &str,
     completed_lookup: &crate::completed_download_handler::CompletedDownloadLookup,
 ) -> bool {
-    if tracked_work_in_flight.len() >= TRACKED_DOWNLOAD_BACKGROUND_WORKER_LIMIT
-        || tracked_work_in_flight.contains(id)
+    if tracked_work_in_flight.contains(id) {
+        return false;
+    }
+
+    let Some((kind, mut tracked)) = prepare_tracked_download_background_work_dispatch(tracker, id)
+    else {
+        return false;
+    };
+    if kind == TrackedDownloadBackgroundWorkKind::Failed
+        && failed_tracked_download_work_count(tracker, tracked_work_in_flight)
+            >= TRACKED_DOWNLOAD_FAILED_WORKER_LIMIT
     {
         return false;
     }
 
-    let Some((kind, tracked)) = prepare_tracked_download_background_work_dispatch(tracker, id)
-    else {
-        return false;
+    let preparation_permit = if kind == TrackedDownloadBackgroundWorkKind::Import {
+        let Some(permit) = app
+            .runtime
+            .imports
+            .execution_coordinator
+            .try_acquire_preparation()
+        else {
+            return false;
+        };
+        if let Some(live) = tracker.find_mut(id) {
+            crate::completed_download_handler::mark_importing(live);
+            tracked = live.clone();
+        }
+        Some(permit)
+    } else {
+        None
     };
 
     dispatch_prepared_tracked_download_background_work(
@@ -2209,6 +2732,7 @@ fn try_dispatch_tracked_download_background_work(
         kind,
         tracked,
         completed_lookup.clone(),
+        preparation_permit,
     );
     true
 }
@@ -2221,17 +2745,18 @@ fn dispatch_prepared_tracked_download_background_work(
     app: &AppUseCase,
     actor: &User,
     tracked_work_in_flight: &mut HashSet<String>,
-    result_tx: &tokio::sync::mpsc::UnboundedSender<TrackedDownloadBackgroundWorkResult>,
+    result_tx: &tokio::sync::mpsc::UnboundedSender<TrackedDownloadBackgroundWorkEvent>,
     id: &str,
     kind: TrackedDownloadBackgroundWorkKind,
     tracked: TrackedDownload,
     completed_lookup: crate::completed_download_handler::CompletedDownloadLookup,
+    preparation_permit: Option<tokio::sync::OwnedSemaphorePermit>,
 ) {
     tracing::info!(
         id = %id,
         work = kind.as_str(),
         active_workers = tracked_work_in_flight.len() + 1,
-        worker_limit = TRACKED_DOWNLOAD_BACKGROUND_WORKER_LIMIT,
+        failed_worker_limit = TRACKED_DOWNLOAD_FAILED_WORKER_LIMIT,
         "tracked: dispatched background work"
     );
     tracked_work_in_flight.insert(id.to_string());
@@ -2242,6 +2767,7 @@ fn dispatch_prepared_tracked_download_background_work(
         kind,
         result_tx.clone(),
         completed_lookup,
+        preparation_permit,
     );
 }
 fn dispatch_tracked_download_background_work(
@@ -2249,22 +2775,26 @@ fn dispatch_tracked_download_background_work(
     actor: User,
     tracked: crate::tracked_downloads::TrackedDownload,
     kind: TrackedDownloadBackgroundWorkKind,
-    result_tx: tokio::sync::mpsc::UnboundedSender<TrackedDownloadBackgroundWorkResult>,
+    result_tx: tokio::sync::mpsc::UnboundedSender<TrackedDownloadBackgroundWorkEvent>,
     completed_lookup: crate::completed_download_handler::CompletedDownloadLookup,
+    preparation_permit: Option<tokio::sync::OwnedSemaphorePermit>,
 ) {
     tokio::spawn(async move {
         let started_at = Instant::now();
         let tracked_id = tracked.id.clone();
-        let worker = tokio::spawn(async move {
+        let worker = std::panic::AssertUnwindSafe(async move {
             let mut tracked = tracked;
 
             match kind {
                 TrackedDownloadBackgroundWorkKind::Import => {
-                    let _ = crate::completed_download_handler::import_with_lookup(
+                    let preparation_permit = preparation_permit
+                        .expect("import dispatch requires a preparation permit");
+                    let _ = crate::completed_download_handler::import_with_lookup_and_preparation_permit(
                         &app,
                         &actor,
                         &mut tracked,
                         &completed_lookup,
+                        preparation_permit,
                     )
                     .await;
                 }
@@ -2274,9 +2804,11 @@ fn dispatch_tracked_download_background_work(
             }
 
             tracked
-        });
+        })
+        .catch_unwind()
+        .await;
 
-        let outcome = match worker.await {
+        let outcome = match worker {
             Ok(tracked) => {
                 tracing::info!(
                     id = %tracked.id,
@@ -2287,17 +2819,15 @@ fn dispatch_tracked_download_background_work(
                 );
                 Ok(tracked)
             }
-            Err(error) => {
+            Err(_) => {
                 let message = format!(
-                    "tracked {} worker exited before completion: {}",
-                    kind.as_str(),
-                    error
+                    "tracked {} worker panicked before completion",
+                    kind.as_str()
                 );
                 tracing::error!(
                     id = %tracked_id,
                     work = kind.as_str(),
                     elapsed_ms = started_at.elapsed().as_millis() as u64,
-                    error = %error,
                     "tracked: background work crashed"
                 );
                 Err(message)
@@ -2305,12 +2835,14 @@ fn dispatch_tracked_download_background_work(
         };
         let elapsed = started_at.elapsed();
         if result_tx
-            .send(TrackedDownloadBackgroundWorkResult {
-                id: tracked_id,
-                kind,
-                outcome,
-                elapsed,
-            })
+            .send(TrackedDownloadBackgroundWorkEvent::Finished(
+                TrackedDownloadBackgroundWorkResult {
+                    id: tracked_id,
+                    kind,
+                    outcome,
+                    elapsed,
+                },
+            ))
             .is_err()
         {
             tracing::debug!(
@@ -2379,11 +2911,10 @@ async fn handle_tracked_download_background_work_result(
     {
         // A rejected import is an operator decision point; record it durably
         // so restarts don't erase it and reconciliation doesn't re-offer it.
-        crate::tracked_downloads::persist_tracked_download_state_marker(
+        crate::tracked_downloads::persist_import_blocked_state_marker(
             app,
             td,
-            TrackedDownloadState::ImportBlocked,
-            Some("import_blocked_after_import"),
+            crate::tracked_downloads::ImportBlockedReason::AfterImport,
             td.status_messages.first().map(String::as_str),
         )
         .await;
@@ -2438,6 +2969,21 @@ pub(crate) async fn finalize_tracked_terminal_state_with(
     let Some(td) = tracker.find(id) else {
         return;
     };
+
+    // The settled download must stop conflicting new submissions for its
+    // scope: the submission guard's 30s caches still hold it as accepted and
+    // the cached client snapshot predates this transition, which would turn an
+    // upgrade queued in that window into a phantom non-replaceable conflict.
+    // Only the transition invalidates — reconcile re-offers a held row every
+    // poll and would otherwise empty the caches on every tick.
+    if trigger == TerminalSettleTrigger::Transition
+        && let Some(title_id) = td.title_id.as_deref()
+    {
+        app.runtime
+            .acquisition
+            .download_submission_guards
+            .forget_settled_download(title_id);
+    }
 
     let cleanup = crate::import::import::reconcile_terminal_download_cleanup_for_tracked(
         app, td, state, cache,
@@ -2685,7 +3231,7 @@ async fn reconcile_terminal_tracked_downloads(
     // One batched prefetch up front, then memoized reads for the rest — held
     // torrents are the common case, so this is a per-tick cost that would
     // otherwise scale with the seeding backlog.
-    let identities: Vec<crate::DownloadSourceIdentity> = settled
+    let identities: Vec<crate::ClientJobLocator> = settled
         .iter()
         .filter_map(|tracked| tracked_download_source_identity(tracked))
         .collect();
@@ -2733,7 +3279,7 @@ fn reconcile_duplicate_terminal_source_states(
     // `ImportedSeeding` has been through the gate, and flipping it back to a
     // sibling's `Imported` would only send it straight back through on the
     // next poll.
-    let updates: Vec<(String, crate::DownloadSourceIdentity, TrackedDownloadState)> = tracker
+    let updates: Vec<(String, crate::ClientJobLocator, TrackedDownloadState)> = tracker
         .get_all()
         .into_iter()
         .filter(|tracked| !tracked.state.is_import_settled())
@@ -2763,15 +3309,13 @@ fn reconcile_duplicate_terminal_source_states(
     }
 }
 
-fn tracked_download_source_identity(
-    tracked: &TrackedDownload,
-) -> Option<crate::DownloadSourceIdentity> {
+fn tracked_download_source_identity(tracked: &TrackedDownload) -> Option<crate::ClientJobLocator> {
     let client_type = tracked.client_type.trim();
     let item_id = tracked.client_item.download_client_item_id.trim();
     if client_type.is_empty() || item_id.is_empty() {
         return None;
     }
-    Some(crate::DownloadSourceIdentity::new(
+    Some(crate::ClientJobLocator::new(
         Some(tracked.client_id.as_str()),
         client_type,
         item_id,

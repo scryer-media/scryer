@@ -175,7 +175,7 @@ export function AddTitleForm({
             <div className="space-y-2">
               {tvdbCandidates.map((result) => (
                 <div
-                  key={`${result.tvdbId}-${result.name}`}
+                  key={String(result.smgId ?? result.tvdbId ?? result.name)}
                   className="rounded-lg border border-border p-3"
                 >
                   <div className="mb-2 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">

@@ -83,6 +83,7 @@ pub struct ScoringWeights {
     // ── Feature preferences ────────────────────────────────
     pub remux_bonus: i32,
     pub remux_missing_penalty: i32,
+    pub remux_not_preferred_penalty: i32,
     pub atmos_bonus: i32,
     pub atmos_missing_penalty: i32,
     pub block_dv_without_fallback: bool,
@@ -115,6 +116,11 @@ pub struct ScoringWeights {
     pub size_small: i32,
     pub size_very_small: i32,
     pub size_tiny: i32,
+    /// Balanced's movie 2160p bitrate expectation. Other personas retain the
+    /// established physical model.
+    pub movie_2160p_bitrate_mbps: f64,
+    /// Extra remux tolerance when the profile does not explicitly prefer one.
+    pub remux_size_factor_when_not_preferred: f64,
 
     // ── Unwanted content ───────────────────────────────────
     pub upscaled_penalty: i32,
@@ -331,8 +337,9 @@ pub(crate) fn balanced_weights() -> ScoringWeights {
         sdr_at_4k_penalty: -150,
 
         // Features
-        remux_bonus: 0,
-        remux_missing_penalty: 0,
+        remux_bonus: 250,
+        remux_missing_penalty: -75,
+        remux_not_preferred_penalty: -400,
         atmos_bonus: 0,
         atmos_missing_penalty: 0,
         block_dv_without_fallback: false,
@@ -355,16 +362,18 @@ pub(crate) fn balanced_weights() -> ScoringWeights {
         streaming_tier3: 10,
         streaming_anime: 20,
 
-        // Size curve
-        size_excessive: -300,
-        size_massive: 550,
-        size_very_large: 380,
-        size_large: 240,
+        // Size curve — favor plausible files over ever-larger files.
+        size_excessive: -1200,
+        size_massive: -700,
+        size_very_large: -350,
+        size_large: -100,
         size_expected: 120,
         size_slightly_small: 0,
-        size_small: -700,
-        size_very_small: -1300,
-        size_tiny: -2500,
+        size_small: -125,
+        size_very_small: -400,
+        size_tiny: -800,
+        movie_2160p_bitrate_mbps: 32.0,
+        remux_size_factor_when_not_preferred: 1.0,
 
         // Unwanted — not applied until Phase E
         upscaled_penalty: BLOCK_SCORE,
@@ -427,6 +436,7 @@ fn audiophile_weights() -> ScoringWeights {
 
         remux_bonus: 400,
         remux_missing_penalty: -80,
+        remux_not_preferred_penalty: 0,
         atmos_bonus: 150,
         atmos_missing_penalty: -30,
         block_dv_without_fallback: false,
@@ -456,6 +466,8 @@ fn audiophile_weights() -> ScoringWeights {
         size_small: -400,
         size_very_small: -900,
         size_tiny: -2000,
+        movie_2160p_bitrate_mbps: 57.0,
+        remux_size_factor_when_not_preferred: 1.45,
 
         upscaled_penalty: BLOCK_SCORE,
         hardcoded_subs_penalty: -400,
@@ -515,6 +527,7 @@ fn efficient_weights() -> ScoringWeights {
 
         remux_bonus: 0,
         remux_missing_penalty: 0,
+        remux_not_preferred_penalty: 0,
         atmos_bonus: 0,
         atmos_missing_penalty: 0,
         block_dv_without_fallback: false,
@@ -545,6 +558,8 @@ fn efficient_weights() -> ScoringWeights {
         size_small: 100,
         size_very_small: -200,
         size_tiny: -800,
+        movie_2160p_bitrate_mbps: 57.0,
+        remux_size_factor_when_not_preferred: 1.45,
 
         upscaled_penalty: BLOCK_SCORE,
         hardcoded_subs_penalty: -200,
@@ -604,6 +619,7 @@ fn compatible_weights() -> ScoringWeights {
 
         remux_bonus: 0,
         remux_missing_penalty: 0,
+        remux_not_preferred_penalty: 0,
         atmos_bonus: 0,
         atmos_missing_penalty: 0,
         block_dv_without_fallback: false,
@@ -634,6 +650,8 @@ fn compatible_weights() -> ScoringWeights {
         size_small: -700,
         size_very_small: -1300,
         size_tiny: -2500,
+        movie_2160p_bitrate_mbps: 57.0,
+        remux_size_factor_when_not_preferred: 1.45,
 
         upscaled_penalty: BLOCK_SCORE,
         hardcoded_subs_penalty: -300,

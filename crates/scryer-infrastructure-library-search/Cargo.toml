@@ -1,13 +1,13 @@
 [package]
 name = "scryer-infrastructure-library-search"
-version = "0.18.21"
+version = "0.19.3"
 edition.workspace = true
 publish = false
 
 [dependencies]
 scryer-domain = { path = "../scryer-domain" }
 scryer-application = { path = "../scryer-application" }
+
 serde_json = { workspace = true }
 sqlx = { workspace = true }
 unicode-normalization = "0.1"
-

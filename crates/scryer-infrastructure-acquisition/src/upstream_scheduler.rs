@@ -35,6 +35,13 @@ const BACKGROUND_QUOTA_PRESSURE_REMAINING_FRACTION: f64 = 0.35;
 /// so pressure sheds cold work first and keeps hot work converging.
 const BACKGROUND_QUOTA_PRESSURE_VALUE_THRESHOLD: f64 = 0.5;
 const DEFAULT_RSS_TARGET_INTERVAL: Duration = Duration::from_secs(15 * 60);
+/// Shortens (or lengthens) the healthy-quota RSS cadence. Automatic upgrades
+/// ride RSS, so a test harness that cannot wait a quarter of an hour between
+/// polls has no other way to exercise them.
+const RSS_TARGET_INTERVAL_ENV: &str = "SCRYER_RSS_TARGET_INTERVAL_SECS";
+/// A floor, not a suggestion: a typo like `0` would turn the cadence gate off
+/// entirely and let the scheduler hot-loop an indexer.
+const MINIMUM_RSS_TARGET_INTERVAL: Duration = Duration::from_secs(5);
 const LOW_QUOTA_RSS_TARGET_INTERVAL: Duration = Duration::from_secs(60 * 60);
 const QUOTA_OBSERVATION_STALE_AFTER: Duration = Duration::from_secs(24 * 60 * 60);
 const EXHAUSTED_QUOTA_PROBE_AFTER: Duration = Duration::from_secs(6 * 60 * 60);
@@ -312,9 +319,7 @@ impl UpstreamScheduler for InMemoryUpstreamScheduler {
                         cadence.last_seen_release_published_at = Some(published_at);
                     }
                 }
-                let target_interval = cadence
-                    .target_interval
-                    .unwrap_or(DEFAULT_RSS_TARGET_INTERVAL);
+                let target_interval = cadence.target_interval.unwrap_or_else(rss_target_interval);
                 cadence.latest_safe_poll_at = chrono::Duration::from_std(target_interval)
                     .ok()
                     .map(|duration| feedback.observed_at + duration);
@@ -846,9 +851,14 @@ impl SqlUpstreamSchedulerStore {
         let arg_rows: Vec<Vec<SqlArg>> = entries
             .into_iter()
             .map(|(key, entry)| {
+                // An entry persisted before any feedback tick has no interval of
+                // its own; the row reads back as `Some(..)` and outranks the
+                // process default, so the fallback written here must be the
+                // env-aware healthy tier or a restart resurrects the shipped
+                // cadence over `SCRYER_RSS_TARGET_INTERVAL_SECS`.
                 let target_interval_seconds = entry
                     .target_interval
-                    .unwrap_or_else(|| Duration::from_secs(15 * 60))
+                    .unwrap_or_else(rss_target_interval)
                     .as_secs()
                     .min(i64::MAX as u64) as i64;
                 vec![
@@ -1084,6 +1094,7 @@ fn decide_candidate(
         return SchedulerAdmission::Skip {
             candidate_id: candidate.candidate_id,
             reason: SkipReason::Cancelled,
+            retry_after: None,
         };
     }
 
@@ -1094,6 +1105,7 @@ fn decide_candidate(
         return SchedulerAdmission::Skip {
             candidate_id: candidate.candidate_id,
             reason: SkipReason::DeadlineExpired,
+            retry_after: None,
         };
     }
 
@@ -1105,6 +1117,7 @@ fn decide_candidate(
         return SchedulerAdmission::Skip {
             candidate_id: candidate.candidate_id,
             reason: SkipReason::LearningSuppressed,
+            retry_after: None,
         };
     }
 
@@ -1123,13 +1136,13 @@ fn decide_candidate(
     // "no releases found" in the UI. If the destination is still rate limited,
     // the HTTP layer fails fast and the failure is surfaced per indexer.
     if candidate.intent != SchedulerIntent::InteractiveSearch
-        && RateLimitRegistry::new()
-            .active_destination_cooldown(&candidate.destination_key)
-            .is_some()
+        && let Some(retry_after) =
+            RateLimitRegistry::new().active_destination_cooldown(&candidate.destination_key)
     {
         return SchedulerAdmission::Skip {
             candidate_id: candidate.candidate_id,
             reason: SkipReason::DestinationCooldown,
+            retry_after: Some(retry_after),
         };
     }
 
@@ -1253,16 +1266,61 @@ fn account_quota_under_pressure(
         .is_some_and(|remaining| remaining < BACKGROUND_QUOTA_PRESSURE_REMAINING_FRACTION)
 }
 
+/// The healthy-quota RSS cadence for this process.
+///
+/// Read once: the scheduler consults it on every feedback tick and every
+/// freshness evaluation, and a cadence that could change under a running
+/// install would make deferral decisions unreproducible.
+static RSS_TARGET_INTERVAL: std::sync::LazyLock<Duration> = std::sync::LazyLock::new(|| {
+    parse_rss_target_interval(std::env::var(RSS_TARGET_INTERVAL_ENV).ok().as_deref())
+});
+
+/// The configured healthy-quota RSS target interval.
+pub(crate) fn rss_target_interval() -> Duration {
+    *RSS_TARGET_INTERVAL
+}
+
+/// Absent, blank, unparseable, and zero all fall back to the shipped default;
+/// anything shorter than [`MINIMUM_RSS_TARGET_INTERVAL`] is clamped up to it.
+fn parse_rss_target_interval(raw: Option<&str>) -> Duration {
+    let Some(seconds) = raw
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|seconds| *seconds > 0)
+    else {
+        return DEFAULT_RSS_TARGET_INTERVAL;
+    };
+    Duration::from_secs(seconds).max(MINIMUM_RSS_TARGET_INTERVAL)
+}
+
 fn rss_target_interval_for_quota(api_remaining: Option<f64>, quota_exhausted: bool) -> Duration {
+    rss_target_interval_for_quota_with_default(
+        rss_target_interval(),
+        api_remaining,
+        quota_exhausted,
+    )
+}
+
+/// The override replaces the healthy tier only. The quota tiers keep their own
+/// slowdowns, floored at the healthy tier so the ordering can never invert: a
+/// low-quota or exhausted account must never be polled *more* often than a
+/// healthy one, which is exactly what an override longer than an hour would
+/// otherwise produce.
+fn rss_target_interval_for_quota_with_default(
+    default_interval: Duration,
+    api_remaining: Option<f64>,
+    quota_exhausted: bool,
+) -> Duration {
     if quota_exhausted {
-        return EXHAUSTED_QUOTA_PROBE_AFTER;
+        return EXHAUSTED_QUOTA_PROBE_AFTER.max(default_interval);
     }
 
     if api_remaining.is_some_and(|remaining| remaining <= LOW_ACCOUNT_QUOTA_REMAINING_FRACTION) {
-        return LOW_QUOTA_RSS_TARGET_INTERVAL;
+        return LOW_QUOTA_RSS_TARGET_INTERVAL.max(default_interval);
     }
 
-    DEFAULT_RSS_TARGET_INTERVAL
+    default_interval
 }
 
 fn destination_cooldown_until(
@@ -1457,6 +1515,96 @@ mod tests {
         SchedulerOperation, SchedulerPluginKind,
     };
     use tokio_util::sync::CancellationToken;
+
+    #[test]
+    fn the_rss_target_interval_override_parses_and_clamps() {
+        assert_eq!(parse_rss_target_interval(None), DEFAULT_RSS_TARGET_INTERVAL);
+        assert_eq!(
+            parse_rss_target_interval(Some("   ")),
+            DEFAULT_RSS_TARGET_INTERVAL
+        );
+        assert_eq!(
+            parse_rss_target_interval(Some("not-a-number")),
+            DEFAULT_RSS_TARGET_INTERVAL
+        );
+        assert_eq!(
+            parse_rss_target_interval(Some("-30")),
+            DEFAULT_RSS_TARGET_INTERVAL
+        );
+        // A zero would remove the cadence gate entirely and hot-loop the
+        // scheduler; it falls back rather than clamping, because it reads as
+        // "unset" far more often than as "poll as fast as possible".
+        assert_eq!(
+            parse_rss_target_interval(Some("0")),
+            DEFAULT_RSS_TARGET_INTERVAL
+        );
+        assert_eq!(
+            parse_rss_target_interval(Some(" 30 ")),
+            Duration::from_secs(30)
+        );
+        assert_eq!(
+            parse_rss_target_interval(Some("1")),
+            MINIMUM_RSS_TARGET_INTERVAL,
+            "a sub-floor value is clamped up, never honoured"
+        );
+        assert_eq!(
+            parse_rss_target_interval(Some("7200")),
+            Duration::from_secs(7200)
+        );
+    }
+
+    /// The override replaces the healthy tier. The quota tiers keep their own
+    /// slowdowns, floored at the healthy tier so a low-quota or exhausted
+    /// account is never polled more often than a healthy one.
+    #[test]
+    fn the_quota_tiers_never_poll_faster_than_the_healthy_tier() {
+        let short = Duration::from_secs(30);
+        assert_eq!(
+            rss_target_interval_for_quota_with_default(short, Some(0.9), false),
+            short
+        );
+        assert_eq!(
+            rss_target_interval_for_quota_with_default(short, Some(0.1), false),
+            LOW_QUOTA_RSS_TARGET_INTERVAL
+        );
+        assert_eq!(
+            rss_target_interval_for_quota_with_default(short, None, true),
+            EXHAUSTED_QUOTA_PROBE_AFTER
+        );
+
+        let very_long = Duration::from_secs(12 * 60 * 60);
+        assert_eq!(
+            rss_target_interval_for_quota_with_default(very_long, Some(0.9), false),
+            very_long
+        );
+        assert_eq!(
+            rss_target_interval_for_quota_with_default(very_long, Some(0.1), false),
+            very_long,
+            "a low-quota account must not poll faster than a healthy one"
+        );
+        assert_eq!(
+            rss_target_interval_for_quota_with_default(very_long, None, true),
+            very_long,
+            "an exhausted account must not poll faster than a healthy one"
+        );
+    }
+
+    /// With no override set, the scheduler's live tier lookup is the shipped
+    /// default — the tiers are unchanged for every install that does not set
+    /// the env var.
+    #[test]
+    fn the_default_tier_is_the_shipped_interval_without_an_override() {
+        assert_eq!(
+            std::env::var(RSS_TARGET_INTERVAL_ENV).ok().as_deref(),
+            None,
+            "this test asserts the unset default; the suite must not set the override"
+        );
+        assert_eq!(rss_target_interval(), DEFAULT_RSS_TARGET_INTERVAL);
+        assert_eq!(
+            rss_target_interval_for_quota(Some(0.9), false),
+            DEFAULT_RSS_TARGET_INTERVAL
+        );
+    }
 
     fn candidate(intent: SchedulerIntent, score: f64) -> SchedulerCandidate {
         SchedulerCandidate {
@@ -2035,6 +2183,7 @@ mod tests {
             decision.decisions.as_slice(),
             [SchedulerAdmission::Skip {
                 reason: SkipReason::DestinationCooldown,
+                retry_after: Some(_),
                 ..
             }]
         ));

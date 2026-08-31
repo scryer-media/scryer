@@ -1417,6 +1417,9 @@ impl AppUseCase {
             .ok_or_else(|| AppError::NotFound(format!("library {library_id}")))?;
         self.require_library_management_permission(actor, &library.id)
             .await?;
+        let previous_indexer_routing = self
+            .resolve_indexer_routing(Some(&library.id), Some(library.facet.as_str()))
+            .await;
         let _profile_reference_guard = self
             .runtime
             .catalog
@@ -1472,7 +1475,7 @@ impl AppUseCase {
         }
 
         if let Some(languages) = settings.required_audio_languages {
-            let languages = normalize_required_audio_languages(languages);
+            let languages = normalize_required_audio_requirements(languages);
             if languages.is_empty() {
                 self.delete_scoped_system_setting(REQUIRED_AUDIO_LANGUAGES_KEY, &library.id)
                     .await?;
@@ -1802,6 +1805,41 @@ impl AppUseCase {
 
         self.refresh_download_client_category_admission_best_effort()
             .await;
+        let updated_indexer_routing = self
+            .resolve_indexer_routing(Some(&library.id), Some(library.facet.as_str()))
+            .await;
+        let canonical_routing = |plan: Option<IndexerRoutingPlan>| {
+            plan.map(|plan| {
+                plan.entries
+                    .into_iter()
+                    .map(|(indexer_id, entry)| {
+                        let mut categories = entry.categories;
+                        categories.sort();
+                        categories.dedup();
+                        (indexer_id, (entry.enabled, categories, entry.priority))
+                    })
+                    .collect::<HashMap<_, _>>()
+            })
+            .unwrap_or_default()
+        };
+        let previous_indexer_routing = canonical_routing(previous_indexer_routing);
+        let updated_indexer_routing = canonical_routing(updated_indexer_routing);
+        let changed_indexers = previous_indexer_routing
+            .keys()
+            .chain(updated_indexer_routing.keys())
+            .filter(|indexer_id| {
+                previous_indexer_routing.get(*indexer_id)
+                    != updated_indexer_routing.get(*indexer_id)
+            })
+            .cloned()
+            .collect::<HashSet<_>>();
+        for indexer_id in changed_indexers {
+            self.prune_indexer_search_learning_best_effort(
+                &indexer_id,
+                "library_indexer_routing_change",
+            )
+            .await;
+        }
         if metadata_language_changed {
             self.queue_library_metadata_rehydration(&library.id).await?;
         }

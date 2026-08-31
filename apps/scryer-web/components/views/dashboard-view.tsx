@@ -20,6 +20,10 @@ import { Link } from "react-router";
 
 import { AuthenticatedAvatar } from "@/components/common/authenticated-avatar";
 import { DownloadClientTypeLogo } from "@/components/common/download-client-type-logo";
+import {
+  IndexerErrorHistoryModal,
+  type IndexerErrorHistoryScope,
+} from "@/components/common/indexer-error-history-modal";
 import { ActivityProgressBar } from "@/components/views/activity-progress-bar";
 import {
   DashboardPanel,
@@ -47,6 +51,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useTranslate } from "@/lib/context/translate-context";
+import { useAuth } from "@/lib/hooks/use-auth";
 import { facetById } from "@/lib/facets/registry";
 import type {
   DashboardImportedItem,
@@ -59,6 +64,10 @@ import type {
   Facet,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import {
+  APP_PERMISSIONS,
+  hasAnyAppPermission,
+} from "@/lib/utils/permissions";
 import {
   deriveQueueRowPresentation,
   formatBytes,
@@ -770,7 +779,7 @@ function RecentlyImportedPanel({ items }: { items: DashboardImportedItem[] }) {
     <DashboardPanel
       icon={Download}
       title={t("dashboard.recentlyImported")}
-      linkTo={buildViewPath("wanted", undefined, undefined, undefined, "history")}
+      linkTo={buildViewPath("activity", undefined, undefined, undefined, undefined, "history")}
       linkLabel={t("dashboard.viewAll")}
       bodyClassName={PREVIEW_PANE_CLASS}
     >
@@ -818,6 +827,12 @@ function RecentlyImportedPanel({ items }: { items: DashboardImportedItem[] }) {
 
 function IndexersPanel({ overview }: { overview: DashboardOverview | null }) {
   const t = useTranslate();
+  const { user } = useAuth();
+  const canViewErrorHistory = hasAnyAppPermission(user, [
+    APP_PERMISSIONS.manageSystemSettings,
+  ]);
+  const [errorHistoryIndexer, setErrorHistoryIndexer] =
+    React.useState<IndexerErrorHistoryScope | null>(null);
   const indexers = React.useMemo(
     () => overview?.indexers ?? [],
     [overview?.indexers],
@@ -946,6 +961,14 @@ function IndexersPanel({ overview }: { overview: DashboardOverview | null }) {
                       lastHealthStatus={indexer.lastHealthStatus}
                       lastError={indexer.lastErrorMessage}
                       lastErrorAt={indexer.lastErrorAt}
+                      onOpenErrorHistory={
+                        canViewErrorHistory
+                          ? () => setErrorHistoryIndexer({
+                              id: indexer.id,
+                              name: indexer.name,
+                            })
+                          : undefined
+                      }
                     />
                   </TableCell>
                 </TableRow>
@@ -954,6 +977,13 @@ function IndexersPanel({ overview }: { overview: DashboardOverview | null }) {
           </TableBody>
         </Table>
       )}
+      <IndexerErrorHistoryModal
+        open={errorHistoryIndexer != null}
+        onOpenChange={(open) => {
+          if (!open) setErrorHistoryIndexer(null);
+        }}
+        indexer={errorHistoryIndexer}
+      />
     </DashboardPanel>
   );
 }
@@ -1002,11 +1032,13 @@ function ProviderStatus({
   lastHealthStatus,
   lastError,
   lastErrorAt,
+  onOpenErrorHistory,
 }: {
   isEnabled: boolean;
   lastHealthStatus: string | null;
   lastError: string | null;
   lastErrorAt?: string | null;
+  onOpenErrorHistory?: () => void;
 }) {
   const t = useTranslate();
 
@@ -1020,14 +1052,31 @@ function ProviderStatus({
 
   if (isProviderErroring(isEnabled, lastHealthStatus, lastError)) {
     const age = formatCompactAge(lastErrorAt);
+    const contents = (
+      <>
+        <TriangleAlert className="h-3 w-3 shrink-0" aria-hidden="true" />
+        <span className="truncate">{t("dashboard.statusError")}</span>
+        {age ? <span className="text-[var(--scry-muted2)]">{age}</span> : null}
+      </>
+    );
+    if (onOpenErrorHistory) {
+      return (
+        <button
+          type="button"
+          className="flex items-center gap-1 text-left text-[11px] text-[var(--scry-danger-text)] underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          title={lastError ?? t("indexerErrors.history")}
+          onClick={onOpenErrorHistory}
+        >
+          {contents}
+        </button>
+      );
+    }
     return (
       <span
         className="flex items-center gap-1 text-[11px] text-[var(--scry-danger-text)]"
         title={lastError ?? t("dashboard.statusError")}
       >
-        <TriangleAlert className="h-3 w-3 shrink-0" aria-hidden="true" />
-        <span className="truncate">{t("dashboard.statusError")}</span>
-        {age ? <span className="text-[var(--scry-muted2)]">{age}</span> : null}
+        {contents}
       </span>
     );
   }

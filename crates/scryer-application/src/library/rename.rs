@@ -2,7 +2,6 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
-use aws_lc_rs::digest as aws_lc_digest;
 use scryer_domain::{
     Collection, DomainEventPayload, Episode, ImportType, MediaFacet, MediaFileRenamedEventData,
     Title, User,
@@ -13,6 +12,7 @@ use tracing::warn;
 use futures_util::stream::{StreamExt, TryStreamExt};
 
 use crate::activity::NotificationMediaUpdate;
+use crate::catalog_workflow::{HydrationSource, HydrationTarget};
 use crate::domain_events::{
     created_media_update, deleted_media_update, new_title_domain_event, title_context_snapshot,
 };
@@ -20,9 +20,9 @@ use crate::facet_handler::{RenameFacetSettings, rename_facet_settings};
 use crate::media::release_labels::resolve_release_labels_from_analysis;
 use crate::stored_paths::{path_to_stored_string, stored_path_to_path_buf};
 use crate::{
-    AppError, AppResult, AppUseCase, CollectionUpdate, DEFAULT_FOLDER_TEMPLATE_ANIME,
-    DEFAULT_FOLDER_TEMPLATE_MOVIE, DEFAULT_FOLDER_TEMPLATE_SERIES, DEFAULT_SEASON_FOLDER_TEMPLATE,
-    DEFAULT_SPECIALS_FOLDER_TEMPLATE, DownloadSourceIdentity, FOLDER_TEMPLATE_KEY,
+    AppError, AppResult, AppUseCase, ClientJobLocator, CollectionUpdate,
+    DEFAULT_FOLDER_TEMPLATE_ANIME, DEFAULT_FOLDER_TEMPLATE_MOVIE, DEFAULT_FOLDER_TEMPLATE_SERIES,
+    DEFAULT_SEASON_FOLDER_TEMPLATE, DEFAULT_SPECIALS_FOLDER_TEMPLATE, FOLDER_TEMPLATE_KEY,
     ParsedEpisodeMetadata, ParsedReleaseMetadata, SEASON_FOLDER_TEMPLATE_KEY,
     SPECIALS_FOLDER_TEMPLATE_KEY, TitleMediaFile, parse_release_metadata,
 };
@@ -214,9 +214,7 @@ const RENAME_MISSING_METADATA_POLICY_GLOBAL_KEY: &str = "rename.missing_metadata
 const DEFAULT_COLLISION_POLICY: RenameCollisionPolicy = RenameCollisionPolicy::Skip;
 const DEFAULT_MISSING_METADATA_POLICY: RenameMissingMetadataPolicy =
     RenameMissingMetadataPolicy::FallbackTitle;
-#[cfg(windows)]
 const GENERATED_COMPONENT_MAX_BYTES: usize = 240;
-#[cfg(windows)]
 const GENERATED_COMPONENT_SUFFIX_RESERVE_BYTES: usize = 24;
 const MAX_RENAME_TEMPLATE_PADDING_WIDTH: usize = 240;
 
@@ -288,11 +286,15 @@ impl AppUseCase {
         }
 
         let settings = self.read_rename_plan_settings(&facet).await?;
+        let effective_languages = self
+            .resolve_metadata_languages_for_titles(std::slice::from_ref(&title))
+            .await;
         self.build_rename_plan_for_titles(
             title.facet.clone(),
             std::slice::from_ref(&title),
             Some(title.id.clone()),
             settings,
+            &effective_languages,
         )
         .await
     }
@@ -339,6 +341,7 @@ impl AppUseCase {
             return Err(AppError::Validation("renamer_disabled".into()));
         }
         let settings = self.read_rename_plan_settings(&facet).await?;
+        let effective_languages = self.resolve_metadata_languages_for_titles(&titles).await;
 
         // Each title plans against its own state, so they are independent and
         // run concurrently. Planning one title at a time would serialize work
@@ -346,12 +349,14 @@ impl AppUseCase {
         // the fan-out it replaced however little per-title work it saves.
         futures_util::stream::iter(titles.into_iter().map(|title| {
             let settings = settings.clone();
+            let effective_languages = effective_languages.clone();
             async move {
                 self.build_rename_plan_for_titles(
                     title.facet.clone(),
                     std::slice::from_ref(&title),
                     Some(title.id.clone()),
                     settings,
+                    &effective_languages,
                 )
                 .await
             }
@@ -398,7 +403,8 @@ impl AppUseCase {
         }
         let mut titles = manageable;
         titles.sort_by(|left, right| left.id.cmp(&right.id));
-        self.build_rename_plan_for_titles(facet, &titles, None, settings)
+        let effective_languages = self.resolve_metadata_languages_for_titles(&titles).await;
+        self.build_rename_plan_for_titles(facet, &titles, None, settings, &effective_languages)
             .await
     }
 
@@ -409,6 +415,26 @@ impl AppUseCase {
         facet: MediaFacet,
         plan_fingerprint: &str,
     ) -> AppResult<RenameApplyResult> {
+        // Keep preview read-only. The execution endpoint is the only place a
+        // stale language selection may refresh and persist catalog metadata.
+        self.preview_rename_for_title(actor, title_id, facet.clone())
+            .await?;
+        let title = self
+            .services
+            .catalog
+            .titles
+            .get_by_id(title_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("title {}", title_id)))?;
+        let effective_languages = self
+            .resolve_metadata_languages_for_titles(std::slice::from_ref(&title))
+            .await;
+        let effective_language = effective_languages
+            .get(&title.id)
+            .map(String::as_str)
+            .unwrap_or("eng");
+        self.refresh_rename_title_metadata_if_stale(&title, effective_language)
+            .await;
         let preview = self
             .preview_rename_for_title(actor, title_id, facet)
             .await?;
@@ -422,6 +448,40 @@ impl AppUseCase {
         facet: MediaFacet,
         plan_fingerprint: &str,
     ) -> AppResult<RenameApplyResult> {
+        // Authorize and build the read-only plan before issuing any execution
+        // refreshes, then only refresh titles the actor may actually rename.
+        self.preview_rename_for_facet(actor, facet.clone()).await?;
+        let titles = self
+            .services
+            .catalog
+            .titles
+            .list(Some(facet.clone()), None)
+            .await?;
+        let manageable = futures_util::future::join_all(titles.into_iter().map(|title| async {
+            self.require_library_permission(
+                actor,
+                &title.library_id,
+                scryer_domain::LibraryPermission::ManageTitles,
+            )
+            .await
+            .is_ok()
+            .then_some(title)
+        }))
+        .await
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+        let effective_languages = self
+            .resolve_metadata_languages_for_titles(&manageable)
+            .await;
+        for title in &manageable {
+            let effective_language = effective_languages
+                .get(&title.id)
+                .map(String::as_str)
+                .unwrap_or("eng");
+            self.refresh_rename_title_metadata_if_stale(title, effective_language)
+                .await;
+        }
         let preview = self.preview_rename_for_facet(actor, facet).await?;
         self.apply_previewed_rename_plan(actor, preview, plan_fingerprint)
             .await
@@ -500,7 +560,7 @@ impl AppUseCase {
             .workflow
             .imports
             .queue_import_request(
-                DownloadSourceIdentity::new(None, "scryer_rename", source_ref),
+                ClientJobLocator::new(None, "scryer_rename", source_ref),
                 ImportType::RenameApplyResult.as_str().to_string(),
                 payload_json,
             )
@@ -944,12 +1004,22 @@ impl AppUseCase {
         titles: &[Title],
         title_id: Option<String>,
         settings: RenamePlanSettings,
+        effective_languages: &HashMap<String, String>,
     ) -> AppResult<RenamePlan> {
         let mut planning = RenamePlanningState::default();
         let mut items = Vec::new();
         for title in titles {
+            let effective_language = effective_languages
+                .get(&title.id)
+                .map(String::as_str)
+                .unwrap_or("eng");
             let mut title_items = self
-                .build_rename_plan_items_for_title(title, &settings, &mut planning)
+                .build_rename_plan_items_for_title(
+                    title,
+                    effective_language,
+                    &settings,
+                    &mut planning,
+                )
                 .await?;
             items.append(&mut title_items);
         }
@@ -967,13 +1037,15 @@ impl AppUseCase {
     async fn build_rename_plan_items_for_title(
         &self,
         title: &Title,
+        _effective_language: &str,
         settings: &RenamePlanSettings,
         planning: &mut RenamePlanningState,
     ) -> AppResult<Vec<RenamePlanItem>> {
+        let title = title.clone();
         // Only the media root varies per title; every template and policy came
         // from `settings`, which was resolved once for the whole plan.
-        let media_root = self.title_root_folder_path_override(title).await?;
-        let use_season_folders = self.resolve_use_season_folders(title).await?;
+        let media_root = self.title_root_folder_path_override(&title).await?;
+        let use_season_folders = self.resolve_use_season_folders(&title).await?;
         let collections = self
             .services
             .catalog
@@ -1052,6 +1124,47 @@ impl AppUseCase {
         };
 
         self.normalize_existing_rename_collisions(items).await
+    }
+
+    async fn refresh_rename_title_metadata_if_stale(
+        &self,
+        title: &Title,
+        effective_language: &str,
+    ) -> Title {
+        let metadata_language = title
+            .metadata_language
+            .as_deref()
+            .and_then(crate::normalize_metadata_language_code);
+        if metadata_language.as_deref() == Some(effective_language) {
+            return title.clone();
+        }
+
+        match self
+            .hydrate_title_single_apq_with_language(
+                HydrationTarget {
+                    title: title.clone(),
+                    requested_tvdb_id: None,
+                    requested_movie_ref: None,
+                    sync_wanted_after_completion: false,
+                    source: HydrationSource::Interactive,
+                },
+                effective_language,
+            )
+            .await
+        {
+            Ok(refreshed) => refreshed,
+            Err(error) => {
+                warn!(
+                    title_id = %title.id,
+                    title_name = %title.name,
+                    effective_language,
+                    persisted_metadata_language = ?metadata_language,
+                    error = %error,
+                    "rename metadata refresh failed; using persisted title metadata"
+                );
+                title.clone()
+            }
+        }
     }
 
     async fn normalize_existing_rename_collisions(
@@ -1277,6 +1390,94 @@ struct MovieRenamePlanOptions<'a> {
 const RENAME_LITERAL_PIPE_SENTINEL: char = '\u{E000}';
 const RENAME_LITERAL_COLON_SENTINEL: char = '\u{E001}';
 
+enum RenameTemplateOptionalGroupParseError {
+    UnmatchedOpen,
+    InvalidGuard,
+    NestedOptionalGroup,
+    UnsupportedFallback,
+}
+
+struct RenameTemplateOptionalGroup {
+    guard: String,
+    body: String,
+    end_index: usize,
+}
+
+fn parse_rename_template_optional_group(
+    chars: &[char],
+    start_index: usize,
+) -> Result<RenameTemplateOptionalGroup, RenameTemplateOptionalGroupParseError> {
+    let mut cursor = start_index + 2;
+    let guard_start = cursor;
+    while cursor < chars.len() && chars[cursor] != ':' {
+        if matches!(chars[cursor], '{' | '}') {
+            return Err(RenameTemplateOptionalGroupParseError::InvalidGuard);
+        }
+        cursor += 1;
+    }
+    if cursor == chars.len() {
+        return Err(RenameTemplateOptionalGroupParseError::UnmatchedOpen);
+    }
+
+    let guard_spec: String = chars[guard_start..cursor].iter().collect();
+    let Some(parsed_guard) = parse_rename_template_token_spec(guard_spec.trim()) else {
+        return Err(RenameTemplateOptionalGroupParseError::InvalidGuard);
+    };
+    if parsed_guard.pad_width.is_some() || !parsed_guard.filters.is_empty() {
+        return Err(RenameTemplateOptionalGroupParseError::InvalidGuard);
+    }
+
+    let body_start = cursor + 1;
+    cursor = body_start;
+    let mut escaped_literal_open_count = 0usize;
+    while cursor < chars.len() {
+        match chars[cursor] {
+            '{' if chars.get(cursor + 1).is_some_and(|next| *next == '{') => {
+                escaped_literal_open_count += 1;
+                cursor += 2;
+            }
+            '{' if chars.get(cursor + 1).is_some_and(|next| *next == '?') => {
+                return Err(RenameTemplateOptionalGroupParseError::NestedOptionalGroup);
+            }
+            '{' => {
+                let Some(end) = chars[cursor + 1..].iter().position(|value| *value == '}') else {
+                    return Err(RenameTemplateOptionalGroupParseError::UnmatchedOpen);
+                };
+                let end_index = cursor + 1 + end;
+                if chars[cursor + 1..end_index].contains(&'{') {
+                    return Err(RenameTemplateOptionalGroupParseError::UnmatchedOpen);
+                }
+                cursor = end_index + 1;
+            }
+            '}' if escaped_literal_open_count > 0 => {
+                if chars.get(cursor + 1).is_some_and(|next| *next == '}') {
+                    cursor += 2;
+                } else {
+                    cursor += 1;
+                }
+                escaped_literal_open_count -= 1;
+            }
+            '|' if escaped_literal_open_count == 0
+                && (chars[cursor + 1..].starts_with(&['e', 'l', 's', 'e', ':'])
+                    || chars.get(cursor + 1).is_some_and(|next| *next == '?')) =>
+            {
+                return Err(RenameTemplateOptionalGroupParseError::UnsupportedFallback);
+            }
+            '}' => {
+                let body: String = chars[body_start..cursor].iter().collect();
+                return Ok(RenameTemplateOptionalGroup {
+                    guard: parsed_guard.name,
+                    body,
+                    end_index: cursor,
+                });
+            }
+            _ => cursor += 1,
+        }
+    }
+
+    Err(RenameTemplateOptionalGroupParseError::UnmatchedOpen)
+}
+
 fn render_rename_template_tokens(template: &str, tokens: &BTreeMap<String, String>) -> String {
     let mut out = String::new();
     let chars: Vec<char> = template.chars().collect();
@@ -1290,6 +1491,19 @@ fn render_rename_template_tokens(template: &str, tokens: &BTreeMap<String, Strin
                 out.push('{');
                 escaped_literal_open_count += 1;
                 cursor += 2;
+                continue;
+            }
+
+            if chars.get(cursor + 1).is_some_and(|next| *next == '?')
+                && let Ok(group) = parse_rename_template_optional_group(&chars, cursor)
+            {
+                if tokens
+                    .get(&group.guard)
+                    .is_some_and(|value| !value.trim().is_empty())
+                {
+                    out.push_str(&render_rename_template_tokens(&group.body, tokens));
+                }
+                cursor = group.end_index + 1;
                 continue;
             }
 
@@ -1396,25 +1610,47 @@ fn is_illegal_folder_template_literal(ch: char) -> bool {
     matches!(ch, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') || ch.is_control()
 }
 
-fn validate_folder_component_template(
+#[derive(Default)]
+struct RenameTemplateValidationState {
+    saw_token: bool,
+    saw_required_token: bool,
+}
+
+fn invalid_optional_group_error(
+    template_label: &str,
+    error: RenameTemplateOptionalGroupParseError,
+) -> AppError {
+    let message = match error {
+        RenameTemplateOptionalGroupParseError::UnmatchedOpen => {
+            format!("{template_label} template contains an unmatched '{{'")
+        }
+        RenameTemplateOptionalGroupParseError::InvalidGuard => {
+            format!("{template_label} template contains an invalid optional group")
+        }
+        RenameTemplateOptionalGroupParseError::NestedOptionalGroup => {
+            format!("{template_label} template does not support nested optional groups")
+        }
+        RenameTemplateOptionalGroupParseError::UnsupportedFallback => {
+            format!("{template_label} template does not support optional-group fallback branches")
+        }
+    };
+    AppError::Validation(message)
+}
+
+fn validate_rename_template_fragment<F>(
     template: &str,
     template_label: &str,
-    is_supported_token: impl Fn(&str) -> bool,
+    is_supported_token: &F,
+    is_illegal_literal: Option<fn(char) -> bool>,
     required_token: Option<&str>,
-    require_any_token: bool,
-) -> AppResult<()> {
-    let trimmed = template.trim();
-    if trimmed.is_empty() {
-        return Err(AppError::Validation(format!(
-            "{template_label} template is required"
-        )));
-    }
-
-    let chars: Vec<char> = trimmed.chars().collect();
+    state: &mut RenameTemplateValidationState,
+) -> AppResult<()>
+where
+    F: Fn(&str) -> bool,
+{
+    let chars: Vec<char> = template.chars().collect();
     let mut cursor = 0usize;
     let mut escaped_literal_open_count = 0usize;
-    let mut saw_token = false;
-    let mut saw_required_token = required_token.is_none();
 
     while cursor < chars.len() {
         let ch = chars[cursor];
@@ -1439,12 +1675,37 @@ fn validate_folder_component_template(
             )));
         }
         if ch != '{' {
-            if is_illegal_folder_template_literal(ch) {
+            if is_illegal_literal.is_some_and(|is_illegal| is_illegal(ch)) {
                 return Err(AppError::Validation(format!(
                     "{template_label} template contains an illegal filesystem character: {ch:?}"
                 )));
             }
             cursor += 1;
+            continue;
+        }
+
+        if chars.get(cursor + 1).is_some_and(|next| *next == '?') {
+            let group = parse_rename_template_optional_group(&chars, cursor)
+                .map_err(|error| invalid_optional_group_error(template_label, error))?;
+            if !is_supported_token(&group.guard) {
+                return Err(AppError::Validation(format!(
+                    "unsupported {template_label} template token: {{{}}}",
+                    group.guard
+                )));
+            }
+            state.saw_token = true;
+            if required_token.is_some_and(|required| group.guard == required) {
+                state.saw_required_token = true;
+            }
+            validate_rename_template_fragment(
+                &group.body,
+                template_label,
+                is_supported_token,
+                is_illegal_literal,
+                required_token,
+                state,
+            )?;
+            cursor = group.end_index + 1;
             continue;
         }
 
@@ -1472,19 +1733,49 @@ fn validate_folder_component_template(
                 token_spec.trim()
             )));
         }
-        saw_token = true;
+        state.saw_token = true;
         if required_token.is_some_and(|required| parsed_token.name == required) {
-            saw_required_token = true;
+            state.saw_required_token = true;
         }
         cursor = end_index + 1;
     }
 
-    if require_any_token && !saw_token {
+    Ok(())
+}
+
+fn validate_folder_component_template(
+    template: &str,
+    template_label: &str,
+    is_supported_token: impl Fn(&str) -> bool,
+    required_token: Option<&str>,
+    require_any_token: bool,
+) -> AppResult<()> {
+    let trimmed = template.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::Validation(format!(
+            "{template_label} template is required"
+        )));
+    }
+
+    let mut state = RenameTemplateValidationState {
+        saw_token: false,
+        saw_required_token: required_token.is_none(),
+    };
+    validate_rename_template_fragment(
+        trimmed,
+        template_label,
+        &is_supported_token,
+        Some(is_illegal_folder_template_literal),
+        required_token,
+        &mut state,
+    )?;
+
+    if require_any_token && !state.saw_token {
         return Err(AppError::Validation(format!(
             "{template_label} template must include at least one supported token"
         )));
     }
-    if !saw_required_token {
+    if !state.saw_required_token {
         return Err(AppError::Validation(format!(
             "{template_label} template must include {{{}}}",
             required_token.unwrap_or_default()
@@ -1519,60 +1810,14 @@ fn validate_rename_template_with_token_checker(
         ));
     }
 
-    let chars: Vec<char> = trimmed.chars().collect();
-    let mut cursor = 0usize;
-    let mut escaped_literal_open_count = 0usize;
-
-    while cursor < chars.len() {
-        let ch = chars[cursor];
-        if ch == '{' {
-            if chars.get(cursor + 1).is_some_and(|next| *next == '{') {
-                escaped_literal_open_count += 1;
-                cursor += 2;
-                continue;
-            }
-
-            let Some(end) = chars[cursor + 1..].iter().position(|value| *value == '}') else {
-                return Err(AppError::Validation(
-                    "rename template contains an unmatched '{'".to_string(),
-                ));
-            };
-            let end_index = cursor + 1 + end;
-            let token_spec: String = chars[cursor + 1..end_index].iter().collect();
-            if token_spec.contains('{') {
-                return Err(AppError::Validation(
-                    "rename template contains an unmatched '{'".to_string(),
-                ));
-            }
-            let Some(parsed_token) = parse_rename_template_token_spec(token_spec.trim()) else {
-                return Err(AppError::Validation(format!(
-                    "unsupported rename template token: {{{}}}",
-                    token_spec.trim()
-                )));
-            };
-            if !is_supported_token(&parsed_token.name) {
-                return Err(AppError::Validation(format!(
-                    "unsupported rename template token: {{{}}}",
-                    token_spec.trim()
-                )));
-            }
-            cursor = end_index + 1;
-        } else if ch == '}' {
-            if chars.get(cursor + 1).is_some_and(|next| *next == '}') {
-                escaped_literal_open_count = escaped_literal_open_count.saturating_sub(1);
-                cursor += 2;
-            } else if escaped_literal_open_count > 0 {
-                escaped_literal_open_count -= 1;
-                cursor += 1;
-            } else {
-                return Err(AppError::Validation(
-                    "rename template contains an unmatched '}'".to_string(),
-                ));
-            }
-        } else {
-            cursor += 1;
-        }
-    }
+    validate_rename_template_fragment(
+        trimmed,
+        "rename",
+        &is_supported_token,
+        None,
+        None,
+        &mut RenameTemplateValidationState::default(),
+    )?;
 
     Ok(())
 }
@@ -1879,8 +2124,10 @@ pub fn build_rename_plan_fingerprint(
         items,
     ))
     .unwrap_or_default();
-    let hash = aws_lc_digest::digest(&aws_lc_digest::SHA256, &bytes);
-    crate::to_hex(hash.as_ref())
+    crate::helpers::blake3_identity_hex(
+        crate::helpers::HashDomain::RenamePlan,
+        String::from_utf8_lossy(&bytes),
+    )
 }
 
 struct GroupedTitleMediaFile {
@@ -3032,7 +3279,6 @@ fn truncate_generated_folder_component(component: &str) -> String {
     truncate_generated_component(component, false)
 }
 
-#[cfg(windows)]
 fn truncate_generated_component(component: &str, preserve_extension: bool) -> String {
     let budget =
         GENERATED_COMPONENT_MAX_BYTES.saturating_sub(GENERATED_COMPONENT_SUFFIX_RESERVE_BYTES);
@@ -3070,12 +3316,6 @@ fn truncate_generated_component(component: &str, preserve_extension: bool) -> St
     }
 }
 
-#[cfg(not(windows))]
-fn truncate_generated_component(component: &str, _preserve_extension: bool) -> String {
-    component.to_string()
-}
-
-#[cfg(windows)]
 fn truncate_utf8_bytes(value: &str, budget: usize) -> String {
     if value.len() <= budget {
         return value.to_string();
@@ -3092,7 +3332,6 @@ fn truncate_utf8_bytes(value: &str, budget: usize) -> String {
     value[..end].to_string()
 }
 
-#[cfg(windows)]
 fn trim_truncated_component_end(value: &str) -> String {
     value
         .trim_end_matches(|ch: char| ch.is_whitespace() || matches!(ch, '.' | '-' | '_'))

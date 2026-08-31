@@ -358,6 +358,7 @@ fn looks_like_release_metadata_token(token: &str, tokens: &[String]) -> bool {
         || looks_like_daily_token(&normalized)
         || looks_like_absolute_episode_token(&normalized)
         || looks_like_season_pack_marker(&normalized, tokens)
+        || spelled_season_marker(&normalized, tokens)
         || looks_like_release_provenance_normalized(&normalized)
 }
 
@@ -447,12 +448,41 @@ fn looks_like_season_pack_release(tokens: &[String]) -> bool {
                 .to_ascii_uppercase()
         })
         .collect::<Vec<_>>();
-    normalized
+    (normalized
         .iter()
         .any(|token| looks_like_bare_season_token(token))
         && normalized
             .iter()
-            .any(|token| matches!(token.as_str(), "COMPLETE" | "SEASON" | "PACK" | "BATCH"))
+            .any(|token| matches!(token.as_str(), "COMPLETE" | "SEASON" | "PACK" | "BATCH")))
+        || spelled_season_marker("SEASON", tokens)
+}
+
+/// A spelled-out season marker — `SEASON` followed within a short window by a
+/// small integer — is a title boundary just as `Sxx` is:
+/// `[Group] Quiet Meridian - Season 1 - The Arc Name ...` must not read its
+/// neutral title as "Quiet Meridian Season 1 The Arc Name". The numeric
+/// successor is mandatory, which is what keeps a title that merely contains the
+/// word ("Season of the ...") intact. `PART` deliberately does not participate:
+/// "Part 2" is identity-bearing in sequel and multi-part titles, and bounding
+/// there would strip it from the neutral title. The window leaves room for one
+/// intervening separator artifact.
+fn spelled_season_marker(normalized: &str, tokens: &[String]) -> bool {
+    const SUCCESSOR_WINDOW: usize = 2;
+    if normalized != "SEASON" {
+        return false;
+    }
+    tokens.iter().enumerate().any(|(index, candidate)| {
+        normalize_alphanumeric_upper(candidate) == normalized
+            && tokens
+                .iter()
+                .skip(index + 1)
+                .take(SUCCESSOR_WINDOW)
+                .any(|next| looks_like_small_season_number(&normalize_alphanumeric_upper(next)))
+    })
+}
+
+fn looks_like_small_season_number(normalized: &str) -> bool {
+    matches!(normalized.len(), 1 | 2) && normalized.chars().all(|ch| ch.is_ascii_digit())
 }
 
 fn looks_like_season_pack_marker(token: &str, tokens: &[String]) -> bool {
@@ -467,6 +497,39 @@ fn looks_like_season_pack_marker(token: &str, tokens: &[String]) -> bool {
                 .collect::<String>()
                 .eq_ignore_ascii_case("COMPLETE")
         })
+        || bare_season_followed_by_release_metadata(token, tokens)
+}
+
+/// A bare `Sxx` trailed within a short window by unmistakable release metadata
+/// (`MULTI`, a resolution, a source, a codec, a year) is a season-pack marker
+/// and therefore a title boundary — `Just.Beyond.S01.iTALiAN.MULTi.1080p...`
+/// must not read its neutral title as "Just Beyond S01 iTALiAN" (issue #170).
+/// An isolated `Sxx` with no such trailer keeps the stricter companion-keyword
+/// requirement: a title's own token that merely looks like a season must not
+/// truncate the title.
+fn bare_season_followed_by_release_metadata(token: &str, tokens: &[String]) -> bool {
+    const METADATA_WINDOW: usize = 3;
+    let target = normalize_alphanumeric_upper(token);
+    tokens.iter().enumerate().any(|(index, candidate)| {
+        normalize_alphanumeric_upper(candidate) == target
+            && tokens
+                .iter()
+                .skip(index + 1)
+                .take(METADATA_WINDOW)
+                .any(|next| {
+                    let normalized = normalize_alphanumeric_upper(next);
+                    looks_like_release_provenance_normalized(&normalized)
+                        || parse_context_year(&normalized).is_some()
+                })
+    })
+}
+
+fn normalize_alphanumeric_upper(token: &str) -> String {
+    token
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .collect::<String>()
+        .to_ascii_uppercase()
 }
 
 fn looks_like_bare_season_token(token: &str) -> bool {

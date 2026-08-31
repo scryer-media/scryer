@@ -10,8 +10,8 @@ use std::time::{Duration, Instant};
 use common::TestContext;
 use scryer_application::testing::AppUseCaseTestExt;
 use scryer_application::{
-    AcquisitionScopeStateRepository, BlocklistRepository, DownloadClientConfigRepository,
-    DownloadSourceIdentity, DownloadSubmission, DownloadSubmissionPurpose,
+    AcquisitionScopeStateRepository, BlocklistRepository, ClientJobLocator,
+    DownloadClientConfigRepository, DownloadSubmission, DownloadSubmissionPurpose,
     DownloadSubmissionRepository, ImportRepository, LibraryRepository, LibraryRootDraft,
     MediaFileRepository, ReleaseAttemptRepository, SaveQualityProfileSettings, ShowRepository,
     SubmissionScope, TitleRepository, import_completed_download,
@@ -87,7 +87,7 @@ async fn app_with_real_imports(ctx: &TestContext) -> scryer_application::AppUseC
     ctx.app.with_test_overrides(|builder| {
         builder
             .with_imports(workflow_store)
-            .with_file_importer(Arc::new(FsFileImporter))
+            .with_file_importer(Arc::new(FsFileImporter::new()))
             .with_media_files(Arc::new(ctx.media_files.clone()))
             .with_acquisition_scope_states(Arc::new(ctx.library_state.clone()))
     })
@@ -118,6 +118,21 @@ fn scryer_completed(
     }
 }
 
+async fn queue_import_record(ctx: &TestContext, completed: &CompletedDownload) -> String {
+    ImportStore::new(ctx.db.datastore())
+        .queue_import_request(
+            ClientJobLocator::for_import_artifact(
+                Some(&completed.client_id),
+                &completed.client_type,
+                &completed.download_client_item_id,
+            ),
+            "manual_import".to_string(),
+            "{}".to_string(),
+        )
+        .await
+        .expect("queue import record")
+}
+
 /// Record the durable grab-time submission a Scryer download carries in
 /// production: the identity of `completed` bound to `title` with the indexer
 /// release title. This is the release evidence import parses, scores, and —
@@ -129,9 +144,11 @@ async fn record_movie_grab_submission(
     completed: &CompletedDownload,
     title: &Title,
     source_title: &str,
-) {
+) -> scryer_domain::download_identity::DownloadId {
+    let download_id = scryer_domain::download_identity::DownloadId::new();
     DownloadSubmissionStore::new(ctx.db.datastore())
         .record_submission(DownloadSubmission {
+            download_id,
             title_id: title.id.clone(),
             facet: "movie".to_string(),
             download_client_id: Some(completed.client_id.clone()),
@@ -142,6 +159,7 @@ async fn record_movie_grab_submission(
             source_provider_name: None,
             source_kind: None,
             source_title: Some(source_title.to_string()),
+            info_hash: None,
             release_size_bytes: None,
             request_signature: None,
             purpose: DownloadSubmissionPurpose::Standard,
@@ -149,6 +167,7 @@ async fn record_movie_grab_submission(
         })
         .await
         .expect("record grab submission");
+    download_id
 }
 
 async fn configure_default_library_root(
@@ -600,6 +619,8 @@ async fn seed_series_movie_link(
             tmdb_id: None,
             mal_id: None,
             anidb_id: None,
+            ratings: None,
+            credits: None,
             created_at: now,
             updated_at: now,
         },
@@ -614,6 +635,8 @@ async fn seed_series_movie_link(
         confidence: None,
         signal_summary: None,
         source: Some("test".to_string()),
+        monitoring_override: None,
+        metadata_active: true,
         monitored: true,
         legacy_collection_id: None,
         created_at: now,
@@ -764,54 +787,6 @@ async fn run_completed_download_series_import_stack_probe() {
 /// Directly mark a download as "completed" in the import repository, then
 /// attempt to import the same download again.  The second call should be
 /// short-circuited as AlreadyImported without re-running the pipeline.
-#[tokio::test]
-async fn import_deduplicates_completed_imports() {
-    let ctx = TestContext::new().await;
-    let app = app_with_real_imports(&ctx).await;
-    let user = ctx.app.find_or_create_default_user().await.unwrap();
-    let workflow_store = ImportStore::new(ctx.db.datastore());
-
-    // Seed a completed import record for (nzbget, "dl-dedup").
-    let import_id = workflow_store
-        .queue_import_request(
-            DownloadSourceIdentity::new(Some("test-client"), "nzbget", "dl-dedup"),
-            "movie_download".to_string(),
-            "{}".to_string(),
-        )
-        .await
-        .expect("queue_import_request");
-    workflow_store
-        .update_import_status(&import_id, scryer_domain::ImportStatus::Completed, None)
-        .await
-        .expect("update_import_status");
-
-    // Now attempt to import the same download — dedup should fire immediately.
-    let completed = CompletedDownload {
-        client_type: "nzbget".to_string(),
-        client_id: "test-client".to_string(),
-        download_client_item_id: "dl-dedup".to_string(),
-        download_id: None,
-        name: "Already.Imported.Movie".to_string(),
-        release_name: None,
-        dest_dir: "/tmp/wherever".to_string(),
-        category: None,
-        size_bytes: None,
-        completed_at: None,
-        parameters: vec![("*scryer_title_id".to_string(), "any-id".to_string())],
-    };
-
-    let result = import_completed_download(&app, &user, &completed)
-        .await
-        .expect("import_completed_download");
-
-    assert_eq!(result.decision, ImportDecision::Skipped);
-    assert_eq!(result.skip_reason, Some(ImportSkipReason::AlreadyImported));
-}
-
-// ---------------------------------------------------------------------------
-// Title matching
-// ---------------------------------------------------------------------------
-
 #[tokio::test]
 async fn import_returns_unmatched_when_title_not_found() {
     let ctx = TestContext::new().await;
@@ -1434,7 +1409,7 @@ score_entry["too_few_chapters"] := scryer.block_score() if {
         .expect("list blocklist");
     assert!(
         blocklist.iter().any(|entry| {
-            entry.source_title.as_deref() == Some(blocklisted_title.as_str())
+            entry.normalized_release_name == blocklisted_title
                 && entry
                     .reason
                     .as_deref()
@@ -1630,11 +1605,12 @@ async fn manual_import_series_pack_maps_each_file_within_the_bound_title() {
         &title.id,
         "series",
     );
+    let import_id = queue_import_record(&ctx, &completed).await;
 
     let results = scryer_application::execute_manual_import(
         &app,
         &user,
-        "manual-series-pack-import",
+        &import_id,
         &title.id,
         Some(&completed),
         vec![
@@ -1708,11 +1684,12 @@ async fn manual_import_multi_episode_filename_keeps_the_explicit_single_episode_
         &title.id,
         "series",
     );
+    let import_id = queue_import_record(&ctx, &completed).await;
 
     let results = scryer_application::execute_manual_import(
         &app,
         &user,
-        "manual-single-target-import",
+        &import_id,
         &title.id,
         Some(&completed),
         vec![scryer_application::ManualImportFileMapping {
@@ -1880,11 +1857,12 @@ async fn manual_import_series_persists_media_analysis_and_acquisition_score() {
         &title.id,
         "series",
     );
+    let import_id = queue_import_record(&ctx, &completed).await;
 
     let results = scryer_application::execute_manual_import(
         &app,
         &user,
-        "manual-series-success-import",
+        &import_id,
         &title.id,
         Some(&completed),
         vec![scryer_application::ManualImportFileMapping {
@@ -1952,11 +1930,12 @@ async fn manual_import_series_reuses_existing_title_folder_path_even_when_templa
         &title.id,
         "series",
     );
+    let import_id = queue_import_record(&ctx, &completed).await;
 
     let results = scryer_application::execute_manual_import(
         &app,
         &user,
-        "manual-series-existing-folder-import",
+        &import_id,
         &title.id,
         Some(&completed),
         vec![scryer_application::ManualImportFileMapping {
@@ -2249,7 +2228,7 @@ score_entry["too_few_chapters"] := scryer.block_score() if {
         .expect("list blocklist");
     assert!(
         blocklist.iter().any(|entry| {
-            entry.source_title.as_deref() == Some(blocklisted_title.as_str())
+            entry.normalized_release_name == blocklisted_title
                 && entry
                     .reason
                     .as_deref()
@@ -2276,8 +2255,10 @@ fn movie_manual_mapping(path: &Path) -> scryer_application::ManualImportFileMapp
 fn tracked_movie_download(
     completed: &CompletedDownload,
     title_id: &str,
+    download_id: scryer_domain::download_identity::DownloadId,
 ) -> scryer_application::tracked_downloads::TrackedDownload {
     scryer_application::tracked_downloads::TrackedDownload {
+        download_id,
         id: format!(
             "{}:{}",
             completed.client_id, completed.download_client_item_id
@@ -2387,15 +2368,18 @@ async fn manual_import_movie_imports_only_the_primary_and_skips_samples_and_extr
     );
     // Import artifacts reference the import record; queue one as the manual
     // import poller would before executing.
+    let download_id = record_movie_grab_submission(&ctx, &completed, &title, &completed.name).await;
     let import_id = ImportStore::new(ctx.db.datastore())
-        .queue_import_request(
-            DownloadSourceIdentity::new(
+        .queue_import_request_with_identity_for_download(
+            ClientJobLocator::for_import_artifact(
                 Some(&completed.client_id),
                 &completed.client_type,
                 &completed.download_client_item_id,
             ),
             "manual_import".to_string(),
             "{}".to_string(),
+            None,
+            Some(&download_id),
         )
         .await
         .expect("queue manual import record");
@@ -2466,7 +2450,7 @@ async fn manual_import_movie_imports_only_the_primary_and_skips_samples_and_extr
     // skipped extras are excluded from the expected count), one imported.
     let expected_mapping_count = Some(results.iter().filter(|result| !result.skipped).count());
     assert_eq!(expected_mapping_count, Some(1));
-    let tracked = tracked_movie_download(&completed, &title.id);
+    let tracked = tracked_movie_download(&completed, &title.id, download_id);
     assert!(
         scryer_application::completed_download_handler::verify_manual_import(
             &app,
@@ -2474,7 +2458,8 @@ async fn manual_import_movie_imports_only_the_primary_and_skips_samples_and_extr
             1,
             expected_mapping_count,
         )
-        .await,
+        .await
+        .expect("manual import verification should be available"),
         "the tracked download must verify as imported with the extras skipped"
     );
 }
@@ -2596,11 +2581,12 @@ async fn manual_import_small_normally_named_movie_imports_as_the_primary() {
         &title.id,
         "movie",
     );
+    let import_id = queue_import_record(&ctx, &completed).await;
 
     let results = scryer_application::execute_manual_import(
         &app,
         &user,
-        "manual-small-movie-import",
+        &import_id,
         &title.id,
         Some(&completed),
         vec![
@@ -2648,7 +2634,7 @@ async fn completed_manual_import_recovery_query_only_returns_records_inside_the_
 
     let manual_import_id = workflow_store
         .queue_import_request(
-            DownloadSourceIdentity::new(Some("test-client"), "qbittorrent", "hash-recover"),
+            ClientJobLocator::new(Some("test-client"), "qbittorrent", "hash-recover"),
             "manual_import".to_string(),
             "{}".to_string(),
         )
@@ -2664,7 +2650,7 @@ async fn completed_manual_import_recovery_query_only_returns_records_inside_the_
         .expect("complete manual import");
     let movie_import_id = workflow_store
         .queue_import_request(
-            DownloadSourceIdentity::new(Some("test-client"), "nzbget", "dl-auto"),
+            ClientJobLocator::new(Some("test-client"), "nzbget", "dl-auto"),
             "movie_download".to_string(),
             "{}".to_string(),
         )

@@ -15,8 +15,12 @@ use scryer_domain::VIDEO_EXTENSIONS;
 use unicode_normalization::UnicodeNormalization;
 
 const LIBRARY_SCAN_DISCOVERY_WORK_QUEUE_CAPACITY: usize = 16;
-const LIBRARY_PROBE_SIGNATURE_DIRECTORY_SCHEME: &str = "immediate_children_v1";
-const LIBRARY_PROBE_SIGNATURE_FILE_SCHEME: &str = "file_snapshot_v1";
+// `_v2` marks the move from SHA-256 to domain-separated BLAKE3. The change
+// needs no migration: the freshness check compares the stored scheme to the
+// live one, so every `_v1` row reads as changed, is recomputed, and is upserted
+// on its next probe. Cost is one extra probe per path on the first pass.
+const LIBRARY_PROBE_SIGNATURE_DIRECTORY_SCHEME: &str = "immediate_children_v2";
+const LIBRARY_PROBE_SIGNATURE_FILE_SCHEME: &str = "file_snapshot_v2";
 pub(crate) const LIBRARY_SCAN_MAX_RECURSIVE_DEPTH: usize = 3;
 
 // Aligned with Sonarr/Radarr special-folder and root-folder exclusion behavior.
@@ -722,13 +726,13 @@ fn compute_library_probe_signature_blocking(path: PathBuf) -> AppResult<(String,
         let payload = markers.join("\n");
         Ok((
             LIBRARY_PROBE_SIGNATURE_DIRECTORY_SCHEME.to_string(),
-            sha256_hex(payload),
+            blake3_identity_hex(HashDomain::LibraryProbe, payload),
         ))
     } else {
         let payload = metadata_probe_marker(&metadata);
         Ok((
             LIBRARY_PROBE_SIGNATURE_FILE_SCHEME.to_string(),
-            sha256_hex(payload),
+            blake3_identity_hex(HashDomain::LibraryProbe, payload),
         ))
     }
 }

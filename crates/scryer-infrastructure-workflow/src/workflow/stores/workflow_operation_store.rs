@@ -209,7 +209,7 @@ impl JobRunRepository for WorkflowOperationStore {
         .collect()
     }
 
-    async fn reconcile_interrupted_job_runs(&self) -> AppResult<u64> {
-        reconcile_interrupted_job_runs(&self.datastore).await
+    async fn reconcile_interrupted_job_runs(&self, excluded_run_ids: &[String]) -> AppResult<u64> {
+        reconcile_interrupted_job_runs(&self.datastore, excluded_run_ids).await
     }
 }

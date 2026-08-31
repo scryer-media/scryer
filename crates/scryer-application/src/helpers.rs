@@ -69,12 +69,39 @@ pub fn nice_thread() {
 pub fn nice_thread() {}
 
 pub(crate) fn normalize_release_attempt_hint(raw: Option<&str>) -> Option<String> {
-    raw.map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
+    let raw = raw.map(str::trim).filter(|value| !value.is_empty())?;
+    let Ok(mut url) = url::Url::parse(raw) else {
+        return Some(raw.to_string());
+    };
+    let _ = url.set_username("");
+    let _ = url.set_password(None);
+    url.set_fragment(None);
+    let mut query = url
+        .query_pairs()
+        .filter(|(key, _)| {
+            !matches!(
+                key.to_ascii_lowercase().replace(['_', '-'], "").as_str(),
+                "apikey" | "apiaccess" | "token" | "auth" | "password" | "passkey"
+            )
+        })
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect::<Vec<_>>();
+    query.sort();
+    url.set_query(None);
+    if !query.is_empty() {
+        url.query_pairs_mut().extend_pairs(query);
+    }
+    Some(url.to_string())
 }
 
-pub(crate) fn normalize_release_attempt_title(raw: Option<&str>) -> Option<String> {
+/// The canonical form of a release name: trimmed and ASCII-lowercased.
+///
+/// This is the blocklist's matcher and its unique key, so the writer and every
+/// reader must agree on it exactly. It is deliberately ASCII-only and
+/// deliberately never expressed in SQL: SQLite's `LOWER` is ASCII-only while
+/// Postgres' `lower()` is locale-aware, so a normalization computed in the
+/// database would differ between the two engines on a non-ASCII name.
+pub fn normalize_release_name(raw: Option<&str>) -> Option<String> {
     raw.map(str::trim)
         .filter(|value| !value.is_empty())
         .map(|value| value.to_ascii_lowercase())
@@ -195,31 +222,136 @@ pub(crate) fn normalize_release_selection_signature(
     source_title: Option<&str>,
     source_kind: Option<DownloadSourceKind>,
 ) -> Option<String> {
-    let source_hint = source_hint
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string);
+    let source_hint = normalize_release_attempt_hint(source_hint);
     let source_title = source_title
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .map(str::to_string);
+        .map(str::to_ascii_lowercase);
     let source_kind = source_kind.map(|value| value.as_str().to_string());
 
     if source_hint.is_none() && source_title.is_none() && source_kind.is_none() {
         return None;
     }
 
-    Some(format!(
-        "{}|{}|{}",
+    let identity = format!(
+        "v1\0{}\0{}\0{}",
         source_kind.unwrap_or_default(),
         source_hint.unwrap_or_default(),
         source_title.unwrap_or_default()
+    );
+    // `blake3:v2:` supersedes the former `sha256:v1:`. The value is write-only
+    // in production — the only reader, `find_by_title_and_request_signature`,
+    // has no application-layer caller — so historical rows keep their old
+    // prefix as inert data and need no backfill. The prefix stays so a future
+    // reader can tell the two apart rather than silently mismatching.
+    Some(format!(
+        "blake3:v2:{}",
+        blake3_identity_hex(HashDomain::ReleaseSelection, identity)
     ))
 }
 
-pub(crate) fn sha256_hex(input: impl AsRef<str>) -> String {
-    let hash = aws_lc_digest::digest(&aws_lc_digest::SHA256, input.as_ref().as_bytes());
-    to_hex(hash.as_ref())
+/// Namespace for a BLAKE3 identity digest.
+///
+/// Every identity hash in the application is domain-separated, so two digests
+/// computed over identical input in different namespaces can never collide or
+/// be substituted for one another. Variants are never renamed or reused: the
+/// string is baked into persisted values.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HashDomain {
+    /// Convergence scope search-criteria fingerprint.
+    ConvergenceScope,
+    /// Per-indexer coverage fingerprint.
+    IndexerCoverage,
+    /// Quality-profile acceptance-criteria version.
+    QualityProfileCriteria,
+    /// Canonical episode-set convergence scope key.
+    EpisodeSetScope,
+    /// Canonical series-pack set convergence scope key.
+    SeriesPackSetScope,
+    /// Release-selection / release-attempt signature.
+    ReleaseSelection,
+    /// Library probe signature (directory and file schemes).
+    LibraryProbe,
+    /// Media-request dedup identity.
+    MediaRequestIdentity,
+    /// Library-scan unmatched item row id.
+    LibraryScanUnmatchedItem,
+    /// Authorization + session claim fingerprint.
+    AuthorizationFingerprint,
+    /// User-delete preview confirmation fingerprint.
+    DeletePreview,
+    /// Rename-plan content hash.
+    RenamePlan,
+    /// Indexer credential fingerprint inside the search identity.
+    IndexerSecret,
+    /// Search-diagnostics query signature.
+    IndexerQuerySignature,
+    /// Search-diagnostics indexer identity fingerprint (reuse validity).
+    IndexerSearchIdentity,
+    /// Interactive-search candidate identity within one session.
+    CandidateSessionIdentity,
+}
+
+impl HashDomain {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::ConvergenceScope => "scryer.convergence.scope.v1",
+            Self::IndexerCoverage => "scryer.convergence.indexer.v1",
+            Self::QualityProfileCriteria => "scryer.quality.profile-criteria.v1",
+            Self::EpisodeSetScope => "scryer.convergence.episode-set.v1",
+            Self::SeriesPackSetScope => "scryer.convergence.series-pack-set.v1",
+            Self::ReleaseSelection => "scryer.release.selection.v1",
+            Self::LibraryProbe => "scryer.library.probe.v1",
+            Self::MediaRequestIdentity => "scryer.media-request.identity.v1",
+            Self::LibraryScanUnmatchedItem => "scryer.library.scan-unmatched.v1",
+            Self::AuthorizationFingerprint => "scryer.auth.fingerprint.v1",
+            Self::DeletePreview => "scryer.library.delete-preview.v1",
+            Self::RenamePlan => "scryer.library.rename-plan.v1",
+            Self::IndexerSecret => "scryer.indexer.secret.v1",
+            Self::IndexerQuerySignature => "scryer.indexer.query-signature.v1",
+            Self::IndexerSearchIdentity => "scryer.indexer.search-identity.v1",
+            Self::CandidateSessionIdentity => "scryer.indexer.candidate-session.v1",
+        }
+    }
+}
+
+/// Domain-separated BLAKE3 identity digest, lowercase hex.
+///
+/// The domain label is absorbed first, followed by a NUL byte that cannot
+/// appear in a label, so no input can impersonate a different domain.
+///
+/// # This is the only hash first-party code may use
+///
+/// Every identity, fingerprint, signature, dedup key, cache key, and content
+/// digest Scryer computes for its own purposes goes through here. Add a
+/// [`HashDomain`] variant rather than reaching for another algorithm.
+///
+/// There is deliberately no `sha256_hex` beside it. SHA-256 survives in this
+/// codebase **only** where an external contract fixes the algorithm and we have
+/// no choice:
+///
+/// - WebAuthn `rpIdHash` and ECDSA-P256-SHA256 verification (`scryer-webauthn`)
+/// - TOTP, where the algorithm is user-selectable per RFC 6238 and stored
+///   (`security/totp.rs`)
+/// - HMAC-SHA256 signing for JWTs, sessions, API keys, and OAuth
+/// - OAuth PKCE `S256` challenges, fixed by RFC 7636 (`oauth.rs`)
+/// - GraphQL Automatic Persisted Queries, where the server keys on SHA-256 of
+///   the query text (`scryer-infrastructure-metadata`)
+/// - Sigstore/Rekor `hashedrekord` verification, which recomputes a digest the
+///   transparency log already recorded (`plugins/catalog.rs`)
+/// - SHA-384 migration-asset integrity (`scryer-infrastructure-datastore`)
+/// - The trusted-certificate `fingerprint_sha256` a human compares against what
+///   a browser or `openssl` prints (`settings/runtime/general.rs`)
+///
+/// Those are compatibility surfaces, not a precedent. If a new hash is *ours* —
+/// nobody outside Scryer computes or verifies it — it belongs here. If you think
+/// you need SHA-256 for something first-party, the answer is that you do not.
+pub fn blake3_identity_hex(domain: HashDomain, input: impl AsRef<str>) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(domain.as_str().as_bytes());
+    hasher.update(&[0u8]);
+    hasher.update(input.as_ref().as_bytes());
+    hasher.finalize().to_hex().to_string()
 }
 
 pub(crate) fn to_hex(value: &[u8]) -> String {
@@ -426,6 +558,25 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn release_selection_signature_is_credential_free_and_versioned() {
+        let signature = |key: &str, id: u8| {
+            normalize_release_selection_signature(
+                Some(&format!(
+                    "https://indexer.invalid/api?t=get&id={id}&apikey={key}"
+                )),
+                Some("Synthetic.Release.1080p"),
+                Some(DownloadSourceKind::NzbUrl),
+            )
+            .expect("signature")
+        };
+
+        assert_eq!(signature("first-secret", 1), signature("rotated-secret", 1));
+        assert_ne!(signature("first-secret", 1), signature("first-secret", 2));
+        assert!(signature("first-secret", 1).starts_with("blake3:v2:"));
+        assert!(!signature("first-secret", 1).contains("first-secret"));
+    }
 
     struct StubDownloadClientPluginProvider {
         available_types: Vec<String>,

@@ -1,6 +1,10 @@
 use super::*;
-use scryer_application::{DownloadQueuePollerOptions, start_download_queue_poller_with_options};
-use scryer_domain::{CompletedDownload, DownloadQueueItem, DownloadQueueState};
+use scryer_application::{
+    ClientJobLocator, DownloadQueuePollerOptions, ImportRepository,
+    start_download_queue_poller_with_options,
+};
+use scryer_domain::{CompletedDownload, DownloadQueueItem, DownloadQueueState, ImportStatus};
+use scryer_infrastructure_workflow::workflow::stores::ImportStore;
 use std::collections::HashSet;
 
 #[tokio::test]
@@ -855,7 +859,6 @@ async fn graphql_introspection_exposes_typed_timestamps_as_datetime() {
     }
 
     for (type_alias, name) in [
-        ("titleReleaseBlocklistEntry", "episodeIds"),
         ("episodeSetScope", "episodeIds"),
         ("titleHistoryEvent", "episodeIds"),
     ] {
@@ -1572,6 +1575,7 @@ async fn graphql_traverses_core_graph_relationships() {
         indexer_id: None,
         release_guid: Some("pending-guid".to_string()),
         added_at: "2026-03-20T00:06:00Z".to_string(),
+        last_observed_at: "2026-03-20T00:06:00Z".to_string(),
         delay_until: "2026-03-20T01:06:00Z".to_string(),
         status: scryer_application::PendingReleaseStatus::Waiting,
         grabbed_at: None,
@@ -1580,6 +1584,11 @@ async fn graphql_traverses_core_graph_relationships() {
         info_hash: None,
         seed_minimums: Default::default(),
         seeders: None,
+        release_identity: "guid:pending-guid".to_string(),
+        coverage_identity: format!("scope:{}", wanted_item.id),
+        role: scryer_application::PendingReleaseRole::Primary,
+        last_decision_code: Some("pending_delay".to_string()),
+        release_age_unknown: false,
     };
     scryer_infrastructure_library::media::libraries::state_store::PendingReleaseStore::new(
         ctx.db.datastore(),
@@ -1635,6 +1644,9 @@ async fn graphql_traverses_core_graph_relationships() {
                   items {
                     id
                     status
+                    delayUntil
+                    lastDecisionCode
+                    role
                     title { id }
                     wantedItem { id }
                   }
@@ -1665,6 +1677,9 @@ async fn graphql_traverses_core_graph_relationships() {
               items {
                 id
                 status
+                delayUntil
+                lastDecisionCode
+                role
                 title { id }
                 wantedItem { id }
               }
@@ -1740,6 +1755,18 @@ async fn graphql_traverses_core_graph_relationships() {
     assert_eq!(
         title_wanted_item["pendingReleases"]["items"][0]["status"],
         "WAITING"
+    );
+    assert_eq!(
+        title_wanted_item["pendingReleases"]["items"][0]["delayUntil"],
+        "2026-03-20T01:06:00+00:00"
+    );
+    assert_eq!(
+        title_wanted_item["pendingReleases"]["items"][0]["lastDecisionCode"],
+        "pending_delay"
+    );
+    assert_eq!(
+        title_wanted_item["pendingReleases"]["items"][0]["role"],
+        "PRIMARY"
     );
     assert_eq!(
         title_wanted_item["releaseDecisions"]["items"][0]["id"],
@@ -2158,9 +2185,16 @@ async fn graphql_manual_import_schema_exposes_candidate_only_contract() {
     );
     assert_eq!(
         field_names("selectionInput"),
-        ["clientId", "clientType", "downloadClientItemId", "titleId"]
+        [
+            "clientId",
+            "clientType",
+            "downloadClientItemId",
+            "titleId",
+            "extractArchives",
+        ]
     );
     assert!(field_names("selectionPayload").contains(&"selectionId"));
+    assert!(field_names("selectionPayload").contains(&"archiveExtractionNeeded"));
     let file_fields = field_names("filePayload");
     assert!(file_fields.contains(&"candidateId"));
     assert!(!file_fields.contains(&"filePath"));
@@ -2405,6 +2439,65 @@ async fn graphql_download_import_exposes_background_import_blocked_state_from_ca
         all["data"]["downloadImport"]["items"][0]["downloadClientItemId"],
         json!(item_id)
     );
+
+    let import_id = ImportStore::new(ctx.db.datastore())
+        .queue_import_request_with_identity(
+            ClientJobLocator::new(Some("graphql-weaver-client"), "weaver", item_id),
+            "manual_import".to_string(),
+            "{}".to_string(),
+            None,
+        )
+        .await
+        .expect("queue manual import record");
+    ctx.app
+        .update_import_status_and_notify(&import_id, ImportStatus::Pending, None)
+        .await
+        .expect("stage pending manual import");
+    tokio::time::sleep(std::time::Duration::from_millis(350)).await;
+
+    let pending = gql(
+        &ctx,
+        r#"
+        query {
+          downloadImport(limit: 100, offset: 0, filter: PENDING) {
+            totalCount
+            items { downloadClientItemId displayState importStatus trackedState }
+          }
+        }
+        "#,
+        json!({}),
+    )
+    .await;
+    assert_no_errors(&pending);
+    let row = &pending["data"]["downloadImport"]["items"][0];
+    assert_eq!(row["downloadClientItemId"], json!(item_id));
+    assert_eq!(row["displayState"], json!("IMPORT_PENDING"));
+    assert_eq!(row["importStatus"], json!("PENDING"));
+    assert_eq!(row["trackedState"], json!("IMPORT_BLOCKED"));
+
+    ctx.app
+        .update_import_status_and_notify(&import_id, ImportStatus::Processing, None)
+        .await
+        .expect("stage processing manual import");
+    tokio::time::sleep(std::time::Duration::from_millis(350)).await;
+    let processing = gql(
+        &ctx,
+        r#"
+        query {
+          downloadImport(limit: 100, offset: 0, filter: IMPORTING) {
+            totalCount
+            items { downloadClientItemId displayState importStatus }
+          }
+        }
+        "#,
+        json!({}),
+    )
+    .await;
+    assert_no_errors(&processing);
+    let row = &processing["data"]["downloadImport"]["items"][0];
+    assert_eq!(row["downloadClientItemId"], json!(item_id));
+    assert_eq!(row["displayState"], json!("IMPORTING"));
+    assert_eq!(row["importStatus"], json!("PROCESSING"));
 }
 
 #[tokio::test]
@@ -3004,8 +3097,10 @@ async fn graphql_introspection_exposes_import_enums() {
         .filter_map(|value| value["name"].as_str())
         .collect();
     assert!(import_skip_reason_names.contains(&"PASSWORD_REQUIRED"));
+    assert!(import_skip_reason_names.contains(&"ARCHIVE_EXTRACTION_TIMED_OUT"));
     assert!(import_skip_reason_names.contains(&"POST_DOWNLOAD_RULE_BLOCKED"));
     assert!(import_skip_reason_names.contains(&"UNPARSEABLE_EPISODE"));
+    assert!(import_skip_reason_names.contains(&"DOWNLOAD_IN_PROGRESS"));
 }
 
 #[tokio::test]

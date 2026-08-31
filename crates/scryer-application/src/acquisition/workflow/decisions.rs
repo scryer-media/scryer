@@ -29,9 +29,14 @@ fn annotated_auto_decision_code(candidate: &IndexerSearchResult) -> ReleaseAutoD
 fn effective_auto_decision_code_for_route(
     candidate: &IndexerSearchResult,
     failed_routes: &[DownloadRouteKey],
-    db_blocklist: &std::collections::HashSet<String>,
+    db_blocklist: &crate::app_usecase_discovery::TitleReleaseBlocklistSignatures,
 ) -> ReleaseAutoDecisionCode {
-    if crate::app_usecase_discovery::is_release_title_blocklisted(&candidate.title, db_blocklist) {
+    if crate::app_usecase_discovery::is_release_blocklisted(
+        candidate.indexer_id.as_deref(),
+        &candidate.title,
+        candidate.info_hash(),
+        db_blocklist,
+    ) {
         return ReleaseAutoDecisionCode::DbBlocklisted;
     }
 

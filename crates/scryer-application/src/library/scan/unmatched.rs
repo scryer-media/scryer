@@ -11,7 +11,7 @@ use crate::library_scan_metadata::{
 };
 use crate::{
     AppResult, AppUseCase, LibraryScanUnmatchedItem, LibraryScanUnmatchedSearchAttempt,
-    PendingImportStatus, sha256_hex,
+    PendingImportStatus,
 };
 
 pub(crate) const LIBRARY_SCAN_SKIPPED_UNUSABLE_TITLE_EVIDENCE: &str =
@@ -67,7 +67,10 @@ fn build_library_scan_unmatched_item_id(
     library_id: &str,
     item_path: &str,
 ) -> String {
-    let fingerprint = sha256_hex(format!("{}:{library_id}:{item_path}", facet.as_str()));
+    let fingerprint = crate::helpers::blake3_identity_hex(
+        crate::helpers::HashDomain::LibraryScanUnmatchedItem,
+        format!("{}:{library_id}:{item_path}", facet.as_str()),
+    );
     format!("library_scan_unmatched:{}", &fingerprint[..24])
 }
 

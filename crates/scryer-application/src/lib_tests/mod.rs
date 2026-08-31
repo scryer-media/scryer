@@ -21,6 +21,7 @@ mod indexer_download_client_mappings;
 mod libraries;
 mod library_scan;
 mod media_requests;
+mod metadata_search;
 mod queueing;
 mod routing_settings;
 mod search_cutoff;
@@ -43,8 +44,8 @@ mod support_indexers_metadata;
 mod support_library_show;
 mod support_settings_scan;
 use support_acquisition_downloads::*;
-pub(crate) use support_bootstrap_fixtures::bootstrap;
 use support_bootstrap_fixtures::*;
+pub(crate) use support_bootstrap_fixtures::{bootstrap, bootstrap_application_upgrade};
 use support_catalog::*;
 use support_events_requests::*;
 use support_imports::*;
@@ -145,7 +146,7 @@ impl ScopeIndexerCoverageRepository for RecordingScopeIndexerCoverageRepo {
                 scope_key: scope_key.clone(),
                 indexer_id: indexer_id.clone(),
                 fingerprint: fingerprint.clone(),
-                searched_at: String::new(),
+                searched_at: chrono::Utc::now().to_rfc3339(),
             })
             .collect())
     }

@@ -93,7 +93,7 @@ pub(crate) fn detect_nfo_root_kind(content: &str) -> NfoRootKind {
     loop {
         match reader.read_event() {
             Ok(Event::Start(ref event)) | Ok(Event::Empty(ref event)) => {
-                let name = String::from_utf8_lossy(event.name().as_ref()).to_lowercase();
+                let name = event.name().as_ref().to_lowercase();
                 return match name.as_str() {
                     "movie" => NfoRootKind::Movie,
                     "tvshow" => NfoRootKind::TvShow,
@@ -133,7 +133,7 @@ fn parse_xml_nfo(content: &str, meta: &mut NfoMetadata) {
         match reader.read_event() {
             Ok(Event::Start(ref e)) => {
                 depth = depth.saturating_add(1);
-                let name = String::from_utf8_lossy(e.name().as_ref()).to_lowercase();
+                let name = e.name().as_ref().to_lowercase();
                 if depth == 2 {
                     current_tag = name.clone();
                     current_text.clear();
@@ -144,19 +144,14 @@ fn parse_xml_nfo(content: &str, meta: &mut NfoMetadata) {
                     uniqueid_type = e
                         .attributes()
                         .filter_map(|a| a.ok())
-                        .find(|a| a.key.as_ref() == b"type")
-                        .and_then(|a| String::from_utf8(a.value.to_vec()).ok())
-                        .map(|v| v.to_lowercase())
+                        .find(|a| a.key.as_ref() == "type")
+                        .map(|a| a.value.to_lowercase())
                         .filter(|_| name == "uniqueid");
                 }
             }
             Ok(Event::Text(ref e)) => {
                 if current_depth == depth
-                    && let Some(decoded) = e.decode().ok().and_then(|decoded| {
-                        quick_xml::escape::unescape(&decoded)
-                            .ok()
-                            .map(|text| text.into_owned())
-                    })
+                    && let Ok(decoded) = quick_xml::escape::unescape(e.as_ref())
                 {
                     current_text.push_str(&decoded);
                 }
@@ -164,17 +159,14 @@ fn parse_xml_nfo(content: &str, meta: &mut NfoMetadata) {
             Ok(Event::GeneralRef(ref e)) if current_depth == depth => {
                 if let Ok(Some(ch)) = e.resolve_char_ref() {
                     current_text.push(ch);
-                } else if let Ok(decoded) = e.decode()
-                    && let Some(entity) =
-                        quick_xml::escape::resolve_predefined_entity(decoded.as_ref())
+                } else if let Some(entity) =
+                    quick_xml::escape::resolve_predefined_entity(e.as_ref())
                 {
                     current_text.push_str(entity);
                 }
             }
             Ok(Event::Comment(ref e)) if depth <= 1 => {
-                if let Ok(decoded) = e.decode() {
-                    push_url_fallback_text(&mut url_fallback_text, &decoded);
-                }
+                push_url_fallback_text(&mut url_fallback_text, e.as_ref());
             }
             Ok(Event::End(_)) => {
                 if current_depth != depth {
@@ -262,10 +254,8 @@ fn parse_xml_nfo(content: &str, meta: &mut NfoMetadata) {
 
 fn apply_id_attribute_provider_ids(event: &BytesStart<'_>, meta: &mut NfoMetadata) {
     for attr in event.attributes().filter_map(|attr| attr.ok()) {
-        let key = String::from_utf8_lossy(attr.key.as_ref()).to_ascii_lowercase();
-        let value = String::from_utf8_lossy(attr.value.as_ref())
-            .trim()
-            .to_string();
+        let key = attr.key.as_ref().to_ascii_lowercase();
+        let value = attr.value.trim().to_string();
         if value.is_empty() {
             continue;
         }

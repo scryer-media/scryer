@@ -81,6 +81,12 @@ function externalIdMap(result: MetadataTvdbSearchItem) {
   if (result.imdbId?.trim() && !ids.has("imdb")) {
     ids.set("imdb", result.imdbId.trim());
   }
+  if (result.smgId != null && !ids.has("smg")) {
+    ids.set("smg", String(result.smgId));
+  }
+  if (result.tmdbId != null && !ids.has("tmdb")) {
+    ids.set("tmdb", String(result.tmdbId));
+  }
   if (result.tvdbId.trim() && !ids.has("tvdb")) {
     ids.set("tvdb", result.tvdbId.trim());
   }

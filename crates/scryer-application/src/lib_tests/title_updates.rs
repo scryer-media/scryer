@@ -120,7 +120,7 @@ async fn fix_title_match_conflicts_are_scoped_to_the_title_library_and_facet() {
         .title;
 
     let cross_library_result = app
-        .fix_title_match(&user, &target.id, "222002")
+        .fix_title_match(&user, &target.id, Some("222002"), None)
         .await
         .expect("an identity in another library must not block rematch");
     assert!(!cross_library_result.hydrated);
@@ -155,7 +155,7 @@ async fn fix_title_match_conflicts_are_scoped_to_the_title_library_and_facet() {
     );
 
     let same_library_error = app
-        .fix_title_match(&user, &target.id, "333003")
+        .fix_title_match(&user, &target.id, Some("333003"), None)
         .await
         .expect_err("same-library duplicate must be rejected");
     assert!(matches!(

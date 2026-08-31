@@ -3,6 +3,11 @@
     "movie": {
       "movie": {
         "tvdb_id": 123456,
+        "title_id": 101,
+        "external_ids": [
+          { "source": "smg", "kind": "movie", "id": "101", "key": "smg:title:101" },
+          { "source": "tvdb", "kind": "movie", "id": "123456", "key": "tvdb:movie:123456" }
+        ],
         "name": "Test Movie Title",
         "slug": "test-movie-title",
         "year": 2024,

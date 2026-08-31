@@ -158,7 +158,10 @@ pub(crate) fn submission_blocks_wanted_item(
         Vec::new()
     };
     let collection_ids: Vec<String> = if item.media_type == "episode" {
-        episode_collection_id.map(str::to_string).into_iter().collect()
+        episode_collection_id
+            .map(str::to_string)
+            .into_iter()
+            .collect()
     } else {
         Vec::new()
     };
@@ -221,10 +224,10 @@ async fn load_recent_failed_season_pack_seasons_for_title(
         Ok(entries) => entries
             .into_iter()
             .filter_map(|entry| {
-                let source_title = entry.source_title?;
+                let release_name = entry.release_name;
                 let created_at = crate::quality_profile::parse_published_at(&entry.created_at)?;
                 (created_at >= cutoff)
-                    .then(|| crate::parse_release_metadata(&source_title))
+                    .then(|| crate::parse_release_metadata(&release_name))
                     .and_then(|parsed| parsed_release_season_pack_season(&parsed))
             })
             .collect(),

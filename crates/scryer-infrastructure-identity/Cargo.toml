@@ -1,6 +1,6 @@
 [package]
 name = "scryer-infrastructure-identity"
-version = "0.18.21"
+version = "0.19.3"
 edition.workspace = true
 publish = false
 
@@ -23,6 +23,6 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 url = "2"
 
+
 [dev-dependencies]
 wiremock = { workspace = true }
-

@@ -23,6 +23,8 @@ pub struct RecycledItemPayload {
     pub reason: String,
     /// Time the file entered the recycle bin in UTC.
     pub recycled_at: DateTime<Utc>,
+    /// Time the retention policy schedules this file for permanent deletion in UTC.
+    pub scheduled_deletion_at: DateTime<Utc>,
     /// Media root containing the original file.
     pub media_root: String,
     /// Library ID containing the original file.

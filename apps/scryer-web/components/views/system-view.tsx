@@ -3,6 +3,8 @@ import { useTranslate } from "@/lib/context/translate-context";
 import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
 import { useClient } from "urql";
 import { Button } from "@/components/ui/button";
+import { ApplicationUpgradeSection } from "@/components/common/application-upgrade";
+import { LazyCodeEditor } from "@/components/common/lazy-code-editor";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -12,7 +14,6 @@ import {
   Film,
   Pause,
   Play,
-  RefreshCw,
   Search,
   Server,
   Terminal,
@@ -27,6 +28,11 @@ import { CODE_FONT } from "@/lib/fonts";
 import { useDeferredWsSubscription } from "@/lib/hooks/use-deferred-ws-subscription";
 import { useIsMobile } from "@/lib/hooks/use-mobile";
 import { formatUiDateTime } from "@/lib/utils/date-format";
+import {
+  parseServiceLogLine,
+  prettyServiceLogLine,
+  type ParsedServiceLogLine,
+} from "@/lib/utils/service-log-lines";
 
 type SystemViewState = {
   systemHealth: SystemHealth | null;
@@ -87,6 +93,7 @@ const SYSTEM_PANEL_BODY_CLASS = "p-4 sm:p-5";
 const SYSTEM_INSET_CLASS =
   "rounded-[12px] border border-[var(--scry-line2)] bg-[var(--scry-card2)]";
 const SYSTEM_MUTED_TEXT_CLASS = "text-[var(--scry-muted3)]";
+const ignoreReadOnlyCodeChange = () => {};
 
 function detectLogLevel(line: string): string {
   const match = String(line ?? "").match(/\b(ERROR|WARN|WARNING|INFO|DEBUG|TRACE)\b/i);
@@ -116,6 +123,7 @@ const LOG_LEVEL_COLORS: Record<string, string> = {
 const TRACING_LINE_RE =
   /^(\d{4}-\d{2}-\d{2}T[\d:.]+Z)\s+(ERROR|WARN|INFO|DEBUG|TRACE)\s+([\w:]+):\s+(.*)/;
 const KV_RE = /(\w+)=("(?:[^"\\]|\\.)*"|\S+)/g;
+const UUID_RE = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
 
 type ParsedLine = {
   timestamp: string;
@@ -131,6 +139,7 @@ type RawLogLineEntry = {
   lower: string;
   level: string;
   parsed?: ParsedLine | null;
+  structured?: ParsedServiceLogLine | null;
 };
 
 type LogLineEntry = {
@@ -139,6 +148,7 @@ type LogLineEntry = {
   lower: string;
   level: string;
   parsed: ParsedLine | null;
+  structured: ParsedServiceLogLine | null;
 };
 
 type LogViewerSnapshot = {
@@ -169,17 +179,22 @@ function parseLine(raw: string): ParsedLine | null {
 }
 
 function buildRawLogLineEntry(id: number, raw: string): RawLogLineEntry {
+  const structured = parseServiceLogLine(raw);
   return {
     id,
     raw,
-    lower: raw.toLowerCase(),
-    level: detectLogLevel(raw),
+    lower: `${raw}\n${structured?.human ?? ""}`.toLowerCase(),
+    level: structured?.level ?? detectLogLevel(raw),
+    structured,
   };
 }
 
 function materializeLogLineEntry(entry: RawLogLineEntry): LogLineEntry {
+  if (entry.structured === undefined) {
+    entry.structured = parseServiceLogLine(entry.raw);
+  }
   if (entry.parsed === undefined) {
-    entry.parsed = parseLine(entry.raw);
+    entry.parsed = entry.structured ? null : parseLine(entry.raw);
   }
 
   return {
@@ -188,10 +203,43 @@ function materializeLogLineEntry(entry: RawLogLineEntry): LogLineEntry {
     lower: entry.lower,
     level: entry.level,
     parsed: entry.parsed,
+    structured: entry.structured,
   };
 }
 
+function humanLogText(value: string): React.ReactNode {
+  const fragments: React.ReactNode[] = [];
+  let cursor = 0;
+  for (const match of value.matchAll(UUID_RE)) {
+    const index = match.index ?? 0;
+    if (index > cursor) fragments.push(value.slice(cursor, index));
+    fragments.push(
+      <em key={index} className="italic">{"<UUID>"}</em>,
+    );
+    cursor = index + match[0].length;
+  }
+  if (cursor < value.length) fragments.push(value.slice(cursor));
+  return fragments.length > 0 ? fragments : value;
+}
+
 function HighlightedLine({ entry }: { entry: LogLineEntry }) {
+  if (entry.structured) {
+    const levelColor = LOG_LEVEL_COLORS[entry.structured.level] ?? "text-zinc-700 dark:text-zinc-300";
+    return (
+      <span style={{ fontFamily: CODE_FONT }}>
+        <span className="text-zinc-500 dark:text-zinc-500">{entry.structured.timestamp}</span>
+        {" "}
+        <span className={levelColor}>{entry.structured.level.toUpperCase().padStart(5)}</span>
+        {" "}
+        <span className="text-zinc-600 dark:text-zinc-400">{entry.structured.target}</span>
+        <span className="text-zinc-500 dark:text-zinc-500">:</span>
+        {" "}
+        <span className="text-zinc-700 dark:text-zinc-300">
+          {humanLogText(entry.structured.human.split(": ").slice(1).join(": "))}
+        </span>
+      </span>
+    );
+  }
   const parsed = entry.parsed;
   if (!parsed) {
     return (
@@ -297,6 +345,8 @@ function LogViewer() {
   const [paused, setPaused] = useState(false);
   const [snapshot, setSnapshot] = useState<LogViewerSnapshot>(EMPTY_LOG_SNAPSHOT);
   const [connected, setConnected] = useState(false);
+  const [selectedLine, setSelectedLine] = useState<LogLineEntry | null>(null);
+  const selectionRegionRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const autoScrollRef = useRef(true);
   const pausedRef = useRef(paused);
@@ -307,6 +357,18 @@ function LogViewer() {
   const pendingLinesRef = useRef<string[]>([]);
   const ingestTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const snapshotTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (!selectedLine) return;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (selectionRegionRef.current?.contains(event.target as Node)) return;
+      setSelectedLine(null);
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => document.removeEventListener("pointerdown", handlePointerDown);
+  }, [selectedLine]);
 
   const commitSnapshot = useCallback(() => {
     const nextSnapshot = buildLogViewerSnapshot(
@@ -456,6 +518,11 @@ function LogViewer() {
     return `Live mode is showing the latest ${snapshot.lines.length} lines from ${snapshot.bufferedCount} buffered entries. Pause or filter to inspect more history.`;
   }, [snapshot.bufferedCount, snapshot.liveTailing, snapshot.lines.length]);
 
+  const selectedJson = useMemo(
+    () => prettyServiceLogLine(selectedLine?.structured ?? null),
+    [selectedLine],
+  );
+
   return (
     <section className={`${SYSTEM_PANEL_CLASS} flex min-h-0 flex-col`}>
       <div className={SYSTEM_PANEL_HEADER_CLASS}>
@@ -542,6 +609,7 @@ function LogViewer() {
                 }
                 pendingLinesRef.current = [];
                 rawBufferRef.current = [];
+                setSelectedLine(null);
                 startTransition(() => {
                   setSnapshot(EMPTY_LOG_SNAPSHOT);
                 });
@@ -558,7 +626,11 @@ function LogViewer() {
             {liveTailNotice}
           </div>
         ) : null}
-        <div className="flex flex-col overflow-hidden rounded-[14px] border border-[var(--scry-border2)] bg-[var(--scry-bg)]">
+        <div
+          ref={selectionRegionRef}
+          className={`grid min-h-0 gap-4 ${selectedLine ? "xl:grid-cols-[minmax(0,1fr)_minmax(320px,0.45fr)]" : ""}`}
+        >
+          <div className="flex flex-col overflow-hidden rounded-[14px] border border-[var(--scry-border2)] bg-[var(--scry-bg)]">
           <div className="flex items-center justify-between gap-3 border-b border-[var(--scry-border3)] bg-[var(--scry-inset)] px-3 py-2 text-xs text-[var(--scry-muted3)]">
             <span>Line</span>
             <span>
@@ -579,9 +651,12 @@ function LogViewer() {
             ) : (
               <div className="p-2">
                 {snapshot.lines.map((line, index) => (
-                  <div
+                  <button
                     key={line.id}
-                    className="group grid grid-cols-[4.75ch_minmax(0,1fr)] gap-3 rounded-[7px] px-2 py-1 hover:bg-[var(--scry-hover)]"
+                    type="button"
+                    aria-pressed={selectedLine?.id === line.id}
+                    onClick={() => setSelectedLine(line)}
+                    className={`group grid w-full grid-cols-[4.75ch_minmax(0,1fr)] gap-3 rounded-[7px] px-2 py-1 text-left hover:bg-[var(--scry-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--scry-info-border-strong)] ${selectedLine?.id === line.id ? "bg-[var(--scry-hover)]" : ""}`}
                   >
                     <span className="select-none text-right tabular-nums text-[var(--scry-faint)]">
                       {index + 1}
@@ -592,12 +667,33 @@ function LogViewer() {
                     >
                       <HighlightedLine entry={line} />
                     </div>
-                  </div>
+                  </button>
                 ))}
               </div>
             )}
           </div>
         </div>
+        {selectedLine ? (
+          <aside className="flex min-h-[240px] flex-col overflow-hidden rounded-[14px] border border-[var(--scry-border2)] bg-[var(--scry-bg)]">
+            <div className="min-h-0 flex-1 overflow-auto p-3" data-code-font>
+              {selectedJson ? (
+                <LazyCodeEditor
+                  id="service-log-event-json"
+                  value={selectedJson}
+                  onChange={ignoreReadOnlyCodeChange}
+                  readOnly
+                  language="json"
+                  copyable
+                  copyLabel="Copy event JSON"
+                  height={isMobile ? "45vh" : "min(55vh, 640px)"}
+                />
+              ) : (
+                <p className="text-xs text-[var(--scry-muted3)]">This legacy text log line has no JSON event payload.</p>
+              )}
+            </div>
+          </aside>
+        ) : null}
+      </div>
       </div>
     </section>
   );
@@ -612,46 +708,27 @@ export function SystemView({
 }) {
   const t = useTranslate();
   const dateTimeFormat = useUiDateTimeFormat();
-  const { systemHealth, systemLoading, refreshSystem } = state;
+  const { systemHealth } = state;
   const healthPlaceholder = "\u2014";
   const statusReady = systemHealth?.serviceReady === true;
   const facetStats: Array<[string, number | string]> = [
     ["Movies", systemHealth?.titlesMovie ?? healthPlaceholder],
     ["Series", systemHealth?.titlesSeries ?? healthPlaceholder],
     ["Anime", systemHealth?.titlesAnime ?? healthPlaceholder],
-    ["Other", systemHealth?.titlesOther ?? healthPlaceholder],
   ];
   const recentEventPreview = systemHealth?.recentEventPreview ?? [];
   const indexerStats = systemHealth?.indexerStats ?? null;
 
   return (
     <div className="space-y-4 text-sm">
+      <ApplicationUpgradeSection />
       <section className={SYSTEM_PANEL_CLASS}>
         <div className={SYSTEM_PANEL_HEADER_CLASS}>
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div className="space-y-1">
-              <h2 className={SYSTEM_PANEL_TITLE_CLASS}>Service health</h2>
-              <p className={`text-sm ${SYSTEM_MUTED_TEXT_CLASS}`}>
-                {systemHealth
-                  ? statusReady
-                    ? t("system.loaded")
-                    : t("system.notReady")
-                  : t("system.notLoaded")}
-              </p>
-              <p className="min-h-4 text-xs font-medium text-[var(--scry-faint)]">
-                {scryerVersion ? `Scryer v${scryerVersion}` : "\u00a0"}
-              </p>
-            </div>
-            <Button
-              size="sm"
-              variant="primary"
-              className="w-full justify-start sm:w-32"
-              onClick={() => void refreshSystem()}
-              disabled={systemLoading}
-            >
-              <RefreshCw className={systemLoading ? "h-4 w-4 animate-spin" : "h-4 w-4"} />
-              {systemLoading ? t("system.refreshing") : t("label.refresh")}
-            </Button>
+          <div className="space-y-1">
+            <h2 className={SYSTEM_PANEL_TITLE_CLASS}>Service health</h2>
+            <p className="min-h-4 text-xs font-medium text-[var(--scry-faint)]">
+              {scryerVersion ? `Scryer v${scryerVersion}` : "\u00a0"}
+            </p>
           </div>
         </div>
         <div className={SYSTEM_PANEL_BODY_CLASS}>
@@ -724,7 +801,7 @@ export function SystemView({
                   </span>
                   <p className="font-semibold text-[var(--scry-ink2)]">Datastore</p>
                 </div>
-                <div className="grid gap-3 md:grid-cols-2">
+                <div className="min-w-0 space-y-3">
                   <div>
                     <p className={`text-xs uppercase tracking-[0.12em] ${SYSTEM_MUTED_TEXT_CLASS}`}>
                       {t("system.dbPathLabel")}
@@ -733,27 +810,21 @@ export function SystemView({
                       {systemHealth?.dbPath ?? healthPlaceholder}
                     </p>
                   </div>
-                  <div>
+                  <div className="min-w-0">
                     <p className={`text-xs uppercase tracking-[0.12em] ${SYSTEM_MUTED_TEXT_CLASS}`}>
                       Migration
                     </p>
-                    <div className="mt-1 flex flex-wrap gap-2">
-                      {systemHealth ? (
-                        <code className="rounded-[7px] border border-[var(--scry-border3)] bg-[var(--scry-inset)] px-2 py-1 text-xs text-[var(--scry-ink2)]">
-                          {systemHealth.dbMigrationVersion ?? "unknown"}
-                        </code>
-                      ) : (
-                        <code className="rounded-[7px] border border-[var(--scry-border3)] bg-[var(--scry-inset)] px-2 py-1 text-xs text-[var(--scry-ink2)]">
-                          {healthPlaceholder}
-                        </code>
-                      )}
-                      <code
-                        className={`min-w-[13rem] rounded-[7px] border border-[var(--scry-border3)] bg-[var(--scry-inset)] px-2 py-1 text-xs text-[var(--scry-ink2)] ${
-                          systemHealth?.datastoreMigrationKey ? "" : "invisible"
-                        }`}
-                      >
-                        {systemHealth?.datastoreMigrationKey ?? healthPlaceholder}
+                    <div className="mt-1 grid min-w-0 gap-2">
+                      <code className="block w-fit max-w-full break-all whitespace-normal rounded-[7px] border border-[var(--scry-border3)] bg-[var(--scry-inset)] px-2 py-1 text-xs text-[var(--scry-ink2)]">
+                        {systemHealth
+                          ? (systemHealth.dbMigrationVersion ?? "unknown")
+                          : healthPlaceholder}
                       </code>
+                      {systemHealth?.datastoreMigrationKey ? (
+                        <code className="block w-fit max-w-full break-all whitespace-normal rounded-[7px] border border-[var(--scry-border3)] bg-[var(--scry-inset)] px-2 py-1 text-xs text-[var(--scry-ink2)]">
+                          {systemHealth.datastoreMigrationKey}
+                        </code>
+                      ) : null}
                     </div>
                   </div>
                 </div>
@@ -764,7 +835,7 @@ export function SystemView({
               <p className="mb-3 font-semibold text-[var(--scry-ink2)]">
                 {t("system.facetLabel")}
               </p>
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-3 gap-2">
                 {facetStats.map(([label, value]) => (
                   <div
                     key={label}

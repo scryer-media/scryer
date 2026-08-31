@@ -130,6 +130,7 @@ impl FileImporter for CopyingFileImporter {
             source_path: source.to_path_buf(),
             dest_path: dest.to_path_buf(),
             size_bytes,
+            destination_disposition: scryer_domain::ImportDestinationDisposition::Created,
             source_cleanup: None,
         })
     }
@@ -209,9 +210,9 @@ impl FileImporter for ProgressReportingFileImporter {
 #[derive(Default, Clone)]
 pub(super) struct MockMediaFileRepo {
     pub(super) store: Arc<Mutex<Vec<TitleMediaFile>>>,
-    /// Optional bridge for the convergence cursor: when set, the
+    /// Optional bridge for the background acquisition cursor: when set, the
     /// derived missing-target sweep reads the seeded acquisition-state rows so a
-    /// mock-backed store still yields targets for `run_convergence_cycle_once`.
+    /// mock-backed store still yields targets for `run_background_acquisition_cycle_once`.
     /// Left `None` for stores that manage their own media files directly.
     pub(super) missing_scope_source: Option<Arc<super::TrackingAcquisitionScopeStateRepo>>,
     /// The catalog the seeded scopes belong to — used to resolve each scope's
@@ -236,64 +237,128 @@ impl MockMediaFileRepo {
     }
 }
 
+fn mock_media_file(id: String, input: &InsertMediaFileInput) -> TitleMediaFile {
+    TitleMediaFile {
+        id,
+        title_id: input.title_id.clone(),
+        episode_id: None,
+        series_movie_link_ids: Vec::new(),
+        role: input.role,
+        file_path: input.file_path.clone(),
+        size_bytes: input.size_bytes,
+        announced_size_bytes: input.announced_size_bytes,
+        source_signature_scheme: input.source_signature_scheme.clone(),
+        source_signature_value: input.source_signature_value.clone(),
+        quality_label: input.quality_label.clone(),
+        scan_status: "pending".to_string(),
+        created_at: Utc::now().to_rfc3339(),
+        video_codec: None,
+        video_width: None,
+        video_height: None,
+        video_bitrate_kbps: None,
+        video_bit_depth: None,
+        video_hdr_format: None,
+        dovi_profile: None,
+        dovi_bl_compat_id: None,
+        video_frame_rate: None,
+        video_profile: None,
+        audio_codec: None,
+        audio_profile: None,
+        audio_channels: None,
+        audio_bitrate_kbps: None,
+        audio_languages: Vec::new(),
+        audio_streams: Vec::new(),
+        subtitle_languages: Vec::new(),
+        subtitle_codecs: Vec::new(),
+        subtitle_streams: Vec::new(),
+        has_multiaudio: false,
+        duration_seconds: None,
+        num_chapters: None,
+        container_format: None,
+        scene_name: input.scene_name.clone(),
+        release_group: input.release_group.clone(),
+        source_type: input.source_type.clone(),
+        resolution: input.resolution.clone(),
+        video_codec_parsed: input.video_codec_parsed,
+        audio_codec_parsed: input.audio_codec_parsed.clone(),
+        audio_channels_parsed: input.audio_channels_parsed.clone(),
+        acquisition_score: input.acquisition_score,
+        scoring_log: input.scoring_log.clone(),
+        indexer_source: input.indexer_source.clone(),
+        grabbed_release_title: input.grabbed_release_title.clone(),
+        grabbed_at: input.grabbed_at.clone(),
+        edition: input.edition.clone(),
+        original_file_path: input.original_file_path.clone(),
+        release_hash: input.release_hash.clone(),
+    }
+}
+
 #[async_trait]
 impl MediaFileRepository for MockMediaFileRepo {
     async fn insert_media_file(&self, input: &InsertMediaFileInput) -> AppResult<String> {
         let id = Id::new().0;
-        self.store.lock().await.push(TitleMediaFile {
-            id: id.clone(),
-            title_id: input.title_id.clone(),
-            episode_id: None,
-            series_movie_link_ids: Vec::new(),
-            role: input.role,
-            file_path: input.file_path.clone(),
-            size_bytes: input.size_bytes,
-            announced_size_bytes: input.announced_size_bytes,
-            source_signature_scheme: input.source_signature_scheme.clone(),
-            source_signature_value: input.source_signature_value.clone(),
-            quality_label: input.quality_label.clone(),
-            scan_status: "pending".to_string(),
-            created_at: Utc::now().to_rfc3339(),
-            video_codec: None,
-            video_width: None,
-            video_height: None,
-            video_bitrate_kbps: None,
-            video_bit_depth: None,
-            video_hdr_format: None,
-            dovi_profile: None,
-            dovi_bl_compat_id: None,
-            video_frame_rate: None,
-            video_profile: None,
-            audio_codec: None,
-            audio_profile: None,
-            audio_channels: None,
-            audio_bitrate_kbps: None,
-            audio_languages: Vec::new(),
-            audio_streams: Vec::new(),
-            subtitle_languages: Vec::new(),
-            subtitle_codecs: Vec::new(),
-            subtitle_streams: Vec::new(),
-            has_multiaudio: false,
-            duration_seconds: None,
-            num_chapters: None,
-            container_format: None,
-            scene_name: input.scene_name.clone(),
-            release_group: input.release_group.clone(),
-            source_type: input.source_type.clone(),
-            resolution: input.resolution.clone(),
-            video_codec_parsed: input.video_codec_parsed,
-            audio_codec_parsed: input.audio_codec_parsed.clone(),
-            audio_channels_parsed: input.audio_channels_parsed.clone(),
-            acquisition_score: input.acquisition_score,
-            scoring_log: input.scoring_log.clone(),
-            indexer_source: input.indexer_source.clone(),
-            grabbed_release_title: input.grabbed_release_title.clone(),
-            grabbed_at: input.grabbed_at.clone(),
-            edition: input.edition.clone(),
-            original_file_path: input.original_file_path.clone(),
-            release_hash: input.release_hash.clone(),
-        });
+        self.store
+            .lock()
+            .await
+            .push(mock_media_file(id.clone(), input));
         Ok(id)
+    }
+
+    async fn claim_import_destination(
+        &self,
+        input: &InsertMediaFileInput,
+        associations: &MediaFileAssociations,
+    ) -> AppResult<crate::ClaimedMediaFile> {
+        let mut files = self.store.lock().await;
+        if let Some(existing) = files
+            .iter_mut()
+            .find(|file| file.file_path == input.file_path)
+        {
+            let episode_matches = existing
+                .episode_id
+                .as_ref()
+                .is_none_or(|id| associations.episode_ids.contains(id));
+            let links_match = existing
+                .series_movie_link_ids
+                .iter()
+                .all(|id| associations.series_movie_link_ids.contains(id));
+            let has_associations =
+                existing.episode_id.is_some() || !existing.series_movie_link_ids.is_empty();
+            let provenance_matches =
+                has_associations || existing.original_file_path == input.original_file_path;
+            if existing.title_id != input.title_id
+                || !episode_matches
+                || !links_match
+                || !provenance_matches
+            {
+                return Err(AppError::ManualReconciliationRequired(format!(
+                    "destination {} belongs to another import target",
+                    input.file_path
+                )));
+            }
+            if existing.episode_id.is_none() {
+                existing.episode_id = associations.episode_ids.first().cloned();
+            }
+            for link_id in &associations.series_movie_link_ids {
+                if !existing.series_movie_link_ids.contains(link_id) {
+                    existing.series_movie_link_ids.push(link_id.clone());
+                }
+            }
+            return Ok(crate::ClaimedMediaFile {
+                media_file_id: existing.id.clone(),
+                disposition: crate::MediaFileCatalogDisposition::Reused,
+            });
+        }
+
+        let id = Id::new().0;
+        let mut file = mock_media_file(id.clone(), input);
+        file.episode_id = associations.episode_ids.first().cloned();
+        file.series_movie_link_ids = associations.series_movie_link_ids.clone();
+        files.push(file);
+        Ok(crate::ClaimedMediaFile {
+            media_file_id: id,
+            disposition: crate::MediaFileCatalogDisposition::Created,
+        })
     }
 
     async fn link_file_to_episode(&self, file_id: &str, episode_id: &str) -> AppResult<()> {
@@ -772,20 +837,6 @@ impl MediaFileRepository for MockMediaFileRepo {
     }
 }
 
-fn import_record_counts_as_already_imported(record: &ImportRecord) -> bool {
-    match record.status {
-        ImportStatus::Completed => true,
-        ImportStatus::Skipped => record
-            .result_json
-            .as_deref()
-            .and_then(|json| serde_json::from_str::<scryer_domain::ImportResult>(json).ok())
-            .is_some_and(|result| {
-                result.skip_reason == Some(scryer_domain::ImportSkipReason::AlreadyImported)
-            }),
-        _ => false,
-    }
-}
-
 /// Keeps every per-file import artifact so tests can assert what each file in a
 /// pack was recorded as (imported / rejected / already present) and why.
 #[derive(Default, Clone)]
@@ -815,7 +866,7 @@ impl crate::ImportArtifactRepository for RecordingImportArtifactRepo {
 
     async fn list_by_source_identity(
         &self,
-        identity: &DownloadSourceIdentity,
+        identity: &ClientJobLocator,
     ) -> AppResult<Vec<crate::ImportArtifact>> {
         Ok(self
             .artifacts
@@ -829,7 +880,7 @@ impl crate::ImportArtifactRepository for RecordingImportArtifactRepo {
 
     async fn count_by_result_for_source_identity(
         &self,
-        identity: &DownloadSourceIdentity,
+        identity: &ClientJobLocator,
         result: &str,
     ) -> AppResult<u64> {
         Ok(self
@@ -886,7 +937,7 @@ impl ImportRepository for TrackingImportRepo {
 
     async fn queue_import_request(
         &self,
-        source_identity: DownloadSourceIdentity,
+        source_identity: ClientJobLocator,
         import_type: String,
         payload_json: String,
     ) -> AppResult<String> {
@@ -896,7 +947,7 @@ impl ImportRepository for TrackingImportRepo {
 
     async fn queue_import_request_with_identity(
         &self,
-        source_identity: DownloadSourceIdentity,
+        source_identity: ClientJobLocator,
         import_type: String,
         payload_json: String,
         submission_identity: Option<DownloadSubmissionIdentity>,
@@ -1050,7 +1101,7 @@ impl ImportRepository for TrackingImportRepo {
 
     async fn list_imports_for_identities(
         &self,
-        identities: &[DownloadSourceIdentity],
+        identities: &[ClientJobLocator],
     ) -> AppResult<Vec<ImportRecord>> {
         let records = self.records.lock().await;
         Ok(records
@@ -1066,45 +1117,6 @@ impl ImportRepository for TrackingImportRepo {
             })
             .cloned()
             .collect())
-    }
-
-    async fn is_already_imported(&self, identity: &DownloadSourceIdentity) -> AppResult<bool> {
-        Ok(self
-            .records
-            .lock()
-            .await
-            .iter()
-            .rev()
-            .find(|record| {
-                record.source_client_id.as_deref().unwrap_or("") == identity.client_id_or_empty()
-                    && record.source_system == identity.client_type
-                    && record.source_ref == identity.item_id
-            })
-            .is_some_and(import_record_counts_as_already_imported))
-    }
-
-    async fn is_already_imported_by_download_id(
-        &self,
-        source_identity: &DownloadSourceIdentity,
-        identity: &DownloadSubmissionIdentity,
-    ) -> AppResult<bool> {
-        let Some(download_id) = identity
-            .download_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        else {
-            return Ok(false);
-        };
-        let records = self.records.lock().await;
-        Ok(records.iter().rev().any(|record| {
-            if !import_record_counts_as_already_imported(record) {
-                return false;
-            }
-            record.source_client_id.as_deref().unwrap_or("") == source_identity.client_id_or_empty()
-                && record.source_system == source_identity.client_type
-                && record.download_id.as_deref() == Some(download_id)
-        }))
     }
 
     async fn list_imports(&self, limit: usize) -> AppResult<Vec<ImportRecord>> {

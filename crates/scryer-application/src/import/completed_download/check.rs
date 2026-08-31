@@ -36,9 +36,36 @@ pub(crate) async fn check_with_lookup(
     }
 
     // Don't re-evaluate a post-import block. Import already ran and returned
-    // Skipped/Failed — stay blocked until the user explicitly retries.
-    if td.state == TrackedDownloadState::ImportBlocked && td.import_attempted {
-        return;
+    // Skipped/Failed — stay blocked until the user explicitly retries. The
+    // migrated pre-import deduplication state is the exception: it never ran
+    // an import, so reopen it and let verification decide.
+    if td.state == TrackedDownloadState::ImportBlocked {
+        let persisted_reason =
+            crate::tracked_downloads::import_blocked_reason_for_tracked(app, td).await;
+        if td.import_attempted {
+            if persisted_reason != Some(crate::tracked_downloads::ImportBlockedReason::AfterImport)
+            {
+                crate::tracked_downloads::persist_import_blocked_state_marker(
+                    app,
+                    td,
+                    crate::tracked_downloads::ImportBlockedReason::AfterImport,
+                    td.status_messages.first().map(String::as_str),
+                )
+                .await;
+            }
+            return;
+        }
+        let reopens_for_verification = persisted_reason
+            .is_some_and(crate::tracked_downloads::ImportBlockedReason::reopens_for_verification);
+        if !reopens_for_verification {
+            return;
+        }
+        tracing::info!(
+            id = %td.id,
+            "check: reopening migrated unverified already-imported block"
+        );
+        td.reset_for_import_retry();
+        td.state = TrackedDownloadState::Downloading;
     }
 
     // A blocked download that was explicitly assigned by the user should remain
@@ -57,7 +84,13 @@ pub(crate) async fn check_with_lookup(
     let queue_identity = observed_queue_item_identity(&td.client_item);
     let queue_source_identity = queue_item_source_identity(&td.client_item);
     if let Some(state) =
-        download_id_tracked_state(app, &queue_identity, Some(&queue_source_identity)).await
+        download_id_tracked_state(
+            app,
+            td.canonical_download_id(),
+            &queue_identity,
+            Some(&queue_source_identity),
+        )
+        .await
         // `is_import_settled` rather than `is_terminal`: a torrent parked in
         // `ImportedSeeding` is already in the library and must not be offered
         // for import again while it works off its seeding goal.
@@ -80,7 +113,7 @@ pub(crate) async fn check_with_lookup(
             block_tracked_download_identity_for_manual_review(
                 app,
                 td,
-                "missing_completed_history_identity",
+                crate::tracked_downloads::ImportBlockedReason::MissingCompletedHistoryIdentity,
                 "completed queue item carried DownloadId but completed history did not contain a matching DownloadId",
             )
             .await;
@@ -141,8 +174,13 @@ pub(crate) async fn check_with_lookup(
 
     let completed_identity = observed_completed_download_identity(&completed);
     let completed_source_identity = completed_download_source_identity(&completed);
-    if let Some(state) =
-        download_id_tracked_state(app, &completed_identity, Some(&completed_source_identity)).await
+    if let Some(state) = download_id_tracked_state(
+        app,
+        td.canonical_download_id(),
+        &completed_identity,
+        Some(&completed_source_identity),
+    )
+    .await
         && state.is_import_settled()
     {
         apply_download_id_state(td, state);
@@ -187,7 +225,7 @@ pub(crate) async fn check_with_lookup(
             block_tracked_download_identity_for_manual_review(
                 app,
                 td,
-                "assigned_title_missing",
+                crate::tracked_downloads::ImportBlockedReason::AssignedTitleMissing,
                 detail,
             )
             .await;
@@ -202,7 +240,7 @@ pub(crate) async fn check_with_lookup(
             block_tracked_download_identity_for_manual_review(
                 app,
                 td,
-                "completed_title_identity_mismatch",
+                crate::tracked_downloads::ImportBlockedReason::CompletedTitleIdentityMismatch,
                 detail,
             )
             .await;
@@ -610,21 +648,30 @@ pub(super) fn has_id_only_conflict(td: &TrackedDownload) -> bool {
 }
 
 async fn set_state_to_import_blocked(app: &AppUseCase, td: &mut TrackedDownload) {
-    let was_blocked = td.state == TrackedDownloadState::ImportBlocked;
+    set_state_to_import_blocked_with_reason(
+        app,
+        td,
+        crate::tracked_downloads::ImportBlockedReason::PreImport,
+    )
+    .await;
+}
+
+async fn set_state_to_import_blocked_with_reason(
+    app: &AppUseCase,
+    td: &mut TrackedDownload,
+    reason: crate::tracked_downloads::ImportBlockedReason,
+) {
     td.state = TrackedDownloadState::ImportBlocked;
     td.waiting_for_completed_history = false;
     td.status = TrackedDownloadStatus::Warning;
 
-    if !was_blocked {
-        crate::tracked_downloads::persist_tracked_download_state_marker(
-            app,
-            td,
-            TrackedDownloadState::ImportBlocked,
-            Some("import_blocked_pre_import"),
-            td.status_messages.first().map(String::as_str),
-        )
-        .await;
-    }
+    crate::tracked_downloads::persist_import_blocked_state_marker(
+        app,
+        td,
+        reason,
+        td.status_messages.first().map(String::as_str),
+    )
+    .await;
 
     if td.notified_manual_interaction {
         return;
@@ -709,7 +756,7 @@ async fn set_state_to_import_blocked(app: &AppUseCase, td: &mut TrackedDownload)
 async fn block_tracked_download_identity_for_manual_review(
     app: &AppUseCase,
     td: &mut TrackedDownload,
-    reason: &str,
+    reason: crate::tracked_downloads::ImportBlockedReason,
     detail: &str,
 ) {
     let observed_identity = observed_queue_item_identity(&td.client_item);
@@ -720,34 +767,5 @@ async fn block_tracked_download_identity_for_manual_review(
         td.status_messages.clear();
         td.status_messages.push(detail.to_string());
     }
-    // set_state_to_import_blocked writes the generic blocked marker; record
-    // the specific identity reason afterwards so it wins the upsert.
-    set_state_to_import_blocked(app, td).await;
-    let source_identity = DownloadSourceIdentity::new(
-        Some(td.client_id.as_str()),
-        &td.client_type,
-        &td.client_item.download_client_item_id,
-    );
-    if let Err(error) = app
-        .services
-        .workflow
-        .download_submissions
-        .record_identity_tracked_state(
-            &observed_identity,
-            Some(&source_identity),
-            TrackedDownloadState::ImportBlocked.as_str(),
-            Some(reason),
-            Some(detail),
-        )
-        .await
-    {
-        tracing::warn!(
-            error = %error,
-            client_id = td.client_id.as_str(),
-            client_type = td.client_type.as_str(),
-            download_client_item_id = td.client_item.download_client_item_id.as_str(),
-            reason,
-            "failed to persist durable tracked-download manual-review state"
-        );
-    }
+    set_state_to_import_blocked_with_reason(app, td, reason).await;
 }

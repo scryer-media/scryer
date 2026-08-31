@@ -374,6 +374,36 @@ fn mkv_hevc_hdr10plus() {
 }
 
 #[test]
+fn mkv_hevc_hdr10plus_content_probe_profile() {
+    let a = analyze_file_with_options(
+        &media("hevc_hdr10plus.mkv"),
+        AnalyzeOptions {
+            profile: AnalysisProfile::ContentProbe,
+        },
+    )
+    .unwrap();
+    assert_eq!(a.video_codec.as_deref(), Some("hevc"));
+    assert_eq!(a.video_hdr_format, None);
+    assert!(is_valid_video(&a));
+}
+
+#[test]
+fn mpegts_content_probe_profile_identifies_video_without_deep_track_enrichment() {
+    let a = analyze_file_with_options(
+        &media("matrix_ts_023.ts"),
+        AnalyzeOptions {
+            profile: AnalysisProfile::ContentProbe,
+        },
+    )
+    .unwrap();
+    assert_eq!(a.container_format.as_deref(), Some("mpegts"));
+    assert_eq!(a.video_codec.as_deref(), Some("h264"));
+    assert_eq!(a.video_width, None);
+    assert_eq!(a.video_height, None);
+    assert!(is_valid_video(&a));
+}
+
+#[test]
 fn mkv_hevc_hdr10plus_ffprobe_parity_profile() {
     let a = analyze_file_with_options(
         &media("hevc_hdr10plus.mkv"),

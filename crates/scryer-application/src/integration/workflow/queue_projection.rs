@@ -28,8 +28,10 @@ fn push_queue_status_detail(
 fn build_download_queue_status_detail(item: &DownloadQueueItem) -> String {
     let mut values = Vec::new();
     let mut seen = HashSet::new();
-    for message in &item.tracked_status_messages {
-        push_queue_status_detail(&mut values, &mut seen, Some(message));
+    if !item.import_status.is_some_and(ImportStatus::is_active) {
+        for message in &item.tracked_status_messages {
+            push_queue_status_detail(&mut values, &mut seen, Some(message));
+        }
     }
     push_queue_status_detail(&mut values, &mut seen, item.attention_reason.as_deref());
     push_queue_status_detail(&mut values, &mut seen, item.delete_error_message.as_deref());
@@ -46,8 +48,16 @@ fn base_download_queue_display_state(item: &DownloadQueueItem) -> DownloadDispla
     }
 
     match item.import_status {
-        Some(ImportStatus::Pending | ImportStatus::Running | ImportStatus::Processing) => {
+        Some(ImportStatus::Pending) => return DownloadDisplayState::ImportPending,
+        Some(ImportStatus::Running | ImportStatus::Processing) => {
             return DownloadDisplayState::Importing;
+        }
+        Some(ImportStatus::Completed) if item.state != DownloadQueueState::Warning => {
+            return if item.tracked_state == Some(TrackedDownloadState::ImportedSeeding) {
+                DownloadDisplayState::ImportedSeeding
+            } else {
+                DownloadDisplayState::Completed
+            };
         }
         Some(ImportStatus::Failed | ImportStatus::Skipped)
             if matches!(
@@ -63,6 +73,12 @@ fn base_download_queue_display_state(item: &DownloadQueueItem) -> DownloadDispla
             return DownloadDisplayState::ImportFailed;
         }
         _ => {}
+    }
+
+    if item.tracked_state == Some(TrackedDownloadState::ImportedSeeding)
+        && item.state != DownloadQueueState::Warning
+    {
+        return DownloadDisplayState::ImportedSeeding;
     }
 
     match item.tracked_state {
@@ -114,6 +130,7 @@ fn bucket_for_base_display_state(state: DownloadDisplayState) -> DownloadQueueBu
         | DownloadDisplayState::Downloading
         | DownloadDisplayState::Paused
         | DownloadDisplayState::PostProcessing
+        | DownloadDisplayState::ImportedSeeding
         // A warned download is still live in the client and still recoverable,
         // so it belongs with the activity it is part of, not in history.
         | DownloadDisplayState::Warning => DownloadQueueBucket::Activity,
@@ -237,6 +254,7 @@ fn classify_download_queue_item(item: &DownloadQueueItem) -> ClassifiedDownloadQ
         DownloadDisplayState::Queued => Some(DownloadActivityFilter::Queued),
         DownloadDisplayState::Paused => Some(DownloadActivityFilter::Paused),
         DownloadDisplayState::PostProcessing => Some(DownloadActivityFilter::PostProcessing),
+        DownloadDisplayState::ImportedSeeding => Some(DownloadActivityFilter::Seeding),
         // Every activity state needs its own filter: the queue page asks for an
         // explicit list of them, so a state that belongs to no filter is a
         // state the operator can never see.
@@ -318,6 +336,14 @@ fn matches_download_import_filter(item: &DownloadQueueItem, filter: DownloadImpo
 
     match filter {
         DownloadImportFilter::All => true,
+        DownloadImportFilter::Attention => matches!(
+            classified.import_filter,
+            Some(
+                DownloadImportFilter::Pending
+                    | DownloadImportFilter::Blocked
+                    | DownloadImportFilter::Failed
+            )
+        ),
         _ => classified.import_filter == Some(filter),
     }
 }

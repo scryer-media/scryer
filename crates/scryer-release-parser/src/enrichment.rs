@@ -204,7 +204,22 @@ pub(crate) fn enrich_candidate(
         }
 
         if let Some(language) = parse_language_hint(token) {
-            match language_context {
+            // The context scan only sees markers *before* a language token
+            // ("SUB ENG"), but the dominant anime order is language-first:
+            // "[ENG-Sub]", "Eng Subs". A language read under no context whose
+            // next token is a subtitle marker names the subtitle track, not an
+            // audio track — claiming English audio here sends the release
+            // through grab scoring as dubbed, and import's real audio probe
+            // then terminally rejects every copy.
+            let scope = match language_context {
+                LanguageScope::Auto
+                    if next.is_some_and(|value| LANG_SUBTITLE_MARKERS.contains(&value)) =>
+                {
+                    LanguageScope::Subtitle
+                }
+                scope => scope,
+            };
+            match scope {
                 LanguageScope::Subtitle => {
                     push_unique(&mut enrichment.languages_subtitles, language)
                 }

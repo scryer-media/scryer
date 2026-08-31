@@ -322,8 +322,11 @@ pub struct SetCollectionMonitoredPayload {
 }
 
 #[derive(SimpleObject, Clone)]
-/// Movie metadata used when a movie is linked into a series timeline.
+#[graphql(complex)]
+/// Persisted movie metadata.
 pub struct MovieEntityPayload {
+    #[graphql(skip)]
+    pub permission_title_id: ID,
     /// Stable movie identifier.
     pub id: ID,
     /// Movie title.
@@ -350,6 +353,8 @@ pub struct MovieEntityPayload {
     pub mal_id: Option<String>,
     /// AniDB identifier, or null when unmatched.
     pub anidb_id: Option<String>,
+    /// Aggregated ratings cached during the movie's latest metadata hydration.
+    pub ratings: TitleRatingPayload,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -373,6 +378,10 @@ pub struct SeriesMovieLinkPayload {
     pub movie_form: Option<String>,
     /// Short explanation of the placement signals, or null when unavailable.
     pub signal_summary: Option<String>,
+    /// Explicit operator monitoring choice, or null when title policy manages this link.
+    pub monitoring_override: Option<bool>,
+    /// Whether current metadata still reports this series-movie relationship.
+    pub metadata_active: bool,
     /// Whether acquisition and monitoring are enabled for this link.
     pub monitored: bool,
 }
@@ -659,6 +668,64 @@ pub struct DownloadQueuePagePayload {
     pub stale: bool,
 }
 
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+/// Runtime phase for an import operation currently awaiting or using a worker lane.
+pub enum ActiveImportStreamPhaseValue {
+    /// The import is waiting for a worker lane.
+    Queued,
+    /// Archive extraction is running for the import.
+    Extracting,
+    /// A fast filesystem placement is in progress.
+    Placing,
+    /// File content is being copied to its destination.
+    Copying,
+    /// The destination is being verified and promoted.
+    Finalizing,
+}
+
+#[derive(SimpleObject, Clone)]
+/// A queued or active import operation. This reports real import work only, never worker capacity.
+pub struct ActiveImportStreamPayload {
+    /// Opaque runtime identity for this active import stream.
+    pub id: ID,
+    /// Identifier of the persisted import record.
+    pub import_id: ID,
+    /// Identifier of the library receiving the import.
+    pub library_id: ID,
+    /// Media category of the import target.
+    pub facet: MediaFacetValue,
+    /// Filesystem path of the source file or extraction directory.
+    pub source_path: String,
+    /// Filesystem path where the import is being placed.
+    pub destination_path: String,
+    /// Current runtime phase of the import.
+    pub phase: ActiveImportStreamPhaseValue,
+    /// Number of source bytes transferred so far.
+    pub bytes: Long,
+    /// Total source bytes expected for the transfer, or zero when unavailable.
+    pub total_bytes: Long,
+    /// Time the import entered the active worker queue.
+    pub queued_at: DateTime<Utc>,
+    /// Time work began, or null while the import remains queued.
+    pub started_at: Option<DateTime<Utc>>,
+    /// Time this stream was last updated.
+    pub updated_at: DateTime<Utc>,
+    /// Whether this stream can still be cancelled.
+    pub cancellable: bool,
+    /// Whether cancellation has been requested and is being processed.
+    pub cancellation_requested: bool,
+}
+
+#[derive(SimpleObject, Clone)]
+/// Revision metadata for active import stream updates.
+pub struct ActiveImportStreamSyncPayload {
+    /// Monotonic revision for active import stream changes.
+    pub revision: Long,
+    /// Time active import streams last changed, or null before the first change.
+    pub updated_at: Option<DateTime<Utc>>,
+}
+
 #[derive(SimpleObject, Clone)]
 /// Queue revision metadata returned after synchronization.
 pub struct DownloadQueueSyncPayload {
@@ -770,6 +837,8 @@ pub struct ManualImportPreviewPayload {
 pub struct ManualImportSelectionPayload {
     /// Identifier of the persisted selection.
     pub selection_id: ID,
+    /// The download contains archives and must be explicitly extracted before files can be mapped.
+    pub archive_extraction_needed: bool,
     /// Files included in the selection.
     pub files: Vec<ManualImportFilePreviewPayload>,
     /// Episodes eligible as import targets for the selection.
@@ -967,6 +1036,10 @@ pub struct PendingReleasePayload {
     pub added_at: DateTime<Utc>,
     /// Time before which the release is held, in UTC.
     pub delay_until: DateTime<Utc>,
+    /// Current machine-readable reason this release is held, or null when none was recorded.
+    pub last_decision_code: Option<String>,
+    /// Arbitration role independent of the release lifecycle state.
+    pub role: PendingReleaseRoleValue,
     /// Lifecycle state of the pending release.
     pub status: PendingReleaseStatusValue,
 }

@@ -1,7 +1,9 @@
-use scryer_domain::{CompletedDownload, Id};
+use chrono::Utc;
+use scryer_domain::{CompletedDownload, download_identity::DownloadId};
 
 use crate::{
-    DownloadSourceKind, DownloadSubmission, DownloadSubmissionIdentity, SubmissionScope,
+    AppUseCase, ClientJobLocator, DownloadSourceKind, DownloadSubmission,
+    DownloadSubmissionIdentity, ObservationResolution, ObservedClientJob, SubmissionScope,
     extract_magnet_info_hash,
 };
 
@@ -15,10 +17,6 @@ pub struct AcceptedDownloadIdentityInput<'a> {
     pub client_type: Option<&'a str>,
     pub client_item_id: Option<&'a str>,
     pub accepted_info_hash: Option<&'a str>,
-}
-
-pub(crate) fn new_download_id() -> String {
-    format!("scryer-download:{}", Id::new().0)
 }
 
 pub struct ObservedDownloadIdentityInput<'a> {
@@ -57,6 +55,133 @@ pub fn observed_download_identity(
         .or_else(|| download_id_from_info_hash(input.info_hash_hint));
 
     DownloadSubmissionIdentity { download_id }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ObservedClientJobResolution {
+    Resolved(DownloadId),
+    Conflict,
+    Unavailable,
+}
+
+/// Resolve an observation to the sole workflow identity.
+pub(crate) async fn resolve_observed_client_job(
+    app: &AppUseCase,
+    observation: ObservedClientJob,
+) -> ObservedClientJobResolution {
+    let valid_token = observation
+        .wire_token
+        .as_deref()
+        .and_then(scryer_domain::download_identity::DownloadId::from_wire);
+    let token = observation.wire_token.as_deref().unwrap_or("");
+    let config_id = observation.locator.client_id.as_deref().unwrap_or("");
+    let client_type = observation.locator.client_type.as_str();
+    let native_item_id = observation.locator.item_id.as_str();
+
+    match app
+        .services
+        .workflow
+        .download_registry
+        .resolve_observation(&observation)
+        .await
+    {
+        Ok(ObservationResolution::Resolved {
+            download_id,
+            newly_foreign,
+            attached,
+        }) => {
+            if valid_token.is_some() && newly_foreign {
+                tracing::debug!(
+                    target: "download_identity_resolver",
+                    token,
+                    config_id,
+                    client_type,
+                    native_item_id,
+                    "unknown valid token adopted as foreign"
+                );
+            }
+            if valid_token.is_none() && attached {
+                tracing::debug!(
+                    target: "download_identity_resolver",
+                    config_id,
+                    client_type,
+                    native_item_id,
+                    "ambiguous locator attached"
+                );
+            }
+            ObservedClientJobResolution::Resolved(download_id)
+        }
+        Ok(ObservationResolution::Conflict {
+            token_id,
+            binding_download_id,
+        }) => {
+            tracing::warn!(
+                target: "download_identity_resolver",
+                token,
+                config_id,
+                client_type,
+                native_item_id,
+                token_id = %token_id,
+                binding_download_id = %binding_download_id,
+                "conflicting canonical download identity observation"
+            );
+            ObservedClientJobResolution::Conflict
+        }
+        Err(error) => {
+            tracing::warn!(
+                target: "download_identity_resolver",
+                token,
+                config_id,
+                client_type,
+                native_item_id,
+                error = %error,
+                "failed to resolve client observation"
+            );
+            ObservedClientJobResolution::Unavailable
+        }
+    }
+}
+
+pub(crate) fn observed_queue_item_job(
+    item: &scryer_domain::DownloadQueueItem,
+) -> ObservedClientJob {
+    ObservedClientJob {
+        locator: ClientJobLocator::new(
+            Some(item.client_id.as_str()),
+            item.client_type.as_str(),
+            item.download_client_item_id.as_str(),
+        ),
+        wire_token: item
+            .download_id
+            .as_deref()
+            .and_then(DownloadId::from_wire)
+            .map(|id| id.to_wire()),
+        observed_name: (!item.title_name.trim().is_empty()).then(|| item.title_name.clone()),
+        observed_at: Utc::now(),
+    }
+}
+
+pub(crate) fn observed_completed_job(item: &CompletedDownload) -> ObservedClientJob {
+    let observed_name = item
+        .release_name
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string)
+        .or_else(|| (!item.name.trim().is_empty()).then(|| item.name.clone()));
+    ObservedClientJob {
+        locator: ClientJobLocator::new(
+            Some(item.client_id.as_str()),
+            item.client_type.as_str(),
+            item.download_client_item_id.as_str(),
+        ),
+        wire_token: item
+            .download_id
+            .as_deref()
+            .and_then(DownloadId::from_wire)
+            .map(|id| id.to_wire()),
+        observed_name,
+        observed_at: Utc::now(),
+    }
 }
 
 pub fn download_submission_identity_is_empty(identity: &DownloadSubmissionIdentity) -> bool {

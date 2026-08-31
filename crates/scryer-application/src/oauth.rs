@@ -5,9 +5,10 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{Duration, Utc};
 use scryer_domain::{Id, User};
+use std::collections::BTreeSet;
 use url::Url;
 
-use crate::types::OAuthAuthorizationSource;
+use crate::types::{OAuthAuthorizationSource, OAuthClientRegistrationRecord};
 use crate::{
     AppError, AppResult, AppUseCase, OAuthAuthorizationCodeRecord, OAuthConnectedAppRecord,
     OAuthRefreshGrantRecord, OAuthRefreshRotationOutcome, OAuthRefreshTokenRecord,
@@ -23,11 +24,35 @@ const AUTHORIZATION_CODE_TTL_SECONDS: i64 = 5 * 60;
 const OAUTH_SECRET_BYTES: usize = 32;
 const CODE_PREFIX: &str = "scryer_oac";
 const REFRESH_PREFIX: &str = "scryer_ort";
+const CUSTOM_CLIENT_PREFIX: &str = "oauth-client";
+const OAUTH_CLIENT_DISPLAY_NAME_MAX_LENGTH: usize = 120;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OAuthClientSource {
+    Managed,
+    Custom,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OAuthClientInfo {
     pub client_id: String,
     pub name: String,
+    pub redirect_uris: Vec<String>,
+    pub enabled: bool,
+    pub source: OAuthClientSource,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CreateOAuthClientRegistration {
+    pub display_name: String,
+    pub redirect_uris: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UpdateOAuthClientRegistration {
+    pub display_name: String,
+    pub redirect_uris: Vec<String>,
+    pub enabled: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -58,50 +83,241 @@ impl AppUseCase {
         let mut clients = vec![OAuthClientInfo {
             client_id: OAUTH_GENERIC_NATIVE_CLIENT_ID.to_string(),
             name: "Generic native integration".to_string(),
+            redirect_uris: Vec::new(),
+            enabled: true,
+            source: OAuthClientSource::Managed,
         }];
         if self.oauth_e2e_client_enabled() {
             clients.push(OAuthClientInfo {
                 client_id: OAUTH_E2E_CLIENT_ID.to_string(),
                 name: "Scryer E2E OAuth client".to_string(),
+                redirect_uris: Vec::new(),
+                enabled: true,
+                source: OAuthClientSource::Managed,
             });
         }
         clients
     }
 
-    pub fn oauth_client_info(&self, client_id: &str) -> Option<OAuthClientInfo> {
-        match client_id {
-            OAUTH_GENERIC_NATIVE_CLIENT_ID => Some(OAuthClientInfo {
-                client_id: client_id.to_string(),
-                name: "Generic native integration".to_string(),
-            }),
-            OAUTH_E2E_CLIENT_ID if self.oauth_e2e_client_enabled() => Some(OAuthClientInfo {
-                client_id: client_id.to_string(),
-                name: "Scryer E2E OAuth client".to_string(),
-            }),
-            _ => None,
+    pub async fn oauth_client_info(&self, client_id: &str) -> AppResult<Option<OAuthClientInfo>> {
+        if let Some(client) = self
+            .oauth_builtin_clients()
+            .into_iter()
+            .find(|client| client.client_id == client_id)
+        {
+            return Ok(Some(client));
         }
+        self.services
+            .identity
+            .oauth
+            .get_client_registration(client_id)
+            .await
+            .map(|record| {
+                record
+                    .filter(|record| record.enabled)
+                    .map(|record| OAuthClientInfo {
+                        client_id: record.client_id,
+                        name: record.display_name,
+                        redirect_uris: record.redirect_uris,
+                        enabled: record.enabled,
+                        source: OAuthClientSource::Custom,
+                    })
+            })
     }
 
-    pub fn validate_oauth_redirect_uri(
+    pub async fn validate_oauth_redirect_uri(
         &self,
         client_id: &str,
         redirect_uri: &str,
     ) -> AppResult<OAuthClientInfo> {
+        self.validated_oauth_redirect_uri(client_id, redirect_uri)
+            .await
+            .map(|(client, _)| client)
+    }
+
+    async fn validated_oauth_redirect_uri(
+        &self,
+        client_id: &str,
+        redirect_uri: &str,
+    ) -> AppResult<(OAuthClientInfo, String)> {
         let client = self
             .oauth_client_info(client_id)
+            .await?
             .ok_or_else(|| AppError::Validation("unknown OAuth client".into()))?;
         let url = Url::parse(redirect_uri)
             .map_err(|_| AppError::Validation("invalid redirect_uri".into()))?;
         reject_redirect_uri_fragment(&url)?;
-        match client_id {
-            OAUTH_GENERIC_NATIVE_CLIENT_ID if is_loopback_redirect(&url) => Ok(client),
-            OAUTH_E2E_CLIENT_ID if self.oauth_e2e_client_enabled() && is_e2e_redirect(&url) => {
-                Ok(client)
+        let canonical_redirect_uri = url.to_string();
+        match client.source {
+            OAuthClientSource::Managed => match client_id {
+                OAUTH_GENERIC_NATIVE_CLIENT_ID if is_loopback_redirect(&url) => {
+                    Ok((client, canonical_redirect_uri))
+                }
+                OAUTH_E2E_CLIENT_ID if self.oauth_e2e_client_enabled() && is_e2e_redirect(&url) => {
+                    Ok((client, canonical_redirect_uri))
+                }
+                _ => Err(AppError::Validation(
+                    "redirect_uri is not allowed for this OAuth client".into(),
+                )),
+            },
+            OAuthClientSource::Custom => {
+                if client
+                    .redirect_uris
+                    .iter()
+                    .any(|uri| uri == &canonical_redirect_uri)
+                {
+                    Ok((client, canonical_redirect_uri))
+                } else {
+                    Err(AppError::Validation(
+                        "redirect_uri is not allowed for this OAuth client".into(),
+                    ))
+                }
             }
-            _ => Err(AppError::Validation(
-                "redirect_uri is not allowed for this OAuth client".into(),
-            )),
         }
+    }
+
+    pub async fn list_oauth_client_registrations(
+        &self,
+        actor: &User,
+    ) -> AppResult<Vec<OAuthClientInfo>> {
+        self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
+            .await?;
+        let mut clients = self.oauth_builtin_clients();
+        clients.extend(
+            self.services
+                .identity
+                .oauth
+                .list_client_registrations()
+                .await?
+                .into_iter()
+                .map(|record| OAuthClientInfo {
+                    client_id: record.client_id,
+                    name: record.display_name,
+                    redirect_uris: record.redirect_uris,
+                    enabled: record.enabled,
+                    source: OAuthClientSource::Custom,
+                }),
+        );
+        clients.sort_by(|left, right| {
+            left.name
+                .cmp(&right.name)
+                .then_with(|| left.client_id.cmp(&right.client_id))
+        });
+        Ok(clients)
+    }
+
+    pub async fn create_oauth_client_registration(
+        &self,
+        actor: &User,
+        input: CreateOAuthClientRegistration,
+    ) -> AppResult<OAuthClientInfo> {
+        self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
+            .await?;
+        let (display_name, redirect_uris) =
+            validate_custom_client_registration(input.display_name, input.redirect_uris)?;
+        let now = Utc::now();
+        let record = OAuthClientRegistrationRecord {
+            client_id: format!("{CUSTOM_CLIENT_PREFIX}-{}", Id::new().0),
+            display_name,
+            redirect_uris,
+            enabled: true,
+            created_at: now,
+            updated_at: now,
+        };
+        let record = self
+            .services
+            .identity
+            .oauth
+            .create_client_registration(record)
+            .await?;
+        Ok(OAuthClientInfo {
+            client_id: record.client_id,
+            name: record.display_name,
+            redirect_uris: record.redirect_uris,
+            enabled: record.enabled,
+            source: OAuthClientSource::Custom,
+        })
+    }
+
+    pub async fn update_oauth_client_registration(
+        &self,
+        actor: &User,
+        client_id: &str,
+        input: UpdateOAuthClientRegistration,
+    ) -> AppResult<OAuthClientInfo> {
+        self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
+            .await?;
+        let Some(current) = self
+            .services
+            .identity
+            .oauth
+            .get_client_registration(client_id)
+            .await?
+        else {
+            return Err(AppError::NotFound(format!("OAuth client {client_id}")));
+        };
+        let (display_name, redirect_uris) =
+            validate_custom_client_registration(input.display_name, input.redirect_uris)?;
+        let record = OAuthClientRegistrationRecord {
+            client_id: current.client_id,
+            display_name,
+            redirect_uris,
+            enabled: input.enabled,
+            created_at: current.created_at,
+            updated_at: Utc::now(),
+        };
+        let Some(record) = self
+            .services
+            .identity
+            .oauth
+            .update_client_registration(record, !input.enabled, Utc::now(), "client_disabled")
+            .await?
+        else {
+            return Err(AppError::NotFound(format!("OAuth client {client_id}")));
+        };
+        Ok(OAuthClientInfo {
+            client_id: record.client_id,
+            name: record.display_name,
+            redirect_uris: record.redirect_uris,
+            enabled: record.enabled,
+            source: OAuthClientSource::Custom,
+        })
+    }
+
+    pub async fn delete_oauth_client_registration(
+        &self,
+        actor: &User,
+        client_id: &str,
+    ) -> AppResult<bool> {
+        self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
+            .await?;
+        self.services
+            .identity
+            .oauth
+            .delete_client_registration(client_id, Utc::now(), "client_deleted")
+            .await
+    }
+
+    pub async fn validate_oauth_access_token(
+        &self,
+        client_id: &str,
+        grant_id: &str,
+    ) -> AppResult<()> {
+        self.oauth_client_info(client_id).await?.ok_or_else(|| {
+            AppError::Unauthorized("OAuth client is disabled or unavailable".into())
+        })?;
+        if !self
+            .services
+            .identity
+            .oauth
+            .is_refresh_grant_active(grant_id, client_id)
+            .await?
+        {
+            return Err(AppError::Unauthorized(
+                "OAuth grant is revoked or unavailable".into(),
+            ));
+        }
+        Ok(())
     }
 
     pub fn validate_oauth_pkce_request(
@@ -138,7 +354,9 @@ impl AppUseCase {
         code_challenge_method: &str,
         authorization_source: OAuthAuthorizationSource,
     ) -> AppResult<OAuthIssuedCode> {
-        self.validate_oauth_redirect_uri(client_id, redirect_uri)?;
+        let (_, redirect_uri) = self
+            .validated_oauth_redirect_uri(client_id, redirect_uri)
+            .await?;
         let scope = self.validate_oauth_scope(Some(scope))?;
         self.validate_oauth_pkce_request(code_challenge, code_challenge_method)?;
         let id = Id::new().0;
@@ -150,7 +368,7 @@ impl AppUseCase {
             code_hash: self.oauth_token_hash("authorization_code", &code),
             client_id: client_id.to_string(),
             user_id: user.id.clone(),
-            redirect_uri: redirect_uri.to_string(),
+            redirect_uri,
             scope,
             code_challenge: code_challenge.to_string(),
             code_challenge_method: code_challenge_method.to_string(),
@@ -177,9 +395,9 @@ impl AppUseCase {
         authless_codes_allowed: bool,
     ) -> AppResult<OAuthTokenPair> {
         validate_pkce_code_verifier(code_verifier)?;
-        let redirect_url = Url::parse(redirect_uri)
-            .map_err(|_| AppError::Validation("invalid redirect_uri".into()))?;
-        reject_redirect_uri_fragment(&redirect_url)?;
+        let (_, redirect_uri) = self
+            .validated_oauth_redirect_uri(client_id, redirect_uri)
+            .await?;
         let code_id = oauth_token_id(code, CODE_PREFIX)?;
         let Some(record) = self
             .services
@@ -256,6 +474,9 @@ impl AppUseCase {
         refresh_token: &str,
         authless_grants_allowed: bool,
     ) -> AppResult<OAuthTokenPair> {
+        self.oauth_client_info(client_id).await?.ok_or_else(|| {
+            AppError::Unauthorized("OAuth client is disabled or unavailable".into())
+        })?;
         let token_id = oauth_token_id(refresh_token, REFRESH_PREFIX)?;
         let Some((token, grant)) = self
             .services
@@ -430,10 +651,13 @@ impl AppUseCase {
             .oauth
             .list_connected_apps(&actor.id)
             .await?;
-        Ok(records
-            .into_iter()
-            .filter_map(|record| connected_app_summary(self, record))
-            .collect())
+        let mut summaries = Vec::with_capacity(records.len());
+        for record in records {
+            if let Some(summary) = connected_app_summary(self, record).await? {
+                summaries.push(summary);
+            }
+        }
+        Ok(summaries)
     }
 
     pub async fn revoke_oauth_refresh_grants_for_user(
@@ -470,6 +694,9 @@ impl AppUseCase {
         if !(user.login_status().is_enabled() || disabled_authless_grant_allowed) {
             return Err(AppError::Unauthorized("credentials unavailable".into()));
         }
+        let client = self.oauth_client_info(client_id).await?.ok_or_else(|| {
+            AppError::Unauthorized("OAuth client is disabled or unavailable".into())
+        })?;
         let scope = self.validate_oauth_scope(Some(scope))?;
         let auth_session_version = self
             .services
@@ -500,7 +727,11 @@ impl AppUseCase {
             .services
             .identity
             .oauth
-            .create_refresh_grant(grant, token_record)
+            .create_refresh_grant(
+                grant,
+                token_record,
+                client.source == OAuthClientSource::Custom,
+            )
             .await?;
         let access_token = self
             .issue_oauth_access_token_with_source(
@@ -539,18 +770,66 @@ impl AppUseCase {
     }
 }
 
-fn connected_app_summary(
+async fn connected_app_summary(
     app: &AppUseCase,
     record: OAuthConnectedAppRecord,
-) -> Option<OAuthConnectedAppSummary> {
-    let client = app.oauth_client_info(&record.client_id)?;
-    Some(OAuthConnectedAppSummary {
+) -> AppResult<Option<OAuthConnectedAppSummary>> {
+    let Some(client) = app.oauth_client_info(&record.client_id).await? else {
+        return Ok(None);
+    };
+    Ok(Some(OAuthConnectedAppSummary {
         grant_id: record.grant_id,
         client_id: record.client_id,
         client_name: client.name,
         authorized_at: record.created_at,
         last_used_at: record.last_used_at,
-    })
+    }))
+}
+
+fn validate_custom_client_registration(
+    display_name: String,
+    redirect_uris: Vec<String>,
+) -> AppResult<(String, Vec<String>)> {
+    let display_name = display_name.trim().to_string();
+    if display_name.is_empty() {
+        return Err(AppError::Validation(
+            "OAuth client display name is required".into(),
+        ));
+    }
+    if display_name.len() > OAUTH_CLIENT_DISPLAY_NAME_MAX_LENGTH {
+        return Err(AppError::Validation(format!(
+            "OAuth client display name must not exceed {OAUTH_CLIENT_DISPLAY_NAME_MAX_LENGTH} characters"
+        )));
+    }
+    if redirect_uris.is_empty() {
+        return Err(AppError::Validation(
+            "at least one OAuth redirect URI is required".into(),
+        ));
+    }
+
+    let mut normalized = BTreeSet::new();
+    for redirect_uri in redirect_uris {
+        let url = Url::parse(redirect_uri.trim())
+            .map_err(|_| AppError::Validation("invalid OAuth redirect URI".into()))?;
+        reject_redirect_uri_fragment(&url)?;
+        if url.scheme() != "https"
+            || url.host_str().is_none()
+            || !url.username().is_empty()
+            || url.password().is_some()
+        {
+            return Err(AppError::Validation(
+                "custom OAuth redirect URIs must be absolute HTTPS URLs without credentials".into(),
+            ));
+        }
+        let canonical = url.to_string();
+        if !normalized.insert(canonical) {
+            return Err(AppError::Validation(
+                "OAuth redirect URIs must be unique".into(),
+            ));
+        }
+    }
+
+    Ok((display_name, normalized.into_iter().collect()))
 }
 
 fn random_oauth_secret() -> AppResult<String> {

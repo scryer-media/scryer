@@ -3,7 +3,10 @@ use super::lookup::{
 };
 use super::result_state::apply_import_result_with_completed;
 use super::*;
-use crate::import_workflow::import_completed_download_with_target_title;
+use crate::AppError;
+use crate::import_workflow::import_completed_download_for_tracked;
+use scryer_logging::{ActorContext, LogContext, ResourceContext, WorkflowContext, context_span};
+use tracing::Instrument;
 
 pub(crate) fn mark_importing(td: &mut TrackedDownload) {
     td.state = TrackedDownloadState::Importing;
@@ -13,16 +16,68 @@ pub(crate) fn mark_importing(td: &mut TrackedDownload) {
 }
 
 pub async fn import(app: &AppUseCase, actor: &User, td: &mut TrackedDownload) -> bool {
-    import_inner(app, actor, td, None).await
+    let log_span = tracked_download_import_log_span(actor, td);
+    import_inner(app, actor, td, None, None)
+        .instrument(log_span)
+        .await
 }
 
+#[cfg(test)]
 pub(crate) async fn import_with_lookup(
     app: &AppUseCase,
     actor: &User,
     td: &mut TrackedDownload,
     completed_lookup: &CompletedDownloadLookup,
 ) -> bool {
-    import_inner(app, actor, td, Some(completed_lookup)).await
+    let log_span = tracked_download_import_log_span(actor, td);
+    import_inner(app, actor, td, Some(completed_lookup), None)
+        .instrument(log_span)
+        .await
+}
+
+pub(crate) async fn import_with_lookup_and_preparation_permit(
+    app: &AppUseCase,
+    actor: &User,
+    td: &mut TrackedDownload,
+    completed_lookup: &CompletedDownloadLookup,
+    preparation_permit: tokio::sync::OwnedSemaphorePermit,
+) -> bool {
+    let log_span = tracked_download_import_log_span(actor, td);
+    import_inner(
+        app,
+        actor,
+        td,
+        Some(completed_lookup),
+        Some(preparation_permit),
+    )
+    .instrument(log_span)
+    .await
+}
+
+fn tracked_download_import_log_span(actor: &User, td: &TrackedDownload) -> tracing::Span {
+    context_span(
+        LogContext::workflow(WorkflowContext {
+            kind: "import".to_owned(),
+            id: td.id.clone(),
+        })
+        .with_actor(ActorContext {
+            kind: if actor.is_system_execution_actor() {
+                "system".to_owned()
+            } else {
+                "user".to_owned()
+            },
+            id: Some(actor.id.clone()),
+            display_name: Some(actor.username.clone()),
+            source: None,
+        })
+        .with_resource(ResourceContext {
+            title_id: td.title_id.clone(),
+            import_id: Some(td.id.clone()),
+            download_id: td.client_item.download_id.clone(),
+            client_id: Some(td.client_id.clone()),
+            ..ResourceContext::default()
+        }),
+    )
 }
 
 async fn import_inner(
@@ -30,6 +85,7 @@ async fn import_inner(
     actor: &User,
     td: &mut TrackedDownload,
     completed_lookup: Option<&CompletedDownloadLookup>,
+    preparation_permit: Option<tokio::sync::OwnedSemaphorePermit>,
 ) -> bool {
     if td.state != TrackedDownloadState::ImportPending
         && td.state != TrackedDownloadState::Importing
@@ -42,8 +98,20 @@ async fn import_inner(
         return false;
     };
 
-    mark_importing(td);
-    crate::tracked_downloads::publish_runtime_tracked_download_snapshot(app, td).await;
+    let preparation_permit = match preparation_permit {
+        Some(permit) => permit,
+        None => {
+            app.runtime
+                .imports
+                .execution_coordinator
+                .acquire_preparation()
+                .await
+        }
+    };
+    if td.state != TrackedDownloadState::Importing {
+        mark_importing(td);
+        crate::tracked_downloads::publish_runtime_tracked_download_snapshot(app, td).await;
+    }
 
     let (completed, release_evidence) =
         match resolve_completed_download_origin_for_import(app, &completed, Some(&td.client_item))
@@ -101,35 +169,48 @@ async fn import_inner(
         "import: starting import from completed download"
     );
 
-    let success_before = total_successful_artifacts(app, td).await;
+    let success_before = match total_successful_artifacts(app, td, Some(&completed)).await {
+        Ok(count) => count,
+        Err(error) => {
+            tracing::warn!(id = %td.id, error = %error, "import artifact evidence unavailable before import");
+            td.schedule_import_execution_retry(Utc::now(), |_, next_retry_at| {
+                format!(
+                    "Import verification is temporarily unavailable. Retrying at {}.",
+                    next_retry_at.to_rfc3339()
+                )
+            });
+            return false;
+        }
+    };
     td.import_attempted = true;
 
     let import_actor = actor_for_tracked_download_import(app, actor, td).await;
     let target_title_id = tracked_import_target_title_id(td, release_evidence.as_ref());
-    let import = match (release_evidence.as_ref(), target_title_id.as_deref()) {
-        (Some(release_evidence), _) => {
-            import_completed_download_with_release_evidence(
-                app,
-                &import_actor,
-                &completed,
-                release_evidence,
-            )
-            .await
-        }
-        (None, Some(target_title_id)) => {
-            import_completed_download_with_target_title(
-                app,
-                &import_actor,
-                &completed,
-                target_title_id,
-            )
-            .await
-        }
-        (None, None) => import_completed_download(app, &import_actor, &completed).await,
-    };
+    let import = import_completed_download_for_tracked(
+        app,
+        &import_actor,
+        &completed,
+        td.canonical_download_id(),
+        target_title_id.as_deref(),
+        release_evidence.as_ref(),
+        preparation_permit,
+    )
+    .await;
     match import {
         Ok(result) => {
-            let success_after = total_successful_artifacts(app, td).await;
+            let success_after = match total_successful_artifacts(app, td, Some(&completed)).await {
+                Ok(count) => count,
+                Err(error) => {
+                    tracing::warn!(id = %td.id, error = %error, "import artifact evidence unavailable after import");
+                    td.schedule_import_execution_retry(Utc::now(), |_, next_retry_at| {
+                        format!(
+                            "Import verification is temporarily unavailable. Retrying at {}.",
+                            next_retry_at.to_rfc3339()
+                        )
+                    });
+                    return false;
+                }
+            };
             let files_imported_this_pass = success_after.saturating_sub(success_before) as usize;
             tracing::info!(
                 id = %td.id,
@@ -150,6 +231,19 @@ async fn import_inner(
             .await
         }
         Err(error) => {
+            if let AppError::ManualReconciliationRequired(message) = &error {
+                tracing::error!(
+                    id = %td.id,
+                    dest_dir = %completed.dest_dir,
+                    error = %message,
+                    "import filesystem worker was terminated; routing download to manual reconciliation"
+                );
+                td.clear_import_execution_retry();
+                td.state = TrackedDownloadState::ImportBlocked;
+                td.status = TrackedDownloadStatus::Error;
+                td.status_messages = vec![message.clone()];
+                return false;
+            }
             // The pipeline itself erred before it could produce a result
             // (repository/DB failure while queueing or resolving the attempt).
             // That is an execution failure of an approved import, so it gets
@@ -215,7 +309,7 @@ async fn actor_for_tracked_download_import(
     fallback_actor: &User,
     td: &TrackedDownload,
 ) -> User {
-    let source_identity = DownloadSourceIdentity::new(
+    let source_identity = ClientJobLocator::new(
         Some(td.client_id.as_str()),
         &td.client_type,
         &td.client_item.download_client_item_id,
@@ -351,25 +445,14 @@ async fn prepare_completed_download_for_tracked_import(
 /// artifact history across all passes.
 ///
 /// Returns true if all expected files are accounted for (imported or already_present).
-async fn total_successful_artifacts(app: &AppUseCase, td: &TrackedDownload) -> u64 {
-    let source_identity = DownloadSourceIdentity::new(
-        Some(td.client_id.as_str()),
-        &td.client_type,
-        &td.client_item.download_client_item_id,
-    );
-    let imported = app
-        .services
-        .workflow
-        .import_artifacts
-        .count_by_result_for_source_identity(&source_identity, "imported")
-        .await
-        .unwrap_or(0);
-    let already_present = app
-        .services
-        .workflow
-        .import_artifacts
-        .count_by_result_for_source_identity(&source_identity, "already_present")
-        .await
-        .unwrap_or(0);
-    imported + already_present
+async fn total_successful_artifacts(
+    app: &AppUseCase,
+    td: &TrackedDownload,
+    completed: Option<&CompletedDownload>,
+) -> AppResult<u64> {
+    Ok(import_artifacts_for_completed_download(app, td, completed)
+        .await?
+        .into_iter()
+        .filter(|artifact| matches!(artifact.result.as_str(), "imported" | "already_present"))
+        .count() as u64)
 }

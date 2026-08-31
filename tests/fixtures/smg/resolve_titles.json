@@ -1,0 +1,34 @@
+{
+  "data": {
+    "resolveTitles": [
+      {
+        "ref_index": 0,
+        "resolved": true,
+        "title_id": 101,
+        "kind": "movie",
+        "primary_source": "tvdb",
+        "redirected_from": 100,
+        "created": false,
+        "external_ids": [
+          { "source": "smg", "kind": "movie", "id": "101", "key": "smg:title:101" },
+          { "source": "tvdb", "kind": "movie", "id": "123456", "key": "tvdb:movie:123456" }
+        ],
+        "reason": "matched external identifier"
+      },
+      {
+        "ref_index": 1,
+        "resolved": true,
+        "title_id": 202,
+        "kind": "movie",
+        "primary_source": "tmdb",
+        "redirected_from": null,
+        "created": false,
+        "external_ids": [
+          { "source": "smg", "kind": "movie", "id": "202", "key": "smg:title:202" },
+          { "source": "tmdb", "kind": "movie", "id": "2020", "key": "tmdb:movie:2020" }
+        ],
+        "reason": "matched external identifier"
+      }
+    ]
+  }
+}

@@ -147,7 +147,7 @@ fn extract_languages_from_required_audio_rego(rego: &str) -> Vec<String> {
         if let Some(rest) = trimmed.strip_prefix("_required_langs := {")
             && let Some(set_body) = rest.strip_suffix('}')
         {
-            return normalize_required_audio_languages(
+            return normalize_required_audio_requirements(
                 set_body
                     .split(',')
                     .map(|value| value.trim().trim_matches('"').to_string()),
@@ -162,7 +162,7 @@ impl AppUseCase {
         &self,
         scope_id: &str,
     ) -> AppResult<Vec<String>> {
-        Ok(normalize_required_audio_languages(
+        Ok(normalize_required_audio_requirements(
             self.read_setting_json_value::<Vec<String>>(
                 REQUIRED_AUDIO_LANGUAGES_KEY,
                 Some(scope_id),
@@ -193,7 +193,7 @@ impl AppUseCase {
         };
 
         serde_json::from_str::<Option<Vec<String>>>(&raw_value)
-            .map(|value| value.map(normalize_required_audio_languages))
+            .map(|value| value.map(normalize_required_audio_requirements))
             .map_err(|error| {
                 AppError::Repository(format!(
                     "failed to parse setting '{TITLE_REQUIRED_AUDIO_OVERRIDE_KEY}' JSON value: {error}"
@@ -233,7 +233,7 @@ impl AppUseCase {
                     ))
                 })?;
             if let Some(languages) = parsed {
-                overrides.insert(title_id, normalize_required_audio_languages(languages));
+                overrides.insert(title_id, normalize_required_audio_requirements(languages));
             }
         }
         Ok(overrides)
@@ -322,7 +322,7 @@ impl AppUseCase {
     }
 }
 impl AppUseCase {
-    pub(crate) async fn resolve_required_audio_languages(
+    pub async fn resolve_required_audio_languages(
         &self,
         title_id: Option<&str>,
         library_id: Option<&str>,
@@ -349,6 +349,29 @@ impl AppUseCase {
         }
 
         Ok(Vec::new())
+    }
+
+    pub(crate) async fn resolve_required_audio_languages_for_title(
+        &self,
+        title: &scryer_domain::Title,
+    ) -> AppResult<Vec<String>> {
+        let requirements = self
+            .resolve_required_audio_languages(
+                Some(&title.id),
+                Some(title.library_id.as_str()),
+                Some(title.facet.as_str()),
+            )
+            .await?;
+        let title_context = title_audio_language_context(
+            title.language.as_deref(),
+            title.country.as_deref(),
+            Some(title.facet.as_str()),
+            &title.tags,
+        );
+        Ok(resolve_required_audio_requirements(
+            &requirements,
+            &title_context,
+        ))
     }
 }
 impl AppUseCase {
@@ -516,7 +539,7 @@ impl AppUseCase {
         )
         .await?;
 
-        let payload = languages.map(normalize_required_audio_languages);
+        let payload = languages.map(normalize_required_audio_requirements);
         self.services
             .config
             .settings
@@ -542,7 +565,7 @@ impl AppUseCase {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageCatalogSettings)
             .await?;
 
-        let normalized = normalize_required_audio_languages(languages);
+        let normalized = normalize_required_audio_requirements(languages);
         self.services
             .config
             .settings
@@ -919,7 +942,7 @@ impl AppUseCase {
                     SETTINGS_SCOPE_SYSTEM,
                     REQUIRED_AUDIO_LANGUAGES_KEY,
                     Some(facet.as_str().to_string()),
-                    encode_setting_json(&normalize_required_audio_languages(
+                    encode_setting_json(&normalize_required_audio_requirements(
                         required_audio_languages,
                     ))?,
                     SETTINGS_SOURCE_TYPED_GRAPHQL,

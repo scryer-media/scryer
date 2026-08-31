@@ -233,7 +233,7 @@ fn row_to_proxy_config(row: &SqlRow) -> AppResult<IndexerProxyConfig> {
             AppError::Repository(format!("unknown indexer proxy protocol '{protocol}'"))
         })?,
         base_url: row.text("base_url")?,
-        request_timeout_seconds: row.i64("request_timeout_seconds")?.max(0) as u32,
+        request_timeout_seconds: clamp_persisted_proxy_timeout(row.i64("request_timeout_seconds")?),
         is_enabled: row.bool("is_enabled")?,
         last_health_status,
         last_error_message: row.opt_text("last_error_message")?,
@@ -241,4 +241,23 @@ fn row_to_proxy_config(row: &SqlRow) -> AppResult<IndexerProxyConfig> {
         created_at: row.timestamp("created_at")?,
         updated_at: row.timestamp("updated_at")?,
     })
+}
+
+fn clamp_persisted_proxy_timeout(timeout_seconds: i64) -> u32 {
+    timeout_seconds.clamp(
+        1,
+        i64::from(scryer_outbound_http::MAX_INDEXER_PROXY_TIMEOUT_SECONDS),
+    ) as u32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::clamp_persisted_proxy_timeout;
+
+    #[test]
+    fn persisted_proxy_timeout_is_clamped_to_supported_range() {
+        assert_eq!(clamp_persisted_proxy_timeout(-1), 1);
+        assert_eq!(clamp_persisted_proxy_timeout(60), 60);
+        assert_eq!(clamp_persisted_proxy_timeout(180), 120);
+    }
 }

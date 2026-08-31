@@ -127,8 +127,6 @@ services:
       - /path/to/your/series:/data/series
     secrets:
       - scryer_encryption_key
-    environment:
-      SCRYER_METADATA_GATEWAY_GRAPHQL_URL: https://smg.scryer.media/graphql
 
 secrets:
   scryer_encryption_key:
@@ -152,15 +150,6 @@ docker compose up -d
 
 Infrastructure settings are configured via environment variables in your `docker-compose.yml`. Application settings like download clients and indexers are configured through the web UI after startup.
 
-### Metadata API
-
-Scryer uses a hosted metadata service for title search, artwork, and metadata. The `init` wizard configures this automatically. For manual setup, point to the hosted instance:
-
-```yaml
-environment:
-  SCRYER_METADATA_GATEWAY_GRAPHQL_URL: https://smg.scryer.media/graphql
-```
-
 ### Media Paths
 
 Scryer defaults to `/data/movies`, `/data/series`, and `/data/anime` inside the container. Keep your volume mounts aligned to those container-side paths:
@@ -179,10 +168,12 @@ Download clients (NZBGet, SABnzbd) and indexers are configured in **Settings** t
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `SCRYER_METADATA_GATEWAY_GRAPHQL_URL` | Yes | — | Metadata API endpoint URL |
+| `SCRYER_METADATA_GATEWAY_GRAPHQL_URL` | No | Unset | Internal metadata-gateway override for development and release testing only. Do not set this in user deployments. |
 | `SCRYER_ENCRYPTION_KEY` | No | Auto-managed | Override encryption key (see below) |
 | `SCRYER_BIND` | No | `0.0.0.0:8080` | Listen address and port |
 | `SCRYER_BASE_PATH` | No | `/` | Optional reverse-proxy path prefix, for example `/scryer` |
+| `SCRYER_LOG_FORMAT` | No | `json` | Console, file, and in-app log format: `json` or `text`. Unrecognized values warn and use `json`. |
+| `SCRYER_LOG_FILE` | No | Unset (Windows uses the application log path) | Optional log-file path. Relative paths are resolved from the data directory. |
 | `SCRYER_TLS_CERT` | No | — | Path to TLS certificate (PEM) |
 | `SCRYER_TLS_KEY` | No | — | Path to TLS private key (PEM) |
 

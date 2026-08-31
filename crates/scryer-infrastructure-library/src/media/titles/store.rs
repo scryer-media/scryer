@@ -113,6 +113,10 @@ ON CONFLICT (id) DO UPDATE SET
     metadata_hydration_attempt_count = CASE
         WHEN {} THEN titles.metadata_hydration_attempt_count
         ELSE excluded.metadata_hydration_attempt_count
+    END,
+    smg_identity_backfill_attempt_count = CASE
+        WHEN titles.external_ids <> excluded.external_ids THEN 0
+        ELSE titles.smg_identity_backfill_attempt_count
     END";
 const RECYCLE_BIN_PATH_SEGMENT: &str = "/.scryer-recycle/";
 const TITLE_QUALITY_PROFILE_TAG_PREFIX: &str = "scryer:quality-profile:";
@@ -1222,6 +1226,90 @@ impl TitleRepository for TitleStore {
             .collect()
     }
 
+    async fn list_movie_titles_missing_smg_id_after_id(
+        &self,
+        after_id: Option<&str>,
+        limit: usize,
+    ) -> AppResult<Vec<Title>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let after_id = after_id.unwrap_or_default().trim().to_string();
+        let rows = SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            &format!(
+                "SELECT {TITLE_COLUMNS}
+                   FROM titles
+                  WHERE facet = {{}}
+                    AND (id > {{}} OR smg_identity_backfill_attempt_count = 0)
+                    AND smg_identity_backfill_attempt_count < 5
+                    AND EXISTS (
+                        SELECT 1
+                          FROM title_external_ids
+                         WHERE title_id = titles.id
+                           AND LOWER(source) IN ('tvdb', 'tmdb', 'imdb')
+                           AND TRIM(external_id) <> ''
+                    )
+                    AND NOT EXISTS (
+                        SELECT 1
+                          FROM title_external_ids
+                         WHERE title_id = titles.id
+                           AND LOWER(source) = 'smg'
+                    )
+                  ORDER BY id ASC
+                  LIMIT {{}}"
+            ),
+            &[
+                SqlArg::Text(MediaFacet::Movie.as_str().to_string()),
+                SqlArg::Text(after_id),
+                SqlArg::I64(limit as i64),
+            ],
+        )
+        .await?;
+        rows.iter()
+            .map(|row| {
+                decode_optional_runtime_title_row(
+                    Some(row),
+                    PersistedTitleReadMode::Canonical,
+                    true,
+                )?
+                .ok_or_else(|| {
+                    AppError::Repository(
+                        "movie SMG identity backfill query returned an empty row projection"
+                            .to_string(),
+                    )
+                })
+            })
+            .collect()
+    }
+
+    async fn record_movie_smg_identity_backfill_unresolved(&self, title_id: &str) -> AppResult<()> {
+        let title_id = title_id.to_string();
+        SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "record_movie_smg_identity_backfill_unresolved",
+            move |tx| {
+                let title_id = title_id.clone();
+                Box::pin(async move {
+                    SqlRuntime::execute(
+                        SqlExec::Tx(tx),
+                        "UPDATE titles
+                            SET smg_identity_backfill_attempt_count = smg_identity_backfill_attempt_count + 1
+                          WHERE id = {} AND facet = {}",
+                        &[
+                            SqlArg::Text(title_id),
+                            SqlArg::Text(MediaFacet::Movie.as_str().to_string()),
+                        ],
+                    )
+                    .await?;
+                    Ok(())
+                })
+            },
+        )
+        .await
+    }
+
     async fn list_title_ids_with_metadata_hydration_due(
         &self,
         facet: Option<MediaFacet>,
@@ -1265,7 +1353,8 @@ impl TitleRepository for TitleStore {
                         SqlExec::Tx(tx),
                         "UPDATE titles
                             SET metadata_hydration_next_attempt_at = {},
-                                metadata_hydration_attempt_count = 0
+                                metadata_hydration_attempt_count = 0,
+                                smg_identity_backfill_attempt_count = 0
                           WHERE id = {}",
                         &[SqlArg::Timestamp(Utc::now()), SqlArg::Text(id)],
                     )
@@ -1295,7 +1384,8 @@ impl TitleRepository for TitleStore {
                     let sql = format!(
                         "UPDATE titles
                             SET metadata_hydration_next_attempt_at = {{}},
-                                metadata_hydration_attempt_count = 0
+                                metadata_hydration_attempt_count = 0,
+                                smg_identity_backfill_attempt_count = 0
                           WHERE id IN ({placeholders})"
                     );
                     let mut args = vec![SqlArg::Timestamp(Utc::now())];
@@ -1363,6 +1453,35 @@ impl TitleRepository for TitleStore {
                 })
             },
         )
+        .await
+    }
+
+    async fn persist_smg_id(
+        &self,
+        title_id: &str,
+        smg_id: i64,
+        redirected_from: Option<i64>,
+    ) -> AppResult<()> {
+        let title_id = title_id.to_string();
+        SqlRuntime::run_in_transaction(&self.datastore, "persist_smg_title_id", move |tx| {
+            let title_id = title_id.clone();
+            Box::pin(async move {
+                let mut title = load_title_canonical_tx_or_not_found(tx, &title_id, true).await?;
+                if redirected_from.is_some() {
+                    title
+                        .external_ids
+                        .retain(|external_id| !external_id.source.eq_ignore_ascii_case("smg"));
+                }
+                merge_title_external_ids(
+                    &mut title.external_ids,
+                    vec![ExternalId {
+                        source: "smg".to_string(),
+                        value: smg_id.to_string(),
+                    }],
+                );
+                persist_title_tx(tx, &title, HydrationStateWrite::Preserve).await
+            })
+        })
         .await
     }
 
@@ -3602,6 +3721,136 @@ mod tests {
             .expect_err("missing title should report not found");
         assert!(matches!(error, AppError::NotFound(_)));
         assert_eq!(learning_count(&pool, "missing-title").await, 1);
+    }
+
+    #[tokio::test]
+    async fn persist_smg_id_replaces_a_redirected_value_and_rebuilds_external_id_lookups() {
+        scryer_infrastructure_datastore::register_spellfix_auto_extension()
+            .expect("spellfix extension should register before migrations");
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite should open");
+        scryer_infrastructure_datastore::migrations::replay_source_catalog_for_fresh_install(
+            &pool, None, true,
+        )
+        .await
+        .expect("fresh migrations should apply");
+        let store = TitleStore::new(StoreDatastore::Sqlite {
+            pool: pool.clone(),
+            writer_gate: std::sync::Arc::new(tokio::sync::Mutex::new(())),
+        });
+        let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+        let root_folder_id: String = sqlx::query_scalar(
+            "SELECT id FROM library_roots
+              WHERE library_id = ?
+              ORDER BY is_default DESC, path
+              LIMIT 1",
+        )
+        .bind(&library_id)
+        .fetch_one(&pool)
+        .await
+        .expect("default movie root should exist");
+        let title = Title {
+            id: "redirected-smg-title".to_string(),
+            library_id: library_id.clone(),
+            name: "Redirected SMG Title".to_string(),
+            facet: MediaFacet::Movie,
+            monitored: true,
+            tags: vec![],
+            external_ids: vec![
+                ExternalId {
+                    source: "SMG".to_string(),
+                    value: "11".to_string(),
+                },
+                ExternalId {
+                    source: "tvdb".to_string(),
+                    value: "901001".to_string(),
+                },
+            ],
+            root_folder_id,
+            created_by: None,
+            created_at: Utc::now(),
+            year: None,
+            overview: None,
+            poster_url: None,
+            poster_source_url: None,
+            background_url: None,
+            background_source_url: None,
+            sort_title: None,
+            catalog_sort_key: String::new(),
+            slug: None,
+            imdb_id: None,
+            runtime_minutes: None,
+            popularity: None,
+            canonical_tags: vec![],
+            content_status: None,
+            language: None,
+            first_aired: None,
+            network: None,
+            studio: None,
+            country: None,
+            aliases: vec![],
+            tagged_aliases: vec![],
+            metadata_language: None,
+            metadata_fetched_at: None,
+            min_availability: None,
+            digital_release_date: None,
+            folder_path: None,
+        };
+        TitleRepository::create(&store, title)
+            .await
+            .expect("title should create");
+
+        TitleRepository::persist_smg_id(&store, "redirected-smg-title", 22, Some(11))
+            .await
+            .expect("redirected SMG id should persist");
+
+        let found = TitleRepository::find_by_external_id_in_library_and_facet(
+            &store,
+            &library_id,
+            MediaFacet::Movie,
+            "SMG",
+            "22",
+        )
+        .await
+        .expect("SMG external-id lookup should succeed")
+        .expect("new SMG id should resolve");
+        assert_eq!(found.id, "redirected-smg-title");
+        assert_eq!(
+            found
+                .external_ids
+                .iter()
+                .filter(|external_id| external_id.source.eq_ignore_ascii_case("smg"))
+                .map(|external_id| external_id.value.as_str())
+                .collect::<Vec<_>>(),
+            vec!["22"]
+        );
+        assert!(
+            TitleRepository::find_by_external_id_in_library_and_facet(
+                &store,
+                &library_id,
+                MediaFacet::Movie,
+                "smg",
+                "11",
+            )
+            .await
+            .expect("stale SMG lookup should succeed")
+            .is_none()
+        );
+        let matches = TitleRepository::list_by_external_id_lookups(
+            &store,
+            &[TitleExternalIdLookup {
+                lookup_index: 0,
+                source: "smg".to_string(),
+                external_id: "22".to_string(),
+            }],
+        )
+        .await
+        .expect("batched SMG external-id lookup should succeed");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].title.id, "redirected-smg-title");
     }
 
     #[test]

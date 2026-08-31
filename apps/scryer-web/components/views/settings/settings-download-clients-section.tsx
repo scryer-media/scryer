@@ -167,6 +167,7 @@ export function SettingsDownloadClientsSection({
   startCreateDownloadClient,
 }: SettingsDownloadClientsSectionProps) {
   const t = useTranslate();
+  const apiKeyInputRef = React.useRef<HTMLInputElement>(null);
   const urlPreview = buildUrlPreview(downloadClientDraft);
   const normalizedClientType = downloadClientDraft.clientType.trim().toLowerCase();
   const configuredClientLabel = downloadClientDraft.clientType.trim();
@@ -590,6 +591,7 @@ export function SettingsDownloadClientsSection({
                     {t("settings.apiKey")}
                   </Label>
                   <Input
+                    ref={apiKeyInputRef}
                     id="settings-download-client-api-key"
                     value={downloadClientDraft.apiKey}
                     onChange={(event) =>
@@ -609,6 +611,9 @@ export function SettingsDownloadClientsSection({
                           href={weaverApiKeyUrl}
                           target="_blank"
                           rel="noreferrer"
+                          onClick={() =>
+                            apiKeyInputRef.current?.focus({ preventScroll: true })
+                          }
                           className="underline underline-offset-4 hover:text-foreground"
                         >
                           open Weaver security settings

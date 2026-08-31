@@ -437,6 +437,74 @@ fn ambiguous_obfuscated_episode_message_ignores_release_with_explicit_season() {
 }
 
 #[test]
+fn exact_submission_episode_fallback_requires_one_episode_and_one_video() {
+    let evidence = |scope| ReleaseEvidence::ScryerSubmission {
+        title_id: "title-1".to_string(),
+        facet: "series".to_string(),
+        source_title: Some("Test.Series.S01E01.1080p.WEB-DL.x264".to_string()),
+        observed_release_name: None,
+        release_size_bytes: None,
+        purpose: crate::DownloadSubmissionPurpose::Standard,
+        scope,
+    };
+    let episode = evidence(SubmissionScope::Episode {
+        episode_id: "ep-1".to_string(),
+    });
+    assert_eq!(sole_submission_episode_id(&episode, false), Some("ep-1"));
+    assert_eq!(sole_submission_episode_id(&episode, true), None);
+
+    let singleton_set = evidence(SubmissionScope::EpisodeSet {
+        episode_ids: vec!["ep-1".to_string()],
+    });
+    assert_eq!(
+        sole_submission_episode_id(&singleton_set, false),
+        Some("ep-1")
+    );
+
+    let ambiguous_set = evidence(SubmissionScope::EpisodeSet {
+        episode_ids: vec!["ep-1".to_string(), "ep-2".to_string()],
+    });
+    assert_eq!(sole_submission_episode_id(&ambiguous_set, false), None);
+    let collection = evidence(SubmissionScope::Collection {
+        collection_id: "season-1".to_string(),
+    });
+    assert_eq!(sole_submission_episode_id(&collection, false), None);
+    let title = evidence(SubmissionScope::Title);
+    assert_eq!(sole_submission_episode_id(&title, false), None);
+    assert_eq!(
+        sole_submission_episode_id(
+            &ReleaseEvidence::DownloaderObservation {
+                release_name: Some("Test.Series.S01E01.1080p.WEB-DL.x264".to_string()),
+            },
+            false,
+        ),
+        None
+    );
+}
+
+#[test]
+fn unresolved_absolute_episode_message_names_the_detected_number() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let release_title = "Test Series - 19 (WEB 1080p x264 10-bit AAC) [A1B2C3D4]";
+    let file_path = dir.path().join(format!("{release_title}.mkv"));
+    std::fs::write(&file_path, b"episode").expect("write file");
+    let evidence = ReleaseEvidence::DownloaderObservation {
+        release_name: Some(release_title.to_string()),
+    };
+    let parsed = build_augmented_episode_import_metadata_for_title(
+        &file_path,
+        &evidence,
+        &titled(MediaFacet::Series, "Test Series", Some(2020)),
+        false,
+    );
+
+    assert_eq!(
+        unresolved_episode_import_message(&parsed, &file_path, &evidence, 1),
+        "Automatic import found absolute episode 19, but could not map it to a season and episode for this title. Open Manual Import and assign the correct episode."
+    );
+}
+
+#[test]
 fn build_augmented_episode_import_metadata_does_not_use_parent_for_obfuscated_file() {
     let dir = tempfile::tempdir().expect("tempdir");
     let dest_dir = dir.path().join("job-123");
@@ -1220,7 +1288,7 @@ async fn post_download_score_uses_rescored_quality_and_records_negative_audit() 
             &title,
             &parsed,
             &acceptance,
-            title.runtime_minutes,
+            crate::quality_profile::CoverageSizeBasis::single(title.runtime_minutes),
             5 * 1024 * 1024,
             &[],
             false,
@@ -1287,7 +1355,7 @@ async fn post_download_score_preserves_prepared_rescore_changes_when_parsed_alre
             &title,
             &prepared_parsed,
             &acceptance,
-            title.runtime_minutes,
+            crate::quality_profile::CoverageSizeBasis::single(title.runtime_minutes),
             5 * 1024 * 1024,
             &first_pass_changes,
             false,
@@ -1357,7 +1425,7 @@ score_entry["dv_profile_bonus"] := 123 if {
             &title,
             &parsed,
             &acceptance,
-            title.runtime_minutes,
+            crate::quality_profile::CoverageSizeBasis::single(title.runtime_minutes),
             5 * 1024 * 1024,
             &[],
             false,
@@ -1555,6 +1623,28 @@ fn find_video_files_finds_mkv_in_dir() {
 }
 
 #[test]
+fn find_video_files_accepts_direct_video_file() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let video = dir.path().join("movie.mkv");
+    std::fs::write(&video, b"data").expect("write");
+
+    assert_eq!(find_video_files(&video, false).expect("find"), vec![video]);
+}
+
+#[test]
+fn find_video_files_rejects_direct_non_video_without_reading_it_as_a_directory() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let payload = dir.path().join("payload.bin");
+    std::fs::write(&payload, b"data").expect("write");
+
+    assert!(
+        find_video_files(&payload, false)
+            .expect("classify")
+            .is_empty()
+    );
+}
+
+#[test]
 fn find_video_files_includes_trailing_sanitized_video_extension() {
     let dir = tempfile::tempdir().expect("tempdir");
     let sanitized_path = dir.path().join("Fixture.Payload.mkv_");
@@ -1619,7 +1709,43 @@ fn find_video_files_keeps_small_strm_when_filtering_samples() {
 #[test]
 fn find_video_files_returns_error_for_missing_dir() {
     let result = find_video_files(std::path::Path::new("/nonexistent/dir/abc"), false);
-    assert!(result.is_err());
+    assert!(matches!(
+        result,
+        Err(AppError::ImportSourceInspection { .. })
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn find_video_files_reports_an_unreadable_root_as_source_inspection() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let original_permissions = std::fs::metadata(dir.path())
+        .expect("metadata")
+        .permissions();
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o000))
+        .expect("remove permissions");
+    let result = find_video_files(dir.path(), false);
+    std::fs::set_permissions(dir.path(), original_permissions).expect("restore permissions");
+
+    assert!(matches!(
+        result,
+        Err(AppError::ImportSourceInspection { .. })
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn find_video_files_rejects_special_filesystem_objects() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let socket_path = dir.path().join("download.sock");
+    let _listener = std::os::unix::net::UnixListener::bind(&socket_path).expect("bind socket");
+
+    assert!(matches!(
+        find_video_files(&socket_path, false),
+        Err(AppError::UnsupportedImportSource { .. })
+    ));
 }
 
 #[test]
@@ -2468,15 +2594,17 @@ async fn maybe_remove_completed_manual_import_download_deletes_history_for_episo
 
 struct RecoveryImportRepo {
     records: Vec<scryer_domain::ImportRecord>,
+    canonical_download_ids:
+        std::collections::HashMap<String, scryer_domain::download_identity::DownloadId>,
     windows: Mutex<Vec<chrono::DateTime<chrono::Utc>>>,
-    deleted_sources: Mutex<Vec<crate::DownloadSourceIdentity>>,
+    deleted_sources: Mutex<Vec<crate::ClientJobLocator>>,
 }
 
 #[async_trait]
 impl crate::ImportRepository for RecoveryImportRepo {
     async fn queue_import_request(
         &self,
-        _: crate::DownloadSourceIdentity,
+        _: crate::ClientJobLocator,
         _: String,
         _: String,
     ) -> AppResult<String> {
@@ -2485,6 +2613,13 @@ impl crate::ImportRepository for RecoveryImportRepo {
 
     async fn get_import_by_id(&self, _: &str) -> AppResult<Option<scryer_domain::ImportRecord>> {
         Ok(None)
+    }
+
+    async fn canonical_download_id_for_import(
+        &self,
+        id: &str,
+    ) -> AppResult<Option<scryer_domain::download_identity::DownloadId>> {
+        Ok(self.canonical_download_ids.get(id).copied())
     }
 
     async fn update_import_status(
@@ -2531,7 +2666,7 @@ impl crate::ImportRepository for RecoveryImportRepo {
 
     async fn list_imports_for_identities(
         &self,
-        _: &[crate::DownloadSourceIdentity],
+        _: &[crate::ClientJobLocator],
     ) -> AppResult<Vec<scryer_domain::ImportRecord>> {
         Ok(Vec::new())
     }
@@ -2545,13 +2680,9 @@ impl crate::ImportRepository for RecoveryImportRepo {
         Ok(self.records.clone())
     }
 
-    async fn is_already_imported(&self, _: &crate::DownloadSourceIdentity) -> AppResult<bool> {
-        Ok(false)
-    }
-
     async fn delete_manual_import_selections_for_source(
         &self,
-        source_identity: &crate::DownloadSourceIdentity,
+        source_identity: &crate::ClientJobLocator,
     ) -> AppResult<()> {
         self.deleted_sources
             .lock()
@@ -2577,6 +2708,9 @@ fn completed_manual_import_record_for(
         status: scryer_domain::ImportStatus::Completed,
         error_code: None,
         error_message: None,
+        requires_reconciliation: false,
+        retry_attempts: 0,
+        next_retry_at: None,
         file_results: vec![ManualImportFileResult {
             file_path: format!("/downloads/{item_id}/movie.mkv"),
             episode_id: None,
@@ -2614,7 +2748,15 @@ fn completed_manual_import_record_for(
 /// A scripted tracked-download runtime: answers `MarkImportedIfAwaitingImport`
 /// per item id from `script` (falling back to `Unchanged`) and records every
 /// (item id, record completion time) it was asked about.
-type TrackedDownloadImportRequests = Arc<Mutex<Vec<(String, chrono::DateTime<chrono::Utc>)>>>;
+type TrackedDownloadImportRequests = Arc<
+    Mutex<
+        Vec<(
+            String,
+            chrono::DateTime<chrono::Utc>,
+            Option<scryer_domain::download_identity::DownloadId>,
+        )>,
+    >,
+>;
 
 fn scripted_tracked_download_runtime(
     script: Vec<(
@@ -2638,16 +2780,18 @@ fn scripted_tracked_download_runtime(
         while let Some(command) = rx.recv().await {
             let TrackedDownloadCommand::MarkImportedIfAwaitingImport {
                 source_identity,
+                canonical_download_id,
                 record_completed_at,
                 reply,
             } = command
             else {
                 continue;
             };
-            asked_task
-                .lock()
-                .await
-                .push((source_identity.item_id.clone(), record_completed_at));
+            asked_task.lock().await.push((
+                source_identity.item_id.clone(),
+                record_completed_at,
+                canonical_download_id,
+            ));
             let outcome = script
                 .iter_mut()
                 .find(|(item_id, _)| *item_id == source_identity.item_id)
@@ -2673,6 +2817,10 @@ async fn completed_manual_import_recovery_decides_each_record_once_and_only_mark
             completed_manual_import_record_for("import-already-imported", "hash-already"),
             completed_manual_import_record_for("import-fresh-download", "hash-fresh"),
         ],
+        canonical_download_ids: std::collections::HashMap::from([(
+            "import-marked".to_string(),
+            scryer_domain::download_identity::DownloadId::new(),
+        )]),
         windows: Mutex::new(Vec::new()),
         deleted_sources: Mutex::new(Vec::new()),
     });
@@ -2706,7 +2854,7 @@ async fn completed_manual_import_recovery_decides_each_record_once_and_only_mark
     let asked = asked.lock().await.clone();
     let mut asked_items = asked
         .iter()
-        .map(|(item_id, _)| item_id.clone())
+        .map(|(item_id, _, _)| item_id.clone())
         .collect::<Vec<_>>();
     asked_items.sort();
     assert_eq!(
@@ -2724,12 +2872,20 @@ async fn completed_manual_import_recovery_decides_each_record_once_and_only_mark
     assert!(
         asked
             .iter()
-            .all(|(_, completed_at)| *completed_at == record_completed_at),
+            .all(|(_, completed_at, _)| *completed_at == record_completed_at),
         "the runtime is told when each record completed (finished_at, else updated_at): {asked:?}"
+    );
+    assert!(
+        asked.iter().any(|(item_id, _, canonical_download_id)| {
+            item_id == "hash-marked" && canonical_download_id.is_some()
+        }) && asked.iter().any(|(item_id, _, canonical_download_id)| {
+            item_id == "hash-already" && canonical_download_id.is_none()
+        }),
+        "manual-import recovery forwards canonical identity when present and preserves legacy rows without it: {asked:?}"
     );
     assert_eq!(
         *repo.deleted_sources.lock().await,
-        vec![crate::DownloadSourceIdentity::new(
+        vec![crate::ClientJobLocator::new(
             Some("client-1"),
             "qbittorrent",
             "hash-marked"
@@ -2774,6 +2930,7 @@ async fn completed_manual_import_recovery_retries_busy_and_untracked_sources_on_
             completed_manual_import_record_for("import-busy", "hash-busy"),
             completed_manual_import_record_for("import-untracked", "hash-untracked"),
         ],
+        canonical_download_ids: std::collections::HashMap::new(),
         windows: Mutex::new(Vec::new()),
         deleted_sources: Mutex::new(Vec::new()),
     });
@@ -2852,7 +3009,7 @@ async fn completed_manual_import_recovery_retries_busy_and_untracked_sources_on_
     assert_eq!(
         asked
             .iter()
-            .filter(|(item, _)| item.as_str() == "hash-busy")
+            .filter(|(item, _, _)| item.as_str() == "hash-busy")
             .count(),
         2,
         "a busy source is retried once, then remembered"
@@ -2860,7 +3017,7 @@ async fn completed_manual_import_recovery_retries_busy_and_untracked_sources_on_
     assert_eq!(
         asked
             .iter()
-            .filter(|(item, _)| item.as_str() == "hash-untracked")
+            .filter(|(item, _, _)| item.as_str() == "hash-untracked")
             .count(),
         3,
         "an untracked source is retried on its backoff until the runtime knows it"
@@ -2880,8 +3037,8 @@ async fn completed_manual_import_recovery_retries_busy_and_untracked_sources_on_
     assert_eq!(
         deleted,
         vec![
-            crate::DownloadSourceIdentity::new(Some("client-1"), "qbittorrent", "hash-busy"),
-            crate::DownloadSourceIdentity::new(Some("client-1"), "qbittorrent", "hash-untracked"),
+            crate::ClientJobLocator::new(Some("client-1"), "qbittorrent", "hash-busy"),
+            crate::ClientJobLocator::new(Some("client-1"), "qbittorrent", "hash-untracked"),
         ]
     );
 }
@@ -2895,15 +3052,14 @@ async fn manual_import_preview_excludes_samples_for_movies_but_keeps_them_for_se
         Arc::new(ManualImportCleanupDownloadClient::default()),
     );
     let dir = tempfile::tempdir().expect("tempdir");
+    let video_fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../scryer-mediainfo/tests/media/hevc_hdr10plus.mkv");
     let primary = dir.path().join("Manual.Movie.2024.1080p.WEB-DL.mkv");
-    std::fs::File::create(&primary)
-        .expect("create primary")
-        .set_len(64 * 1024 * 1024)
-        .expect("size primary past the sample threshold");
+    std::fs::copy(&video_fixture, &primary).expect("copy primary video fixture");
     let named_sample = dir.path().join("Manual.Movie.2024.1080p.WEB-DL-sample.mkv");
-    std::fs::write(&named_sample, b"sample").expect("write sample");
+    std::fs::copy(&video_fixture, &named_sample).expect("copy sample video fixture");
     let tiny_extra = dir.path().join("Manual.Movie.2024.Making.Of.mkv");
-    std::fs::write(&tiny_extra, b"extra").expect("write extra");
+    std::fs::copy(&video_fixture, &tiny_extra).expect("copy extra video fixture");
     let mut completed = test_completed_download("Manual.Movie.2024.1080p.WEB-DL", dir.path());
     completed.release_name = Some("Manual.Movie.2024.1080p.WEB-DL".to_string());
     let evidence = observation_evidence(&completed);
@@ -2912,7 +3068,7 @@ async fn manual_import_preview_excludes_samples_for_movies_but_keeps_them_for_se
     let mut series_title = titled(MediaFacet::Series, "Manual Movie", Some(2024));
     series_title.id = "title-1".to_string();
 
-    let movie_preview = preview_manual_import(&app, &completed, &movie_title, &evidence, &[])
+    let movie_preview = preview_manual_import(&app, dir.path(), &movie_title, &evidence, &[])
         .await
         .expect("movie preview");
     // The preview shows the quality the import will score — the release
@@ -2941,7 +3097,7 @@ async fn manual_import_preview_excludes_samples_for_movies_but_keeps_them_for_se
         "movie previews drop sample-named files but never size-filter (a small movie stays importable)"
     );
 
-    let series_preview = preview_manual_import(&app, &completed, &series_title, &evidence, &[])
+    let series_preview = preview_manual_import(&app, dir.path(), &series_title, &evidence, &[])
         .await
         .expect("series preview");
     let mut series_files = series_preview

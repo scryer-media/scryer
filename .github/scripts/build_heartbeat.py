@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run a release build with progress reporting and a hard child-process deadline."""
+"""Run a release build with periodic progress and resource reporting."""
 
 from __future__ import annotations
 
@@ -10,7 +10,6 @@ import os
 import pathlib
 import platform
 import re
-import signal
 import subprocess
 import sys
 import threading
@@ -76,7 +75,9 @@ foreach ($process in $processes) {{
     rss_bytes = 0
     for raw_line in completed.stdout.splitlines():
         try:
-            pid_text, _parent_text, name, cpu_text, rss_text = raw_line.strip().split("|", 4)
+            pid_text, _parent_text, name, cpu_text, rss_text = raw_line.strip().split(
+                "|", 4
+            )
             pid = int(pid_text)
             cpu_seconds = float(cpu_text or 0)
             process_rss = int(rss_text)
@@ -118,7 +119,14 @@ def _posix_process_snapshot(root_pid: int) -> ProcessSnapshot:
             cpu_seconds = parse_cpu_time(fields[4])
         except ValueError:
             continue
-        rows[pid] = (parent_pid, cpu_percent, rss_bytes, cpu_seconds, fields[5], fields[6])
+        rows[pid] = (
+            parent_pid,
+            cpu_percent,
+            rss_bytes,
+            cpu_seconds,
+            fields[5],
+            fields[6],
+        )
 
     descendants = {root_pid}
     changed = True
@@ -198,37 +206,6 @@ def tee_output(process: subprocess.Popen[str], build_log: pathlib.Path) -> None:
             handle.flush()
 
 
-def terminate_process_tree(process: subprocess.Popen[str], output: pathlib.Path) -> None:
-    if process.poll() is not None:
-        return
-    emit(f"terminating build process tree root_pid={process.pid}", output)
-    if platform.system() == "Windows":
-        try:
-            subprocess.run(
-                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-        except (OSError, subprocess.TimeoutExpired) as error:
-            emit(f"Windows process-tree termination failed: {error}", output)
-    else:
-        try:
-            os.killpg(process.pid, signal.SIGTERM)
-            process.wait(timeout=10)
-            return
-        except (OSError, subprocess.TimeoutExpired):
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except OSError:
-                pass
-    try:
-        process.wait(timeout=30)
-    except subprocess.TimeoutExpired:
-        emit(f"build process tree did not reap root_pid={process.pid}", output)
-
-
 def write_status(path: pathlib.Path, status: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(status, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -239,36 +216,29 @@ def main() -> int:
     parser.add_argument("--output", type=pathlib.Path, required=True)
     parser.add_argument("--build-log", type=pathlib.Path, required=True)
     parser.add_argument("--status-file", type=pathlib.Path, required=True)
-    parser.add_argument("--timeout-seconds", type=int, required=True)
     parser.add_argument("--interval-seconds", type=int, default=60)
-    parser.add_argument("--warning-seconds", type=int, default=1_200)
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
     if not command:
         parser.error("a command is required after --")
-    if args.timeout_seconds <= 0 or args.interval_seconds <= 0:
-        parser.error("timeouts and intervals must be positive")
+    if args.interval_seconds <= 0:
+        parser.error("the heartbeat interval must be positive")
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text("", encoding="utf-8")
     started_wall = dt.datetime.now(dt.timezone.utc)
     started = time.monotonic()
-    emit(f"release build wrapper started command={command!r}", args.output)
-
-    popen_kwargs: dict[str, object] = {
-        "stdout": subprocess.PIPE,
-        "stderr": subprocess.STDOUT,
-        "text": True,
-        "bufsize": 1,
-    }
-    if platform.system() == "Windows":
-        popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
-    else:
-        popen_kwargs["start_new_session"] = True
+    emit(f"release build heartbeat started command={command!r}", args.output)
 
     try:
-        process = subprocess.Popen(command, **popen_kwargs)
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
     except OSError as error:
         message = f"failed to launch build command: {error}"
         args.build_log.write_text(message + "\n", encoding="utf-8")
@@ -280,7 +250,6 @@ def main() -> int:
                 "elapsed_seconds": 0,
                 "outcome": "launch_failed",
                 "process_exit_code": None,
-                "timed_out": False,
                 "wrapper_exit_code": 127,
             },
         )
@@ -293,8 +262,6 @@ def main() -> int:
     )
     reader.start()
 
-    warned = False
-    timed_out = False
     previous_cpu_seconds_by_pid: dict[int, float] = {}
     observed_cpu_seconds = 0.0
     peak_rss_bytes = 0
@@ -306,22 +273,6 @@ def main() -> int:
 
     while process.poll() is None:
         now = time.monotonic()
-        elapsed = now - started
-        if elapsed >= args.timeout_seconds:
-            timed_out = True
-            print(
-                f"::error::Build exceeded its {args.timeout_seconds}-second deadline; terminating the process tree.",
-                flush=True,
-            )
-            terminate_process_tree(process, args.output)
-            break
-        if args.warning_seconds > 0 and elapsed >= args.warning_seconds and not warned:
-            print(
-                "::warning::Cold release build exceeded the 20-minute target; "
-                "continuing to collect compiler diagnostics.",
-                flush=True,
-            )
-            warned = True
         if now >= next_sample:
             snapshot = active_processes(process.pid)
             cpu_delta = sum(
@@ -340,8 +291,9 @@ def main() -> int:
             peak_normalized_cpu_percent = max(
                 peak_normalized_cpu_percent, normalized_cpu_percent
             )
+            elapsed = int(now - started)
             emit(
-                f"elapsed_seconds={int(elapsed)} "
+                f"elapsed_seconds={elapsed} "
                 f"active_processes={len(snapshot.cpu_seconds_by_pid)} "
                 f"active_rss_mib={snapshot.rss_bytes / 1_048_576:.1f} "
                 f"aggregate_cpu_percent={aggregate_cpu_percent:.1f} "
@@ -356,18 +308,10 @@ def main() -> int:
             next_sample = now + args.interval_seconds
         time.sleep(0.25)
 
-    if process.poll() is None:
-        terminate_process_tree(process, args.output)
     process_exit_code = process.wait()
-    reader.join(timeout=30)
-    if reader.is_alive():
-        emit("build output reader did not stop cleanly", args.output)
-
+    reader.join()
     elapsed_seconds = int(time.monotonic() - started)
-    if timed_out:
-        outcome = "timed_out"
-        wrapper_exit_code = 124
-    elif process_exit_code == 0:
+    if process_exit_code == 0:
         outcome = "success"
         wrapper_exit_code = 0
     else:
@@ -377,7 +321,8 @@ def main() -> int:
         )
 
     emit(
-        f"release build wrapper stopped outcome={outcome} elapsed_seconds={elapsed_seconds} "
+        f"release build heartbeat stopped outcome={outcome} "
+        f"elapsed_seconds={elapsed_seconds} "
         f"peak_rss_mib={peak_rss_bytes / 1_048_576:.1f} "
         f"peak_aggregate_cpu_percent={peak_cpu_percent:.1f} "
         f"peak_normalized_cpu_percent={peak_normalized_cpu_percent:.1f} "
@@ -397,7 +342,6 @@ def main() -> int:
             "peak_rss_bytes": peak_rss_bytes,
             "process_exit_code": process_exit_code,
             "started_at": started_wall.isoformat(),
-            "timed_out": timed_out,
             "wrapper_exit_code": wrapper_exit_code,
         },
     )

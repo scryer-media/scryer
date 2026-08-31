@@ -157,7 +157,8 @@ async fn active_library_scans_query_returns_progress_snapshot() {
                 .set_delay(Duration::from_millis(750))
                 .set_body_json(json!({
                     "data": {
-                        "searchTvdbBatch": []
+                        "searchTvdbBatch": [],
+                        "searchTitlesBatch": []
                     }
                 })),
         )
@@ -299,7 +300,8 @@ async fn graphql_allows_concurrent_scans_for_distinct_libraries_in_same_facet() 
                 .set_delay(Duration::from_secs(2))
                 .set_body_json(json!({
                     "data": {
-                        "searchTvdbBatch": []
+                        "searchTvdbBatch": [],
+                        "searchTitlesBatch": []
                     }
                 })),
         )
@@ -486,7 +488,8 @@ async fn cancel_library_scan_mutation_marks_active_full_scan_canceled() {
                 .set_delay(Duration::from_millis(750))
                 .set_body_json(json!({
                     "data": {
-                        "searchTvdbBatch": []
+                        "searchTvdbBatch": [],
+                        "searchTitlesBatch": []
                     }
                 })),
         )

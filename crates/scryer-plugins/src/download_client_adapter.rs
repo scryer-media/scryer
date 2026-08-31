@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use chrono::{DateTime, Utc};
 use scryer_application::{
-    AppError, AppResult, DownloadClient, DownloadClientAddRequest,
+    AppError, AppResult, DownloadClient, DownloadClientAddRequest, DownloadClientFeedbackScope,
     DownloadClientMarkImportedRequest, DownloadClientStatus, DownloadGrabResult,
     DownloadSourceKind, ResolvedDownloadArtifact, StagedNzbRef,
 };
@@ -20,8 +20,12 @@ use scryer_plugin_sdk::command::{
     PluginDownloadClientCommandResult, PluginDownloadGetCompletedRequest,
 };
 use scryer_plugin_sdk::torrent::normalize_info_hash_pair;
-use scryer_plugin_sdk::{PluginError, PluginErrorCode, PluginResult};
-use tracing::debug;
+use scryer_plugin_sdk::{
+    PluginDownloadFeedbackScope as PluginFeedbackScope, PluginDownloadScopedListRequest,
+    PluginDownloadScopedListResponse, PluginDownloadScopedRecentCompletedRequest, PluginError,
+    PluginErrorCode, PluginResult,
+};
+use tracing::{debug, info, warn};
 
 use crate::blocking::run_blocking_plugin_call;
 use crate::legacy_runtime::LegacyPlugin;
@@ -45,7 +49,7 @@ use crate::wasmtime_host::{CommandInvocation, process_command};
 // Keep plugin work below the outer download-feedback gate while leaving enough
 // room for large client responses on slower hosts.
 pub(crate) const DOWNLOAD_CLIENT_PLUGIN_TIMEOUT: std::time::Duration =
-    std::time::Duration::from_secs(240);
+    scryer_outbound_http::DOWNLOAD_CLIENT_PLUGIN_TIMEOUT;
 pub struct WasmDownloadClient {
     plugin: Option<Arc<Mutex<LegacyPlugin>>>,
     command: Option<Arc<CommandDownloadClient>>,
@@ -169,6 +173,20 @@ impl WasmDownloadClient {
         })
     }
 
+    fn supports_category_scoped_feedback(&self) -> bool {
+        self.command.is_some()
+            && self
+                .descriptor
+                .download_client()
+                .is_some_and(|provider| provider.capabilities.category_scoped_feedback)
+    }
+
+    fn plugin_feedback_scope(scope: &DownloadClientFeedbackScope) -> PluginFeedbackScope {
+        PluginFeedbackScope {
+            categories: scope.categories.clone(),
+        }
+    }
+
     async fn invoke_command(
         &self,
         command: PluginDownloadClientCommand,
@@ -210,6 +228,41 @@ fn decode_command_result<T>(result: PluginResult<T>, context: &str) -> AppResult
         PluginResult::Ok(value) => Ok(value),
         PluginResult::Err(error) => Err(plugin_error_as_repository(error, context)),
     }
+}
+
+fn decode_scoped_command_result<T>(
+    result: PluginResult<PluginDownloadScopedListResponse<T>>,
+    context: &str,
+    client_id: &str,
+    provider_type: &str,
+) -> AppResult<Vec<T>> {
+    let response = decode_command_result(result, context)?;
+    if response.failures.is_empty() {
+        return Ok(response.items);
+    }
+    let failed_categories = response
+        .failures
+        .iter()
+        .map(|failure| failure.category.clone())
+        .collect::<Vec<_>>();
+    for failure in response.failures {
+        warn!(
+            client_id,
+            provider_type,
+            category = %failure.category,
+            error_code = ?failure.error.code,
+            error = %failure.error.public_message,
+            "download-client category feedback read returned a partial snapshot"
+        );
+    }
+    Err(AppError::Repository(format!(
+        "{context}: category feedback read was partial for {}",
+        failed_categories.join(", ")
+    )))
+}
+
+fn feedback_scope_is_empty(scope: &DownloadClientFeedbackScope) -> bool {
+    scope.categories.is_empty()
 }
 
 fn decode_download_add_result<T>(result: PluginResult<T>, context: &str) -> AppResult<T> {
@@ -421,10 +474,12 @@ fn map_add_response_to_grab_result(
     });
 
     DownloadGrabResult {
+        download_id: None,
         job_id: client_item_id,
         client_id: None,
         client_type: client_type.to_string(),
         info_hash,
+        seed_goals: None,
     }
 }
 
@@ -813,7 +868,7 @@ fn build_plugin_add_request(
             source_password: request.source_password.clone(),
         },
         release: PluginDownloadRelease {
-            download_id: request.download_id.clone(),
+            download_id: request.download_id.map(|id| id.to_wire()),
             release_title: request
                 .release_title
                 .clone()
@@ -1070,6 +1125,60 @@ impl DownloadClient for WasmDownloadClient {
             .collect())
     }
 
+    async fn list_queue_with_feedback_scope(
+        &self,
+        scope: &DownloadClientFeedbackScope,
+    ) -> AppResult<Vec<DownloadQueueItem>> {
+        if feedback_scope_is_empty(scope) || !self.supports_category_scoped_feedback() {
+            return self.list_queue().await;
+        }
+        let Some(result) = self
+            .invoke_command(
+                PluginDownloadClientCommand::ListQueueScoped(PluginDownloadScopedListRequest {
+                    scope: Self::plugin_feedback_scope(scope),
+                }),
+                "list_queue_scoped",
+            )
+            .await?
+        else {
+            return self.list_queue().await;
+        };
+        let PluginDownloadClientCommandResult::ListQueueScoped(result) = result else {
+            return Err(AppError::Repository(
+                "download-client command returned the wrong result for list_queue_scoped"
+                    .to_string(),
+            ));
+        };
+        let mut items = decode_scoped_command_result(
+            result,
+            "download list_queue_scoped",
+            &self.client_id,
+            self.descriptor.provider_type(),
+        )?;
+        apply_seeding_trust_floor(&self.descriptor, &mut items);
+        self.seeding_observations.record(&items);
+        Ok(items
+            .into_iter()
+            .filter(retain_queue_item)
+            .map(|item| {
+                map_queue_item(
+                    item,
+                    &self.client_id,
+                    &self.client_name,
+                    self.descriptor.provider_type(),
+                )
+            })
+            .collect())
+    }
+
+    async fn list_queue_for_title_with_feedback_scope(
+        &self,
+        _title_id: &str,
+        scope: &DownloadClientFeedbackScope,
+    ) -> AppResult<Vec<DownloadQueueItem>> {
+        self.list_queue_with_feedback_scope(scope).await
+    }
+
     async fn list_history(&self) -> AppResult<Vec<DownloadQueueItem>> {
         if let Some(result) = self
             .invoke_command(PluginDownloadClientCommand::ListHistory, "list_history")
@@ -1167,6 +1276,87 @@ impl DownloadClient for WasmDownloadClient {
         }
     }
 
+    async fn list_history_with_feedback_scope(
+        &self,
+        scope: &DownloadClientFeedbackScope,
+    ) -> AppResult<Vec<DownloadQueueItem>> {
+        if feedback_scope_is_empty(scope) || !self.supports_category_scoped_feedback() {
+            return self.list_history().await;
+        }
+        let Some(result) = self
+            .invoke_command(
+                PluginDownloadClientCommand::ListHistoryScoped(PluginDownloadScopedListRequest {
+                    scope: Self::plugin_feedback_scope(scope),
+                }),
+                "list_history_scoped",
+            )
+            .await?
+        else {
+            return self.list_history().await;
+        };
+        let PluginDownloadClientCommandResult::ListHistoryScoped(result) = result else {
+            return Err(AppError::Repository(
+                "download-client command returned the wrong result for list_history_scoped"
+                    .to_string(),
+            ));
+        };
+        let mut items = decode_scoped_command_result(
+            result,
+            "download list_history_scoped",
+            &self.client_id,
+            self.descriptor.provider_type(),
+        )?
+        .into_iter()
+        .map(|item| {
+            map_history_item_from_completed(
+                item,
+                &self.client_id,
+                &self.client_name,
+                self.descriptor.provider_type(),
+            )
+        })
+        .collect::<Vec<_>>();
+        self.seeding_observations.apply(&mut items);
+        Ok(items)
+    }
+
+    async fn list_history_page_with_feedback_scope(
+        &self,
+        offset: usize,
+        limit: usize,
+        scope: &DownloadClientFeedbackScope,
+    ) -> AppResult<Vec<DownloadQueueItem>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        Ok(self
+            .list_history_with_feedback_scope(scope)
+            .await?
+            .into_iter()
+            .skip(offset)
+            .take(limit)
+            .collect())
+    }
+
+    async fn list_recent_activity_with_feedback_scope(
+        &self,
+        limit: usize,
+        scope: &DownloadClientFeedbackScope,
+    ) -> AppResult<Vec<DownloadQueueItem>> {
+        self.list_history_page_with_feedback_scope(0, limit, scope)
+            .await
+    }
+
+    async fn list_recent_activity_for_title_with_feedback_scope(
+        &self,
+        _title_id: &str,
+        limit: usize,
+        scope: &DownloadClientFeedbackScope,
+    ) -> AppResult<Vec<DownloadQueueItem>> {
+        self.list_recent_activity_with_feedback_scope(limit, scope)
+            .await
+    }
+
     async fn list_completed_downloads(&self) -> AppResult<Vec<CompletedDownload>> {
         if let Some(result) = self
             .invoke_command(PluginDownloadClientCommand::ListCompleted, "list_completed")
@@ -1211,6 +1401,41 @@ impl DownloadClient for WasmDownloadClient {
                 map_completed_download(item, &self.client_id, self.descriptor.provider_type())
             })
             .collect())
+    }
+
+    async fn list_completed_downloads_with_feedback_scope(
+        &self,
+        scope: &DownloadClientFeedbackScope,
+    ) -> AppResult<Vec<CompletedDownload>> {
+        if feedback_scope_is_empty(scope) || !self.supports_category_scoped_feedback() {
+            return self.list_completed_downloads().await;
+        }
+        let Some(result) = self
+            .invoke_command(
+                PluginDownloadClientCommand::ListCompletedScoped(PluginDownloadScopedListRequest {
+                    scope: Self::plugin_feedback_scope(scope),
+                }),
+                "list_completed_scoped",
+            )
+            .await?
+        else {
+            return self.list_completed_downloads().await;
+        };
+        let PluginDownloadClientCommandResult::ListCompletedScoped(result) = result else {
+            return Err(AppError::Repository(
+                "download-client command returned the wrong result for list_completed_scoped"
+                    .to_string(),
+            ));
+        };
+        Ok(decode_scoped_command_result(
+            result,
+            "download list_completed_scoped",
+            &self.client_id,
+            self.descriptor.provider_type(),
+        )?
+        .into_iter()
+        .map(|item| map_completed_download(item, &self.client_id, self.descriptor.provider_type()))
+        .collect())
     }
 
     async fn get_completed_download_for_source(
@@ -1357,6 +1582,48 @@ impl DownloadClient for WasmDownloadClient {
                 map_completed_download(item, &self.client_id, self.descriptor.provider_type())
             })
             .collect())
+    }
+
+    async fn list_recent_completed_downloads_with_feedback_scope(
+        &self,
+        limit: usize,
+        scope: &DownloadClientFeedbackScope,
+    ) -> AppResult<Vec<CompletedDownload>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        if feedback_scope_is_empty(scope) || !self.supports_category_scoped_feedback() {
+            return self.list_recent_completed_downloads(limit).await;
+        }
+        let Some(result) = self
+            .invoke_command(
+                PluginDownloadClientCommand::ListRecentCompletedScoped(
+                    PluginDownloadScopedRecentCompletedRequest {
+                        limit,
+                        scope: Self::plugin_feedback_scope(scope),
+                    },
+                ),
+                "list_recent_completed_scoped",
+            )
+            .await?
+        else {
+            return self.list_recent_completed_downloads(limit).await;
+        };
+        let PluginDownloadClientCommandResult::ListRecentCompletedScoped(result) = result else {
+            return Err(AppError::Repository(
+                "download-client command returned the wrong result for list_recent_completed_scoped"
+                    .to_string(),
+            ));
+        };
+        Ok(decode_scoped_command_result(
+            result,
+            "download list_recent_completed_scoped",
+            &self.client_id,
+            self.descriptor.provider_type(),
+        )?
+        .into_iter()
+        .map(|item| map_completed_download(item, &self.client_id, self.descriptor.provider_type()))
+        .collect())
     }
 
     async fn pause_queue_item(&self, id: &str) -> AppResult<()> {
@@ -1548,12 +1815,22 @@ impl DownloadClient for WasmDownloadClient {
         &self,
         request: &DownloadClientMarkImportedRequest,
     ) -> AppResult<()> {
-        let supported = self.command.is_some()
-            && self
-                .descriptor
-                .download_client()
-                .is_some_and(|provider| provider.capabilities.mark_imported_non_destructive);
+        let command_available = self.command.is_some();
+        let capability_advertised = self
+            .descriptor
+            .download_client()
+            .is_some_and(|provider| provider.capabilities.mark_imported_non_destructive);
+        let supported = command_available && capability_advertised;
         if !supported {
+            info!(
+                plugin_id = %self.descriptor.id,
+                client_id = %self.client_id,
+                client_name = %self.client_name,
+                client_item_id = %request.client_item_id,
+                command_available,
+                capability_advertised,
+                "skipping non-destructive import mark because plugin command or capability support is unavailable"
+            );
             return Ok(());
         }
 
@@ -1585,7 +1862,15 @@ impl DownloadClient for WasmDownloadClient {
                     .to_string(),
             ));
         };
-        decode_command_result(result, "download mark_imported_non_destructive")
+        decode_command_result(result, "download mark_imported_non_destructive")?;
+        info!(
+            plugin_id = %self.descriptor.id,
+            client_id = %self.client_id,
+            client_name = %self.client_name,
+            client_item_id = %request.client_item_id,
+            "marked imported download in client non-destructively"
+        );
+        Ok(())
     }
 
     async fn get_client_status(&self) -> AppResult<DownloadClientStatus> {
@@ -1703,6 +1988,42 @@ mod tests {
             raw_state: None,
             completed_at: None,
         }
+    }
+
+    #[test]
+    fn partial_scoped_response_is_not_reported_as_complete() {
+        let item = queue_filter_item(DownloadItemState::Downloading);
+        let items = decode_scoped_command_result(
+            PluginResult::Ok(PluginDownloadScopedListResponse {
+                items: vec![item.clone()],
+                failures: vec![scryer_plugin_sdk::PluginDownloadScopeFailure {
+                    category: "TV / Anime".to_string(),
+                    error: PluginError {
+                        details: None,
+                        code: PluginErrorCode::UpstreamUnavailable,
+                        public_message: "category request timed out".to_string(),
+                        debug_message: None,
+                        retry_after_seconds: None,
+                    },
+                }],
+            }),
+            "scoped test",
+            "qbit",
+            "qbittorrent",
+        )
+        .expect_err("a failed category must not be reported as a complete snapshot");
+
+        assert!(items.to_string().contains("TV / Anime"));
+    }
+
+    #[test]
+    fn empty_feedback_scope_uses_the_unfiltered_poll_path() {
+        assert!(feedback_scope_is_empty(&DownloadClientFeedbackScope {
+            categories: Vec::new(),
+        }));
+        assert!(!feedback_scope_is_empty(&DownloadClientFeedbackScope {
+            categories: vec!["series".to_string()],
+        }));
     }
 
     #[test]
@@ -2058,6 +2379,7 @@ mod tests {
     fn command_add_permanent_plugin_error_is_rejected_without_losing_its_message() {
         let error = decode_download_add_result::<()>(
             PluginResult::Err(PluginError {
+                details: None,
                 code: PluginErrorCode::Permanent,
                 public_message: "rTorrent add requires an info hash from the release".to_string(),
                 debug_message: None,
@@ -2084,6 +2406,7 @@ mod tests {
         ] {
             let error = decode_download_add_result::<()>(
                 PluginResult::Err(PluginError {
+                    details: None,
                     code,
                     public_message: "client is temporarily unavailable".to_string(),
                     debug_message: None,
@@ -2101,6 +2424,7 @@ mod tests {
     fn legacy_add_permanent_plugin_error_is_rejected() {
         let output = serde_json::to_string(&PluginResult::<PluginDownloadClientAddResponse>::Err(
             PluginError {
+                details: None,
                 code: PluginErrorCode::Permanent,
                 public_message: "download source is invalid".to_string(),
                 debug_message: None,
@@ -2270,6 +2594,66 @@ mod tests {
         assert_eq!(queue_item.category.as_deref(), Some("series"));
         assert_eq!(queue_item.progress_percent, 100);
         assert_eq!(queue_item.remaining_seconds, Some(0));
+    }
+
+    #[test]
+    fn plugin_queue_and_history_keep_their_current_identity_projections() {
+        const INFO_HASH: &str = "abcdef0123456789abcdef0123456789abcdef01";
+        const DOWNLOAD_ID: &str = "scryer-download:plugin-token";
+
+        let queue_item = map_queue_item(
+            PluginDownloadItem {
+                client_item_id: "native-plugin-item".to_string(),
+                download_id: Some(DOWNLOAD_ID.to_string()),
+                info_hash: Some(INFO_HASH.to_string()),
+                title: "Plugin Queue Item".to_string(),
+                state: DownloadItemState::Downloading,
+                message: None,
+                category: Some("series".to_string()),
+                remote_output_path: None,
+                torrent: None,
+                total_size_bytes: Some(2048),
+                remaining_size_bytes: Some(1024),
+                eta_seconds: Some(60),
+                progress_percent: Some(50),
+                can_move_files: None,
+                can_remove: None,
+                removed: None,
+                raw_state: None,
+                completed_at: None,
+            },
+            "client-1",
+            "Plugin Client",
+            "plugin-client",
+        );
+        assert_eq!(queue_item.id, format!("plugin-client:{INFO_HASH}"));
+        assert_eq!(queue_item.download_id.as_deref(), Some(DOWNLOAD_ID));
+        assert_eq!(queue_item.download_client_item_id, "native-plugin-item");
+        assert!(!queue_item.is_scryer_origin);
+
+        let history_item = map_history_item_from_completed(
+            PluginCompletedDownload {
+                client_item_id: "native-plugin-item".to_string(),
+                download_id: Some(DOWNLOAD_ID.to_string()),
+                info_hash: Some(INFO_HASH.to_string()),
+                name: "Plugin Queue Item".to_string(),
+                release_name: None,
+                dest_dir: "/downloads/series".to_string(),
+                category: Some("series".to_string()),
+                output_kind: None,
+                content_paths: vec![],
+                size_bytes: Some(2048),
+                completed_at: Some("2026-05-02T00:00:00Z".to_string()),
+                parameters: vec![],
+            },
+            "client-1",
+            "Plugin Client",
+            "plugin-client",
+        );
+        assert_eq!(history_item.id, format!("plugin-client:{INFO_HASH}"));
+        assert_eq!(history_item.download_id.as_deref(), Some(DOWNLOAD_ID));
+        assert_eq!(history_item.download_client_item_id, INFO_HASH);
+        assert!(!history_item.is_scryer_origin);
     }
 
     #[test]

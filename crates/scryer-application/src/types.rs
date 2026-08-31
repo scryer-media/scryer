@@ -1,52 +1,23 @@
 use std::collections::{BTreeMap, HashMap};
 
-use scryer_domain::{CanonicalMediaTag, DownloadQueueCommandAction, ExternalId, Title};
+use chrono::DateTime;
+use scryer_domain::{
+    CanonicalMediaTag, DownloadQueueCommandAction, ExternalId, IndexerConfig, TaggedAlias, Title,
+    download_identity::DownloadId,
+};
+pub use scryer_domain::{TitleCredit, TitleExternalRating, TitleRatingSummary};
 use serde::{Deserialize, Serialize};
 
-use crate::SubmissionScope;
 use crate::acquisition::seed_goals::ReleaseSeedMinimums;
 use crate::library_scan::LibraryScanSummary;
 use crate::quality_profile::QualityProfileDecision;
 use crate::release_parser::{ParsedReleaseMetadata, VideoCodec};
+use crate::{AppResult, SubmissionScope};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LibraryRootDraft {
     pub path: String,
     pub is_default: bool,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct TitleExternalRating {
-    pub source: String,
-    pub value: Option<f64>,
-    pub score: Option<f64>,
-    pub normalized: f64,
-    pub votes: Option<i32>,
-    pub url: String,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct TitleRatingSummary {
-    pub rating: Option<f64>,
-    pub rating_sources: Vec<String>,
-    pub external_ratings: Vec<TitleExternalRating>,
-}
-
-/// One cast or crew credit as returned by SMG for a title. Crew records share the
-/// shape with cast records; `character_name`/`language` are simply empty for them.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct TitleCredit {
-    pub kind: String,
-    pub person_id: String,
-    pub person_name: String,
-    pub person_original_name: String,
-    pub person_image_url: String,
-    pub person_source: String,
-    pub person_external_id: String,
-    pub character_name: String,
-    pub language: String,
-    pub billing_order: i32,
-    pub episode_count: Option<i32>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -177,6 +148,7 @@ pub struct RecycledItem {
     pub title_name: Option<String>,
     pub reason: String,
     pub recycled_at: String,
+    pub scheduled_deletion_at: String,
     pub media_root: String,
     pub library_id: String,
     pub library_name: String,
@@ -556,6 +528,7 @@ fn normalize_numeric_external_id(raw: &str) -> Option<String> {
 pub struct DownloadQueueCommandRecord {
     pub id: String,
     pub action: DownloadQueueCommandAction,
+    pub canonical_download_id: Option<scryer_domain::download_identity::DownloadId>,
     pub client_id: Option<String>,
     pub client_type: String,
     pub download_client_item_id: String,
@@ -635,6 +608,12 @@ pub struct TitleImageBlob {
     pub content_type: String,
     pub etag: String,
     pub bytes: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MediaFileAssociations {
+    pub episode_ids: Vec<String>,
+    pub series_movie_link_ids: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -749,6 +728,7 @@ pub enum DownloadDisplayState {
     Paused,
     PostProcessing,
     Completed,
+    ImportedSeeding,
     Failed,
     /// The client reports a recoverable problem; the row stays in the activity
     /// list with its message instead of being presented as a dead grab.
@@ -769,12 +749,14 @@ pub enum DownloadActivityFilter {
     Queued,
     Paused,
     PostProcessing,
+    Seeding,
     Warning,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DownloadImportFilter {
     All,
+    Attention,
     Importing,
     Pending,
     Blocked,
@@ -1250,6 +1232,45 @@ pub struct TitleAcquisitionDiagnostics {
     pub latest_wanted_search_at: Option<String>,
 }
 
+/// Arbitration is independent of lifecycle: a fallback can remain active while
+/// a primary waits for its delay to elapse.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PendingReleaseRole {
+    Primary,
+    Fallback,
+}
+
+impl PendingReleaseRole {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Primary => "primary",
+            Self::Fallback => "fallback",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "primary" => Some(Self::Primary),
+            "fallback" => Some(Self::Fallback),
+            _ => None,
+        }
+    }
+}
+
+/// Immutable facts from the current indexer observation. They are deliberately
+/// separate from lifecycle fields on `PendingRelease` so rediscovery cannot
+/// restart the original delay clock.
+#[derive(Clone, Debug)]
+pub struct PendingReleaseObservation {
+    pub eligible_at: String,
+    pub last_observed_at: String,
+    pub latest_decision_code: Option<String>,
+    pub release_identity: String,
+    pub coverage_identity: String,
+    pub role: PendingReleaseRole,
+    pub release_age_unknown: bool,
+}
+
 #[derive(Clone, Debug)]
 pub struct PendingRelease {
     pub id: String,
@@ -1266,6 +1287,7 @@ pub struct PendingRelease {
     pub indexer_id: Option<String>,
     pub release_guid: Option<String>,
     pub added_at: String,
+    pub last_observed_at: String,
     pub delay_until: String,
     pub status: PendingReleaseStatus,
     pub grabbed_at: Option<String>,
@@ -1290,6 +1312,90 @@ pub struct PendingRelease {
     /// — for a row parked before this column existed, or an indexer that reports
     /// nothing — and unknown always stays eligible.
     pub seeders: Option<i64>,
+    pub release_identity: String,
+    pub coverage_identity: String,
+    pub role: PendingReleaseRole,
+    pub last_decision_code: Option<String>,
+    pub release_age_unknown: bool,
+}
+
+impl PendingReleaseObservation {
+    pub fn derived(release: &PendingRelease, role: PendingReleaseRole) -> Self {
+        let indexer = release
+            .indexer_id
+            .as_deref()
+            .or(release.indexer_source.as_deref())
+            .map(normalize_pending_identity_part)
+            .unwrap_or_else(|| "unknown".to_string());
+        let title = normalize_pending_identity_part(&release.release_title);
+        let coverage_identity = if release.coverage_identity.trim().is_empty() {
+            format!(
+                "scope:{}",
+                normalize_pending_identity_part(&release.wanted_item_id)
+            )
+        } else {
+            release.coverage_identity.clone()
+        };
+        let release_identity = if !release.release_identity.trim().is_empty() {
+            release.release_identity.clone()
+        } else if let Some(guid) = release
+            .release_guid
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            format!("guid:{indexer}:{}", normalize_pending_identity_part(guid))
+        } else if let Some(info_hash) = release
+            .info_hash
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            format!("hash:{}", normalize_pending_identity_part(info_hash))
+        } else if let Some(source) = release
+            .release_url
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            format!("source:{}", source.trim())
+        } else {
+            let published_at = release
+                .published_at
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .map(normalize_pending_identity_part)
+                .unwrap_or_else(|| "unknown".to_string());
+            format!("listing:{indexer}:{title}:{published_at}")
+        };
+        Self {
+            eligible_at: release.delay_until.clone(),
+            last_observed_at: if release.last_observed_at.trim().is_empty() {
+                release.added_at.clone()
+            } else {
+                release.last_observed_at.clone()
+            },
+            latest_decision_code: release.last_decision_code.clone(),
+            release_identity,
+            coverage_identity,
+            role,
+            release_age_unknown: release.release_age_unknown
+                || (release
+                    .published_at
+                    .as_deref()
+                    .is_none_or(|value| value.trim().is_empty())
+                    && pending_release_delay_is_active(release)),
+        }
+    }
+}
+
+fn pending_release_delay_is_active(release: &PendingRelease) -> bool {
+    let Ok(added_at) = DateTime::parse_from_rfc3339(&release.added_at) else {
+        return false;
+    };
+    DateTime::parse_from_rfc3339(&release.delay_until)
+        .is_ok_and(|eligible_at| eligible_at > added_at)
+}
+
+fn normalize_pending_identity_part(value: &str) -> String {
+    value.trim().to_ascii_lowercase()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1378,6 +1484,11 @@ pub struct DownloadGrabResult {
     pub client_id: Option<String>,
     pub client_type: String,
     pub info_hash: Option<String>,
+    /// The pre-allocated identity used for the successful client mutation.
+    pub download_id: Option<DownloadId>,
+    /// Torrent seed goals resolved by the selected client route. The canonical
+    /// submission coordinator freezes them with the accepted identity.
+    pub seed_goals: Option<crate::PersistedSeedGoals>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1511,14 +1622,26 @@ pub struct ReleaseDownloadFailureSignature {
     pub source_title: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TitleReleaseBlocklistEntry {
+/// One recorded failed download attempt for a title.
+///
+/// History and audit only: `release_download_attempts` never gates acquisition.
+/// The per-title blocklist is the single exclusion source, and this listing used
+/// to borrow its entry type, which read as though the two were the same thing.
+#[derive(Clone, Debug)]
+pub struct ReleaseDownloadFailureRecord {
     pub id: String,
     pub source_hint: Option<String>,
     pub source_title: Option<String>,
     pub error_message: Option<String>,
     pub attempted_at: String,
-    pub episode_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TitleReleaseBlocklistEntry {
+    pub id: String,
+    pub release_name: String,
+    pub error_message: Option<String>,
+    pub attempted_at: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1686,6 +1809,14 @@ impl IndexerSearchResult {
     /// Selects the source that should be submitted to a download client.
     /// Explicit NZB results retain their HTTP source; torrent results prefer
     /// a validated magnet emitted by the plugin.
+    /// The BitTorrent v1 infohash the indexer announced, if any.
+    ///
+    /// Indexers report it inside `extra` rather than as a typed field, so this
+    /// is the single place that key is read.
+    pub fn info_hash(&self) -> Option<&str> {
+        self.extra.get("info_hash").and_then(|value| value.as_str())
+    }
+
     pub fn canonical_download_source(&self) -> Option<(String, DownloadSourceKind)> {
         let explicit_nzb = matches!(
             self.source_kind,
@@ -1717,36 +1848,6 @@ impl IndexerSearchResult {
                 };
                 (value.to_string(), source_kind)
             })
-    }
-
-    pub fn source_aliases(&self) -> Vec<String> {
-        let mut aliases = Vec::new();
-        let explicit_nzb = matches!(
-            self.source_kind,
-            Some(DownloadSourceKind::NzbFile | DownloadSourceKind::NzbUrl)
-        );
-        if !explicit_nzb {
-            for key in ["magnet_uri", "magnet_url"] {
-                if let Some(value) = self.extra.get(key).and_then(serde_json::Value::as_str)
-                    && is_valid_magnet_uri(value)
-                {
-                    let value = value.trim();
-                    if !aliases.iter().any(|alias| alias == value) {
-                        aliases.push(value.to_string());
-                    }
-                }
-            }
-        }
-        for value in [self.download_url.as_deref(), self.link.as_deref()]
-            .into_iter()
-            .flatten()
-        {
-            let value = value.trim();
-            if !value.is_empty() && !aliases.iter().any(|alias| alias == value) {
-                aliases.push(value.to_string());
-            }
-        }
-        aliases
     }
 }
 
@@ -1819,7 +1920,6 @@ mod canonical_download_source_tests {
             result.canonical_download_source().unwrap().1,
             DownloadSourceKind::MagnetUri
         );
-        assert_eq!(result.source_aliases().len(), 3);
     }
 
     #[test]
@@ -1833,7 +1933,6 @@ mod canonical_download_source_tests {
                 DownloadSourceKind::TorrentFile,
             )
         );
-        assert_eq!(result.source_aliases().len(), 2);
     }
 
     #[test]
@@ -1850,7 +1949,6 @@ mod canonical_download_source_tests {
                 DownloadSourceKind::NzbUrl,
             )
         );
-        assert_eq!(result.source_aliases().len(), 2);
     }
 
     #[test]
@@ -1871,27 +1969,146 @@ mod canonical_download_source_tests {
     }
 }
 
-/// Per-indexer outcome of a single search query. Determines
-/// which routed indexers may be recorded as coverage: only an indexer that actually
-/// fired a query and returned a response (empty included) counts — never one the
-/// scheduler deferred/skipped, and never one whose query errored.
+/// Prefix shared by caps-health persistence and automatic-search suppression.
+pub const INDEXER_CAPS_REFRESH_ERROR_PREFIX: &str = "caps refresh failed:";
+
+/// Project an indexer's caps snapshot down to fields that can change search
+/// dispatch or the returned corpus. Health and display-only metadata must not
+/// reopen convergence.
+pub fn search_relevant_indexer_caps(raw: Option<&str>) -> serde_json::Value {
+    let value = raw.and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok());
+    project_search_relevant_caps(value.as_ref())
+}
+
+fn project_search_relevant_caps(value: Option<&serde_json::Value>) -> serde_json::Value {
+    let Some(object) = value.and_then(serde_json::Value::as_object) else {
+        return serde_json::Value::Null;
+    };
+    let mut projected = serde_json::Map::new();
+    for key in [
+        "search",
+        "tv_search",
+        "movie_search",
+        "categories",
+        "limits_default",
+        "limits_max",
+    ] {
+        if let Some(value) = object.get(key) {
+            projected.insert(key.to_string(), value.clone());
+        }
+    }
+    serde_json::Value::Object(projected)
+}
+
+/// Project managed-indexer metadata down to fields that affect automatic
+/// search routing. Embedded caps and cosmetic manager metadata are represented
+/// elsewhere (or are intentionally irrelevant) in the search fingerprint.
+pub fn search_relevant_managed_indexer_metadata(raw: Option<&str>) -> serde_json::Value {
+    let Some(object) = raw
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+        .and_then(|value| value.as_object().cloned())
+    else {
+        return serde_json::Value::Null;
+    };
+    let mut projected = serde_json::Map::new();
+    for key in ["enable_automatic_search"] {
+        if let Some(value) = object.get(key) {
+            projected.insert(key.to_string(), value.clone());
+        }
+    }
+    serde_json::Value::Object(projected)
+}
+
+/// Canonical search identity shared by coverage, reusable-candidate diagnostics,
+/// and learning invalidation. Keeping this projection in one place prevents
+/// those lifecycle decisions from drifting apart.
+pub fn indexer_search_identity(
+    config: &IndexerConfig,
+    search_semantics_version: Option<u32>,
+) -> serde_json::Value {
+    let config_json = config
+        .config_json
+        .as_deref()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+        .unwrap_or(serde_json::Value::Null);
+    let secret_fingerprint = config.api_key_encrypted.as_deref().map(|secret| {
+        crate::helpers::blake3_identity_hex(crate::helpers::HashDomain::IndexerSecret, secret)
+    });
+    let direct_caps = config
+        .caps_snapshot_json
+        .as_deref()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok());
+    let managed_caps = config
+        .managed_metadata_json
+        .as_deref()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+        .and_then(|value| value.get("caps_snapshot").cloned());
+    let caps = project_search_relevant_caps(direct_caps.as_ref().or(managed_caps.as_ref()));
+    serde_json::json!({
+        "version": 2,
+        "provider": config.provider_type.trim().to_ascii_lowercase(),
+        "endpoint": config.base_url.trim().trim_end_matches('/'),
+        "config": config_json,
+        "secret_fingerprint": secret_fingerprint,
+        "proxy": config.indexer_proxy_config_id,
+        "routing": search_relevant_managed_indexer_metadata(config.managed_metadata_json.as_deref()),
+        "caps": caps,
+        "search_semantics": search_semantics_version,
+    })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IndexerSearchIncompleteReason {
+    UpstreamFailure,
+    RateLimited,
+    MalformedContent,
+    PageCeilingReached,
+    FanoutBranchFailed,
+    SaturatedPartition,
+    Unattested,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum IndexerSearchCompletion {
+    #[default]
+    Complete,
+    Partial {
+        reason: Option<IndexerSearchIncompleteReason>,
+        retry_after: Option<std::time::Duration>,
+    },
+}
+
+impl IndexerSearchCompletion {
+    pub fn is_complete(self) -> bool {
+        matches!(self, Self::Complete)
+    }
+}
+
+/// Per-indexer outcome of a single search query. Only a validated, complete
+/// response is eligible for convergence coverage. Partial responses may still
+/// contribute candidates, but must be retried.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IndexerSearchOutcome {
-    /// The query executed and returned a response — `empty` distinguishes a
-    /// zero-result response (still coverage) from a populated one.
-    Fired { empty: bool },
-    /// The scheduler declined to query this indexer this cycle (deferred/skipped:
-    /// destination cooldown, host-RPS, account quota, disabled) — not queried.
-    Skipped,
-    /// The query was attempted but failed (rate-limited / transport / provider).
+    Complete {
+        empty: bool,
+    },
+    Partial {
+        empty: bool,
+        reason: Option<IndexerSearchIncompleteReason>,
+        retry_after: Option<std::time::Duration>,
+    },
+    Deferred {
+        retry_after: Option<std::time::Duration>,
+    },
+    Skipped {
+        retry_after: Option<std::time::Duration>,
+    },
     Errored,
 }
 
 impl IndexerSearchOutcome {
-    /// Whether this indexer actually executed a query and returned a response.
-    /// Only a fired indexer may be recorded as convergence coverage.
-    pub fn fired(&self) -> bool {
-        matches!(self, Self::Fired { .. })
+    pub fn coverage_eligible(&self) -> bool {
+        matches!(self, Self::Complete { .. })
     }
 }
 
@@ -1902,11 +2119,10 @@ pub struct IndexerQueryOutcome {
     pub outcome: IndexerSearchOutcome,
 }
 
-/// Wrapper around search results that also carries API limit metadata
-/// from the indexer response.
 #[derive(Clone, Debug)]
 pub struct IndexerSearchResponse {
     pub results: Vec<IndexerSearchResult>,
+    pub completion: IndexerSearchCompletion,
     pub api_current: Option<u32>,
     pub api_max: Option<u32>,
     pub grab_current: Option<u32>,
@@ -1915,6 +2131,309 @@ pub struct IndexerSearchResponse {
     /// (empty or not), were skipped/deferred, or errored. Empty for synthetic or
     /// no-eligible-indexer responses.
     pub indexer_outcomes: Vec<IndexerQueryOutcome>,
+}
+
+/// One complete effective search strategy submitted to a plan-capable indexer.
+#[derive(Clone, Debug)]
+pub struct IndexerSearchStrategyRequest {
+    pub strategy_id: String,
+    pub labels: Vec<String>,
+    pub query: String,
+    pub ids: std::collections::HashMap<String, String>,
+    pub category: Option<String>,
+    pub facet: Option<String>,
+    pub id_search_facet: Option<String>,
+    pub newznab_categories: Option<Vec<String>>,
+    pub season: Option<u32>,
+    pub episode: Option<u32>,
+    pub absolute_episode: Option<u32>,
+    pub tagged_aliases: Vec<TaggedAlias>,
+}
+
+/// A tier of strategies that one indexer component may execute concurrently.
+#[derive(Clone, Debug)]
+pub struct IndexerSearchPlanRequest {
+    pub plan_id: String,
+    pub strategies: Vec<IndexerSearchStrategyRequest>,
+}
+
+/// A strategy result emitted while an indexer plan is still running.
+#[derive(Debug)]
+pub struct IndexerSearchStrategyEvent {
+    pub strategy_id: String,
+    pub response: AppResult<IndexerSearchResponse>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IndexerSearchPlanSummary {
+    pub plan_id: String,
+    pub emitted_strategy_ids: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IndexerSearchPlanCapability {
+    pub version: u32,
+    pub max_parallel_strategies: u32,
+}
+
+#[derive(Clone, Debug)]
+pub struct IndexerSearchStrategyEventSink {
+    sender: tokio::sync::mpsc::Sender<IndexerSearchStrategyEvent>,
+}
+
+impl IndexerSearchStrategyEventSink {
+    pub fn new(sender: tokio::sync::mpsc::Sender<IndexerSearchStrategyEvent>) -> Self {
+        Self { sender }
+    }
+
+    pub async fn send(&self, event: IndexerSearchStrategyEvent) -> Result<(), ()> {
+        self.sender.send(event).await.map_err(|_| ())
+    }
+}
+
+/// A persisted page made available to the scoring pipeline.
+#[derive(Debug)]
+pub struct IndexerSearchPage {
+    pub results: Vec<IndexerSearchResult>,
+    _reservation: Option<tokio::sync::OwnedSemaphorePermit>,
+}
+
+/// The bounded hand-off between indexer retrieval and release scoring.
+#[derive(Clone, Debug)]
+pub struct IndexerSearchPageSink {
+    sender: tokio::sync::mpsc::Sender<IndexerSearchPage>,
+    reservations: std::sync::Arc<tokio::sync::Semaphore>,
+}
+
+#[derive(Debug)]
+pub struct IndexerSearchPageReservation {
+    sender: tokio::sync::mpsc::Sender<IndexerSearchPage>,
+    permit: Option<tokio::sync::OwnedSemaphorePermit>,
+}
+
+impl IndexerSearchPageSink {
+    pub fn new(sender: tokio::sync::mpsc::Sender<IndexerSearchPage>, max_pages: usize) -> Self {
+        Self {
+            sender,
+            reservations: std::sync::Arc::new(tokio::sync::Semaphore::new(max_pages)),
+        }
+    }
+
+    pub async fn reserve(&self) -> Option<IndexerSearchPageReservation> {
+        let permit = self.reservations.clone().acquire_owned().await.ok()?;
+        Some(IndexerSearchPageReservation {
+            sender: self.sender.clone(),
+            permit: Some(permit),
+        })
+    }
+
+    pub async fn send(&self, results: Vec<IndexerSearchResult>) -> Result<(), ()> {
+        let Some(reservation) = self.reserve().await else {
+            return Err(());
+        };
+        reservation.send(results).await
+    }
+}
+
+impl IndexerSearchPageReservation {
+    pub async fn send(mut self, results: Vec<IndexerSearchResult>) -> Result<(), ()> {
+        self.sender
+            .send(IndexerSearchPage {
+                results,
+                _reservation: self.permit.take(),
+            })
+            .await
+            .map_err(|_| ())
+    }
+}
+
+/// Why an indexer HTTP request was issued. This is diagnostic metadata only;
+/// search routing continues to use [`SearchMode`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum IndexerErrorOperation {
+    ConnectionTest,
+    InteractiveSearch,
+    AutomaticSearch,
+    RssSync,
+    IndexerAction,
+    ManagementSync,
+    CapsRefresh,
+}
+
+impl IndexerErrorOperation {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ConnectionTest => "connection_test",
+            Self::InteractiveSearch => "interactive_search",
+            Self::AutomaticSearch => "automatic_search",
+            Self::RssSync => "rss_sync",
+            Self::IndexerAction => "indexer_action",
+            Self::ManagementSync => "management_sync",
+            Self::CapsRefresh => "caps_refresh",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "connection_test" => Some(Self::ConnectionTest),
+            "interactive_search" => Some(Self::InteractiveSearch),
+            "automatic_search" => Some(Self::AutomaticSearch),
+            "rss_sync" => Some(Self::RssSync),
+            "indexer_action" => Some(Self::IndexerAction),
+            "management_sync" => Some(Self::ManagementSync),
+            "caps_refresh" => Some(Self::CapsRefresh),
+            _ => None,
+        }
+    }
+}
+
+/// Stable, operator-facing classification for a persisted indexer error.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum IndexerErrorClassification {
+    NewznabInvalidApiKey,
+    NewznabAccountSuspended,
+    NewznabInsufficientPrivileges,
+    NewznabRegistrationDenied,
+    NewznabRegistrationsClosed,
+    NewznabInvalidRegistration,
+    NewznabInvalidRegistrationEmail,
+    NewznabRegistrationFailed,
+    NewznabMissingParameter,
+    NewznabIncorrectParameter,
+    NewznabNoSuchFunction,
+    NewznabFunctionNotAvailable,
+    NewznabNoSuchItem,
+    NewznabRequestLimitReached,
+    NewznabDownloadLimitReached,
+    NewznabUnknownError,
+    NewznabApiDisabled,
+    HttpBadRequest,
+    HttpUnauthorized,
+    HttpForbidden,
+    HttpNotFound,
+    HttpRequestTimeout,
+    HttpRateLimited,
+    HttpServerError,
+    Unknown,
+}
+
+impl IndexerErrorClassification {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::NewznabInvalidApiKey => "newznab_invalid_api_key",
+            Self::NewznabAccountSuspended => "newznab_account_suspended",
+            Self::NewznabInsufficientPrivileges => "newznab_insufficient_privileges",
+            Self::NewznabRegistrationDenied => "newznab_registration_denied",
+            Self::NewznabRegistrationsClosed => "newznab_registrations_closed",
+            Self::NewznabInvalidRegistration => "newznab_invalid_registration",
+            Self::NewznabInvalidRegistrationEmail => "newznab_invalid_registration_email",
+            Self::NewznabRegistrationFailed => "newznab_registration_failed",
+            Self::NewznabMissingParameter => "newznab_missing_parameter",
+            Self::NewznabIncorrectParameter => "newznab_incorrect_parameter",
+            Self::NewznabNoSuchFunction => "newznab_no_such_function",
+            Self::NewznabFunctionNotAvailable => "newznab_function_not_available",
+            Self::NewznabNoSuchItem => "newznab_no_such_item",
+            Self::NewznabRequestLimitReached => "newznab_request_limit_reached",
+            Self::NewznabDownloadLimitReached => "newznab_download_limit_reached",
+            Self::NewznabUnknownError => "newznab_unknown_error",
+            Self::NewznabApiDisabled => "newznab_api_disabled",
+            Self::HttpBadRequest => "http_bad_request",
+            Self::HttpUnauthorized => "http_unauthorized",
+            Self::HttpForbidden => "http_forbidden",
+            Self::HttpNotFound => "http_not_found",
+            Self::HttpRequestTimeout => "http_request_timeout",
+            Self::HttpRateLimited => "http_rate_limited",
+            Self::HttpServerError => "http_server_error",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "newznab_invalid_api_key" => Self::NewznabInvalidApiKey,
+            "newznab_account_suspended" => Self::NewznabAccountSuspended,
+            "newznab_insufficient_privileges" => Self::NewznabInsufficientPrivileges,
+            "newznab_registration_denied" => Self::NewznabRegistrationDenied,
+            "newznab_registrations_closed" => Self::NewznabRegistrationsClosed,
+            "newznab_invalid_registration" => Self::NewznabInvalidRegistration,
+            "newznab_invalid_registration_email" => Self::NewznabInvalidRegistrationEmail,
+            "newznab_registration_failed" => Self::NewznabRegistrationFailed,
+            "newznab_missing_parameter" => Self::NewznabMissingParameter,
+            "newznab_incorrect_parameter" => Self::NewznabIncorrectParameter,
+            "newznab_no_such_function" => Self::NewznabNoSuchFunction,
+            "newznab_function_not_available" => Self::NewznabFunctionNotAvailable,
+            "newznab_no_such_item" => Self::NewznabNoSuchItem,
+            "newznab_request_limit_reached" => Self::NewznabRequestLimitReached,
+            "newznab_download_limit_reached" => Self::NewznabDownloadLimitReached,
+            "newznab_unknown_error" => Self::NewznabUnknownError,
+            "newznab_api_disabled" => Self::NewznabApiDisabled,
+            "http_bad_request" => Self::HttpBadRequest,
+            "http_unauthorized" => Self::HttpUnauthorized,
+            "http_forbidden" => Self::HttpForbidden,
+            "http_not_found" => Self::HttpNotFound,
+            "http_request_timeout" => Self::HttpRequestTimeout,
+            "http_rate_limited" => Self::HttpRateLimited,
+            "http_server_error" => Self::HttpServerError,
+            "unknown" => Self::Unknown,
+            _ => return None,
+        })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CapturedIndexerHttpHeader {
+    pub name: String,
+    pub value: Vec<u8>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CapturedIndexerHttpResponse {
+    pub status: u16,
+    pub headers: Vec<CapturedIndexerHttpHeader>,
+    pub body: Vec<u8>,
+}
+
+#[derive(Clone, Debug)]
+pub struct NewIndexerError {
+    pub id: String,
+    pub indexer_id: String,
+    pub indexer_name: String,
+    pub operation: IndexerErrorOperation,
+    pub classification: IndexerErrorClassification,
+    pub provider_error_code: Option<u16>,
+    pub message: String,
+    pub content_type: Option<String>,
+    /// Present only when the upstream returned an HTTP response.
+    pub response: Option<CapturedIndexerHttpResponse>,
+    pub occurred_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct IndexerErrorSummary {
+    pub id: String,
+    pub indexer_id: String,
+    pub indexer_name: String,
+    pub operation: IndexerErrorOperation,
+    /// Present only when the upstream returned an HTTP response.
+    pub http_status: Option<u16>,
+    pub classification: IndexerErrorClassification,
+    pub provider_error_code: Option<u16>,
+    pub message: String,
+    pub content_type: Option<String>,
+    pub occurred_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct IndexerErrorDetail {
+    pub summary: IndexerErrorSummary,
+    /// Present only when the upstream returned an HTTP response.
+    pub response: Option<CapturedIndexerHttpResponse>,
+}
+
+#[derive(Clone, Debug)]
+pub struct IndexerErrorPage {
+    pub items: Vec<IndexerErrorSummary>,
+    pub next_cursor: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -2206,6 +2725,53 @@ impl OAuthAuthorizationSource {
     pub fn is_authenticated(&self) -> bool {
         matches!(self, Self::Authenticated)
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OAuthClientRegistrationRecord {
+    pub client_id: String,
+    pub display_name: String,
+    pub redirect_uris: Vec<String>,
+    pub enabled: bool,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ApiKeyProvisioningSource {
+    User,
+    Environment,
+}
+
+impl ApiKeyProvisioningSource {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Environment => "environment",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "user" => Some(Self::User),
+            "environment" => Some(Self::Environment),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ApiKeyRecord {
+    pub id: String,
+    pub user_id: String,
+    pub lookup_id: String,
+    pub secret_hash: String,
+    pub label: String,
+    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub revoked_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub last_used_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub provisioning_source: ApiKeyProvisioningSource,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2767,6 +3333,7 @@ pub struct HousekeepingReport {
     pub orphaned_media_files: u32,
     pub stale_release_decisions: u32,
     pub stale_release_attempts: u32,
+    pub stale_indexer_errors: u32,
     pub stale_history_events: u32,
     pub stale_history_records: u32,
     pub staged_nzb_artifacts_pruned: u32,
@@ -3049,8 +3616,13 @@ pub struct ManualImportSelection {
     pub id: String,
     pub actor_user_id: String,
     pub title_id: String,
-    pub source_identity: crate::DownloadSourceIdentity,
+    pub source_identity: crate::ClientJobLocator,
+    pub canonical_download_id: Option<scryer_domain::download_identity::DownloadId>,
     pub release_evidence_json: Option<String>,
+    /// Server-selected root that every candidate must remain beneath.
+    pub trusted_source_root: String,
+    /// Temporary archive workspace retained until the queued import completes.
+    pub archive_workspace_root: Option<String>,
     pub candidates: Vec<ManualImportSelectionCandidate>,
 }
 
@@ -3180,6 +3752,178 @@ mod pending_import_reason_class_tests {
         assert_eq!(
             PendingImportReasonClass::from_reason_code("  no_metadata_search_results  "),
             PendingImportReasonClass::Unmatched
+        );
+    }
+}
+
+#[cfg(test)]
+mod indexer_search_identity_tests {
+    use super::indexer_search_identity;
+    use chrono::Utc;
+    use scryer_domain::IndexerConfig;
+
+    fn config() -> IndexerConfig {
+        IndexerConfig {
+            id: "idx-1".into(),
+            name: "Synthetic Indexer".into(),
+            provider_type: "newznab".into(),
+            base_url: "https://indexer.example.test".into(),
+            api_key_encrypted: Some("secret-a".into()),
+            rate_limit_seconds: None,
+            rate_limit_burst: None,
+            disabled_until: None,
+            is_enabled: true,
+            enable_interactive_search: true,
+            enable_auto_search: true,
+            indexer_proxy_config_id: None,
+            download_client_id: None,
+            seeding_profile_id: None,
+            managed_parent_config_id: None,
+            managed_child_key: None,
+            managed_metadata_json: Some(
+                serde_json::json!({
+                    "enable_rss": true,
+                    "enable_automatic_search": true,
+                    "display_name": "First",
+                    "caps_snapshot": {"cosmetic": "embedded"},
+                })
+                .to_string(),
+            ),
+            caps_snapshot_json: Some(
+                serde_json::json!({
+                    "search": true,
+                    "categories": [5000],
+                    "display_name": "First",
+                })
+                .to_string(),
+            ),
+            last_health_status: None,
+            last_error_message: None,
+            last_error_at: None,
+            config_json: Some(serde_json::json!({"api_path": "/api"}).to_string()),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn cosmetic_managed_metadata_and_caps_do_not_change_search_identity() {
+        let original = config();
+        let mut cosmetic = original.clone();
+        cosmetic.managed_metadata_json = Some(
+            serde_json::json!({
+                "enable_rss": true,
+                "enable_automatic_search": true,
+                "display_name": "Second",
+                "caps_snapshot": {"cosmetic": "changed"},
+            })
+            .to_string(),
+        );
+        cosmetic.caps_snapshot_json = Some(
+            serde_json::json!({
+                "search": true,
+                "categories": [5000],
+                "display_name": "Second",
+            })
+            .to_string(),
+        );
+
+        assert_eq!(
+            indexer_search_identity(&original, Some(7)),
+            indexer_search_identity(&cosmetic, Some(7))
+        );
+    }
+
+    #[test]
+    fn every_search_relevant_indexer_change_changes_identity() {
+        let original = config();
+        let original_identity = indexer_search_identity(&original, Some(7));
+        let variants = [
+            {
+                let mut value = original.clone();
+                value.base_url = "https://other.example.test".into();
+                value
+            },
+            {
+                let mut value = original.clone();
+                value.api_key_encrypted = Some("secret-b".into());
+                value
+            },
+            {
+                let mut value = original.clone();
+                value.indexer_proxy_config_id = Some("proxy-1".into());
+                value
+            },
+            {
+                let mut value = original.clone();
+                value.managed_metadata_json = Some(
+                    serde_json::json!({
+                        "enable_rss": true,
+                        "enable_automatic_search": false,
+                    })
+                    .to_string(),
+                );
+                value
+            },
+            {
+                let mut value = original.clone();
+                value.caps_snapshot_json = Some(
+                    serde_json::json!({
+                        "search": true,
+                        "categories": [5000, 5070],
+                    })
+                    .to_string(),
+                );
+                value
+            },
+            {
+                let mut value = original.clone();
+                value.caps_snapshot_json = Some(
+                    serde_json::json!({
+                        "search": true,
+                        "categories": [5000],
+                        "limits_default": 100,
+                        "limits_max": 200,
+                    })
+                    .to_string(),
+                );
+                value
+            },
+        ];
+
+        for variant in variants {
+            assert_ne!(
+                original_identity,
+                indexer_search_identity(&variant, Some(7))
+            );
+        }
+    }
+
+    #[test]
+    fn managed_embedded_caps_are_used_when_no_direct_snapshot_exists() {
+        let mut original = config();
+        original.caps_snapshot_json = None;
+        original.managed_metadata_json = Some(
+            serde_json::json!({
+                "enable_rss": true,
+                "enable_automatic_search": true,
+                "caps_snapshot": {"search": true, "categories": [5000]},
+            })
+            .to_string(),
+        );
+        let mut changed = original.clone();
+        changed.managed_metadata_json = Some(
+            serde_json::json!({
+                "enable_rss": true,
+                "enable_automatic_search": true,
+                "caps_snapshot": {"search": true, "categories": [5000, 5070]},
+            })
+            .to_string(),
+        );
+
+        assert_ne!(
+            indexer_search_identity(&original, Some(7)),
+            indexer_search_identity(&changed, Some(7))
         );
     }
 }

@@ -1,4 +1,7 @@
-use async_graphql::{Context, ID, MergedObject, Object, Result as GqlResult};
+#![recursion_limit = "256"]
+
+use async_graphql::{Context, Enum, ID, MergedObject, Object, Result as GqlResult, SimpleObject};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 
 use chrono::{DateTime, Utc};
 use scryer_application::{
@@ -20,24 +23,25 @@ use std::{fs, io, path::Path};
 use scryer_interface_core as context;
 use scryer_interface_core::{
     actor_from_ctx, actor_has_any_library_permission, actor_has_app_permission, app_from_ctx,
-    current_user_from_ctx, mfa_verification_from_ctx, require_app_permission,
-    require_config_app_permission, to_gql_error,
+    application_upgrade_assessment_from_ctx, current_user_from_ctx, mfa_verification_from_ctx,
+    require_app_permission, require_config_app_permission, to_gql_error,
 };
 use scryer_interface_media::mappers;
 use scryer_interface_media::mappers::{
     catalog_discovery_query_from_input, discovery_home_filter_options_query_from_input,
     discovery_home_query_from_input, discovery_item_detail_query_from_input,
-    discovery_items_query_from_input, from_activity_event, from_backup_info,
-    from_catalog_discovery, from_collection, from_dashboard_activity_stats, from_delete_preview,
-    from_delete_titles_preview, from_discovery_home, from_discovery_home_cards,
-    from_discovery_home_filter_options, from_discovery_item, from_discovery_items_result,
-    from_domain_event, from_download_queue_item, from_episode,
-    from_external_import_monitor_warmup_progress, from_job_definition, from_job_run, from_library,
-    from_library_scan_session, from_library_settings, from_linked_account, from_media_rename_plan,
-    from_media_request, from_media_request_counts, from_pending_import_connection,
-    from_pending_import_counts, from_pending_release, from_provider_type, from_runtime_path_style,
-    from_smg_scryer_update_notice, from_smg_version_compatibility_notice, from_storage_root_usage,
-    from_system_health, from_title, from_title_acquisition_diagnostics, from_title_history_page,
+    discovery_items_query_from_input, from_active_import_stream, from_activity_event,
+    from_application_upgrade_status, from_backup_info, from_catalog_discovery, from_collection,
+    from_dashboard_activity_stats, from_delete_preview, from_delete_titles_preview,
+    from_discovery_home, from_discovery_home_cards, from_discovery_home_filter_options,
+    from_discovery_item, from_discovery_items_result, from_domain_event, from_download_queue_item,
+    from_episode, from_external_import_monitor_warmup_progress, from_job_definition, from_job_run,
+    from_library, from_library_scan_session, from_library_settings, from_linked_account,
+    from_media_rename_plan, from_media_request, from_media_request_counts,
+    from_pending_import_connection, from_pending_import_counts, from_pending_release,
+    from_provider_type, from_runtime_path_style, from_smg_scryer_update_notice,
+    from_smg_version_compatibility_notice, from_storage_root_usage, from_system_health, from_title,
+    from_title_acquisition_diagnostics, from_title_history_page,
     from_title_release_blocklist_entry, from_user_with_auth_factor_status, from_wanted_item,
     from_wanted_scope_view,
 };
@@ -47,7 +51,10 @@ fn from_metadata_search_item(
     app: &scryer_application::AppUseCase,
     item: scryer_application::RichMetadataSearchItem,
 ) -> MetadataSearchItemPayload {
-    let owner_id = item.tvdb_id.to_string();
+    let owner_id = item
+        .smg_id
+        .map(|id| id.to_string())
+        .unwrap_or_else(|| item.tvdb_id.to_string());
     let poster_url = app.media_image_url(
         item.poster_url.as_deref(),
         Some("metadata_search"),
@@ -57,6 +64,21 @@ fn from_metadata_search_item(
     );
     MetadataSearchItemPayload {
         tvdb_id: item.tvdb_id,
+        smg_id: item.smg_id,
+        tmdb_id: item
+            .external_ids
+            .iter()
+            .find(|external_id| external_id.source.eq_ignore_ascii_case("tmdb"))
+            .and_then(|external_id| external_id.value.parse().ok()),
+        primary_source: item.primary_source,
+        external_ids: item
+            .external_ids
+            .into_iter()
+            .map(|external_id| ExternalIdPayload {
+                source: external_id.source,
+                value: external_id.value,
+            })
+            .collect(),
         name: item.name,
         imdb_id: item.imdb_id,
         slug: item.slug,
@@ -512,6 +534,148 @@ struct UtilityQueries;
 #[derive(Default)]
 struct AccountQueries;
 
+#[derive(Default)]
+struct IndexerErrorQueries;
+
+/// Identifies the indexer operation that produced a persisted HTTP error.
+#[derive(Clone, Copy, Enum, Eq, PartialEq)]
+enum IndexerErrorOperationValue {
+    /// Connection validation against the configured indexer.
+    ConnectionTest,
+    /// An operator-initiated release search.
+    InteractiveSearch,
+    /// A scheduled or automated release search.
+    AutomaticSearch,
+    /// A periodic RSS synchronization.
+    RssSync,
+    /// A plugin-defined indexer action.
+    IndexerAction,
+    /// Synchronization with an indexer management service.
+    ManagementSync,
+    /// Refreshing a managed indexer's capabilities document.
+    CapsRefresh,
+}
+
+/// A normalized, safe classification for an indexer HTTP error.
+#[derive(Clone, Copy, Enum, Eq, PartialEq)]
+enum IndexerErrorClassificationValue {
+    /// Newznab reported an invalid API key.
+    NewznabInvalidApiKey,
+    /// Newznab reported a suspended account.
+    NewznabAccountSuspended,
+    /// Newznab reported insufficient account privileges.
+    NewznabInsufficientPrivileges,
+    /// Newznab denied registration.
+    NewznabRegistrationDenied,
+    /// Newznab has closed registrations.
+    NewznabRegistrationsClosed,
+    /// Newznab rejected registration data.
+    NewznabInvalidRegistration,
+    /// Newznab rejected the registration email address.
+    NewznabInvalidRegistrationEmail,
+    /// Newznab registration failed.
+    NewznabRegistrationFailed,
+    /// Newznab reported a missing request parameter.
+    NewznabMissingParameter,
+    /// Newznab reported an incorrect request parameter.
+    NewznabIncorrectParameter,
+    /// Newznab reported an unsupported function.
+    NewznabNoSuchFunction,
+    /// Newznab reported a function that is unavailable.
+    NewznabFunctionNotAvailable,
+    /// Newznab reported that no matching item exists.
+    NewznabNoSuchItem,
+    /// Newznab reported that the request limit was reached.
+    NewznabRequestLimitReached,
+    /// Newznab reported that the download limit was reached.
+    NewznabDownloadLimitReached,
+    /// Newznab reported its generic unknown error.
+    NewznabUnknownError,
+    /// Newznab reported that its API is disabled.
+    NewznabApiDisabled,
+    /// The server rejected the request as invalid.
+    HttpBadRequest,
+    /// The server rejected authentication.
+    HttpUnauthorized,
+    /// The server forbade access to the resource.
+    HttpForbidden,
+    /// The requested endpoint was not found.
+    HttpNotFound,
+    /// The server timed out the request.
+    HttpRequestTimeout,
+    /// The server rate limited the request.
+    HttpRateLimited,
+    /// The server returned a 5xx response.
+    HttpServerError,
+    /// The accepted response did not match a known error shape.
+    Unknown,
+}
+
+/// List-safe metadata for a persisted indexer error.
+#[derive(SimpleObject)]
+struct IndexerErrorSummaryPayload {
+    /// Stable error-event identifier.
+    id: ID,
+    /// Configured indexer identifier captured with the event.
+    indexer_id: ID,
+    /// Indexer name captured when the event occurred.
+    indexer_name: String,
+    /// Operation that received the failed response.
+    operation: IndexerErrorOperationValue,
+    /// RFC 3339 time at which the response was accepted.
+    occurred_at: String,
+    /// HTTP response status code, when the upstream returned a response.
+    http_status: Option<i32>,
+    /// Safe error classification derived from the response.
+    classification: IndexerErrorClassificationValue,
+    /// Newznab provider code when a known Newznab error was recognized.
+    provider_error_code: Option<i32>,
+    /// Canonical safe error message that excludes response-body text.
+    message: String,
+    /// Response Content-Type header when it was valid UTF-8.
+    content_type: Option<String>,
+}
+
+/// One raw response header retained for privileged diagnostics.
+#[derive(SimpleObject)]
+struct IndexerErrorHeaderPayload {
+    /// Original response header name.
+    name: String,
+    /// Raw header value encoded as base64.
+    value_base64: String,
+    /// Raw header value when it is valid UTF-8.
+    value: Option<String>,
+}
+
+/// Complete persisted HTTP response retained for privileged diagnostics.
+#[derive(SimpleObject)]
+struct IndexerErrorResponsePayload {
+    /// Original HTTP status code.
+    status: i32,
+    /// Repeated raw response headers in their retained order.
+    headers: Vec<IndexerErrorHeaderPayload>,
+    /// Raw response body encoded as base64.
+    body_base64: String,
+}
+
+/// A persisted error event and, when available, its complete HTTP response.
+#[derive(SimpleObject)]
+struct IndexerErrorDetailPayload {
+    /// List-safe metadata for the error event.
+    error: IndexerErrorSummaryPayload,
+    /// Complete response data when the upstream returned one.
+    response: Option<IndexerErrorResponsePayload>,
+}
+
+/// A newest-first page of persisted indexer errors.
+#[derive(SimpleObject)]
+struct IndexerErrorConnectionPayload {
+    /// Error events in newest-first order.
+    items: Vec<IndexerErrorSummaryPayload>,
+    /// Cursor for the following page, or null at the end of the result set.
+    next_cursor: Option<String>,
+}
+
 #[derive(MergedObject, Default)]
 /// Read-only GraphQL query root for authenticated HTTP requests.
 pub struct QueryRoot(
@@ -525,7 +689,248 @@ pub struct QueryRoot(
     MetadataQueries,
     UtilityQueries,
     AccountQueries,
+    IndexerErrorQueries,
 );
+
+fn indexer_error_operation_value(
+    operation: scryer_application::IndexerErrorOperation,
+) -> IndexerErrorOperationValue {
+    match operation {
+        scryer_application::IndexerErrorOperation::ConnectionTest => {
+            IndexerErrorOperationValue::ConnectionTest
+        }
+        scryer_application::IndexerErrorOperation::InteractiveSearch => {
+            IndexerErrorOperationValue::InteractiveSearch
+        }
+        scryer_application::IndexerErrorOperation::AutomaticSearch => {
+            IndexerErrorOperationValue::AutomaticSearch
+        }
+        scryer_application::IndexerErrorOperation::RssSync => IndexerErrorOperationValue::RssSync,
+        scryer_application::IndexerErrorOperation::IndexerAction => {
+            IndexerErrorOperationValue::IndexerAction
+        }
+        scryer_application::IndexerErrorOperation::ManagementSync => {
+            IndexerErrorOperationValue::ManagementSync
+        }
+        scryer_application::IndexerErrorOperation::CapsRefresh => {
+            IndexerErrorOperationValue::CapsRefresh
+        }
+    }
+}
+
+fn indexer_error_classification_value(
+    classification: scryer_application::IndexerErrorClassification,
+) -> IndexerErrorClassificationValue {
+    use scryer_application::IndexerErrorClassification as Value;
+    match classification {
+        Value::NewznabInvalidApiKey => IndexerErrorClassificationValue::NewznabInvalidApiKey,
+        Value::NewznabAccountSuspended => IndexerErrorClassificationValue::NewznabAccountSuspended,
+        Value::NewznabInsufficientPrivileges => {
+            IndexerErrorClassificationValue::NewznabInsufficientPrivileges
+        }
+        Value::NewznabRegistrationDenied => {
+            IndexerErrorClassificationValue::NewznabRegistrationDenied
+        }
+        Value::NewznabRegistrationsClosed => {
+            IndexerErrorClassificationValue::NewznabRegistrationsClosed
+        }
+        Value::NewznabInvalidRegistration => {
+            IndexerErrorClassificationValue::NewznabInvalidRegistration
+        }
+        Value::NewznabInvalidRegistrationEmail => {
+            IndexerErrorClassificationValue::NewznabInvalidRegistrationEmail
+        }
+        Value::NewznabRegistrationFailed => {
+            IndexerErrorClassificationValue::NewznabRegistrationFailed
+        }
+        Value::NewznabMissingParameter => IndexerErrorClassificationValue::NewznabMissingParameter,
+        Value::NewznabIncorrectParameter => {
+            IndexerErrorClassificationValue::NewznabIncorrectParameter
+        }
+        Value::NewznabNoSuchFunction => IndexerErrorClassificationValue::NewznabNoSuchFunction,
+        Value::NewznabFunctionNotAvailable => {
+            IndexerErrorClassificationValue::NewznabFunctionNotAvailable
+        }
+        Value::NewznabNoSuchItem => IndexerErrorClassificationValue::NewznabNoSuchItem,
+        Value::NewznabRequestLimitReached => {
+            IndexerErrorClassificationValue::NewznabRequestLimitReached
+        }
+        Value::NewznabDownloadLimitReached => {
+            IndexerErrorClassificationValue::NewznabDownloadLimitReached
+        }
+        Value::NewznabUnknownError => IndexerErrorClassificationValue::NewznabUnknownError,
+        Value::NewznabApiDisabled => IndexerErrorClassificationValue::NewznabApiDisabled,
+        Value::HttpBadRequest => IndexerErrorClassificationValue::HttpBadRequest,
+        Value::HttpUnauthorized => IndexerErrorClassificationValue::HttpUnauthorized,
+        Value::HttpForbidden => IndexerErrorClassificationValue::HttpForbidden,
+        Value::HttpNotFound => IndexerErrorClassificationValue::HttpNotFound,
+        Value::HttpRequestTimeout => IndexerErrorClassificationValue::HttpRequestTimeout,
+        Value::HttpRateLimited => IndexerErrorClassificationValue::HttpRateLimited,
+        Value::HttpServerError => IndexerErrorClassificationValue::HttpServerError,
+        Value::Unknown => IndexerErrorClassificationValue::Unknown,
+    }
+}
+
+fn from_indexer_error_summary(
+    error: scryer_application::IndexerErrorSummary,
+) -> IndexerErrorSummaryPayload {
+    IndexerErrorSummaryPayload {
+        id: ID::from(error.id),
+        indexer_id: ID::from(error.indexer_id),
+        indexer_name: error.indexer_name,
+        operation: indexer_error_operation_value(error.operation),
+        occurred_at: error.occurred_at.to_rfc3339(),
+        http_status: error.http_status.map(i32::from),
+        classification: indexer_error_classification_value(error.classification),
+        provider_error_code: error.provider_error_code.map(i32::from),
+        message: error.message,
+        content_type: error.content_type,
+    }
+}
+
+fn from_indexer_error_detail(
+    detail: scryer_application::IndexerErrorDetail,
+) -> IndexerErrorDetailPayload {
+    IndexerErrorDetailPayload {
+        error: from_indexer_error_summary(detail.summary),
+        response: detail.response.map(|response| IndexerErrorResponsePayload {
+            status: i32::from(response.status),
+            headers: response
+                .headers
+                .into_iter()
+                .map(|header| IndexerErrorHeaderPayload {
+                    name: header.name,
+                    value: String::from_utf8(header.value.clone()).ok(),
+                    value_base64: BASE64.encode(header.value),
+                })
+                .collect(),
+            body_base64: BASE64.encode(response.body),
+        }),
+    }
+}
+
+#[Object]
+impl IndexerErrorQueries {
+    /// List persisted indexer HTTP errors; requires system-settings management permission.
+    async fn indexer_errors(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Restrict results to one configured indexer.")] indexer_id: Option<ID>,
+        #[graphql(
+            default = 50,
+            desc = "Requested page size from 1 through 100; defaults to 50."
+        )]
+        first: Option<i32>,
+        #[graphql(desc = "Opaque cursor returned by a prior indexerErrors page.")] after: Option<
+            String,
+        >,
+    ) -> GqlResult<IndexerErrorConnectionPayload> {
+        require_app_permission(ctx, AppPermission::ManageSystemSettings).await?;
+        let first = first.unwrap_or(50);
+        if !(1..=100).contains(&first) {
+            return Err(to_gql_error(AppError::Validation(
+                "indexerErrors.first must be between 1 and 100".to_string(),
+            )));
+        }
+        let app = app_from_ctx(ctx)?;
+        let indexer_id = indexer_id.map(|id| id.to_string());
+        let page = app
+            .list_indexer_errors(indexer_id.as_deref(), first as usize, after.as_deref())
+            .await
+            .map_err(to_gql_error)?;
+        Ok(IndexerErrorConnectionPayload {
+            items: page
+                .items
+                .into_iter()
+                .map(from_indexer_error_summary)
+                .collect(),
+            next_cursor: page.next_cursor,
+        })
+    }
+
+    /// Return one complete persisted indexer HTTP response; requires system-settings management permission.
+    async fn indexer_error(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Stable persisted error-event identifier.")] id: ID,
+    ) -> GqlResult<Option<IndexerErrorDetailPayload>> {
+        require_app_permission(ctx, AppPermission::ManageSystemSettings).await?;
+        let app = app_from_ctx(ctx)?;
+        app.indexer_error_detail(id.as_str())
+            .await
+            .map_err(to_gql_error)
+            .map(|detail| detail.map(from_indexer_error_detail))
+    }
+}
+
+#[cfg(test)]
+mod indexer_error_payload_tests {
+    use super::*;
+
+    #[test]
+    fn detail_payload_base64_encodes_binary_response_and_only_decodes_utf8_headers() {
+        let occurred_at = chrono::Utc::now();
+        let payload = from_indexer_error_detail(scryer_application::IndexerErrorDetail {
+            summary: scryer_application::IndexerErrorSummary {
+                id: "error-1".to_string(),
+                indexer_id: "indexer-1".to_string(),
+                indexer_name: "Test indexer".to_string(),
+                operation: scryer_application::IndexerErrorOperation::InteractiveSearch,
+                http_status: Some(500),
+                classification: scryer_application::IndexerErrorClassification::HttpServerError,
+                provider_error_code: None,
+                message: "Indexer server error".to_string(),
+                content_type: Some("application/octet-stream".to_string()),
+                occurred_at,
+            },
+            response: Some(scryer_application::CapturedIndexerHttpResponse {
+                status: 500,
+                headers: vec![
+                    scryer_application::CapturedIndexerHttpHeader {
+                        name: "x-text".to_string(),
+                        value: b"visible".to_vec(),
+                    },
+                    scryer_application::CapturedIndexerHttpHeader {
+                        name: "x-binary".to_string(),
+                        value: vec![255],
+                    },
+                ],
+                body: vec![255, 0],
+            }),
+        });
+
+        assert_eq!(payload.error.id.as_str(), "error-1");
+        let response = payload.response.expect("captured response");
+        assert_eq!(response.status, 500);
+        assert_eq!(response.body_base64, "/wA=");
+        assert_eq!(response.headers[0].value.as_deref(), Some("visible"));
+        assert_eq!(response.headers[0].value_base64, "dmlzaWJsZQ==");
+        assert_eq!(response.headers[1].value, None);
+        assert_eq!(response.headers[1].value_base64, "/w==");
+    }
+
+    #[test]
+    fn detail_payload_preserves_transport_errors_without_an_http_response() {
+        let payload = from_indexer_error_detail(scryer_application::IndexerErrorDetail {
+            summary: scryer_application::IndexerErrorSummary {
+                id: "error-transport".to_string(),
+                indexer_id: "indexer-1".to_string(),
+                indexer_name: "Test indexer".to_string(),
+                operation: scryer_application::IndexerErrorOperation::AutomaticSearch,
+                http_status: None,
+                classification: scryer_application::IndexerErrorClassification::HttpRequestTimeout,
+                provider_error_code: None,
+                message: "Indexer search timed out".to_string(),
+                content_type: None,
+                occurred_at: chrono::Utc::now(),
+            },
+            response: None,
+        });
+
+        assert_eq!(payload.error.http_status, None);
+        assert!(payload.response.is_none());
+    }
+}
 
 fn gql_secret_instance_kind_query(
     kind: ExternalImportSetupSecretInstanceKind,
@@ -942,6 +1347,23 @@ impl CatalogQueries {
         }
         .map_err(to_gql_error)?;
         Ok(title.map(|title| from_title(&app, title)))
+    }
+
+    /// Fetch locally cached movie metadata through a visible title relationship.
+    async fn movie_entity(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Title used to authorize access to the movie.")] title_id: ID,
+        #[graphql(desc = "Movie entity ID to fetch.")] id: ID,
+    ) -> GqlResult<Option<MovieEntityPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        app.get_movie_entity(&actor, title_id.as_ref(), id.as_ref())
+            .await
+            .map(|movie| {
+                movie.map(|movie| mappers::from_movie_entity(&app, title_id.to_string(), movie))
+            })
+            .map_err(to_gql_error)
     }
 
     /// Fetch an episode by ID while verifying that it belongs to the supplied parent title.
@@ -1594,7 +2016,7 @@ impl ActivityQueries {
         };
         let activity_import_count = async {
             if can_resolve_imports {
-                app.count_download_import_items(&actor, DownloadImportFilter::All)
+                app.count_download_import_items(&actor, DownloadImportFilter::Attention)
                     .await
             } else {
                 Ok(0)
@@ -1965,6 +2387,20 @@ impl JobAndDownloadQueries {
         Ok(from_download_queue_page(page))
     }
 
+    /// Return queued and active filesystem import operations. Idle worker capacity is never included.
+    async fn active_import_streams(
+        &self,
+        ctx: &Context<'_>,
+    ) -> GqlResult<Vec<ActiveImportStreamPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let streams = app
+            .list_active_import_streams(&actor)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(streams.into_iter().map(from_active_import_stream).collect())
+    }
+
     /// Deprecated download activity listing without pagination or queue readiness metadata.
     #[graphql(deprecation = "use downloadQueuePage")]
     async fn download_queue(
@@ -2161,6 +2597,29 @@ impl SystemQueries {
         Ok(notice.map(from_smg_scryer_update_notice))
     }
 
+    /// Return application update availability and installation eligibility; requires system-settings management permission.
+    async fn application_upgrade_status(
+        &self,
+        ctx: &Context<'_>,
+    ) -> GqlResult<ApplicationUpgradeStatusPayload> {
+        require_app_permission(ctx, AppPermission::ManageSystemSettings).await?;
+        let assessment = application_upgrade_assessment_from_ctx(ctx);
+        let app = app_from_ctx(ctx)?;
+        let update_notice = app.smg_scryer_update_notice().await.map_err(to_gql_error)?;
+        let (active_run, latest_run) = app
+            .application_upgrade_job_runs()
+            .await
+            .map_err(to_gql_error)?;
+
+        Ok(from_application_upgrade_status(
+            assessment,
+            scryer_application::SCRYER_VERSION.to_string(),
+            update_notice,
+            active_run,
+            latest_run,
+        ))
+    }
+
     /// List recycled media items in a bounded page, optionally restricted to library IDs.
     async fn recycled_items(
         &self,
@@ -2206,6 +2665,11 @@ impl SystemQueries {
                     recycled_at: parse_required_datetime(
                         &item.recycled_at,
                         "recycled item recycled_at",
+                    )
+                    .map_err(to_gql_error)?,
+                    scheduled_deletion_at: parse_required_datetime(
+                        &item.scheduled_deletion_at,
+                        "recycled item scheduled_deletion_at",
                     )
                     .map_err(to_gql_error)?,
                     media_root: item.media_root,

@@ -7,6 +7,16 @@ import { createServer, type ViteDevServer } from "vite";
 const WEB_ROOT = fileURLToPath(new URL("../..", import.meta.url));
 
 type DownloadQueueModule = {
+  IMPORT_ATTENTION_STATUSES: string[];
+  sameDownloadQueueItem: (
+    current: DownloadQueueItem,
+    next: DownloadQueueItem,
+  ) => boolean;
+  reconcileDownloadQueueItems: (
+    current: DownloadQueueItem[],
+    next: DownloadQueueItem[],
+  ) => DownloadQueueItem[];
+  isManualImportRequiredQueueItem: (item: DownloadQueueItem) => boolean;
   mergeAuthoritativeQueueItems: (
     authoritativeItems: DownloadQueueItem[],
     previousItems: DownloadQueueItem[],
@@ -15,7 +25,7 @@ type DownloadQueueModule = {
     item: Pick<DownloadQueueItem, "displayState">,
     statuses: string[],
   ) => boolean;
-  matchesHistoryStatuses: (
+  matchesImportStatuses: (
     item: Pick<DownloadQueueItem, "displayState">,
     statuses: string[],
   ) => boolean;
@@ -90,6 +100,53 @@ function queueItem(overrides: Partial<DownloadQueueItem> = {}): DownloadQueueIte
   };
 }
 
+test("queue item equality ignores regenerated equivalent payload objects", () => {
+  const current = queueItem({
+    trackedStatusMessages: ["waiting for import"],
+    queueScope: {
+      __typename: "EpisodeSetScopePayload",
+      episodeIds: ["episode-1", "episode-2"],
+    },
+  });
+  const next = {
+    ...current,
+    trackedStatusMessages: [...current.trackedStatusMessages],
+    queueScope: {
+      __typename: "EpisodeSetScopePayload" as const,
+      episodeIds: ["episode-1", "episode-2"],
+    },
+  };
+
+  assert.equal(downloadQueue.sameDownloadQueueItem(current, next), true);
+  assert.equal(
+    downloadQueue.sameDownloadQueueItem(
+      current,
+      { ...next, progressPercent: next.progressPercent + 1 },
+    ),
+    false,
+  );
+});
+
+test("queue reconciliation retains unchanged rows and list identity", () => {
+  const first = queueItem();
+  const second = queueItem({ id: "qbittorrent:def", downloadClientItemId: "def" });
+  const current = [first, second];
+
+  const unchanged = downloadQueue.reconcileDownloadQueueItems(current, [
+    { ...first, trackedStatusMessages: [...first.trackedStatusMessages] },
+    { ...second, queueScope: null },
+  ]);
+  assert.equal(unchanged, current);
+
+  const updated = downloadQueue.reconcileDownloadQueueItems(current, [
+    { ...first, progressPercent: 43 },
+    { ...second, queueScope: null },
+  ]);
+  assert.notEqual(updated, current);
+  assert.notEqual(updated[0], first);
+  assert.equal(updated[1], second);
+});
+
 const warnedItem = () =>
   queueItem({
     state: "WARNING",
@@ -138,7 +195,7 @@ test("a warned row is still replaced once the client recovers", () => {
   assert.equal(recovered[0].displayState, "DOWNLOADING");
 });
 
-test("a warned row filters with the activity chips, never with failed history", () => {
+test("a warned row filters with the activity chips", () => {
   const item = { displayState: "WARNING" as const };
 
   assert.equal(downloadQueue.matchesActivityStatuses(item, ["WARNING"]), true);
@@ -146,7 +203,31 @@ test("a warned row filters with the activity chips, never with failed history", 
     downloadQueue.matchesActivityStatuses(item, ["DOWNLOADING", "QUEUED"]),
     false,
   );
-  assert.equal(downloadQueue.matchesHistoryStatuses(item, ["FAILED"]), false);
+});
+
+test("active imports are exclusive to the live Activity stream", () => {
+  assert.deepEqual(downloadQueue.IMPORT_ATTENTION_STATUSES, [
+    "PENDING",
+    "BLOCKED",
+    "FAILED",
+  ]);
+  assert.equal(
+    downloadQueue.matchesImportStatuses(
+      { displayState: "IMPORTING" },
+      downloadQueue.IMPORT_ATTENTION_STATUSES,
+    ),
+    false,
+  );
+  assert.equal(
+    downloadQueue.isManualImportRequiredQueueItem(
+      queueItem({
+        importStatus: "RUNNING",
+        state: "COMPLETED",
+        displayState: "IMPORTING",
+      }),
+    ),
+    false,
+  );
 });
 
 test("warned rows sort with the other attention states", () => {

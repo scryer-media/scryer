@@ -4,14 +4,16 @@ use async_trait::async_trait;
 use scryer_application::{AppError, AppResult, MediaServerConnectionRepository};
 use scryer_domain::{
     AppPermissionMask, LibraryPermissionMask, MediaServerConnection,
-    MediaServerDefaultLibraryGrant, MediaServerPathMapping, MediaServerProvider,
+    MediaServerDefaultLibraryGrant, MediaServerPathMapping, MediaServerPlaybackEntityKind,
+    MediaServerPlaybackItem, MediaServerProvider,
 };
 
 use crate::config_store::{current_encryption_key, decrypt_value, maybe_encrypt_value};
 use crate::encryption::EncryptionKey;
 use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, StoreDatastore};
 
-const CONNECTION_COLUMNS: &str = "id, provider, display_name, base_url, enabled, login_enabled,
+const CONNECTION_COLUMNS: &str =
+    "id, provider, display_name, base_url, external_url, enabled, login_enabled,
     linking_enabled, auto_add_enabled, default_app_permissions, created_at, updated_at";
 
 #[derive(Clone)]
@@ -85,10 +87,10 @@ impl MediaServerConnectionRepository for MediaServerConnectionStore {
                     SqlRuntime::execute(
                         SqlExec::Tx(tx),
                         "INSERT INTO media_server_connections (
-                             id, provider, display_name, base_url, enabled, login_enabled,
+                             id, provider, display_name, base_url, external_url, enabled, login_enabled,
                              linking_enabled, auto_add_enabled, default_app_permissions,
                              created_at, updated_at
-                         ) VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+                         ) VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
                         &insert_args,
                     )
                     .await?;
@@ -106,6 +108,7 @@ impl MediaServerConnectionRepository for MediaServerConnectionStore {
             SqlArg::Text(connection.provider.as_str().to_string()),
             SqlArg::Text(connection.display_name.clone()),
             SqlArg::Text(connection.base_url.clone()),
+            SqlArg::OptText(connection.external_url.clone()),
             SqlArg::Bool(connection.enabled),
             SqlArg::Bool(connection.login_enabled),
             SqlArg::Bool(connection.linking_enabled),
@@ -128,6 +131,7 @@ impl MediaServerConnectionRepository for MediaServerConnectionStore {
                             SET provider = {},
                                 display_name = {},
                                 base_url = {},
+                                external_url = {},
                                 enabled = {},
                                 login_enabled = {},
                                 linking_enabled = {},
@@ -146,6 +150,135 @@ impl MediaServerConnectionRepository for MediaServerConnectionStore {
                     }
                     replace_connection_details(tx, &connection, encryption_key.as_ref()).await?;
                     Ok(connection)
+                })
+            },
+        )
+        .await
+    }
+
+    async fn list_playback_items_for_entity(
+        &self,
+        entity_kind: MediaServerPlaybackEntityKind,
+        entity_id: &str,
+    ) -> AppResult<Vec<MediaServerPlaybackItem>> {
+        let rows = SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            "SELECT connection_id, entity_kind, entity_id, provider_item_id, last_seen_at
+               FROM media_server_playback_items
+              WHERE entity_kind = {}
+                AND entity_id = {}
+              ORDER BY connection_id",
+            &[
+                SqlArg::Text(entity_kind.as_str().to_string()),
+                SqlArg::Text(entity_id.to_string()),
+            ],
+        )
+        .await?;
+        rows.iter().map(row_to_playback_item).collect()
+    }
+
+    async fn list_playback_items_for_entities(
+        &self,
+        entities: &[(MediaServerPlaybackEntityKind, String)],
+    ) -> AppResult<Vec<MediaServerPlaybackItem>> {
+        if entities.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut predicates = Vec::with_capacity(entities.len());
+        let mut args = Vec::with_capacity(entities.len() * 2);
+        for (entity_kind, entity_id) in entities {
+            predicates.push("(entity_kind = {} AND entity_id = {})");
+            args.push(SqlArg::Text(entity_kind.as_str().to_string()));
+            args.push(SqlArg::Text(entity_id.clone()));
+        }
+        let sql = format!(
+            "SELECT connection_id, entity_kind, entity_id, provider_item_id, last_seen_at
+               FROM media_server_playback_items
+              WHERE {}
+              ORDER BY entity_kind, entity_id, connection_id",
+            predicates.join(" OR ")
+        );
+        let rows = SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await?;
+        rows.iter().map(row_to_playback_item).collect()
+    }
+
+    async fn upsert_playback_items_for_connection(
+        &self,
+        connection_id: &str,
+        items: Vec<MediaServerPlaybackItem>,
+    ) -> AppResult<()> {
+        validate_playback_item_connection_ids(connection_id, &items)?;
+        let connection_id = connection_id.to_string();
+        SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "upsert_media_server_playback_items",
+            move |tx| {
+                let connection_id = connection_id.clone();
+                let items = items.clone();
+                Box::pin(async move {
+                    for item in items {
+                        SqlRuntime::execute(
+                            SqlExec::Tx(tx),
+                            "INSERT INTO media_server_playback_items (
+                                connection_id, entity_kind, entity_id, provider_item_id, last_seen_at
+                             ) VALUES ({}, {}, {}, {}, {})
+                             ON CONFLICT (connection_id, entity_kind, entity_id) DO UPDATE SET
+                                provider_item_id = excluded.provider_item_id,
+                                last_seen_at = excluded.last_seen_at",
+                            &[
+                                SqlArg::Text(connection_id.clone()),
+                                SqlArg::Text(item.entity_kind.as_str().to_string()),
+                                SqlArg::Text(item.entity_id),
+                                SqlArg::Text(item.provider_item_id),
+                                SqlArg::Timestamp(item.last_seen_at),
+                            ],
+                        )
+                        .await?;
+                    }
+                    Ok(())
+                })
+            },
+        )
+        .await
+    }
+
+    async fn replace_playback_items_for_connection(
+        &self,
+        connection_id: &str,
+        items: Vec<MediaServerPlaybackItem>,
+    ) -> AppResult<()> {
+        validate_playback_item_connection_ids(connection_id, &items)?;
+        let connection_id = connection_id.to_string();
+        SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "replace_media_server_playback_items",
+            move |tx| {
+                let connection_id = connection_id.clone();
+                let items = items.clone();
+                Box::pin(async move {
+                    SqlRuntime::execute(
+                        SqlExec::Tx(tx),
+                        "DELETE FROM media_server_playback_items WHERE connection_id = {}",
+                        &[SqlArg::Text(connection_id.clone())],
+                    )
+                    .await?;
+                    for item in items {
+                        SqlRuntime::execute(
+                            SqlExec::Tx(tx),
+                            "INSERT INTO media_server_playback_items (
+                                connection_id, entity_kind, entity_id, provider_item_id, last_seen_at
+                             ) VALUES ({}, {}, {}, {}, {})",
+                            &[
+                                SqlArg::Text(item.connection_id),
+                                SqlArg::Text(item.entity_kind.as_str().to_string()),
+                                SqlArg::Text(item.entity_id),
+                                SqlArg::Text(item.provider_item_id),
+                                SqlArg::Timestamp(item.last_seen_at),
+                            ],
+                        )
+                        .await?;
+                    }
+                    Ok(())
                 })
             },
         )
@@ -241,6 +374,7 @@ fn connection_insert_args(connection: &MediaServerConnection) -> Vec<SqlArg> {
         SqlArg::Text(connection.provider.as_str().to_string()),
         SqlArg::Text(connection.display_name.clone()),
         SqlArg::Text(connection.base_url.clone()),
+        SqlArg::OptText(connection.external_url.clone()),
         SqlArg::Bool(connection.enabled),
         SqlArg::Bool(connection.login_enabled),
         SqlArg::Bool(connection.linking_enabled),
@@ -367,6 +501,34 @@ fn encrypted_api_key_arg(
     Ok(SqlArg::OptText(value))
 }
 
+fn validate_playback_item_connection_ids(
+    connection_id: &str,
+    items: &[MediaServerPlaybackItem],
+) -> AppResult<()> {
+    if items.iter().any(|item| item.connection_id != connection_id) {
+        return Err(AppError::Validation(
+            "playback mapping connection ID does not match persistence target".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn row_to_playback_item(row: &SqlRow) -> AppResult<MediaServerPlaybackItem> {
+    let entity_kind = row.text("entity_kind")?;
+    let entity_kind = MediaServerPlaybackEntityKind::parse(&entity_kind).ok_or_else(|| {
+        AppError::Repository(format!(
+            "invalid media server playback entity kind {entity_kind}"
+        ))
+    })?;
+    Ok(MediaServerPlaybackItem {
+        connection_id: row.text("connection_id")?,
+        entity_kind,
+        entity_id: row.text("entity_id")?,
+        provider_item_id: row.text("provider_item_id")?,
+        last_seen_at: row.timestamp("last_seen_at")?,
+    })
+}
+
 async fn fetch_connections(
     datastore: &StoreDatastore,
     sql: &str,
@@ -408,6 +570,7 @@ async fn row_to_connection(
         provider: provider.clone(),
         display_name: row.text("display_name")?,
         base_url: row.text("base_url")?,
+        external_url: row.opt_text("external_url")?,
         enabled: row.bool("enabled")?,
         login_enabled: row.bool("login_enabled")?,
         linking_enabled: row.bool("linking_enabled")?,

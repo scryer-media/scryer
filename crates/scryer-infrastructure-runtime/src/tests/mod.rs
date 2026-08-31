@@ -2,8 +2,8 @@ use super::*;
 use chrono::Utc;
 use scryer_application::{
     AcquisitionScopeState, AcquisitionScopeStateRepository, AcquisitionScopeStatesQuery,
-    AcquisitionScopeStatus, AppError, AppResult, CollectionUpdate, DomainEventRepository,
-    DownloadClientConfigRepository, DownloadQueueCommandRepository, DownloadSourceIdentity,
+    AcquisitionScopeStatus, AppError, AppResult, ClientJobLocator, CollectionUpdate,
+    DomainEventRepository, DownloadClientConfigRepository, DownloadQueueCommandRepository,
     DownloadSubmission, DownloadSubmissionIdentity, DownloadSubmissionRepository, EpisodeUpdate,
     HousekeepingRepository, ImportRepository, InsertMediaFileInput, LibraryScanUnmatchedItem,
     LibraryScanUnmatchedItemRepository, LibraryScanUnmatchedSearchAttempt, MediaFileRepository,
@@ -31,6 +31,8 @@ use std::collections::HashSet;
 use std::sync::{Arc, RwLock};
 use tokio::time::{Duration, timeout};
 
+mod canonical_download_binding_staleness;
+mod canonical_download_registry;
 mod discovery_pending_context_changes;
 mod emby_media_servers;
 mod external_import_setup_secret_drafts;
@@ -46,7 +48,6 @@ mod sql_runtime_gated_write;
 mod stores_migrations_regressions;
 mod title_images;
 mod titles_metadata;
-mod tracked_download_identity;
 mod wanted_items_and_search;
 mod workflow_operation;
 
@@ -76,36 +77,45 @@ fn test_descriptor_json(
             scryer_plugin_sdk::ProviderDescriptor::Indexer(scryer_plugin_sdk::IndexerDescriptor {
                 provider_type: provider_type.to_string(),
                 provider_aliases: Vec::new(),
+                provider_profiles: Vec::new(),
                 source_kind: scryer_plugin_sdk::IndexerSourceKind::Generic,
                 capabilities: Default::default(),
                 scoring_policies: Vec::new(),
                 config_fields: indexer_config_fields(),
                 allowed_hosts: Vec::new(),
                 rate_limit_seconds: None,
+                search_semantics_version: None,
+                strategy_plan: None,
             })
         }
         "usenet_indexer" => {
             scryer_plugin_sdk::ProviderDescriptor::Indexer(scryer_plugin_sdk::IndexerDescriptor {
                 provider_type: provider_type.to_string(),
                 provider_aliases: Vec::new(),
+                provider_profiles: Vec::new(),
                 source_kind: scryer_plugin_sdk::IndexerSourceKind::Usenet,
                 capabilities: Default::default(),
                 scoring_policies: Vec::new(),
                 config_fields: indexer_config_fields(),
                 allowed_hosts: Vec::new(),
                 rate_limit_seconds: None,
+                search_semantics_version: None,
+                strategy_plan: None,
             })
         }
         "torrent_indexer" => {
             scryer_plugin_sdk::ProviderDescriptor::Indexer(scryer_plugin_sdk::IndexerDescriptor {
                 provider_type: provider_type.to_string(),
                 provider_aliases: Vec::new(),
+                provider_profiles: Vec::new(),
                 source_kind: scryer_plugin_sdk::IndexerSourceKind::Torrent,
                 capabilities: Default::default(),
                 scoring_policies: Vec::new(),
                 config_fields: indexer_config_fields(),
                 allowed_hosts: Vec::new(),
                 rate_limit_seconds: None,
+                search_semantics_version: None,
+                strategy_plan: None,
             })
         }
         "notification" => scryer_plugin_sdk::ProviderDescriptor::Notification(
@@ -173,6 +183,7 @@ async fn import_store_test_harness(max_connections: u32) -> (sqlx::SqlitePool, I
             result_json TEXT,
             rename_plan_json TEXT,
             download_id TEXT,
+            canonical_download_id TEXT,
             started_at TEXT,
             finished_at TEXT,
             created_at TEXT NOT NULL,
@@ -213,8 +224,13 @@ async fn import_store_test_harness(max_connections: u32) -> (sqlx::SqlitePool, I
     (pool, workflow)
 }
 
+#[expect(
+    dead_code,
+    reason = "retained cross-datastore canonical identity fixture"
+)]
 fn orphan_test_submission(item_id: &str, source_title: &str) -> DownloadSubmission {
     DownloadSubmission {
+        download_id: scryer_domain::download_identity::DownloadId::new(),
         title_id: String::new(),
         purpose: scryer_application::DownloadSubmissionPurpose::Standard,
         facet: String::new(),
@@ -226,14 +242,20 @@ fn orphan_test_submission(item_id: &str, source_title: &str) -> DownloadSubmissi
         source_provider_name: None,
         source_kind: None,
         source_title: Some(source_title.to_string()),
+        info_hash: None,
         release_size_bytes: None,
         request_signature: None,
         scope: SubmissionScope::Orphan,
     }
 }
 
+#[expect(
+    dead_code,
+    reason = "retained cross-datastore canonical identity fixture"
+)]
 fn managed_episode_set_test_submission(item_id: &str) -> DownloadSubmission {
     DownloadSubmission {
+        download_id: scryer_domain::download_identity::DownloadId::new(),
         title_id: "title-managed".to_string(),
         purpose: scryer_application::DownloadSubmissionPurpose::AdditionalFile,
         facet: "anime".to_string(),
@@ -245,6 +267,7 @@ fn managed_episode_set_test_submission(item_id: &str) -> DownloadSubmission {
         source_provider_name: None,
         source_kind: Some(scryer_application::DownloadSourceKind::TorrentFile),
         source_title: Some("Managed.Release.S01".to_string()),
+        info_hash: None,
         release_size_bytes: None,
         request_signature: Some("request-signature-1".to_string()),
         scope: SubmissionScope::EpisodeSet {
@@ -253,11 +276,15 @@ fn managed_episode_set_test_submission(item_id: &str) -> DownloadSubmission {
     }
 }
 
+#[expect(
+    dead_code,
+    reason = "retained cross-datastore canonical identity fixture"
+)]
 async fn assert_download_submission_orphan_precedence(
     workflow: &DownloadSubmissionStore,
 ) -> AppResult<()> {
     let item_id = "feedfacefeedfacefeedfacefeedfacefeedface";
-    let source_identity = DownloadSourceIdentity::new(Some("client-a"), "qbittorrent", item_id);
+    let source_identity = ClientJobLocator::new(Some("client-a"), "qbittorrent", item_id);
 
     workflow
         .record_submission(orphan_test_submission(item_id, "Foreign.Observation"))
@@ -275,6 +302,7 @@ async fn assert_download_submission_orphan_precedence(
             DownloadSubmissionIdentity {
                 download_id: Some("download-feedface".to_string()),
             },
+            None,
         )
         .await?;
 

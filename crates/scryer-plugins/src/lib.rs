@@ -7,6 +7,7 @@ mod embedded_descriptor;
 mod indexer_adapter;
 mod legacy_runtime;
 mod loader;
+pub mod newznab_profiles;
 mod notification_adapter;
 mod plugin_http_host;
 mod process_host;

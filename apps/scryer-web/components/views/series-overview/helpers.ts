@@ -198,11 +198,11 @@ export function blocklistEntryMatchesEpisode(
   episode: CollectionEpisode,
   collection: TitleCollection,
 ): boolean {
-  if (entry.episodeIds.includes(episode.id)) {
-    return true;
-  }
-
-  if (entry.episodeIds.length === 0 && extractEpisodeKeysFromReleaseTitle(entry.sourceTitle).size === 0) {
+  // A blocklist entry blocks a release for the whole title, so it is shown
+  // against the episodes its name identifies -- and against every episode when
+  // the name identifies none.
+  const keys = extractEpisodeKeysFromReleaseTitle(entry.releaseName);
+  if (keys.size === 0) {
     return true;
   }
 
@@ -211,7 +211,6 @@ export function blocklistEntryMatchesEpisode(
   if (season == null || episodeNumber == null) {
     return false;
   }
-  const keys = extractEpisodeKeysFromReleaseTitle(entry.sourceTitle);
   return keys.has(episodeKey(season, episodeNumber));
 }
 

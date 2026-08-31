@@ -47,7 +47,8 @@ impl ArchiveExtractorClient for WasmArchiveExtractorClient {
             PluginRuntimeBacking::WasmtimeArchive => {}
             PluginRuntimeBacking::LegacyReactor
             | PluginRuntimeBacking::WasmtimeSubtitleSync
-            | PluginRuntimeBacking::WasmtimeCommand => {
+            | PluginRuntimeBacking::WasmtimeCommand
+            | PluginRuntimeBacking::WasmtimeIndexerComponent => {
                 return Err(AppError::Repository(
                     "archive extractor plugin requires the wasmtime runtime backing".to_string(),
                 ));
@@ -81,7 +82,7 @@ impl ArchiveExtractorClient for WasmArchiveExtractorClient {
         )
         .await
         .map_err(|_| {
-            AppError::Repository(format!(
+            AppError::archive_extraction_timed_out(format!(
                 "archive plugin timed out after {ARCHIVE_PROCESS_TIMEOUT_SECONDS} seconds"
             ))
         })?

@@ -72,9 +72,9 @@ use scryer_infrastructure_metadata::metadata::gateway::client::{
 use scryer_infrastructure_workflow::workflow::{
     release_store::ReleaseStore,
     stores::{
-        AcquisitionStore, DomainEventStore, DownloadQueueCommandStore, DownloadSubmissionStore,
-        ExternalImportMonitorStore, ExternalImportSetupSecretDraftStore, ImportStore,
-        WorkflowOperationStore,
+        AcquisitionStore, DomainEventStore, DownloadQueueCommandStore, DownloadRegistryStore,
+        DownloadSubmissionStore, ExternalImportMonitorStore, ExternalImportSetupSecretDraftStore,
+        ImportStore, WorkflowOperationStore,
     },
 };
 use scryer_interface::context::{
@@ -286,6 +286,26 @@ impl PendingReleaseRepository for TestLibraryStateStore {
         self.pending_releases.insert_pending_release(release).await
     }
 
+    async fn insert_pending_release_with_role(
+        &self,
+        release: &scryer_application::PendingRelease,
+        role: scryer_application::PendingReleaseRole,
+    ) -> AppResult<String> {
+        self.pending_releases
+            .insert_pending_release_with_role(release, role)
+            .await
+    }
+
+    async fn insert_pending_release_observation(
+        &self,
+        release: &scryer_application::PendingRelease,
+        observation: &scryer_application::PendingReleaseObservation,
+    ) -> AppResult<String> {
+        self.pending_releases
+            .insert_pending_release_observation(release, observation)
+            .await
+    }
+
     async fn list_expired_pending_releases(
         &self,
         now: &str,
@@ -299,6 +319,14 @@ impl PendingReleaseRepository for TestLibraryStateStore {
         &self,
     ) -> AppResult<Vec<scryer_application::PendingRelease>> {
         self.pending_releases.list_waiting_pending_releases().await
+    }
+
+    async fn list_active_release_age_unknown_pending_releases(
+        &self,
+    ) -> AppResult<Vec<scryer_application::PendingRelease>> {
+        self.pending_releases
+            .list_active_release_age_unknown_pending_releases()
+            .await
     }
 
     async fn get_pending_release(
@@ -343,6 +371,22 @@ impl PendingReleaseRepository for TestLibraryStateStore {
     ) -> AppResult<()> {
         self.pending_releases
             .update_pending_release_status(id, status, grabbed_at)
+            .await
+    }
+
+    async fn expire_pending_release(&self, id: &str, decision_code: &str) -> AppResult<()> {
+        self.pending_releases
+            .expire_pending_release(id, decision_code)
+            .await
+    }
+
+    async fn mark_release_age_unknown_pending_release_needs_review(
+        &self,
+        id: &str,
+        decision_code: &str,
+    ) -> AppResult<()> {
+        self.pending_releases
+            .mark_release_age_unknown_pending_release_needs_review(id, decision_code)
             .await
     }
 
@@ -412,13 +456,12 @@ impl PendingReleaseRepository for TestLibraryStateStore {
             .await
     }
 
-    async fn supersede_pending_releases_for_acquisition_scope_state(
+    async fn retire_lower_or_equal_overlapping_pending_releases(
         &self,
-        wanted_item_id: &str,
-        except_id: &str,
+        lower_or_equal_ids: &[String],
     ) -> AppResult<()> {
         self.pending_releases
-            .supersede_pending_releases_for_acquisition_scope_state(wanted_item_id, except_id)
+            .retire_lower_or_equal_overlapping_pending_releases(lower_or_equal_ids)
             .await
     }
 
@@ -431,8 +474,8 @@ impl PendingReleaseRepository for TestLibraryStateStore {
 
 #[async_trait]
 impl BlocklistRepository for TestLibraryStateStore {
-    async fn add(&self, entry: &scryer_application::NewBlocklistEntry) -> AppResult<String> {
-        self.blocklist.add(entry).await
+    async fn block(&self, entry: &scryer_application::NewBlocklistEntry) -> AppResult<bool> {
+        self.blocklist.block(entry).await
     }
 
     async fn list_for_title(
@@ -451,31 +494,47 @@ impl BlocklistRepository for TestLibraryStateStore {
         self.blocklist.list_all(limit, offset).await
     }
 
-    async fn has_recorded_download_failure(
+    async fn is_blocked(
         &self,
         title_id: &str,
-        source_title: Option<&str>,
+        indexer_id: &str,
+        release_name: &str,
+        info_hash: Option<&str>,
     ) -> AppResult<bool> {
         self.blocklist
-            .has_recorded_download_failure(title_id, source_title)
+            .is_blocked(title_id, indexer_id, release_name, info_hash)
             .await
+    }
+
+    async fn get(&self, id: &str) -> AppResult<Option<scryer_domain::BlocklistEntry>> {
+        self.blocklist.get(id).await
     }
 
     async fn remove(&self, id: &str) -> AppResult<()> {
         self.blocklist.remove(id).await
     }
 
-    async fn is_blocklisted(&self, title_id: &str, source_title: &str) -> AppResult<bool> {
-        self.blocklist.is_blocklisted(title_id, source_title).await
-    }
-
     async fn delete_for_title(&self, title_id: &str) -> AppResult<()> {
         self.blocklist.delete_for_title(title_id).await
+    }
+
+    async fn delete_for_indexer(&self, indexer_id: &str) -> AppResult<()> {
+        self.blocklist.delete_for_indexer(indexer_id).await
     }
 }
 
 #[async_trait]
 impl HousekeepingRepository for TestLibraryStateStore {
+    async fn delete_stale_workflow_operations(
+        &self,
+        completed_days: i64,
+        warning_failed_days: i64,
+    ) -> AppResult<u32> {
+        self.housekeeping
+            .delete_stale_workflow_operations(completed_days, warning_failed_days)
+            .await
+    }
+
     async fn delete_release_decisions_older_than(&self, days: i64) -> AppResult<u32> {
         self.housekeeping
             .delete_release_decisions_older_than(days)
@@ -825,6 +884,7 @@ impl TestContext {
         let domain_event_store = Arc::new(DomainEventStore::new(datastore.clone()));
         let acquisition_store = Arc::new(AcquisitionStore::new(datastore.clone()));
         let download_submission_store = Arc::new(DownloadSubmissionStore::new(datastore.clone()));
+        let download_registry_store = Arc::new(DownloadRegistryStore::new(datastore.clone()));
         let import_store = Arc::new(ImportStore::new(datastore.clone()));
         let external_import_monitor_store =
             Arc::new(ExternalImportMonitorStore::new(datastore.clone()));
@@ -874,6 +934,7 @@ impl TestContext {
         .with_acquisition_state(acquisition_store)
         .with_domain_events(domain_event_store)
         .with_download_queue_commands(download_queue_command_store)
+        .with_download_registry(download_registry_store)
         .with_download_submissions(download_submission_store)
         .with_external_import_monitor_snapshots(external_import_monitor_store)
         .with_external_import_setup_secret_drafts(external_import_setup_secret_draft_store)
@@ -1108,6 +1169,21 @@ async fn mount_default_smg_metadata_mocks(server: &MockServer) {
 
     Mock::given(method("GET"))
         .and(path("/graphql"))
+        .and(is_search_titles_batch_request)
+        .respond_with(search_titles_batch_response)
+        .with_priority(2)
+        .mount(server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/graphql"))
+        .and(is_search_titles_batch_request)
+        .respond_with(search_titles_batch_response)
+        .with_priority(2)
+        .mount(server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/graphql"))
         .and(is_search_tvdb_batch_request)
         .respond_with(search_tvdb_batch_response)
         .with_priority(2)
@@ -1136,7 +1212,31 @@ async fn mount_default_smg_metadata_mocks(server: &MockServer) {
 }
 
 fn is_search_tvdb_batch_request(request: &Request) -> bool {
-    search_tvdb_batch_inputs(request).is_some()
+    is_batch_search_request(request, "SearchTvdbBatch", "searchTvdbBatch")
+        && search_tvdb_batch_inputs(request).is_some()
+}
+
+fn is_search_titles_batch_request(request: &Request) -> bool {
+    is_batch_search_request(request, "SearchTitlesBatch", "searchTitlesBatch")
+        && search_tvdb_batch_inputs(request).is_some()
+}
+
+fn is_batch_search_request(request: &Request, operation_name: &str, field_name: &str) -> bool {
+    let body_matches = request.body_json::<Value>().ok().is_some_and(|body| {
+        body.get("operationName")
+            .and_then(Value::as_str)
+            .is_some_and(|operation| operation == operation_name)
+            || body
+                .get("query")
+                .and_then(Value::as_str)
+                .is_some_and(|query| query.contains(operation_name) || query.contains(field_name))
+    });
+    let query_matches = request.url.query_pairs().any(|(key, value)| {
+        (key == "operationName" && value == operation_name)
+            || (key == "query" && (value.contains(operation_name) || value.contains(field_name)))
+    });
+
+    body_matches || query_matches
 }
 
 fn search_tvdb_batch_response(request: &Request) -> ResponseTemplate {
@@ -1212,6 +1312,99 @@ fn search_tvdb_batch_response(request: &Request) -> ResponseTemplate {
     }))
 }
 
+fn search_titles_batch_response(request: &Request) -> ResponseTemplate {
+    let inputs = search_tvdb_batch_inputs(request).unwrap_or_default();
+    let mut query_counts = HashMap::new();
+    for input in &inputs {
+        if let (Some(query), Some(type_hint)) = (
+            input.get("query").and_then(Value::as_str),
+            input.get("type").and_then(Value::as_str),
+        ) {
+            let year = input.get("year").and_then(Value::as_i64);
+            *query_counts
+                .entry(search_tvdb_query_key(type_hint, query, year))
+                .or_insert(0) += 1;
+        }
+    }
+
+    let batch = inputs
+        .iter()
+        .map(|input| {
+            let query = input
+                .get("query")
+                .and_then(Value::as_str)
+                .unwrap_or("Test Title");
+            let type_hint = input.get("type").and_then(Value::as_str).unwrap_or("movie");
+            let year = input.get("year").and_then(Value::as_i64);
+            let tvdb_id = input
+                .get("tvdbId")
+                .and_then(json_i64)
+                .unwrap_or_else(|| stable_search_tvdb_id(type_hint, query, year));
+            let title_id = stable_search_title_id(tvdb_id);
+            let key = search_tvdb_query_key(type_hint, query, year);
+            let name = if query_counts.get(&key).copied().unwrap_or_default() > 1 {
+                format!("{query} {tvdb_id}")
+            } else {
+                query.to_string()
+            };
+            let mut signals = vec!["exact_title".to_string()];
+            if year.is_some() {
+                signals.push("exact_year".to_string());
+            }
+            if input.get("tvdbId").and_then(json_i64).is_some() {
+                signals.push("external_id:tvdb".to_string());
+            }
+            if input.get("imdbId").and_then(Value::as_str).is_some() {
+                signals.push("external_id:imdb".to_string());
+            }
+            if input.get("tmdbId").and_then(Value::as_str).is_some() {
+                signals.push("external_id:tmdb".to_string());
+            }
+
+            json!({
+                "query": query,
+                "type": type_hint,
+                "year": year,
+                "limit": 10,
+                "total_results": 1,
+                "results": [{
+                    "title_id": title_id,
+                    "kind": "movie",
+                    "primary_source": "tvdb",
+                    "tvdb_id": tvdb_id,
+                    "tmdb_id": tvdb_id,
+                    "imdb_id": format!("tt{tvdb_id:07}"),
+                    "name": name,
+                    "year": year,
+                    "external_ids": [
+                        {
+                            "source": "smg",
+                            "kind": "title",
+                            "id": title_id.to_string(),
+                            "key": format!("smg:title:{title_id}")
+                        },
+                        {
+                            "source": "tvdb",
+                            "kind": "movie",
+                            "id": tvdb_id.to_string(),
+                            "key": format!("tvdb:movie:{tvdb_id}")
+                        }
+                    ],
+                    "auto_match_safe": true,
+                    "auto_match_signals": signals,
+                    "created": false
+                }]
+            })
+        })
+        .collect::<Vec<_>>();
+
+    ResponseTemplate::new(200).set_body_json(json!({
+        "data": {
+            "searchTitlesBatch": batch
+        }
+    }))
+}
+
 fn search_tvdb_batch_inputs(request: &Request) -> Option<Vec<Value>> {
     let variables = if let Ok(payload) = request.body_json::<Value>() {
         payload.get("variables").cloned()
@@ -1257,6 +1450,12 @@ fn stable_search_tvdb_id(type_hint: &str, query: &str, year: Option<i64>) -> i64
         900_000_000_i64
     };
     base + i64::try_from(hash % 100_000_000).unwrap_or(0)
+}
+
+fn stable_search_title_id(tvdb_id: i64) -> i64 {
+    // The shared movie metadata fixture identifies TVDB 123456 as SMG title 101.
+    // Other echo results remain stable and distinct by their TVDB identifier.
+    if tvdb_id == 123_456 { 101 } else { tvdb_id }
 }
 
 fn json_i64(value: &Value) -> Option<i64> {

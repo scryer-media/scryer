@@ -308,6 +308,32 @@ pub(super) fn normalize_media_server_base_url(
     Ok(parsed.as_str().trim_end_matches('/').to_string())
 }
 
+pub(super) fn normalize_media_server_external_url(
+    value: Option<String>,
+) -> AppResult<Option<String>> {
+    let Some(value) = normalize_optional_string(value) else {
+        return Ok(None);
+    };
+    let parsed = url::Url::parse(&value)
+        .map_err(|_| AppError::Validation("media server external URL is invalid".into()))?;
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+        return Err(AppError::Validation(
+            "media server external URL must be an HTTP or HTTPS URL".into(),
+        ));
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err(AppError::Validation(
+            "media server external URL must not include credentials".into(),
+        ));
+    }
+    if parsed.query().is_some() || parsed.fragment().is_some() {
+        return Err(AppError::Validation(
+            "media server external URL must not include a query or fragment".into(),
+        ));
+    }
+    Ok(Some(parsed.as_str().trim_end_matches('/').to_string()))
+}
+
 pub(super) fn normalize_optional_string(value: Option<String>) -> Option<String> {
     value
         .map(|value| value.trim().to_string())
@@ -366,4 +392,29 @@ pub(super) fn normalize_default_library_grants(
         }
     }
     normalized
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn external_url_rejects_embedded_credentials() {
+        let result = normalize_media_server_external_url(Some(
+            "https://admin:secret@media.example.test".into(),
+        ));
+
+        assert!(matches!(result, Err(AppError::Validation(_))));
+    }
+
+    #[test]
+    fn external_url_preserves_reverse_proxy_paths() {
+        assert_eq!(
+            normalize_media_server_external_url(Some(
+                "https://media.example.test/jellyfin/".into(),
+            ))
+            .expect("external URL should be valid"),
+            Some("https://media.example.test/jellyfin".into())
+        );
+    }
 }

@@ -44,39 +44,21 @@ async fn set_state(settings_store: Arc<SettingsStore>, state: &str) -> Result<()
 pub(crate) async fn flip_download_client_remove_failed_default(
     app_use_case: &AppUseCase,
     settings_store: Arc<SettingsStore>,
-) {
+) -> Result<(), String> {
     if read_state(settings_store.clone()).await == STATE_COMPLETED {
-        return;
+        return Ok(());
     }
 
-    if let Err(error) = set_state(settings_store.clone(), STATE_PENDING).await {
-        tracing::warn!(
-            error = %error,
-            "failed to mark remove-failed default migration pending"
-        );
-        return;
-    }
+    set_state(settings_store.clone(), STATE_PENDING).await?;
 
-    match app_use_case.flip_explicit_remove_failed_defaults().await {
-        Ok(flipped) => {
-            if let Err(error) = set_state(settings_store, STATE_COMPLETED).await {
-                tracing::warn!(
-                    error = %error,
-                    flipped,
-                    "remove-failed default migration completed but failed to mark migration completed"
-                );
-                return;
-            }
-            tracing::info!(
-                flipped,
-                "flipped persisted download-client remove-failed defaults"
-            );
-        }
-        Err(error) => {
-            tracing::warn!(
-                error = %error,
-                "remove-failed default migration failed; it will retry on next startup"
-            );
-        }
-    }
+    let flipped = app_use_case
+        .flip_explicit_remove_failed_defaults()
+        .await
+        .map_err(|error| error.to_string())?;
+    set_state(settings_store, STATE_COMPLETED).await?;
+    tracing::info!(
+        flipped,
+        "flipped persisted download-client remove-failed defaults"
+    );
+    Ok(())
 }

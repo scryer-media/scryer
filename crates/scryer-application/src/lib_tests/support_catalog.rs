@@ -19,13 +19,14 @@ pub(super) type PausedDownloadRequests = Arc<Mutex<Vec<PausedDownloadRequest>>>;
 #[derive(Default)]
 pub(super) struct MockTitleRepo {
     pub(super) store: Arc<Mutex<Vec<Title>>>,
+    pub(super) smg_identity_backfill_attempts: Arc<Mutex<HashMap<String, i64>>>,
     pub(super) create_or_get_existing_error: Arc<Mutex<Option<String>>>,
     pub(super) delete_operation_log: OptionalDeleteOperationLog,
     pub(super) pending_import_items: Option<Arc<Mutex<Vec<LibraryScanUnmatchedItem>>>>,
     pub(super) external_id_batch_lookup_calls: AtomicUsize,
 }
 #[derive(Default)]
-pub(super) struct RecordingJobRunRepo {
+pub(crate) struct RecordingJobRunRepo {
     pub(super) runs: Arc<Mutex<Vec<JobRunRecord>>>,
     pub(super) list_job_runs_calls: AtomicUsize,
     pub(super) list_job_runs_for_actor_calls: AtomicUsize,
@@ -33,7 +34,7 @@ pub(super) struct RecordingJobRunRepo {
 }
 
 impl RecordingJobRunRepo {
-    pub(super) async fn seed(&self, run: JobRunRecord) {
+    pub(crate) async fn seed(&self, run: JobRunRecord) {
         self.runs.lock().await.push(run);
     }
 }
@@ -118,11 +119,14 @@ impl JobRunRepository for RecordingJobRunRepo {
             .collect())
     }
 
-    async fn reconcile_interrupted_job_runs(&self) -> AppResult<u64> {
+    async fn reconcile_interrupted_job_runs(&self, excluded_run_ids: &[String]) -> AppResult<u64> {
         let now = chrono::Utc::now();
         let mut runs = self.runs.lock().await;
         let mut reconciled = 0u64;
-        for run in runs.iter_mut().filter(|run| !run.status.is_terminal()) {
+        for run in runs
+            .iter_mut()
+            .filter(|run| !run.status.is_terminal() && !excluded_run_ids.contains(&run.id))
+        {
             run.status = JobRunStatus::Failed;
             run.progress_json = None;
             run.error_text = Some("interrupted by restart".to_string());
@@ -531,10 +535,15 @@ impl TitleRepository for MockTitleRepo {
             .filter(|title| {
                 title.metadata_fetched_at.is_none()
                     && !excluded_facets.iter().any(|facet| facet == &title.facet)
-                    && title.external_ids.iter().any(|external_id| {
-                        external_id.source.eq_ignore_ascii_case("tvdb")
-                            && !external_id.value.trim().is_empty()
-                    })
+                    && match title.facet {
+                        MediaFacet::Movie => crate::MovieTitleRef::from_title(title).is_some(),
+                        MediaFacet::Series | MediaFacet::Anime => {
+                            title.external_ids.iter().any(|external_id| {
+                                external_id.source.eq_ignore_ascii_case("tvdb")
+                                    && !external_id.value.trim().is_empty()
+                            })
+                        }
+                    }
             })
             .cloned()
             .map(|title| PendingTitleHydration {
@@ -542,6 +551,77 @@ impl TitleRepository for MockTitleRepo {
                 attempt_count: 0,
             })
             .collect())
+    }
+
+    async fn list_movie_titles_missing_smg_id_after_id(
+        &self,
+        after_id: Option<&str>,
+        limit: usize,
+    ) -> AppResult<Vec<Title>> {
+        let after_id = after_id.unwrap_or_default().trim().to_string();
+        let attempts = self.smg_identity_backfill_attempts.lock().await.clone();
+        let mut titles = self
+            .store
+            .lock()
+            .await
+            .iter()
+            .filter(|title| {
+                title.facet == MediaFacet::Movie
+                    && (title.id > after_id
+                        || attempts.get(&title.id).copied().unwrap_or_default() == 0)
+                    && attempts.get(&title.id).copied().unwrap_or_default() < 5
+                    && title.external_ids.iter().any(|external_id| {
+                        matches!(
+                            external_id.source.to_ascii_lowercase().as_str(),
+                            "tvdb" | "tmdb" | "imdb"
+                        ) && !external_id.value.trim().is_empty()
+                    })
+                    && !title
+                        .external_ids
+                        .iter()
+                        .any(|external_id| external_id.source.eq_ignore_ascii_case("smg"))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        titles.sort_by(|left, right| left.id.cmp(&right.id));
+        titles.truncate(limit);
+        Ok(titles)
+    }
+
+    async fn record_movie_smg_identity_backfill_unresolved(&self, title_id: &str) -> AppResult<()> {
+        let mut attempts = self.smg_identity_backfill_attempts.lock().await;
+        *attempts.entry(title_id.to_string()).or_default() += 1;
+        Ok(())
+    }
+
+    async fn persist_smg_id(
+        &self,
+        title_id: &str,
+        smg_id: i64,
+        redirected_from: Option<i64>,
+    ) -> AppResult<()> {
+        let mut titles = self.store.lock().await;
+        let title = titles
+            .iter_mut()
+            .find(|title| title.id == title_id)
+            .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
+        if redirected_from.is_some() {
+            title
+                .external_ids
+                .retain(|external_id| !external_id.source.eq_ignore_ascii_case("smg"));
+        }
+        title
+            .external_ids
+            .retain(|external_id| external_id.source != "smg");
+        title.external_ids.push(ExternalId {
+            source: "smg".to_string(),
+            value: smg_id.to_string(),
+        });
+        self.smg_identity_backfill_attempts
+            .lock()
+            .await
+            .remove(title_id);
+        Ok(())
     }
 
     async fn mark_title_metadata_hydration_due_now(&self, _: &str) -> AppResult<()> {

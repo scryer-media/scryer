@@ -27,6 +27,7 @@ import type {
 import type { ExternalSubtitleRecord } from "@/lib/types/subtitles";
 import { formatFileSize } from "./helpers";
 import { MediaFilesOnDiskPanel } from "@/components/common/media-files-on-disk-panel";
+import { TitleFilesOnDiskRail } from "@/components/common/title-files-on-disk-rail";
 import { SeriesMoviePanel } from "./series-movie-panel";
 import {
   EpisodeTableActionButton,
@@ -89,21 +90,24 @@ function SeriesMovieTimelineContent({
       <SeriesMoviePanel
         link={link}
         hasFile={mediaFiles.length > 0}
-      />
-      <MediaFilesOnDiskPanel
-        title={t("title.filesOnDisk")}
-        emptyMessage={t("title.noFilesTracked")}
-        mediaFiles={mediaFiles}
-        subtitleDownloads={subtitleDownloads}
-        onRefreshSubtitles={onRefreshSubtitles}
-        onDeleteFile={onDeleteFile}
-        onMakePrimaryFile={onMakePrimaryFile}
-        primaryFileUpdatingId={primaryMovieFileUpdatingId}
-        showPrimaryRoleBadge
-        fileRowIdPrefix="series-overview-series-movie-file"
-        subtitleSearchIdPrefix="series-overview-series-movie-search-subtitles"
-        deleteFileIdPrefix="series-overview-series-movie-delete-file"
-        makePrimaryFileIdPrefix="series-overview-series-movie-make-primary-file"
+        filesOnDisk={
+          <TitleFilesOnDiskRail>
+            <MediaFilesOnDiskPanel
+              emptyMessage={t("title.noFilesTracked")}
+              mediaFiles={mediaFiles}
+              subtitleDownloads={subtitleDownloads}
+              onRefreshSubtitles={onRefreshSubtitles}
+              onDeleteFile={onDeleteFile}
+              onMakePrimaryFile={onMakePrimaryFile}
+              primaryFileUpdatingId={primaryMovieFileUpdatingId}
+              showPrimaryRoleBadge
+              fileRowIdPrefix="series-overview-series-movie-file"
+              subtitleSearchIdPrefix="series-overview-series-movie-search-subtitles"
+              deleteFileIdPrefix="series-overview-series-movie-delete-file"
+              makePrimaryFileIdPrefix="series-overview-series-movie-make-primary-file"
+            />
+          </TitleFilesOnDiskRail>
+        }
       />
       {searchBlockedForMovie ? <TitleSearchDownloadClientNotice /> : null}
       {!searchBlockedForMovie && searchLoading ? (

@@ -104,6 +104,108 @@ type AcquisitionSettingsPayload {
 }
 
 """
+A queued or active import operation. This reports real import work only, never worker capacity.
+"""
+type ActiveImportStreamPayload {
+	"""
+	Opaque runtime identity for this active import stream.
+	"""
+	id: ID!
+	"""
+	Identifier of the persisted import record.
+	"""
+	importId: ID!
+	"""
+	Identifier of the library receiving the import.
+	"""
+	libraryId: ID!
+	"""
+	Media category of the import target.
+	"""
+	facet: MediaFacetValue!
+	"""
+	Filesystem path of the source file or extraction directory.
+	"""
+	sourcePath: String!
+	"""
+	Filesystem path where the import is being placed.
+	"""
+	destinationPath: String!
+	"""
+	Current runtime phase of the import.
+	"""
+	phase: ActiveImportStreamPhaseValue!
+	"""
+	Number of source bytes transferred so far.
+	"""
+	bytes: Long!
+	"""
+	Total source bytes expected for the transfer, or zero when unavailable.
+	"""
+	totalBytes: Long!
+	"""
+	Time the import entered the active worker queue.
+	"""
+	queuedAt: DateTime!
+	"""
+	Time work began, or null while the import remains queued.
+	"""
+	startedAt: DateTime
+	"""
+	Time this stream was last updated.
+	"""
+	updatedAt: DateTime!
+	"""
+	Whether this stream can still be cancelled.
+	"""
+	cancellable: Boolean!
+	"""
+	Whether cancellation has been requested and is being processed.
+	"""
+	cancellationRequested: Boolean!
+}
+
+"""
+Runtime phase for an import operation currently awaiting or using a worker lane.
+"""
+enum ActiveImportStreamPhaseValue {
+	"""
+	The import is waiting for a worker lane.
+	"""
+	QUEUED
+	"""
+	Archive extraction is running for the import.
+	"""
+	EXTRACTING
+	"""
+	A fast filesystem placement is in progress.
+	"""
+	PLACING
+	"""
+	File content is being copied to its destination.
+	"""
+	COPYING
+	"""
+	The destination is being verified and promoted.
+	"""
+	FINALIZING
+}
+
+"""
+Revision metadata for active import stream updates.
+"""
+type ActiveImportStreamSyncPayload {
+	"""
+	Monotonic revision for active import stream changes.
+	"""
+	revision: Long!
+	"""
+	Time active import streams last changed, or null before the first change.
+	"""
+	updatedAt: DateTime
+}
+
+"""
 Delivery channel associated with an activity event.
 """
 enum ActivityChannelValue {
@@ -157,6 +259,10 @@ type ActivityEventPayload {
 	Media facet, or null when not facet-scoped.
 	"""
 	facet: MediaFacetValue
+	"""
+	Episodes affected by the activity when it originated from an import.
+	"""
+	episodeIds: [ID!]!
 	"""
 	Human-readable activity message.
 	"""
@@ -370,6 +476,22 @@ input AddTitleInput {
 	"""
 	externalIds: [ExternalIdInput!]
 	"""
+	SMG canonical movie title ID, when supplied by metadata search.
+	"""
+	smgId: Int
+	"""
+	TVDB title ID, when supplied by metadata search.
+	"""
+	tvdbId: String
+	"""
+	TMDB title ID, when supplied by metadata search.
+	"""
+	tmdbId: Int
+	"""
+	IMDb title ID, when supplied by metadata search.
+	"""
+	imdbId: String
+	"""
 	Download source locator, such as an NZB URL or magnet URI, used when queuing the title.
 	"""
 	sourceHint: String
@@ -446,6 +568,66 @@ type AddTitleResult {
 }
 
 """
+Expiration choices available when creating an API key.
+"""
+enum ApiKeyExpiryPresetValue {
+	"""
+	Expires in 30 days.
+	"""
+	DAYS_30
+	"""
+	Expires in 90 days.
+	"""
+	DAYS_90
+	"""
+	Expires in one year.
+	"""
+	DAYS_365
+	"""
+	Does not expire automatically.
+	"""
+	NEVER
+}
+
+"""
+Non-secret API-key metadata.
+"""
+type ApiKeyPayload {
+	"""
+	API-key record ID.
+	"""
+	id: ID!
+	"""
+	Human-readable label.
+	"""
+	label: String!
+	"""
+	Auditable identity used for requests made with this key.
+	"""
+	actor: String!
+	"""
+	UTC expiry time, or null when the key does not expire.
+	"""
+	expiresAt: DateTime
+	"""
+	UTC revocation time, or null while active.
+	"""
+	revokedAt: DateTime
+	"""
+	UTC last successful-use time, or null when unused.
+	"""
+	lastUsedAt: DateTime
+	"""
+	UTC creation time.
+	"""
+	createdAt: DateTime!
+	"""
+	Provisioning source (`user` or `environment`).
+	"""
+	provisioningSource: String!
+}
+
+"""
 Application-wide permission independent of a library.
 """
 enum AppPermissionValue {
@@ -465,6 +647,114 @@ enum AppPermissionValue {
 	Allows changing catalog settings.
 	"""
 	MANAGE_CATALOG_SETTINGS
+}
+
+"""
+Installation layout identified for the in-app upgrade surface.
+"""
+enum ApplicationInstallationKindValue {
+	"""
+	A writable standalone installation.
+	"""
+	PORTABLE
+	"""
+	A directly installed Windows MSI package.
+	"""
+	DIRECT_MSI
+	"""
+	A container-managed installation.
+	"""
+	DOCKER
+	"""
+	A Homebrew-managed installation.
+	"""
+	HOMEBREW
+	"""
+	A winget-managed Windows installation.
+	"""
+	WINGET
+	"""
+	A Windows service or session-zero installation.
+	"""
+	WINDOWS_SUPERVISED
+	"""
+	In-app upgrades disabled by the operator.
+	"""
+	DISABLED
+	"""
+	An installation layout that is not supported for in-app upgrades.
+	"""
+	UNSUPPORTED
+}
+
+"""
+Party responsible for managing application upgrades.
+"""
+enum ApplicationUpgradeOwnerValue {
+	"""
+	The application can manage its own upgrade.
+	"""
+	IN_APP
+	"""
+	The operator or an external package manager owns upgrades.
+	"""
+	OPERATOR
+}
+
+"""
+Durable job run accepted for an application upgrade.
+"""
+type ApplicationUpgradeStartPayload {
+	"""
+	The registered application-upgrade job.
+	"""
+	jobRun: JobRunPayload!
+}
+
+"""
+Current update availability and installation eligibility.
+"""
+type ApplicationUpgradeStatusPayload {
+	"""
+	Running application version.
+	"""
+	currentVersion: String!
+	"""
+	Available application version, or null when no update notice exists.
+	"""
+	updateVersion: String
+	"""
+	Available release tag, or null when no update notice exists.
+	"""
+	updateTag: String
+	"""
+	Whether the current update notice offers a newer version.
+	"""
+	updateAvailable: Boolean!
+	"""
+	Installation layout identified at startup.
+	"""
+	installationKind: ApplicationInstallationKindValue!
+	"""
+	Party responsible for managing application upgrades.
+	"""
+	managementOwner: ApplicationUpgradeOwnerValue!
+	"""
+	Whether this installation is eligible for an in-app upgrade.
+	"""
+	eligible: Boolean!
+	"""
+	Stable snake_case code explaining eligibility.
+	"""
+	eligibilityReason: String!
+	"""
+	In-memory application-upgrade job still running in this process, if any.
+	"""
+	activeRun: JobRunPayload
+	"""
+	Most recent persisted application-upgrade job, if any.
+	"""
+	latestRun: JobRunPayload
 }
 
 """
@@ -747,6 +1037,10 @@ input BeginManualImportSelectionInput {
 	Title identity used to suggest import targets.
 	"""
 	titleId: ID!
+	"""
+	Explicitly extract an archive-only download before building the preview.
+	"""
+	extractArchives: Boolean
 }
 
 """
@@ -881,6 +1175,10 @@ type CalendarEpisodePayload {
 	Compact availability derived from the episode's primary media file.
 	"""
 	mediaAvailability: EpisodeMediaAvailabilityPayload!
+	"""
+	Provider-native playback links available to the current user.
+	"""
+	playbackLinks: [MediaServerPlaybackLinkPayload!]!
 }
 
 """
@@ -1506,6 +1804,10 @@ input CreateMediaServerConnectionInput {
 	"""
 	baseUrl: String!
 	"""
+	Browser-facing URL used for playback deep links. Omit to disable deep links for Jellyfin and Emby.
+	"""
+	externalUrl: String
+	"""
 	Whether the connection is enabled, defaulting to true.
 	"""
 	enabled: Boolean
@@ -1584,6 +1886,34 @@ input CreateMediaServerConnectionInput {
 }
 
 """
+Input for creating an API key owned by the interactive actor.
+"""
+input CreateMyApiKeyInput {
+	"""
+	A human-readable label to distinguish the integration.
+	"""
+	label: String!
+	"""
+	Expiration policy. Omission uses 90 days.
+	"""
+	expiry: ApiKeyExpiryPresetValue
+}
+
+"""
+Creation result. `apiKey` is shown once and must be stored by the caller.
+"""
+type CreateMyApiKeyPayload {
+	"""
+	Generated raw API key. This is never returned again.
+	"""
+	apiKey: String!
+	"""
+	Non-secret metadata for the generated key.
+	"""
+	key: ApiKeyPayload!
+}
+
+"""
 Values required to create a notification channel.
 """
 input CreateNotificationChannelInput {
@@ -1641,6 +1971,20 @@ input CreateNotificationSubscriptionInput {
 	Whether the new subscription starts enabled; omitted uses the service default.
 	"""
 	isEnabled: Boolean
+}
+
+"""
+Custom public OAuth application details. Authorization-code plus S256 PKCE is required.
+"""
+input CreateOAuthClientRegistrationInput {
+	"""
+	Name displayed to users during authorization.
+	"""
+	displayName: String!
+	"""
+	Exact HTTPS callback URLs permitted for this application.
+	"""
+	redirectUris: [String!]!
 }
 
 """
@@ -1987,6 +2331,14 @@ input DelayProfileInput {
 	"""
 	torrentDelayMinutes: Int!
 	"""
+	Whether Usenet releases are eligible. Defaults to enabled for existing clients.
+	"""
+	enableUsenet: Boolean
+	"""
+	Whether torrent releases are eligible. Defaults to enabled for existing clients.
+	"""
+	enableTorrent: Boolean
+	"""
 	Preferred protocol when both delayed sources qualify.
 	"""
 	preferredProtocol: DelayProfilePreferredProtocolValue!
@@ -1998,6 +2350,10 @@ input DelayProfileInput {
 	Optional score threshold that bypasses the delay.
 	"""
 	bypassScoreThreshold: Int
+	"""
+	Whether the highest-quality release bypasses its eligible delay. Defaults to disabled.
+	"""
+	bypassIfHighestQuality: Boolean
 	"""
 	Facets to which the profile applies.
 	"""
@@ -2037,6 +2393,14 @@ type DelayProfilePayload {
 	"""
 	torrentDelayMinutes: Int!
 	"""
+	Whether Usenet releases are eligible for this profile.
+	"""
+	enableUsenet: Boolean!
+	"""
+	Whether torrent releases are eligible for this profile.
+	"""
+	enableTorrent: Boolean!
+	"""
 	Preferred protocol after delay eligibility.
 	"""
 	preferredProtocol: DelayProfilePreferredProtocolValue!
@@ -2048,6 +2412,10 @@ type DelayProfilePayload {
 	Score threshold that bypasses delay, or null when disabled.
 	"""
 	bypassScoreThreshold: Int
+	"""
+	Whether the highest-quality release bypasses its eligible delay.
+	"""
+	bypassIfHighestQuality: Boolean!
 	"""
 	Media facets to which the profile applies.
 	"""
@@ -2276,6 +2644,20 @@ type DeleteNotificationSubscriptionPayload {
 	Deleted notification subscription ID.
 	"""
 	id: ID!
+}
+
+"""
+Result of deleting a custom OAuth application.
+"""
+type DeleteOAuthClientRegistrationPayload {
+	"""
+	Deleted OAuth client identifier.
+	"""
+	clientId: String!
+	"""
+	Whether a persisted custom registration was removed.
+	"""
+	deleted: Boolean!
 }
 
 """
@@ -3643,6 +4025,10 @@ enum DownloadActivityFilterValue {
 	"""
 	POST_PROCESSING
 	"""
+	Include imported torrents still retained for seeding.
+	"""
+	SEEDING
+	"""
 	Include items the client reported a recoverable problem for.
 	"""
 	WARNING
@@ -3849,6 +4235,10 @@ enum DownloadDisplayStateValue {
 	"""
 	COMPLETED
 	"""
+	Import completed, but the torrent remains managed while seeding.
+	"""
+	IMPORTED_SEEDING
+	"""
 	Download or processing failed.
 	"""
 	FAILED
@@ -3961,6 +4351,10 @@ enum DownloadImportFilterValue {
 	Include every import state.
 	"""
 	ALL
+	"""
+	Include imports awaiting attention rather than actively executing.
+	"""
+	ATTENTION
 	"""
 	Include imports currently running.
 	"""
@@ -4762,6 +5156,10 @@ type EpisodePayload {
 	Time when the episode record was created, in UTC.
 	"""
 	createdAt: DateTime!
+	"""
+	Provider-native playback links for this episode, when an exact catalog mapping exists.
+	"""
+	playbackLinks: [MediaServerPlaybackLinkPayload!]!
 	"""
 	Parent title for this episode, or null if it is no longer available to the caller.
 	"""
@@ -5837,9 +6235,13 @@ input FixTitleMatchInput {
 	"""
 	titleId: ID!
 	"""
-	TVDB identity to associate with the title.
+	TVDB identity to associate with the title. Required for Series and Anime.
 	"""
-	tvdbId: String!
+	tvdbId: String
+	"""
+	SMG canonical movie title ID to associate with a Movie title.
+	"""
+	smgId: Int
 }
 
 """
@@ -6181,6 +6583,10 @@ enum ImportSkipReasonValue {
 	"""
 	NO_VIDEO_FILES
 	"""
+	The download client is still writing or unpacking the source file.
+	"""
+	DOWNLOAD_IN_PROGRESS
+	"""
 	Storage is full.
 	"""
 	DISK_FULL
@@ -6192,6 +6598,14 @@ enum ImportSkipReasonValue {
 	A password is required before retrying.
 	"""
 	PASSWORD_REQUIRED
+	"""
+	An archive extractor must be installed or enabled before retrying.
+	"""
+	ARCHIVE_EXTRACTION_PLUGIN_REQUIRED
+	"""
+	Archive extraction exceeded its configured time limit.
+	"""
+	ARCHIVE_EXTRACTION_TIMED_OUT
 }
 
 """
@@ -6228,6 +6642,10 @@ enum ImportStatusValue {
 Phase of transferring an imported file.
 """
 enum ImportTransferPhaseValue {
+	"""
+	Archive contents are being extracted before file transfer.
+	"""
+	EXTRACTING
 	"""
 	File bytes are being copied.
 	"""
@@ -6532,6 +6950,256 @@ type IndexerDownloadClientProviderCompatibilityPayload {
 	Compatible download-client IDs.
 	"""
 	compatibleClientIds: [ID!]!
+}
+
+"""
+A normalized, safe classification for an indexer HTTP error.
+"""
+enum IndexerErrorClassificationValue {
+	"""
+	Newznab reported an invalid API key.
+	"""
+	NEWZNAB_INVALID_API_KEY
+	"""
+	Newznab reported a suspended account.
+	"""
+	NEWZNAB_ACCOUNT_SUSPENDED
+	"""
+	Newznab reported insufficient account privileges.
+	"""
+	NEWZNAB_INSUFFICIENT_PRIVILEGES
+	"""
+	Newznab denied registration.
+	"""
+	NEWZNAB_REGISTRATION_DENIED
+	"""
+	Newznab has closed registrations.
+	"""
+	NEWZNAB_REGISTRATIONS_CLOSED
+	"""
+	Newznab rejected registration data.
+	"""
+	NEWZNAB_INVALID_REGISTRATION
+	"""
+	Newznab rejected the registration email address.
+	"""
+	NEWZNAB_INVALID_REGISTRATION_EMAIL
+	"""
+	Newznab registration failed.
+	"""
+	NEWZNAB_REGISTRATION_FAILED
+	"""
+	Newznab reported a missing request parameter.
+	"""
+	NEWZNAB_MISSING_PARAMETER
+	"""
+	Newznab reported an incorrect request parameter.
+	"""
+	NEWZNAB_INCORRECT_PARAMETER
+	"""
+	Newznab reported an unsupported function.
+	"""
+	NEWZNAB_NO_SUCH_FUNCTION
+	"""
+	Newznab reported a function that is unavailable.
+	"""
+	NEWZNAB_FUNCTION_NOT_AVAILABLE
+	"""
+	Newznab reported that no matching item exists.
+	"""
+	NEWZNAB_NO_SUCH_ITEM
+	"""
+	Newznab reported that the request limit was reached.
+	"""
+	NEWZNAB_REQUEST_LIMIT_REACHED
+	"""
+	Newznab reported that the download limit was reached.
+	"""
+	NEWZNAB_DOWNLOAD_LIMIT_REACHED
+	"""
+	Newznab reported its generic unknown error.
+	"""
+	NEWZNAB_UNKNOWN_ERROR
+	"""
+	Newznab reported that its API is disabled.
+	"""
+	NEWZNAB_API_DISABLED
+	"""
+	The server rejected the request as invalid.
+	"""
+	HTTP_BAD_REQUEST
+	"""
+	The server rejected authentication.
+	"""
+	HTTP_UNAUTHORIZED
+	"""
+	The server forbade access to the resource.
+	"""
+	HTTP_FORBIDDEN
+	"""
+	The requested endpoint was not found.
+	"""
+	HTTP_NOT_FOUND
+	"""
+	The server timed out the request.
+	"""
+	HTTP_REQUEST_TIMEOUT
+	"""
+	The server rate limited the request.
+	"""
+	HTTP_RATE_LIMITED
+	"""
+	The server returned a 5xx response.
+	"""
+	HTTP_SERVER_ERROR
+	"""
+	The accepted response did not match a known error shape.
+	"""
+	UNKNOWN
+}
+
+"""
+A newest-first page of persisted indexer errors.
+"""
+type IndexerErrorConnectionPayload {
+	"""
+	Error events in newest-first order.
+	"""
+	items: [IndexerErrorSummaryPayload!]!
+	"""
+	Cursor for the following page, or null at the end of the result set.
+	"""
+	nextCursor: String
+}
+
+"""
+A persisted error event and, when available, its complete HTTP response.
+"""
+type IndexerErrorDetailPayload {
+	"""
+	List-safe metadata for the error event.
+	"""
+	error: IndexerErrorSummaryPayload!
+	"""
+	Complete response data when the upstream returned one.
+	"""
+	response: IndexerErrorResponsePayload
+}
+
+"""
+One raw response header retained for privileged diagnostics.
+"""
+type IndexerErrorHeaderPayload {
+	"""
+	Original response header name.
+	"""
+	name: String!
+	"""
+	Raw header value encoded as base64.
+	"""
+	valueBase64: String!
+	"""
+	Raw header value when it is valid UTF-8.
+	"""
+	value: String
+}
+
+"""
+Identifies the indexer operation that produced a persisted HTTP error.
+"""
+enum IndexerErrorOperationValue {
+	"""
+	Connection validation against the configured indexer.
+	"""
+	CONNECTION_TEST
+	"""
+	An operator-initiated release search.
+	"""
+	INTERACTIVE_SEARCH
+	"""
+	A scheduled or automated release search.
+	"""
+	AUTOMATIC_SEARCH
+	"""
+	A periodic RSS synchronization.
+	"""
+	RSS_SYNC
+	"""
+	A plugin-defined indexer action.
+	"""
+	INDEXER_ACTION
+	"""
+	Synchronization with an indexer management service.
+	"""
+	MANAGEMENT_SYNC
+	"""
+	Refreshing a managed indexer's capabilities document.
+	"""
+	CAPS_REFRESH
+}
+
+"""
+Complete persisted HTTP response retained for privileged diagnostics.
+"""
+type IndexerErrorResponsePayload {
+	"""
+	Original HTTP status code.
+	"""
+	status: Int!
+	"""
+	Repeated raw response headers in their retained order.
+	"""
+	headers: [IndexerErrorHeaderPayload!]!
+	"""
+	Raw response body encoded as base64.
+	"""
+	bodyBase64: String!
+}
+
+"""
+List-safe metadata for a persisted indexer error.
+"""
+type IndexerErrorSummaryPayload {
+	"""
+	Stable error-event identifier.
+	"""
+	id: ID!
+	"""
+	Configured indexer identifier captured with the event.
+	"""
+	indexerId: ID!
+	"""
+	Indexer name captured when the event occurred.
+	"""
+	indexerName: String!
+	"""
+	Operation that received the failed response.
+	"""
+	operation: IndexerErrorOperationValue!
+	"""
+	RFC 3339 time at which the response was accepted.
+	"""
+	occurredAt: String!
+	"""
+	HTTP response status code, when the upstream returned a response.
+	"""
+	httpStatus: Int
+	"""
+	Safe error classification derived from the response.
+	"""
+	classification: IndexerErrorClassificationValue!
+	"""
+	Newznab provider code when a known Newznab error was recognized.
+	"""
+	providerErrorCode: Int
+	"""
+	Canonical safe error message that excludes response-body text.
+	"""
+	message: String!
+	"""
+	Response Content-Type header when it was valid UTF-8.
+	"""
+	contentType: String
 }
 
 """
@@ -7091,6 +7759,10 @@ enum JobKeyValue {
 	Acquisition search.
 	"""
 	ACQUISITION_SEARCH
+	"""
+	Application upgrade.
+	"""
+	APPLICATION_UPGRADE
 }
 
 """
@@ -7562,7 +8234,7 @@ Acquisition, import, routing, and filesystem settings for a library.
 """
 input LibrarySettingsInput {
 	"""
-	Required audio-language codes.
+	Required audio-language codes; use `original` to resolve per title.
 	"""
 	requiredAudioLanguages: [String!]
 	"""
@@ -7648,11 +8320,11 @@ Effective library settings together with nullable per-library overrides.
 """
 type LibrarySettingsPayload {
 	"""
-	Library override for required audio language codes; null means inherit.
+	Library override for required audio language codes; `original` resolves per title.
 	"""
 	requiredAudioLanguagesOverride: [String!]
 	"""
-	Effective required audio language codes after inheritance.
+	Effective configured requirements after inheritance; `original` remains unchanged.
 	"""
 	requiredAudioLanguages: [String!]!
 	"""
@@ -8151,6 +8823,10 @@ type ManualImportFilePreviewPayload {
 	"""
 	sizeBytes: Long!
 	"""
+	Media facts when the native content probe can identify the file.
+	"""
+	videoFacts: ManualImportVideoFactsPayload
+	"""
 	Parsed quality label, or null when unavailable.
 	"""
 	quality: String
@@ -8185,6 +8861,10 @@ type ManualImportSelectionPayload {
 	"""
 	selectionId: ID!
 	"""
+	The download contains archives and must be explicitly extracted before files can be mapped.
+	"""
+	archiveExtractionNeeded: Boolean!
+	"""
 	Files included in the selection.
 	"""
 	files: [ManualImportFilePreviewPayload!]!
@@ -8218,6 +8898,36 @@ type ManualImportSeriesMovieTargetPayload {
 	Runtime in minutes, or null when unavailable.
 	"""
 	runtimeMinutes: Int
+}
+
+"""
+Media facts obtained while qualifying a manual-import candidate.
+"""
+type ManualImportVideoFactsPayload {
+	"""
+	Detected container format, or null when unavailable.
+	"""
+	containerFormat: String
+	"""
+	Detected video codec, or null when unavailable.
+	"""
+	videoCodec: String
+	"""
+	Detected audio codec, or null when unavailable.
+	"""
+	audioCodec: String
+	"""
+	Detected video width in pixels, or null when unavailable.
+	"""
+	videoWidth: Int
+	"""
+	Detected video height in pixels, or null when unavailable.
+	"""
+	videoHeight: Int
+	"""
+	Detected runtime in seconds, or null when unavailable.
+	"""
+	durationSeconds: Int
 }
 
 """
@@ -8791,6 +9501,10 @@ type MediaServerConnectionPayload {
 	"""
 	baseUrl: String!
 	"""
+	Browser-facing URL used for playback deep links.
+	"""
+	externalUrl: String
+	"""
 	Whether the connection is active.
 	"""
 	enabled: Boolean!
@@ -8915,6 +9629,28 @@ type MediaServerPathMappingPayload {
 }
 
 """
+A provider-native playback link for a server linked to the current user.
+"""
+type MediaServerPlaybackLinkPayload {
+	"""
+	Connection identity. This is not a credential or provider token.
+	"""
+	connectionId: ID!
+	"""
+	User-configured server name.
+	"""
+	displayName: String!
+	"""
+	Provider that owns the destination item.
+	"""
+	provider: MediaServerProviderValue!
+	"""
+	Browser URL for the exact provider media item.
+	"""
+	href: String!
+}
+
+"""
 Media-server provider configured by the application.
 """
 enum MediaServerProviderValue {
@@ -9019,7 +9755,7 @@ type MediaSettingsPayload {
 	"""
 	rootFolders: [RootFolderPayload!]!
 	"""
-	Effective required audio language codes.
+	Effective configured requirements; `original` remains unchanged.
 	"""
 	requiredAudioLanguages: [String!]!
 	"""
@@ -9143,13 +9879,25 @@ type MetadataEpisodePayload {
 }
 
 """
-Metadata gateway movie lookup by provider ID and language.
+Metadata gateway movie lookup by one supported identity and language.
 """
 input MetadataMovieInput {
 	"""
-	TVDB movie ID.
+	TVDB movie ID, when known.
 	"""
-	tvdbId: String!
+	tvdbId: String
+	"""
+	SMG canonical movie title ID, when known.
+	"""
+	smgId: Int
+	"""
+	TMDB movie ID, when known.
+	"""
+	tmdbId: Int
+	"""
+	IMDb movie ID, when known.
+	"""
+	imdbId: String
 	"""
 	Optional metadata language code.
 	"""
@@ -9164,6 +9912,14 @@ type MetadataMoviePayload {
 	TVDB movie ID.
 	"""
 	tvdbId: String!
+	"""
+	SMG canonical movie title ID, or null when unavailable.
+	"""
+	smgId: Int
+	"""
+	TMDB movie ID, or null when unavailable.
+	"""
+	tmdbId: Int
 	"""
 	Movie title.
 	"""
@@ -9222,6 +9978,22 @@ type MetadataSearchItemPayload {
 	TVDB provider ID.
 	"""
 	tvdbId: String!
+	"""
+	SMG canonical title ID, or null for legacy-only results.
+	"""
+	smgId: Int
+	"""
+	TMDB provider ID, or null when unavailable.
+	"""
+	tmdbId: Int
+	"""
+	Primary metadata-provider source, or null for legacy-only results.
+	"""
+	primarySource: String
+	"""
+	Every external identity supplied by the metadata provider.
+	"""
+	externalIds: [ExternalIdPayload!]!
 	"""
 	Metadata title.
 	"""
@@ -9427,7 +10199,7 @@ enum MonitorTypeValue {
 }
 
 """
-Movie metadata used when a movie is linked into a series timeline.
+Persisted movie metadata.
 """
 type MovieEntityPayload {
 	"""
@@ -9482,9 +10254,26 @@ type MovieEntityPayload {
 	AniDB identifier, or null when unmatched.
 	"""
 	anidbId: String
+	"""
+	Aggregated ratings cached during the movie's latest metadata hydration.
+	"""
+	ratings: TitleRatingPayload!
+	"""
+	Cast and crew cached during the movie's latest metadata hydration.
+	"""
+	credits: [TitleCreditPayload!]!
 }
 
 type MutationRoot {
+	"""
+	Begin a signed in-application upgrade for the currently advertised release.
+	"""
+	startApplicationUpgrade(
+		"""
+		The update tag and version currently advertised by SMG.
+		"""
+		input: StartApplicationUpgradeInput!
+	): ApplicationUpgradeStartPayload!
 	"""
 	Create or reuse a title in an accessible library and return its hydration state.
 	"""
@@ -9522,11 +10311,11 @@ type MutationRoot {
 		input: SetPrimaryMovieFileInput!
 	): TitlePayload!
 	"""
-	Associate a title with a TVDB identity and return any hydration or scan result.
+	Associate a title with a metadata identity and return any hydration or scan result.
 	"""
 	fixTitleMatch(
 		"""
-		Title identity and TVDB identity used for the rematch.
+		Title identity and metadata identity used for the rematch.
 		"""
 		input: FixTitleMatchInput!
 	): FixTitleMatchPayload!
@@ -9650,6 +10439,15 @@ type MutationRoot {
 		"""
 		input: RetryImportInput!
 	): ImportResultPayload!
+	"""
+	Cancel a queued or copying import operation by its server-issued stream identity.
+	"""
+	cancelActiveImport(
+		"""
+		Opaque identity of the queued or active import stream.
+		"""
+		streamId: ID!
+	): Boolean!
 	"""
 	Mark a tracked download ignored without deleting it from the download client.
 	"""
@@ -10032,6 +10830,37 @@ type MutationRoot {
 		input: UpdateSecuritySettingsInput!
 	): SecuritySettingsPayload!
 	"""
+	Registers a public OAuth application with exact HTTPS callbacks and mandatory S256 PKCE.
+	"""
+	createOauthClientRegistration(
+		"""
+		Display name and exact HTTPS callback allowlist for the application.
+		"""
+		input: CreateOAuthClientRegistrationInput!
+	): OauthClientRegistrationPayload!
+	"""
+	Replaces custom OAuth application metadata and callback allowlist. Disabling revokes all of its grants.
+	"""
+	updateOauthClientRegistration(
+		"""
+		Immutable client identifier returned during registration.
+		"""
+		clientId: String!,
+		"""
+		Replacement public-client configuration.
+		"""
+		input: UpdateOAuthClientRegistrationInput!
+	): OauthClientRegistrationPayload!
+	"""
+	Deletes a custom OAuth application and revokes every active grant issued to it.
+	"""
+	deleteOauthClientRegistration(
+		"""
+		Immutable client identifier returned during registration.
+		"""
+		clientId: String!
+	): DeleteOAuthClientRegistrationPayload!
+	"""
 	Creates a media-server connection with defaults for omitted enablement flags and redacted secret fields in the result.
 	"""
 	createMediaServerConnection(
@@ -10313,6 +11142,24 @@ type MutationRoot {
 		"""
 		grantId: ID!
 	): RevokeMyOauthAppPayload!
+	"""
+	Creates an API key for the interactive actor and returns its secret once.
+	"""
+	createMyApiKey(
+		"""
+		Label and expiration policy for the new API key.
+		"""
+		input: CreateMyApiKeyInput!
+	): CreateMyApiKeyPayload!
+	"""
+	Revokes one user-created API key owned by the interactive actor.
+	"""
+	revokeMyApiKey(
+		"""
+		API-key record ID to revoke.
+		"""
+		id: ID!
+	): RevokeMyApiKeyPayload!
 	"""
 	Authenticates local credentials, optionally verifies required TOTP, and issues a session or MFA-enrollment token.
 	"""
@@ -11176,7 +12023,7 @@ type NavigationBadgeCountsPayload {
 	"""
 	pendingMediaRequestCounts: MediaRequestCountsPayload!
 	"""
-	Count of import activity visible to the caller.
+	Count of imports awaiting operator attention and visible to the caller.
 	"""
 	activityImportCount: Int!
 	"""
@@ -11327,6 +12174,60 @@ type NotificationTargetPayload {
 	Whether this target can receive notifications.
 	"""
 	isEnabled: Boolean!
+}
+
+"""
+Public authorization-screen identity for a validated OAuth request.
+"""
+type OauthAuthorizationClientPayload {
+	"""
+	Requested OAuth client identifier.
+	"""
+	clientId: String!
+	"""
+	Client name safe to display after callback validation.
+	"""
+	displayName: String!
+}
+
+"""
+An OAuth application allowed to receive Scryer authorization codes.
+"""
+type OauthClientRegistrationPayload {
+	"""
+	Immutable OAuth client identifier.
+	"""
+	clientId: String!
+	"""
+	Name shown to users on the authorization screen.
+	"""
+	displayName: String!
+	"""
+	Exact callback URL allowlist. Managed native clients may use an empty list.
+	"""
+	redirectUris: [String!]!
+	"""
+	Whether the application can authorize or refresh tokens.
+	"""
+	enabled: Boolean!
+	"""
+	Whether the application is managed by Scryer or an administrator.
+	"""
+	source: OauthClientSourceValue!
+}
+
+"""
+Origin of an OAuth client registration.
+"""
+enum OauthClientSourceValue {
+	"""
+	Registration managed by Scryer and not editable through settings.
+	"""
+	MANAGED
+	"""
+	Registration created and maintained by an administrator.
+	"""
+	CUSTOM
 }
 
 """
@@ -11810,6 +12711,14 @@ type PendingReleasePayload {
 	"""
 	delayUntil: DateTime!
 	"""
+	Current machine-readable reason this release is held, or null when none was recorded.
+	"""
+	lastDecisionCode: String
+	"""
+	Arbitration role independent of the release lifecycle state.
+	"""
+	role: PendingReleaseRoleValue!
+	"""
 	Lifecycle state of the pending release.
 	"""
 	status: PendingReleaseStatusValue!
@@ -11821,6 +12730,20 @@ type PendingReleasePayload {
 	Wanted scope holding this release, or null when it is no longer available to the caller.
 	"""
 	wantedItem: WantedItemPayload
+}
+
+"""
+Arbitration role of an active pending release candidate.
+"""
+enum PendingReleaseRoleValue {
+	"""
+	The highest-ranked active candidate for its overlap group.
+	"""
+	PRIMARY
+	"""
+	A lower-ranked active candidate retained as a fallback.
+	"""
+	FALLBACK
 }
 
 """
@@ -11963,6 +12886,24 @@ type PluginConfigFieldOptionPayload {
 	Display label for the option.
 	"""
 	label: String!
+	"""
+	Other configuration fields populated when this option is selected.
+	"""
+	configOverrides: [PluginConfigFieldOverridePayload!]!
+}
+
+"""
+One field value supplied by a selected plugin configuration preset.
+"""
+type PluginConfigFieldOverridePayload {
+	"""
+	Configuration field key to populate.
+	"""
+	key: String!
+	"""
+	Configuration field value to populate.
+	"""
+	value: String!
 }
 
 """
@@ -13017,6 +13958,19 @@ type QueryRoot {
 		id: ID!
 	): TitlePayload
 	"""
+	Fetch locally cached movie metadata through a visible title relationship.
+	"""
+	movieEntity(
+		"""
+		Title used to authorize access to the movie.
+		"""
+		titleId: ID!,
+		"""
+		Movie entity ID to fetch.
+		"""
+		id: ID!
+	): MovieEntityPayload
+	"""
 	Fetch an episode by ID while verifying that it belongs to the supplied parent title.
 	"""
 	episode(
@@ -13438,6 +14392,10 @@ type QueryRoot {
 		sortDirection: SortDirectionValue! = ASC
 	): DownloadQueuePagePayload!
 	"""
+	Return queued and active filesystem import operations. Idle worker capacity is never included.
+	"""
+	activeImportStreams: [ActiveImportStreamPayload!]!
+	"""
 	Deprecated download activity listing without pagination or queue readiness metadata.
 	"""
 	downloadQueue(
@@ -13549,6 +14507,23 @@ type QueryRoot {
 	"""
 	securitySettings: SecuritySettingsPayload!
 	"""
+	Lists managed and administrator-created OAuth applications.
+	"""
+	oauthClientRegistrations: [OauthClientRegistrationPayload!]!
+	"""
+	Resolves the display name for an OAuth authorization request after validating its callback URL.
+	"""
+	oauthAuthorizationClient(
+		"""
+		OAuth client identifier from the authorization request.
+		"""
+		clientId: String!,
+		"""
+		Redirect URI from the authorization request.
+		"""
+		redirectUri: String!
+	): OauthAuthorizationClientPayload!
+	"""
 	Returns effective external-auth providers and connections, hiding login capability when form login is disabled.
 	"""
 	externalAuthRuntimeSettings: ExternalAuthRuntimeSettingsPayload!
@@ -13599,6 +14574,14 @@ type QueryRoot {
 	Lists OAuth grants authorized by the authenticated actor without client secrets.
 	"""
 	myOauthApps: [OauthConnectedAppPayload!]!
+	"""
+	Lists the interactive actor's API keys without returning their secrets.
+	"""
+	myApiKeys: [ApiKeyPayload!]!
+	"""
+	Whether the interactive actor may create API keys under the active security policy.
+	"""
+	canCreateMyApiKeys: Boolean!
 	"""
 	Lists delay profiles with minute-based delays and their media-facet assignments.
 	"""
@@ -13713,6 +14696,10 @@ type QueryRoot {
 	Return an available Scryer update notice from SMG, if one exists.
 	"""
 	smgScryerUpdateNotice: SmgScryerUpdateNoticePayload
+	"""
+	Return application update availability and installation eligibility; requires system-settings management permission.
+	"""
+	applicationUpgradeStatus: ApplicationUpgradeStatusPayload!
 	"""
 	List recycled media items in a bounded page, optionally restricted to library IDs.
 	"""
@@ -13946,11 +14933,11 @@ type QueryRoot {
 		language: String! = "eng"
 	): MetadataSearchMultiPayload!
 	"""
-	Fetch one movie metadata record by TVDB identity and language.
+	Fetch one movie metadata record by a supplied identity and language.
 	"""
 	metadataMovie(
 		"""
-		TVDB identity and optional metadata language, which defaults to `eng`.
+		Movie identity and optional metadata language, which defaults to `eng`.
 		"""
 		input: MetadataMovieInput!
 	): MetadataMoviePayload!
@@ -14057,6 +15044,32 @@ type QueryRoot {
 	List external account invitations visible to the caller.
 	"""
 	externalAccountInvites: [LinkedAccountPayload!]!
+	"""
+	List persisted indexer HTTP errors; requires system-settings management permission.
+	"""
+	indexerErrors(
+		"""
+		Restrict results to one configured indexer.
+		"""
+		indexerId: ID,
+		"""
+		Requested page size from 1 through 100; defaults to 50.
+		"""
+		first: Int = 50,
+		"""
+		Opaque cursor returned by a prior indexerErrors page.
+		"""
+		after: String
+	): IndexerErrorConnectionPayload!
+	"""
+	Return one complete persisted indexer HTTP response; requires system-settings management permission.
+	"""
+	indexerError(
+		"""
+		Stable persisted error-event identifier.
+		"""
+		id: ID!
+	): IndexerErrorDetailPayload
 }
 
 """
@@ -14380,6 +15393,10 @@ type RecycledItemPayload {
 	Time the file entered the recycle bin in UTC.
 	"""
 	recycledAt: DateTime!
+	"""
+	Time the retention policy schedules this file for permanent deletion in UTC.
+	"""
+	scheduledDeletionAt: DateTime!
 	"""
 	Media root containing the original file.
 	"""
@@ -14885,6 +15902,20 @@ input RetryImportInput {
 }
 
 """
+Revocation result for a user-owned API key.
+"""
+type RevokeMyApiKeyPayload {
+	"""
+	ID of the revoked key.
+	"""
+	id: ID!
+	"""
+	Whether the active key was revoked.
+	"""
+	revoked: Boolean!
+}
+
+"""
 Result of revoking an OAuth grant.
 """
 type RevokeMyOauthAppPayload {
@@ -15354,6 +16385,10 @@ type SecuritySettingsPayload {
 	"""
 	skipLoginForLocalIps: Boolean!
 	"""
+	Whether API keys are restricted to users with system-settings permission.
+	"""
+	apiKeysRestrictToSystemSettingsUsers: Boolean!
+	"""
 	Whether configuration changes require MFA step-up.
 	"""
 	mfaRequireConfigStepUp: Boolean!
@@ -15511,6 +16546,14 @@ type SeriesMovieLinkPayload {
 	Short explanation of the placement signals, or null when unavailable.
 	"""
 	signalSummary: String
+	"""
+	Explicit operator monitoring choice, or null when title policy manages this link.
+	"""
+	monitoringOverride: Boolean
+	"""
+	Whether current metadata still reports this series-movie relationship.
+	"""
+	metadataActive: Boolean!
 	"""
 	Whether acquisition and monitoring are enabled for this link.
 	"""
@@ -15758,8 +16801,9 @@ input SetTitleRequiredAudioInput {
 	"""
 	facet: MediaFacetValue!
 	"""
-	`null` removes the override and inherits from the facet.
+	`null` removes the override and inherits from the library or facet.
 	`[]` stores an explicit "no required languages" override for the title.
+	Use `original` to resolve the title's original language dynamically.
 	"""
 	languages: [String!]
 }
@@ -15939,6 +16983,20 @@ enum SortDirectionValue {
 }
 
 """
+The exact update notice accepted by `startApplicationUpgrade`.
+"""
+input StartApplicationUpgradeInput {
+	"""
+	Release tag displayed by the current update notice.
+	"""
+	expectedTag: String!
+	"""
+	Release version displayed by the current update notice.
+	"""
+	expectedVersion: String!
+}
+
+"""
 External source and credentials for an asynchronous warmup session.
 """
 input StartExternalImportArrSourceWarmupInput {
@@ -16100,6 +17158,10 @@ type SubscriptionRoot {
 	activityEvents: ActivityEventPayload!
 	domainEventFeed(afterSequence: Long): DomainEventEnvelopePayload!
 	downloadQueueSync: DownloadQueueSyncPayload!
+	"""
+	Notify clients when queued or active import streams change.
+	"""
+	activeImportStreamsSync: ActiveImportStreamSyncPayload!
 	downloadQueue(includeAllActivity: Boolean, includeHistoryOnly: Boolean, includeImportActivity: Boolean, titleId: ID, activityFilter: DownloadActivityFilterValue): [DownloadQueueItemPayload!]! @deprecated(reason: "use downloadQueueSync")
 	libraryScanState: LibraryScanProgressPayload!
 	jobRunEvents: JobRunPayload!
@@ -17554,6 +18616,10 @@ type TitlePayload {
 	"""
 	recapPolicy: RecapPolicyValue
 	"""
+	Provider-native playback links for this title, when an exact catalog mapping exists.
+	"""
+	playbackLinks: [MediaServerPlaybackLinkPayload!]!
+	"""
 	Effective target quality-profile label for the title.
 	"""
 	qualityTier: String
@@ -17665,7 +18731,8 @@ type TitlePayload {
 	"""
 	requiredAudioLanguagesOverride: [String!]
 	"""
-	Required audio languages after applying the title override or facet default.
+	Configured audio requirements after title, library, and facet inheritance.
+	The `original` token remains unresolved in this configuration field.
 	"""
 	effectiveRequiredAudioLanguages: [String!]!
 	"""
@@ -17756,7 +18823,7 @@ type TitleRatingPayload {
 }
 
 """
-One title release blocklist entry and the episodes it affects.
+One blocked release for a title.
 """
 type TitleReleaseBlocklistEntryPayload {
 	"""
@@ -17764,13 +18831,9 @@ type TitleReleaseBlocklistEntryPayload {
 	"""
 	id: ID!
 	"""
-	Download source locator used to identify the blocked release, or null when unavailable.
+	The blocked release's name, as the indexer presented it.
 	"""
-	sourceHint: String
-	"""
-	Release title recorded with the entry, or null when unavailable.
-	"""
-	sourceTitle: String
+	releaseName: String!
 	"""
 	Failure or blocklist reason, or null when unavailable.
 	"""
@@ -17779,10 +18842,6 @@ type TitleReleaseBlocklistEntryPayload {
 	UTC time when the release was attempted.
 	"""
 	attemptedAt: DateTime!
-	"""
-	Episode IDs targeted by this blocklist entry.
-	"""
-	episodeIds: [ID!]!
 }
 
 """
@@ -18587,6 +19646,10 @@ input UpdateMediaServerConnectionInput {
 	"""
 	baseUrl: String
 	"""
+	Replacement browser-facing URL; omission preserves the current value and an empty value clears it.
+	"""
+	externalUrl: String
+	"""
 	Replacement enabled state; omission preserves the current value.
 	"""
 	enabled: Boolean
@@ -18689,7 +19752,7 @@ input UpdateMediaSettingsInput {
 	"""
 	rootFolders: [RootFolderInput!]
 	"""
-	Optional required audio-language codes.
+	Optional required audio-language codes; use `original` to resolve per title.
 	"""
 	requiredAudioLanguages: [String!]
 	"""
@@ -18835,6 +19898,24 @@ input UpdateNotificationSubscriptionInput {
 }
 
 """
+Replacement details for a custom OAuth application.
+"""
+input UpdateOAuthClientRegistrationInput {
+	"""
+	Name displayed to users during authorization.
+	"""
+	displayName: String!
+	"""
+	Exact HTTPS callback URLs permitted for this application.
+	"""
+	redirectUris: [String!]!
+	"""
+	Whether the application is active. Disabling revokes its existing grants.
+	"""
+	enabled: Boolean!
+}
+
+"""
 Automatic official-plugin patch update setting.
 """
 input UpdatePluginAutoUpdateSettingsInput {
@@ -18960,6 +20041,10 @@ input UpdateSecuritySettingsInput {
 	Whether local IPs may skip login.
 	"""
 	skipLoginForLocalIps: Boolean!
+	"""
+	Whether API keys are restricted to users with system-settings permission.
+	"""
+	apiKeysRestrictToSystemSettingsUsers: Boolean
 	"""
 	Whether sensitive configuration changes require MFA step-up.
 	"""

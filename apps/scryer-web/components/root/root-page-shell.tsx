@@ -49,6 +49,7 @@ import { JobRunProvider } from "@/components/root/job-run-provider";
 import { LibraryScanProgressProvider } from "@/components/root/library-scan-progress-provider";
 import { ReactiveRefreshProvider } from "@/components/root/reactive-refresh-provider";
 import { RootSidebar } from "@/components/root/root-sidebar";
+import { ApplicationUpgradeAction } from "@/components/common/application-upgrade";
 import { ViewLoadingFallback } from "@/components/common/view-loading-fallback";
 import { GlobalSearchProvider } from "@/components/root/global-search-provider";
 import { Button } from "@/components/ui/button";
@@ -61,6 +62,7 @@ import { backendClient } from "@/lib/graphql/urql-client";
 import { useOnlineStatus } from "@/lib/hooks/use-online-status";
 import { useInstallPrompt } from "@/lib/hooks/use-install-prompt";
 import { useBackendRestarting } from "@/lib/hooks/use-backend-restarting";
+import { useApplicationUpgradeStatus } from "@/lib/hooks/use-application-upgrade-status";
 import { TotpCodeForm } from "@/components/auth/totp-code-form";
 import {
   Dialog,
@@ -149,6 +151,12 @@ const NotFoundPage = lazy(() => import("@/src/pages/not-found"));
 const ActivityContainer = lazy(() =>
   import("@/components/containers/activity-container").then((m) => ({
     default: m.ActivityContainer,
+  })),
+);
+
+const TitleHistoryContainer = lazy(() =>
+  import("@/components/containers/title-history-container").then((m) => ({
+    default: m.TitleHistoryContainer,
   })),
 );
 
@@ -293,10 +301,12 @@ function SmgUpgradeBanner({
 }
 
 function SmgScryerUpdateBanner({
+  canManageSystemSettings,
   notice,
   t,
   onDismiss,
 }: {
+  canManageSystemSettings: boolean;
   notice: SmgScryerUpdateNotice;
   t: TranslateFn;
   onDismiss: () => void;
@@ -304,6 +314,7 @@ function SmgScryerUpdateBanner({
   const currentVersion = notice.currentVersion.trim();
   const latestVersion = notice.latestVersion.trim();
   const releaseUrl = notice.releaseUrl?.trim() || null;
+  const { status, refresh } = useApplicationUpgradeStatus(canManageSystemSettings);
 
   return (
     <div
@@ -335,6 +346,13 @@ function SmgScryerUpdateBanner({
           >
             {t("smgUpdate.releaseNotes")}
           </a>
+        ) : null}
+        {status?.eligible ? (
+          <ApplicationUpgradeAction
+            status={status}
+            className="flex-none"
+            onStatusChanged={() => void refresh()}
+          />
         ) : null}
         <IconButton
           type="button"
@@ -494,8 +512,11 @@ function MainContent({
     if (!canAccessActivity) {
       return <ViewLoadingFallback />;
     }
+    if (activitySection === "history") {
+      return <TitleHistoryContainer key="activity-history" showRetryActions={false} />;
+    }
     return (
-      <ActivityContainer key="activity" activitySection={activitySection} />
+      <ActivityContainer key={`activity-${activitySection}`} activitySection={activitySection} />
     );
   }
   if (view === "calendar") {
@@ -522,12 +543,10 @@ function MainContent({
     return <RequestsContainer key="requests" facet={null} />;
   }
   if (view === "wanted") {
-    const resolvedWantedSection =
-      wantedSection === "history" && !canManageTitle ? "wanted" : wantedSection;
     return (
       <WantedContainer
-        key={`wanted-${resolvedWantedSection}`}
-        wantedSection={resolvedWantedSection}
+        key={`wanted-${wantedSection}`}
+        wantedSection={wantedSection}
         onOpenOverview={handleOpenOverview}
       />
     );
@@ -1646,32 +1665,6 @@ function AuthenticatedHomePage({
   ]);
 
   useEffect(() => {
-    if (
-      !routeIsCanonical ||
-      view !== "wanted" ||
-      wantedSection !== "history" ||
-      canManageTitle
-    ) {
-      return;
-    }
-
-    if (!canViewCatalog) {
-      navigateToAccessibleDefault();
-      return;
-    }
-
-    navigateTo("wanted", undefined, undefined, undefined, "wanted");
-  }, [
-    canManageTitle,
-    canViewCatalog,
-    navigateTo,
-    navigateToAccessibleDefault,
-    routeIsCanonical,
-    view,
-    wantedSection,
-  ]);
-
-  useEffect(() => {
     if (!routeIsCanonical || view !== "settings") {
       return;
     }
@@ -1770,6 +1763,7 @@ function AuthenticatedHomePage({
                     <GlobalSearchProvider
                       activeFacet={activeFacet}
                       authenticatedUser={authenticatedUser}
+                      onOpenOverview={handleOpenOverview}
                       queueFacet={queueFacet}
                       uiLanguage={uiLanguage}
                     >
@@ -1782,6 +1776,7 @@ function AuthenticatedHomePage({
 
                       {showSmgScryerUpdateReminder && smgScryerUpdateNotice ? (
                         <SmgScryerUpdateBanner
+                          canManageSystemSettings={canManageSystemSettings}
                           notice={smgScryerUpdateNotice}
                           t={t}
                           onDismiss={dismissSmgScryerUpdateReminder}

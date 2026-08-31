@@ -1,7 +1,6 @@
 import type {
   DownloadActivityStatus,
   DownloadClientFilterOption,
-  DownloadHistoryStatus,
   DownloadImportStatus,
   DownloadQueueItem,
 } from "@/lib/types";
@@ -17,6 +16,100 @@ export type DownloadQueueDisplayStateInput = Pick<
   | "trackedState"
   | "trackedStatusMessages"
 >;
+
+type QueueItemValueKey = Exclude<
+  keyof DownloadQueueItem,
+  "trackedStatusMessages" | "queueScope"
+>;
+
+const QUEUE_ITEM_VALUE_KEYS: readonly QueueItemValueKey[] = [
+  "id",
+  "titleId",
+  "episodeId",
+  "titleName",
+  "facet",
+  "isScryerOrigin",
+  "sourceProvider",
+  "clientId",
+  "clientName",
+  "clientType",
+  "state",
+  "displayState",
+  "progressPercent",
+  "importTransferPhase",
+  "importTransferBytes",
+  "importTransferTotalBytes",
+  "importTransferStartedAt",
+  "importTransferUpdatedAt",
+  "sizeBytes",
+  "remainingSeconds",
+  "queuedAt",
+  "lastUpdatedAt",
+  "attentionRequired",
+  "attentionReason",
+  "downloadClientItemId",
+  "downloadId",
+  "importStatus",
+  "importErrorCode",
+  "importErrorMessage",
+  "importedAt",
+  "deleteStatus",
+  "deleteErrorMessage",
+  "trackedState",
+  "trackedStatus",
+  "trackedMatchType",
+  "seedingState",
+  "seedRatio",
+  "seedRatioGoal",
+  "seedTimeSeconds",
+  "seedTimeGoalSeconds",
+  "isPrivate",
+];
+
+export function sameDownloadQueueItem(
+  current: DownloadQueueItem,
+  next: DownloadQueueItem,
+): boolean {
+  const currentStatusMessages = current.trackedStatusMessages ?? [];
+  const nextStatusMessages = next.trackedStatusMessages ?? [];
+  return (
+    current === next ||
+    (QUEUE_ITEM_VALUE_KEYS.every((key) => current[key] === next[key]) &&
+      currentStatusMessages.length === nextStatusMessages.length &&
+      currentStatusMessages.every(
+        (message, index) => message === nextStatusMessages[index],
+      ) &&
+      JSON.stringify(current.queueScope) === JSON.stringify(next.queueScope))
+  );
+}
+
+export function reconcileDownloadQueueItems(
+  current: DownloadQueueItem[],
+  next: readonly DownloadQueueItem[],
+): DownloadQueueItem[] {
+  if (current.length === 0) {
+    return [...next];
+  }
+
+  const currentByIdentity = new Map(
+    current.map((item) => [downloadQueueItemIdentityKey(item), item]),
+  );
+  let changed = current.length !== next.length;
+  const reconciled = next.map((item, index) => {
+    const currentItem = currentByIdentity.get(downloadQueueItemIdentityKey(item));
+    if (currentItem && sameDownloadQueueItem(currentItem, item)) {
+      if (current[index] !== currentItem) {
+        changed = true;
+      }
+      return currentItem;
+    }
+
+    changed = true;
+    return item;
+  });
+
+  return changed ? reconciled : current;
+}
 
 export function downloadQueueItemIdentityKey(
   item: Pick<DownloadQueueItem, "id" | "clientId" | "clientType" | "downloadClientItemId">,
@@ -449,8 +542,14 @@ export function isManualImportRequiredQueueItem(
   queueItem: DownloadQueueDisplayStateInput,
 ): boolean {
   const state = deriveDownloadQueueDisplayState(queueItem);
-  return state === "import_blocked" || state === "importing" || state === "import_failed";
+  return state === "import_blocked" || state === "import_failed";
 }
+
+export const IMPORT_ATTENTION_STATUSES: DownloadImportStatus[] = [
+  "PENDING",
+  "BLOCKED",
+  "FAILED",
+];
 
 export function downloadQueueClientFilterKey(
   item: Pick<DownloadQueueItem, "id" | "clientId" | "clientType">,
@@ -542,25 +641,6 @@ export function matchesActivityStatuses(
     // activity it is part of rather than with the failed history.
     case "WARNING":
       return statuses.includes("WARNING");
-    default:
-      return false;
-  }
-}
-
-export function matchesHistoryStatuses(
-  item: Pick<DownloadQueueItem, "displayState">,
-  statuses: DownloadHistoryStatus[],
-): boolean {
-  if (statuses.length === 0) {
-    return false;
-  }
-
-  switch (item.displayState) {
-    case "COMPLETED":
-      return statuses.includes("SUCCESS");
-    case "FAILED":
-    case "REMOVE_FAILED":
-      return statuses.includes("FAILED");
     default:
       return false;
   }

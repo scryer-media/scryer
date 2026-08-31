@@ -160,6 +160,7 @@ async fn oauth_authorize_decision_inner(
     state
         .app
         .validate_oauth_redirect_uri(&input.client_id, &input.redirect_uri)
+        .await
         .map_err(oauth_validation_error)?;
     if input.response_type != "code" {
         return Ok(OAuthAuthorizeDecisionResponse {
@@ -248,12 +249,16 @@ async fn oauth_token(
             "client_id is required",
         );
     };
-    if state.app.oauth_client_info(client_id).is_none() {
-        return oauth_error(
-            StatusCode::BAD_REQUEST,
-            "invalid_client",
-            "unknown OAuth client",
-        );
+    match state.app.oauth_client_info(client_id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            return oauth_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_client",
+                "unknown OAuth client",
+            );
+        }
+        Err(error) => return oauth_app_error(error),
     }
     let result = match grant_type {
         "authorization_code" => {

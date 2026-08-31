@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 import { AddNewButton } from "@/components/common/add-new-button";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
-import { SubtitleLanguagePicker } from "@/components/common/subtitle-language-picker";
+import { AudioLanguagePicker } from "@/components/common/audio-language-picker";
 import { FolderBrowserDialog } from "@/components/setup/folder-browser-dialog";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
@@ -34,6 +34,7 @@ import {
 } from "@/components/ui/select";
 import { useTranslate } from "@/lib/context/translate-context";
 import { SCORING_PERSONA_CHOICES } from "@/lib/constants/quality-profiles";
+import { formatAudioLanguageLabels } from "@/lib/constants/audio-languages";
 import { AVAILABLE_LANGUAGES } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { selectorId } from "@/lib/utils/dom-ids";
@@ -1295,7 +1296,7 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
               <div className="grid gap-3 md:grid-cols-3">
                 <div className="space-y-2">
                   <Label>{t("settings.libraryRequiredAudioLabel")}</Label>
-                  <SubtitleLanguagePicker
+                  <AudioLanguagePicker
                     value={draftRequiredAudioLanguages}
                     onChange={setDraftRequiredAudioLanguages}
                     disabled={settingsBusy}
@@ -1303,7 +1304,11 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
                   {savedSettings ? (
                     <EffectiveChip>
                       {t("settings.libraryEffectiveAudio", {
-                        value: savedSettings.requiredAudioLanguages.join(", ") || t("label.none"),
+                        value:
+                          formatAudioLanguageLabels(
+                            savedSettings.requiredAudioLanguages,
+                            t("title.originalAudioLanguagePerTitle"),
+                          ) || t("label.none"),
                       })}
                     </EffectiveChip>
                   ) : null}

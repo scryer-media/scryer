@@ -9,6 +9,7 @@ import type { Translate } from "@/components/root/types";
 import { buildViewPath } from "@/lib/utils/routing";
 import { formatUiDateTime } from "@/lib/utils/date-format";
 import { selectorId, wantedItemRowId, wantedItemSearchNowId } from "@/lib/utils/dom-ids";
+import { parseDecisionExplanation } from "@/lib/utils/release-decision-explanation";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
@@ -42,6 +43,7 @@ import {
 import { ConvergenceBadge } from "@/components/views/convergence-badge";
 import { CutoffUnmetView } from "@/components/views/cutoff-unmet-view";
 import type { CutoffUnmetItem } from "@/components/views/cutoff-unmet-view";
+import { WantedScoringBreakdown } from "@/components/views/wanted-scoring-breakdown";
 import type {
   AcquisitionSearchJob,
   PendingReleaseItem,
@@ -109,11 +111,6 @@ type WantedViewState = {
   triggerMismatchRecovery: (titleId: string) => Promise<void>;
 };
 
-type ReleaseDecisionExplanationEntry = {
-  code: string;
-  delta: number;
-};
-
 function formatWantedMediaType(mediaType: WantedMediaType, t: Translate) {
   const key: Record<WantedMediaType, string> = {
     MOVIE: "wanted.type.movie",
@@ -142,6 +139,7 @@ function formatWantedDecisionCode(code: string, t: Translate) {
     ambiguous_identity: "wanted.decision.ambiguousIdentity",
     quality_blocked: "wanted.decision.qualityBlocked",
     minimum_seeders: "wanted.decision.minimumSeeders",
+    pack_below_missing_threshold: "wanted.decision.packBelowMissingThreshold",
     upgrade_rejected: "wanted.decision.upgradeRejected",
     pending_delay: "wanted.decision.pendingDelay",
     already_active: "wanted.decision.alreadyActive",
@@ -372,38 +370,6 @@ function NoStandbyCandidates({ item }: { item: WantedItem }) {
   return <span className="text-xs text-muted-foreground">{t("wanted.noStandbyCandidates")}</span>;
 }
 
-function parseDecisionExplanation(
-  explanationJson: unknown,
-): ReleaseDecisionExplanationEntry[] {
-  if (!explanationJson) return [];
-
-  try {
-    const parsed = explanationJson;
-    if (!Array.isArray(parsed)) return [];
-
-    return parsed.flatMap((entry) => {
-      if (
-        !entry ||
-        typeof entry !== "object" ||
-        typeof entry.code !== "string" ||
-        entry.code.trim().length === 0 ||
-        typeof entry.delta !== "number" ||
-        !Number.isFinite(entry.delta)
-      ) {
-        return [];
-      }
-
-      return [{ code: entry.code, delta: entry.delta }];
-    });
-  } catch {
-    return [];
-  }
-}
-
-function formatSignedDelta(delta: number) {
-  return delta > 0 ? `+${delta}` : `${delta}`;
-}
-
 type PendingViewState = {
   items: PendingReleaseItem[];
   total: number;
@@ -421,7 +387,6 @@ type WantedViewProps = {
   wantedState: WantedViewState;
   cutoffState: CutoffUnmetViewState;
   pendingState: PendingViewState;
-  historyContent?: React.ReactNode;
   onOpenOverview?: (
     targetView: ViewId,
     overviewTarget: OverviewTitleTarget,
@@ -434,38 +399,52 @@ export function WantedView({
   wantedState,
   cutoffState,
   pendingState,
-  historyContent,
   onOpenOverview,
 }: WantedViewProps) {
   const t = useTranslate();
-  const wantedNav = [
+  const wantedNav: Array<{
+    section: WantedSection | "history";
+    label: string;
+    count: number | null;
+    icon: typeof ListChecks;
+    to: string;
+    active: boolean;
+  }> = [
     {
-      section: "wanted" as const,
+      section: "wanted",
       label: t("wanted.title"),
       count: wantedState.total,
       icon: ListChecks,
+      to: buildViewPath("wanted", undefined, undefined, undefined, "wanted"),
+      active: section === "wanted",
     },
     {
-      section: "cutoff" as const,
+      section: "cutoff",
       label: t("cutoff.title"),
       count: cutoffState.total,
       icon: Gauge,
+      to: buildViewPath("wanted", undefined, undefined, undefined, "cutoff"),
+      active: section === "cutoff",
     },
     {
-      section: "pending" as const,
+      section: "pending",
       label: t("pending.title"),
       count: pendingState.total,
       icon: Clock,
+      to: buildViewPath("wanted", undefined, undefined, undefined, "pending"),
+      active: section === "pending",
     },
     {
-      section: "history" as const,
+      section: "history",
       label: t("history.title"),
       count: null,
       icon: History,
+      to: buildViewPath("activity", undefined, undefined, undefined, undefined, "history"),
+      active: false,
     },
   ];
   const activeWantedNavItem =
-    wantedNav.find((item) => item.section === section) ?? wantedNav[0]!;
+    wantedNav.find((item) => item.active) ?? wantedNav[0]!;
   const ActiveWantedIcon = activeWantedNavItem.icon;
 
   return (
@@ -477,11 +456,11 @@ export function WantedView({
         >
           {wantedNav.map((item) => {
             const Icon = item.icon;
-            const active = section === item.section;
+            const active = item.active;
             return (
               <Link
                 key={item.section}
-                to={buildViewPath("wanted", undefined, undefined, undefined, item.section)}
+                to={item.to}
                 className={cn(
                   "flex h-9 shrink-0 items-center gap-2 rounded-[9px] px-3 text-[13px] font-medium text-[var(--scry-muted)] transition hover:bg-[var(--scry-hover)] hover:text-[var(--scry-ink2)] md:w-full",
                   active &&
@@ -532,11 +511,7 @@ export function WantedView({
             </div>
           </div>
           <div className="min-h-0 flex-1">
-            {section === "history" ? (
-              historyContent ?? (
-                <WantedItemsCard state={wantedState} onOpenOverview={onOpenOverview} />
-              )
-            ) : section === "cutoff" ? (
+            {section === "cutoff" ? (
               <CutoffUnmetView state={cutoffState} />
             ) : section === "pending" ? (
               <PendingReleasesCard state={pendingState} />
@@ -842,7 +817,7 @@ function WantedItemsCard({
                                       <span>{t("wanted.scoreBreakdown")}</span>
                                     </button>
                                     {scoringExpanded ? (
-                                      <ScoringBreakdown entries={scoringEntries} />
+                                      <WantedScoringBreakdown entries={scoringEntries} />
                                     ) : null}
                                   </div>
                                 ) : null}
@@ -1134,7 +1109,7 @@ function WantedItemsCard({
                                       {scoringExpanded ? (
                                         <TableRow>
                                           <TableCell colSpan={7} className="bg-background/70 p-3">
-                                            <ScoringBreakdown entries={scoringEntries} />
+                                            <WantedScoringBreakdown entries={scoringEntries} />
                                           </TableCell>
                                         </TableRow>
                                       ) : null}
@@ -1188,36 +1163,6 @@ function WantedItemsCard({
         )}
       </CardContent>
     </Card>
-  );
-}
-
-function ScoringBreakdown({
-  entries,
-}: {
-  entries: ReleaseDecisionExplanationEntry[];
-}) {
-  const t = useTranslate();
-
-  return (
-    <div className="mt-3 rounded-md border border-border/70 bg-background/60 p-3">
-      <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-4 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-        <span>{t("wanted.scoreCode")}</span>
-        <span>{t("wanted.decDelta")}</span>
-      </div>
-      <div className="mt-2 space-y-1">
-        {entries.map((entry, index) => (
-          <div
-            key={`${entry.code}-${index}`}
-            className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-4 font-[var(--font-code)] text-xs text-foreground"
-          >
-            <span className="truncate" title={entry.code}>
-              {entry.code}
-            </span>
-            <span>{formatSignedDelta(entry.delta)}</span>
-          </div>
-        ))}
-      </div>
-    </div>
   );
 }
 
@@ -1405,6 +1350,14 @@ function PendingReleasesCard({ state }: { state: PendingViewState }) {
                         {formatTimeRemaining(item.delayUntil, t)}
                       </span>
                     </div>
+                    <div>
+                      <span className="block">{t("pending.colReason")}</span>
+                      <span className="text-foreground">{item.lastDecisionCode ?? "—"}</span>
+                    </div>
+                    <div>
+                      <span className="block">{t("pending.colRole")}</span>
+                      <span className="text-foreground">{item.role === "PRIMARY" ? t("pending.role.primary") : t("pending.role.fallback")}</span>
+                    </div>
                   </div>
                   <p className="mt-2 text-xs text-muted-foreground">
                     {formatDate(item.addedAt, dateTimeFormat)}
@@ -1462,6 +1415,8 @@ function PendingReleasesCard({ state }: { state: PendingViewState }) {
                   <TableHead className="w-32 text-center">{t("pending.colIndexer")}</TableHead>
                   <TableHead className="w-32 text-center">{t("pending.colAddedAt")}</TableHead>
                   <TableHead className="w-32 text-center">{t("pending.colDelayUntil")}</TableHead>
+                  <TableHead className="w-36 text-center">{t("pending.colReason")}</TableHead>
+                  <TableHead className="w-24 text-center">{t("pending.colRole")}</TableHead>
                   <TableActionsHead className="w-24">{t("label.actions")}</TableActionsHead>
                 </TableRow>
               </TableHeader>
@@ -1508,6 +1463,12 @@ function PendingReleasesCard({ state }: { state: PendingViewState }) {
                             {formatTimeRemaining(item.delayUntil, t)}
                           </span>
                         </TableCell>
+                        <TableCell className="truncate text-center text-xs" title={item.lastDecisionCode ?? undefined}>
+                          {item.lastDecisionCode ?? "—"}
+                        </TableCell>
+                        <TableCell className="text-center text-xs">
+                          {item.role === "PRIMARY" ? t("pending.role.primary") : t("pending.role.fallback")}
+                        </TableCell>
                         <TableActionsCell className="w-24">
                           <div className="flex justify-center gap-1">
                             <IconButton
@@ -1533,7 +1494,7 @@ function PendingReleasesCard({ state }: { state: PendingViewState }) {
                       </TableRow>
                       {expanded ? (
                         <TableRow>
-                          <TableCell colSpan={10} className="bg-background/30 p-4">
+                          <TableCell colSpan={12} className="bg-background/30 p-4">
                             <div className="grid gap-3 text-xs sm:grid-cols-2 lg:grid-cols-4">
                               <div>
                                 <span className="block text-muted-foreground">Title ID</span>
@@ -1551,6 +1512,14 @@ function PendingReleasesCard({ state }: { state: PendingViewState }) {
                                 <span className="block text-muted-foreground">{t("pending.colDelayUntil")}</span>
                                 <span className="text-foreground">{formatDate(item.delayUntil, dateTimeFormat)}</span>
                               </div>
+                              <div>
+                                <span className="block text-muted-foreground">{t("pending.colReason")}</span>
+                                <span className="text-foreground">{item.lastDecisionCode ?? "—"}</span>
+                              </div>
+                              <div>
+                                <span className="block text-muted-foreground">{t("pending.colRole")}</span>
+                                <span className="text-foreground">{item.role === "PRIMARY" ? t("pending.role.primary") : t("pending.role.fallback")}</span>
+                              </div>
                             </div>
                           </TableCell>
                         </TableRow>
@@ -1560,7 +1529,7 @@ function PendingReleasesCard({ state }: { state: PendingViewState }) {
                 })}
                 {items.length === 0 && !loading && (
                   <TableRow>
-                    <TableCell colSpan={10} className="text-center text-muted-foreground">
+                    <TableCell colSpan={12} className="text-center text-muted-foreground">
                       {t("pending.noItems")}
                     </TableCell>
                   </TableRow>

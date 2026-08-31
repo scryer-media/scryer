@@ -1,22 +1,34 @@
-# Scryer
-
 <p align="center">
   <a href="https://github.com/scryer-media/scryer/releases"><img src="https://img.shields.io/github/v/release/scryer-media/scryer" alt="Release" /></a>
-  <a href="https://ghcr.io/scryer-media/scryer"><img src="https://img.shields.io/badge/container-ghcr.io-blue" alt="Container" /></a>
   <a href="https://securityscorecards.dev/viewer/?uri=github.com/scryer-media/scryer"><img src="https://api.scorecard.dev/projects/github.com/scryer-media/scryer/badge" alt="OpenSSF Scorecard" /></a>
   <a href="https://www.bestpractices.dev/projects/14165"><img src="https://www.bestpractices.dev/projects/14165/badge"></a>
 </p>
-
 <p align="center">
   <a href="https://www.scryer.media/scryer/donate/"><img src="https://img.shields.io/badge/Donate-%E2%9D%A4%EF%B8%8F-db61a2?logo=githubsponsors&logoColor=white" alt="Donate to Scryer" /></a>
   <a href="https://www.reddit.com/r/scryer_media/"><img src="https://img.shields.io/badge/Reddit-r%2Fscryer__media-FF4500?logo=reddit&logoColor=white" alt="Scryer on Reddit" /></a>
   <a href="https://discord.gg/SQmtZTanqm"><img src="https://img.shields.io/badge/Discord-Join%20the%20community-5865F2?logo=discord&logoColor=white" alt="Scryer on Discord" /></a>
 </p>
+<hr/>
+<!-- A/B alternative: separate logo and wordmark.
+<p align="center">
+  <img src="apps/scryer-web/public/scryer-logo.svg" alt="Scryer logo" width="240" />
+  <br />
+  <img src="apps/scryer-web/public/scryer-wordmark.svg" alt="Scryer" width="480" />
+</p>
+-->
 
-[![Scryer overview](docs/img/scryer-overview.webp)](https://www.scryer.media/scryer/)
+<p align="center">
+  <img src="docs/img/scryer-introduction.webp" alt="Introducing Scryer" width="960" />
+  <img src="docs/img/scryer-overview.webp" alt="Introducing Scryer" width="960" href="https://www.scryer.media/scryer/" target="_blank"/>
+</p>
+<p align="center">
+  <a href="https://www.reddit.com/r/scryer_media/"><img alt="Join us on Reddit!" src="docs/img/Scryer_Reddit.webp" width="47.3%" /></a>
+  <a href="https://discord.gg/RAVvb2enhz"><img alt="Join us on Discord!" src="docs/img/Scryer_Discord.webp" width="47.3%" /></a>
+</p>
+
 
 <h3 align="center">
-    <a href="https://www.scryer.media/scryer/docs/getting-started/">Getting Started Guide</a>
+    <a href="https://www.scryer.media/scryer/docs/getting-started/"><h3>Getting Started Guide<h3></a>
 </h3>
 
 <p align="center">
@@ -30,14 +42,18 @@ Scryer is a self-hosted media management application for movies, TV series, and 
 At a high level, it:
 
 - monitors libraries and tracked titles
-- searches for releases through pluggable providers
+- searches for releases through indexers
 - evaluates releases against quality and rules policies
 - coordinates downloads and imports
-- organizes files for downstream media servers
-- manages subtitles
-- deeply multi-lingual, when you select your chosen language, your content gets updated as well (limited to upstream language content availability)
+- organizes your files for media servers
+- manages subtitles (finds missing ones, time aligns when needed)
+- deeply multi-lingual, interface and metadata (where available)
+- helps you discover new media based on trends and what you already have
+All packaged inside one binary.
 
-Conceptually it is "Sonarr + Radarr, with some extra bits from other *arr tools", however Scryer is a machine-code compiled binary that runs very efficiently compared to the *arr tools.
+Conceptually it is "Sonarr + Radarr + Seerr + Bazarr, with some extra bits from other *arr tools", however Scryer is a single machine-code compiled binary that runs very efficiently compared to the *arr tools.
+
+Scryer also handles Anime much better than the Arr tools, it uses multiple anime datasources (anidb, anilist, MAL, etc), understands the nuances of anime season and episode numbering, handles episode and multiseason packs cleanly, and even knows which episodes and movies are filler or canon!
 
 *Scryer was written from scratch and has no affiliation with the Servarr tools*
 
@@ -54,30 +70,36 @@ Scryer ships as a single Rust binary with:
 
 ![How Scryer fits into your media system](docs/img/scryer-architecture.webp)
 
-## Windows desktop
-
-Windows releases provide x64 and ARM64 MSI installers plus matching ZIPs. The MSI installs
-`scryer.exe` for command-line use and `scryer-tray.exe` for the desktop experience. The tray
-starts Scryer at sign-in without opening a browser, and its menu opens or manages the local UI.
-Its independent desktop profile is `%LOCALAPPDATA%\ScryerMedia\Scryer`; it does not migrate or
-modify legacy portable data.
-
-The first Windows release line is intentionally unsigned. Windows may show a browser download
-warning, SmartScreen’s **More info → Run anyway** prompt, and an **Unknown publisher** UAC prompt
-for the machine-wide MSI. Verify the release SHA-256 checksum and GitHub build provenance before
-installing. WinGet uses the same MSI once its `ScryerMedia.Scryer` manifest has been accepted.
-
 ## Docker
 
 Scryer publishes a first-party container image:
 
-- `ghcr.io/scryer-media/scryer:latest` runs one portable Linux payload through the launcher while retaining runtime CPU dispatch inside dependencies and Wasm plugins
-- `ghcr.io/scryer-media/scryer:<minor>-latest` tracks a stable release line without moving to the next breaking branch, for example `15-latest` for the `0.15.x` line
-- `ghcr.io/scryer-media/scryer:pr-<number>-rc` and `ghcr.io/scryer-media/scryer:pr-<number>-<shortsha>` are PR candidate images; they never move `latest`
+- `ghcr.io/scryer-media/scryer:latest`
+- `ghcr.io/scryer-media/scryer:<minor>-latest`
+   - `15-latest` for the `0.15.x` line
 
 For Docker installation, Compose examples, environment variables, volumes, and
 deployment notes, see the [Docker install
 docs](https://www.scryer.media/scryer/docs/getting-started/#docker-compose).
+
+## Windows
+
+Scryer publishes two forms of installation for Windows:
+
+- scryer-windows-x86_64.zip, in which contains: scryer.exe | best ran as an [nssm (the Non-Sucking Service Manager)](https://nssm.cc/download) service (Not Recommended)
+- scryer.msi | Windows service install that's completely effortless. Install's the same way as the ARR* stack. (Recommended)
+
+## Unraid
+
+Scryer publishes a first-party unraid application, [view unraid community appication here](https://ca.unraid.net/apps/scryer-1ess99l0zy36id).
+
+Installation Steps:
+- Open your Unraid Dashboard.
+- Navigate to the apps page.
+- Search "Scryer" and click install!
+
+### Support
+If you're facing any issues with installation or issues, feel free to use any of our social platforms (Discord, Reddit, Github) for support!
 
 ## Development
 
@@ -87,5 +109,6 @@ docs](https://www.scryer.media/scryer/docs/getting-started/#docker-compose).
 
 For installation, upgrade guidance, and end-user documentation, use the website links at the top of this file.
 
----
-*All media images courtesy of [thetvdb](https://thetvdb.com/)*
+<p align="center">
+  <a href="https://www.scryer.media/scryer/donate/"><img src="docs/img/scryer-donate.webp" alt="Donate to Scryer" /></a>
+</p>

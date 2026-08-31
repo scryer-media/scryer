@@ -60,6 +60,9 @@ impl SubtitleSyncClient for WasmSubtitleSyncClient {
             PluginRuntimeBacking::WasmtimeCommand => Err(AppError::Repository(
                 "subtitle sync plugin cannot use the generic command runtime backing".to_string(),
             )),
+            PluginRuntimeBacking::WasmtimeIndexerComponent => Err(AppError::Repository(
+                "subtitle sync plugin cannot use the indexer component runtime backing".to_string(),
+            )),
         }
     }
 }

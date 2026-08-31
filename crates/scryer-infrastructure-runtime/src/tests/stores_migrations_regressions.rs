@@ -27,6 +27,7 @@ async fn pending_release_tracker_minimums_round_trip_and_legacy_rows_read_back_a
         indexer_id: None,
         release_guid: Some("guid-minimums".to_string()),
         added_at: now.clone(),
+        last_observed_at: now.clone(),
         delay_until: now.clone(),
         status: scryer_application::PendingReleaseStatus::Waiting,
         grabbed_at: None,
@@ -35,6 +36,11 @@ async fn pending_release_tracker_minimums_round_trip_and_legacy_rows_read_back_a
         info_hash: None,
         seed_minimums: Default::default(),
         seeders: Some(37),
+        release_identity: "guid:private-tracker:guid-minimums".to_string(),
+        coverage_identity: "scope:wanted-minimums".to_string(),
+        role: scryer_application::PendingReleaseRole::Primary,
+        last_decision_code: None,
+        release_age_unknown: false,
     };
     parked.seed_minimums = scryer_application::ReleaseSeedMinimums {
         min_seed_ratio: Some(1.5),
@@ -110,11 +116,104 @@ async fn pending_release_tracker_minimums_round_trip_and_legacy_rows_read_back_a
 async fn sqlite_database_maintenance_runs_without_command_bus() {
     let (services, db) = temp_services("scryer_sqlite_database_maintenance").await;
     let housekeeping = housekeeping_store(&services);
+    let wal_path = std::path::PathBuf::from(format!("{}-wal", db.display()));
+
+    let mut connection = services.pool().acquire().await.expect("acquire sqlite");
+    sqlx::query("PRAGMA wal_autocheckpoint = 0")
+        .execute(&mut *connection)
+        .await
+        .expect("disable automatic checkpoint");
+    sqlx::query("CREATE TABLE maintenance_wal_probe (value TEXT NOT NULL)")
+        .execute(&mut *connection)
+        .await
+        .expect("create WAL probe table");
+    sqlx::query("INSERT INTO maintenance_wal_probe (value) VALUES ('probe')")
+        .execute(&mut *connection)
+        .await
+        .expect("write WAL probe row");
+    drop(connection);
+
+    let freelist_pages: i64 = sqlx::query_scalar("PRAGMA freelist_count")
+        .fetch_one(services.pool())
+        .await
+        .expect("load freelist count");
+    assert!(freelist_pages < 2_000, "test should not trigger VACUUM");
+    assert!(
+        std::fs::metadata(&wal_path).is_ok_and(|metadata| metadata.len() > 0),
+        "probe write should populate the WAL"
+    );
 
     housekeeping
         .run_database_maintenance()
         .await
         .expect("database maintenance should complete");
+
+    assert!(
+        std::fs::metadata(&wal_path).is_ok_and(|metadata| metadata.len() == 0),
+        "maintenance should truncate the WAL"
+    );
+
+    let _ = std::fs::remove_file(db);
+}
+
+#[tokio::test]
+async fn sqlite_database_maintenance_truncates_wal_after_threshold_vacuum() {
+    let (services, db) = temp_services("scryer_sqlite_database_vacuum").await;
+    let housekeeping = housekeeping_store(&services);
+    let wal_path = std::path::PathBuf::from(format!("{}-wal", db.display()));
+
+    let mut connection = services.pool().acquire().await.expect("acquire sqlite");
+    sqlx::query("PRAGMA wal_autocheckpoint = 0")
+        .execute(&mut *connection)
+        .await
+        .expect("disable automatic checkpoint");
+    sqlx::query("CREATE TABLE maintenance_vacuum_probe (payload BLOB NOT NULL)")
+        .execute(&mut *connection)
+        .await
+        .expect("create VACUUM probe table");
+    sqlx::query("INSERT INTO maintenance_vacuum_probe (payload) VALUES (zeroblob(12582912))")
+        .execute(&mut *connection)
+        .await
+        .expect("allocate VACUUM probe pages");
+    sqlx::query("DELETE FROM maintenance_vacuum_probe")
+        .execute(&mut *connection)
+        .await
+        .expect("free VACUUM probe pages");
+    drop(connection);
+
+    let freelist_before: i64 = sqlx::query_scalar("PRAGMA freelist_count")
+        .fetch_one(services.pool())
+        .await
+        .expect("load freelist count before maintenance");
+    let pages_before: i64 = sqlx::query_scalar("PRAGMA page_count")
+        .fetch_one(services.pool())
+        .await
+        .expect("load page count before maintenance");
+    assert!(freelist_before >= 2_000);
+    assert!(freelist_before as f64 / pages_before as f64 >= 0.10);
+
+    housekeeping
+        .run_database_maintenance()
+        .await
+        .expect("database maintenance should vacuum and checkpoint");
+
+    let pages_after: i64 = sqlx::query_scalar("PRAGMA page_count")
+        .fetch_one(services.pool())
+        .await
+        .expect("load page count after maintenance");
+    let integrity: String = sqlx::query_scalar("PRAGMA integrity_check")
+        .fetch_one(services.pool())
+        .await
+        .expect("run integrity check");
+    assert!(
+        pages_after < pages_before,
+        "VACUUM should reclaim free pages"
+    );
+    assert_eq!(integrity, "ok");
+    assert!(
+        std::fs::metadata(&wal_path).is_ok_and(|metadata| metadata.len() == 0),
+        "maintenance should truncate the post-VACUUM WAL"
+    );
 
     let _ = std::fs::remove_file(db);
 }

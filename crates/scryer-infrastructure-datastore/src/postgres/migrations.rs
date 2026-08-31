@@ -513,6 +513,20 @@ async fn run_postgres_rust_hook(
             crate::migrations::post_0_16_6_prerelease::converge_post_0_16_6_prerelease_schema_postgres(tx)
                 .await
         }
+        "backfill_canonical_download_identity" => {
+            crate::migrations::canonical_download_identity::backfill_canonical_download_identity_postgres(tx)
+                .await
+        }
+        "disable_invalid_user_rule_runtime_wrappers" => {
+            crate::migrations::rule_set_runtime_wrapper::disable_invalid_user_rule_runtime_wrappers_postgres(tx)
+                .await
+        }
+        "backfill_blake3_identities" => {
+            crate::migrations::blake3_identities::backfill_blake3_identities_postgres(tx).await
+        }
+        "compact_event_storage" => {
+            crate::migrations::event_storage::compact_event_storage_postgres(tx).await
+        }
         #[cfg(test)]
         "test_insert_hook_marker" => {
             let marker = match install_kind {

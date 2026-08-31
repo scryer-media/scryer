@@ -94,6 +94,7 @@ pub(super) async fn refresh_titles_metadata_for_scan_policy(
         let target = crate::catalog_workflow::HydrationTarget {
             title: title.clone(),
             requested_tvdb_id: None,
+            requested_movie_ref: None,
             sync_wanted_after_completion: false,
             source: metadata_refresh_hydration_source(mode),
         };

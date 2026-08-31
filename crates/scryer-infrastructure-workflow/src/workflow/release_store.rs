@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use scryer_application::{
     AppResult, ReleaseAttemptRepository, ReleaseDownloadAttemptOutcome,
-    ReleaseDownloadFailureSignature, TitleReleaseBlocklistEntry,
+    ReleaseDownloadFailureRecord, ReleaseDownloadFailureSignature,
 };
 use scryer_domain::Id;
 
@@ -200,7 +200,7 @@ impl ReleaseAttemptRepository for ReleaseStore {
         &self,
         title_id: &str,
         limit: usize,
-    ) -> AppResult<Vec<TitleReleaseBlocklistEntry>> {
+    ) -> AppResult<Vec<ReleaseDownloadFailureRecord>> {
         let rows = SqlRuntime::fetch_all(
             self.datastore.read_exec(),
             LIST_FAILED_SIGNATURES_FOR_TITLE_SQL,
@@ -212,7 +212,7 @@ impl ReleaseAttemptRepository for ReleaseStore {
         .await?;
 
         rows.into_iter()
-            .map(decode_title_release_blocklist)
+            .map(decode_release_download_failure)
             .collect()
     }
 
@@ -275,12 +275,12 @@ fn decode_failed_signature(row: SqlRow) -> AppResult<ReleaseDownloadFailureSigna
     })
 }
 
-fn decode_title_release_blocklist(row: SqlRow) -> AppResult<TitleReleaseBlocklistEntry> {
+fn decode_release_download_failure(row: SqlRow) -> AppResult<ReleaseDownloadFailureRecord> {
     let source_hint = row.opt_text("source_hint")?;
     let source_title = row.opt_text("source_title")?;
     let attempted_at = row.timestamp("attempted_at")?.to_rfc3339();
 
-    Ok(TitleReleaseBlocklistEntry {
+    Ok(ReleaseDownloadFailureRecord {
         id: format!(
             "failed-attempt:{}:{}:{}",
             attempted_at,
@@ -291,6 +291,5 @@ fn decode_title_release_blocklist(row: SqlRow) -> AppResult<TitleReleaseBlocklis
         source_title,
         error_message: row.opt_text("error_message")?,
         attempted_at,
-        episode_ids: Vec::new(),
     })
 }

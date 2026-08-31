@@ -36,7 +36,7 @@ export function EpisodeBlocklistPanel({
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0 flex-1">
               <p className="break-words text-sm text-card-foreground">
-                {entry.sourceTitle || t("episode.untitledRelease")}
+                {entry.releaseName || t("episode.untitledRelease")}
               </p>
               <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
                 <span className="text-muted-foreground/60">

@@ -300,6 +300,8 @@ const SERIES_SIDE_PANEL_MOVIE_LINK_FIELDS = `
       continuityStatus
       movieForm
       signalSummary
+      monitoringOverride
+      metadataActive
       monitored
       movie {
         id
@@ -315,6 +317,8 @@ const SERIES_SIDE_PANEL_MOVIE_LINK_FIELDS = `
         tmdbId
         malId
         anidbId
+        ratings {${TITLE_RATING_SUMMARY_FIELDS}
+        }
       }`;
 
 const SERIES_SIDE_PANEL_EPISODE_ROW_FIELDS = `
@@ -519,6 +523,12 @@ const MOVIE_SIDE_PANEL_TITLE_FIELDS = `
     librarySlug
     monitored
     tags
+    playbackLinks {
+      connectionId
+      displayName
+      provider
+      href
+    }
     externalIds {
       source
       value
@@ -581,6 +591,12 @@ const SERIES_SIDE_PANEL_TITLE_FIELDS = `
     libraryId
     librarySlug
     monitored
+    playbackLinks {
+      connectionId
+      displayName
+      provider
+      href
+    }
     externalIds {
       source
       value
@@ -694,11 +710,9 @@ const TITLE_EVENT_FIELDS = `
 
 const TITLE_RELEASE_BLOCKLIST_FIELDS = `
     id
-    sourceHint
-    sourceTitle
+    releaseName
     errorMessage
-    attemptedAt
-    episodeIds`;
+    attemptedAt`;
 
 const EXTERNAL_SUBTITLE_FIELDS = `
     id
@@ -765,7 +779,7 @@ const PROVIDER_TYPE_FIELDS = `
       valueSource
       role
       hostBinding
-      options { value label }
+      options { value label configOverrides { key value } }
       helpText
     }`;
 
@@ -819,6 +833,7 @@ export const MEDIA_SERVER_CONNECTION_FIELDS = `
     provider
     displayName
     baseUrl
+    externalUrl
     enabled
     loginEnabled
     linkingEnabled
@@ -1015,11 +1030,30 @@ export const titleMediaFilesQuery = `query TitleMediaFiles($id: ID!) {
   }
 }`;
 
+export const movieEntityDetailQuery = `query MovieEntityDetail($titleId: ID!, $movieId: ID!) {
+  title(id: $titleId) {
+    id
+    mediaFiles {${TITLE_MEDIA_FILE_FIELDS}
+    }
+  }
+  movieEntity(titleId: $titleId, id: $movieId) {
+    id
+    credits {${TITLE_CAST_CREDIT_FIELDS}
+    }
+  }
+}`;
+
 export const episodeSidePanelDetailQuery = `query EpisodeSidePanelDetail($titleId: ID!, $episodeId: ID!) {
   episode(titleId: $titleId, episodeId: $episodeId) {
     id
     overview
     imageUrl
+    playbackLinks {
+      connectionId
+      displayName
+      provider
+      href
+    }
     mediaAvailability {
       state
       primaryQualityLabel
@@ -1856,6 +1890,7 @@ export const activityQuery = `query Activity($limit: Int, $offset: Int) {
     actorUserId
     actorDisplayName
     titleId
+    episodeIds
     occurredAt
   }
 }`;
@@ -2188,20 +2223,6 @@ export const downloadImportQuery = `query DownloadImport($limit: Int, $offset: I
   }
 }`;
 
-export const downloadHistoryQuery = `query DownloadHistory($limit: Int, $offset: Int, $filters: [DownloadHistoryFilterValue!], $clientIds: [ID!], $scryerSubmittedOnly: Boolean, $sortKey: DownloadHistorySortKeyValue, $sortDirection: SortDirectionValue) {
-  downloadHistory(limit: $limit, offset: $offset, filters: $filters, clientIds: $clientIds, scryerSubmittedOnly: $scryerSubmittedOnly, sortKey: $sortKey, sortDirection: $sortDirection) {
-    items {${DOWNLOAD_QUEUE_ITEM_FIELDS}
-    }
-    hasMore
-    totalCount
-    availableClients {
-      clientId
-      clientName
-      clientType
-    }
-  }
-}`;
-
 export const downloadQueueSubscription = `subscription DownloadQueueStream($includeAllActivity: Boolean, $includeHistoryOnly: Boolean, $includeImportActivity: Boolean, $titleId: ID, $activityFilter: DownloadActivityFilterValue) {
   downloadQueue(includeAllActivity: $includeAllActivity, includeHistoryOnly: $includeHistoryOnly, includeImportActivity: $includeImportActivity, titleId: $titleId, activityFilter: $activityFilter) {${DOWNLOAD_QUEUE_ITEM_FIELDS}
   }
@@ -2214,8 +2235,34 @@ export const downloadQueueSyncSubscription = `subscription DownloadQueueSync {
   }
 }`;
 
+export const activeImportStreamsQuery = `query ActiveImportStreams {
+  activeImportStreams {
+    id
+    importId
+    libraryId
+    facet
+    sourcePath
+    destinationPath
+    phase
+    bytes
+    totalBytes
+    queuedAt
+    startedAt
+    updatedAt
+    cancellable
+    cancellationRequested
+  }
+}`;
+
+export const activeImportStreamsSyncSubscription = `subscription ActiveImportStreamsSync {
+  activeImportStreamsSync {
+    revision
+    updatedAt
+  }
+}`;
+
 export const importQueueCountQuery = `query ImportQueueCount {
-  downloadImport(limit: 1, offset: 0, filter: ALL) {
+  downloadImport(limit: 1, offset: 0, filter: ATTENTION) {
     totalCount
   }
 }`;
@@ -2614,6 +2661,7 @@ export const securitySettingsQuery = `query SecuritySettings {
     formLoginEnabled
     passwordMinLength
     skipLoginForLocalIps
+    apiKeysRestrictToSystemSettingsUsers
     mfaRequireConfigStepUp
     mfaRequirePasswordLogin
     mfaRequireJellyfinLogin
@@ -2621,6 +2669,16 @@ export const securitySettingsQuery = `query SecuritySettings {
     effectiveFormLoginEnabled
     envOverrideActive
     envOverrideDescription
+  }
+}`;
+
+export const oauthClientRegistrationsQuery = `query OAuthClientRegistrations {
+  oauthClientRegistrations {
+    clientId
+    displayName
+    redirectUris
+    enabled
+    source
   }
 }`;
 
@@ -2699,9 +2757,12 @@ export const delayProfilesQuery = `query DelayProfiles {
     name
     usenetDelayMinutes
     torrentDelayMinutes
+    enableUsenet
+    enableTorrent
     preferredProtocol
     minAgeMinutes
     bypassScoreThreshold
+    bypassIfHighestQuality
     appliesToFacets
     tags
     priority
@@ -2814,6 +2875,13 @@ export const authRuntimeStateQuery = `query AuthRuntimeState {
   }
 }`;
 
+export const oauthAuthorizationClientQuery = `query OAuthAuthorizationClient($clientId: String!, $redirectUri: String!) {
+  oauthAuthorizationClient(clientId: $clientId, redirectUri: $redirectUri) {
+    clientId
+    displayName
+  }
+}`;
+
 export const myPasskeysQuery = `query MyPasskeys {
   myPasskeys {
     id
@@ -2830,6 +2898,13 @@ export const myOauthAppsQuery = `query MyOauthApps {
     clientName
     authorizedAt
     lastUsedAt
+  }
+}`;
+
+export const myApiKeysQuery = `query MyApiKeys {
+  canCreateMyApiKeys
+  myApiKeys {
+    id label actor expiresAt revokedAt lastUsedAt createdAt provisioningSource
   }
 }`;
 
@@ -3045,6 +3120,33 @@ export const smgScryerUpdateNoticeQuery = `query SmgScryerUpdateNotice {
   }
 }`;
 
+export const applicationUpgradeStatusQuery = `query ApplicationUpgradeStatus {
+  applicationUpgradeStatus {
+    currentVersion
+    updateVersion
+    updateTag
+    updateAvailable
+    installationKind
+    managementOwner
+    eligible
+    eligibilityReason
+    activeRun {
+${JOB_RUN_FIELDS}
+    }
+    latestRun {
+${JOB_RUN_FIELDS}
+    }
+  }
+}`;
+
+export const startApplicationUpgradeMutation = `mutation StartApplicationUpgrade($input: StartApplicationUpgradeInput!) {
+  startApplicationUpgrade(input: $input) {
+    jobRun {
+${JOB_RUN_FIELDS}
+    }
+  }
+}`;
+
 export const scryerVersionQuery = `query ScryerVersion {
   scryerVersion
 }`;
@@ -3200,6 +3302,7 @@ export const recycledItemsQuery = `query RecycledItems($libraryIds: [ID!]) {
       titleName
       reason
       recycledAt
+      scheduledDeletionAt
       mediaRoot
       libraryId
       libraryName
@@ -3306,6 +3409,13 @@ export const notificationsInitQuery = `query NotificationsInit {
 
 const METADATA_SEARCH_FIELDS = `
     tvdbId
+    smgId
+    tmdbId
+    primarySource
+    externalIds {
+      source
+      value
+    }
     name
     imdbId
     slug
@@ -3427,6 +3537,8 @@ export const searchMetadataMultiQuery = `query SearchMetadataMulti($query: Strin
 export const metadataMovieQuery = `query MetadataMovie($input: MetadataMovieInput!) {
   metadataMovie(input: $input) {
     tvdbId
+    smgId
+    tmdbId
     name
     slug
     year
@@ -3492,6 +3604,8 @@ export const pendingReleasesQuery = `query PendingReleases($filter: PendingRelea
       seeders
       addedAt
       delayUntil
+      lastDecisionCode
+      role
       status
     }
     hasMore
@@ -3516,6 +3630,12 @@ export const calendarEpisodesQuery = `query CalendarEpisodes($startDate: Date!, 
     imageUrl
     airDate
     monitored
+    playbackLinks {
+      connectionId
+      displayName
+      provider
+      href
+    }
     mediaAvailability {
       state
       primaryQualityLabel

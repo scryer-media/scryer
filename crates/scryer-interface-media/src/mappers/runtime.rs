@@ -76,6 +76,68 @@ pub fn from_smg_scryer_update_notice(
     }
 }
 
+pub fn from_application_upgrade_status(
+    assessment: scryer_application::application_upgrade::InstallationAssessment,
+    current_version: String,
+    update_notice: Option<scryer_application::SmgScryerUpdateNotice>,
+    active_run: Option<scryer_application::JobRun>,
+    latest_run: Option<scryer_application::JobRun>,
+) -> ApplicationUpgradeStatusPayload {
+    let (update_version, update_tag, update_available) = match update_notice {
+        Some(notice) => (
+            Some(notice.latest_version),
+            Some(notice.latest_tag),
+            notice.available,
+        ),
+        None => (None, None, false),
+    };
+
+    ApplicationUpgradeStatusPayload {
+        current_version,
+        update_version,
+        update_tag,
+        update_available,
+        installation_kind: match assessment.kind {
+            scryer_application::application_upgrade::InstallationKind::Portable => {
+                ApplicationInstallationKindValue::Portable
+            }
+            scryer_application::application_upgrade::InstallationKind::DirectMsi => {
+                ApplicationInstallationKindValue::DirectMsi
+            }
+            scryer_application::application_upgrade::InstallationKind::Docker => {
+                ApplicationInstallationKindValue::Docker
+            }
+            scryer_application::application_upgrade::InstallationKind::Homebrew => {
+                ApplicationInstallationKindValue::Homebrew
+            }
+            scryer_application::application_upgrade::InstallationKind::Winget => {
+                ApplicationInstallationKindValue::Winget
+            }
+            scryer_application::application_upgrade::InstallationKind::WindowsSupervised => {
+                ApplicationInstallationKindValue::WindowsSupervised
+            }
+            scryer_application::application_upgrade::InstallationKind::Disabled => {
+                ApplicationInstallationKindValue::Disabled
+            }
+            scryer_application::application_upgrade::InstallationKind::Unsupported => {
+                ApplicationInstallationKindValue::Unsupported
+            }
+        },
+        management_owner: match assessment.owner {
+            scryer_application::application_upgrade::ManagementOwner::InApp => {
+                ApplicationUpgradeOwnerValue::InApp
+            }
+            scryer_application::application_upgrade::ManagementOwner::Operator => {
+                ApplicationUpgradeOwnerValue::Operator
+            }
+        },
+        eligible: assessment.eligible,
+        eligibility_reason: assessment.reason.as_str().to_string(),
+        active_run: active_run.map(from_job_run),
+        latest_run: latest_run.map(from_job_run),
+    }
+}
+
 pub fn from_rule_set(rs: RuleSet) -> RuleSetPayload {
     RuleSetPayload {
         id: rs.id.into(),
@@ -434,6 +496,8 @@ pub fn from_pending_release(pr: PendingRelease) -> PendingReleasePayload {
         seeders: pr.seeders,
         added_at: parse_required_datetime(&pr.added_at, "pending release added_at"),
         delay_until: parse_required_datetime(&pr.delay_until, "pending release delay_until"),
+        last_decision_code: pr.last_decision_code,
+        role: PendingReleaseRoleValue::from_application(pr.role),
         status: PendingReleaseStatusValue::from_application(pr.status),
     }
 }

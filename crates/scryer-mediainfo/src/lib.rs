@@ -40,6 +40,10 @@ impl From<std::io::Error> for MediaInfoError {
 /// Analysis behavior profile for media probing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AnalysisProfile {
+    /// Minimal bounded analysis needed to identify a playable video file.
+    /// This avoids optional chapter, frame-rate, HDR, and audio enrichment while
+    /// retaining the bounded container and duration work needed for validation.
+    ContentProbe,
     /// Fast bounded metadata pass. This avoids payload/sample deep probes and
     /// leaves richer confirmation to callers that need it.
     Fast,
@@ -50,6 +54,12 @@ pub enum AnalysisProfile {
     /// analysis pass with larger probe budgets when needed, plus a cheap
     /// first-frame HDR follow-up for PQ video instead of richer native scans.
     FfprobeParity,
+}
+
+impl AnalysisProfile {
+    pub(crate) fn skips_deep_probes(self) -> bool {
+        matches!(self, Self::ContentProbe | Self::Fast)
+    }
 }
 
 /// Options that control media analysis behavior.
@@ -173,7 +183,7 @@ pub fn analyze_file_with_options(
         }
         Some(ContainerFormat::Mp4) => mp4::parse_mp4(file_path, options.profile)?,
         Some(ContainerFormat::Avi) => avi::parse_avi(file_path, options.profile)?,
-        Some(ContainerFormat::Ts) => ts::parse_ts(file_path)?,
+        Some(ContainerFormat::Ts) => ts::parse_ts(file_path, options.profile)?,
         Some(ContainerFormat::Asf) => asf::parse_asf(file_path)?,
         Some(ContainerFormat::Ogg) => ogg::parse_ogg(file_path)?,
         Some(ContainerFormat::Flv) => flv::parse_flv(file_path)?,

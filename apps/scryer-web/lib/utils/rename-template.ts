@@ -4,7 +4,10 @@ export type RenameTemplateValidationIssue =
   | { kind: "unmatchedClose" }
   | { kind: "unknownToken"; token: string }
   | { kind: "invalidPadding"; padding: string }
-  | { kind: "invalidFilter"; filter: string };
+  | { kind: "invalidFilter"; filter: string }
+  | { kind: "invalidOptionalGroup" }
+  | { kind: "nestedOptionalGroup" }
+  | { kind: "unsupportedOptionalFallback" };
 
 export type FolderTemplateValidationIssue =
   | RenameTemplateValidationIssue
@@ -46,6 +49,23 @@ const ILLEGAL_FOLDER_TEMPLATE_LITERAL_CHARS = new Set([
   "<", ">", ":", "\"", "/", "\\", "|", "?", "*",
 ]);
 
+type ParsedOptionalRenameTemplateGroup = {
+  guard: ParsedRenameTokenSpec;
+  body: string;
+  endIndex: number;
+};
+
+type OptionalRenameTemplateGroupParseResult =
+  | { ok: true; group: ParsedOptionalRenameTemplateGroup }
+  | {
+    ok: false;
+    kind: "unmatchedOpen" | "invalidOptionalGroup" | "nestedOptionalGroup" | "unsupportedOptionalFallback";
+  };
+
+type RenameTemplateValidationState = {
+  sawRequiredToken: boolean;
+};
+
 function isIllegalFolderTemplateLiteral(character: string): boolean {
   const codePoint = character.charCodeAt(0);
   return ILLEGAL_FOLDER_TEMPLATE_LITERAL_CHARS.has(character)
@@ -53,42 +73,128 @@ function isIllegalFolderTemplateLiteral(character: string): boolean {
     || (codePoint >= 0x7f && codePoint <= 0x9f);
 }
 
-export function validateFolderTemplateSyntax(
+function parseOptionalRenameTemplateGroup(
   template: string,
-  validTokens: ReadonlySet<string>,
-  requiredToken?: string,
-): FolderTemplateValidationIssue | null {
-  const trimmed = template.trim();
-  if (!trimmed) {
-    return { kind: "empty" };
+  startIndex: number,
+): OptionalRenameTemplateGroupParseResult {
+  let cursor = startIndex + 2;
+  const guardStart = cursor;
+  while (cursor < template.length && template[cursor] !== ":") {
+    if (template[cursor] === "{" || template[cursor] === "}") {
+      return { ok: false, kind: "invalidOptionalGroup" };
+    }
+    cursor++;
+  }
+  if (cursor === template.length) {
+    return { ok: false, kind: "unmatchedOpen" };
   }
 
+  const parsedGuard = parseRenameTemplateTokenSpec(template.slice(guardStart, cursor).trim());
+  if (!parsedGuard.ok || parsedGuard.spec.padWidth !== 0 || parsedGuard.spec.filters.length > 0) {
+    return { ok: false, kind: "invalidOptionalGroup" };
+  }
+
+  const bodyStart = cursor + 1;
+  cursor = bodyStart;
+  let escapedLiteralOpenCount = 0;
+  while (cursor < template.length) {
+    if (template.startsWith("{{", cursor)) {
+      escapedLiteralOpenCount++;
+      cursor += 2;
+      continue;
+    }
+    if (template.startsWith("{?", cursor)) {
+      return { ok: false, kind: "nestedOptionalGroup" };
+    }
+    if (template[cursor] === "{") {
+      const closeIndex = template.indexOf("}", cursor + 1);
+      if (closeIndex === -1 || template.slice(cursor + 1, closeIndex).includes("{")) {
+        return { ok: false, kind: "unmatchedOpen" };
+      }
+      cursor = closeIndex + 1;
+      continue;
+    }
+    if (template[cursor] === "}" && escapedLiteralOpenCount > 0) {
+      cursor += template.startsWith("}}", cursor) ? 2 : 1;
+      escapedLiteralOpenCount--;
+      continue;
+    }
+    if (
+      escapedLiteralOpenCount === 0
+      && (template.startsWith("|else:", cursor) || template.startsWith("|?", cursor))
+    ) {
+      return { ok: false, kind: "unsupportedOptionalFallback" };
+    }
+    if (template[cursor] === "}") {
+      const body = template.slice(bodyStart, cursor);
+      return {
+        ok: true,
+        group: {
+          guard: parsedGuard.spec,
+          body,
+          endIndex: cursor,
+        },
+      };
+    }
+    cursor++;
+  }
+
+  return { ok: false, kind: "unmatchedOpen" };
+}
+
+function validateTemplateFragment(
+  template: string,
+  validTokens: ReadonlySet<string>,
+  state: RenameTemplateValidationState,
+  requiredToken?: string,
+  validateLiteral?: (character: string) => FolderTemplateValidationIssue | null,
+): FolderTemplateValidationIssue | null {
   let i = 0;
   let escapedLiteralOpenCount = 0;
-  let sawRequiredToken = requiredToken === undefined;
-  while (i < trimmed.length) {
-    if (trimmed.startsWith("{{", i)) {
-      escapedLiteralOpenCount += 1;
+  while (i < template.length) {
+    if (template.startsWith("{{", i)) {
+      escapedLiteralOpenCount++;
       i += 2;
       continue;
     }
-    if (trimmed.startsWith("}}", i)) {
+    if (template.startsWith("}}", i)) {
       if (escapedLiteralOpenCount > 0) {
-        escapedLiteralOpenCount -= 1;
+        escapedLiteralOpenCount--;
       }
       i += 2;
       continue;
     }
-    if (trimmed[i] === "{") {
-      const closeIndex = trimmed.indexOf("}", i + 1);
-      if (closeIndex === -1) {
+    if (template.startsWith("{?", i)) {
+      const parsedGroup = parseOptionalRenameTemplateGroup(template, i);
+      if (!parsedGroup.ok) {
+        return { kind: parsedGroup.kind };
+      }
+      const { guard, body, endIndex } = parsedGroup.group;
+      if (!validTokens.has(guard.lookupName)) {
+        return { kind: "unknownToken", token: guard.tokenName };
+      }
+      if (guard.lookupName === requiredToken) {
+        state.sawRequiredToken = true;
+      }
+      const bodyIssue = validateTemplateFragment(
+        body,
+        validTokens,
+        state,
+        requiredToken,
+        validateLiteral,
+      );
+      if (bodyIssue) {
+        return bodyIssue;
+      }
+      i = endIndex + 1;
+      continue;
+    }
+    if (template[i] === "{") {
+      const closeIndex = template.indexOf("}", i + 1);
+      if (closeIndex === -1 || template.slice(i + 1, closeIndex).includes("{")) {
         return { kind: "unmatchedOpen" };
       }
-      const inner = trimmed.slice(i + 1, closeIndex);
-      if (inner.includes("{")) {
-        return { kind: "unmatchedOpen" };
-      }
-      const parsed = parseRenameTemplateTokenSpec(inner);
+      const parsed = parseRenameTemplateTokenSpec(template.slice(i + 1, closeIndex));
       if (!parsed.ok) {
         if (parsed.kind === "invalidFilter") {
           return { kind: "invalidFilter", filter: parsed.value };
@@ -102,26 +208,54 @@ export function validateFolderTemplateSyntax(
         return { kind: "unknownToken", token: parsed.spec.tokenName };
       }
       if (parsed.spec.lookupName === requiredToken) {
-        sawRequiredToken = true;
+        state.sawRequiredToken = true;
       }
       i = closeIndex + 1;
-    } else if (trimmed[i] === "}") {
+      continue;
+    }
+    if (template[i] === "}") {
       if (escapedLiteralOpenCount > 0) {
-        escapedLiteralOpenCount -= 1;
+        escapedLiteralOpenCount--;
         i++;
         continue;
       }
       return { kind: "unmatchedClose" };
-    } else {
-      const character = trimmed[i];
-      if (isIllegalFolderTemplateLiteral(character)) {
-        return { kind: "illegalCharacter", character };
-      }
-      i++;
     }
+    const literalIssue = validateLiteral?.(template[i]);
+    if (literalIssue) {
+      return literalIssue;
+    }
+    i++;
   }
 
-  return sawRequiredToken
+  return null;
+}
+
+export function validateFolderTemplateSyntax(
+  template: string,
+  validTokens: ReadonlySet<string>,
+  requiredToken?: string,
+): FolderTemplateValidationIssue | null {
+  const trimmed = template.trim();
+  if (!trimmed) {
+    return { kind: "empty" };
+  }
+
+  const state = { sawRequiredToken: requiredToken === undefined };
+  const issue = validateTemplateFragment(
+    trimmed,
+    validTokens,
+    state,
+    requiredToken,
+    (character) => isIllegalFolderTemplateLiteral(character)
+      ? { kind: "illegalCharacter", character }
+      : null,
+  );
+  if (issue) {
+    return issue;
+  }
+
+  return state.sawRequiredToken
     ? null
     : { kind: "missingRequiredToken", token: requiredToken ?? "" };
 }
@@ -134,57 +268,7 @@ export function validateRenameTemplateSyntax(
     return { kind: "empty" };
   }
 
-  let i = 0;
-  let escapedLiteralOpenCount = 0;
-  while (i < template.length) {
-    if (template.startsWith("{{", i)) {
-      escapedLiteralOpenCount += 1;
-      i += 2;
-      continue;
-    }
-    if (template.startsWith("}}", i)) {
-      if (escapedLiteralOpenCount > 0) {
-        escapedLiteralOpenCount -= 1;
-      }
-      i += 2;
-      continue;
-    }
-    if (template[i] === "{") {
-      const closeIndex = template.indexOf("}", i + 1);
-      if (closeIndex === -1) {
-        return { kind: "unmatchedOpen" };
-      }
-      const inner = template.slice(i + 1, closeIndex);
-      if (inner.includes("{")) {
-        return { kind: "unmatchedOpen" };
-      }
-      const parsed = parseRenameTemplateTokenSpec(inner);
-      if (!parsed.ok) {
-        if (parsed.kind === "invalidFilter") {
-          return { kind: "invalidFilter", filter: parsed.value };
-        }
-        if (parsed.kind === "invalidPadding") {
-          return { kind: "invalidPadding", padding: parsed.value };
-        }
-        return { kind: "unknownToken", token: parsed.value };
-      }
-      if (!validTokens.has(parsed.spec.lookupName)) {
-        return { kind: "unknownToken", token: parsed.spec.tokenName };
-      }
-      i = closeIndex + 1;
-    } else if (template[i] === "}") {
-      if (escapedLiteralOpenCount > 0) {
-        escapedLiteralOpenCount -= 1;
-        i++;
-        continue;
-      }
-      return { kind: "unmatchedClose" };
-    } else {
-      i++;
-    }
-  }
-
-  return null;
+  return validateTemplateFragment(template, validTokens, { sawRequiredToken: true }) as RenameTemplateValidationIssue | null;
 }
 
 export function applyRenameTemplatePreview(
@@ -212,6 +296,19 @@ export function applyRenameTemplatePreview(
         escapedLiteralOpenCount -= 1;
       }
       i += 2;
+      continue;
+    }
+    if (template.startsWith("{?", i)) {
+      const parsedGroup = parseOptionalRenameTemplateGroup(template, i);
+      if (!parsedGroup.ok) return null;
+      const { guard, body, endIndex } = parsedGroup.group;
+      if (!validTokens.has(guard.lookupName)) return null;
+      if ((sampleValues[guard.lookupName] ?? "").trim()) {
+        const renderedBody = applyRenameTemplatePreview(body, validTokens, sampleValues);
+        if (renderedBody === null) return null;
+        result += renderedBody;
+      }
+      i = endIndex + 1;
       continue;
     }
     if (template[i] === "{") {
@@ -272,6 +369,22 @@ export function splitRenameTemplateSegments(
     }
 
     if (template[cursor] === "{") {
+      if (template.startsWith("{?", cursor)) {
+        const parsedGroup = parseOptionalRenameTemplateGroup(template, cursor);
+        if (
+          parsedGroup.ok
+          && validTokens.has(parsedGroup.group.guard.lookupName)
+          && validateRenameTemplateSyntax(template.slice(cursor, parsedGroup.group.endIndex + 1), validTokens) === null
+        ) {
+          pushPlain();
+          segments.push({
+            text: template.slice(cursor, parsedGroup.group.endIndex + 1),
+            isToken: true,
+          });
+          cursor = parsedGroup.group.endIndex + 1;
+          continue;
+        }
+      }
       const closeIndex = template.indexOf("}", cursor + 1);
       if (closeIndex !== -1) {
         const inner = template.slice(cursor + 1, closeIndex);

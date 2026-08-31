@@ -38,12 +38,13 @@ members = [
     "crates/scryer-plugin-sdk",
     "crates/scryer-plugins",
     "crates/scryer-runtime-info",
+    "crates/scryer-logging",
     "crates/scryer-launcher",
     "crates/scryer",
     "crates/scryer-mock-apis",
     "crates/scryer-mediainfo",
 ]
-exclude = ["test-plugins/test-indexer"]
+exclude = ["test-plugins/test-indexer", "benchmarks/criterion"]
 resolver = "2"
 
 [workspace.package]
@@ -57,24 +58,24 @@ dotenvy = "0.15"
 thiserror = "2.0"
 async-trait = "0.1"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter", "json"] }
 chrono = { version = "0.4", features = ["serde"] }
-uuid = { version = "1.24", features = ["v4", "serde"] }
+uuid = { version = "1.26", features = ["v4", "serde"] }
 async-graphql = { version = "7.2", default-features = false, features = ["chrono", "dataloader"] }
 jsonwebtoken = { version = "11", default-features = false, features = ["aws_lc_rs"] }
 rand_core = "0.10"
 webauthn-rs = { package = "scryer-webauthn", path = "crates/scryer-webauthn" }
 # SQLite is compiled in via sqlx-sqlite -> libsqlite3-sys bundled mode for single-executable
 sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "tls-rustls-aws-lc-rs", "sqlite-bundled", "postgres", "json", "chrono", "migrate"] }
-argon2 = "0.5"
+argon2 = "0.6"
 aws-lc-rs = { version = "1.18", default-features = false, features = ["non-fips"] }
 tokio-util = { version = "0.7", features = ["rt", "io"] }
 toml = "1"
-quick-xml = "0.41.0"
+quick-xml = "0.42.0"
 # Native Wasmtime hosts for command-model archive plugins and legacy reactor
 # compatibility.
-wasmtime = { version = "47", default-features = false, features = ["runtime", "cranelift", "std", "threads", "cache"] }
-wasmtime-wasi = { version = "47", default-features = false, features = ["p1"] }
+wasmtime = { version = "48", default-features = false, features = ["runtime", "cranelift", "std", "component-model-async", "cache"] }
+wasmtime-wasi = { version = "48", default-features = false, features = ["p1", "p2"] }
 semver = "1"
 metrics = "0.24"
 security-framework = "3"
@@ -84,7 +85,6 @@ windows-native-keyring-store = "1"
 wiremock = "0.6"
 strum = { version = "0.28", features = ["derive"] }
 governor = "0.10.4"
-criterion = "0.8.2"
 fixedbitset = "0.5"
 
 [profile.release]
@@ -110,6 +110,10 @@ incremental = true
 [profile.release-launcher]
 inherits = "release"
 opt-level = "z"
+lto = "thin"
+
+[profile.release-thin]
+inherits = "release"
 lto = "thin"
 
 [profile.release-lean]

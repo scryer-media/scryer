@@ -7,6 +7,11 @@ import type { TitleCreditRecord } from "@/lib/types/titles";
  */
 export const TITLE_CAST_RAIL_DISPLAY_LIMIT = 15;
 
+/** A rendered cast card may reserve more than one original-cast slot. */
+export type TitleCastDisplayCredit = TitleCreditRecord & {
+  slotSpan?: number;
+};
+
 /**
  * Drop credits with nothing to render. Placeholder slots on the dub rail are
  * the one exception — they carry a character but no person on purpose — so
@@ -102,6 +107,8 @@ export function isTitleCastPlaceholder(credit: TitleCreditRecord): boolean {
  * character within a title) and falls back to the character name for providers
  * that do not rank consistently.
  *
+ * When more than one original credit resolves to one dub actor, that actor
+ * spans the contiguous source slots rather than appearing as duplicate cards.
  * Returns an empty list when no dub actor exists at all, so the rail stays
  * hidden rather than rendering a row of placeholders.
  */
@@ -109,7 +116,7 @@ export function titleCastDubCreditsAlignedTo(
   credits: TitleCreditRecord[] | null | undefined,
   language: string | null | undefined,
   original: TitleCreditRecord[],
-): TitleCreditRecord[] {
+): TitleCastDisplayCredit[] {
   const dub = titleCastDubCredits(credits, language);
   if (dub.length === 0) {
     return [];
@@ -130,15 +137,22 @@ export function titleCastDubCreditsAlignedTo(
     }
   }
 
-  return original.map((slot) => {
+  const matches = original.map((slot) => {
     const character = (slot.character ?? "").trim();
-    const matched =
+    return (
       (typeof slot.billingOrder === "number"
         ? byBilling.get(slot.billingOrder)
         : undefined) ??
-      (character.length > 0 ? byCharacter.get(character) : undefined);
-    return (
-      matched ?? {
+      (character.length > 0 ? byCharacter.get(character) : undefined)
+    );
+  });
+
+  const aligned: TitleCastDisplayCredit[] = [];
+  for (let index = 0; index < original.length; ) {
+    const slot = original[index];
+    const matched = matches[index];
+    if (!matched) {
+      aligned.push({
         kind: slot.kind,
         personName: "",
         character: slot.character ?? "",
@@ -146,9 +160,20 @@ export function titleCastDubCreditsAlignedTo(
         billingOrder: slot.billingOrder ?? null,
         personImageUrl: null,
         episodeCount: null,
-      }
-    );
-  });
+      });
+      index += 1;
+      continue;
+    }
+
+    let slotSpan = 1;
+    while (matches[index + slotSpan] === matched) {
+      slotSpan += 1;
+    }
+    aligned.push(slotSpan === 1 ? matched : { ...matched, slotSpan });
+    index += slotSpan;
+  }
+
+  return aligned;
 }
 
 /**

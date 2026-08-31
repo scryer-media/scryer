@@ -8,6 +8,10 @@ const MANUAL_IMPORT_RECOVERY_WINDOW_HOURS: i64 = 24;
 const MANUAL_IMPORT_SOURCE_UNAVAILABLE: &str = "download is no longer available for manual import";
 const MANUAL_MOVIE_NO_PRIMARY_FILE: &str =
     "no primary movie file to import: every mapped video is named as a sample";
+// Opaque files have no release-name semantics for the manual candidate UI.
+// Keep small samples and sidecars out of that expanded discovery surface while
+// leaving known video files (including legitimate short specials) untouched.
+const OPAQUE_MANUAL_IMPORT_PROBE_MIN_BYTES: u64 = 16 * 1024 * 1024;
 pub async fn start_background_manual_import_poller(
     app: AppUseCase,
     token: tokio_util::sync::CancellationToken,
@@ -22,30 +26,57 @@ pub async fn start_background_manual_import_poller(
     ));
     // Completed manual-import records already reconciled against their
     // tracked download in this process; each record is decided once.
-    let mut manual_import_recovery_memo: HashMap<String, ManualImportRecoveryMemo> =
-        HashMap::new();
+    let mut manual_import_recovery_memo: HashMap<String, ManualImportRecoveryMemo> = HashMap::new();
+    let mut in_flight: HashMap<String, tokio::task::JoinHandle<()>> = HashMap::new();
+
+    match app
+        .services
+        .workflow
+        .imports
+        .recover_stale_processing_imports_for_type(
+            ImportType::ManualImport,
+            IMPORT_STALE_RECOVERY_SECONDS,
+        )
+        .await
+    {
+        Ok(recovered) if recovered > 0 => {
+            worker.warn_recovered("recover_stale_manual_imports", recovered);
+        }
+        Err(error) => worker.warn_error("recover_stale_manual_imports", &error),
+        _ => {}
+    }
+
     loop {
         if !worker.wait_for_tick(&mut interval).await {
+            for (id, task) in in_flight.drain() {
+                task.abort();
+                let _ = task.await;
+                mark_manual_import_reconciliation(
+                    &app,
+                    &id,
+                    "manual import was interrupted during shutdown; inspect source and destination",
+                )
+                .await;
+            }
             return;
         }
 
-        match app
-            .services
-            .workflow
-            .imports
-            .recover_stale_processing_imports_for_type(
-                ImportType::ManualImport,
-                IMPORT_STALE_RECOVERY_SECONDS,
-            )
-            .await
-        {
-            Ok(recovered) if recovered > 0 => {
-                worker.warn_recovered("recover_stale_manual_imports", recovered);
+        let finished = in_flight
+            .iter()
+            .filter_map(|(id, task)| task.is_finished().then_some(id.clone()))
+            .collect::<Vec<_>>();
+        for id in finished {
+            if let Some(task) = in_flight.remove(&id)
+                && let Err(error) = task.await
+            {
+                tracing::warn!(import_id = %id, error = %error, "manual import task failed");
+                mark_manual_import_reconciliation(
+                    &app,
+                    &id,
+                    "manual import worker ended unexpectedly; inspect source and destination",
+                )
+                .await;
             }
-            Err(error) => {
-                worker.warn_error("recover_stale_manual_imports", &error);
-            }
-            _ => {}
         }
 
         recover_completed_manual_imports(&app, &worker, &mut manual_import_recovery_memo).await;
@@ -65,134 +96,280 @@ pub async fn start_background_manual_import_poller(
         };
 
         for record in pending {
-            let payload =
-                match serde_json::from_str::<ManualImportRequestPayload>(&record.payload_json) {
-                    Ok(payload) => payload,
-                    Err(error) => {
-                        let result_json = manual_import_result_json(
-                            &record.id,
-                            &ManualImportRequestPayload {
-                                requested_by_user_id: None,
-                                title_id: None,
-                                download_client_item_id: record.source_ref.clone(),
-                                client_id: None,
-                                client_type: record.source_system.clone(),
-                                files: Vec::new(),
-                                selection_id: None,
-                                release_evidence: None,
-                                requested_at: record.created_at.clone(),
-                            },
-                            ImportStatus::Failed,
-                            Some(ImportErrorCode::Unknown),
-                            Some(format!("invalid manual import payload: {error}")),
-                            Vec::new(),
-                        );
-                        let _ = app
-                            .update_import_status_and_notify(
-                                &record.id,
-                                ImportStatus::Failed,
-                                result_json,
-                            )
-                            .await;
-                        continue;
-                    }
-                };
-
-            let _import_permit = app.runtime.imports.execution_coordinator.acquire().await;
-            let outcome =
-                match execute_queued_manual_import_with_outcome(&app, &record.id, &payload).await {
-                    Ok(result) => result,
-                    Err(error) => QueuedManualImportOutcome {
-                        status: ImportStatus::Failed,
-                        result_json: manual_import_result_json(
-                            &record.id,
-                            &payload,
-                            ImportStatus::Failed,
-                            Some(classify_manual_import_error_message(&error.to_string())),
-                            Some(error.to_string()),
-                            Vec::new(),
-                        ),
-                        files_imported_this_pass: 0,
-                        completed: None,
-                        title_id: payload.title_id.clone(),
-                        expected_mapping_count: None,
-                        prior_import_proven: false,
-                    },
-                };
-
-            if let Err(error) = app
-                .update_import_status_and_notify(
-                    &record.id,
-                    outcome.status,
-                    outcome.result_json.clone(),
-                )
-                .await
-            {
-                worker.warn_error("finalize_manual_import_request", &error);
+            if in_flight.contains_key(&record.id) {
                 continue;
             }
-
-            let has_successful_import = outcome.files_imported_this_pass > 0
-                || outcome.status == ImportStatus::Completed
-                || outcome.prior_import_proven;
-            let terminalized = if has_successful_import {
-                if let Some(handle) = app.runtime.acquisition.tracked_download_handle.as_ref() {
-                    let tracked_id = crate::tracked_downloads::tracked_download_id(
-                        payload.client_id.as_deref(),
-                        &payload.client_type,
-                        &payload.download_client_item_id,
-                    );
-                    let reconciliation = if outcome.prior_import_proven {
-                        handle.mark_imported(tracked_id).await.map(|()| true)
-                    } else {
-                        handle
-                            .reconcile_manual_import(
-                                tracked_id,
-                                outcome.files_imported_this_pass,
-                                outcome.expected_mapping_count,
-                            )
-                            .await
-                    };
-                    match reconciliation {
-                        Ok(terminalized) => terminalized,
-                        Err(error) => {
-                            worker.warn_error("reconcile_manual_import", &error);
-                            false
-                        }
-                    }
-                } else {
-                    false
-                }
-            } else {
-                false
-            };
-
-            if terminalized {
-                let source_identity = DownloadSourceIdentity::new(
-                    payload.client_id.as_deref(),
-                    &payload.client_type,
-                    &payload.download_client_item_id,
-                );
-                if let Err(error) = app
-                    .services
-                    .workflow
-                    .imports
-                    .delete_manual_import_selections_for_source(&source_identity)
-                    .await
-                {
-                    worker.warn_error("cleanup_terminal_manual_import_selections", &error);
-                }
+            if manual_import_record_requires_reconciliation(&record) {
+                continue;
             }
-
-            maybe_remove_completed_manual_import_download(
-                &app,
-                outcome.completed.as_ref(),
-                outcome.title_id.as_deref(),
-                terminalized,
-            )
-            .await;
+            if !manual_import_retry_is_due(&record, Utc::now()) {
+                continue;
+            }
+            let id = record.id.clone();
+            let task_app = app.clone();
+            let task = tokio::spawn(async move {
+                process_pending_manual_import(task_app, record).await;
+            });
+            in_flight.insert(id, task);
         }
     }
+}
+
+async fn mark_manual_import_reconciliation(app: &AppUseCase, import_id: &str, message: &str) {
+    let record = match app
+        .services
+        .workflow
+        .imports
+        .get_import_by_id(import_id)
+        .await
+    {
+        Ok(Some(record)) if record.status == ImportStatus::Processing => record,
+        Ok(_) => return,
+        Err(error) => {
+            tracing::error!(import_id, error = %error, "failed to load interrupted manual import");
+            return;
+        }
+    };
+    let Ok(payload) = serde_json::from_str::<ManualImportRequestPayload>(&record.payload_json)
+    else {
+        tracing::error!(import_id, "interrupted manual import payload is invalid");
+        return;
+    };
+    let file_results = record
+        .result_json
+        .as_deref()
+        .and_then(|json| serde_json::from_str::<ManualImportExecutionResult>(json).ok())
+        .map(|result| result.file_results)
+        .unwrap_or_default();
+    let result_json = manual_import_pending_result_json(
+        import_id,
+        &payload,
+        format!("Manual reconciliation required: {message}"),
+        true,
+        0,
+        None,
+        file_results,
+    );
+    if let Err(error) = app
+        .update_import_status_and_notify(import_id, ImportStatus::Pending, result_json)
+        .await
+    {
+        tracing::error!(import_id, error = %error, "failed to preserve interrupted manual import");
+    }
+}
+
+pub(crate) fn manual_import_record_requires_reconciliation(
+    record: &scryer_domain::ImportRecord,
+) -> bool {
+    let Some(result) = record
+        .result_json
+        .as_deref()
+        .and_then(|json| serde_json::from_str::<ManualImportExecutionResult>(json).ok())
+    else {
+        return false;
+    };
+    result.requires_reconciliation
+        || result.error_message.is_some_and(|message| {
+            message
+                .to_ascii_lowercase()
+                .starts_with("manual reconciliation required:")
+        })
+}
+
+fn manual_import_retry_is_due(record: &scryer_domain::ImportRecord, now: DateTime<Utc>) -> bool {
+    record
+        .result_json
+        .as_deref()
+        .and_then(|json| serde_json::from_str::<ManualImportExecutionResult>(json).ok())
+        .and_then(|result| result.next_retry_at)
+        .is_none_or(|next_retry_at| next_retry_at <= now)
+}
+
+async fn process_pending_manual_import(app: AppUseCase, record: scryer_domain::ImportRecord) {
+    let payload = match serde_json::from_str::<ManualImportRequestPayload>(&record.payload_json) {
+        Ok(payload) => payload,
+        Err(error) => {
+            let result_json = manual_import_result_json(
+                &record.id,
+                &ManualImportRequestPayload {
+                    requested_by_user_id: None,
+                    title_id: None,
+                    download_client_item_id: record.source_ref.clone(),
+                    client_id: None,
+                    client_type: record.source_system.clone(),
+                    files: Vec::new(),
+                    selection_id: None,
+                    release_evidence: None,
+                    trusted_source_root: None,
+                    archive_workspace_root: None,
+                    requested_at: record.created_at.clone(),
+                },
+                ImportStatus::Failed,
+                Some(ImportErrorCode::Unknown),
+                Some(format!("invalid manual import payload: {error}")),
+                Vec::new(),
+            );
+            let _ = app
+                .update_import_status_and_notify(&record.id, ImportStatus::Failed, result_json)
+                .await;
+            return;
+        }
+    };
+
+    let previous_result = record
+        .result_json
+        .as_deref()
+        .and_then(|json| serde_json::from_str::<ManualImportExecutionResult>(json).ok());
+    let previous_file_results = previous_result
+        .as_ref()
+        .map(|result| result.file_results.clone())
+        .unwrap_or_default();
+
+    let outcome = match execute_queued_manual_import_with_outcome(&app, &record.id, &payload).await
+    {
+        Ok(result) => result,
+        Err(AppError::ManualReconciliationRequired(message)) => QueuedManualImportOutcome {
+            status: ImportStatus::Pending,
+            result_json: manual_import_pending_result_json(
+                &record.id,
+                &payload,
+                format!("Manual reconciliation required: {message}"),
+                true,
+                0,
+                None,
+                previous_file_results.clone(),
+            ),
+            files_imported_this_pass: 0,
+            completed: None,
+            title_id: payload.title_id.clone(),
+            expected_mapping_count: Some(payload.files.len()),
+            prior_import_proven: false,
+        },
+        Err(AppError::ImportEvidenceUnavailable(message)) => {
+            let retry_attempts = previous_result
+                .as_ref()
+                .map_or(1, |result| result.retry_attempts.saturating_add(1));
+            let next_retry_at = Utc::now() + manual_import_recovery_retry_delay(retry_attempts);
+            QueuedManualImportOutcome {
+                status: ImportStatus::Pending,
+                result_json: manual_import_pending_result_json(
+                    &record.id,
+                    &payload,
+                    format!("Import evidence is temporarily unavailable: {message}"),
+                    false,
+                    retry_attempts,
+                    Some(next_retry_at),
+                    previous_file_results,
+                ),
+                files_imported_this_pass: 0,
+                completed: None,
+                title_id: payload.title_id.clone(),
+                expected_mapping_count: Some(payload.files.len()),
+                prior_import_proven: false,
+            }
+        }
+        Err(error) => QueuedManualImportOutcome {
+            status: ImportStatus::Failed,
+            result_json: manual_import_result_json(
+                &record.id,
+                &payload,
+                ImportStatus::Failed,
+                Some(classify_manual_import_error_message(&error.to_string())),
+                Some(error.to_string()),
+                Vec::new(),
+            ),
+            files_imported_this_pass: 0,
+            completed: None,
+            title_id: payload.title_id.clone(),
+            expected_mapping_count: None,
+            prior_import_proven: false,
+        },
+    };
+
+    if let Err(error) = app
+        .update_import_status_and_notify(&record.id, outcome.status, outcome.result_json.clone())
+        .await
+    {
+        tracing::warn!(import_id = %record.id, error = %error, "failed to finalize manual import request");
+        return;
+    }
+
+    let has_successful_import = outcome.files_imported_this_pass > 0
+        || outcome.status == ImportStatus::Completed
+        || outcome.prior_import_proven;
+    let terminalized = if has_successful_import {
+        let canonical_download_id = match app
+            .services
+            .workflow
+            .imports
+            .canonical_download_id_for_import(&record.id)
+            .await
+        {
+            Ok(canonical_download_id) => canonical_download_id,
+            Err(error) => {
+                tracing::warn!(import_id = %record.id, error = %error, "failed to resolve manual import canonical identity");
+                None
+            }
+        };
+        if let Some(handle) = app.runtime.acquisition.tracked_download_handle.as_ref() {
+            let tracked_id = crate::tracked_downloads::tracked_download_id(
+                payload.client_id.as_deref(),
+                &payload.client_type,
+                &payload.download_client_item_id,
+            );
+            let reconciliation = if outcome.prior_import_proven {
+                handle
+                    .mark_imported_for_download(tracked_id, canonical_download_id)
+                    .await
+                    .map(|()| true)
+            } else {
+                handle
+                    .reconcile_manual_import_for_download(
+                        tracked_id,
+                        canonical_download_id,
+                        outcome.files_imported_this_pass,
+                        outcome.expected_mapping_count,
+                    )
+                    .await
+            };
+            match reconciliation {
+                Ok(terminalized) => terminalized,
+                Err(error) => {
+                    tracing::warn!(import_id = %record.id, error = %error, "failed to reconcile manual import");
+                    false
+                }
+            }
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+
+    if terminalized {
+        let source_identity = ClientJobLocator::for_import_artifact(
+            payload.client_id.as_deref(),
+            &payload.client_type,
+            &payload.download_client_item_id,
+        );
+        if let Err(error) = app
+            .services
+            .workflow
+            .imports
+            .delete_manual_import_selections_for_source(&source_identity)
+            .await
+        {
+            tracing::warn!(import_id = %record.id, error = %error, "failed to clean up terminal manual import selections");
+        }
+    }
+
+    maybe_remove_completed_manual_import_download(
+        &app,
+        outcome.completed.as_ref(),
+        outcome.title_id.as_deref(),
+        terminalized,
+    )
+    .await;
 }
 async fn maybe_remove_completed_manual_import_download(
     app: &AppUseCase,
@@ -221,6 +398,7 @@ async fn maybe_remove_completed_manual_import_download(
     // parks it in `ImportedSeeding`.
     let _ = reconcile_terminal_download_cleanup(
         app,
+        None,
         &completed.client_id,
         &completed.client_type,
         &completed.download_client_item_id,
@@ -242,10 +420,21 @@ async fn maybe_remove_completed_manual_import_download(
 // ---------------------------------------------------------------------------
 
 /// A single file in a manual import preview with auto-detected episode info.
+#[derive(Clone, Debug)]
+pub struct ManualImportVideoFacts {
+    pub container_format: Option<String>,
+    pub video_codec: Option<String>,
+    pub audio_codec: Option<String>,
+    pub video_width: Option<i32>,
+    pub video_height: Option<i32>,
+    pub duration_seconds: Option<i32>,
+}
+
 struct ManualImportFilePreview {
     file_path: String,
     file_name: String,
     size_bytes: i64,
+    video_facts: Option<ManualImportVideoFacts>,
     quality: Option<String>,
     parsed_season: Option<u32>,
     parsed_episodes: Vec<u32>,
@@ -272,6 +461,7 @@ pub struct ManualImportSelectionFilePreview {
     pub candidate_id: String,
     pub file_name: String,
     pub size_bytes: i64,
+    pub video_facts: Option<ManualImportVideoFacts>,
     pub quality: Option<String>,
     pub parsed_season: Option<u32>,
     pub parsed_episodes: Vec<u32>,
@@ -282,6 +472,7 @@ pub struct ManualImportSelectionFilePreview {
 
 pub struct ManualImportSelectionPreview {
     pub selection_id: String,
+    pub archive_extraction_needed: bool,
     pub files: Vec<ManualImportSelectionFilePreview>,
     pub available_episodes: Vec<scryer_domain::Episode>,
     pub available_series_movies: Vec<ManualImportSeriesMovieTarget>,
@@ -365,7 +556,7 @@ pub(crate) async fn resolve_current_manual_import_source(
 }
 
 struct AuthorizedManualImportSource {
-    identity: DownloadSourceIdentity,
+    identity: ClientJobLocator,
     title: scryer_domain::Title,
 }
 
@@ -382,7 +573,7 @@ async fn authorize_manual_import_source(
     }
 
     let source_identity =
-        DownloadSourceIdentity::new(Some(client_id), client_type, download_client_item_id);
+        ClientJobLocator::new(Some(client_id), client_type, download_client_item_id);
     let title = app
         .services
         .catalog
@@ -418,7 +609,7 @@ async fn authorize_manual_import_source(
 
 async fn resolve_authorized_manual_import_source(
     app: &AppUseCase,
-    identity: &DownloadSourceIdentity,
+    identity: &ClientJobLocator,
 ) -> AppResult<CompletedDownload> {
     if let Some(handle) = app.runtime.acquisition.tracked_download_handle.as_ref() {
         match handle.completed_source(identity.clone()).await {
@@ -446,7 +637,7 @@ async fn resolve_authorized_manual_import_source(
 
 async fn retained_manual_import_source_is_admitted(
     app: &AppUseCase,
-    identity: &DownloadSourceIdentity,
+    identity: &ClientJobLocator,
     completed: &CompletedDownload,
 ) -> AppResult<bool> {
     let has_scryer_submission = app
@@ -465,7 +656,7 @@ async fn retained_manual_import_source_is_admitted(
 
 async fn resolve_live_manual_import_source(
     app: &AppUseCase,
-    identity: &DownloadSourceIdentity,
+    identity: &ClientJobLocator,
 ) -> AppResult<CompletedDownload> {
     let completed = match app
         .resolve_manual_import_source(
@@ -490,9 +681,11 @@ async fn resolve_live_manual_import_source(
 
 fn completed_download_matches_source(
     completed: &CompletedDownload,
-    identity: &DownloadSourceIdentity,
+    identity: &ClientJobLocator,
 ) -> bool {
-    completed.client_id == identity.client_id.as_deref().unwrap_or_default()
+    completed
+        .client_id
+        .eq_ignore_ascii_case(identity.client_id.as_deref().unwrap_or_default())
         && completed
             .client_type
             .eq_ignore_ascii_case(identity.client_type.as_str())
@@ -577,47 +770,243 @@ fn source_entry_location_under_parent(source_path: &Path) -> AppResult<PathBuf> 
     Ok(parent.join(file_name))
 }
 
-pub(crate) fn validate_manual_import_source_under_trusted_root(
+fn canonical_manual_import_source_under_trusted_root(
     source_path: &Path,
     trusted_root: &Path,
-) -> AppResult<()> {
-    let source_entry_location = source_entry_location_under_parent(source_path)?;
-    if source_entry_location != trusted_root && !source_entry_location.starts_with(trusted_root) {
-        return Err(AppError::Validation(format!(
-            "manual import file path is outside the trusted source root: {}",
-            source_path.display()
-        )));
-    }
-
+) -> AppResult<PathBuf> {
+    let trusted_root_metadata = std::fs::metadata(trusted_root).map_err(|err| {
+        AppError::Validation(format!(
+            "manual import source root is not accessible: {} ({err})",
+            trusted_root.display()
+        ))
+    })?;
+    let canonical_trusted_root = std::fs::canonicalize(trusted_root).map_err(|err| {
+        AppError::Validation(format!(
+            "manual import source root is not accessible: {} ({err})",
+            trusted_root.display()
+        ))
+    })?;
     let canonical = std::fs::canonicalize(source_path).map_err(|err| {
         AppError::Validation(format!(
             "manual import file is not accessible: {} ({err})",
             source_path.display()
         ))
     })?;
-    if canonical != trusted_root && !canonical.starts_with(trusted_root) {
+
+    if trusted_root_metadata.is_file() {
+        if canonical == canonical_trusted_root {
+            return Ok(canonical);
+        }
+        return Err(AppError::Validation(format!(
+            "manual import file is outside the trusted source root: {}",
+            source_path.display()
+        )));
+    }
+    if !trusted_root_metadata.is_dir() {
+        return Err(AppError::Validation(format!(
+            "manual import source root is not a file or directory: {}",
+            trusted_root.display()
+        )));
+    }
+
+    let source_entry_location = source_entry_location_under_parent(source_path)?;
+    if source_entry_location != canonical_trusted_root
+        && !source_entry_location.starts_with(&canonical_trusted_root)
+    {
+        return Err(AppError::Validation(format!(
+            "manual import file path is outside the trusted source root: {}",
+            source_path.display()
+        )));
+    }
+
+    if canonical != canonical_trusted_root && !canonical.starts_with(&canonical_trusted_root) {
         return Err(AppError::Validation(format!(
             "manual import file is outside the trusted source root: {}",
             source_path.display()
         )));
     }
 
-    let metadata = std::fs::symlink_metadata(source_path).map_err(|err| {
+    let metadata = std::fs::metadata(&canonical).map_err(|err| {
         AppError::Validation(format!(
             "manual import file is not accessible: {} ({err})",
             source_path.display()
         ))
     })?;
-    if !metadata.file_type().is_symlink() {
-        return Ok(());
+    if !metadata.is_file() {
+        return Err(AppError::Validation(format!(
+            "manual import source is not a file: {}",
+            source_path.display()
+        )));
     }
-    Ok(())
+    Ok(canonical)
+}
+
+pub(crate) fn validate_manual_import_source_under_trusted_root(
+    source_path: &Path,
+    trusted_root: &Path,
+) -> AppResult<()> {
+    canonical_manual_import_source_under_trusted_root(source_path, trusted_root).map(drop)
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct QualifiedManualImportVideo {
+    pub(crate) source_entry_path: PathBuf,
+    pub(crate) canonical_path: PathBuf,
+    pub(crate) size_bytes: i64,
+    pub(crate) video_facts: Option<ManualImportVideoFacts>,
+}
+
+pub(crate) async fn qualify_manual_import_video_candidate(
+    source_path: &Path,
+    trusted_root: &Path,
+) -> AppResult<Option<QualifiedManualImportVideo>> {
+    let canonical_path =
+        canonical_manual_import_source_under_trusted_root(source_path, trusted_root)?;
+    let metadata = std::fs::metadata(&canonical_path).map_err(|error| {
+        AppError::Validation(format!(
+            "manual import file is not accessible: {} ({error})",
+            source_path.display()
+        ))
+    })?;
+    std::fs::File::open(&canonical_path).map_err(|error| {
+        AppError::Validation(format!(
+            "manual import file is not accessible: {} ({error})",
+            source_path.display()
+        ))
+    })?;
+    let has_known_video_extension = is_video_file(source_path);
+    let has_file_extension = source_path.extension().is_some();
+    if metadata.len() == 0 {
+        return Ok(None);
+    }
+
+    if has_known_video_extension {
+        return Ok(Some(QualifiedManualImportVideo {
+            source_entry_path: source_path.to_path_buf(),
+            canonical_path,
+            size_bytes: i64::try_from(metadata.len()).unwrap_or(i64::MAX),
+            video_facts: None,
+        }));
+    }
+
+    if has_file_extension || metadata.len() < OPAQUE_MANUAL_IMPORT_PROBE_MIN_BYTES {
+        return Ok(None);
+    }
+
+    #[cfg(feature = "runtime-media-analysis")]
+    let video_facts = {
+        let probe_path = canonical_path.clone();
+        let analysis = tokio::task::spawn_blocking(move || {
+            crate::nice_thread();
+            scryer_mediainfo::analyze_file_with_options(
+                &probe_path,
+                scryer_mediainfo::AnalyzeOptions {
+                    profile: scryer_mediainfo::AnalysisProfile::ContentProbe,
+                },
+            )
+        })
+        .await
+        .map_err(|error| {
+            AppError::Repository(format!("manual import media probe failed: {error}"))
+        })?;
+
+        match analysis {
+            Ok(analysis) if scryer_mediainfo::is_valid_video(&analysis) => {
+                Some(ManualImportVideoFacts {
+                    container_format: analysis.container_format,
+                    video_codec: analysis.video_codec,
+                    audio_codec: analysis.audio_codec,
+                    video_width: analysis.video_width,
+                    video_height: analysis.video_height,
+                    duration_seconds: analysis.duration_seconds,
+                })
+            }
+            Ok(_) | Err(scryer_mediainfo::MediaInfoError::Parse(_)) => return Ok(None),
+            Err(scryer_mediainfo::MediaInfoError::UnsupportedFormat(_)) => return Ok(None),
+            Err(scryer_mediainfo::MediaInfoError::Io(error)) => {
+                return Err(AppError::Validation(format!(
+                    "manual import file is not accessible: {} ({error})",
+                    source_path.display()
+                )));
+            }
+        }
+    };
+
+    #[cfg(not(feature = "runtime-media-analysis"))]
+    return Ok(None);
+
+    #[cfg(feature = "runtime-media-analysis")]
+    Ok(Some(QualifiedManualImportVideo {
+        source_entry_path: source_path.to_path_buf(),
+        canonical_path,
+        size_bytes: i64::try_from(metadata.len()).unwrap_or(i64::MAX),
+        video_facts,
+    }))
+}
+
+async fn discover_manual_import_video_candidates(
+    trusted_root: &Path,
+) -> AppResult<Vec<QualifiedManualImportVideo>> {
+    let root_metadata = std::fs::metadata(trusted_root).map_err(|error| {
+        AppError::Validation(format!(
+            "manual import source root is not accessible: {} ({error})",
+            trusted_root.display()
+        ))
+    })?;
+    let paths = if root_metadata.is_file() {
+        vec![trusted_root.to_path_buf()]
+    } else {
+        crate::filesystem_walk::FilesystemWalker::new()
+            .skip_unreadable_subdirectories()
+            .confine_to_root()
+            .walk(trusted_root)?
+            .into_iter()
+            .flat_map(|entry| entry.files.into_iter())
+            .collect()
+    };
+
+    let mut candidates: Vec<QualifiedManualImportVideo> = Vec::new();
+    let mut candidate_indexes: std::collections::HashMap<PathBuf, usize> =
+        std::collections::HashMap::new();
+    let mut first_error = None;
+    for path in paths {
+        match qualify_manual_import_video_candidate(&path, trusted_root).await {
+            Ok(Some(candidate)) => {
+                if let Some(index) = candidate_indexes.get(&candidate.canonical_path).copied() {
+                    let existing = &mut candidates[index];
+                    if is_video_file(&candidate.source_entry_path)
+                        && !is_video_file(&existing.source_entry_path)
+                    {
+                        *existing = candidate;
+                    }
+                } else {
+                    candidate_indexes.insert(candidate.canonical_path.clone(), candidates.len());
+                    candidates.push(candidate);
+                }
+            }
+            Ok(None) => {}
+            Err(error) => {
+                tracing::debug!(
+                    path = %path.display(),
+                    error = %error,
+                    "skipping unavailable manual import candidate"
+                );
+                first_error.get_or_insert(error);
+            }
+        }
+    }
+    if candidates.is_empty()
+        && let Some(error) = first_error
+    {
+        return Err(error);
+    }
+    Ok(candidates)
 }
 
 /// Scan a completed download's directory and attempt to auto-match files to episodes.
 async fn preview_manual_import(
     app: &AppUseCase,
-    completed: &CompletedDownload,
+    source_dir: &Path,
     title: &scryer_domain::Title,
     release_evidence: &ReleaseEvidence,
     available_episodes: &[scryer_domain::Episode],
@@ -631,27 +1020,20 @@ async fn preview_manual_import(
     // as skipped). Name only, never size: the automatic movie path does not
     // size-filter either, and a legitimately small movie must stay importable
     // by hand.
-    let dest_dir = Path::new(&completed.dest_dir);
-    let mut video_files = find_video_files(dest_dir, false)?;
+    let mut video_files = discover_manual_import_video_candidates(source_dir).await?;
     if *facet == MediaFacet::Movie {
-        video_files.retain(|path| !is_sample_named_file(path));
+        video_files.retain(|candidate| !is_sample_named_file(&candidate.source_entry_path));
     }
     let grabbed_episode_ids = match release_evidence.scope() {
-        Some(SubmissionScope::Episode { episode_id }) => {
-            HashSet::from([episode_id.clone()])
-        }
-        Some(SubmissionScope::EpisodeSet { episode_ids }) => {
-            episode_ids.iter().cloned().collect()
-        }
+        Some(SubmissionScope::Episode { episode_id }) => HashSet::from([episode_id.clone()]),
+        Some(SubmissionScope::EpisodeSet { episode_ids }) => episode_ids.iter().cloned().collect(),
         Some(SubmissionScope::Collection { collection_id }) => available_episodes
             .iter()
             .filter(|episode| episode.collection_id.as_deref() == Some(collection_id))
             .map(|episode| episode.id.clone())
             .collect(),
         Some(
-            SubmissionScope::Title
-            | SubmissionScope::SeriesMovie { .. }
-            | SubmissionScope::Orphan,
+            SubmissionScope::Title | SubmissionScope::SeriesMovie { .. } | SubmissionScope::Orphan,
         )
         | None => HashSet::new(),
     };
@@ -666,20 +1048,27 @@ async fn preview_manual_import(
     .then(|| {
         video_files
             .iter()
-            .max_by_key(|path| std::fs::metadata(path).map(|metadata| metadata.len()).unwrap_or(0))
-            .cloned()
+            .max_by_key(|candidate| candidate.size_bytes)
+            .map(|candidate| candidate.source_entry_path.clone())
     })
     .flatten();
+    let verified_pack = verified_episode_pack(release_evidence, title);
+    let expected_pack_episode_ids = match (verified_pack.as_ref(), release_evidence.scope()) {
+        (Some(_), Some(scope)) => {
+            expected_episode_ids_from_submission_scope(app, title, scope, false).await
+        }
+        _ => None,
+    };
 
     // For each file, parse and attempt auto-match
     let mut previews = Vec::new();
-    for path in &video_files {
+    for candidate in &video_files {
+        let path = &candidate.source_entry_path;
         let file_name = path
             .file_name()
             .and_then(|f| f.to_str())
             .unwrap_or("unknown")
             .to_string();
-        let size = std::fs::metadata(path).map(|m| m.len() as i64).unwrap_or(0);
 
         // File parsing is only for user-facing episode suggestions. It must
         // not become release/quality evidence for the later import.
@@ -711,18 +1100,27 @@ async fn preview_manual_import(
                     .find_episode_by_title_and_numbers(title_id, &season_str, &ep_str)
                     .await
                 {
-                    let label = format!(
-                        "S{:02}E{:02}{}",
-                        ep_meta.season.unwrap_or(1),
-                        ep_num,
-                        episode
-                            .title
-                            .as_ref()
-                            .map(|t| format!(" - {}", t))
-                            .unwrap_or_default()
-                    );
                     suggested_episode_id = Some(episode.id.clone());
-                    suggested_episode_label = Some(label);
+                    suggested_episode_label = Some(
+                        if episode
+                            .absolute_number
+                            .as_deref()
+                            .is_some_and(|value| !value.trim().is_empty())
+                        {
+                            manual_import_episode_label(&episode)
+                        } else {
+                            format!(
+                                "S{:02}E{:02}{}",
+                                ep_meta.season.unwrap_or(1),
+                                ep_num,
+                                episode
+                                    .title
+                                    .as_ref()
+                                    .map(|title| format!(" - {title}"))
+                                    .unwrap_or_default()
+                            )
+                        },
+                    );
                 }
             }
 
@@ -738,19 +1136,42 @@ async fn preview_manual_import(
                     .find_episode_by_title_and_absolute_number(title_id, &abs_str)
                     .await
                 {
-                    let label = format!(
-                        "#{}{}",
-                        abs,
-                        episode
-                            .title
-                            .as_ref()
-                            .map(|t| format!(" - {}", t))
-                            .unwrap_or_default()
-                    );
                     suggested_episode_id = Some(episode.id.clone());
-                    suggested_episode_label = Some(label);
+                    suggested_episode_label = Some(manual_import_episode_label(&episode));
                 }
             }
+        }
+
+        if suggested_episode_id.is_none()
+            && let Some(episode) = reconcile_unresolved_scene_episode_from_scoped_release(
+                app,
+                title,
+                release_evidence,
+                path,
+                video_files.len() > 1,
+            )
+            .await?
+        {
+            suggested_episode_id = Some(episode.id.clone());
+            suggested_episode_label = Some(manual_import_episode_label(&episode));
+        }
+
+        if suggested_episode_id.is_none()
+            && let Some(pack) = verified_pack.as_ref()
+            && let ScopedPackMemberReconciliation::Resolved(episode_id) =
+                reconcile_unresolved_pack_member_from_expected_scope(
+                    title,
+                    pack,
+                    path,
+                    available_episodes,
+                    expected_pack_episode_ids.as_ref(),
+                )
+            && let Some(episode) = available_episodes
+                .iter()
+                .find(|episode| episode.id == episode_id)
+        {
+            suggested_episode_id = Some(episode.id.clone());
+            suggested_episode_label = Some(manual_import_episode_label(episode));
         }
 
         let is_grabbed_fallback_path = grabbed_fallback_path
@@ -775,25 +1196,46 @@ async fn preview_manual_import(
         }
 
         previews.push(ManualImportFilePreview {
-            file_path: path_to_stored_string(path),
+            file_path: path_to_stored_string(&candidate.canonical_path),
             file_name,
-            size_bytes: size,
+            size_bytes: candidate.size_bytes,
+            video_facts: candidate.video_facts.clone(),
             quality,
             parsed_season,
             parsed_episodes,
             suggested_episode_id,
             suggested_episode_label,
-            suggested_series_movie_link_id: grabbed_series_movie_link_id
-                .clone()
-                .filter(|_| {
-                    grabbed_fallback_path
-                        .as_ref()
-                        .is_some_and(|fallback| fallback == path)
-                }),
+            suggested_series_movie_link_id: grabbed_series_movie_link_id.clone().filter(|_| {
+                grabbed_fallback_path
+                    .as_ref()
+                    .is_some_and(|fallback| fallback == path)
+            }),
         });
     }
 
     Ok(ManualImportPreview { files: previews })
+}
+
+#[cfg(test)]
+pub(crate) async fn preview_manual_import_suggested_episode_ids_for_tests(
+    app: &AppUseCase,
+    source_dir: &Path,
+    title: &scryer_domain::Title,
+    release_evidence: &ReleaseEvidence,
+    available_episodes: &[scryer_domain::Episode],
+) -> AppResult<Vec<Option<String>>> {
+    Ok(preview_manual_import(
+        app,
+        source_dir,
+        title,
+        release_evidence,
+        available_episodes,
+    )
+    .await?
+    .files
+    .into_iter()
+    .map(|file| file.suggested_episode_id)
+    .collect())
 }
 
 /// Whether the preview may pre-select the single grabbed episode for a file.
@@ -839,6 +1281,36 @@ fn manual_episode_suggestion_for_grabbed_scope(
 }
 
 fn manual_import_episode_label(episode: &scryer_domain::Episode) -> String {
+    if let Some(absolute) = episode
+        .absolute_number
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let normalized_number = |value: Option<&str>| {
+            let digits = value
+                .unwrap_or_default()
+                .chars()
+                .filter(char::is_ascii_digit)
+                .collect::<String>();
+            if digits.is_empty() {
+                "??".to_string()
+            } else {
+                digits
+            }
+        };
+        let season = normalized_number(episode.season_number.as_deref());
+        let number = normalized_number(episode.episode_number.as_deref());
+        let title = episode
+            .title
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| format!(" — {value}"))
+            .unwrap_or_default();
+        return format!("S{season:0>2}E{number:0>2} · Absolute {absolute}{title}");
+    }
+
     episode.episode_label.clone().unwrap_or_else(|| {
         let season = episode.season_number.as_deref().unwrap_or("1");
         let number = episode.episode_number.as_deref().unwrap_or("?");
@@ -853,6 +1325,18 @@ fn manual_import_episode_label(episode: &scryer_domain::Episode) -> String {
     })
 }
 
+fn reusable_manual_archive_workspace(
+    selection: &crate::ManualImportSelection,
+) -> Option<(PathBuf, String)> {
+    let workspace = selection.archive_workspace_root.as_deref()?;
+    if selection.trusted_source_root.trim().is_empty() {
+        return None;
+    }
+    let existing_root = std::fs::canonicalize(stored_path_to_path_buf(workspace)).ok()?;
+    (existing_root == stored_path_to_path_buf(&selection.trusted_source_root))
+        .then(|| (existing_root, workspace.to_string()))
+}
+
 /// Creates a durable, server-owned selection for files from a tracked completed download.
 /// The caller receives opaque candidate IDs; canonical source paths remain in workflow storage.
 pub async fn begin_manual_import_selection(
@@ -862,20 +1346,31 @@ pub async fn begin_manual_import_selection(
     client_type: &str,
     download_client_item_id: &str,
     title_id: &str,
+    extract_archives: bool,
 ) -> AppResult<ManualImportSelectionPreview> {
     let client_id = client_id.trim();
     let client_type = client_type.trim().to_ascii_lowercase();
     let source_ref = download_client_item_id.trim();
-    let authorized = authorize_manual_import_source(
-        app,
-        actor,
-        client_id,
-        &client_type,
-        source_ref,
-        title_id,
-    )
-    .await?;
+    let authorized =
+        authorize_manual_import_source(app, actor, client_id, &client_type, source_ref, title_id)
+            .await?;
     let completed = resolve_authorized_manual_import_source(app, &authorized.identity).await?;
+    let canonical_download_id = match crate::download_identity::resolve_observed_client_job(
+        app,
+        crate::download_identity::observed_completed_job(&completed),
+    )
+    .await
+    {
+        crate::download_identity::ObservedClientJobResolution::Resolved(download_id) => {
+            Some(download_id)
+        }
+        crate::download_identity::ObservedClientJobResolution::Conflict => {
+            return Err(AppError::Validation(
+                "manual import source has a conflicting canonical download identity".to_string(),
+            ));
+        }
+        crate::download_identity::ObservedClientJobResolution::Unavailable => None,
+    };
     let release_evidence =
         resolve_release_evidence_for_completed_download(app, &completed, None).await?;
     if let Some(submission_title_id) = release_evidence.title_id()
@@ -888,51 +1383,129 @@ pub async fn begin_manual_import_selection(
     }
     let release_evidence_json = serde_json::to_string(&release_evidence)
         .map_err(|error| AppError::Repository(error.to_string()))?;
-    let trusted_root = std::fs::canonicalize(&completed.dest_dir)
+    let download_root = std::fs::canonicalize(&completed.dest_dir)
         .map_err(|_| manual_import_source_unavailable())?;
-    let source_identity = DownloadSourceIdentity::new(
+    let source_identity = ClientJobLocator::new(
         Some(&completed.client_id),
         &completed.client_type,
         &completed.download_client_item_id,
     );
     let selection_id = scryer_domain::Id::new().0;
-    let prior_candidate_ids = app
+    let prior_selection = app
         .services
         .workflow
         .imports
-        .find_manual_import_selection(&actor.id, title_id, &source_identity)
-        .await?
+        .find_manual_import_selection_for_download(
+            canonical_download_id.as_ref(),
+            &actor.id,
+            title_id,
+            &source_identity,
+        )
+        .await?;
+    let prior_candidate_ids = prior_selection
+        .as_ref()
         .map(|selection| {
             selection
                 .candidates
-                .into_iter()
-                .map(|candidate| (candidate.canonical_path, candidate.id))
+                .iter()
+                .map(|candidate| (candidate.canonical_path.clone(), candidate.id.clone()))
                 .collect::<std::collections::HashMap<_, _>>()
         })
         .unwrap_or_default();
     let (all_episodes, available_series_movies) =
         manual_import_preview_targets(app, title_id).await?;
 
+    let mut preview_root = download_root.clone();
+    let mut trusted_root = download_root;
+    let mut archive_workspace_root = None;
+    let mut archive_extraction_needed =
+        crate::archive_extractor::archive_extraction_would_be_needed(&preview_root)?;
+
+    if archive_extraction_needed && extract_archives {
+        let destination =
+            archive_extraction_destination_for_title(app, &selection_id, &authorized.title).await?;
+        let extracted_root = {
+            let _archive_extraction_permit = app
+                .runtime
+                .imports
+                .execution_coordinator
+                .acquire_archive_extraction()
+                .await;
+            crate::archive_extractor::extract_archives_if_needed(
+                &preview_root,
+                Some(destination),
+                None,
+                app.services
+                    .integrations
+                    .archive_extractor_plugin_provider
+                    .available()
+                    .cloned(),
+            )
+            .await?
+        }
+        .ok_or_else(|| {
+            AppError::Validation("archive extraction did not produce importable files".to_string())
+        })?;
+        trusted_root = std::fs::canonicalize(&extracted_root).map_err(|error| {
+            AppError::Validation(format!(
+                "extracted archive workspace is not accessible: {} ({error})",
+                extracted_root.display()
+            ))
+        })?;
+        preview_root = trusted_root.clone();
+        archive_workspace_root = Some(path_to_stored_string(&trusted_root));
+        archive_extraction_needed = false;
+    } else if archive_extraction_needed
+        && let Some((existing_root, workspace)) = prior_selection
+            .as_ref()
+            .and_then(reusable_manual_archive_workspace)
+    {
+        preview_root = existing_root.clone();
+        trusted_root = existing_root;
+        archive_workspace_root = Some(workspace.to_string());
+        archive_extraction_needed = false;
+    }
+
+    if archive_extraction_needed {
+        app.services
+            .workflow
+            .imports
+            .replace_manual_import_selection_for_download(
+                crate::ManualImportSelection {
+                    id: selection_id.clone(),
+                    actor_user_id: actor.id.clone(),
+                    title_id: title_id.to_string(),
+                    source_identity,
+                    canonical_download_id: None,
+                    release_evidence_json: Some(release_evidence_json),
+                    trusted_source_root: path_to_stored_string(&trusted_root),
+                    archive_workspace_root: None,
+                    candidates: Vec::new(),
+                },
+                canonical_download_id.as_ref(),
+            )
+            .await?;
+        return Ok(ManualImportSelectionPreview {
+            selection_id,
+            archive_extraction_needed: true,
+            files: Vec::new(),
+            available_episodes: all_episodes,
+            available_series_movies,
+        });
+    }
+
     let mut candidates = Vec::new();
     let mut files = Vec::new();
     let preview = preview_manual_import(
         app,
-        &completed,
+        &preview_root,
         &authorized.title,
         &release_evidence,
         &all_episodes,
     )
     .await?;
     for file in preview.files {
-        let source_path = stored_path_to_path_buf(&file.file_path);
-        validate_manual_import_source_under_trusted_root(&source_path, &trusted_root)?;
-        let canonical_path =
-            path_to_stored_string(&std::fs::canonicalize(&source_path).map_err(|error| {
-                AppError::Validation(format!(
-                    "manual import file is no longer accessible: {} ({error})",
-                    source_path.display()
-                ))
-            })?);
+        let canonical_path = file.file_path.clone();
         let candidate_id = prior_candidate_ids
             .get(&canonical_path)
             .cloned()
@@ -945,6 +1518,7 @@ pub async fn begin_manual_import_selection(
             candidate_id,
             file_name: file.file_name,
             size_bytes: file.size_bytes,
+            video_facts: file.video_facts,
             quality: file.quality,
             parsed_season: file.parsed_season,
             parsed_episodes: file.parsed_episodes,
@@ -957,18 +1531,36 @@ pub async fn begin_manual_import_selection(
     app.services
         .workflow
         .imports
-        .replace_manual_import_selection(crate::ManualImportSelection {
-            id: selection_id.clone(),
-            actor_user_id: actor.id.clone(),
-            title_id: title_id.to_string(),
-            source_identity,
-            release_evidence_json: Some(release_evidence_json),
-            candidates,
-        })
+        .replace_manual_import_selection_for_download(
+            crate::ManualImportSelection {
+                id: selection_id.clone(),
+                actor_user_id: actor.id.clone(),
+                title_id: title_id.to_string(),
+                source_identity,
+                canonical_download_id: None,
+                release_evidence_json: Some(release_evidence_json),
+                trusted_source_root: path_to_stored_string(&trusted_root),
+                archive_workspace_root: archive_workspace_root.clone(),
+                candidates,
+            },
+            canonical_download_id.as_ref(),
+        )
         .await?;
+
+    if let Some(previous_workspace) = prior_selection
+        .as_ref()
+        .and_then(|selection| selection.archive_workspace_root.as_deref())
+        .filter(|workspace| Some(*workspace) != archive_workspace_root.as_deref())
+    {
+        crate::archive_extractor::cleanup_extracted_dir(&stored_path_to_path_buf(
+            previous_workspace,
+        ))
+        .await;
+    }
 
     Ok(ManualImportSelectionPreview {
         selection_id,
+        archive_extraction_needed: false,
         files,
         available_episodes: all_episodes,
         available_series_movies,
@@ -1236,6 +1828,12 @@ pub struct ManualImportRequestPayload {
     /// degrade to downloader display-name or filename evidence.
     #[serde(default)]
     pub(crate) release_evidence: Option<ReleaseEvidence>,
+    /// Server-owned root that the queued candidate paths were validated against.
+    #[serde(default)]
+    pub(crate) trusted_source_root: Option<String>,
+    /// Temporary archive staging root to remove after execution.
+    #[serde(default)]
+    pub(crate) archive_workspace_root: Option<String>,
     pub requested_at: String,
 }
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -1247,6 +1845,12 @@ pub struct ManualImportExecutionResult {
     pub status: ImportStatus,
     pub error_code: Option<ImportErrorCode>,
     pub error_message: Option<String>,
+    #[serde(default)]
+    pub requires_reconciliation: bool,
+    #[serde(default)]
+    pub retry_attempts: u32,
+    #[serde(default)]
+    pub next_retry_at: Option<DateTime<Utc>>,
     #[serde(default)]
     pub file_results: Vec<ManualImportFileResult>,
     pub completed_at: DateTime<Utc>,
@@ -1306,11 +1910,41 @@ pub(crate) fn manual_import_result_json(
         status,
         error_code,
         error_message,
+        requires_reconciliation: false,
+        retry_attempts: 0,
+        next_retry_at: None,
         file_results,
         completed_at: Utc::now(),
     })
     .ok()
 }
+
+fn manual_import_pending_result_json(
+    import_id: &str,
+    payload: &ManualImportRequestPayload,
+    message: String,
+    requires_reconciliation: bool,
+    retry_attempts: u32,
+    next_retry_at: Option<DateTime<Utc>>,
+    file_results: Vec<ManualImportFileResult>,
+) -> Option<String> {
+    serde_json::to_string(&ManualImportExecutionResult {
+        import_id: import_id.to_string(),
+        client_type: payload.client_type.clone(),
+        download_client_item_id: payload.download_client_item_id.clone(),
+        title_id: payload.title_id.clone(),
+        status: ImportStatus::Pending,
+        error_code: Some(classify_manual_import_error_message(&message)),
+        error_message: Some(message),
+        requires_reconciliation,
+        retry_attempts,
+        next_retry_at,
+        file_results,
+        completed_at: Utc::now(),
+    })
+    .ok()
+}
+
 pub(crate) fn manual_import_source_failed_result_json(
     import_id: &str,
     payload: &ManualImportRequestPayload,
@@ -1341,7 +1975,12 @@ pub(crate) fn manual_import_request_matches_source(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty());
-    if requested_client_id != payload_client_id {
+    let client_id_matches = match (requested_client_id, payload_client_id) {
+        (None, None) => true,
+        (Some(requested), Some(payload)) => requested.eq_ignore_ascii_case(payload),
+        _ => false,
+    };
+    if !client_id_matches {
         return false;
     }
 
@@ -1365,7 +2004,7 @@ pub(crate) async fn find_active_manual_import_for_source(
         .services
         .workflow
         .imports
-        .list_imports_for_identities(&[DownloadSourceIdentity::new(
+        .list_imports_for_identities(&[ClientJobLocator::new(
             client_id,
             normalized_client_type.as_str(),
             source_ref,
@@ -1422,6 +2061,8 @@ pub(crate) async fn fail_active_manual_import_for_source(
             files: Vec::new(),
             selection_id: None,
             release_evidence: None,
+            trusted_source_root: None,
+            archive_workspace_root: None,
             requested_at: record.created_at.clone(),
         });
     let message = format!("source download failed before import: {failure_reason}");
@@ -1590,19 +2231,26 @@ async fn execute_manual_series_movie_import(
         completed,
     )
     .await?;
+    let destination_ownership = ImportDestinationOwnership::series_movie(
+        series_movie_link_id,
+        link.linked_episode_id.as_deref(),
+    );
     let file_result = match import_file_with_record_progress(
         app,
         import_id,
         &title.library_id,
         &title.facet,
+        &destination_ownership,
         source,
         &dest_path,
         import_mode,
         None,
+        completed,
     )
     .await
     {
         Ok(file_result) => file_result,
+        Err(error @ AppError::ManualReconciliationRequired(_)) => return Err(error),
         Err(error) => {
             let message = error.to_string();
             return Ok(manual_import_file_result(
@@ -1616,36 +2264,36 @@ async fn execute_manual_series_movie_import(
     };
     let quality_label = parsed.quality.clone();
     let started_at = Utc::now();
-    let imported_media_file_id = match app
-        .services
-        .library
-        .media_files
-        .insert_media_file(&crate::InsertMediaFileInput {
-            title_id: title.id.clone(),
-            file_path: path_to_stored_string(&dest_path),
-            size_bytes: file_result.size_bytes as i64,
-            announced_size_bytes: crate::canonical_scoring::persisted_announced_size_bytes(
-                file_result.size_bytes as i64,
-                release_evidence.announced_size_bytes(),
-            ),
-            role: crate::MediaFileRole::Primary,
-            quality_label: quality_label.clone(),
-            scene_name: Some(parsed.raw_title.clone()),
-            release_group: parsed.release_group.clone(),
-            source_type: crate::release_parser::parsed_release_source_type(&parsed),
-            resolution: quality_label,
-            video_codec_parsed: parsed.video_codec,
-            audio_codec_parsed: parsed.audio.as_ref().map(ToString::to_string),
-            audio_channels_parsed: parsed.audio_channels.clone(),
-            original_file_path: Some(path_to_stored_string(source)),
-            grabbed_release_title: release_evidence.release_title(Some(source)),
-            grabbed_at: Some(started_at.to_rfc3339()),
-            edition: parsed.edition.clone(),
-            ..Default::default()
-        })
+    let imported_media_file_id = match file_result
+        .insert_or_reuse_media_file(
+            app,
+            &crate::InsertMediaFileInput {
+                title_id: title.id.clone(),
+                file_path: path_to_stored_string(&dest_path),
+                size_bytes: file_result.size_bytes as i64,
+                announced_size_bytes: crate::canonical_scoring::persisted_announced_size_bytes(
+                    file_result.size_bytes as i64,
+                    release_evidence.announced_size_bytes(),
+                ),
+                role: crate::MediaFileRole::Primary,
+                quality_label: quality_label.clone(),
+                scene_name: Some(parsed.raw_title.clone()),
+                release_group: parsed.release_group.clone(),
+                source_type: crate::release_parser::parsed_release_source_type(&parsed),
+                resolution: quality_label,
+                video_codec_parsed: parsed.video_codec,
+                audio_codec_parsed: parsed.audio.as_ref().map(ToString::to_string),
+                audio_channels_parsed: parsed.audio_channels.clone(),
+                original_file_path: Some(path_to_stored_string(source)),
+                grabbed_release_title: release_evidence.release_title(Some(source)),
+                grabbed_at: Some(started_at.to_rfc3339()),
+                edition: parsed.edition.clone(),
+                ..Default::default()
+            },
+        )
         .await
     {
-        Ok(file_id) => file_id,
+        Ok(persistence) => persistence.media_file_id,
         Err(error) => {
             let message = error.to_string();
             return Ok(manual_import_file_result(
@@ -1658,17 +2306,7 @@ async fn execute_manual_series_movie_import(
         }
     };
 
-    app.services
-        .library
-        .media_files
-        .link_file_to_series_movie(&imported_media_file_id, series_movie_link_id)
-        .await?;
     if let Some(linked_episode_id) = link.linked_episode_id.as_deref() {
-        app.services
-            .library
-            .media_files
-            .link_file_to_episode(&imported_media_file_id, linked_episode_id)
-            .await?;
         app.services
             .library
             .media_files
@@ -1701,19 +2339,6 @@ async fn execute_manual_series_movie_import(
         );
     }
     maybe_trigger_subtitle_search(app, &title.id, &imported_media_file_id);
-    if let Err(error) =
-        finalize_import_source_cleanup(app, import_mode, &file_result, &dest_path).await
-    {
-        let message = error.to_string();
-        return Ok(manual_import_file_result(
-            mapping,
-            false,
-            Some(path_to_stored_string(&dest_path)),
-            Some(classify_manual_import_error_message(&message)),
-            Some(message),
-        ));
-    }
-
     if let Some(completed) = completed {
         let linked_episode_artifacts = linked_episode.iter().cloned().collect::<Vec<_>>();
         persist_file_import_artifact(
@@ -1728,7 +2353,23 @@ async fn execute_manual_series_movie_import(
             Some(imported_media_file_id.as_str()),
             &linked_episode_artifacts,
         )
-        .await;
+        .await?;
+    }
+
+    if let Err(error) =
+        finalize_import_source_cleanup(app, import_mode, &file_result, &dest_path, completed).await
+    {
+        if matches!(&error, AppError::ManualReconciliationRequired(_)) {
+            return Err(error);
+        }
+        let message = error.to_string();
+        return Ok(manual_import_file_result(
+            mapping,
+            false,
+            Some(path_to_stored_string(&dest_path)),
+            Some(classify_manual_import_error_message(&message)),
+            Some(message),
+        ));
     }
 
     let nfo_enabled = app
@@ -1888,33 +2529,39 @@ pub(crate) async fn execute_manual_import_with_release_evidence(
 
     for (mapping_index, mapping) in files.iter().enumerate() {
         let source = stored_path_to_path_buf(&mapping.file_path);
-        if let Err(err) =
-            validate_manual_import_source_under_trusted_root(&source, &trusted_source_root)
-        {
-            results.push(manual_import_file_result(
-                mapping,
-                false,
-                None,
-                Some(classify_manual_import_error_message(&err.to_string())),
-                Some(err.to_string()),
-            ));
-            continue;
-        }
-
-        // Validate file exists
-        if !source.exists() || !source.is_file() {
-            results.push(manual_import_file_result(
-                mapping,
-                false,
-                None,
-                Some(ImportErrorCode::FileNotFound),
-                Some(format!("file not found: {}", mapping.file_path)),
-            ));
-            continue;
-        }
+        let qualified =
+            match qualify_manual_import_video_candidate(&source, &trusted_source_root).await {
+                Ok(Some(qualified)) => qualified,
+                Ok(None) => {
+                    results.push(manual_import_file_result(
+                        mapping,
+                        false,
+                        None,
+                        Some(ImportErrorCode::PolicyMismatch),
+                        Some("manual import candidate is no longer a valid video".to_string()),
+                    ));
+                    continue;
+                }
+                Err(err) => {
+                    results.push(manual_import_file_result(
+                        mapping,
+                        false,
+                        None,
+                        Some(if !source.exists() {
+                            ImportErrorCode::FileNotFound
+                        } else {
+                            classify_manual_import_error_message(&err.to_string())
+                        }),
+                        Some(err.to_string()),
+                    ));
+                    continue;
+                }
+            };
+        let source = qualified.canonical_path;
 
         let target = match manual_import_mapping_target(mapping, &title.facet) {
             Ok(target) => target,
+            Err(error @ AppError::ManualReconciliationRequired(_)) => return Err(error),
             Err(err) => {
                 results.push(manual_import_file_result(
                     mapping,
@@ -2003,6 +2650,7 @@ pub(crate) async fn execute_manual_import_with_release_evidence(
                             import_result.error_message,
                         )
                     }
+                    Err(error @ AppError::ManualReconciliationRequired(_)) => return Err(error),
                     Err(error) => {
                         let message = error.to_string();
                         manual_import_file_result(
@@ -2132,6 +2780,8 @@ pub(crate) async fn execute_manual_import_with_release_evidence(
                 imported_media_file_id,
                 reason_code,
                 size_bytes,
+                source_cleanup,
+                destination_permit: _destination_permit,
                 ..
             }) => {
                 if let Some(completed) = completed {
@@ -2147,8 +2797,15 @@ pub(crate) async fn execute_manual_import_with_release_evidence(
                         imported_media_file_id.as_deref(),
                         std::slice::from_ref(&episode),
                     )
-                    .await;
+                    .await?;
                 }
+                finalize_deferred_import_source_cleanup(
+                    app,
+                    source_cleanup.map(|guard| *guard),
+                    &crate::stored_paths::stored_path_to_path_buf(&dest_path),
+                    completed,
+                )
+                .await?;
                 if let Some(size_bytes) = size_bytes {
                     imported_size_bytes =
                         Some(imported_size_bytes.unwrap_or(0).saturating_add(size_bytes));
@@ -2167,8 +2824,7 @@ pub(crate) async fn execute_manual_import_with_release_evidence(
                 skip_reason,
                 ..
             }) => {
-                if episode_skip_is_already_present(reason_code.as_deref(), skip_reason.as_ref())
-                {
+                if episode_skip_is_already_present(skip_reason.as_ref()) {
                     // The identical file already sits at the destination (an
                     // earlier import landed it): the operator's mapping is
                     // satisfied, not failed. Record it like the automatic path
@@ -2188,7 +2844,7 @@ pub(crate) async fn execute_manual_import_with_release_evidence(
                             None,
                             std::slice::from_ref(&episode),
                         )
-                        .await;
+                        .await?;
                     }
                     results.push(manual_import_file_result(mapping, true, None, None, None));
                     continue;
@@ -2198,6 +2854,19 @@ pub(crate) async fn execute_manual_import_with_release_evidence(
                     false,
                     None,
                     Some(manual_import_error_from_skip_reason(skip_reason.clone())),
+                    Some(message),
+                ));
+            }
+            Ok(EpisodeImportOutcome::Ignored { message, .. }) => {
+                // Automatic pack planning is never active for an operator's
+                // explicit manual mapping. Keep this arm non-successful if a
+                // future caller reaches it rather than turning it into a
+                // manual ignore action.
+                results.push(manual_import_file_result(
+                    mapping,
+                    false,
+                    None,
+                    Some(manual_import_error_from_skip_reason(None)),
                     Some(message),
                 ));
             }
@@ -2212,6 +2881,7 @@ pub(crate) async fn execute_manual_import_with_release_evidence(
                     Some(rejection.message),
                 ));
             }
+            Err(error @ AppError::ManualReconciliationRequired(_)) => return Err(error),
             Err(err) => {
                 let error_message = err.to_string();
                 results.push(manual_import_file_result(
@@ -2362,8 +3032,25 @@ async fn recover_completed_manual_imports(
             continue;
         };
         let source_identity = recovery.source_identity;
+        let canonical_download_id = match app
+            .services
+            .workflow
+            .imports
+            .canonical_download_id_for_import(&record.id)
+            .await
+        {
+            Ok(canonical_download_id) => canonical_download_id,
+            Err(error) => {
+                worker.warn_error("recovered_manual_import_canonical_download_id", &error);
+                None
+            }
+        };
         match handle
-            .mark_imported_if_awaiting_import(source_identity.clone(), recovery.record_completed_at)
+            .mark_imported_if_awaiting_import_for_download(
+                source_identity.clone(),
+                canonical_download_id,
+                recovery.record_completed_at,
+            )
             .await
         {
             Ok(ManualImportRecoveryOutcome::Marked) => {
@@ -2399,7 +3086,7 @@ async fn recover_completed_manual_imports(
 }
 
 struct CompletedManualImportRecovery {
-    source_identity: DownloadSourceIdentity,
+    source_identity: ClientJobLocator,
     /// When the record reached `Completed`: `finished_at`, falling back to
     /// `updated_at`. Only a tracked download the client finished before this
     /// may be terminalized on the strength of the record.
@@ -2456,7 +3143,7 @@ fn completed_manual_import_recovery(
     // tracked download's completion, so it cannot safely recover anything.
     let record_completed_at = import_record_completed_at(record)?;
     Some(CompletedManualImportRecovery {
-        source_identity: DownloadSourceIdentity::new(
+        source_identity: ClientJobLocator::new(
             Some(client_id),
             &record.source_system,
             &record.source_ref,
@@ -2530,6 +3217,25 @@ async fn execute_queued_manual_import_with_outcome(
     import_id: &str,
     payload: &ManualImportRequestPayload,
 ) -> AppResult<QueuedManualImportOutcome> {
+    let outcome = execute_queued_manual_import_with_outcome_inner(app, import_id, payload).await;
+    if let Some(workspace_root) = payload.archive_workspace_root.as_deref() {
+        crate::archive_extractor::cleanup_extracted_dir(&stored_path_to_path_buf(workspace_root))
+            .await;
+    }
+    outcome
+}
+
+async fn execute_queued_manual_import_with_outcome_inner(
+    app: &AppUseCase,
+    import_id: &str,
+    payload: &ManualImportRequestPayload,
+) -> AppResult<QueuedManualImportOutcome> {
+    let preparation_permit = app
+        .runtime
+        .imports
+        .execution_coordinator
+        .acquire_preparation()
+        .await;
     let user_id = payload
         .requested_by_user_id
         .as_deref()
@@ -2543,9 +3249,6 @@ async fn execute_queued_manual_import_with_outcome(
         .ok_or_else(|| {
             AppError::Validation("manual import request actor no longer exists".into())
         })?;
-
-    app.update_import_status_and_notify(import_id, ImportStatus::Processing, None)
-        .await?;
 
     let Some(title_id) = payload
         .title_id
@@ -2612,7 +3315,11 @@ async fn execute_queued_manual_import_with_outcome(
                 .to_string(),
         ));
     }
-    let trusted_source_root = match std::fs::canonicalize(&completed.dest_dir) {
+    let trusted_source_root_result = match payload.trusted_source_root.as_deref() {
+        Some(root) => std::fs::canonicalize(stored_path_to_path_buf(root)),
+        None => std::fs::canonicalize(&completed.dest_dir),
+    };
+    let trusted_source_root = match trusted_source_root_result {
         Ok(root) => root,
         Err(_) => {
             return Ok(QueuedManualImportOutcome::source_unavailable(
@@ -2638,6 +3345,10 @@ async fn execute_queued_manual_import_with_outcome(
             prior_import_proven: false,
         });
     }
+
+    drop(preparation_permit);
+    app.update_import_status_and_notify(import_id, ImportStatus::Processing, None)
+        .await?;
 
     let results = execute_manual_import_with_release_evidence(
         app,
@@ -2696,17 +3407,117 @@ pub async fn execute_queued_manual_import(
     import_id: &str,
     payload: &ManualImportRequestPayload,
 ) -> AppResult<(ImportStatus, Option<String>)> {
-    let _import_permit = app.runtime.imports.execution_coordinator.acquire().await;
-    let outcome = execute_queued_manual_import_with_outcome(app, import_id, payload).await?;
+    let outcome = execute_queued_manual_import_with_outcome(app, import_id, payload).await;
+    let outcome = outcome?;
     Ok((outcome.status, outcome.result_json))
+}
+
+#[cfg(test)]
+mod manual_archive_workspace_tests {
+    use super::*;
+
+    fn selection(workspace_root: &Path, trusted_root: &Path) -> crate::ManualImportSelection {
+        crate::ManualImportSelection {
+            id: "selection-1".to_string(),
+            actor_user_id: "user-1".to_string(),
+            title_id: "title-1".to_string(),
+            source_identity: ClientJobLocator::new(Some("client-1"), "weaver", "item-1"),
+            canonical_download_id: None,
+            release_evidence_json: None,
+            trusted_source_root: path_to_stored_string(trusted_root),
+            archive_workspace_root: Some(path_to_stored_string(workspace_root)),
+            candidates: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn reuses_archive_workspace_only_when_it_matches_the_trusted_root() {
+        let workspace = tempfile::tempdir().expect("workspace tempdir");
+        let canonical_workspace =
+            std::fs::canonicalize(workspace.path()).expect("canonical workspace root");
+        let selection = selection(&canonical_workspace, &canonical_workspace);
+
+        assert_eq!(
+            reusable_manual_archive_workspace(&selection),
+            Some((
+                canonical_workspace.clone(),
+                path_to_stored_string(&canonical_workspace),
+            ))
+        );
+    }
+
+    #[test]
+    fn refuses_archive_workspace_when_it_differs_from_the_trusted_root() {
+        let workspace = tempfile::tempdir().expect("workspace tempdir");
+        let trusted = tempfile::tempdir().expect("trusted tempdir");
+        let selection = selection(workspace.path(), trusted.path());
+
+        assert!(reusable_manual_archive_workspace(&selection).is_none());
+    }
 }
 
 #[cfg(test)]
 mod manual_preview_suggestion_tests {
     use super::*;
 
+    fn episode_for_label(absolute_number: Option<&str>) -> scryer_domain::Episode {
+        scryer_domain::Episode {
+            id: "episode-19".to_string(),
+            title_id: "title-1".to_string(),
+            collection_id: Some("season-1".to_string()),
+            episode_type: scryer_domain::EpisodeType::Standard,
+            episode_number: Some("19".to_string()),
+            season_number: Some("1".to_string()),
+            episode_label: Some("provider label is not the import target".to_string()),
+            title: Some("Episode Title".to_string()),
+            air_date: None,
+            duration_seconds: None,
+            has_multi_audio: false,
+            has_subtitle: false,
+            is_filler: false,
+            is_recap: false,
+            absolute_number: absolute_number.map(str::to_string),
+            overview: None,
+            tvdb_id: None,
+            image_url: None,
+            monitored: true,
+            created_at: Utc::now(),
+        }
+    }
+
     fn file_episode(stem: &str) -> Option<crate::ParsedEpisodeMetadata> {
         parse_release_metadata(stem).episode
+    }
+
+    #[test]
+    fn manual_episode_label_names_the_absolute_number() {
+        assert_eq!(
+            manual_import_episode_label(&episode_for_label(Some("19"))),
+            "S01E19 · Absolute 19 — Episode Title"
+        );
+
+        let mut decorated = episode_for_label(Some("19"));
+        decorated.season_number = Some("Season 1".to_string());
+        decorated.episode_number = Some("Episode 19".to_string());
+        assert_eq!(
+            manual_import_episode_label(&decorated),
+            "S01E19 · Absolute 19 — Episode Title"
+        );
+
+        decorated.season_number = None;
+        decorated.episode_number = None;
+        assert_eq!(
+            manual_import_episode_label(&decorated),
+            "S??E?? · Absolute 19 — Episode Title"
+        );
+    }
+
+    #[test]
+    fn manual_episode_label_without_absolute_number_preserves_catalog_label() {
+        assert_eq!(
+            manual_import_episode_label(&episode_for_label(None)),
+            "provider label is not the import target"
+        );
     }
 
     fn suggestion(
@@ -2769,7 +3580,13 @@ mod manual_preview_suggestion_tests {
         let grabbed = HashSet::from(["episode-3".to_string(), "episode-4".to_string()]);
 
         assert_eq!(
-            suggestion(Some("episode-4"), &grabbed, false, "Show.S01E04.720p.WEB-DL").as_deref(),
+            suggestion(
+                Some("episode-4"),
+                &grabbed,
+                false,
+                "Show.S01E04.720p.WEB-DL"
+            )
+            .as_deref(),
             Some("episode-4")
         );
         assert_eq!(
@@ -2793,6 +3610,9 @@ mod manual_import_recovery_tests {
             status: ImportStatus::Completed,
             error_code: None,
             error_message: None,
+            requires_reconciliation: false,
+            retry_attempts: 0,
+            next_retry_at: None,
             file_results: vec![ManualImportFileResult {
                 file_path: "/downloads/episode.mkv".to_string(),
                 episode_id: Some("episode-1".to_string()),
@@ -2840,6 +3660,22 @@ mod manual_import_recovery_tests {
             assert_eq!(identity.client_type, client_type);
             assert_eq!(identity.item_id, "download-1");
         }
+    }
+
+    #[test]
+    fn reconciliation_pending_manual_import_is_not_automatically_requeued() {
+        let mut record = completed_manual_import_record("weaver", true);
+        record.status = ImportStatus::Pending;
+        let mut result = serde_json::from_str::<ManualImportExecutionResult>(
+            record.result_json.as_deref().expect("result JSON"),
+        )
+        .expect("parse result JSON");
+        result.status = ImportStatus::Pending;
+        result.error_message =
+            Some("Manual reconciliation required: filesystem worker was terminated".to_string());
+        record.result_json = Some(serde_json::to_string(&result).expect("result JSON"));
+
+        assert!(manual_import_record_requires_reconciliation(&record));
     }
 
     #[test]
@@ -2922,8 +3758,12 @@ mod manual_import_recovery_tests {
             record.result_json.as_deref().expect("result JSON"),
         )
         .expect("parse result JSON");
-        result.file_results.push(skipped_movie_extra("/downloads/sample.mkv"));
-        result.file_results.push(skipped_movie_extra("/downloads/featurette.mkv"));
+        result
+            .file_results
+            .push(skipped_movie_extra("/downloads/sample.mkv"));
+        result
+            .file_results
+            .push(skipped_movie_extra("/downloads/featurette.mkv"));
         record.result_json = Some(serde_json::to_string(&result).expect("result JSON"));
 
         assert!(
@@ -3030,7 +3870,11 @@ mod manual_movie_primary_selection_tests {
         let root = std::fs::canonicalize(dir.path()).expect("canonical root");
         // Deliberately not the largest: a movie sample can be big, and a
         // trailer bigger than the film is a data error, not the primary.
-        let sample = write_video(&root, "Movie.2024.1080p-sample.mkv", PAST_SAMPLE_THRESHOLD + 2);
+        let sample = write_video(
+            &root,
+            "Movie.2024.1080p-sample.mkv",
+            PAST_SAMPLE_THRESHOLD + 2,
+        );
         let movie = write_video(&root, "Movie.2024.1080p.mkv", PAST_SAMPLE_THRESHOLD + 1);
         let featurette = write_video(&root, "Making.Of.mkv", 1024);
         let files = vec![sample, movie, featurette];

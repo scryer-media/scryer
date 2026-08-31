@@ -165,49 +165,29 @@ async fn rollback_attempt(
 pub(crate) async fn migrate_emby_plugin_compatibility(
     app: &AppUseCase,
     settings_store: Arc<SettingsStore>,
-) {
-    let state = match read_state(settings_store.clone()).await {
-        Ok(state) => state,
-        Err(error) => {
-            tracing::warn!(error = %error, "failed to read Emby plugin compatibility state");
-            return;
-        }
-    };
+) -> Result<(), String> {
+    let state = read_state(settings_store.clone()).await?;
     if state == MigrationState::Completed {
-        return;
+        return Ok(());
     }
 
     let actor = migration_actor();
-    let legacy = match app.get_plugin_installation(&actor, LEGACY_PLUGIN_ID).await {
-        Ok(installation) => installation,
-        Err(error) => {
-            tracing::warn!(error = %error, "Emby plugin compatibility migration deferred: legacy installation lookup failed");
-            return;
-        }
-    };
+    let legacy = app
+        .get_plugin_installation(&actor, LEGACY_PLUGIN_ID)
+        .await
+        .map_err(|error| format!("legacy installation lookup failed: {error}"))?;
     let Some(legacy) = legacy else {
-        if let Err(error) = write_state(settings_store, MigrationState::Completed).await {
-            tracing::warn!(error = %error, "failed to complete Emby plugin compatibility state");
-        }
-        return;
+        write_state(settings_store, MigrationState::Completed).await?;
+        return Ok(());
     };
 
-    let canonical = match app
+    let canonical = app
         .get_plugin_installation(&actor, CANONICAL_PLUGIN_ID)
         .await
-    {
-        Ok(installation) => installation,
-        Err(error) => {
-            tracing::warn!(error = %error, "Emby plugin compatibility migration deferred: canonical installation lookup failed");
-            return;
-        }
-    };
+        .map_err(|error| format!("canonical installation lookup failed: {error}"))?;
     let state = if state == MigrationState::None {
         let state = MigrationState::initial(legacy.is_enabled, canonical.is_some());
-        if let Err(error) = write_state(settings_store.clone(), state).await {
-            tracing::warn!(error = %error, "Emby plugin compatibility migration deferred: pending state could not be persisted");
-            return;
-        }
+        write_state(settings_store.clone(), state).await?;
         state
     } else {
         state
@@ -217,10 +197,7 @@ pub(crate) async fn migrate_emby_plugin_compatibility(
     let legacy_enabled = state.legacy_enabled_state().unwrap_or(legacy.is_enabled);
 
     if matches!(state, MigrationState::PendingExisting { .. }) && canonical.is_none() {
-        tracing::info!(
-            "Emby plugin compatibility migration deferred: operator removed canonical plugin"
-        );
-        return;
+        return Err("operator removed the canonical Emby plugin".to_string());
     }
 
     if !migration_owns_canonical
@@ -229,20 +206,16 @@ pub(crate) async fn migrate_emby_plugin_compatibility(
             .is_some_and(|installation| !installation.is_enabled)
         && legacy_enabled
     {
-        tracing::info!(
-            "Emby plugin compatibility migration deferred: canonical plugin is operator-disabled"
-        );
-        return;
+        return Err("canonical Emby plugin is operator-disabled".to_string());
     }
 
     if canonical.is_none() {
         if legacy.is_enabled != legacy_enabled {
             restore_legacy_enabled_state(app, &actor, legacy_enabled).await;
         }
-        if let Err(error) = app.refresh_plugin_catalog(&actor).await {
-            tracing::warn!(error = %error, "Emby plugin compatibility migration deferred: catalog refresh failed");
-            return;
-        }
+        app.refresh_plugin_catalog(&actor)
+            .await
+            .map_err(|error| format!("catalog refresh failed: {error}"))?;
     }
 
     let canonical_enabled = state
@@ -262,9 +235,10 @@ pub(crate) async fn migrate_emby_plugin_compatibility(
         None => match app.install_plugin(&actor, CANONICAL_PLUGIN_ID).await {
             Ok(installation) => installation,
             Err(error) => {
-                tracing::warn!(error = %error, "Emby plugin compatibility migration deferred: canonical installation failed");
                 restore_legacy_enabled_state(app, &actor, legacy_enabled).await;
-                return;
+                return Err(format!(
+                    "canonical Emby plugin installation failed: {error}"
+                ));
             }
         },
     };
@@ -278,9 +252,8 @@ pub(crate) async fn migrate_emby_plugin_compatibility(
         {
             Ok(installation) => canonical = installation,
             Err(error) => {
-                tracing::warn!(error = %error, "Emby plugin compatibility migration deferred: enabled state could not be preserved");
                 rollback_attempt(app, &actor, migration_owns_canonical, legacy_enabled).await;
-                return;
+                return Err(format!("enabled state could not be preserved: {error}"));
             }
         }
     }
@@ -291,9 +264,8 @@ pub(crate) async fn migrate_emby_plugin_compatibility(
     {
         Ok(declared) => declared,
         Err(error) => {
-            tracing::warn!(error = %error, "Emby plugin compatibility migration deferred: provider alias verification failed");
             rollback_attempt(app, &actor, migration_owns_canonical, legacy_enabled).await;
-            return;
+            return Err(format!("provider alias verification failed: {error}"));
         }
     };
     let alias_active = !canonical.is_enabled
@@ -302,17 +274,14 @@ pub(crate) async fn migrate_emby_plugin_compatibility(
             .iter()
             .any(|provider| provider.eq_ignore_ascii_case(LEGACY_PLUGIN_ID));
     if !alias_declared || !alias_active {
-        tracing::warn!(
-            alias_declared,
-            alias_active,
-            "Emby plugin compatibility migration deferred: legacy provider alias is unavailable"
-        );
         rollback_attempt(app, &actor, migration_owns_canonical, legacy_enabled).await;
-        return;
+        return Err(format!(
+            "legacy provider alias is unavailable (declared={alias_declared}, active={alias_active})"
+        ));
     }
 
     if let Err(error) = app.uninstall_plugin(&actor, LEGACY_PLUGIN_ID).await {
-        tracing::warn!(error = %error, "Emby plugin compatibility migration deferred: legacy uninstall failed");
+        let uninstall_error = error.to_string();
         match app.get_plugin_installation(&actor, LEGACY_PLUGIN_ID).await {
             Ok(Some(_)) => {
                 rollback_attempt(app, &actor, migration_owns_canonical, legacy_enabled).await;
@@ -335,17 +304,17 @@ pub(crate) async fn migrate_emby_plugin_compatibility(
                 );
             }
         }
-        return;
+        return Err(format!(
+            "legacy Emby plugin uninstall failed: {uninstall_error}"
+        ));
     }
-    if let Err(error) = write_state(settings_store, MigrationState::Completed).await {
-        tracing::warn!(error = %error, "failed to complete Emby plugin compatibility state");
-        return;
-    }
+    write_state(settings_store, MigrationState::Completed).await?;
     tracing::info!(
         legacy_plugin_id = LEGACY_PLUGIN_ID,
         canonical_plugin_id = CANONICAL_PLUGIN_ID,
         "completed Emby plugin compatibility migration"
     );
+    Ok(())
 }
 
 #[cfg(test)]

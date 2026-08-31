@@ -14,11 +14,15 @@ use crate::null_repositories::test_nulls::{
     NullTitleRepository, NullUserRepository,
 };
 use crate::services::AppServices;
-use scryer_domain::{LibraryPermission, LibraryPermissionMask, UserAuthorization};
+use scryer_domain::{
+    LibraryPermission, LibraryPermissionMask, MediaServerPlaybackEntityKind,
+    MediaServerPlaybackItem, UserAuthorization,
+};
 
 #[derive(Default)]
 struct TestMediaServerConnectionRepository {
     connections: Mutex<Vec<MediaServerConnection>>,
+    playback_items: Mutex<Vec<MediaServerPlaybackItem>>,
     fail_create: bool,
     fail_update: bool,
 }
@@ -27,6 +31,7 @@ impl TestMediaServerConnectionRepository {
     fn new(connections: Vec<MediaServerConnection>) -> Self {
         Self {
             connections: Mutex::new(connections),
+            playback_items: Mutex::new(Vec::new()),
             fail_create: false,
             fail_update: false,
         }
@@ -35,6 +40,7 @@ impl TestMediaServerConnectionRepository {
     fn failing(connections: Vec<MediaServerConnection>, create: bool, update: bool) -> Self {
         Self {
             connections: Mutex::new(connections),
+            playback_items: Mutex::new(Vec::new()),
             fail_create: create,
             fail_update: update,
         }
@@ -91,6 +97,77 @@ impl MediaServerConnectionRepository for TestMediaServerConnectionRepository {
             *existing = connection.clone();
         }
         Ok(connection)
+    }
+
+    async fn list_playback_items_for_entity(
+        &self,
+        entity_kind: MediaServerPlaybackEntityKind,
+        entity_id: &str,
+    ) -> AppResult<Vec<MediaServerPlaybackItem>> {
+        Ok(self
+            .playback_items
+            .lock()
+            .await
+            .iter()
+            .filter(|item| item.entity_kind == entity_kind && item.entity_id == entity_id)
+            .cloned()
+            .collect())
+    }
+
+    async fn list_playback_items_for_entities(
+        &self,
+        entities: &[(MediaServerPlaybackEntityKind, String)],
+    ) -> AppResult<Vec<MediaServerPlaybackItem>> {
+        Ok(self
+            .playback_items
+            .lock()
+            .await
+            .iter()
+            .filter(|item| {
+                entities.iter().any(|(entity_kind, entity_id)| {
+                    item.entity_kind == *entity_kind && item.entity_id == *entity_id
+                })
+            })
+            .cloned()
+            .collect())
+    }
+
+    async fn upsert_playback_items_for_connection(
+        &self,
+        connection_id: &str,
+        items: Vec<MediaServerPlaybackItem>,
+    ) -> AppResult<()> {
+        if items.iter().any(|item| item.connection_id != connection_id) {
+            return Err(AppError::Validation(
+                "playback mapping connection ID does not match upsert target".into(),
+            ));
+        }
+        let mut playback_items = self.playback_items.lock().await;
+        for item in items {
+            playback_items.retain(|existing| {
+                !(existing.connection_id == item.connection_id
+                    && existing.entity_kind == item.entity_kind
+                    && existing.entity_id == item.entity_id)
+            });
+            playback_items.push(item);
+        }
+        Ok(())
+    }
+
+    async fn replace_playback_items_for_connection(
+        &self,
+        connection_id: &str,
+        items: Vec<MediaServerPlaybackItem>,
+    ) -> AppResult<()> {
+        if items.iter().any(|item| item.connection_id != connection_id) {
+            return Err(AppError::Validation(
+                "playback mapping connection ID does not match replacement target".into(),
+            ));
+        }
+        let mut playback_items = self.playback_items.lock().await;
+        playback_items.retain(|item| item.connection_id != connection_id);
+        playback_items.extend(items);
+        Ok(())
     }
 
     async fn compare_and_set_emby_base_url(
@@ -671,6 +748,7 @@ fn grant_bearing_jellyfin_connection() -> MediaServerConnection {
         provider: MediaServerProvider::Jellyfin,
         display_name: "Jellyfin".to_string(),
         base_url: "https://jellyfin.example.test".to_string(),
+        external_url: None,
         enabled: true,
         login_enabled: true,
         linking_enabled: false,
@@ -808,6 +886,7 @@ async fn media_server_create_with_api_key_tests_connection_on_save() {
                 provider: MediaServerProvider::Jellyfin,
                 display_name: "Dead Jellyfin".to_string(),
                 base_url: "http://127.0.0.1:9".to_string(),
+                external_url: None,
                 enabled: true,
                 login_enabled: false,
                 linking_enabled: false,
@@ -933,6 +1012,7 @@ async fn emby_setup_preserves_admin_and_connect_password_bytes() {
             provider: MediaServerProvider::Emby,
             display_name: "Emby".into(),
             base_url: "https://emby.example.test".into(),
+            external_url: None,
             enabled: true,
             login_enabled: false,
             linking_enabled: false,
@@ -1117,6 +1197,7 @@ async fn newly_created_emby_key_is_compensated_when_create_persistence_fails() {
                 provider: MediaServerProvider::Emby,
                 display_name: "Emby".into(),
                 base_url: "https://emby.example.test".into(),
+                external_url: None,
                 enabled: true,
                 login_enabled: false,
                 linking_enabled: false,
@@ -1443,6 +1524,7 @@ async fn media_server_create_preserves_plex_token_and_path_mappings() {
                 provider: MediaServerProvider::Plex,
                 display_name: "Plex".to_string(),
                 base_url: "http://plex:32400".to_string(),
+                external_url: None,
                 enabled: true,
                 login_enabled: false,
                 linking_enabled: false,
@@ -1572,4 +1654,67 @@ async fn plex_media_server_notification_channel_uses_facade_config() {
     assert_eq!(config["api_key"], "plex-token");
     assert_eq!(config["machine_id"], "machine-1");
     assert_eq!(config["path_mappings"], "/data/media => /mnt/plex");
+}
+
+#[tokio::test]
+async fn playback_mapping_upsert_preserves_untouched_items_and_full_replace_removes_stale_items() {
+    let repository = TestMediaServerConnectionRepository::new(Vec::new());
+    let now = Utc::now();
+    let title = MediaServerPlaybackItem {
+        connection_id: "server-1".into(),
+        entity_kind: MediaServerPlaybackEntityKind::Title,
+        entity_id: "title-1".into(),
+        provider_item_id: "provider-title-1".into(),
+        last_seen_at: now,
+    };
+    let stale_episode = MediaServerPlaybackItem {
+        connection_id: "server-1".into(),
+        entity_kind: MediaServerPlaybackEntityKind::Episode,
+        entity_id: "episode-1".into(),
+        provider_item_id: "provider-episode-old".into(),
+        last_seen_at: now,
+    };
+    repository
+        .replace_playback_items_for_connection(
+            "server-1",
+            vec![title.clone(), stale_episode.clone()],
+        )
+        .await
+        .expect("seed playback mappings");
+
+    let mut refreshed_episode = stale_episode.clone();
+    refreshed_episode.provider_item_id = "provider-episode-new".into();
+    repository
+        .upsert_playback_items_for_connection("server-1", vec![refreshed_episode.clone()])
+        .await
+        .expect("incremental upsert");
+    let incrementally_refreshed_title = repository
+        .list_playback_items_for_entity(MediaServerPlaybackEntityKind::Title, "title-1")
+        .await
+        .expect("list incrementally refreshed title mappings");
+    let incrementally_refreshed_episode = repository
+        .list_playback_items_for_entity(MediaServerPlaybackEntityKind::Episode, "episode-1")
+        .await
+        .expect("list incrementally refreshed episode mappings");
+    assert!(incrementally_refreshed_title.contains(&title));
+    assert!(incrementally_refreshed_episode.contains(&refreshed_episode));
+
+    repository
+        .replace_playback_items_for_connection("server-1", vec![title.clone()])
+        .await
+        .expect("full reconciliation");
+    assert_eq!(
+        repository
+            .list_playback_items_for_entity(MediaServerPlaybackEntityKind::Title, "title-1")
+            .await
+            .expect("list reconciled mappings"),
+        vec![title]
+    );
+    assert!(
+        repository
+            .list_playback_items_for_entity(MediaServerPlaybackEntityKind::Episode, "episode-1")
+            .await
+            .expect("list stale episode mappings")
+            .is_empty()
+    );
 }

@@ -173,8 +173,10 @@
   --scry-pp2: #ffffff;
   --scry-side1: rgba(255, 255, 255, 0.9);
   --scry-side2: rgba(248, 250, 253, 0.9);
+  --scry-shell-left-glow: rgba(var(--scry-accent-rgb), 0.055);
+  --scry-shell-left-glow-reach: 34rem;
   --scry-shell-bg:
-    radial-gradient(circle at 14% 10%, rgba(var(--scry-accent-rgb), 0.1), transparent 26rem),
+    radial-gradient(circle at 14% 10%, var(--scry-shell-left-glow), transparent var(--scry-shell-left-glow-reach)),
     radial-gradient(circle at 86% 14%, rgba(56, 189, 248, 0.06), transparent 28rem),
     radial-gradient(circle at 60% 92%, rgba(16, 185, 129, 0.05), transparent 34rem),
     linear-gradient(180deg, var(--scry-page1) 0%, var(--scry-page2) 42%, var(--scry-page3) 100%);
@@ -235,6 +237,8 @@
 
 .dark {
   /* Dark theme */
+  --scry-shell-left-glow: rgba(var(--scry-accent-rgb), 0.1);
+  --scry-shell-left-glow-reach: 26rem;
   --scry-page1: #070d1d;
   --scry-page2: #040814;
   --scry-page3: #02050c;
@@ -555,11 +559,9 @@ body {
 }
 
 [data-slot="sidebar-inner"] {
-  border-right: 1px solid var(--scry-border3);
+  border-right: 1px solid color-mix(in srgb, var(--scry-border3) 52%, transparent);
   background: var(--scry-shell-side-bg);
-  box-shadow:
-    inset -1px 0 0 color-mix(in srgb, var(--scry-border3) 78%, transparent),
-    12px 0 28px rgba(28, 39, 68, 0.08);
+  box-shadow: none;
 }
 
 [data-slot="global-search-panel"] {
@@ -720,7 +722,7 @@ body {
  * settings rows (excluded here) span the same gradient across the whole row.
  * A row opts in by carrying one of the data-ui values listed below, so both
  * lists have to stay in sync or a row gets the gradient twice. */
-.dark [data-slot="table-body"] [data-slot="table-row"]:not([data-ui="title-table-row"]):not([data-ui="compact-title-table-row"]):not([data-ui="settings-user-table-row"]):not([data-ui="settings-plugin-table-row"]):not([data-ui="settings-table-row"]):not([data-ui="activity-row"]):not([data-ui="wanted-item-row"]):not([data-ui="pending-release-row"]):hover > [data-slot="table-cell"] {
+.dark [data-slot="table-body"] [data-slot="table-row"]:not([data-ui="title-table-row"]):not([data-ui="compact-title-table-row"]):not([data-ui="title-table-empty-row"]):not([data-ui="settings-user-table-row"]):not([data-ui="settings-plugin-table-row"]):not([data-ui="settings-table-row"]):not([data-ui="activity-row"]):not([data-ui="wanted-item-row"]):not([data-ui="pending-release-row"]):hover > [data-slot="table-cell"] {
   background:
     linear-gradient(90deg, rgba(91, 100, 255, 0.02), rgba(56, 189, 248, 0.012) 72%, transparent 100%);
 }
@@ -735,6 +737,21 @@ body {
 .dark [data-slot="table-body"] [data-ui="pending-release-row"]:hover {
   background:
     linear-gradient(90deg, rgba(91, 100, 255, 0.02), rgba(56, 189, 248, 0.012) 72%, transparent 100%);
+}
+
+/* Settings tables are scoped at their page shells so every current and future
+ * multi-column row gets one continuous hover band, even when a renderer has no
+ * row-specific data-ui hook. Catalog tables live outside these shells and keep
+ * their independently tuned row treatment. */
+.dark [data-slot="settings-main-scroll"] [data-slot="table-body"] [data-slot="table-row"]:has(> [data-slot="table-cell"] + [data-slot="table-cell"]):hover,
+.dark [data-slot="facet-settings-scroll"] [data-slot="table-body"] [data-slot="table-row"]:has(> [data-slot="table-cell"] + [data-slot="table-cell"]):hover {
+  background:
+    linear-gradient(90deg, rgba(91, 100, 255, 0.02), rgba(56, 189, 248, 0.012) 72%, transparent 100%);
+}
+
+.dark [data-slot="settings-main-scroll"] [data-slot="table-body"] [data-slot="table-row"]:has(> [data-slot="table-cell"] + [data-slot="table-cell"]):hover > [data-slot="table-cell"],
+.dark [data-slot="facet-settings-scroll"] [data-slot="table-body"] [data-slot="table-row"]:has(> [data-slot="table-cell"] + [data-slot="table-cell"]):hover > [data-slot="table-cell"] {
+  background: transparent;
 }
 
 .dark [data-ui="global-search"] {
@@ -1194,7 +1211,7 @@ body {
   border-bottom-right-radius: 1rem;
 }
 
-.pride [data-slot="table-body"] [data-slot="table-row"]:hover > [data-slot="table-cell"] {
+.pride [data-slot="table-body"] [data-slot="table-row"]:not([data-ui="title-table-empty-row"]):hover > [data-slot="table-cell"] {
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.018)),
     linear-gradient(90deg, rgba(255, 76, 168, 0.08), rgba(74, 125, 255, 0.07) 68%, rgba(55, 213, 140, 0.06) 100%),
@@ -1850,7 +1867,7 @@ h6 {
   color: var(--popover-foreground);
   max-height: calc(100vh - 1.5rem);
   overflow: hidden;
-  pointer-events: none;
+  pointer-events: auto;
   position: fixed;
   z-index: 80;
 }

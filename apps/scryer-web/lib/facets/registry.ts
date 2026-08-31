@@ -122,3 +122,10 @@ export function facetByMetadataKey(
 ): FacetDefinition | undefined {
   return FACETS_BY_METADATA_KEY.get(metadataKey);
 }
+
+export function metadataFacetGraphqlValue(
+  metadataFacet: string | null | undefined,
+): Facet {
+  const metadataKey = (metadataFacet ?? "").trim().toLowerCase() as MetadataFacetKey;
+  return facetByMetadataKey(metadataKey)?.id ?? "SERIES";
+}

@@ -48,7 +48,6 @@ test("canonical route families resolve to typed application state", () => {
     "/automation/wanted/items",
     "/automation/wanted/cutoff-unmet",
     "/automation/wanted/pending",
-    "/automation/wanted/history",
     "/automation/acquisition",
     "/automation/rules",
     "/automation/subtitles",
@@ -110,7 +109,9 @@ test("0.16 route aliases redirect to canonical 0.17 paths", () => {
     ["/wanted/wanted", "/automation/wanted/items"],
     ["/wanted/cutoff-unmet", "/automation/wanted/cutoff-unmet"],
     ["/wanted/cutoff", "/automation/wanted/cutoff-unmet"],
-    ["/history", "/automation/wanted/history"],
+    ["/automation/wanted/history", "/activity/history"],
+    ["/wanted/history", "/activity/history"],
+    ["/history", "/activity/history"],
     ["/settings/acquisition", "/automation/acquisition"],
     ["/settings/rules", "/automation/rules"],
     ["/settings/subtitles", "/automation/subtitles"],
@@ -154,6 +155,20 @@ test("redirects preserve query parameters and hashes", () => {
     kind: "redirect",
     to: "/system/recycle-bin?library=library-a&id=title-id#items",
   });
+  for (const path of [
+    "/automation/wanted/history",
+    "/wanted/history",
+    "/history",
+  ]) {
+    assert.deepEqual(resolveAppRoute(
+      path,
+      "?library=library-a&id=title-id",
+      "#items",
+    ), {
+      kind: "redirect",
+      to: "/activity/history?library=library-a&id=title-id#items",
+    });
+  }
 });
 
 test("legacy id-based media routes remain canonical until title lookup replaces them", () => {

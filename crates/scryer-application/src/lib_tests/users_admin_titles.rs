@@ -725,6 +725,7 @@ async fn delete_title_queues_targeted_cancel_for_active_submission_only() {
         .expect("create title");
 
     let active_submission = DownloadSubmission {
+        download_id: scryer_domain::download_identity::DownloadId::new(),
         title_id: created.id.clone(),
         purpose: crate::DownloadSubmissionPurpose::Standard,
         facet: "movie".to_string(),
@@ -736,11 +737,13 @@ async fn delete_title_queues_targeted_cancel_for_active_submission_only() {
         source_provider_name: None,
         source_kind: None,
         source_title: Some(created.name.clone()),
+        info_hash: None,
         release_size_bytes: None,
         request_signature: None,
         scope: SubmissionScope::Title,
     };
     let terminal_submission = DownloadSubmission {
+        download_id: scryer_domain::download_identity::DownloadId::new(),
         title_id: created.id.clone(),
         purpose: crate::DownloadSubmissionPurpose::Standard,
         facet: "movie".to_string(),
@@ -752,6 +755,7 @@ async fn delete_title_queues_targeted_cancel_for_active_submission_only() {
         source_provider_name: None,
         source_kind: None,
         source_title: Some(created.name.clone()),
+        info_hash: None,
         release_size_bytes: None,
         request_signature: None,
         scope: SubmissionScope::Title,
@@ -762,7 +766,7 @@ async fn delete_title_queues_targeted_cancel_for_active_submission_only() {
         .expect("record active submission");
     download_submissions
         .update_tracked_state(
-            &DownloadSourceIdentity::from_submission(&active_submission),
+            &ClientJobLocator::from_submission(&active_submission),
             "downloading",
         )
         .await
@@ -773,7 +777,7 @@ async fn delete_title_queues_targeted_cancel_for_active_submission_only() {
         .expect("record terminal submission");
     download_submissions
         .update_tracked_state(
-            &DownloadSourceIdentity::from_submission(&terminal_submission),
+            &ClientJobLocator::from_submission(&terminal_submission),
             "imported",
         )
         .await

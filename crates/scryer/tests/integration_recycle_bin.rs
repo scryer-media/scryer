@@ -475,6 +475,15 @@ async fn recycled_items_are_filtered_to_manage_title_libraries() {
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].library_id, library_a.id);
     assert_eq!(items[0].library_name, library_a.name);
+    let recycled_at =
+        chrono::DateTime::parse_from_rfc3339(&items[0].recycled_at).expect("recycled timestamp");
+    let scheduled_deletion_at =
+        chrono::DateTime::parse_from_rfc3339(&items[0].scheduled_deletion_at)
+            .expect("scheduled deletion timestamp");
+    assert_eq!(
+        scheduled_deletion_at - recycled_at,
+        chrono::Duration::days(7)
+    );
 
     let filtered_out = ctx
         .app

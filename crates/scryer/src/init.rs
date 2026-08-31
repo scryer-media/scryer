@@ -261,10 +261,6 @@ fn generate_compose(movies_path: &str, series_path: &str) -> String {
       # Beta default: authentication is disabled and all requests act
       # as the built-in admin user. Set this to "true" to require login.
       SCRYER_AUTH_ENABLED: "false"
-
-      # ── Metadata gateway ──────────────────────────────────────────
-      SCRYER_METADATA_GATEWAY_GRAPHQL_URL: https://smg.scryer.media/graphql
-
     # ── Upgrade procedure ───────────────────────────────────────────
     # 1. docker compose pull
     # 2. docker compose up -d

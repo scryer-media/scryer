@@ -9,6 +9,7 @@ use std::sync::{Arc, Condvar, LazyLock, Mutex};
 use std::time::Instant;
 
 use wasmtime::Module;
+use wasmtime::component::Component;
 
 use super::engine;
 
@@ -18,6 +19,7 @@ const MAX_READY_MODULES_PER_FLAVOR: usize = 128;
 pub(crate) enum ModuleFlavor {
     LegacyReactor,
     Command,
+    IndexerComponent,
 }
 
 impl ModuleFlavor {
@@ -25,6 +27,7 @@ impl ModuleFlavor {
         match self {
             Self::LegacyReactor => "legacy_reactor",
             Self::Command => "command",
+            Self::IndexerComponent => "indexer_component",
         }
     }
 }
@@ -35,14 +38,20 @@ struct ModuleKey {
     wasm_digest: [u8; 32],
 }
 
+#[derive(Clone)]
+enum CachedArtifact {
+    Module(Arc<Module>),
+    Component(Arc<Component>),
+}
+
 enum ModuleEntry {
-    Ready(Arc<Module>),
+    Ready(CachedArtifact),
     Loading(Arc<ModuleWaiter>),
     Failed(String),
 }
 
 struct ModuleWaiter {
-    result: Mutex<Option<Result<Arc<Module>, String>>>,
+    result: Mutex<Option<Result<CachedArtifact, String>>>,
     ready: Condvar,
 }
 
@@ -54,7 +63,7 @@ impl ModuleWaiter {
         }
     }
 
-    fn wait(&self) -> Result<Arc<Module>, String> {
+    fn wait(&self) -> Result<CachedArtifact, String> {
         let mut result = self
             .result
             .lock()
@@ -68,7 +77,7 @@ impl ModuleWaiter {
         result.clone().expect("module waiter result must be set")
     }
 
-    fn finish(&self, result: Result<Arc<Module>, String>) {
+    fn finish(&self, result: Result<CachedArtifact, String>) {
         let mut slot = self
             .result
             .lock()
@@ -92,8 +101,9 @@ impl ModuleRegistry {
         self.recency.push_back(key.clone());
     }
 
-    fn insert_ready(&mut self, key: ModuleKey, module: Arc<Module>) {
-        self.entries.insert(key.clone(), ModuleEntry::Ready(module));
+    fn insert_ready(&mut self, key: ModuleKey, artifact: CachedArtifact) {
+        self.entries
+            .insert(key.clone(), ModuleEntry::Ready(artifact));
         self.touch(&key);
 
         while self
@@ -130,6 +140,13 @@ pub(crate) fn command_module(wasm: &[u8]) -> Result<Arc<Module>, String> {
     module_for(ModuleFlavor::Command, wasm)
 }
 
+pub(crate) fn indexer_component(wasm: &[u8]) -> Result<Arc<Component>, String> {
+    match artifact_for(ModuleFlavor::IndexerComponent, wasm)? {
+        CachedArtifact::Component(component) => Ok(component),
+        CachedArtifact::Module(_) => unreachable!("component cache returned a core module"),
+    }
+}
+
 /// A deliberate plugin load retries a prior compilation failure. This is used
 /// for installs, updates, and explicit provider reloads; ordinary invocations
 /// keep returning the retained failure instead of starting surprise work.
@@ -138,7 +155,11 @@ pub(crate) fn reset_failed_modules(wasm: &[u8]) {
     let mut registry = MODULE_REGISTRY
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    for flavor in [ModuleFlavor::LegacyReactor, ModuleFlavor::Command] {
+    for flavor in [
+        ModuleFlavor::LegacyReactor,
+        ModuleFlavor::Command,
+        ModuleFlavor::IndexerComponent,
+    ] {
         let key = ModuleKey {
             flavor,
             wasm_digest: digest,
@@ -233,6 +254,15 @@ pub(crate) fn schedule_rehydration(artifacts: Vec<RehydrationArtifact>) {
 }
 
 pub(crate) fn module_for(flavor: ModuleFlavor, wasm: &[u8]) -> Result<Arc<Module>, String> {
+    match artifact_for(flavor, wasm)? {
+        CachedArtifact::Module(module) => Ok(module),
+        CachedArtifact::Component(_) => {
+            Err("component artifact cannot be loaded as a core module".into())
+        }
+    }
+}
+
+fn artifact_for(flavor: ModuleFlavor, wasm: &[u8]) -> Result<CachedArtifact, String> {
     let key = ModuleKey {
         flavor,
         wasm_digest: *blake3::hash(wasm).as_bytes(),
@@ -247,15 +277,15 @@ pub(crate) fn module_for(flavor: ModuleFlavor, wasm: &[u8]) -> Result<Arc<Module
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         match registry.entries.get(&key) {
-            Some(ModuleEntry::Ready(module)) => {
-                let module = Arc::clone(module);
+            Some(ModuleEntry::Ready(artifact)) => {
+                let artifact = artifact.clone();
                 registry.touch(&key);
                 tracing::debug!(
                     module_flavor = flavor.label(),
                     wasm_digest = %blake3::Hash::from_bytes(key.wasm_digest),
                     "plugin module memory-cache hit"
                 );
-                return Ok(module);
+                return Ok(artifact);
             }
             Some(ModuleEntry::Loading(waiter)) => Resolution::Wait(Arc::clone(waiter)),
             Some(ModuleEntry::Failed(error)) => return Err(error.clone()),
@@ -288,16 +318,23 @@ fn compile_registered(
     waiter: Arc<ModuleWaiter>,
     source: &'static str,
     plugin: Option<(&str, &str)>,
-) -> Result<Arc<Module>, String> {
+) -> Result<CachedArtifact, String> {
     let started = Instant::now();
     let engine = match key.flavor {
         ModuleFlavor::LegacyReactor => engine::shared_engine(),
-        ModuleFlavor::Command => engine::shared_async_engine(),
+        ModuleFlavor::Command | ModuleFlavor::IndexerComponent => engine::shared_async_engine(),
     };
     let (cache_hits_before, cache_misses_before) = engine::cache_statistics();
-    let result = Module::from_binary(engine, wasm)
-        .map(Arc::new)
-        .map_err(|error| format!("failed to compile plugin WASM: {error:#}"));
+    let result = match key.flavor {
+        ModuleFlavor::LegacyReactor | ModuleFlavor::Command => Module::from_binary(engine, wasm)
+            .map(Arc::new)
+            .map(CachedArtifact::Module)
+            .map_err(|error| format!("failed to compile plugin WASM: {error:#}")),
+        ModuleFlavor::IndexerComponent => Component::from_binary(engine, wasm)
+            .map(Arc::new)
+            .map(CachedArtifact::Component)
+            .map_err(|error| format!("failed to compile plugin component: {error:#}")),
+    };
 
     let registered_waiter = {
         let mut registry = MODULE_REGISTRY
@@ -307,7 +344,7 @@ fn compile_registered(
             unreachable!("plugin module registry entry changed while compiling");
         };
         match &result {
-            Ok(module) => registry.insert_ready(key.clone(), Arc::clone(module)),
+            Ok(artifact) => registry.insert_ready(key.clone(), artifact.clone()),
             Err(error) => {
                 registry
                     .entries
@@ -377,6 +414,16 @@ mod tests {
     }
 
     #[test]
+    fn component_registry_reuses_the_same_bounded_slot() {
+        let wasm = wat::parse_str("(component)").expect("component WAT must parse");
+
+        let first = indexer_component(&wasm).expect("first component must compile");
+        let second = indexer_component(&wasm).expect("second component must reuse cache");
+
+        assert!(Arc::ptr_eq(&first, &second));
+    }
+
+    #[test]
     fn concurrent_requests_share_one_module_slot() {
         let wasm = Arc::new(
             wat::parse_str("(module (func (export \"scryer_describe\") (result i32) i32.const 0))")
@@ -412,12 +459,12 @@ mod tests {
             .collect::<Vec<_>>();
 
         for key in legacy_keys.iter().take(MAX_READY_MODULES_PER_FLAVOR) {
-            registry.insert_ready(key.clone(), Arc::clone(&module));
+            registry.insert_ready(key.clone(), CachedArtifact::Module(Arc::clone(&module)));
         }
         registry.touch(&legacy_keys[0]);
         registry.insert_ready(
             legacy_keys[MAX_READY_MODULES_PER_FLAVOR].clone(),
-            Arc::clone(&module),
+            CachedArtifact::Module(Arc::clone(&module)),
         );
         assert!(registry.entries.contains_key(&legacy_keys[0]));
         assert!(!registry.entries.contains_key(&legacy_keys[1]));
@@ -428,7 +475,7 @@ mod tests {
                     flavor: ModuleFlavor::Command,
                     wasm_digest: [index as u8; 32],
                 },
-                Arc::clone(&module),
+                CachedArtifact::Module(Arc::clone(&module)),
             );
         }
         assert_eq!(

@@ -1,5 +1,5 @@
-//! Convergence model: search-criteria fingerprints and the settings
-//! that pace the background convergence cursor.
+//! Convergence model: fingerprinted proof that an indexer's corpus was
+//! completely searched for a scope under the current acquisition policy.
 //!
 //! A scope's *fingerprint* captures what a "correct" search is — the effective
 //! quality profile (identity + a version that bumps on edits) and the required
@@ -14,7 +14,7 @@ use super::*;
 use crate::acquisition_release_search::ResolvedReleaseSearchSubject;
 use crate::app_usecase_discovery::QualityProfileLookup;
 use crate::quality_profile::QualityProfileCriteria;
-use scryer_domain::Title;
+use scryer_domain::{IndexerConfig, Title};
 
 /// Per-tick evaluation cost ceiling for the convergence cursor (§D3): how many
 /// scopes the cursor may *evaluate* per cycle (coverage lookup, routing resolve,
@@ -26,40 +26,31 @@ pub(crate) const ACQUISITION_LONG_TAIL_BACKFILL_MAX_SCOPES_PER_CYCLE_KEY: &str =
 
 /// Optional slow re-converge backstop: coverage older than this many days is
 /// treated as stale and re-converged (insurance against a lossy RSS feed).
-/// `0` = off — the default and the intended steady state (§D6): we trust RSS,
-/// and this knob exists only as break-glass for a feed that proves incomplete.
+/// `0` remains an explicit opt-out. Missing scopes otherwise revalidate on a
+/// slow cadence so a previously complete empty result cannot live forever.
 pub(crate) const ACQUISITION_LONG_TAIL_RECONVERGE_DAYS_KEY: &str =
     "acquisition.long_tail_reconverge_days";
 
 pub(crate) const DEFAULT_LONG_TAIL_BACKFILL_MAX_SCOPES_PER_CYCLE: i64 = 500;
+pub(crate) const DEFAULT_LONG_TAIL_RECONVERGE_DAYS: i64 = 30;
 
 #[derive(Debug, Clone)]
 pub(crate) struct ConvergenceSettings {
-    pub long_tail_backfill_max_scopes_per_cycle: i64,
     /// `None` when the backstop is off.
     pub long_tail_reconverge: Option<chrono::Duration>,
 }
 
 impl AppUseCase {
     pub(crate) async fn convergence_settings(&self) -> AppResult<ConvergenceSettings> {
-        let long_tail_backfill_max_scopes_per_cycle = self
-            .read_setting_i64_value(
-                ACQUISITION_LONG_TAIL_BACKFILL_MAX_SCOPES_PER_CYCLE_KEY,
-                None,
-            )
-            .await?
-            .filter(|value| *value > 0)
-            .unwrap_or(DEFAULT_LONG_TAIL_BACKFILL_MAX_SCOPES_PER_CYCLE);
         let reconverge_days = self
             .read_setting_i64_value(ACQUISITION_LONG_TAIL_RECONVERGE_DAYS_KEY, None)
             .await?
-            .unwrap_or(0);
+            .unwrap_or(DEFAULT_LONG_TAIL_RECONVERGE_DAYS);
         let long_tail_reconverge = (reconverge_days > 0)
             .then(|| chrono::Duration::days(reconverge_days))
             .filter(|d| *d > chrono::Duration::zero());
 
         Ok(ConvergenceSettings {
-            long_tail_backfill_max_scopes_per_cycle,
             long_tail_reconverge,
         })
     }
@@ -68,7 +59,7 @@ impl AppUseCase {
 /// System-settings key persisting the cold-lane rotation position across
 /// cycles and restarts (§D3: the cursor is keyed on the last-considered
 /// scope_key, not a numeric offset, so it survives target-set changes).
-pub(crate) const ACQUISITION_CONVERGENCE_RESUME_AFTER_KEY: &str =
+pub(crate) const BACKGROUND_ACQUISITION_RESUME_AFTER_KEY: &str =
     "acquisition.convergence_resume_after";
 
 /// Marker set once the run-once cutover seed has completed.
@@ -290,14 +281,14 @@ impl AppUseCase {
     }
 
     /// The persisted cold-lane rotation position (§D3), if any.
-    pub(crate) async fn convergence_cursor_resume_position(&self) -> Option<String> {
+    pub(crate) async fn background_acquisition_resume_position(&self) -> Option<String> {
         let value_json = self
             .services
             .config
             .settings
             .get_setting_json_explicit(
                 SETTINGS_SCOPE_SYSTEM,
-                ACQUISITION_CONVERGENCE_RESUME_AFTER_KEY,
+                BACKGROUND_ACQUISITION_RESUME_AFTER_KEY,
                 None,
             )
             .await
@@ -310,7 +301,10 @@ impl AppUseCase {
     }
 
     /// Persist the cold-lane rotation position for the next cycle.
-    pub(crate) async fn store_convergence_cursor_resume_position(&self, position: Option<&str>) {
+    pub(crate) async fn store_background_acquisition_resume_position(
+        &self,
+        position: Option<&str>,
+    ) {
         let value = position.unwrap_or_default();
         let Ok(value_json) = serde_json::to_string(value) else {
             return;
@@ -321,7 +315,7 @@ impl AppUseCase {
             .settings
             .upsert_setting_json(
                 SETTINGS_SCOPE_SYSTEM,
-                ACQUISITION_CONVERGENCE_RESUME_AFTER_KEY,
+                BACKGROUND_ACQUISITION_RESUME_AFTER_KEY,
                 None,
                 value_json,
                 "system",
@@ -355,13 +349,31 @@ pub(crate) fn compute_search_fingerprint(
     langs.sort();
     langs.dedup();
     let canonical = format!(
-        "v2;profile={};version={};audio={};match={}",
+        "v4;profile={};version={};audio={};match={}",
         profile_id.trim(),
         profile_version.trim(),
         langs.join(","),
         match_identity.trim(),
     );
-    crate::sha256_hex(canonical)
+    crate::helpers::blake3_identity_hex(crate::helpers::HashDomain::ConvergenceScope, canonical)
+}
+
+fn indexer_coverage_fingerprint(
+    scope_fingerprint: &str,
+    config: &IndexerConfig,
+    search_semantics_version: Option<u32>,
+) -> String {
+    let mut identity = crate::indexer_search_identity(config, search_semantics_version);
+    if let Some(identity) = identity.as_object_mut() {
+        identity.insert(
+            "scope".to_string(),
+            serde_json::Value::String(scope_fingerprint.to_string()),
+        );
+    }
+    crate::helpers::blake3_identity_hex(
+        crate::helpers::HashDomain::IndexerCoverage,
+        canonical_json_string(&identity),
+    )
 }
 
 /// Canonical identity of a scope's SMG match — its resolved external ids. A rematch
@@ -393,7 +405,7 @@ impl AppUseCase {
     pub(crate) async fn uncovered_indexers_for_scope(
         &self,
         scope_key: &str,
-        facet: &str,
+        _facet: &str,
         fingerprint: &str,
         routed_indexer_ids: &[String],
     ) -> AppResult<Vec<String>> {
@@ -405,17 +417,44 @@ impl AppUseCase {
             .await?
             .long_tail_reconverge
             .map(|window| chrono::Utc::now() - window);
-        let covered: std::collections::HashSet<String> = self
+        let coverage_rows = self
             .services
             .integrations
             .scope_indexer_coverage
-            .covered_indexers(scope_key, facet, fingerprint, stale_before)
+            .list_coverage_for_scope_keys(&[scope_key.to_string()])
+            .await?;
+        let configs = self
+            .services
+            .integrations
+            .indexer_configs
+            .list(None)
             .await?
             .into_iter()
-            .collect();
+            .map(|config| (config.id.clone(), config))
+            .collect::<std::collections::HashMap<_, _>>();
+        let provider = self.services.integrations.plugin_provider.available();
         Ok(routed_indexer_ids
             .iter()
-            .filter(|id| !covered.contains(id.as_str()))
+            .filter(|id| {
+                let Some(config) = configs.get(id.as_str()) else {
+                    return true;
+                };
+                let semantics = provider.as_ref().and_then(|provider| {
+                    provider.search_semantics_version_for_provider(&config.provider_type)
+                });
+                let expected = indexer_coverage_fingerprint(fingerprint, config, semantics);
+                !coverage_rows.iter().any(|row| {
+                    row.indexer_id == **id
+                        && row.fingerprint == expected
+                        && stale_before.is_none_or(|cutoff| {
+                            chrono::DateTime::parse_from_rfc3339(&row.searched_at)
+                                .map(|searched_at| {
+                                    searched_at.with_timezone(&chrono::Utc) >= cutoff
+                                })
+                                .unwrap_or(false)
+                        })
+                })
+            })
             .cloned()
             .collect())
     }
@@ -476,10 +515,47 @@ pub(crate) fn convergence_scope_key(scope: &SubmissionScope, title_id: &str) -> 
                 .collect();
             ids.sort_unstable();
             ids.dedup();
-            (!ids.is_empty()).then(|| format!("episode_set:{}", crate::sha256_hex(ids.join(","))))
+            (!ids.is_empty()).then(|| {
+                format!(
+                    "episode_set:b3:{}",
+                    crate::helpers::blake3_identity_hex(
+                        crate::helpers::HashDomain::EpisodeSetScope,
+                        ids.join(","),
+                    )
+                )
+            })
         }
         SubmissionScope::Orphan => None,
     }
+}
+
+/// Stable title-lane key for series-pack discovery. It deliberately has no
+/// title id: eligibility changes when its canonical collection membership does.
+pub(crate) fn series_pack_set_scope_key(collection_ids: &[String]) -> Option<String> {
+    let mut ids = collection_ids
+        .iter()
+        .map(|id| id.trim())
+        .filter(|id| !id.is_empty())
+        .collect::<Vec<_>>();
+    ids.sort_unstable();
+    ids.dedup();
+    (!ids.is_empty()).then(|| {
+        format!(
+            "series_pack_set:b3:{}",
+            crate::helpers::blake3_identity_hex(
+                crate::helpers::HashDomain::SeriesPackSetScope,
+                ids.join(","),
+            )
+        )
+    })
+}
+
+/// Stable per-collection receipt for a qualifying series pack. This is kept
+/// distinct from ordinary `collection:` coverage so it cannot suppress the
+/// established season search lane.
+pub(crate) fn series_pack_collection_scope_key(collection_id: &str) -> Option<String> {
+    let collection_id = collection_id.trim();
+    (!collection_id.is_empty()).then(|| format!("series_pack_collection:{collection_id}"))
 }
 
 /// Stable convergence key derived from a persisted acquisition scope state.
@@ -498,13 +574,24 @@ pub(crate) fn convergence_scope_key_for_state(item: &AcquisitionScopeState) -> O
 }
 
 /// Deterministic version string for a quality profile's acceptance criteria. Any
-/// edit that changes acceptance (cutoff, tiers, codecs, required audio, scoring)
-/// changes this, so the fingerprint changes and still-unsatisfied scopes re-open
-/// for convergence. Canonical (recursively sorted-key) JSON keeps the hash stable
+/// edit that changes acceptance (cutoff, tiers, codecs, required audio) changes
+/// this, so the fingerprint changes and still-unsatisfied scopes re-open for
+/// convergence. Canonical (recursively sorted-key) JSON keeps the hash stable
 /// regardless of map iteration order.
+///
+/// Hashes [`AcceptanceCriteria`], not the whole profile: a ranking-only edit
+/// (persona, score overrides, preference flags) re-orders the results a scope
+/// already has and needs no new indexer data, so it must not invalidate
+/// convergence coverage for every scope inheriting the profile and trigger a
+/// library-wide re-search. That projection is where a new criteria field gets
+/// classified acceptance-vs-ranking.
 pub(crate) fn profile_criteria_version(criteria: &QualityProfileCriteria) -> String {
-    let value = serde_json::to_value(criteria).unwrap_or(serde_json::Value::Null);
-    crate::sha256_hex(canonical_json_string(&value))
+    let acceptance = crate::quality_profile::AcceptanceCriteria::from(criteria);
+    let value = serde_json::to_value(&acceptance).unwrap_or(serde_json::Value::Null);
+    crate::helpers::blake3_identity_hex(
+        crate::helpers::HashDomain::QualityProfileCriteria,
+        canonical_json_string(&value),
+    )
 }
 
 fn canonical_json_string(value: &serde_json::Value) -> String {
@@ -549,6 +636,29 @@ impl AppUseCase {
         subject: &ResolvedReleaseSearchSubject,
     ) -> Option<ScopeConvergence> {
         let scope_key = convergence_scope_key(&subject.submission_scope, &subject.title_id)?;
+        self.resolve_scope_convergence_for_key(title, subject, scope_key)
+            .await
+    }
+
+    /// Convergence coordinates for the series-pack title lane. The set key is
+    /// based on eligible collection membership, never `title:<id>`.
+    pub(crate) async fn resolve_series_pack_convergence(
+        &self,
+        title: &Title,
+        subject: &ResolvedReleaseSearchSubject,
+        collection_ids: &[String],
+    ) -> Option<ScopeConvergence> {
+        let scope_key = series_pack_set_scope_key(collection_ids)?;
+        self.resolve_scope_convergence_for_key(title, subject, scope_key)
+            .await
+    }
+
+    async fn resolve_scope_convergence_for_key(
+        &self,
+        title: &Title,
+        subject: &ResolvedReleaseSearchSubject,
+        scope_key: String,
+    ) -> Option<ScopeConvergence> {
         let facet = subject.owner_facet.as_str().to_string();
 
         let context = match self
@@ -569,10 +679,24 @@ impl AppUseCase {
                 return None;
             }
         };
+        let required_audio_languages = match self
+            .resolve_required_audio_languages_for_title(title)
+            .await
+        {
+            Ok(languages) => languages,
+            Err(error) => {
+                tracing::warn!(
+                    title_id = subject.title_id.as_str(),
+                    error = %error,
+                    "convergence: failed to resolve required audio languages; leaving scope unresolved"
+                );
+                return None;
+            }
+        };
         let fingerprint = compute_search_fingerprint(
             &context.profile.id,
             &profile_criteria_version(&context.profile.criteria),
-            &context.profile.criteria.required_audio_languages,
+            &required_audio_languages,
             &scope_match_identity(subject),
         );
 
@@ -650,15 +774,46 @@ impl AppUseCase {
         let Some(convergence) = self.resolve_scope_convergence(title, subject).await else {
             return;
         };
+        self.record_convergence_coverage(&convergence, fired_indexer_ids)
+            .await;
+    }
+
+    /// Write receipts for an already-resolved convergence unit. This lets the
+    /// series-pack title lane use its membership and collection keys without
+    /// changing the generic search coverage behavior.
+    pub(crate) async fn record_convergence_coverage(
+        &self,
+        convergence: &ScopeConvergence,
+        fired_indexer_ids: &[String],
+    ) {
         // Only routed indexers that actually fired are recorded as covered; a
         // deferred/skipped/errored routed indexer stays uncovered so the cursor
         // retries it.
         let fired: std::collections::HashSet<&str> =
             fired_indexer_ids.iter().map(String::as_str).collect();
+        let configs = self
+            .services
+            .integrations
+            .indexer_configs
+            .list(None)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|config| (config.id.clone(), config))
+            .collect::<std::collections::HashMap<_, _>>();
+        let provider = self.services.integrations.plugin_provider.available();
         for indexer_id in &convergence.routed_indexer_ids {
             if !fired.contains(indexer_id.as_str()) {
                 continue;
             }
+            let Some(config) = configs.get(indexer_id) else {
+                continue;
+            };
+            let semantics = provider.as_ref().and_then(|provider| {
+                provider.search_semantics_version_for_provider(&config.provider_type)
+            });
+            let fingerprint =
+                indexer_coverage_fingerprint(&convergence.fingerprint, config, semantics);
             if let Err(error) = self
                 .services
                 .integrations
@@ -667,7 +822,7 @@ impl AppUseCase {
                     &convergence.scope_key,
                     &convergence.facet,
                     indexer_id,
-                    &convergence.fingerprint,
+                    &fingerprint,
                 )
                 .await
             {
@@ -684,8 +839,8 @@ impl AppUseCase {
 
     /// Re-open an acquisition state row and apply its coverage invalidation
     /// policy before waking the convergence cursor. Operator triggers use
-    /// [`CoverageReopen::All`]; failures use `Indexer` when their source is
-    /// known (or `All` when it is not); fingerprint rematches use `Keep`.
+    /// [`CoverageReopen::All`]; failures and fingerprint rematches use
+    /// [`CoverageReopen::Keep`].
     pub(crate) async fn reopen_wanted_scope_for_acquisition(
         &self,
         item: &AcquisitionScopeState,
@@ -749,10 +904,10 @@ impl AppUseCase {
 mod tests {
     use super::{
         canonical_json_string, compute_search_fingerprint, convergence_scope_key,
-        profile_criteria_version,
+        profile_criteria_version, series_pack_collection_scope_key, series_pack_set_scope_key,
     };
     use crate::contracts::SubmissionScope;
-    use crate::quality_profile::QualityProfileCriteria;
+    use crate::quality_profile::{AcceptanceCriteria, QualityProfileCriteria};
 
     #[test]
     fn fingerprint_is_stable_and_order_independent_for_audio() {
@@ -783,6 +938,14 @@ mod tests {
             compute_search_fingerprint("p1", "v1", &["en".into(), "ja".into()], "m1")
         );
         assert_ne!(base, compute_search_fingerprint("p1", "v1", &[], "m1"));
+    }
+
+    #[test]
+    fn fingerprint_changes_when_resolved_original_language_changes() {
+        let japanese = compute_search_fingerprint("p1", "v1", &["jpn".into()], "m1");
+        let korean = compute_search_fingerprint("p1", "v1", &["kor".into()], "m1");
+
+        assert_ne!(japanese, korean);
     }
 
     #[test]
@@ -880,6 +1043,26 @@ mod tests {
             ),
             None
         );
+
+        let set_ab = series_pack_set_scope_key(&["c1".into(), "c2".into()]);
+        assert!(
+            set_ab
+                .as_deref()
+                .is_some_and(|key| key.starts_with("series_pack_set:"))
+        );
+        assert_eq!(
+            set_ab,
+            series_pack_set_scope_key(&[" c2 ".into(), "c1".into(), "c1".into()])
+        );
+        assert_ne!(
+            set_ab,
+            series_pack_set_scope_key(&["c1".into(), "c3".into()])
+        );
+        assert_eq!(series_pack_set_scope_key(&[]), None);
+        assert_eq!(
+            series_pack_collection_scope_key(" c1 "),
+            Some("series_pack_collection:c1".to_string())
+        );
     }
 
     #[test]
@@ -916,6 +1099,74 @@ mod tests {
         );
     }
 
+    /// A ranking-only profile edit must leave the criteria version alone.
+    ///
+    /// Re-ordering candidates is decided against results the scope already
+    /// holds; it needs no new indexer data. Hashing the persona, the score
+    /// overrides or the preference flags would re-open convergence for every
+    /// scope inheriting the profile and re-search the whole library to arrive at
+    /// the same corpus in a different order.
+    #[test]
+    fn a_ranking_only_profile_edit_does_not_move_the_criteria_version() {
+        let base = test_criteria();
+        let mut ranked_differently = base.clone();
+        ranked_differently.scoring_persona = crate::scoring_weights::ScoringPersona::Efficient;
+        ranked_differently.prefer_remux = !base.prefer_remux;
+        ranked_differently.atmos_preferred = !base.atmos_preferred;
+        ranked_differently.prefer_dual_audio = !base.prefer_dual_audio;
+        ranked_differently.scoring_overrides.prefer_compact_encodes = Some(true);
+        ranked_differently.facet_persona_overrides.insert(
+            "movie".to_string(),
+            crate::scoring_weights::ScoringPersona::Audiophile,
+        );
+
+        assert_ne!(
+            base.scoring_persona, ranked_differently.scoring_persona,
+            "the edit must actually differ, or this test proves nothing"
+        );
+        assert_eq!(
+            profile_criteria_version(&base),
+            profile_criteria_version(&ranked_differently),
+            "a ranking-only edit must not invalidate convergence coverage"
+        );
+    }
+
+    #[test]
+    fn every_acceptance_edit_moves_the_criteria_version() {
+        let base = test_criteria();
+        let baseline = profile_criteria_version(&base);
+
+        let mut tiers = base.clone();
+        tiers.quality_tiers.push("480p".to_string());
+
+        let mut upgrades = base.clone();
+        upgrades.allow_upgrades = !base.allow_upgrades;
+
+        let mut audio = base.clone();
+        audio.required_audio_languages.push("ja".to_string());
+
+        let mut cutoff = base.clone();
+        assert_eq!(cutoff.cutoff_score, None);
+        cutoff.cutoff_score = Some(400);
+
+        let mut unknown = base.clone();
+        unknown.allow_unknown_quality = !base.allow_unknown_quality;
+
+        for (label, edited) in [
+            ("quality_tiers", tiers),
+            ("allow_upgrades", upgrades),
+            ("required_audio_languages", audio),
+            ("cutoff_score", cutoff),
+            ("allow_unknown_quality", unknown),
+        ] {
+            assert_ne!(
+                baseline,
+                profile_criteria_version(&edited),
+                "an edit to {label} changes which releases are acceptable and must re-open convergence"
+            );
+        }
+    }
+
     /// **D19.** Adding a field to `QualityProfileCriteria` must not move the
     /// fingerprint of a profile that does not set it.
     ///
@@ -929,22 +1180,43 @@ mod tests {
     /// absent from the serialization entirely — which is what makes the
     /// hard-coded value the same one the profile hashed to before the field
     /// existed. Any future criteria field has to clear both.
+    ///
+    /// The constant has been re-pinned twice, both times for a deliberate change
+    /// to what is hashed: the SHA-256 → BLAKE3 switch (plan 149), and the
+    /// narrowing of the hash input from the whole `QualityProfileCriteria` to the
+    /// acceptance-only [`AcceptanceCriteria`] projection. Those are the only
+    /// reasons it may ever change: a moved value with the hash input unchanged is
+    /// the library-wide re-sweep this test exists to catch.
     #[test]
     fn an_unset_new_criteria_field_does_not_move_the_profile_fingerprint() {
         let base = test_criteria();
         assert_eq!(base.cutoff_score, None);
         assert_eq!(
             profile_criteria_version(&base),
-            "797bd8459663cb2b52ed3bd9601946f5f8baf570a93f59d686eb959cd987c3f8",
+            "5d83bd034035f542fae433da6567546566f520a818aa0f425f309a4e10f1e99f",
             "the fingerprint of a profile that sets no new field must not move"
         );
 
-        let serialized =
-            serde_json::to_value(&base).expect("criteria serialize for the fingerprint");
+        // The projection, not the source struct, is what the hash reads.
+        let serialized = serde_json::to_value(AcceptanceCriteria::from(&base))
+            .expect("criteria serialize for the fingerprint");
         assert!(
             serialized.get("cutoff_score").is_none(),
             "an unset `cutoff_score` must not appear in the fingerprint input at all"
         );
+        for ranking_key in [
+            "scoring_persona",
+            "scoring_overrides",
+            "facet_persona_overrides",
+            "atmos_preferred",
+            "prefer_remux",
+            "prefer_dual_audio",
+        ] {
+            assert!(
+                serialized.get(ranking_key).is_none(),
+                "{ranking_key} ranks results the scope already has; it must not reach the fingerprint"
+            );
+        }
 
         // …and a profile that *does* set it is genuinely a different profile.
         let mut with_cutoff = base.clone();

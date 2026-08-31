@@ -7,10 +7,11 @@ use scryer_application::DiscoveryRepository;
 use scryer_application::{
     AppError, AppResult, AppServices, AppServicesBuilder, DownloadClient,
     DownloadClientConfigRepository, ImageProxyRepository, IndexerClient, IndexerConfigRepository,
-    IndexerSearchLearningRepository, IndexerStatsTracker, LibraryRepository, LogicalBackupExporter,
-    MediaRequestRepository, MediaServerConnectionRepository, OAuthRepository,
-    PluginInstallationRepository, PostProcessingScriptRepository, QualityProfileRepository,
-    RuleSetRepository, ScopeIndexerCoverageRepository, SettingsRepository, ShowRepository,
+    IndexerErrorRepository, IndexerSearchLearningRepository, IndexerStatsTracker,
+    LibraryRepository, LogicalBackupExporter, MediaRequestRepository,
+    MediaServerConnectionRepository, OAuthRepository, PluginInstallationRepository,
+    PostProcessingScriptRepository, QualityProfileRepository, RuleSetRepository,
+    ScopeIndexerCoverageRepository, SettingsRepository, ShowRepository,
     SubtitleProviderConfigRepository, TitleImageProcessor, TitleImageRepository, TitleRepository,
     TotpRepository, UpstreamScheduler, UserExternalAccountRepository, UserRepository,
     UserUiSettingsRepository, WebauthnRepository,
@@ -29,14 +30,15 @@ use crate::postgres::{
 use crate::queries::sql_runtime::StoreDatastore;
 use crate::{
     AcquisitionStore, BlocklistStore, DomainEventStore, DownloadClientConfigStore,
-    DownloadQueueCommandStore, DownloadSubmissionStore, ExternalImportMonitorStore,
-    ExternalImportSetupSecretDraftStore, FileSystemStagedNzbStore, HousekeepingStore, ImportStore,
-    InMemoryIndexerStatsTracker, IndexerConfigStore, IndexerProxyConfigStore,
-    IndexerSearchLearningStore, LibraryProbeStore, LibraryScanUnmatchedStore, MediaFileStore,
-    MediaRequestStore, MediaServerConnectionStore, MetadataGatewayClient, MigrationMode,
-    NotificationStore, OAuthStore, PendingReleaseStore, PluginStore, PostProcessingScriptStore,
-    QualityProfileStore, ReleaseStore, RuleSetStore, SeedingProfileStore, SettingsStore, ShowStore,
-    SmgEnrollmentConfig, SqliteLogicalBackupExporter, SqliteServices, SubtitleDownloadStore,
+    DownloadQueueCommandStore, DownloadRegistryStore, DownloadSubmissionStore,
+    ExternalImportMonitorStore, ExternalImportSetupSecretDraftStore, FileSystemStagedNzbStore,
+    HousekeepingStore, ImportStore, InMemoryIndexerStatsTracker, IndexerConfigStore,
+    IndexerErrorStore, IndexerProxyConfigStore, IndexerSearchLearningStore, LibraryProbeStore,
+    LibraryScanUnmatchedStore, MediaFileStore, MediaRequestStore, MediaServerConnectionStore,
+    MetadataGatewayClient, MigrationMode, NotificationStore, OAuthStore, PendingReleaseStore,
+    PluginStore, PostProcessingScriptStore, QualityProfileStore, ReleaseStore, RuleSetStore,
+    SeedingProfileStore, SettingsStore, ShowStore, SmgEnrollmentConfig,
+    SqliteLogicalBackupExporter, SqliteServices, SubtitleDownloadStore,
     SubtitleProviderConfigStore, TitleImageStore, TitleStore, TotpStore, WantedStore,
     WebauthnStore, WorkflowOperationStore,
 };
@@ -630,6 +632,7 @@ enum DatastoreStores {
         totp_store: Arc<TotpStore>,
         oauth_store: Arc<OAuthStore>,
         indexer_config_store: Arc<IndexerConfigStore>,
+        indexer_error_store: Arc<IndexerErrorStore>,
         indexer_proxy_config_store: Arc<IndexerProxyConfigStore>,
         download_client_config_store: Arc<DownloadClientConfigStore>,
         seeding_profile_store: Arc<SeedingProfileStore>,
@@ -653,6 +656,7 @@ enum DatastoreStores {
         quality_profile_store: Arc<QualityProfileStore>,
         domain_event_store: Arc<DomainEventStore>,
         acquisition_store: Arc<AcquisitionStore>,
+        download_registry_store: Arc<DownloadRegistryStore>,
         download_submission_store: Arc<DownloadSubmissionStore>,
         import_store: Arc<ImportStore>,
         external_import_monitor_store: Arc<ExternalImportMonitorStore>,
@@ -674,6 +678,7 @@ enum DatastoreStores {
         totp_store: Arc<TotpStore>,
         oauth_store: Arc<OAuthStore>,
         indexer_config_store: Arc<IndexerConfigStore>,
+        indexer_error_store: Arc<IndexerErrorStore>,
         indexer_proxy_config_store: Arc<IndexerProxyConfigStore>,
         download_client_config_store: Arc<DownloadClientConfigStore>,
         seeding_profile_store: Arc<SeedingProfileStore>,
@@ -697,6 +702,7 @@ enum DatastoreStores {
         quality_profile_store: Arc<QualityProfileStore>,
         domain_event_store: Arc<DomainEventStore>,
         acquisition_store: Arc<AcquisitionStore>,
+        download_registry_store: Arc<DownloadRegistryStore>,
         download_submission_store: Arc<DownloadSubmissionStore>,
         import_store: Arc<ImportStore>,
         external_import_monitor_store: Arc<ExternalImportMonitorStore>,
@@ -740,6 +746,7 @@ impl DatastoreAssembly {
             datastore.clone(),
             db.encryption_key_state(),
         ));
+        let indexer_error_store = Arc::new(IndexerErrorStore::new(datastore.clone()));
         let indexer_proxy_config_store = Arc::new(IndexerProxyConfigStore::new(datastore.clone()));
         let download_client_config_store = Arc::new(DownloadClientConfigStore::new(
             datastore.clone(),
@@ -783,6 +790,7 @@ impl DatastoreAssembly {
         let quality_profile_store = Arc::new(QualityProfileStore::new(datastore.clone()));
         let domain_event_store = Arc::new(DomainEventStore::new(datastore.clone()));
         let acquisition_store = Arc::new(AcquisitionStore::new(datastore.clone()));
+        let download_registry_store = Arc::new(DownloadRegistryStore::new(datastore.clone()));
         let download_submission_store = Arc::new(DownloadSubmissionStore::new(datastore.clone()));
         let import_store = Arc::new(ImportStore::new(datastore.clone()));
         let external_import_monitor_store =
@@ -810,6 +818,7 @@ impl DatastoreAssembly {
             totp_store,
             oauth_store,
             indexer_config_store,
+            indexer_error_store,
             indexer_proxy_config_store,
             download_client_config_store,
             seeding_profile_store,
@@ -833,6 +842,7 @@ impl DatastoreAssembly {
             quality_profile_store,
             domain_event_store,
             acquisition_store,
+            download_registry_store,
             download_submission_store,
             import_store,
             external_import_monitor_store,
@@ -870,6 +880,7 @@ impl DatastoreAssembly {
             datastore.clone(),
             db.encryption_key_state(),
         ));
+        let indexer_error_store = Arc::new(IndexerErrorStore::new(datastore.clone()));
         let indexer_proxy_config_store = Arc::new(IndexerProxyConfigStore::new(datastore.clone()));
         let download_client_config_store = Arc::new(DownloadClientConfigStore::new(
             datastore.clone(),
@@ -913,6 +924,7 @@ impl DatastoreAssembly {
         let quality_profile_store = Arc::new(QualityProfileStore::new(datastore.clone()));
         let domain_event_store = Arc::new(DomainEventStore::new(datastore.clone()));
         let acquisition_store = Arc::new(AcquisitionStore::new(datastore.clone()));
+        let download_registry_store = Arc::new(DownloadRegistryStore::new(datastore.clone()));
         let download_submission_store = Arc::new(DownloadSubmissionStore::new(datastore.clone()));
         let import_store = Arc::new(ImportStore::new(datastore.clone()));
         let external_import_monitor_store =
@@ -938,6 +950,7 @@ impl DatastoreAssembly {
             totp_store,
             oauth_store,
             indexer_config_store,
+            indexer_error_store,
             indexer_proxy_config_store,
             download_client_config_store,
             seeding_profile_store,
@@ -961,6 +974,7 @@ impl DatastoreAssembly {
             quality_profile_store,
             domain_event_store,
             acquisition_store,
+            download_registry_store,
             download_submission_store,
             import_store,
             external_import_monitor_store,
@@ -988,6 +1002,13 @@ impl DatastoreAssembly {
                 FileSystemStagedNzbStore::path_for_main_db(&self.config.database_url)
             }
             DatastoreEngine::Postgres => self.config.data_dir.join("staged-nzbs"),
+        }
+    }
+
+    pub fn datastore(&self) -> StoreDatastore {
+        match &self.stores {
+            DatastoreStores::Sqlite { db, .. } => db.datastore(),
+            DatastoreStores::Postgres { db, .. } => db.datastore(),
         }
     }
 
@@ -1144,6 +1165,19 @@ impl DatastoreAssembly {
         }
     }
 
+    pub fn download_registry(&self) -> Arc<dyn scryer_application::DownloadRegistryRepository> {
+        match &self.stores {
+            DatastoreStores::Sqlite {
+                download_registry_store,
+                ..
+            } => download_registry_store.clone(),
+            DatastoreStores::Postgres {
+                download_registry_store,
+                ..
+            } => download_registry_store.clone(),
+        }
+    }
+
     pub fn seeding_profiles(&self) -> Arc<dyn scryer_application::SeedingProfileRepository> {
         match &self.stores {
             DatastoreStores::Sqlite {
@@ -1260,12 +1294,27 @@ impl DatastoreAssembly {
 
     pub fn indexer_search_learning_repository(&self) -> Arc<dyn IndexerSearchLearningRepository> {
         match &self.stores {
-            DatastoreStores::Sqlite { db, .. } => {
-                Arc::new(IndexerSearchLearningStore::new(db.datastore()))
-            }
-            DatastoreStores::Postgres { db, .. } => {
-                Arc::new(IndexerSearchLearningStore::new(db.datastore()))
-            }
+            DatastoreStores::Sqlite { db, .. } => Arc::new(IndexerSearchLearningStore::new(
+                db.datastore(),
+                db.encryption_key_state(),
+            )),
+            DatastoreStores::Postgres { db, .. } => Arc::new(IndexerSearchLearningStore::new(
+                db.datastore(),
+                db.encryption_key_state(),
+            )),
+        }
+    }
+
+    pub fn indexer_errors(&self) -> Arc<dyn IndexerErrorRepository> {
+        match &self.stores {
+            DatastoreStores::Sqlite {
+                indexer_error_store,
+                ..
+            } => indexer_error_store.clone(),
+            DatastoreStores::Postgres {
+                indexer_error_store,
+                ..
+            } => indexer_error_store.clone(),
         }
     }
 
@@ -1349,6 +1398,7 @@ impl DatastoreAssembly {
                 plugin_store,
                 domain_event_store,
                 acquisition_store,
+                download_registry_store,
                 download_submission_store,
                 import_store,
                 external_import_monitor_store,
@@ -1384,6 +1434,7 @@ impl DatastoreAssembly {
                     self.quality_profiles(),
                     self.backup_dir(),
                 )
+                .with_indexer_error_repository(self.indexer_errors())
                 .with_libraries(libraries)
                 .with_media_requests(media_requests)
                 .with_user_ui_settings_store(ui_settings)
@@ -1411,6 +1462,7 @@ impl DatastoreAssembly {
                 .with_plugin_installation_store(plugin_store.clone())
                 .with_acquisition_state(acquisition_store.clone())
                 .with_domain_events(domain_event_store.clone())
+                .with_download_registry(download_registry_store.clone())
                 .with_download_submissions(download_submission_store.clone())
                 .with_download_queue_commands(download_queue_command_store.clone())
                 .with_external_import_monitor_snapshots(external_import_monitor_store.clone())
@@ -1455,6 +1507,7 @@ impl DatastoreAssembly {
                 settings_store,
                 domain_event_store,
                 acquisition_store,
+                download_registry_store,
                 download_submission_store,
                 import_store,
                 external_import_monitor_store,
@@ -1488,6 +1541,7 @@ impl DatastoreAssembly {
                     self.quality_profiles(),
                     self.backup_dir(),
                 )
+                .with_indexer_error_repository(self.indexer_errors())
                 .with_libraries(libraries)
                 .with_media_requests(media_requests)
                 .with_user_ui_settings_store(ui_settings)
@@ -1515,6 +1569,7 @@ impl DatastoreAssembly {
                 .with_plugin_installation_store(plugin_store.clone())
                 .with_acquisition_state(acquisition_store.clone())
                 .with_domain_events(domain_event_store.clone())
+                .with_download_registry(download_registry_store.clone())
                 .with_download_submissions(download_submission_store.clone())
                 .with_download_queue_commands(download_queue_command_store.clone())
                 .with_external_import_monitor_snapshots(external_import_monitor_store.clone())
@@ -1644,13 +1699,13 @@ pub fn datastore_file_path(database_url: &str) -> PathBuf {
 mod tests {
     use super::*;
     use scryer_application::{
-        BACKUP_TABLE_CATALOG, BackupBundleExportRequest, BackupExportSecrets,
-        BackupTableClassification, DiscoverySyncStateRecord, LogicalBackupExporter,
-        SettingsRepository, SystemInfoProvider, TitleImageKind, TitleImageRepository,
-        TitleImageSourceResult, TitleImageVariantRecord, TitleRepository, UserRepository,
-        inspect_backup_bundle,
+        AcquisitionScopeStateRepository, BACKUP_TABLE_CATALOG, BackupBundleExportRequest,
+        BackupExportSecrets, BackupTableClassification, DiscoverySyncStateRecord,
+        LogicalBackupExporter, ReleaseDecision, SettingsRepository, SystemInfoProvider,
+        TitleImageKind, TitleImageRepository, TitleImageSourceResult, TitleImageVariantRecord,
+        TitleRepository, UserRepository, inspect_backup_bundle,
     };
-    use scryer_domain::{ExternalId, Id, MediaFacet, Title, User};
+    use scryer_domain::{ExternalId, MediaFacet, Title, User};
     use sqlx::Row;
     use std::sync::{Mutex, MutexGuard};
     use tempfile::TempDir;
@@ -1918,7 +1973,6 @@ mod tests {
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum TestBackupEngine {
         Sqlite,
-        Postgres,
     }
 
     struct TestBackupSource {
@@ -1945,44 +1999,15 @@ mod tests {
 
     #[tokio::test]
     async fn sqlite_logical_backup_restore_round_trip_preserves_setup_data() -> AppResult<()> {
-        run_backup_restore_round_trip_or_skip(
-            TestBackupEngine::Sqlite,
-            TestBackupEngine::Sqlite,
-            None,
-        )
-        .await
-    }
-
-    #[tokio::test]
-    async fn postgres_logical_backup_restore_matrix_from_env() -> AppResult<()> {
-        let Some(raw_url) = std::env::var("SCRYER_TEST_POSTGRES_URL")
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-        else {
-            eprintln!(
-                "skipping PostgreSQL backup/restore matrix; SCRYER_TEST_POSTGRES_URL is not set"
-            );
-            return Ok(());
-        };
-
-        for (source, target) in [
-            (TestBackupEngine::Sqlite, TestBackupEngine::Postgres),
-            (TestBackupEngine::Postgres, TestBackupEngine::Postgres),
-            (TestBackupEngine::Postgres, TestBackupEngine::Sqlite),
-        ] {
-            run_backup_restore_round_trip_or_skip(source, target, Some(raw_url.as_str())).await?;
-        }
-        Ok(())
+        run_backup_restore_round_trip_or_skip(TestBackupEngine::Sqlite, TestBackupEngine::Sqlite)
+            .await
     }
 
     async fn run_backup_restore_round_trip_or_skip(
         source_engine: TestBackupEngine,
         target_engine: TestBackupEngine,
-        postgres_url: Option<&str>,
     ) -> AppResult<()> {
-        let result =
-            run_backup_restore_round_trip(source_engine, target_engine, postgres_url).await;
+        let result = run_backup_restore_round_trip(source_engine, target_engine).await;
         #[cfg(feature = "runtime-backups")]
         {
             result
@@ -2002,10 +2027,9 @@ mod tests {
     async fn run_backup_restore_round_trip(
         source_engine: TestBackupEngine,
         target_engine: TestBackupEngine,
-        postgres_url: Option<&str>,
     ) -> AppResult<()> {
-        let source = TestBackupSource::new(source_engine, postgres_url).await?;
-        let target = TestBackupTarget::new(target_engine, postgres_url).await?;
+        let source = TestBackupSource::new(source_engine).await?;
+        let target = TestBackupTarget::new(target_engine).await?;
         let bundle_dir = tempfile::tempdir().map_err(|error| {
             AppError::Repository(format!("failed to create backup bundle tempdir: {error}"))
         })?;
@@ -2110,7 +2134,7 @@ mod tests {
     }
 
     impl TestBackupSource {
-        async fn new(engine: TestBackupEngine, postgres_url: Option<&str>) -> AppResult<Self> {
+        async fn new(engine: TestBackupEngine) -> AppResult<Self> {
             let temp = tempfile::tempdir().map_err(|error| {
                 AppError::Repository(format!("failed to create source tempdir: {error}"))
             })?;
@@ -2119,111 +2143,45 @@ mod tests {
                 AppError::Repository(format!("failed to create source data dir: {error}"))
             })?;
 
-            match engine {
-                TestBackupEngine::Sqlite => {
-                    let db_path = data_dir.join("scryer.db");
-                    let database_url = format!("sqlite://{}", db_path.display());
-                    let sqlite =
-                        SqliteServices::new_with_mode(database_url.clone(), MigrationMode::Apply)
-                            .await?;
-                    Ok(Self {
-                        engine,
-                        database_url,
-                        sqlite: Some(sqlite),
-                        postgres: None,
-                        admin_pool: None,
-                        schema: None,
-                        _temp: temp,
-                    })
-                }
-                TestBackupEngine::Postgres => {
-                    let raw_url = postgres_url.ok_or_else(|| {
-                        AppError::Validation(
-                            "SCRYER_TEST_POSTGRES_URL is required for PostgreSQL backup tests"
-                                .into(),
-                        )
-                    })?;
-                    let admin_pool = sqlx::PgPool::connect(raw_url).await.map_err(|error| {
-                        AppError::Repository(format!("failed to connect to postgres: {error}"))
-                    })?;
-                    let schema = next_backup_matrix_schema_name();
-                    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
-                        .execute(&admin_pool)
-                        .await
-                        .map_err(|error| {
-                            AppError::Repository(format!(
-                                "failed to create source schema {schema}: {error}"
-                            ))
-                        })?;
-                    let database_url = postgres_url_with_search_path(raw_url, &schema)?;
-                    let postgres =
-                        PostgresServices::new_with_mode(database_url.clone(), MigrationMode::Apply)
-                            .await?;
-                    Ok(Self {
-                        engine,
-                        database_url,
-                        sqlite: None,
-                        postgres: Some(postgres),
-                        admin_pool: Some(admin_pool),
-                        schema: Some(schema),
-                        _temp: temp,
-                    })
-                }
-            }
+            let db_path = data_dir.join("scryer.db");
+            let database_url = format!("sqlite://{}", db_path.display());
+            let sqlite =
+                SqliteServices::new_with_mode(database_url.clone(), MigrationMode::Apply).await?;
+            Ok(Self {
+                engine,
+                database_url,
+                sqlite: Some(sqlite),
+                postgres: None,
+                admin_pool: None,
+                schema: None,
+                _temp: temp,
+            })
         }
 
         fn engine_name(&self) -> &'static str {
-            match self.engine {
-                TestBackupEngine::Sqlite => "sqlite",
-                TestBackupEngine::Postgres => "postgres",
-            }
+            let TestBackupEngine::Sqlite = self.engine;
+            "sqlite"
         }
 
         async fn seed(&self) -> AppResult<()> {
-            match self.engine {
-                TestBackupEngine::Sqlite => {
-                    let services = self.sqlite.as_ref().expect("sqlite source");
-                    let datastore = services.datastore();
-                    let settings =
-                        SettingsStore::new(datastore.clone(), services.encryption_key_state());
-                    let titles = TitleStore::new(datastore.clone());
-                    let images = TitleImageStore::new(datastore.clone());
-                    let users = UserStore::new(datastore.clone());
-                    settings
-                        .batch_ensure_setting_definitions(backup_matrix_setting_definitions())
-                        .await?;
-                    seed_backup_matrix_data(&settings, &titles, &users).await?;
-                    seed_backup_matrix_title_image(&images).await?;
-                    seed_backup_matrix_runtime_state(
-                        &datastore,
-                        "source-fingerprint",
-                        "2026-07-17T12:34:56Z",
-                        "source-discovery-generation",
-                    )
-                    .await
-                }
-                TestBackupEngine::Postgres => {
-                    let services = self.postgres.as_ref().expect("postgres source");
-                    let datastore = services.datastore();
-                    let settings =
-                        SettingsStore::new(datastore.clone(), services.encryption_key_state());
-                    let titles = TitleStore::new(datastore.clone());
-                    let images = TitleImageStore::new(datastore.clone());
-                    let users = UserStore::new(datastore.clone());
-                    settings
-                        .batch_ensure_setting_definitions(backup_matrix_setting_definitions())
-                        .await?;
-                    seed_backup_matrix_data(&settings, &titles, &users).await?;
-                    seed_backup_matrix_title_image(&images).await?;
-                    seed_backup_matrix_runtime_state(
-                        &datastore,
-                        "source-fingerprint",
-                        "2026-07-17T12:34:56Z",
-                        "source-discovery-generation",
-                    )
-                    .await
-                }
-            }
+            let services = self.sqlite.as_ref().expect("sqlite source");
+            let datastore = services.datastore();
+            let settings = SettingsStore::new(datastore.clone(), services.encryption_key_state());
+            let titles = TitleStore::new(datastore.clone());
+            let images = TitleImageStore::new(datastore.clone());
+            let users = UserStore::new(datastore.clone());
+            settings
+                .batch_ensure_setting_definitions(backup_matrix_setting_definitions())
+                .await?;
+            seed_backup_matrix_data(&settings, &titles, &users).await?;
+            seed_backup_matrix_title_image(&images).await?;
+            seed_backup_matrix_runtime_state(
+                &datastore,
+                "source-fingerprint",
+                "2026-07-17T12:34:56Z",
+                "source-discovery-generation",
+            )
+            .await
         }
 
         async fn export_backup(
@@ -2245,42 +2203,19 @@ mod tests {
                 },
             };
 
-            match self.engine {
-                TestBackupEngine::Sqlite => {
-                    SqliteLogicalBackupExporter::new(self.database_url.clone())
-                        .export_backup_bundle(request)
-                        .await
-                }
-                TestBackupEngine::Postgres => {
-                    let services = self.postgres.as_ref().expect("postgres source");
-                    PostgresLogicalBackupExporter::new(services)
-                        .export_backup_bundle(request)
-                        .await
-                }
-            }
+            SqliteLogicalBackupExporter::new(self.database_url.clone())
+                .export_backup_bundle(request)
+                .await
         }
 
         async fn current_migration_key(&self) -> AppResult<Option<String>> {
-            match self.engine {
-                TestBackupEngine::Sqlite => {
-                    let services = self.sqlite.as_ref().expect("sqlite source");
-                    let settings =
-                        SettingsStore::new(services.datastore(), services.encryption_key_state());
-                    settings
-                        .datastore_info()
-                        .await
-                        .map(|info| info.current_migration_key)
-                }
-                TestBackupEngine::Postgres => {
-                    let services = self.postgres.as_ref().expect("postgres source");
-                    let settings =
-                        SettingsStore::new(services.datastore(), services.encryption_key_state());
-                    settings
-                        .datastore_info()
-                        .await
-                        .map(|info| info.current_migration_key)
-                }
-            }
+            let services = self.sqlite.as_ref().expect("sqlite source");
+            let settings =
+                SettingsStore::new(services.datastore(), services.encryption_key_state());
+            settings
+                .datastore_info()
+                .await
+                .map(|info| info.current_migration_key)
         }
 
         async fn cleanup(self) -> AppResult<()> {
@@ -2295,7 +2230,7 @@ mod tests {
     }
 
     impl TestBackupTarget {
-        async fn new(engine: TestBackupEngine, postgres_url: Option<&str>) -> AppResult<Self> {
+        async fn new(engine: TestBackupEngine) -> AppResult<Self> {
             let temp = tempfile::tempdir().map_err(|error| {
                 AppError::Repository(format!("failed to create target tempdir: {error}"))
             })?;
@@ -2304,143 +2239,57 @@ mod tests {
                 AppError::Repository(format!("failed to create target data dir: {error}"))
             })?;
 
-            match engine {
-                TestBackupEngine::Sqlite => {
-                    let db_path = data_dir.join("scryer.db");
-                    let database_url = format!("sqlite://{}", db_path.display());
-                    Ok(Self {
-                        engine,
-                        config: DatastoreConfig::sqlite(
-                            database_url,
-                            data_dir,
-                            MigrationMode::Apply,
-                        ),
-                        admin_pool: None,
-                        schema: None,
-                        _temp: temp,
-                    })
-                }
-                TestBackupEngine::Postgres => {
-                    let raw_url = postgres_url.ok_or_else(|| {
-                        AppError::Validation(
-                            "SCRYER_TEST_POSTGRES_URL is required for PostgreSQL backup tests"
-                                .into(),
-                        )
-                    })?;
-                    let admin_pool = sqlx::PgPool::connect(raw_url).await.map_err(|error| {
-                        AppError::Repository(format!("failed to connect to postgres: {error}"))
-                    })?;
-                    let schema = next_backup_matrix_schema_name();
-                    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
-                        .execute(&admin_pool)
-                        .await
-                        .map_err(|error| {
-                            AppError::Repository(format!(
-                                "failed to create target schema {schema}: {error}"
-                            ))
-                        })?;
-                    let database_url = postgres_url_with_search_path(raw_url, &schema)?;
-                    Ok(Self {
-                        engine,
-                        config: DatastoreConfig::postgres(
-                            database_url.clone(),
-                            database_url,
-                            DatastoreConfigSource::EnvDbUrl,
-                            data_dir,
-                            MigrationMode::Apply,
-                        ),
-                        admin_pool: Some(admin_pool),
-                        schema: Some(schema),
-                        _temp: temp,
-                    })
-                }
-            }
+            let db_path = data_dir.join("scryer.db");
+            let database_url = format!("sqlite://{}", db_path.display());
+            Ok(Self {
+                engine,
+                config: DatastoreConfig::sqlite(database_url, data_dir, MigrationMode::Apply),
+                admin_pool: None,
+                schema: None,
+                _temp: temp,
+            })
         }
         async fn seed_stale_ephemeral_rows(&self) -> AppResult<()> {
-            match self.engine {
-                TestBackupEngine::Sqlite => {
-                    let services = SqliteServices::new_with_mode(
-                        self.config.database_url.clone(),
-                        MigrationMode::Apply,
-                    )
-                    .await?;
-                    let datastore = services.datastore();
-                    let titles = TitleStore::new(datastore.clone());
-                    let images = TitleImageStore::new(datastore.clone());
-                    TitleRepository::create(&titles, backup_matrix_title()).await?;
-                    seed_backup_matrix_title_image(&images).await?;
-                    seed_backup_matrix_runtime_state(
-                        &datastore,
-                        "target-fingerprint",
-                        "2025-01-02T03:04:05Z",
-                        "target-discovery-generation",
-                    )
-                    .await?;
-                    services.pool().close().await;
-                }
-                TestBackupEngine::Postgres => {
-                    let services = PostgresServices::new_with_mode(
-                        self.config.database_url.clone(),
-                        MigrationMode::Apply,
-                    )
-                    .await?;
-                    let datastore = services.datastore();
-                    let titles = TitleStore::new(datastore.clone());
-                    let images = TitleImageStore::new(datastore.clone());
-                    TitleRepository::create(&titles, backup_matrix_title()).await?;
-                    seed_backup_matrix_title_image(&images).await?;
-                    seed_backup_matrix_runtime_state(
-                        &datastore,
-                        "target-fingerprint",
-                        "2025-01-02T03:04:05Z",
-                        "target-discovery-generation",
-                    )
-                    .await?;
-                    services.pool().close().await;
-                }
+            let TestBackupEngine::Sqlite = self.engine;
+            {
+                let services = SqliteServices::new_with_mode(
+                    self.config.database_url.clone(),
+                    MigrationMode::Apply,
+                )
+                .await?;
+                let datastore = services.datastore();
+                let titles = TitleStore::new(datastore.clone());
+                let images = TitleImageStore::new(datastore.clone());
+                TitleRepository::create(&titles, backup_matrix_title()).await?;
+                seed_backup_matrix_title_image(&images).await?;
+                seed_backup_matrix_runtime_state(
+                    &datastore,
+                    "target-fingerprint",
+                    "2025-01-02T03:04:05Z",
+                    "target-discovery-generation",
+                )
+                .await?;
+                services.pool().close().await;
             }
             Ok(())
         }
 
         async fn verify_restored(&self) -> AppResult<()> {
-            match self.engine {
-                TestBackupEngine::Sqlite => {
-                    let services = SqliteServices::new_with_mode(
-                        self.config.database_url.clone(),
-                        MigrationMode::Apply,
-                    )
-                    .await?;
-                    let datastore = services.datastore();
-                    let settings =
-                        SettingsStore::new(datastore.clone(), services.encryption_key_state());
-                    let titles = TitleStore::new(datastore.clone());
-                    let images = TitleImageStore::new(datastore.clone());
-                    let users = UserStore::new(datastore.clone());
-                    verify_backup_matrix_data(&settings, &titles, &users).await?;
-                    verify_backup_matrix_runtime_state(&datastore).await?;
-                    verify_backup_matrix_title_image_restore(&images).await?;
-                    verify_sqlite_title_image_restore_tables(services.pool()).await?;
-                    services.pool().close().await;
-                }
-                TestBackupEngine::Postgres => {
-                    let services = PostgresServices::new_with_mode(
-                        self.config.database_url.clone(),
-                        MigrationMode::Apply,
-                    )
-                    .await?;
-                    let datastore = services.datastore();
-                    let settings =
-                        SettingsStore::new(datastore.clone(), services.encryption_key_state());
-                    let titles = TitleStore::new(datastore.clone());
-                    let images = TitleImageStore::new(datastore.clone());
-                    let users = UserStore::new(datastore.clone());
-                    verify_backup_matrix_data(&settings, &titles, &users).await?;
-                    verify_backup_matrix_runtime_state(&datastore).await?;
-                    verify_backup_matrix_title_image_restore(&images).await?;
-                    verify_postgres_title_image_restore_tables(services.pool()).await?;
-                    services.pool().close().await;
-                }
-            }
+            let services = SqliteServices::new_with_mode(
+                self.config.database_url.clone(),
+                MigrationMode::Apply,
+            )
+            .await?;
+            let datastore = services.datastore();
+            let settings = SettingsStore::new(datastore.clone(), services.encryption_key_state());
+            let titles = TitleStore::new(datastore.clone());
+            let images = TitleImageStore::new(datastore.clone());
+            let users = UserStore::new(datastore.clone());
+            verify_backup_matrix_data(&settings, &titles, &users).await?;
+            verify_backup_matrix_runtime_state(&datastore).await?;
+            verify_backup_matrix_title_image_restore(&images).await?;
+            verify_sqlite_title_image_restore_tables(services.pool()).await?;
+            services.pool().close().await;
             Ok(())
         }
 
@@ -2526,6 +2375,46 @@ mod tests {
                 "backup-indexer",
                 coverage_fingerprint,
             )
+            .await?;
+        let now = chrono::Utc::now();
+        SqlRuntime::execute(
+            datastore.read_exec(),
+            "INSERT INTO wanted_items (
+                 id, title_id, media_type, status, created_at, updated_at
+             ) VALUES ({}, {}, {}, {}, {}, {})",
+            &[
+                SqlArg::Text("backup-matrix-wanted".to_string()),
+                SqlArg::Text("backup-lattice-title".to_string()),
+                SqlArg::Text("movie".to_string()),
+                SqlArg::Text("wanted".to_string()),
+                SqlArg::Timestamp(now),
+                SqlArg::Timestamp(now),
+            ],
+        )
+        .await?;
+        WantedStore::new(datastore.clone())
+            .insert_release_decision(&ReleaseDecision {
+                id: "backup-matrix-release-decision".to_string(),
+                wanted_item_id: "backup-matrix-wanted".to_string(),
+                title_id: "backup-lattice-title".to_string(),
+                release_title: "Synthetic Backup Release".to_string(),
+                release_url: None,
+                release_size_bytes: Some(1_000_000),
+                decision_code: "eligible".to_string(),
+                candidate_score: 100,
+                current_score: None,
+                score_delta: None,
+                explanation_json: Some(
+                    serde_json::json!({
+                        "quality_profile_decision": {
+                            "scoring_log": [{"code": "backup_matrix", "delta": 100}],
+                        },
+                        "fingerprint": coverage_fingerprint,
+                    })
+                    .to_string(),
+                ),
+                created_at: now.to_rfc3339(),
+            })
             .await?;
         let coverage_searched_at = chrono::DateTime::parse_from_rfc3339(coverage_searched_at)
             .map_err(|error| {
@@ -2619,6 +2508,21 @@ mod tests {
         assert_eq!(emby.text("api_key")?, "source-fingerprint-emby-api-key");
         assert_eq!(emby.text("server_id")?, "source-fingerprint-emby-server-id");
         assert!(emby.bool("connect_enabled")?);
+
+        let release_decisions = WantedStore::new(datastore.clone())
+            .list_release_decisions_for_title("backup-lattice-title", 10, 0)
+            .await?;
+        assert_eq!(release_decisions.len(), 1);
+        let explanation = release_decisions[0]
+            .explanation_json
+            .as_deref()
+            .expect("restored release decision should retain its explanation");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(explanation)
+                .map_err(|error| AppError::Repository(error.to_string()))?["fingerprint"],
+            "source-fingerprint",
+            "compressed release-decision explanations should survive logical backup restore"
+        );
 
         let coverage = ScopeIndexerCoverageStore::new(datastore.clone());
         assert_eq!(
@@ -2868,52 +2772,6 @@ mod tests {
         Ok(())
     }
 
-    async fn verify_postgres_title_image_restore_tables(pool: &sqlx::PgPool) -> AppResult<()> {
-        let row = sqlx::query(
-            "SELECT poster_local_path, background_local_path
-               FROM titles
-              WHERE id = $1",
-        )
-        .bind("backup-lattice-title")
-        .fetch_one(pool)
-        .await
-        .map_err(|error| AppError::Repository(format!("failed to load restored title: {error}")))?;
-        let poster_local_path: Option<String> =
-            row.try_get("poster_local_path").map_err(|error| {
-                AppError::Repository(format!("failed to decode poster local path: {error}"))
-            })?;
-        let background_local_path: Option<String> =
-            row.try_get("background_local_path").map_err(|error| {
-                AppError::Repository(format!("failed to decode background local path: {error}"))
-            })?;
-        assert!(poster_local_path.is_none());
-        assert!(background_local_path.is_none());
-
-        let image_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM title_images")
-            .fetch_one(pool)
-            .await
-            .map_err(|error| {
-                AppError::Repository(format!("failed to count restored title images: {error}"))
-            })?;
-        assert_eq!(image_count, 0);
-
-        let variant_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM title_image_variants")
-            .fetch_one(pool)
-            .await
-            .map_err(|error| {
-                AppError::Repository(format!("failed to count restored variants: {error}"))
-            })?;
-        assert_eq!(variant_count, 0);
-        let blob_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM title_image_blobs")
-            .fetch_one(pool)
-            .await
-            .map_err(|error| {
-                AppError::Repository(format!("failed to count restored image blobs: {error}"))
-            })?;
-        assert_eq!(blob_count, 0);
-        Ok(())
-    }
-
     fn backup_matrix_title() -> Title {
         Title {
             id: "backup-lattice-title".to_string(),
@@ -2956,22 +2814,6 @@ mod tests {
             digital_release_date: Some("2026-01-02".to_string()),
             folder_path: Some("/data/movies/Backup Lattice Movie (2026)".to_string()),
         }
-    }
-
-    fn postgres_url_with_search_path(raw_url: &str, schema: &str) -> AppResult<String> {
-        let mut url = url::Url::parse(raw_url)
-            .map_err(|error| AppError::Validation(format!("invalid postgres test URL: {error}")))?;
-        url.query_pairs_mut()
-            .append_pair("options", &format!("-csearch_path={schema}"));
-        Ok(url.to_string())
-    }
-
-    fn next_backup_matrix_schema_name() -> String {
-        format!(
-            "scryer_backup_matrix_{}_{}",
-            std::process::id(),
-            Id::new().0.replace('-', "_")
-        )
     }
 
     async fn cleanup_postgres_schema(

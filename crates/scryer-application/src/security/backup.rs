@@ -9,14 +9,15 @@ use crate::types::{BackupStatus, BackupTrigger};
 use chrono::TimeZone;
 use scryer_domain::{ConfigurationChangeAction, Id};
 use semver::Version;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use tracing::{error, info, warn};
 
 const BACKUP_METADATA_EXTENSION: &str = ".metadata.json";
-const AUTO_BACKUP_RETENTION_COUNT: usize = 5;
+const AUTO_BACKUP_CURRENT_VERSION_RETENTION_COUNT: usize = 3;
+const AUTO_BACKUP_PREVIOUS_VERSION_RETENTION_COUNT: usize = 1;
 const BACKUP_EXECUTION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30 * 60);
 const BACKUP_STALE_TIMEOUT_MINUTES: i64 = 30;
 const BACKUP_TIMEOUT_ERROR_MESSAGE: &str = "backup bundle creation timed out after 30 minutes";
@@ -235,13 +236,97 @@ fn write_backup_metadata(backup_dir: &Path, info: &BackupInfo) -> AppResult<()> 
     Ok(())
 }
 
-fn auto_backup_filenames_to_prune(entries: &[BackupInfo], retention_count: usize) -> Vec<String> {
+fn auto_backup_filenames_to_prune(
+    entries: &[BackupInfo],
+    current_version_retention_count: usize,
+    previous_version_retention_count: usize,
+) -> Vec<String> {
+    let current_version = &*CURRENT_SCRYER_VERSION;
+    let mut retained_filenames = BTreeSet::new();
+
+    let mut current_version_entries = entries
+        .iter()
+        .filter(|entry| {
+            entry.trigger == BackupTrigger::Auto
+                && entry.status == BackupStatus::Ready
+                && parse_backup_source_version(&entry.source_scryer_version)
+                    .is_some_and(|version| version == *current_version)
+        })
+        .collect::<Vec<_>>();
+    current_version_entries.sort_by(|a, b| {
+        b.created_at
+            .cmp(&a.created_at)
+            .then_with(|| b.filename.cmp(&a.filename))
+    });
+    retained_filenames.extend(
+        current_version_entries
+            .into_iter()
+            .take(current_version_retention_count)
+            .map(|entry| entry.filename.clone()),
+    );
+
+    let previous_version = entries
+        .iter()
+        .filter(|entry| {
+            entry.trigger == BackupTrigger::Auto
+                && matches!(entry.status, BackupStatus::Ready | BackupStatus::Invalid)
+        })
+        .filter_map(|entry| parse_backup_source_version(&entry.source_scryer_version))
+        .filter(|version| version < current_version)
+        .max();
+    if let Some(previous_version) = previous_version {
+        let mut previous_version_entries = entries
+            .iter()
+            .filter(|entry| {
+                entry.trigger == BackupTrigger::Auto
+                    && matches!(entry.status, BackupStatus::Ready | BackupStatus::Invalid)
+                    && parse_backup_source_version(&entry.source_scryer_version)
+                        .is_some_and(|version| version == previous_version)
+            })
+            .collect::<Vec<_>>();
+        previous_version_entries.sort_by(|a, b| {
+            b.created_at
+                .cmp(&a.created_at)
+                .then_with(|| b.filename.cmp(&a.filename))
+        });
+        retained_filenames.extend(
+            previous_version_entries
+                .into_iter()
+                .take(previous_version_retention_count)
+                .map(|entry| entry.filename.clone()),
+        );
+    }
+
     entries
         .iter()
-        .filter(|entry| entry.status == BackupStatus::Ready && entry.trigger == BackupTrigger::Auto)
-        .skip(retention_count)
+        .filter(|entry| {
+            if entry.trigger != BackupTrigger::Auto
+                || !matches!(entry.status, BackupStatus::Ready | BackupStatus::Invalid)
+            {
+                return false;
+            }
+
+            let Some(source_version) = parse_backup_source_version(&entry.source_scryer_version)
+            else {
+                return false;
+            };
+
+            source_version < *current_version
+                || (source_version == *current_version && entry.status == BackupStatus::Ready)
+        })
+        .filter(|entry| !retained_filenames.contains(&entry.filename))
         .map(|entry| entry.filename.clone())
         .collect()
+}
+
+fn has_ready_current_auto_backup(entries: &[BackupInfo], filename: &str) -> bool {
+    entries.iter().any(|entry| {
+        entry.filename == filename
+            && entry.trigger == BackupTrigger::Auto
+            && entry.status == BackupStatus::Ready
+            && parse_backup_source_version(&entry.source_scryer_version)
+                .is_some_and(|version| version == *CURRENT_SCRYER_VERSION)
+    })
 }
 
 fn has_creating_backup_for_trigger(entries: &[BackupInfo], trigger: BackupTrigger) -> bool {
@@ -641,12 +726,23 @@ impl AppUseCase {
         Ok(true)
     }
 
-    async fn enforce_auto_backup_retention(&self, retention_count: usize) -> AppResult<u32> {
+    async fn enforce_auto_backup_retention(&self, created_filename: &str) -> AppResult<u32> {
         let dir = self.effective_backup_dir().await?;
         let entries = list_backup_files(&dir);
+        if !has_ready_current_auto_backup(&entries, created_filename) {
+            warn!(
+                filename = %created_filename,
+                "skipping automatic backup retention because the new backup is not ready"
+            );
+            return Ok(0);
+        }
         let mut deleted = 0u32;
 
-        for filename in auto_backup_filenames_to_prune(&entries, retention_count) {
+        for filename in auto_backup_filenames_to_prune(
+            &entries,
+            AUTO_BACKUP_CURRENT_VERSION_RETENTION_COUNT,
+            AUTO_BACKUP_PREVIOUS_VERSION_RETENTION_COUNT,
+        ) {
             match remove_backup_artifacts(&dir, &filename) {
                 Ok(true) => deleted += 1,
                 Ok(false) => {}
@@ -708,9 +804,7 @@ impl AppUseCase {
         let info = self
             .create_backup_inline(None, BackupTrigger::Auto, &passphrase)
             .await?;
-        let pruned_count = self
-            .enforce_auto_backup_retention(AUTO_BACKUP_RETENTION_COUNT)
-            .await?;
+        let pruned_count = self.enforce_auto_backup_retention(&info.filename).await?;
 
         Ok(AutoBackupRunOutcome::Created { info, pruned_count })
     }
@@ -934,6 +1028,18 @@ mod tests {
         }
     }
 
+    fn backup_info_with_version(
+        filename: &str,
+        created_at: &str,
+        trigger: BackupTrigger,
+        status: BackupStatus,
+        source_scryer_version: &str,
+    ) -> BackupInfo {
+        let mut info = backup_info(filename, created_at, trigger, status);
+        info.source_scryer_version = source_scryer_version.to_string();
+        info
+    }
+
     #[test]
     fn compute_next_auto_backup_run_at_uses_today_when_before_scheduled_time() {
         let today = chrono::Local::now().date_naive();
@@ -970,80 +1076,155 @@ mod tests {
     }
 
     #[test]
-    fn auto_backup_filenames_to_prune_keeps_only_latest_successful_automatic_backups() {
+    fn auto_backup_filenames_to_prune_keeps_current_and_previous_version_backups() {
         let entries = vec![
             backup_info(
-                "auto-06.sbk",
+                "current-04.sbk",
+                "2026-05-14T10:00:00Z",
+                BackupTrigger::Auto,
+                BackupStatus::Ready,
+            ),
+            backup_info(
+                "current-03.sbk",
+                "2026-05-14T09:00:00Z",
+                BackupTrigger::Auto,
+                BackupStatus::Ready,
+            ),
+            backup_info(
+                "current-02.sbk",
+                "2026-05-14T08:00:00Z",
+                BackupTrigger::Auto,
+                BackupStatus::Ready,
+            ),
+            backup_info(
+                "current-01.sbk",
+                "2026-05-14T07:00:00Z",
+                BackupTrigger::Auto,
+                BackupStatus::Ready,
+            ),
+            backup_info_with_version(
+                "previous-new.sbk",
                 "2026-05-14T06:00:00Z",
                 BackupTrigger::Auto,
-                BackupStatus::Ready,
+                BackupStatus::Invalid,
+                "0.0.2",
             ),
-            backup_info(
-                "manual-newer.sbk",
-                "2026-05-14T05:59:00Z",
-                BackupTrigger::Manual,
-                BackupStatus::Ready,
-            ),
-            backup_info(
-                "auto-05.sbk",
+            backup_info_with_version(
+                "previous-old.sbk",
                 "2026-05-14T05:00:00Z",
                 BackupTrigger::Auto,
-                BackupStatus::Ready,
+                BackupStatus::Invalid,
+                "0.0.2",
             ),
-            backup_info(
-                "auto-failed.sbk",
-                "2026-05-14T04:30:00Z",
-                BackupTrigger::Auto,
-                BackupStatus::Failed,
-            ),
-            backup_info(
-                "auto-04.sbk",
+            backup_info_with_version(
+                "older-version.sbk",
                 "2026-05-14T04:00:00Z",
                 BackupTrigger::Auto,
-                BackupStatus::Ready,
+                BackupStatus::Invalid,
+                "0.0.1",
             ),
-            backup_info(
-                "auto-03.sbk",
+            backup_info_with_version(
+                "manual.sbk",
+                "2026-05-14T03:30:00Z",
+                BackupTrigger::Manual,
+                BackupStatus::Invalid,
+                "0.0.2",
+            ),
+            backup_info_with_version(
+                "failed.sbk",
                 "2026-05-14T03:00:00Z",
                 BackupTrigger::Auto,
-                BackupStatus::Ready,
+                BackupStatus::Failed,
+                "0.0.2",
             ),
-            backup_info(
-                "auto-02.sbk",
+            backup_info_with_version(
+                "creating.sbk",
+                "2026-05-14T02:30:00Z",
+                BackupTrigger::Auto,
+                BackupStatus::Creating,
+                "0.0.2",
+            ),
+            backup_info_with_version(
+                "malformed-version.sbk",
                 "2026-05-14T02:00:00Z",
                 BackupTrigger::Auto,
-                BackupStatus::Ready,
+                BackupStatus::Invalid,
+                "not-a-version",
             ),
-            backup_info(
-                "auto-01.sbk",
+            backup_info_with_version(
+                "newer-version.sbk",
                 "2026-05-14T01:00:00Z",
                 BackupTrigger::Auto,
                 BackupStatus::Ready,
+                "999.0.0",
             ),
         ];
 
-        let pruned = auto_backup_filenames_to_prune(&entries, 5);
+        let pruned = auto_backup_filenames_to_prune(&entries, 3, 1);
 
-        assert_eq!(pruned, vec!["auto-01.sbk".to_string()]);
+        assert_eq!(
+            pruned,
+            vec![
+                "current-01.sbk".to_string(),
+                "previous-old.sbk".to_string(),
+                "older-version.sbk".to_string(),
+            ],
+        );
     }
 
     #[test]
-    fn retention_prune_leaves_unrelated_files_in_custom_directory() {
+    fn auto_backup_retention_requires_new_backup_to_be_persisted_as_ready() {
+        let ready = backup_info(
+            "ready.sbk",
+            "2026-05-14T06:00:00Z",
+            BackupTrigger::Auto,
+            BackupStatus::Ready,
+        );
+        let creating = backup_info(
+            "creating.sbk",
+            "2026-05-14T05:00:00Z",
+            BackupTrigger::Auto,
+            BackupStatus::Creating,
+        );
+        let manual = backup_info(
+            "manual.sbk",
+            "2026-05-14T04:00:00Z",
+            BackupTrigger::Manual,
+            BackupStatus::Ready,
+        );
+        let entries = vec![ready, creating, manual];
+
+        assert!(has_ready_current_auto_backup(&entries, "ready.sbk"));
+        assert!(!has_ready_current_auto_backup(&entries, "creating.sbk"));
+        assert!(!has_ready_current_auto_backup(&entries, "manual.sbk"));
+        assert!(!has_ready_current_auto_backup(&entries, "missing.sbk"));
+    }
+
+    #[test]
+    fn retention_prune_reconciles_legacy_backup_artifacts_without_touching_unrelated_files() {
         let dir = tempdir().expect("tempdir");
         let foreign_file = dir.path().join("notes.txt");
         std::fs::write(&foreign_file, b"not a backup").expect("write foreign file");
         let entries = vec![
             backup_info(
-                "auto-new.sbk",
+                "current.sbk",
                 "2026-05-14T06:00:00Z",
                 BackupTrigger::Auto,
                 BackupStatus::Ready,
             ),
-            backup_info(
-                "auto-old.sbk",
+            backup_info_with_version(
+                "previous.sbk",
                 "2026-05-14T05:00:00Z",
                 BackupTrigger::Auto,
-                BackupStatus::Ready,
+                BackupStatus::Invalid,
+                "0.0.2",
+            ),
+            backup_info_with_version(
+                "oldest.sbk",
+                "2026-05-14T04:00:00Z",
+                BackupTrigger::Auto,
+                BackupStatus::Invalid,
+                "0.0.1",
             ),
         ];
         for entry in &entries {
@@ -1051,13 +1232,17 @@ mod tests {
             write_backup_metadata(dir.path(), entry).expect("write metadata");
         }
 
-        for filename in auto_backup_filenames_to_prune(&entries, 1) {
+        for filename in auto_backup_filenames_to_prune(&entries, 3, 1) {
             remove_backup_artifacts(dir.path(), &filename).expect("remove backup");
         }
 
         assert!(foreign_file.exists());
-        assert!(dir.path().join("auto-new.sbk").exists());
-        assert!(!dir.path().join("auto-old.sbk").exists());
+        assert!(dir.path().join("current.sbk").exists());
+        assert!(dir.path().join(metadata_filename("current.sbk")).exists());
+        assert!(dir.path().join("previous.sbk").exists());
+        assert!(dir.path().join(metadata_filename("previous.sbk")).exists());
+        assert!(!dir.path().join("oldest.sbk").exists());
+        assert!(!dir.path().join(metadata_filename("oldest.sbk")).exists());
     }
 
     #[test]

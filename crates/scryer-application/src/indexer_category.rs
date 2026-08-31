@@ -165,25 +165,20 @@ pub fn nzb_head_category(nzb_head_bytes: &[u8]) -> Option<String> {
                 }
             }
             Ok(Event::Text(ref text)) if capturing => {
-                if let Some(decoded) = text.decode().ok().and_then(|decoded| {
-                    quick_xml::escape::unescape(&decoded)
-                        .ok()
-                        .map(|unescaped| unescaped.into_owned())
-                }) {
+                if let Ok(decoded) = quick_xml::escape::unescape(text.as_ref()) {
                     value.push_str(&decoded);
                 }
             }
             // CDATA carries the literal category text with no entity escaping;
             // skipping it would let `<![CDATA[TV > Anime]]>` dodge the gate.
             Ok(Event::CData(ref cdata)) if capturing => {
-                value.push_str(&String::from_utf8_lossy(cdata));
+                value.push_str(cdata.as_ref());
             }
             Ok(Event::GeneralRef(ref reference)) if capturing => {
                 if let Ok(Some(character)) = reference.resolve_char_ref() {
                     value.push(character);
-                } else if let Ok(decoded) = reference.decode()
-                    && let Some(entity) =
-                        quick_xml::escape::resolve_predefined_entity(decoded.as_ref())
+                } else if let Some(entity) =
+                    quick_xml::escape::resolve_predefined_entity(reference.as_ref())
                 {
                     value.push_str(entity);
                 }
@@ -270,15 +265,12 @@ fn meta_declares_category(start: &BytesStart<'_>) -> bool {
         .filter_map(|attribute| attribute.ok())
         .any(|attribute| {
             local_name_lowercase(attribute.key.as_ref()) == "type"
-                && String::from_utf8_lossy(attribute.value.as_ref())
-                    .trim()
-                    .eq_ignore_ascii_case("category")
+                && attribute.value.trim().eq_ignore_ascii_case("category")
         })
 }
 
-fn local_name_lowercase(name: &[u8]) -> String {
-    let local = name.rsplit(|byte| *byte == b':').next().unwrap_or(name);
-    String::from_utf8_lossy(local).to_ascii_lowercase()
+fn local_name_lowercase(name: &str) -> String {
+    name.rsplit(':').next().unwrap_or(name).to_ascii_lowercase()
 }
 
 #[cfg(test)]

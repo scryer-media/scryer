@@ -16,7 +16,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { SubtitleLanguagePicker } from "@/components/common/subtitle-language-picker";
+import { AudioLanguagePicker } from "@/components/common/audio-language-picker";
+import { formatAudioLanguageLabels } from "@/lib/constants/audio-languages";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { useTranslate } from "@/lib/context/translate-context";
 import { setTitleRequiredAudioMutation } from "@/lib/graphql/mutations";
@@ -267,7 +268,7 @@ export function TitleOptionsSettingsGrid({
           {t("title.requiredAudioLanguages")}
         </label>
         <div id={`${idPrefix}-required-audio-languages`}>
-          <SubtitleLanguagePicker
+          <AudioLanguagePicker
             value={requiredAudioLanguages}
             onChange={(codes) => void handleRequiredAudioChange(codes)}
             compact
@@ -277,7 +278,11 @@ export function TitleOptionsSettingsGrid({
         {!hasAudioOverride ? (
           <p className="mt-1 text-xs text-muted-foreground">
             {t("settings.libraryEffectiveAudio", {
-              value: requiredAudioLanguages.join(", ") || t("label.none"),
+              value:
+                formatAudioLanguageLabels(
+                  requiredAudioLanguages,
+                  t("title.originalAudioLanguagePerTitle"),
+                ) || t("label.none"),
             })}
           </p>
         ) : null}

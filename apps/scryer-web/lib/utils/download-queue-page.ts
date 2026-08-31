@@ -1,4 +1,5 @@
 import type { DownloadQueueItem } from "../types/download-queue";
+import { sameDownloadQueueItem } from "./download-queue.ts";
 
 export const DOWNLOAD_QUEUE_PAGE_SIZE = 50;
 export const DOWNLOAD_QUEUE_SYNC_REFRESH_LIMIT = 200;
@@ -43,6 +44,23 @@ export function mergeDownloadQueuePageRange(
     markRetainedStale?: boolean;
   },
 ): Map<number, DownloadQueueRetainedPage> {
+  const coveredEnd = offset + limit;
+  const previousItems = new Map<string, DownloadQueueItem>();
+  if (!options.reset) {
+    for (const [pageOffset, page] of current) {
+      const overlaps =
+        pageOffset < coveredEnd && pageOffset + page.items.length > offset;
+      if (overlaps) {
+        for (const item of page.items) {
+          previousItems.set(queueIdentity(item), item);
+        }
+      }
+    }
+  }
+  const reconciledItems = items.map((item) => {
+    const previous = previousItems.get(queueIdentity(item));
+    return previous && sameDownloadQueueItem(previous, item) ? previous : item;
+  });
   const next = options.reset
     ? new Map<number, DownloadQueueRetainedPage>()
     : new Map(
@@ -53,7 +71,6 @@ export function mergeDownloadQueuePageRange(
             : page,
         ]),
       );
-  const coveredEnd = offset + limit;
   for (const [pageOffset, page] of next) {
     const overlaps =
       pageOffset < coveredEnd && pageOffset + page.items.length > offset;
@@ -64,9 +81,13 @@ export function mergeDownloadQueuePageRange(
       next.delete(pageOffset);
     }
   }
-  for (let index = 0; index < items.length; index += DOWNLOAD_QUEUE_PAGE_SIZE) {
+  for (
+    let index = 0;
+    index < reconciledItems.length;
+    index += DOWNLOAD_QUEUE_PAGE_SIZE
+  ) {
     next.set(offset + index, {
-      items: items.slice(index, index + DOWNLOAD_QUEUE_PAGE_SIZE),
+      items: reconciledItems.slice(index, index + DOWNLOAD_QUEUE_PAGE_SIZE),
       revision: options.revision,
       stale: false,
     });

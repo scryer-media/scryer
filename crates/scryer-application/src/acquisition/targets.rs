@@ -2,7 +2,7 @@
 //! monitored and its current primary file does not satisfy the effective
 //! requirements — computed from library state on demand, never materialized.
 //! `missing` targets have no primary file; `cutoff_upgrade` targets have a file
-//! strictly below the profile cutoff. The convergence cursor (§D3) and the
+//! strictly below the profile cutoff. The background acquisition cursor and the
 //! wanted views read this same derivation, so the searcher and the UI agree on
 //! the target set by construction. A scope whose file satisfies requirements is
 //! never in this set and is therefore never actively searched (§D1a).
@@ -31,12 +31,12 @@ const HOT_MOVIE_RELEASE_WINDOW_DAYS: i64 = 30;
 const HOT_RECENTLY_ADDED_WINDOW_DAYS: i64 = 3;
 
 /// One derived acquisition target: a monitored scope whose current files do not
-/// satisfy requirements, plus the coordinates the convergence cursor and the
+/// satisfy requirements, plus the coordinates the acquisition cursor and the
 /// search pipeline need to act on it.
 #[derive(Clone, Debug)]
 pub struct AcquisitionTarget {
-    /// Stable coverage key (`convergence_scope_key`) — the cursor's rotation and
-    /// the coverage ledger both key on this.
+    /// Stable coverage key (`convergence_scope_key`) shared by cursor rotation
+    /// and the convergence ledger.
     pub scope_key: String,
     pub title_id: String,
     pub library_id: String,
@@ -113,7 +113,7 @@ pub(crate) struct CursorSelection {
     pub resume_after: Option<String>,
 }
 
-/// Select the convergence batch for one cycle (§D3). Plan-112 backpressure is
+/// Select the background acquisition batch for one cycle. Scheduler backpressure is
 /// the pace; this only bounds how many scopes get *evaluated* (coverage lookup,
 /// routing resolve, fingerprint compute) per tick:
 /// - **hot targets first** (recent = high candidate value), in stable order;
@@ -127,7 +127,7 @@ pub(crate) struct CursorSelection {
 /// not here — the enumeration stays cheap. Returns the new cold resume
 /// position: the last cold scope_key *considered*, so the cursor always
 /// advances.
-pub(crate) fn select_convergence_batch(
+pub(crate) fn select_background_acquisition_batch(
     targets: &[AcquisitionTarget],
     resume_after: Option<&str>,
     max_scopes: usize,
@@ -572,7 +572,7 @@ impl AppUseCase {
         Ok(targets)
     }
 
-    /// The full derived target set the convergence cursor rotates over:
+    /// The full derived target set the background acquisition cursor rotates over:
     /// missing ∪ cutoff-upgrade, minus scopes the user paused. Grab-blocking
     /// (active/completed submissions) is checked per selected scope during
     /// processing, where the download-client snapshot is available.
@@ -651,7 +651,7 @@ mod tests {
             cursor_target("cold-2", false),
             cursor_target("hot-2", true),
         ];
-        let selection = select_convergence_batch(&targets, None, 10);
+        let selection = select_background_acquisition_batch(&targets, None, 10);
         assert_eq!(
             selected_keys(&targets, &selection),
             vec!["hot-1", "hot-2", "cold-1", "cold-2"],
@@ -666,7 +666,7 @@ mod tests {
             cursor_target("b", false),
             cursor_target("c", false),
         ];
-        let selection = select_convergence_batch(&targets, None, 2);
+        let selection = select_background_acquisition_batch(&targets, None, 2);
         assert_eq!(selected_keys(&targets, &selection), vec!["a", "b"]);
         assert_eq!(
             selection.resume_after.as_deref(),
@@ -682,10 +682,11 @@ mod tests {
             cursor_target("b", false),
             cursor_target("c", false),
         ];
-        let first = select_convergence_batch(&targets, None, 2);
+        let first = select_background_acquisition_batch(&targets, None, 2);
         assert_eq!(selected_keys(&targets, &first), vec!["a", "b"]);
         // Next cycle resumes after "b" → c, then wraps to a.
-        let second = select_convergence_batch(&targets, first.resume_after.as_deref(), 2);
+        let second =
+            select_background_acquisition_batch(&targets, first.resume_after.as_deref(), 2);
         assert_eq!(selected_keys(&targets, &second), vec!["c", "a"]);
     }
 
@@ -698,7 +699,7 @@ mod tests {
         ];
         // The cap is filled by hot targets, so the cold lane is not reached and
         // its rotation cursor is carried forward unchanged.
-        let selection = select_convergence_batch(&targets, Some("cold-1"), 2);
+        let selection = select_background_acquisition_batch(&targets, Some("cold-1"), 2);
         assert_eq!(selected_keys(&targets, &selection), vec!["hot-1", "hot-2"]);
         assert_eq!(selection.resume_after.as_deref(), Some("cold-1"));
     }

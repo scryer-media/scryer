@@ -12,6 +12,8 @@ pub(crate) struct CompletedDownloadLookup {
     coverage: CompletedDownloadLookupCoverage,
     pub(super) by_source: HashMap<(String, String, String), CompletedDownload>,
     by_download_id: HashMap<(String, String, String), Vec<CompletedDownload>>,
+    pub(super) by_canonical:
+        HashMap<scryer_domain::download_identity::DownloadId, CompletedDownload>,
 }
 
 impl CompletedDownloadLookup {
@@ -42,6 +44,7 @@ impl CompletedDownloadLookup {
         for completed in other.by_source.into_values() {
             index_completed_download_into(self, completed);
         }
+        self.by_canonical.extend(other.by_canonical);
         self.coverage = coverage;
     }
 
@@ -82,8 +85,11 @@ pub(crate) async fn load_completed_download_lookup(
         .download_client
         .list_completed_downloads()
         .await?;
-    Ok(index_completed_downloads(
+    let canonical_download_ids =
+        resolve_completed_download_observations(app, &completed_downloads).await;
+    Ok(index_completed_download_observations(
         completed_downloads,
+        canonical_download_ids,
         CompletedDownloadLookupCoverage::Full,
     ))
 }
@@ -129,7 +135,13 @@ async fn load_recent_completed_download_lookup_for_client_scope_or_default_exclu
         .await
     {
         Ok(completed_downloads) => {
-            index_completed_downloads(completed_downloads, CompletedDownloadLookupCoverage::Recent)
+            let canonical_download_ids =
+                resolve_completed_download_observations(app, &completed_downloads).await;
+            index_completed_download_observations(
+                completed_downloads,
+                canonical_download_ids,
+                CompletedDownloadLookupCoverage::Recent,
+            )
         }
         Err(error) => {
             tracing::warn!(
@@ -198,6 +210,49 @@ pub(crate) async fn load_completed_download_lookup_for_tracked_client_items_excl
     )
 }
 
+pub(super) async fn resolve_completed_download_observations(
+    app: &AppUseCase,
+    completed_downloads: &[CompletedDownload],
+) -> Vec<crate::download_identity::ObservedClientJobResolution> {
+    let mut resolutions = Vec::with_capacity(completed_downloads.len());
+    for completed in completed_downloads {
+        resolutions.push(
+            crate::download_identity::resolve_observed_client_job(
+                app,
+                crate::download_identity::observed_completed_job(completed),
+            )
+            .await,
+        );
+    }
+    resolutions
+}
+
+fn index_completed_download_observations(
+    downloads: Vec<CompletedDownload>,
+    resolutions: Vec<crate::download_identity::ObservedClientJobResolution>,
+    coverage: CompletedDownloadLookupCoverage,
+) -> CompletedDownloadLookup {
+    debug_assert_eq!(downloads.len(), resolutions.len());
+    let (downloads, canonical_download_ids): (Vec<_>, Vec<_>) = downloads
+        .into_iter()
+        .zip(resolutions)
+        .filter_map(|(completed, resolution)| match resolution {
+            crate::download_identity::ObservedClientJobResolution::Resolved(download_id) => {
+                Some((completed, Some(download_id)))
+            }
+            crate::download_identity::ObservedClientJobResolution::Conflict => None,
+            crate::download_identity::ObservedClientJobResolution::Unavailable => {
+                Some((completed, None))
+            }
+        })
+        .unzip();
+    index_completed_downloads_with_canonical_download_ids(
+        downloads,
+        canonical_download_ids,
+        coverage,
+    )
+}
+
 fn download_queue_item_needs_completed_lookup(item: &DownloadQueueItem) -> bool {
     matches!(
         item.state,
@@ -254,10 +309,43 @@ pub(super) fn index_completed_downloads(
     lookup
 }
 
+pub(super) fn index_completed_downloads_with_canonical_download_ids(
+    downloads: Vec<CompletedDownload>,
+    canonical_download_ids: Vec<Option<scryer_domain::download_identity::DownloadId>>,
+    coverage: CompletedDownloadLookupCoverage,
+) -> CompletedDownloadLookup {
+    debug_assert_eq!(downloads.len(), canonical_download_ids.len());
+    let mut lookup = CompletedDownloadLookup {
+        coverage,
+        ..CompletedDownloadLookup::default()
+    };
+    for (completed, canonical_download_id) in downloads.into_iter().zip(canonical_download_ids) {
+        index_completed_download_into_with_canonical_download_id(
+            &mut lookup,
+            completed,
+            canonical_download_id,
+        );
+    }
+    lookup
+}
+
 fn index_completed_download_into(
     lookup: &mut CompletedDownloadLookup,
     completed: CompletedDownload,
 ) {
+    index_completed_download_into_with_canonical_download_id(lookup, completed, None);
+}
+
+fn index_completed_download_into_with_canonical_download_id(
+    lookup: &mut CompletedDownloadLookup,
+    completed: CompletedDownload,
+    canonical_download_id: Option<scryer_domain::download_identity::DownloadId>,
+) {
+    if let Some(canonical_download_id) = canonical_download_id {
+        lookup
+            .by_canonical
+            .insert(canonical_download_id, completed.clone());
+    }
     let observed_identity = observed_completed_download_identity(&completed);
     if let Some(download_id) = observed_identity
         .download_id
@@ -295,8 +383,8 @@ pub(super) fn observed_queue_item_identity(
     })
 }
 
-pub(super) fn queue_item_source_identity(item: &DownloadQueueItem) -> DownloadSourceIdentity {
-    DownloadSourceIdentity::new(
+pub(super) fn queue_item_source_identity(item: &DownloadQueueItem) -> ClientJobLocator {
+    ClientJobLocator::new(
         Some(item.client_id.as_str()),
         item.client_type.as_str(),
         item.download_client_item_id.as_str(),
@@ -315,8 +403,8 @@ pub(super) fn observed_completed_download_identity(
 
 pub(super) fn completed_download_source_identity(
     completed: &CompletedDownload,
-) -> DownloadSourceIdentity {
-    DownloadSourceIdentity::new(
+) -> ClientJobLocator {
+    ClientJobLocator::new(
         Some(completed.client_id.as_str()),
         completed.client_type.as_str(),
         completed.download_client_item_id.as_str(),
@@ -325,8 +413,9 @@ pub(super) fn completed_download_source_identity(
 
 pub(super) async fn download_id_tracked_state(
     app: &AppUseCase,
+    canonical_download_id: Option<&scryer_domain::download_identity::DownloadId>,
     identity: &crate::DownloadSubmissionIdentity,
-    source_identity: Option<&DownloadSourceIdentity>,
+    source_identity: Option<&ClientJobLocator>,
 ) -> Option<TrackedDownloadState> {
     if crate::download_submission_identity_is_empty(identity) {
         return None;
@@ -334,7 +423,7 @@ pub(super) async fn download_id_tracked_state(
     app.services
         .workflow
         .download_submissions
-        .get_identity_tracked_state(identity, source_identity)
+        .get_identity_tracked_state_for_download(canonical_download_id, identity, source_identity)
         .await
         .ok()
         .flatten()
@@ -484,6 +573,39 @@ pub(super) async fn find_completed_download(
 }
 
 pub(super) fn find_completed_download_in_lookup(
+    lookup: &CompletedDownloadLookup,
+    td: &TrackedDownload,
+) -> Option<CompletedDownload> {
+    let canonical_download_id = td.canonical_download_id();
+    let canonical = canonical_download_id
+        .and_then(|download_id| lookup.by_canonical.get(download_id))
+        .cloned();
+    let legacy = find_completed_download_in_lookup_legacy(lookup, td);
+
+    match (canonical_download_id, canonical, legacy) {
+        (Some(canonical_download_id), Some(canonical), Some(legacy)) => {
+            if serde_json::to_vec(&canonical).ok() != serde_json::to_vec(&legacy).ok() {
+                tracing::warn!(
+                    target: "download_identity_resolver",
+                    canonical_download_id = %canonical_download_id,
+                    canonical_client_id = canonical.client_id.as_str(),
+                    canonical_client_type = canonical.client_type.as_str(),
+                    canonical_item_id = canonical.download_client_item_id.as_str(),
+                    legacy_client_id = legacy.client_id.as_str(),
+                    legacy_client_type = legacy.client_type.as_str(),
+                    legacy_item_id = legacy.download_client_item_id.as_str(),
+                    "completed download lookup canonical and legacy routes disagree; using legacy result"
+                );
+            }
+            Some(legacy)
+        }
+        (None, Some(_), Some(legacy)) => Some(legacy),
+        (_, Some(canonical), None) => Some(canonical),
+        (_, None, legacy) => legacy,
+    }
+}
+
+fn find_completed_download_in_lookup_legacy(
     lookup: &CompletedDownloadLookup,
     td: &TrackedDownload,
 ) -> Option<CompletedDownload> {

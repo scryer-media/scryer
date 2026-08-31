@@ -13,9 +13,78 @@ struct PreparedManagedIndexerChild {
     routing_by_scope: HashMap<String, Vec<String>>,
 }
 
-const PROWLARR_MANAGED_CHILD_RATE_LIMIT_SECONDS: i64 = 2;
+pub(crate) struct CapsSnapshotRefreshOutcome {
+    snapshot_json: Option<String>,
+    error_message: Option<String>,
+}
 
-fn merge_managed_caps_snapshot(existing: Option<&str>, desired: Option<&str>) -> Option<String> {
+const PROWLARR_MANAGED_CHILD_RATE_LIMIT_SECONDS: i64 = 2;
+const MANAGED_CHILD_LOCAL_DISABLES_KEY: &str = "locally_disabled_children";
+
+fn managed_child_is_locally_disabled(metadata: Option<&str>, child_key: &str) -> bool {
+    metadata
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+        .and_then(|value| value.get(MANAGED_CHILD_LOCAL_DISABLES_KEY)?.as_array().cloned())
+        .is_some_and(|keys| {
+            keys.iter()
+                .filter_map(serde_json::Value::as_str)
+                .any(|key| key == child_key)
+        })
+}
+
+fn with_managed_child_local_disable(
+    metadata: Option<&str>,
+    child_key: &str,
+    locally_disabled: bool,
+) -> AppResult<Option<String>> {
+    let mut value = match metadata.map(str::trim).filter(|raw| !raw.is_empty()) {
+        Some(raw) => serde_json::from_str::<serde_json::Value>(raw)
+            .map_err(|error| AppError::Repository(format!("invalid managed child metadata: {error}")))?,
+        None => serde_json::json!({}),
+    };
+    let object = value.as_object_mut().ok_or_else(|| {
+        AppError::Repository("managed indexer metadata must be a JSON object".into())
+    })?;
+    let mut disabled_children = object
+        .get(MANAGED_CHILD_LOCAL_DISABLES_KEY)
+        .and_then(serde_json::Value::as_array)
+        .map(|keys| {
+            keys.iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if locally_disabled {
+        if !disabled_children.iter().any(|key| key == child_key) {
+            disabled_children.push(child_key.to_string());
+        }
+    } else {
+        disabled_children.retain(|key| key != child_key);
+    }
+    if disabled_children.is_empty() {
+        object.remove(MANAGED_CHILD_LOCAL_DISABLES_KEY);
+    } else {
+        object.insert(
+            MANAGED_CHILD_LOCAL_DISABLES_KEY.to_string(),
+            serde_json::Value::Array(
+                disabled_children
+                    .into_iter()
+                    .map(serde_json::Value::String)
+                    .collect(),
+            ),
+        );
+    }
+    if object.is_empty() {
+        Ok(None)
+    } else {
+        serde_json::to_string(&value)
+            .map(Some)
+            .map_err(|error| AppError::Repository(error.to_string()))
+    }
+}
+
+fn merge_managed_child_metadata(existing: Option<&str>, desired: Option<&str>) -> Option<String> {
     let desired = desired?.trim();
     if desired.is_empty() {
         return None;
@@ -150,24 +219,50 @@ pub(crate) fn normalize_indexer_config_json(
     config_json: Option<&str>,
     persisted_config_json: Option<&str>,
 ) -> AppResult<String> {
-    indexer_connection_url_field(fields)?;
+    let connection_url_field = indexer_connection_url_field(fields)?;
+    let option_supplies_connection_url = connection_url_field.is_some_and(|connection_field| {
+        fields.iter().any(|field| {
+            field
+                .options
+                .iter()
+                .any(|option| option.config_overrides.contains_key(&connection_field.key))
+        })
+    });
 
     let mut object = parse_indexer_config_json(config_json)?;
     let persisted = parse_indexer_config_json(persisted_config_json)?;
 
     for field in fields {
-        let should_restore_persisted = match field.field_type {
-            scryer_domain::ConfigFieldType::Password => !object.contains_key(&field.key),
-            _ => !object.contains_key(&field.key),
-        };
-
-        if should_restore_persisted
+        if !object.contains_key(&field.key)
             && let Some(stored) = persisted.get(&field.key)
             && !config_value_is_empty(Some(stored))
         {
             object.insert(field.key.clone(), stored.clone());
         }
+    }
 
+    for field in fields {
+        let Some(selected_value) = object.get(&field.key).and_then(serde_json::Value::as_str)
+        else {
+            continue;
+        };
+        let Some(selected_option) = field
+            .options
+            .iter()
+            .find(|option| option.value == selected_value)
+        else {
+            continue;
+        };
+        for (key, value) in &selected_option.config_overrides {
+            if fields.iter().any(|candidate| candidate.key == *key)
+                && config_value_is_empty(object.get(key))
+            {
+                object.insert(key.clone(), serde_json::Value::String(value.clone()));
+            }
+        }
+    }
+
+    for field in fields {
         if config_value_is_empty(object.get(&field.key))
             && let Some(default_value) = field
                 .default_value
@@ -187,6 +282,16 @@ pub(crate) fn normalize_indexer_config_json(
                 field.label.trim()
             )));
         }
+    }
+
+    if option_supplies_connection_url
+        && let Some(connection_field) = connection_url_field
+        && config_value_is_empty(object.get(&connection_field.key))
+    {
+        return Err(AppError::Validation(format!(
+            "{} is required",
+            connection_field.label.trim()
+        )));
     }
 
     serde_json::to_string(&serde_json::Value::Object(object))
@@ -232,7 +337,7 @@ impl AppUseCase {
     }
 }
 impl AppUseCase {
-    async fn fetch_caps_snapshot_json_for_config(
+    pub(crate) async fn fetch_caps_snapshot_json_for_config(
         &self,
         config: &IndexerConfig,
     ) -> AppResult<Option<String>> {
@@ -245,6 +350,11 @@ impl AppUseCase {
             return Ok(None);
         };
         let Some(snapshot) = refresher.fetch_for_config(config).await? else {
+            if config.is_direct_nab() {
+                return Err(AppError::Repository(
+                    "caps refresh returned no Newznab caps snapshot".into(),
+                ));
+            }
             return Ok(None);
         };
         serde_json::to_string(&snapshot)
@@ -253,22 +363,92 @@ impl AppUseCase {
     }
 }
 impl AppUseCase {
+    pub(crate) async fn prune_indexer_search_learning_best_effort(
+        &self,
+        indexer_id: &str,
+        reason: &'static str,
+    ) {
+        if let Err(error) = self
+            .services
+            .integrations
+            .indexer_client
+            .prune_search_learning(indexer_id)
+            .await
+        {
+            tracing::warn!(
+                config_id = indexer_id,
+                reason,
+                error = %error,
+                "failed to invalidate indexer search learning"
+            );
+        }
+    }
+
+    async fn record_caps_refresh_failure(&self, config: &IndexerConfig, error: &AppError) {
+        let message = format!("{} {error}", crate::INDEXER_CAPS_REFRESH_ERROR_PREFIX);
+        if let Err(record_error) = self
+            .services
+            .integrations
+            .indexer_configs
+            .record_last_error(&config.id, Some(message))
+            .await
+        {
+            tracing::warn!(config_id = %config.id, error = %record_error, "failed to persist indexer caps health error");
+        }
+        if let Err(prune_error) = self
+            .services
+            .integrations
+            .scope_indexer_coverage
+            .prune_indexer(&config.id)
+            .await
+        {
+            tracing::warn!(config_id = %config.id, error = %prune_error, "failed to invalidate coverage after caps refresh failure");
+        }
+        self.prune_indexer_search_learning_best_effort(&config.id, "caps_refresh_failure")
+            .await;
+    }
+
     pub(crate) async fn refresh_caps_snapshot_json_best_effort(
         &self,
         config: &IndexerConfig,
         fallback: Option<&str>,
-    ) -> Option<String> {
+    ) -> CapsSnapshotRefreshOutcome {
         match self.fetch_caps_snapshot_json_for_config(config).await {
-            Ok(Some(snapshot_json)) => Some(snapshot_json),
-            Ok(None) => fallback.map(ToOwned::to_owned),
+            Ok(Some(snapshot_json)) => {
+                if config.last_error_message.as_deref().is_some_and(|message| {
+                    message.starts_with(crate::INDEXER_CAPS_REFRESH_ERROR_PREFIX)
+                }) && let Err(error) = self
+                        .services
+                        .integrations
+                        .indexer_configs
+                        .clear_last_error(&config.id)
+                        .await
+                {
+                    tracing::warn!(config_id = %config.id, error = %error, "failed to clear recovered indexer caps error");
+                }
+                CapsSnapshotRefreshOutcome {
+                    snapshot_json: Some(snapshot_json),
+                    error_message: None,
+                }
+            }
+            Ok(None) => CapsSnapshotRefreshOutcome {
+                snapshot_json: fallback.map(ToOwned::to_owned),
+                error_message: None,
+            },
             Err(error) => {
+                let error_message =
+                    format!("{} {error}", crate::INDEXER_CAPS_REFRESH_ERROR_PREFIX);
+                self.record_caps_refresh_failure(config, &error).await;
                 tracing::warn!(
                     config_id = %config.id,
                     provider_type = %config.provider_type,
                     error = %error,
                     "failed to refresh indexer caps snapshot; keeping the last known snapshot"
                 );
-                fallback.map(ToOwned::to_owned)
+                CapsSnapshotRefreshOutcome {
+                    snapshot_json: fallback.map(ToOwned::to_owned),
+                    error_message: Some(error_message),
+                }
             }
         }
     }
@@ -322,7 +502,9 @@ impl AppUseCase {
 
             match self.fetch_caps_snapshot_json_for_config(&config).await {
                 Ok(Some(snapshot_json)) => {
-                    if config.caps_snapshot_json.as_deref() != Some(snapshot_json.as_str()) {
+                    let updated = if config.caps_snapshot_json.as_deref()
+                        != Some(snapshot_json.as_str())
+                    {
                         self.services
                             .integrations
                             .indexer_configs
@@ -331,12 +513,35 @@ impl AppUseCase {
                                 caps_snapshot_json: Some(Some(snapshot_json)),
                                 ..Default::default()
                             })
-                            .await?;
+                            .await?
+                    } else {
+                        config.clone()
+                    };
+                    if crate::indexer_search_identity(&config, None)
+                        != crate::indexer_search_identity(&updated, None)
+                    {
+                        self.prune_indexer_search_learning_best_effort(
+                            &config.id,
+                            "caps_snapshot_change",
+                        )
+                        .await;
+                    }
+                    if config.last_error_message.as_deref().is_some_and(|message| {
+                        message.starts_with(crate::INDEXER_CAPS_REFRESH_ERROR_PREFIX)
+                    }) && let Err(error) = self
+                            .services
+                            .integrations
+                            .indexer_configs
+                            .clear_last_error(&config.id)
+                            .await
+                    {
+                        tracing::warn!(config_id = %config.id, error = %error, "failed to clear recovered indexer caps error");
                     }
                     refreshed += 1;
                 }
                 Ok(None) => {}
                 Err(error) => {
+                    self.record_caps_refresh_failure(&config, &error).await;
                     tracing::warn!(
                         config_id = %config.id,
                         provider_type = %config.provider_type,
@@ -512,9 +717,14 @@ impl AppUseCase {
                 })?;
             self.validate_indexer_download_client_mapping(&config, &client)?;
         }
-        config.caps_snapshot_json = self
+        let caps_refresh = self
             .refresh_caps_snapshot_json_best_effort(&config, None)
             .await;
+        config.caps_snapshot_json = caps_refresh.snapshot_json;
+        if let Some(error_message) = caps_refresh.error_message {
+            config.last_error_message = Some(error_message);
+            config.last_error_at = Some(Utc::now());
+        }
 
         let created = self
             .services
@@ -548,6 +758,10 @@ impl AppUseCase {
                 "at least one indexer field must be provided".into(),
             ));
         }
+        let mut changes_other_than_enabled = update.clone();
+        changes_other_than_enabled.is_enabled = None;
+        let managed_enabled_only =
+            update.is_enabled.is_some() && !changes_other_than_enabled.has_changes();
 
         let normalized_name = update.name.map(|value| value.trim().to_string());
         if normalized_name.as_ref().is_some_and(String::is_empty) {
@@ -568,6 +782,14 @@ impl AppUseCase {
             .get_by_id(config_id)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("indexer config '{config_id}' not found")))?;
+        if existing.managed_parent_config_id.is_some()
+            && managed_enabled_only
+            && let Some(requested_enabled) = update.is_enabled
+        {
+            return self
+                .set_managed_child_indexer_enabled(actor, &existing, requested_enabled)
+                .await;
+        }
         if existing.managed_parent_config_id.is_some() {
             return Err(AppError::Validation(
                 "managed child indexers are controlled by their parent sync and cannot be edited directly"
@@ -724,7 +946,7 @@ impl AppUseCase {
                 })?;
             self.validate_indexer_download_client_mapping(&preview_config, &client)?;
         }
-        let refreshed_caps_snapshot_json = self
+        let caps_refresh = self
             .refresh_caps_snapshot_json_best_effort(
                 &preview_config,
                 existing.caps_snapshot_json.as_deref(),
@@ -760,11 +982,21 @@ impl AppUseCase {
                 managed_parent_config_id: update.managed_parent_config_id,
                 managed_child_key: update.managed_child_key,
                 managed_metadata_json: update.managed_metadata_json,
-                caps_snapshot_json: Some(refreshed_caps_snapshot_json),
+                caps_snapshot_json: Some(caps_refresh.snapshot_json),
                 config_json: normalized_config_json,
             })
             .await?;
-        if should_validate_connection {
+        if caps_refresh.error_message.is_none()
+            && crate::indexer_search_identity(&existing, None)
+            != crate::indexer_search_identity(&updated, None)
+        {
+            self.prune_indexer_search_learning_best_effort(
+                &updated.id,
+                "search_relevant_config_change",
+            )
+            .await;
+        }
+        if should_validate_connection && caps_refresh.error_message.is_none() {
             self.services
                 .integrations
                 .indexer_configs
@@ -865,6 +1097,25 @@ impl AppUseCase {
             .indexer_configs
             .delete(root_id)
             .await?;
+        // A deleted indexer's blocklist rows can never match again -- the key
+        // carries its id -- but they would still render in the UI as blocks the
+        // operator cannot reason about. Managed children churn ids on re-sync,
+        // so this is the path that keeps that from accumulating.
+        for id in &deleted_ids {
+            if let Err(error) = self
+                .services
+                .workflow
+                .blocklist_repo
+                .delete_for_indexer(id)
+                .await
+            {
+                tracing::warn!(
+                    config_id = %id,
+                    error = %error,
+                    "failed to drop blocklist entries for deleted indexer"
+                );
+            }
+        }
         self.publish_indexers_changed();
         Ok(deleted_ids)
     }
@@ -1049,7 +1300,11 @@ impl AppUseCase {
 
         for desired in desired_children {
             if let Some(existing) = existing_by_key.remove(&desired.child_key) {
-                let managed_metadata_json = merge_managed_caps_snapshot(
+                let locally_disabled = managed_child_is_locally_disabled(
+                    parent.managed_metadata_json.as_deref(),
+                    &desired.child_key,
+                );
+                let managed_metadata_json = merge_managed_child_metadata(
                     existing.managed_metadata_json.as_deref(),
                     desired.managed_metadata_json.as_deref(),
                 )
@@ -1069,7 +1324,7 @@ impl AppUseCase {
                                 None
                             },
                             rate_limit_burst: None,
-                            is_enabled: Some(desired.is_enabled),
+                            is_enabled: Some(desired.is_enabled && !locally_disabled),
                             enable_interactive_search: Some(desired.enable_interactive_search),
                             enable_auto_search: Some(desired.enable_auto_search),
                             indexer_proxy_config_id: Some(parent.indexer_proxy_config_id.clone()),
@@ -1086,6 +1341,15 @@ impl AppUseCase {
                         })
                         .await
                 );
+                if crate::indexer_search_identity(&existing, None)
+                    != crate::indexer_search_identity(&updated, None)
+                {
+                    self.prune_indexer_search_learning_best_effort(
+                        &updated.id,
+                        "managed_indexer_search_change",
+                    )
+                    .await;
+                }
                 indexers_changed = true;
                 apply_managed_child_routing(
                     &mut routing_by_scope,
@@ -1107,7 +1371,11 @@ impl AppUseCase {
                             rate_limit_seconds: managed_rate_limit_seconds,
                             rate_limit_burst: None,
                             disabled_until: None,
-                            is_enabled: desired.is_enabled,
+                            is_enabled: desired.is_enabled
+                                && !managed_child_is_locally_disabled(
+                                    parent.managed_metadata_json.as_deref(),
+                                    &desired.child_key,
+                                ),
                             enable_interactive_search: desired.enable_interactive_search,
                             enable_auto_search: desired.enable_auto_search,
                             indexer_proxy_config_id: parent.indexer_proxy_config_id.clone(),
@@ -1161,6 +1429,107 @@ impl AppUseCase {
     }
 }
 impl AppUseCase {
+    async fn set_managed_child_indexer_enabled(
+        &self,
+        actor: &User,
+        child: &IndexerConfig,
+        requested_enabled: bool,
+    ) -> AppResult<IndexerConfig> {
+        let child_id = child.id.clone();
+        let (updated, parent_id) = self
+            .set_managed_child_local_disable(&child_id, !requested_enabled)
+            .await?;
+
+        if !requested_enabled {
+            self.publish_indexers_changed();
+            return Ok(updated);
+        }
+
+        if let Err(error) = self.sync_indexer_config(actor, &parent_id).await {
+            if let Err(restore_error) = self.set_managed_child_local_disable(&child_id, true).await {
+                tracing::error!(
+                    child_id = %child_id,
+                    error = %restore_error,
+                    "failed to restore managed child local disable after sync failure"
+                );
+            } else {
+                self.publish_indexers_changed();
+            }
+            return Err(error);
+        }
+        self.services
+            .integrations
+            .indexer_configs
+            .get_by_id(&child_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("indexer config '{child_id}' not found")))
+    }
+
+    async fn set_managed_child_local_disable(
+        &self,
+        child_id: &str,
+        locally_disabled: bool,
+    ) -> AppResult<(IndexerConfig, String)> {
+        let child_id = child_id.to_string();
+        let (updated, parent_id) = {
+            let _sync_guard = self
+                .runtime
+                .integrations
+                .managed_indexer_sync_lock
+                .clone()
+                .lock_owned()
+                .await;
+            let current = self
+                .services
+                .integrations
+                .indexer_configs
+                .get_by_id(&child_id)
+                .await?
+                .ok_or_else(|| {
+                    AppError::NotFound(format!("indexer config '{child_id}' not found"))
+                })?;
+            let parent_id = current.managed_parent_config_id.clone().ok_or_else(|| {
+                AppError::Validation("managed child indexer requires a parent".into())
+            })?;
+            let child_key = current.managed_child_key.as_deref().ok_or_else(|| {
+                AppError::Validation("managed child indexer requires a child key".into())
+            })?;
+            let parent = self
+                .services
+                .integrations
+                .indexer_configs
+                .get_by_id(&parent_id)
+                .await?
+                .ok_or_else(|| AppError::NotFound(format!("indexer config '{parent_id}' not found")))?;
+            let metadata = with_managed_child_local_disable(
+                parent.managed_metadata_json.as_deref(),
+                child_key,
+                locally_disabled,
+            )?;
+            self.services
+                .integrations
+                .indexer_configs
+                .update(IndexerConfigUpdate {
+                    id: parent_id.clone(),
+                    managed_metadata_json: Some(metadata),
+                    ..Default::default()
+                })
+                .await?;
+            let updated = self
+                .services
+                .integrations
+                .indexer_configs
+                .update(IndexerConfigUpdate {
+                    id: child_id.clone(),
+                    is_enabled: Some(false),
+                    ..Default::default()
+                })
+                .await?;
+            (updated, parent_id)
+        };
+        Ok((updated, parent_id))
+    }
+
     async fn set_managed_child_indexers_enabled_state(
         &self,
         parent_config_id: &str,

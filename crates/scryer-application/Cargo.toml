@@ -1,6 +1,6 @@
 [package]
 name = "scryer-application"
-version = "0.18.21"
+version = "0.19.3"
 edition.workspace = true
 
 [features]
@@ -12,13 +12,11 @@ runtime = [
     "runtime-plugin-trust",
 ]
 runtime-archives = [
-    "dep:flate2",
     "dep:lzma-rs",
-    "dep:tar",
     "dep:par2-rs",
     "dep:zstd",
 ]
-runtime-backups = ["dep:tar", "dep:zstd"]
+runtime-backups = ["dep:zstd"]
 runtime-media-analysis = [
     "dep:chardetng",
     "dep:encoding_rs",
@@ -41,6 +39,7 @@ scryer-release-parser = { path = "../scryer-release-parser" }
 scryer-rules = { path = "../scryer-rules" }
 scryer-mediainfo = { path = "../scryer-mediainfo", optional = true }
 scryer-outbound-http = { path = "../scryer-outbound-http" }
+scryer-logging = { path = "../scryer-logging" }
 scryer-runtime-info = { path = "../scryer-runtime-info" }
 jsonwebtoken = { workspace = true }
 rand_core = { workspace = true }
@@ -48,7 +47,7 @@ argon2 = { workspace = true }
 aws-lc-rs = { workspace = true }
 uuid = { workspace = true }
 webauthn-rs = { workspace = true }
-reqwest = { version = "0.13", default-features = false, features = ["json", "query", "rustls-no-provider", "http2", "gzip", "brotli", "deflate"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "query", "stream", "rustls-no-provider", "http2", "gzip", "brotli", "deflate"] }
 quick-xml = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -64,11 +63,11 @@ metrics = { workspace = true }
 base64 = "0.23"
 sha2 = { version = "0.11", optional = true }
 brotli = { version = "8", optional = true }
-tar = { version = "0.4", optional = true }
-flate2 = { version = "1", optional = true }
+tar = "0.4"
+flate2 = "1"
 zstd = { version = "0.13", default-features = false, optional = true }
 lzma-rs = { version = "0.3", optional = true }
-par2-rs = { version = "0.5.0", optional = true }
+par2-rs = { version = "0.7.1", optional = true }
 tempfile = "3"
 chardetng = { version = "1", optional = true }
 encoding_rs = { version = "0.8", optional = true }
@@ -90,6 +89,5 @@ libc = "0.2"
 windows-sys = { version = "0.61.2", features = ["Win32_Storage_FileSystem"] }
 
 [dev-dependencies]
-criterion.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 wiremock = { workspace = true }

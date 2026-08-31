@@ -444,18 +444,18 @@ impl TitleMutations {
         Ok(from_title(&app, title))
     }
 
-    /// Associate a title with a TVDB identity and return any hydration or scan result.
+    /// Associate a title with a metadata identity and return any hydration or scan result.
     async fn fix_title_match(
         &self,
         ctx: &Context<'_>,
-        #[graphql(desc = "Title identity and TVDB identity used for the rematch.")]
+        #[graphql(desc = "Title identity and metadata identity used for the rematch.")]
         input: FixTitleMatchInput,
     ) -> GqlResult<FixTitleMatchPayload> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
         let title_id = input.title_id.to_string();
         let result = app
-            .fix_title_match(&actor, &title_id, &input.tvdb_id)
+            .fix_title_match(&actor, &title_id, input.tvdb_id.as_deref(), input.smg_id)
             .await
             .map_err(to_gql_error)?;
 

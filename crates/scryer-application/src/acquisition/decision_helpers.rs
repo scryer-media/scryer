@@ -31,33 +31,6 @@ pub(crate) fn is_download_submit_unavailable_error(err: &AppError) -> bool {
     err.is_retryable_download_submit_failure()
 }
 
-/// Blocklist entry `data` attribution in the shape every failure writer
-/// persists (`episode_ids`, `collection_id`, `series_movie_link_id`); absent
-/// or empty values are omitted so the UI's episode grouping stays unchanged.
-pub(crate) fn blocklist_entry_data(
-    episode_ids: &[String],
-    collection_id: Option<&str>,
-    series_movie_link_id: Option<&str>,
-) -> std::collections::HashMap<String, serde_json::Value> {
-    let mut data = std::collections::HashMap::new();
-    if !episode_ids.is_empty() {
-        data.insert("episode_ids".to_string(), serde_json::json!(episode_ids));
-    }
-    if let Some(collection_id) = collection_id {
-        data.insert(
-            "collection_id".to_string(),
-            serde_json::json!(collection_id),
-        );
-    }
-    if let Some(series_movie_link_id) = series_movie_link_id {
-        data.insert(
-            "series_movie_link_id".to_string(),
-            serde_json::json!(series_movie_link_id),
-        );
-    }
-    data
-}
-
 #[derive(Clone, Debug)]
 pub(crate) struct ResolvedUpgradeContext {
     pub(crate) profile: QualityProfile,

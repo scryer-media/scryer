@@ -1,5 +1,5 @@
-use super::{Long, RuntimePathStyleValue};
-use async_graphql::{ID, InputObject, SimpleObject};
+use super::{JobRunPayload, Long, RuntimePathStyleValue};
+use async_graphql::{Enum, ID, InputObject, SimpleObject};
 use chrono::{DateTime, Utc};
 
 /// Audio stream metadata for a media file.
@@ -106,6 +106,79 @@ pub struct SmgScryerUpdateNoticePayload {
     pub published_at: Option<DateTime<Utc>>,
     /// UTC time when the check completed.
     pub checked_at: DateTime<Utc>,
+}
+
+/// Installation layout identified for the in-app upgrade surface.
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+pub enum ApplicationInstallationKindValue {
+    /// A writable standalone installation.
+    Portable,
+    /// A directly installed Windows MSI package.
+    DirectMsi,
+    /// A container-managed installation.
+    Docker,
+    /// A Homebrew-managed installation.
+    Homebrew,
+    /// A winget-managed Windows installation.
+    Winget,
+    /// A Windows service or session-zero installation.
+    WindowsSupervised,
+    /// In-app upgrades disabled by the operator.
+    Disabled,
+    /// An installation layout that is not supported for in-app upgrades.
+    Unsupported,
+}
+
+/// Party responsible for managing application upgrades.
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+pub enum ApplicationUpgradeOwnerValue {
+    /// The application can manage its own upgrade.
+    InApp,
+    /// The operator or an external package manager owns upgrades.
+    Operator,
+}
+
+/// Current update availability and installation eligibility.
+#[derive(SimpleObject, Clone)]
+pub struct ApplicationUpgradeStatusPayload {
+    /// Running application version.
+    pub current_version: String,
+    /// Available application version, or null when no update notice exists.
+    pub update_version: Option<String>,
+    /// Available release tag, or null when no update notice exists.
+    pub update_tag: Option<String>,
+    /// Whether the current update notice offers a newer version.
+    pub update_available: bool,
+    /// Installation layout identified at startup.
+    pub installation_kind: ApplicationInstallationKindValue,
+    /// Party responsible for managing application upgrades.
+    pub management_owner: ApplicationUpgradeOwnerValue,
+    /// Whether this installation is eligible for an in-app upgrade.
+    pub eligible: bool,
+    /// Stable snake_case code explaining eligibility.
+    pub eligibility_reason: String,
+    /// In-memory application-upgrade job still running in this process, if any.
+    pub active_run: Option<JobRunPayload>,
+    /// Most recent persisted application-upgrade job, if any.
+    pub latest_run: Option<JobRunPayload>,
+}
+
+/// The exact update notice accepted by `startApplicationUpgrade`.
+#[derive(InputObject, Clone)]
+pub struct StartApplicationUpgradeInput {
+    /// Release tag displayed by the current update notice.
+    pub expected_tag: String,
+    /// Release version displayed by the current update notice.
+    pub expected_version: String,
+}
+
+/// Durable job run accepted for an application upgrade.
+#[derive(SimpleObject, Clone)]
+pub struct ApplicationUpgradeStartPayload {
+    /// The registered application-upgrade job.
+    pub job_run: JobRunPayload,
 }
 
 /// Query and quota counters for one indexer.

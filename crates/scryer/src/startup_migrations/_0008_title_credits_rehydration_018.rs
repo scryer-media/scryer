@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use scryer_application::{AppResult, AppUseCase, SETTINGS_SCOPE_SYSTEM};
 use scryer_infrastructure_configuration::settings::settings_store::SettingsStore;
-use tokio::task::JoinHandle;
 
 use super::versioning::{MajorMinor, parse_major_minor};
 
@@ -55,62 +54,36 @@ pub(crate) async fn rehydrate_title_credits_for_018_upgrade(
     app_use_case: &AppUseCase,
     settings_store: Arc<SettingsStore>,
     current_version: &str,
-) {
-    let app_use_case = app_use_case.clone();
+) -> Result<(), String> {
     start_title_credits_rehydration(settings_store, current_version, move || async move {
         app_use_case.hydrate_all_titles_for_current_language().await
     })
-    .await;
+    .await
 }
 
-/// Returns the spawned traversal so tests can await it; startup drops the handle
-/// and lets the rehydration run in the background.
 async fn start_title_credits_rehydration<F, Fut>(
     settings_store: Arc<SettingsStore>,
     current_version: &str,
     rehydrate: F,
-) -> Option<JoinHandle<()>>
+) -> Result<(), String>
 where
-    F: FnOnce() -> Fut + Send + 'static,
-    Fut: Future<Output = AppResult<u32>> + Send,
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = AppResult<u32>>,
 {
     let state = read_state(settings_store.clone()).await;
     if !should_attempt_title_credits_rehydration(current_version, &state) {
-        return None;
+        return Ok(());
     }
 
-    if let Err(error) = set_state(settings_store.clone(), STATE_PENDING).await {
-        tracing::warn!(
-            error = %error,
-            "failed to mark 0.18 title credits rehydration migration pending"
-        );
-        return None;
-    }
+    set_state(settings_store.clone(), STATE_PENDING).await?;
 
-    Some(tokio::spawn(async move {
-        match rehydrate().await {
-            Ok(titles_rehydrated) => {
-                if let Err(error) = set_state(settings_store, STATE_COMPLETED).await {
-                    tracing::warn!(
-                        error = %error,
-                        titles_rehydrated,
-                        "0.18 title credits rehydration completed but failed to mark migration completed"
-                    );
-                    return;
-                }
-                tracing::info!(
-                    titles_rehydrated,
-                    "0.18 title credits rehydration migration completed"
-                );
-            }
-            Err(error) => {
-                tracing::warn!(
-                    error = %error,
-                    "0.18 title credits rehydration migration failed; it will retry on next startup"
-                );
-            }
-        }
-    }))
+    let titles_rehydrated = rehydrate().await.map_err(|error| error.to_string())?;
+    set_state(settings_store, STATE_COMPLETED).await?;
+    tracing::info!(
+        titles_rehydrated,
+        "0.18 title credits rehydration migration completed"
+    );
+    Ok(())
 }
 
 #[cfg(test)]
@@ -177,26 +150,22 @@ mod tests {
         assert_eq!(read_state(store.clone()).await, STATE_NONE);
 
         static RUNS: AtomicUsize = AtomicUsize::new(0);
-        let handle = start_title_credits_rehydration(store.clone(), "0.18.16", || async {
+        start_title_credits_rehydration(store.clone(), "0.18.16", || async {
             RUNS.fetch_add(1, Ordering::SeqCst);
             Ok(7)
         })
         .await
-        .expect("migration should start on a 0.18 host with no recorded state");
-        handle.await.expect("rehydration task should not panic");
+        .expect("migration should succeed on a 0.18 host with no recorded state");
 
         assert_eq!(read_state(store.clone()).await, STATE_COMPLETED);
         assert_eq!(RUNS.load(Ordering::SeqCst), 1);
 
-        assert!(
-            start_title_credits_rehydration(store.clone(), "0.18.16", || async {
-                RUNS.fetch_add(1, Ordering::SeqCst);
-                Ok(7)
-            })
-            .await
-            .is_none(),
-            "a completed migration must not run again"
-        );
+        start_title_credits_rehydration(store.clone(), "0.18.16", || async {
+            RUNS.fetch_add(1, Ordering::SeqCst);
+            Ok(7)
+        })
+        .await
+        .expect("completed migration should be a no-op");
         assert_eq!(RUNS.load(Ordering::SeqCst), 1);
     }
 
@@ -204,19 +173,17 @@ mod tests {
     async fn failed_rehydration_leaves_the_migration_pending_for_the_next_startup() {
         let (_temp, store) = migration_settings_store().await;
 
-        let handle = start_title_credits_rehydration(store.clone(), "0.18.16", || async {
+        let result = start_title_credits_rehydration(store.clone(), "0.18.16", || async {
             Err(AppError::Repository("smg unavailable".to_string()))
         })
-        .await
-        .expect("migration should start");
-        handle.await.expect("rehydration task should not panic");
+        .await;
+        assert!(result.is_err());
 
         assert_eq!(read_state(store.clone()).await, STATE_PENDING);
 
-        let handle = start_title_credits_rehydration(store.clone(), "0.18.16", || async { Ok(3) })
+        start_title_credits_rehydration(store.clone(), "0.18.16", || async { Ok(3) })
             .await
-            .expect("a pending migration should retry on the next startup");
-        handle.await.expect("rehydration task should not panic");
+            .expect("a pending migration should retry successfully");
 
         assert_eq!(read_state(store).await, STATE_COMPLETED);
     }
@@ -225,11 +192,9 @@ mod tests {
     async fn pre_018_hosts_never_start_the_migration() {
         let (_temp, store) = migration_settings_store().await;
 
-        assert!(
-            start_title_credits_rehydration(store.clone(), "0.17.9", || async { Ok(0) })
-                .await
-                .is_none()
-        );
+        start_title_credits_rehydration(store.clone(), "0.17.9", || async { Ok(0) })
+            .await
+            .expect("inapplicable migration should be a no-op");
         assert_eq!(read_state(store).await, STATE_NONE);
     }
 }

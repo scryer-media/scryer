@@ -244,13 +244,46 @@ export function SubtitleTracksPopover({
   );
 }
 
-export function MediaInfoBadges({ file }: { file: MediaInfoFile }) {
+function resolveContainerFormat(format: string | null): string | null {
+  if (format == null) return null;
+
+  switch (format.trim().toLowerCase()) {
+    case "matroska":
+      return "MKV";
+    case "webm":
+      return "WebM";
+    case "mp4":
+      return "MP4";
+    case "avi":
+      return "AVI";
+    case "mpegts":
+      return "MPEG-TS";
+    case "asf":
+      return "ASF";
+    case "ogg":
+      return "OGG";
+    case "flv":
+      return "FLV";
+    default:
+      return format.toUpperCase();
+  }
+}
+
+export function MediaInfoBadges({
+  file,
+  includeContainer = false,
+}: {
+  file: MediaInfoFile;
+  includeContainer?: boolean;
+}) {
   const t = useTranslate();
 
   const resolution = resolveResolution(file.videoWidth, file.videoHeight);
   const videoCodec = resolveVideoCodec(file.videoCodec);
+  const containerFormat = includeContainer ? resolveContainerFormat(file.containerFormat) : null;
 
   const sourceType = file.sourceType ? resolveSourceType(file.sourceType) : null;
+  const hasContainer = containerFormat != null;
   const hasVideo = !!(resolution || videoCodec || file.videoHdrFormat);
   const hasRelease = !!(sourceType || file.edition);
   const hasAudioStreams = file.audioStreams.length > 0;
@@ -258,10 +291,11 @@ export function MediaInfoBadges({ file }: { file: MediaInfoFile }) {
   const isPendingScan = file.scanStatus === "imported";
   const isScanFailed = file.scanStatus === "scan_failed";
 
-  if (!hasVideo && !hasRelease && !hasAudioStreams && !hasSubtitles && !isPendingScan && !isScanFailed) return null;
+  if (!hasContainer && !hasVideo && !hasRelease && !hasAudioStreams && !hasSubtitles && !isPendingScan && !isScanFailed) return null;
 
   return (
     <div className="flex flex-wrap items-center gap-1">
+      {containerFormat ? <Badge tone="info">{containerFormat}</Badge> : null}
       {resolution ? <Badge tone="info">{resolution}</Badge> : null}
       {videoCodec ? <Badge tone="info">{videoCodec}</Badge> : null}
       {file.videoHdrFormat ? <Badge tone="info">{file.videoHdrFormat}</Badge> : null}

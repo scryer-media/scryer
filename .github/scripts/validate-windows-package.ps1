@@ -6,10 +6,19 @@ param(
   [string]$ZipPath,
 
   [Parameter(Mandatory = $true)]
+  [string]$TarballPath,
+
+  [Parameter(Mandatory = $true)]
   [string]$MsiPath,
 
   [Parameter(Mandatory = $true)]
   [string]$MsiMetadataPath,
+
+  [Parameter(Mandatory = $true)]
+  [string]$WingetMsiPath,
+
+  [Parameter(Mandatory = $true)]
+  [string]$WingetMsiMetadataPath,
 
   [Parameter(Mandatory = $true)]
   [string]$BuiltExePath,
@@ -308,6 +317,40 @@ function Invoke-MsiExec {
   return (Start-Process -FilePath $msiExec -ArgumentList $Arguments -PassThru -Wait).ExitCode
 }
 
+function Assert-MsiDistributionOwner {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$MsiPath,
+
+    [Parameter(Mandatory = $true)]
+    [string]$ExpectedOwner
+  )
+
+  $key = "Software\Scryer Media\Scryer"
+  $installer = New-Object -ComObject WindowsInstaller.Installer
+  $database = $installer.OpenDatabase($MsiPath, 0)
+  $query = 'SELECT `Value` FROM `Registry` WHERE `Root`=2 AND `Key`=''{0}'' AND `Name`=''DistributionOwner''' -f $key.Replace("'", "''")
+  $view = $database.OpenView($query)
+  $view.Execute()
+  try {
+    $record = $view.Fetch()
+    if (-not $record) {
+      throw "MSI did not contain HKLM\\${key}::DistributionOwner in its Registry table: $MsiPath"
+    }
+
+    # The COM record's field must be consumed while its view remains open.
+    $actualOwner = $record.StringData(1)
+    if ($null -eq $actualOwner) {
+      throw "MSI registry row HKLM\\${key}::DistributionOwner had no value: $MsiPath"
+    }
+    if ($actualOwner.ToString().Trim() -ne $ExpectedOwner) {
+      throw "MSI DistributionOwner was '$actualOwner', expected '$ExpectedOwner': $MsiPath"
+    }
+  } finally {
+    [void]$view.Close()
+  }
+}
+
 function Invoke-WinGetManifestValidation {
   param(
     [Parameter(Mandatory = $true)]
@@ -421,9 +464,11 @@ New-Item -ItemType Directory -Force -Path $validationRoot | Out-Null
 
 $zipCopy = Join-Path $validationRoot (Split-Path $ZipPath -Leaf)
 $msiCopy = Join-Path $validationRoot (Split-Path $MsiPath -Leaf)
+$wingetMsiCopy = Join-Path $validationRoot (Split-Path $WingetMsiPath -Leaf)
 $extractRoot = Join-Path $validationRoot "extracted"
 Copy-Item $ZipPath $zipCopy -Force
 Copy-Item $MsiPath $msiCopy -Force
+Copy-Item $WingetMsiPath $wingetMsiCopy -Force
 Expand-Archive -Path $zipCopy -DestinationPath $extractRoot -Force
 $packagedExe = Join-Path $extractRoot "scryer.exe"
 $packagedTray = Join-Path $extractRoot "scryer-tray.exe"
@@ -445,26 +490,79 @@ if ($builtTrayHash -ne $packagedTrayHash) {
   throw "Packaged scryer-tray.exe hash differs from built executable."
 }
 
-$msiMetadata = Get-Content $MsiMetadataPath -Raw | ConvertFrom-Json
-if ($msiMetadata.product_code -notmatch '^\{[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}\}$') {
-  throw "MSI metadata did not contain a valid ProductCode: $($msiMetadata.product_code)"
+# The tarball is the artifact the in-app upgrade engine downloads and extracts,
+# so its member names must be exactly the flat names the signed manifest records
+# and the helper swap resolves against the staged directory.
+$tarballCopy = Join-Path $validationRoot (Split-Path $TarballPath -Leaf)
+$tarballExtractRoot = Join-Path $validationRoot "extracted-tarball"
+Copy-Item $TarballPath $tarballCopy -Force
+New-Item -ItemType Directory -Force -Path $tarballExtractRoot | Out-Null
+tar --extract --gzip --file $tarballCopy --directory $tarballExtractRoot
+if ($LASTEXITCODE -ne 0) {
+  throw "Failed to extract the portable upgrade tarball."
 }
-if ($msiMetadata.version -notmatch '^\d+\.\d+\.\d+$') {
-  throw "MSI metadata did not contain a valid release version: $($msiMetadata.version)"
+$tarballMembers = Get-ChildItem -Recurse -File $tarballExtractRoot |
+  ForEach-Object { $_.FullName.Substring($tarballExtractRoot.Length + 1).Replace('\', '/') } |
+  Sort-Object
+$expectedMembers = @("LICENSE", "README.txt", "scryer-tray.exe", "scryer.exe")
+if (Compare-Object $tarballMembers $expectedMembers) {
+  throw "Portable tarball members were '$($tarballMembers -join ", ")', expected '$($expectedMembers -join ", ")'."
+}
+$tarballExe = Join-Path $tarballExtractRoot "scryer.exe"
+$tarballTray = Join-Path $tarballExtractRoot "scryer-tray.exe"
+if ($builtHash -ne (Get-FileHash $tarballExe -Algorithm SHA256).Hash) {
+  throw "Tarballed scryer.exe hash differs from built executable."
+}
+if ($builtTrayHash -ne (Get-FileHash $tarballTray -Algorithm SHA256).Hash) {
+  throw "Tarballed scryer-tray.exe hash differs from built executable."
 }
 
+$msiMetadata = Get-Content $MsiMetadataPath -Raw | ConvertFrom-Json
+$wingetMsiMetadata = Get-Content $WingetMsiMetadataPath -Raw | ConvertFrom-Json
+foreach ($metadata in @($msiMetadata, $wingetMsiMetadata)) {
+  if ($metadata.product_code -notmatch '^\{[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}\}$') {
+    throw "MSI metadata did not contain a valid ProductCode: $($metadata.product_code)"
+  }
+  if ($metadata.version -notmatch '^\d+\.\d+\.\d+$') {
+    throw "MSI metadata did not contain a valid release version: $($metadata.version)"
+  }
+}
+if ($msiMetadata.distribution_owner -ne "msi") {
+  throw "Primary MSI metadata DistributionOwner was '$($msiMetadata.distribution_owner)', expected 'msi'"
+}
+if ($wingetMsiMetadata.distribution_owner -ne "winget") {
+  throw "WinGet MSI metadata DistributionOwner was '$($wingetMsiMetadata.distribution_owner)', expected 'winget'"
+}
+if ($msiMetadata.upgrade_code -ne $wingetMsiMetadata.upgrade_code) {
+  throw "MSI variants did not share an UpgradeCode."
+}
+if ($msiMetadata.version -ne $wingetMsiMetadata.version) {
+  throw "MSI variants did not share a version."
+}
+if ($msiMetadata.architecture -ne $wingetMsiMetadata.architecture) {
+  throw "MSI variants did not share an architecture."
+}
+if ($msiMetadata.product_code -eq $wingetMsiMetadata.product_code) {
+  throw "MSI variants must have distinct ProductCodes."
+}
+Assert-MsiDistributionOwner -MsiPath $MsiPath -ExpectedOwner "msi"
+Assert-MsiDistributionOwner -MsiPath $WingetMsiPath -ExpectedOwner "winget"
+
 Invoke-DefenderScan -Path $zipCopy
+Invoke-DefenderScan -Path $tarballCopy
 Invoke-DefenderScan -Path $packagedExe
 Invoke-DefenderScan -Path $packagedTray
 Invoke-DefenderScan -Path $msiCopy
+Invoke-DefenderScan -Path $wingetMsiCopy
 
 $sourceUrl = "https://github.com/scryer-media/scryer/releases/download/scryer-local-ci/$(Split-Path $zipCopy -Leaf)"
 Invoke-AttachmentServicesSave -Path $zipCopy -Source $sourceUrl
 Invoke-AttachmentServicesSave -Path $msiCopy -Source ($sourceUrl -replace 'zip$', 'msi')
+Invoke-AttachmentServicesSave -Path $wingetMsiCopy -Source "https://github.com/scryer-media/scryer/releases/download/scryer-local-ci/$(Split-Path $wingetMsiCopy -Leaf)"
 
 Invoke-ScryerStartupSmoke -ExePath $packagedExe -Label "packaged"
 
-foreach ($unsignedArtifact in @($packagedExe, $packagedTray, $msiCopy)) {
+foreach ($unsignedArtifact in @($packagedExe, $packagedTray, $msiCopy, $wingetMsiCopy)) {
   $signature = Get-AuthenticodeSignature -FilePath $unsignedArtifact
   if ($signature.Status -ne "NotSigned") {
     throw "Expected intentionally unsigned artifact $unsignedArtifact, got Authenticode status $($signature.Status)."
@@ -528,6 +626,6 @@ if (-not (Test-Path $profileMarker)) {
 }
 
 Invoke-WinGetManifestValidation `
-  -PackageMsi $msiCopy `
-  -ProductCode $msiMetadata.product_code `
-  -PackageVersion $msiMetadata.version
+  -PackageMsi $wingetMsiCopy `
+  -ProductCode $wingetMsiMetadata.product_code `
+  -PackageVersion $wingetMsiMetadata.version

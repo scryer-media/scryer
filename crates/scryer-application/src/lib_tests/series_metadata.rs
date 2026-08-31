@@ -158,7 +158,9 @@ async fn anime_hybrid_movie_mapping_creates_series_movie_link() {
                 131_963,
                 MovieMetadata {
                     target_key: None,
-                    tvdb_id: 131_963,
+                    smg_id: None,
+                    primary_source: "tvdb".into(),
+                    tvdb_id: Some(131_963),
                     name: "Iron Rail".into(),
                     slug: "iron-rail".into(),
                     year: Some(2020),
@@ -1073,12 +1075,90 @@ async fn anime_movies_create_series_movie_links_without_collection_metadata() {
         .expect("recap movie link");
     assert_eq!(recap.movie_form.as_deref(), Some("recap"));
     assert!(recap.linked_episode_id.is_none());
+    assert!(
+        !recap.monitored,
+        "recaps require an explicit operator choice"
+    );
+    let explicitly_disabled_recap = app
+        .set_series_movie_monitored(&user, &recap.id, false)
+        .await
+        .expect("record explicit disabled choice");
+    assert_eq!(explicitly_disabled_recap.monitoring_override, Some(false));
     let ordered = links
         .iter()
         .find(|link| link.movie.title == "Iron Rail")
         .expect("ordered movie link");
     assert_eq!(ordered.continuity_status.as_deref(), Some("canon"));
     assert!(ordered.linked_episode_id.is_none());
+    assert!(
+        !ordered.monitored,
+        "derived links stay unmonitored until the title explicitly uses All or Missing"
+    );
+
+    app.update_title_metadata(
+        &user,
+        &title.id,
+        None,
+        None,
+        Some(vec!["scryer:monitor-type:allepisodes".into()]),
+    )
+    .await
+    .expect("set explicit all monitor mode");
+    let all_links = app
+        .list_series_movie_links(&user, &title.id)
+        .await
+        .expect("list policy-selected links");
+    let all_ordered = all_links
+        .iter()
+        .find(|link| link.movie.title == "Iron Rail")
+        .expect("ordered movie link");
+    let all_recap = all_links
+        .iter()
+        .find(|link| link.movie.title == "Stoneguard: Amber Bow and Quiver")
+        .expect("recap movie link");
+    assert!(all_ordered.monitored);
+    assert!(!all_recap.monitored);
+
+    app.update_title_metadata(
+        &user,
+        &title.id,
+        None,
+        None,
+        Some(vec!["scryer:monitor-type:missingandfutureepisodes".into()]),
+    )
+    .await
+    .expect("set explicit missing monitor mode");
+    let missing_links = app
+        .list_series_movie_links(&user, &title.id)
+        .await
+        .expect("list missing-policy links");
+    let missing_ordered = missing_links
+        .iter()
+        .find(|link| link.movie.title == "Iron Rail")
+        .expect("ordered movie link");
+    assert!(missing_ordered.monitored);
+
+    app.set_series_movie_monitored(&user, &missing_ordered.id, false)
+        .await
+        .expect("explicitly disable canonical movie");
+    app.update_title_metadata(
+        &user,
+        &title.id,
+        None,
+        None,
+        Some(vec!["scryer:monitor-type:allepisodes".into()]),
+    )
+    .await
+    .expect("refresh explicit all monitor mode");
+    let overridden = app
+        .list_series_movie_links(&user, &title.id)
+        .await
+        .expect("list overridden links")
+        .into_iter()
+        .find(|link| link.id == missing_ordered.id)
+        .expect("canonical movie link");
+    assert_eq!(overridden.monitoring_override, Some(false));
+    assert!(!overridden.monitored);
 }
 
 #[tokio::test]

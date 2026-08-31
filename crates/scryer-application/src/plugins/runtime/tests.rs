@@ -346,6 +346,22 @@ mod catalog_artifact_selection_tests {
     }
 
     #[test]
+    fn wasip2_artifact_is_selectable() {
+        let mut component = artifact(&[], "https://example.invalid/plugin.wasm.zst");
+        component.runtime = "wasm32-wasip2".to_string();
+        let release = release(vec![component]);
+
+        let selected = select_catalog_release_artifact(
+            &release,
+            &HashSet::new(),
+            RuntimePerformanceClass::Slow,
+        )
+        .expect("WASIp2 artifact");
+
+        assert_eq!(selected.runtime, "wasm32-wasip2");
+    }
+
+    #[test]
     fn simd128_feature_set_selects_simd128_but_not_relaxed_simd() {
         let release = release(vec![
             artifact(&[], "https://example.invalid/plugin.zst"),

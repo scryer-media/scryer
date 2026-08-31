@@ -1,7 +1,8 @@
 import * as React from "react";
 import { useClient } from "urql";
-import { Eye, Loader2, Search } from "lucide-react";
+import { Eye, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { FixTitleMatchSettingsCard } from "@/components/common/fix-title-match-settings-card";
 import { MediaRenamePlanPanel } from "@/components/common/media-rename-plan-panel";
 import { TitleOptionsSettingsGrid } from "@/components/common/title-options-settings-grid";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
@@ -132,25 +133,11 @@ export function TitleSettingsPanel({
       />
 
       {onOpenFixMatch ? (
-        <div className="mt-5 flex items-center justify-between gap-3 rounded-lg border border-border/70 bg-muted/20 px-3 py-3">
-          <div className="min-w-0">
-            <p className="text-sm font-medium text-foreground">{t("title.fixMatchHeading")}</p>
-            <p className="text-xs text-muted-foreground">
-              {t("title.fixMatchDescriptionSeries")}
-            </p>
-          </div>
-          <Button
-            id="series-overview-settings-fix-match"
-            type="button"
-            variant="primary"
-            size="sm"
-            className="shrink-0"
-            onClick={onOpenFixMatch}
-          >
-            <Search className="mr-2 h-4 w-4" />
-            {t("title.fixMatchAction")}
-          </Button>
-        </div>
+        <FixTitleMatchSettingsCard
+          facet={title.facet}
+          idPrefix="series-overview-settings"
+          onOpen={onOpenFixMatch}
+        />
       ) : null}
 
       {renameEnabled ? (

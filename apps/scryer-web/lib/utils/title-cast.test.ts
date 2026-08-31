@@ -247,6 +247,21 @@ test("the dub rail lines up column-for-column with the original", () => {
   );
 });
 
+test("one dub actor spans duplicate original-cast slots", () => {
+  const credits = [
+    credit({ kind: "voice_actor", personName: "JP Lead A", character: "Lead", language: "ja", billingOrder: 0 }),
+    credit({ kind: "voice_actor", personName: "JP Lead B", character: "Lead", language: "ja", billingOrder: 0 }),
+    credit({ kind: "voice_actor", personName: "EN Lead", character: "Lead", language: "en", billingOrder: 0 }),
+  ];
+
+  const original = titleCastOriginalCredits(credits);
+  const dub = titleCastDubCreditsAlignedTo(credits, "en", original);
+
+  assert.equal(dub.length, 1);
+  assert.equal(dub[0].personName, "EN Lead");
+  assert.equal(dub[0].slotSpan, 2);
+});
+
 test("a character with no dub actor holds its column open", () => {
   // The whole point of alignment: without a placeholder, "EN Rival" would slide
   // under the Japanese lead's portrait.

@@ -315,6 +315,14 @@ pub(crate) async fn finalize_title_scan_file(
         PlannedTitleScanRecord::New => None,
     };
 
+    let destination_path = stored_path_to_path_buf(&file.path);
+    let destination_permit = app
+        .runtime
+        .imports
+        .execution_coordinator
+        .acquire_destination(&destination_path)
+        .await;
+
     let Some(persisted_file) = persist_or_reuse_scanned_media_file(
         app,
         title,
@@ -386,8 +394,9 @@ pub(crate) async fn finalize_title_scan_file(
             );
         }
     }
+    drop(destination_permit);
 
-    let file_path = stored_path_to_path_buf(&file.path);
+    let file_path = destination_path;
     match crate::subtitles::reconcile_external_subtitles_for_media_file_with_cache(
         app,
         &title.id,
@@ -583,6 +592,12 @@ pub(super) async fn finalize_movie_scan_file(
                 || existing.scan_status != "scanned",
         });
 
+    let destination_permit = app
+        .runtime
+        .imports
+        .execution_coordinator
+        .acquire_destination(&file_path)
+        .await;
     let Some(mut persisted_file) = persist_or_reuse_scanned_media_file(
         app,
         title,
@@ -598,6 +613,7 @@ pub(super) async fn finalize_movie_scan_file(
     else {
         return;
     };
+    drop(destination_permit);
 
     match crate::subtitles::reconcile_external_subtitles_for_media_file(
         app,

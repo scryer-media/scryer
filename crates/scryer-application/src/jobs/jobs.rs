@@ -15,11 +15,12 @@ use scryer_domain::{
     JobNextRunUpdatedEventData, JobRunCompletedEventData, JobRunFailedEventData,
     JobRunStartedEventData,
 };
+use scryer_logging::{ActorContext, LogContext, ResourceContext, WorkflowContext, context_span};
 use serde_json::json;
 use std::collections::{BTreeSet, HashMap};
 use std::time::UNIX_EPOCH;
 use tokio::sync::broadcast;
-use tracing::{info, warn};
+use tracing::{Instrument, info, warn};
 
 const BACKGROUND_LIBRARY_REFRESH_INTERVAL_SECONDS: i64 = 6 * 60 * 60;
 const BACKGROUND_LIBRARY_REFRESH_STAGGER_SECONDS: i64 = 15 * 60;
@@ -43,6 +44,29 @@ pub(crate) const SCHEDULER_INSTANCE_ID_KEY: &str = "scheduler.instance_id";
 enum JobExecutionPrincipal {
     User(User),
     System,
+}
+
+fn job_log_span(run: &JobRunRecord, actor: &User) -> tracing::Span {
+    context_span(
+        LogContext::workflow(WorkflowContext {
+            kind: run.job_key.as_str().to_owned(),
+            id: run.id.clone(),
+        })
+        .with_actor(ActorContext {
+            kind: if actor.is_system_execution_actor() {
+                "system".to_owned()
+            } else {
+                "user".to_owned()
+            },
+            id: Some(actor.id.clone()),
+            display_name: Some(actor.username.clone()),
+            source: None,
+        })
+        .with_resource(ResourceContext {
+            job_id: Some(run.id.clone()),
+            ..ResourceContext::default()
+        }),
+    )
 }
 
 impl JobExecutionPrincipal {
@@ -431,6 +455,7 @@ struct HousekeepingRunSummary {
     orphaned_media_files: u32,
     stale_release_decisions: u32,
     stale_release_attempts: u32,
+    stale_indexer_errors: u32,
     stale_history_events: u32,
     stale_history_records: u32,
     staged_nzb_artifacts_pruned: u32,
@@ -562,12 +587,15 @@ impl AppUseCase {
     /// run the tracker still holds that the store just failed is a ghost, so we
     /// push it through `upsert_active_run` (which drops terminal runs from the
     /// active registry) to evict it. Returns the number of runs reconciled.
-    pub async fn reconcile_interrupted_job_runs(&self) -> AppResult<u64> {
+    pub async fn reconcile_interrupted_job_runs(
+        &self,
+        excluded_run_ids: &[String],
+    ) -> AppResult<u64> {
         let reconciled = self
             .services
             .events
             .job_runs
-            .reconcile_interrupted_job_runs()
+            .reconcile_interrupted_job_runs(excluded_run_ids)
             .await?;
         if reconciled == 0 {
             return Ok(0);
@@ -578,7 +606,7 @@ impl AppUseCase {
         );
         // Evict any tracker entry the store no longer considers active.
         for mut run in self.runtime.jobs.job_run_tracker.list_active().await {
-            if !run.status.is_terminal() {
+            if !run.status.is_terminal() && !excluded_run_ids.contains(&run.id) {
                 run.status = JobRunStatus::Failed;
                 run.completed_at = Some(Utc::now());
                 self.runtime
@@ -1005,16 +1033,20 @@ impl AppUseCase {
             ))
             .await;
 
+        let log_span = job_log_span(&run, actor);
         let app = self.clone();
         let actor = actor.clone();
-        tokio::spawn(async move {
-            if let Err(error) = app
-                .run_job_run(run, JobExecutionPrincipal::User(actor), event_actor)
-                .await
-            {
-                warn!(job_key = job_key.as_str(), error = %error, "manual job trigger failed");
+        tokio::spawn(
+            async move {
+                if let Err(error) = app
+                    .run_job_run(run, JobExecutionPrincipal::User(actor), event_actor)
+                    .await
+                {
+                    warn!(job_key = job_key.as_str(), error = %error, "manual job trigger failed");
+                }
             }
-        });
+            .instrument(log_span),
+        );
 
         Ok(run_payload)
     }
@@ -1052,11 +1084,13 @@ impl AppUseCase {
                 }),
             ))
             .await;
+        let system_actor = User::system_execution_actor();
         self.run_job_run(
-            run,
+            run.clone(),
             JobExecutionPrincipal::System,
             DomainEventActor::system(),
         )
+        .instrument(job_log_span(&run, &system_actor))
         .await
     }
 
@@ -1087,7 +1121,9 @@ impl AppUseCase {
                 }),
             ))
             .await;
-        self.run_job_run_with_auto_backup_outcome(run, None, DomainEventActor::system())
+        let system_actor = User::system_execution_actor();
+        self.run_job_run_with_auto_backup_outcome(run.clone(), None, DomainEventActor::system())
+            .instrument(job_log_span(&run, &system_actor))
             .await?
             .ok_or_else(|| {
                 AppError::Repository("auto backup job did not return an outcome".to_string())
@@ -1484,6 +1520,7 @@ impl AppUseCase {
                         orphaned_media_files: report.orphaned_media_files,
                         stale_release_decisions: report.stale_release_decisions,
                         stale_release_attempts: report.stale_release_attempts,
+                        stale_indexer_errors: report.stale_indexer_errors,
                         stale_history_events: report.stale_history_events,
                         stale_history_records: report.stale_history_records,
                         staged_nzb_artifacts_pruned: report.staged_nzb_artifacts_pruned,
@@ -1557,13 +1594,13 @@ impl AppUseCase {
                     }
                 }
             }
-            JobKey::PendingReleaseProcessing => {
-                let count = self.process_expired_pending_releases().await?;
-                Ok(JobExecutionOutcome::new(
-                    Some(format!("Processed {count} pending releases")),
-                    serde_json::to_string(&CountSummary { count }).ok(),
-                ))
-            }
+            JobKey::PendingReleaseProcessing => Ok(JobExecutionOutcome::new(
+                Some(
+                    "Pending releases are re-evaluated with fresh RSS results during RSS sync"
+                        .to_string(),
+                ),
+                serde_json::to_string(&CountSummary { count: 0 }).ok(),
+            )),
             JobKey::StagedNzbPrune => {
                 let count = self
                     .services
@@ -1605,6 +1642,10 @@ impl AppUseCase {
             )),
             JobKey::AcquisitionSearch => Err(AppError::Validation(
                 "acquisition search jobs must be started from the acquisition search mutation"
+                    .into(),
+            )),
+            JobKey::ApplicationUpgrade => Err(AppError::Validation(
+                "application upgrade jobs must be started from the application upgrade mutation"
                     .into(),
             )),
         }

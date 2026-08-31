@@ -20,6 +20,7 @@ fn emby_connection() -> MediaServerConnection {
         provider: MediaServerProvider::Emby,
         display_name: "Emby Round Trip".to_string(),
         base_url: "https://emby.example.test/reverse-proxy/emby".to_string(),
+        external_url: None,
         enabled: true,
         login_enabled: true,
         linking_enabled: true,

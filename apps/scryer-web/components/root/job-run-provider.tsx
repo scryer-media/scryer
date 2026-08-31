@@ -9,6 +9,7 @@ import {
   jobRunEventsSubscription,
 } from "@/lib/graphql/queries";
 import { useDeferredWsSubscription } from "@/lib/hooks/use-deferred-ws-subscription";
+import { normalizeApplicationUpgradeProgress } from "@/lib/utils/application-upgrade-progress";
 import {
   isTerminalJobRunStatus,
   normalizeJobRun,
@@ -20,6 +21,7 @@ const TERMINAL_TOAST_DURATION_MS = 6_000;
 const INTERACTIVE_JOB_RECONCILE_DELAYS_MS = [1_000, 5_000, 15_000] as const;
 const INTERACTIVE_JOB_RECONCILE_INTERVAL_MS = 30_000;
 const INTERACTIVE_JOB_RECONCILE_LIMIT = 25;
+const APPLICATION_UPGRADE_RUN_STORAGE_KEY = "scryer:application-upgrade-run";
 
 type JobRunToastContextValue = {
   registerInteractiveJobRun: (
@@ -39,6 +41,71 @@ function usesDedicatedLibraryScanToast(jobKey: JobKey): boolean {
     jobKey === "BACKGROUND_LIBRARY_REFRESH_SERIES" ||
     jobKey === "BACKGROUND_LIBRARY_REFRESH_ANIME"
   );
+}
+
+function readRememberedApplicationUpgradeRunId(): string | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  try {
+    const value = window.sessionStorage.getItem(APPLICATION_UPGRADE_RUN_STORAGE_KEY);
+    return value?.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+function rememberApplicationUpgradeRun(run: JobRun) {
+  if (run.jobKey !== "APPLICATION_UPGRADE" || typeof window === "undefined") {
+    return;
+  }
+  try {
+    window.sessionStorage.setItem(APPLICATION_UPGRADE_RUN_STORAGE_KEY, run.id);
+  } catch {
+    // Storage can be unavailable in a restricted browser context.
+  }
+}
+
+function forgetApplicationUpgradeRun(run: JobRun) {
+  if (run.jobKey !== "APPLICATION_UPGRADE" || typeof window === "undefined") {
+    return;
+  }
+  try {
+    window.sessionStorage.removeItem(APPLICATION_UPGRADE_RUN_STORAGE_KEY);
+  } catch {
+    // Storage can be unavailable in a restricted browser context.
+  }
+}
+
+function applicationUpgradeToastDetails(
+  run: JobRun,
+  t: ReturnType<typeof useTranslate>,
+): { title: string; description: string } | null {
+  if (run.jobKey !== "APPLICATION_UPGRADE") {
+    return null;
+  }
+
+  const progress = normalizeApplicationUpgradeProgress(run.progressJson);
+  if (run.status === "COMPLETED") {
+    return {
+      title: t("appUpgrade.title"),
+      description: progress?.targetVersion
+        ? t("appUpgrade.success", { version: progress.targetVersion })
+        : t("jobs.runSummaryCompleted"),
+    };
+  }
+
+  if (run.status === "FAILED") {
+    return {
+      title: t("appUpgrade.title"),
+      description: run.errorText ?? progress?.error ?? t("appUpgrade.failed"),
+    };
+  }
+
+  return {
+    title: t("appUpgrade.title"),
+    description: t(`appUpgrade.phase.${progress?.phase ?? "unknown"}`),
+  };
 }
 
 export function JobRunProvider({
@@ -140,6 +207,7 @@ export function JobRunProvider({
   const registerInteractiveJobRun = React.useCallback(
     (run: JobRun, onTerminal?: (run: JobRun) => void) => {
       interactiveRunIdsRef.current.add(run.id);
+      rememberApplicationUpgradeRun(run);
       upsertRun(run);
       scheduleInteractiveRunReconciliation(run);
 
@@ -198,6 +266,49 @@ export function JobRunProvider({
     };
   }, [client, enabled]);
 
+  React.useEffect(() => {
+    if (!enabled) {
+      return;
+    }
+    const runId = readRememberedApplicationUpgradeRunId();
+    if (!runId) {
+      return;
+    }
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const { data, error } = await client
+          .query<{ jobRuns?: unknown[] }>(
+            jobRunsQuery,
+            { jobKey: "APPLICATION_UPGRADE", limit: INTERACTIVE_JOB_RECONCILE_LIMIT },
+            { requestPolicy: "network-only" },
+          )
+          .toPromise();
+        if (cancelled || error) {
+          return;
+        }
+
+        const run = (Array.isArray(data?.jobRuns) ? data.jobRuns : [])
+          .map(normalizeJobRun)
+          .find((candidate): candidate is JobRun => candidate?.id === runId);
+        if (!run) {
+          return;
+        }
+
+        interactiveRunIdsRef.current.add(run.id);
+        upsertRun(run);
+        scheduleInteractiveRunReconciliation(run);
+      } catch (error) {
+        console.error("[job-runs] failed to reconcile application upgrade:", error);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [client, enabled, scheduleInteractiveRunReconciliation, upsertRun]);
+
   useDeferredWsSubscription<{ data?: { jobRunEvents?: unknown } }>({
     enabled,
     requestKey: "jobRunEvents",
@@ -219,6 +330,7 @@ export function JobRunProvider({
     for (const run of Object.values(runsById)) {
       if (isTerminalJobRunStatus(run.status)) {
         clearReconcileTimers(run.id);
+        forgetApplicationUpgradeRun(run);
         const callbacks = terminalCallbacksRef.current[run.id];
         delete terminalCallbacksRef.current[run.id];
         callbacks?.forEach((callback) => callback(run));
@@ -253,15 +365,18 @@ export function JobRunProvider({
         delete dismissTimersRef.current[run.id];
       }
 
-      const description =
+      const defaultDescription =
         run.errorText ??
         run.summaryText ??
         (isTerminalJobRunStatus(run.status)
           ? t("jobs.runSummaryCompleted")
           : t("jobs.runSummaryRunning"));
+      const upgradeToast = applicationUpgradeToastDetails(run, t);
+      const title = upgradeToast?.title ?? run.displayName;
+      const description = upgradeToast?.description ?? defaultDescription;
 
       if (run.status === "FAILED") {
-        toast.error(run.displayName, {
+        toast.error(title, {
           id: run.id,
           description,
           duration: TERMINAL_TOAST_DURATION_MS,
@@ -270,7 +385,7 @@ export function JobRunProvider({
       }
 
       if (run.status === "WARNING") {
-        toast.warning(run.displayName, {
+        toast.warning(title, {
           id: run.id,
           description,
           duration: TERMINAL_TOAST_DURATION_MS,
@@ -279,7 +394,7 @@ export function JobRunProvider({
       }
 
       if (run.status === "COMPLETED") {
-        toast.success(run.displayName, {
+        toast.success(title, {
           id: run.id,
           description,
           duration: TERMINAL_TOAST_DURATION_MS,
@@ -287,7 +402,7 @@ export function JobRunProvider({
         continue;
       }
 
-      toast.loading(run.displayName, {
+      toast.loading(title, {
         id: run.id,
         description,
         duration: Infinity,

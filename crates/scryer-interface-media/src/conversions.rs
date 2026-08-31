@@ -9,9 +9,10 @@ use scryer_application::{
     JobSection as AppJobSection, JobTriggerSource as AppJobTriggerSource,
     LibraryScanMode as AppLibraryScanMode, LibraryScanStatus as AppLibraryScanStatus,
     PendingImportReasonClass as AppPendingImportReasonClass,
-    PendingImportStatus as AppPendingImportStatus, PendingReleaseStatus as AppPendingReleaseStatus,
-    ScoringOverrides as AppScoringOverrides, ScoringPersona as AppScoringPersona,
-    SortDirection as AppSortDirection, SubmissionScope as AppSubmissionScope,
+    PendingImportStatus as AppPendingImportStatus, PendingReleaseRole as AppPendingReleaseRole,
+    PendingReleaseStatus as AppPendingReleaseStatus, ScoringOverrides as AppScoringOverrides,
+    ScoringPersona as AppScoringPersona, SortDirection as AppSortDirection,
+    SubmissionScope as AppSubmissionScope,
 };
 
 pub trait FromApplication<T> {
@@ -130,6 +131,7 @@ impl FromApplication<scryer_application::DownloadDisplayState> for DownloadDispl
             scryer_application::DownloadDisplayState::Paused => Self::Paused,
             scryer_application::DownloadDisplayState::PostProcessing => Self::PostProcessing,
             scryer_application::DownloadDisplayState::Completed => Self::Completed,
+            scryer_application::DownloadDisplayState::ImportedSeeding => Self::ImportedSeeding,
             scryer_application::DownloadDisplayState::Failed => Self::Failed,
             scryer_application::DownloadDisplayState::Warning => Self::Warning,
             scryer_application::DownloadDisplayState::Importing => Self::Importing,
@@ -163,6 +165,7 @@ impl IntoApplication<scryer_application::DownloadActivityFilter> for DownloadAct
             Self::Queued => scryer_application::DownloadActivityFilter::Queued,
             Self::Paused => scryer_application::DownloadActivityFilter::Paused,
             Self::PostProcessing => scryer_application::DownloadActivityFilter::PostProcessing,
+            Self::Seeding => scryer_application::DownloadActivityFilter::Seeding,
             Self::Warning => scryer_application::DownloadActivityFilter::Warning,
         }
     }
@@ -172,6 +175,7 @@ impl IntoApplication<scryer_application::DownloadImportFilter> for DownloadImpor
     fn into_application(self) -> scryer_application::DownloadImportFilter {
         match self {
             Self::All => scryer_application::DownloadImportFilter::All,
+            Self::Attention => scryer_application::DownloadImportFilter::Attention,
             Self::Importing => scryer_application::DownloadImportFilter::Importing,
             Self::Pending => scryer_application::DownloadImportFilter::Pending,
             Self::Blocked => scryer_application::DownloadImportFilter::Blocked,
@@ -322,6 +326,15 @@ impl IntoApplication<AppPendingReleaseStatus> for PendingReleaseStatusValue {
     }
 }
 
+impl FromApplication<AppPendingReleaseRole> for PendingReleaseRoleValue {
+    fn from_application(value: AppPendingReleaseRole) -> Self {
+        match value {
+            AppPendingReleaseRole::Primary => Self::Primary,
+            AppPendingReleaseRole::Fallback => Self::Fallback,
+        }
+    }
+}
+
 impl IntoApplication<AppJobKey> for JobKeyValue {
     fn into_application(self) -> AppJobKey {
         match self {
@@ -348,6 +361,7 @@ impl IntoApplication<AppJobKey> for JobKeyValue {
             Self::RecycleBinRestore => AppJobKey::RecycleBinRestore,
             Self::RecycleBinPurge => AppJobKey::RecycleBinPurge,
             Self::AcquisitionSearch => AppJobKey::AcquisitionSearch,
+            Self::ApplicationUpgrade => AppJobKey::ApplicationUpgrade,
         }
     }
 }
@@ -378,6 +392,7 @@ impl FromApplication<AppJobKey> for JobKeyValue {
             AppJobKey::RecycleBinRestore => Self::RecycleBinRestore,
             AppJobKey::RecycleBinPurge => Self::RecycleBinPurge,
             AppJobKey::AcquisitionSearch => Self::AcquisitionSearch,
+            AppJobKey::ApplicationUpgrade => Self::ApplicationUpgrade,
         }
     }
 }

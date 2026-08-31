@@ -87,6 +87,7 @@ impl AppUseCase {
                 draft.provider,
                 draft.display_name,
                 base_url,
+                draft.external_url,
                 draft.enabled,
                 draft.login_enabled,
                 draft.linking_enabled,
@@ -161,6 +162,17 @@ impl AppUseCase {
                 return Err(error);
             }
         };
+        if created.enabled
+            && let Err(error) = self
+                .refresh_media_server_playback_mappings_for_connection(&created)
+                .await
+        {
+            tracing::warn!(
+                connection_id = created.id.as_str(),
+                error = %error,
+                "initial media server playback catalog scan failed"
+            );
+        }
         self.emit_configuration_changed_event(
             actor,
             "media_server_connection",
@@ -323,6 +335,7 @@ impl AppUseCase {
                     .display_name
                     .unwrap_or_else(|| existing.display_name.clone()),
                 base_url,
+                patch.external_url.or_else(|| existing.external_url.clone()),
                 enabled,
                 patch.login_enabled.unwrap_or(existing.login_enabled),
                 patch.linking_enabled.unwrap_or(existing.linking_enabled),
@@ -404,6 +417,17 @@ impl AppUseCase {
                 return Err(error);
             }
         };
+        if updated.enabled
+            && let Err(error) = self
+                .refresh_media_server_playback_mappings_for_connection(&updated)
+                .await
+        {
+            tracing::warn!(
+                connection_id = updated.id.as_str(),
+                error = %error,
+                "media server playback catalog scan after connection update failed"
+            );
+        }
         self.emit_configuration_changed_event(
             actor,
             "media_server_connection",
@@ -539,6 +563,7 @@ impl AppUseCase {
         provider: MediaServerProvider,
         display_name: String,
         base_url: String,
+        external_url: Option<String>,
         enabled: bool,
         login_enabled: bool,
         linking_enabled: bool,
@@ -560,6 +585,7 @@ impl AppUseCase {
             ));
         }
         let base_url = normalize_media_server_base_url(&provider, base_url)?;
+        let external_url = normalize_media_server_external_url(external_url)?;
         let display_name = display_name.trim().to_string();
         let display_name = if display_name.is_empty() {
             default_media_server_display_name(&provider).to_string()
@@ -603,6 +629,7 @@ impl AppUseCase {
             provider: provider.clone(),
             display_name,
             base_url,
+            external_url,
             enabled,
             login_enabled,
             linking_enabled,

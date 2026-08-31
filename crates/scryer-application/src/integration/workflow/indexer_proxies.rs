@@ -239,10 +239,11 @@ fn normalize_indexer_proxy_base_url(raw: &str) -> AppResult<String> {
 }
 
 fn validate_indexer_proxy_timeout(timeout: u32) -> AppResult<u32> {
-    if !(1..=180).contains(&timeout) {
-        return Err(AppError::Validation(
-            "indexer proxy timeout must be between 1 and 180 seconds".into(),
-        ));
+    if !(1..=scryer_outbound_http::MAX_INDEXER_PROXY_TIMEOUT_SECONDS).contains(&timeout) {
+        return Err(AppError::Validation(format!(
+            "indexer proxy timeout must be between 1 and {} seconds",
+            scryer_outbound_http::MAX_INDEXER_PROXY_TIMEOUT_SECONDS
+        )));
     }
     Ok(timeout)
 }
@@ -321,11 +322,11 @@ async fn probe_solver_health(config: &scryer_domain::IndexerProxyConfig) -> AppR
     let provider_name = crate::challenge_solver::solver_provider_name(config.provider_type);
     let base_url = config.base_url.trim_end_matches('/');
     let health_url = format!("{base_url}/health");
-    let request_timeout = std::time::Duration::from_secs(u64::from(
-        config.request_timeout_seconds.saturating_add(5),
-    ));
-    let client =
-        scryer_outbound_http::indexer_proxy_health_reqwest_client(request_timeout).map_err(|_| {
+    let request_timeout = scryer_outbound_http::effective_indexer_proxy_request_timeout(
+        config.request_timeout_seconds,
+    );
+    let client = scryer_outbound_http::indexer_proxy_health_reqwest_client(request_timeout)
+        .map_err(|_| {
             AppError::Repository(
                 crate::challenge_solver::solver_error_message(
                     config.provider_type,
@@ -368,11 +369,13 @@ async fn probe_solver_health(config: &scryer_domain::IndexerProxyConfig) -> AppR
     let probe_url = crate::challenge_solver::solver_solve_endpoint(base_url);
     let probe_deadline = tokio::time::Instant::now() + request_timeout;
     let response = send_solver_probe_request(
-        client.post(&probe_url).json(&crate::challenge_solver::solver_solve_request(
-            config.provider_type,
-            "https://example.com/",
-            config.request_timeout_seconds,
-        )),
+        client
+            .post(&probe_url)
+            .json(&crate::challenge_solver::solver_solve_request(
+                config.provider_type,
+                "https://example.com/",
+                config.request_timeout_seconds,
+            )),
         config.provider_type,
         probe_deadline,
     )
@@ -420,6 +423,13 @@ mod indexer_proxy_tests {
     use super::*;
     use wiremock::matchers::{body_json, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[test]
+    fn proxy_timeout_validation_uses_indexer_ceiling() {
+        assert_eq!(validate_indexer_proxy_timeout(120).unwrap(), 120);
+        assert!(validate_indexer_proxy_timeout(0).is_err());
+        assert!(validate_indexer_proxy_timeout(121).is_err());
+    }
 
     fn test_config(
         server: &MockServer,

@@ -77,6 +77,8 @@ function link(
     confidence: null,
     signalSummary: null,
     source: null,
+    monitoringOverride: null,
+    metadataActive: true,
     monitored: true,
     createdAt: "2026-01-01T00:00:00Z",
     updatedAt: "2026-01-01T00:00:00Z",

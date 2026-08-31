@@ -198,6 +198,7 @@ pub struct ActivityEvent {
     pub actor_display_name: String,
     pub title_id: Option<String>,
     pub facet: Option<String>,
+    pub episode_ids: Vec<String>,
     pub message: String,
     pub occurred_at: DateTime<Utc>,
 }
@@ -231,6 +232,7 @@ impl ActivityEvent {
             actor_display_name,
             title_id,
             facet: None,
+            episode_ids: Vec::new(),
             message,
             occurred_at: Utc::now(),
         }

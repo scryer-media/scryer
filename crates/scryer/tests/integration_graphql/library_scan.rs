@@ -1970,18 +1970,7 @@ async fn library_movie_scan_matches_existing_title_from_movie_nfo_when_folder_mi
 async fn library_movie_scan_creates_unmonitored_title_and_collection() {
     let ctx = TestContext::new().await;
     seed_typed_settings_definitions(&ctx).await;
-
-    let fixture = load_fixture("smg/metadata_bulk_movie.json");
-    Mock::given(method("GET"))
-        .and(path("/graphql"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(fixture.clone()))
-        .mount(&ctx.smg_server)
-        .await;
-    Mock::given(method("POST"))
-        .and(path("/graphql"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(fixture))
-        .mount(&ctx.smg_server)
-        .await;
+    mount_smg_mocks(&ctx, "smg/metadata_bulk_movie.json").await;
 
     let media_root = tempfile::tempdir().expect("media root tempdir");
     let movie_dir = media_root.path().join("Test Movie Title (2024)");

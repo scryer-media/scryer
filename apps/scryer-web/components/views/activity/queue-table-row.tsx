@@ -35,6 +35,7 @@ import {
   type QueueRowPresentation,
   type TranslateFn,
 } from "@/lib/utils/activity-utils";
+import { sameDownloadQueueItem } from "@/lib/utils/download-queue";
 import { selectorId } from "@/lib/utils/dom-ids";
 
 export type QueueTableRowProps = {
@@ -100,6 +101,32 @@ function QueueIconAction({
         {children}
       </Button>
     </ActionTooltip>
+  );
+}
+
+function queueTableRowPropsEqual(
+  previous: Readonly<QueueTableRowProps>,
+  next: Readonly<QueueTableRowProps>,
+): boolean {
+  // `row` is derived solely from the item and translator, and the action
+  // closures close over that same immutable item. Ignore their recreated
+  // identities so virtual-scroll updates do not rerender retained rows.
+  return (
+    sameDownloadQueueItem(previous.queueItem, next.queueItem) &&
+    previous.activeTab === next.activeTab &&
+    previous.rowId === next.rowId &&
+    previous.rowSelectorKey === next.rowSelectorKey &&
+    previous.detailId === next.detailId &&
+    previous.isActionLoading === next.isActionLoading &&
+    previous.isRowBlocked === next.isRowBlocked &&
+    previous.isRowFullyBusy === next.isRowFullyBusy &&
+    previous.isManualImportPending === next.isManualImportPending &&
+    previous.isExpanded === next.isExpanded &&
+    previous.isImportSelected === next.isImportSelected &&
+    previous.rowActionVisualClass === next.rowActionVisualClass &&
+    previous.virtualIndex === next.virtualIndex &&
+    previous.measureElement === next.measureElement &&
+    previous.t === next.t
   );
 }
 
@@ -386,4 +413,4 @@ export const QueueTableRow = memo(function QueueTableRow({
       ) : null}
     </Fragment>
   );
-});
+}, queueTableRowPropsEqual);

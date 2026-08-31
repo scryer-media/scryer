@@ -17,11 +17,11 @@
 //! where the bar is re-derived, both silently vanished and the two sides
 //! disagreed.
 //!
-//! Sonarr draws the same line: `DownloadDecisionComparer` chains protocol →
-//! quality → custom-format score → indexer priority → age → episode
-//! count as *comparator steps*, while `UpgradableSpecification` compares only
-//! quality and custom-format score. Nothing about the listing ever reaches the
-//! upgrade decision.
+//! Sonarr draws the same line: `DownloadDecisionComparer` chains quality →
+//! custom-format score → protocol → episode coverage/number → indexer priority
+//! → swarm/age → size as *comparator steps*, while `UpgradableSpecification`
+//! compares only quality and custom-format score. Nothing about the listing
+//! ever reaches the upgrade decision.
 //!
 //! Ranks are therefore built per search, keyed by release, and dropped when the
 //! search ends. Nothing here is ever persisted.
@@ -124,20 +124,9 @@ pub(crate) struct SearchRank {
     /// Release worth: allowed, tier, revision, score. Shared with
     /// `compare_release_search_results`.
     pub head: RankHead,
-    /// Indexer priority, lower value = higher priority (Sonarr's convention).
-    pub indexer_priority: i64,
-    /// Torrent seeders, negated so more is better (Sonarr compares them
-    /// directly after indexer priority).
-    ///
-    /// `0` for usenet and for a torrent whose indexer did not report a count:
-    /// "no information" is not the same as "no peers", and sorting an unknown
-    /// count below a torrent with one seeder would quietly bury every release
-    /// from an indexer that omits the field. It ties with them instead and the
-    /// next step decides.
-    pub negated_seeders: i64,
-    /// Age in whole hours, when the listing reported a publish date. Fresher
-    /// first — the *only* thing release age is allowed to do.
-    pub age_hours: i64,
+    /// Whether this release uses a non-preferred protocol. Preferred protocol
+    /// is compared after release worth and before listing-specific tie-breakers.
+    pub non_preferred_protocol: bool,
     /// How many episodes this release covers, oriented by what was asked for:
     /// a single-episode search prefers the single, a season search prefers the
     /// pack. This replaces the old `single_episode_preference_penalty`, which
@@ -145,17 +134,45 @@ pub(crate) struct SearchRank {
     pub coverage_distance: usize,
     /// Earliest episode number, so a deterministic order survives ties.
     pub episode_number: u32,
+    /// Indexer priority, lower value = higher priority (Sonarr's convention).
+    pub indexer_priority: i64,
+    /// Torrent seeders, negated so more is better.
+    ///
+    /// `0` for usenet and for a torrent whose indexer did not report a count:
+    /// "no information" is not the same as "no peers", and sorting an unknown
+    /// count below a torrent with one seeder would quietly bury every release
+    /// from an indexer that omits the field. It ties with them instead and the
+    /// next step decides.
+    pub negated_seeders: i64,
+    /// Usenet age in whole hours. Fresher releases sort first; non-Usenet
+    /// releases tie because swarm is their protocol-specific listing signal.
+    pub usenet_age_hours: i64,
+    /// Size, negated so the larger release wins when every stronger signal ties.
+    pub negated_size_bytes: i64,
 }
 
+type SearchRankKey = (
+    (bool, usize, i32, i32),
+    bool,
+    usize,
+    u32,
+    i64,
+    i64,
+    i64,
+    i64,
+);
+
 impl SearchRank {
-    fn key(&self) -> ((bool, usize, i32, i32), i64, i64, i64, usize, u32) {
+    fn key(&self) -> SearchRankKey {
         (
             self.head.key(),
-            self.indexer_priority,
-            self.negated_seeders,
-            self.age_hours,
+            self.non_preferred_protocol,
             self.coverage_distance,
             self.episode_number,
+            self.indexer_priority,
+            self.negated_seeders,
+            self.usenet_age_hours,
+            self.negated_size_bytes,
         )
     }
 }
@@ -199,4 +216,112 @@ pub(crate) fn compare_ranked_results(
     let left_rank = rank_by_key.get(&key_of(left)).unwrap_or(&fallback);
     let right_rank = rank_by_key.get(&key_of(right)).unwrap_or(&fallback);
     left_rank.key().cmp(&right_rank.key())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{RankHead, SearchRank};
+
+    fn rank() -> SearchRank {
+        SearchRank {
+            head: RankHead::default(),
+            non_preferred_protocol: false,
+            coverage_distance: 0,
+            episode_number: 0,
+            indexer_priority: 0,
+            negated_seeders: 0,
+            usenet_age_hours: 0,
+            negated_size_bytes: 0,
+        }
+    }
+
+    #[test]
+    fn automatic_rank_uses_sonarr_protocol_and_provider_order() {
+        let preferred = SearchRank {
+            coverage_distance: 1,
+            indexer_priority: 100,
+            non_preferred_protocol: false,
+            ..rank()
+        };
+        let non_preferred = SearchRank {
+            coverage_distance: 0,
+            indexer_priority: 0,
+            non_preferred_protocol: true,
+            ..rank()
+        };
+        assert!(preferred.key() < non_preferred.key());
+
+        let better_coverage = SearchRank {
+            coverage_distance: 0,
+            indexer_priority: 100,
+            ..rank()
+        };
+        let better_indexer = SearchRank {
+            coverage_distance: 1,
+            indexer_priority: 0,
+            ..rank()
+        };
+        assert!(better_coverage.key() < better_indexer.key());
+
+        let better_episode = SearchRank {
+            episode_number: 1,
+            indexer_priority: 100,
+            ..rank()
+        };
+        let better_indexer = SearchRank {
+            episode_number: 2,
+            indexer_priority: 0,
+            ..rank()
+        };
+        assert!(better_episode.key() < better_indexer.key());
+    }
+
+    #[test]
+    fn automatic_rank_uses_swarm_age_and_size_as_final_tiebreakers() {
+        let better_indexer = SearchRank {
+            indexer_priority: 0,
+            negated_seeders: -100,
+            ..rank()
+        };
+        let better_swarm = SearchRank {
+            indexer_priority: 1,
+            negated_seeders: -200,
+            ..rank()
+        };
+        assert!(better_indexer.key() < better_swarm.key());
+
+        let better_swarm = SearchRank {
+            negated_seeders: -200,
+            usenet_age_hours: 100,
+            ..rank()
+        };
+        let fresher = SearchRank {
+            negated_seeders: -100,
+            usenet_age_hours: 1,
+            ..rank()
+        };
+        assert!(better_swarm.key() < fresher.key());
+
+        let fresher = SearchRank {
+            usenet_age_hours: 1,
+            negated_size_bytes: -1,
+            ..rank()
+        };
+        let larger = SearchRank {
+            usenet_age_hours: 2,
+            negated_size_bytes: -1_000,
+            ..rank()
+        };
+        assert!(fresher.key() < larger.key());
+
+        let larger = SearchRank {
+            negated_size_bytes: -1_000,
+            ..rank()
+        };
+        let smaller = SearchRank {
+            negated_size_bytes: -1,
+            ..rank()
+        };
+        assert!(larger.key() < smaller.key());
+    }
 }

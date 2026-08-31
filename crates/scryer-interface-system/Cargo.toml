@@ -1,6 +1,6 @@
 [package]
 name = "scryer-interface-system"
-version = "0.18.21"
+version = "0.19.3"
 edition.workspace = true
 
 [dependencies]

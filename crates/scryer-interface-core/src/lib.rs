@@ -5,9 +5,9 @@ use std::time::Instant;
 use async_graphql::{Context, Error, ErrorExtensions, Result as GqlResult, value};
 use scryer_application::{
     AppError, AppUseCase, BackupRestorePreparedBundle, JwtSessionScope, LoginFailureTimingClass,
-    OAuthAuthorizationSource,
+    OAuthAuthorizationSource, application_upgrade::InstallationAssessment,
 };
-use scryer_domain::{ActorCapabilityMask, AppPermission, Id, LibraryPermission, User};
+use scryer_domain::{AppPermission, Id, LibraryPermission, User};
 use tokio::sync::{broadcast, watch};
 
 pub mod loaders;
@@ -154,6 +154,7 @@ pub struct ApiContext {
     pub app: AppUseCase,
     pub auth_runtime: AuthRuntimeStateHandle,
     pub restore: Option<RestoreContext>,
+    pub application_upgrade_assessment: InstallationAssessment,
 }
 
 /// Per-HTTP-request session persistence policy. This is intentionally absent
@@ -282,6 +283,11 @@ pub fn app_from_ctx(ctx: &Context<'_>) -> GqlResult<AppUseCase> {
     Ok(ctx.data_unchecked::<ApiContext>().app.clone())
 }
 
+pub fn application_upgrade_assessment_from_ctx(ctx: &Context<'_>) -> InstallationAssessment {
+    ctx.data_unchecked::<ApiContext>()
+        .application_upgrade_assessment
+}
+
 pub fn auth_runtime_from_ctx(ctx: &Context<'_>) -> AuthRuntimeStateHandle {
     ctx.data_unchecked::<ApiContext>().auth_runtime.clone()
 }
@@ -342,6 +348,9 @@ pub fn to_gql_error(err: AppError) -> Error {
                 extensions.set("sourcePath", source_path);
             }
         }),
+        AppError::ArchiveExtractionTimedOut { message } => {
+            coded_gql_error(message, "ARCHIVE_EXTRACTION_TIMED_OUT")
+        }
         AppError::TemporaryUnavailable {
             message,
             retry_after,
@@ -359,6 +368,9 @@ pub fn to_gql_error(err: AppError) -> Error {
             coded_gql_error(format!("not found: {message}"), "NOT_FOUND")
         }
         AppError::DownloadSubmitAmbiguous(message) => {
+            coded_gql_error(message, "DOWNLOAD_SUBMIT_AMBIGUOUS")
+        }
+        AppError::DownloadSubmitAmbiguousWithClient { message, .. } => {
             coded_gql_error(message, "DOWNLOAD_SUBMIT_AMBIGUOUS")
         }
         AppError::DownloadSubmitRejected(message) => {
@@ -379,6 +391,13 @@ pub fn to_gql_error(err: AppError) -> Error {
             coded_gql_error(message, "TOTP_RECOVERY_CODE_USED")
         }
         AppError::Canceled(message) => coded_gql_error(message, "CANCELED"),
+        AppError::ManualReconciliationRequired(message) => {
+            coded_gql_error(message, "MANUAL_RECONCILIATION_REQUIRED")
+        }
+        AppError::ImportEvidenceUnavailable(message) => repository_gql_error(message),
+        error @ AppError::ImportSourceInspection { .. }
+        | error @ AppError::UnsupportedImportSource { .. }
+        | error @ AppError::ImportSourceChanged { .. } => repository_gql_error(error.to_string()),
         AppError::Repository(message) => repository_gql_error(message),
     }
 }
@@ -424,11 +443,13 @@ fn app_error_kind(err: &AppError) -> &'static str {
         AppError::NotFound(_) => "NotFound",
         AppError::DownloadFeedbackTimeout(_) => "DownloadFeedbackTimeout",
         AppError::DownloadSubmitAmbiguous(_) => "DownloadSubmitAmbiguous",
+        AppError::DownloadSubmitAmbiguousWithClient { .. } => "DownloadSubmitAmbiguous",
         AppError::DownloadSubmitRejected(_) => "DownloadSubmitRejected",
         AppError::DownloadSubmitUnavailable(_) => "DownloadSubmitUnavailable",
         AppError::DownloadSourceGone(_) => "DownloadSourceGone",
         AppError::DownloadSubmitFailoverExhausted(_) => "DownloadSubmitFailoverExhausted",
         AppError::ArchiveExtractionPluginRequired { .. } => "ArchiveExtractionPluginRequired",
+        AppError::ArchiveExtractionTimedOut { .. } => "ArchiveExtractionTimedOut",
         AppError::TemporaryUnavailable { .. } => "TemporaryUnavailable",
         AppError::MfaStepUpRequired(_) => "MfaStepUpRequired",
         AppError::TotpEnrollmentRequired(_) => "TotpEnrollmentRequired",
@@ -437,6 +458,11 @@ fn app_error_kind(err: &AppError) -> &'static str {
         AppError::TotpInvalidCode(_) => "TotpInvalidCode",
         AppError::TotpRecoveryCodeUsed(_) => "TotpRecoveryCodeUsed",
         AppError::Canceled(_) => "Canceled",
+        AppError::ManualReconciliationRequired(_) => "ManualReconciliationRequired",
+        AppError::ImportEvidenceUnavailable(_) => "ImportEvidenceUnavailable",
+        AppError::ImportSourceInspection { .. } => "ImportSourceInspection",
+        AppError::UnsupportedImportSource { .. } => "UnsupportedImportSource",
+        AppError::ImportSourceChanged { .. } => "ImportSourceChanged",
         AppError::Repository(_) => "Repository",
     }
 }
@@ -514,6 +540,33 @@ pub struct OAuthActorSession {
     pub grant_id: String,
 }
 
+/// Marker added only for browser or native interactive sessions.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct InteractiveSession;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ApiKeyManagementSession;
+
+/// Returns the actor only when the request may manage its own API keys.
+pub fn api_key_management_actor_from_ctx(ctx: &Context<'_>) -> GqlResult<User> {
+    if ctx.data_opt::<ApiKeyManagementSession>().is_none() {
+        return Err(to_gql_error(AppError::Unauthorized(
+            "an interactive session is required for this operation".into(),
+        )));
+    }
+    actor_from_ctx(ctx)
+}
+
+/// Returns the actor only when the request was authenticated by an interactive session.
+pub fn interactive_session_actor_from_ctx(ctx: &Context<'_>) -> GqlResult<User> {
+    if ctx.data_opt::<InteractiveSession>().is_none() {
+        return Err(to_gql_error(AppError::Unauthorized(
+            "an interactive session is required for this operation".into(),
+        )));
+    }
+    actor_from_ctx(ctx)
+}
+
 pub fn oauth_actor_session_from_ctx(ctx: &Context<'_>) -> Option<OAuthActorSession> {
     ctx.data_opt::<OAuthActorSession>().cloned()
 }
@@ -569,16 +622,10 @@ pub async fn require_config_app_permission(
     {
         return Ok(actor);
     }
-    if actor
-        .authorization
-        .actor_capabilities
-        .contains(ActorCapabilityMask::MANAGE_OWN_ACCOUNT)
-    {
-        let mfa = mfa_verification_from_ctx(ctx);
-        app.require_mfa_step_up(&actor, mfa.step_up_verified_until)
-            .await
-            .map_err(to_gql_error)?;
-    }
+    let mfa = mfa_verification_from_ctx(ctx);
+    app.require_mfa_step_up(&actor, mfa.step_up_verified_until)
+        .await
+        .map_err(to_gql_error)?;
     Ok(actor)
 }
 

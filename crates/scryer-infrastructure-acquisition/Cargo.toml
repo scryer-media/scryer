@@ -1,6 +1,6 @@
 [package]
 name = "scryer-infrastructure-acquisition"
-version = "0.18.21"
+version = "0.19.3"
 edition.workspace = true
 publish = false
 build = "build.rs"
@@ -24,7 +24,6 @@ quick-xml = { workspace = true }
 reqwest = { version = "0.13", default-features = false, features = ["json", "multipart", "query", "rustls-no-provider", "http2", "gzip", "brotli", "zstd", "deflate", "stream"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
-sha2 = "0.11"
 sqlx = { workspace = true }
 tokio = { workspace = true }
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }

@@ -104,6 +104,75 @@ async fn revoke_authless_refresh_grants_revokes_only_authless_grants_and_tokens(
     let _ = std::fs::remove_file(db);
 }
 
+#[tokio::test]
+async fn custom_client_grant_creation_requires_an_enabled_registration() {
+    let (services, db) = temp_services("scryer_oauth_disabled_client_grant").await;
+    let oauth = oauth_store(&services);
+    let user = UserRepository::list_all(&user_store(&services))
+        .await
+        .expect("users should load")
+        .into_iter()
+        .next()
+        .expect("default user should exist");
+    let now = Utc::now();
+    let client_id = "oauth-client-disabled";
+
+    oauth
+        .create_client_registration(scryer_application::OAuthClientRegistrationRecord {
+            client_id: client_id.to_string(),
+            display_name: "Disabled client".to_string(),
+            redirect_uris: vec!["https://example.test/oauth/callback".to_string()],
+            enabled: false,
+            created_at: now,
+            updated_at: now,
+        })
+        .await
+        .expect("disabled client registration should insert");
+
+    let grant = scryer_application::OAuthRefreshGrantRecord {
+        id: "grant-disabled-client".to_string(),
+        family_id: "family-disabled-client".to_string(),
+        user_id: user.id,
+        authorization_source: scryer_application::OAuthAuthorizationSource::Authenticated,
+        client_id: client_id.to_string(),
+        scope: "library".to_string(),
+        auth_session_version: "1".to_string(),
+        created_at: now,
+        updated_at: now,
+        last_used_at: None,
+        revoked_at: None,
+        revoked_reason: None,
+    };
+    let token = scryer_application::OAuthRefreshTokenRecord {
+        id: "token-disabled-client".to_string(),
+        grant_id: grant.id.clone(),
+        family_id: grant.family_id.clone(),
+        token_hash: "hash-disabled-client".to_string(),
+        created_at: now,
+        consumed_at: None,
+        revoked_at: None,
+    };
+
+    let error = oauth
+        .create_refresh_grant(grant, token, true)
+        .await
+        .expect_err("disabled client must not receive a grant");
+    assert!(matches!(
+        error,
+        scryer_application::AppError::Unauthorized(_)
+    ));
+
+    let grant_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM oauth_refresh_grants WHERE id = 'grant-disabled-client'",
+    )
+    .fetch_one(services.pool())
+    .await
+    .expect("grant count should load");
+    assert_eq!(grant_count, 0);
+
+    let _ = std::fs::remove_file(db);
+}
+
 async fn create_grant_with_token(
     oauth: &OAuthStore,
     user_id: &str,
@@ -141,7 +210,7 @@ async fn create_grant_with_token(
     };
 
     oauth
-        .create_refresh_grant(grant, token)
+        .create_refresh_grant(grant, token, false)
         .await
         .expect("grant should insert");
 }

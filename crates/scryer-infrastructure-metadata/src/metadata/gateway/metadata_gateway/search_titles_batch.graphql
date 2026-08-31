@@ -1,0 +1,23 @@
+query SearchTitlesBatch($requests: [TvdbSearchBatchRequestInput!]!, $kind: String!, $language: String!, $createMissing: Boolean!) {
+  searchTitlesBatch(requests: $requests, kind: $kind, language: $language, createMissing: $createMissing) {
+    query
+    type
+    year
+    limit
+    total_results
+    results {
+      title_id
+      kind
+      primary_source
+      tvdb_id
+      tmdb_id
+      imdb_id
+      name
+      year
+      external_ids { source kind id key }
+      auto_match_safe
+      auto_match_signals
+      created
+    }
+  }
+}

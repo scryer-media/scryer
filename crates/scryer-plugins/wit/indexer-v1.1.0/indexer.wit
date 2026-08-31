@@ -1,0 +1,71 @@
+package scryer:indexer@1.1.0;
+
+interface host {
+  record header {
+    name: string,
+    value: string,
+  }
+
+  record http-request {
+    method: string,
+    url: string,
+    headers: list<header>,
+    body: list<u8>,
+  }
+
+  record http-response {
+    status: u16,
+    headers: list<header>,
+    body: list<u8>,
+  }
+
+  enum transport-error {
+    invalid-request,
+    forbidden-origin,
+    timeout,
+    cancelled,
+    response-too-large,
+    capacity,
+    transport,
+  }
+
+  enum log-level {
+    trace,
+    debug,
+    info,
+    warn,
+    error,
+  }
+
+  enum strategy-event-error {
+    no-active-plan,
+    closed,
+  }
+
+  http: async func(request: http-request) -> result<http-response, transport-error>;
+  sleep: async func(duration-ms: u64);
+  emit-strategy-event: async func(event: list<u8>) -> result<_, strategy-event-error>;
+  monotonic-now-ms: func() -> u64;
+  operation-deadline-monotonic-ms: func() -> u64;
+  wall-now-ms: func() -> u64;
+  config-get: func(key: string) -> option<string>;
+  provider-profile: func() -> option<list<u8>>;
+  state-get: func(key: string) -> option<list<u8>>;
+  state-cas: func(key: string, expected: option<list<u8>>, replacement: option<list<u8>>) -> bool;
+  log: func(level: log-level, message: string);
+}
+
+world indexer-plugin {
+  import host;
+
+  enum invocation-error {
+    failed,
+    cancelled,
+    invalid-response,
+  }
+
+  export describe: func() -> list<u8>;
+  export search: async func(request: list<u8>) -> result<list<u8>, invocation-error>;
+  export search-plan: async func(request: list<u8>) -> result<list<u8>, invocation-error>;
+  export action: async func(request: list<u8>) -> result<list<u8>, invocation-error>;
+}

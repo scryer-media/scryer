@@ -1,0 +1,31 @@
+{
+  "data": {
+    "searchTitlesBatch": [
+      {
+        "query": "Test Movie",
+        "type": "movie",
+        "year": 2024,
+        "limit": 10,
+        "total_results": 1,
+        "results": [
+          {
+            "title_id": 101,
+            "kind": "movie",
+            "primary_source": "tvdb",
+            "tvdb_id": 123456,
+            "tmdb_id": 111,
+            "imdb_id": "tt1234567",
+            "name": "Test Movie Title",
+            "year": 2024,
+            "external_ids": [
+              { "source": "smg", "kind": "movie", "id": "101", "key": "smg:title:101" }
+            ],
+            "auto_match_safe": true,
+            "auto_match_signals": ["exact-title"],
+            "created": false
+          }
+        ]
+      }
+    ]
+  }
+}

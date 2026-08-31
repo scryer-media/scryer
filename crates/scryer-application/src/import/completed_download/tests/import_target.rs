@@ -59,6 +59,7 @@ fn submission_row(
     source_title: Option<&str>,
 ) -> DownloadSubmission {
     DownloadSubmission {
+        download_id: scryer_domain::download_identity::DownloadId::new(),
         title_id: title_id.to_string(),
         purpose: crate::DownloadSubmissionPurpose::Standard,
         facet: "movie".to_string(),
@@ -70,6 +71,7 @@ fn submission_row(
         source_provider_name: None,
         source_kind: None,
         source_title: source_title.map(str::to_string),
+        info_hash: None,
         release_size_bytes: None,
         request_signature: None,
         scope,
@@ -101,8 +103,8 @@ fn import_pending_observation(title_id: &str, match_type: TitleMatchType) -> Tra
     td
 }
 
-fn source_identity() -> DownloadSourceIdentity {
-    DownloadSourceIdentity::new(Some("client-1"), "nzbget", "dl-1")
+fn source_identity() -> ClientJobLocator {
+    ClientJobLocator::new(Some("client-1"), "nzbget", "dl-1")
 }
 
 fn completed_request_payload(
@@ -212,6 +214,90 @@ async fn title_parse_observation_imports_into_the_checked_title() {
 
     let result = assert_lands_in(&import_repo, "title-a").await;
     assert_eq!(result.source_title.as_deref(), Some(OBFUSCATED_RELEASE));
+}
+
+#[tokio::test]
+async fn migrated_unverified_import_record_does_not_suppress_blocked_import_retry() {
+    let (_dir, completed) = completed_without_video(Some(PAPER_LANTERN_RELEASE));
+    let import_repo = Arc::new(TestImportRepo::with_records(vec![test_import_record(
+        "status-only-import",
+        &source_identity(),
+        ImportStatus::Completed,
+        completed_request_payload(
+            &completed,
+            observation_evidence_json(PAPER_LANTERN_RELEASE),
+            Some("title-a"),
+        ),
+    )]));
+    let submissions = Arc::new(TestDownloadSubmissionRepo::default());
+    let app = app_for_import(submissions.clone(), import_repo.clone());
+    let lookup =
+        index_completed_downloads(vec![completed], CompletedDownloadLookupCoverage::Recent);
+    // Restart reconstruction restores this durable state, but not the
+    // in-memory `import_attempted` flag. The migrated durable reason must
+    // reopen the pre-import block before the submission guard runs.
+    let mut td = import_pending_observation("title-a", TitleMatchType::Submission);
+    td.client_item.is_scryer_origin = true;
+    td.state = TrackedDownloadState::ImportBlocked;
+    td.status = TrackedDownloadStatus::Warning;
+    td.status_messages = vec!["Awaiting import verification.".to_string()];
+    submissions
+        .canonical_identity_tracked_state_reasons
+        .lock()
+        .await
+        .push((
+            td.download_id.to_string(),
+            crate::tracked_downloads::ImportBlockedReason::UnverifiedAlreadyImported
+                .as_str()
+                .to_string(),
+        ));
+
+    check_with_lookup(&app, &mut td, Some(&lookup)).await;
+    assert_eq!(td.state, TrackedDownloadState::ImportPending);
+    import_with_lookup(&app, &import_actor(), &mut td, &lookup).await;
+
+    let result = assert_lands_in(&import_repo, "title-a").await;
+    assert_eq!(result.skip_reason, Some(ImportSkipReason::NoVideoFiles));
+    assert_eq!(td.state, TrackedDownloadState::ImportPending);
+    assert!(
+        td.status_messages
+            .iter()
+            .all(|message| message != "Awaiting import verification.")
+    );
+}
+
+#[tokio::test]
+async fn attempted_import_does_not_reopen_when_durable_reason_is_stale() {
+    let (_dir, completed) = completed_without_video(Some(PAPER_LANTERN_RELEASE));
+    let import_repo = Arc::new(TestImportRepo::default());
+    let submissions = Arc::new(TestDownloadSubmissionRepo::default());
+    let app = app_for_import(submissions.clone(), import_repo);
+    let lookup =
+        index_completed_downloads(vec![completed], CompletedDownloadLookupCoverage::Recent);
+    let mut td = import_pending_observation("title-a", TitleMatchType::Submission);
+    td.state = TrackedDownloadState::ImportBlocked;
+    td.import_attempted = true;
+    td.status = TrackedDownloadStatus::Error;
+    td.status_messages = vec!["Import failed after admission.".to_string()];
+    submissions
+        .canonical_identity_tracked_state_reasons
+        .lock()
+        .await
+        .push((
+            td.download_id.to_string(),
+            crate::tracked_downloads::ImportBlockedReason::UnverifiedAlreadyImported
+                .as_str()
+                .to_string(),
+        ));
+
+    check_with_lookup(&app, &mut td, Some(&lookup)).await;
+
+    assert_eq!(td.state, TrackedDownloadState::ImportBlocked);
+    assert!(td.import_attempted);
+    assert_eq!(
+        crate::tracked_downloads::import_blocked_reason_for_tracked(&app, &td).await,
+        Some(crate::tracked_downloads::ImportBlockedReason::AfterImport)
+    );
 }
 
 #[tokio::test]

@@ -7,6 +7,7 @@ export const QUALITY_TIER_CHOICES = [
   { value: "1080P", label: "1080P" },
   { value: "1080I", label: "1080i" },
   { value: "720P", label: "720P" },
+  { value: "576P", label: "576P" },
   { value: "480P", label: "480P" },
   { value: "360P", label: "360P" },
 ] as const;

@@ -804,7 +804,7 @@ export function MobileSearchOverlay({
       return (
         <SearchMetadataPosterButton
           id={globalSearchMetadataResultId(facet, result)}
-          key={`${facet}-${result.tvdbId}-${result.name}`}
+          key={`${facet}-${result.smgId ?? result.tvdbId ?? result.name}`}
           onClick={handleMetadataAction}
           onKeyDown={handleMobileSearchResultKeyDown}
           disabled={disabled}
@@ -815,6 +815,7 @@ export function MobileSearchOverlay({
           name={result.name}
           posterUrl={posterUrl}
           resultAttribute="data-mobile-global-search-result"
+          smgId={result.smgId}
           tvdbId={result.tvdbId}
           year={result.year}
           yearLabel={result.year ? result.year : t("label.yearUnknown")}

@@ -75,6 +75,10 @@ import {
   TvdbSeriesExternalLink,
 } from "@/components/common/external-media-links";
 import { titleGenreLabels } from "@/lib/utils/title-genres";
+import {
+  collectActiveDownloadEpisodeIds,
+  coveredEpisodeIdsForQueueItem,
+} from "@/lib/utils/episode-download-activity";
 
 const EPISODE_QUEUE_PRECEDENCE: Record<string, number> = {
   downloading: 0,
@@ -106,41 +110,9 @@ function compareEpisodeQueueItems(
   return right.progressPercent - left.progressPercent;
 }
 
-function coveredEpisodeIdsForQueueItem(
-  item: DownloadQueueItem,
-  episodesByCollection: Record<string, CollectionEpisode[]>,
-): string[] {
-  const episodeIds = new Set<string>();
-  if (item.episodeId) {
-    episodeIds.add(item.episodeId);
-  }
-
-  const scope = item.queueScope;
-  if (!scope) {
-    return Array.from(episodeIds);
-  }
-
-  if (scope.__typename === "EpisodeScopePayload" && scope.episodeId) {
-    episodeIds.add(scope.episodeId);
-  }
-
-  if (scope.__typename === "EpisodeSetScopePayload") {
-    for (const episodeId of scope.episodeIds) {
-      episodeIds.add(episodeId);
-    }
-  }
-
-  if (scope.__typename === "CollectionScopePayload" && scope.collectionId) {
-    for (const episode of episodesByCollection[scope.collectionId] ?? []) {
-      episodeIds.add(episode.id);
-    }
-  }
-
-  return Array.from(episodeIds);
-}
-
 type Props = {
   canManageTitle: boolean;
+  fullBleedHero?: boolean;
   loading: boolean;
   hydrating: boolean;
   title: TitleDetail | null;
@@ -196,8 +168,9 @@ type Props = {
   moreLikeThisActions?: TitleMoreLikeThisStripActions;
 };
 
-export function SeriesOverviewView({
+function SeriesOverviewViewImpl({
   canManageTitle,
+  fullBleedHero = false,
   loading,
   hydrating,
   title,
@@ -318,7 +291,7 @@ export function SeriesOverviewView({
   const searchPrerequisiteNotice = canManageTitle && !hasDownloadClients && showSearchPrerequisiteNotice
     ? <TitleSearchDownloadClientNotice />
     : null;
-  const { primaryQueueItemByEpisodeId } = React.useMemo(() => {
+  const { activeDownloadEpisodeIds, primaryQueueItemByEpisodeId } = React.useMemo(() => {
     const queueItemsByEpisodeId: Record<string, DownloadQueueItem[]> = {};
 
     for (const item of downloadQueueItems) {
@@ -335,6 +308,10 @@ export function SeriesOverviewView({
     ) as Record<string, DownloadQueueItem | undefined>;
 
     return {
+      activeDownloadEpisodeIds: collectActiveDownloadEpisodeIds(
+        downloadQueueItems,
+        sortedEpisodesByCollection,
+      ),
       primaryQueueItemByEpisodeId: primaryByEpisodeId,
     };
   }, [downloadQueueItems, sortedEpisodesByCollection]);
@@ -473,6 +450,47 @@ export function SeriesOverviewView({
       return next;
     });
   }, []);
+
+  const toggleActionByKey = React.useMemo(
+    () =>
+      new Map(
+        timelineItems.map((item) => [item.key, () => toggleKey(item.key)]),
+      ),
+    [timelineItems, toggleKey],
+  );
+  const seasonSearchActionByKey = React.useMemo(() => {
+    const actions = new Map<string, (() => void) | undefined>();
+    for (const item of timelineItems) {
+      if (item.kind === "seriesMovie") {
+        continue;
+      }
+      const { collection } = item;
+      actions.set(
+        item.key,
+        canManageTitle && onRunSeasonSearch
+          ? () => {
+              if (!hasDownloadClients) {
+                setSearchBlockedByCollection((previous) => ({
+                  ...previous,
+                  [collection.id]: true,
+                }));
+                return;
+              }
+              setSearchBlockedByCollection((previous) => {
+                if (!previous[collection.id]) {
+                  return previous;
+                }
+                const next = { ...previous };
+                delete next[collection.id];
+                return next;
+              });
+              void onRunSeasonSearch(collection);
+            }
+          : undefined,
+      );
+    }
+    return actions;
+  }, [canManageTitle, hasDownloadClients, onRunSeasonSearch, timelineItems]);
 
   const handleRunEpisodeSearch = React.useCallback(
     (episode: CollectionEpisode) => {
@@ -881,7 +899,11 @@ export function SeriesOverviewView({
     <>
       <div className="space-y-4">
       <Card
-        className="relative overflow-hidden p-0"
+        className={
+          fullBleedHero
+            ? "relative -mx-4 -mt-4 overflow-hidden rounded-none border-0 p-0 sm:-mx-5 sm:-mt-5"
+            : "relative overflow-hidden p-0"
+        }
         style={overviewBackdropUrl ? { backdropFilter: "none", WebkitBackdropFilter: "none" } : undefined}
       >
         {overviewBackdropUrl ? (
@@ -904,6 +926,9 @@ export function SeriesOverviewView({
                   "linear-gradient(to top, var(--color-card) 0%, var(--color-card) 5%, color-mix(in srgb, var(--color-card) 82%, transparent), color-mix(in srgb, var(--color-card) 52%, transparent)), linear-gradient(135deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.012) 40%, transparent 100%)",
               }}
             />
+            {fullBleedHero ? (
+              <div className="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-b from-transparent to-[var(--scry-bg)]" />
+            ) : null}
           </div>
         ) : null}
         <CardContent className="relative p-4">
@@ -1103,7 +1128,7 @@ export function SeriesOverviewView({
                       key={item.key}
                       link={item.link}
                       expanded={expandedKeys.has(item.key)}
-                      onToggle={() => toggleKey(item.key)}
+                      onToggle={toggleActionByKey.get(item.key)!}
                       mediaFilesByEpisode={mediaFilesByEpisode}
                       mediaFilesBySeriesMovieLink={mediaFilesBySeriesMovieLink}
                       onLoadSeriesMovieDetail={onLoadSeriesMovieDetail}
@@ -1145,10 +1170,11 @@ export function SeriesOverviewView({
                     episodesReady={collection.id in episodesByCollection}
                     facet={title.facet}
                     expanded={expandedKeys.has(item.key)}
-                    onToggle={() => toggleKey(item.key)}
+                    onToggle={toggleActionByKey.get(item.key)!}
                     initiallyOpenEpisodeId={initialEpisodeId}
                     mediaFilesByEpisode={mediaFilesByEpisode}
               onLoadEpisodeDetail={onLoadEpisodeDetail}
+                    activeDownloadEpisodeIds={activeDownloadEpisodeIds}
                     downloadQueueItemByEpisodeId={primaryQueueItemByEpisodeId}
                     subtitleDownloads={subtitleDownloads}
                     onRefreshSubtitles={canManageTitle ? onRefreshSubtitles : undefined}
@@ -1175,19 +1201,7 @@ export function SeriesOverviewView({
                     onSetEpisodeMonitored={canManageTitle ? onSetEpisodeMonitored : undefined}
                     seasonSearchResults={seasonSearchResultsByCollection?.[collection.id]}
                     seasonSearchLoading={seasonSearchLoadingByCollection?.[collection.id] === true}
-                    onRunSeasonSearch={canManageTitle && onRunSeasonSearch ? () => {
-                      if (!hasDownloadClients) {
-                        setSearchBlockedByCollection((prev) => ({ ...prev, [collection.id]: true }));
-                        return;
-                      }
-                      setSearchBlockedByCollection((prev) => {
-                        if (!prev[collection.id]) return prev;
-                        const next = { ...prev };
-                        delete next[collection.id];
-                        return next;
-                      });
-                      return onRunSeasonSearch(collection);
-                    } : undefined}
+                    onRunSeasonSearch={seasonSearchActionByKey.get(item.key)}
                     searchBlocked={searchBlockedByCollection[collection.id] === true}
                     onQueueFromSeasonSearch={canManageTitle ? onQueueFromSeasonSearch : undefined}
                     onDeleteFile={canManageTitle ? onDeleteFile : undefined}
@@ -1246,7 +1260,7 @@ export function SeriesOverviewView({
                   <div className="flex items-center justify-between gap-3">
                     <div className="min-w-0 flex-1">
                       <p className="break-words text-sm text-card-foreground">
-                        {entry.sourceTitle || t("episode.untitledRelease")}
+                        {entry.releaseName || t("episode.untitledRelease")}
                       </p>
                       <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
                         <span className="text-muted-foreground/60">
@@ -1296,3 +1310,5 @@ export function SeriesOverviewView({
     </>
   );
 }
+
+export const SeriesOverviewView = React.memo(SeriesOverviewViewImpl);

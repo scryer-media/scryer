@@ -1574,7 +1574,7 @@ fn scan_mp4_sample_probes(
     tracks: &mut [ParsedMp4Track],
     profile: AnalysisProfile,
 ) {
-    if profile == AnalysisProfile::Fast {
+    if profile.skips_deep_probes() {
         return;
     }
 

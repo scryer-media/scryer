@@ -1,5 +1,5 @@
-import { providerConfigRecordToValues } from "@/lib/utils/provider-config";
-import type { ConfigFieldDef } from "@/lib/types";
+import type { ConfigFieldDef } from "../types/index.ts";
+import { providerConfigRecordToValues } from "./provider-config.ts";
 
 export function setupIndexerConfigFields(fields: ConfigFieldDef[]) {
   return fields.filter((field) => field.valueSource !== "HOST_BINDING");
@@ -14,6 +14,26 @@ export function buildSetupIndexerConfigValues(
       field.defaultValue ?? (field.fieldType === "BOOL" ? "false" : "");
   }
   return values;
+}
+
+export function applyIndexerConfigOption(
+  fields: ConfigFieldDef[],
+  currentValues: Record<string, string>,
+  key: string,
+  value: string,
+): Record<string, string> {
+  const nextValues = { ...currentValues, [key]: value };
+  const declaredKeys = new Set(fields.map((field) => field.key));
+  const selectedOption = fields
+    .find((field) => field.key === key)
+    ?.options.find((option) => option.value === value);
+
+  for (const override of selectedOption?.configOverrides ?? []) {
+    if (declaredKeys.has(override.key)) {
+      nextValues[override.key] = override.value;
+    }
+  }
+  return nextValues;
 }
 
 export function serializeSetupIndexerConfigValues(

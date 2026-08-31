@@ -3,24 +3,29 @@ use std::time::Instant;
 use async_graphql::{Context, Error, ID, Object, Result as GqlResult};
 use chrono::{DateTime, Utc};
 use scryer_application::{
-    AcquisitionSettings as AppAcquisitionSettings, AppError, LoginFailureTimingClass,
+    AcquisitionSettings as AppAcquisitionSettings, ApiKeyExpiryPreset as AppApiKeyExpiryPreset,
+    AppError, CreateApiKey, CreateOAuthClientRegistration, LoginFailureTimingClass,
     LoginVerificationMethod, LoginVerificationRequirement, MediaServerConnectionDraft,
     MediaServerConnectionPatch, QualityProfile, QualityProfileCriteria,
     SecuritySettings as AppSecuritySettings,
     UpdateAutoBackupSettings as AppUpdateAutoBackupSettings,
     UpdateBackupSettings as AppUpdateBackupSettings,
-    UpdateGeneralSettings as AppUpdateGeneralSettings,
+    UpdateGeneralSettings as AppUpdateGeneralSettings, UpdateOAuthClientRegistration,
     UpdatePluginAutoUpdateSettings as AppUpdatePluginAutoUpdateSettings,
     UpdateRecycleBinSettings as AppUpdateRecycleBinSettings,
     UpdateSecuritySettings as AppUpdateSecuritySettings,
     UpdateSubtitleSettings as AppUpdateSubtitleSettings,
 };
 
-use super::{from_plugin_auto_update_settings, from_ui_settings, ui_settings_update_from_input};
+use super::{
+    from_api_key, from_oauth_client_registration, from_plugin_auto_update_settings,
+    from_ui_settings, ui_settings_update_from_input,
+};
 use scryer_interface_core::{
-    actor_from_ctx, app_from_ctx, auth_runtime_from_ctx, default_persist_session_from_ctx,
-    login_verification_required_gql_error, mfa_enrollment_actor_from_ctx,
-    mfa_verification_from_ctx, password_change_required_actor_from_ctx, persist_session_or_default,
+    actor_from_ctx, api_key_management_actor_from_ctx, app_from_ctx, auth_runtime_from_ctx,
+    default_persist_session_from_ctx, login_verification_required_gql_error,
+    mfa_enrollment_actor_from_ctx, mfa_verification_from_ctx,
+    password_change_required_actor_from_ctx, persist_session_or_default,
     require_config_app_permission, to_gql_error, to_login_gql_error,
     to_login_gql_error_after_timing,
 };
@@ -151,6 +156,8 @@ fn from_security_settings(
         form_login_enabled: settings.form_login_enabled,
         password_min_length: settings.password_min_length,
         skip_login_for_local_ips: settings.skip_login_for_local_ips,
+        api_keys_restrict_to_system_settings_users: settings
+            .api_keys_restrict_to_system_settings_users,
         mfa_require_config_step_up: settings.mfa_require_config_step_up,
         mfa_require_password_login: settings.mfa_require_password_login,
         mfa_require_jellyfin_login: settings.totp_require_jellyfin_login,
@@ -241,6 +248,7 @@ fn media_server_draft(input: CreateMediaServerConnectionInput) -> MediaServerCon
         provider: input.provider.into_domain(),
         display_name: input.display_name,
         base_url: input.base_url,
+        external_url: input.external_url,
         enabled: input.enabled.unwrap_or(true),
         login_enabled: input.login_enabled.unwrap_or(false),
         linking_enabled: input.linking_enabled.unwrap_or(false),
@@ -269,6 +277,7 @@ fn media_server_patch(input: UpdateMediaServerConnectionInput) -> MediaServerCon
         provider: input.provider.map(MediaServerProviderValue::into_domain),
         display_name: input.display_name,
         base_url: input.base_url,
+        external_url: input.external_url,
         enabled: input.enabled,
         login_enabled: input.login_enabled,
         linking_enabled: input.linking_enabled,
@@ -352,11 +361,14 @@ fn from_delay_profile(profile: scryer_application::DelayProfile) -> DelayProfile
         name: profile.name,
         usenet_delay_minutes: profile.usenet_delay_minutes as i32,
         torrent_delay_minutes: profile.torrent_delay_minutes as i32,
+        enable_usenet: profile.enable_usenet,
+        enable_torrent: profile.enable_torrent,
         preferred_protocol: DelayProfilePreferredProtocolValue::from_application(
             profile.preferred_protocol,
         ),
         min_age_minutes: profile.min_age_minutes as i32,
         bypass_score_threshold: profile.bypass_score_threshold,
+        bypass_if_highest_quality: profile.bypass_if_highest_quality,
         applies_to_facets: profile
             .applies_to_facets
             .into_iter()
@@ -1031,6 +1043,10 @@ impl SettingsMutations {
         let auth_runtime = auth_runtime_from_ctx(ctx);
         let actor =
             require_config_app_permission(ctx, scryer_domain::AppPermission::ManageUsers).await?;
+        if input.api_keys_restrict_to_system_settings_users.is_some() {
+            require_config_app_permission(ctx, scryer_domain::AppPermission::ManageSystemSettings)
+                .await?;
+        }
         let previous_snapshot = auth_runtime.snapshot();
         let jellyfin_mfa_requirement = resolve_mfa_route_requirement(
             input.mfa_require_jellyfin_login,
@@ -1055,6 +1071,8 @@ impl SettingsMutations {
                     form_login_enabled: input.form_login_enabled,
                     password_min_length: input.password_min_length,
                     skip_login_for_local_ips: input.skip_login_for_local_ips,
+                    api_keys_restrict_to_system_settings_users: input
+                        .api_keys_restrict_to_system_settings_users,
                     mfa_require_config_step_up: input.mfa_require_config_step_up,
                     mfa_require_password_login: input.mfa_require_password_login,
                     totp_require_jellyfin_login: jellyfin_mfa_requirement,
@@ -1075,6 +1093,73 @@ impl SettingsMutations {
         }
 
         Ok(from_security_settings(settings, &snapshot))
+    }
+
+    /// Registers a public OAuth application with exact HTTPS callbacks and mandatory S256 PKCE.
+    async fn create_oauth_client_registration(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Display name and exact HTTPS callback allowlist for the application.")]
+        input: CreateOAuthClientRegistrationInput,
+    ) -> GqlResult<OAuthClientRegistrationPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor =
+            require_config_app_permission(ctx, scryer_domain::AppPermission::ManageSystemSettings)
+                .await?;
+        app.create_oauth_client_registration(
+            &actor,
+            CreateOAuthClientRegistration {
+                display_name: input.display_name,
+                redirect_uris: input.redirect_uris,
+            },
+        )
+        .await
+        .map(from_oauth_client_registration)
+        .map_err(to_gql_error)
+    }
+
+    /// Replaces custom OAuth application metadata and callback allowlist. Disabling revokes all of its grants.
+    async fn update_oauth_client_registration(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Immutable client identifier returned during registration.")]
+        client_id: String,
+        #[graphql(desc = "Replacement public-client configuration.")]
+        input: UpdateOAuthClientRegistrationInput,
+    ) -> GqlResult<OAuthClientRegistrationPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor =
+            require_config_app_permission(ctx, scryer_domain::AppPermission::ManageSystemSettings)
+                .await?;
+        app.update_oauth_client_registration(
+            &actor,
+            &client_id,
+            UpdateOAuthClientRegistration {
+                display_name: input.display_name,
+                redirect_uris: input.redirect_uris,
+                enabled: input.enabled,
+            },
+        )
+        .await
+        .map(from_oauth_client_registration)
+        .map_err(to_gql_error)
+    }
+
+    /// Deletes a custom OAuth application and revokes every active grant issued to it.
+    async fn delete_oauth_client_registration(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Immutable client identifier returned during registration.")]
+        client_id: String,
+    ) -> GqlResult<DeleteOAuthClientRegistrationPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor =
+            require_config_app_permission(ctx, scryer_domain::AppPermission::ManageSystemSettings)
+                .await?;
+        app.delete_oauth_client_registration(&actor, &client_id)
+            .await
+            .map(|deleted| DeleteOAuthClientRegistrationPayload { client_id, deleted })
+            .map_err(to_gql_error)
     }
 
     /// Creates a media-server connection with defaults for omitted enablement flags and redacted secret fields in the result.
@@ -1276,9 +1361,12 @@ impl SettingsMutations {
                     name: input.name,
                     usenet_delay_minutes: input.usenet_delay_minutes as i64,
                     torrent_delay_minutes: input.torrent_delay_minutes as i64,
+                    enable_usenet: input.enable_usenet.unwrap_or(true),
+                    enable_torrent: input.enable_torrent.unwrap_or(true),
                     preferred_protocol: input.preferred_protocol.into_application(),
                     min_age_minutes: input.min_age_minutes as i64,
                     bypass_score_threshold: input.bypass_score_threshold,
+                    bypass_if_highest_quality: input.bypass_if_highest_quality.unwrap_or(false),
                     applies_to_facets: input
                         .applies_to_facets
                         .into_iter()
@@ -2009,6 +2097,57 @@ impl SettingsMutations {
             .await
             .map_err(to_gql_error)?;
         Ok(RevokeMyOauthAppPayload { grant_id, revoked })
+    }
+
+    /// Creates an API key for the interactive actor and returns its secret once.
+    async fn create_my_api_key(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Label and expiration policy for the new API key.")]
+        input: CreateMyApiKeyInput,
+    ) -> GqlResult<CreateMyApiKeyPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = api_key_management_actor_from_ctx(ctx)?;
+        let mfa = mfa_verification_from_ctx(ctx);
+        app.require_api_key_mfa_step_up(&actor, mfa.step_up_verified_until)
+            .await
+            .map_err(to_gql_error)?;
+        let expiry = match input.expiry.unwrap_or(ApiKeyExpiryPresetValue::Days90) {
+            ApiKeyExpiryPresetValue::Days30 => AppApiKeyExpiryPreset::Days30,
+            ApiKeyExpiryPresetValue::Days90 => AppApiKeyExpiryPreset::Days90,
+            ApiKeyExpiryPresetValue::Days365 => AppApiKeyExpiryPreset::Days365,
+            ApiKeyExpiryPresetValue::Never => AppApiKeyExpiryPreset::Never,
+        };
+        let created = app
+            .create_api_key(
+                &actor,
+                CreateApiKey {
+                    label: input.label,
+                    expiry,
+                },
+            )
+            .await
+            .map_err(to_gql_error)?;
+        Ok(CreateMyApiKeyPayload {
+            api_key: created.raw_key,
+            key: from_api_key(created.api_key, &actor.username),
+        })
+    }
+
+    /// Revokes one user-created API key owned by the interactive actor.
+    async fn revoke_my_api_key(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "API-key record ID to revoke.")] id: ID,
+    ) -> GqlResult<RevokeMyApiKeyPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = api_key_management_actor_from_ctx(ctx)?;
+        let id_string = id.to_string();
+        let revoked = app
+            .revoke_api_key(&actor, &id_string)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(RevokeMyApiKeyPayload { id, revoked })
     }
 
     /// Authenticates local credentials, optionally verifies required TOTP, and issues a session or MFA-enrollment token.

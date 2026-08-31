@@ -277,9 +277,6 @@ fn completed_download_observed_identity(
     })
 }
 
-
-
-
 fn download_submission_identity_is_empty(identity: &DownloadSubmissionIdentity) -> bool {
     identity
         .download_id
@@ -288,8 +285,8 @@ fn download_submission_identity_is_empty(identity: &DownloadSubmissionIdentity) 
         .is_none_or(str::is_empty)
 }
 
-fn submission_source_identity(submission: &DownloadSubmission) -> DownloadSourceIdentity {
-    DownloadSourceIdentity::from_submission(submission)
+fn submission_source_identity(submission: &DownloadSubmission) -> ClientJobLocator {
+    ClientJobLocator::from_submission(submission)
 }
 
 async fn resolve_completed_download_submission(
@@ -314,43 +311,33 @@ async fn resolve_completed_download_submission(
             .await?;
 
         if download_id_submissions.is_empty() {
-            return Ok(
-                CompletedDownloadSubmissionResolution::MissingDownloadId {
-                    identity: observed_identity,
-                },
-            );
+            return Ok(CompletedDownloadSubmissionResolution::MissingDownloadId {
+                identity: observed_identity,
+            });
         }
         if let Some(submission) =
             crate::download_identity::coalesce_download_submissions_by_release_attempt(
                 &download_id_submissions,
             )
         {
-            return matched_completed_download_submission(
-                app,
-                submission,
-                &observed_identity,
-            )
-            .await;
+            return matched_completed_download_submission(app, submission, &observed_identity)
+                .await;
         }
-        return Ok(
-            CompletedDownloadSubmissionResolution::AmbiguousDownloadId {
-                download_id: download_id.to_string(),
-                matches: download_id_submissions.len(),
-            },
-        );
+        return Ok(CompletedDownloadSubmissionResolution::AmbiguousDownloadId {
+            download_id: download_id.to_string(),
+            matches: download_id_submissions.len(),
+        });
     }
 
     if !download_submission_identity_is_empty(&observed_identity) {
-        return Ok(
-            CompletedDownloadSubmissionResolution::MissingDownloadId {
-                identity: observed_identity,
-            },
-        );
+        return Ok(CompletedDownloadSubmissionResolution::MissingDownloadId {
+            identity: observed_identity,
+        });
     }
 
     let mut source_identities = vec![completed_download_identity(completed)];
     if let Some(item) = item {
-        source_identities.push(DownloadSourceIdentity::new(
+        source_identities.push(ClientJobLocator::new(
             Some(item.client_id.as_str()),
             &item.client_type,
             &item.download_client_item_id,
@@ -364,12 +351,8 @@ async fn resolve_completed_download_submission(
             .find_by_client_item_id(&source_identity)
             .await?
         {
-            return matched_completed_download_submission(
-                app,
-                submission,
-                &observed_identity,
-            )
-            .await;
+            return matched_completed_download_submission(app, submission, &observed_identity)
+                .await;
         }
     }
 
@@ -459,98 +442,6 @@ pub(crate) async fn resolve_completed_download_origin_for_import(
     })
 }
 
-async fn completed_download_already_imported_for_current_attempt(
-    app: &AppUseCase,
-    completed: &CompletedDownload,
-    resolution: &CompletedDownloadSubmissionResolution,
-) -> AppResult<bool> {
-    if matches!(
-        resolution,
-        CompletedDownloadSubmissionResolution::AmbiguousDownloadId { .. }
-            | CompletedDownloadSubmissionResolution::MissingDownloadId { .. }
-    ) {
-        return Ok(false);
-    }
-
-    // `ImportedSeeding` counts as imported here: the payload is in the library
-    // and only the torrent's seeding obligation is still open.
-    if completed_download_terminal_state_for_resolution(app, completed, resolution)
-        .await?
-        .is_some_and(TrackedDownloadState::counts_as_imported)
-    {
-        return Ok(true);
-    }
-
-    let source_identity = match resolution {
-        CompletedDownloadSubmissionResolution::Matched(matched) => {
-            let source_identity = submission_source_identity(&matched.submission);
-            if let Some(identity) = matched.identity.as_ref()
-                && !download_submission_identity_is_empty(identity)
-            {
-                return app
-                    .services
-                    .workflow
-                    .imports
-                    .is_already_imported_by_download_id(&source_identity, identity)
-                    .await;
-            }
-            source_identity
-        }
-        CompletedDownloadSubmissionResolution::DownloaderObservation => {
-            completed_download_identity(completed)
-        }
-        CompletedDownloadSubmissionResolution::AmbiguousDownloadId { .. }
-        | CompletedDownloadSubmissionResolution::MissingDownloadId { .. } => unreachable!(),
-    };
-
-    app.services
-        .workflow
-        .imports
-        .is_already_imported(&source_identity)
-        .await
-}
-
-async fn completed_download_terminal_state_for_resolution(
-    app: &AppUseCase,
-    completed: &CompletedDownload,
-    resolution: &CompletedDownloadSubmissionResolution,
-) -> AppResult<Option<TrackedDownloadState>> {
-    let identity_and_source = match resolution {
-        CompletedDownloadSubmissionResolution::Matched(matched) => matched
-            .identity
-            .as_ref()
-            .map(|identity| (identity, submission_source_identity(&matched.submission))),
-        CompletedDownloadSubmissionResolution::MissingDownloadId { identity } => {
-            Some((identity, completed_download_identity(completed)))
-        }
-        _ => None,
-    };
-    if let Some((identity, source_identity)) = identity_and_source
-        && !download_submission_identity_is_empty(identity)
-        && let Some(state) = app
-            .services
-            .workflow
-            .download_submissions
-            .get_identity_tracked_state(identity, Some(&source_identity))
-            .await?
-            .and_then(|value| TrackedDownloadState::from_str_opt(&value))
-    {
-        return Ok(Some(state));
-    }
-
-    let CompletedDownloadSubmissionResolution::Matched(matched) = resolution else {
-        return Ok(None);
-    };
-
-    Ok(app
-        .services
-        .workflow
-        .download_submissions
-        .get_tracked_state(&submission_source_identity(&matched.submission))
-        .await?
-        .and_then(|value| TrackedDownloadState::from_str_opt(&value)))
-}
-
 fn completed_download_import_identity_for_resolution(
     completed: &CompletedDownload,
     resolution: &CompletedDownloadSubmissionResolution,
@@ -565,7 +456,6 @@ fn completed_download_import_identity_for_resolution(
         _ => None,
     }
 }
-
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -619,25 +509,61 @@ fn sanitized_title_folder_component(raw: &str) -> String {
 }
 /// Recursively find all video files under `dir`, optionally filtering out samples.
 ///
-/// `dir` is usually a directory, but SABnzbd sometimes reports the file path
-/// itself as the completed download's `storage` field. If the path has a video
-/// extension and cannot be opened as a directory, we treat it as a single-file
-/// result.
+/// `dir` is usually a directory, but download clients may report a completed
+/// file path directly. Classify the source before walking it so a regular file
+/// never reaches `read_dir` (Windows reports that mistake as OS error 267).
 pub(crate) fn find_video_files(dir: &Path, filter_samples: bool) -> AppResult<Vec<PathBuf>> {
-    if std::fs::read_dir(dir).is_err() && is_video_file(dir) {
+    fn single_file(path: &Path, filter_samples: bool) -> Vec<PathBuf> {
+        (is_video_file(path) && (!filter_samples || !is_sample_file(path)))
+            .then_some(path.to_path_buf())
+            .into_iter()
+            .collect()
+    }
+
+    let metadata = std::fs::metadata(dir).map_err(|error| AppError::ImportSourceInspection {
+        path: dir.display().to_string(),
+        message: error.to_string(),
+    })?;
+    if metadata.is_file() {
         tracing::info!(
             path = %dir.display(),
             "download path is a video file, not a directory"
         );
-        return Ok((!filter_samples || !is_sample_file(dir))
-            .then_some(dir.to_path_buf())
-            .into_iter()
-            .collect());
+        return Ok(single_file(dir, filter_samples));
+    }
+    if !metadata.is_dir() {
+        return Err(AppError::UnsupportedImportSource {
+            path: dir.display().to_string(),
+        });
     }
 
-    let walked = crate::filesystem_walk::FilesystemWalker::new()
+    let walked = match crate::filesystem_walk::FilesystemWalker::new()
         .skip_unreadable_subdirectories()
-        .walk(dir)?;
+        .walk(dir)
+    {
+        Ok(walked) => walked,
+        Err(walk_error) => match std::fs::metadata(dir) {
+            Ok(metadata) if metadata.is_file() => return Ok(single_file(dir, filter_samples)),
+            Ok(metadata) if metadata.is_dir() => {
+                return Err(AppError::ImportSourceInspection {
+                    path: dir.display().to_string(),
+                    message: walk_error.to_string(),
+                });
+            }
+            Ok(_) => {
+                return Err(AppError::ImportSourceChanged {
+                    path: dir.display().to_string(),
+                    message: "source changed to an unsupported filesystem object".to_string(),
+                });
+            }
+            Err(error) => {
+                return Err(AppError::ImportSourceChanged {
+                    path: dir.display().to_string(),
+                    message: error.to_string(),
+                });
+            }
+        },
+    };
 
     Ok(walked
         .into_iter()
@@ -668,7 +594,11 @@ pub(crate) fn completed_download_release_claims(completed: &CompletedDownload) -
         video_files = find_video_files(dest_dir, false).unwrap_or_default();
     }
     video_files.sort_by_cached_key(|file| {
-        std::cmp::Reverse(std::fs::metadata(file).map(|metadata| metadata.len()).unwrap_or(0))
+        std::cmp::Reverse(
+            std::fs::metadata(file)
+                .map(|metadata| metadata.len())
+                .unwrap_or(0),
+        )
     });
     let mut claims = Vec::new();
     for stem in video_files.iter().filter_map(|file| {

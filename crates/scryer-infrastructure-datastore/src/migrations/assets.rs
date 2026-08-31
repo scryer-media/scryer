@@ -609,8 +609,8 @@ mod tests {
         let bundle =
             compile_source_bundle(&source_db_root()).expect("compile source migration bundle");
         assert!(
-            bundle.catalog.find_migration(113).is_some(),
-            "migration 0113 must be registered in migration_manifest.toml"
+            bundle.catalog.find_migration(198).is_some(),
+            "migration 0198 must be registered in migration_manifest.toml"
         );
         assert!(
             bundle
@@ -625,6 +625,20 @@ mod tests {
                 .latest_baseline_at_or_below(140, EngineScope::Postgres)
                 .is_some_and(|baseline| baseline.file == "postgres/baselines/0140_baseline.sql"),
             "PostgreSQL should register the latest manifest-owned baseline"
+        );
+        assert!(
+            bundle
+                .catalog
+                .latest_baseline_at_or_below(198, EngineScope::Sqlite)
+                .is_some_and(|baseline| baseline.file == "baselines/0198_baseline.sql"),
+            "SQLite should register the 0198 baseline"
+        );
+        assert!(
+            bundle
+                .catalog
+                .latest_baseline_at_or_below(198, EngineScope::Postgres)
+                .is_some_and(|baseline| baseline.file == "postgres/baselines/0198_baseline.sql"),
+            "PostgreSQL should register the 0198 baseline"
         );
     }
 
@@ -660,6 +674,118 @@ mod tests {
                 sql.contains(index_name),
                 "expected PostgreSQL 0140 baseline to include {index_name}"
             );
+        }
+    }
+
+    #[test]
+    fn postgres_0198_keeps_sqlite_builtin_seed_parity_without_rewriting_the_baseline() {
+        let postgres = fs::read_to_string(
+            source_db_root().join("postgres/migrations/0198_seed_canonical_defaults.sql"),
+        )
+        .expect("PostgreSQL 0198 seed migration should be readable");
+        let sqlite = fs::read_to_string(source_db_root().join("baselines/0140_baseline.sql"))
+            .expect("SQLite 0140 baseline should be readable");
+
+        for seed in [
+            "anime_default_library",
+            "movie_default_library",
+            "series_default_library",
+            "canonical_root_for_anime_default_library",
+            "canonical_root_for_movie_default_library",
+            "canonical_root_for_series_default_library",
+            "('1080p', '1080P', 0, '1970-01-01T00:00:00Z')",
+            "('1080p', '720P', 1, '1970-01-01T00:00:00Z')",
+            "('4k', '1080P', 1, '1970-01-01T00:00:00Z')",
+            "('4k', '2160P', 0, '1970-01-01T00:00:00Z')",
+            "('4k', '720P', 2, '1970-01-01T00:00:00Z')",
+            "('1080p', '1080P', 'system'",
+            "('4k', '4K', 'system'",
+            "00000000000000000000000000000001",
+        ] {
+            assert!(sqlite.contains(seed), "SQLite baseline missing seed {seed}");
+            assert!(
+                postgres.contains(seed),
+                "PostgreSQL baseline missing seed {seed}"
+            );
+        }
+        for guard in [
+            "INNER JOIN libraries parent",
+            "parent.id = roots.library_id",
+            "parent.facet = roots.facet",
+            "parent.slug = roots.slug",
+            "ON CONFLICT DO NOTHING",
+        ] {
+            assert!(
+                postgres.contains(guard),
+                "PostgreSQL 0198 must guard canonical roots with `{guard}`"
+            );
+        }
+    }
+
+    #[test]
+    fn released_0_18_21_sql_assets_are_immutable() {
+        let root = source_db_root();
+        let mut paths = vec![
+            root.join("baselines/0140_baseline.sql"),
+            root.join("postgres/baselines/0140_baseline.sql"),
+        ];
+        for relative_dir in ["migrations", "postgres/migrations"] {
+            for entry in fs::read_dir(root.join(relative_dir)).expect("migration directory") {
+                let path = entry.expect("migration entry").path();
+                let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                    continue;
+                };
+                let version = name
+                    .get(..4)
+                    .and_then(|version| version.parse::<u32>().ok());
+                if version.is_some_and(|version| version <= 173) {
+                    paths.push(path);
+                }
+            }
+        }
+        paths.sort_by_key(|path| {
+            path.strip_prefix(&root)
+                .expect("asset should be under db root")
+                .to_string_lossy()
+                .replace('\\', "/")
+        });
+
+        let mut hasher = Blake3Hasher::new();
+        for path in paths {
+            let relative = path
+                .strip_prefix(&root)
+                .expect("asset should be under db root")
+                .to_string_lossy()
+                .replace('\\', "/");
+            hasher.update(relative.as_bytes());
+            hasher.update(&[0]);
+            hasher.update(&fs::read(&path).expect("released SQL asset should be readable"));
+            hasher.update(&[0]);
+        }
+        assert_eq!(
+            hasher.finalize().to_hex().as_str(),
+            "57b821be60b4e6cab89d76ad2961d05288cca5bd19e8314c2083eb4f66a43f58"
+        );
+    }
+
+    #[test]
+    fn migration_0197_converges_binary_event_storage_without_the_stream_index() {
+        let root = source_db_root();
+        let sqlite = fs::read_to_string(root.join("migrations/0197_compact_event_storage_pre.sql"))
+            .expect("SQLite 0197 pre-migration should be readable");
+        let postgres =
+            fs::read_to_string(root.join("postgres/migrations/0197_compact_event_storage.sql"))
+                .expect("PostgreSQL 0197 migration should be readable");
+
+        assert!(sqlite.contains("payload_json BLOB NOT NULL"));
+        assert!(sqlite.contains("explanation_json BLOB"));
+        assert!(postgres.contains("ALTER COLUMN payload_json TYPE bytea"));
+        assert!(postgres.contains("ALTER COLUMN explanation_json TYPE bytea"));
+        for sql in [&sqlite, &postgres] {
+            assert!(sql.contains("DROP INDEX IF EXISTS idx_domain_events_stream_sequence"));
+            assert!(sql.contains("import_status"));
+            assert!(sql.contains("media_file_delete_reason"));
+            assert!(sql.contains("download_id"));
         }
     }
 
@@ -822,6 +948,225 @@ mod tests {
                 "migration {} must explicitly treat both sqlite and postgres after the 0140 postgres baseline",
                 migration.key
             );
+        }
+    }
+
+    #[test]
+    fn migration_0177_requeues_legacy_movie_hydration_for_both_engines() {
+        let db_root = source_db_root();
+        let manifest = fs::read_to_string(db_root.join("migration_manifest.toml"))
+            .expect("migration manifest should be readable");
+        assert!(manifest.contains("version = 177"));
+
+        let sqlite_sql =
+            fs::read_to_string(db_root.join("migrations/0177_movie_smg_identity_backfill.sql"))
+                .expect("SQLite 0177 migration should be readable");
+        assert!(sqlite_sql.contains("facet = 'movie'"));
+        assert!(sqlite_sql.contains("('tmdb', 'imdb')"));
+        assert!(sqlite_sql.contains("= 'tvdb'"));
+        assert!(sqlite_sql.contains("metadata_hydration_attempt_count = 0"));
+
+        let postgres_sql = fs::read_to_string(
+            db_root.join("postgres/migrations/0177_movie_smg_identity_backfill.sql"),
+        )
+        .expect("PostgreSQL 0177 migration should be readable");
+        assert!(postgres_sql.contains("NOW()"));
+        assert!(postgres_sql.contains("jsonb_array_elements"));
+        assert!(postgres_sql.contains("('tmdb', 'imdb')"));
+        assert!(postgres_sql.contains("= 'tvdb'"));
+    }
+
+    #[test]
+    fn migration_0183_adds_manual_import_canonical_identity_for_both_engines() {
+        let db_root = source_db_root();
+        let manifest = fs::read_to_string(db_root.join("migration_manifest.toml"))
+            .expect("migration manifest should be readable");
+        assert!(manifest.contains("version = 183"));
+        assert!(manifest.contains("migrations/0183_manual_import_selection_durable_identity.sql"));
+        assert!(
+            manifest
+                .contains("postgres/migrations/0183_manual_import_selection_durable_identity.sql")
+        );
+
+        for relative_path in [
+            "migrations/0183_manual_import_selection_durable_identity.sql",
+            "postgres/migrations/0183_manual_import_selection_durable_identity.sql",
+        ] {
+            let sql = fs::read_to_string(db_root.join(relative_path))
+                .expect("0183 migration should be readable");
+            assert!(sql.contains("ALTER TABLE manual_import_selections"));
+            assert!(sql.contains("ADD COLUMN canonical_download_id"));
+            assert!(sql.contains("idx_manual_import_selections_canonical_download"));
+        }
+    }
+
+    #[test]
+    fn migration_0186_drops_the_legacy_token_requirement_for_both_engines() {
+        let db_root = source_db_root();
+        let manifest = fs::read_to_string(db_root.join("migration_manifest.toml"))
+            .expect("migration manifest should be readable");
+        assert!(manifest.contains("version = 186"));
+        assert!(manifest.contains("migrations/0186_download_identity_states_token_optional.sql"));
+        assert!(
+            manifest
+                .contains("postgres/migrations/0186_download_identity_states_token_optional.sql")
+        );
+
+        let sqlite_sql = fs::read_to_string(
+            db_root.join("migrations/0186_download_identity_states_token_optional.sql"),
+        )
+        .expect("SQLite 0186 migration should be readable");
+        // The rebuilt table keeps the canonical column mandatory and the legacy
+        // token optional, and picks up the downloads(id) foreign key the other
+        // canonical dependents already carry.
+        assert!(sqlite_sql.contains("canonical_download_id TEXT NOT NULL"));
+        assert!(!sqlite_sql.contains("CHECK (download_id IS NOT NULL)"));
+        assert!(
+            sqlite_sql.contains("FOREIGN KEY (canonical_download_id) REFERENCES downloads(id)")
+        );
+        assert!(sqlite_sql.contains("idx_download_identity_states_canonical_download_id"));
+
+        let postgres_sql = fs::read_to_string(
+            db_root.join("postgres/migrations/0186_download_identity_states_token_optional.sql"),
+        )
+        .expect("PostgreSQL 0186 migration should be readable");
+        assert!(
+            postgres_sql
+                .contains("DROP CONSTRAINT IF EXISTS download_identity_states_download_id_check")
+        );
+        assert!(
+            postgres_sql
+                .contains("ADD CONSTRAINT download_identity_states_canonical_download_id_fkey")
+        );
+        assert!(postgres_sql.contains("idx_download_identity_states_canonical_download_id"));
+    }
+
+    #[tokio::test]
+    async fn migration_0188_classifies_only_unreasoned_legacy_import_blocks() {
+        let db_root = source_db_root();
+        let manifest = fs::read_to_string(db_root.join("migration_manifest.toml"))
+            .expect("migration manifest should be readable");
+        assert!(manifest.contains("version = 188"));
+
+        let sqlite_sql = fs::read_to_string(
+            db_root.join("migrations/0188_unverified_already_imported_blocks.sql"),
+        )
+        .expect("SQLite 0188 migration should be readable");
+        let postgres_sql = fs::read_to_string(
+            db_root.join("postgres/migrations/0188_unverified_already_imported_blocks.sql"),
+        )
+        .expect("PostgreSQL 0188 migration should be readable");
+        assert!(postgres_sql.contains("btrim(reason)"));
+        assert!(postgres_sql.contains("unverified_already_imported"));
+
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("open SQLite database");
+        sqlx::raw_sql(
+            "CREATE TABLE download_identity_states (
+                id TEXT PRIMARY KEY,
+                tracked_state TEXT NOT NULL,
+                reason TEXT,
+                detail TEXT
+            );",
+        )
+        .execute(&pool)
+        .await
+        .expect("create download identity states table");
+
+        for (id, state, reason, detail) in [
+            (
+                "legacy-null",
+                "import_blocked",
+                None,
+                Some(" Import blocked: ALREADY_IMPORTED "),
+            ),
+            (
+                "legacy-blank",
+                "import_blocked",
+                Some("   "),
+                Some("Import blocked: already_imported"),
+            ),
+            (
+                "post-import",
+                "import_blocked",
+                Some("import_blocked_after_import"),
+                Some("Import blocked: already_imported"),
+            ),
+            (
+                "other-state",
+                "imported",
+                None,
+                Some("Import blocked: already_imported"),
+            ),
+            (
+                "other-detail",
+                "import_blocked",
+                None,
+                Some("manual review"),
+            ),
+        ] {
+            sqlx::query(
+                "INSERT INTO download_identity_states (id, tracked_state, reason, detail)
+                 VALUES (?, ?, ?, ?)",
+            )
+            .bind(id)
+            .bind(state)
+            .bind(reason)
+            .bind(detail)
+            .execute(&pool)
+            .await
+            .expect("seed migration row");
+        }
+
+        sqlx::raw_sql(sqlx::AssertSqlSafe(sqlite_sql))
+            .execute(&pool)
+            .await
+            .expect("run 0188 migration");
+
+        for id in ["legacy-null", "legacy-blank"] {
+            let reason: Option<String> =
+                sqlx::query_scalar("SELECT reason FROM download_identity_states WHERE id = ?")
+                    .bind(id)
+                    .fetch_one(&pool)
+                    .await
+                    .expect("read migrated reason");
+            assert_eq!(reason.as_deref(), Some("unverified_already_imported"));
+        }
+
+        for (id, expected_reason) in [
+            ("post-import", Some("import_blocked_after_import")),
+            ("other-state", None),
+            ("other-detail", None),
+        ] {
+            let reason: Option<String> =
+                sqlx::query_scalar("SELECT reason FROM download_identity_states WHERE id = ?")
+                    .bind(id)
+                    .fetch_one(&pool)
+                    .await
+                    .expect("read untouched reason");
+            assert_eq!(reason.as_deref(), expected_reason);
+        }
+    }
+
+    #[test]
+    fn migration_0195_creates_application_migration_ledgers_for_both_engines() {
+        let db_root = source_db_root();
+        let manifest = fs::read_to_string(db_root.join("migration_manifest.toml"))
+            .expect("migration manifest should be readable");
+        assert!(manifest.contains("version = 195"));
+
+        for relative_path in [
+            "migrations/0195_application_migrations.sql",
+            "postgres/migrations/0195_application_migrations.sql",
+        ] {
+            assert!(manifest.contains(relative_path));
+            let sql = fs::read_to_string(db_root.join(relative_path))
+                .expect("0195 migration should be readable");
+            assert!(sql.contains("CREATE TABLE application_migrations"));
+            assert!(sql.contains("migration_id TEXT PRIMARY KEY"));
         }
     }
 

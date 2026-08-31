@@ -7,7 +7,7 @@ use scryer_domain::{DownloadQueueState, TrackedDownloadState, TrackedDownloadSta
 
 use crate::acquisition_workflow::{DownloadFailureContext, FailureHandlingOutcome};
 use crate::tracked_downloads::TrackedDownload;
-use crate::{AppUseCase, DownloadSourceIdentity};
+use crate::{AppUseCase, ClientJobLocator};
 
 /// Detect failed downloads during the poll cycle.
 ///
@@ -67,8 +67,9 @@ pub async fn process_failed(app: &AppUseCase, td: &mut TrackedDownload) {
         "download failed - processing failure"
     );
 
-    let outcome = crate::acquisition_workflow::process_download_failure(
+    let outcome = crate::acquisition_workflow::process_download_failure_for_download(
         app,
+        td.canonical_download_id(),
         DownloadFailureContext {
             wanted_item: None,
             title_id: td.title_id.clone(),
@@ -101,12 +102,12 @@ pub async fn process_failed(app: &AppUseCase, td: &mut TrackedDownload) {
 
 pub(crate) fn tracked_download_failure_submission_identity(
     td: &TrackedDownload,
-) -> Option<DownloadSourceIdentity> {
+) -> Option<ClientJobLocator> {
     if !tracked_download_has_scryer_failure_origin(td) {
         return None;
     }
 
-    Some(DownloadSourceIdentity::new(
+    Some(ClientJobLocator::new(
         Some(td.client_id.as_str()),
         &td.client_type,
         &td.client_item.download_client_item_id,
@@ -125,17 +126,18 @@ pub(crate) async fn tracked_download_has_grabbed_submission(
         return false;
     };
 
-    download_submission_exists(app, &identity).await
+    download_submission_exists_for_download(app, td.canonical_download_id(), &identity).await
 }
 
-pub(crate) async fn download_submission_exists(
+pub(crate) async fn download_submission_exists_for_download(
     app: &AppUseCase,
-    identity: &DownloadSourceIdentity,
+    canonical_download_id: Option<&scryer_domain::download_identity::DownloadId>,
+    identity: &ClientJobLocator,
 ) -> bool {
     app.services
         .workflow
         .download_submissions
-        .find_by_client_item_id(identity)
+        .find_by_client_item_id_for_download(canonical_download_id, identity)
         .await
         .ok()
         .flatten()

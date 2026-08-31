@@ -64,47 +64,30 @@ pub(crate) async fn refresh_title_image_artwork_urls_for_upgrade(
     settings_store: Arc<SettingsStore>,
     previous_version: Option<&str>,
     current_version: &str,
-) {
+) -> Result<(), String> {
     let state = read_state(settings_store.clone()).await;
     if !should_attempt_title_image_artwork_url_refresh(previous_version, current_version, &state) {
-        return;
+        return Ok(());
     }
 
-    if let Err(error) = set_state(settings_store.clone(), STATE_PENDING).await {
-        tracing::warn!(
-            error = %error,
-            "failed to mark title image artwork URL refresh migration pending"
-        );
-        return;
-    }
+    set_state(settings_store.clone(), STATE_PENDING).await?;
 
-    match app_use_case.run_title_image_cache_refresh().await {
-        Ok(summary) => {
-            if let Err(error) = set_state(settings_store, STATE_COMPLETED).await {
-                tracing::warn!(
-                    error = %error,
-                    "title image artwork URL refresh completed but failed to mark migration completed"
-                );
-                return;
-            }
-            tracing::info!(
-                titles_scanned = summary.titles_scanned,
-                title_urls_updated = summary.title_urls_updated,
-                episode_urls_updated = summary.episode_urls_updated,
-                missing_artwork_results = summary.missing_artwork_results,
-                missing_title_artwork_results = summary.missing_title_artwork_results,
-                missing_episode_matches = summary.missing_episode_matches,
-                missing_incoming_image_urls = summary.missing_incoming_image_urls,
-                "title image artwork URL refresh migration completed"
-            );
-        }
-        Err(error) => {
-            tracing::warn!(
-                error = %error,
-                "title image artwork URL refresh migration failed; it will retry on next startup"
-            );
-        }
-    }
+    let summary = app_use_case
+        .run_title_image_cache_refresh()
+        .await
+        .map_err(|error| error.to_string())?;
+    set_state(settings_store, STATE_COMPLETED).await?;
+    tracing::info!(
+        titles_scanned = summary.titles_scanned,
+        title_urls_updated = summary.title_urls_updated,
+        episode_urls_updated = summary.episode_urls_updated,
+        missing_artwork_results = summary.missing_artwork_results,
+        missing_title_artwork_results = summary.missing_title_artwork_results,
+        missing_episode_matches = summary.missing_episode_matches,
+        missing_incoming_image_urls = summary.missing_incoming_image_urls,
+        "title image artwork URL refresh migration completed"
+    );
+    Ok(())
 }
 
 #[cfg(test)]

@@ -557,15 +557,39 @@ impl AppUseCase {
         request.root_folder_id = None;
         request.min_availability = None;
 
-        let target_tvdb_id = request
-            .external_ids
-            .iter()
-            .find(|external_id| {
-                external_id.source.eq_ignore_ascii_case("tvdb")
-                    && !external_id.value.trim().is_empty()
-            })
-            .map(|external_id| external_id.value.trim().to_string())
-            .ok_or_else(|| AppError::Validation("tvdb id is required".into()))?;
+        let (target_identity_source, target_identity_value) = match item.facet {
+            MediaFacet::Movie => request
+                .external_ids
+                .iter()
+                .find_map(|external_id| {
+                    let source = if external_id.source.eq_ignore_ascii_case("smg") {
+                        Some("smg")
+                    } else if external_id.source.eq_ignore_ascii_case("tvdb") {
+                        Some("tvdb")
+                    } else if external_id.source.eq_ignore_ascii_case("tmdb") {
+                        Some("tmdb")
+                    } else if external_id.source.eq_ignore_ascii_case("imdb") {
+                        Some("imdb")
+                    } else {
+                        None
+                    }?;
+                    let value = external_id.value.trim();
+                    (!value.is_empty()).then(|| (source, value.to_string()))
+                })
+                .ok_or_else(|| AppError::Validation("a title identity is required".into()))?,
+            MediaFacet::Series | MediaFacet::Anime => {
+                let target_tvdb_id = request
+                    .external_ids
+                    .iter()
+                    .find(|external_id| {
+                        external_id.source.eq_ignore_ascii_case("tvdb")
+                            && !external_id.value.trim().is_empty()
+                    })
+                    .map(|external_id| external_id.value.trim().to_string())
+                    .ok_or_else(|| AppError::Validation("tvdb id is required".into()))?;
+                ("tvdb", target_tvdb_id)
+            }
+        };
 
         if self
             .services
@@ -574,8 +598,8 @@ impl AppUseCase {
             .find_by_external_id_in_library_and_facet(
                 &item.library_id,
                 item.facet.clone(),
-                "tvdb",
-                &target_tvdb_id,
+                target_identity_source,
+                &target_identity_value,
             )
             .await?
             .is_some()

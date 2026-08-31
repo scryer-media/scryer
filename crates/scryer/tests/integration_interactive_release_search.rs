@@ -492,7 +492,7 @@ async fn mount_rate_limited(server: &MockServer) {
         .and(path("/api"))
         .respond_with(
             ResponseTemplate::new(429)
-                .insert_header("Retry-After", "120")
+                .insert_header("Retry-After", "2")
                 .set_body_string("Request limit reached"),
         )
         .mount(server)
@@ -660,7 +660,7 @@ async fn rate_limited_indexer_is_marked_failed_and_healthy_results_survive() {
     let healthy = MockServer::start().await;
     mount_healthy(&healthy, "Paperman.2012.1080p.WEB-DL-GRP", "ok-1").await;
     let limited = MockServer::start().await;
-    mount_rate_limited(&limited).await;
+    mount_healthy(&limited, "Paperman.2012.1080p.WEB-DL-GRP", "warmup-1").await;
 
     let now = chrono::Utc::now();
     let (app, user) = setup_app(vec![
@@ -672,9 +672,8 @@ async fn rate_limited_indexer_is_marked_failed_and_healthy_results_survive() {
 
     // Warm up the search pipeline so cold WASM compilation (~6s per indexer in
     // debug, worse under a parallel test sweep) does not eat into the job's
-    // 55s server-side deadline. The warmup also arms the 429 indexer's
-    // destination cooldown, so the job below additionally exercises the
-    // scheduler's interactive cooldown bypass end to end.
+    // workflow deadline. The rate-limit response must belong to the interactive
+    // job itself: priming it here persists a cooldown and prevents dispatch.
     app.search_indexers_for_title(
         &user,
         title_id.clone(),
@@ -683,13 +682,17 @@ async fn rate_limited_indexer_is_marked_failed_and_healthy_results_survive() {
     .await
     .expect("warmup search");
 
+    limited.reset().await;
+    mount_rate_limited(&limited).await;
+
     let start = app
         .start_interactive_release_search(&user, title_request(&title_id))
         .await
         .expect("start job");
 
-    // 90s > the job's own 55s deadline, so the snapshot is guaranteed
-    // terminal here even on a saturated CI host.
+    // The pipeline is warm and the fixture's cooldown is bounded, so this is
+    // ample time on a saturated CI host without making the test sleep through
+    // the production 120-second indexer budget.
     let done = wait_for_snapshot(
         &app,
         &user,
@@ -719,9 +722,11 @@ async fn rate_limited_indexer_is_marked_failed_and_healthy_results_survive() {
         reason.contains("limit") || reason.contains("429") || reason.contains("rate"),
         "failure reason should mention rate limiting: {limited_view:?}"
     );
+    let healthy_view = indexer_status(&done, "healthy-a");
     assert_eq!(
-        indexer_status(&done, "healthy-a").status,
-        InteractiveReleaseSearchIndexerStatus::Completed
+        healthy_view.status,
+        InteractiveReleaseSearchIndexerStatus::Completed,
+        "healthy indexer should complete: {healthy_view:?}"
     );
 }
 

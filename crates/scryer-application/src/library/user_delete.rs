@@ -1299,7 +1299,10 @@ fn aggregate_delete_title_previews(items: &[DeleteTitlePreviewResult]) -> Delete
     }
 
     DeletePreview {
-        fingerprint: sha256_hex(fingerprint_parts.join("\n")),
+        fingerprint: crate::helpers::blake3_identity_hex(
+            crate::helpers::HashDomain::DeletePreview,
+            fingerprint_parts.join("\n"),
+        ),
         total_file_count,
         media_count,
         subtitle_count,
@@ -1334,7 +1337,10 @@ fn build_delete_manifest_fingerprint(
             entry.path.display()
         )
     }));
-    sha256_hex(payload.join("\n"))
+    crate::helpers::blake3_identity_hex(
+        crate::helpers::HashDomain::DeletePreview,
+        payload.join("\n"),
+    )
 }
 
 async fn delete_single_path(entry: &DeleteManifestEntry) -> AppResult<()> {

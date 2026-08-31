@@ -17,12 +17,13 @@ use crate::domain_events::{
 };
 use crate::import_workflow::{
     ResolvedCompletedDownloadOriginForImport, completed_import_result_is_retryable,
-    import_completed_download, import_completed_download_with_release_evidence,
     resolve_completed_download_origin_for_import,
 };
 use crate::stored_paths::path_to_stored_string;
 use crate::tracked_downloads::{NoVideoImportSourceSignature, TrackedDownload};
-use crate::{AppResult, AppUseCase, DownloadSourceIdentity, DownloadSubmissionActorSnapshot, User};
+use crate::{
+    AppResult, AppUseCase, ClientJobLocator, DownloadSubmissionActorSnapshot, ImportArtifact, User,
+};
 use crate::{
     apply_remote_path_mappings_to_completed_download, parse_download_client_remote_path_mappings,
 };
@@ -37,7 +38,9 @@ mod verification;
 pub use check::check;
 pub(crate) use check::check_with_lookup;
 pub use execute::import;
-pub(crate) use execute::{import_with_lookup, mark_importing};
+#[cfg(test)]
+pub(crate) use execute::import_with_lookup;
+pub(crate) use execute::{import_with_lookup_and_preparation_permit, mark_importing};
 #[cfg(test)]
 pub(crate) use lookup::load_completed_download_lookup_for_items;
 pub(crate) use lookup::{
@@ -61,6 +64,68 @@ const NO_VIDEO_BLOCK_AFTER_UNCHANGED_ATTEMPTS: u8 = 3;
 const IMPORT_RUNNING_MESSAGE: &str = "Moving files to library.";
 const COMPLETED_PATH_GRACE_PERIOD_MINUTES: i64 = 10;
 
+fn import_artifact_source_identities(
+    td: &TrackedDownload,
+    completed: Option<&CompletedDownload>,
+) -> Vec<ClientJobLocator> {
+    let mut identities = Vec::with_capacity(2);
+    if let Some(completed) = completed {
+        identities.push(ClientJobLocator::for_import_artifact(
+            Some(completed.client_id.as_str()),
+            &completed.client_type,
+            &completed.download_client_item_id,
+        ));
+    }
+    identities.push(ClientJobLocator::for_import_artifact(
+        Some(td.client_id.as_str()),
+        &td.client_type,
+        &td.client_item.download_client_item_id,
+    ));
+    identities.dedup();
+    identities
+}
+
+async fn import_artifacts_for_completed_download(
+    app: &AppUseCase,
+    td: &TrackedDownload,
+    completed: Option<&CompletedDownload>,
+) -> AppResult<Vec<ImportArtifact>> {
+    let identities = import_artifact_source_identities(td, completed);
+    if identities.len() > 1 {
+        tracing::debug!(
+            tracked_id = %td.id,
+            identity_aliases = identities.len(),
+            "reading import artifacts through completed identity and tracked compatibility alias"
+        );
+    }
+    let mut artifacts = Vec::new();
+    let mut seen = HashSet::new();
+    let canonical_download_id = td.canonical_download_id();
+    for identity in identities {
+        let mut matches = app
+            .services
+            .workflow
+            .import_artifacts
+            .list_by_source_identity_for_download(canonical_download_id, &identity)
+            .await?;
+        if canonical_download_id.is_none() {
+            matches.extend(
+                app.services
+                    .workflow
+                    .import_artifacts
+                    .list_by_source_identity(&identity)
+                    .await?,
+            );
+        }
+        for artifact in matches {
+            if seen.insert(artifact.id.clone()) {
+                artifacts.push(artifact);
+            }
+        }
+    }
+    Ok(artifacts)
+}
+
 pub(crate) async fn load_completed_download_lookup(
     app: &AppUseCase,
 ) -> AppResult<CompletedDownloadLookup> {
@@ -76,5 +141,23 @@ pub(crate) async fn queue_item_identity_tracked_state(
 ) -> Option<TrackedDownloadState> {
     let identity = lookup::observed_queue_item_identity(item);
     let source_identity = lookup::queue_item_source_identity(item);
-    lookup::download_id_tracked_state(app, &identity, Some(&source_identity)).await
+    let canonical_download_id = match crate::download_identity::resolve_observed_client_job(
+        app,
+        crate::download_identity::observed_queue_item_job(item),
+    )
+    .await
+    {
+        crate::download_identity::ObservedClientJobResolution::Resolved(download_id) => {
+            Some(download_id)
+        }
+        crate::download_identity::ObservedClientJobResolution::Conflict => return None,
+        crate::download_identity::ObservedClientJobResolution::Unavailable => None,
+    };
+    lookup::download_id_tracked_state(
+        app,
+        canonical_download_id.as_ref(),
+        &identity,
+        Some(&source_identity),
+    )
+    .await
 }

@@ -67,8 +67,14 @@ function metadataResultForDiscoveryItem(
 ): MetadataTvdbSearchItem {
   const externalIds = externalIdsForDiscoveryItem(item);
   return {
+    smgId: Number(
+      externalIds.find((externalId) => externalId.source === "smg")?.value,
+    ) || null,
     tvdbId:
       externalIds.find((externalId) => externalId.source === "tvdb")?.value ?? "",
+    tmdbId: Number(
+      externalIds.find((externalId) => externalId.source === "tmdb")?.value,
+    ) || null,
     name: discoveryItemDisplayTitle(item),
     imdbId:
       externalIds.find((externalId) => externalId.source === "imdb")?.value ??

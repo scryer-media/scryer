@@ -48,6 +48,21 @@ fn download_queue_action_payload(parts: DownloadQueueActionParts) -> DownloadQue
     }
 }
 
+fn queued_manual_import_action_payload(
+    queued: scryer_application::QueuedManualImport,
+) -> DownloadQueueActionPayload {
+    download_queue_action_payload(DownloadQueueActionParts {
+        kind: DownloadQueueActionKindValue::QueuedManualImport,
+        download_client_item_id: queued.source_identity.item_id,
+        client_id: queued.source_identity.client_id,
+        client_type: Some(queued.source_identity.client_type),
+        import_id: Some(queued.import_id),
+        command_id: None,
+        removed: false,
+        queue_item: None,
+    })
+}
+
 pub(crate) fn queue_download_conflict_payload(
     conflict: SubmissionScopeConflict,
 ) -> QueueDownloadConflictPayload {
@@ -264,7 +279,7 @@ impl DownloadMutations {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
         let selection_id = input.selection_id.to_string();
-        let import_id = app
+        let queued = app
             .queue_manual_import_selection(
                 &actor,
                 selection_id.clone(),
@@ -280,16 +295,7 @@ impl DownloadMutations {
             )
             .await
             .map_err(to_gql_error)?;
-        Ok(download_queue_action_payload(DownloadQueueActionParts {
-            kind: DownloadQueueActionKindValue::QueuedManualImport,
-            download_client_item_id: selection_id,
-            client_id: None,
-            client_type: None,
-            import_id: Some(import_id),
-            command_id: None,
-            removed: false,
-            queue_item: None,
-        }))
+        Ok(queued_manual_import_action_payload(queued))
     }
 
     /// Inspect a tracked download and persist a server-owned selection of importable files.
@@ -310,11 +316,13 @@ impl DownloadMutations {
             &input.client_type,
             &input.download_client_item_id,
             input.title_id.as_str(),
+            input.extract_archives.unwrap_or(false),
         )
         .await
         .map_err(to_gql_error)?;
         Ok(ManualImportSelectionPayload {
             selection_id: selection.selection_id.into(),
+            archive_extraction_needed: selection.archive_extraction_needed,
             files: selection
                 .files
                 .into_iter()
@@ -322,6 +330,14 @@ impl DownloadMutations {
                     candidate_id: file.candidate_id.into(),
                     file_name: file.file_name,
                     size_bytes: Long::from(file.size_bytes),
+                    video_facts: file.video_facts.map(|facts| ManualImportVideoFactsPayload {
+                        container_format: facts.container_format,
+                        video_codec: facts.video_codec,
+                        audio_codec: facts.audio_codec,
+                        video_width: facts.video_width,
+                        video_height: facts.video_height,
+                        duration_seconds: facts.duration_seconds,
+                    }),
                     quality: file.quality,
                     parsed_season: file.parsed_season.map(|value| value as i32),
                     parsed_episodes: file
@@ -382,6 +398,21 @@ impl DownloadMutations {
             dest_path: result.dest_path,
             error_message: result.error_message,
         })
+    }
+
+    /// Cancel a queued or copying import operation by its server-issued stream identity.
+    async fn cancel_active_import(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Opaque identity of the queued or active import stream.")]
+        stream_id: async_graphql::ID,
+    ) -> GqlResult<bool> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        app.cancel_active_import_stream(&actor, stream_id.as_ref())
+            .await
+            .map_err(to_gql_error)?;
+        Ok(true)
     }
 
     /// Mark a tracked download ignored without deleting it from the download client.
@@ -631,5 +662,33 @@ impl DownloadMutations {
             removed: false,
             queue_item: existing_queue_item,
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn queued_manual_import_payload_uses_the_source_identity_not_the_selection_id() {
+        let payload = queued_manual_import_action_payload(scryer_application::QueuedManualImport {
+            import_id: "import-1".to_string(),
+            source_identity: scryer_application::ClientJobLocator::new(
+                Some("client-1"),
+                "weaver",
+                "10766",
+            ),
+        });
+
+        assert_eq!(payload.download_client_item_id, "10766");
+        assert_eq!(
+            payload.client_id.as_ref().map(|id| id.as_str()),
+            Some("client-1")
+        );
+        assert_eq!(payload.client_type.as_deref(), Some("weaver"));
+        assert_eq!(
+            payload.import_id.as_ref().map(|id| id.as_str()),
+            Some("import-1")
+        );
     }
 }

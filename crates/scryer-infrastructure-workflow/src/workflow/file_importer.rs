@@ -1,17 +1,25 @@
 use async_trait::async_trait;
 use scryer_application::{
-    AppError, AppResult, FileImporter, ImportFilePermissions, ImportFileTransferProgress,
-    ImportFileTransferProgressSender, fs_integrity::import_content_proof,
+    AppError, AppResult, FileImporter, ImportFileExecutionContext, ImportFilePermissions,
+    ImportFileTransferProgress, ImportFileTransferProgressSender,
+    fs_integrity::import_content_proof,
 };
 use scryer_domain::{
-    ImportFileIdentity, ImportFileResult, ImportMode, ImportSourceCleanupGuard,
-    ImportSourceIdentity, ImportSourceIdentityKind, ImportSourceSnapshot, ImportStrategy,
-    ImportTransferPhase,
+    ImportDestinationDisposition, ImportFileIdentity, ImportFileResult, ImportMode,
+    ImportSourceCleanupGuard, ImportSourceIdentity, ImportSourceIdentityKind, ImportSourceSnapshot,
+    ImportStrategy, ImportTransferPhase,
 };
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fmt;
-use std::io::{self, Read, Write};
+use std::hash::{DefaultHasher, Hash, Hasher};
+use std::io::{self, BufRead, Read, Write};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
+use std::sync::{
+    Arc, OnceLock, Weak,
+    atomic::{AtomicU64, Ordering},
+};
+use std::time::{Duration, Instant, SystemTime};
 
 #[cfg(unix)]
 use std::ffi::CString;
@@ -32,8 +40,126 @@ use windows_sys::Win32::Storage::FileSystem::{
 const TRANSIENT_BAD_FILE_DESCRIPTOR_ERRNO: i32 = 9;
 const IMPORT_COPY_MAX_ATTEMPTS: usize = 3;
 const IMPORT_COPY_BUFFER_BYTES: usize = 8 * 1024 * 1024;
+const IMPORT_FILE_STALL_TIMEOUT_ENV: &str = "SCRYER_IMPORT_FILE_STALL_TIMEOUT_SECONDS";
+const DEFAULT_IMPORT_FILE_STALL_TIMEOUT_SECONDS: u64 = 30 * 60;
+const MIN_IMPORT_FILE_STALL_TIMEOUT_SECONDS: u64 = 5 * 60;
+const MAX_IMPORT_FILE_STALL_TIMEOUT_SECONDS: u64 = 24 * 60 * 60;
+const IMPORT_COPY_WORKERS_PER_VOLUME_ENV: &str = "SCRYER_IMPORT_COPY_WORKERS_PER_VOLUME";
+const IMPORT_FAST_WORKERS_PER_CLIENT_ENV: &str = "SCRYER_IMPORT_FAST_WORKERS_PER_CLIENT";
+const DEFAULT_IMPORT_COPY_WORKERS_PER_VOLUME: usize = 2;
+const MAX_IMPORT_COPY_WORKERS_PER_VOLUME: usize = 8;
+const DEFAULT_IMPORT_FAST_WORKERS_PER_CLIENT: usize = 1;
+const MAX_IMPORT_FAST_WORKERS_PER_CLIENT: usize = 4;
+const IMPORT_PREPARATION_WORKERS: usize = 8;
+static IMPORT_PLACEMENT_LIMITS: OnceLock<(usize, usize)> = OnceLock::new();
 
-pub struct FsFileImporter;
+#[derive(Clone)]
+struct KeyedImportPermitTable {
+    permits: Arc<tokio::sync::Mutex<HashMap<String, Weak<tokio::sync::Semaphore>>>>,
+    workers_per_key: usize,
+}
+
+impl KeyedImportPermitTable {
+    fn new(workers_per_key: usize) -> Self {
+        Self {
+            permits: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            workers_per_key,
+        }
+    }
+
+    async fn acquire(&self, key: &str, lane: &'static str) -> tokio::sync::OwnedSemaphorePermit {
+        let semaphore = {
+            let mut permits = self.permits.lock().await;
+            permits.retain(|_, permit| permit.strong_count() > 0);
+            if let Some(permit) = permits.get(key).and_then(Weak::upgrade) {
+                permit
+            } else {
+                let permit = Arc::new(tokio::sync::Semaphore::new(self.workers_per_key));
+                permits.insert(key.to_string(), Arc::downgrade(&permit));
+                permit
+            }
+        };
+        let available_before = semaphore.available_permits();
+        let semaphore_for_metrics = semaphore.clone();
+        let started = Instant::now();
+        let permit = semaphore
+            .acquire_owned()
+            .await
+            .expect("import lane semaphore is never closed");
+        let wait = started.elapsed();
+        let active_permits = self
+            .workers_per_key
+            .saturating_sub(semaphore_for_metrics.available_permits());
+        metrics::counter!(
+            "scryer_import_lane_acquisitions_total",
+            "lane" => lane,
+            "saturated" => (available_before == 0).to_string()
+        )
+        .increment(1);
+        metrics::histogram!("scryer_import_lane_wait_seconds", "lane" => lane)
+            .record(wait.as_secs_f64());
+        metrics::histogram!("scryer_import_lane_active_permits", "lane" => lane)
+            .record(active_permits as f64);
+        tracing::debug!(
+            lane,
+            lane_key = %opaque_lane_key(key),
+            wait_ms = wait.as_millis(),
+            active_permits,
+            capacity = self.workers_per_key,
+            saturated = available_before == 0,
+            "acquired import workstream permit"
+        );
+        permit
+    }
+}
+
+#[derive(Clone)]
+struct ImportPlacementCoordinator {
+    preparation: Arc<tokio::sync::Semaphore>,
+    fast: KeyedImportPermitTable,
+    copy: KeyedImportPermitTable,
+}
+
+impl ImportPlacementCoordinator {
+    fn from_environment() -> Self {
+        let (fast_workers, copy_workers) = *IMPORT_PLACEMENT_LIMITS.get_or_init(|| {
+            (
+                import_worker_limit_from_environment(
+                    IMPORT_FAST_WORKERS_PER_CLIENT_ENV,
+                    DEFAULT_IMPORT_FAST_WORKERS_PER_CLIENT,
+                    MAX_IMPORT_FAST_WORKERS_PER_CLIENT,
+                ),
+                import_worker_limit_from_environment(
+                    IMPORT_COPY_WORKERS_PER_VOLUME_ENV,
+                    DEFAULT_IMPORT_COPY_WORKERS_PER_VOLUME,
+                    MAX_IMPORT_COPY_WORKERS_PER_VOLUME,
+                ),
+            )
+        });
+        Self::new(fast_workers, copy_workers)
+    }
+
+    fn new(fast_workers_per_client: usize, copy_workers_per_volume: usize) -> Self {
+        Self {
+            preparation: Arc::new(tokio::sync::Semaphore::new(IMPORT_PREPARATION_WORKERS)),
+            fast: KeyedImportPermitTable::new(fast_workers_per_client),
+            copy: KeyedImportPermitTable::new(copy_workers_per_volume),
+        }
+    }
+
+    async fn acquire_preparation(&self) -> tokio::sync::OwnedSemaphorePermit {
+        self.preparation
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("import preparation semaphore is never closed")
+    }
+}
+
+pub struct FsFileImporter {
+    placement: ImportPlacementCoordinator,
+    worker_executable: Option<PathBuf>,
+}
 
 impl Default for FsFileImporter {
     fn default() -> Self {
@@ -43,11 +169,65 @@ impl Default for FsFileImporter {
 
 impl FsFileImporter {
     pub fn new() -> Self {
-        Self
+        Self {
+            placement: ImportPlacementCoordinator::from_environment(),
+            worker_executable: None,
+        }
+    }
+
+    pub fn with_worker_executable(worker_executable: PathBuf) -> Self {
+        Self {
+            placement: ImportPlacementCoordinator::from_environment(),
+            worker_executable: Some(worker_executable),
+        }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+fn import_worker_limit_from_environment(key: &str, default: usize, maximum: usize) -> usize {
+    let Ok(raw) = std::env::var(key) else {
+        return default;
+    };
+    let value = raw.trim();
+    let parsed = parse_import_worker_limit(Some(value), default, maximum);
+    match value.parse::<usize>() {
+        Ok(0) | Err(_) => {
+            tracing::warn!(
+                key,
+                value,
+                default,
+                "invalid import worker limit; using default"
+            );
+        }
+        Ok(requested) if requested > maximum => {
+            tracing::warn!(
+                key,
+                requested,
+                maximum,
+                "import worker limit exceeds maximum; clamping"
+            );
+        }
+        Ok(_) => {}
+    }
+    parsed
+}
+
+fn parse_import_worker_limit(value: Option<&str>, default: usize, maximum: usize) -> usize {
+    match value
+        .map(str::trim)
+        .and_then(|value| value.parse::<usize>().ok())
+    {
+        Some(parsed) if parsed > 0 => parsed.min(maximum),
+        _ => default,
+    }
+}
+
+fn opaque_lane_key(key: &str) -> String {
+    let mut hasher = DefaultHasher::new();
+    key.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct FileFingerprint {
     len: u64,
     modified: Option<SystemTime>,
@@ -59,7 +239,7 @@ struct FileFingerprint {
     uid: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct DirectoryFingerprint {
     #[cfg(unix)]
     dev: u64,
@@ -71,7 +251,7 @@ struct DirectoryFingerprint {
     file_index: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 enum ImportSourceKind {
     Regular,
     Symlink {
@@ -80,7 +260,7 @@ enum ImportSourceKind {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct ImportSourceFingerprint {
     file: FileFingerprint,
     kind: ImportSourceKind,
@@ -777,6 +957,7 @@ pub fn missing_destination_dirs(parent: &Path) -> Vec<PathBuf> {
     missing
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct ImportDestinationGuard {
     requested_path: PathBuf,
     parent_path: PathBuf,
@@ -872,6 +1053,20 @@ fn validate_import_destination_parent(
     }
 
     Ok(())
+}
+
+fn ensure_import_destination_absent(dest: &Path) -> AppResult<()> {
+    match std::fs::symlink_metadata(dest) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Ok(_) => Err(AppError::Repository(format!(
+            "import destination appeared before copy execution: {}",
+            dest.display()
+        ))),
+        Err(error) => Err(AppError::Repository(format!(
+            "failed to inspect import destination {} before copy: {error}",
+            dest.display()
+        ))),
+    }
 }
 
 fn validate_import_destination_file(guard: &ImportDestinationGuard) -> AppResult<()> {
@@ -1009,6 +1204,10 @@ impl ImportCopyAttemptError {
     fn is_transient_file_handle_error(&self) -> bool {
         self.error.raw_os_error() == Some(TRANSIENT_BAD_FILE_DESCRIPTOR_ERRNO)
     }
+
+    fn is_cancellation(&self) -> bool {
+        self.stage == "copy cancelled"
+    }
 }
 
 impl fmt::Display for ImportCopyAttemptError {
@@ -1062,6 +1261,7 @@ struct ImportCopyAttempt<'a> {
     source_fingerprint: &'a ImportSourceFingerprint,
     size: u64,
     progress: Option<&'a ImportFileTransferProgressSender>,
+    cancellation: Option<&'a scryer_application::ImportCancellation>,
 }
 
 fn copy_regular_source_to_destination_once(
@@ -1076,7 +1276,15 @@ fn copy_regular_source_to_destination_once(
         source_fingerprint,
         size,
         progress,
+        cancellation,
     } = attempt_context;
+
+    if cancellation.is_some_and(scryer_application::ImportCancellation::is_cancelled) {
+        return Err(ImportCopyAttemptError::new(
+            "copy cancelled",
+            io_other("import copy was cancelled before it started"),
+        ));
+    }
 
     ensure_same_source(source, source_fingerprint)
         .map_err(io_other)
@@ -1105,6 +1313,12 @@ fn copy_regular_source_to_destination_once(
     let mut copied = 0u64;
     let mut buffer = vec![0u8; IMPORT_COPY_BUFFER_BYTES];
     loop {
+        if cancellation.is_some_and(scryer_application::ImportCancellation::is_cancelled) {
+            return Err(ImportCopyAttemptError::new(
+                "copy cancelled",
+                io_other("import copy was cancelled"),
+            ));
+        }
         let read = source_file
             .read(&mut buffer)
             .map_err(|error| ImportCopyAttemptError::new("copy", error))?;
@@ -1143,6 +1357,7 @@ fn copy_regular_source_to_destination(
     size: u64,
     options: ImportFileOptions,
     progress: Option<&ImportFileTransferProgressSender>,
+    cancellation: Option<&scryer_application::ImportCancellation>,
 ) -> AppResult<()> {
     let temp_dest = dest.with_extension("tmp_import");
     let mut attempt = 1usize;
@@ -1167,15 +1382,24 @@ fn copy_regular_source_to_destination(
                 source_fingerprint,
                 size,
                 progress,
+                cancellation,
             },
             options,
             attempt,
         ) {
             Ok(()) => break,
             Err(error) => {
+                let cancelled = error.is_cancellation();
                 let should_retry =
                     error.is_transient_file_handle_error() && attempt < IMPORT_COPY_MAX_ATTEMPTS;
                 let _ = remove_import_temp_file(&temp_dest);
+                if cancelled {
+                    return Err(AppError::canceled(format!(
+                        "filesystem copy was cancelled: {} -> {}",
+                        source.display(),
+                        dest.display()
+                    )));
+                }
                 if should_retry {
                     sleep_before_import_copy_retry(import_copy_retry_delay(attempt));
                     attempt += 1;
@@ -1303,6 +1527,300 @@ fn finalize_imported_regular_destination(
     Ok(())
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PreparedImportPlacement {
+    source: PathBuf,
+    dest: PathBuf,
+    #[serde(skip)]
+    options: ImportFileOptions,
+    source_cleanup_required: bool,
+    #[serde(skip)]
+    progress: Option<ImportFileTransferProgressSender>,
+    #[serde(skip)]
+    cancellation: Option<scryer_application::ImportCancellation>,
+    permissions: ImportFilePermissions,
+    source_fingerprint: ImportSourceFingerprint,
+    size: u64,
+    destination_guard: ImportDestinationGuard,
+    volume_key: String,
+}
+
+enum FastPlacementResult {
+    Finished(ImportFileResult),
+    CopyRequired(PreparedImportPlacement),
+}
+
+fn prepare_import_placement_blocking(
+    source: PathBuf,
+    dest: PathBuf,
+    options: ImportFileOptions,
+    source_cleanup_required: bool,
+    expected_source: Option<ImportSourceSnapshot>,
+    progress: Option<ImportFileTransferProgressSender>,
+    permissions: ImportFilePermissions,
+) -> AppResult<PreparedImportPlacement> {
+    let (source_fingerprint, size, destination_guard) =
+        prepare_import_destination(&source, &dest, &permissions)?;
+    ensure_expected_source_snapshot(&source, &source_fingerprint, expected_source.as_ref())?;
+    let volume_key = destination_volume_key(&destination_guard);
+    Ok(PreparedImportPlacement {
+        source,
+        dest,
+        options,
+        source_cleanup_required,
+        progress,
+        cancellation: None,
+        permissions,
+        source_fingerprint,
+        size,
+        destination_guard,
+        volume_key,
+    })
+}
+
+#[cfg(unix)]
+fn destination_volume_key(guard: &ImportDestinationGuard) -> String {
+    format!("unix-dev:{}", guard.approved_parent_fingerprint.dev)
+}
+
+#[cfg(windows)]
+fn destination_volume_key(guard: &ImportDestinationGuard) -> String {
+    use std::path::{Component, Prefix};
+
+    let root = match guard.approved_parent_canonical.components().next() {
+        Some(Component::Prefix(prefix)) => match prefix.kind() {
+            Prefix::Disk(letter) | Prefix::VerbatimDisk(letter) => {
+                format!("{}:", char::from(letter).to_ascii_lowercase())
+            }
+            Prefix::UNC(server, share) | Prefix::VerbatimUNC(server, share) => format!(
+                "//{}/{}",
+                server.to_string_lossy().to_ascii_lowercase(),
+                share.to_string_lossy().to_ascii_lowercase()
+            ),
+            other => format!("{other:?}"),
+        },
+        _ => "unknown-root".to_string(),
+    };
+    format!(
+        "windows-volume:{}:{root}",
+        guard.approved_parent_fingerprint.volume_serial_number
+    )
+}
+
+#[cfg(not(any(unix, windows)))]
+fn destination_volume_key(_guard: &ImportDestinationGuard) -> String {
+    "unknown-volume".to_string()
+}
+
+fn finish_prepared_import(
+    prepared: PreparedImportPlacement,
+    strategy: ImportStrategy,
+) -> AppResult<ImportFileResult> {
+    let source_cleanup = cleanup_guard_after_placement(
+        prepared.source_cleanup_required,
+        &prepared.source,
+        &prepared.dest,
+        &prepared.source_fingerprint,
+        prepared.size,
+    )?;
+    Ok(ImportFileResult {
+        strategy,
+        source_path: prepared.source,
+        dest_path: prepared.dest,
+        size_bytes: prepared.size,
+        destination_disposition: ImportDestinationDisposition::Created,
+        source_cleanup,
+    })
+}
+
+fn try_fast_import_placement_blocking(
+    prepared: PreparedImportPlacement,
+) -> AppResult<FastPlacementResult> {
+    ensure_same_source(&prepared.source, &prepared.source_fingerprint)?;
+    validate_import_destination_parent(&prepared.destination_guard, &prepared.dest)?;
+    if let Some(existing) = reconcile_existing_destination(
+        &prepared.source,
+        &prepared.dest,
+        &prepared.source_fingerprint,
+        prepared.size,
+        &prepared.destination_guard,
+        prepared.source_cleanup_required,
+    )? {
+        return Ok(FastPlacementResult::Finished(existing));
+    }
+
+    if let ImportSourceKind::Symlink { .. } = &prepared.source_fingerprint.kind {
+        import_symlink_source(
+            &prepared.source,
+            &prepared.dest,
+            &prepared.source_fingerprint,
+            prepared.size,
+        )?;
+        validate_import_destination_guard_after_placement(
+            &prepared.destination_guard,
+            &prepared.dest,
+        )?;
+        return finish_prepared_import(prepared, ImportStrategy::Symlink)
+            .map(FastPlacementResult::Finished);
+    }
+
+    let hardlink_uid_safe =
+        source_uid_matches_scryer(&prepared.source_fingerprint, &prepared.options);
+    let mut partial_destination_created = false;
+    if !force_cross_device_move(&prepared.options) && hardlink_uid_safe {
+        match std::fs::hard_link(&prepared.source, &prepared.dest) {
+            Ok(()) => {
+                partial_destination_created = true;
+                if let Err(error) = ensure_same_source(
+                    &prepared.source,
+                    &prepared.source_fingerprint,
+                )
+                .and_then(|_| {
+                    ensure_same_file_identity(&prepared.dest, &prepared.source_fingerprint.file)
+                }) {
+                    let _ = std::fs::remove_file(&prepared.dest);
+                    return Err(error);
+                }
+                match std::fs::metadata(&prepared.dest) {
+                    Ok(dest_meta) if dest_meta.len() == prepared.size => {
+                        validate_import_destination_guard_after_placement(
+                            &prepared.destination_guard,
+                            &prepared.dest,
+                        )?;
+                        finalize_imported_regular_destination(
+                            &prepared.dest,
+                            &prepared.options,
+                            &prepared.permissions,
+                        )?;
+                        return finish_prepared_import(prepared, ImportStrategy::HardLink)
+                            .map(FastPlacementResult::Finished);
+                    }
+                    Ok(dest_meta) => tracing::warn!(
+                        source_size = prepared.size,
+                        destination_size = dest_meta.len(),
+                        "hard link size mismatch; handing import to copy lane"
+                    ),
+                    Err(error) => tracing::warn!(
+                        error = %error,
+                        "hard link destination stat failed; handing import to copy lane"
+                    ),
+                }
+            }
+            Err(error) if scryer_application::fs_safety::is_cross_device_error(&error) => {
+                tracing::debug!(error = %error, "hard link is ineligible; handing import to copy lane");
+            }
+            Err(error) => {
+                tracing::warn!(error = %error, "hard link failed; handing import to copy lane");
+            }
+        }
+    }
+
+    if partial_destination_created {
+        std::fs::remove_file(&prepared.dest).map_err(|error| {
+            AppError::Repository(format!(
+                "failed to remove partial hardlink destination {} before copy: {error}",
+                prepared.dest.display()
+            ))
+        })?;
+    }
+    ensure_import_destination_absent(&prepared.dest)?;
+    Ok(FastPlacementResult::CopyRequired(prepared))
+}
+
+fn reconcile_existing_destination(
+    source: &Path,
+    dest: &Path,
+    source_fingerprint: &ImportSourceFingerprint,
+    size: u64,
+    destination_guard: &ImportDestinationGuard,
+    source_cleanup_required: bool,
+) -> AppResult<Option<ImportFileResult>> {
+    let metadata = match std::fs::symlink_metadata(dest) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(AppError::Repository(format!(
+                "failed to inspect existing import destination {}: {error}",
+                dest.display()
+            )));
+        }
+        Ok(metadata) => metadata,
+    };
+    if source == dest {
+        return Err(AppError::ManualReconciliationRequired(format!(
+            "import source and destination are the same path: {}",
+            dest.display()
+        )));
+    }
+    if !metadata.file_type().is_file() && !metadata.file_type().is_symlink() {
+        return Err(AppError::ManualReconciliationRequired(format!(
+            "import destination conflict is not a regular file: {}",
+            dest.display()
+        )));
+    }
+
+    ensure_same_source(source, source_fingerprint)?;
+    validate_import_destination_parent(destination_guard, dest)?;
+    validate_import_destination_file(destination_guard)?;
+    let source_proof = import_content_proof(source).map_err(|error| {
+        AppError::Repository(format!(
+            "failed to prove import source content {}: {error}",
+            source.display()
+        ))
+    })?;
+    let destination_proof = import_content_proof(dest).map_err(|error| {
+        AppError::Repository(format!(
+            "failed to prove import destination content {}: {error}",
+            dest.display()
+        ))
+    })?;
+    if source_proof != destination_proof || source_proof.size_bytes != size {
+        return Err(AppError::ManualReconciliationRequired(format!(
+            "import destination appeared with different content: {}",
+            dest.display()
+        )));
+    }
+
+    let source_cleanup = if source_cleanup_required {
+        Some(cleanup_guard(source, dest, source_fingerprint, size)?)
+    } else {
+        None
+    };
+    Ok(Some(ImportFileResult {
+        strategy: if source_cleanup_required {
+            ImportStrategy::Move
+        } else {
+            ImportStrategy::Copy
+        },
+        source_path: source.to_path_buf(),
+        dest_path: dest.to_path_buf(),
+        size_bytes: size,
+        destination_disposition: ImportDestinationDisposition::AlreadyPresent,
+        source_cleanup,
+    }))
+}
+
+fn copy_prepared_import_blocking(prepared: PreparedImportPlacement) -> AppResult<ImportFileResult> {
+    ensure_same_source(&prepared.source, &prepared.source_fingerprint)?;
+    validate_import_destination_parent(&prepared.destination_guard, &prepared.dest)?;
+    ensure_import_destination_absent(&prepared.dest)?;
+    copy_regular_source_to_destination(
+        &prepared.source,
+        &prepared.dest,
+        &prepared.source_fingerprint,
+        prepared.size,
+        prepared.options,
+        prepared.progress.as_ref(),
+        prepared.cancellation.as_ref(),
+    )?;
+    validate_import_destination_guard_after_placement(&prepared.destination_guard, &prepared.dest)?;
+    finalize_imported_regular_destination(
+        &prepared.dest,
+        &prepared.options,
+        &prepared.permissions,
+    )?;
+    finish_prepared_import(prepared, ImportStrategy::Copy)
+}
+
 fn import_hardlink_or_copy_blocking(
     source: PathBuf,
     dest: PathBuf,
@@ -1315,6 +1833,16 @@ fn import_hardlink_or_copy_blocking(
     let (source_fingerprint, size, destination_guard) =
         prepare_import_destination(&source, &dest, &permissions)?;
     ensure_expected_source_snapshot(&source, &source_fingerprint, expected_source.as_ref())?;
+    if let Some(existing) = reconcile_existing_destination(
+        &source,
+        &dest,
+        &source_fingerprint,
+        size,
+        &destination_guard,
+        source_cleanup_required,
+    )? {
+        return Ok(existing);
+    }
 
     if let ImportSourceKind::Symlink { .. } = &source_fingerprint.kind {
         import_symlink_source(&source, &dest, &source_fingerprint, size)?;
@@ -1331,6 +1859,7 @@ fn import_hardlink_or_copy_blocking(
             source_path: source,
             dest_path: dest,
             size_bytes: size,
+            destination_disposition: ImportDestinationDisposition::Created,
             source_cleanup,
         });
     }
@@ -1379,6 +1908,7 @@ fn import_hardlink_or_copy_blocking(
                             source_path: source,
                             dest_path: dest,
                             size_bytes: size,
+                            destination_disposition: ImportDestinationDisposition::Created,
                             source_cleanup,
                         });
                     }
@@ -1423,6 +1953,7 @@ fn import_hardlink_or_copy_blocking(
         size,
         options,
         progress.as_ref(),
+        None,
     )?;
     validate_import_destination_guard_after_placement(&destination_guard, &dest)?;
     finalize_imported_regular_destination(&dest, &options, &permissions)?;
@@ -1439,6 +1970,7 @@ fn import_hardlink_or_copy_blocking(
         source_path: source,
         dest_path: dest,
         size_bytes: size,
+        destination_disposition: ImportDestinationDisposition::Created,
         source_cleanup,
     })
 }
@@ -1474,9 +2006,632 @@ fn import_file_blocking(
     }
 }
 
+const IMPORT_FILE_WORKER_PROTOCOL_VERSION: u16 = 1;
+static IMPORT_FILE_WORKER_NONCE: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "command", rename_all = "snake_case")]
+enum ImportFileWorkerRequest {
+    Snapshot {
+        version: u16,
+        nonce: u64,
+        source: PathBuf,
+    },
+    Prepare {
+        version: u16,
+        nonce: u64,
+        source: PathBuf,
+        dest: PathBuf,
+        mode: ImportMode,
+        expected_source: Option<ImportSourceSnapshot>,
+        permissions: ImportFilePermissions,
+    },
+    FastPlacement {
+        version: u16,
+        nonce: u64,
+        prepared: PreparedImportPlacement,
+    },
+    Copy {
+        version: u16,
+        nonce: u64,
+        prepared: PreparedImportPlacement,
+    },
+    Cleanup {
+        version: u16,
+        nonce: u64,
+        guard: ImportSourceCleanupGuard,
+        final_dest_path: PathBuf,
+    },
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "event", rename_all = "snake_case")]
+enum ImportFileWorkerEvent {
+    Stage {
+        nonce: u64,
+        stage: String,
+    },
+    Prepared {
+        nonce: u64,
+        prepared: PreparedImportPlacement,
+    },
+    CopyRequired {
+        nonce: u64,
+        volume_key: String,
+    },
+    Progress {
+        nonce: u64,
+        phase: ImportTransferPhase,
+        bytes: u64,
+        total_bytes: u64,
+    },
+    SnapshotFinished {
+        nonce: u64,
+        snapshot: ImportSourceSnapshot,
+    },
+    ImportFinished {
+        nonce: u64,
+        result: ImportFileResult,
+    },
+    CleanupFinished {
+        nonce: u64,
+    },
+    Error {
+        nonce: u64,
+        message: String,
+    },
+}
+
+fn write_import_worker_event(
+    output: &Arc<std::sync::Mutex<std::io::Stdout>>,
+    event: &ImportFileWorkerEvent,
+) -> io::Result<()> {
+    let mut output = output
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    serde_json::to_writer(&mut *output, event).map_err(io::Error::other)?;
+    output.write_all(b"\n")?;
+    output.flush()
+}
+
+fn read_import_worker_request(
+    input: &mut impl std::io::BufRead,
+) -> Result<ImportFileWorkerRequest, String> {
+    let mut line = String::new();
+    if input
+        .read_line(&mut line)
+        .map_err(|error| error.to_string())?
+        == 0
+    {
+        return Err("import worker control pipe closed".to_string());
+    }
+    serde_json::from_str(&line).map_err(|error| format!("invalid import worker request: {error}"))
+}
+
+fn import_worker_request_nonce(request: &ImportFileWorkerRequest) -> (u16, u64) {
+    match request {
+        ImportFileWorkerRequest::Snapshot { version, nonce, .. }
+        | ImportFileWorkerRequest::Prepare { version, nonce, .. }
+        | ImportFileWorkerRequest::FastPlacement { version, nonce, .. }
+        | ImportFileWorkerRequest::Copy { version, nonce, .. }
+        | ImportFileWorkerRequest::Cleanup { version, nonce, .. } => (*version, *nonce),
+    }
+}
+
+fn start_import_worker_stdin_death_watch() {
+    std::thread::spawn(|| {
+        let stdin = std::io::stdin();
+        let mut control = std::io::BufReader::new(stdin.lock());
+        let mut line = String::new();
+        if control.read_line(&mut line).is_err() || line.is_empty() {
+            std::process::exit(3);
+        }
+    });
+}
+
+/// Run the hidden filesystem worker protocol. The host invokes this before
+/// normal application startup so a blocked kernel filesystem call remains
+/// independently killable.
+pub fn run_import_file_worker() -> i32 {
+    let stdin = std::io::stdin();
+    let mut input = std::io::BufReader::new(stdin.lock());
+    let output = Arc::new(std::sync::Mutex::new(std::io::stdout()));
+    let request = match read_import_worker_request(&mut input) {
+        Ok(request) => request,
+        Err(error) => {
+            let _ = write_import_worker_event(
+                &output,
+                &ImportFileWorkerEvent::Error {
+                    nonce: 0,
+                    message: error,
+                },
+            );
+            return 2;
+        }
+    };
+    let (version, nonce) = import_worker_request_nonce(&request);
+    if version != IMPORT_FILE_WORKER_PROTOCOL_VERSION {
+        let _ = write_import_worker_event(
+            &output,
+            &ImportFileWorkerEvent::Error {
+                nonce,
+                message: format!("unsupported import worker protocol version {version}"),
+            },
+        );
+        return 2;
+    }
+    drop(input);
+    start_import_worker_stdin_death_watch();
+
+    let result: Result<(), String> = match request {
+        ImportFileWorkerRequest::Snapshot { source, .. } => {
+            let _ = write_import_worker_event(
+                &output,
+                &ImportFileWorkerEvent::Stage {
+                    nonce,
+                    stage: "snapshot".to_string(),
+                },
+            );
+            snapshot_import_source_blocking(source)
+                .map_err(|error| error.to_string())
+                .and_then(|snapshot| {
+                    write_import_worker_event(
+                        &output,
+                        &ImportFileWorkerEvent::SnapshotFinished { nonce, snapshot },
+                    )
+                    .map_err(|error| error.to_string())
+                })
+        }
+        ImportFileWorkerRequest::Cleanup {
+            guard,
+            final_dest_path,
+            ..
+        } => {
+            let _ = write_import_worker_event(
+                &output,
+                &ImportFileWorkerEvent::Stage {
+                    nonce,
+                    stage: "cleanup".to_string(),
+                },
+            );
+            remove_import_source_after_verified_import_blocking(
+                guard,
+                final_dest_path,
+                ImportFileOptions::default(),
+            )
+            .map_err(|error| error.to_string())
+            .and_then(|()| {
+                write_import_worker_event(
+                    &output,
+                    &ImportFileWorkerEvent::CleanupFinished { nonce },
+                )
+                .map_err(|error| error.to_string())
+            })
+        }
+        ImportFileWorkerRequest::Prepare {
+            source,
+            dest,
+            mode,
+            expected_source,
+            permissions,
+            ..
+        } => {
+            let _ = write_import_worker_event(
+                &output,
+                &ImportFileWorkerEvent::Stage {
+                    nonce,
+                    stage: "prepare".to_string(),
+                },
+            );
+            let source_cleanup_required = mode == ImportMode::Move;
+            prepare_import_placement_blocking(
+                source,
+                dest,
+                ImportFileOptions::default(),
+                source_cleanup_required,
+                expected_source,
+                None,
+                permissions,
+            )
+            .map_err(|error| error.to_string())
+            .and_then(|prepared| {
+                write_import_worker_event(
+                    &output,
+                    &ImportFileWorkerEvent::Prepared { nonce, prepared },
+                )
+                .map_err(|error| error.to_string())
+            })
+        }
+        ImportFileWorkerRequest::FastPlacement { mut prepared, .. } => {
+            let _ = write_import_worker_event(
+                &output,
+                &ImportFileWorkerEvent::Stage {
+                    nonce,
+                    stage: "fast_placement".to_string(),
+                },
+            );
+            prepared.options = ImportFileOptions::default();
+            prepared.progress = None;
+            try_fast_import_placement_blocking(prepared)
+                .map_err(|error| error.to_string())
+                .and_then(|result| match result {
+                    FastPlacementResult::Finished(result) => write_import_worker_event(
+                        &output,
+                        &ImportFileWorkerEvent::ImportFinished { nonce, result },
+                    )
+                    .map_err(|error| error.to_string()),
+                    FastPlacementResult::CopyRequired(prepared) => write_import_worker_event(
+                        &output,
+                        &ImportFileWorkerEvent::CopyRequired {
+                            nonce,
+                            volume_key: prepared.volume_key,
+                        },
+                    )
+                    .map_err(|error| error.to_string()),
+                })
+        }
+        ImportFileWorkerRequest::Copy { mut prepared, .. } => {
+            let _ = write_import_worker_event(
+                &output,
+                &ImportFileWorkerEvent::Stage {
+                    nonce,
+                    stage: "copy".to_string(),
+                },
+            );
+            let (progress_tx, mut progress_rx) =
+                tokio::sync::mpsc::unbounded_channel::<ImportFileTransferProgress>();
+            let progress_output = output.clone();
+            let progress_thread = std::thread::spawn(move || {
+                while let Some(progress) = progress_rx.blocking_recv() {
+                    let _ = write_import_worker_event(
+                        &progress_output,
+                        &ImportFileWorkerEvent::Progress {
+                            nonce,
+                            phase: progress.phase,
+                            bytes: progress.bytes,
+                            total_bytes: progress.total_bytes,
+                        },
+                    );
+                }
+            });
+            prepared.options = ImportFileOptions::default();
+            prepared.progress = Some(progress_tx);
+            let outcome = copy_prepared_import_blocking(prepared)
+                .map_err(|error| error.to_string())
+                .and_then(|result| {
+                    write_import_worker_event(
+                        &output,
+                        &ImportFileWorkerEvent::ImportFinished { nonce, result },
+                    )
+                    .map_err(|error| error.to_string())
+                });
+            let _ = progress_thread.join();
+            outcome
+        }
+    };
+
+    if let Err(message) = result {
+        let _ =
+            write_import_worker_event(&output, &ImportFileWorkerEvent::Error { nonce, message });
+        return 1;
+    }
+    0
+}
+
+struct ImportFileWorkerSession {
+    nonce: u64,
+    child: Option<tokio::process::Child>,
+    _stdin: tokio::process::ChildStdin,
+    lines: tokio::io::Lines<tokio::io::BufReader<tokio::process::ChildStdout>>,
+    last_stage: Option<String>,
+    last_progress_phase: Option<String>,
+    last_progress_bytes: u64,
+}
+
+fn import_file_stall_timeout() -> Duration {
+    static TIMEOUT: OnceLock<Duration> = OnceLock::new();
+    *TIMEOUT.get_or_init(|| {
+        let raw = std::env::var(IMPORT_FILE_STALL_TIMEOUT_ENV).ok();
+        let seconds = parse_import_file_stall_timeout(raw.as_deref());
+        if raw.is_some()
+            && raw
+                .as_deref()
+                .map(str::trim)
+                .and_then(|value| value.parse::<u64>().ok())
+                != Some(seconds)
+        {
+            tracing::warn!(
+                key = IMPORT_FILE_STALL_TIMEOUT_ENV,
+                value = raw.as_deref().unwrap_or_default(),
+                seconds,
+                "invalid or out-of-range import file stall timeout was adjusted"
+            );
+        }
+        Duration::from_secs(seconds)
+    })
+}
+
+fn parse_import_file_stall_timeout(raw: Option<&str>) -> u64 {
+    match raw
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .and_then(|value| value.parse::<u64>().ok())
+    {
+        Some(seconds) if seconds < MIN_IMPORT_FILE_STALL_TIMEOUT_SECONDS => {
+            DEFAULT_IMPORT_FILE_STALL_TIMEOUT_SECONDS
+        }
+        Some(seconds) if seconds > MAX_IMPORT_FILE_STALL_TIMEOUT_SECONDS => {
+            MAX_IMPORT_FILE_STALL_TIMEOUT_SECONDS
+        }
+        Some(seconds) => seconds,
+        None => DEFAULT_IMPORT_FILE_STALL_TIMEOUT_SECONDS,
+    }
+}
+
+async fn spawn_import_file_worker(
+    executable: &Path,
+    request: &ImportFileWorkerRequest,
+) -> AppResult<ImportFileWorkerSession> {
+    use std::process::Stdio;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+
+    let nonce = import_worker_request_nonce(request).1;
+    let mut child = tokio::process::Command::new(executable)
+        .arg("__import-file-worker")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|error| {
+            AppError::Repository(format!("failed to start import file worker: {error}"))
+        })?;
+    let mut stdin = child.stdin.take().ok_or_else(|| {
+        AppError::Repository("import file worker stdin was unavailable".to_string())
+    })?;
+    let stdout = child.stdout.take().ok_or_else(|| {
+        AppError::Repository("import file worker stdout was unavailable".to_string())
+    })?;
+    let mut payload = serde_json::to_vec(request).map_err(|error| {
+        AppError::Repository(format!("failed to encode import worker request: {error}"))
+    })?;
+    payload.push(b'\n');
+    stdin.write_all(&payload).await.map_err(|error| {
+        AppError::Repository(format!("failed to send import worker request: {error}"))
+    })?;
+    stdin.flush().await.map_err(|error| {
+        AppError::Repository(format!("failed to flush import worker request: {error}"))
+    })?;
+    Ok(ImportFileWorkerSession {
+        nonce,
+        child: Some(child),
+        _stdin: stdin,
+        lines: tokio::io::BufReader::new(stdout).lines(),
+        last_stage: None,
+        last_progress_phase: None,
+        last_progress_bytes: 0,
+    })
+}
+
+async fn hold_unconfirmed_import_worker(
+    mut child: tokio::process::Child,
+    reason: String,
+) -> AppError {
+    loop {
+        tracing::error!(reason, pid = ?child.id(), "import file worker termination is unconfirmed; retaining import ownership");
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                return AppError::ManualReconciliationRequired(format!(
+                    "filesystem worker termination was eventually confirmed ({status}); inspect source and destination before retrying"
+                ));
+            }
+            Ok(None) => {}
+            Err(error) => tracing::error!(
+                reason,
+                error = %error,
+                pid = ?child.id(),
+                "failed to check import file worker termination; retaining import ownership"
+            ),
+        }
+        tokio::time::sleep(Duration::from_secs(60)).await;
+    }
+}
+
+async fn cancel_stalled_import_worker(session: &mut ImportFileWorkerSession) -> AppError {
+    let mut child = session
+        .child
+        .take()
+        .expect("active import worker session owns its child process");
+    let pid = child.id();
+    if let Err(error) = child.start_kill() {
+        return hold_unconfirmed_import_worker(
+            child,
+            format!("failed to signal stalled worker {pid:?}: {error}"),
+        )
+        .await;
+    }
+    match tokio::time::timeout(Duration::from_secs(30), child.wait()).await {
+        Ok(Ok(status)) => AppError::ManualReconciliationRequired(format!(
+            "filesystem worker {pid:?} made no progress for {} seconds and was terminated ({status}); inspect source and destination before retrying",
+            import_file_stall_timeout().as_secs()
+        )),
+        other => {
+            let reason = format!("stalled worker {pid:?} kill could not be confirmed: {other:?}");
+            hold_unconfirmed_import_worker(child, reason).await
+        }
+    }
+}
+
+async fn cancel_import_worker(session: &mut ImportFileWorkerSession) -> AppError {
+    let mut child = session
+        .child
+        .take()
+        .expect("active import worker session owns its child process");
+    let pid = child.id();
+    if let Err(error) = child.start_kill() {
+        return hold_unconfirmed_import_worker(
+            child,
+            format!("failed to signal cancelled worker {pid:?}: {error}"),
+        )
+        .await;
+    }
+    match tokio::time::timeout(Duration::from_secs(30), child.wait()).await {
+        Ok(Ok(status)) => AppError::canceled(format!(
+            "filesystem worker {pid:?} was cancelled ({status})"
+        )),
+        other => {
+            hold_unconfirmed_import_worker(
+                child,
+                format!("cancelled worker {pid:?} stop could not be confirmed: {other:?}"),
+            )
+            .await
+        }
+    }
+}
+
+async fn next_import_worker_event_or_cancel(
+    session: &mut ImportFileWorkerSession,
+    cancellation: Option<&scryer_application::ImportCancellation>,
+) -> AppResult<ImportFileWorkerEvent> {
+    let Some(cancellation) = cancellation else {
+        return next_import_worker_event(session).await;
+    };
+    tokio::select! {
+        biased;
+        event = next_import_worker_event(session) => event,
+        _ = cancellation.cancelled() => Err(cancel_import_worker(session).await),
+    }
+}
+
+async fn wait_for_import_operation_or_cancel<T>(
+    cancellation: Option<&scryer_application::ImportCancellation>,
+    operation: impl std::future::Future<Output = T>,
+) -> AppResult<T> {
+    let Some(cancellation) = cancellation else {
+        return Ok(operation.await);
+    };
+    tokio::select! {
+        _ = cancellation.cancelled() => Err(AppError::canceled("import was cancelled before it started")),
+        result = operation => Ok(result),
+    }
+}
+
+async fn wait_for_import_worker_exit(
+    session: &mut ImportFileWorkerSession,
+    context: &str,
+) -> AppResult<()> {
+    let mut child = session
+        .child
+        .take()
+        .expect("active import worker session owns its child process");
+    match tokio::time::timeout(import_file_stall_timeout(), child.wait()).await {
+        Ok(Ok(status)) if status.success() => Ok(()),
+        Ok(Ok(status)) => Err(AppError::ManualReconciliationRequired(format!(
+            "filesystem worker exited unexpectedly {context} ({status}); inspect source and destination"
+        ))),
+        Ok(Err(error)) => Err(AppError::ManualReconciliationRequired(format!(
+            "filesystem worker exit could not be confirmed {context}: {error}; inspect source and destination"
+        ))),
+        Err(_) => {
+            session.child = Some(child);
+            Err(cancel_stalled_import_worker(session).await)
+        }
+    }
+}
+
+async fn next_import_worker_event(
+    session: &mut ImportFileWorkerSession,
+) -> AppResult<ImportFileWorkerEvent> {
+    let timeout = import_file_stall_timeout();
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        let line = match tokio::time::timeout_at(deadline, session.lines.next_line()).await {
+            Ok(Ok(Some(line))) => line,
+            Ok(Ok(None)) => {
+                return Err(AppError::ManualReconciliationRequired(
+                    "filesystem worker exited before reporting a verified result; inspect source and destination"
+                        .to_string(),
+                ));
+            }
+            Ok(Err(error)) => {
+                return Err(AppError::ManualReconciliationRequired(format!(
+                    "filesystem worker output failed: {error}; inspect source and destination"
+                )));
+            }
+            Err(_) => return Err(cancel_stalled_import_worker(session).await),
+        };
+        let event: ImportFileWorkerEvent = serde_json::from_str(&line).map_err(|error| {
+            AppError::ManualReconciliationRequired(format!(
+                "filesystem worker returned invalid output: {error}; inspect source and destination"
+            ))
+        })?;
+        let nonce = match &event {
+            ImportFileWorkerEvent::Stage { nonce, .. }
+            | ImportFileWorkerEvent::Prepared { nonce, .. }
+            | ImportFileWorkerEvent::CopyRequired { nonce, .. }
+            | ImportFileWorkerEvent::Progress { nonce, .. }
+            | ImportFileWorkerEvent::SnapshotFinished { nonce, .. }
+            | ImportFileWorkerEvent::ImportFinished { nonce, .. }
+            | ImportFileWorkerEvent::CleanupFinished { nonce }
+            | ImportFileWorkerEvent::Error { nonce, .. } => *nonce,
+        };
+        if nonce != session.nonce {
+            return Err(AppError::ManualReconciliationRequired(
+                "filesystem worker response identity mismatch; inspect source and destination"
+                    .to_string(),
+            ));
+        }
+        match &event {
+            ImportFileWorkerEvent::Stage { stage, .. } => {
+                if session.last_stage.as_deref() == Some(stage) {
+                    continue;
+                }
+                session.last_stage = Some(stage.clone());
+            }
+            ImportFileWorkerEvent::Progress { phase, bytes, .. } => {
+                let phase = format!("{phase:?}");
+                let phase_advanced = session.last_progress_phase.as_deref() != Some(&phase);
+                if !phase_advanced && *bytes <= session.last_progress_bytes {
+                    continue;
+                }
+                session.last_progress_phase = Some(phase);
+                session.last_progress_bytes = *bytes;
+            }
+            _ => {}
+        }
+        return Ok(event);
+    }
+}
+
 #[async_trait]
 impl FileImporter for FsFileImporter {
     async fn snapshot_import_source(&self, source: &Path) -> AppResult<ImportSourceSnapshot> {
+        if let Some(executable) = &self.worker_executable {
+            let nonce = IMPORT_FILE_WORKER_NONCE.fetch_add(1, Ordering::Relaxed);
+            let request = ImportFileWorkerRequest::Snapshot {
+                version: IMPORT_FILE_WORKER_PROTOCOL_VERSION,
+                nonce,
+                source: source.to_path_buf(),
+            };
+            let mut session = spawn_import_file_worker(executable, &request).await?;
+            loop {
+                match next_import_worker_event(&mut session).await? {
+                    ImportFileWorkerEvent::Stage { .. } => {}
+                    ImportFileWorkerEvent::SnapshotFinished { snapshot, .. } => {
+                        return Ok(snapshot);
+                    }
+                    ImportFileWorkerEvent::Error { message, .. } => {
+                        return Err(AppError::Repository(message));
+                    }
+                    _ => {
+                        return Err(AppError::ManualReconciliationRequired(
+                            "filesystem worker returned an unexpected snapshot response"
+                                .to_string(),
+                        ));
+                    }
+                }
+            }
+        }
         let source = source.to_path_buf();
 
         tokio::task::spawn_blocking(move || snapshot_import_source_blocking(source))
@@ -1543,6 +2698,225 @@ impl FileImporter for FsFileImporter {
         .map_err(|e| AppError::Repository(format!("import task panicked: {}", e)))?
     }
 
+    async fn import_file_with_execution_context(
+        &self,
+        source: &Path,
+        dest: &Path,
+        mode: ImportMode,
+        expected_source: Option<&ImportSourceSnapshot>,
+        progress: Option<ImportFileTransferProgressSender>,
+        permissions: &ImportFilePermissions,
+        context: &ImportFileExecutionContext,
+    ) -> AppResult<ImportFileResult> {
+        let cancellation = context.cancellation_token();
+        if let Some(executable) = &self.worker_executable {
+            let preparation_permit = wait_for_import_operation_or_cancel(
+                cancellation.as_ref(),
+                self.placement.acquire_preparation(),
+            )
+            .await?;
+            let prepare_request = ImportFileWorkerRequest::Prepare {
+                version: IMPORT_FILE_WORKER_PROTOCOL_VERSION,
+                nonce: IMPORT_FILE_WORKER_NONCE.fetch_add(1, Ordering::Relaxed),
+                source: source.to_path_buf(),
+                dest: dest.to_path_buf(),
+                mode,
+                expected_source: expected_source.cloned(),
+                permissions: permissions.clone(),
+            };
+            let mut session = spawn_import_file_worker(executable, &prepare_request).await?;
+            let prepared = loop {
+                match next_import_worker_event_or_cancel(&mut session, cancellation.as_ref())
+                    .await?
+                {
+                    ImportFileWorkerEvent::Stage { .. } => {}
+                    ImportFileWorkerEvent::Prepared { prepared, .. } => {
+                        wait_for_import_worker_exit(&mut session, "after preparing import").await?;
+                        break prepared;
+                    }
+                    ImportFileWorkerEvent::Error { message, .. } => {
+                        return Err(AppError::Repository(message));
+                    }
+                    _ => {
+                        return Err(AppError::ManualReconciliationRequired(
+                            "filesystem worker returned an unexpected preparation response; inspect source and destination"
+                                .to_string(),
+                        ));
+                    }
+                }
+            };
+            drop(preparation_permit);
+
+            let client_key = context.client_lane_key().to_string();
+            let mut fast_permit = Some(
+                wait_for_import_operation_or_cancel(
+                    cancellation.as_ref(),
+                    self.placement.fast.acquire(&client_key, "fast"),
+                )
+                .await?,
+            );
+            context.mark_active_import_placing().await;
+            let volume_key = prepared.volume_key.clone();
+            let mut prepared = Some(prepared);
+            let fast_request = ImportFileWorkerRequest::FastPlacement {
+                version: IMPORT_FILE_WORKER_PROTOCOL_VERSION,
+                nonce: IMPORT_FILE_WORKER_NONCE.fetch_add(1, Ordering::Relaxed),
+                prepared: prepared
+                    .as_ref()
+                    .expect("prepared import is available before copy handoff")
+                    .clone(),
+            };
+            let mut session = spawn_import_file_worker(executable, &fast_request).await?;
+            let mut copy_permit = None;
+            let mut copy_finalizing = false;
+            loop {
+                match next_import_worker_event_or_cancel(
+                    &mut session,
+                    if copy_finalizing {
+                        None
+                    } else {
+                        cancellation.as_ref()
+                    },
+                )
+                .await?
+                {
+                    ImportFileWorkerEvent::Stage { .. } => {}
+                    ImportFileWorkerEvent::Progress {
+                        phase,
+                        bytes,
+                        total_bytes,
+                        ..
+                    } => {
+                        if phase == ImportTransferPhase::Finalizing && copy_permit.is_some() {
+                            copy_finalizing = true;
+                            context.mark_active_import_finalizing().await;
+                        }
+                        if let Some(progress) = &progress {
+                            let _ = progress.send(ImportFileTransferProgress {
+                                phase,
+                                bytes,
+                                total_bytes,
+                            });
+                        }
+                    }
+                    ImportFileWorkerEvent::CopyRequired {
+                        volume_key: reported_volume_key,
+                        ..
+                    } => {
+                        if reported_volume_key != volume_key {
+                            return Err(AppError::ManualReconciliationRequired(
+                                "filesystem worker changed destination volume identity; inspect the destination before retrying"
+                                    .to_string(),
+                            ));
+                        }
+                        wait_for_import_worker_exit(&mut session, "after requesting copy").await?;
+                        drop(fast_permit.take());
+                        tracing::debug!(
+                            client_key = %opaque_lane_key(&client_key),
+                            volume_key = %opaque_lane_key(&volume_key),
+                            "released fast import lane before copy fallback"
+                        );
+                        copy_permit = Some(
+                            wait_for_import_operation_or_cancel(
+                                cancellation.as_ref(),
+                                self.placement.copy.acquire(&volume_key, "copy"),
+                            )
+                            .await?,
+                        );
+                        copy_finalizing = false;
+                        context.mark_active_import_copying().await;
+                        let copy_request = ImportFileWorkerRequest::Copy {
+                            version: IMPORT_FILE_WORKER_PROTOCOL_VERSION,
+                            nonce: IMPORT_FILE_WORKER_NONCE.fetch_add(1, Ordering::Relaxed),
+                            prepared: prepared
+                                .take()
+                                .expect("prepared import is consumed once by copy handoff"),
+                        };
+                        session = spawn_import_file_worker(executable, &copy_request).await?;
+                    }
+                    ImportFileWorkerEvent::ImportFinished { result, .. } => {
+                        drop(copy_permit);
+                        return Ok(result);
+                    }
+                    ImportFileWorkerEvent::Error { message, .. } => {
+                        return Err(AppError::Repository(message));
+                    }
+                    _ => {
+                        return Err(AppError::ManualReconciliationRequired(
+                            "filesystem worker returned an unexpected import response; inspect source and destination"
+                                .to_string(),
+                        ));
+                    }
+                }
+            }
+        }
+        let source = source.to_path_buf();
+        let dest = dest.to_path_buf();
+        let expected_source = expected_source.cloned();
+        let permissions = permissions.clone();
+        let source_cleanup_required = mode == ImportMode::Move;
+        let preparation_permit = wait_for_import_operation_or_cancel(
+            cancellation.as_ref(),
+            self.placement.acquire_preparation(),
+        )
+        .await?;
+        let mut prepared = tokio::task::spawn_blocking(move || {
+            prepare_import_placement_blocking(
+                source,
+                dest,
+                ImportFileOptions::default(),
+                source_cleanup_required,
+                expected_source,
+                progress,
+                permissions,
+            )
+        })
+        .await
+        .map_err(|error| {
+            AppError::Repository(format!("import preparation task panicked: {error}"))
+        })??;
+        drop(preparation_permit);
+
+        let client_key = context.client_lane_key().to_string();
+        let fast_permit = wait_for_import_operation_or_cancel(
+            cancellation.as_ref(),
+            self.placement.fast.acquire(&client_key, "fast"),
+        )
+        .await?;
+        context.mark_active_import_placing().await;
+        prepared.cancellation = cancellation.clone();
+        let fast_result =
+            tokio::task::spawn_blocking(move || try_fast_import_placement_blocking(prepared))
+                .await
+                .map_err(|error| {
+                    AppError::Repository(format!("fast import task panicked: {error}"))
+                })??;
+
+        match fast_result {
+            FastPlacementResult::Finished(result) => Ok(result),
+            FastPlacementResult::CopyRequired(prepared) => {
+                let volume_key = prepared.volume_key.clone();
+                drop(fast_permit);
+                tracing::debug!(
+                    client_key = %opaque_lane_key(&client_key),
+                    volume_key = %opaque_lane_key(&volume_key),
+                    "released fast import lane before copy fallback"
+                );
+                let _copy_permit = wait_for_import_operation_or_cancel(
+                    cancellation.as_ref(),
+                    self.placement.copy.acquire(&volume_key, "copy"),
+                )
+                .await?;
+                context.mark_active_import_copying().await;
+                tokio::task::spawn_blocking(move || copy_prepared_import_blocking(prepared))
+                    .await
+                    .map_err(|error| {
+                        AppError::Repository(format!("copy import task panicked: {error}"))
+                    })?
+            }
+        }
+    }
+
     async fn remove_import_source_after_verified_import(
         &self,
         guard: ImportSourceCleanupGuard,
@@ -1560,6 +2934,55 @@ impl FileImporter for FsFileImporter {
         .await
         .map_err(|e| AppError::Repository(format!("import cleanup task panicked: {}", e)))?
     }
+
+    async fn remove_import_source_after_verified_import_with_context(
+        &self,
+        guard: ImportSourceCleanupGuard,
+        final_dest_path: &Path,
+        context: &ImportFileExecutionContext,
+    ) -> AppResult<()> {
+        let client_key = context.client_lane_key().to_string();
+        let _fast_permit = self
+            .placement
+            .fast
+            .acquire(&client_key, "move-cleanup")
+            .await;
+        if let Some(executable) = &self.worker_executable {
+            let nonce = IMPORT_FILE_WORKER_NONCE.fetch_add(1, Ordering::Relaxed);
+            let request = ImportFileWorkerRequest::Cleanup {
+                version: IMPORT_FILE_WORKER_PROTOCOL_VERSION,
+                nonce,
+                guard,
+                final_dest_path: final_dest_path.to_path_buf(),
+            };
+            let mut session = spawn_import_file_worker(executable, &request).await?;
+            loop {
+                match next_import_worker_event(&mut session).await? {
+                    ImportFileWorkerEvent::Stage { .. } => {}
+                    ImportFileWorkerEvent::CleanupFinished { .. } => return Ok(()),
+                    ImportFileWorkerEvent::Error { message, .. } => {
+                        return Err(AppError::Repository(message));
+                    }
+                    _ => {
+                        return Err(AppError::ManualReconciliationRequired(
+                            "filesystem worker returned an unexpected cleanup response; inspect source and destination"
+                                .to_string(),
+                        ));
+                    }
+                }
+            }
+        }
+        let final_dest_path = final_dest_path.to_path_buf();
+        tokio::task::spawn_blocking(move || {
+            remove_import_source_after_verified_import_blocking(
+                guard,
+                final_dest_path,
+                ImportFileOptions::default(),
+            )
+        })
+        .await
+        .map_err(|error| AppError::Repository(format!("import cleanup task panicked: {error}")))?
+    }
 }
 
 #[cfg(test)]
@@ -1571,6 +2994,190 @@ mod tests {
 
     #[cfg(unix)]
     use std::os::unix::fs::MetadataExt;
+
+    #[test]
+    fn import_worker_limits_default_validate_and_clamp() {
+        assert_eq!(parse_import_worker_limit(None, 2, 8), 2);
+        assert_eq!(parse_import_worker_limit(Some(""), 2, 8), 2);
+        assert_eq!(parse_import_worker_limit(Some("invalid"), 2, 8), 2);
+        assert_eq!(parse_import_worker_limit(Some("0"), 2, 8), 2);
+        assert_eq!(parse_import_worker_limit(Some(" 3 "), 2, 8), 3);
+        assert_eq!(parse_import_worker_limit(Some("99"), 2, 8), 8);
+    }
+
+    #[test]
+    fn import_file_stall_timeout_is_generous_and_clamped() {
+        assert_eq!(
+            parse_import_file_stall_timeout(None),
+            DEFAULT_IMPORT_FILE_STALL_TIMEOUT_SECONDS
+        );
+        assert_eq!(
+            parse_import_file_stall_timeout(Some("")),
+            DEFAULT_IMPORT_FILE_STALL_TIMEOUT_SECONDS
+        );
+        assert_eq!(
+            parse_import_file_stall_timeout(Some("invalid")),
+            DEFAULT_IMPORT_FILE_STALL_TIMEOUT_SECONDS
+        );
+        assert_eq!(
+            parse_import_file_stall_timeout(Some("60")),
+            DEFAULT_IMPORT_FILE_STALL_TIMEOUT_SECONDS
+        );
+        assert_eq!(parse_import_file_stall_timeout(Some("3600")), 3600);
+        assert_eq!(
+            parse_import_file_stall_timeout(Some("999999")),
+            MAX_IMPORT_FILE_STALL_TIMEOUT_SECONDS
+        );
+    }
+
+    #[tokio::test]
+    async fn copy_lanes_are_volume_scoped_and_do_not_block_fast_lanes() {
+        let coordinator = ImportPlacementCoordinator::new(1, 2);
+        let first_copy = coordinator.copy.acquire("volume-a", "copy").await;
+        let second_copy = coordinator.copy.acquire("volume-a", "copy").await;
+        let third_copy = tokio::spawn({
+            let copy = coordinator.copy.clone();
+            async move { copy.acquire("volume-a", "copy").await }
+        });
+        tokio::task::yield_now().await;
+        assert!(
+            !third_copy.is_finished(),
+            "a third copy to one volume must wait"
+        );
+
+        let fast = tokio::time::timeout(
+            Duration::from_secs(1),
+            coordinator.fast.acquire("client-a", "fast"),
+        )
+        .await
+        .expect("a hardlink lane must remain available while copies are blocked");
+        let other_volume = tokio::time::timeout(
+            Duration::from_secs(1),
+            coordinator.copy.acquire("volume-b", "copy"),
+        )
+        .await
+        .expect("a different volume must have independent copy capacity");
+
+        drop(fast);
+        drop(other_volume);
+        drop(first_copy);
+        let third_copy = tokio::time::timeout(Duration::from_secs(1), third_copy)
+            .await
+            .expect("waiting copy should start after one same-volume slot is released")
+            .expect("copy waiter should not panic");
+        drop(third_copy);
+        drop(second_copy);
+    }
+
+    #[tokio::test]
+    async fn fast_lanes_are_client_scoped() {
+        let coordinator = ImportPlacementCoordinator::new(1, 2);
+        let first = coordinator.fast.acquire("client-a", "fast").await;
+        let same_client = tokio::spawn({
+            let fast = coordinator.fast.clone();
+            async move { fast.acquire("client-a", "fast").await }
+        });
+        tokio::task::yield_now().await;
+        assert!(!same_client.is_finished());
+
+        let other_client = tokio::time::timeout(
+            Duration::from_secs(1),
+            coordinator.fast.acquire("client-b", "fast"),
+        )
+        .await
+        .expect("different clients should place fast imports concurrently");
+        drop(other_client);
+        drop(first);
+        let same_client = tokio::time::timeout(Duration::from_secs(1), same_client)
+            .await
+            .expect("same client should continue after its lane is released")
+            .expect("fast waiter should not panic");
+        drop(same_client);
+    }
+
+    #[test]
+    fn roots_on_the_same_physical_volume_share_a_copy_key() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let source = temp.path().join("source.mkv");
+        std::fs::write(&source, b"video").expect("write source");
+        let first = prepare_import_placement_blocking(
+            source.clone(),
+            temp.path().join("library-a/title.mkv"),
+            ImportFileOptions::default(),
+            false,
+            None,
+            None,
+            ImportFilePermissions::default(),
+        )
+        .expect("prepare first destination");
+        let second = prepare_import_placement_blocking(
+            source,
+            temp.path().join("library-b/title.mkv"),
+            ImportFileOptions::default(),
+            false,
+            None,
+            None,
+            ImportFilePermissions::default(),
+        )
+        .expect("prepare second destination");
+        assert_eq!(first.volume_key, second.volume_key);
+    }
+
+    #[test]
+    fn fast_handoff_preserves_a_destination_created_after_preparation() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let source = temp.path().join("source.mkv");
+        let dest = temp.path().join("library/title.mkv");
+        std::fs::write(&source, b"source").expect("write source");
+        let prepared = prepare_import_placement_blocking(
+            source,
+            dest.clone(),
+            ImportFileOptions::default(),
+            false,
+            None,
+            None,
+            ImportFilePermissions::default(),
+        )
+        .expect("prepare destination");
+        std::fs::write(&dest, b"foreign destination").expect("create racing destination");
+
+        let error = match try_fast_import_placement_blocking(prepared) {
+            Err(error) => error,
+            Ok(_) => panic!("destination race must stop the handoff"),
+        };
+        assert!(error.to_string().contains("destination appeared"));
+        assert_eq!(
+            std::fs::read(&dest).expect("read destination"),
+            b"foreign destination"
+        );
+    }
+
+    #[test]
+    fn copy_lane_revalidates_destination_after_wait() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let source = temp.path().join("source.mkv");
+        let dest = temp.path().join("library/title.mkv");
+        std::fs::write(&source, b"source").expect("write source");
+        let prepared = prepare_import_placement_blocking(
+            source,
+            dest.clone(),
+            ImportFileOptions::default(),
+            false,
+            None,
+            None,
+            ImportFilePermissions::default(),
+        )
+        .expect("prepare destination");
+        std::fs::write(&dest, b"foreign destination").expect("create racing destination");
+
+        let error = copy_prepared_import_blocking(prepared)
+            .expect_err("destination race must stop copy execution");
+        assert!(error.to_string().contains("destination appeared"));
+        assert_eq!(
+            std::fs::read(&dest).expect("read destination"),
+            b"foreign destination"
+        );
+    }
 
     #[cfg(unix)]
     #[derive(Clone)]
@@ -1825,6 +3432,65 @@ mod tests {
         assert!(message.contains("import destination is not a file or symlink"));
         assert!(message.contains("additionally failed to remove placed import destination"));
         assert!(dest.exists());
+    }
+
+    #[test]
+    fn identical_existing_destination_is_reconciled_without_overwrite() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source = dir.path().join("source.mkv");
+        let dest = dir.path().join("library").join("Imported.Movie.mkv");
+        std::fs::create_dir_all(dest.parent().expect("parent")).expect("create library");
+        std::fs::write(&source, b"same video bytes").expect("write source");
+        std::fs::write(&dest, b"same video bytes").expect("write destination");
+
+        let result = import_file_blocking(
+            source.clone(),
+            dest.clone(),
+            ImportMode::HardlinkOrCopy,
+            ImportFileOptions::default(),
+            None,
+            None,
+            ImportFilePermissions::default(),
+        )
+        .expect("reconcile identical destination");
+
+        assert_eq!(result.strategy, ImportStrategy::Copy);
+        assert_eq!(std::fs::read(&source).expect("source"), b"same video bytes");
+        assert_eq!(
+            std::fs::read(&dest).expect("destination"),
+            b"same video bytes"
+        );
+    }
+
+    #[test]
+    fn different_existing_destination_requires_reconciliation_and_preserves_both_files() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source = dir.path().join("source.mkv");
+        let dest = dir.path().join("library").join("Imported.Movie.mkv");
+        std::fs::create_dir_all(dest.parent().expect("parent")).expect("create library");
+        std::fs::write(&source, b"source video bytes").expect("write source");
+        std::fs::write(&dest, b"other video bytes!").expect("write destination");
+
+        let error = import_file_blocking(
+            source.clone(),
+            dest.clone(),
+            ImportMode::HardlinkOrCopy,
+            ImportFileOptions::default(),
+            None,
+            None,
+            ImportFilePermissions::default(),
+        )
+        .expect_err("different destination must conflict");
+
+        assert!(matches!(error, AppError::ManualReconciliationRequired(_)));
+        assert_eq!(
+            std::fs::read(&source).expect("source"),
+            b"source video bytes"
+        );
+        assert_eq!(
+            std::fs::read(&dest).expect("destination"),
+            b"other video bytes!"
+        );
     }
 
     #[tokio::test]

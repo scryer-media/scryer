@@ -50,7 +50,8 @@
 
 use crate::quality_profile::{
     BLOCK_SCORE, QualityProfileDecision, ScoringEntry, ScoringSource, apply_min_score_gate,
-    apply_size_scoring_for_category, evaluate_against_profile_for_category, normalize_quality_tier,
+    apply_size_scoring_for_category_with_remux_preference, evaluate_against_profile_for_category,
+    normalize_quality_tier,
 };
 use crate::scoring_weights::ScoringWeights;
 use crate::{MediaFileAnalysis, ParsedReleaseMetadata, QualityProfile};
@@ -121,7 +122,11 @@ pub(crate) struct ScoringContext<'a> {
     pub weights: &'a ScoringWeights,
     pub required_audio_languages: &'a [String],
     pub category: &'a str,
-    pub runtime_minutes: Option<i32>,
+    /// What size scoring compares the reported bytes against: the coverage's
+    /// total runtime, one member's, and the member count. Resolved once per
+    /// scope by the caller so every lane reads the same basis for the same
+    /// evidence.
+    pub size_basis: crate::quality_profile::CoverageSizeBasis,
     pub rules: Option<&'a scryer_rules::UserRulesEngine>,
     pub title_id: Option<&'a str>,
     pub library_name: Option<&'a str>,
@@ -377,12 +382,13 @@ fn run_term_pipeline(
         Some(ctx.category),
     );
 
-    apply_size_scoring_for_category(
+    apply_size_scoring_for_category_with_remux_preference(
         &mut decision,
         parsed,
         size_bytes,
         Some(ctx.category),
-        ctx.runtime_minutes,
+        ctx.size_basis,
+        resolved_profile.criteria.prefer_remux,
         ctx.weights,
     );
 
@@ -445,7 +451,9 @@ fn append_rule_scores(
             has_existing_file: false,
             existing_score: None,
             search_mode: CANONICAL_RULE_SEARCH_MODE,
-            runtime_minutes: ctx.runtime_minutes,
+            // Rules see the scope's total runtime, which is what they always
+            // saw; the member split is the size term's business alone.
+            runtime_minutes: ctx.size_basis.total_runtime_minutes,
             is_filler: ctx.is_filler,
         },
         file_doc,
@@ -523,7 +531,7 @@ const POLICY_ONLY_BLOCK_CODES: &[&str] = &["score_below_minimum", "upgrade_block
 /// | code | assertable | why |
 /// |---|---|---|
 /// | `quality_*` | always | the resolution is the one claim every release name makes, and it is the claim the grab decision was taken on. A file whose measured height lands outside the profile's tiers is not what was fetched. |
-/// | `size_implausible*_for_quality` | always | both passes score the *same* bytes, so this can only be introduced when the landed quality moved — which is the quality claim again, seen through the size band. |
+/// | `size_implausible_for_quality` | always | both passes score the *same* bytes, so this can only be introduced when the landed quality moved — which is the quality claim again, seen through the size band. It is the only size veto left: implausible *smallness* is a penalty on the curve, never a block, so it cannot reach here at all. |
 /// | `video_codec_*` | iff the parse carried a codec | `H.265` in the name against an H.264 stream is a lie; a codec-silent name is not a claim. |
 /// | `audio_codec_*` | iff the parse carried an audio codec | same rule. Note the gate only fires at all when `normalized_audio_codecs` is non-empty, which for a silent name means the probe populated it. |
 /// | `hdr_not_allowed`, `dolby_vision_*` | never | derived from `video_hdr_format`; a profile that forbids them has refused this file, so import burns this release and convergence tries the next candidate. |
@@ -784,19 +792,12 @@ pub(crate) fn audio_channels_label(channels: i32) -> String {
 /// exactly its announced byte count either. Inside this band the grab and the
 /// import are looking at the same release, so the import scores the size term
 /// on the **announced** size (option c of the grab-vs-import size decision):
-/// the number the grab admitted is the number the import sees. Below it the
-/// shortfall is real — a truncated, stripped or mislabelled payload — and the
-/// import scores what actually landed.
+/// the number the grab admitted is the number the import sees. Outside the
+/// reciprocal band the difference is material, so the import scores what
+/// actually landed. The upper bound matters when an indexer reports one pack
+/// member's size but the landed file contains the complete aggregate.
 pub(crate) const SIZE_OVERHEAD_TOLERANCE: f64 = 0.85;
 
-/// The byte count the size term is scored on for a landed file.
-///
-/// `announced` is the release's advertised size (`download_submissions.release_size_bytes`
-/// at import, `media_files.announced_size_bytes` when the bar is re-derived);
-/// `landed` is the file on disk. Returns `announced` when the landed file is at
-/// least [`SIZE_OVERHEAD_TOLERANCE`] of it, otherwise `landed`. Both the import
-/// decision and the incumbent bar go through here so the re-derived bar
-/// reproduces the import score for this term.
 /// What the media-file row should remember as its announced size: the
 /// announced size when the import scored on it, `None` when the landed size was
 /// the basis. Persisting only the engaged case keeps the column honest — a row
@@ -806,12 +807,21 @@ pub(crate) fn persisted_announced_size_bytes(landed: i64, announced: Option<i64>
     announced.filter(|announced| size_basis_bytes(landed, Some(*announced)) == *announced)
 }
 
+/// The byte count the size term is scored on for a landed file.
+///
+/// `announced` is the release's advertised size (`download_submissions.release_size_bytes`
+/// at import, `media_files.announced_size_bytes` when the bar is re-derived);
+/// `landed` is the file on disk. Returns `announced` only when the landed ratio
+/// is between [`SIZE_OVERHEAD_TOLERANCE`] and its reciprocal, otherwise
+/// `landed`. Both the import decision and the incumbent bar go through here so
+/// the re-derived bar reproduces the import score for this term.
 pub(crate) fn size_basis_bytes(landed: i64, announced: Option<i64>) -> i64 {
     match announced {
         Some(announced)
             if announced > 0
                 && landed > 0
-                && (landed as f64) >= SIZE_OVERHEAD_TOLERANCE * (announced as f64) =>
+                && (landed as f64) >= SIZE_OVERHEAD_TOLERANCE * (announced as f64)
+                && (landed as f64) <= (announced as f64) / SIZE_OVERHEAD_TOLERANCE =>
         {
             announced
         }

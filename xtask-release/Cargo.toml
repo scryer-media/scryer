@@ -11,6 +11,7 @@ blake3 = "1.8"
 chrono = { version = "0.4", features = ["clock"] }
 clap = { version = "4", features = ["derive"] }
 dotenvy = { workspace = true }
+flate2 = "1"
 quick-xml = { workspace = true, features = ["serialize"] }
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "rustls"] }
 scryer-application = { path = "../crates/scryer-application" }
@@ -26,6 +27,7 @@ sigstore = { version = "0.14", default-features = false, features = ["cosign", "
 rustls-pki-types = "1"
 rustls-webpki = "0.103"
 tempfile = "3"
+tar = "0.4"
 tokio = { workspace = true }
 toml = "1"
 toml_edit = "0.25"

@@ -17,7 +17,7 @@ const JSON_LIMIT: usize = 1024 * 1024;
 const AVATAR_LIMIT: usize = 2 * 1024 * 1024;
 const PAGE_LIMIT: usize = 100;
 const RECORD_LIMIT: usize = 10_000;
-const CONNECT_DISCOVERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+const CONNECT_DISCOVERY_TIMEOUT: std::time::Duration = scryer_outbound_http::STANDARD_HTTP_TIMEOUT;
 const CONNECT_PROBE_CONCURRENCY: usize = 8;
 
 #[derive(Clone)]

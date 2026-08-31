@@ -17,6 +17,10 @@ import { useTranslate } from "@/lib/context/translate-context";
 import { fixTitleMatchMutation } from "@/lib/graphql/mutations";
 import { searchMetadataQuery } from "@/lib/graphql/queries";
 import { isAbortError, makeAbortableFetch } from "@/lib/graphql/urql-client";
+import {
+  buildFixTitleMatchSearchVariables,
+  fixTitleMatchDialogIdentity,
+} from "@/lib/fix-title-match";
 import type { MetadataTvdbSearchItem } from "@/lib/graphql/smg-queries";
 import { selectorId } from "@/lib/utils/dom-ids";
 
@@ -34,24 +38,19 @@ type Props = {
   onFixed?: (warnings: string[]) => Promise<void> | void;
 };
 
-function metadataTypeForFacet(
-  facet: string | null | undefined,
-): "movie" | "series" | "anime" {
-  switch ((facet ?? "").toLowerCase()) {
-    case "movie":
-      return "movie";
-    case "anime":
-      return "anime";
-    default:
-      return "series";
-  }
-}
-
 function currentTvdbId(title: FixableTitle | null): string | null {
   return (
     title?.externalIds.find((entry) => entry.source.toLowerCase() === "tvdb")?.value?.trim() ||
     null
   );
+}
+
+function metadataResultKey(result: MetadataTvdbSearchItem): string {
+  return result.smgId != null
+    ? `smg:${result.smgId}`
+    : result.tvdbId.trim()
+      ? `tvdb:${result.tvdbId}`
+      : `name:${result.name}`;
 }
 
 export function FixTitleMatchDialog({
@@ -64,25 +63,27 @@ export function FixTitleMatchDialog({
   const t = useTranslate();
   const [query, setQuery] = React.useState("");
   const [results, setResults] = React.useState<MetadataTvdbSearchItem[]>([]);
-  const [selectedTvdbId, setSelectedTvdbId] = React.useState<string | null>(null);
+  const [selectedResultKey, setSelectedResultKey] = React.useState<string | null>(null);
   const [searching, setSearching] = React.useState(false);
   const [applying, setApplying] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const titleIdentity = fixTitleMatchDialogIdentity(title);
+  const titleName = title?.name ?? "";
 
   React.useEffect(() => {
-    if (!open || !title) {
+    if (!open || titleIdentity === null) {
       setQuery("");
       setResults([]);
-      setSelectedTvdbId(null);
+      setSelectedResultKey(null);
       setError(null);
       return;
     }
 
-    setQuery(title.name);
+    setQuery(titleName);
     setResults([]);
-    setSelectedTvdbId(null);
+    setSelectedResultKey(null);
     setError(null);
-  }, [open, title]);
+  }, [open, titleIdentity, titleName]);
 
   React.useEffect(() => {
     if (!open || !title) {
@@ -93,7 +94,7 @@ export function FixTitleMatchDialog({
     const trimmed = query.trim();
     if (!trimmed) {
       setResults([]);
-      setSelectedTvdbId(null);
+      setSelectedResultKey(null);
       setSearching(false);
       return undefined;
     }
@@ -105,22 +106,22 @@ export function FixTitleMatchDialog({
       setSearching(true);
       setError(null);
       client
-        .query(searchMetadataQuery, {
-          query: trimmed,
-          type: metadataTypeForFacet(title.facet),
-          limit: 8,
-        }, { fetch: abortableFetch })
+        .query(
+          searchMetadataQuery,
+          buildFixTitleMatchSearchVariables(trimmed, title.facet),
+          { fetch: abortableFetch },
+        )
         .toPromise()
         .then(({ data, error: queryError }) => {
           if (queryError) throw queryError;
           if (!active) return;
           const items = (data?.searchMetadata ?? []) as MetadataTvdbSearchItem[];
           setResults(items);
-          setSelectedTvdbId((current) =>
-            current && items.some((item) => String(item.tvdbId) === current)
+          setSelectedResultKey((current) =>
+            current && items.some((item) => metadataResultKey(item) === current)
               ? current
               : items[0]
-                ? String(items[0].tvdbId)
+                ? metadataResultKey(items[0])
                 : null,
           );
         })
@@ -129,7 +130,7 @@ export function FixTitleMatchDialog({
             return;
           }
           setResults([]);
-          setSelectedTvdbId(null);
+          setSelectedResultKey(null);
           setError(err instanceof Error ? err.message : t("title.fixMatchSearchFailed"));
         })
         .finally(() => {
@@ -147,7 +148,10 @@ export function FixTitleMatchDialog({
   }, [client, open, query, t, title]);
 
   const handleApply = React.useCallback(async () => {
-    if (!title || !selectedTvdbId) return;
+    const result = results.find((item) => metadataResultKey(item) === selectedResultKey);
+    const tvdbId = result?.tvdbId.trim();
+    const isMovie = title?.facet.toLowerCase() === "movie";
+    if (!title || !result || (isMovie ? result.smgId == null && !tvdbId : !tvdbId)) return;
     setApplying(true);
     setError(null);
     try {
@@ -155,7 +159,9 @@ export function FixTitleMatchDialog({
         .mutation(fixTitleMatchMutation, {
           input: {
             titleId: title.id,
-            tvdbId: selectedTvdbId,
+            ...(isMovie
+              ? { smgId: result.smgId ?? undefined, tvdbId: tvdbId || undefined }
+              : { tvdbId }),
           },
         })
         .toPromise();
@@ -168,9 +174,16 @@ export function FixTitleMatchDialog({
     } finally {
       setApplying(false);
     }
-  }, [client, onFixed, onOpenChange, selectedTvdbId, t, title]);
+  }, [client, onFixed, onOpenChange, results, selectedResultKey, t, title]);
 
   const existingTvdbId = currentTvdbId(title);
+  const selectedResult = results.find((item) => metadataResultKey(item) === selectedResultKey);
+  const canApply = Boolean(
+    selectedResult &&
+      (title?.facet.toLowerCase() === "movie"
+        ? selectedResult.smgId != null || selectedResult.tvdbId.trim()
+        : selectedResult.tvdbId.trim()),
+  );
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -183,7 +196,6 @@ export function FixTitleMatchDialog({
             })}
           </DialogDescription>
         </DialogHeader>
-
         <div className="space-y-4">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
             <Input
@@ -226,18 +238,19 @@ export function FixTitleMatchDialog({
 
           <div className="max-h-[420px] space-y-3 overflow-y-auto pr-1">
             {results.map((result) => {
-              const selected = String(result.tvdbId) === selectedTvdbId;
+              const resultKey = metadataResultKey(result);
+              const selected = resultKey === selectedResultKey;
               return (
                 <button
-                  key={`${result.tvdbId}-${result.name}`}
-                  id={selectorId("fix-title-match-result", result.tvdbId)}
+                  key={resultKey}
+                  id={selectorId("fix-title-match-result", resultKey)}
                   type="button"
                   className={`flex w-full gap-3 rounded-lg border p-3 text-left transition-colors ${
                     selected
                       ? "border-primary bg-primary/5"
                       : "border-border bg-card/40 hover:bg-muted/35"
                   }`}
-                  onClick={() => setSelectedTvdbId(String(result.tvdbId))}
+                  onClick={() => setSelectedResultKey(resultKey)}
                   disabled={applying}
                 >
                   <div className="h-24 w-16 flex-none overflow-hidden rounded-md border border-border bg-muted">
@@ -252,7 +265,7 @@ export function FixTitleMatchDialog({
                         <span className="text-xs text-muted-foreground">{result.year}</span>
                       ) : null}
                       <span className="text-xs text-muted-foreground">
-                        TVDB {result.tvdbId}
+                        {result.smgId != null ? `SMG ${result.smgId}` : `TVDB ${result.tvdbId}`}
                       </span>
                     </div>
                     {result.status ? (
@@ -266,7 +279,7 @@ export function FixTitleMatchDialog({
                   </div>
                   <div className="flex items-start">
                     <Button
-                      id={selectorId("fix-title-match-choose", result.tvdbId)}
+                      id={selectorId("fix-title-match-choose", resultKey)}
                       type="button"
                       variant="primary"
                       size="sm"
@@ -297,7 +310,7 @@ export function FixTitleMatchDialog({
             id="fix-title-match-apply"
             type="button"
             onClick={() => void handleApply()}
-            disabled={!selectedTvdbId || applying}
+            disabled={!canApply || applying}
           >
             {applying ? (
               <>

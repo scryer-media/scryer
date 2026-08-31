@@ -53,45 +53,24 @@ pub(crate) async fn rehydrate_title_metadata_for_017_upgrade(
     app_use_case: &AppUseCase,
     settings_store: Arc<SettingsStore>,
     current_version: &str,
-) {
+) -> Result<(), String> {
     let state = read_state(settings_store.clone()).await;
     if !should_attempt_title_metadata_rehydration(current_version, &state) {
-        return;
+        return Ok(());
     }
 
-    if let Err(error) = set_state(settings_store.clone(), STATE_PENDING).await {
-        tracing::warn!(
-            error = %error,
-            "failed to mark 0.17 title metadata rehydration migration pending"
-        );
-        return;
-    }
+    set_state(settings_store.clone(), STATE_PENDING).await?;
 
-    let app_use_case = app_use_case.clone();
-    tokio::spawn(async move {
-        match app_use_case.hydrate_all_titles_for_current_language().await {
-            Ok(titles_rehydrated) => {
-                if let Err(error) = set_state(settings_store, STATE_COMPLETED).await {
-                    tracing::warn!(
-                        error = %error,
-                        titles_rehydrated,
-                        "0.17 title metadata rehydration completed but failed to mark migration completed"
-                    );
-                    return;
-                }
-                tracing::info!(
-                    titles_rehydrated,
-                    "0.17 title metadata rehydration migration completed"
-                );
-            }
-            Err(error) => {
-                tracing::warn!(
-                    error = %error,
-                    "0.17 title metadata rehydration migration failed; it will retry on next startup"
-                );
-            }
-        }
-    });
+    let titles_rehydrated = app_use_case
+        .hydrate_all_titles_for_current_language()
+        .await
+        .map_err(|error| error.to_string())?;
+    set_state(settings_store, STATE_COMPLETED).await?;
+    tracing::info!(
+        titles_rehydrated,
+        "0.17 title metadata rehydration migration completed"
+    );
+    Ok(())
 }
 
 #[cfg(test)]

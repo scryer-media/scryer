@@ -1,6 +1,6 @@
 [package]
 name = "scryer-plugins"
-version = "0.18.21"
+version = "0.19.3"
 edition.workspace = true
 
 [dependencies]
@@ -27,12 +27,13 @@ glob = "0.3"
 rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs", "logging", "std", "tls12"] }
 rustls-native-certs = "0.8"
 url = "2"
+uuid = { workspace = true }
 zstd = { version = "0.13", default-features = false }
 tempfile = "3"
 libc = "0.2"
 blake3 = "1"
 # RFC 123 WP1: native wasmtime archive host (crypto ABI + command protocol).
-wasmparser = "0.255"
+wasmparser = "0.258"
 wasmtime = { workspace = true }
 wasmtime-wasi = { workspace = true }
 

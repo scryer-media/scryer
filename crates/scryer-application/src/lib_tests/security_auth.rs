@@ -25,21 +25,15 @@ fn hash_version_is_explicit() {
 }
 
 #[test]
-fn v1_password_still_validates() {
+fn v1_password_hashes_are_rejected() {
     let (app, _user) = bootstrap();
-    // Simulate a legacy v1 hash
+    // The legacy `v1$<salt>$<sha256(salt+password)>` form is retired. Migration
+    // 0191 clears surviving rows; anything still presenting one fails closed.
     let salt = "abcdef0123456789abcdef0123456789";
-    let digest = sha256_hex(format!("{salt}legacy-pass"));
-    let v1_hash = format!("v1${salt}${digest}");
-    assert!(app.validate_password_hash(&v1_hash).is_ok());
-    assert!(
-        app.validate_password("legacy-pass", &v1_hash)
-            .expect("v1 should validate")
-    );
-    assert!(
-        !app.validate_password("wrong", &v1_hash)
-            .expect("v1 should reject wrong password")
-    );
+    let v1_hash =
+        format!("v1${salt}$0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+    assert!(app.validate_password_hash(&v1_hash).is_err());
+    assert!(app.validate_password("legacy-pass", &v1_hash).is_err());
 }
 
 #[test]
@@ -129,6 +123,7 @@ async fn existing_short_password_remains_valid_after_minimum_is_raised() {
             form_login_enabled: false,
             password_min_length: 12,
             skip_login_for_local_ips: false,
+            api_keys_restrict_to_system_settings_users: Some(false),
             mfa_require_config_step_up: false,
             mfa_require_password_login: false,
             totp_require_jellyfin_login: false,
@@ -214,6 +209,7 @@ async fn emby_totp_requirement_round_trips_through_settings_values() {
             form_login_enabled: false,
             password_min_length: 8,
             skip_login_for_local_ips: false,
+            api_keys_restrict_to_system_settings_users: Some(false),
             mfa_require_config_step_up: false,
             mfa_require_password_login: false,
             totp_require_jellyfin_login: false,
@@ -305,71 +301,6 @@ async fn security_settings_do_not_overwrite_new_mfa_keys_with_legacy_values() {
             .await
             .as_deref(),
         Some("false")
-    );
-}
-
-#[tokio::test]
-async fn existing_short_v1_password_rehashes_after_minimum_is_raised() {
-    let (app, admin) = bootstrap();
-    let short_password = "short7!";
-    let salt = "abcdef0123456789abcdef0123456789";
-    let digest = sha256_hex(format!("{salt}{short_password}"));
-    let legacy_hash = format!("v1${salt}${digest}");
-    let user = User {
-        id: "existing-short-v1-password-user".to_string(),
-        username: "existing_short_v1_password".to_string(),
-        password_hash: Some(legacy_hash.clone()),
-        password_change_required: false,
-        account_kind: Default::default(),
-        authorization: Default::default(),
-    };
-    app.services
-        .identity
-        .users
-        .create(user.clone())
-        .await
-        .expect("create short-password legacy user");
-
-    app.update_security_settings(
-        &admin,
-        UpdateSecuritySettings {
-            form_login_enabled: false,
-            password_min_length: 12,
-            skip_login_for_local_ips: false,
-            mfa_require_config_step_up: false,
-            mfa_require_password_login: false,
-            totp_require_jellyfin_login: false,
-            totp_require_emby_login: Some(false),
-        },
-    )
-    .await
-    .expect("raise password minimum");
-
-    let authenticated = app
-        .authenticate_credentials("existing_short_v1_password", short_password)
-        .await
-        .expect("authenticate existing short v1 password");
-    assert!(
-        authenticated
-            .password_hash
-            .as_deref()
-            .is_some_and(|hash| hash.starts_with("v2$"))
-    );
-
-    let stored = app
-        .services
-        .identity
-        .users
-        .get_by_id(&user.id)
-        .await
-        .expect("load migrated user")
-        .expect("migrated user present");
-    assert_ne!(stored.password_hash.as_deref(), Some(legacy_hash.as_str()));
-    assert!(
-        stored
-            .password_hash
-            .as_deref()
-            .is_some_and(|hash| hash.starts_with("v2$"))
     );
 }
 
@@ -877,9 +808,11 @@ async fn oauth_redirect_validation_and_code_exchange_reject_fragments() {
     let verifier = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~abcdef";
 
     app.validate_oauth_redirect_uri(OAUTH_GENERIC_NATIVE_CLIENT_ID, redirect_uri)
+        .await
         .expect("fragment-free redirect should remain valid");
     match app
         .validate_oauth_redirect_uri(OAUTH_GENERIC_NATIVE_CLIENT_ID, fragment_redirect_uri)
+        .await
         .expect_err("fragment-bearing redirect should be rejected")
     {
         AppError::Validation(message) => {

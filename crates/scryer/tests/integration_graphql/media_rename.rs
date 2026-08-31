@@ -1860,6 +1860,182 @@ async fn graphql_media_rename_preview_scopes_returned_items_without_changing_cou
 }
 
 #[tokio::test]
+async fn graphql_media_rename_preview_does_not_refresh_stale_title_metadata_language() {
+    let ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+    let media_root = tempfile::tempdir().expect("media root tempdir");
+    configure_default_library_root(&ctx, MediaFacet::Movie, media_root.path()).await;
+
+    let localized_movie_response = json!({
+        "data": {
+            "movie": {
+                "movie": {
+                    "tvdb_id": 94123,
+                    "name": "現地化された映画",
+                    "slug": "localized-rename-movie",
+                    "year": 2024,
+                    "status": "Released",
+                    "overview": "",
+                    "poster_url": "",
+                    "language": "jpn",
+                    "original_language": "jpn",
+                    "runtime_minutes": 120,
+                    "sort_title": "現地化された映画",
+                    "imdb_id": "",
+                    "tmdb_id": null,
+                    "tmdb_popularity": null,
+                    "anidb_id": null,
+                    "canonical_tags": [],
+                    "studio": "",
+                    "tmdb_release_date": null,
+                    "rating": null,
+                    "rating_sources": [],
+                    "external_ratings": [],
+                    "credits": [],
+                    "artworks": []
+                }
+            }
+        }
+    });
+    Mock::given(method("GET"))
+        .and(path("/graphql"))
+        .and(query_param("operationName", "GetMovie"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(localized_movie_response.clone()))
+        .with_priority(1)
+        .mount(&ctx.smg_server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/graphql"))
+        .and(body_string_contains("GetMovie"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(localized_movie_response))
+        .with_priority(1)
+        .mount(&ctx.smg_server)
+        .await;
+    // This fixture models an older gateway: title-id lookup is rejected, so a
+    // TVDB-backed movie must fall back to the legacy GetMovie operation.
+    Mock::given(method("GET"))
+        .and(path("/graphql"))
+        .and(query_param("operationName", "ResolveTitles"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "errors": [{
+                "message": "Cannot query field \"resolveTitles\" on type \"Query\"."
+            }]
+        })))
+        .with_priority(2)
+        .mount(&ctx.smg_server)
+        .await;
+
+    let title = create_catalog_title(
+        &ctx,
+        "Saved English Title",
+        MediaFacet::Movie,
+        vec![ExternalId {
+            source: "tvdb".to_string(),
+            value: "94123".to_string(),
+        }],
+        vec![],
+        true,
+    )
+    .await;
+    let movie_dir = media_root.path().join("Saved English Title");
+    std::fs::create_dir_all(&movie_dir).expect("create movie dir");
+    set_title_folder_path(&ctx, &title.id, &movie_dir).await;
+    let file_path = movie_dir.join("Saved.English.Title.2024.mkv");
+    std::fs::write(&file_path, b"movie-rename-preview").expect("write movie file");
+    ctx.shows
+        .create_collection(Collection {
+            id: Id::new().0,
+            title_id: title.id.clone(),
+            collection_type: scryer_domain::CollectionType::Movie,
+            collection_index: "1".to_string(),
+            label: Some("1080p".to_string()),
+            ordered_path: Some(file_path.to_string_lossy().to_string()),
+            narrative_order: None,
+            first_episode_number: None,
+            last_episode_number: None,
+            monitored: true,
+            created_at: chrono::Utc::now(),
+        })
+        .await
+        .expect("create movie collection");
+    ctx.media_files
+        .insert_media_file(&InsertMediaFileInput {
+            title_id: title.id.clone(),
+            file_path: file_path.to_string_lossy().to_string(),
+            size_bytes: 4096,
+            quality_label: Some("1080p".to_string()),
+            ..Default::default()
+        })
+        .await
+        .expect("insert movie media file");
+
+    let actor = ctx
+        .app
+        .find_or_create_default_user()
+        .await
+        .expect("default user");
+    ctx.app
+        .set_title_metadata_language_override(&actor, &title.id, Some("jpn".to_string()))
+        .await
+        .expect("set title metadata language override");
+
+    let preview = || async {
+        gql(
+            &ctx,
+            r#"
+            query($input: MediaRenamePreviewInput!) {
+              mediaRenamePreview(input: $input) {
+                fingerprint
+                items { proposedPath }
+              }
+            }
+            "#,
+            json!({ "input": { "facet": "MOVIE", "titleId": title.id, "dryRun": true } }),
+        )
+        .await
+    };
+
+    let first = preview().await;
+    assert_no_errors(&first);
+    let metadata_requests = ctx
+        .smg_server
+        .received_requests()
+        .await
+        .expect("read metadata requests");
+    assert!(
+        metadata_requests.is_empty(),
+        "preview must not hydrate: {metadata_requests:?}"
+    );
+    assert!(
+        first["data"]["mediaRenamePreview"]["items"][0]["proposedPath"]
+            .as_str()
+            .is_some_and(|path| path.contains("Saved English Title")),
+        "expected persisted metadata path, got {first}"
+    );
+    let persisted = ctx
+        .titles
+        .get_by_id(&title.id)
+        .await
+        .expect("load title")
+        .expect("persisted title");
+    assert_eq!(persisted.name, "Saved English Title");
+    assert_eq!(persisted.metadata_language.as_deref(), Some("eng"));
+
+    let request_count = metadata_requests.len();
+    let second = preview().await;
+    assert_no_errors(&second);
+    assert_eq!(
+        ctx.smg_server
+            .received_requests()
+            .await
+            .expect("read metadata requests")
+            .len(),
+        request_count,
+        "preview must not issue a metadata request"
+    );
+}
+
+#[tokio::test]
 async fn graphql_media_rename_preview_bulk_matches_per_title_previews() {
     let ctx = TestContext::new().await;
     seed_typed_settings_definitions(&ctx).await;

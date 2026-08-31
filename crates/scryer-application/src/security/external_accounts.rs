@@ -1562,6 +1562,22 @@ mod tests {
             Ok(connection)
         }
 
+        async fn list_playback_items_for_entity(
+            &self,
+            _: scryer_domain::MediaServerPlaybackEntityKind,
+            _: &str,
+        ) -> AppResult<Vec<scryer_domain::MediaServerPlaybackItem>> {
+            Ok(Vec::new())
+        }
+
+        async fn replace_playback_items_for_connection(
+            &self,
+            _: &str,
+            _: Vec<scryer_domain::MediaServerPlaybackItem>,
+        ) -> AppResult<()> {
+            Ok(())
+        }
+
         async fn delete(&self, id: &str) -> AppResult<()> {
             self.connections
                 .lock()
@@ -1928,6 +1944,7 @@ mod tests {
                 }
                 scryer_domain::MediaServerProvider::Emby => "https://emby.example.test".to_string(),
             },
+            external_url: None,
             enabled: true,
             login_enabled: true,
             linking_enabled: true,

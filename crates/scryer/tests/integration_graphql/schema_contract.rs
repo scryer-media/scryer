@@ -533,19 +533,44 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // OBJECT 300->301, and INPUT_OBJECT 166->168.
     // Temporary-password replacement adds one mutation and its input object:
     // mutation 186->187, INPUT_OBJECT 168->169, public types 585->586.
+    // Durable indexer HTTP error history adds the indexerErrors and indexerError
+    // query roots: query 127->129. The title-id work changes existing metadata
+    // query inputs and payload fields only, so it adds no roots or named types.
+    // OAuth client registrations add their create, update, and delete mutation
+    // roots and six named types: mutation 187->190, public types 593->599.
+    // API-key lifecycle adds two queries, two mutations, and five named types:
+    // query 129->131, mutation 190->192, public types 599->604.
+    // Application upgrade status adds one query root, one payload object, and
+    // two enum types: query +1, OBJECT +1, ENUM +2, public types +3.
+    // Starting an application upgrade adds one mutation root, its input, and
+    // its acceptance payload. The status run fields reuse JobRunPayload and
+    // APPLICATION_UPGRADE joins the existing JobKeyValue enum: mutation +1,
+    // OBJECT +1, INPUT_OBJECT +1, public types +2.
+    // Media-server playback links add one object behind existing title, episode,
+    // and calendar payloads: OBJECT 314->315, public types 609->610.
+    // Query, mutation, subscription, input-object, and enum counts are unchanged.
+    // Manual-import video facts add one object: OBJECT 315->316, public types 610->611.
+    // Live import activity adds one query, one mutation, one subscription, two
+    // payload objects, and one phase enum: query 132->133, mutation 193->194,
+    // subscription 13->14, OBJECT 316->318, ENUM 110->111, public types 611->614.
+    // Local movie-entity detail adds one query. In the combined release schema,
+    // its payload graph also makes one existing enum reachable: query 133->134,
+    // ENUM 111->112, public types 614->615.
+    // Plugin config preset overrides add one key/value payload object behind the
+    // existing config option type: OBJECT 318->319, public types 615->616.
     assert_eq!(
-        query_field_count, 125,
+        query_field_count, 134,
         "query fields: {query_field_names:?}"
     );
     assert_eq!(
-        mutation_field_count, 187,
+        mutation_field_count, 194,
         "mutation fields: {mutation_field_names:?}"
     );
-    assert_eq!(subscription_field_count, 13);
-    assert_eq!(public_types.len(), 586);
-    assert_eq!(kind_count("OBJECT"), 301);
-    assert_eq!(kind_count("INPUT_OBJECT"), 169);
-    assert_eq!(kind_count("ENUM"), 104);
+    assert_eq!(subscription_field_count, 14);
+    assert_eq!(public_types.len(), 616);
+    assert_eq!(kind_count("OBJECT"), 319);
+    assert_eq!(kind_count("INPUT_OBJECT"), 173);
+    assert_eq!(kind_count("ENUM"), 112);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
     assert!(query_field_names.contains(&"backupSettings"));
@@ -553,6 +578,13 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     assert!(query_field_names.contains(&"indexerDownloadClientMappingCatalog"));
     assert!(query_field_names.contains(&"externalImportSetupSecretDraft"));
     assert!(query_field_names.contains(&"externalImportSetupSecretDraftStatus"));
+    assert!(query_field_names.contains(&"indexerErrors"));
+    assert!(query_field_names.contains(&"indexerError"));
+    assert!(query_field_names.contains(&"canCreateMyApiKeys"));
+    assert!(query_field_names.contains(&"applicationUpgradeStatus"));
+    assert!(query_field_names.contains(&"activeImportStreams"));
+    assert!(mutation_field_names.contains(&"cancelActiveImport"));
+    assert!(mutation_field_names.contains(&"startApplicationUpgrade"));
     assert!(query_field_names.contains(&"episode"));
     assert!(query_field_names.contains(&"titleCatalogFilterOptions"));
     assert!(!query_field_names.contains(&"catalogHasValidRoot"));
@@ -567,6 +599,7 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     assert!(public_type_names.contains(&"DashboardActivityStatsPayload"));
     assert!(public_type_names.contains(&"ActivityWindowCountsPayload"));
     assert!(public_type_names.contains(&"StorageRootUsagePayload"));
+    assert!(public_type_names.contains(&"MediaServerPlaybackLinkPayload"));
     assert!(public_type_names.contains(&"PendingImportReasonClassValue"));
     assert!(mutation_field_names.contains(&"clearExternalImportSetupSecretDraft"));
     assert!(mutation_field_names.contains(&"createIndexerProxyConfig"));
@@ -594,6 +627,9 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     assert!(public_type_names.contains(&"ExternalImportSetupSecretDraftPayload"));
     assert!(public_type_names.contains(&"RuntimeInfoPayload"));
     assert!(public_type_names.contains(&"RuntimePathStyleValue"));
+    assert!(public_type_names.contains(&"ApplicationUpgradeStatusPayload"));
+    assert!(public_type_names.contains(&"ApplicationInstallationKindValue"));
+    assert!(public_type_names.contains(&"ApplicationUpgradeOwnerValue"));
     assert!(public_type_names.contains(&"UpdateBackupSettingsInput"));
     assert!(public_type_names.contains(&"CutoffUnmetTitlesPagePayload"));
     // interactive-search job + convergence surface is present…
@@ -1452,10 +1488,17 @@ async fn graphql_introspection_search_metadata_uses_media_facet_enum() {
             .iter()
             .filter_map(|field| field["name"].as_str())
             .collect::<Vec<_>>(),
-        vec!["tvdbId", "language"]
+        vec!["tvdbId", "smgId", "tmdbId", "imdbId", "language"]
     );
-    assert_eq!(movie_input_fields[0]["type"]["kind"], "NON_NULL");
-    assert_eq!(movie_input_fields[0]["type"]["ofType"]["name"], "String");
+    for (field, scalar) in [
+        (&movie_input_fields[0], "String"),
+        (&movie_input_fields[1], "Int"),
+        (&movie_input_fields[2], "Int"),
+        (&movie_input_fields[3], "String"),
+    ] {
+        assert_eq!(field["type"]["kind"], "SCALAR");
+        assert_eq!(field["type"]["name"], scalar);
+    }
 
     let series_input_fields = body["data"]["metadataSeriesInput"]["inputFields"]
         .as_array()
@@ -1511,6 +1554,12 @@ async fn graphql_introspection_begin_manual_import_selection_uses_input_object()
               }
             }
           }
+          manualImportFilePreview: __type(name: "ManualImportFilePreviewPayload") {
+            fields { name type { kind name } }
+          }
+          manualImportVideoFacts: __type(name: "ManualImportVideoFactsPayload") {
+            fields { name }
+          }
         }
         "#,
         json!({}),
@@ -1556,6 +1605,38 @@ async fn graphql_introspection_begin_manual_import_selection_uses_input_object()
     let title_id = input_field("titleId");
     assert_eq!(title_id["type"]["kind"], "NON_NULL");
     assert_eq!(title_id["type"]["ofType"]["name"], "ID");
+
+    let preview_fields = body["data"]["manualImportFilePreview"]["fields"]
+        .as_array()
+        .expect("ManualImportFilePreviewPayload should expose fields");
+    let video_facts = preview_fields
+        .iter()
+        .find(|field| field["name"] == "videoFacts")
+        .expect("manual import preview should expose video facts");
+    assert_eq!(video_facts["type"]["kind"], "OBJECT");
+    assert_eq!(video_facts["type"]["name"], "ManualImportVideoFactsPayload");
+
+    let fact_field_names = body["data"]["manualImportVideoFacts"]["fields"]
+        .as_array()
+        .expect("ManualImportVideoFactsPayload should expose fields")
+        .iter()
+        .filter_map(|field| field["name"].as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        fact_field_names,
+        vec![
+            "containerFormat",
+            "videoCodec",
+            "audioCodec",
+            "videoWidth",
+            "videoHeight",
+            "durationSeconds",
+        ]
+    );
+
+    let extract_archives = input_field("extractArchives");
+    assert_eq!(extract_archives["type"]["kind"], "SCALAR");
+    assert_eq!(extract_archives["type"]["name"], "Boolean");
 }
 
 #[tokio::test]
@@ -5484,6 +5565,14 @@ async fn graphql_introspection_exposes_typed_settings_fields() {
         assert_eq!(field["type"]["kind"], "SCALAR", "{label}");
         assert_eq!(field["type"]["name"], "ID", "{label}");
     };
+    let assert_settings_non_null_boolean = |field: Value, label: &str| {
+        assert_eq!(field["type"]["kind"], "NON_NULL", "{label}");
+        assert_eq!(field["type"]["ofType"]["name"], "Boolean", "{label}");
+    };
+    let assert_settings_optional_boolean = |field: Value, label: &str| {
+        assert_eq!(field["type"]["kind"], "SCALAR", "{label}");
+        assert_eq!(field["type"]["name"], "Boolean", "{label}");
+    };
     let assert_settings_non_null_id_list = |field: Value, label: &str| {
         assert_eq!(field["type"]["kind"], "NON_NULL", "{label}");
         assert_eq!(field["type"]["ofType"]["kind"], "LIST", "{label}");
@@ -5510,6 +5599,16 @@ async fn graphql_introspection_exposes_typed_settings_fields() {
         settings_input_field("delayProfileInput", "id"),
         "DelayProfileInput.id",
     );
+    for field_name in ["enableUsenet", "enableTorrent", "bypassIfHighestQuality"] {
+        assert_settings_optional_boolean(
+            settings_input_field("delayProfileInput", field_name),
+            &format!("DelayProfileInput.{field_name}"),
+        );
+        assert_settings_non_null_boolean(
+            settings_output_field("delayProfile", field_name),
+            &format!("DelayProfilePayload.{field_name}"),
+        );
+    }
     assert_settings_non_null_id(
         settings_output_field("qualityProfile", "id"),
         "QualityProfilePayload.id",

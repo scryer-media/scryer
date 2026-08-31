@@ -1,10 +1,10 @@
-use crate::MediaInfoError;
 use crate::codec::{
     detect_audio_profile_from_payload, detect_dts_channels_from_probe_bytes, merge_audio_profile,
 };
 use crate::probe::ProbeBudget;
 use crate::scan;
 use crate::types::{RawContainer, RawTrack, TrackKind};
+use crate::{AnalysisProfile, MediaInfoError};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
@@ -109,7 +109,10 @@ struct TsPacketLayout {
 }
 
 /// Parse an MPEG Transport Stream file and extract stream metadata.
-pub(crate) fn parse_ts(path: &Path) -> Result<RawContainer, MediaInfoError> {
+pub(crate) fn parse_ts(
+    path: &Path,
+    profile: AnalysisProfile,
+) -> Result<RawContainer, MediaInfoError> {
     let mut file = std::fs::File::open(path).map_err(|e| MediaInfoError::Io(e.to_string()))?;
 
     let file_size = file
@@ -122,7 +125,11 @@ pub(crate) fn parse_ts(path: &Path) -> Result<RawContainer, MediaInfoError> {
     let es_entries = parse_program_map(&mut file, layout)?;
     let mut tracks: Vec<RawTrack> = es_entries.iter().map(build_track).collect();
 
-    let first_probe_pts = enrich_tracks_from_probe(&mut file, &es_entries, &mut tracks, layout)?;
+    let first_probe_pts = if profile == AnalysisProfile::ContentProbe {
+        None
+    } else {
+        enrich_tracks_from_probe(&mut file, &es_entries, &mut tracks, layout)?
+    };
     let duration_seconds =
         estimate_duration(&mut file, file_size, &es_entries, layout, first_probe_pts);
 

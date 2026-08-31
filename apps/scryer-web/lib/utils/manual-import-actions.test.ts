@@ -2,9 +2,21 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  compareManualImportSeasonLabels,
   directMovieManualImportMappings,
   manualImportActions,
 } from "./manual-import-actions.ts";
+
+test("manual import season labels sort numerically", () => {
+  const labels = ["Season 1", "Season 10", "Season 2", "Season 20"];
+
+  assert.deepEqual(labels.sort(compareManualImportSeasonLabels), [
+    "Season 1",
+    "Season 2",
+    "Season 10",
+    "Season 20",
+  ]);
+});
 
 test("direct movie manual import maps only the largest candidate", () => {
   assert.deepEqual(

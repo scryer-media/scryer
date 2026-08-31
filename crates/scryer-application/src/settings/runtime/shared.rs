@@ -459,7 +459,7 @@ impl AppUseCase {
                         })
                         .or(selected_global_profile)
                         .map(|profile| {
-                            normalize_required_audio_languages(
+                            normalize_required_audio_requirements(
                                 profile.criteria.required_audio_languages.clone(),
                             )
                         })

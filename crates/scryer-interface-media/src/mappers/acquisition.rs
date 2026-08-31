@@ -124,14 +124,12 @@ pub fn from_title_release_blocklist_entry(
 ) -> TitleReleaseBlocklistEntryPayload {
     TitleReleaseBlocklistEntryPayload {
         id: entry.id.into(),
-        source_hint: entry.source_hint,
-        source_title: entry.source_title,
+        release_name: entry.release_name,
         error_message: entry.error_message,
         attempted_at: parse_required_datetime(
             &entry.attempted_at,
             "title release blocklist attempted_at",
         ),
-        episode_ids: entry.episode_ids.into_iter().map(Into::into).collect(),
     }
 }
 
@@ -195,6 +193,43 @@ pub fn from_parsed_episode(episode: ParsedEpisodeMetadata) -> ParsedEpisodePaylo
             .into_iter()
             .map(|value| value as i32)
             .collect(),
+    }
+}
+
+pub fn from_active_import_stream(
+    stream: scryer_application::ActiveImportStream,
+) -> ActiveImportStreamPayload {
+    let phase = match stream.phase {
+        scryer_application::ActiveImportStreamPhase::Queued => ActiveImportStreamPhaseValue::Queued,
+        scryer_application::ActiveImportStreamPhase::Extracting => {
+            ActiveImportStreamPhaseValue::Extracting
+        }
+        scryer_application::ActiveImportStreamPhase::Placing => {
+            ActiveImportStreamPhaseValue::Placing
+        }
+        scryer_application::ActiveImportStreamPhase::Copying => {
+            ActiveImportStreamPhaseValue::Copying
+        }
+        scryer_application::ActiveImportStreamPhase::Finalizing => {
+            ActiveImportStreamPhaseValue::Finalizing
+        }
+    };
+    let cancellable = stream.cancellable();
+    ActiveImportStreamPayload {
+        id: stream.id.into(),
+        import_id: stream.import_id.into(),
+        library_id: stream.library_id.into(),
+        facet: MediaFacetValue::from_domain(stream.facet),
+        source_path: stream.source_path,
+        destination_path: stream.destination_path,
+        phase,
+        bytes: Long::from(i64::try_from(stream.bytes).unwrap_or(i64::MAX)),
+        total_bytes: Long::from(i64::try_from(stream.total_bytes).unwrap_or(i64::MAX)),
+        queued_at: stream.queued_at,
+        started_at: stream.started_at,
+        updated_at: stream.updated_at,
+        cancellable,
+        cancellation_requested: stream.cancellation_requested,
     }
 }
 

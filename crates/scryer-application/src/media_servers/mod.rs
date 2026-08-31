@@ -1,7 +1,8 @@
 use super::*;
 
 #[cfg(not(test))]
-const MEDIA_SERVER_USER_LIST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const MEDIA_SERVER_USER_LIST_TIMEOUT: std::time::Duration =
+    scryer_outbound_http::STANDARD_HTTP_TIMEOUT;
 #[cfg(test)]
 const MEDIA_SERVER_USER_LIST_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(50);
 
@@ -22,6 +23,7 @@ pub struct MediaServerConnectionDraft {
     pub provider: MediaServerProvider,
     pub display_name: String,
     pub base_url: String,
+    pub external_url: Option<String>,
     pub enabled: bool,
     pub login_enabled: bool,
     pub linking_enabled: bool,
@@ -49,6 +51,7 @@ pub struct MediaServerConnectionPatch {
     pub provider: Option<MediaServerProvider>,
     pub display_name: Option<String>,
     pub base_url: Option<String>,
+    pub external_url: Option<String>,
     pub enabled: Option<bool>,
     pub login_enabled: Option<bool>,
     pub linking_enabled: Option<bool>,
@@ -88,9 +91,14 @@ struct ResolvedEmbyCredentials {
 mod connections;
 mod emby;
 mod jellyfin;
+mod playback;
 mod plex;
 mod policy;
+mod scanner;
 mod users;
+
+pub use playback::MediaServerPlaybackLink;
+pub use scanner::start_background_media_server_playback_reconciliation_loop;
 
 use policy::*;
 

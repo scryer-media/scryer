@@ -43,4 +43,8 @@ pub fn is_password_required_error(_error: &AppError) -> bool {
     false
 }
 
+pub fn is_timeout_error(error: &AppError) -> bool {
+    matches!(error, AppError::ArchiveExtractionTimedOut { .. })
+}
+
 pub async fn cleanup_extracted_dir(_dir: &Path) {}

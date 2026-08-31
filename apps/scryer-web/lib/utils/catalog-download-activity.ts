@@ -11,6 +11,11 @@ export type CatalogDownloadActivityInput = Pick<
   "titleId" | "displayState"
 >;
 
+export type PendingDownloadActivityInput = Pick<
+  DownloadQueueItem,
+  "displayState"
+>;
+
 /**
  * Display states that mean "work is still pending for this title" — everything
  * from sitting in the client queue through the import finishing.
@@ -28,22 +33,22 @@ const PENDING_CATALOG_DOWNLOAD_DISPLAY_STATES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * True when a queue item represents live, title-linked work that the catalog
- * should surface as a pulsing "Downloading" pill.
- *
- * Items with no linked title can't be attributed to a catalog row, so they
- * never count no matter what state they're in.
+ * True when a queue item represents live work that should surface as a
+ * pulsing "Downloading" pill.
  */
-export function isPendingCatalogDownloadQueueItem(
-  item: CatalogDownloadActivityInput,
+export function isPendingDownloadQueueItem(
+  item: PendingDownloadActivityInput,
 ): boolean {
-  if (!item.titleId || item.titleId.trim().length === 0) {
-    return false;
-  }
-
   return PENDING_CATALOG_DOWNLOAD_DISPLAY_STATES.has(
     normalizeQueueState(item.displayState),
   );
+}
+
+export function isPendingCatalogDownloadQueueItem(
+  item: CatalogDownloadActivityInput,
+): boolean {
+  // Items with no linked title cannot be attributed to a catalog row.
+  return Boolean(item.titleId?.trim()) && isPendingDownloadQueueItem(item);
 }
 
 /**

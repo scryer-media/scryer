@@ -1,4 +1,5 @@
 use super::*;
+use crate::library_scan_titles::find_existing_movie_title_index_for_metadata_match;
 use crate::library_scan_unmatched::{
     IgnoredLibraryScanItemArgs, LIBRARY_SCAN_SKIPPED_UNUSABLE_TITLE_EVIDENCE,
     LIBRARY_SCAN_TITLE_ALREADY_OWNS_ANOTHER_FOLDER, build_title_bound_unmatched_scan_item,
@@ -687,6 +688,7 @@ async fn resolve_movie_metadata_match(
     batch_search_results: &MetadataSearchResults,
     existing_titles: &mut Vec<Title>,
     existing_titles_by_name: &mut TitleNameIndex,
+    existing_titles_by_smg_id: &mut HashMap<String, usize>,
     existing_titles_by_tvdb_id: &mut HashMap<String, usize>,
     existing_titles_by_imdb_id: &mut HashMap<String, usize>,
     existing_titles_by_tmdb_id: &mut HashMap<String, usize>,
@@ -697,11 +699,14 @@ async fn resolve_movie_metadata_match(
         return Ok(MovieMetadataResolution::Unmatched);
     };
 
-    if let Some(index) = find_existing_title_index_for_metadata_match(
+    if let Some(index) = find_existing_movie_title_index_for_metadata_match(
         &selected,
         existing_titles,
         existing_titles_by_name,
+        existing_titles_by_smg_id,
         existing_titles_by_tvdb_id,
+        existing_titles_by_imdb_id,
+        existing_titles_by_tmdb_id,
     ) {
         return Ok(MovieMetadataResolution::Ready(
             existing_titles[index].clone(),
@@ -722,6 +727,7 @@ async fn resolve_movie_metadata_match(
             let index = append_movie_title(
                 existing_titles,
                 existing_titles_by_name,
+                existing_titles_by_smg_id,
                 existing_titles_by_tvdb_id,
                 existing_titles_by_imdb_id,
                 existing_titles_by_tmdb_id,
@@ -1135,6 +1141,7 @@ pub(super) async fn process_resolved_movie_full_scan_candidate(
     executor: &mut dyn LibraryScanTitleWorkQueue,
     existing_titles: &mut Vec<Title>,
     existing_titles_by_name: &mut TitleNameIndex,
+    existing_titles_by_smg_id: &mut HashMap<String, usize>,
     existing_titles_by_tvdb_id: &mut HashMap<String, usize>,
     existing_titles_by_imdb_id: &mut HashMap<String, usize>,
     existing_titles_by_tmdb_id: &mut HashMap<String, usize>,
@@ -1152,6 +1159,7 @@ pub(super) async fn process_resolved_movie_full_scan_candidate(
         batch_search_results,
         existing_titles,
         existing_titles_by_name,
+        existing_titles_by_smg_id,
         existing_titles_by_tvdb_id,
         existing_titles_by_imdb_id,
         existing_titles_by_tmdb_id,
@@ -1791,6 +1799,7 @@ pub(super) async fn process_resolved_movie_refresh_candidate(
     executor: &mut dyn LibraryScanTitleWorkQueue,
     existing_titles: &mut Vec<Title>,
     existing_titles_by_name: &mut TitleNameIndex,
+    existing_titles_by_smg_id: &mut HashMap<String, usize>,
     existing_titles_by_tvdb_id: &mut HashMap<String, usize>,
     existing_titles_by_imdb_id: &mut HashMap<String, usize>,
     existing_titles_by_tmdb_id: &mut HashMap<String, usize>,
@@ -1810,6 +1819,7 @@ pub(super) async fn process_resolved_movie_refresh_candidate(
         batch_search_results,
         existing_titles,
         existing_titles_by_name,
+        existing_titles_by_smg_id,
         existing_titles_by_tvdb_id,
         existing_titles_by_imdb_id,
         existing_titles_by_tmdb_id,
@@ -2188,7 +2198,8 @@ mod tests {
             build_movie_title_named("namesake-1990", "Namesake Film", Some(1990)),
             build_movie_title_named("namesake-2012", "Namesake Film", Some(2012)),
         ];
-        let (by_name, by_tvdb, by_imdb, by_tmdb) = build_movie_title_indexes(&existing_titles);
+        let (by_name, _by_smg, by_tvdb, by_imdb, by_tmdb) =
+            build_movie_title_indexes(&existing_titles);
         assert_eq!(
             by_name
                 .get(&crate::title_matching::canonical_lookup_key(
@@ -2240,7 +2251,8 @@ mod tests {
         remake.folder_path = Some("/library/Namesake Film (2012)".to_string());
         // Ordered so the plain "first compatible" answer is the wrong one.
         let existing_titles = vec![remake, original];
-        let (by_name, by_tvdb, by_imdb, by_tmdb) = build_movie_title_indexes(&existing_titles);
+        let (by_name, _by_smg, by_tvdb, by_imdb, by_tmdb) =
+            build_movie_title_indexes(&existing_titles);
 
         let mut in_original_folder = movie_candidate("Namesake Film", None);
         in_original_folder.file.path = "/library/Namesake Film/Namesake.Film.1080p.mkv".to_string();
@@ -2339,9 +2351,12 @@ mod tests {
             value: "tvdb-2019".to_string(),
         }];
         let existing_titles = vec![remake_2019];
-        let (by_name, by_tvdb, _, _) = build_movie_title_indexes(&existing_titles);
+        let (by_name, _by_smg, by_tvdb, _, _) = build_movie_title_indexes(&existing_titles);
         let selected = |tvdb_id: &str, year: Option<i32>| MetadataSearchItem {
             tvdb_id: tvdb_id.to_string(),
+            smg_id: None,
+            primary_source: None,
+            external_ids: vec![],
             name: "Remade Film".to_string(),
             year,
             auto_match_safe: true,
@@ -2387,6 +2402,46 @@ mod tests {
             ),
             Some(0),
             "an unknown year cannot contradict"
+        );
+    }
+
+    #[test]
+    fn movie_metadata_match_prefers_smg_id_before_tvdb_id() {
+        let mut smg_title = build_movie_title_named("smg-title", "SMG Title", Some(2020));
+        smg_title.external_ids = vec![scryer_domain::ExternalId {
+            source: "smg".to_string(),
+            value: "901".to_string(),
+        }];
+        let mut tvdb_title = build_movie_title_named("tvdb-title", "TVDB Title", Some(2020));
+        tvdb_title.external_ids = vec![scryer_domain::ExternalId {
+            source: "tvdb".to_string(),
+            value: "movie-902".to_string(),
+        }];
+        let existing_titles = vec![smg_title, tvdb_title];
+        let (by_name, by_smg, by_tvdb, by_imdb, by_tmdb) =
+            build_movie_title_indexes(&existing_titles);
+        let selected = MetadataSearchItem {
+            tvdb_id: "movie-902".to_string(),
+            smg_id: Some(901),
+            primary_source: Some("tmdb".to_string()),
+            external_ids: vec![],
+            name: "Different Metadata Name".to_string(),
+            year: Some(2020),
+            auto_match_safe: true,
+            auto_match_signals: Vec::new(),
+        };
+
+        assert_eq!(
+            find_existing_movie_title_index_for_metadata_match(
+                &selected,
+                &existing_titles,
+                &by_name,
+                &by_smg,
+                &by_tvdb,
+                &by_imdb,
+                &by_tmdb,
+            ),
+            Some(0)
         );
     }
 

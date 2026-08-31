@@ -236,6 +236,10 @@ pub fn is_password_required_error(error: &AppError) -> bool {
     msg.contains("password") || msg.contains("encrypted") || msg.contains("wrong password")
 }
 
+pub fn is_timeout_error(error: &AppError) -> bool {
+    matches!(error, AppError::ArchiveExtractionTimedOut { .. })
+}
+
 fn plan_archive_extraction(dir: &Path) -> AppResult<Option<(PathBuf, ArchiveType)>> {
     if dir.is_file() {
         return Ok(archive_type_for_path(dir).map(|archive_type| (dir.to_path_buf(), archive_type)));

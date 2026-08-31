@@ -1,17 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 import { Loader2, LogIn, ShieldCheck, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { authRuntimeStateQuery } from "@/lib/graphql/queries";
+import {
+  authRuntimeStateQuery,
+  oauthAuthorizationClientQuery,
+} from "@/lib/graphql/queries";
 import { backendClient } from "@/lib/graphql/urql-client";
 import { getAuthToken } from "@/lib/hooks/use-auth";
 import { getRuntimeBackendUrl, getRuntimeBasePath } from "@/lib/runtime-config";
 import type { AuthRuntimeState } from "@/lib/types/settings";
 import { selectorId } from "@/lib/utils/dom-ids";
-
-const CLIENT_NAMES: Record<string, string> = {
-  "generic-native": "Generic native integration",
-  e2e: "Scryer E2E OAuth client",
-};
 
 const OAUTH_PAGE_CLASS =
   "flex min-h-screen items-center justify-center bg-fixed p-4 text-[var(--scry-body)] [background-image:var(--scry-shell-bg)] sm:p-6";
@@ -49,10 +47,11 @@ export default function OAuthAuthorizePage() {
   const params = useMemo(() => new URLSearchParams(window.location.search), []);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [clientName, setClientName] = useState<string | null>(null);
+  const [clientValidationError, setClientValidationError] = useState<string | null>(null);
   const [effectiveFormLoginEnabled, setEffectiveFormLoginEnabled] = useState<boolean | null>(null);
   const clientId = params.get("client_id") ?? "";
   const redirectUri = params.get("redirect_uri") ?? "";
-  const clientName = CLIENT_NAMES[clientId] ?? clientId;
   const token = getAuthToken();
   const authlessAuthorization = effectiveFormLoginEnabled === false;
 
@@ -61,20 +60,39 @@ export default function OAuthAuthorizePage() {
 
     (async () => {
       try {
-        const { data } = await backendClient
-          .query<{ authRuntimeState?: AuthRuntimeState | null }>(authRuntimeStateQuery, {})
-          .toPromise();
+        const [runtimeResult, clientResult] = await Promise.all([
+          backendClient
+            .query<{ authRuntimeState?: AuthRuntimeState | null }>(authRuntimeStateQuery, {})
+            .toPromise(),
+          backendClient
+            .query<{
+              oauthAuthorizationClient?: { clientId: string; displayName: string } | null;
+            }>(oauthAuthorizationClientQuery, { clientId, redirectUri })
+            .toPromise(),
+        ]);
         if (!cancelled) {
-          const runtimeState = data?.authRuntimeState ?? null;
+          const runtimeState = runtimeResult.data?.authRuntimeState ?? null;
           setEffectiveFormLoginEnabled(
             typeof runtimeState?.effectiveFormLoginEnabled === "boolean"
               ? runtimeState.effectiveFormLoginEnabled
               : null,
           );
+          const authorizationClient = clientResult.data?.oauthAuthorizationClient ?? null;
+          if (authorizationClient?.displayName) {
+            setClientName(authorizationClient.displayName);
+            setClientValidationError(null);
+          } else {
+            setClientName(null);
+            setClientValidationError(
+              clientResult.error?.message ?? "This OAuth request has an invalid client or redirect URI.",
+            );
+          }
         }
       } catch {
         if (!cancelled) {
           setEffectiveFormLoginEnabled(null);
+          setClientName(null);
+          setClientValidationError("Unable to validate this OAuth request.");
         }
       }
     })();
@@ -82,12 +100,16 @@ export default function OAuthAuthorizePage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [clientId, redirectUri]);
 
   const decide = async (approved: boolean) => {
     setBusy(true);
     setError(null);
     try {
+      if (!clientName) {
+        setError(clientValidationError ?? "Validating OAuth request. Please try again.");
+        return;
+      }
       if (!authlessAuthorization && !token) {
         window.location.assign(loginUrl());
         return;
@@ -131,7 +153,7 @@ export default function OAuthAuthorizePage() {
     }
   };
 
-  if (!authlessAuthorization && !token) {
+  if (!authlessAuthorization && !token && clientName) {
     return (
       <main className={OAUTH_PAGE_CLASS}>
         <div className={OAUTH_COMPACT_PANEL_CLASS}>
@@ -141,7 +163,7 @@ export default function OAuthAuthorizePage() {
             </span>
             <div className="min-w-0 space-y-1">
               <h1 id={selectorId("oauth-authorize-heading")} className={OAUTH_HEADING_CLASS}>
-                Authorize {clientName || "integration"}
+                Authorize {clientName ?? "integration"}
               </h1>
               <p className={OAUTH_MUTED_TEXT_CLASS}>
                 Sign in to continue OAuth authorization.
@@ -170,7 +192,7 @@ export default function OAuthAuthorizePage() {
           </span>
           <div className="min-w-0 space-y-2">
             <h1 id={selectorId("oauth-authorize-heading")} className={OAUTH_HEADING_CLASS}>
-              Authorize {clientName}
+              Authorize {clientName ?? "integration"}
             </h1>
             <p className={OAUTH_URI_CLASS}>{redirectUri}</p>
           </div>
@@ -184,11 +206,13 @@ export default function OAuthAuthorizePage() {
             Cannot manage users, settings, backups, security, or app configuration.
           </p>
         </div>
-        {error ? <p className={OAUTH_ERROR_CLASS}>{error}</p> : null}
+        {error ?? clientValidationError ? (
+          <p className={OAUTH_ERROR_CLASS}>{error ?? clientValidationError}</p>
+        ) : null}
         <div className="flex flex-wrap gap-2">
           <Button
             id={selectorId("oauth-authorize-approve")}
-            disabled={busy}
+            disabled={busy || !clientName}
             className={OAUTH_PRIMARY_BUTTON_CLASS}
             onClick={() => decide(true)}
           >
@@ -198,7 +222,7 @@ export default function OAuthAuthorizePage() {
           <Button
             id={selectorId("oauth-authorize-deny")}
             variant="outline"
-            disabled={busy}
+            disabled={busy || !clientName}
             className={OAUTH_SECONDARY_BUTTON_CLASS}
             onClick={() => decide(false)}
           >

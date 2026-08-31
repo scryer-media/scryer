@@ -1,6 +1,7 @@
 pub(crate) use crate::*;
 
 pub(crate) mod admission;
+pub(crate) mod submission;
 
 /// Contract tests for the shared admission gate. Written from the gate's own
 /// contract rather than from either caller, because the whole point is that

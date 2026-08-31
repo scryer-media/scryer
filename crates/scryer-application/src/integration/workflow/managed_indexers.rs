@@ -161,15 +161,19 @@ impl AppUseCase {
             let Some(existing) = existing_by_key.get(&desired.child_key) else {
                 continue;
             };
-            let managed_metadata_json = desired
-                .managed_metadata_json
-                .or_else(|| existing.managed_metadata_json.clone());
+            let managed_metadata_json = merge_managed_child_metadata(
+                existing.managed_metadata_json.as_deref(),
+                desired.managed_metadata_json.as_deref(),
+            )
+            .or_else(|| desired.managed_metadata_json.clone())
+            .or_else(|| existing.managed_metadata_json.clone());
             if existing.caps_snapshot_json.as_deref() == Some(caps_snapshot_json.as_str())
                 && existing.managed_metadata_json == managed_metadata_json
             {
                 continue;
             }
-            self.services
+            let updated = self
+                .services
                 .integrations
                 .indexer_configs
                 .update(IndexerConfigUpdate {
@@ -179,6 +183,15 @@ impl AppUseCase {
                     ..Default::default()
                 })
                 .await?;
+            if crate::indexer_search_identity(existing, None)
+                != crate::indexer_search_identity(&updated, None)
+            {
+                self.prune_indexer_search_learning_best_effort(
+                    &updated.id,
+                    "managed_indexer_caps_change",
+                )
+                .await;
+            }
             enriched = enriched.saturating_add(1);
         }
         if enriched > 0 {

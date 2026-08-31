@@ -15,6 +15,7 @@ impl IndexerClient for MockIndexerClient {
         _newznab_categories: Option<Vec<String>>,
         _indexer_routing: Option<IndexerRoutingPlan>,
         _mode: SearchMode,
+        _operation: IndexerErrorOperation,
         _season: Option<u32>,
         _episode: Option<u32>,
         _absolute_episode: Option<u32>,
@@ -29,6 +30,8 @@ impl IndexerClient for MockIndexerClient {
             tracing::info!(imdb_id = %imdb, category = ?category, "mock nzbgeek search");
         }
         Ok(IndexerSearchResponse {
+            completion: crate::IndexerSearchCompletion::Complete,
+
             indexer_outcomes: Vec::new(),
             results: vec![IndexerSearchResult {
                 indexer_id: None,
@@ -170,6 +173,16 @@ pub(super) struct RecordedIndexerSearch {
 pub(super) struct TrackingIndexerClient {
     pub(super) searches: Arc<Mutex<Vec<RecordedIndexerSearch>>>,
     pub(super) season_pack_titles: Vec<String>,
+    pub(super) title_pack_titles: Vec<String>,
+    pub(super) fail_scoped_queries: bool,
+    pub(super) report_routed_indexers_fired: bool,
+    /// Overrides the default 1970 publication date, so a delay profile can
+    /// actually hold the results this stand-in returns.
+    pub(super) published_at: Option<String>,
+    /// Stamp each result with the first routed indexer id, the way a real
+    /// provider response is attributed. Off by default: most tests do not care,
+    /// and coverage-scoped filters key on this field.
+    pub(super) stamp_indexer_ids: bool,
 }
 
 impl TrackingIndexerClient {
@@ -178,6 +191,34 @@ impl TrackingIndexerClient {
         titles: impl IntoIterator<Item = String>,
     ) -> Self {
         self.season_pack_titles = titles.into_iter().collect();
+        self
+    }
+
+    pub(super) fn with_title_pack_titles(
+        mut self,
+        titles: impl IntoIterator<Item = String>,
+    ) -> Self {
+        self.title_pack_titles = titles.into_iter().collect();
+        self
+    }
+
+    pub(super) fn failing_scoped_queries(mut self) -> Self {
+        self.fail_scoped_queries = true;
+        self
+    }
+
+    pub(super) fn reporting_routed_indexers_fired(mut self) -> Self {
+        self.report_routed_indexers_fired = true;
+        self
+    }
+
+    pub(super) fn with_published_at(mut self, published_at: impl Into<String>) -> Self {
+        self.published_at = Some(published_at.into());
+        self
+    }
+
+    pub(super) fn stamping_indexer_ids(mut self) -> Self {
+        self.stamp_indexer_ids = true;
         self
     }
 }
@@ -192,8 +233,9 @@ impl IndexerClient for TrackingIndexerClient {
         _facet: Option<String>,
         _id_search_facet: Option<String>,
         _newznab_categories: Option<Vec<String>>,
-        _indexer_routing: Option<IndexerRoutingPlan>,
+        indexer_routing: Option<IndexerRoutingPlan>,
         _mode: SearchMode,
+        _operation: IndexerErrorOperation,
         season: Option<u32>,
         episode: Option<u32>,
         _absolute_episode: Option<u32>,
@@ -206,6 +248,35 @@ impl IndexerClient for TrackingIndexerClient {
             season,
             episode,
         });
+        let mut routed_indexer_ids = indexer_routing
+            .iter()
+            .flat_map(|plan| plan.entries.iter())
+            .filter(|(_, entry)| entry.enabled)
+            .map(|(indexer_id, _)| indexer_id.clone())
+            .collect::<Vec<_>>();
+        routed_indexer_ids.sort();
+        let stamped_indexer_id = self
+            .stamp_indexer_ids
+            .then(|| routed_indexer_ids.first().cloned())
+            .flatten();
+        let indexer_outcomes = if self.report_routed_indexers_fired {
+            indexer_routing
+                .into_iter()
+                .flat_map(|plan| plan.entries)
+                .filter(|(_, entry)| entry.enabled)
+                .map(|(indexer_id, _)| crate::IndexerQueryOutcome {
+                    indexer_id,
+                    outcome: crate::IndexerSearchOutcome::Complete { empty: false },
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        if self.fail_scoped_queries && (season.is_some() || episode.is_some()) {
+            return Err(AppError::Repository(
+                "tracking indexer scoped-query failure".to_string(),
+            ));
+        }
 
         let release_title = match (season, episode) {
             (Some(season), Some(episode)) => {
@@ -215,20 +286,24 @@ impl IndexerClient for TrackingIndexerClient {
             (None, _) => format!("{query}.2024.1080p.WEB-DL"),
         };
         let release_titles =
-            if season.is_some() && episode.is_none() && !self.season_pack_titles.is_empty() {
+            if season.is_none() && episode.is_none() && !self.title_pack_titles.is_empty() {
+                self.title_pack_titles.clone()
+            } else if season.is_some() && episode.is_none() && !self.season_pack_titles.is_empty() {
                 self.season_pack_titles.clone()
             } else {
                 vec![release_title]
             };
 
         Ok(IndexerSearchResponse {
-            indexer_outcomes: Vec::new(),
+            completion: crate::IndexerSearchCompletion::Complete,
+
+            indexer_outcomes,
             results: release_titles
                 .into_iter()
                 .map(|release_title| {
                     let release_slug = release_title.replace([' ', '/'], ".");
                     IndexerSearchResult {
-                        indexer_id: None,
+                        indexer_id: stamped_indexer_id.clone(),
                         source: "nzbgeek".into(),
                         title: release_title.clone(),
                         link: Some(format!("https://example.invalid/info/{release_slug}")),
@@ -237,7 +312,11 @@ impl IndexerClient for TrackingIndexerClient {
                         )),
                         source_kind: Some(DownloadSourceKind::NzbUrl),
                         size_bytes: None,
-                        published_at: Some("1970-01-01T00:00:00Z".into()),
+                        published_at: Some(
+                            self.published_at
+                                .clone()
+                                .unwrap_or_else(|| "1970-01-01T00:00:00Z".into()),
+                        ),
                         thumbs_up: None,
                         thumbs_down: None,
                         indexer_languages: None,
@@ -288,6 +367,7 @@ pub(super) struct FixedReleaseIndexerClient {
     /// Deliberately independent of the release's source kind: the capture path
     /// under test reads the map, not the protocol.
     pub(super) seeders: Option<i64>,
+    pub(super) published_at: String,
 }
 
 impl FixedReleaseIndexerClient {
@@ -299,11 +379,17 @@ impl FixedReleaseIndexerClient {
             requested_indexer_id_sets: Arc::new(Mutex::new(Vec::new())),
             empty_response: false,
             seeders: None,
+            published_at: "1970-01-01T00:00:00Z".to_string(),
         }
     }
 
     pub(super) fn with_seeders(mut self, seeders: i64) -> Self {
         self.seeders = Some(seeders);
+        self
+    }
+
+    pub(super) fn with_published_at(mut self, published_at: impl Into<String>) -> Self {
+        self.published_at = published_at.into();
         self
     }
 
@@ -337,6 +423,7 @@ impl IndexerClient for FixedReleaseIndexerClient {
         _newznab_categories: Option<Vec<String>>,
         indexer_routing: Option<IndexerRoutingPlan>,
         _mode: SearchMode,
+        _operation: IndexerErrorOperation,
         _season: Option<u32>,
         _episode: Option<u32>,
         _absolute_episode: Option<u32>,
@@ -360,13 +447,15 @@ impl IndexerClient for FixedReleaseIndexerClient {
             .iter()
             .map(|id| crate::IndexerQueryOutcome {
                 indexer_id: id.clone(),
-                outcome: crate::IndexerSearchOutcome::Fired {
+                outcome: crate::IndexerSearchOutcome::Complete {
                     empty: self.empty_response,
                 },
             })
             .collect();
         if self.empty_response {
             return Ok(IndexerSearchResponse {
+                completion: crate::IndexerSearchCompletion::Complete,
+
                 indexer_outcomes,
                 results: Vec::new(),
                 api_current: None,
@@ -380,16 +469,20 @@ impl IndexerClient for FixedReleaseIndexerClient {
             extra.insert("seeders".to_string(), serde_json::json!(seeders));
         }
         Ok(IndexerSearchResponse {
+            completion: crate::IndexerSearchCompletion::Complete,
+
             indexer_outcomes,
             results: vec![IndexerSearchResult {
-                indexer_id: None,
+                // A real search names the indexer that served the result; the
+                // blocklist attributes a failure to it.
+                indexer_id: Some("indexer-a".to_string()),
                 source: "nzbgeek".into(),
                 title: self.release_title.clone(),
                 link: Some("https://example.invalid/info".to_string()),
                 download_url: Some("https://example.invalid/download.nzb".to_string()),
                 source_kind: Some(DownloadSourceKind::NzbUrl),
                 size_bytes: None,
-                published_at: Some("1970-01-01T00:00:00Z".into()),
+                published_at: Some(self.published_at.clone()),
                 thumbs_up: None,
                 thumbs_down: None,
                 indexer_languages: self.indexer_languages.clone(),
@@ -443,6 +536,7 @@ impl IndexerClient for SharedUrlMovieIndexerClient {
         _newznab_categories: Option<Vec<String>>,
         _indexer_routing: Option<IndexerRoutingPlan>,
         _mode: SearchMode,
+        _operation: IndexerErrorOperation,
         _season: Option<u32>,
         _episode: Option<u32>,
         _absolute_episode: Option<u32>,
@@ -465,6 +559,8 @@ impl IndexerClient for SharedUrlMovieIndexerClient {
         };
 
         Ok(IndexerSearchResponse {
+            completion: crate::IndexerSearchCompletion::Complete,
+
             indexer_outcomes: Vec::new(),
             results: vec![IndexerSearchResult {
                 indexer_id: None,
@@ -553,6 +649,7 @@ impl IndexerClient for RecordingCategoriesIndexerClient {
         newznab_categories: Option<Vec<String>>,
         _indexer_routing: Option<IndexerRoutingPlan>,
         _mode: SearchMode,
+        _operation: IndexerErrorOperation,
         _season: Option<u32>,
         _episode: Option<u32>,
         _absolute_episode: Option<u32>,
@@ -570,6 +667,8 @@ impl IndexerClient for RecordingCategoriesIndexerClient {
         });
 
         Ok(IndexerSearchResponse {
+            completion: crate::IndexerSearchCompletion::Complete,
+
             indexer_outcomes: Vec::new(),
             results: vec![IndexerSearchResult {
                 indexer_id: None,
@@ -620,6 +719,7 @@ impl IndexerClient for RecordingStructuredQueryIndexerClient {
         _newznab_categories: Option<Vec<String>>,
         _indexer_routing: Option<IndexerRoutingPlan>,
         _mode: SearchMode,
+        _operation: IndexerErrorOperation,
         season: Option<u32>,
         episode: Option<u32>,
         absolute_episode: Option<u32>,
@@ -635,6 +735,8 @@ impl IndexerClient for RecordingStructuredQueryIndexerClient {
         });
 
         Ok(IndexerSearchResponse {
+            completion: crate::IndexerSearchCompletion::Complete,
+
             indexer_outcomes: Vec::new(),
             results: vec![],
             api_current: None,
@@ -677,6 +779,7 @@ impl IndexerClient for MultiReleaseIndexerClient {
         _newznab_categories: Option<Vec<String>>,
         _indexer_routing: Option<IndexerRoutingPlan>,
         _mode: SearchMode,
+        _operation: IndexerErrorOperation,
         _season: Option<u32>,
         _episode: Option<u32>,
         _absolute_episode: Option<u32>,
@@ -685,6 +788,8 @@ impl IndexerClient for MultiReleaseIndexerClient {
         _cancel_token: tokio_util::sync::CancellationToken,
     ) -> AppResult<IndexerSearchResponse> {
         Ok(IndexerSearchResponse {
+            completion: crate::IndexerSearchCompletion::Complete,
+
             indexer_outcomes: Vec::new(),
             results: self
                 .release_titles
@@ -810,5 +915,36 @@ impl MetadataGateway for MockMetadataGateway {
             movies,
             series: HashMap::new(),
         })
+    }
+
+    async fn get_movie_titles(
+        &self,
+        refs: &[MovieTitleRef],
+        _language: &str,
+    ) -> AppResult<MovieTitleBulkResult> {
+        let mut result = MovieTitleBulkResult::default();
+        for (ref_index, movie_ref) in refs.iter().enumerate() {
+            let movie = self.movies.values().find(|movie| {
+                movie_ref
+                    .smg_id
+                    .is_some_and(|smg_id| movie.smg_id == Some(smg_id))
+                    || movie_ref
+                        .tvdb_id
+                        .is_some_and(|tvdb_id| movie.tvdb_id == Some(tvdb_id))
+                    || movie_ref
+                        .tmdb_id
+                        .is_some_and(|tmdb_id| movie.tmdb_id == Some(tmdb_id))
+                    || movie_ref
+                        .imdb_id
+                        .as_deref()
+                        .is_some_and(|imdb_id| movie.imdb_id == imdb_id)
+            });
+            if let Some(movie) = movie {
+                result.by_ref_index.insert(ref_index, movie.clone());
+            } else {
+                result.missing_ref_indexes.push(ref_index);
+            }
+        }
+        Ok(result)
     }
 }

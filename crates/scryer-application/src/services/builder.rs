@@ -136,6 +136,11 @@ impl AppServicesBuildConfiguration {
 }
 
 impl AppServicesBuilder {
+    app_services_builder_setter!(
+        with_indexer_error_repository,
+        integrations.indexer_errors,
+        Arc<dyn IndexerErrorRepository>
+    );
     app_services_builder_runtime_feature_setter!(
         with_plugin_http_trust_runtime,
         config.plugin_http_trust_runtime,
@@ -154,6 +159,14 @@ impl AppServicesBuilder {
     {
         self.runtime =
             AppRuntimeState::new(build_lane, config_dir, supported_plugin_required_features);
+        self
+    }
+
+    pub fn with_download_client_category_snapshot_store(
+        mut self,
+        store: DownloadClientCategorySnapshotStore,
+    ) -> Self {
+        self.runtime.acquisition.download_client_category_admission = store;
         self
     }
 
@@ -389,6 +402,11 @@ impl AppServicesBuilder {
         workflow.download_submissions,
         download_submissions,
         Arc<dyn DownloadSubmissionRepository>
+    );
+    app_services_builder_setter!(
+        with_download_registry,
+        workflow.download_registry,
+        Arc<dyn DownloadRegistryRepository>
     );
     app_services_builder_required_setter!(
         with_acquisition_state,

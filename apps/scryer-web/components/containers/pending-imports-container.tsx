@@ -51,6 +51,9 @@ const PAGE_SIZE = 50;
 
 type MetadataSearchResult = {
   tvdbId: string;
+  smgId?: number | null;
+  tmdbId?: number | null;
+  externalIds?: ExternalIdInput[];
   name: string;
   imdbId: string | null;
   slug: string | null;
@@ -77,6 +80,10 @@ type PendingImportResolveTitleInput = {
   monitored: false;
   tags: string[];
   externalIds: ExternalIdInput[];
+  smgId?: number;
+  tvdbId?: string;
+  tmdbId?: number;
+  imdbId?: string;
   year?: number;
   overview?: string;
   sortTitle?: string;
@@ -154,13 +161,18 @@ function summarizePendingImport(item: PendingImportItem, t: Translate): string {
 }
 
 function metadataResultExternalIds(result: MetadataSearchResult): ExternalIdInput[] {
+  const smgId = result.smgId == null ? "" : String(result.smgId).trim();
   const tvdbId = String(result.tvdbId).trim();
+  const tmdbId = result.tmdbId == null ? "" : String(result.tmdbId).trim();
   const imdbId = result.imdbId?.trim();
   const seen = new Set<string>();
   const ids: ExternalIdInput[] = [];
 
   for (const externalId of [
+    ...(result.externalIds ?? []),
+    ...(smgId ? [{ source: "smg", value: smgId }] : []),
     ...(tvdbId ? [{ source: "tvdb", value: tvdbId }] : []),
+    ...(tmdbId ? [{ source: "tmdb", value: tmdbId }] : []),
     ...(imdbId ? [{ source: "imdb", value: imdbId }] : []),
   ]) {
     const source = externalId.source.trim().toLowerCase();
@@ -187,6 +199,10 @@ function buildPendingImportResolveTitleInput(
     monitored: false,
     tags: [],
     externalIds: metadataResultExternalIds(result),
+    smgId: result.smgId ?? undefined,
+    tvdbId: result.tvdbId.trim() || undefined,
+    tmdbId: result.tmdbId ?? undefined,
+    imdbId: result.imdbId?.trim() || undefined,
   };
 
   if (typeof result.year === "number") title.year = result.year;

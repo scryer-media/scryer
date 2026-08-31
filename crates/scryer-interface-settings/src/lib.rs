@@ -3,8 +3,8 @@ mod mutation;
 use async_graphql::{Context, ID, Object, Result as GqlResult};
 use chrono::{DateTime, Utc};
 use scryer_interface_core::{
-    AuthRuntimeStateSnapshot, actor_from_ctx, app_from_ctx, auth_runtime_from_ctx,
-    default_persist_session_from_ctx, to_gql_error,
+    AuthRuntimeStateSnapshot, actor_from_ctx, api_key_management_actor_from_ctx, app_from_ctx,
+    auth_runtime_from_ctx, default_persist_session_from_ctx, to_gql_error,
 };
 use scryer_interface_media::mappers::{
     from_download_client_config_with_fields, from_download_client_routing_entry,
@@ -83,6 +83,34 @@ fn from_oauth_connected_app(
         client_name: app.client_name,
         authorized_at: app.authorized_at,
         last_used_at: app.last_used_at,
+    }
+}
+
+fn from_api_key(key: scryer_application::ApiKeySummary, owner_username: &str) -> ApiKeyPayload {
+    ApiKeyPayload {
+        id: key.id.into(),
+        actor: format!("api ({}) obo {owner_username}", key.label),
+        label: key.label,
+        expires_at: key.expires_at,
+        revoked_at: key.revoked_at,
+        last_used_at: key.last_used_at,
+        created_at: key.created_at,
+        provisioning_source: key.provisioning_source.as_str().to_owned(),
+    }
+}
+
+fn from_oauth_client_registration(
+    client: scryer_application::OAuthClientInfo,
+) -> OAuthClientRegistrationPayload {
+    OAuthClientRegistrationPayload {
+        client_id: client.client_id,
+        display_name: client.name,
+        redirect_uris: client.redirect_uris,
+        enabled: client.enabled,
+        source: match client.source {
+            scryer_application::OAuthClientSource::Managed => OAuthClientSourceValue::Managed,
+            scryer_application::OAuthClientSource::Custom => OAuthClientSourceValue::Custom,
+        },
     }
 }
 
@@ -231,6 +259,8 @@ fn from_security_settings(
         form_login_enabled: settings.form_login_enabled,
         password_min_length: settings.password_min_length,
         skip_login_for_local_ips: settings.skip_login_for_local_ips,
+        api_keys_restrict_to_system_settings_users: settings
+            .api_keys_restrict_to_system_settings_users,
         mfa_require_config_step_up: settings.mfa_require_config_step_up,
         mfa_require_password_login: settings.mfa_require_password_login,
         mfa_require_jellyfin_login: settings.totp_require_jellyfin_login,
@@ -509,11 +539,14 @@ fn from_delay_profile(profile: scryer_application::DelayProfile) -> DelayProfile
         name: profile.name,
         usenet_delay_minutes: profile.usenet_delay_minutes as i32,
         torrent_delay_minutes: profile.torrent_delay_minutes as i32,
+        enable_usenet: profile.enable_usenet,
+        enable_torrent: profile.enable_torrent,
         preferred_protocol: DelayProfilePreferredProtocolValue::from_application(
             profile.preferred_protocol,
         ),
         min_age_minutes: profile.min_age_minutes as i32,
         bypass_score_threshold: profile.bypass_score_threshold,
+        bypass_if_highest_quality: profile.bypass_if_highest_quality,
         applies_to_facets: profile
             .applies_to_facets
             .into_iter()
@@ -638,6 +671,42 @@ impl SettingsQueries {
         Ok(from_security_settings(settings, &auth_runtime.snapshot()))
     }
 
+    /// Lists managed and administrator-created OAuth applications.
+    async fn oauth_client_registrations(
+        &self,
+        ctx: &Context<'_>,
+    ) -> GqlResult<Vec<OAuthClientRegistrationPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        app.list_oauth_client_registrations(&actor)
+            .await
+            .map(|clients| {
+                clients
+                    .into_iter()
+                    .map(from_oauth_client_registration)
+                    .collect()
+            })
+            .map_err(to_gql_error)
+    }
+
+    /// Resolves the display name for an OAuth authorization request after validating its callback URL.
+    async fn oauth_authorization_client(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "OAuth client identifier from the authorization request.")]
+        client_id: String,
+        #[graphql(desc = "Redirect URI from the authorization request.")] redirect_uri: String,
+    ) -> GqlResult<OAuthAuthorizationClientPayload> {
+        let app = app_from_ctx(ctx)?;
+        app.validate_oauth_redirect_uri(&client_id, &redirect_uri)
+            .await
+            .map(|client| OAuthAuthorizationClientPayload {
+                client_id: client.client_id,
+                display_name: client.name,
+            })
+            .map_err(to_gql_error)
+    }
+
     /// Returns effective external-auth providers and connections, hiding login capability when form login is disabled.
     async fn external_auth_runtime_settings(
         &self,
@@ -755,6 +824,28 @@ impl SettingsQueries {
             .await
             .map(|apps| apps.into_iter().map(from_oauth_connected_app).collect())
             .map_err(to_gql_error)
+    }
+
+    /// Lists the interactive actor's API keys without returning their secrets.
+    async fn my_api_keys(&self, ctx: &Context<'_>) -> GqlResult<Vec<ApiKeyPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = api_key_management_actor_from_ctx(ctx)?;
+        let owner_username = actor.username.clone();
+        app.list_api_keys(&actor)
+            .await
+            .map(|keys| {
+                keys.into_iter()
+                    .map(|key| from_api_key(key, &owner_username))
+                    .collect()
+            })
+            .map_err(to_gql_error)
+    }
+
+    /// Whether the interactive actor may create API keys under the active security policy.
+    async fn can_create_my_api_keys(&self, ctx: &Context<'_>) -> GqlResult<bool> {
+        let app = app_from_ctx(ctx)?;
+        let actor = api_key_management_actor_from_ctx(ctx)?;
+        app.can_create_api_key(&actor).await.map_err(to_gql_error)
     }
 
     /// Lists delay profiles with minute-based delays and their media-facet assignments.

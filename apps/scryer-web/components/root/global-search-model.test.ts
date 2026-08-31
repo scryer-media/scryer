@@ -48,9 +48,13 @@ function title(id: string, name: string, facet: Facet): TitleRecord {
   };
 }
 
-function metadata(name: string): MetadataTvdbSearchItem {
+function metadata(
+  name: string,
+  identity: { smgId?: number | null; tvdbId?: string } = {},
+): MetadataTvdbSearchItem {
   return {
-    tvdbId: `tvdb-${name}`,
+    smgId: identity.smgId ?? null,
+    tvdbId: identity.tvdbId ?? `tvdb-${name}`,
     name,
     imdbId: null,
     slug: null,
@@ -359,7 +363,7 @@ test("buildGlobalSearchTabs keeps catalog, metadata, and route command counts al
     "",
   );
   const metadataResultCounts = buildMetadataResultCounts({
-    movie: [metadata("Remote Movie")],
+    movie: [metadata("Remote Movie", { smgId: 202, tvdbId: "" })],
     series: [metadata("Remote Series"), metadata("Another Series")],
     anime: [],
   });

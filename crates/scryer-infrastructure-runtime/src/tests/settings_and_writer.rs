@@ -588,6 +588,7 @@ async fn source_password_writes_are_encrypted_at_rest_sqlite() {
         indexer_id: None,
         release_guid: Some("guid-encrypted".to_string()),
         added_at: now.clone(),
+        last_observed_at: now.clone(),
         delay_until: now,
         status: scryer_application::PendingReleaseStatus::Waiting,
         grabbed_at: None,
@@ -596,6 +597,11 @@ async fn source_password_writes_are_encrypted_at_rest_sqlite() {
         info_hash: None,
         seed_minimums: Default::default(),
         seeders: None,
+        release_identity: "guid:weaver:guid-encrypted".to_string(),
+        coverage_identity: "scope:wanted-encrypted".to_string(),
+        role: scryer_application::PendingReleaseRole::Primary,
+        last_decision_code: None,
+        release_age_unknown: false,
     };
     PendingReleaseRepository::insert_pending_release(&pending_store, &pending_release)
         .await

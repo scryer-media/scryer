@@ -103,8 +103,7 @@ async fn graphql_invalid_nzb_xml_queue_failure_is_blocklisted_impl() {
         query($titleId: ID!) {
           titleReleaseBlocklist(titleId: $titleId) {
             id
-            sourceHint
-            sourceTitle
+            releaseName
             errorMessage
           }
         }
@@ -119,8 +118,7 @@ async fn graphql_invalid_nzb_xml_queue_failure_is_blocklisted_impl() {
         .expect("blocklist entries array");
     assert!(
         entries.iter().any(|entry| {
-            entry["sourceHint"].as_str() == Some(source_hint.as_str())
-                && entry["sourceTitle"].as_str() == Some("Broken.NZB.Movie.2024")
+            entry["releaseName"].as_str() == Some("Broken.NZB.Movie.2024")
                 && entry["errorMessage"].as_str().is_some_and(|message| {
                     message.contains("did not look like xml")
                         || message.contains("root element must be <nzb>")
@@ -140,6 +138,7 @@ async fn graphql_title_release_blocklist_entry_can_be_cleared_impl() {
     let ctx = TestContext::new().await;
     let title_id = add_test_title(&ctx, "Clear Blocklist Movie", "MOVIE").await;
     let source_hint = format!("{}/invalid-clear.nzb", ctx.nzbget_server.uri());
+    let release_title = "Clear.Blocklist.Movie.2024";
     let admin = ctx.app.find_or_create_default_user().await.unwrap();
     let candidate_token = ctx
         .app
@@ -197,7 +196,7 @@ async fn graphql_title_release_blocklist_entry_can_be_cleared_impl() {
         query($titleId: ID!) {
           titleReleaseBlocklist(titleId: $titleId) {
             id
-            sourceHint
+            releaseName
           }
         }
         "#,
@@ -210,7 +209,7 @@ async fn graphql_title_release_blocklist_entry_can_be_cleared_impl() {
         .as_array()
         .and_then(|entries| {
             entries.iter().find_map(|entry| {
-                (entry["sourceHint"].as_str() == Some(source_hint.as_str()))
+                (entry["releaseName"].as_str() == Some(release_title))
                     .then(|| entry["id"].as_str().map(ToOwned::to_owned))
                     .flatten()
             })
@@ -240,7 +239,7 @@ async fn graphql_title_release_blocklist_entry_can_be_cleared_impl() {
         r#"
         query($titleId: ID!) {
           titleReleaseBlocklist(titleId: $titleId) {
-            sourceHint
+            releaseName
           }
         }
         "#,
@@ -255,7 +254,7 @@ async fn graphql_title_release_blocklist_entry_can_be_cleared_impl() {
     assert!(
         !entries_after
             .iter()
-            .any(|entry| entry["sourceHint"].as_str() == Some(source_hint.as_str())),
+            .any(|entry| entry["releaseName"].as_str() == Some(release_title)),
         "expected cleared release to be removed from titleReleaseBlocklist: {blocklist_after}"
     );
 }
@@ -274,14 +273,12 @@ async fn graphql_title_release_blocklist_uses_persisted_blocklist_source_title_i
     scryer_infrastructure_library::media::libraries::state_store::BlocklistStore::new(
         ctx.db.datastore(),
     )
-    .add(&scryer_application::NewBlocklistEntry {
+    .block(&scryer_application::NewBlocklistEntry {
         title_id: title_id.clone(),
-        source_title: Some("pals.s05.720p.bluray.dd5.1.x264-ntb".to_string()),
-        source_hint: Some("weaver://job-1".to_string()),
-        quality: None,
-        download_id: Some("job-1".to_string()),
+        release_name: "pals.s05.720p.bluray.dd5.1.x264-ntb".to_string(),
+        indexer_id: String::new(),
+        info_hash: None,
         reason: Some("download client failure: corrupt archive".to_string()),
-        data: HashMap::new(),
     })
     .await
     .expect("seed blocklist entry");
@@ -307,8 +304,7 @@ async fn graphql_title_release_blocklist_uses_persisted_blocklist_source_title_i
         r#"
         query($titleId: ID!) {
           titleReleaseBlocklist(titleId: $titleId) {
-            sourceTitle
-            sourceHint
+            releaseName
           }
         }
         "#,
@@ -321,8 +317,7 @@ async fn graphql_title_release_blocklist_uses_persisted_blocklist_source_title_i
         .as_array()
         .expect("blocklist entries array");
     assert!(entries.iter().any(|entry| {
-        entry["sourceTitle"].as_str() == Some("pals.s05.720p.bluray.dd5.1.x264-ntb")
-            && entry["sourceHint"].as_str() == Some("weaver://job-1")
+        entry["releaseName"].as_str() == Some("pals.s05.720p.bluray.dd5.1.x264-ntb")
     }));
 }
 
@@ -404,6 +399,10 @@ async fn housekeeping_respects_configured_history_retention() {
     let stale_at = (now - Duration::days(40)).to_rfc3339();
     let very_stale_at = (now - Duration::days(120)).to_rfc3339();
     let fresh_at = (now - Duration::days(5)).to_rfc3339();
+    let expired_operational_at = (now - Duration::days(4)).to_rfc3339();
+    let fresh_operational_at = (now - Duration::days(2)).to_rfc3339();
+    let expired_acquisition_telemetry_at = (now - Duration::days(2)).to_rfc3339();
+    let fresh_acquisition_telemetry_at = (now - Duration::hours(12)).to_rfc3339();
     let wanted_item_id = Id::new().0;
     let stale_completed_import_id = Id::new().0;
     let fresh_completed_import_id = Id::new().0;
@@ -488,16 +487,22 @@ async fn housekeeping_respects_configured_history_retention() {
          VALUES (?, ?, NULL, NULL, NULL, NULL, NULL, 1, 'test', NULL, 'title_added', '{}'),
                 (?, ?, NULL, NULL, NULL, NULL, NULL, 1, 'test', NULL, 'import_requested', '{}'),
                 (?, ?, NULL, NULL, NULL, NULL, NULL, 1, 'test', NULL, 'library_scan_progressed', '{}'),
-                (?, ?, NULL, NULL, NULL, NULL, NULL, 1, 'test', NULL, 'job_run_started', '{}')",
+                (?, ?, NULL, NULL, NULL, NULL, NULL, 1, 'test', NULL, 'job_run_started', '{}'),
+                (?, ?, NULL, NULL, NULL, NULL, NULL, 1, 'test', NULL, 'acquisition_search_completed', '{}'),
+                (?, ?, NULL, NULL, NULL, NULL, NULL, 1, 'test', NULL, 'acquisition_candidate_rejected', '{}')",
     )
     .bind(Id::new().0)
     .bind(&stale_at)
     .bind(Id::new().0)
     .bind(&fresh_at)
     .bind(Id::new().0)
-    .bind(&stale_at)
+    .bind(&expired_operational_at)
     .bind(Id::new().0)
-    .bind(&fresh_at)
+    .bind(&fresh_operational_at)
+    .bind(Id::new().0)
+    .bind(&expired_acquisition_telemetry_at)
+    .bind(Id::new().0)
+    .bind(&fresh_acquisition_telemetry_at)
     .execute(ctx.db.pool())
     .await
     .expect("domain events should insert");
@@ -589,7 +594,7 @@ async fn housekeeping_respects_configured_history_retention() {
     assert_eq!(report.stale_release_decisions, 1);
     assert_eq!(report.stale_release_attempts, 1);
     assert_eq!(report.stale_history_events, 1);
-    assert_eq!(report.stale_history_records, 8);
+    assert_eq!(report.stale_history_records, 9);
 
     let remaining_release_decisions: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM release_decisions")
@@ -615,7 +620,7 @@ async fn housekeeping_respects_configured_history_retention() {
         .fetch_one(ctx.db.pool())
         .await
         .expect("domain events count");
-    assert_eq!(remaining_domain_events, baseline_domain_events + 3);
+    assert_eq!(remaining_domain_events, baseline_domain_events + 4);
 
     let remaining_imports: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM imports")
         .fetch_one(ctx.db.pool())
@@ -1059,4 +1064,179 @@ async fn graphql_smg_scryer_update_notice_reads_persisted_notice() {
         body["data"]["smgScryerUpdateNotice"]["checkedAt"],
         "2026-06-15T12:00:00+00:00"
     );
+}
+
+#[tokio::test]
+async fn graphql_application_upgrade_status_requires_system_settings_permission() {
+    let ctx = TestContext::new().await;
+    let admin = ctx
+        .app
+        .find_or_create_default_user()
+        .await
+        .expect("find default admin");
+    let denied_actor = ctx
+        .app
+        .create_user(
+            &admin,
+            "upgrade_status_denied".to_string(),
+            "upgrade-status-pass1".to_string(),
+            AppPermissionMask::NONE,
+            vec![],
+        )
+        .await
+        .expect("create actor without system settings permission");
+    let system_actor = ctx
+        .app
+        .create_user(
+            &admin,
+            "upgrade_status_system".to_string(),
+            "upgrade-status-pass2".to_string(),
+            AppPermissionMask::from_permission(scryer_domain::AppPermission::ManageSystemSettings),
+            vec![],
+        )
+        .await
+        .expect("create actor with system settings permission");
+
+    let query = r#"
+        {
+          applicationUpgradeStatus {
+            currentVersion
+            updateVersion
+            updateTag
+            updateAvailable
+            installationKind
+            managementOwner
+            eligible
+            eligibilityReason
+            activeRun { id status }
+            latestRun { id status }
+          }
+        }
+    "#;
+
+    let denied = schema_exec(&ctx, query, Some(denied_actor)).await;
+    assert_graphql_field_denied(&denied, "applicationUpgradeStatus");
+
+    let allowed = schema_exec(&ctx, query, Some(system_actor)).await;
+    assert_no_errors(&allowed);
+    let status = &allowed["data"]["applicationUpgradeStatus"];
+    assert!(
+        status["currentVersion"]
+            .as_str()
+            .is_some_and(|version| !version.is_empty()),
+        "currentVersion must be populated: {status}"
+    );
+    assert!(status["updateVersion"].is_null() || status["updateVersion"].is_string());
+    assert!(status["updateTag"].is_null() || status["updateTag"].is_string());
+    assert!(status["updateAvailable"].is_boolean());
+    assert!(matches!(
+        status["installationKind"].as_str(),
+        Some(
+            "PORTABLE"
+                | "DIRECT_MSI"
+                | "DOCKER"
+                | "HOMEBREW"
+                | "WINGET"
+                | "WINDOWS_SUPERVISED"
+                | "DISABLED"
+                | "UNSUPPORTED"
+        )
+    ));
+    assert!(matches!(
+        status["managementOwner"].as_str(),
+        Some("IN_APP" | "OPERATOR")
+    ));
+    assert!(status["eligible"].is_boolean());
+    assert!(status["activeRun"].is_null());
+    assert!(status["latestRun"].is_null());
+    assert!(matches!(
+        status["eligibilityReason"].as_str(),
+        Some(
+            "disabled_by_operator"
+                | "managed_by_docker"
+                | "managed_by_homebrew"
+                | "windows_supervised"
+                | "managed_by_winget"
+                | "eligible"
+                | "unsupported_layout"
+                | "install_dir_not_writable"
+        )
+    ));
+}
+
+#[tokio::test]
+async fn graphql_start_application_upgrade_requires_config_permission_and_rejects_ineligible_installations()
+ {
+    let ctx = TestContext::new().await;
+    let admin = ctx
+        .app
+        .find_or_create_default_user()
+        .await
+        .expect("find default admin");
+    let denied_actor = ctx
+        .app
+        .create_user(
+            &admin,
+            "upgrade_start_denied".to_string(),
+            "upgrade-start-pass1".to_string(),
+            AppPermissionMask::NONE,
+            vec![],
+        )
+        .await
+        .expect("create actor without system settings permission");
+    let system_actor = ctx
+        .app
+        .create_user(
+            &admin,
+            "upgrade_start_system".to_string(),
+            "upgrade-start-pass2".to_string(),
+            AppPermissionMask::from_permission(scryer_domain::AppPermission::ManageSystemSettings),
+            vec![],
+        )
+        .await
+        .expect("create actor with system settings permission");
+    let mutation = r#"
+        mutation {
+          startApplicationUpgrade(input: { expectedTag: "v999.0.0", expectedVersion: "999.0.0" }) {
+            jobRun { id }
+          }
+        }
+    "#;
+
+    let denied = schema_exec(&ctx, mutation, Some(denied_actor)).await;
+    assert_graphql_field_denied(&denied, "startApplicationUpgrade");
+
+    let ineligible = schema_exec(&ctx, mutation, Some(system_actor)).await;
+    assert!(
+        ineligible.get("errors").is_some(),
+        "expected ineligible error: {ineligible}"
+    );
+    assert!(
+        ineligible["errors"][0]["message"]
+            .as_str()
+            .is_some_and(|message| message
+                .contains("application upgrade is not eligible: unsupported_layout")),
+        "unexpected ineligible response: {ineligible}"
+    );
+}
+
+#[tokio::test]
+async fn graphql_start_application_upgrade_requires_mfa_step_up() {
+    let ctx = TestContext::new().await;
+    let (_admin, token, _totp_code) =
+        enable_form_login_with_config_step_up(&ctx, "admin", "admin-pass1").await;
+    let body = gql_with_token(
+        &ctx,
+        r#"
+            mutation {
+              startApplicationUpgrade(input: { expectedTag: "v999.0.0", expectedVersion: "999.0.0" }) {
+                jobRun { id }
+              }
+            }
+        "#,
+        json!({}),
+        &token,
+    )
+    .await;
+    assert_mfa_step_up_required(&body);
 }

@@ -2,6 +2,13 @@ query SearchTvdb($query: String!, $type: String, $limit: Int, $year: Int) {
   searchTvdb(query: $query, type: $type, limit: $limit, year: $year) {
     results {
       tvdb_id
+      title_id
+      external_ids {
+        source
+        kind
+        id
+        key
+      }
       name
       year
     }

@@ -371,6 +371,68 @@ pub struct OAuthConnectedAppPayload {
     pub last_used_at: Option<DateTime<Utc>>,
 }
 
+/// Expiration choices available when creating an API key.
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+pub enum ApiKeyExpiryPresetValue {
+    /// Expires in 30 days.
+    Days30,
+    /// Expires in 90 days.
+    Days90,
+    /// Expires in one year.
+    Days365,
+    /// Does not expire automatically.
+    Never,
+}
+
+/// Input for creating an API key owned by the interactive actor.
+#[derive(InputObject)]
+pub struct CreateMyApiKeyInput {
+    /// A human-readable label to distinguish the integration.
+    pub label: String,
+    /// Expiration policy. Omission uses 90 days.
+    pub expiry: Option<ApiKeyExpiryPresetValue>,
+}
+
+/// Non-secret API-key metadata.
+#[derive(SimpleObject, Clone)]
+pub struct ApiKeyPayload {
+    /// API-key record ID.
+    pub id: ID,
+    /// Human-readable label.
+    pub label: String,
+    /// Auditable identity used for requests made with this key.
+    pub actor: String,
+    /// UTC expiry time, or null when the key does not expire.
+    pub expires_at: Option<DateTime<Utc>>,
+    /// UTC revocation time, or null while active.
+    pub revoked_at: Option<DateTime<Utc>>,
+    /// UTC last successful-use time, or null when unused.
+    pub last_used_at: Option<DateTime<Utc>>,
+    /// UTC creation time.
+    pub created_at: DateTime<Utc>,
+    /// Provisioning source (`user` or `environment`).
+    pub provisioning_source: String,
+}
+
+/// Creation result. `apiKey` is shown once and must be stored by the caller.
+#[derive(SimpleObject)]
+pub struct CreateMyApiKeyPayload {
+    /// Generated raw API key. This is never returned again.
+    pub api_key: String,
+    /// Non-secret metadata for the generated key.
+    pub key: ApiKeyPayload,
+}
+
+/// Revocation result for a user-owned API key.
+#[derive(SimpleObject)]
+pub struct RevokeMyApiKeyPayload {
+    /// ID of the revoked key.
+    pub id: ID,
+    /// Whether the active key was revoked.
+    pub revoked: bool,
+}
+
 /// Result of revoking an OAuth grant.
 #[derive(SimpleObject, Clone)]
 pub struct RevokeMyOauthAppPayload {

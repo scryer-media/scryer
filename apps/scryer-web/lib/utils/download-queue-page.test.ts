@@ -45,6 +45,34 @@ test("queue page ranges append infinitely and deduplicate stable identities", ()
   assert.equal(rows.at(-1)?.id, "item-98");
 });
 
+test("queue refreshes retain unchanged item references", () => {
+  const original = item("unchanged");
+  const pages = mergeDownloadQueuePageRange(
+    new Map(),
+    [original],
+    0,
+    50,
+    { reset: true, revision: 1, totalCount: 1 },
+  );
+  const unchanged = mergeDownloadQueuePageRange(
+    pages,
+    [{ ...original }],
+    0,
+    50,
+    { reset: false, revision: 2, totalCount: 1 },
+  );
+  const changed = mergeDownloadQueuePageRange(
+    unchanged,
+    [{ ...original, progressPercent: 1 }],
+    0,
+    50,
+    { reset: false, revision: 3, totalCount: 1 },
+  );
+
+  assert.equal(unchanged.get(0)?.items[0], original);
+  assert.notEqual(changed.get(0)?.items[0], original);
+});
+
 test("filter or sort resets discard retained queue pages", () => {
   const existing = new Map<number, DownloadQueueRetainedPage>([
     [0, { items: [item("old-0")], revision: 1, stale: false }],

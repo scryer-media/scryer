@@ -116,6 +116,7 @@ async fn nzbgeek_search_movie_by_category() {
             None,
             None,
             SearchMode::Interactive,
+            scryer_application::IndexerErrorOperation::InteractiveSearch,
             None,
             None,
             None, // absolute_episode
@@ -177,6 +178,7 @@ async fn nzbgeek_search_movie_extracts_size() {
             None,
             None,
             SearchMode::Interactive,
+            scryer_application::IndexerErrorOperation::InteractiveSearch,
             None,
             None,
             None, // absolute_episode
@@ -216,6 +218,7 @@ async fn nzbgeek_search_movie_extracts_download_url() {
             None,
             None,
             SearchMode::Interactive,
+            scryer_application::IndexerErrorOperation::InteractiveSearch,
             None,
             None,
             None, // absolute_episode
@@ -263,6 +266,7 @@ async fn nzbgeek_search_series_by_category() {
             None,
             None,
             SearchMode::Interactive,
+            scryer_application::IndexerErrorOperation::InteractiveSearch,
             None,
             None,
             None, // absolute_episode
@@ -300,6 +304,7 @@ async fn nzbgeek_search_series_endpoint_by_anime_category() {
             None,
             None,
             SearchMode::Interactive,
+            scryer_application::IndexerErrorOperation::InteractiveSearch,
             None,
             None,
             None, // absolute_episode
@@ -338,6 +343,7 @@ async fn nzbgeek_search_series_endpoint_by_series_category() {
             None,
             None,
             SearchMode::Interactive,
+            scryer_application::IndexerErrorOperation::InteractiveSearch,
             None,
             None,
             None, // absolute_episode
@@ -377,6 +383,7 @@ async fn nzbgeek_search_infers_movie_from_imdb_id() {
             None,
             None,
             SearchMode::Interactive,
+            scryer_application::IndexerErrorOperation::InteractiveSearch,
             None,
             None,
             None, // absolute_episode
@@ -415,6 +422,7 @@ async fn nzbgeek_search_infers_series_endpoint_from_tvdb_id() {
             None,
             None,
             SearchMode::Interactive,
+            scryer_application::IndexerErrorOperation::InteractiveSearch,
             None,
             None,
             None, // absolute_episode
@@ -454,6 +462,7 @@ async fn nzbgeek_search_generic_without_ids() {
             None,
             None,
             SearchMode::Interactive,
+            scryer_application::IndexerErrorOperation::InteractiveSearch,
             None,
             None,
             None, // absolute_episode
@@ -495,6 +504,7 @@ async fn nzbgeek_search_empty_results() {
             None,
             None,
             SearchMode::Interactive,
+            scryer_application::IndexerErrorOperation::InteractiveSearch,
             None,
             None,
             None, // absolute_episode
@@ -532,6 +542,7 @@ async fn nzbgeek_search_single_item_response() {
             None,
             None,
             SearchMode::Interactive,
+            scryer_application::IndexerErrorOperation::InteractiveSearch,
             None,
             None,
             None, // absolute_episode
@@ -601,6 +612,7 @@ async fn nzbgeek_search_no_api_key_fails() {
             None,
             None,
             SearchMode::Interactive,
+            scryer_application::IndexerErrorOperation::InteractiveSearch,
             None,
             None,
             None, // absolute_episode
@@ -632,6 +644,7 @@ async fn nzbgeek_search_http_error() {
             None,
             None,
             SearchMode::Interactive,
+            scryer_application::IndexerErrorOperation::InteractiveSearch,
             None,
             None,
             None, // absolute_episode
@@ -667,6 +680,7 @@ async fn nzbgeek_search_rate_limited() {
             None,
             None,
             SearchMode::Interactive,
+            scryer_application::IndexerErrorOperation::InteractiveSearch,
             None,
             None,
             None, // absolute_episode
@@ -680,12 +694,13 @@ async fn nzbgeek_search_rate_limited() {
 }
 
 #[tokio::test]
-async fn nzbgeek_search_server_error_fallback() {
+async fn nzbgeek_search_server_error_is_deferred() {
     let ctx = TestContext::new().await;
-    let _call_count = 0u32;
 
-    // First call (movie search) returns 500, second (fallback search) returns results.
-    // Since wiremock mocks are matched in reverse order, mount the fallback first.
+    // Strategy orchestration owns generic fallback. The direct plugin client
+    // instead reports a typed upstream deferral for a provider 500.
+    // Keep a viable fallback response mounted so a client-side fallback would
+    // turn this test red by returning results.
     Mock::given(method("GET"))
         .and(path("/api"))
         .and(query_param("t", "search"))
@@ -712,6 +727,7 @@ async fn nzbgeek_search_server_error_fallback() {
             None,
             None,
             SearchMode::Interactive,
+            scryer_application::IndexerErrorOperation::InteractiveSearch,
             None,
             None,
             None, // absolute_episode
@@ -721,11 +737,20 @@ async fn nzbgeek_search_server_error_fallback() {
         )
         .await;
 
-    // The client should fall back to t=search on 500
+    let error = results.expect_err("a provider 500 should defer the direct search");
     assert!(
-        results.is_ok(),
-        "should fall back to generic search on 500: {:?}",
-        results.err()
+        matches!(
+            &error,
+            scryer_application::AppError::TemporaryUnavailable {
+                retry_after: None,
+                ..
+            }
+        ),
+        "expected a recoverable upstream deferral: {error:?}"
+    );
+    assert!(
+        error.to_string().contains("UpstreamFailure"),
+        "expected the upstream failure reason: {error}"
     );
 }
 
@@ -744,6 +769,7 @@ async fn nzbgeek_search_empty_query_and_no_ids_fails() {
             None,
             None,
             SearchMode::Interactive,
+            scryer_application::IndexerErrorOperation::InteractiveSearch,
             None,
             None,
             None, // absolute_episode
@@ -786,6 +812,7 @@ async fn newznab_search_extracts_standard_metadata_attributes() {
             None,
             None,
             SearchMode::Interactive,
+            scryer_application::IndexerErrorOperation::InteractiveSearch,
             None,
             None,
             None, // absolute_episode
@@ -808,6 +835,54 @@ async fn newznab_search_extracts_standard_metadata_attributes() {
 // ---------------------------------------------------------------------------
 // MetadataGateway (SMG) client
 // ---------------------------------------------------------------------------
+
+fn is_search_titles_request(request: &wiremock::Request) -> bool {
+    request
+        .url
+        .query_pairs()
+        .any(|(name, value)| name == "operationName" && value == "SearchTitles")
+        || request
+            .body_json::<serde_json::Value>()
+            .ok()
+            .is_some_and(|body| {
+                body.get("operationName")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|operation_name| operation_name == "SearchTitles")
+            })
+}
+
+async fn mount_movie_search_metadata_mocks(ctx: &TestContext, legacy_fixture_path: &str) {
+    let legacy_fixture = load_fixture(legacy_fixture_path);
+    let titles_fixture = load_fixture("smg/search_titles.json");
+    let get_titles_fixture = titles_fixture.clone();
+    Mock::given(method("GET"))
+        .and(path("/graphql"))
+        .and(query_param("operationName", "SearchTitles"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(get_titles_fixture))
+        .with_priority(1)
+        .mount(&ctx.smg_server)
+        .await;
+    let post_titles_fixture = titles_fixture.clone();
+    Mock::given(method("POST"))
+        .and(path("/graphql"))
+        .and(is_search_titles_request)
+        .respond_with(ResponseTemplate::new(200).set_body_string(post_titles_fixture))
+        .with_priority(1)
+        .mount(&ctx.smg_server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/graphql"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(legacy_fixture.clone()))
+        .with_priority(100)
+        .mount(&ctx.smg_server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/graphql"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(legacy_fixture))
+        .with_priority(100)
+        .mount(&ctx.smg_server)
+        .await;
+}
 
 #[tokio::test]
 async fn smg_search_tvdb() {
@@ -841,20 +916,7 @@ async fn smg_search_tvdb() {
 #[tokio::test]
 async fn smg_search_tvdb_rich() {
     let ctx = TestContext::new().await;
-    Mock::given(method("GET"))
-        .and(path("/graphql"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_string(load_fixture("smg/search_tvdb_rich.json")),
-        )
-        .mount(&ctx.smg_server)
-        .await;
-    Mock::given(method("POST"))
-        .and(path("/graphql"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_string(load_fixture("smg/search_tvdb_rich.json")),
-        )
-        .mount(&ctx.smg_server)
-        .await;
+    mount_movie_search_metadata_mocks(&ctx, "smg/search_tvdb_rich.json").await;
 
     let results = ctx
         .app
@@ -872,26 +934,26 @@ async fn smg_search_tvdb_rich() {
         results[0].overview.is_some(),
         "rich search should have overview"
     );
+    assert_eq!(results[0].year, Some(2024));
 }
 
 #[tokio::test]
 async fn smg_search_tvdb_rich_includes_year_hint() {
     let ctx = TestContext::new().await;
-    let fixture = load_fixture("smg/search_tvdb_rich.json");
+    let titles_fixture = load_fixture("smg/search_titles.json");
     Mock::given(method("GET"))
         .and(path("/graphql"))
+        .and(query_param("operationName", "SearchTitles"))
         .and(query_param(
             "variables",
-            r#"{"query":"Test Movie","type":"movie","limit":25,"language":"eng","year":2024}"#,
+            r#"{"query":"Test Movie","kind":"movie","limit":25,"language":"eng","year":2024}"#,
         ))
-        .respond_with(ResponseTemplate::new(200).set_body_string(fixture.clone()))
+        .respond_with(ResponseTemplate::new(200).set_body_string(titles_fixture))
+        .expect(1)
+        .with_priority(1)
         .mount(&ctx.smg_server)
         .await;
-    Mock::given(method("POST"))
-        .and(path("/graphql"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(fixture))
-        .mount(&ctx.smg_server)
-        .await;
+    mount_movie_search_metadata_mocks(&ctx, "smg/search_tvdb_rich.json").await;
 
     let results = ctx
         .app
@@ -901,6 +963,9 @@ async fn smg_search_tvdb_rich_includes_year_hint() {
 
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].name, "Test Movie Title");
+    assert!(results[0].poster_url.is_some());
+    assert!(results[0].overview.is_some());
+    assert_eq!(results[0].year, Some(2024));
 }
 
 #[tokio::test]

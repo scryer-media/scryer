@@ -122,7 +122,7 @@ pub(crate) fn parse_mkv(
     let num_chapters = header
         .num_chapters
         .or_else(|| {
-            (!header.chapters_known_absent)
+            (!profile.skips_deep_probes() && !header.chapters_known_absent)
                 .then(|| {
                     scanner
                         .scan_prefix_for_chapter_count(MKV_CHAPTER_SCAN_MAX_BYTES as u64)
@@ -175,7 +175,7 @@ pub(crate) fn parse_mkv(
             tracks[video_idx].dovi_config = Some(dovi_config);
         }
 
-        if profile != AnalysisProfile::Fast {
+        if !profile.skips_deep_probes() {
             if !is_plausible_frame_rate(tracks[video_idx].frame_rate_fps)
                 && let Some(track_num) = primary_video_track_num
             {
@@ -215,7 +215,7 @@ pub(crate) fn parse_mkv(
         }
     }
 
-    let audio_probe_requests = if profile == AnalysisProfile::Fast {
+    let audio_probe_requests = if profile.skips_deep_probes() {
         Vec::new()
     } else {
         audio_track_refs

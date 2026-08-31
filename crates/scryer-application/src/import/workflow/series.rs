@@ -65,6 +65,7 @@ async fn import_series_download(
     import_id: &str,
     completed: &CompletedDownload,
     release_evidence: &ReleaseEvidence,
+    source_root: &Path,
     video_files: &[PathBuf],
     started_at: chrono::DateTime<Utc>,
 ) -> AppResult<ImportResult> {
@@ -94,6 +95,7 @@ async fn import_series_download(
 
     let mut imported_count: usize = 0;
     let mut skipped_count: usize = 0;
+    let mut ignored_count: usize = 0;
     let mut rejected_count: usize = 0;
     let mut release_burned = false;
     let mut failed_count: usize = 0;
@@ -111,6 +113,15 @@ async fn import_series_download(
     let mut imported_link_type: Option<scryer_domain::ImportStrategy> = None;
     let expected_episode_ids =
         expected_episode_ids_for_completed_download(app, title, release_evidence).await;
+    let pack_plan = build_episode_pack_import_plan(
+        app,
+        title,
+        release_evidence,
+        source_root,
+        video_files,
+        expected_episode_ids.as_ref(),
+    )
+    .await?;
     // `video_files` came from `find_video_files(dir, true)`: samples are already
     // excluded, so this is the count Sonarr's `OtherVideoFiles` rule wants.
     let video_file_count = video_files.len();
@@ -135,6 +146,9 @@ async fn import_series_download(
             &quality_profile,
             nfo_enabled,
             expected_episode_ids.as_ref(),
+            pack_plan
+                .as_ref()
+                .and_then(|plan| plan.disposition_for(source_video)),
             video_file_count,
             &mut blocklist_ledger,
         )
@@ -169,6 +183,16 @@ async fn import_series_download(
                 append_unique_episode_ids(&mut attributed_episode_ids, &episode_ids);
                 last_skipped_message = Some(message);
                 last_skipped_skip_reason = skip_reason;
+            }
+            Ok(EpisodeImportOutcome::Ignored {
+                message,
+                episode_ids,
+                ..
+            }) => {
+                ignored_count += 1;
+                append_unique_episode_ids(&mut attributed_episode_ids, &episode_ids);
+                last_skipped_message = Some(message);
+                last_skipped_skip_reason = None;
             }
             Ok(EpisodeImportOutcome::Rejected {
                 rejection,
@@ -207,27 +231,14 @@ async fn import_series_download(
 
     let move_import_has_failure =
         import_mode == scryer_domain::ImportMode::Move && failed_count > 0;
-    let (decision, status, skip_reason) = if move_import_has_failure {
-        (ImportDecision::Failed, ImportStatus::Failed, None)
-    } else if imported_count > 0 {
-        (ImportDecision::Imported, ImportStatus::Completed, None)
-    } else if failed_count > 0 {
-        (ImportDecision::Failed, ImportStatus::Failed, None)
-    } else if rejected_count > 0 {
-        (
-            ImportDecision::Rejected,
-            ImportStatus::Failed,
-            last_rejection_skip_reason,
-        )
-    } else {
-        // All files skipped (no parseable episode info, already imported, etc.)
-        // — this is a permanent condition, not worth retrying.
-        (
-            ImportDecision::Skipped,
-            ImportStatus::Skipped,
-            last_skipped_skip_reason,
-        )
-    };
+    let (decision, status, skip_reason) = aggregate_episode_import_outcome(
+        import_mode,
+        imported_count,
+        rejected_count,
+        failed_count,
+        last_rejection_skip_reason,
+        last_skipped_skip_reason,
+    );
     let release_burned = matches!(&decision, ImportDecision::Rejected) && release_burned;
 
     let error_message = if imported_count == 0
@@ -236,9 +247,9 @@ async fn import_series_download(
         && skipped_count > 0
     {
         last_skipped_message
-    } else if failed_count > 0 || skipped_count > 0 || rejected_count > 0 {
+    } else if failed_count > 0 || skipped_count > 0 || ignored_count > 0 || rejected_count > 0 {
         Some(format!(
-            "{imported_count} imported, {skipped_count} skipped, {rejected_count} rejected, {failed_count} failed{}",
+            "{imported_count} imported, {ignored_count} ignored, {skipped_count} skipped, {rejected_count} rejected, {failed_count} failed{}",
             last_error
                 .as_ref()
                 .map(|e| format!(". Last error: {e}"))
@@ -306,6 +317,8 @@ enum EpisodeImportOutcome {
         imported_media_file_id: Option<String>,
         reason_code: Option<String>,
         link_type: Option<scryer_domain::ImportStrategy>,
+        source_cleanup: Option<Box<scryer_domain::ImportSourceCleanupGuard>>,
+        destination_permit: ImportDestinationPermit,
         /// Bytes written for this file, so multi-file imports can report a
         /// total without re-stating the destination paths.
         size_bytes: Option<i64>,
@@ -322,6 +335,11 @@ enum EpisodeImportOutcome {
         message: String,
         reason_code: Option<String>,
         skip_reason: Option<ImportSkipReason>,
+        episode_ids: Vec<String>,
+    },
+    Ignored {
+        message: String,
+        reason_code: String,
         episode_ids: Vec<String>,
     },
     Rejected {
@@ -469,7 +487,6 @@ impl DownloadBlocklistLedger {
                 title,
                 write.release_title,
                 Some(reason.to_string()),
-                write.attribution,
             )
             .await;
         }
@@ -498,15 +515,11 @@ pub(super) struct PlannedBlocklistWrite<'a> {
 /// (`check_not_already_imported`) is not a rejection: the unit is in place, so
 /// the automatic and manual paths both record it as `already_present` and let
 /// the download finalize as imported instead of retrying forever.
-pub(super) fn episode_skip_is_already_present(
-    reason_code: Option<&str>,
-    skip_reason: Option<&ImportSkipReason>,
-) -> bool {
-    reason_code == Some("duplicate_file")
-        || matches!(
-            skip_reason,
-            Some(ImportSkipReason::AlreadyImported | ImportSkipReason::DuplicateFile)
-        )
+pub(super) fn episode_skip_is_already_present(skip_reason: Option<&ImportSkipReason>) -> bool {
+    matches!(
+        skip_reason,
+        Some(ImportSkipReason::AlreadyImported | ImportSkipReason::DuplicateFile)
+    )
 }
 
 fn append_unique_episode_ids(target: &mut Vec<String>, source: &[String]) {
@@ -516,13 +529,121 @@ fn append_unique_episode_ids(target: &mut Vec<String>, source: &[String]) {
         }
     }
 }
+
+fn aggregate_episode_import_outcome(
+    import_mode: scryer_domain::ImportMode,
+    imported_count: usize,
+    rejected_count: usize,
+    failed_count: usize,
+    last_rejection_skip_reason: Option<ImportSkipReason>,
+    last_skipped_skip_reason: Option<ImportSkipReason>,
+) -> (ImportDecision, ImportStatus, Option<ImportSkipReason>) {
+    if import_mode == scryer_domain::ImportMode::Move && failed_count > 0 {
+        (ImportDecision::Failed, ImportStatus::Failed, None)
+    } else if rejected_count > 0 {
+        (
+            ImportDecision::Rejected,
+            ImportStatus::Failed,
+            last_rejection_skip_reason,
+        )
+    } else if imported_count > 0 {
+        (ImportDecision::Imported, ImportStatus::Completed, None)
+    } else if failed_count > 0 {
+        (ImportDecision::Failed, ImportStatus::Failed, None)
+    } else {
+        (
+            ImportDecision::Skipped,
+            ImportStatus::Skipped,
+            last_skipped_skip_reason,
+        )
+    }
+}
+
+#[cfg(test)]
+mod aggregate_episode_import_outcome_tests {
+    use super::*;
+
+    #[test]
+    fn imported_member_wins_over_another_non_move_failure() {
+        assert_eq!(
+            aggregate_episode_import_outcome(
+                scryer_domain::ImportMode::HardlinkOrCopy,
+                1,
+                0,
+                1,
+                None,
+                None,
+            ),
+            (ImportDecision::Imported, ImportStatus::Completed, None)
+        );
+    }
+
+    #[test]
+    fn rejected_member_wins_over_another_import() {
+        assert_eq!(
+            aggregate_episode_import_outcome(
+                scryer_domain::ImportMode::HardlinkOrCopy,
+                1,
+                1,
+                0,
+                Some(ImportSkipReason::PolicyMismatch),
+                None,
+            ),
+            (
+                ImportDecision::Rejected,
+                ImportStatus::Failed,
+                Some(ImportSkipReason::PolicyMismatch),
+            )
+        );
+    }
+
+    #[test]
+    fn move_failure_wins_over_another_import() {
+        assert_eq!(
+            aggregate_episode_import_outcome(scryer_domain::ImportMode::Move, 1, 0, 1, None, None,),
+            (ImportDecision::Failed, ImportStatus::Failed, None)
+        );
+    }
+
+    #[test]
+    fn all_ignored_members_are_skipped() {
+        assert_eq!(
+            aggregate_episode_import_outcome(
+                scryer_domain::ImportMode::HardlinkOrCopy,
+                0,
+                0,
+                0,
+                None,
+                None,
+            ),
+            (ImportDecision::Skipped, ImportStatus::Skipped, None)
+        );
+    }
+
+    #[test]
+    fn all_failed_members_fail() {
+        assert_eq!(
+            aggregate_episode_import_outcome(
+                scryer_domain::ImportMode::HardlinkOrCopy,
+                0,
+                0,
+                1,
+                None,
+                None,
+            ),
+            (ImportDecision::Failed, ImportStatus::Failed, None)
+        );
+    }
+}
+
 async fn expected_episode_ids_for_completed_download(
     app: &AppUseCase,
     title: &scryer_domain::Title,
     release_evidence: &ReleaseEvidence,
 ) -> Option<HashSet<String>> {
     if let Some(scope) = release_evidence.scope()
-        && let Some(ids) = expected_episode_ids_from_submission_scope(app, title, scope).await
+        && let Some(ids) =
+            expected_episode_ids_from_submission_scope(app, title, scope, false).await
         && !ids.is_empty()
     {
         return Some(ids);
@@ -532,21 +653,28 @@ async fn expected_episode_ids_for_completed_download(
 }
 /// The episodes a grab's submission scope names outright — the one derivation
 /// both the import's grabbed-release gate and the post-import verification use.
-/// A collection (season) scope expects its monitored episodes, or every episode
-/// when none is monitored; title/series-movie/orphan scopes name none.
+/// A collection (season) scope names every episode of the season: monitoring
+/// decides what Scryer searches for, never which downloaded file belongs to
+/// the grab. Verification alone passes `monitored_collection_preference` so a
+/// season pack that lacks a file for an unmonitored episode still counts as
+/// complete; title/series-movie/orphan scopes name none.
 pub(crate) async fn expected_episode_ids_from_submission_scope(
     app: &AppUseCase,
     title: &scryer_domain::Title,
     scope: &SubmissionScope,
+    monitored_collection_preference: bool,
 ) -> Option<HashSet<String>> {
     match scope {
         SubmissionScope::Episode { episode_id } => Some(HashSet::from([episode_id.clone()])),
         SubmissionScope::EpisodeSet { episode_ids } => Some(episode_ids.iter().cloned().collect()),
         SubmissionScope::Collection { collection_id } => {
-            match episode_ids_for_collection(app, title, collection_id, true).await {
-                Some(monitored) => Some(monitored),
-                None => episode_ids_for_collection(app, title, collection_id, false).await,
+            if monitored_collection_preference
+                && let Some(monitored) =
+                    episode_ids_for_collection(app, title, collection_id, true).await
+            {
+                return Some(monitored);
             }
+            episode_ids_for_collection(app, title, collection_id, false).await
         }
         SubmissionScope::Title | SubmissionScope::SeriesMovie { .. } | SubmissionScope::Orphan => {
             None
@@ -562,17 +690,6 @@ async fn expected_episode_ids_from_release_title(
     let ep_meta = parsed.episode.as_ref()?;
     let season = ep_meta.season.unwrap_or(1).to_string();
     let mut episodes = resolve_target_episodes(app, title, ep_meta, &season).await;
-
-    if ep_meta.release_type == crate::ParsedEpisodeReleaseType::SeasonPack {
-        let monitored: Vec<_> = episodes
-            .iter()
-            .filter(|episode| episode.monitored)
-            .map(|episode| episode.id.clone())
-            .collect();
-        if !monitored.is_empty() {
-            return Some(monitored.into_iter().collect());
-        }
-    }
 
     if episodes.is_empty() {
         None
@@ -779,6 +896,315 @@ fn ambiguous_obfuscated_episode_message(
         "Automatic import could not choose a season for episode {episode_number}: the release name does not include a season and the downloaded filename is obfuscated. Open Manual Import and assign the correct season and episode."
     ))
 }
+
+fn sole_submission_episode_id(
+    release_evidence: &ReleaseEvidence,
+    other_video_files: bool,
+) -> Option<&str> {
+    if other_video_files {
+        return None;
+    }
+
+    match release_evidence.scope()? {
+        SubmissionScope::Episode { episode_id } => Some(episode_id.as_str()),
+        SubmissionScope::EpisodeSet { episode_ids } if episode_ids.len() == 1 => {
+            episode_ids.first().map(String::as_str)
+        }
+        _ => None,
+    }
+}
+
+async fn grabbed_episode_fallback(
+    app: &AppUseCase,
+    title: &scryer_domain::Title,
+    release_evidence: &ReleaseEvidence,
+    other_video_files: bool,
+) -> AppResult<Option<scryer_domain::Episode>> {
+    let Some(episode_id) = sole_submission_episode_id(release_evidence, other_video_files) else {
+        return Ok(None);
+    };
+    let Some(episode) = app
+        .services
+        .catalog
+        .shows
+        .get_episode_by_id(episode_id)
+        .await?
+    else {
+        tracing::warn!(
+            episode_id,
+            title_id = %title.id,
+            "import: acquisition episode no longer exists; falling back to artifact parsing"
+        );
+        return Ok(None);
+    };
+    if episode.title_id != title.id {
+        tracing::warn!(
+            episode_id,
+            scoped_title_id = %episode.title_id,
+            import_title_id = %title.id,
+            "import: acquisition episode belongs to another title; falling back to artifact parsing"
+        );
+        return Ok(None);
+    }
+    Ok(Some(episode))
+}
+
+/// Reconcile alternate numbering only when the file and the original grab
+/// independently corroborate the one catalog episode Scryer submitted.
+///
+/// Scene releases can carry a collection's local numbering while the catalog
+/// has that content in a different season. A parseable filename normally wins,
+/// but once that filename resolves to no catalog episode, this narrowly admits
+/// the scoped episode when the series title matches exactly, its episode title
+/// is a near match, and both episode numbers agree.
+async fn reconcile_unresolved_scene_episode_from_scoped_release(
+    app: &AppUseCase,
+    title: &scryer_domain::Title,
+    release_evidence: &ReleaseEvidence,
+    source_video: &Path,
+    other_video_files: bool,
+) -> AppResult<Option<scryer_domain::Episode>> {
+    let Some(scoped_episode) =
+        grabbed_episode_fallback(app, title, release_evidence, other_video_files).await?
+    else {
+        return Ok(None);
+    };
+
+    let file_metadata = parsed_release_from_file_stem(source_video);
+    let Some(file_episode) = file_metadata.episode.as_ref() else {
+        return Ok(None);
+    };
+    let [file_episode_number] = file_episode.episode_numbers.as_slice() else {
+        return Ok(None);
+    };
+    let Some(scoped_episode_number) = scoped_episode
+        .episode_number
+        .as_deref()
+        .and_then(|number| number.parse::<u32>().ok())
+    else {
+        return Ok(None);
+    };
+    if *file_episode_number != scoped_episode_number
+        || !parsed_title_matches_catalog_title(&file_metadata, title)
+        || !source_fuzzily_matches_catalog_episode_title(title, source_video, &scoped_episode)
+    {
+        return Ok(None);
+    }
+
+    let Some(release_title) = release_evidence.release_title(None) else {
+        return Ok(None);
+    };
+    let release_metadata = normalize_release_title_signal(parse_import_release_for_title(
+        &release_title,
+        title,
+    ));
+    let Some(release_episode) = release_metadata.episode.as_ref() else {
+        return Ok(None);
+    };
+    let release_season = release_episode.season.unwrap_or(1).to_string();
+    let release_targets =
+        resolve_target_episodes(app, title, release_episode, &release_season).await;
+    if release_targets.len() != 1 || release_targets[0].id != scoped_episode.id {
+        return Ok(None);
+    }
+
+    tracing::debug!(
+        file = %source_video.display(),
+        title_id = %title.id,
+        episode_id = %scoped_episode.id,
+        "import: reconciled alternate scene numbering from scoped release evidence"
+    );
+    Ok(Some(scoped_episode))
+}
+
+fn parsed_title_matches_catalog_title(
+    parsed: &crate::ParsedReleaseMetadata,
+    title: &scryer_domain::Title,
+) -> bool {
+    let mut expected = Vec::with_capacity(1 + title.aliases.len() + title.tagged_aliases.len());
+    expected.push(crate::app_usecase_rss::normalize_for_matching(&title.name));
+    expected.extend(
+        title
+            .aliases
+            .iter()
+            .map(|alias| crate::app_usecase_rss::normalize_for_matching(alias)),
+    );
+    expected.extend(
+        title
+            .tagged_aliases
+            .iter()
+            .map(|alias| crate::app_usecase_rss::normalize_for_matching(&alias.name)),
+    );
+
+    let candidates = if parsed.normalized_title_variants.is_empty() {
+        vec![parsed.normalized_title.as_str()]
+    } else {
+        parsed
+            .normalized_title_variants
+            .iter()
+            .map(String::as_str)
+            .collect()
+    };
+    candidates.into_iter().any(|candidate| {
+        let normalized = crate::app_usecase_rss::normalize_for_matching(candidate);
+        !normalized.is_empty() && expected.iter().any(|value| value == &normalized)
+    })
+}
+
+/// Match only a member's episode-title text with typo tolerance. Series title
+/// identity is checked separately and always stays exact (canonical or alias).
+fn source_fuzzily_matches_catalog_episode_title(
+    title: &scryer_domain::Title,
+    source_video: &Path,
+    episode: &scryer_domain::Episode,
+) -> bool {
+    let Some(expected_title) = episode.title.as_deref().filter(|value| !value.trim().is_empty())
+    else {
+        return false;
+    };
+    let Some(stem) = source_video_stem(Some(source_video)) else {
+        return false;
+    };
+    let expected = crate::app_usecase_rss::normalize_for_matching(expected_title);
+    if expected.is_empty() {
+        return false;
+    }
+
+    let context = crate::build_release_parse_context(title, Some(episode), None, None);
+    let analysis = crate::analyze_release_for_target(&stem, &context);
+    let Some(candidate) = analysis.best_candidate() else {
+        return false;
+    };
+    if candidate.context_title_matches.iter().any(|context_match| {
+        context_match.kind == crate::release_parser::ContextTitleMatchKind::EpisodeTitle
+            && !candidate.zones.title_zones.iter().any(|title_zone| {
+                context_match.token_range.start_token < title_zone.end_token
+                    && title_zone.start_token < context_match.token_range.end_token
+            })
+    }) {
+        return true;
+    }
+
+    let unmatched_tokens: Vec<_> = candidate
+        .unconsumed_tokens
+        .iter()
+        .filter_map(|span| stem.get(span.start..span.end))
+        .filter(|token| token.chars().any(|character| character.is_alphanumeric()))
+        .collect();
+    let max_window_tokens = expected_title
+        .split_whitespace()
+        .count()
+        .saturating_add(2)
+        .max(1);
+    for start in 0..unmatched_tokens.len() {
+        let mut phrase = String::new();
+        for token in unmatched_tokens
+            .iter()
+            .skip(start)
+            .take(max_window_tokens)
+        {
+            if !phrase.is_empty() {
+                phrase.push(' ');
+            }
+            phrase.push_str(token);
+            let normalized = crate::app_usecase_rss::normalize_for_matching(&phrase);
+            if !normalized.is_empty()
+                && normalized_episode_title_matches_or_is_near_match(&normalized, &expected)
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn normalized_episode_title_matches_or_is_near_match(candidate: &str, expected: &str) -> bool {
+    if candidate == expected {
+        return true;
+    }
+
+    let candidate_len = candidate.chars().count();
+    let expected_len = expected.chars().count();
+    let max_distance = match candidate_len.max(expected_len) {
+        0..=5 => 0,
+        6..=12 => 1,
+        13..=24 => 2,
+        _ => 3,
+    };
+    bounded_levenshtein_distance(candidate, expected, max_distance).is_some()
+}
+
+fn bounded_levenshtein_distance(left: &str, right: &str, max_distance: usize) -> Option<usize> {
+    let left: Vec<char> = left.chars().collect();
+    let right: Vec<char> = right.chars().collect();
+    if left.len().abs_diff(right.len()) > max_distance {
+        return None;
+    }
+
+    let mut previous: Vec<usize> = (0..=right.len()).collect();
+    for (left_index, left_char) in left.iter().enumerate() {
+        let mut current = Vec::with_capacity(right.len() + 1);
+        current.push(left_index + 1);
+        let mut row_min = left_index + 1;
+        for (right_index, right_char) in right.iter().enumerate() {
+            let cost = usize::from(left_char != right_char);
+            let distance = (previous[right_index + 1] + 1)
+                .min(current[right_index] + 1)
+                .min(previous[right_index] + cost);
+            row_min = row_min.min(distance);
+            current.push(distance);
+        }
+        if row_min > max_distance {
+            return None;
+        }
+        previous = current;
+    }
+
+    previous
+        .last()
+        .copied()
+        .filter(|distance| *distance <= max_distance)
+}
+
+#[cfg(test)]
+mod alternate_scene_numbering_tests {
+    use super::*;
+
+    #[test]
+    fn episode_title_match_allows_a_small_typo_but_not_an_unrelated_title() {
+        assert!(normalized_episode_title_matches_or_is_near_match(
+            "sonofdarkness",
+            "sonofdarknes",
+        ));
+        assert!(!normalized_episode_title_matches_or_is_near_match(
+            "sonofdarkness",
+            "thenightmareofyou",
+        ));
+    }
+}
+
+fn unresolved_episode_import_message(
+    parsed: &crate::ParsedReleaseMetadata,
+    source_video: &Path,
+    release_evidence: &ReleaseEvidence,
+    video_file_count: usize,
+) -> String {
+    if let Some(absolute_number) = parsed.episode.as_ref().and_then(|episode| {
+        episode
+            .absolute_episode
+            .or_else(|| episode.absolute_episode_numbers.first().copied())
+    }) {
+        return format!(
+            "Automatic import found absolute episode {absolute_number}, but could not map it to a season and episode for this title. Open Manual Import and assign the correct episode."
+        );
+    }
+
+    ambiguous_obfuscated_episode_message(source_video, release_evidence, video_file_count)
+        .unwrap_or_else(|| {
+            "Automatic import could not determine a season and episode from the downloaded file. Open Manual Import and assign the correct season and episode."
+                .to_string()
+        })
+}
 /// Import a single episode video file: parse, gate, import, and link.
 #[expect(
     clippy::too_many_arguments,
@@ -800,6 +1226,7 @@ async fn import_single_episode_file(
     quality_profile: &crate::QualityProfile,
     nfo_enabled: bool,
     expected_episode_ids: Option<&HashSet<String>>,
+    planned_disposition: Option<&PlannedEpisodeMemberDisposition>,
     video_file_count: usize,
     blocklist_ledger: &mut DownloadBlocklistLedger,
 ) -> AppResult<EpisodeImportOutcome> {
@@ -813,45 +1240,136 @@ async fn import_single_episode_file(
         other_video_files,
     );
 
-    // Must have episode info to proceed
-    let ep_meta = match parsed.episode.as_ref() {
-        Some(ep) if !ep.episode_numbers.is_empty() => ep,
-        Some(ep)
-            if ep.absolute_episode.is_some() && title.facet == scryer_domain::MediaFacet::Anime =>
-        {
-            ep
-        }
-        Some(ep) if ep.air_date.is_some() => ep,
-        Some(ep) if ep.release_type == crate::ParsedEpisodeReleaseType::SeasonPack => ep,
-        _ => {
-            tracing::debug!(
-                file = %source_video.display(),
-                other_video_files,
-                "skipping file with no parseable episode info"
-            );
-            return Ok(EpisodeImportOutcome::Skipped {
-                message: ambiguous_obfuscated_episode_message(
-                    source_video,
-                    release_evidence,
-                    video_file_count,
-                )
-                .unwrap_or_else(|| {
-                    "Automatic import could not determine a season and episode from the downloaded file. Open Manual Import and assign the correct season and episode."
-                        .to_string()
-                }),
-                reason_code: None,
-                skip_reason: Some(ImportSkipReason::UnparseableEpisode),
-                episode_ids: Vec::new(),
+    let planned_pack_import = matches!(
+        planned_disposition,
+        Some(PlannedEpisodeMemberDisposition::Import { .. })
+    );
+    let planned_episodes = match planned_disposition {
+        Some(PlannedEpisodeMemberDisposition::Import { episodes }) => Some(episodes.clone()),
+        Some(PlannedEpisodeMemberDisposition::Ignore {
+            episodes,
+            reason_code,
+            message,
+        }) => {
+            persist_file_import_artifact(
+                app,
+                import_id,
+                completed,
+                title.id.as_str(),
+                source_video,
+                "episode",
+                "ignored",
+                Some(reason_code),
+                None,
+                episodes,
+            )
+            .await?;
+            return Ok(EpisodeImportOutcome::Ignored {
+                message: message.clone(),
+                reason_code: (*reason_code).to_string(),
+                episode_ids: episodes.iter().map(|episode| episode.id.clone()).collect(),
             });
         }
+        Some(PlannedEpisodeMemberDisposition::Hold {
+            episodes,
+            reason_code,
+            message,
+        }) => {
+            persist_file_import_artifact(
+                app,
+                import_id,
+                completed,
+                title.id.as_str(),
+                source_video,
+                "episode",
+                "rejected",
+                Some(reason_code),
+                None,
+                episodes,
+            )
+            .await?;
+            return Ok(EpisodeImportOutcome::Rejected {
+                rejection: crate::post_download_gate::ImportedFileRejection {
+                    message: message.clone(),
+                    recycle_reason: reason_code,
+                    skip_reason: Some(ImportSkipReason::PolicyMismatch),
+                    blocking_rule_codes: vec![(*reason_code).to_string()],
+                },
+                disposition: crate::import_decide::RejectionDisposition::Hold,
+                reason_code: Some((*reason_code).to_string()),
+                episode_ids: episodes.iter().map(|episode| episode.id.clone()).collect(),
+            });
+        }
+        None => None,
     };
 
-    let season = ep_meta.season.unwrap_or(1);
-    let season_str = season.to_string();
-
-    // Resolve target episodes early so we can enrich rename tokens with DB
-    // metadata (e.g. absolute_number from TVDB).
-    let target_episodes = resolve_target_episodes(app, title, ep_meta, &season_str).await;
+    let episode_is_resolvable = |episode: &crate::ParsedEpisodeMetadata| {
+        !episode.episode_numbers.is_empty()
+            || (episode.absolute_episode.is_some()
+                && title.facet == scryer_domain::MediaFacet::Anime)
+            || episode.air_date.is_some()
+            || episode.release_type == crate::ParsedEpisodeReleaseType::SeasonPack
+    };
+    let file_episode = file_episode_identity_for_title(source_video, title);
+    let identity_episode = file_episode
+        .as_ref()
+        .filter(|episode| episode_is_resolvable(episode))
+        .or_else(|| {
+            parsed
+                .episode
+                .as_ref()
+                .filter(|episode| episode_is_resolvable(episode))
+        });
+    let (target_episodes, uses_catalog_identity) = if let Some(episodes) = planned_episodes {
+        // The verified-pack preflight resolves member identity from catalog
+        // episodes. Parsed metadata remains release evidence only.
+        (episodes, true)
+    } else if let Some(ep_meta) = identity_episode {
+        // A file that positively identifies itself wins identity resolution.
+        // The expected-scope gate below then holds it when that identity is not
+        // part of the grabbed release. Acquisition is only an ambiguity
+        // fallback; it never overwrites contradictory file evidence.
+        let season = ep_meta.season.unwrap_or(1);
+        let season_str = season.to_string();
+        let resolved_episodes = resolve_target_episodes(app, title, ep_meta, &season_str).await;
+        if resolved_episodes.is_empty()
+            && let Some(episode) = reconcile_unresolved_scene_episode_from_scoped_release(
+                app,
+                title,
+                release_evidence,
+                source_video,
+                other_video_files,
+            )
+            .await?
+        {
+            (vec![episode], true)
+        } else {
+            (resolved_episodes, false)
+        }
+    } else if let Some(episode) =
+        grabbed_episode_fallback(app, title, release_evidence, other_video_files).await?
+    {
+        // Only an ambiguous sole video inherits the exact catalog episode that
+        // acquisition admitted. Multi-video downloads never use this fallback.
+        (vec![episode], true)
+    } else {
+        tracing::debug!(
+            file = %source_video.display(),
+            other_video_files,
+            "skipping file with no parseable episode info"
+        );
+        return Ok(EpisodeImportOutcome::Skipped {
+            message: unresolved_episode_import_message(
+                &parsed,
+                source_video,
+                release_evidence,
+                video_file_count,
+            ),
+            reason_code: None,
+            skip_reason: Some(ImportSkipReason::UnparseableEpisode),
+            episode_ids: Vec::new(),
+        });
+    };
     let target_episode_ids: Vec<String> = target_episodes
         .iter()
         .map(|episode| episode.id.clone())
@@ -878,7 +1396,7 @@ async fn import_single_episode_file(
             None,
             &target_episodes,
         )
-        .await;
+        .await?;
         return Ok(EpisodeImportOutcome::Rejected {
             rejection: crate::post_download_gate::ImportedFileRejection {
                 message: "file resolves to no episode of this title".to_string(),
@@ -895,7 +1413,8 @@ async fn import_single_episode_file(
             episode_ids: Vec::new(),
         });
     }
-    if let Some(expected_episode_ids) = expected_episode_ids
+    if !planned_pack_import
+        && let Some(expected_episode_ids) = expected_episode_ids
         && !resolved_episode_ids_are_within_expected(&target_episode_ids, expected_episode_ids)
     {
         // The obfuscation explainer describes a season guessed from the
@@ -906,6 +1425,19 @@ async fn import_single_episode_file(
         } else {
             ambiguous_obfuscated_episode_message(source_video, release_evidence, video_file_count)
         };
+        persist_file_import_artifact(
+            app,
+            import_id,
+            completed,
+            title.id.as_str(),
+            source_video,
+            "episode",
+            "rejected",
+            Some("episode_outside_grabbed_release"),
+            None,
+            &target_episodes,
+        )
+        .await?;
         return Ok(EpisodeImportOutcome::Rejected {
             rejection: crate::post_download_gate::ImportedFileRejection {
                 message: obfuscated_message.unwrap_or_else(|| {
@@ -921,17 +1453,39 @@ async fn import_single_episode_file(
             episode_ids: target_episode_ids.clone(),
         });
     }
-    let ep_num_str = episode_number_token_for_import(
-        &ep_meta.episode_numbers,
-        target_episodes
-            .first()
-            .and_then(|episode| episode.episode_number.as_deref()),
-    );
-    let abs_str = ep_meta.absolute_episode.map(|n| n.to_string()).or_else(|| {
-        target_episodes
-            .first()
-            .and_then(|ep| ep.absolute_number.clone())
-    });
+    let resolved_episode = target_episodes.first();
+    let (season, ep_num_str, abs_str) = if uses_catalog_identity {
+        let season = resolved_episode
+            .and_then(|episode| episode.season_number.as_deref())
+            .map(str::trim)
+            .and_then(|value| value.parse::<u32>().ok())
+            .unwrap_or(1);
+        let episode_number = resolved_episode
+            .and_then(|episode| episode.episode_number.as_deref())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or_default()
+            .to_string();
+        let absolute_number = resolved_episode.and_then(|episode| episode.absolute_number.clone());
+        (season, episode_number, absolute_number)
+    } else {
+        let ep_meta = identity_episode.expect("the parse path resolved episode metadata");
+        let season = ep_meta.season.unwrap_or(1);
+        let episode_number = episode_number_token_for_import(
+            &ep_meta.episode_numbers,
+            resolved_episode.and_then(|episode| episode.episode_number.as_deref()),
+        );
+        let absolute_number = ep_meta
+            .absolute_episode
+            .map(|number| number.to_string())
+            .or_else(|| resolved_episode.and_then(|episode| episode.absolute_number.clone()));
+        (season, episode_number, absolute_number)
+    };
+    let post_processing_episode = if uses_catalog_identity {
+        ep_num_str.parse::<u32>().ok()
+    } else {
+        identity_episode.and_then(|episode| episode.episode_numbers.first().copied())
+    };
     let episode_title = target_episodes.first().and_then(|ep| ep.title.as_deref());
     let import_purpose = release_evidence.purpose();
     let origin = release_evidence.import_origin();
@@ -956,7 +1510,7 @@ async fn import_single_episode_file(
         &parsed,
         &target_episodes,
         &target_episodes,
-        season as u32,
+        season,
         &ep_num_str,
         abs_str.as_deref(),
         episode_title,
@@ -975,6 +1529,7 @@ async fn import_single_episode_file(
             imported_media_file_id,
             reason_code,
             blocklist_after_import,
+            source_cleanup,
             ..
         } => {
             // Imported, but the release lied about its quality: burn it so the
@@ -1008,7 +1563,15 @@ async fn import_single_episode_file(
                 imported_media_file_id.as_deref(),
                 &target_episodes,
             )
-            .await;
+            .await?;
+
+            finalize_deferred_import_source_cleanup(
+                app,
+                source_cleanup.as_deref().cloned(),
+                &crate::stored_paths::stored_path_to_path_buf(dest_path),
+                Some(completed),
+            )
+            .await?;
 
             if imported_media_file_id.is_some() && reason_code.as_deref() != Some("additional_file")
             {
@@ -1046,7 +1609,7 @@ async fn import_single_episode_file(
                         .find(|e| e.source == "tvdb")
                         .map(|e| e.value.clone()),
                     season: Some(season),
-                    episode: ep_meta.episode_numbers.first().copied(),
+                    episode: post_processing_episode,
                     quality: parsed.quality.clone(),
                 });
             }
@@ -1056,12 +1619,11 @@ async fn import_single_episode_file(
             skip_reason,
             ..
         } => {
-            let artifact_result =
-                if episode_skip_is_already_present(reason_code.as_deref(), skip_reason.as_ref()) {
-                    "already_present"
-                } else {
-                    "rejected"
-                };
+            let artifact_result = if episode_skip_is_already_present(skip_reason.as_ref()) {
+                "already_present"
+            } else {
+                "rejected"
+            };
             persist_file_import_artifact(
                 app,
                 import_id,
@@ -1074,7 +1636,22 @@ async fn import_single_episode_file(
                 None,
                 &target_episodes,
             )
-            .await;
+            .await?;
+        }
+        EpisodeImportOutcome::Ignored { reason_code, .. } => {
+            persist_file_import_artifact(
+                app,
+                import_id,
+                completed,
+                title.id.as_str(),
+                source_video,
+                "episode",
+                "ignored",
+                Some(reason_code),
+                None,
+                &target_episodes,
+            )
+            .await?;
         }
         EpisodeImportOutcome::Rejected {
             rejection,
@@ -1115,7 +1692,7 @@ async fn import_single_episode_file(
                 None,
                 &target_episodes,
             )
-            .await;
+            .await?;
         }
     }
 
@@ -1166,7 +1743,10 @@ mod episode_number_token_for_import_tests {
             ("episode".to_string(), episode),
         ]);
 
-        assert_eq!(render_rename_template("S{season:2}E{episode:2}", &tokens), "S01E01");
+        assert_eq!(
+            render_rename_template("S{season:2}E{episode:2}", &tokens),
+            "S01E01"
+        );
     }
 }
 /// Resolve media root path and rename template for a title's facet.
@@ -1695,7 +2275,7 @@ async fn persist_file_import_artifact(
     reason_code: Option<&str>,
     imported_media_file_id: Option<&str>,
     episodes: &[scryer_domain::Episode],
-) {
+) -> AppResult<()> {
     let relative_path = source_path
         .strip_prefix(&completed.dest_dir)
         .ok()
@@ -1706,6 +2286,24 @@ async fn persist_file_import_artifact(
         .and_then(|name| name.to_str())
         .map(|name| name.to_ascii_lowercase())
         .unwrap_or_else(|| source_path.to_string_lossy().to_ascii_lowercase());
+    let canonical_download_id = match app
+        .services
+        .workflow
+        .imports
+        .canonical_download_id_for_import(import_id)
+        .await
+    {
+        Ok(canonical_download_id) => canonical_download_id,
+        Err(error) => {
+            tracing::warn!(
+                error = %error,
+                import_id,
+                source_ref = %completed.download_client_item_id,
+                "failed to resolve canonical identity for import artifact; retaining legacy artifact write"
+            );
+            None
+        }
+    };
 
     let episode_rows: Vec<(Option<String>, Option<i32>, Option<i32>)> = if episodes.is_empty() {
         vec![(None, None, None)]
@@ -1728,41 +2326,51 @@ async fn persist_file_import_artifact(
             .collect()
     };
 
-    for (episode_id, season_number, episode_number) in episode_rows {
-        let artifact = ImportArtifact {
-            id: Id::new().0,
-            source_client_id: Some(completed.client_id.clone()),
-            source_system: completed.client_type.clone(),
-            source_ref: completed.download_client_item_id.clone(),
-            import_id: Some(import_id.to_string()),
-            relative_path: relative_path.clone(),
-            normalized_file_name: normalized_file_name.clone(),
-            media_kind: media_kind.to_string(),
-            title_id: Some(title_id.to_string()),
-            episode_id,
-            season_number,
-            episode_number,
-            result: result.to_string(),
-            reason_code: reason_code.map(str::to_string),
-            imported_media_file_id: imported_media_file_id.map(str::to_string),
-            created_at: Utc::now(),
-        };
-        if let Err(error) = app
-            .services
-            .workflow
-            .import_artifacts
-            .insert_artifact(artifact)
-            .await
-        {
-            tracing::warn!(
-                error = %error,
-                import_id,
-                source_ref = %completed.download_client_item_id,
-                file = %source_path.display(),
-                "failed to persist import artifact"
-            );
-        }
+    let source_identity = ClientJobLocator::for_import_artifact(
+        Some(completed.client_id.as_str()),
+        &completed.client_type,
+        &completed.download_client_item_id,
+    );
+    let artifacts = episode_rows
+        .into_iter()
+        .map(
+            |(episode_id, season_number, episode_number)| ImportArtifact {
+                id: Id::new().0,
+                source_client_id: source_identity.client_id.clone(),
+                source_system: source_identity.client_type.clone(),
+                source_ref: source_identity.item_id.clone(),
+                import_id: Some(import_id.to_string()),
+                relative_path: relative_path.clone(),
+                normalized_file_name: normalized_file_name.clone(),
+                media_kind: media_kind.to_string(),
+                title_id: Some(title_id.to_string()),
+                episode_id,
+                season_number,
+                episode_number,
+                result: result.to_string(),
+                reason_code: reason_code.map(str::to_string),
+                imported_media_file_id: imported_media_file_id.map(str::to_string),
+                created_at: Utc::now(),
+            },
+        )
+        .collect();
+    if let Err(error) = app
+        .services
+        .workflow
+        .import_artifacts
+        .insert_artifacts_for_download(artifacts, canonical_download_id.as_ref())
+        .await
+    {
+        tracing::warn!(
+            error = %error,
+            import_id,
+            source_ref = %completed.download_client_item_id,
+            file = %source_path.display(),
+            "failed to persist import artifacts"
+        );
+        return Err(AppError::ImportEvidenceUnavailable(error.to_string()));
     }
+    Ok(())
 }
 // 50 MB
 

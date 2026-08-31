@@ -23,6 +23,13 @@ query MetadataBulk(
 
 fragment MovieFields on TvdbMovie {
   tvdb_id
+  title_id
+  external_ids {
+    source
+    kind
+    id
+    key
+  }
   name
   slug
   year

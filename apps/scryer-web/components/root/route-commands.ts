@@ -295,17 +295,6 @@ export function buildRouteCommands({
           onSelect: buildNavigate(onNavigate, "wanted", undefined, undefined, undefined, "pending"),
         } satisfies RouteCommand]
       : []),
-    ...(canViewCatalog && canManageTitle
-      ? [{
-          id: "wanted-history",
-          label: `${t("nav.wanted")} / ${t("history.title")}`,
-          description: t("history.title"),
-          groupLabel: automationGroupLabel,
-          keywords: ["wanted", "history", "imports", "downloads", "blocklist", "failures"],
-          icon: ListChecks,
-          onSelect: buildNavigate(onNavigate, "wanted", undefined, undefined, undefined, "history"),
-        } satisfies RouteCommand]
-      : []),
     ...(canAccessActivity && activityImportCount > 0
       ? [{
           id: "activity-import",

@@ -17,6 +17,9 @@ import type {
 
 type MetadataSearchResult = {
   tvdbId: string;
+  smgId?: number | null;
+  tmdbId?: number | null;
+  externalIds?: Array<{ source: string; value: string }>;
   name: string;
   imdbId: string | null;
   slug: string | null;
@@ -379,7 +382,7 @@ export const PendingImportCard = React.memo(function PendingImportCard({
                 <div className="space-y-3">
                   {searchResults.map((result) => (
                     <div
-                      key={`${item.id}-${result.tvdbId}`}
+                      key={`${item.id}-${result.smgId ?? result.tvdbId ?? result.name}`}
                       className="flex gap-3 rounded-lg border border-border bg-card/40 p-3"
                     >
                       <div className="h-24 w-16 flex-none overflow-hidden rounded-md border border-border bg-muted">
@@ -393,7 +396,9 @@ export const PendingImportCard = React.memo(function PendingImportCard({
                           {result.year ? (
                             <span className="text-xs text-muted-foreground">{result.year}</span>
                           ) : null}
-                          <span className="text-xs text-muted-foreground">TVDB {result.tvdbId}</span>
+                          <span className="text-xs text-muted-foreground">
+                            {result.smgId != null ? `SMG ${result.smgId}` : `TVDB ${result.tvdbId}`}
+                          </span>
                         </div>
                         {result.status ? (
                           <div className="text-xs text-muted-foreground">{result.status}</div>

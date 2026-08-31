@@ -97,7 +97,6 @@ export const WANTED_SECTION_PATH: Record<WantedSection, string> = {
   wanted: "items",
   cutoff: "cutoff-unmet",
   pending: "pending",
-  history: "history",
 };
 
 export const ACTIVITY_SECTION_PATH: Record<ActivitySection, string> = {
@@ -282,7 +281,6 @@ const WANTED_SECTION_BY_SEGMENT: Record<string, WantedSection> = {
   "cutoff-unmet": "cutoff",
   cutoff: "cutoff",
   pending: "pending",
-  history: "history",
 };
 
 function parsedRoute(
@@ -490,6 +488,13 @@ export function resolveAppRoute(
     const section = normalizedSegments[1] ?? "";
     if (section === "wanted") {
       const wantedSegment = normalizedSegments[2] ?? "items";
+      if (wantedSegment === "history" && rawSegments.length === 3) {
+        return redirectTo(
+          buildViewPath("activity", undefined, undefined, undefined, undefined, "history"),
+          search,
+          hash,
+        );
+      }
       const wantedSection = WANTED_SECTION_BY_SEGMENT[wantedSegment];
       if (!wantedSection || rawSegments.length > 3) {
         return { kind: "not-found" };
@@ -545,6 +550,13 @@ export function resolveAppRoute(
 
   if (root === "wanted") {
     const wantedSegment = normalizedSegments[1] ?? "items";
+    if (wantedSegment === "history" && rawSegments.length === 2) {
+      return redirectTo(
+        buildViewPath("activity", undefined, undefined, undefined, undefined, "history"),
+        search,
+        hash,
+      );
+    }
     const wantedSection = WANTED_SECTION_BY_SEGMENT[wantedSegment];
     if (!wantedSection || rawSegments.length > 2) {
       return { kind: "not-found" };
@@ -559,7 +571,7 @@ export function resolveAppRoute(
   if (root === "history") {
     return rawSegments.length === 1
       ? redirectTo(
-          buildViewPath("wanted", undefined, undefined, undefined, "history"),
+          buildViewPath("activity", undefined, undefined, undefined, undefined, "history"),
           search,
           hash,
         )

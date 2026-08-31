@@ -17,6 +17,42 @@ struct MetadataTables {
     external_ratings: &'static str,
 }
 
+#[derive(Clone, Copy)]
+struct MetadataRatingTables {
+    owner_column: &'static str,
+    rating_summaries: &'static str,
+    rating_sources: &'static str,
+    external_ratings: &'static str,
+}
+
+#[derive(Clone, Copy)]
+enum MetadataRatingOwner {
+    Title,
+    MovieEntity,
+    DiscoveryTitle,
+}
+
+impl MetadataRatingOwner {
+    const fn tables(self) -> MetadataRatingTables {
+        match self {
+            Self::Title => TITLE_METADATA_TABLES.ratings(),
+            Self::MovieEntity => MOVIE_ENTITY_METADATA_RATING_TABLES,
+            Self::DiscoveryTitle => DISCOVERY_TITLE_METADATA_TABLES.ratings(),
+        }
+    }
+}
+
+impl MetadataTables {
+    const fn ratings(self) -> MetadataRatingTables {
+        MetadataRatingTables {
+            owner_column: self.owner_column,
+            rating_summaries: self.rating_summaries,
+            rating_sources: self.rating_sources,
+            external_ratings: self.external_ratings,
+        }
+    }
+}
+
 const TITLE_METADATA_TABLES: MetadataTables = MetadataTables {
     owner_column: "title_id",
     tags: "title_metadata_tags",
@@ -35,6 +71,13 @@ const DISCOVERY_TITLE_METADATA_TABLES: MetadataTables = MetadataTables {
     rating_summaries: "discovery_title_metadata_rating_summaries",
     rating_sources: "discovery_title_metadata_rating_sources",
     external_ratings: "discovery_title_metadata_external_ratings",
+};
+
+const MOVIE_ENTITY_METADATA_RATING_TABLES: MetadataRatingTables = MetadataRatingTables {
+    owner_column: "movie_entity_id",
+    rating_summaries: "title_metadata_rating_summaries",
+    rating_sources: "title_metadata_rating_sources",
+    external_ratings: "title_metadata_external_ratings",
 };
 
 pub async fn replace_title_metadata_tags_tx(
@@ -211,7 +254,21 @@ pub async fn replace_title_metadata_ratings_tx(
     title_id: &str,
     ratings: &TitleRatingSummary,
 ) -> AppResult<()> {
-    replace_metadata_ratings_tx(tx, TITLE_METADATA_TABLES, title_id, ratings).await
+    replace_metadata_ratings_tx(tx, MetadataRatingOwner::Title, title_id, ratings).await
+}
+
+pub async fn replace_movie_entity_metadata_ratings_tx(
+    tx: &mut SqlTx<'_>,
+    movie_entity_id: &str,
+    ratings: &TitleRatingSummary,
+) -> AppResult<()> {
+    replace_metadata_ratings_tx(
+        tx,
+        MetadataRatingOwner::MovieEntity,
+        movie_entity_id,
+        ratings,
+    )
+    .await
 }
 
 pub async fn replace_discovery_title_metadata_ratings_tx(
@@ -221,7 +278,7 @@ pub async fn replace_discovery_title_metadata_ratings_tx(
 ) -> AppResult<()> {
     replace_metadata_ratings_tx(
         tx,
-        DISCOVERY_TITLE_METADATA_TABLES,
+        MetadataRatingOwner::DiscoveryTitle,
         discovery_title_id,
         ratings,
     )
@@ -230,10 +287,11 @@ pub async fn replace_discovery_title_metadata_ratings_tx(
 
 async fn replace_metadata_ratings_tx(
     tx: &mut SqlTx<'_>,
-    tables: MetadataTables,
+    owner: MetadataRatingOwner,
     owner_id: &str,
     ratings: &TitleRatingSummary,
 ) -> AppResult<()> {
+    let tables = owner.tables();
     for table in [
         tables.external_ratings,
         tables.rating_sources,
@@ -324,24 +382,37 @@ pub async fn load_title_metadata_ratings(
     exec: SqlExec<'_, '_>,
     title_ids: &[String],
 ) -> AppResult<BTreeMap<String, TitleRatingSummary>> {
-    load_metadata_ratings(exec, TITLE_METADATA_TABLES, title_ids).await
+    load_metadata_ratings(exec, MetadataRatingOwner::Title, title_ids).await
+}
+
+pub async fn load_movie_entity_metadata_ratings(
+    exec: SqlExec<'_, '_>,
+    movie_entity_ids: &[String],
+) -> AppResult<BTreeMap<String, TitleRatingSummary>> {
+    load_metadata_ratings(exec, MetadataRatingOwner::MovieEntity, movie_entity_ids).await
 }
 
 pub async fn load_discovery_title_metadata_ratings(
     exec: SqlExec<'_, '_>,
     discovery_title_ids: &[String],
 ) -> AppResult<BTreeMap<String, TitleRatingSummary>> {
-    load_metadata_ratings(exec, DISCOVERY_TITLE_METADATA_TABLES, discovery_title_ids).await
+    load_metadata_ratings(
+        exec,
+        MetadataRatingOwner::DiscoveryTitle,
+        discovery_title_ids,
+    )
+    .await
 }
 
 async fn load_metadata_ratings(
     exec: SqlExec<'_, '_>,
-    tables: MetadataTables,
+    owner: MetadataRatingOwner,
     owner_ids: &[String],
 ) -> AppResult<BTreeMap<String, TitleRatingSummary>> {
     if owner_ids.is_empty() {
         return Ok(BTreeMap::new());
     }
+    let tables = owner.tables();
     let placeholders = bind_placeholders(owner_ids.len());
     let sql = format!(
         "WITH metadata_ratings(

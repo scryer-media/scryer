@@ -901,6 +901,13 @@ pub fn weaver_item_to_queue_item(job: &WeaverQueueItem) -> DownloadQueueItem {
 
     let scryer_metadata =
         extract_scryer_metadata(&job.attributes, job.client_request_id.as_deref());
+    let title_name = job
+        .original_title
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(&job.name)
+        .to_string();
 
     // Calculate remaining seconds from progress and download speed.
     // We don't have per-job speed, so leave it as None.
@@ -908,7 +915,7 @@ pub fn weaver_item_to_queue_item(job: &WeaverQueueItem) -> DownloadQueueItem {
         id: job.id.to_string(),
         title_id: scryer_metadata.title_id,
         episode_id: None,
-        title_name: job.name.clone(),
+        title_name,
         facet: scryer_metadata.facet,
         category: job
             .category
@@ -1161,8 +1168,8 @@ impl DownloadClient for WeaverDownloadClient {
             json!({"key": "*scryer_facet", "value": facet_str}),
             json!({"key": "*scryer_import_purpose", "value": request.purpose.as_str()}),
         ];
-        if let Some(download_id) = request.download_id.as_deref() {
-            attributes.push(json!({"key": "*scryer_download_id", "value": download_id}));
+        if let Some(download_id) = request.download_id {
+            attributes.push(json!({"key": "*scryer_download_id", "value": download_id.to_wire()}));
         }
 
         if let Some(imdb_id) = title
@@ -1175,17 +1182,20 @@ impl DownloadClient for WeaverDownloadClient {
             attributes.push(json!({"key": "*scryer_imdb_id", "value": imdb_id}));
         }
 
-        let client_request_id = request.download_id.clone().unwrap_or_else(|| {
-            format!(
-                "scryer:{}:{}",
-                title.id,
-                request
-                    .release_title
-                    .clone()
-                    .or_else(|| normalized_source_title.clone())
-                    .unwrap_or_else(|| title.name.clone())
-            )
-        });
+        let client_request_id = request
+            .download_id
+            .map(|id| id.to_wire())
+            .unwrap_or_else(|| {
+                format!(
+                    "scryer:{}:{}",
+                    title.id,
+                    request
+                        .release_title
+                        .clone()
+                        .or_else(|| normalized_source_title.clone())
+                        .unwrap_or_else(|| title.name.clone())
+                )
+            });
 
         let result: AppResult<DownloadGrabResult> = async {
             let variables = json!({
@@ -1290,10 +1300,12 @@ impl DownloadClient for WeaverDownloadClient {
                     );
 
                     Ok(DownloadGrabResult {
+    download_id: None,
                         job_id: job_id.to_string(),
                         client_id: None,
                         client_type: "weaver".to_string(),
                         info_hash: None,
+                        seed_goals: None,
                     })
                 }
                 Err(error)
@@ -1341,10 +1353,12 @@ impl DownloadClient for WeaverDownloadClient {
                         .await
                         .map_err(AppError::into_download_submit_unavailable)?;
                     Ok(DownloadGrabResult {
+    download_id: None,
                         job_id: compat_data.submit_nzb.id.to_string(),
                         client_id: None,
                         client_type: "weaver".to_string(),
                         info_hash: None,
+                        seed_goals: None,
                     })
                 }
                 Err(error) => Err(error.into_download_submit_unavailable()),
@@ -1719,10 +1733,17 @@ mod tests {
         SubmissionPayload, WeaverDownloadClient, WeaverQueueItem, map_weaver_outbound_error,
         weaver_item_to_queue_item,
     };
-    use scryer_application::{AppError, DownloadClient};
-    use scryer_domain::{DownloadClientConfig, DownloadQueueState};
+    use scryer_application::{
+        AppError, DownloadClient, DownloadClientAddRequest, DownloadSubmissionPurpose,
+        ResolvedDownloadArtifact,
+    };
+    use scryer_domain::{DownloadClientConfig, DownloadQueueState, MediaFacet, Title};
     use scryer_outbound_http::OutboundHttpError;
+    use std::sync::Arc;
     use std::time::Duration;
+    use tokio::sync::Semaphore;
+
+    use crate::downloads::staged_nzb_store::FileSystemStagedNzbStore;
 
     fn test_config(config_json: &str) -> DownloadClientConfig {
         DownloadClientConfig {
@@ -1739,6 +1760,161 @@ mod tests {
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }
+    }
+
+    fn test_add_request(download_id: &str) -> DownloadClientAddRequest {
+        let facet = MediaFacet::Movie;
+        DownloadClientAddRequest {
+            title: Title {
+                id: "title-1".to_string(),
+                name: "Test Title".to_string(),
+                library_id: scryer_domain::default_library_id_for_facet(&facet),
+                facet,
+                monitored: true,
+                tags: vec![],
+                canonical_tags: vec![],
+                external_ids: vec![],
+                root_folder_id: scryer_domain::root_folder_id_for_path("/data/movies"),
+                created_by: None,
+                created_at: Utc::now(),
+                year: None,
+                overview: None,
+                poster_url: None,
+                poster_source_url: None,
+                background_url: None,
+                background_source_url: None,
+                sort_title: None,
+                catalog_sort_key: String::new(),
+                slug: None,
+                imdb_id: None,
+                runtime_minutes: None,
+                popularity: None,
+                content_status: None,
+                language: None,
+                first_aired: None,
+                network: None,
+                studio: None,
+                country: None,
+                aliases: vec![],
+                tagged_aliases: vec![],
+                metadata_language: None,
+                metadata_fetched_at: None,
+                min_availability: None,
+                digital_release_date: None,
+                folder_path: None,
+            },
+            search_facet: None,
+            purpose: DownloadSubmissionPurpose::Standard,
+            download_id: Some(
+                scryer_domain::download_identity::DownloadId::from_wire(download_id)
+                    .expect("test token should be a wire DownloadId"),
+            ),
+            source_hint: Some("https://example.invalid/release.nzb".to_string()),
+            staged_nzb: None,
+            resolved_download_artifact: Some(ResolvedDownloadArtifact::Nzb {
+                bytes: b"<nzb></nzb>".to_vec(),
+                file_name: Some("Test Release.nzb".to_string()),
+                content_type: Some("application/x-nzb".to_string()),
+            }),
+            source_kind: None,
+            source_title: Some("Test Release".to_string()),
+            source_password: Some("archive-password".to_string()),
+            category: Some("movies".to_string()),
+            queue_priority: None,
+            download_directory: None,
+            release_title: None,
+            indexer_name: None,
+            indexer_id: None,
+            info_hash_hint: None,
+            seed_goal_ratio: None,
+            seed_goal_seconds: None,
+            tracker_min_seed_ratio: None,
+            tracker_min_seed_time_minutes: None,
+            season_pack_seed_ratio: None,
+            season_pack_seed_time_minutes: None,
+            is_recent: None,
+            season_pack: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn submit_nzb_payload_preserves_the_passed_scryer_download_id_attribute() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/release.nzb"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"<nzb></nzb>".to_vec()))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(header("authorization", "Bearer wvr_test"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": {
+                    "submitNzb": {
+                        "accepted": true,
+                        "status": "ACCEPTED",
+                        "jobId": 77,
+                        "errorCode": null,
+                        "message": null,
+                        "item": { "id": 77 }
+                    }
+                }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let download_id = "scryer-download:00000000-0000-4000-8000-000000000022";
+        let staged_nzb_dir = tempfile::tempdir().expect("staged nzb directory");
+        let staged_nzb_store = Arc::new(
+            FileSystemStagedNzbStore::new(staged_nzb_dir.path())
+                .await
+                .expect("staged nzb store"),
+        );
+        let client = WeaverDownloadClient::with_staged_nzb_store(
+            server.uri(),
+            Some("wvr_test".to_string()),
+            staged_nzb_store,
+            Arc::new(Semaphore::new(1)),
+        );
+        let mut request = test_add_request(download_id);
+        request.source_hint = Some(format!("{}/release.nzb", server.uri()));
+        let result = client
+            .submit_download(&request)
+            .await
+            .expect("submitNzb should succeed");
+        assert_eq!(result.job_id, "77");
+
+        let requests = server
+            .received_requests()
+            .await
+            .expect("submitNzb request should be recorded");
+        let request = requests
+            .iter()
+            .find(|request| request.url.path() == "/graphql")
+            .expect("submitNzb request");
+        let body = String::from_utf8_lossy(&request.body);
+        let expected_variables = json!({
+            "input": {
+                "nzbUpload": null,
+                "filename": "Test Release.nzb",
+                "password": "archive-password",
+                "category": "movies",
+                "attributes": [
+                    { "key": "*scryer_title_id", "value": "title-1" },
+                    { "key": "*scryer_facet", "value": "movie" },
+                    { "key": "*scryer_import_purpose", "value": "standard" },
+                    { "key": "*scryer_download_id", "value": download_id },
+                ],
+                "clientRequestId": download_id,
+            }
+        });
+        assert!(
+            body.contains(&expected_variables.to_string()),
+            "submitNzb request did not contain the exact expected input: {body}",
+        );
+        assert!(body.contains(r#"{"0":["variables.input.nzbUpload"]}"#));
     }
 
     #[tokio::test]
@@ -1955,6 +2131,7 @@ mod tests {
         let job = json!({
             "id": 42,
             "name": "Example Job",
+            "originalTitle": "Example.Release.1080p.WEB-DL-GROUP",
             "state": "FAILED",
             "error": "archive corrupt",
             "progressPercent": 25.0,
@@ -1978,6 +2155,7 @@ mod tests {
         let item = weaver_item_to_queue_item(&job);
 
         assert_eq!(item.state, DownloadQueueState::Failed);
+        assert_eq!(item.title_name, "Example.Release.1080p.WEB-DL-GROUP");
         assert_eq!(item.title_id.as_deref(), Some("title-1"));
         assert!(item.is_scryer_origin);
         assert_eq!(item.attention_reason.as_deref(), Some("archive corrupt"));
@@ -2007,6 +2185,7 @@ mod tests {
         let job: WeaverQueueItem = serde_json::from_value(job).expect("job should deserialize");
         let item = weaver_item_to_queue_item(&job);
 
+        assert_eq!(item.title_name, "Origin Fallback");
         assert_eq!(item.title_id.as_deref(), Some("title-77"));
         assert!(item.is_scryer_origin);
         assert_eq!(item.download_id, None);

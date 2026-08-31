@@ -7,6 +7,11 @@ pub const SEARCH_TVDB_MULTI_QUERY: &str =
 pub const GET_MOVIE_QUERY: &str = include_str!("metadata_gateway/get_movie.graphql");
 pub const GET_SERIES_QUERY: &str = include_str!("metadata_gateway/get_series.graphql");
 pub const METADATA_BULK_QUERY: &str = include_str!("metadata_gateway/metadata_bulk.graphql");
+pub const TITLES_QUERY: &str = include_str!("metadata_gateway/titles.graphql");
+pub const RESOLVE_TITLES_QUERY: &str = include_str!("metadata_gateway/resolve_titles.graphql");
+pub const SEARCH_TITLES_QUERY: &str = include_str!("metadata_gateway/search_titles.graphql");
+pub const SEARCH_TITLES_BATCH_QUERY: &str =
+    include_str!("metadata_gateway/search_titles_batch.graphql");
 pub const DISCOVER_PUBLIC_FEED_QUERY: &str =
     include_str!("metadata_gateway/discover_public_feed.graphql");
 pub const TITLE_RECOMMENDATIONS_QUERY: &str =

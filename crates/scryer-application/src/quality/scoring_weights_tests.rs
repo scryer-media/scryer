@@ -42,10 +42,11 @@ fn balanced_dv_hdr_matches_legacy() {
 }
 
 #[test]
-fn balanced_features_match_current_defaults() {
+fn balanced_remux_weights_favor_only_explicit_preference() {
     let w = build_weights(&ScoringPersona::Balanced, &ScoringOverrides::default());
-    assert_eq!(w.remux_bonus, 0);
-    assert_eq!(w.remux_missing_penalty, 0);
+    assert_eq!(w.remux_bonus, 250);
+    assert_eq!(w.remux_missing_penalty, -75);
+    assert_eq!(w.remux_not_preferred_penalty, -400);
     assert_eq!(w.atmos_bonus, 0);
     assert_eq!(w.atmos_missing_penalty, 0);
     assert_eq!(w.dual_audio_bonus, 150);
@@ -72,17 +73,33 @@ fn guide_fact_penalties_follow_persona_scale() {
 }
 
 #[test]
-fn balanced_size_curve_matches_legacy() {
+fn balanced_size_curve_penalizes_oversized_releases() {
     let w = build_weights(&ScoringPersona::Balanced, &ScoringOverrides::default());
-    assert_eq!(w.size_excessive, -300);
-    assert_eq!(w.size_massive, 550);
-    assert_eq!(w.size_very_large, 380);
-    assert_eq!(w.size_large, 240);
+    assert_eq!(w.size_excessive, -1200);
+    assert_eq!(w.size_massive, -700);
+    assert_eq!(w.size_very_large, -350);
+    assert_eq!(w.size_large, -100);
     assert_eq!(w.size_expected, 120);
     assert_eq!(w.size_slightly_small, 0);
-    assert_eq!(w.size_small, -700);
-    assert_eq!(w.size_very_small, -1300);
-    assert_eq!(w.size_tiny, -2500);
+    assert_eq!(w.size_small, -125);
+    assert_eq!(w.size_very_small, -400);
+    assert_eq!(w.size_tiny, -800);
+    assert_eq!(w.movie_2160p_bitrate_mbps, 32.0);
+    assert_eq!(w.remux_size_factor_when_not_preferred, 1.0);
+}
+
+#[test]
+fn other_personas_retain_the_established_remux_size_model() {
+    for persona in [
+        ScoringPersona::Audiophile,
+        ScoringPersona::Efficient,
+        ScoringPersona::Compatible,
+    ] {
+        let w = build_weights(&persona, &ScoringOverrides::default());
+        assert_eq!(w.remux_not_preferred_penalty, 0);
+        assert_eq!(w.movie_2160p_bitrate_mbps, 57.0);
+        assert_eq!(w.remux_size_factor_when_not_preferred, 1.45);
+    }
 }
 
 // ── Persona defaults are distinct ─────────────────────────────────────────
@@ -162,8 +179,8 @@ fn override_compact_off_on_efficient_uses_normal_curve() {
         },
     );
     // Should use normal curve now
-    assert_eq!(w.size_excessive, -300);
-    assert_eq!(w.size_massive, 550);
+    assert_eq!(w.size_excessive, -1200);
+    assert_eq!(w.size_massive, -700);
     assert_eq!(w.size_slightly_small, 0);
 }
 

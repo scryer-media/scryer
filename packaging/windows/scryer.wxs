@@ -41,6 +41,12 @@
               Type="integer"
               Value="1"
               KeyPath="yes" />
+          <RegistryValue
+              Root="HKLM"
+              Key="Software\Scryer Media\Scryer"
+              Name="DistributionOwner"
+              Type="string"
+              Value="$(var.DistributionOwner)" />
         </Component>
       </Directory>
     </StandardDirectory>
@@ -66,7 +72,10 @@
     </InstallExecuteSequence>
 
     <!-- The tray owns only a per-user Run value and its child server. User profile data and
-         Credential Manager entries intentionally remain after uninstall. -->
+         Credential Manager entries intentionally remain after uninstall. A major upgrade
+         removes the old product as part of installing the new one; UPGRADINGPRODUCTCODE is
+         set only in that removal, so the startup preference survives an upgrade and is
+         cleared only by a real uninstall. -->
     <CustomAction
         Id="StopTrayBeforeRemoval"
         FileRef="ScryerTrayExe"
@@ -83,7 +92,7 @@
         Impersonate="yes" />
     <InstallExecuteSequence>
       <Custom Action="StopTrayBeforeRemoval" Before="RemoveFiles" Condition="REMOVE~=&quot;ALL&quot;" />
-      <Custom Action="RemoveTrayStartupBeforeRemoval" Before="RemoveFiles" Condition="REMOVE~=&quot;ALL&quot;" />
+      <Custom Action="RemoveTrayStartupBeforeRemoval" Before="RemoveFiles" Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
     </InstallExecuteSequence>
   </Package>
 </Wix>

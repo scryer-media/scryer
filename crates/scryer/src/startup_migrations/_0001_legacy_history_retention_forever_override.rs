@@ -7,17 +7,15 @@ use scryer_infrastructure_configuration::settings::settings_store::SettingsStore
 
 pub(crate) async fn clear_legacy_history_retention_forever_override(
     settings_store: Arc<SettingsStore>,
-) {
+) -> Result<(), String> {
     let keep_forever = settings_store
         .get_setting_with_defaults(SETTINGS_SCOPE_SYSTEM, HISTORY_KEEP_FOREVER_KEY, None)
         .await
-        .ok()
-        .flatten();
+        .map_err(|error| error.to_string())?;
     let retention_days = settings_store
         .get_setting_with_defaults(SETTINGS_SCOPE_SYSTEM, HISTORY_RETENTION_DAYS_KEY, None)
         .await
-        .ok()
-        .flatten();
+        .map_err(|error| error.to_string())?;
 
     let should_clear = keep_forever.as_ref().is_some_and(|record| {
         record.source.as_deref() == Some("migration")
@@ -28,20 +26,15 @@ pub(crate) async fn clear_legacy_history_retention_forever_override(
     });
 
     if !should_clear {
-        return;
+        return Ok(());
     }
 
-    if let Err(error) = settings_store
+    settings_store
         .delete_setting_value(SETTINGS_SCOPE_SYSTEM, HISTORY_KEEP_FOREVER_KEY, None)
         .await
-    {
-        tracing::warn!(
-            error = %error,
-            "failed to clear legacy history retention override"
-        );
-    } else {
-        tracing::info!("cleared legacy history retention forever override");
-    }
+        .map_err(|error| error.to_string())?;
+    tracing::info!("cleared legacy history retention forever override");
+    Ok(())
 }
 
 #[cfg(test)]
@@ -84,7 +77,9 @@ mod tests {
             .await
             .expect("seed legacy migration override");
 
-        clear_legacy_history_retention_forever_override(store.clone()).await;
+        clear_legacy_history_retention_forever_override(store.clone())
+            .await
+            .expect("migration should succeed");
 
         let keep_forever = store
             .get_setting_with_defaults(SETTINGS_SCOPE_SYSTEM, HISTORY_KEEP_FOREVER_KEY, None)
@@ -122,7 +117,9 @@ mod tests {
             .await
             .expect("seed legacy migration override");
 
-        clear_legacy_history_retention_forever_override(store.clone()).await;
+        clear_legacy_history_retention_forever_override(store.clone())
+            .await
+            .expect("migration should succeed");
 
         let keep_forever = store
             .get_setting_with_defaults(SETTINGS_SCOPE_SYSTEM, HISTORY_KEEP_FOREVER_KEY, None)

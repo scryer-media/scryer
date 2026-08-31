@@ -5,15 +5,15 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { ChevronDown, Search, X } from "lucide-react";
 import {
   SUBTITLE_LANGUAGES,
-  getSubtitleLanguage,
   type SubtitleLanguage,
 } from "@/lib/constants/subtitle-languages";
 import { useTranslate } from "@/lib/context/translate-context";
 import { cn } from "@/lib/utils";
 
-type SubtitleLanguagePickerProps = {
+export type SubtitleLanguagePickerProps = {
   value: string[];
   onChange: (codes: string[]) => void;
+  languageOptions?: SubtitleLanguage[];
   className?: string;
   buttonClassName?: string;
   compact?: boolean;
@@ -37,6 +37,7 @@ function matchesFilter(lang: SubtitleLanguage, filter: string): boolean {
 export const SubtitleLanguagePicker = React.memo(function SubtitleLanguagePicker({
   value,
   onChange,
+  languageOptions = SUBTITLE_LANGUAGES,
   className,
   buttonClassName,
   compact = false,
@@ -65,21 +66,25 @@ export const SubtitleLanguagePicker = React.memo(function SubtitleLanguagePicker
   }, [disabled]);
 
   const selectedSet = React.useMemo(() => new Set<string>(value), [value]);
+  const languageByCode = React.useMemo(
+    () => new Map(languageOptions.map((language) => [language.code, language])),
+    [languageOptions],
+  );
   const selectedLabel = React.useMemo(() => {
     if (value.length === 0) {
       return t("settings.sub.languagePickerSelect");
     }
     return value
-      .map((code) => getSubtitleLanguage(code)?.name ?? code)
+      .map((code) => languageByCode.get(code)?.name ?? code)
       .join(", ");
-  }, [t, value]);
+  }, [languageByCode, t, value]);
 
   const filteredLanguages = React.useMemo(
     () =>
       filter.trim()
-        ? SUBTITLE_LANGUAGES.filter((lang) => matchesFilter(lang, filter.trim()))
-        : SUBTITLE_LANGUAGES,
-    [filter],
+        ? languageOptions.filter((lang) => matchesFilter(lang, filter.trim()))
+        : languageOptions,
+    [filter, languageOptions],
   );
 
   React.useEffect(() => {
@@ -232,7 +237,7 @@ export const SubtitleLanguagePicker = React.memo(function SubtitleLanguagePicker
               </span>
             ) : (
               value.map((code) => {
-                const lang = getSubtitleLanguage(code);
+                const lang = languageByCode.get(code);
                 return (
                   <span
                     key={code}

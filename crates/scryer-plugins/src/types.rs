@@ -32,6 +32,7 @@ pub(crate) fn config_field_to_domain(field: &ConfigFieldDef) -> scryer_domain::C
             .map(|option| scryer_domain::ConfigFieldOption {
                 value: option.value.clone(),
                 label: option.label.clone(),
+                config_overrides: option.config_overrides.clone(),
             })
             .collect(),
         help_text: field.help_text.clone(),

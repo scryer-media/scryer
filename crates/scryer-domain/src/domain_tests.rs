@@ -9,6 +9,7 @@ fn media_server_connection_redacts_api_key_from_debug_and_serialization() {
         provider: MediaServerProvider::Emby,
         display_name: "Emby".into(),
         base_url: "http://emby.test/emby".into(),
+        external_url: None,
         enabled: true,
         login_enabled: true,
         linking_enabled: true,

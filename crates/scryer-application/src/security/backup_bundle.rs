@@ -426,6 +426,10 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
         table: "_sqlx_migrations",
         classification: BackupTableClassification::Ignore,
     },
+    BackupTableCatalogEntry {
+        table: "application_migrations",
+        classification: BackupTableClassification::Export,
+    },
     // Legacy: no current migration creates this table, but installs that
     // upgraded through the pre-0122 schema may still carry it. The entry is
     // deliberately retained — an `Ignore` entry for an absent table costs
@@ -623,6 +627,14 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
         classification: BackupTableClassification::Export,
     },
     BackupTableCatalogEntry {
+        table: "download_client_bindings",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
+        table: "downloads",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
         table: "download_import_artifacts",
         classification: BackupTableClassification::Export,
     },
@@ -687,8 +699,32 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
         classification: BackupTableClassification::Export,
     },
     BackupTableCatalogEntry {
+        table: "indexer_errors",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
+        table: "indexer_search_candidates",
+        classification: BackupTableClassification::ResetOnRestore,
+    },
+    BackupTableCatalogEntry {
+        table: "indexer_search_candidate_source_values",
+        classification: BackupTableClassification::ResetOnRestore,
+    },
+    BackupTableCatalogEntry {
+        table: "indexer_search_candidate_sources",
+        classification: BackupTableClassification::ResetOnRestore,
+    },
+    BackupTableCatalogEntry {
+        table: "indexer_search_run_candidate_sources",
+        classification: BackupTableClassification::ResetOnRestore,
+    },
+    BackupTableCatalogEntry {
         table: "indexer_search_learning",
         classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
+        table: "indexer_search_runs",
+        classification: BackupTableClassification::ResetOnRestore,
     },
     BackupTableCatalogEntry {
         table: "indexer_system_backoffs",
@@ -759,6 +795,10 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
         classification: BackupTableClassification::Export,
     },
     BackupTableCatalogEntry {
+        table: "media_server_playback_items",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
         table: "media_server_default_library_grants",
         classification: BackupTableClassification::Export,
     },
@@ -796,6 +836,18 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
     },
     BackupTableCatalogEntry {
         table: "notification_subscriptions",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
+        table: "api_keys",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
+        table: "oauth_client_redirect_uris",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
+        table: "oauth_client_registrations",
         classification: BackupTableClassification::Export,
     },
     BackupTableCatalogEntry {
@@ -1815,6 +1867,7 @@ mod tests {
     #[test]
     fn backup_table_catalog_preserves_oauth_grants_but_not_codes() {
         for (table, expected) in [
+            ("api_keys", BackupTableClassification::Export),
             (
                 "oauth_authorization_codes",
                 BackupTableClassification::Ignore,
@@ -1869,6 +1922,15 @@ mod tests {
                 entry.table
             );
         }
+    }
+
+    #[test]
+    fn backup_table_catalog_preserves_application_migration_successes() {
+        let entry = BACKUP_TABLE_CATALOG
+            .iter()
+            .find(|entry| entry.table == "application_migrations")
+            .expect("application migration ledger should be classified");
+        assert_eq!(entry.classification, BackupTableClassification::Export);
     }
 
     #[test]
@@ -2290,6 +2352,8 @@ mod tests {
                         | "title_images"
                         | "title_image_variants"
                         | "title_image_blobs"
+                        | "indexer_search_candidates"
+                        | "indexer_search_runs"
                 )
         }) {
             assert_eq!(

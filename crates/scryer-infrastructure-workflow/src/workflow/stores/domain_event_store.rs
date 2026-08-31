@@ -198,10 +198,12 @@ mod title_history_filter_tests {
     use std::sync::Arc;
 
     use scryer_domain::{
-        DomainEventActorKind, DomainEventPayload, DomainEventStream, DownloadIgnoredEventData,
-        MediaFacet,
+        DomainEventActorKind, DomainEventPayload, DomainEventStream, DomainExternalIds,
+        DownloadIgnoredEventData, ImportRejectedEventData, ImportStatus, MediaFacet,
+        MediaFileDeletedEventData, MediaFileDeletedReason, ReleaseGrabbedEventData,
+        TitleContextSnapshot,
     };
-    use sqlx::sqlite::SqlitePoolOptions;
+    use sqlx::{Row, sqlite::SqlitePoolOptions};
 
     use super::*;
 
@@ -227,7 +229,10 @@ mod title_history_filter_tests {
                  stream_kind TEXT NOT NULL,
                  stream_id TEXT,
                  event_type TEXT NOT NULL,
-                 payload_json TEXT NOT NULL
+                 payload_json BLOB NOT NULL,
+                 import_status TEXT,
+                 media_file_delete_reason TEXT,
+                 download_id TEXT
              )",
         )
         .execute(&pool)
@@ -263,6 +268,23 @@ mod title_history_filter_tests {
                 source_title: Some("Some Release".to_string()),
             }),
         }
+    }
+
+    fn title_snapshot() -> TitleContextSnapshot {
+        TitleContextSnapshot {
+            title_name: "Projection Test".to_string(),
+            facet: MediaFacet::Movie,
+            external_ids: DomainExternalIds::default(),
+            poster_url: None,
+            year: None,
+        }
+    }
+
+    fn event_with_payload(event_id: &str, payload: DomainEventPayload) -> NewDomainEvent {
+        let mut event = download_ignored_event();
+        event.event_id = event_id.to_string();
+        event.payload = payload;
+        event
     }
 
     /// Filtering the history page by "download ignored" used to push a literal
@@ -329,5 +351,73 @@ mod title_history_filter_tests {
             .await
             .expect("filtered page should load");
         assert!(filtered.is_empty());
+    }
+
+    #[tokio::test]
+    async fn append_populates_query_projections() {
+        let store = store().await;
+        store
+            .append_many(vec![
+                event_with_payload(
+                    "import-rejected",
+                    DomainEventPayload::ImportRejected(ImportRejectedEventData {
+                        title: None,
+                        status: ImportStatus::Failed,
+                        import_id: None,
+                        source_system: None,
+                        source_ref: None,
+                        source_title: None,
+                        source_path: None,
+                        dest_path: None,
+                        quality: None,
+                        reason: None,
+                        skip_reason: None,
+                        episode_ids: Vec::new(),
+                    }),
+                ),
+                event_with_payload(
+                    "media-file-deleted",
+                    DomainEventPayload::MediaFileDeleted(MediaFileDeletedEventData {
+                        title: title_snapshot(),
+                        media_updates: Vec::new(),
+                        file_id: None,
+                        reason: MediaFileDeletedReason::UpgradeCleanup,
+                        episode_ids: Vec::new(),
+                    }),
+                ),
+                event_with_payload(
+                    "release-grabbed",
+                    DomainEventPayload::ReleaseGrabbed(ReleaseGrabbedEventData {
+                        title: title_snapshot(),
+                        source_title: None,
+                        source_hint: None,
+                        source_provider: None,
+                        download_id: Some("download-1".to_string()),
+                        episode_ids: Vec::new(),
+                    }),
+                ),
+            ])
+            .await
+            .expect("events should append");
+
+        let StoreDatastore::Sqlite { pool, .. } = &store.datastore else {
+            unreachable!("test store is sqlite")
+        };
+        let rows = sqlx::query(
+            "SELECT event_id, import_status, media_file_delete_reason, download_id
+               FROM domain_events
+              ORDER BY event_id",
+        )
+        .fetch_all(pool)
+        .await
+        .expect("projection rows should load");
+
+        assert_eq!(rows[0].get::<String, _>("event_id"), "import-rejected");
+        assert_eq!(rows[0].get::<String, _>("import_status"), "failed");
+        assert_eq!(
+            rows[1].get::<String, _>("media_file_delete_reason"),
+            "upgrade_cleanup"
+        );
+        assert_eq!(rows[2].get::<String, _>("download_id"), "download-1");
     }
 }

@@ -1695,6 +1695,7 @@ async fn hydrate_library_scan_title_works(
         .map(|reservation| crate::catalog_workflow::HydrationTarget {
             title: reservation.work.title.clone(),
             requested_tvdb_id: None,
+            requested_movie_ref: None,
             sync_wanted_after_completion: false,
             source: crate::catalog_workflow::HydrationSource::LibraryScanFull,
         })
@@ -2389,6 +2390,7 @@ struct QueuedMatchCandidate {
 struct ScanMatchWorkerState {
     existing_titles: Vec<Title>,
     existing_titles_by_name: TitleNameIndex,
+    existing_titles_by_smg_id: HashMap<String, usize>,
     existing_titles_by_tvdb_id: HashMap<String, usize>,
     existing_titles_by_imdb_id: HashMap<String, usize>,
     existing_titles_by_tmdb_id: HashMap<String, usize>,
@@ -2419,13 +2421,17 @@ async fn run_scan_match_worker(
                 "library scan match worker failed to load existing titles: {error}"
             ))
         })?;
-    let (by_name, by_tvdb, by_imdb, by_tmdb) = match ctx.kind {
+    let (by_name, by_smg, by_tvdb, by_imdb, by_tmdb) = match ctx.kind {
         LibraryScanPipelineKind::Movie => build_movie_title_indexes(&existing_titles),
-        LibraryScanPipelineKind::Series => build_series_title_indexes(&existing_titles),
+        LibraryScanPipelineKind::Series => {
+            let (by_name, by_tvdb, by_imdb, by_tmdb) = build_series_title_indexes(&existing_titles);
+            (by_name, HashMap::new(), by_tvdb, by_imdb, by_tmdb)
+        }
     };
     let mut state = ScanMatchWorkerState {
         existing_titles,
         existing_titles_by_name: by_name,
+        existing_titles_by_smg_id: by_smg,
         existing_titles_by_tvdb_id: by_tvdb,
         existing_titles_by_imdb_id: by_imdb,
         existing_titles_by_tmdb_id: by_tmdb,
@@ -2976,6 +2982,7 @@ async fn resolve_ready_candidate_burst(
                     &mut sink,
                     &mut state.existing_titles,
                     &mut state.existing_titles_by_name,
+                    &mut state.existing_titles_by_smg_id,
                     &mut state.existing_titles_by_tvdb_id,
                     &mut state.existing_titles_by_imdb_id,
                     &mut state.existing_titles_by_tmdb_id,

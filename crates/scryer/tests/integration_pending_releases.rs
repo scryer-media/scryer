@@ -6,10 +6,10 @@ use chrono::{Duration, Utc};
 use common::TestContext;
 use scryer_application::{
     AcquisitionScopeCompleteTransition, AcquisitionScopeStateRepository, AcquisitionScopeStatus,
-    AcquisitionStateRepository, AppError, DownloadSourceIdentity, DownloadSourceKind,
-    DownloadSubmission, DownloadSubmissionPurpose, DownloadSubmissionRepository, LibraryRepository,
-    LibraryRootDraft, PendingReleaseRepository, PendingReleaseStatus, SubmissionScope,
-    SuccessfulGrabCommit, TitleRepository, UserRepository,
+    AcquisitionStateRepository, AppError, ClientJobLocator, DownloadSourceKind, DownloadSubmission,
+    DownloadSubmissionPurpose, DownloadSubmissionRepository, LibraryRepository, LibraryRootDraft,
+    PendingReleaseRepository, PendingReleaseStatus, SubmissionScope, SuccessfulGrabCommit,
+    TitleRepository, UserRepository,
 };
 use scryer_domain::{
     Id, Library, LibraryGrant, LibraryPermission, LibraryPermissionMask, MediaFacet, Title, User,
@@ -123,7 +123,14 @@ async fn seed_pending_release(
 ) -> scryer_application::PendingRelease {
     let now = Utc::now();
     let delay_until = now + Duration::minutes(delay_minutes);
-    let pr = scryer_application::PendingRelease {
+    let initial_status = match status {
+        PendingReleaseStatus::Grabbed
+        | PendingReleaseStatus::Superseded
+        | PendingReleaseStatus::Expired
+        | PendingReleaseStatus::Dismissed => PendingReleaseStatus::Waiting,
+        active => active,
+    };
+    let mut pr = scryer_application::PendingRelease {
         id: scryer_domain::Id::new().0,
         wanted_item_id: wanted_item_id.to_string(),
         title_id: title_id.to_string(),
@@ -137,22 +144,37 @@ async fn seed_pending_release(
         indexer_id: None,
         release_guid: Some(format!("guid-{}", scryer_domain::Id::new().0)),
         added_at: now.to_rfc3339(),
+        last_observed_at: now.to_rfc3339(),
         delay_until: delay_until.to_rfc3339(),
-        status,
+        status: initial_status,
         grabbed_at: None,
         source_password: None,
         published_at: None,
         info_hash: None,
         seed_minimums: Default::default(),
         seeders: None,
+        release_identity: String::new(),
+        coverage_identity: String::new(),
+        role: scryer_application::PendingReleaseRole::Primary,
+        last_decision_code: None,
+        release_age_unknown: false,
     };
-    scryer_infrastructure_library::media::libraries::state_store::PendingReleaseStore::new(
-        ctx.db.datastore(),
-        ctx.db.encryption_key_state(),
-    )
-    .insert_pending_release(&pr)
-    .await
-    .expect("seed pending release");
+    let store =
+        scryer_infrastructure_library::media::libraries::state_store::PendingReleaseStore::new(
+            ctx.db.datastore(),
+            ctx.db.encryption_key_state(),
+        );
+    pr.id = store
+        .insert_pending_release(&pr)
+        .await
+        .expect("seed pending release");
+    if initial_status != status {
+        store
+            .update_pending_release_status(&pr.id, status, None)
+            .await
+            .expect("transition seeded pending release");
+        pr.status = status;
+    }
     pr
 }
 
@@ -317,6 +339,7 @@ async fn pending_release_roundtrips_indexer_provenance() {
         indexer_id: Some("stable-indexer-id".to_string()),
         release_guid: Some("indexed-guid".to_string()),
         added_at: now.to_rfc3339(),
+        last_observed_at: now.to_rfc3339(),
         delay_until: (now + Duration::minutes(5)).to_rfc3339(),
         status: PendingReleaseStatus::Waiting,
         grabbed_at: None,
@@ -325,12 +348,26 @@ async fn pending_release_roundtrips_indexer_provenance() {
         info_hash: None,
         seed_minimums: Default::default(),
         seeders: None,
+        release_identity: String::new(),
+        coverage_identity: String::new(),
+        role: scryer_application::PendingReleaseRole::Primary,
+        last_decision_code: None,
+        release_age_unknown: false,
+    };
+    let observation = scryer_application::PendingReleaseObservation {
+        eligible_at: release.delay_until.clone(),
+        last_observed_at: now.to_rfc3339(),
+        latest_decision_code: Some("test_pending_reason".to_string()),
+        release_identity: "guid:stable-indexer-id:indexed-guid".to_string(),
+        coverage_identity: format!("scope:{}", release.wanted_item_id),
+        role: scryer_application::PendingReleaseRole::Fallback,
+        release_age_unknown: true,
     };
     scryer_infrastructure_library::media::libraries::state_store::PendingReleaseStore::new(
         ctx.db.datastore(),
         ctx.db.encryption_key_state(),
     )
-    .insert_pending_release(&release)
+    .insert_pending_release_observation(&release, &observation)
     .await
     .expect("pending release should insert");
 
@@ -342,6 +379,63 @@ async fn pending_release_roundtrips_indexer_provenance() {
         .expect("pending release should exist");
     assert_eq!(loaded.indexer_id.as_deref(), Some("stable-indexer-id"));
     assert_eq!(loaded.indexer_source.as_deref(), Some("Renamed Indexer"));
+    assert_eq!(loaded.release_identity, observation.release_identity);
+    assert_eq!(loaded.coverage_identity, observation.coverage_identity);
+    assert_eq!(
+        loaded.role,
+        scryer_application::PendingReleaseRole::Fallback
+    );
+    assert_eq!(
+        loaded.last_decision_code.as_deref(),
+        Some("test_pending_reason")
+    );
+    assert!(loaded.release_age_unknown);
+    assert_eq!(loaded.last_observed_at, observation.last_observed_at);
+
+    let reported_publication_time = (now - Duration::minutes(30)).to_rfc3339();
+    let mut hydrated_release = release.clone();
+    hydrated_release.published_at = Some(reported_publication_time.clone());
+    let hydrated_observation = scryer_application::PendingReleaseObservation {
+        release_age_unknown: false,
+        last_observed_at: (now + Duration::minutes(1)).to_rfc3339(),
+        ..observation.clone()
+    };
+    let store =
+        scryer_infrastructure_library::media::libraries::state_store::PendingReleaseStore::new(
+            ctx.db.datastore(),
+            ctx.db.encryption_key_state(),
+        );
+    store
+        .insert_pending_release_observation(&hydrated_release, &hydrated_observation)
+        .await
+        .expect("valid publication timestamp should hydrate pending release");
+
+    let mut missing_again = hydrated_release;
+    missing_again.published_at = None;
+    let missing_observation = scryer_application::PendingReleaseObservation {
+        release_age_unknown: true,
+        last_observed_at: (now + Duration::minutes(2)).to_rfc3339(),
+        ..hydrated_observation
+    };
+    store
+        .insert_pending_release_observation(&missing_again, &missing_observation)
+        .await
+        .expect("later observation without publication timestamp should upsert");
+
+    let loaded = ctx
+        .library_state
+        .get_pending_release(&release.id)
+        .await
+        .expect("pending release should load after repeated observation")
+        .expect("pending release should remain active");
+    assert_eq!(
+        loaded.published_at.as_deref(),
+        Some(reported_publication_time.as_str())
+    );
+    assert!(
+        !loaded.release_age_unknown,
+        "a later incomplete observation must not erase a known publication time"
+    );
 }
 
 #[tokio::test]
@@ -608,7 +702,6 @@ async fn commit_successful_grab_supersedes_waiting_siblings_but_keeps_saved_resu
     })
     .to_string();
     let acquisition_store = AcquisitionStore::new(ctx.db.datastore());
-    let download_submission_store = DownloadSubmissionStore::new(ctx.db.datastore());
 
     acquisition_store
         .commit_successful_grab(&SuccessfulGrabCommit {
@@ -616,23 +709,6 @@ async fn commit_successful_grab_supersedes_waiting_siblings_but_keeps_saved_resu
             covered_wanted_item_ids: Vec::new(),
             grabbed_release: grabbed_release.clone(),
             last_search_at: Some(grabbed_at.clone()),
-            download_submission: DownloadSubmission {
-                title_id: wi.title_id.clone(),
-                facet: "movie".to_string(),
-                download_client_id: None,
-                download_client_type: "nzbget".to_string(),
-                download_client_item_id: "job-1".to_string(),
-                source_hint: None,
-                source_provider_id: None,
-                source_provider_name: None,
-                source_kind: None,
-                source_title: Some("Best.Release.1080p.WEB-DL".to_string()),
-                release_size_bytes: None,
-                request_signature: None,
-                purpose: DownloadSubmissionPurpose::Standard,
-                scope: SubmissionScope::Title,
-            },
-            download_submission_identity: None,
             grabbed_pending_release_id: None,
             grabbed_at: Some(grabbed_at.clone()),
         })
@@ -653,17 +729,6 @@ async fn commit_successful_grab_supersedes_waiting_siblings_but_keeps_saved_resu
     assert_eq!(
         wanted.grabbed_release.as_deref(),
         Some(grabbed_release.as_str())
-    );
-
-    let submission = download_submission_store
-        .find_by_client_item_id(&DownloadSourceIdentity::new(None, "nzbget", "job-1"))
-        .await
-        .expect("find submission")
-        .expect("submission exists");
-    assert_eq!(submission.title_id, wi.title_id);
-    assert_eq!(
-        submission.source_title.as_deref(),
-        Some("Best.Release.1080p.WEB-DL")
     );
 
     assert_eq!(
@@ -732,23 +797,6 @@ async fn commit_successful_grab_marks_selected_pending_release_grabbed() {
             })
             .to_string(),
             last_search_at: Some(grabbed_at.clone()),
-            download_submission: DownloadSubmission {
-                title_id: wi.title_id.clone(),
-                facet: "movie".to_string(),
-                download_client_id: None,
-                download_client_type: "nzbget".to_string(),
-                download_client_item_id: "job-2".to_string(),
-                source_hint: None,
-                source_provider_id: None,
-                source_provider_name: None,
-                source_kind: None,
-                source_title: Some(claimed.release_title.clone()),
-                release_size_bytes: None,
-                request_signature: None,
-                purpose: DownloadSubmissionPurpose::Standard,
-                scope: SubmissionScope::Title,
-            },
-            download_submission_identity: None,
             grabbed_pending_release_id: Some(claimed.id.clone()),
             grabbed_at: Some(grabbed_at.clone()),
         })
@@ -784,6 +832,7 @@ async fn download_submission_roundtrips_episode_scope() {
 
     workflow_store
         .record_submission(DownloadSubmission {
+            download_id: scryer_domain::download_identity::DownloadId::new(),
             title_id: "title-episode-scope".to_string(),
             facet: "series".to_string(),
             download_client_id: None,
@@ -794,6 +843,7 @@ async fn download_submission_roundtrips_episode_scope() {
             source_provider_name: None,
             source_kind: Some(DownloadSourceKind::NzbUrl),
             source_title: Some("Episode.Scope.S01E01.1080p.WEB-DL".to_string()),
+            info_hash: None,
             release_size_bytes: None,
             request_signature: Some("episode-scope-signature".to_string()),
             purpose: DownloadSubmissionPurpose::Standard,
@@ -813,11 +863,7 @@ async fn download_submission_roundtrips_episode_scope() {
     .expect("load raw submission row");
 
     let submission = workflow_store
-        .find_by_client_item_id(&DownloadSourceIdentity::new(
-            None,
-            "nzbget",
-            "job-episode-scope",
-        ))
+        .find_by_client_item_id(&ClientJobLocator::new(None, "nzbget", "job-episode-scope"))
         .await
         .expect("find submission")
         .expect("submission exists");
@@ -852,6 +898,15 @@ async fn download_submission_legacy_rows_without_episode_id_still_load() {
     let ctx = TestContext::new().await;
     seed_title(&ctx, "title-legacy-scope").await;
     let workflow_store = DownloadSubmissionStore::new(ctx.db.datastore());
+    query(
+        "INSERT INTO downloads (id, origin, created_at)
+         VALUES (?, 'scryer_submission', ?)",
+    )
+    .bind("00000000-0000-4000-8000-000000000031")
+    .bind(chrono::Utc::now())
+    .execute(ctx.db.pool())
+    .await
+    .expect("insert canonical parent for legacy submission row");
 
     query(
         "INSERT INTO download_submissions
@@ -859,7 +914,7 @@ async fn download_submission_legacy_rows_without_episode_id_still_load() {
           source_hint, source_kind, request_signature, collection_id)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
-    .bind("submission-legacy")
+    .bind("00000000-0000-4000-8000-000000000031")
     .bind("title-legacy-scope")
     .bind("series")
     .bind("nzbget")
@@ -874,11 +929,7 @@ async fn download_submission_legacy_rows_without_episode_id_still_load() {
     .expect("insert legacy submission row");
 
     let submission = workflow_store
-        .find_by_client_item_id(&DownloadSourceIdentity::new(
-            None,
-            "nzbget",
-            "job-legacy-scope",
-        ))
+        .find_by_client_item_id(&ClientJobLocator::new(None, "nzbget", "job-legacy-scope"))
         .await
         .expect("find legacy submission")
         .expect("legacy submission exists");
@@ -1217,7 +1268,7 @@ async fn process_expired_marks_expired_when_wanted_item_gone() {
 }
 
 #[tokio::test]
-async fn process_expired_supersedes_when_already_grabbed() {
+async fn process_expired_keeps_upgrade_candidate_when_already_grabbed() {
     let ctx = TestContext::new().await;
     let app = ctx.app.clone();
 
@@ -1244,12 +1295,171 @@ async fn process_expired_supersedes_when_already_grabbed() {
         .expect("process");
     assert_eq!(count, 0);
 
-    // PR should be superseded (wanted item already grabbed)
+    // A successful grab does not retire an unresolved candidate here. It may
+    // still be a higher-quality upgrade after fresh ranking.
     let fetched = ctx
         .library_state
         .get_pending_release(&pr.id)
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(fetched.status, PendingReleaseStatus::Superseded);
+    assert_eq!(fetched.status, PendingReleaseStatus::Waiting);
+}
+
+#[tokio::test]
+async fn late_timestamp_hydration_reactivates_unknown_review_row() {
+    let ctx = TestContext::new().await;
+    seed_title(&ctx, "title-late-timestamp").await;
+    let wanted =
+        seed_wanted_item(&ctx, "title-late-timestamp", AcquisitionScopeStatus::Wanted).await;
+    let original = seed_pending_release(
+        &ctx,
+        &wanted.id,
+        "title-late-timestamp",
+        100,
+        5,
+        PendingReleaseStatus::NeedsReview,
+    )
+    .await;
+
+    let mut observed = original.clone();
+    observed.id = Id::new().0;
+    observed.status = PendingReleaseStatus::Waiting;
+    observed.release_guid = Some("late-observed-guid".to_string());
+    observed.published_at = Some(Utc::now().to_rfc3339());
+    observed.last_observed_at = Utc::now().to_rfc3339();
+    let observation = scryer_application::PendingReleaseObservation::derived(
+        &observed,
+        scryer_application::PendingReleaseRole::Primary,
+    );
+
+    let persisted_id = ctx
+        .library_state
+        .insert_pending_release_observation(&observed, &observation)
+        .await
+        .expect("hydrate late timestamp");
+    assert_eq!(persisted_id, original.id);
+
+    let hydrated = ctx
+        .library_state
+        .get_pending_release(&original.id)
+        .await
+        .expect("load hydrated row")
+        .expect("hydrated row exists");
+    assert_eq!(hydrated.status, PendingReleaseStatus::Waiting);
+    assert_eq!(hydrated.added_at, original.added_at);
+    assert_eq!(hydrated.published_at, observed.published_at);
+    assert!(!hydrated.release_age_unknown);
+}
+
+#[tokio::test]
+async fn rediscovery_recomputes_unknown_age_from_the_current_eligibility_gate() {
+    let ctx = TestContext::new().await;
+    seed_title(&ctx, "title-profile-gate").await;
+    let wanted = seed_wanted_item(&ctx, "title-profile-gate", AcquisitionScopeStatus::Wanted).await;
+    let original = seed_pending_release(
+        &ctx,
+        &wanted.id,
+        "title-profile-gate",
+        100,
+        5,
+        PendingReleaseStatus::Waiting,
+    )
+    .await;
+
+    let mut observed = original.clone();
+    observed.id = Id::new().0;
+    observed.delay_until = observed.added_at.clone();
+    observed.last_observed_at = Utc::now().to_rfc3339();
+    let observation = scryer_application::PendingReleaseObservation::derived(
+        &observed,
+        scryer_application::PendingReleaseRole::Primary,
+    );
+    assert!(!observation.release_age_unknown);
+
+    let persisted_id = ctx
+        .library_state
+        .insert_pending_release_observation(&observed, &observation)
+        .await
+        .expect("refresh pending observation");
+    assert_eq!(persisted_id, original.id);
+
+    let refreshed = ctx
+        .library_state
+        .get_pending_release(&original.id)
+        .await
+        .expect("load refreshed row")
+        .expect("refreshed row exists");
+    assert_eq!(refreshed.added_at, original.added_at);
+    assert_eq!(refreshed.delay_until, observed.delay_until);
+    assert!(!refreshed.release_age_unknown);
+}
+
+#[tokio::test]
+async fn repeated_and_concurrent_stable_identity_observations_keep_the_first_row() {
+    let ctx = TestContext::new().await;
+    seed_title(&ctx, "title-pending-identity").await;
+    let wanted = seed_wanted_item(
+        &ctx,
+        "title-pending-identity",
+        AcquisitionScopeStatus::Wanted,
+    )
+    .await;
+    let original = seed_pending_release(
+        &ctx,
+        &wanted.id,
+        "title-pending-identity",
+        100,
+        5,
+        PendingReleaseStatus::Waiting,
+    )
+    .await;
+
+    let mut repeated = original.clone();
+    repeated.id = Id::new().0;
+    repeated.last_observed_at = Utc::now().to_rfc3339();
+    let repeated_observation = scryer_application::PendingReleaseObservation::derived(
+        &repeated,
+        scryer_application::PendingReleaseRole::Primary,
+    );
+    let repeated_id = ctx
+        .library_state
+        .insert_pending_release_observation(&repeated, &repeated_observation)
+        .await
+        .expect("repeat observation");
+    assert_eq!(repeated_id, original.id);
+
+    let mut concurrent_left = repeated.clone();
+    concurrent_left.id = Id::new().0;
+    concurrent_left.last_observed_at = Utc::now().to_rfc3339();
+    let concurrent_left_observation = scryer_application::PendingReleaseObservation::derived(
+        &concurrent_left,
+        scryer_application::PendingReleaseRole::Primary,
+    );
+    let mut concurrent_right = repeated.clone();
+    concurrent_right.id = Id::new().0;
+    concurrent_right.last_observed_at = Utc::now().to_rfc3339();
+    let concurrent_right_observation = scryer_application::PendingReleaseObservation::derived(
+        &concurrent_right,
+        scryer_application::PendingReleaseRole::Primary,
+    );
+    let left_store = ctx.library_state.clone();
+    let right_store = ctx.library_state.clone();
+    let (left, right) = tokio::join!(
+        left_store
+            .insert_pending_release_observation(&concurrent_left, &concurrent_left_observation),
+        right_store
+            .insert_pending_release_observation(&concurrent_right, &concurrent_right_observation),
+    );
+    assert_eq!(left.expect("left concurrent observation"), original.id);
+    assert_eq!(right.expect("right concurrent observation"), original.id);
+
+    let active = ctx
+        .library_state
+        .list_pending_releases_for_wanted_item(&wanted.id)
+        .await
+        .expect("list active pending rows");
+    assert_eq!(active.len(), 1);
+    assert_eq!(active[0].id, original.id);
+    assert_eq!(active[0].added_at, original.added_at);
 }

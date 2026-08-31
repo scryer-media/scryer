@@ -78,24 +78,15 @@ async fn mark_completed(settings_store: Arc<SettingsStore>) -> Result<(), String
 pub(crate) async fn clear_system_written_legacy_default_global_profile(
     settings_store: Arc<SettingsStore>,
     quality_profiles: Arc<QualityProfileStore>,
-) {
+) -> Result<(), String> {
     if read_state(settings_store.clone()).await == STATE_COMPLETED {
-        return;
+        return Ok(());
     }
 
-    let record = match settings_store
+    let record = settings_store
         .get_setting_with_defaults(SETTINGS_SCOPE_SYSTEM, QUALITY_PROFILE_ID_KEY, None)
         .await
-    {
-        Ok(record) => record,
-        Err(error) => {
-            tracing::warn!(
-                error = %error,
-                "failed to read global quality profile for the 1080p default migration; retrying next start"
-            );
-            return;
-        }
-    };
+        .map_err(|error| error.to_string())?;
 
     if let Some(record) = record
         && is_system_written_legacy_default(
@@ -103,32 +94,17 @@ pub(crate) async fn clear_system_written_legacy_default_global_profile(
             record.updated_by_user_id.as_deref(),
         )
     {
-        let builtin_default_available = match quality_profiles
+        let builtin_default_available = quality_profiles
             .list_quality_profiles(SETTINGS_SCOPE_SYSTEM, None)
             .await
-        {
-            Ok(catalog) => catalog
-                .iter()
-                .any(|profile| profile.id == BUILTIN_DEFAULT_QUALITY_PROFILE_ID),
-            Err(error) => {
-                tracing::warn!(
-                    error = %error,
-                    "failed to read the quality profile catalog for the 1080p default migration; retrying next start"
-                );
-                return;
-            }
-        };
+            .map_err(|error| error.to_string())?
+            .iter()
+            .any(|profile| profile.id == BUILTIN_DEFAULT_QUALITY_PROFILE_ID);
         if builtin_default_available {
-            if let Err(error) = settings_store
+            settings_store
                 .delete_setting_value(SETTINGS_SCOPE_SYSTEM, QUALITY_PROFILE_ID_KEY, None)
                 .await
-            {
-                tracing::warn!(
-                    error = %error,
-                    "failed to clear system-written legacy 4k global profile; retrying next start"
-                );
-                return;
-            }
+                .map_err(|error| error.to_string())?;
             tracing::info!(
                 builtin_default = BUILTIN_DEFAULT_QUALITY_PROFILE_ID,
                 "cleared system-written legacy 4k global quality profile; the built-in default now applies"
@@ -140,12 +116,8 @@ pub(crate) async fn clear_system_written_legacy_default_global_profile(
         }
     }
 
-    if let Err(error) = mark_completed(settings_store).await {
-        tracing::warn!(
-            error = %error,
-            "1080p default migration finished but failed to record completion; it will re-run harmlessly"
-        );
-    }
+    mark_completed(settings_store).await?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -233,7 +205,8 @@ mod tests {
             .expect("seed system-written global");
 
         clear_system_written_legacy_default_global_profile(store.clone(), quality_profiles.clone())
-            .await;
+            .await
+            .expect("migration should succeed");
 
         assert_eq!(explicit_global_value(store.as_ref()).await, None);
         assert_eq!(read_state(store.clone()).await, STATE_COMPLETED);
@@ -251,7 +224,8 @@ mod tests {
             .await
             .expect("re-seed global");
         clear_system_written_legacy_default_global_profile(store.clone(), quality_profiles.clone())
-            .await;
+            .await
+            .expect("migration should succeed");
         assert!(explicit_global_value(store.as_ref()).await.is_some());
     }
 
@@ -271,7 +245,8 @@ mod tests {
             .expect("seed scoped profile row");
 
         clear_system_written_legacy_default_global_profile(store.clone(), quality_profiles.clone())
-            .await;
+            .await
+            .expect("migration should succeed");
 
         let scoped = store
             .get_setting_with_defaults(
@@ -314,7 +289,8 @@ mod tests {
             .expect("seed system-written global");
 
         clear_system_written_legacy_default_global_profile(store.clone(), quality_profiles.clone())
-            .await;
+            .await
+            .expect("migration should succeed");
 
         assert!(
             explicit_global_value(store.as_ref()).await.is_some(),
@@ -339,7 +315,8 @@ mod tests {
             .expect("seed user-chosen global");
 
         clear_system_written_legacy_default_global_profile(store.clone(), quality_profiles.clone())
-            .await;
+            .await
+            .expect("migration should succeed");
 
         assert!(
             explicit_global_value(store.as_ref()).await.is_some(),

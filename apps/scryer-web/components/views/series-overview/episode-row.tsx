@@ -17,6 +17,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { EpisodeQueueIndicator } from "@/components/common/download-queue-overview";
+import { TitleDownloadActivityPill } from "@/components/common/title-download-activity";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
 import type { InteractiveSearchIndexerProgress } from "@/lib/graphql/release-search";
@@ -118,6 +119,7 @@ export type EpisodeRowProps = {
   autoSearching: boolean;
   collection: TitleCollection;
   clearingReleaseBlocklistEntryId?: string | null;
+  downloadActive: boolean;
   episode: CollectionEpisode;
   episodeFiles: EpisodeMediaFile[];
   episodeIndexerProgress: InteractiveSearchIndexerProgress[];
@@ -149,6 +151,7 @@ export const EpisodeRow = React.memo(function EpisodeRow({
   autoSearching,
   collection,
   clearingReleaseBlocklistEntryId,
+  downloadActive,
   episode,
   episodeFiles,
   episodeIndexerProgress,
@@ -474,6 +477,7 @@ export const EpisodeRow = React.memo(function EpisodeRow({
             <span className="min-w-0 break-words">
               {episode.title || episode.episodeLabel || "—"}
             </span>
+            {downloadActive ? <TitleDownloadActivityPill /> : null}
             {episodeTypeBadges}
           </div>
           {episodeRuntime ? (

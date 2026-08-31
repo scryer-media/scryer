@@ -1,5 +1,5 @@
 use super::*;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use tracing::warn;
 
 fn health_root_label(facet: &MediaFacet) -> &'static str {
@@ -76,6 +76,38 @@ fn download_client_status_health_results(
     results
 }
 
+fn release_age_unknown_health_results(
+    pending_releases: impl IntoIterator<Item = PendingRelease>,
+) -> Vec<HealthCheckResult> {
+    let mut by_indexer = HashMap::<String, (usize, String)>::new();
+    for pending in pending_releases {
+        let indexer = pending
+            .indexer_id
+            .or(pending.indexer_source)
+            .unwrap_or_else(|| "unknown indexer".to_string());
+        let entry = by_indexer
+            .entry(indexer)
+            .or_insert((0, pending.last_observed_at.clone()));
+        entry.0 += 1;
+        if pending.last_observed_at > entry.1 {
+            entry.1 = pending.last_observed_at;
+        }
+    }
+
+    let mut results = by_indexer
+        .into_iter()
+        .map(|(indexer, (count, last_observed_at))| HealthCheckResult {
+            source: "ReleaseAgeUnknown".into(),
+            status: HealthCheckStatus::Warning,
+            message: format!(
+                "Indexer '{indexer}' has {count} pending release(s) with an unknown publication time (last observed {last_observed_at}). They will remain pending until a later feed observation supplies a valid publication time or they require review."
+            ),
+        })
+        .collect::<Vec<_>>();
+    results.sort_by(|left, right| left.message.cmp(&right.message));
+    results
+}
+
 impl AppUseCase {
     /// Run all health checks and return results.
     pub async fn run_health_checks(&self) -> Vec<HealthCheckResult> {
@@ -85,7 +117,24 @@ impl AppUseCase {
         results.extend(self.check_root_folders().await);
         results.extend(self.check_recycle_bin_config().await);
         results.extend(self.check_disk_space_health().await);
+        results.extend(self.check_release_age_unknown_pending().await);
         results
+    }
+
+    async fn check_release_age_unknown_pending(&self) -> Vec<HealthCheckResult> {
+        match self
+            .services
+            .workflow
+            .pending_releases
+            .list_active_release_age_unknown_pending_releases()
+            .await
+        {
+            Ok(pending) => release_age_unknown_health_results(pending),
+            Err(error) => {
+                warn!(error = %error, "health check: failed to list unknown-age pending releases");
+                Vec::new()
+            }
+        }
     }
 
     async fn health_library_roots(
@@ -428,6 +477,81 @@ mod tests {
             created_at: now,
             updated_at: now,
         }
+    }
+
+    fn unknown_age_pending(
+        indexer_id: Option<&str>,
+        source: Option<&str>,
+        added_at: &str,
+        last_observed_at: &str,
+    ) -> PendingRelease {
+        PendingRelease {
+            id: format!("pending-{added_at}"),
+            wanted_item_id: "wanted-1".to_string(),
+            title_id: "title-1".to_string(),
+            release_title: "Example.Release.1080p".to_string(),
+            release_url: None,
+            source_kind: None,
+            release_size_bytes: None,
+            release_score: 0,
+            scoring_log_json: None,
+            indexer_source: source.map(str::to_string),
+            indexer_id: indexer_id.map(str::to_string),
+            release_guid: None,
+            added_at: added_at.to_string(),
+            last_observed_at: last_observed_at.to_string(),
+            delay_until: added_at.to_string(),
+            status: PendingReleaseStatus::Waiting,
+            grabbed_at: None,
+            source_password: None,
+            published_at: None,
+            info_hash: None,
+            seed_minimums: crate::ReleaseSeedMinimums::default(),
+            seeders: None,
+            release_identity: format!("release-{added_at}"),
+            coverage_identity: "scope:wanted-1".to_string(),
+            role: PendingReleaseRole::Primary,
+            last_decision_code: Some("release_age_unknown".to_string()),
+            release_age_unknown: true,
+        }
+    }
+
+    #[test]
+    fn unknown_release_age_health_groups_by_indexer_and_keeps_last_observation() {
+        let results = release_age_unknown_health_results(vec![
+            unknown_age_pending(
+                Some("indexer-a"),
+                Some("A"),
+                "2026-08-01T00:00:00Z",
+                "2026-08-04T00:00:00Z",
+            ),
+            unknown_age_pending(
+                Some("indexer-a"),
+                Some("A"),
+                "2026-08-02T00:00:00Z",
+                "2026-08-05T00:00:00Z",
+            ),
+            unknown_age_pending(
+                None,
+                Some("Indexer B"),
+                "2026-08-03T00:00:00Z",
+                "2026-08-03T12:00:00Z",
+            ),
+        ]);
+
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().any(|result| {
+            result.source == "ReleaseAgeUnknown"
+                && result.message.contains("indexer-a")
+                && result.message.contains("2 pending release(s)")
+                && result.message.contains("2026-08-05T00:00:00Z")
+        }));
+        assert!(
+            results
+                .iter()
+                .any(|result| result.message.contains("Indexer B"))
+        );
+        assert!(release_age_unknown_health_results(Vec::new()).is_empty());
     }
 
     #[test]

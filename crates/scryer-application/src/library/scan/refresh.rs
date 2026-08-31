@@ -425,6 +425,7 @@ pub(super) async fn background_refresh_movies(
         load_titles_for_background_refresh(app, MediaFacet::Movie, &library_ids).await?;
     let (
         mut existing_titles_by_name,
+        mut existing_titles_by_smg_id,
         mut existing_titles_by_tvdb_id,
         mut existing_titles_by_imdb_id,
         mut existing_titles_by_tmdb_id,
@@ -532,6 +533,7 @@ pub(super) async fn background_refresh_movies(
                     &mut executor,
                     &mut existing_titles,
                     &mut existing_titles_by_name,
+                    &mut existing_titles_by_smg_id,
                     &mut existing_titles_by_tvdb_id,
                     &mut existing_titles_by_imdb_id,
                     &mut existing_titles_by_tmdb_id,

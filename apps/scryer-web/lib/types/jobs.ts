@@ -50,7 +50,8 @@ export type JobKey =
   | "RECYCLE_BIN_RESTORE"
   | "RECYCLE_BIN_PURGE"
   | "ACQUISITION_SEARCH"
-  | "AUTO_BACKUP";
+  | "AUTO_BACKUP"
+  | "APPLICATION_UPGRADE";
 
 export type JobScheduleInfo = {
   kind: JobScheduleKind;

@@ -28,8 +28,8 @@ use builder::AppServicesBuildConfiguration;
 use runtime::normalize_supported_plugin_required_features;
 
 pub(crate) use runtime::{
-    CachedWantedProjection, CompletedDownloadAdmission, DownloadClientCategoryAdmissionSnapshot,
-    DownloadQueueReadModel, ReleaseCandidatePasswordTicket, download_observation_is_admitted,
+    CachedWantedProjection, CompletedDownloadAdmission, DownloadQueueReadModel,
+    ReleaseCandidatePasswordTicket, download_observation_is_admitted,
     normalize_download_client_category,
 };
 
@@ -492,23 +492,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn acquire_scope_serializes_overlapping_scopes_for_same_title() {
+    async fn acquire_title_serializes_submissions_for_same_title() {
         let guards = DownloadSubmissionGuardTable::default();
-        let title_guard = guards
-            .acquire_scope("title-1", &SubmissionScope::Title)
-            .await;
+        let title_guard = guards.acquire_title("title-1").await;
 
         let guards_clone = guards.clone();
-        let waiting_guard = tokio::spawn(async move {
-            guards_clone
-                .acquire_scope(
-                    "title-1",
-                    &SubmissionScope::Episode {
-                        episode_id: "episode-1".to_string(),
-                    },
-                )
-                .await
-        });
+        let waiting_guard =
+            tokio::spawn(async move { guards_clone.acquire_title("title-1").await });
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         assert!(!waiting_guard.is_finished());

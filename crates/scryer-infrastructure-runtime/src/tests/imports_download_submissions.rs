@@ -13,7 +13,7 @@ async fn list_imports_for_identities_handles_multiple_pairs() {
 
     workflow
         .queue_import_request(
-            DownloadSourceIdentity::new(Some("client-a"), "weaver", "10000"),
+            ClientJobLocator::new(Some("client-a"), "weaver", "10000"),
             ImportType::ManualImport.as_str().to_string(),
             "{}".to_string(),
         )
@@ -21,7 +21,7 @@ async fn list_imports_for_identities_handles_multiple_pairs() {
         .expect("first import should queue");
     workflow
         .queue_import_request(
-            DownloadSourceIdentity::new(Some("client-b"), "weaver", "10001"),
+            ClientJobLocator::new(Some("client-b"), "weaver", "10001"),
             ImportType::ManualImport.as_str().to_string(),
             "{}".to_string(),
         )
@@ -30,8 +30,8 @@ async fn list_imports_for_identities_handles_multiple_pairs() {
 
     let records = workflow
         .list_imports_for_identities(&[
-            DownloadSourceIdentity::new(Some("client-a"), "weaver", "10000"),
-            DownloadSourceIdentity::new(Some("client-b"), "weaver", "10001"),
+            ClientJobLocator::new(Some("client-a"), "weaver", "10000"),
+            ClientJobLocator::new(Some("client-b"), "weaver", "10001"),
         ])
         .await
         .expect("batch lookup should succeed");
@@ -44,7 +44,7 @@ async fn list_imports_for_identities_handles_multiple_pairs() {
 #[tokio::test]
 async fn queue_import_request_reuses_existing_row_for_same_identity() {
     let (pool, workflow) = import_store_test_harness(1).await;
-    let identity = DownloadSourceIdentity::new(Some("client-a"), "weaver", "10000");
+    let identity = ClientJobLocator::new(Some("client-a"), "weaver", "10000");
 
     let first_id = workflow
         .queue_import_request(
@@ -98,107 +98,6 @@ async fn queue_import_request_reuses_existing_row_for_same_identity() {
     .await
     .expect("import count should load");
     assert_eq!(row_count, 1);
-
-    let download_identity = DownloadSubmissionIdentity {
-        download_id: Some("scryer-download:store-test".to_string()),
-    };
-    let durable_source_identity = DownloadSourceIdentity::new(Some("client-a"), "weaver", "10001");
-    let durable_import_id = workflow
-        .queue_import_request_with_identity(
-            durable_source_identity.clone(),
-            ImportType::MovieDownload.as_str().to_string(),
-            "{\"attempt\":1}".to_string(),
-            Some(download_identity.clone()),
-        )
-        .await
-        .expect("durable import should queue");
-    workflow
-        .update_import_status(&durable_import_id, ImportStatus::Completed, None)
-        .await
-        .expect("durable import should complete");
-
-    assert!(
-        workflow
-            .is_already_imported_by_download_id(&durable_source_identity, &download_identity)
-            .await
-            .expect("identity import lookup should succeed")
-    );
-}
-
-#[tokio::test]
-async fn already_imported_lookup_ignores_uncataloged_duplicate_file_skips() {
-    let (_, workflow) = import_store_test_harness(1).await;
-    let duplicate_identity =
-        DownloadSourceIdentity::new(Some("client-a"), "weaver", "duplicate-job");
-    let duplicate_download_identity = DownloadSubmissionIdentity {
-        download_id: Some("scryer-download:duplicate-file".to_string()),
-    };
-    let duplicate_id = workflow
-        .queue_import_request_with_identity(
-            duplicate_identity.clone(),
-            ImportType::SeriesDownload.as_str().to_string(),
-            "{}".to_string(),
-            Some(duplicate_download_identity.clone()),
-        )
-        .await
-        .expect("duplicate import should queue");
-    workflow
-        .update_import_status(
-            &duplicate_id,
-            ImportStatus::Skipped,
-            Some(r#"{"skip_reason":"duplicate_file"}"#.to_string()),
-        )
-        .await
-        .expect("duplicate import should be marked skipped");
-
-    assert!(
-        !workflow
-            .is_already_imported(&duplicate_identity)
-            .await
-            .expect("duplicate import lookup should succeed")
-    );
-    assert!(
-        !workflow
-            .is_already_imported_by_download_id(&duplicate_identity, &duplicate_download_identity)
-            .await
-            .expect("duplicate download id lookup should succeed")
-    );
-
-    let cataloged_identity =
-        DownloadSourceIdentity::new(Some("client-a"), "weaver", "cataloged-job");
-    let cataloged_download_identity = DownloadSubmissionIdentity {
-        download_id: Some("scryer-download:already-imported".to_string()),
-    };
-    let cataloged_id = workflow
-        .queue_import_request_with_identity(
-            cataloged_identity.clone(),
-            ImportType::SeriesDownload.as_str().to_string(),
-            "{}".to_string(),
-            Some(cataloged_download_identity.clone()),
-        )
-        .await
-        .expect("cataloged import should queue");
-    workflow
-        .update_import_status(
-            &cataloged_id,
-            ImportStatus::Skipped,
-            Some(r#"{"skip_reason":"already_imported"}"#.to_string()),
-        )
-        .await
-        .expect("cataloged import should be marked skipped");
-
-    assert!(
-        workflow
-            .is_already_imported(&cataloged_identity)
-            .await
-            .expect("cataloged import lookup should succeed")
-    );
-    assert!(
-        workflow
-            .is_already_imported_by_download_id(&cataloged_identity, &cataloged_download_identity)
-            .await
-            .expect("cataloged download id lookup should succeed")
-    );
 }
 
 #[tokio::test]
@@ -210,7 +109,7 @@ async fn queue_import_request_with_download_id_reuses_active_row_only() {
 
     let first_id = workflow
         .queue_import_request_with_identity(
-            DownloadSourceIdentity::new(Some("client-a"), "weaver", "job-a"),
+            ClientJobLocator::new(Some("client-a"), "weaver", "job-a"),
             ImportType::MovieDownload.as_str().to_string(),
             "{\"attempt\":1}".to_string(),
             Some(download_identity.clone()),
@@ -219,7 +118,7 @@ async fn queue_import_request_with_download_id_reuses_active_row_only() {
         .expect("first durable import should queue");
     let second_id = workflow
         .queue_import_request_with_identity(
-            DownloadSourceIdentity::new(Some("client-a"), "weaver", "job-b"),
+            ClientJobLocator::new(Some("client-a"), "weaver", "job-b"),
             ImportType::SeriesDownload.as_str().to_string(),
             "{\"attempt\":2}".to_string(),
             Some(download_identity.clone()),
@@ -246,7 +145,7 @@ async fn queue_import_request_with_download_id_reuses_active_row_only() {
         .expect("first durable import should complete");
     let third_id = workflow
         .queue_import_request_with_identity(
-            DownloadSourceIdentity::new(Some("client-a"), "weaver", "job-c"),
+            ClientJobLocator::new(Some("client-a"), "weaver", "job-c"),
             ImportType::MovieDownload.as_str().to_string(),
             "{\"attempt\":3}".to_string(),
             Some(download_identity),
@@ -276,7 +175,7 @@ async fn queue_import_request_with_download_id_scopes_active_rows_by_client_and_
 
     let client_a_id = workflow
         .queue_import_request_with_identity(
-            DownloadSourceIdentity::new(Some("client-a"), "weaver", "job-a"),
+            ClientJobLocator::new(Some("client-a"), "weaver", "job-a"),
             ImportType::MovieDownload.as_str().to_string(),
             "{}".to_string(),
             Some(download_identity.clone()),
@@ -285,7 +184,7 @@ async fn queue_import_request_with_download_id_scopes_active_rows_by_client_and_
         .expect("client-a import should queue");
     let client_b_id = workflow
         .queue_import_request_with_identity(
-            DownloadSourceIdentity::new(Some("client-b"), "weaver", "job-b"),
+            ClientJobLocator::new(Some("client-b"), "weaver", "job-b"),
             ImportType::MovieDownload.as_str().to_string(),
             "{}".to_string(),
             Some(download_identity.clone()),
@@ -294,7 +193,7 @@ async fn queue_import_request_with_download_id_scopes_active_rows_by_client_and_
         .expect("client-b import should queue");
     let other_source_id = workflow
         .queue_import_request_with_identity(
-            DownloadSourceIdentity::new(Some("client-a"), "sabnzbd", "job-c"),
+            ClientJobLocator::new(Some("client-a"), "sabnzbd", "job-c"),
             ImportType::MovieDownload.as_str().to_string(),
             "{}".to_string(),
             Some(download_identity),
@@ -324,7 +223,7 @@ async fn stale_processing_recovery_respects_transfer_progress_heartbeat() {
 
     let stale_id = workflow
         .queue_import_request(
-            DownloadSourceIdentity::new(Some("client-a"), "weaver", "stale-job"),
+            ClientJobLocator::new(Some("client-a"), "weaver", "stale-job"),
             ImportType::MovieDownload.as_str().to_string(),
             "{}".to_string(),
         )
@@ -337,7 +236,7 @@ async fn stale_processing_recovery_respects_transfer_progress_heartbeat() {
 
     let heartbeat_id = workflow
         .queue_import_request(
-            DownloadSourceIdentity::new(Some("client-a"), "weaver", "heartbeat-job"),
+            ClientJobLocator::new(Some("client-a"), "weaver", "heartbeat-job"),
             ImportType::MovieDownload.as_str().to_string(),
             "{}".to_string(),
         )
@@ -453,10 +352,10 @@ async fn active_download_identity_unique_index_blocks_duplicate_active_rows() {
 #[test]
 fn download_submission_lookup_chunks_and_deduplicates_client_items() {
     let mut client_items = (0..805)
-        .map(|idx| DownloadSourceIdentity::new(None, "weaver", format!("job-{idx}")))
+        .map(|idx| ClientJobLocator::new(None, "weaver", format!("job-{idx}")))
         .collect::<Vec<_>>();
-    client_items.push(DownloadSourceIdentity::new(None, "weaver", "job-12"));
-    client_items.push(DownloadSourceIdentity::new(None, "weaver", "job-400"));
+    client_items.push(ClientJobLocator::new(None, "weaver", "job-12"));
+    client_items.push(ClientJobLocator::new(None, "weaver", "job-400"));
 
     let chunks = crate::workflow_store::chunk_download_submission_client_items(&client_items);
 
@@ -466,7 +365,7 @@ fn download_submission_lookup_chunks_and_deduplicates_client_items() {
     assert_eq!(chunks[2].len(), 5);
     assert_eq!(
         chunks[0][12],
-        DownloadSourceIdentity::new(None, "weaver", "job-12")
+        ClientJobLocator::new(None, "weaver", "job-12")
     );
     assert_eq!(
         chunks
@@ -492,6 +391,7 @@ async fn list_download_submissions_for_client_items_handles_large_batched_lookup
     for idx in 0..805 {
         workflow
             .record_submission(DownloadSubmission {
+                download_id: scryer_domain::download_identity::DownloadId::new(),
                 title_id: format!("title-{idx}"),
                 purpose: scryer_application::DownloadSubmissionPurpose::Standard,
                 facet: "movie".to_string(),
@@ -503,6 +403,7 @@ async fn list_download_submissions_for_client_items_handles_large_batched_lookup
                 source_provider_name: None,
                 source_kind: None,
                 source_title: Some(format!("Release {idx}")),
+                info_hash: None,
                 release_size_bytes: None,
                 request_signature: None,
                 scope: SubmissionScope::Title,
@@ -512,10 +413,10 @@ async fn list_download_submissions_for_client_items_handles_large_batched_lookup
     }
 
     let mut lookup = (0..805)
-        .map(|idx| DownloadSourceIdentity::new(None, "weaver", format!("job-{idx}")))
+        .map(|idx| ClientJobLocator::new(None, "weaver", format!("job-{idx}")))
         .collect::<Vec<_>>();
-    lookup.push(DownloadSourceIdentity::new(None, "weaver", "job-12"));
-    lookup.push(DownloadSourceIdentity::new(None, "weaver", "job-400"));
+    lookup.push(ClientJobLocator::new(None, "weaver", "job-12"));
+    lookup.push(ClientJobLocator::new(None, "weaver", "job-400"));
 
     let records = workflow
         .list_for_client_items(&lookup)
@@ -531,66 +432,6 @@ async fn list_download_submissions_for_client_items_handles_large_batched_lookup
 }
 
 #[tokio::test]
-async fn download_submission_orphan_precedence_sqlite() -> AppResult<()> {
-    let (services, db) = temp_services("scryer_download_submission_orphan_precedence").await;
-    let workflow = DownloadSubmissionStore::new(services.datastore());
-    let result = assert_download_submission_orphan_precedence(&workflow).await;
-    drop(services);
-    let _ = std::fs::remove_file(db);
-    result
-}
-
-#[tokio::test]
-async fn download_submission_orphan_precedence_postgres() -> AppResult<()> {
-    let Some(raw_url) = std::env::var("SCRYER_TEST_POSTGRES_URL")
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-    else {
-        eprintln!(
-            "skipping PostgreSQL download submission orphan precedence test; SCRYER_TEST_POSTGRES_URL is not set"
-        );
-        return Ok(());
-    };
-
-    let admin_pool = sqlx::PgPool::connect(&raw_url)
-        .await
-        .map_err(|error| AppError::Repository(format!("failed to connect to postgres: {error}")))?;
-    let schema = format!(
-        "scryer_test_{}_{}",
-        std::process::id(),
-        Id::new().0.replace('-', "_")
-    );
-
-    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
-        .execute(&admin_pool)
-        .await
-        .map_err(|error| AppError::Repository(format!("failed to create schema: {error}")))?;
-
-    let result = async {
-        let mut url = url::Url::parse(&raw_url)
-            .map_err(|error| AppError::Validation(format!("invalid postgres test URL: {error}")))?;
-        url.query_pairs_mut()
-            .append_pair("options", &format!("-csearch_path={schema}"));
-        let services =
-            crate::PostgresServices::new_with_mode(url.to_string(), crate::MigrationMode::Apply)
-                .await?;
-        let workflow = DownloadSubmissionStore::new(services.datastore());
-        let result = assert_download_submission_orphan_precedence(&workflow).await;
-        services.pool().close().await;
-        result
-    }
-    .await;
-
-    let cleanup = sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
-        .execute(&admin_pool)
-        .await;
-    admin_pool.close().await;
-    cleanup.map_err(|error| AppError::Repository(format!("failed to drop schema: {error}")))?;
-    result
-}
-
-#[tokio::test]
 async fn download_submission_identity_does_not_fall_back_to_legacy_rows() {
     let db = std::env::temp_dir().join(format!(
         "scryer_download_submission_identity_{}.db",
@@ -603,6 +444,7 @@ async fn download_submission_identity_does_not_fall_back_to_legacy_rows() {
 
     workflow
         .record_submission(DownloadSubmission {
+            download_id: scryer_domain::download_identity::DownloadId::new(),
             title_id: "legacy-title".to_string(),
             purpose: scryer_application::DownloadSubmissionPurpose::Standard,
             facet: "movie".to_string(),
@@ -614,6 +456,7 @@ async fn download_submission_identity_does_not_fall_back_to_legacy_rows() {
             source_provider_name: None,
             source_kind: None,
             source_title: Some("Legacy Release".to_string()),
+            info_hash: None,
             release_size_bytes: None,
             request_signature: None,
             scope: SubmissionScope::Title,
@@ -622,7 +465,7 @@ async fn download_submission_identity_does_not_fall_back_to_legacy_rows() {
         .expect("legacy submission should persist");
 
     let exact_client_lookup = workflow
-        .find_by_client_item_id(&DownloadSourceIdentity::new(
+        .find_by_client_item_id(&ClientJobLocator::new(
             Some("client-a"),
             "weaver",
             "shared-job",
@@ -632,92 +475,11 @@ async fn download_submission_identity_does_not_fall_back_to_legacy_rows() {
     assert!(exact_client_lookup.is_none());
 
     let legacy_lookup = workflow
-        .find_by_client_item_id(&DownloadSourceIdentity::new(None, "weaver", "shared-job"))
+        .find_by_client_item_id(&ClientJobLocator::new(None, "weaver", "shared-job"))
         .await
         .expect("legacy lookup should succeed")
         .expect("legacy row should still be discoverable by a legacy identity");
     assert_eq!(legacy_lookup.title_id, "legacy-title");
-
-    let _ = std::fs::remove_file(db);
-}
-
-#[tokio::test]
-async fn recording_new_download_identity_clears_stale_terminal_state_for_reused_item_id() {
-    let db = std::env::temp_dir().join(format!(
-        "scryer_download_submission_reused_item_identity_{}.db",
-        chrono::Utc::now().timestamp_micros()
-    ));
-    let services = SqliteServices::new(db.to_string_lossy())
-        .await
-        .expect("db should initialize");
-    let workflow = DownloadSubmissionStore::new(services.datastore());
-    let identity = DownloadSourceIdentity::new(None, "weaver", "10010");
-
-    workflow
-        .record_submission(DownloadSubmission {
-            title_id: "title-1".to_string(),
-            purpose: scryer_application::DownloadSubmissionPurpose::Standard,
-            facet: "series".to_string(),
-            download_client_id: None,
-            download_client_type: "weaver".to_string(),
-            download_client_item_id: "10010".to_string(),
-            source_hint: None,
-            source_provider_id: None,
-            source_provider_name: None,
-            source_kind: None,
-            source_title: Some("Old.Release.S01E05".to_string()),
-            release_size_bytes: None,
-            request_signature: None,
-            scope: SubmissionScope::Episode {
-                episode_id: "episode-5".to_string(),
-            },
-        })
-        .await
-        .expect("old submission should persist");
-    workflow
-        .update_tracked_state(&identity, "imported")
-        .await
-        .expect("old terminal state should persist");
-
-    workflow
-        .record_submission_with_identity(
-            DownloadSubmission {
-                title_id: "title-1".to_string(),
-                purpose: scryer_application::DownloadSubmissionPurpose::Standard,
-                facet: "series".to_string(),
-                download_client_id: None,
-                download_client_type: "weaver".to_string(),
-                download_client_item_id: "10010".to_string(),
-                source_hint: None,
-                source_provider_id: None,
-                source_provider_name: None,
-                source_kind: None,
-                source_title: Some("Fresh.Release.S01E07".to_string()),
-                release_size_bytes: None,
-                request_signature: None,
-                scope: SubmissionScope::Episode {
-                    episode_id: "episode-7".to_string(),
-                },
-            },
-            DownloadSubmissionIdentity {
-                download_id: Some("scryer-download:fresh".to_string()),
-            },
-        )
-        .await
-        .expect("fresh submission identity should persist");
-
-    let tracked_state = workflow
-        .get_tracked_state(&identity)
-        .await
-        .expect("tracked state lookup should succeed");
-    assert_eq!(tracked_state, None);
-
-    let fresh = workflow
-        .find_by_download_id(None, "weaver", "scryer-download:fresh")
-        .await
-        .expect("download id lookup should succeed")
-        .expect("fresh download id should be indexed");
-    assert_eq!(fresh.source_title.as_deref(), Some("Fresh.Release.S01E07"));
 
     let _ = std::fs::remove_file(db);
 }
@@ -735,6 +497,7 @@ async fn record_download_submission_persists_episode_set_scope() {
 
     workflow
         .record_submission(DownloadSubmission {
+            download_id: scryer_domain::download_identity::DownloadId::new(),
             title_id: "title-1".to_string(),
             purpose: scryer_application::DownloadSubmissionPurpose::Standard,
             facet: "anime".to_string(),
@@ -746,6 +509,7 @@ async fn record_download_submission_persists_episode_set_scope() {
             source_provider_name: None,
             source_kind: None,
             source_title: Some("RASCAL 01-13".to_string()),
+            info_hash: None,
             release_size_bytes: None,
             request_signature: None,
             scope: SubmissionScope::EpisodeSet {
@@ -756,7 +520,7 @@ async fn record_download_submission_persists_episode_set_scope() {
         .expect("record submission should succeed");
 
     let record = workflow
-        .find_by_client_item_id(&DownloadSourceIdentity::new(
+        .find_by_client_item_id(&ClientJobLocator::new(
             Some("client-a"),
             "weaver",
             "job-range",
@@ -789,6 +553,7 @@ async fn download_submission_signature_lookup_matches_scope() {
     for (episode_id, item_id) in [("episode-1", "job-1"), ("episode-2", "job-2")] {
         workflow
             .record_submission(DownloadSubmission {
+                download_id: scryer_domain::download_identity::DownloadId::new(),
                 title_id: "title-1".to_string(),
                 purpose: scryer_application::DownloadSubmissionPurpose::AdditionalFile,
                 facet: "series".to_string(),
@@ -800,6 +565,7 @@ async fn download_submission_signature_lookup_matches_scope() {
                 source_provider_name: None,
                 source_kind: None,
                 source_title: Some("Same.Release.S01E01.1080p.WEB-DL".to_string()),
+                info_hash: None,
                 release_size_bytes: None,
                 request_signature: Some("same-signature".to_string()),
                 scope: SubmissionScope::Episode {

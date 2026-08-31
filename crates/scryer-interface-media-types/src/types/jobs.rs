@@ -52,6 +52,8 @@ pub enum JobKeyValue {
     RecycleBinPurge,
     /// Acquisition search.
     AcquisitionSearch,
+    /// Application upgrade.
+    ApplicationUpgrade,
 }
 
 /// Broad category assigned to a job.

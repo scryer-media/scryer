@@ -7,21 +7,25 @@ use scryer_application::{
     AcquisitionScopeState, AcquisitionScopeStateRepository, AcquisitionScopeStatesQuery,
     AcquisitionScopeStatus, AppResult, BlocklistRepository, DownloadSourceKind,
     HousekeepingMediaFileRootRow, HousekeepingRepository, LibraryProbeRepository,
-    LibraryProbeSignature, NewBlocklistEntry, PendingRelease, PendingReleasePageSort,
-    PendingReleaseRepository, PendingReleaseStatus, PendingReleasesPageQuery, ReleaseDecision,
-    ReleaseSeedMinimums, SubtitleDownloadRepository,
+    LibraryProbeSignature, NewBlocklistEntry, PendingRelease, PendingReleaseObservation,
+    PendingReleasePageSort, PendingReleaseRepository, PendingReleaseRole, PendingReleaseStatus,
+    PendingReleasesPageQuery, ReleaseDecision, ReleaseSeedMinimums, SubtitleDownloadRepository,
+    normalize_release_name,
     subtitles::{ExternalSubtitleDetectionSource, ExternalSubtitleProbeCacheEntry},
 };
 use scryer_domain::{
     BlocklistEntry, DomainEventType, ExternalSubtitleSourceKind, Id, SubtitleBlocklistEntry,
     SubtitleDownload,
 };
+use scryer_plugin_sdk::torrent::normalize_info_hash;
 
 use crate::config_store::{current_encryption_key, decrypt_optional_value, encrypt_optional_value};
 use crate::encryption::{EncryptionKey, is_encrypted};
 use crate::queries::common::parse_utc_datetime;
 use crate::queries::sql_runtime::repo_err;
 use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, StoreDatastore};
+
+use super::{decode_release_decision_explanation, encode_release_decision_explanation};
 
 // Throttle the SQLite full VACUUM so it does not run on every
 // daily maintenance tick. `auto_vacuum` is not enabled on the connection, so
@@ -31,6 +35,33 @@ use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, StoreData
 // small absolute floor (skip trivially small databases).
 const SQLITE_VACUUM_MIN_FREELIST_FRACTION: f64 = 0.10;
 const SQLITE_VACUUM_MIN_FREELIST_PAGES: i64 = 2_000;
+
+fn validate_sqlite_checkpoint_result(
+    busy: i64,
+    log_frames: i64,
+    checkpointed_frames: i64,
+) -> AppResult<()> {
+    if busy == 0 && (log_frames < 0 || checkpointed_frames >= log_frames) {
+        return Ok(());
+    }
+
+    Err(scryer_application::AppError::Repository(format!(
+        "sqlite WAL checkpoint incomplete: busy={busy}, log_frames={log_frames}, checkpointed_frames={checkpointed_frames}"
+    )))
+}
+
+#[cfg(test)]
+mod sqlite_checkpoint_tests {
+    use super::validate_sqlite_checkpoint_result;
+
+    #[test]
+    fn checkpoint_result_requires_no_busy_or_uncheckpointed_frames() {
+        assert!(validate_sqlite_checkpoint_result(0, 0, 0).is_ok());
+        assert!(validate_sqlite_checkpoint_result(0, -1, -1).is_ok());
+        assert!(validate_sqlite_checkpoint_result(1, 10, 10).is_err());
+        assert!(validate_sqlite_checkpoint_result(0, 10, 9).is_err());
+    }
+}
 
 const LIBRARY_PROBE_COLUMNS: &str = "title_id, path, probe_signature_scheme, probe_signature_value, last_probed_at, last_changed_at";
 
@@ -331,8 +362,10 @@ fn wanted_seed_row_to_item(row: &SqlRow) -> AppResult<AcquisitionScopeState> {
 }
 
 fn release_decision_row_to_item(row: &SqlRow) -> AppResult<ReleaseDecision> {
+    let id = row.text("id")?;
     Ok(ReleaseDecision {
-        id: row.text("id")?,
+        explanation_json: release_decision_explanation_from_row(row, "explanation_json", &id)?,
+        id,
         wanted_item_id: row.text("wanted_item_id")?,
         title_id: row.text("title_id")?,
         release_title: row.text("release_title")?,
@@ -342,14 +375,27 @@ fn release_decision_row_to_item(row: &SqlRow) -> AppResult<ReleaseDecision> {
         candidate_score: row.i32("candidate_score")?,
         current_score: row.opt_i32("current_score")?,
         score_delta: row.opt_i32("score_delta")?,
-        explanation_json: match row {
-            SqlRow::Sqlite(_) => row.opt_text("explanation_json")?,
-            SqlRow::Postgres(_) => row
-                .opt_json("explanation_json")?
-                .map(|value| value.to_string()),
-        },
         created_at: required_timestamp_text(row, "created_at")?,
     })
+}
+
+fn release_decision_explanation_from_row(
+    row: &SqlRow,
+    column: &str,
+    decision_id: &str,
+) -> AppResult<Option<String>> {
+    let encoded = row.opt_bytes(column)?;
+    match decode_release_decision_explanation(encoded.as_deref()) {
+        Ok(explanation) => Ok(explanation),
+        Err(error) => {
+            tracing::warn!(
+                decision_id,
+                error = %error,
+                "release decision explanation could not be decoded"
+            );
+            Ok(None)
+        }
+    }
 }
 
 fn json_text_from_row(row: &SqlRow, column: &str) -> AppResult<Option<String>> {
@@ -364,6 +410,11 @@ fn json_text_from_row(row: &SqlRow, column: &str) -> AppResult<Option<String>> {
 fn wanted_row_to_item(row: &SqlRow) -> AppResult<AcquisitionScopeState> {
     let latest_release_decision = match row.opt_text("latest_decision_id")? {
         Some(id) => Some(ReleaseDecision {
+            explanation_json: release_decision_explanation_from_row(
+                row,
+                "latest_decision_explanation_json",
+                &id,
+            )?,
             id,
             wanted_item_id: row.text("latest_decision_wanted_item_id")?,
             title_id: row.text("latest_decision_title_id")?,
@@ -376,7 +427,6 @@ fn wanted_row_to_item(row: &SqlRow) -> AppResult<AcquisitionScopeState> {
                 .unwrap_or_default(),
             current_score: row.opt_i32("latest_decision_current_score")?,
             score_delta: row.opt_i32("latest_decision_score_delta")?,
-            explanation_json: json_text_from_row(row, "latest_decision_explanation_json")?,
             created_at: required_timestamp_text(row, "latest_decision_created_at")?,
         }),
         None => None,
@@ -921,6 +971,18 @@ impl AcquisitionScopeStateRepository for WantedStore {
     }
 
     async fn insert_release_decision(&self, decision: &ReleaseDecision) -> AppResult<String> {
+        let explanation_json =
+            match encode_release_decision_explanation(decision.explanation_json.as_deref()) {
+                Ok(encoded) => encoded,
+                Err(error) => {
+                    tracing::warn!(
+                        decision_id = %decision.id,
+                        error = %error,
+                        "release decision explanation could not be encoded"
+                    );
+                    None
+                }
+            };
         execute_datastore_write(
             &self.datastore,
             "insert_release_decision",
@@ -939,7 +1001,7 @@ impl AcquisitionScopeStateRepository for WantedStore {
                 SqlArg::I32(decision.candidate_score),
                 SqlArg::OptI32(decision.current_score),
                 SqlArg::OptI32(decision.score_delta),
-                opt_json_arg_for_datastore(&self.datastore, decision.explanation_json.as_deref())?,
+                SqlArg::OptBytes(explanation_json),
                 timestamp_arg_for_datastore(&self.datastore, &decision.created_at)?,
             ],
         )
@@ -1182,6 +1244,43 @@ async fn delete_media_files_by_ids_shared(
 
 #[async_trait]
 impl HousekeepingRepository for HousekeepingStore {
+    async fn delete_stale_workflow_operations(
+        &self,
+        completed_days: i64,
+        warning_failed_days: i64,
+    ) -> AppResult<u32> {
+        let now = Utc::now();
+        execute_housekeeping_delete(
+            &self.datastore,
+            "delete_stale_workflow_operations",
+            "DELETE FROM workflow_operations
+              WHERE job_key IS NOT NULL
+                AND (
+                    (status = 'completed' AND started_at <= {})
+                    OR (status IN ('warning', 'failed') AND started_at <= {})
+                )
+                AND id NOT IN (
+                    SELECT id
+                      FROM (
+                            SELECT id,
+                                   ROW_NUMBER() OVER (
+                                       PARTITION BY job_key
+                                       ORDER BY started_at DESC NULLS LAST, id DESC
+                                   ) AS retention_rank
+                              FROM workflow_operations
+                             WHERE job_key IS NOT NULL
+                               AND status IN ('completed', 'warning', 'failed')
+                      ) terminal_workflow_operations
+                     WHERE retention_rank = 1
+                )",
+            vec![
+                SqlArg::Timestamp(now - Duration::days(completed_days)),
+                SqlArg::Timestamp(now - Duration::days(warning_failed_days)),
+            ],
+        )
+        .await
+    }
+
     async fn delete_release_decisions_older_than(&self, days: i64) -> AppResult<u32> {
         execute_housekeeping_delete(
             &self.datastore,
@@ -1230,7 +1329,7 @@ impl HousekeepingRepository for HousekeepingStore {
 
         let sql = format!(
             "DELETE FROM domain_events
-              WHERE occurred_at < {{}}
+              WHERE occurred_at <= {{}}
                 AND event_type IN ({})",
             placeholders(event_types.len())
         );
@@ -1435,10 +1534,6 @@ impl HousekeepingRepository for HousekeepingStore {
                             .execute(&pool)
                             .await
                             .map_err(repo_err)?;
-                        sqlx::query("PRAGMA wal_checkpoint(PASSIVE)")
-                            .execute(&pool)
-                            .await
-                            .map_err(repo_err)?;
                         // Throttled full VACUUM: only reclaim when
                         // the free-page ratio shows meaningful bloat, so the daily
                         // maintenance tick does not pay the VACUUM cost every run.
@@ -1472,7 +1567,26 @@ impl HousekeepingRepository for HousekeepingStore {
                         Ok(())
                     },
                 )
-                .await
+                .await?;
+
+                let (busy, log_frames, checkpointed_frames) = SqlRuntime::run_serialized_sqlite(
+                    &self.datastore,
+                    "sqlite_database_checkpoint",
+                    |pool| async move {
+                        sqlx::query_as::<_, (i64, i64, i64)>("PRAGMA wal_checkpoint(TRUNCATE)")
+                            .fetch_one(&pool)
+                            .await
+                            .map_err(repo_err)
+                    },
+                )
+                .await?;
+                tracing::info!(
+                    busy,
+                    log_frames,
+                    checkpointed_frames,
+                    "completed sqlite WAL checkpoint"
+                );
+                validate_sqlite_checkpoint_result(busy, log_frames, checkpointed_frames)
             }
             StoreDatastore::Postgres { pool } => sqlx::query("VACUUM (ANALYZE)")
                 .execute(pool)
@@ -1486,9 +1600,10 @@ impl HousekeepingRepository for HousekeepingStore {
 const PENDING_RELEASE_COLUMNS: &str =
     "id, wanted_item_id, title_id, release_title, release_url, release_size_bytes,
     source_kind, release_score, scoring_log_json, indexer_source, indexer_id, release_guid,
-    added_at, delay_until, status, grabbed_at, source_password, published_at, info_hash,
+    added_at, last_observed_at, delay_until, status, grabbed_at, source_password, published_at, info_hash,
     minimum_seed_ratio, minimum_seed_time_minutes, season_pack_seed_ratio,
-    season_pack_seed_time_minutes, seeders";
+    season_pack_seed_time_minutes, seeders, release_identity, coverage_identity, role,
+    last_decision_code, release_age_unknown";
 
 /// Same columns as [`PENDING_RELEASE_COLUMNS`] but qualified with the `pr` alias
 /// so the paged read can JOIN `titles` for library scoping without ambiguous
@@ -1496,9 +1611,10 @@ const PENDING_RELEASE_COLUMNS: &str =
 const PENDING_RELEASE_COLUMNS_PR: &str =
     "pr.id, pr.wanted_item_id, pr.title_id, pr.release_title, pr.release_url, pr.release_size_bytes,
     pr.source_kind, pr.release_score, pr.scoring_log_json, pr.indexer_source, pr.indexer_id, pr.release_guid,
-    pr.added_at, pr.delay_until, pr.status, pr.grabbed_at, pr.source_password, pr.published_at, pr.info_hash,
+    pr.added_at, pr.last_observed_at, pr.delay_until, pr.status, pr.grabbed_at, pr.source_password, pr.published_at, pr.info_hash,
     pr.minimum_seed_ratio, pr.minimum_seed_time_minutes, pr.season_pack_seed_ratio,
-    pr.season_pack_seed_time_minutes, pr.seeders";
+    pr.season_pack_seed_time_minutes, pr.seeders, pr.release_identity, pr.coverage_identity,
+    pr.role, pr.last_decision_code, pr.release_age_unknown";
 
 fn pending_release_row_to_item(
     row: &SqlRow,
@@ -1521,6 +1637,7 @@ fn pending_release_row_to_item(
         indexer_id: row.opt_text("indexer_id")?,
         release_guid: row.opt_text("release_guid")?,
         added_at: required_timestamp_text(row, "added_at")?,
+        last_observed_at: required_timestamp_text(row, "last_observed_at")?,
         delay_until: required_timestamp_text(row, "delay_until")?,
         status: PendingReleaseStatus::parse(&status).ok_or_else(|| {
             scryer_application::AppError::Repository("invalid pending release status".into())
@@ -1543,6 +1660,13 @@ fn pending_release_row_to_item(
         // Rows parked before migration 0169 read back as `None`, which the
         // promotion re-judge treats as unknown — and unknown stays eligible.
         seeders: row.opt_i64("seeders")?,
+        release_identity: row.text("release_identity")?,
+        coverage_identity: row.text("coverage_identity")?,
+        role: PendingReleaseRole::parse(&row.text("role")?).ok_or_else(|| {
+            scryer_application::AppError::Repository("invalid pending release role".into())
+        })?,
+        last_decision_code: row.opt_text("last_decision_code")?,
+        release_age_unknown: row.bool("release_age_unknown")?,
     })
 }
 
@@ -1563,6 +1687,7 @@ fn pending_release_insert_args(
     datastore: &StoreDatastore,
     release: &PendingRelease,
     encryption_key: Option<&EncryptionKey>,
+    observation: &PendingReleaseObservation,
 ) -> AppResult<Vec<SqlArg>> {
     Ok(vec![
         SqlArg::Text(release.id.clone()),
@@ -1578,7 +1703,8 @@ fn pending_release_insert_args(
         SqlArg::OptText(release.indexer_id.clone()),
         SqlArg::OptText(release.release_guid.clone()),
         timestamp_arg_for_datastore(datastore, &release.added_at)?,
-        timestamp_arg_for_datastore(datastore, &release.delay_until)?,
+        timestamp_arg_for_datastore(datastore, &observation.last_observed_at)?,
+        timestamp_arg_for_datastore(datastore, &observation.eligible_at)?,
         SqlArg::Text(release.status.as_str().to_string()),
         opt_timestamp_arg_for_datastore(datastore, release.grabbed_at.as_deref())?,
         SqlArg::OptText(encrypt_pending_release_source_password(
@@ -1592,6 +1718,11 @@ fn pending_release_insert_args(
         SqlArg::OptF64(release.seed_minimums.season_pack_seed_ratio),
         SqlArg::OptI64(release.seed_minimums.season_pack_seed_time_minutes),
         SqlArg::OptI64(release.seeders),
+        SqlArg::Text(observation.release_identity.clone()),
+        SqlArg::Text(observation.coverage_identity.clone()),
+        SqlArg::Text(observation.role.as_str().to_string()),
+        SqlArg::OptText(observation.latest_decision_code.clone()),
+        SqlArg::Bool(observation.release_age_unknown),
     ])
 }
 
@@ -1612,22 +1743,204 @@ fn decrypt_pending_release_source_password(
 #[async_trait]
 impl PendingReleaseRepository for PendingReleaseStore {
     async fn insert_pending_release(&self, release: &PendingRelease) -> AppResult<String> {
+        let observation = PendingReleaseObservation::derived(release, PendingReleaseRole::Primary);
+        self.insert_pending_release_observation(release, &observation)
+            .await
+    }
+
+    async fn insert_pending_release_with_role(
+        &self,
+        release: &PendingRelease,
+        role: PendingReleaseRole,
+    ) -> AppResult<String> {
+        let observation = PendingReleaseObservation::derived(release, role);
+        self.insert_pending_release_observation(release, &observation)
+            .await
+    }
+
+    async fn insert_pending_release_observation(
+        &self,
+        release: &PendingRelease,
+        observation: &PendingReleaseObservation,
+    ) -> AppResult<String> {
         let encryption_key = self.encryption_key()?;
+
+        // A row first seen without a publish timestamp retains its original
+        // clock. A later observation may carry a GUID or info hash, so match
+        // the unknown row by the listing facts rather than its old identity.
+        if release
+            .published_at
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        {
+            let provisional_sql = "SELECT id FROM pending_releases
+                WHERE coverage_identity = {}
+                  AND release_age_unknown = {}
+                  AND status IN ('waiting', 'standby', 'processing', 'needs_review')
+                  AND lower(trim(release_title)) = {}
+                  AND lower(trim(COALESCE(indexer_id, indexer_source, 'unknown'))) = {}
+                ORDER BY added_at ASC, id ASC
+                LIMIT 1";
+            let normalized_title = release.release_title.trim().to_ascii_lowercase();
+            let normalized_indexer = release
+                .indexer_id
+                .as_deref()
+                .or(release.indexer_source.as_deref())
+                .unwrap_or("unknown")
+                .trim()
+                .to_ascii_lowercase();
+            if let Some(existing) = SqlRuntime::fetch_all(
+                self.datastore.read_exec(),
+                provisional_sql,
+                &[
+                    SqlArg::Text(observation.coverage_identity.clone()),
+                    SqlArg::Bool(true),
+                    SqlArg::Text(normalized_title),
+                    SqlArg::Text(normalized_indexer),
+                ],
+            )
+            .await?
+            .into_iter()
+            .next()
+            {
+                let existing_id = existing.text("id")?;
+                execute_datastore_write(
+                    &self.datastore,
+                    "fill_pending_release_published_at",
+                    "UPDATE pending_releases
+                        SET release_url = {},
+                            source_kind = {},
+                            release_size_bytes = {},
+                            release_score = {},
+                            scoring_log_json = {},
+                            source_password = COALESCE({}, source_password),
+                            indexer_source = {},
+                            indexer_id = {},
+                            release_guid = {},
+                            info_hash = {},
+                            minimum_seed_ratio = {},
+                            minimum_seed_time_minutes = {},
+                            season_pack_seed_ratio = {},
+                            season_pack_seed_time_minutes = {},
+                            seeders = {},
+                            delay_until = {},
+                            status = 'waiting',
+                            role = {},
+                            last_decision_code = COALESCE({}, last_decision_code),
+                            published_at = {},
+                            release_identity = {},
+                            release_age_unknown = {},
+                            last_observed_at = {}
+                      WHERE id = {}",
+                    vec![
+                        SqlArg::OptText(release.release_url.clone()),
+                        SqlArg::OptText(
+                            release.source_kind.map(|value| value.as_str().to_string()),
+                        ),
+                        SqlArg::OptI64(release.release_size_bytes),
+                        SqlArg::I32(release.release_score),
+                        opt_json_arg_for_datastore(
+                            &self.datastore,
+                            release.scoring_log_json.as_deref(),
+                        )?,
+                        SqlArg::OptText(encrypt_pending_release_source_password(
+                            encryption_key.as_ref(),
+                            release.source_password.as_ref(),
+                        )?),
+                        SqlArg::OptText(release.indexer_source.clone()),
+                        SqlArg::OptText(release.indexer_id.clone()),
+                        SqlArg::OptText(release.release_guid.clone()),
+                        SqlArg::OptText(release.info_hash.clone()),
+                        SqlArg::OptF64(release.seed_minimums.min_seed_ratio),
+                        SqlArg::OptI64(release.seed_minimums.min_seed_time_minutes),
+                        SqlArg::OptF64(release.seed_minimums.season_pack_seed_ratio),
+                        SqlArg::OptI64(release.seed_minimums.season_pack_seed_time_minutes),
+                        SqlArg::OptI64(release.seeders),
+                        timestamp_arg_for_datastore(&self.datastore, &observation.eligible_at)?,
+                        SqlArg::Text(observation.role.as_str().to_string()),
+                        SqlArg::OptText(observation.latest_decision_code.clone()),
+                        opt_timestamp_arg_for_datastore(
+                            &self.datastore,
+                            release.published_at.as_deref(),
+                        )?,
+                        SqlArg::Text(observation.release_identity.clone()),
+                        SqlArg::Bool(false),
+                        timestamp_arg_for_datastore(
+                            &self.datastore,
+                            &observation.last_observed_at,
+                        )?,
+                        SqlArg::Text(existing_id.clone()),
+                    ],
+                )
+                .await?;
+                return Ok(existing_id);
+            }
+        }
+
         execute_datastore_write(
             &self.datastore,
             "insert_pending_release",
             "INSERT INTO pending_releases
              (id, wanted_item_id, title_id, release_title, release_url, release_size_bytes,
               source_kind, release_score, scoring_log_json, indexer_source, indexer_id, release_guid,
-              added_at, delay_until, status, grabbed_at, source_password, published_at, info_hash,
+              added_at, last_observed_at, delay_until, status, grabbed_at, source_password, published_at, info_hash,
               minimum_seed_ratio, minimum_seed_time_minutes, season_pack_seed_ratio,
-              season_pack_seed_time_minutes, seeders)
+              season_pack_seed_time_minutes, seeders, release_identity, coverage_identity, role,
+              last_decision_code, release_age_unknown)
              VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {},
-                     {}, {}, {}, {}, {})",
-            pending_release_insert_args(&self.datastore, release, encryption_key.as_ref())?,
+                     {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})
+             ON CONFLICT(release_identity)
+             WHERE status IN ('waiting', 'standby', 'processing', 'needs_review')
+             DO UPDATE SET
+                release_url = excluded.release_url,
+                source_kind = excluded.source_kind,
+                release_size_bytes = excluded.release_size_bytes,
+                release_score = excluded.release_score,
+                scoring_log_json = excluded.scoring_log_json,
+                indexer_source = excluded.indexer_source,
+                indexer_id = excluded.indexer_id,
+                release_guid = excluded.release_guid,
+                source_password = COALESCE(excluded.source_password, pending_releases.source_password),
+                info_hash = excluded.info_hash,
+                minimum_seed_ratio = excluded.minimum_seed_ratio,
+                minimum_seed_time_minutes = excluded.minimum_seed_time_minutes,
+                season_pack_seed_ratio = excluded.season_pack_seed_ratio,
+                season_pack_seed_time_minutes = excluded.season_pack_seed_time_minutes,
+                seeders = excluded.seeders,
+                delay_until = excluded.delay_until,
+                published_at = COALESCE(pending_releases.published_at, excluded.published_at),
+                release_age_unknown = excluded.release_age_unknown
+                    AND pending_releases.published_at IS NULL,
+                coverage_identity = excluded.coverage_identity,
+                role = excluded.role,
+                last_decision_code = COALESCE(excluded.last_decision_code, pending_releases.last_decision_code),
+                last_observed_at = excluded.last_observed_at",
+            pending_release_insert_args(
+                &self.datastore,
+                release,
+                encryption_key.as_ref(),
+                observation,
+            )?,
         )
         .await?;
-        Ok(release.id.clone())
+        let persisted = SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            "SELECT id FROM pending_releases
+              WHERE release_identity = {}
+                AND status IN ('waiting', 'standby', 'processing', 'needs_review')
+              ORDER BY added_at ASC, id ASC
+              LIMIT 1",
+            &[SqlArg::Text(observation.release_identity.clone())],
+        )
+        .await?
+        .into_iter()
+        .next()
+        .ok_or_else(|| {
+            scryer_application::AppError::Repository(
+                "pending release observation was not persisted".to_string(),
+            )
+        })?;
+        persisted.text("id")
     }
 
     async fn list_expired_pending_releases(&self, now: &str) -> AppResult<Vec<PendingRelease>> {
@@ -1648,12 +1961,12 @@ impl PendingReleaseRepository for PendingReleaseStore {
     }
 
     async fn list_waiting_pending_releases(&self) -> AppResult<Vec<PendingRelease>> {
-        // `needs_review` rows are parked, not delayed, but they are open work and
-        // belong in the same review surface as `waiting` (§9 decision 2).
+        // Merge candidates remain actionable; manual-review rows are deliberately
+        // excluded so automatic processing cannot grab them.
         let sql = format!(
             "SELECT {PENDING_RELEASE_COLUMNS}
                FROM pending_releases
-              WHERE status IN ('waiting', 'needs_review')
+              WHERE status IN ('waiting', 'standby')
               ORDER BY delay_until ASC"
         );
         let encryption_key = self.encryption_key()?;
@@ -1661,6 +1974,26 @@ impl PendingReleaseRepository for PendingReleaseStore {
             self.datastore.read_exec(),
             &sql,
             &[],
+            encryption_key.as_ref(),
+        )
+        .await
+    }
+
+    async fn list_active_release_age_unknown_pending_releases(
+        &self,
+    ) -> AppResult<Vec<PendingRelease>> {
+        let sql = format!(
+            "SELECT {PENDING_RELEASE_COLUMNS}
+              FROM pending_releases
+              WHERE release_age_unknown = {{}}
+                AND status IN ('waiting', 'standby', 'processing', 'needs_review')
+              ORDER BY indexer_id ASC, added_at ASC, id ASC"
+        );
+        let encryption_key = self.encryption_key()?;
+        fetch_pending_releases(
+            self.datastore.read_exec(),
+            &sql,
+            &[SqlArg::Bool(true)],
             encryption_key.as_ref(),
         )
         .await
@@ -1824,6 +2157,44 @@ impl PendingReleaseRepository for PendingReleaseStore {
         Ok(())
     }
 
+    async fn expire_pending_release(&self, id: &str, decision_code: &str) -> AppResult<()> {
+        execute_datastore_write(
+            &self.datastore,
+            "expire_pending_release",
+            "UPDATE pending_releases
+                SET status = 'expired', last_decision_code = {}
+              WHERE id = {}",
+            vec![
+                SqlArg::Text(decision_code.to_string()),
+                SqlArg::Text(id.to_string()),
+            ],
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn mark_release_age_unknown_pending_release_needs_review(
+        &self,
+        id: &str,
+        decision_code: &str,
+    ) -> AppResult<()> {
+        execute_datastore_write(
+            &self.datastore,
+            "mark_release_age_unknown_pending_release_needs_review",
+            "UPDATE pending_releases
+                SET status = 'needs_review', last_decision_code = {}
+              WHERE id = {}
+                AND release_age_unknown = 1
+                AND status IN ('waiting', 'standby', 'processing')",
+            vec![
+                SqlArg::Text(decision_code.to_string()),
+                SqlArg::Text(id.to_string()),
+            ],
+        )
+        .await?;
+        Ok(())
+    }
+
     async fn update_pending_release_delay_until(
         &self,
         id: &str,
@@ -1965,23 +2336,23 @@ impl PendingReleaseRepository for PendingReleaseStore {
         Ok(rows > 0)
     }
 
-    async fn supersede_pending_releases_for_acquisition_scope_state(
+    async fn retire_lower_or_equal_overlapping_pending_releases(
         &self,
-        wanted_item_id: &str,
-        except_id: &str,
+        lower_or_equal_ids: &[String],
     ) -> AppResult<()> {
-        execute_datastore_write(
-            &self.datastore,
-            "supersede_pending_releases_for_acquisition_scope_state",
-            "UPDATE pending_releases
-                SET status = 'superseded'
-              WHERE wanted_item_id = {} AND id != {} AND status = 'waiting'",
-            vec![
-                SqlArg::Text(wanted_item_id.to_string()),
-                SqlArg::Text(except_id.to_string()),
-            ],
-        )
-        .await?;
+        for id in lower_or_equal_ids {
+            execute_datastore_write(
+                &self.datastore,
+                "retire_lower_or_equal_overlapping_pending_release",
+                "UPDATE pending_releases
+                    SET status = 'superseded',
+                        last_decision_code = 'grabbed_overlap_retired'
+                  WHERE id = {}
+                    AND status IN ('waiting', 'standby', 'processing', 'needs_review')",
+                vec![SqlArg::Text(id.clone())],
+            )
+            .await?;
+        }
         Ok(())
     }
 
@@ -1997,19 +2368,17 @@ impl PendingReleaseRepository for PendingReleaseStore {
     }
 }
 
-const BLOCKLIST_COLUMNS: &str =
-    "id, title_id, source_title, source_hint, quality, download_id, reason, data_json, created_at";
+const BLOCKLIST_COLUMNS: &str = "id, title_id, release_name, normalized_release_name, indexer_id, info_hash, reason, created_at";
 
 fn blocklist_row_to_entry_sql(row: &SqlRow) -> AppResult<BlocklistEntry> {
     Ok(BlocklistEntry {
         id: row.text("id")?,
         title_id: row.text("title_id")?,
-        source_title: row.opt_text("source_title")?,
-        source_hint: row.opt_text("source_hint")?,
-        quality: row.opt_text("quality")?,
-        download_id: row.opt_text("download_id")?,
+        release_name: row.text("release_name")?,
+        normalized_release_name: row.text("normalized_release_name")?,
+        indexer_id: row.text("indexer_id")?,
+        info_hash: row.opt_text("info_hash")?,
         reason: row.opt_text("reason")?,
-        data_json: json_text_from_row(row, "data_json")?,
         created_at: required_timestamp_text(row, "created_at")?,
     })
 }
@@ -2036,130 +2405,35 @@ async fn fetch_exists(exec: SqlExec<'_, '_>, sql: &str, args: &[SqlArg]) -> AppR
 
 #[async_trait]
 impl BlocklistRepository for BlocklistStore {
-    async fn add(&self, entry: &NewBlocklistEntry) -> AppResult<String> {
-        let id = Id::new().0;
-        let now = Utc::now().to_rfc3339();
-        let data_json = serde_json::to_string(&entry.data).map_err(repo_err)?;
-        execute_datastore_write(
+    async fn block(&self, entry: &NewBlocklistEntry) -> AppResult<bool> {
+        let Some(normalized_release_name) = normalize_release_name(Some(&entry.release_name))
+        else {
+            return Ok(false);
+        };
+        // `ON CONFLICT DO NOTHING` against the two unique indexes, rather than a
+        // read-then-write in application code: two writers recording the same
+        // failure cannot both insert, and neither needs a lock to find out.
+        let rows_written = execute_datastore_write(
             &self.datastore,
             "insert_blocklist_entry",
             "INSERT INTO blocklist
-             (id, title_id, source_title, source_hint, quality, download_id, reason, data_json, created_at)
-             VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {})",
+             (id, title_id, release_name, normalized_release_name, indexer_id,
+              info_hash, reason, created_at)
+             VALUES ({}, {}, {}, {}, {}, {}, {}, {})
+             ON CONFLICT DO NOTHING",
             vec![
-                SqlArg::Text(id.clone()),
+                SqlArg::Text(Id::new().0),
                 SqlArg::Text(entry.title_id.clone()),
-                SqlArg::OptText(entry.source_title.clone()),
-                SqlArg::OptText(entry.source_hint.clone()),
-                SqlArg::OptText(entry.quality.clone()),
-                SqlArg::OptText(entry.download_id.clone()),
+                SqlArg::Text(entry.release_name.trim().to_string()),
+                SqlArg::Text(normalized_release_name),
+                SqlArg::Text(entry.indexer_id.trim().to_string()),
+                SqlArg::OptText(normalize_info_hash(entry.info_hash.as_deref())),
                 SqlArg::OptText(entry.reason.clone()),
-                opt_json_arg_for_datastore(&self.datastore, Some(&data_json))?,
-                timestamp_arg_for_datastore(&self.datastore, &now)?,
+                timestamp_arg_for_datastore(&self.datastore, &Utc::now().to_rfc3339())?,
             ],
         )
         .await?;
-        Ok(id)
-    }
-
-    async fn add_failed_download_if_absent(&self, entry: &NewBlocklistEntry) -> AppResult<bool> {
-        let id = Id::new().0;
-        let now = Utc::now().to_rfc3339();
-        let title_id = entry.title_id.clone();
-        let source_title = entry.source_title.clone();
-        let source_hint = entry.source_hint.clone();
-        let download_id = entry.download_id.clone();
-        let quality = entry.quality.clone();
-        let reason = entry.reason.clone();
-        let data_json = serde_json::to_string(&entry.data).map_err(repo_err)?;
-        let data_arg = opt_json_arg_for_datastore(&self.datastore, Some(&data_json))?;
-        let created_at_arg = timestamp_arg_for_datastore(&self.datastore, &now)?;
-        let use_postgres_advisory_lock = matches!(&self.datastore, StoreDatastore::Postgres { .. });
-
-        let dedupe_key = source_title
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(|value| ("source_title", value.to_ascii_lowercase()))
-            .or_else(|| {
-                source_hint
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(|value| ("source_hint", value.to_ascii_lowercase()))
-            })
-            .or_else(|| {
-                download_id
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(|value| ("download_id", value.to_ascii_lowercase()))
-            });
-
-        let datastore = self.datastore.clone();
-        SqlRuntime::run_in_transaction(&datastore, "insert_failed_download_blocklist_entry", move |tx| {
-            let title_id = title_id.clone();
-            let source_title = source_title.clone();
-            let source_hint = source_hint.clone();
-            let download_id = download_id.clone();
-            let quality = quality.clone();
-            let reason = reason.clone();
-            let id = id.clone();
-            let data_arg = data_arg.clone();
-            let created_at_arg = created_at_arg.clone();
-            let dedupe_key = dedupe_key.clone();
-            let use_postgres_advisory_lock = use_postgres_advisory_lock;
-            Box::pin(async move {
-                if let Some((column, value)) = dedupe_key {
-                    if use_postgres_advisory_lock {
-                        let lock_key = format!("{title_id}:{column}:{value}");
-                        let _ = SqlRuntime::fetch_optional(
-                            SqlExec::Tx(&mut *tx),
-                            "SELECT pg_advisory_xact_lock(hashtext({}))",
-                            &[SqlArg::Text(lock_key)],
-                        )
-                        .await?;
-                    }
-
-                    let matched = fetch_exists(
-                        SqlExec::Tx(&mut *tx),
-                        &format!(
-                            "SELECT EXISTS(
-                                 SELECT 1 FROM blocklist
-                                  WHERE title_id = {{}}
-                                    AND LOWER(TRIM(COALESCE({column}, ''))) = {{}}
-                             ) AS matched"
-                        ),
-                        &[SqlArg::Text(title_id.clone()), SqlArg::Text(value)],
-                    )
-                    .await?;
-                    if matched {
-                        return Ok(false);
-                    }
-                }
-
-                SqlRuntime::execute(
-                    SqlExec::Tx(&mut *tx),
-                    "INSERT INTO blocklist
-                     (id, title_id, source_title, source_hint, quality, download_id, reason, data_json, created_at)
-                     VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {})",
-                    &[
-                        SqlArg::Text(id),
-                        SqlArg::Text(title_id),
-                        SqlArg::OptText(source_title),
-                        SqlArg::OptText(source_hint),
-                        SqlArg::OptText(quality),
-                        SqlArg::OptText(download_id),
-                        SqlArg::OptText(reason),
-                        data_arg,
-                        created_at_arg,
-                    ],
-                )
-                .await?;
-                Ok(true)
-            })
-        })
-        .await
+        Ok(rows_written > 0)
     }
 
     async fn list_for_title(&self, title_id: &str, limit: usize) -> AppResult<Vec<BlocklistEntry>> {
@@ -2206,31 +2480,64 @@ impl BlocklistRepository for BlocklistStore {
         Ok((entries, total))
     }
 
-    async fn has_recorded_download_failure(
+    async fn is_blocked(
         &self,
         title_id: &str,
-        source_title: Option<&str>,
+        indexer_id: &str,
+        release_name: &str,
+        info_hash: Option<&str>,
     ) -> AppResult<bool> {
-        let Some(source_title) = source_title
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_ascii_lowercase)
-        else {
+        // Infohash first: content identity is the same wherever the torrent
+        // came from, so it answers without consulting the indexer at all.
+        if let Some(info_hash) = normalize_info_hash(info_hash)
+            && fetch_exists(
+                self.datastore.read_exec(),
+                "SELECT EXISTS(
+                     SELECT 1 FROM blocklist
+                      WHERE title_id = {} AND info_hash = {}
+                 ) AS matched",
+                &[SqlArg::Text(title_id.to_string()), SqlArg::Text(info_hash)],
+            )
+            .await?
+        {
+            return Ok(true);
+        }
+        let Some(normalized_release_name) = normalize_release_name(Some(release_name)) else {
             return Ok(false);
         };
+        // An empty stored indexer blocks the name on every indexer.
         fetch_exists(
             self.datastore.read_exec(),
             "SELECT EXISTS(
                  SELECT 1 FROM blocklist
                   WHERE title_id = {}
-                    AND LOWER(TRIM(COALESCE(source_title, ''))) = {}
+                    AND normalized_release_name = {}
+                    AND (indexer_id = '' OR indexer_id = {})
              ) AS matched",
             &[
                 SqlArg::Text(title_id.to_string()),
-                SqlArg::Text(source_title),
+                SqlArg::Text(normalized_release_name),
+                SqlArg::Text(indexer_id.trim().to_string()),
             ],
         )
         .await
+    }
+
+    async fn get(&self, id: &str) -> AppResult<Option<BlocklistEntry>> {
+        let sql = format!(
+            "SELECT {BLOCKLIST_COLUMNS}
+               FROM blocklist
+              WHERE id = {{}}
+              LIMIT 1"
+        );
+        Ok(fetch_blocklist_entries(
+            self.datastore.read_exec(),
+            &sql,
+            &[SqlArg::Text(id.to_string())],
+        )
+        .await?
+        .into_iter()
+        .next())
     }
 
     async fn remove(&self, id: &str) -> AppResult<()> {
@@ -2244,28 +2551,29 @@ impl BlocklistRepository for BlocklistStore {
         Ok(())
     }
 
-    async fn is_blocklisted(&self, title_id: &str, source_title: &str) -> AppResult<bool> {
-        fetch_exists(
-            self.datastore.read_exec(),
-            "SELECT EXISTS(
-                 SELECT 1 FROM blocklist
-                  WHERE title_id = {}
-                    AND LOWER(TRIM(COALESCE(source_title, ''))) = LOWER(TRIM({}))
-             ) AS matched",
-            &[
-                SqlArg::Text(title_id.to_string()),
-                SqlArg::Text(source_title.to_string()),
-            ],
-        )
-        .await
-    }
-
     async fn delete_for_title(&self, title_id: &str) -> AppResult<()> {
         execute_datastore_write(
             &self.datastore,
             "delete_blocklist_for_title",
             "DELETE FROM blocklist WHERE title_id = {}",
             vec![SqlArg::Text(title_id.to_string())],
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn delete_for_indexer(&self, indexer_id: &str) -> AppResult<()> {
+        let indexer_id = indexer_id.trim();
+        if indexer_id.is_empty() {
+            // The empty indexer is the every-indexer wildcard, not a row a
+            // deleted indexer owns.
+            return Ok(());
+        }
+        execute_datastore_write(
+            &self.datastore,
+            "delete_blocklist_for_indexer",
+            "DELETE FROM blocklist WHERE indexer_id = {}",
+            vec![SqlArg::Text(indexer_id.to_string())],
         )
         .await?;
         Ok(())

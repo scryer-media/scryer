@@ -25,10 +25,13 @@ async fn graphql_get_handler(
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Json<Value> {
     let scenario = state.current_scenario();
-    let variables_str = params.get("variables").cloned().unwrap_or_default();
+    let operation_name = params
+        .get("operationName")
+        .map(String::as_str)
+        .unwrap_or_default();
     tracing::debug!(scenario = %scenario, "smg graphql GET (APQ)");
 
-    resolve_response(&variables_str)
+    fixture_response(operation_name, "")
 }
 
 /// POST handler — parses the query body to determine response.
@@ -38,54 +41,62 @@ async fn graphql_post_handler(
 ) -> Json<Value> {
     let scenario = state.current_scenario();
     let query = body.get("query").and_then(Value::as_str).unwrap_or("");
-    let variables = body.get("variables").cloned().unwrap_or(Value::Null);
-    let variables_str = serde_json::to_string(&variables).unwrap_or_default();
+    let operation_name = body
+        .get("operationName")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
 
     tracing::debug!(scenario = %scenario, query_len = query.len(), "smg graphql POST");
 
-    // Detect query type from the query string
-    if query.contains("searchTvdbBatch") {
-        let fixture = load_fixture("smg/search_tvdb_batch.json");
-        let parsed: Value = serde_json::from_str(&fixture).expect("valid fixture");
-        return Json(parsed);
-    }
-
-    if query.contains("searchTvdbMulti") {
-        let fixture = load_fixture("smg/search_tvdb_multi.json");
-        let parsed: Value = serde_json::from_str(&fixture).expect("valid fixture");
-        return Json(parsed);
-    }
-
-    if query.contains("getSeries") || (query.contains("series") && !query.contains("searchTvdb")) {
-        let fixture = load_fixture("smg/get_series.json");
-        let parsed: Value = serde_json::from_str(&fixture).expect("valid fixture");
-        return Json(parsed);
-    }
-
-    if query.contains("getMovie") || (query.contains("movie") && !query.contains("searchTvdb")) {
-        let fixture = load_fixture("smg/get_movie.json");
-        let parsed: Value = serde_json::from_str(&fixture).expect("valid fixture");
-        return Json(parsed);
-    }
-
-    resolve_response(&variables_str)
+    fixture_response(operation_name, query)
 }
 
-/// Resolve the response based on variables (handles both GET and POST).
-fn resolve_response(variables_str: &str) -> Json<Value> {
-    // Try to parse variables to detect query intent
-    let variables: Value = serde_json::from_str(variables_str).unwrap_or(Value::Null);
-
-    // If variables contain tvdbId (get movie/series), return appropriate fixture
-    if variables.get("tvdbId").is_some() || variables.get("tvdb_id").is_some() {
-        // Check if it looks like a series or movie request
-        let fixture = load_fixture("smg/get_movie.json");
-        let parsed: Value = serde_json::from_str(&fixture).expect("valid fixture");
-        return Json(parsed);
-    }
-
-    // Default: search response
-    let fixture = load_fixture("smg/search_tvdb_rich.json");
+fn fixture_response(operation_name: &str, query: &str) -> Json<Value> {
+    let operation = if query.is_empty() {
+        operation_name
+    } else {
+        query
+    };
+    let fixture =
+        if operation.contains("searchTitlesBatch") || operation.contains("SearchTitlesBatch") {
+            "smg/search_titles_batch.json"
+        } else if operation.contains("searchTitles(") || operation.contains("SearchTitles") {
+            "smg/search_titles.json"
+        } else if operation.contains("resolveTitles(") || operation.contains("ResolveTitles") {
+            "smg/resolve_titles.json"
+        } else if operation.contains("titles(") || operation.contains("Titles") {
+            "smg/titles_movie.json"
+        } else if operation.contains("metadataBulk(") || operation.contains("MetadataBulk") {
+            "smg/metadata_bulk_movie.json"
+        } else if operation.contains("searchTvdbBatch") || operation.contains("SearchTvdbBatch") {
+            "smg/search_tvdb_batch.json"
+        } else if operation.contains("searchTvdbMulti") || operation.contains("SearchTvdbMulti") {
+            "smg/search_tvdb_multi.json"
+        } else if operation.contains("series(") || operation.contains("GetSeries") {
+            "smg/get_series.json"
+        } else if operation.contains("movie(") || operation.contains("GetMovie") {
+            "smg/get_movie.json"
+        } else {
+            "smg/search_tvdb_rich.json"
+        };
+    let fixture = load_fixture(fixture);
     let parsed: Value = serde_json::from_str(&fixture).expect("valid fixture");
     Json(parsed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fixture_response;
+
+    #[test]
+    fn routes_title_id_operations_by_operation_name() {
+        let response = fixture_response("Titles", "");
+        assert!(response["data"]["titles"].is_object());
+
+        let response = fixture_response(
+            "",
+            "query { searchTitles(query: \"x\") { results { title_id } } }",
+        );
+        assert!(response["data"]["searchTitles"].is_object());
+    }
 }

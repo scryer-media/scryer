@@ -105,6 +105,17 @@ impl ScopeIndexerCoverageRepository for ScopeIndexerCoverageStore {
         Ok(())
     }
 
+    async fn prune_indexer(&self, indexer_id: &str) -> AppResult<()> {
+        SqlRuntime::execute_write(
+            &self.datastore,
+            "prune_scope_indexer_coverage_for_indexer_globally",
+            "DELETE FROM scope_indexer_coverage WHERE indexer_id = {}",
+            vec![SqlArg::Text(indexer_id.to_string())],
+        )
+        .await?;
+        Ok(())
+    }
+
     async fn list_coverage_for_scope_keys(
         &self,
         scope_keys: &[String],

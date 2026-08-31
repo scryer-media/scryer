@@ -41,6 +41,10 @@ export function setOnBackendRestarting(cb: (() => void) | null) {
   onBackendRestarting = cb;
 }
 
+export function notifyBackendRestarting() {
+  onBackendRestarting?.();
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value != null && typeof value === "object";
 }

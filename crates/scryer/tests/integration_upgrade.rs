@@ -40,7 +40,7 @@ fn app_with_real_fs(ctx: &TestContext) -> scryer_application::AppUseCase {
     ctx.app.with_test_overrides(|builder| {
         builder
             .with_media_files(Arc::new(ctx.media_files.clone()))
-            .with_file_importer(Arc::new(FsFileImporter))
+            .with_file_importer(Arc::new(FsFileImporter::new()))
     })
 }
 
@@ -60,10 +60,11 @@ fn app_with_failing_media_path_update(
         builder
             .with_media_files(Arc::new(FailingPathUpdateMediaFileRepo {
                 inner: ctx.media_files.clone(),
+                fail_insert: false,
                 fail_path,
                 rollback_occupant: None,
             }))
-            .with_file_importer(Arc::new(FsFileImporter))
+            .with_file_importer(Arc::new(FsFileImporter::new()))
     })
 }
 
@@ -77,10 +78,24 @@ fn app_with_failing_media_path_update_and_rollback_occupant(
         builder
             .with_media_files(Arc::new(FailingPathUpdateMediaFileRepo {
                 inner: ctx.media_files.clone(),
+                fail_insert: false,
                 fail_path,
                 rollback_occupant: Some((occupant_path, occupant_bytes)),
             }))
-            .with_file_importer(Arc::new(FsFileImporter))
+            .with_file_importer(Arc::new(FsFileImporter::new()))
+    })
+}
+
+fn app_with_failing_media_insert(ctx: &TestContext) -> scryer_application::AppUseCase {
+    ctx.app.with_test_overrides(|builder| {
+        builder
+            .with_media_files(Arc::new(FailingPathUpdateMediaFileRepo {
+                inner: ctx.media_files.clone(),
+                fail_insert: true,
+                fail_path: String::new(),
+                rollback_occupant: None,
+            }))
+            .with_file_importer(Arc::new(FsFileImporter::new()))
     })
 }
 
@@ -92,7 +107,7 @@ impl FileImporter for CleanupFailingFileImporter {
         &self,
         source: &Path,
     ) -> AppResult<scryer_domain::ImportSourceSnapshot> {
-        let importer = FsFileImporter;
+        let importer = FsFileImporter::new();
         importer.snapshot_import_source(source).await
     }
 
@@ -103,7 +118,7 @@ impl FileImporter for CleanupFailingFileImporter {
         mode: scryer_domain::ImportMode,
         expected_source: Option<&scryer_domain::ImportSourceSnapshot>,
     ) -> AppResult<scryer_domain::ImportFileResult> {
-        let importer = FsFileImporter;
+        let importer = FsFileImporter::new();
         importer
             .import_file(source, dest, mode, expected_source)
             .await
@@ -122,6 +137,7 @@ impl FileImporter for CleanupFailingFileImporter {
 
 struct FailingPathUpdateMediaFileRepo {
     inner: MediaFileStore,
+    fail_insert: bool,
     fail_path: String,
     rollback_occupant: Option<(PathBuf, Vec<u8>)>,
 }
@@ -129,7 +145,27 @@ struct FailingPathUpdateMediaFileRepo {
 #[async_trait]
 impl MediaFileRepository for FailingPathUpdateMediaFileRepo {
     async fn insert_media_file(&self, input: &InsertMediaFileInput) -> AppResult<String> {
+        if self.fail_insert {
+            return Err(AppError::Repository(
+                "forced media-file insertion failure".to_string(),
+            ));
+        }
         self.inner.insert_media_file(input).await
+    }
+
+    async fn claim_import_destination(
+        &self,
+        input: &InsertMediaFileInput,
+        associations: &scryer_application::MediaFileAssociations,
+    ) -> AppResult<scryer_application::ClaimedMediaFile> {
+        if self.fail_insert {
+            return Err(AppError::Repository(
+                "forced media-file insertion failure".to_string(),
+            ));
+        }
+        self.inner
+            .claim_import_destination(input, associations)
+            .await
     }
 
     async fn link_file_to_episode(&self, file_id: &str, episode_id: &str) -> AppResult<()> {
@@ -2368,4 +2404,166 @@ async fn disabled_recycle_bin_upgrade_validation_failure_preserves_old_file() {
         .expect("list media files");
     assert_eq!(files.len(), 1);
     assert_eq!(files[0].id, existing.id);
+}
+
+#[tokio::test]
+async fn reused_upgrade_destination_survives_pre_swap_validation_failure() {
+    let ctx = TestContext::new().await;
+    let app = app_with_real_fs(&ctx);
+    let title = seed_title(&ctx, "title-reused-upgrade").await;
+    let actor = test_actor();
+    let media_dir = tempfile::tempdir().expect("media dir");
+    let source_dir = tempfile::tempdir().expect("source dir");
+    let wrong_root = tempfile::tempdir().expect("wrong root");
+    let old_path = media_dir.path().join("Movie.720p.mkv");
+    let new_source = source_dir.path().join("Movie.1080p.mkv");
+    let new_dest = media_dir.path().join("Movie.1080p.mkv");
+    std::fs::write(&old_path, b"old content guarded").expect("write old");
+    std::fs::write(&new_source, b"recovered replacement content").expect("write source");
+    std::fs::write(&new_dest, b"recovered replacement content").expect("write destination");
+    let existing = seed_media_file(
+        &ctx,
+        "title-reused-upgrade",
+        &old_path,
+        b"old content guarded".len() as i64,
+        300,
+    )
+    .await;
+    let recovered = seed_media_file(
+        &ctx,
+        "title-reused-upgrade",
+        &new_dest,
+        b"recovered replacement content".len() as i64,
+        650,
+    )
+    .await;
+    let disabled_config = RecycleBinConfig {
+        enabled: false,
+        base_path: std::path::PathBuf::from("/tmp/unused"),
+        retention_days: 7,
+        cleanup_enabled: true,
+        validation_error: None,
+        source_roots: vec![media_dir.path().to_path_buf()],
+    };
+
+    let result = execute_upgrade_for_test(
+        &app,
+        UpgradeForTestInput {
+            actor: &actor,
+            title: &title,
+            existing_file: &existing,
+            source_path: &new_source,
+            dest_path: &new_dest,
+            parsed: scryer_application::parse_release_metadata("Movie.1080p.WEB-DL"),
+            final_score: 650,
+            target_episode_ids: &[],
+            media_root: Some(wrong_root.path().to_string_lossy().as_ref()),
+            recycle_config: &disabled_config,
+        },
+    )
+    .await;
+
+    assert!(result.is_err(), "replacement validation should fail");
+    assert_eq!(
+        std::fs::read(&new_dest).expect("recovered destination should remain"),
+        b"recovered replacement content"
+    );
+    assert!(
+        ctx.media_files
+            .get_media_file_by_id(&recovered.id)
+            .await
+            .expect("load recovered row")
+            .is_some(),
+        "rollback must not delete a row from an earlier finalization attempt"
+    );
+    assert!(
+        ctx.media_files
+            .get_media_file_by_id(&existing.id)
+            .await
+            .expect("load old row")
+            .is_some(),
+        "old row must remain before the guarded swap"
+    );
+}
+
+#[tokio::test]
+async fn uncataloged_existing_upgrade_destination_survives_insert_failure() {
+    let ctx = TestContext::new().await;
+    let app = app_with_failing_media_insert(&ctx);
+    let title = seed_title(&ctx, "title-existing-destination").await;
+    let actor = test_actor();
+    let media_dir = tempfile::tempdir().expect("media dir");
+    let source_dir = tempfile::tempdir().expect("source dir");
+    let old_path = media_dir.path().join("Movie.720p.mkv");
+    let new_source = source_dir.path().join("Movie.1080p.mkv");
+    let new_dest = media_dir.path().join("Movie.1080p.mkv");
+    std::fs::write(&old_path, b"old content guarded").expect("write old");
+    std::fs::write(&new_source, b"existing destination content").expect("write source");
+    std::fs::write(&new_dest, b"existing destination content").expect("write destination");
+    let existing = seed_media_file(
+        &ctx,
+        "title-existing-destination",
+        &old_path,
+        b"old content guarded".len() as i64,
+        300,
+    )
+    .await;
+    let disabled_config = RecycleBinConfig {
+        enabled: false,
+        base_path: std::path::PathBuf::from("/tmp/unused"),
+        retention_days: 7,
+        cleanup_enabled: true,
+        validation_error: None,
+        source_roots: vec![media_dir.path().to_path_buf()],
+    };
+
+    let result = execute_upgrade_for_test(
+        &app,
+        UpgradeForTestInput {
+            actor: &actor,
+            title: &title,
+            existing_file: &existing,
+            source_path: &new_source,
+            dest_path: &new_dest,
+            parsed: scryer_application::parse_release_metadata("Movie.1080p.WEB-DL"),
+            final_score: 650,
+            target_episode_ids: &[],
+            media_root: Some(media_dir.path().to_string_lossy().as_ref()),
+            recycle_config: &disabled_config,
+        },
+    )
+    .await;
+    let Err(error) = result else {
+        panic!("forced media-row insertion should fail the upgrade");
+    };
+
+    assert!(
+        error
+            .to_string()
+            .contains("forced media-file insertion failure")
+    );
+    assert_eq!(
+        std::fs::read(&new_dest).expect("existing destination should remain"),
+        b"existing destination content"
+    );
+    assert_eq!(
+        std::fs::read(&new_source).expect("source should remain"),
+        b"existing destination content"
+    );
+    assert!(
+        ctx.media_files
+            .get_media_file_by_path(new_dest.to_string_lossy().as_ref())
+            .await
+            .expect("destination lookup should succeed")
+            .is_none(),
+        "the failed insert must not leave a catalog row"
+    );
+    assert!(
+        ctx.media_files
+            .get_media_file_by_id(&existing.id)
+            .await
+            .expect("load old row")
+            .is_some(),
+        "the incumbent must remain before a completed swap"
+    );
 }

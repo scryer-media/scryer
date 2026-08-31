@@ -93,6 +93,40 @@ impl MetadataGateway for MediaRequestMetadataGateway {
             .collect();
         Ok(BulkMetadataResult { movies, series })
     }
+
+    async fn get_movie_titles(
+        &self,
+        refs: &[MovieTitleRef],
+        _language: &str,
+    ) -> AppResult<MovieTitleBulkResult> {
+        if self.fail_detail {
+            return Err(AppError::Repository("movie metadata unavailable".into()));
+        }
+        let mut result = MovieTitleBulkResult::default();
+        for (ref_index, movie_ref) in refs.iter().enumerate() {
+            let movie = self.movies.values().find(|movie| {
+                movie_ref
+                    .smg_id
+                    .is_some_and(|smg_id| movie.smg_id == Some(smg_id))
+                    || movie_ref
+                        .tvdb_id
+                        .is_some_and(|tvdb_id| movie.tvdb_id == Some(tvdb_id))
+                    || movie_ref
+                        .tmdb_id
+                        .is_some_and(|tmdb_id| movie.tmdb_id == Some(tmdb_id))
+                    || movie_ref
+                        .imdb_id
+                        .as_deref()
+                        .is_some_and(|imdb_id| movie.imdb_id == imdb_id)
+            });
+            if let Some(movie) = movie {
+                result.by_ref_index.insert(ref_index, movie.clone());
+            } else {
+                result.missing_ref_indexes.push(ref_index);
+            }
+        }
+        Ok(result)
+    }
 }
 
 fn external_id(source: &str, value: impl ToString) -> ExternalId {
@@ -678,6 +712,43 @@ async fn submit_media_request_enriches_movie_external_ids_from_metadata() {
             ("imdb", "tt9100100"),
             ("tmdb", "810010"),
             ("tvdb", "91001"),
+        ],
+    );
+}
+
+#[tokio::test]
+async fn submit_media_request_enriches_tmdb_only_movie_from_title_ref() {
+    let harness = bootstrap_media_request_app();
+    let tvdb_id = 91_021;
+    let tmdb_id = 810_021;
+    let mut movie = make_movie_metadata(tvdb_id, "TMDB Request Movie");
+    movie.smg_id = Some(1_810_021);
+    movie.tmdb_id = Some(tmdb_id);
+    movie.imdb_id = "tt8100021".to_string();
+    let app = harness.app.with_test_overrides(|builder| {
+        builder.with_metadata_gateway(Arc::new(MediaRequestMetadataGateway {
+            movies: HashMap::from([(tvdb_id, movie)]),
+            ..Default::default()
+        }))
+    });
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let mut input = media_request_input(library_id, tvdb_id);
+    input.title = "TMDB Request Movie".to_string();
+    input.external_ids = vec![external_id("tmdb", tmdb_id)];
+
+    app.submit_media_request(&harness.user, input)
+        .await
+        .expect("TMDB-only movie request should enrich");
+
+    let requests = harness.media_requests.requests.lock().await;
+    assert_eq!(requests.len(), 1);
+    assert_external_ids(
+        &requests[0].external_ids,
+        &[
+            ("imdb", "tt8100021"),
+            ("smg", "1810021"),
+            ("tmdb", "810021"),
+            ("tvdb", "91021"),
         ],
     );
 }

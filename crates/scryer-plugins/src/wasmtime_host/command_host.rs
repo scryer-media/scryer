@@ -8,7 +8,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use scryer_plugin_sdk::host::{
     HOST_ABI_MODULE, PluginConfigGetResponse, PluginHostRequest, PluginHostResponse,
@@ -17,17 +17,19 @@ use scryer_plugin_sdk::host::{
 use scryer_plugin_sdk::{PluginError, PluginErrorCode, PluginResult};
 use wasmtime::{Caller, Linker, Memory};
 
-use crate::plugin_http_host::{IndexerProxyPolicy, PluginHttpHost, PluginHttpRequest};
+use crate::plugin_http_host::{
+    IndexerErrorCaptureContext, IndexerProxyPolicy, PluginHttpHost, PluginHttpRequest,
+};
 use crate::wasmtime_host::sandbox::HostCtx;
 
 const MAX_RESPONSE_HANDLES: usize = 32;
 const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_STATE_BYTES: usize = 1024 * 1024;
-
 #[derive(Clone)]
 pub(crate) struct CommandHost {
     state: Arc<Mutex<CommandHostState>>,
     services: Option<Arc<CommandHostServices>>,
+    request_deadline: Option<Instant>,
 }
 
 struct CommandHostState {
@@ -57,6 +59,7 @@ impl CommandHost {
                 responses: HashMap::new(),
             })),
             services: None,
+            request_deadline: None,
         }
     }
 
@@ -79,6 +82,7 @@ impl CommandHost {
                 http: PluginHttpHost::new(allowed_hosts, None, None, max_http_response_bytes),
                 timeout,
             })),
+            request_deadline: None,
         }
     }
 
@@ -117,7 +121,30 @@ impl CommandHost {
                 ),
                 timeout,
             })),
+            request_deadline: None,
         }
+    }
+
+    /// Clone this host for one command invocation and bind HTTP calls to the
+    /// invocation's remaining wall-clock budget.
+    pub(crate) fn for_invocation(&self, timeout: Duration) -> Self {
+        let now = Instant::now();
+        Self {
+            state: Arc::clone(&self.state),
+            services: self.services.clone(),
+            request_deadline: Some(now.checked_add(timeout).unwrap_or(now)),
+        }
+    }
+
+    fn remaining_http_timeout(&self, maximum: Duration) -> Result<Duration, String> {
+        let Some(deadline) = self.request_deadline else {
+            return Ok(maximum);
+        };
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err("command plugin HTTP deadline exhausted".to_string());
+        }
+        Ok(remaining.min(maximum))
     }
 
     pub(crate) fn rate_limit_message(&self) -> Option<String> {
@@ -127,6 +154,18 @@ impl CommandHost {
             .rate_limit_message(&services.plugin_id)
             .ok()
             .flatten()
+    }
+
+    pub(crate) fn begin_indexer_error_capture(&self, context: IndexerErrorCaptureContext) {
+        if let Some(services) = self.services.as_ref() {
+            services.http.begin_indexer_error_capture(context);
+        }
+    }
+
+    pub(crate) fn finish_indexer_error_capture(&self, operation_failed: bool) {
+        if let Some(services) = self.services.as_ref() {
+            services.http.finish_indexer_error_capture(operation_failed);
+        }
     }
 
     fn call(&self, encoded_request: &[u8]) -> Result<u32, String> {
@@ -204,18 +243,20 @@ impl CommandHost {
                 }))
             }
             PluginHostRequest::Http(request) => {
-                let response = services
-                    .http
-                    .request(
-                        &services.plugin_id,
-                        PluginHttpRequest {
-                            url: request.url,
-                            method: request.method,
-                            headers: request.headers,
-                        },
-                        (!request.body.is_empty()).then_some(request.body),
-                        Some(services.timeout),
-                    )
+                let response = self
+                    .remaining_http_timeout(services.timeout)
+                    .and_then(|timeout| {
+                        services.http.request(
+                            &services.plugin_id,
+                            PluginHttpRequest {
+                                url: request.url,
+                                method: request.method,
+                                headers: request.headers,
+                            },
+                            (!request.body.is_empty()).then_some(request.body),
+                            timeout,
+                        )
+                    })
                     .and_then(|body| {
                         let status = services.http.status_code(&services.plugin_id)?;
                         Ok(PluginHttpResponse {
@@ -228,6 +269,9 @@ impl CommandHost {
                         })
                     });
                 PluginHostResponse::Http(response.map_or_else(service_error, PluginResult::Ok))
+            }
+            PluginHostRequest::ReservedHttpBatch(_) => {
+                PluginHostResponse::ReservedHttpBatch(unsupported())
             }
             request => unsupported_response(request),
         }
@@ -277,6 +321,7 @@ fn unsupported_error() -> PluginError {
         // during serialization. Keep its optional fields present on this ABI.
         debug_message: Some(String::new()),
         retry_after_seconds: Some(0),
+        details: None,
     }
 }
 
@@ -290,6 +335,7 @@ fn service_error<T>(message: String) -> PluginResult<T> {
         public_message: "command plugin host service failed".to_string(),
         debug_message: Some(message),
         retry_after_seconds: Some(0),
+        details: None,
     })
 }
 
@@ -300,6 +346,9 @@ fn unsupported_response(request: PluginHostRequest) -> PluginHostResponse {
         PluginHostRequest::StateSet(_) => PluginHostResponse::StateSet(unsupported()),
         PluginHostRequest::StateDelete(_) => PluginHostResponse::StateDelete(unsupported()),
         PluginHostRequest::Http(_) => PluginHostResponse::Http(unsupported()),
+        PluginHostRequest::ReservedHttpBatch(_) => {
+            PluginHostResponse::ReservedHttpBatch(unsupported())
+        }
         PluginHostRequest::SocketOpen(_) => PluginHostResponse::SocketOpen(unsupported()),
         PluginHostRequest::SocketRead(_) => PluginHostResponse::SocketRead(unsupported()),
         PluginHostRequest::SocketWrite(_) => PluginHostResponse::SocketWrite(unsupported()),
@@ -441,6 +490,116 @@ fn write_memory(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn invocation_http_budget_uses_only_remaining_time() {
+        let host = CommandHost::disabled();
+        assert_eq!(
+            host.remaining_http_timeout(Duration::from_secs(5))
+                .expect("unbound host uses its configured maximum"),
+            Duration::from_secs(5)
+        );
+
+        let active = host.for_invocation(Duration::from_secs(30));
+        let remaining = active
+            .remaining_http_timeout(Duration::from_secs(5))
+            .expect("active invocation retains a request budget");
+        assert!(!remaining.is_zero());
+        assert!(remaining <= Duration::from_secs(5));
+
+        let expired = host.for_invocation(Duration::ZERO);
+        assert_eq!(
+            expired
+                .remaining_http_timeout(Duration::from_secs(5))
+                .unwrap_err(),
+            "command plugin HTTP deadline exhausted"
+        );
+    }
+
+    #[test]
+    fn reserved_batch_slot_is_rejected_without_shifting_later_operations() {
+        use scryer_plugin_sdk::host::{
+            PluginConfigGetRequest, PluginHttpRequest, PluginProcessExecRequest,
+            PluginStateDeleteRequest, PluginStateGetRequest, PluginStateSetRequest,
+        };
+        use scryer_plugin_sdk::{
+            SocketCloseRequest, SocketOpenRequest, SocketReadRequest, SocketStartTlsRequest,
+            SocketWriteRequest,
+        };
+        use serde::Serialize;
+
+        #[derive(Serialize)]
+        struct PreReleaseHttpBatchStartRate {
+            starts: u32,
+            interval_ms: u64,
+        }
+
+        #[derive(Serialize)]
+        struct PreReleaseHttpBatchRequest {
+            requests: Vec<PluginHttpRequest>,
+            desired_start_rate: PreReleaseHttpBatchStartRate,
+        }
+
+        #[allow(dead_code)]
+        #[derive(Serialize)]
+        enum PreReleasePluginHostRequest {
+            ConfigGet(PluginConfigGetRequest),
+            StateGet(PluginStateGetRequest),
+            StateSet(PluginStateSetRequest),
+            StateDelete(PluginStateDeleteRequest),
+            Http(PluginHttpRequest),
+            HttpBatch(PreReleaseHttpBatchRequest),
+            SocketOpen(SocketOpenRequest),
+            SocketRead(SocketReadRequest),
+            SocketWrite(SocketWriteRequest),
+            SocketStartTls(SocketStartTlsRequest),
+            SocketClose(SocketCloseRequest),
+            ProcessExec(PluginProcessExecRequest),
+        }
+
+        let host = CommandHost::disabled();
+        let batch = postcard::to_allocvec(&PreReleasePluginHostRequest::HttpBatch(
+            PreReleaseHttpBatchRequest {
+                requests: Vec::new(),
+                desired_start_rate: PreReleaseHttpBatchStartRate {
+                    starts: 1,
+                    interval_ms: 1_000,
+                },
+            },
+        ))
+        .expect("pre-release batch request serializes");
+        let handle = host
+            .call(&batch)
+            .expect("reserved request receives a response");
+        let response: PluginHostResponse =
+            postcard::from_bytes(&host.response(handle).expect("response is retained"))
+                .expect("reserved response decodes");
+        assert!(matches!(
+            response,
+            PluginHostResponse::ReservedHttpBatch(PluginResult::Err(PluginError {
+                code: PluginErrorCode::Unsupported,
+                ..
+            }))
+        ));
+
+        let legacy_later_operation = postcard::to_allocvec(
+            &PreReleasePluginHostRequest::SocketClose(SocketCloseRequest { handle: 1 }),
+        )
+        .expect("pre-release later request serializes");
+        let handle = host
+            .call(&legacy_later_operation)
+            .expect("pre-release later request receives a response");
+        let response: PluginHostResponse =
+            postcard::from_bytes(&host.response(handle).expect("response is retained"))
+                .expect("later response decodes");
+        assert!(matches!(
+            response,
+            PluginHostResponse::SocketClose(PluginResult::Err(PluginError {
+                code: PluginErrorCode::Unsupported,
+                ..
+            }))
+        ));
+    }
 
     #[test]
     fn disabled_host_returns_typed_unsupported_response() {

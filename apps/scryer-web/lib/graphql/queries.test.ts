@@ -12,6 +12,8 @@ import {
   globalSearchInitQuery,
   movieSidePanelTitleQuery,
   movieSidePanelOverviewQuery,
+  myApiKeysQuery,
+  pendingReleasesQuery,
   seriesCollectionEpisodesQuery,
   seriesSidePanelOverviewQuery,
   TITLE_CAST_CREDIT_KINDS,
@@ -20,9 +22,21 @@ import {
   wantedNavigationCountsQuery,
 } from "./queries.ts";
 
+test("API key list query includes lifecycle status fields", () => {
+  const fields = ["createdAt", "expiresAt", "revokedAt", "lastUsedAt", "provisioningSource"];
+  for (const field of fields) {
+    assert.equal(
+      myApiKeysQuery.includes(field),
+      true,
+      `${field} is required for API-key status`,
+    );
+  }
+});
+
 test("calendar hover query includes its artwork and synopsis fields", () => {
   assert.equal(calendarEpisodesQuery.includes("overview"), true);
   assert.equal(calendarEpisodesQuery.includes("imageUrl"), true);
+  assert.equal(calendarEpisodesQuery.includes("playbackLinks {"), true);
 });
 
 test("calendar uses compact episode availability instead of querying media files", () => {
@@ -43,6 +57,12 @@ test("wanted navigation loads every badge total without table rows", () => {
     3,
   );
   assert.equal(wantedNavigationCountsQuery.includes("items {"), false);
+});
+
+test("pending releases query includes current delay diagnostics", () => {
+  for (const field of ["delayUntil", "lastDecisionCode", "role"]) {
+    assert.equal(pendingReleasesQuery.includes(field), true, `${field} is required`);
+  }
 });
 
 test("activity queue uses paged cache reads and revision-only sync", () => {
@@ -322,6 +342,10 @@ test("episode side panel detail query loads nested media files", () => {
   assert.equal(episodeSidePanelDetailQuery.includes("primaryQualityLabel"), true);
   assert.equal(episodeSidePanelDetailQuery.includes("mediaFiles {"), true);
   assert.equal(episodeSidePanelDetailQuery.includes("filePath"), true);
+  assert.equal(episodeSidePanelDetailQuery.includes("playbackLinks {"), true);
+  assert.equal(episodeSidePanelDetailQuery.includes("displayName"), true);
+  assert.equal(episodeSidePanelDetailQuery.includes("provider"), true);
+  assert.equal(episodeSidePanelDetailQuery.includes("href"), true);
 });
 
 test("overview queries do not export old native or panel-detail documents", async () => {

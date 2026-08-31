@@ -35,6 +35,7 @@ import {
 import {
   Archive,
   Bell,
+  BookOpen,
   Captions,
   ChevronDown,
   Database,
@@ -43,6 +44,7 @@ import {
   FolderCog,
   Heart,
   Inbox,
+  MessagesSquare,
   Monitor,
   Moon,
   Puzzle,
@@ -60,6 +62,7 @@ import {
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { fromUiThemeValue, getNextTheme, toUiThemeValue } from "@/lib/theme";
+import { getRuntimeBasePath } from "@/lib/runtime-config";
 import { cn } from "@/lib/utils";
 import type { PendingImportCounts } from "@/lib/types";
 import { pendingImportCountForView } from "@/lib/types";
@@ -83,7 +86,6 @@ import {
   canAccessSystemSection,
 } from "@/lib/utils/routes";
 import { selectorId } from "@/lib/utils/dom-ids";
-import ScryerLogo from "@/components/scryer-logo";
 
 type NavItem = {
   id: ViewId;
@@ -239,6 +241,11 @@ const DEFAULT_SETTINGS_SECTION_ORDER: SettingsSection[] = [
   "plugins",
 ];
 const MEDIA_NAV_VIEW_IDS: ViewId[] = ["movies", "series", "anime"];
+
+function sidebarPublicAssetUrl(path: string): string {
+  const basePath = getRuntimeBasePath();
+  return `${basePath === "/" ? "" : basePath}/${path.replace(/^\/+/, "")}`;
+}
 
 type RootSidebarProps = {
   topNav: NavItem[];
@@ -414,7 +421,6 @@ const WANTED_SUB_PAGES: Array<{ id: WantedSection; labelKey: string }> = [
   { id: "wanted", labelKey: "wanted.tabWanted" },
   { id: "cutoff", labelKey: "wanted.tabCutoff" },
   { id: "pending", labelKey: "wanted.tabPending" },
-  { id: "history", labelKey: "history.title" },
 ];
 
 const SIDEBAR_COLLAPSED_GROUPS_STORAGE_KEY = "scryer:sidebar-collapsed-groups";
@@ -479,7 +485,7 @@ function navBadgeToneClass(tone: NavBadgeTone) {
     case "danger":
       return "bg-[var(--scry-danger-solid)] text-[var(--scry-danger-on-solid)]";
     case "warning":
-      return "bg-[var(--scry-warning-solid)] text-[var(--scry-warning-on-solid)]";
+      return "bg-[var(--scry-warning-solid)] text-[var(--scry-warning-on-solid)] peer-hover/menu-button:text-[var(--scry-warning-on-solid)] peer-data-[active=true]/menu-button:text-[var(--scry-warning-on-solid)]";
     case "request":
       return "bg-primary text-primary-foreground";
     case "cta":
@@ -569,7 +575,7 @@ function RootSidebarContent({
   const t = useTranslate();
   const setGlobalStatus = useGlobalStatus();
   const { isMobile, setOpenMobile } = useSidebar();
-  const { theme, setTheme } = useTheme();
+  const { theme, resolvedTheme, setTheme } = useTheme();
   const {
     uiSettings,
     uiSettingsLoaded,
@@ -578,6 +584,10 @@ function RootSidebarContent({
   } = useUiSettings();
   const themeSaveSequenceRef = React.useRef(0);
   const [themeMounted, setThemeMounted] = React.useState(false);
+  const brandLogoUrl =
+    themeMounted && resolvedTheme === "light"
+      ? `${import.meta.env.BASE_URL}scryer-lockup-dark.webp`
+      : `${import.meta.env.BASE_URL}scryer-lockup-light.webp`;
   const [collapsedTopNavGroups, setCollapsedTopNavGroups] = React.useState<
     ReadonlySet<string>
   >(readCollapsedTopNavGroups);
@@ -873,13 +883,7 @@ function RootSidebarContent({
     () => visibleActivitySubPages.some((entry) => entry.id !== "activity"),
     [visibleActivitySubPages],
   );
-  const visibleWantedSubPages = React.useMemo(
-    () =>
-      WANTED_SUB_PAGES.filter(
-        (entry) => entry.id !== "history" || canManageTitle,
-      ),
-    [canManageTitle],
-  );
+  const visibleWantedSubPages = WANTED_SUB_PAGES;
 
   const handleNavigate = React.useCallback(
     (
@@ -1036,19 +1040,13 @@ function RootSidebarContent({
         mobileDescription={t("nav.mobileDescription")}
         className="overflow-hidden border-r border-[var(--scry-border3)] bg-[var(--scry-bg)] shadow-[12px_0_40px_rgba(2,6,23,0.22)] min-[981px]:sticky min-[981px]:top-[var(--root-shell-top-offset,0px)] min-[981px]:h-[calc(100dvh-var(--root-shell-top-offset,0px))] min-[981px]:max-h-[calc(100dvh-var(--root-shell-top-offset,0px))] min-[981px]:self-start"
       >
-        <SidebarHeader className="px-5 pb-3 pt-5">
-          <div className="flex -translate-y-2 items-center gap-3.5">
-            <ScryerLogo className="h-[55px]! w-[55px]! dark:drop-shadow-[0_12px_22px_rgba(var(--scry-accent-rgb),0.32)]" />
-            <span
-              data-slot="brand-wordmark"
-              className="text-[24px] font-bold leading-none text-[var(--scry-ink2)]"
-              style={{
-                fontFamily:
-                  "var(--font-space-grotesk), var(--font-inter), ui-sans-serif, system-ui, -apple-system, sans-serif",
-              }}
-            >
-              Scryer
-            </span>
+        <SidebarHeader className="px-4 py-0">
+          <div className="flex w-full items-center justify-center">
+            <img
+              src={brandLogoUrl}
+              alt="Scryer"
+              className="h-auto w-[220px] object-contain dark:drop-shadow-[0_12px_22px_rgba(var(--scry-accent-rgb),0.32)]"
+            />
           </div>
         </SidebarHeader>
         <SidebarContent className="overflow-y-auto px-3 pb-3 [scrollbar-color:var(--scry-border2)_transparent] [scrollbar-width:thin] [&::-webkit-scrollbar]:w-2.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:border-[3px] [&::-webkit-scrollbar-thumb]:border-transparent [&::-webkit-scrollbar-thumb]:bg-[var(--scry-border2)] [&::-webkit-scrollbar-thumb]:bg-clip-content">
@@ -1332,7 +1330,10 @@ function RootSidebarContent({
                         ) : null}
                         {isSettingsTop && pluginUpdateCount > 0 ? (
                           <SidebarMenuBadge
-                            className={navBadgeToneClass("warning")}
+                            className={cn(
+                              "!top-1/2 -translate-y-1/2",
+                              navBadgeToneClass("warning"),
+                            )}
                           >
                             {pluginUpdateCount}
                           </SidebarMenuBadge>
@@ -1546,10 +1547,7 @@ function RootSidebarContent({
         <SidebarFooter className="space-y-1.5 border-t border-[var(--scry-border3)] px-3.5 py-2.5">
           <div
             className={cn(
-              "grid gap-1.5 group-data-[collapsible=icon]:flex group-data-[collapsible=icon]:justify-center",
-              uiSettings.hideSponsorButton
-                ? "grid-cols-1"
-                : "grid-cols-2 group-data-[collapsible=icon]:grid-cols-1",
+              "grid grid-cols-2 gap-1.5 group-data-[collapsible=icon]:flex group-data-[collapsible=icon]:justify-center",
             )}
           >
             {!uiSettings.hideSponsorButton ? (
@@ -1557,7 +1555,7 @@ function RootSidebarContent({
                 id="root-sidebar-sponsor-link"
                 href="https://www.scryer.media/scryer/donate/"
                 target="_blank"
-                rel="noreferrer"
+                rel="noopener noreferrer"
                 className={cn(
                   "flex min-w-0 items-center justify-center gap-1.5 rounded-lg border border-[var(--scry-border2)] bg-[var(--scry-card2)] px-2 py-1 text-xs font-semibold text-[var(--scry-ink2)] transition hover:border-[var(--scry-accent)] hover:bg-[var(--scry-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/25 group-data-[collapsible=icon]:hidden",
                 )}
@@ -1566,26 +1564,90 @@ function RootSidebarContent({
                 <span className="truncate">Sponsor</span>
               </a>
             ) : null}
-              {themeMounted ? (
-                <button
-                  id="root-sidebar-theme-toggle"
-                  type="button"
-                  onClick={cycleTheme}
-                  aria-label={t("theme.switchLabel", { theme: themeLabel })}
-                  className={cn(
-                    "flex min-w-0 items-center justify-center gap-1.5 rounded-lg border border-transparent bg-transparent px-2 py-1 text-xs font-medium text-[var(--scry-muted)] transition hover:border-[var(--scry-border2)] hover:bg-[var(--scry-hover)] hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/25",
-                  )}
+            {themeMounted ? (
+              <button
+                id="root-sidebar-theme-toggle"
+                type="button"
+                onClick={cycleTheme}
+                aria-label={t("theme.switchLabel", { theme: themeLabel })}
+                className={cn(
+                  "flex min-w-0 items-center justify-center gap-1.5 rounded-lg border border-transparent bg-transparent px-2 py-1 text-xs font-medium text-[var(--scry-muted)] transition hover:border-[var(--scry-border2)] hover:bg-[var(--scry-hover)] hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/25",
+                )}
+              >
+                {displayTheme === "light" ? (
+                  <Sun className="h-4 w-4" />
+                ) : displayTheme === "dark" ? (
+                  <Moon className="h-4 w-4" />
+                ) : (
+                  <Monitor className="h-4 w-4" />
+                )}
+                <span className="truncate">{themeLabel}</span>
+              </button>
+            ) : null}
+            <a
+              id="root-sidebar-docs-link"
+              href="https://www.scryer.media/scryer/docs/"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex min-w-0 items-center justify-center gap-1.5 rounded-lg border border-transparent bg-transparent px-2 py-1 text-xs font-medium text-[var(--scry-muted)] transition hover:border-[var(--scry-border2)] hover:bg-[var(--scry-hover)] hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/25 group-data-[collapsible=icon]:hidden"
+            >
+              <BookOpen className="h-4 w-4" />
+              <span className="truncate">Docs</span>
+            </a>
+            <div
+              className={cn(
+                "group/social relative min-w-0 group-data-[collapsible=icon]:hidden",
+                uiSettings.hideSponsorButton && "col-span-2",
+              )}
+            >
+              <button
+                id="root-sidebar-social-links"
+                type="button"
+                aria-haspopup="menu"
+                className="flex w-full min-w-0 items-center justify-center gap-1.5 rounded-lg border border-transparent bg-transparent px-2 py-1 text-xs font-medium text-[var(--scry-muted)] transition hover:border-[var(--scry-border2)] hover:bg-[var(--scry-hover)] hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/25"
+              >
+                <MessagesSquare className="h-4 w-4" />
+                <span className="truncate">Social</span>
+              </button>
+              <div className="pointer-events-none invisible absolute bottom-full left-0 z-50 w-full pb-1.5 opacity-0 transition-opacity group-hover/social:pointer-events-auto group-hover/social:visible group-hover/social:opacity-100 group-focus-within/social:pointer-events-auto group-focus-within/social:visible group-focus-within/social:opacity-100">
+                <div
+                  role="menu"
+                  aria-label="Social links"
+                  className="space-y-0.5 rounded-lg border border-[var(--scry-border2)] bg-[var(--scry-bg)] p-1 shadow-xl"
                 >
-                  {displayTheme === "light" ? (
-                    <Sun className="h-4 w-4" />
-                  ) : displayTheme === "dark" ? (
-                    <Moon className="h-4 w-4" />
-                  ) : (
-                    <Monitor className="h-4 w-4" />
-                  )}
-                  <span className="truncate">{themeLabel}</span>
-                </button>
-              ) : null}
+                  <a
+                    href="https://www.reddit.com/r/scryer_media/"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    role="menuitem"
+                    className="flex items-center gap-2 rounded-md px-2 py-1.5 text-xs font-medium text-[var(--scry-ink2)] transition hover:bg-[var(--scry-hover)] focus-visible:bg-[var(--scry-hover)] focus-visible:outline-none"
+                  >
+                    <img
+                      src={sidebarPublicAssetUrl("social/reddit.svg")}
+                      alt=""
+                      aria-hidden="true"
+                      className="h-4 w-4 shrink-0"
+                    />
+                    <span>Reddit</span>
+                  </a>
+                  <a
+                    href="https://discord.gg/SQmtZTanqm"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    role="menuitem"
+                    className="flex items-center gap-2 rounded-md px-2 py-1.5 text-xs font-medium text-[var(--scry-ink2)] transition hover:bg-[var(--scry-hover)] focus-visible:bg-[var(--scry-hover)] focus-visible:outline-none"
+                  >
+                    <img
+                      src={sidebarPublicAssetUrl("social/discord.svg")}
+                      alt=""
+                      aria-hidden="true"
+                      className="h-4 w-4 shrink-0"
+                    />
+                    <span>Discord</span>
+                  </a>
+                </div>
+              </div>
+            </div>
           </div>
         </SidebarFooter>
       </Sidebar>

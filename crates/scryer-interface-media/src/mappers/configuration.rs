@@ -9,6 +9,14 @@ fn provider_config_field_payload_options(
         .map(|option| PluginConfigFieldOptionPayload {
             value: option.value.clone(),
             label: option.label.clone(),
+            config_overrides: option
+                .config_overrides
+                .iter()
+                .map(|(key, value)| PluginConfigFieldOverridePayload {
+                    key: key.clone(),
+                    value: value.clone(),
+                })
+                .collect(),
         })
         .collect()
 }
@@ -734,6 +742,11 @@ pub fn from_provider_type(
                     .map(|o| PluginConfigFieldOptionPayload {
                         value: o.value,
                         label: o.label,
+                        config_overrides: o
+                            .config_overrides
+                            .into_iter()
+                            .map(|(key, value)| PluginConfigFieldOverridePayload { key, value })
+                            .collect(),
                     })
                     .collect(),
                 help_text: f.help_text,
@@ -876,4 +889,42 @@ pub(super) fn stored_secret_keys_from_config_json(
     keys.sort();
     keys.dedup();
     keys
+}
+
+#[cfg(test)]
+mod option_tests {
+    use super::*;
+
+    #[test]
+    fn config_option_payload_preserves_preset_overrides() {
+        let field = ConfigFieldDef {
+            key: "profile_id".to_string(),
+            label: "Known provider".to_string(),
+            field_type: ConfigFieldType::Select,
+            required: false,
+            default_value: None,
+            value_source: scryer_domain::ConfigFieldValueSource::User,
+            role: None,
+            host_binding: None,
+            options: vec![scryer_domain::ConfigFieldOption {
+                value: "preset".to_string(),
+                label: "Preset".to_string(),
+                config_overrides: std::collections::BTreeMap::from([
+                    ("api_path".to_string(), "/api".to_string()),
+                    (
+                        "base_url".to_string(),
+                        "https://api.example.test".to_string(),
+                    ),
+                ]),
+            }],
+            help_text: None,
+        };
+
+        let options = provider_config_field_payload_options(&field);
+        assert_eq!(options.len(), 1);
+        assert_eq!(options[0].config_overrides.len(), 2);
+        assert_eq!(options[0].config_overrides[0].key, "api_path");
+        assert_eq!(options[0].config_overrides[0].value, "/api");
+        assert_eq!(options[0].config_overrides[1].key, "base_url");
+    }
 }

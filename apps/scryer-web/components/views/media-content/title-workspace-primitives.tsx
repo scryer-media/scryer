@@ -10,11 +10,13 @@ export function TitleWorkspaceHero({
   backgroundUrl,
   closeLabel,
   onClose,
+  headerActions,
   children,
 }: {
   backgroundUrl?: string | null;
   closeLabel: string;
   onClose: () => void;
+  headerActions?: React.ReactNode;
   children: React.ReactNode;
 }) {
   const [failedBackgroundUrl, setFailedBackgroundUrl] = React.useState<string | null>(null);
@@ -38,19 +40,19 @@ export function TitleWorkspaceHero({
       ) : null}
       <div className="absolute inset-0 bg-[linear-gradient(105deg,rgba(8,12,22,0.96)_30%,rgba(8,12,22,0.55)_70%,rgba(8,12,22,0.2))]" />
       <div className="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-b from-transparent to-[var(--scry-bg)]" />
-      <ActionTooltip
-        content={closeLabel}
-        wrapperClassName="absolute right-2.5 top-2.5 z-10"
-      >
-        <button
-          type="button"
-          aria-label={closeLabel}
-          className="flex size-8 items-center justify-center rounded-[9px] border !border-[rgba(var(--scry-accent-rgb),0.55)] bg-slate-950/60 text-[#dde4f5] backdrop-blur-md transition hover:bg-slate-950/75 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--scry-focus)]"
-          onClick={onClose}
-        >
-          <X className="h-4 w-4" />
-        </button>
-      </ActionTooltip>
+      <div className="absolute right-2.5 top-2.5 z-10 flex items-center gap-1.5">
+        {headerActions}
+        <ActionTooltip content={closeLabel}>
+          <button
+            type="button"
+            aria-label={closeLabel}
+            className="flex size-8 items-center justify-center rounded-[9px] border !border-[rgba(var(--scry-accent-rgb),0.55)] bg-slate-950/60 text-[#dde4f5] backdrop-blur-md transition hover:bg-slate-950/75 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--scry-focus)]"
+            onClick={onClose}
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </ActionTooltip>
+      </div>
       <div className="relative flex flex-col gap-4 p-[18px] sm:flex-row sm:pr-16">
         {children}
       </div>

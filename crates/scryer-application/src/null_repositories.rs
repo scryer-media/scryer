@@ -11,16 +11,24 @@ use scryer_domain::{
 
 use scryer_domain::RuleSet;
 
+use crate::contracts::{
+    ClientJobLocator, DownloadClientBindingRecord, DownloadRecord, ObservationResolution,
+    ObservedClientJob,
+};
+use crate::ports::DownloadRegistryRepository;
 use crate::ports::{
     DiscoveryHomeCandidate, DiscoveryHomeFilterOptions, DiscoveryHomeFilters,
     DiscoveryHomeSectionCandidatesRecord,
 };
-use crate::types::{PendingImportStatus, PendingReleaseStatus};
+use crate::types::{
+    ApiKeyRecord, OAuthClientRegistrationRecord, PendingImportStatus, PendingReleaseObservation,
+    PendingReleaseRole, PendingReleaseStatus,
+};
 use crate::{
-    AcquisitionScopeStatesQuery, AcquisitionStateRepository, InsertMediaFileInput,
-    JellyfinServerUser, MediaRequestResolutionResult, MediaRequestSubmissionResult,
-    MediaRequestUpdateResult, MediaServerConnectionRepository, PlexServerDiscovery, PlexServerUser,
-    SuccessfulGrabCommit,
+    AcquisitionScopeStatesQuery, AcquisitionStateRepository, IndexerErrorDetail, IndexerErrorPage,
+    IndexerErrorRepository, InsertMediaFileInput, JellyfinServerUser, MediaRequestResolutionResult,
+    MediaRequestSubmissionResult, MediaRequestUpdateResult, MediaServerConnectionRepository,
+    NewIndexerError, PlexServerDiscovery, PlexServerUser, SuccessfulGrabCommit,
 };
 use scryer_domain::{PersistedPluginWasmPayload, PluginInstallation};
 
@@ -35,17 +43,16 @@ use crate::{
     DiscoveryPublicFeedCommit, DiscoveryRepository, DiscoverySectionRecord,
     DiscoverySubmittedSubjectRecord, DiscoverySyncRunRecord, DiscoverySyncStateRecord,
     DomainEventRepository, DownloadQueueCommandRecord, DownloadQueueCommandRepository,
-    DownloadSourceIdentity, DownloadSubmission, DownloadSubmissionRepository,
-    ExternalIdentityVerifier, ExternalImportMonitorSnapshotRepository,
-    ExternalImportSetupSecretDraft, ExternalImportSetupSecretDraftInput,
-    ExternalImportSetupSecretDraftRepository, ExternalImportSetupSecretDraftSaveResult,
-    ExternalImportSetupSecretDraftStatus, FileImporter, HousekeepingRepository,
-    ImageProxyCacheControl, ImageProxyCacheEntryRecord, ImageProxyRegistration,
-    ImageProxyRepository, ImageProxySourceRecord, ImportArtifact, ImportArtifactRepository,
-    ImportRepository, IndexerProxyConfigRepository, IndexerQueryStats, IndexerSearchLearningKey,
-    IndexerSearchLearningRecord, IndexerSearchLearningRepository, IndexerStatsTracker, JobKey,
-    JobRunRecord, JobRunRepository, LibraryProbeRepository, LibraryProbeSignature,
-    LibraryRepository, LibraryRootDraft, LibraryScanUnmatchedItem,
+    DownloadSubmission, DownloadSubmissionRepository, ExternalIdentityVerifier,
+    ExternalImportMonitorSnapshotRepository, ExternalImportSetupSecretDraft,
+    ExternalImportSetupSecretDraftInput, ExternalImportSetupSecretDraftRepository,
+    ExternalImportSetupSecretDraftSaveResult, ExternalImportSetupSecretDraftStatus, FileImporter,
+    HousekeepingRepository, ImageProxyCacheControl, ImageProxyCacheEntryRecord,
+    ImageProxyRegistration, ImageProxyRepository, ImageProxySourceRecord, ImportArtifact,
+    ImportArtifactRepository, ImportRepository, IndexerProxyConfigRepository, IndexerQueryStats,
+    IndexerSearchLearningKey, IndexerSearchLearningRecord, IndexerSearchLearningRepository,
+    IndexerStatsTracker, JobKey, JobRunRecord, JobRunRepository, LibraryProbeRepository,
+    LibraryProbeSignature, LibraryRepository, LibraryRootDraft, LibraryScanUnmatchedItem,
     LibraryScanUnmatchedItemRepository, MediaFileRepository, MediaRequestCounts, MediaRequestQuery,
     MediaRequestRepository, MediaRequestResolution, NewBlocklistEntry, NewMediaRequest,
     NotificationChannelRepository, NotificationSubscriptionRepository,
@@ -102,6 +109,36 @@ impl SeedingProfileRepository for NullSeedingProfileRepository {
 
 #[derive(Default)]
 pub struct NullIndexerProxyConfigRepository;
+
+#[derive(Default)]
+pub struct NullIndexerErrorRepository;
+
+#[async_trait]
+impl IndexerErrorRepository for NullIndexerErrorRepository {
+    async fn record(&self, _error: NewIndexerError) -> AppResult<()> {
+        Ok(())
+    }
+
+    async fn list(
+        &self,
+        _indexer_id: Option<&str>,
+        _first: usize,
+        _after: Option<&str>,
+    ) -> AppResult<IndexerErrorPage> {
+        Ok(IndexerErrorPage {
+            items: Vec::new(),
+            next_cursor: None,
+        })
+    }
+
+    async fn get_detail(&self, _id: &str) -> AppResult<Option<IndexerErrorDetail>> {
+        Ok(None)
+    }
+
+    async fn delete_older_than(&self, _cutoff: chrono::DateTime<chrono::Utc>) -> AppResult<u32> {
+        Ok(0)
+    }
+}
 
 #[async_trait]
 impl IndexerProxyConfigRepository for NullIndexerProxyConfigRepository {
@@ -544,7 +581,7 @@ pub struct NullImportRepository;
 impl ImportRepository for NullImportRepository {
     async fn queue_import_request(
         &self,
-        _source_identity: DownloadSourceIdentity,
+        _source_identity: ClientJobLocator,
         _import_type: String,
         _payload_json: String,
     ) -> AppResult<String> {
@@ -590,12 +627,9 @@ impl ImportRepository for NullImportRepository {
     }
     async fn list_imports_for_identities(
         &self,
-        _: &[DownloadSourceIdentity],
+        _: &[ClientJobLocator],
     ) -> AppResult<Vec<ImportRecord>> {
         Ok(vec![])
-    }
-    async fn is_already_imported(&self, _: &DownloadSourceIdentity) -> AppResult<bool> {
-        Ok(false)
     }
     async fn list_imports(&self, _limit: usize) -> AppResult<Vec<ImportRecord>> {
         Ok(vec![])
@@ -757,6 +791,16 @@ pub struct NullMediaFileRepository;
 #[async_trait]
 impl MediaFileRepository for NullMediaFileRepository {
     async fn insert_media_file(&self, _input: &InsertMediaFileInput) -> AppResult<String> {
+        Err(AppError::Repository(
+            "media file repository is not configured".to_string(),
+        ))
+    }
+
+    async fn claim_import_destination(
+        &self,
+        _input: &InsertMediaFileInput,
+        _associations: &crate::MediaFileAssociations,
+    ) -> AppResult<crate::ClaimedMediaFile> {
         Err(AppError::Repository(
             "media file repository is not configured".to_string(),
         ))
@@ -1756,6 +1800,13 @@ pub struct NullHousekeepingRepository;
 
 #[async_trait]
 impl HousekeepingRepository for NullHousekeepingRepository {
+    async fn delete_stale_workflow_operations(
+        &self,
+        _completed_days: i64,
+        _warning_failed_days: i64,
+    ) -> AppResult<u32> {
+        Ok(0)
+    }
     async fn delete_release_decisions_older_than(&self, _days: i64) -> AppResult<u32> {
         Ok(0)
     }
@@ -1824,22 +1875,74 @@ impl HousekeepingRepository for NullHousekeepingRepository {
 pub struct NullDownloadSubmissionRepository;
 
 #[derive(Default)]
+pub struct NullDownloadRegistryRepository;
+
+#[derive(Default)]
 pub struct NullAcquisitionStateRepository;
+
+#[async_trait]
+impl DownloadRegistryRepository for NullDownloadRegistryRepository {
+    async fn resolve_observation(
+        &self,
+        observation: &ObservedClientJob,
+    ) -> AppResult<ObservationResolution> {
+        Err(AppError::Repository(format!(
+            "download registry is unavailable for observation {}:{}",
+            observation.locator.client_type, observation.locator.item_id
+        )))
+    }
+
+    async fn load_download(
+        &self,
+        _: &scryer_domain::download_identity::DownloadId,
+    ) -> AppResult<Option<DownloadRecord>> {
+        Ok(None)
+    }
+
+    async fn load_binding(
+        &self,
+        _: &scryer_domain::download_identity::DownloadId,
+    ) -> AppResult<Option<DownloadClientBindingRecord>> {
+        Ok(None)
+    }
+
+    async fn find_active_binding_by_locator(
+        &self,
+        _: &ClientJobLocator,
+    ) -> AppResult<Option<DownloadClientBindingRecord>> {
+        Ok(None)
+    }
+
+    async fn end_binding(&self, _: &scryer_domain::download_identity::DownloadId) -> AppResult<()> {
+        Ok(())
+    }
+}
 
 #[async_trait]
 impl DownloadSubmissionRepository for NullDownloadSubmissionRepository {
     async fn record_submission(&self, _: DownloadSubmission) -> AppResult<()> {
         Ok(())
     }
+    async fn record_ambiguous_submission(&self, _: DownloadSubmission) -> AppResult<()> {
+        Ok(())
+    }
+    async fn record_submission_with_identity(
+        &self,
+        _: DownloadSubmission,
+        _: crate::DownloadSubmissionIdentity,
+        _: Option<crate::PersistedSeedGoals>,
+    ) -> AppResult<crate::CanonicalDownloadIdentityDisposition> {
+        Ok(crate::CanonicalDownloadIdentityDisposition::Requested)
+    }
     async fn find_by_client_item_id(
         &self,
-        _: &DownloadSourceIdentity,
+        _: &ClientJobLocator,
     ) -> AppResult<Option<DownloadSubmission>> {
         Ok(None)
     }
     async fn list_for_client_items(
         &self,
-        _: &[DownloadSourceIdentity],
+        _: &[ClientJobLocator],
     ) -> AppResult<Vec<DownloadSubmission>> {
         Ok(vec![])
     }
@@ -1858,13 +1961,13 @@ impl DownloadSubmissionRepository for NullDownloadSubmissionRepository {
     async fn delete_for_title(&self, _: &str) -> AppResult<()> {
         Ok(())
     }
-    async fn delete_by_client_item_id(&self, _: &DownloadSourceIdentity) -> AppResult<()> {
+    async fn delete_by_client_item_id(&self, _: &ClientJobLocator) -> AppResult<()> {
         Ok(())
     }
-    async fn update_tracked_state(&self, _: &DownloadSourceIdentity, _: &str) -> AppResult<()> {
+    async fn update_tracked_state(&self, _: &ClientJobLocator, _: &str) -> AppResult<()> {
         Ok(())
     }
-    async fn get_tracked_state(&self, _: &DownloadSourceIdentity) -> AppResult<Option<String>> {
+    async fn get_tracked_state(&self, _: &ClientJobLocator) -> AppResult<Option<String>> {
         Ok(None)
     }
 }
@@ -1885,13 +1988,13 @@ impl ImportArtifactRepository for NullImportArtifactRepository {
     }
     async fn list_by_source_identity(
         &self,
-        _: &DownloadSourceIdentity,
+        _: &ClientJobLocator,
     ) -> AppResult<Vec<ImportArtifact>> {
         Ok(vec![])
     }
     async fn count_by_result_for_source_identity(
         &self,
-        _: &DownloadSourceIdentity,
+        _: &ClientJobLocator,
         _: &str,
     ) -> AppResult<u64> {
         Ok(0)
@@ -1950,10 +2053,29 @@ impl PendingReleaseRepository for NullPendingReleaseRepository {
     async fn insert_pending_release(&self, _: &PendingRelease) -> AppResult<String> {
         Ok(String::new())
     }
+    async fn insert_pending_release_with_role(
+        &self,
+        _: &PendingRelease,
+        _: PendingReleaseRole,
+    ) -> AppResult<String> {
+        Ok(String::new())
+    }
+    async fn insert_pending_release_observation(
+        &self,
+        _: &PendingRelease,
+        _: &PendingReleaseObservation,
+    ) -> AppResult<String> {
+        Ok(String::new())
+    }
     async fn list_expired_pending_releases(&self, _: &str) -> AppResult<Vec<PendingRelease>> {
         Ok(vec![])
     }
     async fn list_waiting_pending_releases(&self) -> AppResult<Vec<PendingRelease>> {
+        Ok(vec![])
+    }
+    async fn list_active_release_age_unknown_pending_releases(
+        &self,
+    ) -> AppResult<Vec<PendingRelease>> {
         Ok(vec![])
     }
     async fn get_pending_release(&self, _: &str) -> AppResult<Option<PendingRelease>> {
@@ -1979,6 +2101,16 @@ impl PendingReleaseRepository for NullPendingReleaseRepository {
         _: &str,
         _: PendingReleaseStatus,
         _: Option<&str>,
+    ) -> AppResult<()> {
+        Ok(())
+    }
+    async fn expire_pending_release(&self, _: &str, _: &str) -> AppResult<()> {
+        Ok(())
+    }
+    async fn mark_release_age_unknown_pending_release_needs_review(
+        &self,
+        _: &str,
+        _: &str,
     ) -> AppResult<()> {
         Ok(())
     }
@@ -2018,10 +2150,9 @@ impl PendingReleaseRepository for NullPendingReleaseRepository {
     ) -> AppResult<bool> {
         Ok(false)
     }
-    async fn supersede_pending_releases_for_acquisition_scope_state(
+    async fn retire_lower_or_equal_overlapping_pending_releases(
         &self,
-        _: &str,
-        _: &str,
+        _: &[String],
     ) -> AppResult<()> {
         Ok(())
     }
@@ -2070,8 +2201,8 @@ pub struct NullBlocklistRepository;
 
 #[async_trait]
 impl BlocklistRepository for NullBlocklistRepository {
-    async fn add(&self, _: &NewBlocklistEntry) -> AppResult<String> {
-        Ok(String::new())
+    async fn block(&self, _: &NewBlocklistEntry) -> AppResult<bool> {
+        Ok(false)
     }
     async fn list_for_title(&self, _: &str, _: usize) -> AppResult<Vec<BlocklistEntry>> {
         Ok(vec![])
@@ -2079,16 +2210,19 @@ impl BlocklistRepository for NullBlocklistRepository {
     async fn list_all(&self, _: usize, _: usize) -> AppResult<(Vec<BlocklistEntry>, i64)> {
         Ok((vec![], 0))
     }
-    async fn has_recorded_download_failure(&self, _: &str, _: Option<&str>) -> AppResult<bool> {
+    async fn get(&self, _: &str) -> AppResult<Option<BlocklistEntry>> {
+        Ok(None)
+    }
+    async fn is_blocked(&self, _: &str, _: &str, _: &str, _: Option<&str>) -> AppResult<bool> {
         Ok(false)
     }
     async fn remove(&self, _: &str) -> AppResult<()> {
         Ok(())
     }
-    async fn is_blocklisted(&self, _: &str, _: &str) -> AppResult<bool> {
-        Ok(false)
-    }
     async fn delete_for_title(&self, _: &str) -> AppResult<()> {
+        Ok(())
+    }
+    async fn delete_for_indexer(&self, _: &str) -> AppResult<()> {
         Ok(())
     }
 }
@@ -2202,7 +2336,7 @@ impl JobRunRepository for NullJobRunRepository {
         Ok(Vec::new())
     }
 
-    async fn reconcile_interrupted_job_runs(&self) -> AppResult<u64> {
+    async fn reconcile_interrupted_job_runs(&self, _excluded_run_ids: &[String]) -> AppResult<u64> {
         Ok(0)
     }
 }
@@ -2602,6 +2736,84 @@ pub struct NullOAuthRepository;
 
 #[async_trait]
 impl OAuthRepository for NullOAuthRepository {
+    async fn create_api_key(&self, _: ApiKeyRecord) -> AppResult<ApiKeyRecord> {
+        Err(AppError::Repository("not configured".into()))
+    }
+
+    async fn get_api_key_by_lookup_id(&self, _: &str) -> AppResult<Option<ApiKeyRecord>> {
+        Ok(None)
+    }
+
+    async fn list_api_keys(&self, _: &str) -> AppResult<Vec<ApiKeyRecord>> {
+        Ok(Vec::new())
+    }
+
+    async fn list_environment_api_keys(&self) -> AppResult<Vec<ApiKeyRecord>> {
+        Ok(Vec::new())
+    }
+
+    async fn upsert_environment_api_key(&self, _: ApiKeyRecord) -> AppResult<ApiKeyRecord> {
+        Err(AppError::Repository("not configured".into()))
+    }
+
+    async fn revoke_api_key(
+        &self,
+        _: &str,
+        _: &str,
+        _: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<bool> {
+        Ok(false)
+    }
+
+    async fn touch_api_key_last_used(
+        &self,
+        _: &str,
+        _: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<bool> {
+        Ok(false)
+    }
+
+    async fn create_client_registration(
+        &self,
+        _: OAuthClientRegistrationRecord,
+    ) -> AppResult<OAuthClientRegistrationRecord> {
+        Err(AppError::Repository("not configured".into()))
+    }
+
+    async fn get_client_registration(
+        &self,
+        _: &str,
+    ) -> AppResult<Option<OAuthClientRegistrationRecord>> {
+        Ok(None)
+    }
+
+    async fn list_client_registrations(&self) -> AppResult<Vec<OAuthClientRegistrationRecord>> {
+        Ok(Vec::new())
+    }
+
+    async fn update_client_registration(
+        &self,
+        _: OAuthClientRegistrationRecord,
+        _: bool,
+        _: chrono::DateTime<chrono::Utc>,
+        _: &str,
+    ) -> AppResult<Option<OAuthClientRegistrationRecord>> {
+        Ok(None)
+    }
+
+    async fn delete_client_registration(
+        &self,
+        _: &str,
+        _: chrono::DateTime<chrono::Utc>,
+        _: &str,
+    ) -> AppResult<bool> {
+        Ok(false)
+    }
+
+    async fn is_refresh_grant_active(&self, _: &str, _: &str) -> AppResult<bool> {
+        Ok(false)
+    }
+
     async fn create_authorization_code(
         &self,
         _: OAuthAuthorizationCodeRecord,
@@ -2628,6 +2840,7 @@ impl OAuthRepository for NullOAuthRepository {
         &self,
         _: OAuthRefreshGrantRecord,
         _: OAuthRefreshTokenRecord,
+        _: bool,
     ) -> AppResult<OAuthRefreshGrantRecord> {
         Err(AppError::Repository("not configured".into()))
     }
@@ -2814,6 +3027,22 @@ impl MediaServerConnectionRepository for NullMediaServerConnectionRepository {
         Err(AppError::Repository("not configured".into()))
     }
 
+    async fn list_playback_items_for_entity(
+        &self,
+        _: scryer_domain::MediaServerPlaybackEntityKind,
+        _: &str,
+    ) -> AppResult<Vec<scryer_domain::MediaServerPlaybackItem>> {
+        Ok(Vec::new())
+    }
+
+    async fn replace_playback_items_for_connection(
+        &self,
+        _: &str,
+        _: Vec<scryer_domain::MediaServerPlaybackItem>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository("not configured".into()))
+    }
+
     async fn delete(&self, _: &str) -> AppResult<()> {
         Ok(())
     }
@@ -2912,8 +3141,8 @@ pub mod test_nulls {
         EpisodeUpdate, IndexerClient, IndexerRoutingPlan, IndexerSearchResponse,
         PendingTitleHydration, PrimaryCollectionSummary, QualityProfile, QualityProfileRepository,
         ReleaseAttemptRepository, ReleaseDownloadAttemptOutcome, ReleaseDownloadFailureSignature,
-        ScopedExternalId, SearchMode, ShowRepository, TitleMetadataUpdate,
-        TitleReleaseBlocklistEntry, TitleRepository, UserRepository,
+        ScopedExternalId, SearchMode, ShowRepository, TitleMetadataUpdate, TitleRepository,
+        UserRepository,
     };
     use async_trait::async_trait;
     use scryer_domain::{
@@ -3231,6 +3460,7 @@ pub mod test_nulls {
             _: Option<Vec<String>>,
             _: Option<IndexerRoutingPlan>,
             _: SearchMode,
+            _: crate::IndexerErrorOperation,
             _: Option<u32>,
             _: Option<u32>,
             _: Option<u32>,
@@ -3239,6 +3469,8 @@ pub mod test_nulls {
             _: tokio_util::sync::CancellationToken,
         ) -> AppResult<IndexerSearchResponse> {
             Ok(IndexerSearchResponse {
+                completion: crate::IndexerSearchCompletion::Complete,
+
                 indexer_outcomes: Vec::new(),
                 results: vec![],
                 api_current: None,
@@ -3320,7 +3552,7 @@ pub mod test_nulls {
             &self,
             _: &str,
             _: usize,
-        ) -> AppResult<Vec<TitleReleaseBlocklistEntry>> {
+        ) -> AppResult<Vec<crate::ReleaseDownloadFailureRecord>> {
             Ok(vec![])
         }
         async fn get_latest_source_password(

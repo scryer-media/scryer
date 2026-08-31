@@ -63,6 +63,7 @@ export type DownloadDisplayState =
   | "PAUSED"
   | "POST_PROCESSING"
   | "COMPLETED"
+  | "IMPORTED_SEEDING"
   | "FAILED"
   | "WARNING"
   | "IMPORTING"
@@ -79,19 +80,19 @@ export type DownloadActivityFilter =
   | "QUEUED"
   | "PAUSED"
   | "POST_PROCESSING"
+  | "SEEDING"
   | "WARNING";
 
 export type DownloadImportFilter =
   | "ALL"
+  | "ATTENTION"
   | "IMPORTING"
   | "PENDING"
   | "BLOCKED"
   | "FAILED";
 
-export type DownloadHistoryFilter = "ALL" | "SUCCESS" | "FAILED";
 export type DownloadActivityStatus = Exclude<DownloadActivityFilter, "ALL">;
-export type DownloadImportStatus = Exclude<DownloadImportFilter, "ALL">;
-export type DownloadHistoryStatus = Exclude<DownloadHistoryFilter, "ALL">;
+export type DownloadImportStatus = Exclude<DownloadImportFilter, "ALL" | "ATTENTION">;
 export type ActivitySortKey = "TITLE" | "CLIENT" | "STATUS" | "PROGRESS" | "SIZE";
 export type SortDirection = "ASC" | "DESC";
 export type SortConfig = {
@@ -120,7 +121,7 @@ export type DownloadQueueItem = {
   state: DownloadQueueState;
   displayState: DownloadDisplayState;
   progressPercent: number;
-  importTransferPhase: "COPYING" | "FINALIZING" | null;
+  importTransferPhase: "EXTRACTING" | "COPYING" | "FINALIZING" | null;
   importTransferBytes: number | null;
   importTransferTotalBytes: number | null;
   importTransferStartedAt: string | null;
@@ -154,6 +155,23 @@ export type DownloadQueueItem = {
   seedTimeGoalSeconds: number | null;
   isPrivate: boolean | null;
   queueScope: ReleaseQueueScope | null;
+};
+
+export type ActiveImportStream = {
+  id: string;
+  importId: string;
+  libraryId: string;
+  facet: string;
+  sourcePath: string;
+  destinationPath: string;
+  phase: "QUEUED" | "EXTRACTING" | "PLACING" | "COPYING" | "FINALIZING";
+  bytes: number;
+  totalBytes: number;
+  queuedAt: string;
+  startedAt: string | null;
+  updatedAt: string;
+  cancellable: boolean;
+  cancellationRequested: boolean;
 };
 
 export type DownloadHistoryPage = {

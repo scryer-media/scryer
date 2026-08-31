@@ -504,11 +504,7 @@ export function ExternalAccountInvitesPanel({
       </div>
 
       <div className="space-y-4 p-4 sm:p-5">
-        {inviteUnavailable ? (
-          <p className="text-[var(--scry-muted3)]">
-            {t("settings.externalAccountInvitesUnavailable")}
-          </p>
-        ) : (
+        {!inviteUnavailable ? (
         <form
           id="settings-external-account-invite-form"
           className="space-y-4"
@@ -615,7 +611,7 @@ export function ExternalAccountInvitesPanel({
             </div>
           </div>
         </form>
-      )}
+        ) : null}
 
       <div className="space-y-3">
         <h4 className="text-sm font-medium text-[var(--scry-ink2)]">

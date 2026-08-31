@@ -79,6 +79,11 @@ export default defineConfig(({ command, mode }) => ({
       "@": import.meta.dirname,
     },
   },
+  // This dependency is first reached through lazy media routes. Prebundle it at
+  // startup so Vite does not replace its optimized URL while a route is loading.
+  optimizeDeps: {
+    include: ["@tanstack/react-virtual"],
+  },
   envPrefix: "SCRYER_",
   build: {
     target: "es2022",

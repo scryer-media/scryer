@@ -11,12 +11,18 @@ export function selectorToken(value: string | number): string {
 type MetadataSearchSelectorInput = {
   name: string;
   imdbId?: string | null;
+  smgId?: string | number | null;
   tvdbId?: string | number | null;
 };
 
 export function metadataSearchSelectorParts(
   result: MetadataSearchSelectorInput,
 ): string[] {
+  const smgId = String(result.smgId ?? "").trim();
+  if (smgId) {
+    return ["smg", smgId];
+  }
+
   const imdbId = result.imdbId?.trim();
   if (imdbId) {
     return ["imdb", imdbId];
