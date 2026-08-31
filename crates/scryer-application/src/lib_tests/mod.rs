@@ -34,6 +34,7 @@ mod title_image_cache;
 mod title_updates;
 mod user_permissions;
 mod users_admin_titles;
+mod verification_settings;
 
 mod support_acquisition_downloads;
 mod support_bootstrap_fixtures;

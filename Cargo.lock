@@ -5556,6 +5556,7 @@ dependencies = [
  "chardetng",
  "chrono",
  "const-oid 0.10.2",
+ "crc-fast",
  "encoding_rs",
  "flate2",
  "futures-util",

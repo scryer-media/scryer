@@ -138,6 +138,18 @@ pub struct UpdateRecycleBinSettings {
     pub enabled: bool,
 }
 
+/// How thoroughly location operations and download-client copies prove a
+/// destination copy before the source may be touched (FR-042).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerificationSettings {
+    pub depth: crate::location::model::VerificationDepth,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UpdateVerificationSettings {
+    pub depth: crate::location::model::VerificationDepth,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RecycledItem {
     pub id: String,

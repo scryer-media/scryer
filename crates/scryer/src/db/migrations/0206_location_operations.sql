@@ -22,8 +22,9 @@ CREATE TABLE location_operations (
     operation_type TEXT NOT NULL,
     -- move | adopt | catalog_only
     execution_mode TEXT NOT NULL,
-    -- queued | planning | awaiting_confirmation | running | paused | canceling
-    -- | canceled | completed | completed_with_warnings | failed
+    -- queued | preparing | moving | verifying | reconciling | cleaning_up
+    -- | completed | completed_with_warnings | canceled | failed
+    -- (`LocationOperationState` in scryer-application::location::model, FR-091)
     state TEXT NOT NULL DEFAULT 'queued',
     initiated_by_user_id TEXT,
     source_library_id TEXT,
@@ -71,10 +72,12 @@ CREATE TABLE location_operation_title_checkpoints (
     operation_id TEXT NOT NULL,
     title_id TEXT NOT NULL,
     sequence INTEGER NOT NULL DEFAULT 0,
-    -- pending | in_progress | copied | verified | committed | skipped | no_op
-    -- | blocked | failed | canceled
+    -- pending | moving | verifying | reconciling | cleaning_up | completed
+    -- | completed_with_warnings | skipped | blocked | failed
+    -- (`TitleCheckpointState` in scryer-application::location::model)
     state TEXT NOT NULL DEFAULT 'pending',
-    -- move | merge | dedup | catalog_only | no_op | blocked (preview classification)
+    -- Per-title preview classification, as previewed (FR-015/FR-080); value set
+    -- owned by scryer-application::location::classify.
     classification TEXT,
     source_library_id TEXT,
     source_root_id TEXT,

@@ -87,6 +87,10 @@ wiremock = "0.6"
 strum = { version = "0.28", features = ["derive"] }
 governor = "0.10.4"
 fixedbitset = "0.5"
+# SIMD-accelerated CRC used as the streaming move-corruption check during
+# location-operation copies. `ffi`/`panic-handler` (default) are for the crate's
+# C shared library and are deliberately off.
+crc-fast = { version = "1.10", default-features = false, features = ["std"] }
 
 [profile.release]
 lto = "fat"

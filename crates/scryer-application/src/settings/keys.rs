@@ -70,6 +70,7 @@ pub const TOTP_REQUIRE_EMBY_LOGIN_KEY: &str = "auth.totp.require_emby_login";
 pub const RECYCLE_BIN_ENABLED_KEY: &str = "recycle_bin.enabled";
 pub const RECYCLE_BIN_PATH_KEY: &str = "recycle_bin.path";
 pub const RECYCLE_BIN_RETENTION_DAYS_KEY: &str = "recycle_bin.retention_days";
+pub const VERIFICATION_DEPTH_KEY: &str = "verification.depth";
 
 pub(crate) fn default_indexer_routing_categories_for_scope(scope_id: &str) -> Vec<String> {
     match scope_id {

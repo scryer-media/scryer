@@ -77,6 +77,7 @@ unicode-normalization = "0.1"
 whatlang = { version = "0.18.0", optional = true }
 regex = "1"
 blake3 = "1"
+crc-fast = { workspace = true }
 const-oid = { version = "0.10.2", features = ["db"] }
 serde_json_canonicalizer = { version = "0.3", optional = true }
 sigstore = { version = "0.14", default-features = false, features = ["sigstore-trust-root"], optional = true }

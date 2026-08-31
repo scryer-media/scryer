@@ -61,6 +61,7 @@ mod library_scan_progress;
 mod library_scan_titles;
 #[path = "library/scan/unmatched.rs"]
 mod library_scan_unmatched;
+pub mod location;
 mod media;
 mod media_requests;
 mod media_servers;
@@ -428,6 +429,7 @@ pub use library_scan_progress::{
     LibraryScanMode, LibraryScanPhaseProgress, LibraryScanSession, LibraryScanStatus,
     LibraryScanTracker,
 };
+pub use location::model::VerificationDepth;
 pub use media::analyzer::NativeMediaAnalyzer;
 pub use notifications::dispatcher::start_notification_dispatcher;
 pub use null_repositories::NullIndexerErrorRepository;
@@ -564,7 +566,7 @@ pub use settings::keys::{
     SKIP_LOGIN_FOR_LOCAL_IPS_KEY, SPECIALS_FOLDER_TEMPLATE_KEY,
     TITLE_METADATA_LANGUAGE_OVERRIDE_KEY, TITLE_REQUIRED_AUDIO_OVERRIDE_KEY, TLS_CERT_PATH_KEY,
     TLS_KEY_PATH_KEY, TOTP_REQUIRE_EMBY_LOGIN_KEY, TOTP_REQUIRE_JELLYFIN_LOGIN_KEY,
-    USE_SEASON_FOLDERS_KEY,
+    USE_SEASON_FOLDERS_KEY, VERIFICATION_DEPTH_KEY,
 };
 pub use settings::runtime::is_bootstrap_default_library_root_set;
 pub(crate) use types::JwtClaims;
@@ -611,9 +613,10 @@ pub use types::{
     TotpEnrollmentComplete, TotpEnrollmentStart, TotpFailedAttemptRecord, TotpRecoveryCodeRecord,
     TotpStatus, UiDateTimeFormat, UiDefaultLandingView, UiDensity, UiSettings, UiSettingsFacet,
     UiSettingsUpdate, UiSidebarMode, UiTableColumnSetting, UiTableViewMode, UiTheme,
-    UpdateRecycleBinSettings, UserAuthFactorStatus, UserLoginSnapshot, VerifiedLocalCredentials,
-    WantedKind, WantedStatusCount, WebauthnChallengePurpose, WebauthnChallengeRecord,
-    WebauthnChallengeStart, WebauthnChallengeType, WebauthnCredentialRecord,
+    UpdateRecycleBinSettings, UpdateVerificationSettings, UserAuthFactorStatus, UserLoginSnapshot,
+    VerificationSettings, VerifiedLocalCredentials, WantedKind, WantedStatusCount,
+    WebauthnChallengePurpose, WebauthnChallengeRecord, WebauthnChallengeStart,
+    WebauthnChallengeType, WebauthnCredentialRecord,
 };
 pub use types::{
     CapturedIndexerHttpHeader, CapturedIndexerHttpResponse, INDEXER_CAPS_REFRESH_ERROR_PREFIX,

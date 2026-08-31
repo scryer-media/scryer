@@ -66,6 +66,28 @@ fn from_recycle_bin_settings(
     }
 }
 
+fn from_verification_depth(depth: scryer_application::VerificationDepth) -> VerificationDepthValue {
+    match depth {
+        scryer_application::VerificationDepth::Full => VerificationDepthValue::Full,
+        scryer_application::VerificationDepth::Quick => VerificationDepthValue::Quick,
+    }
+}
+
+fn to_verification_depth(value: VerificationDepthValue) -> scryer_application::VerificationDepth {
+    match value {
+        VerificationDepthValue::Full => scryer_application::VerificationDepth::Full,
+        VerificationDepthValue::Quick => scryer_application::VerificationDepth::Quick,
+    }
+}
+
+fn from_verification_settings(
+    settings: scryer_application::VerificationSettings,
+) -> VerificationSettingsPayload {
+    VerificationSettingsPayload {
+        depth: from_verification_depth(settings.depth),
+    }
+}
+
 fn from_plugin_auto_update_settings(
     settings: scryer_application::PluginAutoUpdateSettings,
 ) -> PluginAutoUpdateSettingsPayload {
@@ -609,6 +631,20 @@ impl SettingsQueries {
             .await
             .map_err(to_gql_error)?;
         Ok(from_recycle_bin_settings(settings))
+    }
+
+    /// Returns the verification depth applied to copies performed by location operations and download-client copies.
+    async fn verification_settings(
+        &self,
+        ctx: &Context<'_>,
+    ) -> GqlResult<VerificationSettingsPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let settings = app
+            .get_verification_settings(&actor)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(from_verification_settings(settings))
     }
 
     /// Returns whether the scheduled plugin catalog refresh installs official patch updates automatically.

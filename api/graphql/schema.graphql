@@ -10794,6 +10794,15 @@ type MutationRoot {
 		input: UpdateRecycleBinSettingsInput!
 	): RecycleBinSettingsPayload!
 	"""
+	Saves the verification depth applied to copies after checking the system-settings permission.
+	"""
+	updateVerificationSettings(
+		"""
+		Verification depth to save.
+		"""
+		input: UpdateVerificationSettingsInput!
+	): VerificationSettingsPayload!
+	"""
 	Saves the automatic official-plugin patch update setting after checking the system-settings permission.
 	"""
 	updatePluginAutoUpdateSettings(
@@ -14512,6 +14521,10 @@ type QueryRoot {
 	Returns whether the recycle bin is enabled for the authenticated actor.
 	"""
 	recycleBinSettings: RecycleBinSettingsPayload!
+	"""
+	Returns the verification depth applied to copies performed by location operations and download-client copies.
+	"""
+	verificationSettings: VerificationSettingsPayload!
 	"""
 	Returns whether the scheduled plugin catalog refresh installs official patch updates automatically.
 	"""
@@ -20280,6 +20293,17 @@ input UpdateTitleInput {
 }
 
 """
+Verification depth applied to copies performed by location operations and by
+download-client completed-download copies.
+"""
+input UpdateVerificationSettingsInput {
+	"""
+	Depth applied when proving a copied file before its source is touched.
+	"""
+	depth: VerificationDepthValue!
+}
+
+"""
 A multipart file upload
 """
 scalar Upload
@@ -20388,6 +20412,34 @@ input ValidateRuleSetInput {
 	Existing rule-set ID for context, or null for standalone validation.
 	"""
 	ruleSetId: ID
+}
+
+"""
+How thoroughly a copied file is proven before its source may be touched.
+"""
+enum VerificationDepthValue {
+	"""
+	Read the destination back in full and compare it against the CRC streamed
+	during the copy.
+	"""
+	FULL
+	"""
+	Compare the sampled head and tail content proof plus the file size. This
+	is also the floor full verification falls back to when a full read-back
+	cannot run.
+	"""
+	QUICK
+}
+
+"""
+Verification depth applied to copies performed by location operations and by
+download-client completed-download copies.
+"""
+type VerificationSettingsPayload {
+	"""
+	Depth applied when proving a copied file before its source is touched.
+	"""
+	depth: VerificationDepthValue!
 }
 
 """

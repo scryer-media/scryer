@@ -2,6 +2,7 @@ use super::{
     ContentScopeValue, DelayProfilePreferredProtocolValue, FillerPolicyValue, ImportModeValue,
     Long, MediaFacetValue, RecapPolicyValue, RenameCollisionPolicyValue,
     RenameMissingMetadataPolicyValue, RootFolderPayload, ScoringPersonaValue,
+    VerificationDepthValue,
 };
 use async_graphql::{Enum, ID, InputObject, SimpleObject};
 use chrono::{DateTime, Utc};
@@ -51,6 +52,14 @@ pub struct SubtitleSettingsPayload {
 pub struct RecycleBinSettingsPayload {
     /// Whether deleted media is moved to the recycle bin.
     pub enabled: bool,
+}
+
+#[derive(SimpleObject, Clone)]
+/// Verification depth applied to copies performed by location operations and by
+/// download-client completed-download copies.
+pub struct VerificationSettingsPayload {
+    /// Depth applied when proving a copied file before its source is touched.
+    pub depth: VerificationDepthValue,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -920,6 +929,14 @@ pub struct UpdateSubtitleSettingsInput {
 pub struct UpdateRecycleBinSettingsInput {
     /// Whether deleted media is retained in the recycle bin.
     pub enabled: bool,
+}
+
+#[derive(InputObject, Clone)]
+/// Verification depth applied to copies performed by location operations and by
+/// download-client completed-download copies.
+pub struct UpdateVerificationSettingsInput {
+    /// Depth applied when proving a copied file before its source is touched.
+    pub depth: VerificationDepthValue,
 }
 
 #[derive(InputObject, Clone)]
