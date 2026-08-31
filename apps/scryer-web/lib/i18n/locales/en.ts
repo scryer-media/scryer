@@ -1264,6 +1264,8 @@ const en: LocaleDictionary = {
   "title.requiredAudioResetInherit": "Reset to inherit",
   "title.fixMatchHeading": "Fix metadata match",
   "title.fixMatchAction": "Fix Match",
+  "title.fixMatchDescriptionMovie":
+    "Repair the TVDB match for this movie. Local title and folder naming stay the same.",
   "title.fixMatchDescriptionSeries":
     "Repair the TVDB match for this title. Local title and folder naming stay the same.",
   "title.fixMatchDialogTitle": "Fix Match",
