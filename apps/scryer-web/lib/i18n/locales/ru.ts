@@ -230,7 +230,7 @@ const ru: LocaleDictionary = {
     "settings.securityModeDisabled": "Открытый режим администратора",
     "settings.securityConfirmTitle": "Включить вход через форму?",
     "settings.securityConfirmDescription":
-        "Введите пароль, прежде чем Scryer начнёт требовать вход в систему.",
+        "После включения входа через форму Scryer потребует войти в систему.",
     "settings.securityConfirmPassword": "Пароль",
     "settings.securityConfirmAction": "Включить",
     "settings.securityAdminPasswordRequiredTitle": "Сначала задайте пароль администратора",

@@ -25,12 +25,10 @@ type SettingsSecuritySectionProps = {
   disableConfirmOpen: boolean;
   adminPasswordRequiredOpen: boolean;
   confirmBusy: boolean;
-  confirmPassword: string;
   confirmError: string | null;
   passwordMinLengthDraft: string;
   minPasswordLength: number;
   onToggle: (enabled: boolean) => void;
-  onConfirmPasswordChange: (value: string) => void;
   onConfirmEnable: () => Promise<void> | void;
   onCancelEnable: () => void;
   onConfirmDisable: () => Promise<void> | void;
@@ -57,12 +55,10 @@ export function SettingsSecuritySection({
   disableConfirmOpen,
   adminPasswordRequiredOpen,
   confirmBusy,
-  confirmPassword,
   confirmError,
   passwordMinLengthDraft,
   minPasswordLength,
   onToggle,
-  onConfirmPasswordChange,
   onConfirmEnable,
   onCancelEnable,
   onConfirmDisable,
@@ -83,7 +79,6 @@ export function SettingsSecuritySection({
 }: SettingsSecuritySectionProps) {
   const t = useTranslate();
   const busy = loading || confirmBusy;
-  const confirmDisabled = confirmPassword.trim().length === 0;
 
   return (
     <>
@@ -343,29 +338,14 @@ export function SettingsSecuritySection({
         confirmButtonVariant="default"
         confirmButtonClassName="bg-[var(--scry-success-solid)] text-[var(--scry-success-on-solid)] hover:bg-[var(--scry-success-solid-hover)] focus-visible:ring-[var(--scry-success-border-strong)]"
         isBusy={confirmBusy}
-        confirmDisabled={confirmDisabled}
         onConfirm={onConfirmEnable}
         onCancel={onCancelEnable}
       >
-        <div className="space-y-3">
-          <div className="space-y-1.5">
-            <Label htmlFor="security-confirm-password">
-              {t("settings.securityConfirmPassword")}
-            </Label>
-            <Input
-              id="security-confirm-password"
-              type="password"
-              autoComplete="current-password"
-              value={confirmPassword}
-              onChange={(event) => onConfirmPasswordChange(event.target.value)}
-            />
-          </div>
-          {confirmError ? (
-            <p id="settings-security-confirm-error" className="text-xs text-destructive">
-              {confirmError}
-            </p>
-          ) : null}
-        </div>
+        {confirmError ? (
+          <p id="settings-security-confirm-error" className="text-xs text-destructive">
+            {confirmError}
+          </p>
+        ) : null}
       </ConfirmDialog>
 
       <ConfirmDialog

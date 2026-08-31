@@ -178,7 +178,7 @@ const it: LocaleDictionary = {
   "settings.securityModeDisabled": "Open admin mode",
   "settings.securityConfirmTitle": "Enable form login?",
   "settings.securityConfirmDescription":
-    "Enter your password before Scryer starts requiring login.",
+    "Scryer will require you to sign in after form login is enabled.",
   "settings.securityConfirmPassword": "Password",
   "settings.securityConfirmAction": "Enable",
   "settings.securityAdminPasswordRequiredTitle": "Set the admin password first",
