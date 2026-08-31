@@ -3586,7 +3586,12 @@ async fn graphql_title_root_folder_id_tracks_library_root_id_lifecycle() {
         &added_unreferenced_root["data"]["updateLibrary"],
         "/library/root-lifecycle-unreferenced",
     );
-    assert_eq!(
+    // Root ids are allocated, never derived from the path (FR-078).
+    assert!(
+        unreferenced_root_id.starts_with(scryer_domain::SYNTHETIC_ROOT_ID_PREFIX),
+        "a newly configured root should carry an allocated id, got {unreferenced_root_id}"
+    );
+    assert_ne!(
         unreferenced_root_id,
         scryer_domain::root_folder_id_for_path("/library/root-lifecycle-unreferenced")
     );
@@ -3624,10 +3629,14 @@ async fn graphql_title_root_folder_id_tracks_library_root_id_lifecycle() {
         &renamed_unreferenced_root["data"]["updateLibrary"],
         "/library/root-lifecycle-unreferenced-renamed",
     );
+    // The bulk root replace still cannot express "this root moved", so an
+    // unreferenced root swapped for another path reads as a removal plus an
+    // addition and the addition is allocated a fresh id. Identity across a
+    // deliberate path change is the move workflow's job, not this mutation's.
     assert_ne!(renamed_unreferenced_root_id, unreferenced_root_id);
-    assert_eq!(
-        renamed_unreferenced_root_id,
-        scryer_domain::root_folder_id_for_path("/library/root-lifecycle-unreferenced-renamed")
+    assert!(
+        renamed_unreferenced_root_id.starts_with(scryer_domain::SYNTHETIC_ROOT_ID_PREFIX),
+        "a newly configured root should carry an allocated id, got {renamed_unreferenced_root_id}"
     );
 
     let removed_unreferenced_root = gql(

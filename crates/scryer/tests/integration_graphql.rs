@@ -1822,7 +1822,8 @@ async fn configure_default_library_root(
         .expect("lookup default library")
         .expect("default library exists");
     let media_root_path = media_root.to_string_lossy().to_string();
-    ctx.libraries
+    let updated = ctx
+        .libraries
         .update(
             &library_id,
             library.name,
@@ -1834,7 +1835,14 @@ async fn configure_default_library_root(
         )
         .await
         .expect("configure default library root");
-    scryer_domain::root_folder_id_for_path(&media_root_path)
+    // Root ids are allocated, not derived from the path, so read the stored id back.
+    updated
+        .roots
+        .iter()
+        .find(|root| root.is_default)
+        .or_else(|| updated.roots.first())
+        .map(|root| root.id.clone())
+        .expect("configured library should expose its root")
 }
 
 async fn default_library_root_id(ctx: &TestContext, facet: &MediaFacet) -> String {

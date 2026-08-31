@@ -190,10 +190,6 @@ async fn seed_title_with_folder_path(
     library: &Library,
     folder_path: Option<String>,
 ) {
-    let root_folder_path = folder_path
-        .as_deref()
-        .or_else(|| library.roots.first().map(|root| root.path.as_str()))
-        .unwrap_or_default();
     let title = Title {
         id: id.to_string(),
         name: format!("{} Title", library.name),
@@ -229,7 +225,12 @@ async fn seed_title_with_folder_path(
         metadata_fetched_at: None,
         min_availability: None,
         digital_release_date: None,
-        root_folder_id: scryer_domain::root_folder_id_for_path(root_folder_path),
+        // Root ids are allocated, not derived from a path, so take the library's own.
+        root_folder_id: library
+            .roots
+            .first()
+            .map(|root| root.id.clone())
+            .unwrap_or_else(|| format!("missing-root-for-{}", library.id)),
         folder_path,
     };
     TitleRepository::create(&ctx.titles, title)

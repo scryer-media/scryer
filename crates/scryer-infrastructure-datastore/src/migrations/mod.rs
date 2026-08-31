@@ -13,6 +13,10 @@ pub mod known_bad;
 pub mod notification_targets;
 pub mod post_0_16_6_prerelease;
 pub mod rule_set_runtime_wrapper;
+pub mod synthetic_root_ids;
+#[cfg(test)]
+#[path = "synthetic_root_ids_upgrade_tests.rs"]
+mod synthetic_root_ids_upgrade_tests;
 pub mod title_catalog_sort_keys;
 pub mod title_folder_ownership;
 pub mod title_folder_ownership_safe;
@@ -789,6 +793,9 @@ async fn run_rust_hook(
             blake3_identities::backfill_blake3_identities_sqlite(tx).await
         }
         "compact_event_storage" => event_storage::compact_event_storage_sqlite(tx).await,
+        "migrate_synthetic_root_ids" => {
+            synthetic_root_ids::migrate_synthetic_root_ids_sqlite(tx).await
+        }
         #[cfg(test)]
         "test_insert_hook_marker" => {
             let marker = match install_kind {

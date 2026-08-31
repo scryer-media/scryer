@@ -155,10 +155,37 @@ pub fn normalize_library_root_path(path: &str) -> String {
     }
 }
 
+/// Prefix marking a library root id as synthetic — allocated, never derived.
+pub const SYNTHETIC_ROOT_ID_PREFIX: &str = "root_";
+
+/// Allocate a fresh identity for a newly configured library root.
+///
+/// A root's id is opaque and permanent: it is minted once, when the root is
+/// first configured, and is never recomputed. That is what lets a root's path be
+/// a mutable attribute — changing where a root points does not change which root
+/// it is, so titles keep valid references across path changes and consolidations
+/// (FR-078). Resolving an *existing* root always means reading its stored id, not
+/// recomputing one from its path.
+pub fn allocate_root_folder_id() -> String {
+    format!(
+        "{SYNTHETIC_ROOT_ID_PREFIX}{}",
+        uuid::Uuid::new_v4().simple()
+    )
+}
+
+/// The pre-0204 path-derived root id.
+///
+/// **Legacy.** Root identity was a pure function of the platform-normalized path
+/// until migration 0204 re-keyed roots onto synthetic ids. This survives for the
+/// migration hooks that have to reproduce the old scheme to recognize and remap
+/// it, and for resolving a legacy id a caller may still be holding through
+/// `library_root_id_remaps`. New code allocates with [`allocate_root_folder_id`]
+/// and resolves existing roots by reading `library_roots.id`.
 pub fn root_folder_id_for_path(path: &str) -> String {
     root_folder_id_for_normalized_path(&normalize_library_root_path(path))
 }
 
+/// See [`root_folder_id_for_path`] — legacy, migration and lookup use only.
 pub fn root_folder_id_for_normalized_path(normalized_path: &str) -> String {
     blake3::hash(normalized_path.as_bytes())
         .to_hex()
