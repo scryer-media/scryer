@@ -1656,6 +1656,23 @@ file = "postgres/migrations/0203_oauth_authorization_code_session_epoch.sql"
 engine = "postgres"
 scope = "all"
 
+[[migration]]
+version = 204
+description = "maintenance rule sets and immutable matcher revisions"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0204_maintenance_rule_sets.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0204_maintenance_rule_sets.sql"
+engine = "postgres"
+scope = "all"
+
 [[baseline]]
 through_version = 140
 file = "baselines/0140_baseline.sql"

@@ -3739,6 +3739,115 @@ pub struct RuleSet {
     pub managed_tag_filter: Option<Vec<String>>,
 }
 
+/// How far a maintenance rule set is allowed to act (RFC 137 section 7).
+///
+/// Only [`Self::Disabled`] is reachable in the foundation wave: nothing
+/// evaluates stored maintenance rules yet, so a rule that claimed to be running
+/// in shadow or observe mode would be advertising a capability that does not
+/// exist. The other two variants are declared here because the storage column
+/// is written now and must not need a migration when the evaluator lands.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MaintenanceEvaluationMode {
+    #[default]
+    Disabled,
+    /// Evaluate and record candidates; never act.
+    Shadow,
+    /// Evaluate, record, and surface candidates for manual approval.
+    Observe,
+}
+
+impl MaintenanceEvaluationMode {
+    pub const fn as_storage_str(self) -> &'static str {
+        match self {
+            Self::Disabled => "disabled",
+            Self::Shadow => "shadow",
+            Self::Observe => "observe",
+        }
+    }
+
+    pub fn parse_storage(value: &str) -> Option<Self> {
+        match value {
+            "disabled" => Some(Self::Disabled),
+            "shadow" => Some(Self::Shadow),
+            "observe" => Some(Self::Observe),
+            _ => None,
+        }
+    }
+}
+
+/// Granularity a maintenance rule set is scoped to.
+///
+/// Season- and episode-scoped rule sets are an RFC concept but have no
+/// persistence or evaluation path yet, so this wave stores only `Title`. The
+/// column is a string so widening the enum stays a code change.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MaintenanceRuleSubjectKind {
+    #[default]
+    Title,
+}
+
+impl MaintenanceRuleSubjectKind {
+    pub const fn as_storage_str(self) -> &'static str {
+        match self {
+            Self::Title => "title",
+        }
+    }
+
+    pub fn parse_storage(value: &str) -> Option<Self> {
+        match value {
+            "title" => Some(Self::Title),
+            _ => None,
+        }
+    }
+}
+
+/// A user-authored maintenance rule set: identity, scope, and evaluation state.
+///
+/// The matcher and the action it authorizes live on
+/// [`MaintenanceRuleRevision`], never here, so changing what a rule *does*
+/// always produces a new revision.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MaintenanceRuleSet {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub enabled: bool,
+    pub evaluation_mode: MaintenanceEvaluationMode,
+    /// Libraries this rule is confined to. Empty means every library.
+    pub library_ids: Vec<String>,
+    pub subject_kind: MaintenanceRuleSubjectKind,
+    /// Revision number of the matcher currently in force.
+    pub current_revision_number: i64,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// One immutable revision of a maintenance rule set's matcher and action
+/// (RFC 137 section 7.1).
+///
+/// Revisions are append-only: editing the matcher writes revision N+1 and
+/// repoints the rule set, so a candidate can always be attributed to the exact
+/// source and action that produced it.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MaintenanceRuleRevision {
+    pub id: String,
+    pub rule_set_id: String,
+    pub revision_number: i64,
+    /// Rego source with the package declaration already rewritten to the
+    /// system-assigned rule ID.
+    pub rego_source: String,
+    /// Serialized `MaintenanceActionSpec`. Stored as JSON because the closed
+    /// action catalog lives in the application layer; callers deserialize it at
+    /// that boundary rather than passing the raw text around.
+    pub action_spec_json: String,
+    pub grace_days: i64,
+    pub matcher_content_hash: String,
+    pub created_by: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum UserAccountKind {

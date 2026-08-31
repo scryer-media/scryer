@@ -237,6 +237,16 @@ impl AppServicesBuilder {
         self
     }
 
+    /// Not a required service: maintenance rules ship dark, and an assembly
+    /// that never configures the store simply has no rules to read.
+    pub fn with_maintenance_rule_set_store<T>(mut self, store: Arc<T>) -> Self
+    where
+        T: MaintenanceRuleSetRepository + Send + Sync + 'static,
+    {
+        self.services.customization.maintenance_rule_sets = store;
+        self
+    }
+
     pub fn with_post_processing_script_store<T>(mut self, store: Arc<T>) -> Self
     where
         T: PostProcessingScriptRepository + Send + Sync + 'static,

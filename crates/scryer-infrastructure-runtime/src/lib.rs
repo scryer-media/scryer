@@ -89,8 +89,8 @@ pub(crate) use scryer_infrastructure_acquisition::indexers::{
     stats::InMemoryIndexerStatsTracker,
 };
 pub(crate) use scryer_infrastructure_configuration::customization::{
-    plugin_store::PluginStore, post_processing_script_store::PostProcessingScriptStore,
-    rule_set_store::RuleSetStore,
+    maintenance_rule_set_store::MaintenanceRuleSetStore, plugin_store::PluginStore,
+    post_processing_script_store::PostProcessingScriptStore, rule_set_store::RuleSetStore,
 };
 pub(crate) use scryer_infrastructure_configuration::settings::{
     quality_profile_store::QualityProfileStore, settings_store::SettingsStore,

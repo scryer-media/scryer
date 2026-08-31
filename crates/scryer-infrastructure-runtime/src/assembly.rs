@@ -34,10 +34,10 @@ use crate::{
     ExternalImportMonitorStore, ExternalImportSetupSecretDraftStore, FileSystemStagedNzbStore,
     HousekeepingStore, ImportStore, InMemoryIndexerStatsTracker, IndexerConfigStore,
     IndexerErrorStore, IndexerProxyConfigStore, IndexerSearchLearningStore, LibraryProbeStore,
-    LibraryScanUnmatchedStore, MediaFileStore, MediaRequestStore, MediaServerConnectionStore,
-    MetadataGatewayClient, MigrationMode, NotificationStore, OAuthStore, PendingReleaseStore,
-    PluginStore, PostProcessingScriptStore, QualityProfileStore, ReleaseStore, RuleSetStore,
-    SeedingProfileStore, SettingsStore, ShowStore, SmgEnrollmentConfig,
+    LibraryScanUnmatchedStore, MaintenanceRuleSetStore, MediaFileStore, MediaRequestStore,
+    MediaServerConnectionStore, MetadataGatewayClient, MigrationMode, NotificationStore,
+    OAuthStore, PendingReleaseStore, PluginStore, PostProcessingScriptStore, QualityProfileStore,
+    ReleaseStore, RuleSetStore, SeedingProfileStore, SettingsStore, ShowStore, SmgEnrollmentConfig,
     SqliteLogicalBackupExporter, SqliteServices, SubtitleDownloadStore,
     SubtitleProviderConfigStore, TitleImageStore, TitleStore, TotpStore, WantedStore,
     WebauthnStore, WorkflowOperationStore,
@@ -1012,6 +1012,12 @@ impl DatastoreAssembly {
         }
     }
 
+    /// Built on demand: maintenance rules ship dark, so the store is not part
+    /// of the per-engine store set every assembly path constructs eagerly.
+    pub fn maintenance_rule_set_store(&self) -> Arc<MaintenanceRuleSetStore> {
+        Arc::new(MaintenanceRuleSetStore::new(self.datastore()))
+    }
+
     pub fn settings_store(&self) -> Arc<SettingsStore> {
         match &self.stores {
             DatastoreStores::Sqlite { settings_store, .. } => settings_store.clone(),
@@ -1458,6 +1464,7 @@ impl DatastoreAssembly {
                 .with_housekeeping(housekeeping_store.clone())
                 .with_subtitle_downloads(subtitle_download_store.clone())
                 .with_rule_set_store(rule_set_store.clone())
+                .with_maintenance_rule_set_store(self.maintenance_rule_set_store())
                 .with_post_processing_script_store(post_processing_script_store.clone())
                 .with_plugin_installation_store(plugin_store.clone())
                 .with_acquisition_state(acquisition_store.clone())
@@ -1565,6 +1572,7 @@ impl DatastoreAssembly {
                 .with_housekeeping(housekeeping_store.clone())
                 .with_subtitle_downloads(subtitle_download_store.clone())
                 .with_rule_set_store(rule_set_store.clone())
+                .with_maintenance_rule_set_store(self.maintenance_rule_set_store())
                 .with_post_processing_script_store(post_processing_script_store.clone())
                 .with_plugin_installation_store(plugin_store.clone())
                 .with_acquisition_state(acquisition_store.clone())

@@ -38,6 +38,7 @@ mod emby_media_servers;
 mod external_import_setup_secret_drafts;
 mod imports_download_submissions;
 mod library_scan_unmatched;
+mod maintenance_rule_sets;
 mod migrations;
 mod oauth;
 mod permissions_users_shows;

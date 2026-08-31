@@ -13,7 +13,8 @@ use async_trait::async_trait;
 use scryer_domain::download_identity::DownloadId;
 use scryer_domain::{
     CanonicalMediaTag, ImportTransferPhase, ImportType, IndexerCapsSnapshot,
-    PersistedPluginWasmPayload, title_catalog_name_tie_key, title_catalog_sort_key_for_title,
+    MaintenanceRuleRevision, MaintenanceRuleSet, PersistedPluginWasmPayload,
+    title_catalog_name_tie_key, title_catalog_sort_key_for_title,
 };
 use scryer_plugin_sdk::{
     ArchivePluginFormat, ArchivePluginProcessRequest, ArchivePluginProcessResponse,
@@ -5420,6 +5421,57 @@ pub trait RuleSetRepository: Send + Sync {
     async fn get_rule_set_by_managed_key(&self, key: &str) -> AppResult<Option<RuleSet>>;
     async fn delete_rule_set_by_managed_key(&self, key: &str) -> AppResult<()>;
     async fn list_rule_sets_by_managed_key_prefix(&self, prefix: &str) -> AppResult<Vec<RuleSet>>;
+}
+
+/// Persistence for user-authored maintenance rules (RFC 137 section 11).
+///
+/// Rule sets and their matcher revisions are two tables but one unit of change:
+/// a rule set with no revision has no matcher and no action, so
+/// [`Self::create_rule_set`] and [`Self::add_revision`] must each write both
+/// rows in a single transaction.
+#[async_trait]
+pub trait MaintenanceRuleSetRepository: Send + Sync {
+    async fn list_rule_sets(&self) -> AppResult<Vec<MaintenanceRuleSet>>;
+
+    async fn get_rule_set(&self, id: &str) -> AppResult<Option<MaintenanceRuleSet>>;
+
+    /// Insert the rule set and its first revision atomically.
+    async fn create_rule_set(
+        &self,
+        rule_set: &MaintenanceRuleSet,
+        revision: &MaintenanceRuleRevision,
+    ) -> AppResult<()>;
+
+    /// Append `revision` and repoint the rule set at it, atomically. Existing
+    /// revisions are never rewritten.
+    async fn add_revision(
+        &self,
+        revision: &MaintenanceRuleRevision,
+        updated_at: DateTime<Utc>,
+    ) -> AppResult<()>;
+
+    async fn get_revision(
+        &self,
+        rule_set_id: &str,
+        revision_number: i64,
+    ) -> AppResult<Option<MaintenanceRuleRevision>>;
+
+    /// Newest revision first.
+    async fn list_revisions(&self, rule_set_id: &str) -> AppResult<Vec<MaintenanceRuleRevision>>;
+
+    /// Update the fields that carry no evaluation semantics. Never creates a
+    /// revision — the matcher, action, and grace period are untouched.
+    async fn update_rule_set_metadata(
+        &self,
+        id: &str,
+        name: &str,
+        description: &str,
+        library_ids: &[String],
+        updated_at: DateTime<Utc>,
+    ) -> AppResult<()>;
+
+    /// Removes the rule set; the FK cascade takes its revisions with it.
+    async fn delete_rule_set(&self, id: &str) -> AppResult<()>;
 }
 
 #[async_trait]

@@ -20,6 +20,7 @@ mod import_rejection_reopen;
 mod indexer_download_client_mappings;
 mod libraries;
 mod library_scan;
+mod maintenance_rules;
 mod media_requests;
 mod metadata_search;
 mod queueing;

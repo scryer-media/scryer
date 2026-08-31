@@ -130,6 +130,7 @@ pub struct AppConfigServices {
 #[derive(Clone)]
 pub struct AppCustomizationServices {
     pub(crate) rule_sets: Arc<dyn RuleSetRepository>,
+    pub(crate) maintenance_rule_sets: Arc<dyn MaintenanceRuleSetRepository>,
     pub(crate) pp_scripts: Arc<dyn PostProcessingScriptRepository>,
     pub(crate) plugin_installations: Arc<dyn PluginInstallationRepository>,
     pub(crate) plugin_descriptor_loader: Arc<dyn PluginDescriptorLoader>,
@@ -369,6 +370,9 @@ impl AppServices {
             },
             customization: AppCustomizationServices {
                 rule_sets: Arc::new(NullRuleSetRepository),
+                maintenance_rule_sets: Arc::new(
+                    null_repositories::NullMaintenanceRuleSetRepository,
+                ),
                 pp_scripts: Arc::new(NullPostProcessingScriptRepository),
                 plugin_installations: Arc::new(NullPluginInstallationRepository),
                 plugin_descriptor_loader: Arc::new(NullPluginDescriptorLoader),

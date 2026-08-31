@@ -10,6 +10,7 @@ use scryer_domain::{
 };
 
 use scryer_domain::RuleSet;
+use scryer_domain::{MaintenanceRuleRevision, MaintenanceRuleSet};
 
 use crate::contracts::{
     ClientJobLocator, DownloadClientBindingRecord, DownloadRecord, ObservationResolution,
@@ -53,26 +54,26 @@ use crate::{
     IndexerSearchLearningKey, IndexerSearchLearningRecord, IndexerSearchLearningRepository,
     IndexerStatsTracker, JobKey, JobRunRecord, JobRunRepository, LibraryProbeRepository,
     LibraryProbeSignature, LibraryRepository, LibraryRootDraft, LibraryScanUnmatchedItem,
-    LibraryScanUnmatchedItemRepository, MediaFileRepository, MediaRequestCounts, MediaRequestQuery,
-    MediaRequestRepository, MediaRequestResolution, NewBlocklistEntry, NewMediaRequest,
-    NotificationChannelRepository, NotificationSubscriptionRepository,
-    OAuthAuthorizationCodeRecord, OAuthConnectedAppRecord, OAuthRefreshGrantRecord,
-    OAuthRefreshRotationOutcome, OAuthRefreshTokenRecord, OAuthRepository, PendingRelease,
-    PendingReleaseRepository, PendingReleasesPageQuery, PendingStagedNzb, PluginDescriptorLoader,
-    PluginInstallationRepository, PostProcessingScriptRepository, ReleaseDecision,
-    RuleSetRepository, SchedulerAdmission, SchedulerBatchDecision, SchedulerBatchRequest,
-    SchedulerFeedback, SchedulerLease, SchedulerSnapshot, SchedulerSnapshotFilter,
-    ScopeIndexerCoverageRepository, SeedingProfileRepository, SettingsRepository, StagedNzbRef,
-    StagedNzbStore, SystemInfoProvider, TitleEpisodeProgressSummary, TitleImageBlob,
-    TitleImageKind, TitleImageProcessor, TitleImageRepository, TitleImageSourceResult,
-    TitleImageSyncTask, TitleImageVariantSpec, TitleMediaFile, TitleMediaSizeSummary,
-    TitleMovieMediaSummary, TitleQualitySummary, UiSettings, UiSettingsUpdate, UpstreamScheduler,
-    UserExternalAccountRepository, UserUiSettingsRepository, VerifiedExternalIdentity,
-    WebauthnChallengeRecord, WebauthnCredentialRecord, WebauthnRepository, WorkflowOperationInfo,
-    WorkflowOperationRepository, ports::CatalogDiscoveryCandidatesRecord, ports::DatastoreInfo,
-    ports::LogicalBackupExporter, ports::TotpRepository, types::TotpCredentialRecord,
-    types::TotpEnrollmentChallengeRecord, types::TotpFailedAttemptRecord,
-    types::TotpRecoveryCodeRecord,
+    LibraryScanUnmatchedItemRepository, MaintenanceRuleSetRepository, MediaFileRepository,
+    MediaRequestCounts, MediaRequestQuery, MediaRequestRepository, MediaRequestResolution,
+    NewBlocklistEntry, NewMediaRequest, NotificationChannelRepository,
+    NotificationSubscriptionRepository, OAuthAuthorizationCodeRecord, OAuthConnectedAppRecord,
+    OAuthRefreshGrantRecord, OAuthRefreshRotationOutcome, OAuthRefreshTokenRecord, OAuthRepository,
+    PendingRelease, PendingReleaseRepository, PendingReleasesPageQuery, PendingStagedNzb,
+    PluginDescriptorLoader, PluginInstallationRepository, PostProcessingScriptRepository,
+    ReleaseDecision, RuleSetRepository, SchedulerAdmission, SchedulerBatchDecision,
+    SchedulerBatchRequest, SchedulerFeedback, SchedulerLease, SchedulerSnapshot,
+    SchedulerSnapshotFilter, ScopeIndexerCoverageRepository, SeedingProfileRepository,
+    SettingsRepository, StagedNzbRef, StagedNzbStore, SystemInfoProvider,
+    TitleEpisodeProgressSummary, TitleImageBlob, TitleImageKind, TitleImageProcessor,
+    TitleImageRepository, TitleImageSourceResult, TitleImageSyncTask, TitleImageVariantSpec,
+    TitleMediaFile, TitleMediaSizeSummary, TitleMovieMediaSummary, TitleQualitySummary, UiSettings,
+    UiSettingsUpdate, UpstreamScheduler, UserExternalAccountRepository, UserUiSettingsRepository,
+    VerifiedExternalIdentity, WebauthnChallengeRecord, WebauthnCredentialRecord,
+    WebauthnRepository, WorkflowOperationInfo, WorkflowOperationRepository,
+    ports::CatalogDiscoveryCandidatesRecord, ports::DatastoreInfo, ports::LogicalBackupExporter,
+    ports::TotpRepository, types::TotpCredentialRecord, types::TotpEnrollmentChallengeRecord,
+    types::TotpFailedAttemptRecord, types::TotpRecoveryCodeRecord,
 };
 
 #[derive(Default)]
@@ -1304,6 +1305,64 @@ impl RuleSetRepository for NullRuleSetRepository {
     }
     async fn list_rule_sets_by_managed_key_prefix(&self, _prefix: &str) -> AppResult<Vec<RuleSet>> {
         Ok(vec![])
+    }
+}
+
+#[derive(Default)]
+pub struct NullMaintenanceRuleSetRepository;
+
+#[async_trait]
+impl MaintenanceRuleSetRepository for NullMaintenanceRuleSetRepository {
+    async fn list_rule_sets(&self) -> AppResult<Vec<MaintenanceRuleSet>> {
+        Ok(vec![])
+    }
+    async fn get_rule_set(&self, _id: &str) -> AppResult<Option<MaintenanceRuleSet>> {
+        Ok(None)
+    }
+    async fn create_rule_set(
+        &self,
+        _rule_set: &MaintenanceRuleSet,
+        _revision: &MaintenanceRuleRevision,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "maintenance rule repository is not configured".to_string(),
+        ))
+    }
+    async fn add_revision(
+        &self,
+        _revision: &MaintenanceRuleRevision,
+        _updated_at: DateTime<Utc>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "maintenance rule repository is not configured".to_string(),
+        ))
+    }
+    async fn get_revision(
+        &self,
+        _rule_set_id: &str,
+        _revision_number: i64,
+    ) -> AppResult<Option<MaintenanceRuleRevision>> {
+        Ok(None)
+    }
+    async fn list_revisions(&self, _rule_set_id: &str) -> AppResult<Vec<MaintenanceRuleRevision>> {
+        Ok(vec![])
+    }
+    async fn update_rule_set_metadata(
+        &self,
+        _id: &str,
+        _name: &str,
+        _description: &str,
+        _library_ids: &[String],
+        _updated_at: DateTime<Utc>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "maintenance rule repository is not configured".to_string(),
+        ))
+    }
+    async fn delete_rule_set(&self, _id: &str) -> AppResult<()> {
+        Err(AppError::Repository(
+            "maintenance rule repository is not configured".to_string(),
+        ))
     }
 }
 

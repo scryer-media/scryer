@@ -1,0 +1,667 @@
+//! Authoring and on-demand preview for maintenance rule sets (RFC 137 tracks
+//! A3/A4).
+//!
+//! Everything here is authoring-time. Nothing schedules evaluation, writes
+//! candidates, or executes an action: [`preview_maintenance_rule`] is the only
+//! path that runs a matcher, it runs on request against a bounded selection,
+//! and it persists nothing.
+//!
+//! [`preview_maintenance_rule`]: AppUseCase::preview_maintenance_rule
+
+use std::collections::HashMap;
+
+use chrono::Utc;
+use scryer_domain::{
+    AppPermission, Id, MaintenanceEvaluationMode, MaintenanceRuleRevision, MaintenanceRuleSet,
+    MaintenanceRuleSubjectKind, MediaFacet, Title, User,
+};
+use scryer_rules::maintenance::{
+    MaintenanceOutcome, MaintenancePolicy, MaintenanceRulesEngine, rewrite_package_declaration,
+};
+use scryer_rules::runtime::content_hash;
+use scryer_rules::validation::{ValidationResult, validate_maintenance_rule};
+
+use crate::maintenance_rules::facts::{MaintenanceLibraryRef, build_title_input};
+use crate::maintenance_rules::{
+    MaintenanceActionSpec, MaintenanceSubjectKind as ActionSubjectKind,
+};
+use crate::{AppError, AppResult, AppUseCase};
+
+/// Upper bound on how many titles one preview may evaluate. Preview is
+/// synchronous and builds a fact snapshot per title, so the cap is what keeps a
+/// request from turning into a library-wide scan.
+pub const MAINTENANCE_PREVIEW_MAX_TITLES: usize = 50;
+
+/// Selection size used when the caller does not ask for one.
+pub const MAINTENANCE_PREVIEW_DEFAULT_TITLES: usize = 20;
+
+// ── Request models ──────────────────────────────────────────────────────────
+
+/// A new rule set plus its first matcher revision.
+#[derive(Clone, Debug)]
+pub struct MaintenanceRuleDraft {
+    pub name: String,
+    pub description: String,
+    pub rego_source: String,
+    pub action_spec: MaintenanceActionSpec,
+    pub grace_days: i64,
+    /// Empty means every library.
+    pub library_ids: Vec<String>,
+    /// Only [`MaintenanceEvaluationMode::Disabled`] is accepted in this wave.
+    pub evaluation_mode: Option<MaintenanceEvaluationMode>,
+}
+
+/// A replacement matcher for an existing rule set. Applying one always appends
+/// a revision; it never edits the revision in force.
+#[derive(Clone, Debug)]
+pub struct MaintenanceMatcherDraft {
+    pub rego_source: String,
+    pub action_spec: MaintenanceActionSpec,
+    pub grace_days: i64,
+}
+
+/// Which matcher a preview should run.
+#[derive(Clone, Debug)]
+pub enum MaintenancePreviewMatcher {
+    /// The current revision of a stored rule set.
+    Stored { rule_set_id: String },
+    /// An unsaved draft from the editor. Validated and compiled, never stored.
+    Inline {
+        rego_source: String,
+        action_spec: MaintenanceActionSpec,
+        grace_days: i64,
+    },
+}
+
+/// Which titles a preview should evaluate.
+#[derive(Clone, Debug)]
+pub enum MaintenancePreviewSelection {
+    /// Exactly these titles, at most [`MAINTENANCE_PREVIEW_MAX_TITLES`].
+    Titles(Vec<String>),
+    /// The first `limit` titles of one library, clamped to the cap.
+    Library {
+        library_id: String,
+        limit: Option<usize>,
+    },
+}
+
+#[derive(Clone, Debug)]
+pub struct MaintenancePreviewRequest {
+    pub matcher: MaintenancePreviewMatcher,
+    pub selection: MaintenancePreviewSelection,
+}
+
+// ── Read models ─────────────────────────────────────────────────────────────
+
+/// A rule set with the revision currently in force, action spec already
+/// decoded so no caller downstream handles the stored JSON.
+#[derive(Clone, Debug)]
+pub struct MaintenanceRuleSetDetail {
+    pub rule_set: MaintenanceRuleSet,
+    pub revision: MaintenanceRuleRevision,
+    pub action_spec: MaintenanceActionSpec,
+}
+
+#[derive(Clone, Debug)]
+pub struct MaintenancePreviewResult {
+    /// The stored rule set's id, or the throwaway id an inline draft compiled
+    /// under.
+    pub rule_set_id: String,
+    /// Hash of the exact source that produced these outcomes.
+    pub matcher_content_hash: String,
+    pub evaluated_at: chrono::DateTime<Utc>,
+    pub titles: Vec<MaintenancePreviewTitleResult>,
+}
+
+/// One title's outcome. `outcome` is `None` exactly when `error` is set: a rule
+/// that failed produced no decision, and a failure is never rendered as
+/// no-match.
+#[derive(Clone, Debug)]
+pub struct MaintenancePreviewTitleResult {
+    pub title_id: String,
+    pub title_name: String,
+    pub facet: MediaFacet,
+    pub library_id: String,
+    pub outcome: Option<MaintenanceOutcome>,
+    pub reason_codes: Vec<String>,
+    pub error: Option<String>,
+}
+
+// ── Service ─────────────────────────────────────────────────────────────────
+
+impl AppUseCase {
+    pub async fn list_maintenance_rule_sets(
+        &self,
+        actor: &User,
+    ) -> AppResult<Vec<MaintenanceRuleSet>> {
+        self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
+            .await?;
+        self.services
+            .customization
+            .maintenance_rule_sets
+            .list_rule_sets()
+            .await
+    }
+
+    pub async fn get_maintenance_rule_set(
+        &self,
+        actor: &User,
+        id: &str,
+    ) -> AppResult<Option<MaintenanceRuleSetDetail>> {
+        self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
+            .await?;
+        let Some(rule_set) = self
+            .services
+            .customization
+            .maintenance_rule_sets
+            .get_rule_set(id)
+            .await?
+        else {
+            return Ok(None);
+        };
+        self.load_detail(rule_set).await.map(Some)
+    }
+
+    pub async fn list_maintenance_rule_revisions(
+        &self,
+        actor: &User,
+        rule_set_id: &str,
+    ) -> AppResult<Vec<MaintenanceRuleRevision>> {
+        self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
+            .await?;
+        self.services
+            .customization
+            .maintenance_rule_sets
+            .list_revisions(rule_set_id)
+            .await
+    }
+
+    pub async fn create_maintenance_rule_set(
+        &self,
+        actor: &User,
+        draft: MaintenanceRuleDraft,
+    ) -> AppResult<MaintenanceRuleSetDetail> {
+        self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
+            .await?;
+
+        require_dormant_evaluation_mode(draft.evaluation_mode)?;
+        let name = require_non_empty(&draft.name, "name")?;
+
+        let id = Id::new_rego_safe().0;
+        let prepared = prepare_matcher(
+            &id,
+            &draft.rego_source,
+            &draft.action_spec,
+            draft.grace_days,
+        )?;
+
+        let now = Utc::now();
+        let rule_set = MaintenanceRuleSet {
+            id: id.clone(),
+            name,
+            description: draft.description,
+            // Ships dark: nothing evaluates stored rules yet, so a rule that
+            // persisted as enabled would be advertising a capability that does
+            // not exist.
+            enabled: false,
+            evaluation_mode: MaintenanceEvaluationMode::Disabled,
+            library_ids: draft.library_ids,
+            subject_kind: MaintenanceRuleSubjectKind::Title,
+            current_revision_number: 1,
+            created_at: now,
+            updated_at: now,
+        };
+        let revision = build_revision(&id, 1, &prepared, draft.grace_days, actor, now);
+
+        self.services
+            .customization
+            .maintenance_rule_sets
+            .create_rule_set(&rule_set, &revision)
+            .await?;
+
+        Ok(MaintenanceRuleSetDetail {
+            rule_set,
+            revision,
+            action_spec: draft.action_spec,
+        })
+    }
+
+    /// Appends revision N+1. Revision N is left exactly as it was written, so a
+    /// candidate recorded against it stays attributable (RFC 7.1).
+    pub async fn update_maintenance_rule_matcher(
+        &self,
+        actor: &User,
+        rule_set_id: &str,
+        draft: MaintenanceMatcherDraft,
+    ) -> AppResult<MaintenanceRuleSetDetail> {
+        self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
+            .await?;
+
+        let mut rule_set = self.require_rule_set(rule_set_id).await?;
+        let prepared = prepare_matcher(
+            &rule_set.id,
+            &draft.rego_source,
+            &draft.action_spec,
+            draft.grace_days,
+        )?;
+
+        let now = Utc::now();
+        let revision_number = rule_set.current_revision_number + 1;
+        let revision = build_revision(
+            &rule_set.id,
+            revision_number,
+            &prepared,
+            draft.grace_days,
+            actor,
+            now,
+        );
+
+        self.services
+            .customization
+            .maintenance_rule_sets
+            .add_revision(&revision, now)
+            .await?;
+
+        rule_set.current_revision_number = revision_number;
+        rule_set.updated_at = now;
+        Ok(MaintenanceRuleSetDetail {
+            rule_set,
+            revision,
+            action_spec: draft.action_spec,
+        })
+    }
+
+    /// Renames and re-scopes without touching the matcher, action, or grace
+    /// period, so no revision is created.
+    pub async fn update_maintenance_rule_metadata(
+        &self,
+        actor: &User,
+        rule_set_id: &str,
+        name: String,
+        description: String,
+        library_ids: Vec<String>,
+    ) -> AppResult<MaintenanceRuleSet> {
+        self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
+            .await?;
+
+        let mut rule_set = self.require_rule_set(rule_set_id).await?;
+        let name = require_non_empty(&name, "name")?;
+        let now = Utc::now();
+
+        self.services
+            .customization
+            .maintenance_rule_sets
+            .update_rule_set_metadata(&rule_set.id, &name, &description, &library_ids, now)
+            .await?;
+
+        rule_set.name = name;
+        rule_set.description = description;
+        rule_set.library_ids = library_ids;
+        rule_set.updated_at = now;
+        Ok(rule_set)
+    }
+
+    /// Hard delete is safe only because nothing references a maintenance rule
+    /// yet. Once candidates exist, deleting a rule set would orphan their
+    /// attribution — that path becomes archive-gated instead.
+    pub async fn delete_maintenance_rule_set(
+        &self,
+        actor: &User,
+        rule_set_id: &str,
+    ) -> AppResult<()> {
+        self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
+            .await?;
+        self.require_rule_set(rule_set_id).await?;
+        self.services
+            .customization
+            .maintenance_rule_sets
+            .delete_rule_set(rule_set_id)
+            .await
+    }
+
+    /// Editor support: compile and check a draft without storing it. The
+    /// throwaway id only satisfies the package-declaration check.
+    pub async fn validate_maintenance_rule_source(
+        &self,
+        actor: &User,
+        rego_source: &str,
+    ) -> AppResult<ValidationResult> {
+        self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
+            .await?;
+
+        let scratch_id = Id::new_rego_safe().0;
+        let rewritten = rewrite_package_declaration(rego_source, &scratch_id);
+        validate_maintenance_rule(&rewritten, &scratch_id)
+            .map_err(|e| AppError::Validation(format!("rule validation failed: {e}")))
+    }
+
+    /// Evaluate one matcher against a bounded title selection. Nothing is
+    /// written: preview answers "what would this match", not "what happened".
+    pub async fn preview_maintenance_rule(
+        &self,
+        actor: &User,
+        request: MaintenancePreviewRequest,
+    ) -> AppResult<MaintenancePreviewResult> {
+        self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
+            .await?;
+
+        let policy = self.resolve_preview_policy(request.matcher).await?;
+        let titles = self.select_preview_titles(&request.selection).await?;
+        let libraries = self.preview_library_refs().await?;
+
+        let title_ids: Vec<String> = titles.iter().map(|title| title.id.clone()).collect();
+        // One batched load for the whole selection; a per-title query here
+        // would make the preview cost scale with the cap.
+        let mut files_by_title: HashMap<String, Vec<crate::types::TitleMediaFile>> = HashMap::new();
+        if !title_ids.is_empty() {
+            for file in self
+                .services
+                .library
+                .media_files
+                .list_media_files_for_titles(&title_ids)
+                .await?
+            {
+                files_by_title
+                    .entry(file.title_id.clone())
+                    .or_default()
+                    .push(file);
+            }
+        }
+
+        let matcher_content_hash = content_hash(&policy.rego_source);
+        let rule_set_id = policy.id.clone();
+        let engine = MaintenanceRulesEngine::build(std::slice::from_ref(&policy))
+            .map_err(|e| AppError::Validation(format!("rule failed to compile: {e}")))?;
+        let mut evaluator = engine.evaluator();
+
+        let evaluated_at = Utc::now();
+        let mut results = Vec::with_capacity(titles.len());
+        for title in titles {
+            let library = libraries
+                .get(&title.library_id)
+                .cloned()
+                .unwrap_or_else(|| MaintenanceLibraryRef {
+                    id: title.library_id.clone(),
+                    name: String::new(),
+                });
+            let files = files_by_title
+                .get(&title.id)
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            let input = build_title_input(evaluated_at, &title, &library, files);
+
+            let evaluation = evaluator
+                .evaluate(&input)
+                .map_err(|e| AppError::Validation(format!("rule evaluation failed: {e}")))?;
+
+            let (outcome, reason_codes, error) =
+                match (evaluation.records.first(), evaluation.errors.first()) {
+                    (Some(record), _) => (
+                        Some(record.decision.outcome),
+                        record.decision.reason_codes.clone(),
+                        None,
+                    ),
+                    (None, Some(failure)) => (None, Vec::new(), Some(failure.message.clone())),
+                    (None, None) => (
+                        None,
+                        Vec::new(),
+                        Some("rule produced no decision".to_string()),
+                    ),
+                };
+
+            results.push(MaintenancePreviewTitleResult {
+                title_id: title.id,
+                title_name: title.name,
+                facet: title.facet,
+                library_id: title.library_id,
+                outcome,
+                reason_codes,
+                error,
+            });
+        }
+
+        Ok(MaintenancePreviewResult {
+            rule_set_id,
+            matcher_content_hash,
+            evaluated_at,
+            titles: results,
+        })
+    }
+
+    async fn require_rule_set(&self, id: &str) -> AppResult<MaintenanceRuleSet> {
+        self.services
+            .customization
+            .maintenance_rule_sets
+            .get_rule_set(id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("maintenance rule set {id} not found")))
+    }
+
+    async fn load_detail(
+        &self,
+        rule_set: MaintenanceRuleSet,
+    ) -> AppResult<MaintenanceRuleSetDetail> {
+        let revision = self
+            .services
+            .customization
+            .maintenance_rule_sets
+            .get_revision(&rule_set.id, rule_set.current_revision_number)
+            .await?
+            .ok_or_else(|| {
+                AppError::Repository(format!(
+                    "maintenance rule set {} has no revision {}",
+                    rule_set.id, rule_set.current_revision_number
+                ))
+            })?;
+        let action_spec = decode_action_spec(&revision)?;
+        Ok(MaintenanceRuleSetDetail {
+            rule_set,
+            revision,
+            action_spec,
+        })
+    }
+
+    async fn resolve_preview_policy(
+        &self,
+        matcher: MaintenancePreviewMatcher,
+    ) -> AppResult<MaintenancePolicy> {
+        match matcher {
+            MaintenancePreviewMatcher::Stored { rule_set_id } => {
+                let rule_set = self.require_rule_set(&rule_set_id).await?;
+                let detail = self.load_detail(rule_set).await?;
+                Ok(MaintenancePolicy {
+                    id: detail.rule_set.id,
+                    name: detail.rule_set.name,
+                    rego_source: detail.revision.rego_source,
+                })
+            }
+            MaintenancePreviewMatcher::Inline {
+                rego_source,
+                action_spec,
+                grace_days,
+            } => {
+                let scratch_id = Id::new_rego_safe().0;
+                let prepared =
+                    prepare_matcher(&scratch_id, &rego_source, &action_spec, grace_days)?;
+                Ok(MaintenancePolicy {
+                    id: scratch_id,
+                    name: "preview".to_string(),
+                    rego_source: prepared.rego_source,
+                })
+            }
+        }
+    }
+
+    async fn select_preview_titles(
+        &self,
+        selection: &MaintenancePreviewSelection,
+    ) -> AppResult<Vec<Title>> {
+        match selection {
+            MaintenancePreviewSelection::Titles(title_ids) => {
+                if title_ids.len() > MAINTENANCE_PREVIEW_MAX_TITLES {
+                    return Err(AppError::Validation(format!(
+                        "preview accepts at most {MAINTENANCE_PREVIEW_MAX_TITLES} titles, {} were requested",
+                        title_ids.len()
+                    )));
+                }
+                self.services.catalog.titles.get_by_ids(title_ids).await
+            }
+            MaintenancePreviewSelection::Library { library_id, limit } => {
+                let limit = limit
+                    .unwrap_or(MAINTENANCE_PREVIEW_DEFAULT_TITLES)
+                    .clamp(1, MAINTENANCE_PREVIEW_MAX_TITLES);
+                let mut titles = self
+                    .services
+                    .catalog
+                    .titles
+                    .list_for_libraries(None, std::slice::from_ref(library_id), None)
+                    .await?;
+                titles.truncate(limit);
+                Ok(titles)
+            }
+        }
+    }
+
+    async fn preview_library_refs(&self) -> AppResult<HashMap<String, MaintenanceLibraryRef>> {
+        Ok(self
+            .services
+            .catalog
+            .libraries
+            .list(None)
+            .await?
+            .into_iter()
+            .map(|library| {
+                (
+                    library.id.clone(),
+                    MaintenanceLibraryRef {
+                        id: library.id,
+                        name: library.name,
+                    },
+                )
+            })
+            .collect())
+    }
+}
+
+// ── Validation helpers ──────────────────────────────────────────────────────
+
+/// A matcher that passed every authoring-time check, ready to persist.
+struct PreparedMatcher {
+    rego_source: String,
+    content_hash: String,
+    action_spec_json: String,
+}
+
+/// Rewrite the package to the system-assigned id, then run every check that
+/// must hold before a revision is written: the matcher compiles and reads only
+/// documented facts, the action is legal for a title-scoped rule, and the grace
+/// period is a real duration.
+fn prepare_matcher(
+    rule_id: &str,
+    rego_source: &str,
+    action_spec: &MaintenanceActionSpec,
+    grace_days: i64,
+) -> AppResult<PreparedMatcher> {
+    if grace_days < 0 {
+        return Err(AppError::Validation(
+            "grace period must be zero or more days".to_string(),
+        ));
+    }
+    validate_title_scope_action(action_spec)?;
+
+    let rewritten = rewrite_package_declaration(rego_source, rule_id);
+    let validation = validate_maintenance_rule(&rewritten, rule_id)
+        .map_err(|e| AppError::Validation(format!("rule validation failed: {e}")))?;
+    if !validation.valid {
+        return Err(AppError::Validation(format_maintenance_validation_errors(
+            &validation,
+        )));
+    }
+
+    let action_spec_json = serde_json::to_string(action_spec)
+        .map_err(|e| AppError::Validation(format!("maintenance action is not storable: {e}")))?;
+
+    Ok(PreparedMatcher {
+        content_hash: content_hash(&rewritten),
+        rego_source: rewritten,
+        action_spec_json,
+    })
+}
+
+/// A title-scoped rule set spans both movie and show libraries, so its action
+/// need only be legal for one of them. Which one applies to a given candidate
+/// is decided per title from its facet at evaluation time; rejecting an action
+/// here because it is movie-only would make it unusable in movie libraries.
+fn validate_title_scope_action(spec: &MaintenanceActionSpec) -> AppResult<()> {
+    if spec.validate(ActionSubjectKind::Movie).is_ok()
+        || spec.validate(ActionSubjectKind::Show).is_ok()
+    {
+        return Ok(());
+    }
+
+    // Both failed; the movie error names the reason (schema version and
+    // parameter shape are subject-independent, so it is the same either way).
+    let error = spec
+        .validate(ActionSubjectKind::Movie)
+        .expect_err("action rejected for both movie and show subjects");
+    Err(AppError::Validation(format!(
+        "maintenance action is not valid for a title-scoped rule: {error}"
+    )))
+}
+
+fn require_dormant_evaluation_mode(mode: Option<MaintenanceEvaluationMode>) -> AppResult<()> {
+    match mode {
+        None | Some(MaintenanceEvaluationMode::Disabled) => Ok(()),
+        Some(_) => Err(AppError::Validation(
+            "shadow and observe evaluation are not yet available; maintenance rules can only be saved as disabled".to_string(),
+        )),
+    }
+}
+
+fn require_non_empty(value: &str, field: &str) -> AppResult<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::Validation(format!("{field} must not be empty")));
+    }
+    Ok(trimmed.to_string())
+}
+
+fn build_revision(
+    rule_set_id: &str,
+    revision_number: i64,
+    prepared: &PreparedMatcher,
+    grace_days: i64,
+    actor: &User,
+    created_at: chrono::DateTime<Utc>,
+) -> MaintenanceRuleRevision {
+    MaintenanceRuleRevision {
+        id: Id::new().0,
+        rule_set_id: rule_set_id.to_string(),
+        revision_number,
+        rego_source: prepared.rego_source.clone(),
+        action_spec_json: prepared.action_spec_json.clone(),
+        grace_days,
+        matcher_content_hash: prepared.content_hash.clone(),
+        created_by: Some(actor.id.clone()),
+        created_at,
+    }
+}
+
+/// Read the stored action back through the closed catalog. Stored JSON that no
+/// longer deserializes is a repository fault, not a validation failure: it
+/// means a spec was written by a build whose catalog this one does not have.
+fn decode_action_spec(revision: &MaintenanceRuleRevision) -> AppResult<MaintenanceActionSpec> {
+    serde_json::from_str(&revision.action_spec_json).map_err(|e| {
+        AppError::Repository(format!(
+            "maintenance rule revision {} has an unreadable action spec: {e}",
+            revision.id
+        ))
+    })
+}
+
+fn format_maintenance_validation_errors(validation: &ValidationResult) -> String {
+    format!(
+        "Maintenance rule validation failed:\n- {}",
+        validation.errors.join("\n- ")
+    )
+}
