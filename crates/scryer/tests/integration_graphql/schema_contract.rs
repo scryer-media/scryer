@@ -560,19 +560,24 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // existing config option type: OBJECT 318->319, public types 615->616.
     // Account-security reauthentication adds three mutation roots without
     // changing the established factor-mutation payload contracts: mutation 194->197.
+    // The maintenance-rule authoring surface adds four query roots (list, get,
+    // revisions, action catalog) and six mutation roots (create, matcher edit,
+    // metadata edit, delete, validate, preview), with nine payload objects, six
+    // inputs, and six enums: query 134->138, mutation 197->203, OBJECT 319->328,
+    // INPUT_OBJECT 173->179, ENUM 112->118, public types 616->637.
     assert_eq!(
-        query_field_count, 134,
+        query_field_count, 138,
         "query fields: {query_field_names:?}"
     );
     assert_eq!(
-        mutation_field_count, 197,
+        mutation_field_count, 203,
         "mutation fields: {mutation_field_names:?}"
     );
     assert_eq!(subscription_field_count, 14);
-    assert_eq!(public_types.len(), 616);
-    assert_eq!(kind_count("OBJECT"), 319);
-    assert_eq!(kind_count("INPUT_OBJECT"), 173);
-    assert_eq!(kind_count("ENUM"), 112);
+    assert_eq!(public_types.len(), 637);
+    assert_eq!(kind_count("OBJECT"), 328);
+    assert_eq!(kind_count("INPUT_OBJECT"), 179);
+    assert_eq!(kind_count("ENUM"), 118);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
     assert!(query_field_names.contains(&"backupSettings"));

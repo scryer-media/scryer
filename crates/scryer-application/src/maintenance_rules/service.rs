@@ -143,6 +143,25 @@ impl AppUseCase {
             .await
     }
 
+    /// Every rule set with the revision currently in force.
+    ///
+    /// A list view still has to show what each rule *does* (its action and
+    /// grace period), and those live on the revision. Resolving them here keeps
+    /// that from becoming one detail round trip per row; a rule set whose
+    /// current revision is missing is the same repository fault the detail path
+    /// reports, never a row silently rendered without its action.
+    pub async fn list_maintenance_rule_set_details(
+        &self,
+        actor: &User,
+    ) -> AppResult<Vec<MaintenanceRuleSetDetail>> {
+        let rule_sets = self.list_maintenance_rule_sets(actor).await?;
+        let mut details = Vec::with_capacity(rule_sets.len());
+        for rule_set in rule_sets {
+            details.push(self.load_detail(rule_set).await?);
+        }
+        Ok(details)
+    }
+
     pub async fn get_maintenance_rule_set(
         &self,
         actor: &User,

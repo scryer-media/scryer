@@ -2979,6 +2979,72 @@ impl AcquisitionQueries {
             .collect())
     }
 
+    // ── Maintenance Rule Sets ────────────────────────────────────────────
+
+    /// List maintenance rule sets; requires catalog-settings management permission.
+    async fn maintenance_rule_sets(&self, ctx: &Context<'_>) -> GqlResult<Vec<MaintenanceRuleSet>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+
+        // Details, not bare rows: the payload carries the action and grace
+        // period of the revision in force so a list view never has to fetch
+        // each rule set again to render them.
+        let details = app
+            .list_maintenance_rule_set_details(&actor)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(details
+            .iter()
+            .map(crate::mappers::from_maintenance_rule_set)
+            .collect())
+    }
+
+    /// Return one maintenance rule set with the revision currently in force, or null when no such rule set exists.
+    async fn maintenance_rule_set(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Maintenance rule-set ID to load.")] id: ID,
+    ) -> GqlResult<Option<MaintenanceRuleSetDetail>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+
+        let detail = app
+            .get_maintenance_rule_set(&actor, id.as_ref())
+            .await
+            .map_err(to_gql_error)?;
+        Ok(detail.map(crate::mappers::from_maintenance_rule_set_detail))
+    }
+
+    /// List every stored revision of one maintenance rule set, newest first.
+    async fn maintenance_rule_revisions(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Maintenance rule-set ID whose revisions are returned.")] rule_set_id: ID,
+    ) -> GqlResult<Vec<MaintenanceRuleRevision>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+
+        let revisions = app
+            .list_maintenance_rule_revisions(&actor, rule_set_id.as_ref())
+            .await
+            .map_err(to_gql_error)?;
+        Ok(revisions
+            .into_iter()
+            .map(crate::mappers::from_maintenance_rule_revision)
+            .collect())
+    }
+
+    /// List the static maintenance action catalog the rule builder chooses from.
+    async fn maintenance_action_descriptors(
+        &self,
+        ctx: &Context<'_>,
+    ) -> GqlResult<Vec<MaintenanceActionDescriptor>> {
+        // The catalog is static, so no service call enforces the permission the
+        // rest of this surface requires; the gate has to happen here.
+        require_app_permission(ctx, AppPermission::ManageCatalogSettings).await?;
+        Ok(crate::mappers::maintenance_action_descriptors())
+    }
+
     // ── Post-Processing Scripts ──────────────────────────────────────────
 
     /// List post-processing scripts visible to the caller.
