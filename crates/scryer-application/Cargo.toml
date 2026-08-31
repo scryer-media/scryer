@@ -29,6 +29,7 @@ runtime-plugin-trust = [
     "dep:serde_json_canonicalizer",
     "dep:sha2",
     "dep:sigstore",
+    "dep:sigstore_protobuf_specs",
     "dep:x509-cert",
     "dep:zstd",
 ]
@@ -79,9 +80,10 @@ blake3 = "1"
 const-oid = { version = "0.10.2", features = ["db"] }
 serde_json_canonicalizer = { version = "0.3", optional = true }
 sigstore = { version = "0.14", default-features = false, features = ["sigstore-trust-root"], optional = true }
+sigstore_protobuf_specs = { version = "0.5.2", optional = true }
 rustls-pki-types = "1"
 rustls-webpki = { version = "0.103", default-features = false, features = ["std", "aws-lc-rs"], optional = true }
-x509-cert = { version = "0.3", default-features = false, features = ["pem", "std"], optional = true }
+x509-cert = { version = "0.2", default-features = false, features = ["pem", "sct", "std"], optional = true }
 url = "2"
 
 [target.'cfg(unix)'.dependencies]

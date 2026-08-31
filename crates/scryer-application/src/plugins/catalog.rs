@@ -18,8 +18,7 @@ use scryer_domain::PluginSupportTier;
 
 #[cfg(all(test, feature = "runtime-plugin-trust"))]
 use super::trust::{
-    SignedArtifactBundle, normalize_bundle_cert, normalize_sigstore_bundle,
-    parse_rekor_verification_keys, pem_encode_certificate, verify_rekor_hashedrekord_binding,
+    normalize_bundle_cert, pem_encode_certificate, verify_rekor_hashedrekord_binding,
 };
 
 #[cfg(test)]
@@ -1399,66 +1398,5 @@ mod tests {
             verify_rekor_hashedrekord_binding(raw, &signature, cert_pem, &certificate_body)
                 .expect_err("Rekor certificate must bind to the bundle certificate");
         assert!(certificate_error.to_string().contains("certificate"));
-    }
-
-    #[cfg(feature = "runtime-plugin-trust")]
-    #[test]
-    fn normalize_sigstore_bundle_rewrites_v03_payloads() {
-        let der_base64 = base64::engine::general_purpose::STANDARD.encode([1_u8, 2, 3, 4]);
-        let key_id_base64 = base64::engine::general_purpose::STANDARD.encode([0_u8, 1, 2, 3]);
-        let bundle = serde_json::json!({
-            "mediaType": "application/vnd.dev.sigstore.bundle.v0.3+json",
-            "messageSignature": {
-                "signature": "sig=="
-            },
-            "verificationMaterial": {
-                "certificate": {
-                    "rawBytes": der_base64
-                },
-                "tlogEntries": [
-                    {
-                        "logIndex": "12",
-                        "logId": {
-                            "keyId": key_id_base64
-                        },
-                        "integratedTime": "34",
-                        "inclusionPromise": {
-                            "signedEntryTimestamp": "set=="
-                        },
-                        "canonicalizedBody": "body=="
-                    }
-                ]
-            }
-        });
-
-        let normalized =
-            normalize_sigstore_bundle(&bundle.to_string()).expect("bundle should normalize");
-        let parsed: SignedArtifactBundle =
-            serde_json::from_str(&normalized).expect("bundle should parse in legacy shape");
-        assert_eq!(parsed.base64_signature, "sig==");
-        assert_eq!(
-            parsed.cert.lines().next(),
-            Some("-----BEGIN CERTIFICATE-----")
-        );
-        assert_eq!(parsed.rekor_bundle.payload.log_index, 12);
-        assert_eq!(parsed.rekor_bundle.payload.integrated_time, 34);
-        assert_eq!(parsed.rekor_bundle.payload.log_id, "00010203");
-        assert_eq!(parsed.rekor_bundle.payload.body, "body==");
-    }
-
-    #[cfg(feature = "runtime-plugin-trust")]
-    #[tokio::test]
-    async fn sigstore_trust_root_rekor_keys_parse_as_der() {
-        scryer_outbound_http::install_default_rustls_provider();
-        let trust_root = SigstoreTrustRoot::new(None)
-            .await
-            .expect("embedded Sigstore trust root should load");
-        let rekor_keys = trust_root
-            .rekor_keys()
-            .expect("Sigstore trust root should provide Rekor keys");
-        assert!(!rekor_keys.is_empty(), "expected at least one Rekor key");
-        let parsed = parse_rekor_verification_keys(rekor_keys)
-            .expect("embedded Rekor keys should parse as DER verification keys");
-        assert!(!parsed.is_empty(), "expected at least one parsed Rekor key");
     }
 }
