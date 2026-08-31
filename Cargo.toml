@@ -112,6 +112,10 @@ inherits = "release"
 opt-level = "z"
 lto = "thin"
 
+[profile.release-thin]
+inherits = "release"
+lto = "thin"
+
 [profile.release-lean]
 inherits = "release"
 opt-level = 2
