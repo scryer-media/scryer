@@ -111,7 +111,7 @@ impl MaintenanceRuleSetRepository for InMemoryMaintenanceRuleRepo {
             .filter(|revision| revision.rule_set_id == rule_set_id)
             .cloned()
             .collect();
-        revisions.sort_by(|left, right| right.revision_number.cmp(&left.revision_number));
+        revisions.sort_by_key(|revision| std::cmp::Reverse(revision.revision_number));
         Ok(revisions)
     }
 
