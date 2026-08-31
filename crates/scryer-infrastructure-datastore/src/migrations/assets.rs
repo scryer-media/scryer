@@ -977,6 +977,27 @@ mod tests {
     }
 
     #[test]
+    fn migration_0200_queues_supported_movie_identities_for_both_engines() {
+        let db_root = source_db_root();
+        let manifest = fs::read_to_string(db_root.join("migration_manifest.toml"))
+            .expect("migration manifest should be readable");
+        assert!(manifest.contains("version = 200"));
+
+        for relative_path in [
+            "migrations/0200_movie_supported_identity_hydration.sql",
+            "postgres/migrations/0200_movie_supported_identity_hydration.sql",
+        ] {
+            let sql = fs::read_to_string(db_root.join(relative_path))
+                .expect("0200 migration should be readable");
+            assert!(sql.contains("facet = 'movie'"));
+            assert!(sql.contains("('smg', 'tvdb', 'tmdb', 'imdb')"));
+            assert!(sql.contains("metadata_fetched_at IS NULL"));
+            assert!(sql.contains("metadata_hydration_next_attempt_at IS NULL"));
+            assert!(sql.contains("metadata_hydration_attempt_count = 0"));
+        }
+    }
+
+    #[test]
     fn migration_0183_adds_manual_import_canonical_identity_for_both_engines() {
         let db_root = source_db_root();
         let manifest = fs::read_to_string(db_root.join("migration_manifest.toml"))
