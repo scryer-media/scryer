@@ -27,10 +27,9 @@ pub(super) async fn title_requires_scan_hydration(
 ) -> AppResult<bool> {
     let hydratable = match title.facet {
         MediaFacet::Movie => crate::catalog_workflow::movie_title_ref(title).is_some(),
-        MediaFacet::Series | MediaFacet::Anime => title
-            .external_ids
-            .iter()
-            .any(|external_id| external_id.source.eq_ignore_ascii_case("tvdb")),
+        MediaFacet::Series | MediaFacet::Anime => {
+            crate::catalog_workflow::extract_tvdb_id(title).is_some()
+        }
     };
     if !hydratable {
         return Ok(false);

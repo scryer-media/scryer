@@ -108,7 +108,7 @@ impl MovieTitleRef {
             title
                 .external_ids
                 .iter()
-                .find(|external_id| external_id.source.eq_ignore_ascii_case(source))
+                .find(|external_id| external_id.source.trim().eq_ignore_ascii_case(source))
                 .map(|external_id| external_id.value.trim())
                 .filter(|value| !value.is_empty())
         };

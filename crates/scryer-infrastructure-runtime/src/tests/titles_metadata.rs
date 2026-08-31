@@ -1283,7 +1283,7 @@ async fn title_lookup_by_external_id_preserves_source_image_url() {
 }
 
 #[tokio::test]
-async fn create_title_only_marks_tvdb_titles_for_background_hydration() {
+async fn create_title_marks_supported_movie_identities_for_background_hydration() {
     let db = std::env::temp_dir().join(format!(
         "scryer_title_hydration_seed_{}.db",
         chrono::Utc::now().timestamp_micros()
@@ -1293,41 +1293,37 @@ async fn create_title_only_marks_tvdb_titles_for_background_hydration() {
         .expect("db should initialize");
     let catalog = title_store(&services);
 
-    let mut tvdb_title = make_test_title("title-tvdb", None);
-    tvdb_title.external_ids = vec![ExternalId {
-        source: "tvdb".to_string(),
-        value: "123".to_string(),
-    }];
-    TitleRepository::create(&catalog, tvdb_title)
-        .await
-        .expect("tvdb title should insert");
-
-    let mut imdb_title = make_test_title("title-imdb", None);
-    imdb_title.external_ids = vec![ExternalId {
-        source: "imdb".to_string(),
-        value: "tt1234567".to_string(),
-    }];
-    TitleRepository::create(&catalog, imdb_title)
-        .await
-        .expect("imdb title should insert");
+    for source in ["smg", "tmdb", "imdb", "tvdb", "wikidata"] {
+        let mut title = make_test_title(&format!("title-{source}"), None);
+        title.external_ids = vec![ExternalId {
+            source: source.to_string(),
+            value: format!("{source}-id"),
+        }];
+        TitleRepository::create(&catalog, title)
+            .await
+            .expect("identity-backed title should insert");
+    }
 
     let markers: Vec<(String, Option<String>)> = sqlx::query_as(
         "SELECT id, metadata_hydration_next_attempt_at
          FROM titles
-         WHERE id IN (?, ?)
+         WHERE id LIKE 'title-%'
          ORDER BY id",
     )
-    .bind("title-imdb")
-    .bind("title-tvdb")
     .fetch_all(&services.pool)
     .await
     .expect("load hydration markers");
 
-    assert_eq!(markers[0], ("title-imdb".to_string(), None));
-    assert!(
-        markers[1].1.is_some(),
-        "tvdb-backed titles should be queued for background hydration"
-    );
+    let markers = markers
+        .into_iter()
+        .collect::<std::collections::HashMap<_, _>>();
+    for source in ["smg", "tmdb", "imdb", "tvdb"] {
+        assert!(
+            markers[&format!("title-{source}")].is_some(),
+            "{source}-backed movie should be queued for background hydration"
+        );
+    }
+    assert_eq!(markers["title-wikidata"], None);
 
     let _ = std::fs::remove_file(db);
 }
