@@ -8,10 +8,10 @@
 neighbors (different files, no ordering dependency). File paths are the expected
 primary touch points; see plan.md "Project Structure".
 
-**Conventions for every task**: implementation in an isolated worktree on a
-`feature/` branch; targeted tests per work package (no broad workspace sweeps);
-`npm run lint` before any web handoff; new migrations only (never edit shipped
-ones); SSH-signed commits.
+**Conventions for every task**: the project constitution
+([specs/constitution.md](../constitution.md)) applies — notably C1 (new migrations
+only), C8 (targeted tests per work package; web lint before handoff), and C9
+(isolated worktrees, gitflow branches, signed commits).
 
 ## Phase 1: Setup
 

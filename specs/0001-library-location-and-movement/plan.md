@@ -54,18 +54,12 @@ verification engine.
 
 ## Constitution Check
 
-No `constitution.md` exists yet (this is the first spec-kit spec). Standing repo
-rules act as gates:
-
-- Shipped migrations are immutable — all schema change is new forward migrations
-  (SQLite + PostgreSQL variants), including the migration-numbering registry.
-- CI `web` lane = typecheck AND eslint; run `npm run lint` locally before handing
-  off web changes.
-- Commits are SSH-signed; release procedure runs through repo release tooling only.
-- Implementation happens in isolated worktrees on `feature/`-prefixed branches;
-  never directly in shared checkouts.
-- No security-audit scope in this workstream (owned elsewhere); functional
-  correctness only.
+Gated by [specs/constitution.md](../constitution.md) v1.0.0. This feature is the
+principal exercise of C2 (preview before mutate), C3 (nothing silent), C4 (verified
+moves), C5 (async/resumable), and C7 (platform differences); C1 governs the three
+new migrations. **No deviations.** Scope note: security auditing is out of scope
+for this workstream (owned by a separate review track); functional correctness
+only.
 
 ## Prior & In-Flight Work
 
@@ -230,6 +224,6 @@ apps/scryer-web/
 
 ## Complexity Tracking
 
-No constitution deviations to record (no constitution yet). The one deliberate
+No constitution deviations to record. The one deliberate
 scope-cut: file renaming to destination naming policy is out of scope (spec "Out of
 Scope") — folder names only, existing rename feature covers files later.
