@@ -13,7 +13,7 @@ scryer-infrastructure-sql = { path = "../scryer-infrastructure-sql" }
 scryer-infrastructure-crypto = { path = "../scryer-infrastructure-crypto" }
 scryer-infrastructure-library-search = { path = "../scryer-infrastructure-library-search" }
 async-trait = { workspace = true }
-base64 = "0.23"
+base64 = { workspace = true }
 blake3 = "1"
 chrono = { workspace = true }
 libsqlite3-sys = { version = "0.37.0", default-features = false, features = ["bundled"] }

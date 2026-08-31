@@ -11,7 +11,7 @@ scryer-interface-media = { path = "../scryer-interface-media" }
 scryer-interface-metadata = { path = "../scryer-interface-metadata" }
 scryer-interface-settings = { path = "../scryer-interface-settings" }
 async-graphql = { workspace = true }
-base64 = "0.23"
+base64 = { workspace = true }
 chrono = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }

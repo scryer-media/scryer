@@ -527,7 +527,7 @@ dependencies = [
  "sha1 0.10.7",
  "sync_wrapper",
  "tokio",
- "tokio-tungstenite 0.29.0",
+ "tokio-tungstenite",
  "tower",
  "tower-layer",
  "tower-service",
@@ -603,12 +603,6 @@ name = "base64"
 version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
-
-[[package]]
-name = "base64"
-version = "0.23.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 
 [[package]]
 name = "base64ct"
@@ -1438,9 +1432,7 @@ version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ce6e4c961d6cd6c9a86db418387425e8bdeaf05b3c8bc1411e6dca4c252f1453"
 dependencies = [
- "getrandom 0.4.3",
  "hybrid-array",
- "rand_core 0.10.1",
 ]
 
 [[package]]
@@ -1844,7 +1836,7 @@ dependencies = [
  "digest 0.10.7",
  "elliptic-curve",
  "rfc6979",
- "signature 2.2.0",
+ "signature",
  "spki 0.7.3",
 ]
 
@@ -1854,8 +1846,8 @@ version = "2.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "115531babc129696a58c64a4fef0a8bf9e9698629fb97e9e40767d235cfbcd53"
 dependencies = [
- "pkcs8 0.10.2",
- "signature 2.2.0",
+ "pkcs8",
+ "signature",
 ]
 
 [[package]]
@@ -1895,7 +1887,7 @@ dependencies = [
  "group",
  "hkdf 0.12.4",
  "pem-rfc7468 0.7.0",
- "pkcs8 0.10.2",
+ "pkcs8",
  "rand_core 0.6.4",
  "sec1",
  "subtle",
@@ -2707,7 +2699,6 @@ version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "707114b52a152fa7bdb290cd7cd5912d9467273b6d74e21b8d81aca1f8533f6b"
 dependencies = [
- "ctutils",
  "typenum",
 ]
 
@@ -3300,7 +3291,7 @@ dependencies = [
  "js-sys",
  "serde",
  "serde_json",
- "signature 2.2.0",
+ "signature",
  "zeroize",
 ]
 
@@ -3316,7 +3307,7 @@ dependencies = [
  "js-sys",
  "serde",
  "serde_json",
- "signature 2.2.0",
+ "signature",
  "zeroize",
 ]
 
@@ -3327,16 +3318,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1130d80c7374efad55a117d715a3af9368f0fa7a2c54573afc15a188cd984837"
 dependencies = [
  "mutate_once",
-]
-
-[[package]]
-name = "keccak"
-version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d8f198d1db720e4940b5a493201d199d9f24f568f8f746bd13706243a2f71598"
-dependencies = [
- "cfg-if",
- "cpufeatures 0.3.1",
 ]
 
 [[package]]
@@ -3590,7 +3571,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ea1f30cedd69f0a2954655f7188c6a834246d2bcf1e315e2ac40c4b24dc9519"
 dependencies = [
  "cfg-if",
- "rayon",
 ]
 
 [[package]]
@@ -3723,33 +3703,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ml-dsa"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "add6b9d92e496f16f4526d68ff29da1483aba4b119baeab8bed3b9e3544a6f3d"
-dependencies = [
- "const-oid 0.10.2",
- "crypto-common 0.2.2",
- "ctutils",
- "hybrid-array",
- "module-lattice",
- "pkcs8 0.11.0",
- "shake",
- "signature 3.0.0",
-]
-
-[[package]]
-name = "module-lattice"
-version = "0.2.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0c61b87c9683ab7cb1c6871d261ad5479b6b10ceb52c4352aaca3b5d35a8febe"
-dependencies = [
- "ctutils",
- "hybrid-array",
- "num-traits",
-]
-
-[[package]]
 name = "moxcms"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3810,16 +3763,6 @@ name = "mutate_once"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13d2233c9842d08cfe13f9eac96e207ca6a2ea10b80259ebe8ad0268be27d2af"
-
-[[package]]
-name = "nasm-rs"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "706bf8a5e8c8ddb99128c3291d31bd21f4bcde17f0f4c20ec678d85c74faa149"
-dependencies = [
- "jobserver",
- "log",
-]
 
 [[package]]
 name = "ndk-context"
@@ -4470,7 +4413,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8ffb9f10fa047879315e6625af03c164b16962a5368d724ed16323b68ace47f"
 dependencies = [
  "der 0.7.10",
- "pkcs8 0.10.2",
+ "pkcs8",
  "spki 0.7.3",
 ]
 
@@ -4499,16 +4442,6 @@ dependencies = [
  "pkcs5",
  "rand_core 0.6.4",
  "spki 0.7.3",
-]
-
-[[package]]
-name = "pkcs8"
-version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "451913da69c775a56034ea8d9003d27ee8948e12443eae7c038ba100a4f21cb7"
-dependencies = [
- "der 0.8.1",
- "spki 0.8.0",
 ]
 
 [[package]]
@@ -5016,7 +4949,6 @@ dependencies = [
  "av1-grain",
  "bitstream-io",
  "built",
- "cc",
  "cfg-if",
  "interpolate_name",
  "itertools 0.14.0",
@@ -5024,7 +4956,6 @@ dependencies = [
  "libfuzzer-sys",
  "log",
  "maybe-rayon",
- "nasm-rs",
  "new_debug_unreachable",
  "noop_proc_macro",
  "num-derive",
@@ -5050,7 +4981,6 @@ dependencies = [
  "loop9",
  "quick-error",
  "rav1e",
- "rayon",
  "rgb",
 ]
 
@@ -5244,7 +5174,7 @@ dependencies = [
  "tokio-rustls",
  "tokio-util",
  "tower",
- "tower-http 0.6.11",
+ "tower-http",
  "tower-service",
  "url",
  "wasm-bindgen",
@@ -5320,9 +5250,9 @@ dependencies = [
  "num-integer",
  "num-traits",
  "pkcs1",
- "pkcs8 0.10.2",
+ "pkcs8",
  "rand_core 0.6.4",
- "signature 2.2.0",
+ "signature",
  "spki 0.7.3",
  "subtle",
  "zeroize",
@@ -5604,7 +5534,7 @@ dependencies = [
  "tokio-util",
  "toml 1.1.4+spec-1.1.0",
  "tower",
- "tower-http 0.7.0",
+ "tower-http",
  "tracing",
  "tracing-subscriber",
  "url",
@@ -5620,7 +5550,7 @@ dependencies = [
  "argon2",
  "async-trait",
  "aws-lc-rs",
- "base64 0.23.1",
+ "base64 0.22.1",
  "blake3",
  "brotli",
  "chardetng",
@@ -5652,6 +5582,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
+ "serde_json_canonicalizer",
  "sha2 0.11.0",
  "sigstore",
  "tar",
@@ -5693,7 +5624,7 @@ dependencies = [
  "async-compression",
  "async-trait",
  "aws-lc-rs",
- "base64 0.23.1",
+ "base64 0.22.1",
  "chrono",
  "filetime",
  "futures-util",
@@ -5713,7 +5644,7 @@ dependencies = [
  "sqlx",
  "tempfile",
  "tokio",
- "tokio-tungstenite 0.30.0",
+ "tokio-tungstenite",
  "tokio-util",
  "toml 1.1.4+spec-1.1.0",
  "tracing",
@@ -5748,7 +5679,7 @@ name = "scryer-infrastructure-crypto"
 version = "0.19.3"
 dependencies = [
  "aws-lc-rs",
- "base64 0.23.1",
+ "base64 0.22.1",
  "scryer-application",
  "serde_json",
 ]
@@ -5758,7 +5689,7 @@ name = "scryer-infrastructure-datastore"
 version = "0.19.3"
 dependencies = [
  "async-trait",
- "base64 0.23.1",
+ "base64 0.22.1",
  "blake3",
  "cc",
  "chrono",
@@ -5824,7 +5755,6 @@ dependencies = [
  "fast_image_resize",
  "image",
  "kamadak-exif",
- "ravif",
  "reqwest",
  "scryer-application",
  "scryer-domain",
@@ -5865,11 +5795,10 @@ version = "0.19.3"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
- "base64 0.23.1",
+ "base64 0.22.1",
  "blake3",
  "chrono",
  "graphql-parser",
- "ml-dsa",
  "reqwest",
  "scryer-application",
  "scryer-domain",
@@ -5910,7 +5839,7 @@ version = "0.19.3"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
- "base64 0.23.1",
+ "base64 0.22.1",
  "blake3",
  "chrono",
  "scryer-application",
@@ -6085,7 +6014,7 @@ name = "scryer-interface-query"
 version = "0.19.3"
 dependencies = [
  "async-graphql",
- "base64 0.23.1",
+ "base64 0.22.1",
  "chrono",
  "scryer-application",
  "scryer-domain",
@@ -6215,7 +6144,7 @@ dependencies = [
 name = "scryer-plugin-sdk"
 version = "3.10.0"
 dependencies = [
- "base64 0.23.1",
+ "base64 0.22.1",
  "extism-pdk",
  "schemars 1.2.2",
  "semver",
@@ -6228,8 +6157,8 @@ name = "scryer-plugins"
 version = "0.19.3"
 dependencies = [
  "async-trait",
- "aws-lc-sys",
- "base64 0.23.1",
+ "aws-lc-rs",
+ "base64 0.22.1",
  "blake3",
  "chrono",
  "crc-fast",
@@ -6254,7 +6183,7 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
- "wasmparser 0.258.0",
+ "wasmparser 0.254.0",
  "wasmtime",
  "wasmtime-wasi",
  "wat",
@@ -6296,7 +6225,7 @@ name = "scryer-webauthn"
 version = "0.19.3"
 dependencies = [
  "aws-lc-rs",
- "base64 0.23.1",
+ "base64 0.22.1",
  "ciborium",
  "coset",
  "passkey-types",
@@ -6397,7 +6326,7 @@ dependencies = [
  "base16ct",
  "der 0.7.10",
  "generic-array",
- "pkcs8 0.10.2",
+ "pkcs8",
  "subtle",
  "zeroize",
 ]
@@ -6641,17 +6570,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "shake"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "09057cb2149ad4cbd2da1e26b351f9a4c354219421229c69c3063e6f61947c4a"
-dependencies = [
- "digest 0.11.3",
- "keccak",
- "sponge-cursor",
-]
-
-[[package]]
 name = "sharded-slab"
 version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6703,16 +6621,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "signature"
-version = "3.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "28d567dcbaf0049cb8ac2608a76cd95ff9e4412e1899d389ee400918ca7537f5"
-dependencies = [
- "digest 0.11.3",
- "rand_core 0.10.1",
-]
-
-[[package]]
 name = "sigstore"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6733,7 +6641,7 @@ dependencies = [
  "oci-client",
  "openidconnect",
  "pem",
- "pkcs8 0.10.2",
+ "pkcs8",
  "regex",
  "reqwest",
  "rustls-pki-types",
@@ -6927,12 +6835,6 @@ dependencies = [
  "base64ct",
  "der 0.8.1",
 ]
-
-[[package]]
-name = "sponge-cursor"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a0219bd7d979d58245a4f41f695e1ac9f8befdffadd7f61f1bae9e39abc6620"
 
 [[package]]
 name = "sqlx"
@@ -7409,7 +7311,6 @@ dependencies = [
  "bytes",
  "libc",
  "mio",
- "parking_lot",
  "pin-project-lite",
  "signal-hook-registry",
  "socket2",
@@ -7457,23 +7358,11 @@ checksum = "8f72a05e828585856dacd553fba484c242c46e391fb0e58917c942ee9202915c"
 dependencies = [
  "futures-util",
  "log",
- "tokio",
- "tungstenite 0.29.0",
-]
-
-[[package]]
-name = "tokio-tungstenite"
-version = "0.30.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "17a073bfed563fa236697a068031408a93cd9522e08abf9933ead3e73411bd71"
-dependencies = [
- "futures-util",
- "log",
  "rustls",
  "rustls-pki-types",
  "tokio",
  "tokio-rustls",
- "tungstenite 0.30.0",
+ "tungstenite",
  "webpki-roots 0.26.11",
 ]
 
@@ -7643,26 +7532,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tower-http"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b11f75e912b0c2be01b63d8cf8057b8c3f97cf34abb3d431a3a4c8675498e233"
-dependencies = [
- "async-compression",
- "bitflags 2.13.1",
- "bytes",
- "futures-core",
- "http",
- "http-body",
- "percent-encoding",
- "pin-project-lite",
- "tokio",
- "tokio-util",
- "tower-layer",
- "tower-service",
-]
-
-[[package]]
 name = "tower-layer"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7767,25 +7636,9 @@ dependencies = [
  "httparse",
  "log",
  "rand 0.9.5",
- "sha1 0.10.7",
- "thiserror 2.0.20",
-]
-
-[[package]]
-name = "tungstenite"
-version = "0.30.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e48ac77174b19c110a50ab2128b24215ac9cb40e0e12e093fb602d175c569d22"
-dependencies = [
- "bytes",
- "data-encoding",
- "http",
- "httparse",
- "log",
- "rand 0.10.2",
  "rustls",
  "rustls-pki-types",
- "sha1 0.11.0",
+ "sha1 0.10.7",
  "thiserror 2.0.20",
 ]
 
@@ -8120,10 +7973,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d9a61719f93a87b16d325921e251800c4833f8fab50fa21c7de73aed50086313"
 dependencies = [
  "bitflags 2.13.1",
- "hashbrown 0.17.1",
  "indexmap 2.14.1",
  "semver",
- "serde",
 ]
 
 [[package]]
@@ -8958,7 +8809,7 @@ dependencies = [
  "const-oid 0.9.6",
  "der 0.7.10",
  "sha1 0.10.7",
- "signature 2.2.0",
+ "signature",
  "spki 0.7.3",
  "tls_codec",
 ]
@@ -8990,7 +8841,7 @@ name = "xtask"
 version = "0.15.9"
 dependencies = [
  "anyhow",
- "base64 0.23.1",
+ "base64 0.22.1",
  "chrono",
  "clap",
  "dotenvy",
@@ -9022,7 +8873,7 @@ name = "xtask-release"
 version = "0.15.9"
 dependencies = [
  "anyhow",
- "base64 0.23.1",
+ "base64 0.22.1",
  "blake3",
  "chrono",
  "clap",

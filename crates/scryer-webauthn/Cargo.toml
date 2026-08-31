@@ -5,7 +5,7 @@ edition.workspace = true
 
 [dependencies]
 aws-lc-rs = { workspace = true }
-base64 = "0.23"
+base64 = { workspace = true }
 ciborium = "0.2"
 coset = "0.4"
 passkey-types = { version = "0.5", default-features = false, features = ["serialize_bytes_as_base64_string"] }
