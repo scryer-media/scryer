@@ -264,6 +264,116 @@ async fn user_crud_queries_work() {
 }
 
 #[tokio::test]
+async fn conditional_own_password_updates_allow_one_initial_claim_and_reject_stale_hashes() {
+    let db = std::env::temp_dir().join(format!(
+        "scryer_conditional_password_{}.db",
+        chrono::Utc::now().timestamp_micros()
+    ));
+    let services = SqliteServices::new(db.to_string_lossy())
+        .await
+        .expect("db should initialize");
+    let users = user_store(&services);
+    let created = UserRepository::create(
+        &users,
+        scryer_domain::User {
+            id: "conditional-password-user".to_string(),
+            username: "conditional-password-user".to_string(),
+            password_hash: None,
+            password_change_required: false,
+            account_kind: Default::default(),
+            authorization: Default::default(),
+        },
+    )
+    .await
+    .expect("create passwordless user");
+
+    let first_claim = UserRepository::update_own_password_and_invalidate_sessions(
+        &users,
+        &created.id,
+        "first-hash".to_string(),
+        false,
+        "first-session",
+        None,
+    );
+    let second_claim = UserRepository::update_own_password_and_invalidate_sessions(
+        &users,
+        &created.id,
+        "second-hash".to_string(),
+        false,
+        "second-session",
+        None,
+    );
+    let (first_claim, second_claim) = tokio::join!(first_claim, second_claim);
+    assert_eq!(
+        usize::from(first_claim.is_ok()) + usize::from(second_claim.is_ok()),
+        1,
+        "exactly one initial password claim must win"
+    );
+    for result in [&first_claim, &second_claim] {
+        if let Err(error) = result {
+            assert!(matches!(error, AppError::ReauthenticationRequired(_)));
+        }
+    }
+
+    let winner = UserRepository::get_by_id(&users, &created.id)
+        .await
+        .expect("load initial password winner")
+        .expect("user should remain present");
+    let winner_hash = winner.password_hash.expect("winning password hash");
+    let winner_session = UserRepository::auth_session_version(&users, &created.id)
+        .await
+        .expect("load winning authentication epoch")
+        .expect("winning authentication epoch");
+
+    let stale = UserRepository::update_own_password_and_invalidate_sessions(
+        &users,
+        &created.id,
+        "stale-hash".to_string(),
+        false,
+        "stale-session",
+        Some("superseded-hash"),
+    )
+    .await;
+    assert!(matches!(stale, Err(AppError::ReauthenticationRequired(_))));
+    let after_stale = UserRepository::get_by_id(&users, &created.id)
+        .await
+        .expect("load user after stale write")
+        .expect("user should remain present");
+    assert_eq!(
+        after_stale.password_hash.as_deref(),
+        Some(winner_hash.as_str())
+    );
+    assert_eq!(
+        UserRepository::auth_session_version(&users, &created.id)
+            .await
+            .expect("load authentication epoch after stale write")
+            .as_deref(),
+        Some(winner_session.as_str())
+    );
+
+    let final_user = UserRepository::update_own_password_and_invalidate_sessions(
+        &users,
+        &created.id,
+        "final-hash".to_string(),
+        false,
+        "final-session",
+        Some(&winner_hash),
+    )
+    .await
+    .expect("matching stored hash should permit replacement");
+    assert_eq!(final_user.password_hash.as_deref(), Some("final-hash"));
+    assert_eq!(
+        UserRepository::auth_session_version(&users, &created.id)
+            .await
+            .expect("load final authentication epoch")
+            .as_deref(),
+        Some("final-session")
+    );
+
+    let _ = std::fs::remove_file(db);
+}
+
+#[tokio::test]
 async fn sqlite_show_queries_roundtrip() {
     let db = std::env::temp_dir().join(format!(
         "scryer_show_roundtrip_{}.db",

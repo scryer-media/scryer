@@ -3450,6 +3450,16 @@ pub mod test_nulls {
         ) -> AppResult<User> {
             Err(AppError::Repository("not configured".into()))
         }
+        async fn update_own_password_and_invalidate_sessions(
+            &self,
+            _: &str,
+            _: String,
+            _: bool,
+            _: &str,
+            _: Option<&str>,
+        ) -> AppResult<User> {
+            Err(AppError::Repository("not configured".into()))
+        }
         async fn update_login_status_and_rotate_session(
             &self,
             _: &str,

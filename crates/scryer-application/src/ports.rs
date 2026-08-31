@@ -2112,6 +2112,14 @@ pub trait UserRepository: Send + Sync {
         password_change_required: bool,
         auth_session_version: &str,
     ) -> AppResult<User>;
+    async fn update_own_password_and_invalidate_sessions(
+        &self,
+        id: &str,
+        password_hash: String,
+        password_change_required: bool,
+        auth_session_version: &str,
+        expected_password_hash: Option<&str>,
+    ) -> AppResult<User>;
     async fn complete_required_password_change(
         &self,
         _id: &str,

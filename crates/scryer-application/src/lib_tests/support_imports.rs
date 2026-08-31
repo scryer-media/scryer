@@ -6,6 +6,9 @@ pub(super) struct MockUserRepo {
     pub(super) auth_session_versions: Arc<Mutex<HashMap<String, String>>>,
     pub(super) get_by_id_calls: Arc<AtomicUsize>,
     pub(super) list_all_calls: Arc<AtomicUsize>,
+    pause_next_own_password_update: Arc<Mutex<bool>>,
+    own_password_update_reached: Arc<Notify>,
+    resume_own_password_update: Arc<Notify>,
 }
 
 impl MockUserRepo {
@@ -15,6 +18,18 @@ impl MockUserRepo {
 
     pub(super) fn list_all_call_count(&self) -> usize {
         self.list_all_calls.load(Ordering::SeqCst)
+    }
+
+    pub(super) async fn pause_next_own_password_update(&self) {
+        *self.pause_next_own_password_update.lock().await = true;
+    }
+
+    pub(super) async fn wait_for_own_password_update(&self) {
+        self.own_password_update_reached.notified().await;
+    }
+
+    pub(super) fn resume_own_password_update(&self) {
+        self.resume_own_password_update.notify_one();
     }
 }
 
@@ -1172,6 +1187,50 @@ impl UserRepository for MockUserRepo {
                 .iter_mut()
                 .find(|entry| entry.id == id)
                 .ok_or_else(|| AppError::NotFound(format!("user {}", id)))?;
+            user.password_hash = Some(password_hash);
+            user.password_change_required = password_change_required;
+            user.clone()
+        };
+        self.auth_session_versions
+            .lock()
+            .await
+            .insert(id.to_string(), auth_session_version.to_string());
+        Ok(user)
+    }
+
+    async fn update_own_password_and_invalidate_sessions(
+        &self,
+        id: &str,
+        password_hash: String,
+        password_change_required: bool,
+        auth_session_version: &str,
+        expected_password_hash: Option<&str>,
+    ) -> AppResult<User> {
+        let pause = {
+            let mut pause = self.pause_next_own_password_update.lock().await;
+            let pause_now = *pause;
+            *pause = false;
+            pause_now
+        };
+        if pause {
+            self.own_password_update_reached.notify_one();
+            self.resume_own_password_update.notified().await;
+        }
+        let user = {
+            let mut users = self.store.lock().await;
+            let user = users
+                .iter_mut()
+                .find(|entry| entry.id == id)
+                .ok_or_else(|| AppError::NotFound(format!("user {id}")))?;
+            let precondition_matches = match expected_password_hash {
+                Some(expected) => user.password_hash.as_deref() == Some(expected),
+                None => user.password_hash.is_none(),
+            };
+            if !precondition_matches {
+                return Err(AppError::ReauthenticationRequired(
+                    "account credentials changed; authenticate again".into(),
+                ));
+            }
             user.password_hash = Some(password_hash);
             user.password_change_required = password_change_required;
             user.clone()

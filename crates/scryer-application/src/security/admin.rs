@@ -629,7 +629,7 @@ impl AppUseCase {
             ));
         }
 
-        self.update_user_password_hash(actor, &actor.id, password, false)
+        self.update_own_password_hash(actor, password, Some(hash))
             .await
     }
 
@@ -658,8 +658,7 @@ impl AppUseCase {
             return Err(AppError::Validation("current password is required".into()));
         }
 
-        self.update_user_password_hash(actor, &actor.id, password, false)
-            .await
+        self.update_own_password_hash(actor, password, None).await
     }
 
     pub async fn set_user_password(
@@ -773,6 +772,45 @@ impl AppUseCase {
         )
         .await;
         Ok((user, Some(auth_session_version)))
+    }
+
+    async fn update_own_password_hash(
+        &self,
+        actor: &User,
+        password: String,
+        expected_password_hash: Option<&str>,
+    ) -> AppResult<User> {
+        if password.is_empty() {
+            return Err(AppError::Validation("password is required".into()));
+        }
+
+        self.validate_new_local_password(&password).await?;
+        let password_hash = self.hash_password(&password)?;
+        let auth_session_version = Id::new().0;
+        let user = self
+            .services
+            .identity
+            .users
+            .update_own_password_and_invalidate_sessions(
+                &actor.id,
+                password_hash,
+                false,
+                &auth_session_version,
+                expected_password_hash,
+            )
+            .await?;
+        self.refresh_cached_jwt_signing_key(&user).await?;
+        self.revoke_oauth_refresh_grants_for_user(&actor.id, "password_changed")
+            .await?;
+        self.emit_configuration_changed_event(
+            actor,
+            "user_password",
+            Some(user.id.clone()),
+            ConfigurationChangeAction::Updated,
+        )
+        .await;
+
+        Ok(user)
     }
 
     async fn update_user_password_hash(

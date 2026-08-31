@@ -193,6 +193,30 @@ impl ScryerRateLimiter {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn for_authentication_test(
+        login_requests: u32,
+        auth_start_requests: u32,
+        auth_peer_requests: u32,
+        principal_failures: usize,
+    ) -> Self {
+        Self {
+            inner: Arc::new(RateLimitBuckets {
+                bypass: Vec::new(),
+                login: Bucket::for_test(login_requests),
+                auth_start: Bucket::for_test(auth_start_requests),
+                auth_peer: Bucket::for_test(auth_peer_requests),
+                authentication_checks: AtomicUsize::new(0),
+                principal_failures: PrincipalFailureBucket::for_test(principal_failures),
+                search: Bucket::for_test(1_000),
+                mutation: Bucket::for_test(1_000),
+                api: Bucket::for_test(1_000),
+                authless_client: Bucket::for_test(1_000),
+                oauth: Bucket::for_test(1_000),
+            }),
+        }
+    }
+
     pub(crate) fn check_graphql(
         &self,
         class: GraphqlRateLimitClass,
@@ -289,6 +313,16 @@ impl ScryerRateLimiter {
 }
 
 impl Bucket {
+    #[cfg(test)]
+    fn for_test(requests: u32) -> Self {
+        Self {
+            limiter: DefaultKeyedRateLimiter::keyed(quota_for_window(
+                requests.max(1),
+                Duration::from_secs(3_600),
+            )),
+        }
+    }
+
     fn from_env(
         requests_env: &str,
         window_env: &str,
@@ -327,6 +361,21 @@ impl Bucket {
 }
 
 impl PrincipalFailureBucket {
+    #[cfg(test)]
+    fn for_test(requests: usize) -> Self {
+        Self {
+            requests: requests.max(1),
+            window: Duration::from_secs(3_600),
+            max_tracked: 128,
+            primary_hasher: std::collections::hash_map::RandomState::new(),
+            secondary_hasher: std::collections::hash_map::RandomState::new(),
+            failures: Mutex::new(PrincipalFailureState {
+                entries: HashMap::new(),
+                last_used: 0,
+            }),
+        }
+    }
+
     fn from_env(
         requests_env: &str,
         window_env: &str,
@@ -492,7 +541,7 @@ pub(crate) fn analyze_authentication_request(
     request: &async_graphql::Request,
 ) -> AuthenticationRequestAnalysis {
     let Ok(document) = parse_query(&request.query) else {
-        return rejected_authentication_request();
+        return rejected_authentication_request(None);
     };
     let Some(operation) = selected_operation(&document, request.operation_name.as_deref()) else {
         return AuthenticationRequestAnalysis::default();
@@ -511,7 +560,7 @@ pub(crate) fn analyze_authentication_request(
         &mut fragment_stack,
         &mut traversed,
     ) {
-        return rejected_authentication_request();
+        return rejected_authentication_request(authentication_class_for_fields(&fields));
     }
     let authentication_fields = fields
         .iter()
@@ -523,7 +572,12 @@ pub(crate) fn analyze_authentication_request(
         return AuthenticationRequestAnalysis::default();
     }
     if fields.len() != 1 || authentication_fields.len() != 1 {
-        return rejected_authentication_request();
+        let class = authentication_fields
+            .iter()
+            .map(|(_, class)| *class)
+            .reduce(stricter_class)
+            .expect("authentication fields are known to be non-empty");
+        return rejected_authentication_request(Some(class));
     }
     let (field, class) = authentication_fields[0];
     let variables = operation_variables(request, operation);
@@ -534,8 +588,18 @@ pub(crate) fn analyze_authentication_request(
     }
 }
 
-fn rejected_authentication_request() -> AuthenticationRequestAnalysis {
+fn authentication_class_for_fields(fields: &[&Field]) -> Option<GraphqlRateLimitClass> {
+    fields
+        .iter()
+        .filter_map(|field| authentication_rate_limit_class(field.name.node.as_str()))
+        .reduce(stricter_class)
+}
+
+fn rejected_authentication_request(
+    class: Option<GraphqlRateLimitClass>,
+) -> AuthenticationRequestAnalysis {
     AuthenticationRequestAnalysis {
+        class,
         rejected: true,
         ..AuthenticationRequestAnalysis::default()
     }
@@ -991,12 +1055,34 @@ mod tests {
         let aliased = async_graphql::Request::new(
             "mutation { password: accountSecurityPasswordVerify(currentPassword: \"password\") { token } totp: mfaVerifyStepUp(input: { code: \"123456\" }) { token } }",
         );
-        assert!(analyze_authentication_request(&aliased).rejected);
+        let aliased_analysis = analyze_authentication_request(&aliased);
+        assert!(aliased_analysis.rejected);
+        assert_eq!(aliased_analysis.class, Some(GraphqlRateLimitClass::Login));
 
         let fragment = async_graphql::Request::new(
             "mutation { ...Authentication } fragment Authentication on Mutation { login(input: { username: \"a\", password: \"b\" }) { token } updateSecuritySettings(input: {}) { formLoginEnabled } }",
         );
-        assert!(analyze_authentication_request(&fragment).rejected);
+        let fragment_analysis = analyze_authentication_request(&fragment);
+        assert!(fragment_analysis.rejected);
+        assert_eq!(fragment_analysis.class, Some(GraphqlRateLimitClass::Login));
+
+        let auth_start = async_graphql::Request::new(
+            "mutation { webauthnAuthenticateStart(username: \"a\") { challengeId } updateSecuritySettings(input: {}) { formLoginEnabled } }",
+        );
+        let auth_start_analysis = analyze_authentication_request(&auth_start);
+        assert!(auth_start_analysis.rejected);
+        assert_eq!(
+            auth_start_analysis.class,
+            Some(GraphqlRateLimitClass::AuthStart)
+        );
+    }
+
+    #[test]
+    fn malformed_generic_mutation_has_no_authentication_class() {
+        let request = async_graphql::Request::new("mutation { updateSecuritySettings(input: {");
+        let analysis = analyze_authentication_request(&request);
+        assert!(analysis.rejected);
+        assert_eq!(analysis.class, None);
     }
 
     #[test]
@@ -1039,14 +1125,27 @@ mod tests {
         );
 
         let beyond_limit = authentication_fragment_chain(GRAPHQL_RECURSIVE_DEPTH_LIMIT + 1);
-        assert!(
-            analyze_authentication_request(&async_graphql::Request::new(beyond_limit)).rejected
-        );
+        let beyond_limit =
+            analyze_authentication_request(&async_graphql::Request::new(beyond_limit));
+        assert!(beyond_limit.rejected);
+        assert_eq!(beyond_limit.class, None);
 
         let cycle = async_graphql::Request::new(
             "mutation { ...A } fragment A on Mutation { ...B } fragment B on Mutation { ...A }",
         );
-        assert!(analyze_authentication_request(&cycle).rejected);
+        let cycle = analyze_authentication_request(&cycle);
+        assert!(cycle.rejected);
+        assert_eq!(cycle.class, None);
+
+        let classified_cycle = async_graphql::Request::new(
+            "mutation { webauthnAuthenticateStart(username: \"a\") { challengeId } ...A } fragment A on Mutation { ...A }",
+        );
+        let classified_cycle = analyze_authentication_request(&classified_cycle);
+        assert!(classified_cycle.rejected);
+        assert_eq!(
+            classified_cycle.class,
+            Some(GraphqlRateLimitClass::AuthStart)
+        );
     }
 
     fn authentication_fragment_chain(depth: usize) -> String {

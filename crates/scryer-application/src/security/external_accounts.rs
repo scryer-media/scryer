@@ -1653,6 +1653,33 @@ mod tests {
             Ok(user.clone())
         }
 
+        async fn update_own_password_and_invalidate_sessions(
+            &self,
+            id: &str,
+            password_hash: String,
+            password_change_required: bool,
+            _auth_session_version: &str,
+            expected_password_hash: Option<&str>,
+        ) -> AppResult<User> {
+            let mut users = self.users.lock().await;
+            let user = users
+                .iter_mut()
+                .find(|user| user.id == id)
+                .ok_or_else(|| AppError::NotFound(format!("user {id}")))?;
+            let precondition_matches = match expected_password_hash {
+                Some(expected) => user.password_hash.as_deref() == Some(expected),
+                None => user.password_hash.is_none(),
+            };
+            if !precondition_matches {
+                return Err(AppError::ReauthenticationRequired(
+                    "account credentials changed; authenticate again".into(),
+                ));
+            }
+            user.password_hash = Some(password_hash);
+            user.password_change_required = password_change_required;
+            Ok(user.clone())
+        }
+
         async fn complete_required_password_change(
             &self,
             id: &str,

@@ -205,6 +205,79 @@ impl UserRepository for UserStore {
         .await
     }
 
+    async fn update_own_password_and_invalidate_sessions(
+        &self,
+        id: &str,
+        password_hash: String,
+        password_change_required: bool,
+        auth_session_version: &str,
+        expected_password_hash: Option<&str>,
+    ) -> AppResult<User> {
+        let id = id.to_string();
+        let expected_password_hash = expected_password_hash.map(str::to_string);
+        let auth_session_version = auth_session_version.to_string();
+        SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "update_own_password_and_invalidate_sessions",
+            move |tx| {
+                let id = id.clone();
+                let password_hash = password_hash.clone();
+                let expected_password_hash = expected_password_hash.clone();
+                let auth_session_version = auth_session_version.clone();
+                Box::pin(async move {
+                    let rows = if let Some(expected_password_hash) = expected_password_hash {
+                        tx.execute(
+                            "UPDATE users
+                             SET password_hash = {}, password_change_required = {}, auth_session_version = {}
+                             WHERE id = {} AND password_hash = {}",
+                            &[
+                                SqlArg::Text(password_hash),
+                                SqlArg::Bool(password_change_required),
+                                SqlArg::Text(auth_session_version),
+                                SqlArg::Text(id.clone()),
+                                SqlArg::Text(expected_password_hash),
+                            ],
+                        )
+                        .await?
+                    } else {
+                        tx.execute(
+                            "UPDATE users
+                             SET password_hash = {}, password_change_required = {}, auth_session_version = {}
+                             WHERE id = {} AND password_hash IS NULL",
+                            &[
+                                SqlArg::Text(password_hash),
+                                SqlArg::Bool(password_change_required),
+                                SqlArg::Text(auth_session_version),
+                                SqlArg::Text(id.clone()),
+                            ],
+                        )
+                        .await?
+                    };
+                    if rows == 0 {
+                        return Err(AppError::ReauthenticationRequired(
+                            "account credentials changed; authenticate again".into(),
+                        ));
+                    }
+                    for table in [
+                        "totp_enrollment_challenges",
+                        "webauthn_challenges",
+                        "login_verification_challenges",
+                    ] {
+                        tx.execute(
+                            &format!("DELETE FROM {table} WHERE user_id = {{}}"),
+                            &[SqlArg::Text(id.clone())],
+                        )
+                        .await?;
+                    }
+                    load_user_by_id_tx(tx, &id)
+                        .await?
+                        .ok_or_else(|| AppError::NotFound(format!("user {id}")))
+                })
+            },
+        )
+        .await
+    }
+
     async fn complete_required_password_change(
         &self,
         id: &str,
