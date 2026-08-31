@@ -61,6 +61,7 @@ mod library_scan_progress;
 mod library_scan_titles;
 #[path = "library/scan/unmatched.rs"]
 mod library_scan_unmatched;
+pub mod maintenance_rules;
 mod media;
 mod media_requests;
 mod media_servers;
