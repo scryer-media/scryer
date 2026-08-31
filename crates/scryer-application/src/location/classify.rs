@@ -42,6 +42,20 @@ impl TitleLocationClass {
         }
     }
 
+    /// Parse a persisted class value (checkpoint rows carry the class the title
+    /// was previewed as). Unknown values are rejected rather than defaulted.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim() {
+            "cross_library_transfer" => Some(Self::CrossLibraryTransfer),
+            "root_move" => Some(Self::RootMove),
+            "no_op" => Some(Self::NoOp),
+            "catalog_only" => Some(Self::CatalogOnly),
+            "incompatible" => Some(Self::Incompatible),
+            "needs_resolution" => Some(Self::NeedsResolution),
+            _ => None,
+        }
+    }
+
     /// Whether a title in this class moves bytes. `NoOp`, `CatalogOnly`,
     /// `Incompatible`, and `NeedsResolution` never do.
     pub fn moves_files(&self) -> bool {

@@ -3,6 +3,11 @@ use crate::contracts::{
     ClientJobLocator, DownloadClientBindingRecord, DownloadRecord, ObservationResolution,
     ObservedClientJob, TerminalDownloadHistoryRow,
 };
+use crate::location::model::{
+    FileVerificationRecord, LocationOperation, LocationOperationCounters, LocationOperationState,
+    TitleCheckpoint,
+};
+use crate::location::ownership_guard::{OwnedEntity, OwnershipConflict};
 use crate::types::{
     ApiKeyRecord, EpisodeMediaAvailability, IndexerSearchPlanCapability, IndexerSearchPlanRequest,
     IndexerSearchPlanSummary, IndexerSearchStrategyEventSink, LoginVerificationChallengeRecord,
@@ -4244,6 +4249,148 @@ pub trait StagedNzbStore: Send + Sync {
     fn mark_artifact_active(&self, path: &Path) -> AppResult<()>;
 
     fn mark_artifact_inactive(&self, path: &Path) -> AppResult<()>;
+}
+
+/// A live (title, root) ownership claim held by a location operation (FR-084,
+/// D7). Rows stay open until the operation releases them, so the guard survives
+/// a restart.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocationOwnershipClaim {
+    pub operation_id: String,
+    pub entity: OwnedEntity,
+    pub acquired_at: DateTime<Utc>,
+}
+
+/// The state and counters one checkpoint boundary writes back to the operation
+/// row. Grouped so a progress write is one statement, not a field-by-field
+/// scatter.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocationOperationProgress {
+    pub operation_id: String,
+    pub state: LocationOperationState,
+    pub counters: LocationOperationCounters,
+    /// Files that could only be proven at the quick floor (FR-042/043).
+    pub verification_fallback_count: i64,
+    /// Failure or warning explanation for Activity; `None` leaves the stored
+    /// value untouched only when `clear_detail` is false.
+    pub detail: Option<String>,
+    /// Clear a stored detail that no longer applies.
+    pub clear_detail: bool,
+    pub started_at: Option<DateTime<Utc>>,
+    pub completed_at: Option<DateTime<Utc>>,
+}
+
+/// Persistence for location operations (D5, migration 0206): the operation row,
+/// its per-title checkpoints, its per-file verification records, and the
+/// ownership registry the concurrency guard reads.
+///
+/// The runner in [`crate::location::executor`] is the only writer of operation
+/// state; the guard in [`crate::location::ownership_guard`] is the only reader
+/// of the ownership rows outside the runner.
+#[async_trait]
+pub trait LocationOperationRepository: Send + Sync {
+    /// Persists a confirmed operation. `plan_json` is the serialized plan the
+    /// user confirmed, kept so a resumed run does not have to rebuild it.
+    async fn create_location_operation(
+        &self,
+        operation: &LocationOperation,
+        plan_json: Option<&str>,
+    ) -> AppResult<()>;
+
+    async fn get_location_operation(&self, operation_id: &str)
+    -> AppResult<Option<LocationOperation>>;
+
+    async fn get_location_operation_plan_json(
+        &self,
+        operation_id: &str,
+    ) -> AppResult<Option<String>>;
+
+    /// Every operation in a non-terminal state, oldest first: what restart
+    /// resume walks (FR-033).
+    async fn list_active_location_operations(&self) -> AppResult<Vec<LocationOperation>>;
+
+    async fn update_location_operation_progress(
+        &self,
+        progress: &LocationOperationProgress,
+    ) -> AppResult<()>;
+
+    /// Records a cancel request (FR-092). Returns false when the operation is
+    /// already terminal, so a late cancel cannot resurrect a finished run.
+    async fn request_location_operation_cancel(&self, operation_id: &str) -> AppResult<bool>;
+
+    /// Whether a cancel has been requested. Read at every title boundary, so a
+    /// cancel issued by another process is honored.
+    async fn location_operation_cancel_requested(&self, operation_id: &str) -> AppResult<bool>;
+
+    /// Writes a title's checkpoint. Called on every title state transition; the
+    /// row is the unit a resume restarts from (FR-092).
+    async fn upsert_location_title_checkpoint(
+        &self,
+        checkpoint: &TitleCheckpoint,
+    ) -> AppResult<()>;
+
+    /// Checkpoints in plan order.
+    async fn list_location_title_checkpoints(
+        &self,
+        operation_id: &str,
+    ) -> AppResult<Vec<TitleCheckpoint>>;
+
+    /// Persists one file's verification outcome. Idempotent on
+    /// (operation, destination path) — the 0206 unique index — so a resumed
+    /// operation re-recording a file cannot duplicate its history.
+    async fn record_location_file_verification(
+        &self,
+        record: &FileVerificationRecord,
+    ) -> AppResult<()>;
+
+    async fn list_location_file_verifications(
+        &self,
+        operation_id: &str,
+        title_id: Option<&str>,
+    ) -> AppResult<Vec<FileVerificationRecord>>;
+
+    /// Destination paths this operation already proved for `title_id`. Resume
+    /// reads this and never re-copies or re-verifies them (FR-092).
+    async fn verified_destination_paths(
+        &self,
+        operation_id: &str,
+        title_id: &str,
+    ) -> AppResult<BTreeSet<String>>;
+
+    /// Claims every entity for the operation, or reports the conflicts and
+    /// claims nothing (FR-084). All-or-nothing: a partially owned operation
+    /// could interleave with the operation holding the rest.
+    async fn claim_location_operation_ownership(
+        &self,
+        operation_id: &str,
+        entities: &[OwnedEntity],
+    ) -> AppResult<LocationOwnershipOutcome>;
+
+    /// Releases every claim the operation holds, returning how many were open.
+    async fn release_location_operation_ownership(&self, operation_id: &str) -> AppResult<u64>;
+
+    /// The operation currently holding `entity`, if any. The choke-point query
+    /// behind the guard (T016).
+    async fn location_ownership_holder(&self, entity: &OwnedEntity)
+    -> AppResult<Option<String>>;
+
+    /// Every open claim, for the in-process guard cache and diagnostics.
+    async fn list_location_ownership_claims(&self) -> AppResult<Vec<LocationOwnershipClaim>>;
+}
+
+/// Result of an ownership claim attempt.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LocationOwnershipOutcome {
+    /// Every requested entity is now owned by the operation.
+    Claimed,
+    /// At least one entity is owned by another operation; nothing was claimed.
+    Conflict(Vec<OwnershipConflict>),
+}
+
+impl LocationOwnershipOutcome {
+    pub fn is_claimed(&self) -> bool {
+        matches!(self, Self::Claimed)
+    }
 }
 
 #[async_trait]

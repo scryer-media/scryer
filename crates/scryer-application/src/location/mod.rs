@@ -11,7 +11,7 @@
 //! | Module | Responsibility |
 //! |---|---|
 //! | [`model`] | Operation, checkpoint, and verification-record types shared by every workflow. |
-//! | [`preview`] | Plan building, plan fingerprinting, complete counts with sampled items (FR-080–082). |
+//! | [`preview`] | Plan building, plan fingerprinting, complete counts with sampled items, free-space estimation, typed confirmation (FR-080–082). |
 //! | [`classify`] | Per-title classification of a requested destination (FR-015, FR-076). |
 //! | [`executor`] | The operation runner: state machine, per-title checkpoints, safe-cancel points, restart resume (FR-030–033, FR-089, FR-092). |
 //! | [`verify`] | Verified streaming copy: CRC + full BLAKE3 in one pass, depth-governed read-back (FR-040–044). |

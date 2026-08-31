@@ -39,6 +39,20 @@ impl LocationOperationType {
         }
     }
 
+    /// Parse a persisted value. Unknown values are rejected: an operation whose
+    /// type cannot be read must not be run as some other type.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim() {
+            "folder_reassignment" => Some(Self::FolderReassignment),
+            "root_move" => Some(Self::RootMove),
+            "root_change" => Some(Self::RootChange),
+            "root_consolidation" => Some(Self::RootConsolidation),
+            "cross_library_transfer" => Some(Self::CrossLibraryTransfer),
+            "adoption" => Some(Self::Adoption),
+            _ => None,
+        }
+    }
+
     /// Whether this operation type is root-wide and therefore requires the
     /// stronger typed confirmation (FR-029).
     pub fn requires_typed_confirmation(&self) -> bool {
@@ -68,6 +82,17 @@ impl LocationExecutionMode {
             Self::MoveWithScryer => "move_with_scryer",
             Self::FilesAlreadyThere => "files_already_there",
             Self::CatalogOnly => "catalog_only",
+        }
+    }
+
+    /// Parse a persisted value. Unknown values are rejected rather than falling
+    /// back to a mode that would touch files.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim() {
+            "move_with_scryer" => Some(Self::MoveWithScryer),
+            "files_already_there" => Some(Self::FilesAlreadyThere),
+            "catalog_only" => Some(Self::CatalogOnly),
+            _ => None,
         }
     }
 
@@ -117,6 +142,24 @@ impl LocationOperationState {
             Self::CompletedWithWarnings => "completed_with_warnings",
             Self::Canceled => "canceled",
             Self::Failed => "failed",
+        }
+    }
+
+    /// Parse a persisted value. Unknown values are rejected: a state that cannot
+    /// be read must not be resumed as if it were `queued`.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim() {
+            "queued" => Some(Self::Queued),
+            "preparing" => Some(Self::Preparing),
+            "moving" => Some(Self::Moving),
+            "verifying" => Some(Self::Verifying),
+            "reconciling" => Some(Self::Reconciling),
+            "cleaning_up" => Some(Self::CleaningUp),
+            "completed" => Some(Self::Completed),
+            "completed_with_warnings" => Some(Self::CompletedWithWarnings),
+            "canceled" => Some(Self::Canceled),
+            "failed" => Some(Self::Failed),
+            _ => None,
         }
     }
 
@@ -223,6 +266,17 @@ impl FileVerificationOutcome {
             Self::Verified => "verified",
             Self::Mismatch => "mismatch",
             Self::Unavailable => "unavailable",
+        }
+    }
+
+    /// Parse a persisted value. An unreadable outcome is never treated as a
+    /// pass (FR-044).
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim() {
+            "verified" => Some(Self::Verified),
+            "mismatch" => Some(Self::Mismatch),
+            "unavailable" => Some(Self::Unavailable),
+            _ => None,
         }
     }
 
@@ -344,6 +398,24 @@ impl TitleCheckpointState {
         }
     }
 
+    /// Parse a persisted value. Unknown values are rejected so a checkpoint that
+    /// cannot be read is never mistaken for unstarted work.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim() {
+            "pending" => Some(Self::Pending),
+            "moving" => Some(Self::Moving),
+            "verifying" => Some(Self::Verifying),
+            "reconciling" => Some(Self::Reconciling),
+            "cleaning_up" => Some(Self::CleaningUp),
+            "completed" => Some(Self::Completed),
+            "completed_with_warnings" => Some(Self::CompletedWithWarnings),
+            "skipped" => Some(Self::Skipped),
+            "blocked" => Some(Self::Blocked),
+            "failed" => Some(Self::Failed),
+            _ => None,
+        }
+    }
+
     /// A finished title is never reprocessed on resume (FR-092: "retry/resume
     /// never repeats verified work").
     pub fn is_settled(&self) -> bool {
@@ -354,6 +426,23 @@ impl TitleCheckpointState {
     }
 }
 
+/// Where one title's content sits on each side of the operation, as previewed.
+///
+/// Carried on the checkpoint so a resumed operation can explain what it was
+/// doing without re-deriving the plan, and so Activity's per-title expansion has
+/// the source and destination it needs (FR-091).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TitleCheckpointPlacement {
+    pub source_library_id: Option<String>,
+    pub source_root_id: Option<String>,
+    pub source_folder_path: Option<String>,
+    pub destination_library_id: Option<String>,
+    pub destination_root_id: Option<String>,
+    pub destination_folder_path: Option<String>,
+    /// Set when this title merges into an existing destination title (D8, US7).
+    pub merged_into_title_id: Option<String>,
+}
+
 /// Per-title checkpoint row: the unit resume restarts from.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TitleCheckpoint {
@@ -362,6 +451,11 @@ pub struct TitleCheckpoint {
     /// Position of this title in the confirmed plan; resume walks in this order.
     pub sequence: i64,
     pub state: TitleCheckpointState,
+    /// The class this title was previewed as (FR-015); `None` for workflows that
+    /// do not classify per title.
+    pub classification: Option<crate::location::classify::TitleLocationClass>,
+    /// Source and destination placement as previewed.
+    pub placement: TitleCheckpointPlacement,
     /// Files planned for this title.
     pub files_total: i64,
     /// Files whose destination is verified.
@@ -372,16 +466,31 @@ pub struct TitleCheckpoint {
     pub bytes_verified: i64,
     /// Warning or failure explanation shown in the per-title Activity expansion.
     pub detail: Option<String>,
+    /// When this title entered the operation. Checkpoint rows are written when a
+    /// title starts, so this is the row's `created_at` in 0206.
     pub started_at: Option<DateTime<Utc>>,
     pub updated_at: DateTime<Utc>,
+    /// When the title settled; 0206's `checkpointed_at`.
     pub completed_at: Option<DateTime<Utc>>,
 }
 
 /// Aggregate counters shown in Activity (US8 scenario 1).
+///
+/// # Persistence coverage
+///
+/// Migration 0206 has columns for the volume counters only (`title_total`,
+/// `title_completed_count`, `title_blocked_count`, `file_total`,
+/// `file_completed_count`, `bytes_total`, `bytes_completed`). The outcome
+/// counters below it — `merges`, `dedups`, `renames`, `no_ops`, `unresolved` —
+/// have no columns yet, so a store round-trip returns them as zero and callers
+/// derive them from the checkpoint rows (merged/skipped/blocked titles) and the
+/// collision engine's per-file results until a follow-up migration adds them.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct LocationOperationCounters {
     pub titles_total: i64,
     pub titles_processed: i64,
+    /// Titles that could not enter the operation (FR-086, FR-016).
+    pub titles_blocked: i64,
     pub files_total: i64,
     pub files_processed: i64,
     pub bytes_total: i64,
@@ -405,8 +514,10 @@ pub struct LocationOperation {
     pub operation_type: LocationOperationType,
     pub mode: LocationExecutionMode,
     pub state: LocationOperationState,
-    /// User who confirmed the operation; shown in Activity (FR-091).
-    pub initiated_by_user_id: String,
+    /// User who confirmed the operation; shown in Activity (FR-091). `None` once
+    /// that user is deleted (0206's `ON DELETE SET NULL`), because the operation
+    /// record outlives the actor.
+    pub initiated_by_user_id: Option<String>,
     /// Source library, when the operation is scoped to one.
     pub source_library_id: Option<String>,
     /// Destination library; differs from the source only for transfers.
@@ -421,9 +532,25 @@ pub struct LocationOperation {
     /// Depth the user's preference asked for at confirmation time; the preview
     /// stated it and per-file records stamp what was actually achieved (FR-043).
     pub verification_depth: VerificationDepth,
+    /// Files that could only be proven at the quick floor, so the weaker
+    /// guarantee is visible on the operation itself (FR-042/043).
+    pub verification_fallback_count: i64,
     pub counters: LocationOperationCounters,
     /// Concise failure or warning explanation for Activity.
     pub detail: Option<String>,
+    /// The Activity job run this operation reports through, when it has one.
+    pub job_run_id: Option<String>,
+    /// The workflow-operation row this operation reports through, when it has
+    /// one.
+    pub workflow_operation_id: Option<String>,
+    /// A cancel was requested; the runner stops at the next title checkpoint
+    /// (FR-092). Persisted so a cancel survives a restart.
+    pub cancel_requested: bool,
+    pub cancel_requested_at: Option<DateTime<Utc>>,
+    /// When the user confirmed the fingerprinted plan (FR-081).
+    pub confirmed_at: Option<DateTime<Utc>>,
+    /// When the runner first left `queued`.
+    pub started_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub completed_at: Option<DateTime<Utc>>,
