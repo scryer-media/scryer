@@ -185,10 +185,7 @@ pub struct DiscoverySyncRunRecord {
     pub page_count: Option<i32>,
     pub item_count: Option<i64>,
     pub facet_count: Option<i64>,
-    pub raw_submit_json: Option<String>,
-    pub raw_changes_json: Option<String>,
-    pub raw_final_status_json: Option<String>,
-    pub raw_ack_json: Option<String>,
+    pub acknowledged_at: Option<DateTime<Utc>>,
     pub error_text: Option<String>,
     pub started_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
@@ -457,14 +454,14 @@ pub struct DiscoverySectionRecord {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct DiscoverySourceTagRecord {
     pub category: Option<String>,
     pub name: Option<String>,
     pub values: Vec<String>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct DiscoveryExternalIdRecord {
     pub source: String,
     pub kind: String,
@@ -472,21 +469,21 @@ pub struct DiscoveryExternalIdRecord {
     pub key: String,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct DiscoveryRankComponentRecord {
     pub component_index: i32,
     pub component_name: Option<String>,
     pub component_value: Option<String>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct DiscoveryItemLibraryProvenanceRecord {
     pub subject_key: String,
     pub title_id: Option<String>,
     pub library_id: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct DiscoveryItemRecord {
     pub id: String,
     pub run_id: String,

@@ -975,6 +975,10 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
         classification: BackupTableClassification::ResetOnRestore,
     },
     BackupTableCatalogEntry {
+        table: "title_recommendation_cards",
+        classification: BackupTableClassification::ResetOnRestore,
+    },
+    BackupTableCatalogEntry {
         table: "titles",
         classification: BackupTableClassification::Export,
     },

@@ -355,11 +355,6 @@ fn non_empty_discovery_string(value: &str) -> Option<String> {
     (!value.is_empty()).then(|| value.to_string())
 }
 
-fn discovery_json_string<T: serde::Serialize>(value: &T) -> AppResult<String> {
-    serde_json::to_string(value)
-        .map_err(|error| AppError::Repository(format!("failed to encode discovery JSON: {error}")))
-}
-
 fn next_hash_jittered_bucket(
     now: chrono::DateTime<Utc>,
     jitter_seconds: i64,
@@ -2105,10 +2100,7 @@ impl AppUseCase {
             page_count: None,
             item_count: None,
             facet_count: None,
-            raw_submit_json: None,
-            raw_changes_json: None,
-            raw_final_status_json: None,
-            raw_ack_json: None,
+            acknowledged_at: None,
             error_text: Some(reason.to_string()),
             started_at: Some(observed_at),
             completed_at: Some(observed_at),
@@ -2243,8 +2235,8 @@ impl AppUseCase {
                 .acknowledge_discovery_context_snapshot(&request_id)
                 .await
             {
-                Ok(ack) => {
-                    run.raw_ack_json = Some(discovery_json_string(&ack)?);
+                Ok(_) => {
+                    run.acknowledged_at = Some(now);
                     run.status = "complete".to_string();
                     run.error_text = None;
                     run.updated_at = now;
@@ -2312,10 +2304,7 @@ impl AppUseCase {
             page_count: None,
             item_count: None,
             facet_count: None,
-            raw_submit_json: None,
-            raw_changes_json: None,
-            raw_final_status_json: None,
-            raw_ack_json: None,
+            acknowledged_at: None,
             error_text: None,
             started_at: Some(started_at),
             completed_at: None,
@@ -2391,8 +2380,6 @@ impl AppUseCase {
         run.page_count = Some(sections.len() as i32);
         run.item_count = Some(items.len() as i64);
         run.facet_count = Some(facet_count);
-        run.raw_submit_json = Some(discovery_json_string(&input)?);
-        run.raw_final_status_json = Some(discovery_json_string(&result)?);
         run.completed_at = Some(completed_at);
         run.updated_at = completed_at;
 
@@ -2500,10 +2487,7 @@ impl AppUseCase {
                 page_count: None,
                 item_count: None,
                 facet_count: None,
-                raw_submit_json: None,
-                raw_changes_json: None,
-                raw_final_status_json: None,
-                raw_ack_json: None,
+                acknowledged_at: None,
                 error_text: None,
                 started_at: Some(started_at),
                 completed_at: None,
@@ -2552,7 +2536,6 @@ impl AppUseCase {
             };
 
             let now = self.runtime.environment.now();
-            run.raw_submit_json = Some(discovery_json_string(&submit_result)?);
             run.smg_status = Some(submit_result.status.clone());
             run.smg_request_id = submit_result.request_id.clone();
             run.updated_at = now;
@@ -2627,7 +2610,6 @@ impl AppUseCase {
         };
 
         let status_checked_at = self.runtime.environment.now();
-        run.raw_final_status_json = Some(discovery_json_string(&status_result)?);
         run.smg_status = Some(status_result.status.clone());
         run.discovery_index_watermark =
             non_empty_discovery_string(status_result.discovery_index_watermark.as_str());
@@ -2853,9 +2835,10 @@ impl AppUseCase {
             .acknowledge_discovery_context_snapshot(&request_id)
             .await
         {
-            Ok(ack) => {
-                run.raw_ack_json = Some(discovery_json_string(&ack)?);
-                run.updated_at = self.runtime.environment.now();
+            Ok(_) => {
+                let acknowledged_at = self.runtime.environment.now();
+                run.acknowledged_at = Some(acknowledged_at);
+                run.updated_at = acknowledged_at;
                 self.services
                     .library
                     .discovery
@@ -2935,10 +2918,7 @@ impl AppUseCase {
             page_count: None,
             item_count: None,
             facet_count: None,
-            raw_submit_json: None,
-            raw_changes_json: None,
-            raw_final_status_json: None,
-            raw_ack_json: None,
+            acknowledged_at: None,
             error_text: None,
             started_at: Some(started_at),
             completed_at: None,
@@ -2985,7 +2965,6 @@ impl AppUseCase {
         };
 
         let completed_at = self.runtime.environment.now();
-        run.raw_changes_json = Some(discovery_json_string(&result)?);
         run.smg_status = Some(result.status.clone());
         run.discovery_index_watermark =
             non_empty_discovery_string(&result.discovery_index_watermark);
