@@ -1,16 +1,14 @@
 use super::*;
 
+type DownloadBindingTimes = HashMap<
+    scryer_domain::download_identity::DownloadId,
+    (chrono::DateTime<Utc>, Option<chrono::DateTime<Utc>>),
+>;
+
 #[derive(Default)]
 struct RecordingDownloadRegistry {
     rows: Arc<Mutex<HashMap<ClientJobLocator, scryer_domain::download_identity::DownloadId>>>,
-    binding_times: Arc<
-        Mutex<
-            HashMap<
-                scryer_domain::download_identity::DownloadId,
-                (chrono::DateTime<Utc>, Option<chrono::DateTime<Utc>>),
-            >,
-        >,
-    >,
+    binding_times: Arc<Mutex<DownloadBindingTimes>>,
     ended: Arc<Mutex<HashSet<scryer_domain::download_identity::DownloadId>>>,
     terminal: Arc<Mutex<HashSet<scryer_domain::download_identity::DownloadId>>>,
     reconcile_candidates: Arc<Mutex<Vec<DownloadClientBindingRecord>>>,
