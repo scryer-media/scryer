@@ -142,6 +142,7 @@ pub struct ConnectionAuthEpoch(pub u64);
 pub struct MfaVerification {
     pub verified_until: Option<i64>,
     pub step_up_verified_until: Option<i64>,
+    pub security_action_verified_until: Option<i64>,
     pub session_scope: JwtSessionScope,
     pub persist_session: bool,
     pub auth_session_version: Option<String>,
@@ -377,6 +378,9 @@ pub fn to_gql_error(err: AppError) -> Error {
             coded_gql_error(message, "DOWNLOAD_SUBMIT_REJECTED")
         }
         AppError::MfaStepUpRequired(message) => coded_gql_error(message, "MFA_STEP_UP_REQUIRED"),
+        AppError::ReauthenticationRequired(message) => {
+            coded_gql_error(message, "REAUTHENTICATION_REQUIRED")
+        }
         AppError::TotpEnrollmentRequired(message) => {
             coded_gql_error(message, "TOTP_ENROLLMENT_REQUIRED")
         }
@@ -452,6 +456,7 @@ fn app_error_kind(err: &AppError) -> &'static str {
         AppError::ArchiveExtractionTimedOut { .. } => "ArchiveExtractionTimedOut",
         AppError::TemporaryUnavailable { .. } => "TemporaryUnavailable",
         AppError::MfaStepUpRequired(_) => "MfaStepUpRequired",
+        AppError::ReauthenticationRequired(_) => "ReauthenticationRequired",
         AppError::TotpEnrollmentRequired(_) => "TotpEnrollmentRequired",
         AppError::MfaEnrollmentRequired(_) => "MfaEnrollmentRequired",
         AppError::PasswordChangeRequired(_) => "PasswordChangeRequired",
@@ -544,6 +549,10 @@ pub struct OAuthActorSession {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct InteractiveSession;
 
+/// Marker for the intentional unauthenticated default actor.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AuthlessDefaultSession;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ApiKeyManagementSession;
 
@@ -565,6 +574,55 @@ pub fn interactive_session_actor_from_ctx(ctx: &Context<'_>) -> GqlResult<User> 
         )));
     }
     actor_from_ctx(ctx)
+}
+
+/// Returns the actor allowed to manage TOTP factors.
+///
+/// The intentionally configured authless default actor retains this legacy
+/// capability; API-key and OAuth actors do not receive either marker.
+pub fn totp_management_actor_from_ctx(ctx: &Context<'_>) -> GqlResult<User> {
+    if ctx.data_opt::<InteractiveSession>().is_none()
+        && ctx.data_opt::<AuthlessDefaultSession>().is_none()
+    {
+        return Err(to_gql_error(AppError::Unauthorized(
+            "an interactive session is required for this operation".into(),
+        )));
+    }
+    actor_from_ctx(ctx)
+}
+
+/// Starts TOTP enrollment only with an account-security grant, except for the
+/// intentional authless default actor's established management behavior.
+pub fn totp_enrollment_actor_from_ctx(ctx: &Context<'_>) -> GqlResult<User> {
+    if ctx.data_opt::<AuthlessDefaultSession>().is_some() {
+        return actor_from_ctx(ctx);
+    }
+    account_security_actor_from_ctx(ctx)
+}
+
+/// Returns the interactive actor only while its account-security freshness grant is valid.
+pub fn account_security_actor_from_ctx(ctx: &Context<'_>) -> GqlResult<User> {
+    let actor = actor_from_ctx(ctx)?;
+    if ctx.data_opt::<InteractiveSession>().is_none() {
+        return Err(to_gql_error(AppError::Unauthorized(
+            "interactive session authentication is required".into(),
+        )));
+    }
+    if mfa_verification_from_ctx(ctx)
+        .security_action_verified_until
+        .is_some_and(|expires_at| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|now| expires_at > now.as_secs() as i64)
+                .unwrap_or(false)
+        })
+    {
+        return Ok(actor);
+    }
+
+    Err(to_gql_error(AppError::ReauthenticationRequired(
+        "reauthentication is required before changing authentication factors".into(),
+    )))
 }
 
 pub fn oauth_actor_session_from_ctx(ctx: &Context<'_>) -> Option<OAuthActorSession> {

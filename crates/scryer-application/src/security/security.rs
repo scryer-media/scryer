@@ -19,6 +19,7 @@ const DUMMY_LOGIN_PASSWORD_HASH: &str = "v2$$argon2id$v=19$m=19456,t=2,p=1$zyGbH
 struct AccessTokenOptions {
     mfa_verified_until: Option<chrono::DateTime<Utc>>,
     mfa_step_up_verified_until: Option<chrono::DateTime<Utc>>,
+    security_action_verified_until: Option<chrono::DateTime<Utc>>,
     auth_scope: JwtSessionScope,
     ttl_seconds: i64,
     persist_session: bool,
@@ -573,6 +574,11 @@ impl AppUseCase {
         Utc::now() + Duration::minutes(super::totp::MFA_FRESHNESS_TTL_MINUTES)
     }
 
+    /// Freshness window required for self-service authentication-factor changes.
+    pub fn security_action_verified_until(&self) -> chrono::DateTime<Utc> {
+        Utc::now() + Duration::minutes(5)
+    }
+
     pub async fn issue_access_token(&self, actor: &User) -> AppResult<String> {
         self.issue_access_token_with_mfa(actor, None, None).await
     }
@@ -628,6 +634,7 @@ impl AppUseCase {
             AccessTokenOptions {
                 mfa_verified_until,
                 mfa_step_up_verified_until,
+                security_action_verified_until: Some(self.security_action_verified_until()),
                 auth_scope: JwtSessionScope::Full,
                 ttl_seconds: self.token_lifetime(),
                 persist_session,
@@ -651,6 +658,7 @@ impl AppUseCase {
             AccessTokenOptions {
                 mfa_verified_until: None,
                 mfa_step_up_verified_until: None,
+                security_action_verified_until: None,
                 auth_scope: JwtSessionScope::MfaEnrollment,
                 ttl_seconds: self.mfa_enrollment_token_lifetime(),
                 persist_session,
@@ -674,6 +682,7 @@ impl AppUseCase {
             AccessTokenOptions {
                 mfa_verified_until,
                 mfa_step_up_verified_until: None,
+                security_action_verified_until: None,
                 auth_scope: JwtSessionScope::PasswordChangeRequired,
                 ttl_seconds: self.mfa_enrollment_token_lifetime(),
                 persist_session,
@@ -712,6 +721,7 @@ impl AppUseCase {
             AccessTokenOptions {
                 mfa_verified_until: None,
                 mfa_step_up_verified_until: None,
+                security_action_verified_until: None,
                 auth_scope: JwtSessionScope::Full,
                 ttl_seconds: Self::OAUTH_ACCESS_TOKEN_TTL_SECONDS,
                 persist_session: false,
@@ -741,6 +751,8 @@ impl AppUseCase {
             AccessTokenOptions {
                 mfa_verified_until,
                 mfa_step_up_verified_until,
+                security_action_verified_until: (auth_scope == JwtSessionScope::Full)
+                    .then(|| self.security_action_verified_until()),
                 auth_scope,
                 ttl_seconds,
                 persist_session,
@@ -761,6 +773,7 @@ impl AppUseCase {
         let AccessTokenOptions {
             mfa_verified_until,
             mfa_step_up_verified_until,
+            security_action_verified_until,
             auth_scope,
             ttl_seconds,
             persist_session,
@@ -837,6 +850,8 @@ impl AppUseCase {
             library_permissions,
             mfa_verified_until: mfa_verified_until.map(|value| value.timestamp()),
             mfa_step_up_verified_until: mfa_step_up_verified_until.map(|value| value.timestamp()),
+            security_action_verified_until: security_action_verified_until
+                .map(|value| value.timestamp()),
             auth_scope,
             persist_session,
             auth_session_version,
@@ -1357,6 +1372,7 @@ impl AppUseCase {
         let token_claims = AuthenticatedTokenClaims {
             mfa_verified_until: claims.mfa_verified_until,
             mfa_step_up_verified_until: claims.mfa_step_up_verified_until,
+            security_action_verified_until: claims.security_action_verified_until,
             session_scope: claims.auth_scope,
             persist_session: claims.persist_session,
             auth_session_version: claims.auth_session_version,
@@ -1454,5 +1470,56 @@ impl AppUseCase {
 
         self.cache_jwt_signing_key(&user).await?;
         Ok(user)
+    }
+
+    /// Verifies the current local password before issuing an account-security grant.
+    pub async fn account_security_password_verify(
+        &self,
+        actor: &User,
+        current_password: &str,
+    ) -> AppResult<()> {
+        self.require_actor_capability(actor, scryer_domain::ActorCapability::ManageOwnAccount)
+            .await?;
+        if current_password.is_empty() {
+            return Err(AppError::Unauthorized(
+                "current password is required for reauthentication".into(),
+            ));
+        }
+
+        let user = self.load_user_for_auth_payload(actor).await?;
+        let Some(password_hash) = user.password_hash.as_deref() else {
+            return Err(AppError::Unauthorized(
+                "password reauthentication is unavailable for this account".into(),
+            ));
+        };
+        if !self.validate_password(current_password, password_hash)? {
+            return Err(AppError::Unauthorized("invalid current password".into()));
+        }
+        Ok(())
+    }
+
+    /// Rotates every token-bearing session after a self-service factor change.
+    pub async fn rotate_auth_session_after_factor_change(&self, actor: &User) -> AppResult<()> {
+        let auth_session_version = Id::new().0;
+        let updated_user = self
+            .services
+            .identity
+            .users
+            .rotate_auth_session_version(&actor.id, &auth_session_version)
+            .await?;
+        self.finalize_auth_session_rotation(&actor.id, &updated_user)
+            .await
+    }
+
+    pub async fn finalize_auth_session_rotation(
+        &self,
+        user_id: &str,
+        updated_user: &User,
+    ) -> AppResult<()> {
+        self.revoke_oauth_refresh_grants_for_user(user_id, "auth_session_changed")
+            .await?;
+        self.evict_cached_jwt_signing_key(user_id).await;
+        self.refresh_cached_jwt_signing_key(updated_user).await?;
+        Ok(())
     }
 }

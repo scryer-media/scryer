@@ -723,6 +723,9 @@ pub enum AppError {
     MfaStepUpRequired(String),
 
     #[error("{0}")]
+    ReauthenticationRequired(String),
+
+    #[error("{0}")]
     TotpEnrollmentRequired(String),
 
     #[error("{0}")]

@@ -1555,6 +1555,7 @@ async fn test_graphql_handler(
         request = request.data(MfaVerification {
             verified_until: claims.mfa_verified_until,
             step_up_verified_until: claims.mfa_step_up_verified_until,
+            security_action_verified_until: claims.security_action_verified_until,
             session_scope: claims.session_scope,
             persist_session: claims.persist_session,
             auth_session_version: claims.auth_session_version.clone(),

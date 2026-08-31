@@ -5,9 +5,9 @@ use crate::{mutation::MutationRoot, query::QueryRoot, subscription::Subscription
 
 pub use scryer_interface_core::{
     ApiContext, ApiKeyManagementSession, AuthRuntimeStateHandle, AuthRuntimeStateSnapshot,
-    ConnectionAuthEpoch, InteractiveSession, LogBuffer, MfaVerification, OAuthActorSession,
-    RequestSessionPersistence, RestoreContext, RestoreDatastoreConfig, RestoreDatastoreEngine,
-    RestoreDatastoreHandle, RestoreMigrationMode, RestoreRestartHandle,
+    AuthlessDefaultSession, ConnectionAuthEpoch, InteractiveSession, LogBuffer, MfaVerification,
+    OAuthActorSession, RequestSessionPersistence, RestoreContext, RestoreDatastoreConfig,
+    RestoreDatastoreEngine, RestoreDatastoreHandle, RestoreMigrationMode, RestoreRestartHandle,
     RestoreSqliteDatastoreRequest, actor_from_ctx, actor_has_any_library_permission,
     actor_has_app_permission, app_from_ctx, auth_runtime_from_ctx, current_user_from_ctx,
     mfa_verification_from_ctx, oauth_actor_session_from_ctx, require_app_permission,

@@ -92,6 +92,8 @@ async fn login_payload_from_user(
         user: user_payload_from_user(app, user).await?,
         expires_at,
         mfa_verified_until,
+        security_action_verified_until: (!password_change_required)
+            .then(|| app.security_action_verified_until()),
         mfa_enrollment_required: false,
         password_change_required,
         persist_session,
@@ -124,6 +126,7 @@ async fn login_mfa_enrollment_payload_from_user(
         user: user_payload_from_user(app, user).await?,
         expires_at,
         mfa_verified_until: None,
+        security_action_verified_until: None,
         mfa_enrollment_required: true,
         password_change_required: false,
         persist_session,
@@ -347,6 +350,7 @@ impl UserMutations {
             .reset_user_mfa(&actor, &id)
             .await
             .map_err(to_gql_error)?;
+        auth_runtime_from_ctx(ctx).invalidate_connections();
         let user = app
             .attach_user_authorization(user)
             .await

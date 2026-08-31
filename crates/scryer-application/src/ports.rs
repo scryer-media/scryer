@@ -2074,6 +2074,15 @@ pub trait UserRepository: Send + Sync {
     async fn list_all(&self) -> AppResult<Vec<User>>;
     async fn get_by_id(&self, id: &str) -> AppResult<Option<User>>;
     async fn auth_session_version(&self, user_id: &str) -> AppResult<Option<String>>;
+    async fn rotate_auth_session_version(
+        &self,
+        _user_id: &str,
+        _auth_session_version: &str,
+    ) -> AppResult<User> {
+        Err(AppError::Repository(
+            "authentication-session rotation is not configured".into(),
+        ))
+    }
     async fn reset_authentication_factors_and_invalidate_sessions(
         &self,
         _user_id: &str,
@@ -2776,6 +2785,16 @@ pub trait WebauthnRepository: Send + Sync {
         &self,
         credential: WebauthnCredentialRecord,
     ) -> AppResult<WebauthnCredentialRecord>;
+    /// Installs a passkey only while the observed authentication session remains current.
+    async fn create_credential_for_current_session(
+        &self,
+        _credential: WebauthnCredentialRecord,
+        _expected_auth_session_version: Option<&str>,
+    ) -> AppResult<WebauthnCredentialRecord> {
+        Err(AppError::Repository(
+            "atomic passkey creation for the current session is not configured".into(),
+        ))
+    }
     async fn update_credential(
         &self,
         credential: WebauthnCredentialRecord,
@@ -2790,6 +2809,17 @@ pub trait WebauthnRepository: Send + Sync {
         credential_record_id: &str,
         user_id: &str,
     ) -> AppResult<()>;
+    /// Deletes a passkey only when another sign-in route and the current session remain valid.
+    async fn delete_credential_preserving_login_route_for_current_session(
+        &self,
+        _credential_record_id: &str,
+        _user_id: &str,
+        _expected_auth_session_version: Option<&str>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "atomic passkey deletion for the current session is not configured".into(),
+        ))
+    }
     async fn create_challenge(
         &self,
         challenge: WebauthnChallengeRecord,
@@ -2857,6 +2887,39 @@ pub trait TotpRepository: Send + Sync {
         user_id: &str,
         auth_session_version: &str,
     ) -> AppResult<()>;
+    /// Atomically installs a newly verified TOTP factor while the observed session remains current.
+    async fn complete_enrollment_for_current_session(
+        &self,
+        _credential: TotpCredentialRecord,
+        _challenge_id: &str,
+        _recovery_codes: Vec<TotpRecoveryCodeRecord>,
+        _expected_auth_session_version: Option<&str>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "atomic TOTP enrollment completion for the current session is not configured".into(),
+        ))
+    }
+    /// Atomically removes a TOTP factor and its related secrets for the current session.
+    async fn disable_for_current_session(
+        &self,
+        _user_id: &str,
+        _expected_auth_session_version: Option<&str>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "atomic TOTP disablement for the current session is not configured".into(),
+        ))
+    }
+    /// Atomically replaces recovery codes for the current session.
+    async fn replace_recovery_codes_for_current_session(
+        &self,
+        _user_id: &str,
+        _codes: Vec<TotpRecoveryCodeRecord>,
+        _expected_auth_session_version: Option<&str>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "atomic recovery-code replacement for the current session is not configured".into(),
+        ))
+    }
     async fn replace_recovery_codes(
         &self,
         user_id: &str,
@@ -2872,6 +2935,33 @@ pub trait TotpRepository: Send + Sync {
         user_id: &str,
         used_at: &str,
     ) -> AppResult<()>;
+    /// Atomically reserves one verification attempt for the credential's rolling window.
+    async fn reserve_totp_attempt(
+        &self,
+        user_id: &str,
+        attempted_at: &str,
+        window_started_after: &str,
+        limit: i32,
+    ) -> AppResult<bool> {
+        let _ = (user_id, attempted_at, window_started_after, limit);
+        Err(AppError::Repository(
+            "atomic TOTP attempt reservations are not configured".into(),
+        ))
+    }
+    /// Clears the rolling attempt reservation after a successful verification.
+    async fn clear_totp_attempt_reservations(&self, user_id: &str) -> AppResult<()> {
+        let _ = user_id;
+        Err(AppError::Repository(
+            "atomic TOTP attempt reservations are not configured".into(),
+        ))
+    }
+    /// Atomically accepts one previously unused TOTP time step.
+    async fn claim_totp_step(&self, user_id: &str, step: i64, used_at: &str) -> AppResult<bool> {
+        let _ = (user_id, step, used_at);
+        Err(AppError::Repository(
+            "atomic TOTP step claims are not configured".into(),
+        ))
+    }
     async fn record_failed_attempt(&self, attempt: TotpFailedAttemptRecord) -> AppResult<()>;
     async fn count_failed_attempts_since(&self, user_id: &str, since: &str) -> AppResult<i64>;
     async fn clear_failed_attempts(&self, user_id: &str) -> AppResult<u64>;

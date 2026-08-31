@@ -239,6 +239,8 @@ pub struct LoginPayload {
     pub expires_at: DateTime<Utc>,
     /// UTC time through which MFA verification remains fresh, or null when not verified.
     pub mfa_verified_until: Option<DateTime<Utc>>,
+    /// UTC time through which account-security changes may be authorized.
+    pub security_action_verified_until: Option<DateTime<Utc>>,
     /// True when the token can only complete MFA enrollment.
     pub mfa_enrollment_required: bool,
     /// True when the token can only replace an administrator-provided temporary password.

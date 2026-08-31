@@ -2470,6 +2470,7 @@ impl WebauthnChallengeType {
 pub enum WebauthnChallengePurpose {
     StandaloneAuthentication,
     LoginVerification,
+    AccountSecurityReauthentication,
     AccountRegistration,
     LoginEnrollment,
 }
@@ -2479,6 +2480,7 @@ impl WebauthnChallengePurpose {
         match self {
             Self::StandaloneAuthentication => "standalone_authentication",
             Self::LoginVerification => "login_verification",
+            Self::AccountSecurityReauthentication => "account_security_reauthentication",
             Self::AccountRegistration => "account_registration",
             Self::LoginEnrollment => "login_enrollment",
         }
@@ -2488,6 +2490,7 @@ impl WebauthnChallengePurpose {
         match value {
             "standalone_authentication" => Some(Self::StandaloneAuthentication),
             "login_verification" => Some(Self::LoginVerification),
+            "account_security_reauthentication" => Some(Self::AccountSecurityReauthentication),
             "account_registration" => Some(Self::AccountRegistration),
             "login_enrollment" => Some(Self::LoginEnrollment),
             _ => None,
@@ -2539,6 +2542,8 @@ pub struct WebauthnChallengeRecord {
     pub challenge_type: WebauthnChallengeType,
     pub purpose: WebauthnChallengePurpose,
     pub login_verification_challenge_id: Option<String>,
+    /// Version of the interactive session that created this challenge.
+    pub auth_session_version: Option<String>,
     pub state_json: String,
     pub created_at: String,
     pub expires_at: String,
@@ -2608,6 +2613,8 @@ pub struct TotpCredentialRecord {
 pub struct TotpEnrollmentChallengeRecord {
     pub id: String,
     pub user_id: String,
+    /// Version of the interactive session that created this challenge.
+    pub auth_session_version: Option<String>,
     pub secret_base32: String,
     pub algorithm: String,
     pub digits: i32,
@@ -2679,6 +2686,7 @@ pub enum JwtSessionScope {
 pub struct AuthenticatedTokenClaims {
     pub mfa_verified_until: Option<i64>,
     pub mfa_step_up_verified_until: Option<i64>,
+    pub security_action_verified_until: Option<i64>,
     pub session_scope: JwtSessionScope,
     pub persist_session: bool,
     pub auth_session_version: Option<String>,
@@ -2854,6 +2862,8 @@ pub(crate) struct JwtClaims {
     pub mfa_verified_until: Option<i64>,
     #[serde(default, rename = "mfaStepUpVerifiedUntil")]
     pub mfa_step_up_verified_until: Option<i64>,
+    #[serde(default, rename = "securityActionVerifiedUntil")]
+    pub security_action_verified_until: Option<i64>,
     #[serde(default, rename = "authScope")]
     pub auth_scope: JwtSessionScope,
     #[serde(default, rename = "persistSession")]

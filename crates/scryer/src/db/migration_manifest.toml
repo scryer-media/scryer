@@ -1622,6 +1622,23 @@ file = "postgres/migrations/0201_bound_discovery_storage.sql"
 engine = "postgres"
 scope = "all"
 
+[[migration]]
+version = 202
+description = "account security factor state"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0202_account_security_factor_state.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0202_account_security_factor_state.sql"
+engine = "postgres"
+scope = "all"
+
 [[baseline]]
 through_version = 140
 file = "baselines/0140_baseline.sql"

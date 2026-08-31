@@ -33,7 +33,7 @@ use std::sync::{
 use std::time::Duration;
 
 use axum::Router;
-use axum::extract::{Path as AxumPath, Query, State};
+use axum::extract::{DefaultBodyLimit, Path as AxumPath, Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -1829,7 +1829,9 @@ async fn bootstrap_application(
         .route("/oauth/authorize", get(ui_fallback))
         .route(
             "/graphql",
-            post(graphql_handler).with_state(auth_state.clone()),
+            post(graphql_handler)
+                .with_state(auth_state.clone())
+                .layer(DefaultBodyLimit::max(middleware::GRAPHQL_MAX_MESSAGE_BYTES)),
         )
         .route(
             "/images/media/{token}/{variant}",

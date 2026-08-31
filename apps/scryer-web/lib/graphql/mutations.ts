@@ -29,6 +29,7 @@ const LOGIN_PAYLOAD_FIELDS = `
     }
     expiresAt
     mfaVerifiedUntil
+    securityActionVerifiedUntil
     mfaEnrollmentRequired
     passwordChangeRequired
     persistSession`;
@@ -180,6 +181,26 @@ ${LOGIN_PAYLOAD_FIELDS}
 
 export const mfaVerifyStepUpMutation = `mutation MfaVerifyStepUp($input: TotpVerifyInput!) {
   mfaVerifyStepUp(input: $input) {
+${LOGIN_PAYLOAD_FIELDS}
+  }
+}`;
+
+export const accountSecurityPasswordVerifyMutation = `mutation AccountSecurityPasswordVerify($currentPassword: String!) {
+  accountSecurityPasswordVerify(currentPassword: $currentPassword) {
+${LOGIN_PAYLOAD_FIELDS}
+  }
+}`;
+
+export const accountSecurityPasskeyStartMutation = `mutation AccountSecurityPasskeyStart {
+  accountSecurityPasskeyStart {
+    challengeId
+    optionsJson
+    expiresAt
+  }
+}`;
+
+export const accountSecurityPasskeyCompleteMutation = `mutation AccountSecurityPasskeyComplete($input: WebauthnCompleteInput!) {
+  accountSecurityPasskeyComplete(input: $input) {
 ${LOGIN_PAYLOAD_FIELDS}
   }
 }`;

@@ -22,12 +22,14 @@ use super::{
     from_ui_settings, ui_settings_update_from_input,
 };
 use scryer_interface_core::{
-    actor_from_ctx, api_key_management_actor_from_ctx, app_from_ctx, auth_runtime_from_ctx,
-    default_persist_session_from_ctx, login_verification_required_gql_error,
+    account_security_actor_from_ctx, actor_from_ctx, api_key_management_actor_from_ctx,
+    app_from_ctx, auth_runtime_from_ctx, default_persist_session_from_ctx,
+    interactive_session_actor_from_ctx, login_verification_required_gql_error,
     mfa_enrollment_actor_from_ctx, mfa_verification_from_ctx,
     password_change_required_actor_from_ctx, persist_session_or_default,
     require_config_app_permission, to_gql_error, to_login_gql_error,
-    to_login_gql_error_after_timing,
+    to_login_gql_error_after_timing, totp_enrollment_actor_from_ctx,
+    totp_management_actor_from_ctx,
 };
 use scryer_interface_media::mappers::{
     from_download_client_routing_entry, from_indexer_routing_entry, from_library_paths_settings,
@@ -488,6 +490,8 @@ async fn login_payload_from_user(
         user: from_user_with_auth_factor_status(user, auth_factor_status),
         expires_at,
         mfa_verified_until,
+        security_action_verified_until: (!password_change_required)
+            .then(|| app.security_action_verified_until()),
         mfa_enrollment_required: false,
         password_change_required,
         persist_session,
@@ -524,6 +528,7 @@ async fn login_mfa_enrollment_payload_from_user(
         user: from_user_with_auth_factor_status(user, auth_factor_status),
         expires_at,
         mfa_verified_until: None,
+        security_action_verified_until: None,
         mfa_enrollment_required: true,
         password_change_required: false,
         persist_session,
@@ -1689,7 +1694,7 @@ impl SettingsMutations {
         ctx: &Context<'_>,
     ) -> GqlResult<WebauthnChallengePayload> {
         let app = app_from_ctx(ctx)?;
-        let actor = actor_from_ctx(ctx)?;
+        let actor = account_security_actor_from_ctx(ctx)?;
         let auth_runtime = auth_runtime_from_ctx(ctx);
         app.webauthn_register_start(&actor, auth_runtime.snapshot().effective_form_login_enabled)
             .await
@@ -1697,7 +1702,7 @@ impl SettingsMutations {
             .map_err(to_gql_error)
     }
 
-    /// Completes passkey registration using the challenge ID and browser response, then returns a passkey summary.
+    /// Completes passkey registration using the authorized enrollment challenge.
     async fn webauthn_register_complete(
         &self,
         ctx: &Context<'_>,
@@ -1707,7 +1712,7 @@ impl SettingsMutations {
         input: WebauthnRegisterCompleteInput,
     ) -> GqlResult<PasskeySummaryPayload> {
         let app = app_from_ctx(ctx)?;
-        let actor = actor_from_ctx(ctx)?;
+        let actor = interactive_session_actor_from_ctx(ctx)?;
         let auth_runtime = auth_runtime_from_ctx(ctx);
         app.webauthn_register_complete(
             &actor,
@@ -1728,9 +1733,8 @@ impl SettingsMutations {
     ) -> GqlResult<WebauthnChallengePayload> {
         let app = app_from_ctx(ctx)?;
         let actor = mfa_enrollment_actor_from_ctx(ctx)?;
-        let form_login_enabled = auth_runtime_from_ctx(ctx)
-            .snapshot()
-            .effective_form_login_enabled;
+        let auth_runtime = auth_runtime_from_ctx(ctx);
+        let form_login_enabled = auth_runtime.snapshot().effective_form_login_enabled;
         app.webauthn_login_enrollment_start(&actor, form_login_enabled)
             .await
             .map(from_webauthn_challenge_start)
@@ -1749,9 +1753,8 @@ impl SettingsMutations {
         let app = app_from_ctx(ctx)?;
         let mfa = mfa_verification_from_ctx(ctx);
         let actor = mfa_enrollment_actor_from_ctx(ctx)?;
-        let form_login_enabled = auth_runtime_from_ctx(ctx)
-            .snapshot()
-            .effective_form_login_enabled;
+        let auth_runtime = auth_runtime_from_ctx(ctx);
+        let form_login_enabled = auth_runtime.snapshot().effective_form_login_enabled;
         let passkey = app
             .webauthn_login_enrollment_complete(
                 &actor,
@@ -1790,7 +1793,7 @@ impl SettingsMutations {
         let actor = if login_enrollment {
             mfa_enrollment_actor_from_ctx(ctx)?
         } else {
-            actor_from_ctx(ctx)?
+            totp_enrollment_actor_from_ctx(ctx)?
         };
         let start = if login_enrollment {
             app.start_login_mfa_enrollment(&actor).await
@@ -1809,11 +1812,12 @@ impl SettingsMutations {
         input: TotpEnrollmentCompleteInput,
     ) -> GqlResult<TotpEnrollmentCompletePayload> {
         let app = app_from_ctx(ctx)?;
-        let actor = actor_from_ctx(ctx)?;
-        app.totp_enrollment_complete(&actor, input.challenge_id.as_ref(), &input.code)
+        let actor = totp_management_actor_from_ctx(ctx)?;
+        let complete = app
+            .totp_enrollment_complete(&actor, input.challenge_id.as_ref(), &input.code)
             .await
-            .map(from_totp_enrollment_complete)
-            .map_err(to_gql_error)
+            .map_err(to_gql_error)?;
+        Ok(from_totp_enrollment_complete(complete))
     }
 
     /// Completes required login MFA enrollment, returns one-time recovery codes, and issues the authenticated login payload.
@@ -1855,6 +1859,7 @@ impl SettingsMutations {
         input: TotpVerifyInput,
     ) -> GqlResult<LoginPayload> {
         let app = app_from_ctx(ctx)?;
+        let mfa = mfa_verification_from_ctx(ctx);
         let actor = actor_from_ctx(ctx)?;
         let mfa_step_up_verified_until = app
             .mfa_verify_step_up(&actor, &input.code)
@@ -1865,22 +1870,99 @@ impl SettingsMutations {
             actor,
             None,
             Some(mfa_step_up_verified_until),
-            true,
+            mfa.persist_session,
             None,
             false,
         )
         .await
     }
 
-    /// Disables TOTP after verifying the supplied code and returns updated status.
+    /// Verifies the current local password and returns a fresh account-security session.
+    async fn account_security_password_verify(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(
+            desc = "Current local password used to reauthenticate this interactive session."
+        )]
+        current_password: String,
+    ) -> GqlResult<LoginPayload> {
+        let app = app_from_ctx(ctx)?;
+        let mfa = mfa_verification_from_ctx(ctx);
+        let actor = interactive_session_actor_from_ctx(ctx)?;
+        app.account_security_password_verify(&actor, &current_password)
+            .await
+            .map_err(to_gql_error)?;
+        login_payload_from_user(
+            &app,
+            actor,
+            None,
+            None,
+            mfa.persist_session,
+            Some(&mfa.auth_session_version),
+            false,
+        )
+        .await
+    }
+
+    /// Starts a passkey assertion that reauthenticates the current interactive session.
+    async fn account_security_passkey_start(
+        &self,
+        ctx: &Context<'_>,
+    ) -> GqlResult<WebauthnChallengePayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = interactive_session_actor_from_ctx(ctx)?;
+        let form_login_enabled = auth_runtime_from_ctx(ctx)
+            .snapshot()
+            .effective_form_login_enabled;
+        app.account_security_passkey_start(&actor, form_login_enabled)
+            .await
+            .map(from_webauthn_challenge_start)
+            .map_err(to_gql_error)
+    }
+
+    /// Completes a passkey reauthentication assertion and returns a fresh account-security session.
+    async fn account_security_passkey_complete(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Passkey assertion response for the current account-security challenge.")]
+        input: WebauthnCompleteInput,
+    ) -> GqlResult<LoginPayload> {
+        let app = app_from_ctx(ctx)?;
+        let mfa = mfa_verification_from_ctx(ctx);
+        let actor = interactive_session_actor_from_ctx(ctx)?;
+        let form_login_enabled = auth_runtime_from_ctx(ctx)
+            .snapshot()
+            .effective_form_login_enabled;
+        app.account_security_passkey_complete(
+            &actor,
+            input.challenge_id.as_ref(),
+            &serde_json::to_string(&input.response_json.0).unwrap_or_default(),
+            form_login_enabled,
+        )
+        .await
+        .map_err(to_gql_error)?;
+        login_payload_from_user(
+            &app,
+            actor,
+            None,
+            None,
+            mfa.persist_session,
+            Some(&mfa.auth_session_version),
+            false,
+        )
+        .await
+    }
+
+    /// Disables TOTP after verifying the current TOTP code.
     async fn totp_disable(
         &self,
         ctx: &Context<'_>,
         #[graphql(desc = "Current TOTP code required to disable TOTP.")] input: TotpVerifyInput,
     ) -> GqlResult<TotpStatusPayload> {
         let app = app_from_ctx(ctx)?;
-        let actor = actor_from_ctx(ctx)?;
-        app.totp_disable(&actor, &input.code)
+        let mfa = mfa_verification_from_ctx(ctx);
+        let actor = totp_management_actor_from_ctx(ctx)?;
+        app.totp_disable(&actor, &input.code, mfa.auth_session_version.as_deref())
             .await
             .map(from_totp_status)
             .map_err(to_gql_error)
@@ -1894,11 +1976,17 @@ impl SettingsMutations {
         input: TotpVerifyInput,
     ) -> GqlResult<TotpEnrollmentCompletePayload> {
         let app = app_from_ctx(ctx)?;
-        let actor = actor_from_ctx(ctx)?;
-        app.totp_regenerate_recovery_codes(&actor, &input.code)
+        let mfa = mfa_verification_from_ctx(ctx);
+        let actor = totp_management_actor_from_ctx(ctx)?;
+        let complete = app
+            .totp_regenerate_recovery_codes(
+                &actor,
+                &input.code,
+                mfa.auth_session_version.as_deref(),
+            )
             .await
-            .map(from_totp_enrollment_complete)
-            .map_err(to_gql_error)
+            .map_err(to_gql_error)?;
+        Ok(from_totp_enrollment_complete(complete))
     }
 
     /// Starts passkey authentication, masking failures when form login is enabled.
@@ -2070,13 +2158,15 @@ impl SettingsMutations {
         #[graphql(desc = "ID of the authenticated actor's passkey to delete.")] id: ID,
     ) -> GqlResult<DeleteMyPasskeyPayload> {
         let app = app_from_ctx(ctx)?;
-        let actor = actor_from_ctx(ctx)?;
+        let mfa = mfa_verification_from_ctx(ctx);
+        let actor = account_security_actor_from_ctx(ctx)?;
         let auth_runtime = auth_runtime_from_ctx(ctx);
         let id_string = id.to_string();
         app.delete_my_passkey(
             &actor,
             &id_string,
             auth_runtime.snapshot().effective_form_login_enabled,
+            mfa.auth_session_version.as_deref(),
         )
         .await
         .map_err(to_gql_error)?;

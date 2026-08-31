@@ -4,11 +4,22 @@ import { notifyExternalAccountInviteSourcesChanged } from "@/components/containe
 import { sanitizeTotpCode } from "@/components/auth/totp-code-form";
 import { ApiKeysPanel } from "@/components/containers/settings/api-keys-panel";
 import { SettingsProfileSection } from "@/components/views/settings/settings-profile-section";
+import { Button } from "@/components/ui/button";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import {
+  accountSecurityPasswordVerifyMutation,
   deleteMyPasskeyMutation,
   linkEmbyAccountMutation,
   linkJellyfinAccountMutation,
   linkPlexAccountMutation,
+  mfaVerifyStepUpMutation,
   revokeMyOauthAppMutation,
   setMyUiSettingsMutation,
   setUserPasswordMutation,
@@ -52,7 +63,11 @@ import type {
   UiSettings,
 } from "@/lib/types/settings";
 import type { UserAccountKind } from "@/lib/types/users";
-import { PasskeyClientError, registerPasskey } from "@/lib/utils/passkeys";
+import {
+  PasskeyClientError,
+  reauthenticateAccountSecurityWithPasskey,
+  registerPasskey,
+} from "@/lib/utils/passkeys";
 import { authenticateWithPlexPin } from "@/lib/utils/plex-oauth";
 import {
   canSubmitJellyfinLink,
@@ -63,6 +78,30 @@ type Props = {
   userId?: string;
   username?: string;
 };
+
+type SecurityFactorLogin = {
+  token: string;
+  user: AuthUser | null;
+  persistSession: boolean;
+};
+
+type PendingSecurityFactorAction =
+  | { kind: "add-passkey" }
+  | { kind: "start-totp-enrollment" }
+  | { kind: "delete-passkey"; id: string };
+
+type AccountSecurityReauthenticationMethod = "password" | "passkey" | "totp";
+
+function requiresAccountSecurityReauthentication(error: unknown): boolean {
+  const graphqlErrors = (error as {
+    graphQLErrors?: Array<{ extensions?: { code?: unknown } }>;
+  })?.graphQLErrors;
+  return (
+    graphqlErrors?.some(
+      (graphqlError) => graphqlError.extensions?.code === "REAUTHENTICATION_REQUIRED",
+    ) ?? (error instanceof Error && error.message.includes("reauthentication"))
+  );
+}
 
 type LinkAccountDraft = {
   provider: ExternalAccountProvider;
@@ -103,6 +142,7 @@ export function SettingsProfileContainer({ userId, username }: Props) {
   const client = useClient();
   const {
     login,
+    adoptSession,
     user: authUser,
     loading: authLoading,
     effectiveFormLoginEnabled,
@@ -127,6 +167,15 @@ export function SettingsProfileContainer({ userId, username }: Props) {
   const [totpEnrollment, setTotpEnrollment] = useState<TotpEnrollmentStart | null>(null);
   const [totpEnrollmentCode, setTotpEnrollmentCode] = useState("");
   const [totpActionCode, setTotpActionCode] = useState("");
+  const [securityReauthenticationOpen, setSecurityReauthenticationOpen] = useState(false);
+  const [securityReauthenticationMethod, setSecurityReauthenticationMethod] =
+    useState<AccountSecurityReauthenticationMethod>("password");
+  const [securityReauthenticationPassword, setSecurityReauthenticationPassword] = useState("");
+  const [securityReauthenticationCode, setSecurityReauthenticationCode] = useState("");
+  const [securityReauthenticationBusy, setSecurityReauthenticationBusy] = useState(false);
+  const [pendingSecurityFactorAction, setPendingSecurityFactorAction] =
+    useState<PendingSecurityFactorAction | null>(null);
+  const [securityReauthenticationGeneration, setSecurityReauthenticationGeneration] = useState(0);
   const [totpRecoveryCodes, setTotpRecoveryCodes] = useState<string[]>([]);
   const [linkedAccounts, setLinkedAccounts] = useState<LinkedAccount[]>([]);
   const [externalAuthSettings, setExternalAuthSettings] = useState<ExternalAuthRuntimeSettings>(
@@ -166,6 +215,124 @@ export function SettingsProfileContainer({ userId, username }: Props) {
 
     return error instanceof Error ? error.message : t("profile.passkeyOperationFailed");
   }, [t]);
+
+  const finishSecurityReauthentication = useCallback(
+    (replacementLogin: SecurityFactorLogin) => {
+      adoptSession(
+        replacementLogin.token,
+        replacementLogin.user,
+        replacementLogin.persistSession,
+      );
+      setSecurityReauthenticationPassword("");
+      setSecurityReauthenticationCode("");
+      setSecurityReauthenticationOpen(false);
+      setSecurityReauthenticationGeneration((generation) => generation + 1);
+    },
+    [adoptSession],
+  );
+
+  const requestSecurityReauthentication = useCallback((
+    error: unknown,
+    pendingAction?: PendingSecurityFactorAction,
+  ): boolean => {
+    if (!requiresAccountSecurityReauthentication(error)) {
+      return false;
+    }
+    if (pendingAction) {
+      setPendingSecurityFactorAction(pendingAction);
+    }
+    setSecurityReauthenticationMethod(
+      hasPassword ? "password" : passkeys.length > 0 ? "passkey" : "totp",
+    );
+    setSecurityReauthenticationOpen(true);
+    return true;
+  }, [hasPassword, passkeys.length]);
+
+  const handlePasswordSecurityReauthentication = useCallback(async () => {
+    if (!securityReauthenticationPassword) return;
+
+    setSecurityReauthenticationBusy(true);
+    try {
+      const result = await client
+        .mutation<
+          { accountSecurityPasswordVerify?: SecurityFactorLogin },
+          { currentPassword: string }
+        >(accountSecurityPasswordVerifyMutation, {
+          currentPassword: securityReauthenticationPassword,
+        })
+        .toPromise();
+      const login = result.data?.accountSecurityPasswordVerify;
+      if (result.error || !login) {
+        setGlobalStatus(result.error?.message ?? "Account security verification failed.");
+        return;
+      }
+      finishSecurityReauthentication(login);
+    } catch (error) {
+      setGlobalStatus(
+        error instanceof Error ? error.message : "Account security verification failed.",
+      );
+    } finally {
+      setSecurityReauthenticationBusy(false);
+    }
+  }, [
+    client,
+    finishSecurityReauthentication,
+    securityReauthenticationPassword,
+    setGlobalStatus,
+  ]);
+
+  const handlePasskeySecurityReauthentication = useCallback(async () => {
+    setSecurityReauthenticationBusy(true);
+    try {
+      finishSecurityReauthentication(
+        await reauthenticateAccountSecurityWithPasskey(client),
+      );
+    } catch (error) {
+      if (requestSecurityReauthentication(error)) return;
+      setGlobalStatus(formatPasskeyError(error));
+    } finally {
+      setSecurityReauthenticationBusy(false);
+    }
+  }, [
+    client,
+    finishSecurityReauthentication,
+    formatPasskeyError,
+    requestSecurityReauthentication,
+    setGlobalStatus,
+  ]);
+
+  const handleTotpSecurityReauthentication = useCallback(async () => {
+    if (!securityReauthenticationCode.trim()) return;
+
+    setSecurityReauthenticationBusy(true);
+    try {
+      const result = await client
+        .mutation<
+          { mfaVerifyStepUp?: SecurityFactorLogin },
+          { input: { code: string } }
+        >(mfaVerifyStepUpMutation, {
+          input: { code: securityReauthenticationCode },
+        })
+        .toPromise();
+      const login = result.data?.mfaVerifyStepUp;
+      if (result.error || !login) {
+        setGlobalStatus(result.error?.message ?? "Account security verification failed.");
+        return;
+      }
+      finishSecurityReauthentication(login);
+    } catch (error) {
+      setGlobalStatus(
+        error instanceof Error ? error.message : "Account security verification failed.",
+      );
+    } finally {
+      setSecurityReauthenticationBusy(false);
+    }
+  }, [
+    client,
+    finishSecurityReauthentication,
+    securityReauthenticationCode,
+    setGlobalStatus,
+  ]);
 
   const handleChangePassword = useCallback(async () => {
     if (!userId || !newPassword || newPassword !== confirmPassword) return;
@@ -579,22 +746,35 @@ export function SettingsProfileContainer({ userId, username }: Props) {
       setPasskeys((current) => [...current, passkey]);
       setGlobalStatus(t("profile.passkeyAdded"));
     } catch (error) {
+      if (requestSecurityReauthentication(error, { kind: "add-passkey" })) return;
       setGlobalStatus(formatPasskeyError(error));
     } finally {
       setAddingPasskey(false);
     }
-  }, [client, formatPasskeyError, setGlobalStatus, t, userId]);
+  }, [
+    client,
+    formatPasskeyError,
+    requestSecurityReauthentication,
+    setGlobalStatus,
+    t,
+    userId,
+  ]);
 
   const handleDeletePasskey = useCallback(async (id: string) => {
     setDeletingPasskeyId(id);
     try {
       const result = await client
-        .mutation<{ deleteMyPasskey?: { id?: string } }, { id: string }>(
+        .mutation<
+          { deleteMyPasskey?: { id?: string } },
+          { id: string }
+        >(
           deleteMyPasskeyMutation,
           { id },
         )
         .toPromise();
-      if (result.error || !result.data?.deleteMyPasskey?.id) {
+      const deleted = result.data?.deleteMyPasskey;
+      if (result.error || !deleted?.id) {
+        if (requestSecurityReauthentication(result.error, { kind: "delete-passkey", id })) return;
         setGlobalStatus(result.error?.message ?? t("profile.passkeyDeleteFailed"));
         return;
       }
@@ -602,11 +782,12 @@ export function SettingsProfileContainer({ userId, username }: Props) {
       setPasskeys((current) => current.filter((passkey) => passkey.id !== id));
       setGlobalStatus(t("profile.passkeyDeleted"));
     } catch (error) {
+      if (requestSecurityReauthentication(error, { kind: "delete-passkey", id })) return;
       setGlobalStatus(error instanceof Error ? error.message : t("profile.passkeyDeleteFailed"));
     } finally {
       setDeletingPasskeyId(null);
     }
-  }, [client, setGlobalStatus, t]);
+  }, [client, requestSecurityReauthentication, setGlobalStatus, t]);
 
   const handleRevokeOauthApp = useCallback(async (grantId: string) => {
     setRevokingOauthGrantId(grantId);
@@ -639,17 +820,19 @@ export function SettingsProfileContainer({ userId, username }: Props) {
         .mutation<{ totpEnrollmentStart?: TotpEnrollmentStart }>(totpEnrollmentStartMutation, {})
         .toPromise();
       if (result.error || !result.data?.totpEnrollmentStart) {
+        if (requestSecurityReauthentication(result.error, { kind: "start-totp-enrollment" })) return;
         setGlobalStatus(result.error?.message ?? t("profile.totpOperationFailed"));
         return;
       }
       setTotpEnrollment(result.data.totpEnrollmentStart);
       setTotpEnrollmentCode("");
     } catch (error) {
+      if (requestSecurityReauthentication(error, { kind: "start-totp-enrollment" })) return;
       setGlobalStatus(error instanceof Error ? error.message : t("profile.totpOperationFailed"));
     } finally {
       setTotpBusy(false);
     }
-  }, [client, setGlobalStatus, t]);
+  }, [client, requestSecurityReauthentication, setGlobalStatus, t]);
 
   const handleCompleteTotpEnrollment = useCallback(async () => {
     if (!totpEnrollment || totpEnrollmentCode.length !== TOTP_CODE_LENGTH) return;
@@ -667,12 +850,13 @@ export function SettingsProfileContainer({ userId, username }: Props) {
           },
         })
         .toPromise();
-      if (result.error || !result.data?.totpEnrollmentComplete) {
+      const completed = result.data?.totpEnrollmentComplete;
+      if (result.error || !completed) {
         setGlobalStatus(result.error?.message ?? t("profile.totpOperationFailed"));
         return;
       }
-      setTotpStatus(result.data.totpEnrollmentComplete.status);
-      setTotpRecoveryCodes(result.data.totpEnrollmentComplete.recoveryCodes);
+      setTotpStatus(completed.status);
+      setTotpRecoveryCodes(completed.recoveryCodes);
       setTotpEnrollment(null);
       setTotpEnrollmentCode("");
       setGlobalStatus(t("profile.totpEnabled"));
@@ -681,7 +865,13 @@ export function SettingsProfileContainer({ userId, username }: Props) {
     } finally {
       setTotpBusy(false);
     }
-  }, [client, setGlobalStatus, t, totpEnrollment, totpEnrollmentCode]);
+  }, [
+    client,
+    setGlobalStatus,
+    t,
+    totpEnrollment,
+    totpEnrollmentCode,
+  ]);
 
   const handleDisableTotp = useCallback(async () => {
     if (totpActionCode.length !== TOTP_CODE_LENGTH) return;
@@ -689,16 +879,20 @@ export function SettingsProfileContainer({ userId, username }: Props) {
     setTotpBusy(true);
     try {
       const result = await client
-        .mutation<{ totpDisable?: TotpStatus }, { input: { code: string } }>(
+        .mutation<
+          { totpDisable?: TotpStatus },
+          { input: { code: string } }
+        >(
           totpDisableMutation,
           { input: { code: totpActionCode } },
         )
         .toPromise();
-      if (result.error || !result.data?.totpDisable) {
+      const disabled = result.data?.totpDisable;
+      if (result.error || !disabled) {
         setGlobalStatus(result.error?.message ?? t("profile.totpOperationFailed"));
         return;
       }
-      setTotpStatus(result.data.totpDisable);
+      setTotpStatus(disabled);
       setTotpActionCode("");
       setTotpRecoveryCodes([]);
       setGlobalStatus(t("profile.totpDisabled"));
@@ -720,12 +914,13 @@ export function SettingsProfileContainer({ userId, username }: Props) {
           { input: { code: string } }
         >(totpRegenerateRecoveryCodesMutation, { input: { code: totpActionCode } })
         .toPromise();
-      if (result.error || !result.data?.totpRegenerateRecoveryCodes) {
+      const regenerated = result.data?.totpRegenerateRecoveryCodes;
+      if (result.error || !regenerated) {
         setGlobalStatus(result.error?.message ?? t("profile.totpOperationFailed"));
         return;
       }
-      setTotpStatus(result.data.totpRegenerateRecoveryCodes.status);
-      setTotpRecoveryCodes(result.data.totpRegenerateRecoveryCodes.recoveryCodes);
+      setTotpStatus(regenerated.status);
+      setTotpRecoveryCodes(regenerated.recoveryCodes);
       setTotpActionCode("");
       setGlobalStatus(t("profile.totpRecoveryCodesRegenerated"));
     } catch (error) {
@@ -734,6 +929,32 @@ export function SettingsProfileContainer({ userId, username }: Props) {
       setTotpBusy(false);
     }
   }, [client, setGlobalStatus, t, totpActionCode]);
+
+  useEffect(() => {
+    if (!pendingSecurityFactorAction || securityReauthenticationGeneration === 0) return;
+
+    const action = pendingSecurityFactorAction;
+    setPendingSecurityFactorAction(null);
+    void (async () => {
+      switch (action.kind) {
+        case "add-passkey":
+          await handleAddPasskey();
+          break;
+        case "start-totp-enrollment":
+          await handleStartTotpEnrollment();
+          break;
+        case "delete-passkey":
+          await handleDeletePasskey(action.id);
+          break;
+      }
+    })();
+  }, [
+    handleAddPasskey,
+    handleDeletePasskey,
+    handleStartTotpEnrollment,
+    pendingSecurityFactorAction,
+    securityReauthenticationGeneration,
+  ]);
 
   const handleUnlinkExternalAccount = useCallback(async (id: string) => {
     setUnlinkingAccountId(id);
@@ -1042,6 +1263,103 @@ export function SettingsProfileContainer({ userId, username }: Props) {
       onUnlinkExternalAccount={handleUnlinkExternalAccount}
     />
     <ApiKeysPanel />
+    <Dialog
+      open={securityReauthenticationOpen}
+      onOpenChange={setSecurityReauthenticationOpen}
+    >
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Verify account security</DialogTitle>
+          <DialogDescription>
+            Verify a current factor before managing passkeys, TOTP, or recovery codes.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex flex-wrap gap-2">
+          {hasPassword ? (
+            <Button
+              type="button"
+              variant={securityReauthenticationMethod === "password" ? "default" : "outline"}
+              onClick={() => setSecurityReauthenticationMethod("password")}
+              disabled={securityReauthenticationBusy}
+            >
+              Password
+            </Button>
+          ) : null}
+          {passkeys.length > 0 ? (
+            <Button
+              type="button"
+              variant={securityReauthenticationMethod === "passkey" ? "default" : "outline"}
+              onClick={() => setSecurityReauthenticationMethod("passkey")}
+              disabled={securityReauthenticationBusy}
+            >
+              Passkey
+            </Button>
+          ) : null}
+          {totpStatus?.enabled ? (
+            <Button
+              type="button"
+              variant={securityReauthenticationMethod === "totp" ? "default" : "outline"}
+              onClick={() => setSecurityReauthenticationMethod("totp")}
+              disabled={securityReauthenticationBusy}
+            >
+              TOTP or recovery code
+            </Button>
+          ) : null}
+        </div>
+        {securityReauthenticationMethod === "password" && hasPassword ? (
+          <>
+            <Input
+              type="password"
+              value={securityReauthenticationPassword}
+              onChange={(event) => setSecurityReauthenticationPassword(event.target.value)}
+              autoComplete="current-password"
+              placeholder="Current password"
+              disabled={securityReauthenticationBusy}
+            />
+            <Button
+              type="button"
+              onClick={handlePasswordSecurityReauthentication}
+              disabled={securityReauthenticationBusy || !securityReauthenticationPassword}
+            >
+              Verify password
+            </Button>
+          </>
+        ) : null}
+        {securityReauthenticationMethod === "passkey" && passkeys.length > 0 ? (
+          <Button
+            type="button"
+            onClick={handlePasskeySecurityReauthentication}
+            disabled={securityReauthenticationBusy}
+          >
+            Verify with passkey
+          </Button>
+        ) : null}
+        {securityReauthenticationMethod === "totp" && totpStatus?.enabled ? (
+          <>
+            <Input
+              value={securityReauthenticationCode}
+              onChange={(event) => setSecurityReauthenticationCode(event.target.value)}
+              autoComplete="one-time-code"
+              placeholder="TOTP or recovery code"
+              disabled={securityReauthenticationBusy}
+            />
+            <Button
+              type="button"
+              onClick={handleTotpSecurityReauthentication}
+              disabled={securityReauthenticationBusy || !securityReauthenticationCode.trim()}
+            >
+              Verify code
+            </Button>
+          </>
+        ) : null}
+        {!hasPassword && passkeys.length === 0 && !totpStatus?.enabled ? (
+          <p className="text-sm text-[var(--scry-muted3)]">
+            This account has no available reauthentication factor. Sign out and sign in again,
+            then retry the account-security change.
+          </p>
+        ) : null}
+      </DialogContent>
+    </Dialog>
     </>
   );
 }

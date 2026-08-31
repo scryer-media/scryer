@@ -493,6 +493,7 @@ async fn token_signed_without_auth_session_version_authenticates() {
         library_permissions: vec![],
         mfa_verified_until: None,
         mfa_step_up_verified_until: None,
+        security_action_verified_until: None,
         actor_capabilities: vec![],
         oauth_client_id: None,
         oauth_grant_id: None,
@@ -870,6 +871,7 @@ async fn oauth_token_with_app_permissions_is_rejected_during_authentication() {
         library_permissions: vec![],
         mfa_verified_until: None,
         mfa_step_up_verified_until: None,
+        security_action_verified_until: None,
         actor_capabilities: vec![],
         oauth_client_id: Some("generic-native".to_string()),
         oauth_grant_id: Some("grant-with-app-permission".to_string()),
@@ -927,6 +929,7 @@ async fn oauth_token_with_actor_capabilities_is_rejected_during_authentication()
         library_permissions: vec![],
         mfa_verified_until: None,
         mfa_step_up_verified_until: None,
+        security_action_verified_until: None,
         actor_capabilities: vec!["manageOwnAccount".to_string()],
         oauth_client_id: Some("generic-native".to_string()),
         oauth_grant_id: Some("grant-with-actor-capability".to_string()),
@@ -1700,6 +1703,7 @@ async fn expired_token_returns_unauthorized() {
         library_permissions: vec![],
         mfa_verified_until: None,
         mfa_step_up_verified_until: None,
+        security_action_verified_until: None,
         actor_capabilities: vec![],
         oauth_client_id: None,
         oauth_grant_id: None,
@@ -1744,6 +1748,7 @@ async fn wrong_issuer_token_returns_unauthorized() {
         library_permissions: vec![],
         mfa_verified_until: None,
         mfa_step_up_verified_until: None,
+        security_action_verified_until: None,
         actor_capabilities: vec![],
         oauth_client_id: None,
         oauth_grant_id: None,
@@ -1868,7 +1873,10 @@ async fn passkey_management_requires_enabled_form_login() {
 
     assert_form_login_required(app.webauthn_register_start(&user, false).await);
     assert_form_login_required(app.list_my_passkeys(&user, false).await);
-    assert_form_login_required(app.delete_my_passkey(&user, "credential-id", false).await);
+    assert_form_login_required(
+        app.delete_my_passkey(&user, "credential-id", false, None)
+            .await,
+    );
 }
 
 #[tokio::test]
@@ -2045,6 +2053,7 @@ async fn token_permission_claims_do_not_override_database_authorization() {
         library_permissions: vec![],
         mfa_verified_until: None,
         mfa_step_up_verified_until: None,
+        security_action_verified_until: None,
         actor_capabilities: vec![],
         oauth_client_id: None,
         oauth_grant_id: None,

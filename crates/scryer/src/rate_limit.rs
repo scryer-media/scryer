@@ -209,7 +209,7 @@ impl Bucket {
 pub(crate) fn classify_graphql(batch: &BatchRequest) -> GraphqlRateLimitClass {
     let mut class = GraphqlRateLimitClass::Api;
     for request in batch.iter() {
-        let next = classify_query(&request.query);
+        let next = classify_graphql_request(request);
         class = stricter_class(class, next);
         if class == GraphqlRateLimitClass::Login {
             break;
@@ -218,11 +218,19 @@ pub(crate) fn classify_graphql(batch: &BatchRequest) -> GraphqlRateLimitClass {
     class
 }
 
+pub(crate) fn classify_graphql_request(request: &async_graphql::Request) -> GraphqlRateLimitClass {
+    classify_query(&request.query)
+}
+
 pub(crate) fn should_precheck_graphql_login(batch: &BatchRequest) -> bool {
     classify_graphql(batch) == GraphqlRateLimitClass::Login
 }
 
 pub(crate) fn rate_limited_graphql_response(decision: &RateLimitDecision) -> BatchResponse {
+    BatchResponse::Single(rate_limited_graphql_single_response(decision))
+}
+
+pub(crate) fn rate_limited_graphql_single_response(decision: &RateLimitDecision) -> Response {
     let mut extensions = ErrorExtensionValues::default();
     extensions.set("code", "RATE_LIMITED");
     if let Some(retry_after) = decision.retry_after {
@@ -231,7 +239,7 @@ pub(crate) fn rate_limited_graphql_response(decision: &RateLimitDecision) -> Bat
 
     let mut error = ServerError::new(decision.message.clone(), None);
     error.extensions = Some(extensions);
-    BatchResponse::Single(Response::from_errors(vec![error]))
+    Response::from_errors(vec![error])
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -364,6 +372,12 @@ fn is_login_mutation_field(name: &str) -> bool {
             | "webauthnLoginEnrollmentStart"
             | "webauthnLoginEnrollmentComplete"
             | "completeRequiredPasswordChange"
+            | "accountSecurityPasswordVerify"
+            | "accountSecurityPasskeyStart"
+            | "accountSecurityPasskeyComplete"
+            | "mfaVerifyStepUp"
+            | "totpDisable"
+            | "totpRegenerateRecoveryCodes"
     )
 }
 
@@ -525,6 +539,24 @@ mod tests {
             GraphqlRateLimitClass::Login
         );
         assert!(should_precheck_graphql_login(&complete_batch));
+    }
+
+    #[test]
+    fn account_security_verification_mutations_use_login_bucket() {
+        for mutation in [
+            "accountSecurityPasswordVerify(currentPassword: \"password\") { token }",
+            "accountSecurityPasskeyStart { challengeId }",
+            "accountSecurityPasskeyComplete(input: { challengeId: \"c\", responseJson: \"{}\" }) { token }",
+            "mfaVerifyStepUp(input: { code: \"123456\" }) { token }",
+            "totpDisable(input: { code: \"123456\" }) { enabled }",
+            "totpRegenerateRecoveryCodes(input: { code: \"123456\" }) { recoveryCodes }",
+        ] {
+            let batch = BatchRequest::Single(async_graphql::Request::new(format!(
+                "mutation SecurityVerification {{ {mutation} }}"
+            )));
+            assert_eq!(classify_graphql(&batch), GraphqlRateLimitClass::Login);
+            assert!(should_precheck_graphql_login(&batch));
+        }
     }
 
     #[test]
