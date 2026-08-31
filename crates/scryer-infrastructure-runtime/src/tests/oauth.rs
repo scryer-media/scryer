@@ -152,7 +152,7 @@ async fn custom_client_grant_creation_requires_an_enabled_registration() {
     let grant = scryer_application::OAuthRefreshGrantRecord {
         id: "grant-disabled-client".to_string(),
         family_id: "family-disabled-client".to_string(),
-        user_id: user.id,
+        user_id: user.id.clone(),
         authorization_source: scryer_application::OAuthAuthorizationSource::Authenticated,
         client_id: client_id.to_string(),
         scope: "library".to_string(),

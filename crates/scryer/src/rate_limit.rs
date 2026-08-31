@@ -1,5 +1,5 @@
 use std::collections::{HashMap, VecDeque};
-use std::hash::{BuildHasher, Hash, Hasher};
+use std::hash::BuildHasher;
 use std::net::IpAddr;
 use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -16,7 +16,7 @@ use async_graphql::{
 };
 use governor::clock::Clock;
 use governor::{DefaultKeyedRateLimiter, Quota};
-use scryer_interface::{GRAPHQL_RECURSION_LIMIT, LoginAttemptPrincipal};
+use scryer_interface::{GRAPHQL_RECURSIVE_DEPTH_LIMIT, LoginAttemptPrincipal};
 
 const GRAPHQL_SELECTION_TRAVERSAL_BUDGET: usize = 1_024;
 const AUTHENTICATION_BUCKET_CLEANUP_INTERVAL: usize = 256;
@@ -257,7 +257,7 @@ impl ScryerRateLimiter {
             .authentication_checks
             .fetch_add(1, Ordering::Relaxed)
             + 1;
-        if checks % AUTHENTICATION_BUCKET_CLEANUP_INTERVAL == 0 {
+        if checks.is_multiple_of(AUTHENTICATION_BUCKET_CLEANUP_INTERVAL) {
             self.inner.login.retain_recent();
             self.inner.auth_start.retain_recent();
             self.inner.auth_peer.retain_recent();
@@ -391,15 +391,15 @@ impl PrincipalFailureBucket {
             Self::prune(&mut entry.failures, now, self.window);
             !entry.failures.is_empty()
         });
-        if !state.entries.contains_key(&digest) && state.entries.len() >= self.max_tracked {
-            if let Some(lru) = state
+        if !state.entries.contains_key(&digest)
+            && state.entries.len() >= self.max_tracked
+            && let Some(lru) = state
                 .entries
                 .iter()
                 .min_by_key(|(_, entry)| entry.last_used)
                 .map(|(digest, _)| *digest)
-            {
-                state.entries.remove(&lru);
-            }
+        {
+            state.entries.remove(&lru);
         }
         let last_used = Self::next_last_used(&mut state);
         let entry = state
@@ -432,13 +432,11 @@ impl PrincipalFailureBucket {
     }
 
     fn digest(&self, principal: &LoginAttemptPrincipal) -> [u8; 16] {
-        let mut primary = self.primary_hasher.build_hasher();
-        principal.hash(&mut primary);
-        let mut secondary = self.secondary_hasher.build_hasher();
-        principal.hash(&mut secondary);
+        let primary = self.primary_hasher.hash_one(principal);
+        let secondary = self.secondary_hasher.hash_one(principal);
         let mut digest = [0_u8; 16];
-        digest[..8].copy_from_slice(&primary.finish().to_be_bytes());
-        digest[8..].copy_from_slice(&secondary.finish().to_be_bytes());
+        digest[..8].copy_from_slice(&primary.to_be_bytes());
+        digest[8..].copy_from_slice(&secondary.to_be_bytes());
         digest
     }
 
@@ -705,7 +703,7 @@ fn collect_top_level_fields<'a>(
     fragment_stack: &mut Vec<&'a str>,
     traversed: &mut usize,
 ) -> bool {
-    if depth > GRAPHQL_RECURSION_LIMIT {
+    if depth > GRAPHQL_RECURSIVE_DEPTH_LIMIT {
         return false;
     }
     for selection in &selection_set.items {
@@ -1034,13 +1032,13 @@ mod tests {
 
     #[test]
     fn authentication_analysis_fails_closed_for_fragment_depth_and_cycles() {
-        let at_limit = authentication_fragment_chain(GRAPHQL_RECURSION_LIMIT);
+        let at_limit = authentication_fragment_chain(GRAPHQL_RECURSIVE_DEPTH_LIMIT);
         assert_eq!(
             analyze_authentication_request(&async_graphql::Request::new(at_limit)).class,
             Some(GraphqlRateLimitClass::Login),
         );
 
-        let beyond_limit = authentication_fragment_chain(GRAPHQL_RECURSION_LIMIT + 1);
+        let beyond_limit = authentication_fragment_chain(GRAPHQL_RECURSIVE_DEPTH_LIMIT + 1);
         assert!(
             analyze_authentication_request(&async_graphql::Request::new(beyond_limit)).rejected
         );

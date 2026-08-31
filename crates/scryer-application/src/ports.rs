@@ -2105,22 +2105,13 @@ pub trait UserRepository: Send + Sync {
             "authentication-factor recovery is not configured".into(),
         ))
     }
-    async fn update_password_hash(
+    async fn update_password_and_invalidate_sessions(
         &self,
         id: &str,
         password_hash: String,
         password_change_required: bool,
+        auth_session_version: &str,
     ) -> AppResult<User>;
-    async fn set_temporary_password_and_invalidate_sessions(
-        &self,
-        _id: &str,
-        _password_hash: String,
-        _auth_session_version: &str,
-    ) -> AppResult<User> {
-        Err(AppError::Repository(
-            "temporary-password replacement is not configured".into(),
-        ))
-    }
     async fn complete_required_password_change(
         &self,
         _id: &str,

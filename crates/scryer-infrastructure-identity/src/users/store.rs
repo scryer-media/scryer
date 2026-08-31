@@ -152,49 +152,18 @@ impl UserRepository for UserStore {
         .await
     }
 
-    async fn update_password_hash(
+    async fn update_password_and_invalidate_sessions(
         &self,
         id: &str,
         password_hash: String,
         password_change_required: bool,
-    ) -> AppResult<User> {
-        let id = id.to_string();
-        SqlRuntime::run_in_transaction(&self.datastore, "update_user_password_hash", move |tx| {
-            let id = id.clone();
-            let password_hash = password_hash.clone();
-            Box::pin(async move {
-                let rows = tx
-                    .execute(
-                        "UPDATE users SET password_hash = {}, password_change_required = {} WHERE id = {}",
-                        &[
-                            SqlArg::Text(password_hash),
-                            SqlArg::Bool(password_change_required),
-                            SqlArg::Text(id.clone()),
-                        ],
-                    )
-                    .await?;
-                if rows == 0 {
-                    return Err(AppError::NotFound(format!("user {id}")));
-                }
-                load_user_by_id_tx(tx, &id)
-                    .await?
-                    .ok_or_else(|| AppError::NotFound(format!("user {id}")))
-            })
-        })
-        .await
-    }
-
-    async fn set_temporary_password_and_invalidate_sessions(
-        &self,
-        id: &str,
-        password_hash: String,
         auth_session_version: &str,
     ) -> AppResult<User> {
         let id = id.to_string();
         let auth_session_version = auth_session_version.to_string();
         SqlRuntime::run_in_transaction(
             &self.datastore,
-            "set_temporary_password_and_invalidate_sessions",
+            "update_password_and_invalidate_sessions",
             move |tx| {
                 let id = id.clone();
                 let password_hash = password_hash.clone();
@@ -207,7 +176,7 @@ impl UserRepository for UserStore {
                              WHERE id = {}",
                             &[
                                 SqlArg::Text(password_hash),
-                                SqlArg::Bool(true),
+                                SqlArg::Bool(password_change_required),
                                 SqlArg::Text(auth_session_version),
                                 SqlArg::Text(id.clone()),
                             ],

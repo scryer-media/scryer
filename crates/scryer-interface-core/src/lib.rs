@@ -203,11 +203,14 @@ impl LoginAttemptPrincipal {
     }
 }
 
+type LoginAttemptCheck = dyn Fn(&LoginAttemptPrincipal) -> GqlResult<()> + Send + Sync;
+type LoginAttemptOutcome = dyn Fn(&LoginAttemptPrincipal) + Send + Sync;
+
 #[derive(Clone)]
 pub struct LoginAttemptLimiter {
-    check: Arc<dyn Fn(&LoginAttemptPrincipal) -> GqlResult<()> + Send + Sync>,
-    record_failure: Arc<dyn Fn(&LoginAttemptPrincipal) + Send + Sync>,
-    clear_success: Arc<dyn Fn(&LoginAttemptPrincipal) + Send + Sync>,
+    check: Arc<LoginAttemptCheck>,
+    record_failure: Arc<LoginAttemptOutcome>,
+    clear_success: Arc<LoginAttemptOutcome>,
 }
 
 impl LoginAttemptLimiter {
@@ -516,6 +519,23 @@ fn repository_gql_error(message: String) -> Error {
     })
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LoginErrorClassification {
+    Progression,
+    InfrastructureFailure,
+    MaskedPrimaryFailure,
+}
+
+pub fn classify_login_error(err: &AppError) -> LoginErrorClassification {
+    if login_progression_error(err) {
+        LoginErrorClassification::Progression
+    } else if matches!(err, AppError::Repository(_)) {
+        LoginErrorClassification::InfrastructureFailure
+    } else {
+        LoginErrorClassification::MaskedPrimaryFailure
+    }
+}
+
 fn login_progression_error(err: &AppError) -> bool {
     matches!(
         err,
@@ -563,14 +583,16 @@ fn app_error_kind(err: &AppError) -> &'static str {
 }
 
 pub fn to_login_gql_error(method: &'static str, err: AppError) -> Error {
-    if login_progression_error(&err) {
-        return to_gql_error(err);
-    }
-
     let error_kind = app_error_kind(&err);
-    match err {
-        AppError::Repository(message) => repository_gql_error(message),
-        _ => {
+    match classify_login_error(&err) {
+        LoginErrorClassification::Progression => to_gql_error(err),
+        LoginErrorClassification::InfrastructureFailure => {
+            let AppError::Repository(message) = err else {
+                return to_gql_error(err);
+            };
+            repository_gql_error(message)
+        }
+        LoginErrorClassification::MaskedPrimaryFailure => {
             tracing::debug!(login_method = method, error_kind, "masked login failure");
             Error::new(LOGIN_FAILED_MESSAGE).extend_with(|_, extensions| {
                 extensions.set("code", "LOGIN_FAILED");
@@ -604,7 +626,7 @@ pub async fn to_login_gql_error_after_timing(
     started_at: Instant,
     err: AppError,
 ) -> Error {
-    if login_progression_error(&err) {
+    if classify_login_error(&err) == LoginErrorClassification::Progression {
         return to_gql_error(err);
     }
 
@@ -852,6 +874,22 @@ mod tests {
             assert_eq!(error.message, LOGIN_FAILED_MESSAGE);
             assert_eq!(graphql_error_code(&error), Some("LOGIN_FAILED"));
         }
+    }
+
+    #[test]
+    fn login_error_classification_matches_masking_behavior() {
+        assert_eq!(
+            classify_login_error(&AppError::Unauthorized("invalid credentials".into())),
+            LoginErrorClassification::MaskedPrimaryFailure
+        );
+        assert_eq!(
+            classify_login_error(&AppError::Repository("connection unavailable".into())),
+            LoginErrorClassification::InfrastructureFailure
+        );
+        assert_eq!(
+            classify_login_error(&AppError::MfaStepUpRequired("MFA required".into())),
+            LoginErrorClassification::Progression
+        );
     }
 
     #[test]

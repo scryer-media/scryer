@@ -1159,29 +1159,23 @@ impl UserRepository for MockUserRepo {
             .cloned())
     }
 
-    async fn update_password_hash(
+    async fn update_password_and_invalidate_sessions(
         &self,
         id: &str,
         password_hash: String,
         password_change_required: bool,
-    ) -> AppResult<User> {
-        let mut users = self.store.lock().await;
-        let user = users
-            .iter_mut()
-            .find(|entry| entry.id == id)
-            .ok_or_else(|| AppError::NotFound(format!("user {}", id)))?;
-        user.password_hash = Some(password_hash);
-        user.password_change_required = password_change_required;
-        Ok(user.clone())
-    }
-
-    async fn set_temporary_password_and_invalidate_sessions(
-        &self,
-        id: &str,
-        password_hash: String,
         auth_session_version: &str,
     ) -> AppResult<User> {
-        let user = self.update_password_hash(id, password_hash, true).await?;
+        let user = {
+            let mut users = self.store.lock().await;
+            let user = users
+                .iter_mut()
+                .find(|entry| entry.id == id)
+                .ok_or_else(|| AppError::NotFound(format!("user {}", id)))?;
+            user.password_hash = Some(password_hash);
+            user.password_change_required = password_change_required;
+            user.clone()
+        };
         self.auth_session_versions
             .lock()
             .await

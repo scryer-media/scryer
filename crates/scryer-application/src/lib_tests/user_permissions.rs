@@ -450,14 +450,16 @@ async fn form_login_transition_requires_usable_admin_and_repairs_default_identit
         .await
         .expect("load default admin")
         .expect("default admin repaired");
+    let auth_session_version = scryer_domain::Id::new().0;
     let default_admin = app
         .services
         .identity
         .users
-        .update_password_hash(
+        .update_password_and_invalidate_sessions(
             &default_admin.id,
             app.hash_password("admin").expect("hash bootstrap password"),
             false,
+            &auth_session_version,
         )
         .await
         .expect("seed bootstrap password");

@@ -42,9 +42,10 @@ use uuid::Uuid;
 use crate::base_path::BasePath;
 use crate::http_error::ErrorResponse;
 use crate::rate_limit::{
-    HttpRateLimitClass, RateLimitKey, ScryerRateLimiter, analyze_authentication_request,
-    classify_graphql, classify_graphql_request, rate_limited_graphql_error,
-    rate_limited_graphql_response, rate_limited_graphql_single_response,
+    GraphqlRateLimitClass, HttpRateLimitClass, RateLimitKey, ScryerRateLimiter,
+    analyze_authentication_request, classify_graphql, classify_graphql_request,
+    rate_limited_graphql_error, rate_limited_graphql_response,
+    rate_limited_graphql_single_response,
 };
 
 const X_FORWARDED_PROTO: &str = "x-forwarded-proto";
@@ -1264,6 +1265,16 @@ impl Executor for ContextualGraphqlExecutor {
         );
         async move {
             let authentication = analyze_authentication_request(&request);
+            let class = if authentication.rejected {
+                GraphqlRateLimitClass::Login
+            } else {
+                authentication
+                    .class
+                    .unwrap_or_else(|| classify_graphql_request(&request))
+            };
+            if let Err(decision) = rate_limiter.check_graphql(class, &rate_limit_key) {
+                return rate_limited_graphql_single_response(&decision);
+            }
             if authentication.rejected {
                 return authentication_mutation_single_field_response();
             }
@@ -1272,12 +1283,6 @@ impl Executor for ContextualGraphqlExecutor {
                 && let Err(decision) =
                     rate_limiter.check_login_principal(&rate_limit_key, principal)
             {
-                return rate_limited_graphql_single_response(&decision);
-            }
-            let class = authentication
-                .class
-                .unwrap_or_else(|| classify_graphql_request(&request));
-            if let Err(decision) = rate_limiter.check_graphql(class, &rate_limit_key) {
                 return rate_limited_graphql_single_response(&decision);
             }
             if validate_ws_oauth_session(&app, &oauth_session)
@@ -1305,29 +1310,33 @@ impl Executor for ContextualGraphqlExecutor {
             .expect("rate limit user lock must not be poisoned")
             .clone();
         let authentication = analyze_authentication_request(&request);
-        if authentication.rejected {
-            return Box::pin(stream::once(async {
-                authentication_mutation_single_field_response()
-            }));
-        }
         let rate_limit_key = RateLimitKey::for_client_and_peer(
             self.client_ip,
             self.peer_ip,
             rate_limit_user_id.as_deref(),
         );
+        let class = if authentication.rejected {
+            GraphqlRateLimitClass::Login
+        } else {
+            authentication
+                .class
+                .unwrap_or_else(|| classify_graphql_request(&request))
+        };
+        if let Err(decision) = self.rate_limiter.check_graphql(class, &rate_limit_key) {
+            return Box::pin(stream::once(async move {
+                rate_limited_graphql_single_response(&decision)
+            }));
+        }
+        if authentication.rejected {
+            return Box::pin(stream::once(async {
+                authentication_mutation_single_field_response()
+            }));
+        }
         if let Some(principal) = authentication.principal.as_ref()
             && let Err(decision) = self
                 .rate_limiter
                 .check_login_principal(&rate_limit_key, principal)
         {
-            return Box::pin(stream::once(async move {
-                rate_limited_graphql_single_response(&decision)
-            }));
-        }
-        let class = authentication
-            .class
-            .unwrap_or_else(|| classify_graphql_request(&request));
-        if let Err(decision) = self.rate_limiter.check_graphql(class, &rate_limit_key) {
             return Box::pin(stream::once(async move {
                 rate_limited_graphql_single_response(&decision)
             }));
@@ -1513,6 +1522,29 @@ pub(crate) async fn graphql_handler(
         .iter()
         .map(analyze_authentication_request)
         .collect::<Vec<_>>();
+    let rate_limit_key = RateLimitKey::for_client_and_peer(client_ip, peer_ip, None);
+    for (request, authentication) in batch.iter().zip(&authentication_requests) {
+        let request_rate_limit_class = if authentication.rejected {
+            GraphqlRateLimitClass::Login
+        } else {
+            authentication
+                .class
+                .unwrap_or_else(|| classify_graphql_request(request))
+        };
+        if let Err(decision) = state
+            .rate_limiter
+            .check_graphql(request_rate_limit_class, &rate_limit_key)
+        {
+            return rate_limited_graphql_http_response(&decision);
+        }
+        if let Some(principal) = authentication.principal.as_ref()
+            && let Err(decision) = state
+                .rate_limiter
+                .check_login_principal(&rate_limit_key, principal)
+        {
+            return rate_limited_graphql_http_response(&decision);
+        }
+    }
     if authentication_requests
         .iter()
         .any(|analysis| analysis.rejected)
@@ -1522,25 +1554,6 @@ pub(crate) async fn graphql_handler(
     let has_authentication_request = authentication_requests
         .iter()
         .any(|analysis| analysis.class.is_some());
-    let rate_limit_key = RateLimitKey::for_client_and_peer(client_ip, peer_ip, None);
-    for (request, authentication) in batch.iter().zip(&authentication_requests) {
-        if let Some(principal) = authentication.principal.as_ref()
-            && let Err(decision) = state
-                .rate_limiter
-                .check_login_principal(&rate_limit_key, principal)
-        {
-            return rate_limited_graphql_http_response(&decision);
-        }
-        let request_rate_limit_class = authentication
-            .class
-            .unwrap_or_else(|| classify_graphql_request(request));
-        if let Err(decision) = state
-            .rate_limiter
-            .check_graphql(request_rate_limit_class, &rate_limit_key)
-        {
-            return rate_limited_graphql_http_response(&decision);
-        }
-    }
 
     let api_key_bearer = authorization_token_from_headers(&headers)
         .ok()

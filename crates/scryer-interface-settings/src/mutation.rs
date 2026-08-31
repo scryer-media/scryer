@@ -22,12 +22,12 @@ use super::{
     from_ui_settings, ui_settings_update_from_input,
 };
 use scryer_interface_core::{
-    AuthlessDefaultSession, LoginAttemptPrincipal, account_security_actor_from_ctx, actor_from_ctx,
-    api_key_management_actor_from_ctx, app_from_ctx, auth_runtime_from_ctx,
-    default_persist_session_from_ctx, interactive_session_actor_from_ctx,
-    login_attempt_limiter_from_ctx, login_verification_required_gql_error,
-    mfa_enrollment_actor_from_ctx, mfa_verification_from_ctx,
-    password_change_required_actor_from_ctx, persist_session_or_default,
+    AuthlessDefaultSession, LoginAttemptPrincipal, LoginErrorClassification,
+    account_security_actor_from_ctx, actor_from_ctx, api_key_management_actor_from_ctx,
+    app_from_ctx, auth_runtime_from_ctx, classify_login_error, default_persist_session_from_ctx,
+    interactive_session_actor_from_ctx, login_attempt_limiter_from_ctx,
+    login_verification_required_gql_error, mfa_enrollment_actor_from_ctx,
+    mfa_verification_from_ctx, password_change_required_actor_from_ctx, persist_session_or_default,
     require_config_app_permission, to_gql_error, to_login_gql_error,
     to_login_gql_error_after_timing, totp_enrollment_actor_from_ctx,
     totp_management_actor_from_ctx,
@@ -2288,7 +2288,7 @@ impl SettingsMutations {
                 verified
             }
             Err(err) => {
-                if matches!(&err, AppError::Unauthorized(_) | AppError::NotFound(_))
+                if classify_login_error(&err) == LoginErrorClassification::MaskedPrimaryFailure
                     && let Some(principal) = principal.as_ref()
                     && let Some(limiter) = login_attempt_limiter_from_ctx(ctx)
                 {

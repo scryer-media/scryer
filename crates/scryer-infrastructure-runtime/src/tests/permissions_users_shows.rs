@@ -213,15 +213,23 @@ async fn user_crud_queries_work() {
         scryer_domain::UserLoginStatus::Enabled
     );
 
-    let updated = UserRepository::update_password_hash(
+    let updated = UserRepository::update_password_and_invalidate_sessions(
         &users,
         &created.id,
         "hashed-password".to_string(),
         false,
+        "session-1",
     )
     .await
     .expect("update password hash");
     assert_eq!(updated.password_hash.as_deref(), Some("hashed-password"));
+    assert_eq!(
+        UserRepository::auth_session_version(&users, &created.id)
+            .await
+            .expect("load password update session version")
+            .as_deref(),
+        Some("session-1")
+    );
 
     let disabled = UserRepository::update_login_status_and_rotate_session(
         &users,

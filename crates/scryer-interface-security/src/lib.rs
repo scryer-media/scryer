@@ -3,15 +3,16 @@ use std::time::Instant;
 use async_graphql::{Context, ID, Object, Result as GqlResult};
 use chrono::Utc;
 use scryer_application::{
-    AppError, LoginFailureTimingClass, LoginVerificationMethod, LoginVerificationRequirement,
+    LoginFailureTimingClass, LoginVerificationMethod, LoginVerificationRequirement,
 };
 use scryer_domain::AppPermission;
 
 use scryer_interface_core::{
-    LoginAttemptPrincipal, actor_from_ctx, app_from_ctx, auth_runtime_from_ctx,
-    default_persist_session_from_ctx, login_attempt_limiter_from_ctx,
-    login_verification_required_gql_error, persist_session_or_default,
-    require_config_app_permission, to_gql_error, to_login_gql_error_after_timing,
+    LoginAttemptPrincipal, LoginErrorClassification, actor_from_ctx, app_from_ctx,
+    auth_runtime_from_ctx, classify_login_error, default_persist_session_from_ctx,
+    login_attempt_limiter_from_ctx, login_verification_required_gql_error,
+    persist_session_or_default, require_config_app_permission, to_gql_error,
+    to_login_gql_error_after_timing,
 };
 use scryer_interface_media::mappers::{from_linked_account, from_user_with_auth_factor_status};
 use scryer_interface_media::types::*;
@@ -539,7 +540,7 @@ impl UserMutations {
                 user
             }
             Err(err) => {
-                if matches!(&err, AppError::Unauthorized(_) | AppError::NotFound(_))
+                if classify_login_error(&err) == LoginErrorClassification::MaskedPrimaryFailure
                     && let Some(principal) = principal.as_ref()
                     && let Some(limiter) = login_attempt_limiter_from_ctx(ctx)
                 {
@@ -648,7 +649,7 @@ impl UserMutations {
                 user
             }
             Err(err) => {
-                if matches!(&err, AppError::Unauthorized(_) | AppError::NotFound(_))
+                if classify_login_error(&err) == LoginErrorClassification::MaskedPrimaryFailure
                     && let Some(principal) = principal.as_ref()
                     && let Some(limiter) = login_attempt_limiter_from_ctx(ctx)
                 {

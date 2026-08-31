@@ -1636,11 +1636,12 @@ mod tests {
             Ok(None)
         }
 
-        async fn update_password_hash(
+        async fn update_password_and_invalidate_sessions(
             &self,
             id: &str,
             password_hash: String,
             password_change_required: bool,
+            _auth_session_version: &str,
         ) -> AppResult<User> {
             let mut users = self.users.lock().await;
             let user = users
@@ -1650,15 +1651,6 @@ mod tests {
             user.password_hash = Some(password_hash);
             user.password_change_required = password_change_required;
             Ok(user.clone())
-        }
-
-        async fn set_temporary_password_and_invalidate_sessions(
-            &self,
-            id: &str,
-            password_hash: String,
-            _auth_session_version: &str,
-        ) -> AppResult<User> {
-            self.update_password_hash(id, password_hash, true).await
         }
 
         async fn complete_required_password_change(

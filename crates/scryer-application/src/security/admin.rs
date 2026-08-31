@@ -234,11 +234,17 @@ impl AppUseCase {
             self.ensure_user_admin_permission_masks(&found).await?;
             // Migration-seeded admin may lack a password hash — set one.
             if found.password_hash.is_none() {
+                let auth_session_version = Id::new().0;
                 found = self
                     .services
                     .identity
                     .users
-                    .update_password_hash(&found.id, self.hash_password(password)?, false)
+                    .update_password_and_invalidate_sessions(
+                        &found.id,
+                        self.hash_password(password)?,
+                        false,
+                        &auth_session_version,
+                    )
                     .await?;
             }
             self.refresh_cached_jwt_signing_key(&found).await?;
@@ -569,11 +575,17 @@ impl AppUseCase {
     /// Set a user's password without actor checks. Used only for first-run bootstrap.
     pub async fn bootstrap_user_password(&self, user_id: &str, password: &str) -> AppResult<User> {
         let password_hash = self.hash_password(password)?;
+        let auth_session_version = Id::new().0;
         let user = self
             .services
             .identity
             .users
-            .update_password_hash(user_id, password_hash, false)
+            .update_password_and_invalidate_sessions(
+                user_id,
+                password_hash,
+                false,
+                &auth_session_version,
+            )
             .await?;
         self.revoke_oauth_refresh_grants_for_user(user_id, "password_changed")
             .await?;
@@ -683,11 +695,17 @@ impl AppUseCase {
 
         self.validate_new_local_password(&password).await?;
         let password_hash = self.hash_password(&password)?;
+        let auth_session_version = Id::new().0;
         let user = self
             .services
             .identity
             .users
-            .set_temporary_password_and_invalidate_sessions(user_id, password_hash, &Id::new().0)
+            .update_password_and_invalidate_sessions(
+                user_id,
+                password_hash,
+                true,
+                &auth_session_version,
+            )
             .await?;
         self.refresh_cached_jwt_signing_key(&user).await?;
         self.revoke_oauth_refresh_grants_for_user(user_id, "password_changed")
@@ -783,11 +801,17 @@ impl AppUseCase {
 
         self.validate_new_local_password(&password).await?;
         let password_hash = self.hash_password(&password)?;
+        let auth_session_version = Id::new().0;
         let user = self
             .services
             .identity
             .users
-            .update_password_hash(user_id, password_hash, password_change_required)
+            .update_password_and_invalidate_sessions(
+                user_id,
+                password_hash,
+                password_change_required,
+                &auth_session_version,
+            )
             .await?;
         self.refresh_cached_jwt_signing_key(&user).await?;
         self.revoke_oauth_refresh_grants_for_user(user_id, "password_changed")

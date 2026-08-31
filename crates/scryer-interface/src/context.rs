@@ -17,7 +17,7 @@ pub use scryer_interface_core::{
 };
 
 pub type ApiSchema = Schema<QueryRoot, MutationRoot, SubscriptionRoot>;
-pub const GRAPHQL_RECURSION_LIMIT: usize = 32;
+pub const GRAPHQL_RECURSIVE_DEPTH_LIMIT: usize = 32;
 
 pub fn export_schema_sdl() -> String {
     Schema::build(
@@ -25,7 +25,7 @@ pub fn export_schema_sdl() -> String {
         MutationRoot::default(),
         SubscriptionRoot,
     )
-    .limit_depth(GRAPHQL_RECURSION_LIMIT)
+    .limit_recursive_depth(GRAPHQL_RECURSIVE_DEPTH_LIMIT)
     .finish()
     .sdl()
 }
@@ -69,7 +69,7 @@ pub fn build_schema_with_log_buffer_and_restore_and_application_upgrade(
         MutationRoot::default(),
         SubscriptionRoot,
     )
-    .limit_depth(GRAPHQL_RECURSION_LIMIT)
+    .limit_recursive_depth(GRAPHQL_RECURSIVE_DEPTH_LIMIT)
     .data(ApiContext {
         app,
         auth_runtime,

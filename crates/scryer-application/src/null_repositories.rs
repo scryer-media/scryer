@@ -3441,7 +3441,13 @@ pub mod test_nulls {
         async fn auth_session_version(&self, _: &str) -> AppResult<Option<String>> {
             Ok(None)
         }
-        async fn update_password_hash(&self, _: &str, _: String, _: bool) -> AppResult<User> {
+        async fn update_password_and_invalidate_sessions(
+            &self,
+            _: &str,
+            _: String,
+            _: bool,
+            _: &str,
+        ) -> AppResult<User> {
             Err(AppError::Repository("not configured".into()))
         }
         async fn update_login_status_and_rotate_session(
