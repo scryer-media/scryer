@@ -50,6 +50,8 @@ pub struct RequiredSigner {
     pub github_repository: String,
     #[serde(default)]
     pub github_workflow: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub github_ref: Option<String>,
 }
 
 pub const CATALOG_V3_SCHEMA_VERSION: &str = "scryer.plugin.catalog.v3";

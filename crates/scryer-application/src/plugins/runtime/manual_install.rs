@@ -129,6 +129,7 @@ impl AppUseCase {
         let signer = RequiredSigner {
             github_repository: repo.slug(),
             github_workflow: None,
+            github_ref: None,
         };
         let data_urls = vec![catalog_url.to_string()];
         let signature_urls = vec![signed_catalog_json_bundle_url(catalog_url)];

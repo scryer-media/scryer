@@ -1978,19 +1978,37 @@ fn verify_certificate_identity(
 
     if let Some(expected_workflow) = required_signer.github_workflow.as_deref() {
         let matched = identity.workflow_uris.iter().any(|uri| {
-            github_workflow_uri_matches(uri, &required_signer.github_repository, expected_workflow)
+            github_workflow_uri_matches(
+                uri,
+                &required_signer.github_repository,
+                expected_workflow,
+                required_signer.github_ref.as_deref(),
+            )
         });
         if !matched {
+            let expected_ref = required_signer
+                .github_ref
+                .as_deref()
+                .unwrap_or("a refs/tags/* release ref");
             return Err(AppError::Validation(format!(
-                "Sigstore workflow mismatch for '{}'; expected '{}'",
-                required_signer.github_repository, expected_workflow
+                "Sigstore workflow identity mismatch for '{}'; expected '{}@{}'",
+                required_signer.github_repository, expected_workflow, expected_ref
             )));
         }
+    } else if required_signer.github_ref.is_some() {
+        return Err(AppError::Validation(
+            "Sigstore signer policy cannot require a Git ref without a workflow".to_string(),
+        ));
     }
     Ok(())
 }
 
-fn github_workflow_uri_matches(uri: &str, repository: &str, workflow: &str) -> bool {
+fn github_workflow_uri_matches(
+    uri: &str,
+    repository: &str,
+    workflow: &str,
+    expected_ref: Option<&str>,
+) -> bool {
     let expected_prefix = format!("https://github.com/{repository}/");
     let Some(workflow_and_ref) = uri.strip_prefix(&expected_prefix) else {
         return false;
@@ -1998,10 +2016,18 @@ fn github_workflow_uri_matches(uri: &str, repository: &str, workflow: &str) -> b
     let Some((actual_workflow, git_ref)) = workflow_and_ref.rsplit_once('@') else {
         return false;
     };
+    let Some(tag) = git_ref.strip_prefix("refs/tags/") else {
+        return false;
+    };
+    let ref_matches = match expected_ref {
+        Some(expected_ref) => expected_ref == git_ref,
+        None => true,
+    };
     actual_workflow == workflow
-        && !git_ref.is_empty()
+        && !tag.is_empty()
         && !git_ref.contains(['?', '#'])
         && !workflow.contains(['?', '#', '@'])
+        && ref_matches
 }
 
 fn sigstore_bundle_value<'a>(
@@ -2387,6 +2413,7 @@ mod tests {
         let required_signer = RequiredSigner {
             github_repository: "scryer-media/scryer-plugins".to_string(),
             github_workflow: Some(".github/workflows/release-plugin-v3.yml".to_string()),
+            github_ref: Some("refs/tags/plugins-v3/release/1787972354-109745e51603".to_string()),
         };
 
         verify_signed_blob(raw.to_vec(), bundle.to_vec(), required_signer.clone())
@@ -2431,6 +2458,7 @@ mod tests {
         RequiredSigner {
             github_repository: "scryer-media/scryer".to_string(),
             github_workflow: Some(".github/workflows/scryer.yml".to_string()),
+            github_ref: Some("refs/tags/scryer-v0.19.3".to_string()),
         }
     }
 
@@ -2463,6 +2491,36 @@ mod tests {
             "https://github.com/scryer-media/scryer/.github/workflows/evil.yml@refs/heads/attack/.github/workflows/scryer.yml",
         );
         assert!(verify_certificate_identity(&crafted_ref, &required_github_signer()).is_err());
+
+        for git_ref in [
+            "refs/pull/123/merge",
+            "refs/heads/main",
+            "refs/tags/scryer-v0.19.2",
+        ] {
+            let identity = github_identity(&format!(
+                "https://github.com/scryer-media/scryer/.github/workflows/scryer.yml@{git_ref}"
+            ));
+            assert!(
+                verify_certificate_identity(&identity, &required_github_signer()).is_err(),
+                "unexpected ref {git_ref} must fail closed"
+            );
+        }
+    }
+
+    #[test]
+    fn signer_identity_without_an_exact_ref_still_requires_a_release_tag() {
+        let mut signer = required_github_signer();
+        signer.github_ref = None;
+        let tag = github_identity(
+            "https://github.com/scryer-media/scryer/.github/workflows/scryer.yml@refs/tags/scryer-v0.19.3",
+        );
+        verify_certificate_identity(&tag, &signer)
+            .expect("legacy signer policy should accept a release tag");
+
+        let pull_request = github_identity(
+            "https://github.com/scryer-media/scryer/.github/workflows/scryer.yml@refs/pull/123/merge",
+        );
+        assert!(verify_certificate_identity(&pull_request, &signer).is_err());
     }
 
     #[test]
