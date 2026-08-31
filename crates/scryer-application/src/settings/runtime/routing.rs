@@ -772,6 +772,23 @@ impl AppUseCase {
     ) -> AppResult<Vec<IndexerRoutingSettingsEntry>> {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageCatalogSettings)
             .await?;
+        let _sync_guard = self
+            .runtime
+            .integrations
+            .managed_indexer_sync_lock
+            .clone()
+            .lock_owned()
+            .await;
+        self.update_indexer_routing_without_sync_lock(actor, scope_id, entries)
+            .await
+    }
+
+    pub(crate) async fn update_indexer_routing_without_sync_lock(
+        &self,
+        actor: &User,
+        scope_id: &str,
+        entries: Vec<IndexerRoutingSettingsEntry>,
+    ) -> AppResult<Vec<IndexerRoutingSettingsEntry>> {
         let previous = self.get_indexer_routing(actor, scope_id).await?;
 
         let mut payload = serde_json::Map::new();

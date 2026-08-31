@@ -679,10 +679,10 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::{
         Arc,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     };
     use std::time::Duration;
-    use tokio::sync::Mutex;
+    use tokio::sync::{Mutex, Semaphore};
 
     #[test]
     fn known_newznab_errors_use_catalog_messages() {
@@ -1008,6 +1008,23 @@ mod tests {
     struct RecordingSettingsRepository {
         values: RecordingSettingsValues,
         fail_upsert: bool,
+        system_upsert_barrier: Option<Arc<SettingsUpsertBarrier>>,
+    }
+
+    struct SettingsUpsertBarrier {
+        block_once: AtomicBool,
+        entered: Semaphore,
+        release: Semaphore,
+    }
+
+    impl SettingsUpsertBarrier {
+        fn new() -> Self {
+            Self {
+                block_once: AtomicBool::new(true),
+                entered: Semaphore::new(0),
+                release: Semaphore::new(0),
+            }
+        }
     }
 
     impl RecordingSettingsRepository {
@@ -1015,7 +1032,20 @@ mod tests {
             Self {
                 values: Default::default(),
                 fail_upsert: true,
+                system_upsert_barrier: None,
             }
+        }
+
+        fn with_system_upsert_barrier() -> (Self, Arc<SettingsUpsertBarrier>) {
+            let barrier = Arc::new(SettingsUpsertBarrier::new());
+            (
+                Self {
+                    values: Default::default(),
+                    fail_upsert: false,
+                    system_upsert_barrier: Some(barrier.clone()),
+                },
+                barrier,
+            )
         }
     }
 
@@ -1045,10 +1075,22 @@ mod tests {
             scope_id: Option<String>,
             value: String,
             _source: &str,
-            _updated_by_user_id: Option<String>,
+            updated_by_user_id: Option<String>,
         ) -> AppResult<()> {
             if self.fail_upsert {
                 return Err(AppError::Repository("forced settings write failure".into()));
+            }
+            if updated_by_user_id.is_none()
+                && let Some(barrier) = &self.system_upsert_barrier
+                && barrier.block_once.swap(false, Ordering::SeqCst)
+            {
+                barrier.entered.add_permits(1);
+                barrier
+                    .release
+                    .acquire()
+                    .await
+                    .expect("settings upsert barrier should remain open")
+                    .forget();
             }
             self.values
                 .lock()
@@ -3481,6 +3523,103 @@ mod tests {
                 .load(Ordering::SeqCst),
             1
         );
+    }
+
+    #[tokio::test]
+    async fn routing_update_waits_for_managed_sync_and_wins() {
+        let indexer_repo = Arc::new(RecordingIndexerConfigRepo::new());
+        let now = Utc::now();
+        indexer_repo
+            .create(IndexerConfig {
+                id: "parent".to_string(),
+                name: "Parent Manager".to_string(),
+                provider_type: "manager".to_string(),
+                base_url: "https://manager.example".to_string(),
+                api_key_encrypted: None,
+                rate_limit_seconds: None,
+                rate_limit_burst: None,
+                disabled_until: None,
+                is_enabled: true,
+                enable_interactive_search: false,
+                enable_auto_search: false,
+                indexer_proxy_config_id: None,
+                download_client_id: None,
+                seeding_profile_id: None,
+                managed_parent_config_id: None,
+                managed_child_key: None,
+                managed_metadata_json: None,
+                caps_snapshot_json: None,
+                last_health_status: None,
+                last_error_message: None,
+                last_error_at: None,
+                config_json: Some(r#"{"base_url":"https://manager.example"}"#.to_string()),
+                created_at: now,
+                updated_at: now,
+            })
+            .await
+            .unwrap();
+
+        let provider = Arc::new(RecordingPluginProvider::with_sync_plan(
+            crate::IndexerSyncPlan::default(),
+        ));
+        let (settings_repo, barrier) = RecordingSettingsRepository::with_system_upsert_barrier();
+        let app = test_app(indexer_repo, Some(provider), Arc::new(settings_repo));
+        app.update_indexer_routing(
+            &test_admin(),
+            "movie",
+            vec![IndexerRoutingSettingsEntry {
+                indexer_id: "managed-child".to_string(),
+                enabled: true,
+                categories: vec!["2000".to_string()],
+                priority: 1,
+            }],
+        )
+        .await
+        .unwrap();
+
+        let sync_app = app.clone();
+        let sync_task = tokio::spawn(async move {
+            sync_app
+                .sync_indexer_config(&scryer_domain::User::system_execution_actor(), "parent")
+                .await
+        });
+        barrier
+            .entered
+            .acquire()
+            .await
+            .expect("settings upsert barrier should remain open")
+            .forget();
+
+        let admin = test_admin();
+        let update = app.update_indexer_routing(
+            &admin,
+            "movie",
+            vec![IndexerRoutingSettingsEntry {
+                indexer_id: "managed-child".to_string(),
+                enabled: false,
+                categories: vec!["2000".to_string()],
+                priority: 1,
+            }],
+        );
+        tokio::pin!(update);
+        let first_poll = std::future::poll_fn(|cx| {
+            std::task::Poll::Ready(std::future::Future::poll(update.as_mut(), cx))
+        });
+        assert!(first_poll.await.is_pending());
+
+        barrier.release.add_permits(1);
+        sync_task.await.unwrap().unwrap();
+        update.await.unwrap();
+
+        let routing = app
+            .get_indexer_routing(&test_admin(), "movie")
+            .await
+            .unwrap();
+        let managed_child = routing
+            .iter()
+            .find(|entry| entry.indexer_id == "managed-child")
+            .expect("managed child routing entry");
+        assert!(!managed_child.enabled);
     }
 
     #[tokio::test]

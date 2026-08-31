@@ -1586,7 +1586,7 @@ impl AppUseCase {
     ) -> AppResult<()> {
         for scope_id in MANAGED_INDEXER_SCOPE_IDS {
             let entries = routing_by_scope.remove(*scope_id).unwrap_or_default();
-            self.update_indexer_routing(actor, scope_id, entries)
+            self.update_indexer_routing_without_sync_lock(actor, scope_id, entries)
                 .await?;
         }
         Ok(())
