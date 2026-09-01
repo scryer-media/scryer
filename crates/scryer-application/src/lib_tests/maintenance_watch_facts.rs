@@ -7,10 +7,10 @@
 //!   below asserts what a rule *decides*, not what a helper returns, because
 //!   the property that matters is that an incomplete watch picture holds a
 //!   subject rather than deleting it.
-//! * **The authoring bar on person-targeted facts.** Writing a rule that reads
-//!   who added, requested, or watched something needs the instance's
-//!   permission-management authority; running an already-stored one does not,
-//!   because the executor and the scheduler have no actor to ask.
+//! * **The authoring bar on person-targeted facts.** Writing — or previewing —
+//!   a rule that reads who added, requested, or watched something needs the
+//!   instance's permission-management authority; running an already-stored one
+//!   does not, because the executor and the scheduler have no actor to ask.
 
 use super::*;
 
@@ -22,8 +22,8 @@ use crate::lib_tests::media_server_signals::{
 };
 use crate::maintenance_rules::{
     MaintenanceActionKind, MaintenanceActionSpec, MaintenanceGatesUpdate, MaintenanceMatcherDraft,
-    MaintenancePreviewMatcher, MaintenancePreviewRequest, MaintenancePreviewSelection,
-    MaintenanceRuleDraft,
+    MaintenancePreviewMatcher, MaintenancePreviewRequest, MaintenancePreviewResult,
+    MaintenancePreviewSelection, MaintenanceRuleDraft,
 };
 use crate::ports::MediaServerSignalRepository;
 use scryer_domain::{
@@ -51,6 +51,22 @@ const NOBODY_WATCHED_MATCHER: &str = "package whatever\n\
      \tcount(input.facts.watched_by_user_ids) == 0\n\
      }\n";
 
+/// Matches a movie with no recorded play at all, through the anonymous
+/// timestamp rather than the watcher list.
+const NEVER_WATCHED_MATCHER: &str = "package whatever\n\
+     import rego.v1\n\n\
+     match if {\n\
+     \tnot input.facts.last_watched_at\n\
+     }\n";
+
+/// The other requester rollup, so the gate can be probed through all four watch
+/// facts rather than just the two the shipped template reads.
+const WATCHED_BY_ANY_REQUESTER_MATCHER: &str = "package whatever\n\
+     import rego.v1\n\n\
+     match if {\n\
+     \tinput.facts.watched_by_any_requester\n\
+     }\n";
+
 /// Reads no person-targeted fact at all, so the authoring bar must not apply.
 const MONITORED_MATCHER: &str = "package whatever\n\
      import rego.v1\n\n\
@@ -59,6 +75,7 @@ const MONITORED_MATCHER: &str = "package whatever\n\
      }\n";
 
 const VIEWER_EXTERNAL_ID: &str = "jf-viewer-two";
+const OTHER_VIEWER_EXTERNAL_ID: &str = "jf-viewer-three";
 
 // ── Fixture ─────────────────────────────────────────────────────────────────
 
@@ -235,7 +252,33 @@ fn request_for(title_id: &str, requester: &str) -> MediaRequest {
     }
 }
 
+fn inline_matcher(rego_source: &str) -> MaintenancePreviewMatcher {
+    MaintenancePreviewMatcher::Inline {
+        rego_source: rego_source.to_string(),
+        action_spec: MaintenanceActionSpec::new(MaintenanceActionKind::UnmonitorScopeKeepFiles),
+        grace_days: 0,
+    }
+}
+
 impl WatchFixture {
+    /// Run one preview as a named actor, without asserting it succeeded.
+    async fn preview_as(
+        &self,
+        actor: &User,
+        matcher: MaintenancePreviewMatcher,
+        title_id: &str,
+    ) -> AppResult<MaintenancePreviewResult> {
+        self.app
+            .preview_maintenance_rule(
+                actor,
+                MaintenancePreviewRequest {
+                    matcher,
+                    selection: MaintenancePreviewSelection::Titles(vec![title_id.to_string()]),
+                },
+            )
+            .await
+    }
+
     /// Preview one matcher over one title and return what it decided.
     async fn decide(
         &self,
@@ -243,20 +286,7 @@ impl WatchFixture {
         title_id: &str,
     ) -> (Option<MaintenanceOutcome>, Vec<String>) {
         let preview = self
-            .app
-            .preview_maintenance_rule(
-                &self.user,
-                MaintenancePreviewRequest {
-                    matcher: MaintenancePreviewMatcher::Inline {
-                        rego_source: rego_source.to_string(),
-                        action_spec: MaintenanceActionSpec::new(
-                            MaintenanceActionKind::UnmonitorScopeKeepFiles,
-                        ),
-                        grace_days: 0,
-                    },
-                    selection: MaintenancePreviewSelection::Titles(vec![title_id.to_string()]),
-                },
-            )
+            .preview_as(&self.user, inline_matcher(rego_source), title_id)
             .await
             .expect("preview");
         assert_eq!(preview.titles.len(), 1);
@@ -326,7 +356,12 @@ async fn watch_facts_hold_when_the_newest_clean_sweep_is_stale() {
 
 #[tokio::test]
 async fn a_fresh_sweep_with_no_plays_is_a_decisive_nobody_watched_it() {
-    let fixture = watch_app(vec![jellyfin_connection(true)], Vec::new());
+    // Somebody is linked, so Scryer is observing an audience and can say
+    // truthfully that none of it played the movie.
+    let fixture = watch_app(
+        vec![jellyfin_connection(true)],
+        vec![link("user-viewer", CONNECTION_ID, VIEWER_EXTERNAL_ID)],
+    );
     let title = seed_title(&fixture.app, &fixture.user, "Unwatched Movie").await;
     record_sweep(&fixture.signals, CONNECTION_ID, Some(Utc::now())).await;
 
@@ -342,7 +377,10 @@ async fn a_fresh_sweep_with_no_plays_is_a_decisive_nobody_watched_it() {
 
 #[tokio::test]
 async fn a_recorded_play_stops_the_nobody_watched_rule_matching() {
-    let fixture = watch_app(vec![jellyfin_connection(true)], Vec::new());
+    let fixture = watch_app(
+        vec![jellyfin_connection(true)],
+        vec![link("user-viewer", CONNECTION_ID, VIEWER_EXTERNAL_ID)],
+    );
     let title = seed_title(&fixture.app, &fixture.user, "Watched Movie").await;
     record_sweep(&fixture.signals, CONNECTION_ID, Some(Utc::now())).await;
     record_play(
@@ -367,7 +405,7 @@ async fn a_disabled_connection_never_poisons_the_gate() {
             jellyfin_connection(true),
             named_jellyfin_connection("conn-retired", false),
         ],
-        Vec::new(),
+        vec![link("user-viewer", CONNECTION_ID, VIEWER_EXTERNAL_ID)],
     );
     let title = seed_title(&fixture.app, &fixture.user, "Unwatched Movie").await;
     // Only the enabled connection has ever swept.
@@ -405,6 +443,63 @@ async fn one_stale_connection_holds_every_subject() {
     assert_eq!(reasons, vec!["signals_stale".to_string()]);
 }
 
+/// A clean sweep over nobody is not a watch picture: with no verified link on
+/// any enabled connection, Scryer observes no audience at all, so an empty set
+/// of plays says nothing about whether anyone watched.
+#[tokio::test]
+async fn a_fresh_sweep_with_nobody_linked_holds_every_watch_fact() {
+    let fixture = watch_app(vec![jellyfin_connection(true)], Vec::new());
+    let title = seed_title(&fixture.app, &fixture.user, "Unwatched Movie").await;
+    fixture
+        .media_requests
+        .requests
+        .lock()
+        .await
+        .push(request_for(&title.id, "user-viewer"));
+    record_sweep(&fixture.signals, CONNECTION_ID, Some(Utc::now())).await;
+
+    for (fact, matcher) in [
+        ("watched_by_user_ids", NOBODY_WATCHED_MATCHER),
+        ("last_watched_at", NEVER_WATCHED_MATCHER),
+        ("watched_by_any_requester", WATCHED_BY_ANY_REQUESTER_MATCHER),
+        (
+            "watched_by_all_requesters",
+            WATCHED_BY_ALL_REQUESTERS_MATCHER,
+        ),
+    ] {
+        let (outcome, reasons) = fixture.decide(matcher, &title.id).await;
+
+        assert_eq!(outcome, Some(MaintenanceOutcome::Unknown), "{fact}");
+        assert_eq!(
+            reasons,
+            vec!["no_linked_participants".to_string()],
+            "{fact}"
+        );
+    }
+}
+
+/// One verified link is the whole difference: there is now an audience to have
+/// watched or not watched the subject, so the same facts are answers again.
+#[tokio::test]
+async fn one_linked_participant_opens_the_gate() {
+    let fixture = watch_app(
+        vec![jellyfin_connection(true)],
+        vec![link("user-viewer", CONNECTION_ID, VIEWER_EXTERNAL_ID)],
+    );
+    let title = seed_title(&fixture.app, &fixture.user, "Unwatched Movie").await;
+    record_sweep(&fixture.signals, CONNECTION_ID, Some(Utc::now())).await;
+
+    for (fact, matcher) in [
+        ("watched_by_user_ids", NOBODY_WATCHED_MATCHER),
+        ("last_watched_at", NEVER_WATCHED_MATCHER),
+    ] {
+        let (outcome, reasons) = fixture.decide(matcher, &title.id).await;
+
+        assert_eq!(outcome, Some(MaintenanceOutcome::Match), "{fact}");
+        assert!(reasons.is_empty(), "{fact}: {reasons:?}");
+    }
+}
+
 // ── Requester rollups end to end ────────────────────────────────────────────
 
 #[tokio::test]
@@ -438,9 +533,13 @@ async fn a_requested_movie_its_requester_watched_matches_the_shipped_template() 
 
 #[tokio::test]
 async fn an_unlinked_requester_holds_the_shipped_template() {
-    // The connection is fresh and the movie was played — but the requester
-    // never linked an account, so Scryer cannot say whether *they* watched it.
-    let fixture = watch_app(vec![jellyfin_connection(true)], Vec::new());
+    // The connection is fresh, somebody else is linked so the instance-wide
+    // gate is open, and the movie was played — but the requester never linked
+    // an account, so Scryer cannot say whether *they* watched it.
+    let fixture = watch_app(
+        vec![jellyfin_connection(true)],
+        vec![link("user-other", CONNECTION_ID, OTHER_VIEWER_EXTERNAL_ID)],
+    );
     let title = seed_title(&fixture.app, &fixture.user, "Requested Movie").await;
     fixture
         .media_requests
@@ -614,6 +713,102 @@ async fn the_bar_applies_to_replacing_a_matcher_too() {
         )
         .await
         .expect_err("a revision is authoring, and the bar is on authoring");
+
+    assert!(matches!(error, AppError::Unauthorized(_)), "{error:?}");
+    assert!(
+        error.to_string().contains("watched_by_all_requesters"),
+        "{error}"
+    );
+}
+
+/// Preview answers the same question authoring does, one real subject at a
+/// time: an ungated preview is a person-fact oracle — ask "did this user watch
+/// it" title by title and read the answers off the outcomes.
+#[tokio::test]
+async fn previewing_a_person_fact_draft_needs_permission_management() {
+    let fixture = watch_app(
+        vec![jellyfin_connection(true)],
+        vec![link("user-viewer", CONNECTION_ID, VIEWER_EXTERNAL_ID)],
+    );
+    let title = seed_title(&fixture.app, &fixture.user, "Requested Movie").await;
+
+    let error = fixture
+        .preview_as(
+            &catalog_only_author(),
+            inline_matcher(WATCHED_BY_ALL_REQUESTERS_MATCHER),
+            &title.id,
+        )
+        .await
+        .expect_err("previewing a rule about people needs the same authority as saving one");
+
+    assert!(matches!(error, AppError::Unauthorized(_)), "{error:?}");
+    let message = error.to_string();
+    assert!(
+        message.contains("watched_by_all_requesters"),
+        "the error must name the facts that triggered it: {message}"
+    );
+}
+
+#[tokio::test]
+async fn a_privileged_actor_may_preview_a_person_fact_rule() {
+    let fixture = watch_app(
+        vec![jellyfin_connection(true)],
+        vec![link("user-viewer", CONNECTION_ID, VIEWER_EXTERNAL_ID)],
+    );
+    let title = seed_title(&fixture.app, &fixture.user, "Requested Movie").await;
+    record_sweep(&fixture.signals, CONNECTION_ID, Some(Utc::now())).await;
+
+    let preview = fixture
+        .preview_as(
+            &fixture.user,
+            inline_matcher(WATCHED_BY_ALL_REQUESTERS_MATCHER),
+            &title.id,
+        )
+        .await
+        .expect("an administrator may preview a rule about people");
+
+    assert_eq!(preview.titles.len(), 1);
+}
+
+#[tokio::test]
+async fn previewing_a_rule_about_media_is_unaffected() {
+    let fixture = watch_app(Vec::new(), Vec::new());
+    let title = seed_title(&fixture.app, &fixture.user, "Scanned Movie").await;
+
+    let preview = fixture
+        .preview_as(
+            &catalog_only_author(),
+            inline_matcher(MONITORED_MATCHER),
+            &title.id,
+        )
+        .await
+        .expect("catalog-settings management is enough to preview a rule about media");
+
+    assert_eq!(preview.titles.len(), 1);
+}
+
+/// Storing the rule first changes nothing: the preview still reads the same
+/// person facts about the same real subjects on the caller's behalf.
+#[tokio::test]
+async fn previewing_a_stored_person_fact_rule_is_gated_too() {
+    let fixture = watch_app(Vec::new(), Vec::new());
+    let title = seed_title(&fixture.app, &fixture.user, "Requested Movie").await;
+    let created = fixture
+        .app
+        .create_maintenance_rule_set(&fixture.user, draft(WATCHED_BY_ALL_REQUESTERS_MATCHER))
+        .await
+        .expect("an administrator may author a rule about people");
+
+    let error = fixture
+        .preview_as(
+            &catalog_only_author(),
+            MaintenancePreviewMatcher::Stored {
+                rule_set_id: created.rule_set.id.clone(),
+            },
+            &title.id,
+        )
+        .await
+        .expect_err("a stored rule is no less of an oracle than a draft");
 
     assert!(matches!(error, AppError::Unauthorized(_)), "{error:?}");
     assert!(

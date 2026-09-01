@@ -1119,6 +1119,10 @@ impl AppUseCase {
     /// for the whole run, because Scryer would otherwise be reporting a partial
     /// watch picture as a complete one. A disabled connection is skipped: an
     /// operator turning a server off is a decision, not a gap.
+    ///
+    /// The roster is part of the gate, not just its payload: a clean sweep with
+    /// nobody linked observes nobody, so it reports unavailable rather than an
+    /// empty — and therefore decisive — watch picture.
     pub(crate) async fn maintenance_watch_context(&self) -> AppResult<MaintenanceWatchContext> {
         let mut connections = Vec::new();
         for provider in SIGNAL_SYNC_PROVIDERS {
@@ -1191,6 +1195,19 @@ impl AppUseCase {
             {
                 linked_user_ids.insert(account.user_id);
             }
+        }
+
+        // A fresh sweep over nobody is not a watch picture. With no verified
+        // link on any enabled connection, every subject would come back "no
+        // plays recorded" — which reads as "nobody watched it" while Scryer is
+        // in fact observing nobody at all.
+        if linked_user_ids.is_empty() {
+            return Ok(MaintenanceWatchContext {
+                freshness: WatchSignalFreshness::Unavailable(
+                    unknown_reason::NO_LINKED_PARTICIPANTS,
+                ),
+                linked_user_ids,
+            });
         }
 
         Ok(MaintenanceWatchContext {

@@ -96,6 +96,14 @@ pub mod unknown_reason {
     /// connection. Their watch state is unknowable, so neither requester
     /// rollup can be honest about them.
     pub const REQUESTER_NOT_LINKED: &str = "requester_not_linked";
+
+    /// Every enabled signal-sync connection swept cleanly, but not one of them
+    /// carries a verified linked account — so nobody in the instance is
+    /// observable at all. A clean sweep over an empty roster reports no plays
+    /// for every subject, which is "Scryer can see nobody", not "nobody watched
+    /// it", and the difference is what a "delete what nobody watched" rule
+    /// deletes on.
+    pub const NO_LINKED_PARTICIPANTS: &str = "no_linked_participants";
 }
 
 /// How recently every enabled signal-sync connection must have swept cleanly

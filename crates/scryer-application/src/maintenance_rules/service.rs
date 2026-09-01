@@ -375,6 +375,14 @@ impl AppUseCase {
             .await?;
 
         let policy = self.resolve_preview_policy(request.matcher).await?;
+        // Preview evaluates against real subjects and reports per-title
+        // outcomes, so an ungated one is a person-fact oracle: ask "did user x
+        // watch this" title by title and read the answers off the results. The
+        // same bar authoring meets applies here, for a stored rule as much as
+        // for a draft.
+        self.require_person_fact_authority(actor, &policy.rego_source, &policy.id)
+            .await?;
+
         let titles = self.select_preview_titles(&request.selection).await?;
         let libraries = self.maintenance_library_refs().await?;
 
@@ -475,15 +483,19 @@ impl AppUseCase {
         })
     }
 
-    /// Gate authoring a matcher that reads person-targeted facts.
+    /// Gate authoring — or previewing — a matcher that reads person-targeted
+    /// facts.
     ///
     /// Catalog-settings management is enough to write a rule about *media*.
     /// Writing one about *people* — who added a title, who asked for it, who
     /// watched it — is a use of the instance's identity records, so it asks for
-    /// the same authority that hands out permissions in the first place. The
-    /// bar is on authoring, deliberately: a stored revision keeps running under
-    /// the system principal, because revoking an author's permission must not
-    /// silently stop a rule an operator armed.
+    /// the same authority that hands out permissions in the first place.
+    /// Preview meets the same bar because it answers the same question against
+    /// real subjects, one title at a time.
+    ///
+    /// The bar is on reaching the facts, not on running: a stored revision
+    /// keeps evaluating under the system principal, because revoking an
+    /// author's permission must not silently stop a rule an operator armed.
     ///
     /// The fact set comes from the same static extraction the engine holds
     /// rules on, so a rule cannot reach a person fact by a path this check
