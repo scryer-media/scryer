@@ -3,4 +3,4 @@
 DELETE FROM oauth_authorization_codes;
 
 ALTER TABLE oauth_authorization_codes
-    ADD COLUMN auth_session_version TEXT NOT NULL;
+    ADD COLUMN auth_session_version TEXT NOT NULL DEFAULT '';

@@ -4251,6 +4251,328 @@ async fn migration_0201_postgres_uses_native_payload_and_timestamp_types() -> Ap
 }
 
 #[tokio::test]
+async fn migrations_0202_and_0203_bind_factor_state_and_session_epochs() {
+    crate::spellfix::register_spellfix_auto_extension()
+        .expect("spellfix auto-extension should register");
+    let db = std::env::temp_dir().join(format!(
+        "scryer_migration_0202_0203_factor_state_{}.db",
+        chrono::Utc::now().timestamp_micros()
+    ));
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect(&sqlite_url_with_create(db.to_string_lossy().as_ref()))
+        .await
+        .expect("migration test database should open");
+    crate::migrations::replay_source_catalog_for_fresh_install(&pool, Some(201), true)
+        .await
+        .expect("0201 fixture schema should install");
+
+    sqlx::query(
+        "INSERT INTO totp_credentials (
+            id, user_id, secret_base32, algorithm, digits, period_seconds,
+            created_at, updated_at
+         ) VALUES (
+            'credential', '00000000000000000000000000000001', 'JBSWY3DPEHPK3PXP',
+            'SHA1', 6, 30, '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z'
+         )",
+    )
+    .execute(&pool)
+    .await
+    .expect("legacy TOTP credential should insert");
+    for (id, expires_at) in [
+        ("expired-challenge", "2000-01-01T00:00:00Z"),
+        ("stale-challenge", "2999-01-01T00:00:00Z"),
+        ("newest-challenge", "2999-06-01T00:00:00Z"),
+    ] {
+        sqlx::query(
+            "INSERT INTO totp_enrollment_challenges (
+                id, user_id, secret_base32, algorithm, digits, period_seconds,
+                created_at, expires_at
+             ) VALUES (
+                $1, '00000000000000000000000000000001', 'JBSWY3DPEHPK3PXP',
+                'SHA1', 6, 30, '2026-08-01T00:00:00Z', $2
+             )",
+        )
+        .bind(id)
+        .bind(expires_at)
+        .execute(&pool)
+        .await
+        .expect("legacy enrollment challenge should insert");
+    }
+    sqlx::query(
+        "INSERT INTO oauth_authorization_codes (
+            id, code_hash, client_id, user_id, redirect_uri, scope,
+            code_challenge, code_challenge_method, created_at, expires_at
+         ) VALUES (
+            'stale-code', 'stale-hash', 'client', '00000000000000000000000000000001',
+            'https://client.test/callback', 'profile', 'challenge', 'S256',
+            '2026-08-01T00:00:00Z', '2999-01-01T00:00:00Z'
+         )",
+    )
+    .execute(&pool)
+    .await
+    .expect("pre-epoch authorization code should insert");
+
+    crate::migrations::run_migrations(&pool, crate::types::MigrationMode::Apply)
+        .await
+        .expect("0202 and 0203 should apply");
+
+    let credential: (Option<String>, i64) = sqlx::query_as(
+        "SELECT attempt_window_started_at, attempt_count
+         FROM totp_credentials WHERE id = 'credential'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("credential attempt state should load");
+    assert_eq!(credential, (None, 0));
+
+    let challenge_ids: Vec<String> =
+        sqlx::query_scalar("SELECT id FROM totp_enrollment_challenges")
+            .fetch_all(&pool)
+            .await
+            .expect("surviving enrollment challenges should load");
+    assert_eq!(challenge_ids, vec!["newest-challenge".to_string()]);
+    let unique_index: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)
+         FROM pragma_index_list('totp_enrollment_challenges')
+         WHERE name = 'totp_enrollment_challenges_one_active_per_user'
+           AND \"unique\" = 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("one-active-per-user index should load");
+    assert_eq!(unique_index, 1);
+
+    for table in ["totp_enrollment_challenges", "webauthn_challenges"] {
+        let has_session_version: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM pragma_table_info($1)
+             WHERE name = 'auth_session_version'",
+        )
+        .bind(table)
+        .fetch_one(&pool)
+        .await
+        .expect("challenge session-version column should load");
+        assert_eq!(has_session_version, 1, "{table} should carry the epoch");
+    }
+
+    let remaining_codes: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM oauth_authorization_codes")
+            .fetch_one(&pool)
+            .await
+            .expect("authorization code count should load");
+    assert_eq!(remaining_codes, 0);
+    sqlx::query(
+        "INSERT INTO oauth_authorization_codes (
+            id, code_hash, client_id, user_id, redirect_uri, scope,
+            code_challenge, code_challenge_method, created_at, expires_at
+         ) VALUES (
+            'epochless-code', 'epochless-hash', 'client',
+            '00000000000000000000000000000001', 'https://client.test/callback',
+            'profile', 'challenge', 'S256',
+            '2026-08-01T00:00:00Z', '2999-01-01T00:00:00Z'
+         )",
+    )
+    .execute(&pool)
+    .await
+    .expect("epoch column default should admit legacy-shaped inserts");
+    let default_epoch: String = sqlx::query_scalar(
+        "SELECT auth_session_version FROM oauth_authorization_codes
+         WHERE id = 'epochless-code'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("defaulted epoch should load");
+    assert_eq!(default_epoch, "");
+
+    let integrity: String = sqlx::query_scalar("PRAGMA integrity_check")
+        .fetch_one(&pool)
+        .await
+        .expect("integrity check should run");
+    assert_eq!(integrity, "ok");
+
+    drop(pool);
+    let _ = std::fs::remove_file(db);
+}
+
+#[tokio::test]
+async fn migrations_0202_and_0203_postgres_bind_factor_state_and_session_epochs() -> AppResult<()> {
+    let Some(raw_url) = std::env::var("SCRYER_TEST_POSTGRES_URL")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(());
+    };
+    let admin_pool = sqlx::PgPool::connect(&raw_url)
+        .await
+        .map_err(|error| AppError::Repository(format!("failed to connect to postgres: {error}")))?;
+    let schema = format!(
+        "scryer_0202_0203_migration_{}",
+        chrono::Utc::now().timestamp_micros()
+    );
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
+        .execute(&admin_pool)
+        .await
+        .map_err(|error| {
+            AppError::Repository(format!("failed to create postgres schema: {error}"))
+        })?;
+    let mut schema_url = url::Url::parse(&raw_url)
+        .map_err(|error| AppError::Validation(format!("invalid postgres URL: {error}")))?;
+    schema_url
+        .query_pairs_mut()
+        .append_pair("options", &format!("-csearch_path={schema}"));
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .connect(schema_url.as_str())
+        .await
+        .map_err(|error| {
+            AppError::Repository(format!("failed to open postgres schema: {error}"))
+        })?;
+
+    let result = async {
+        crate::postgres::replay_source_catalog_for_fresh_install(&pool, Some(201)).await?;
+        for (id, expires_at) in [
+            ("expired-challenge", "2000-01-01T00:00:00Z"),
+            ("stale-challenge", "2999-01-01T00:00:00Z"),
+            ("newest-challenge", "2999-06-01T00:00:00Z"),
+        ] {
+            sqlx::query(
+                "INSERT INTO totp_enrollment_challenges (
+                    id, user_id, secret_base32, algorithm, digits, period_seconds,
+                    created_at, expires_at
+                 ) VALUES (
+                    $1, '00000000000000000000000000000001', 'JBSWY3DPEHPK3PXP',
+                    'SHA1', 6, 30, '2026-08-01T00:00:00Z'::timestamptz,
+                    $2::timestamptz
+                 )",
+            )
+            .bind(id)
+            .bind(expires_at)
+            .execute(&pool)
+            .await
+            .map_err(|error| AppError::Repository(error.to_string()))?;
+        }
+        sqlx::query(
+            "INSERT INTO oauth_authorization_codes (
+                id, code_hash, client_id, user_id, redirect_uri, scope,
+                code_challenge, code_challenge_method, created_at, expires_at
+             ) VALUES (
+                'stale-code', 'stale-hash', 'client',
+                '00000000000000000000000000000001', 'https://client.test/callback',
+                'profile', 'challenge', 'S256',
+                '2026-08-01T00:00:00Z'::timestamptz, '2999-01-01T00:00:00Z'::timestamptz
+             )",
+        )
+        .execute(&pool)
+        .await
+        .map_err(|error| AppError::Repository(error.to_string()))?;
+
+        let services = crate::PostgresServices::new_with_mode(
+            schema_url.as_str(),
+            crate::types::MigrationMode::Apply,
+        )
+        .await?;
+        drop(services);
+
+        let challenge_ids: Vec<String> =
+            sqlx::query_scalar("SELECT id FROM totp_enrollment_challenges")
+                .fetch_all(&pool)
+                .await
+                .map_err(|error| AppError::Repository(error.to_string()))?;
+        assert_eq!(challenge_ids, vec!["newest-challenge".to_string()]);
+        let unique_index: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)
+             FROM pg_indexes
+             WHERE schemaname = current_schema()
+               AND tablename = 'totp_enrollment_challenges'
+               AND indexname = 'totp_enrollment_challenges_one_active_per_user'
+               AND indexdef LIKE 'CREATE UNIQUE INDEX%'",
+        )
+        .fetch_one(&pool)
+        .await
+        .map_err(|error| AppError::Repository(error.to_string()))?;
+        assert_eq!(unique_index, 1);
+
+        let epoch_column: (String, Option<String>) = sqlx::query_as(
+            "SELECT is_nullable, column_default
+             FROM information_schema.columns
+             WHERE table_schema = current_schema()
+               AND table_name = 'oauth_authorization_codes'
+               AND column_name = 'auth_session_version'",
+        )
+        .fetch_one(&pool)
+        .await
+        .map_err(|error| AppError::Repository(error.to_string()))?;
+        assert_eq!(epoch_column.0, "NO");
+        assert_eq!(epoch_column.1.as_deref(), Some("''::text"));
+
+        let remaining_codes: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM oauth_authorization_codes")
+                .fetch_one(&pool)
+                .await
+                .map_err(|error| AppError::Repository(error.to_string()))?;
+        assert_eq!(remaining_codes, 0);
+        sqlx::query(
+            "INSERT INTO oauth_authorization_codes (
+                id, code_hash, client_id, user_id, redirect_uri, scope,
+                code_challenge, code_challenge_method, created_at, expires_at
+             ) VALUES (
+                'epochless-code', 'epochless-hash', 'client',
+                '00000000000000000000000000000001', 'https://client.test/callback',
+                'profile', 'challenge', 'S256',
+                '2026-08-01T00:00:00Z'::timestamptz, '2999-01-01T00:00:00Z'::timestamptz
+             )",
+        )
+        .execute(&pool)
+        .await
+        .map_err(|error| AppError::Repository(error.to_string()))?;
+        let default_epoch: String = sqlx::query_scalar(
+            "SELECT auth_session_version FROM oauth_authorization_codes
+             WHERE id = 'epochless-code'",
+        )
+        .fetch_one(&pool)
+        .await
+        .map_err(|error| AppError::Repository(error.to_string()))?;
+        assert_eq!(default_epoch, "");
+
+        let attempt_state_columns: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)
+             FROM information_schema.columns
+             WHERE table_schema = current_schema()
+               AND table_name = 'totp_credentials'
+               AND column_name IN ('attempt_window_started_at', 'attempt_count')",
+        )
+        .fetch_one(&pool)
+        .await
+        .map_err(|error| AppError::Repository(error.to_string()))?;
+        assert_eq!(attempt_state_columns, 2);
+        let challenge_epoch_columns: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)
+             FROM information_schema.columns
+             WHERE table_schema = current_schema()
+               AND table_name IN ('totp_enrollment_challenges', 'webauthn_challenges')
+               AND column_name = 'auth_session_version'",
+        )
+        .fetch_one(&pool)
+        .await
+        .map_err(|error| AppError::Repository(error.to_string()))?;
+        assert_eq!(challenge_epoch_columns, 2);
+        Ok(())
+    }
+    .await;
+
+    drop(pool);
+    let cleanup = sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
+        .execute(&admin_pool)
+        .await;
+    drop(admin_pool);
+    cleanup.map_err(|error| {
+        AppError::Repository(format!("failed to drop postgres schema: {error}"))
+    })?;
+    result
+}
+
+#[tokio::test]
 async fn migration_0186_postgres_relaxes_the_token_check_and_adds_the_canonical_foreign_key()
 -> AppResult<()> {
     let Some(raw_url) = std::env::var("SCRYER_TEST_POSTGRES_URL")
