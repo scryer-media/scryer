@@ -7,6 +7,9 @@
 //! encoding to the real filesystem spelling on the way out.
 
 use async_graphql::ID;
+use scryer_application::location::asset_listing::{
+    DeduplicatedAsset, LocationOperationAssetListing, RenamedAsset, TitleAssetListing,
+};
 use scryer_application::location::classify::{
     DestinationRequest, SelectionClassification, TitleClassification, TitleLocationClass,
 };
@@ -43,8 +46,10 @@ use crate::types::{
     LocationMergePostMergeWorkValue, LocationMergePreviewPayload,
     LocationMergeReservedTagConflictPayload, LocationMergeRoleChangePayload,
     LocationMergeRoleChangeReasonValue, LocationMergeTableDispositionPayload,
-    LocationOperationCountersPayload, LocationOperationPayload,
-    LocationOperationPreviewPayload, LocationOperationStateValue, LocationOperationTypeValue,
+    LocationOperationAssetListingPayload, LocationOperationCountersPayload,
+    LocationOperationDeduplicatedAssetPayload, LocationOperationPayload,
+    LocationOperationPreviewPayload, LocationOperationRenamedAssetPayload,
+    LocationOperationStateValue, LocationOperationTitleAssetsPayload, LocationOperationTypeValue,
     LocationPlanConfirmationPayload, LocationPlanCountsPayload, LocationPlanItemKindValue,
     LocationPlanItemPayload, LocationPlanKindCountPayload, LocationPlanSectionPayload,
     LocationSelectionClassificationPayload, LocationTitleCheckpointPayload,
@@ -715,6 +720,65 @@ pub fn from_location_operation(
         updated_at: operation.updated_at,
         completed_at: operation.completed_at,
         title_checkpoints: checkpoints.iter().map(from_title_checkpoint).collect(),
+    }
+}
+
+fn from_renamed_asset(asset: &RenamedAsset) -> LocationOperationRenamedAssetPayload {
+    LocationOperationRenamedAssetPayload {
+        source_path: asset.source_path.as_deref().map(display_path),
+        source_name: asset.source_name.clone(),
+        destination_path: display_path(&asset.destination_path),
+        destination_name: asset.destination_name.clone(),
+        provenance_label: asset.provenance_label.clone(),
+        media_file_id: asset.media_file_id.clone().map(ID::from),
+        size_bytes: bytes(asset.size_bytes),
+        done: asset.done,
+    }
+}
+
+fn from_deduplicated_asset(
+    asset: &DeduplicatedAsset,
+) -> LocationOperationDeduplicatedAssetPayload {
+    LocationOperationDeduplicatedAssetPayload {
+        source_path: display_path(&asset.source_path),
+        source_name: asset.source_name.clone(),
+        surviving_path: asset.surviving_path.as_deref().map(display_path),
+        surviving_name: asset.surviving_name.clone(),
+        done: asset.done,
+    }
+}
+
+fn from_title_asset_listing(title: &TitleAssetListing) -> LocationOperationTitleAssetsPayload {
+    LocationOperationTitleAssetsPayload {
+        title_id: ID::from(title.title_id.clone()),
+        title_name: title.title_name.clone(),
+        sequence: Long(title.sequence),
+        settled: title.settled,
+        checkpoint_state: title.checkpoint_state.map(from_title_checkpoint_state),
+        renames: title.renames.iter().map(from_renamed_asset).collect(),
+        dedups: title.dedups.iter().map(from_deduplicated_asset).collect(),
+    }
+}
+
+/// Which files an operation renames and deduplicates, per title (FR-091).
+///
+/// The done flags come through untouched: the application decides what settled,
+/// and presenting a planned rename as a finished one is exactly the silence
+/// FR-091 forbids.
+pub fn from_location_operation_asset_listing(
+    listing: &LocationOperationAssetListing,
+) -> LocationOperationAssetListingPayload {
+    LocationOperationAssetListingPayload {
+        operation_id: ID::from(listing.operation_id.clone()),
+        titles: listing
+            .titles
+            .iter()
+            .map(from_title_asset_listing)
+            .collect(),
+        renames_total: Long(listing.renames_total),
+        renames_done: Long(listing.renames_done),
+        dedups_total: Long(listing.dedups_total),
+        dedups_done: Long(listing.dedups_done),
     }
 }
 

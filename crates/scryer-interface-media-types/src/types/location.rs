@@ -794,6 +794,91 @@ pub struct LocationOperationPayload {
 }
 
 #[derive(SimpleObject, Clone)]
+/// One file the operation lands under a different name so destination content
+/// keeps its own.
+pub struct LocationOperationRenamedAssetPayload {
+    /// Path the file is read from, or null when the stored plan no longer
+    /// carries the file this destination came from.
+    pub source_path: Option<String>,
+    /// File name at the source.
+    pub source_name: Option<String>,
+    /// Path the file lands under.
+    pub destination_path: String,
+    /// File name it lands under.
+    pub destination_name: String,
+    /// Source library named inside the rename suffix, or null when the rename
+    /// only had a number appended.
+    pub provenance_label: Option<String>,
+    /// Tracked media file, or null for a companion asset.
+    pub media_file_id: Option<ID>,
+    /// Size of the file being renamed.
+    pub size_bytes: Long,
+    /// Whether this rename has happened. False means the title carrying it has
+    /// not settled yet, so the rename is still only planned.
+    pub done: bool,
+}
+
+#[derive(SimpleObject, Clone)]
+/// One source file proven identical to destination content, so it is recycled
+/// instead of copied.
+pub struct LocationOperationDeduplicatedAssetPayload {
+    /// Path of the redundant source copy.
+    pub source_path: String,
+    /// Its file name.
+    pub source_name: String,
+    /// Path of the destination copy that survives, or null when the plan does
+    /// not carry enough placement to name it.
+    pub surviving_path: Option<String>,
+    /// File name of that survivor.
+    pub surviving_name: Option<String>,
+    /// Whether this deduplication has happened. False means the title carrying
+    /// it has not settled yet, so the source copy is still in place.
+    pub done: bool,
+}
+
+#[derive(SimpleObject, Clone)]
+/// One title's renamed and deduplicated files inside an operation.
+pub struct LocationOperationTitleAssetsPayload {
+    /// Title these assets belong to.
+    pub title_id: ID,
+    /// Title name as the confirmed plan recorded it.
+    pub title_name: String,
+    /// Position of this title in the confirmed plan.
+    pub sequence: Long,
+    /// Whether this title finished, which is what turns its planned renames and
+    /// deduplications into things that actually happened.
+    pub settled: bool,
+    /// The title's checkpoint state, or null when it has not entered the run.
+    pub checkpoint_state: Option<LocationTitleCheckpointStateValue>,
+    /// Files renamed around a destination collision.
+    pub renames: Vec<LocationOperationRenamedAssetPayload>,
+    /// Source files recycled as proven duplicates.
+    pub dedups: Vec<LocationOperationDeduplicatedAssetPayload>,
+}
+
+#[derive(SimpleObject, Clone)]
+/// Which files an operation renames and deduplicates, split per title and by
+/// whether the work has happened yet.
+///
+/// Read from the plan the user confirmed, so a canceled or failed title still
+/// reports what it would have done rather than dropping the files from view.
+pub struct LocationOperationAssetListingPayload {
+    /// Operation this listing describes.
+    pub operation_id: ID,
+    /// Titles carrying at least one rename or deduplication, in confirmed-plan
+    /// order. A title with neither is not listed.
+    pub titles: Vec<LocationOperationTitleAssetsPayload>,
+    /// Renames the confirmed plan carries across every title.
+    pub renames_total: Long,
+    /// How many of those have happened.
+    pub renames_done: Long,
+    /// Deduplications the confirmed plan carries across every title.
+    pub dedups_total: Long,
+    /// How many of those have happened.
+    pub dedups_done: Long,
+}
+
+#[derive(SimpleObject, Clone)]
 /// Acceptance of a confirmed location operation; the work runs in the background.
 pub struct StartLocationOperationPayload {
     /// The accepted operation, as persisted.

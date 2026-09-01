@@ -9539,6 +9539,41 @@ type LocationMergeTableDispositionPayload {
 }
 
 """
+Which files an operation renames and deduplicates, split per title and by
+whether the work has happened yet.
+
+Read from the plan the user confirmed, so a canceled or failed title still
+reports what it would have done rather than dropping the files from view.
+"""
+type LocationOperationAssetListingPayload {
+	"""
+	Operation this listing describes.
+	"""
+	operationId: ID!
+	"""
+	Titles carrying at least one rename or deduplication, in confirmed-plan
+	order. A title with neither is not listed.
+	"""
+	titles: [LocationOperationTitleAssetsPayload!]!
+	"""
+	Renames the confirmed plan carries across every title.
+	"""
+	renamesTotal: Long!
+	"""
+	How many of those have happened.
+	"""
+	renamesDone: Long!
+	"""
+	Deduplications the confirmed plan carries across every title.
+	"""
+	dedupsTotal: Long!
+	"""
+	How many of those have happened.
+	"""
+	dedupsDone: Long!
+}
+
+"""
 Aggregate counters for a running or finished operation.
 """
 type LocationOperationCountersPayload {
@@ -9590,6 +9625,35 @@ type LocationOperationCountersPayload {
 	Items still needing a user decision.
 	"""
 	unresolved: Long!
+}
+
+"""
+One source file proven identical to destination content, so it is recycled
+instead of copied.
+"""
+type LocationOperationDeduplicatedAssetPayload {
+	"""
+	Path of the redundant source copy.
+	"""
+	sourcePath: String!
+	"""
+	Its file name.
+	"""
+	sourceName: String!
+	"""
+	Path of the destination copy that survives, or null when the plan does
+	not carry enough placement to name it.
+	"""
+	survivingPath: String
+	"""
+	File name of that survivor.
+	"""
+	survivingName: String
+	"""
+	Whether this deduplication has happened. False means the title carrying
+	it has not settled yet, so the source copy is still in place.
+	"""
+	done: Boolean!
 }
 
 """
@@ -9784,6 +9848,48 @@ type LocationOperationPreviewPayload {
 }
 
 """
+One file the operation lands under a different name so destination content
+keeps its own.
+"""
+type LocationOperationRenamedAssetPayload {
+	"""
+	Path the file is read from, or null when the stored plan no longer
+	carries the file this destination came from.
+	"""
+	sourcePath: String
+	"""
+	File name at the source.
+	"""
+	sourceName: String
+	"""
+	Path the file lands under.
+	"""
+	destinationPath: String!
+	"""
+	File name it lands under.
+	"""
+	destinationName: String!
+	"""
+	Source library named inside the rename suffix, or null when the rename
+	only had a number appended.
+	"""
+	provenanceLabel: String
+	"""
+	Tracked media file, or null for a companion asset.
+	"""
+	mediaFileId: ID
+	"""
+	Size of the file being renamed.
+	"""
+	sizeBytes: Long!
+	"""
+	Whether this rename has happened. False means the title carrying it has
+	not settled yet, so the rename is still only planned.
+	"""
+	done: Boolean!
+}
+
+"""
 Lifecycle state of a confirmed location operation, as shown in Activity.
 """
 enum LocationOperationStateValue {
@@ -9827,6 +9933,41 @@ enum LocationOperationStateValue {
 	Stopped on an error; completed titles remain consistent.
 	"""
 	FAILED
+}
+
+"""
+One title's renamed and deduplicated files inside an operation.
+"""
+type LocationOperationTitleAssetsPayload {
+	"""
+	Title these assets belong to.
+	"""
+	titleId: ID!
+	"""
+	Title name as the confirmed plan recorded it.
+	"""
+	titleName: String!
+	"""
+	Position of this title in the confirmed plan.
+	"""
+	sequence: Long!
+	"""
+	Whether this title finished, which is what turns its planned renames and
+	deduplications into things that actually happened.
+	"""
+	settled: Boolean!
+	"""
+	The title's checkpoint state, or null when it has not entered the run.
+	"""
+	checkpointState: LocationTitleCheckpointStateValue
+	"""
+	Files renamed around a destination collision.
+	"""
+	renames: [LocationOperationRenamedAssetPayload!]!
+	"""
+	Source files recycled as proven duplicates.
+	"""
+	dedups: [LocationOperationDeduplicatedAssetPayload!]!
 }
 
 """
@@ -15769,6 +15910,21 @@ type QueryRoot {
 		"""
 		id: ID!
 	): LocationOperationPayload
+	"""
+	Which files one location operation renames and deduplicates, per title.
+	
+	Activity's counters say how many; this says which ones, and whether each
+	has happened yet or is still only what the confirmed plan intends
+	(FR-091). It is a separate read from `locationOperation` because the
+	per-file identities live in the operation's stored plan, which a
+	progress poll has no reason to load.
+	"""
+	locationOperationAssets(
+		"""
+		Location-operation identity.
+		"""
+		id: ID!
+	): LocationOperationAssetListingPayload
 	"""
 	Preview deleting all media files for one title without changing files.
 	"""

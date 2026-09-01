@@ -4,6 +4,11 @@ import test from "node:test";
 import type { Translate } from "@/components/root/types";
 import {
   ambiguousCandidates,
+  assetLineTextKey,
+  assetLines,
+  assetListingHasPlannedWork,
+  assetListingIsEmpty,
+  assetsByTitle,
   blockingTitles,
   canCancelOperation,
   canResumeOperation,
@@ -44,6 +49,7 @@ import {
   remainingSelection,
   sameNamedDestinationTitle,
   shouldPollOperation,
+  showsAssetPlannedState,
   startRefusalCodeFromError,
   toCount,
   transferStatement,
@@ -57,6 +63,8 @@ import {
   type LocationOperationCounters,
   type LocationOperationPreview,
   type LocationSelectionClassification,
+  type LocationOperationAssetListing,
+  type LocationTitleAssets,
   type LocationTitleCheckpoint,
 } from "./location-operations.ts";
 
@@ -1353,4 +1361,183 @@ test("only an unresolved identity still holds the plan back (FR-016)", () => {
   );
   // It is not the active-work block, which has its own prose.
   assert.equal(isActiveWorkBlock(ambiguous), false);
+});
+
+function titleAssets(
+  overrides: Partial<LocationTitleAssets> = {},
+): LocationTitleAssets {
+  return {
+    titleId: "a",
+    titleName: "Arrival",
+    sequence: 1,
+    settled: true,
+    checkpointState: "COMPLETED_WITH_WARNINGS",
+    renames: [
+      {
+        sourcePath: "/data/a/Arrival/Arrival.mkv",
+        sourceName: "Arrival.mkv",
+        destinationPath: "/data/b/Arrival/Arrival (from Movies 4K).mkv",
+        destinationName: "Arrival (from Movies 4K).mkv",
+        provenanceLabel: "Movies 4K",
+        mediaFileId: "media-1",
+        sizeBytes: 4096,
+        done: true,
+      },
+    ],
+    dedups: [
+      {
+        sourcePath: "/data/a/Arrival/Arrival.nfo",
+        sourceName: "Arrival.nfo",
+        survivingPath: "/data/b/Arrival/Arrival.nfo",
+        survivingName: "Arrival.nfo",
+        done: true,
+      },
+    ],
+    ...overrides,
+  };
+}
+
+function assetListing(
+  overrides: Partial<LocationOperationAssetListing> = {},
+): LocationOperationAssetListing {
+  return {
+    operationId: "op-1",
+    titles: [titleAssets()],
+    renamesTotal: 1,
+    renamesDone: 1,
+    dedupsTotal: 1,
+    dedupsDone: 1,
+    ...overrides,
+  };
+}
+
+test("a title's assets read out as renames first, then dedups (FR-091)", () => {
+  const lines = assetLines(titleAssets());
+
+  assert.deepEqual(
+    lines.map((line) => [line.kind, line.key, line.from, line.to]),
+    [
+      ["RENAME", "rename-0", "Arrival.mkv", "Arrival (from Movies 4K).mkv"],
+      ["DEDUP", "dedup-0", "Arrival.nfo", "Arrival.nfo"],
+    ],
+  );
+  // The collision suffix names the library the file came from (FR-074); a
+  // dedup has no such provenance to state.
+  assert.equal(lines[0].provenanceLabel, "Movies 4K");
+  assert.equal(lines[1].provenanceLabel, null);
+  assert.equal(assetLineTextKey("RENAME"), "move.assetRenamedAs");
+  assert.equal(
+    assetLineTextKey("DEDUP"),
+    "move.assetDeduplicatedAgainst",
+  );
+  assert.deepEqual(assetLines(null), []);
+  assert.deepEqual(assetLines(titleAssets({ renames: [], dedups: [] })), []);
+});
+
+test("an unsettled title's assets stay planned, never history", () => {
+  const pending = titleAssets({
+    settled: false,
+    checkpointState: "PENDING",
+    renames: [
+      { ...titleAssets().renames[0], done: false },
+    ],
+    dedups: [{ ...titleAssets().dedups[0], done: false }],
+  });
+
+  assert.deepEqual(
+    assetLines(pending).map((line) => line.done),
+    [false, false],
+  );
+
+  // The listing knows there is something outstanding, which is what turns the
+  // per-row done/planned labels on.
+  const partial = assetListing({
+    titles: [titleAssets(), pending],
+    renamesTotal: 2,
+    renamesDone: 1,
+    dedupsTotal: 2,
+    dedupsDone: 1,
+  });
+  assert.equal(assetListingHasPlannedWork(partial), true);
+  assert.equal(
+    showsAssetPlannedState(operation({ state: "CANCELED" }), partial),
+    true,
+    "a canceled operation with unsettled titles must not read as history",
+  );
+});
+
+test("a finished operation whose assets all landed hides the done labels", () => {
+  const settled = assetListing();
+  assert.equal(assetListingHasPlannedWork(settled), false);
+  assert.equal(
+    showsAssetPlannedState(operation({ state: "COMPLETED" }), settled),
+    false,
+    "stamping done on every row of a finished operation is noise",
+  );
+  // While the operation is still running, the same listing is a snapshot, so
+  // the labels stay on.
+  assert.equal(
+    showsAssetPlannedState(operation({ state: "MOVING" }), settled),
+    true,
+  );
+  assert.equal(showsAssetPlannedState(operation(), null), false);
+});
+
+test("assets are looked up by title, and a plan with no collisions lists none", () => {
+  const byTitle = assetsByTitle(
+    assetListing({
+      titles: [titleAssets(), titleAssets({ titleId: "b" }), titleAssets()],
+    }),
+  );
+  assert.deepEqual([...byTitle.keys()], ["a", "b"]);
+  assert.equal(byTitle.get("a")?.titleName, "Arrival");
+  assert.equal(byTitle.get("missing"), undefined);
+  assert.equal(assetsByTitle(null).size, 0);
+
+  const empty = assetListing({
+    titles: [],
+    renamesTotal: 0,
+    renamesDone: 0,
+    dedupsTotal: 0,
+    dedupsDone: 0,
+  });
+  assert.equal(assetListingIsEmpty(empty), true);
+  assert.equal(assetListingIsEmpty(assetListing()), false);
+  assert.equal(assetListingIsEmpty(null), true);
+});
+
+test("a file the stored plan cannot fully name still says what it can", () => {
+  const partiallyNamed = titleAssets({
+    renames: [
+      {
+        ...titleAssets().renames[0],
+        sourceName: null,
+        sourcePath: "/data/a/Arrival/Arrival.mkv",
+        provenanceLabel: null,
+      },
+      { ...titleAssets().renames[0], sourceName: null, sourcePath: null },
+    ],
+    dedups: [
+      {
+        ...titleAssets().dedups[0],
+        survivingName: null,
+        survivingPath: null,
+      },
+    ],
+  });
+
+  const lines = assetLines(partiallyNamed);
+  // The nameless source falls back to its path; the row with no source side at
+  // all is dropped rather than rendered as an arrow pointing at nothing.
+  assert.deepEqual(
+    lines.map((line) => [line.kind, line.from, line.to]),
+    [
+      [
+        "RENAME",
+        "/data/a/Arrival/Arrival.mkv",
+        "Arrival (from Movies 4K).mkv",
+      ],
+      ["DEDUP", "Arrival.nfo", null],
+    ],
+  );
 });

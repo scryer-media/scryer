@@ -402,6 +402,52 @@ export type LocationOperation = {
   titleCheckpoints: LocationTitleCheckpoint[];
 };
 
+/** One file the operation lands under a different name (FR-074/075). */
+export type LocationRenamedAsset = {
+  sourcePath: string | null;
+  sourceName: string | null;
+  destinationPath: string;
+  destinationName: string;
+  /** Source library named inside the `(from …)` suffix, when the rename used one. */
+  provenanceLabel: string | null;
+  mediaFileId: string | null;
+  sizeBytes: LongValue;
+  /** False while the title carrying this rename has not settled. */
+  done: boolean;
+};
+
+/** One source file recycled as a proven duplicate (FR-073). */
+export type LocationDeduplicatedAsset = {
+  sourcePath: string;
+  sourceName: string;
+  survivingPath: string | null;
+  survivingName: string | null;
+  /** False while the title carrying this dedup has not settled. */
+  done: boolean;
+};
+
+/** One title's renamed and deduplicated files inside an operation. */
+export type LocationTitleAssets = {
+  titleId: string;
+  titleName: string;
+  sequence: LongValue;
+  /** Whether the title finished; what turns its plan facts into history. */
+  settled: boolean;
+  checkpointState: LocationTitleCheckpointState | null;
+  renames: LocationRenamedAsset[];
+  dedups: LocationDeduplicatedAsset[];
+};
+
+/** Which files an operation renames and deduplicates, per title (FR-091). */
+export type LocationOperationAssetListing = {
+  operationId: string;
+  titles: LocationTitleAssets[];
+  renamesTotal: LongValue;
+  renamesDone: LongValue;
+  dedupsTotal: LongValue;
+  dedupsDone: LongValue;
+};
+
 /**
  * Classes in the order the preview renders them: what will happen first, what
  * will not happen next, what stops the run last. Every class is rendered even
@@ -1363,6 +1409,144 @@ export function refusalMessageKey(
   code: LocationRefusalCode | null,
 ): string | null {
   return code === "insufficient_space" ? "move.startRefusedNoSpace" : null;
+}
+
+/** One line in a title's asset section: a rename or a deduplication. */
+export type LocationAssetLine = {
+  kind: "RENAME" | "DEDUP";
+  /** Stable id suffix, unique within its title. */
+  key: string;
+  /** The file as it is named on the source side. */
+  from: string;
+  /**
+   * A rename's new name, or a dedup's surviving destination copy. Null only
+   * when the stored plan could not name the other side.
+   */
+  to: string | null;
+  /** Source library named inside a `(from …)` rename suffix (FR-074). */
+  provenanceLabel: string | null;
+  /** False while the title carrying this line has not settled. */
+  done: boolean;
+};
+
+/** A name for a file, falling back to its path when the name is missing. */
+function assetLabel(
+  name: string | null | undefined,
+  path: string | null | undefined,
+): string | null {
+  const trimmedName = name?.trim();
+  if (trimmedName) {
+    return trimmedName;
+  }
+  const trimmedPath = path?.trim();
+  return trimmedPath ? trimmedPath : null;
+}
+
+/**
+ * One title's renames and dedups as render-ready lines, renames first — the
+ * same order the preview's plan sections use.
+ *
+ * A line whose source side cannot be named at all is dropped: the row would be
+ * "→ X" with nothing to say what moved, which is less informative than the
+ * count already shown beside it. Everything the plan can name is kept, settled
+ * or not (FR-091).
+ */
+export function assetLines(
+  title: LocationTitleAssets | null | undefined,
+): LocationAssetLine[] {
+  if (!title) {
+    return [];
+  }
+  const lines: LocationAssetLine[] = [];
+  title.renames.forEach((rename, index) => {
+    const from = assetLabel(rename.sourceName, rename.sourcePath);
+    if (!from) {
+      return;
+    }
+    lines.push({
+      kind: "RENAME",
+      key: `rename-${index}`,
+      from,
+      to: assetLabel(rename.destinationName, rename.destinationPath),
+      provenanceLabel: rename.provenanceLabel?.trim() || null,
+      done: rename.done,
+    });
+  });
+  title.dedups.forEach((dedup, index) => {
+    const from = assetLabel(dedup.sourceName, dedup.sourcePath);
+    if (!from) {
+      return;
+    }
+    lines.push({
+      kind: "DEDUP",
+      key: `dedup-${index}`,
+      from,
+      to: assetLabel(dedup.survivingName, dedup.survivingPath),
+      provenanceLabel: null,
+      done: dedup.done,
+    });
+  });
+  return lines;
+}
+
+/** Each title's assets, keyed by title id, for the checkpoint rows to read. */
+export function assetsByTitle(
+  listing: LocationOperationAssetListing | null | undefined,
+): Map<string, LocationTitleAssets> {
+  const byTitle = new Map<string, LocationTitleAssets>();
+  for (const title of listing?.titles ?? []) {
+    if (!title?.titleId || byTitle.has(title.titleId)) {
+      continue;
+    }
+    byTitle.set(title.titleId, title);
+  }
+  return byTitle;
+}
+
+/** Whether any listed rename or dedup belongs to a title that has not settled. */
+export function assetListingHasPlannedWork(
+  listing: LocationOperationAssetListing | null | undefined,
+): boolean {
+  if (!listing) {
+    return false;
+  }
+  return (
+    toCount(listing.renamesDone) < toCount(listing.renamesTotal) ||
+    toCount(listing.dedupsDone) < toCount(listing.dedupsTotal)
+  );
+}
+
+/**
+ * Whether each line should be labelled done-versus-planned.
+ *
+ * A finished operation whose every listed asset happened has nothing to
+ * distinguish, and stamping "done" on every row of it would be noise. The
+ * labels appear exactly when they carry information: while the operation is
+ * still running, or when some titles settled and others did not (FR-091).
+ */
+export function showsAssetPlannedState(
+  operation: LocationOperation | null | undefined,
+  listing: LocationOperationAssetListing | null | undefined,
+): boolean {
+  if (!listing) {
+    return false;
+  }
+  if (assetListingHasPlannedWork(listing)) {
+    return true;
+  }
+  return operation ? !isTerminalOperationState(operation.state) : false;
+}
+
+/** Whether the listing has anything at all to show. */
+export function assetListingIsEmpty(
+  listing: LocationOperationAssetListing | null | undefined,
+): boolean {
+  return (listing?.titles?.length ?? 0) === 0;
+}
+
+/** Translation key for one asset line's prose. */
+export function assetLineTextKey(kind: LocationAssetLine["kind"]): string {
+  return kind === "RENAME" ? "move.assetRenamedAs" : "move.assetDeduplicatedAgainst";
 }
 
 /** Translation key for a classification group heading. */

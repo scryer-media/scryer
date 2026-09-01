@@ -6,9 +6,14 @@ use super::*;
 // The operation store is reached through its port here so a test can seed a
 // queued operation without racing the runner that a real start spawns.
 use scryer_application::LocationOperationRepository;
+use scryer_application::location::classify::TitleLocationClass;
 use scryer_application::location::model::{
     LocationExecutionMode, LocationOperation, LocationOperationCounters, LocationOperationState,
-    LocationOperationType, VerificationDepth,
+    LocationOperationType, TitleCheckpoint, TitleCheckpointPlacement, TitleCheckpointState,
+    VerificationDepth,
+};
+use scryer_application::location::root_move::{
+    RootMoveExecutionPlan, RootMoveFileExecution, RootMoveTitleExecution,
 };
 use scryer_infrastructure_library::media::libraries::location_operation_store::LocationOperationStore;
 
@@ -153,6 +158,42 @@ const OPERATION_QUERY: &str = r#"
           destinationFolderPath
           mergedIntoTitleId
           mergedIntoTitleName
+        }
+      }
+    }
+"#;
+
+const ASSETS_QUERY: &str = r#"
+    query OperationAssets($id: ID!) {
+      locationOperationAssets(id: $id) {
+        operationId
+        renamesTotal
+        renamesDone
+        dedupsTotal
+        dedupsDone
+        titles {
+          titleId
+          titleName
+          sequence
+          settled
+          checkpointState
+          renames {
+            sourcePath
+            sourceName
+            destinationPath
+            destinationName
+            provenanceLabel
+            mediaFileId
+            sizeBytes
+            done
+          }
+          dedups {
+            sourcePath
+            sourceName
+            survivingPath
+            survivingName
+            done
+          }
         }
       }
     }
@@ -313,6 +354,105 @@ async fn seed_queued_operation(ctx: &TestContext, library_id: &str, root_id: &st
         .create_location_operation(&operation, None)
         .await
         .expect("seed location operation");
+    operation.id
+}
+
+/// One planned title carrying a collision rename and a proven duplicate, in the
+/// serialized shape a confirmed operation stores.
+fn planned_collision_title(
+    title_id: &str,
+    title_name: &str,
+    sequence: i64,
+    library_id: &str,
+    root_id: &str,
+) -> RootMoveTitleExecution {
+    RootMoveTitleExecution {
+        title_id: title_id.to_string(),
+        title_name: title_name.to_string(),
+        sequence,
+        class: TitleLocationClass::RootMove,
+        source_library_id: library_id.to_string(),
+        source_root_id: root_id.to_string(),
+        source_folder_path: Some(format!("/source/{title_name}")),
+        destination_library_id: library_id.to_string(),
+        destination_root_id: root_id.to_string(),
+        destination_folder_path: Some(format!("/destination/{title_name}")),
+        destination_root_path: Some("/destination".to_string()),
+        source_root_path: Some("/source".to_string()),
+        same_volume: Some(false),
+        files: vec![RootMoveFileExecution {
+            media_file_id: Some(format!("media-{title_id}")),
+            source_path: format!("/source/{title_name}/{title_name}.mkv"),
+            destination_path: format!("/destination/{title_name}/{title_name} (from Movies 4K).mkv"),
+            size_bytes: 4_096,
+        }],
+        deduplicated_sources: vec![format!("/source/{title_name}/{title_name}.nfo")],
+        deduplicated_media_file_ids: Vec::new(),
+        renamed_destinations: vec![format!(
+            "/destination/{title_name}/{title_name} (from Movies 4K).mkv"
+        )],
+        prune_directories: Vec::new(),
+        warnings: Vec::new(),
+        converted_facet: None,
+        dropped_tag_prefixes: Vec::new(),
+        merge_target_title_id: None,
+    }
+}
+
+/// Seeds an operation whose stored plan carries collisions, plus the checkpoint
+/// states that decide which of them already happened.
+async fn seed_operation_with_collision_plan(
+    ctx: &TestContext,
+    library_id: &str,
+    root_id: &str,
+    checkpoint_states: &[(&str, i64, TitleCheckpointState)],
+) -> String {
+    let store = LocationOperationStore::new(ctx.db.datastore());
+    let operation_id = seed_queued_operation(ctx, library_id, root_id).await;
+    let plan = RootMoveExecutionPlan {
+        titles: vec![
+            planned_collision_title("title-settled", "Settled", 1, library_id, root_id),
+            planned_collision_title("title-canceled", "Canceled", 2, library_id, root_id),
+        ],
+        ..RootMoveExecutionPlan::default()
+    };
+    // `create_location_operation` is the only writer of the plan column, so the
+    // seeded row is replaced with one carrying the plan JSON a confirmed start
+    // would have stored.
+    let mut operation = store
+        .get_location_operation(&operation_id)
+        .await
+        .expect("read seeded operation")
+        .expect("seeded operation exists");
+    operation.id = Id::new().0;
+    let plan_json = serde_json::to_string(&plan).expect("serialize plan");
+    store
+        .create_location_operation(&operation, Some(&plan_json))
+        .await
+        .expect("seed operation with plan");
+
+    let now = chrono::Utc::now();
+    for (title_id, sequence, state) in checkpoint_states {
+        store
+            .upsert_location_title_checkpoint(&TitleCheckpoint {
+                operation_id: operation.id.clone(),
+                title_id: (*title_id).to_string(),
+                sequence: *sequence,
+                state: *state,
+                classification: None,
+                placement: TitleCheckpointPlacement::default(),
+                files_total: 1,
+                files_verified: 1,
+                bytes_total: 4_096,
+                bytes_verified: 4_096,
+                detail: None,
+                started_at: Some(now),
+                updated_at: now,
+                completed_at: None,
+            })
+            .await
+            .expect("seed title checkpoint");
+    }
     operation.id
 }
 
@@ -653,6 +793,97 @@ async fn graphql_start_location_operation_accepts_the_previewed_plan() {
     assert_eq!(row["destinationRootId"], destination_root_id);
     assert_eq!(row["cancelRequested"], false);
     assert!(row["titleCheckpoints"].is_array());
+}
+
+/// FR-091 (US8.1/US8.4): the operation detail can name every file the plan
+/// renamed and deduplicated, and says which of them actually happened. A title
+/// that never settled keeps its entries listed as intent, so a canceled run
+/// neither hides its planned collisions nor claims it performed them.
+#[tokio::test]
+async fn graphql_location_operation_assets_split_settled_work_from_planned_work() {
+    let ctx = TestContext::new().await;
+    let first_root = tempfile::tempdir().expect("first root tempdir");
+    let second_root = tempfile::tempdir().expect("second root tempdir");
+    let (root_id, _destination_root_id) =
+        configure_two_movie_roots(&ctx, first_root.path(), second_root.path()).await;
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+
+    let operation_id = seed_operation_with_collision_plan(
+        &ctx,
+        &library_id,
+        &root_id,
+        &[
+            ("title-settled", 1, TitleCheckpointState::CompletedWithWarnings),
+            ("title-canceled", 2, TitleCheckpointState::Pending),
+        ],
+    )
+    .await;
+
+    let body = gql(&ctx, ASSETS_QUERY, json!({ "id": operation_id })).await;
+    assert_no_errors(&body);
+    let listing = &body["data"]["locationOperationAssets"];
+    assert_eq!(listing["operationId"], operation_id);
+    assert_eq!(listing["renamesTotal"], 2);
+    assert_eq!(listing["renamesDone"], 1);
+    assert_eq!(listing["dedupsTotal"], 2);
+    assert_eq!(listing["dedupsDone"], 1);
+
+    let titles = listing["titles"].as_array().expect("titles");
+    assert_eq!(titles.len(), 2, "both titles carry collisions: {listing}");
+
+    // The settled title states what happened, with the file names on both sides
+    // and the source library the collision suffix names.
+    let settled = &titles[0];
+    assert_eq!(settled["titleId"], "title-settled");
+    assert_eq!(settled["titleName"], "Settled");
+    assert_eq!(settled["settled"], true);
+    assert_eq!(settled["checkpointState"], "COMPLETED_WITH_WARNINGS");
+    let rename = &settled["renames"][0];
+    assert_eq!(rename["sourceName"], "Settled.mkv");
+    assert_eq!(rename["destinationName"], "Settled (from Movies 4K).mkv");
+    assert_eq!(rename["provenanceLabel"], "Movies 4K");
+    assert_eq!(rename["mediaFileId"], "media-title-settled");
+    assert_eq!(rename["sizeBytes"], 4_096);
+    assert_eq!(rename["done"], true);
+    let dedup = &settled["dedups"][0];
+    assert_eq!(dedup["sourcePath"], "/source/Settled/Settled.nfo");
+    assert_eq!(dedup["survivingPath"], "/destination/Settled/Settled.nfo");
+    assert_eq!(dedup["survivingName"], "Settled.nfo");
+    assert_eq!(dedup["done"], true);
+
+    // The title that never settled carries the same plan facts as intent.
+    let pending = &titles[1];
+    assert_eq!(pending["titleId"], "title-canceled");
+    assert_eq!(pending["settled"], false);
+    assert_eq!(pending["checkpointState"], "PENDING");
+    assert_eq!(pending["renames"][0]["done"], false);
+    assert_eq!(pending["dedups"][0]["done"], false);
+
+    // FR-083 governs this read the same way it governs the operation row.
+    let assets_query = format!(
+        r#"query {{ locationOperationAssets(id: "{operation_id}") {{ operationId }} }}"#
+    );
+    let denied = schema_exec(&ctx, &assets_query, Some(location_outsider())).await;
+    assert_graphql_field_denied(&denied, "locationOperationAssets");
+
+    // An unknown operation is absent, not an error.
+    let missing = gql(&ctx, ASSETS_QUERY, json!({ "id": "no-such-operation" })).await;
+    assert_no_errors(&missing);
+    assert!(missing["data"]["locationOperationAssets"].is_null());
+
+    // An operation stored without a plan lists nothing rather than failing.
+    let planless = seed_queued_operation(&ctx, &library_id, &root_id).await;
+    let empty = gql(&ctx, ASSETS_QUERY, json!({ "id": planless })).await;
+    assert_no_errors(&empty);
+    let empty_listing = &empty["data"]["locationOperationAssets"];
+    assert_eq!(empty_listing["renamesTotal"], 0);
+    assert_eq!(empty_listing["dedupsTotal"], 0);
+    assert!(
+        empty_listing["titles"]
+            .as_array()
+            .expect("titles")
+            .is_empty()
+    );
 }
 
 #[tokio::test]

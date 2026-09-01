@@ -4215,3 +4215,42 @@ export const locationOperationQuery = `query LocationOperation($id: ID!) {
   locationOperation(id: $id) {${LOCATION_OPERATION_FIELDS}
   }
 }`;
+
+/**
+ * Which files the operation renamed and deduplicated (FR-091). Read separately
+ * from the operation row because the per-file identities live in the stored
+ * plan, which the two-second progress poll has no reason to load.
+ */
+export const locationOperationAssetsQuery = `query LocationOperationAssets($id: ID!) {
+  locationOperationAssets(id: $id) {
+    operationId
+    renamesTotal
+    renamesDone
+    dedupsTotal
+    dedupsDone
+    titles {
+      titleId
+      titleName
+      sequence
+      settled
+      checkpointState
+      renames {
+        sourcePath
+        sourceName
+        destinationPath
+        destinationName
+        provenanceLabel
+        mediaFileId
+        sizeBytes
+        done
+      }
+      dedups {
+        sourcePath
+        sourceName
+        survivingPath
+        survivingName
+        done
+      }
+    }
+  }
+}`;

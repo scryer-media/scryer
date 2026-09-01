@@ -583,8 +583,16 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // mutation 199->202, OBJECT 324->341, INPUT_OBJECT 176->179, ENUM 116->123,
     // public types 628->655. The LOCATION_OPERATION job key joins the existing
     // JobKeyValue enum, so it adds no type.
+    // The dedup/rename asset listing (T090, FR-091, US8.1/US8.4) adds the
+    // locationOperationAssets query root and four payload objects (the listing,
+    // one title's assets, one renamed asset, one deduplicated asset): query
+    // 138->139, OBJECT 352->356, public types 673->677. The per-title state
+    // reuses the existing LocationTitleCheckpointStateValue, so ENUM is
+    // unchanged, and nothing is added to the operation payload itself: the
+    // per-file identities live in the stored plan, which a progress poll has no
+    // reason to load.
     assert_eq!(
-        query_field_count, 138,
+        query_field_count, 139,
         "query fields: {query_field_names:?}"
     );
     assert_eq!(
@@ -618,8 +626,8 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // this census counts types and root fields only, so every count below is
     // unchanged.
     assert_eq!(subscription_field_count, 14);
-    assert_eq!(public_types.len(), 673);
-    assert_eq!(kind_count("OBJECT"), 352);
+    assert_eq!(public_types.len(), 677);
+    assert_eq!(kind_count("OBJECT"), 356);
     assert_eq!(kind_count("INPUT_OBJECT"), 179);
     assert_eq!(kind_count("ENUM"), 130);
     assert_eq!(kind_count("SCALAR"), 10);
@@ -641,6 +649,11 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     assert!(public_type_names.contains(&"DisplacedTitleRepairPayload"));
     assert!(query_field_names.contains(&"locationOperationPreview"));
     assert!(query_field_names.contains(&"locationOperation"));
+    assert!(query_field_names.contains(&"locationOperationAssets"));
+    assert!(public_type_names.contains(&"LocationOperationAssetListingPayload"));
+    assert!(public_type_names.contains(&"LocationOperationTitleAssetsPayload"));
+    assert!(public_type_names.contains(&"LocationOperationRenamedAssetPayload"));
+    assert!(public_type_names.contains(&"LocationOperationDeduplicatedAssetPayload"));
     assert!(mutation_field_names.contains(&"startLocationOperation"));
     assert!(mutation_field_names.contains(&"cancelLocationOperation"));
     assert!(mutation_field_names.contains(&"resumeLocationOperation"));

@@ -13,8 +13,14 @@ import {
   cancelLocationOperationMutation,
   resumeLocationOperationMutation,
 } from "@/lib/graphql/mutations";
-import { locationOperationQuery } from "@/lib/graphql/queries";
 import {
+  locationOperationAssetsQuery,
+  locationOperationQuery,
+} from "@/lib/graphql/queries";
+import {
+  assetLineTextKey,
+  assetLines,
+  assetsByTitle,
   canCancelOperation,
   canResumeOperation,
   checkpointMergeTarget,
@@ -26,9 +32,12 @@ import {
   operationByteProgress,
   operationStateLabelKey,
   orderedCheckpoints,
+  showsAssetPlannedState,
   toCount,
   verificationStampText,
   type LocationOperation,
+  type LocationOperationAssetListing,
+  type LocationTitleAssets,
   type LocationTitleCheckpoint,
 } from "@/lib/location-operations";
 import { formatByteCount } from "@/lib/utils/activity-utils";
@@ -63,6 +72,8 @@ export function LocationOperationPanel({ operationId, onDismiss }: Props) {
   const [missing, setMissing] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
   const [expanded, setExpanded] = React.useState<Set<string>>(new Set());
+  const [assets, setAssets] =
+    React.useState<LocationOperationAssetListing | null>(null);
   const [refreshNonce, setRefreshNonce] = React.useState(0);
   const [nowMs, setNowMs] = React.useState(() => Date.now());
 
@@ -75,6 +86,7 @@ export function LocationOperationPanel({ operationId, onDismiss }: Props) {
     setError(null);
     setLoading(true);
     setExpanded(new Set());
+    setAssets(null);
   }, [operationId]);
 
   React.useEffect(() => {
@@ -140,6 +152,48 @@ export function LocationOperationPanel({ operationId, onDismiss }: Props) {
       }
     };
   }, [client, operationId, polling, refreshNonce, t]);
+
+  // The asset listing is read separately from the operation row and only once
+  // the user opens a title: the per-file identities live in the operation's
+  // stored plan, and loading it on every two-second progress poll would be a
+  // plan read per tick for a section nobody is looking at (FR-091).
+  const wantsAssets = expanded.size > 0;
+  const operationUpdatedAt = operation?.updatedAt ?? null;
+  React.useEffect(() => {
+    if (!operationId || !wantsAssets) {
+      return undefined;
+    }
+    let active = true;
+    client
+      .query(
+        locationOperationAssetsQuery,
+        { id: operationId },
+        { requestPolicy: "network-only" },
+      )
+      .toPromise()
+      .then(({ data }) => {
+        if (!active) {
+          return;
+        }
+        setAssets(
+          (data?.locationOperationAssets as LocationOperationAssetListing | null) ??
+            null,
+        );
+      })
+      .catch(() => {
+        // The listing is detail beside the counters, which are already on
+        // screen. A failed read leaves the section saying it has nothing
+        // rather than replacing the whole panel with an error.
+        if (active) {
+          setAssets(null);
+        }
+      });
+    return () => {
+      active = false;
+    };
+    // Re-read whenever the operation itself was written: a title that settles
+    // flips its entries from planned to done.
+  }, [client, operationId, wantsAssets, operationUpdatedAt, refreshNonce]);
 
   const refresh = React.useCallback(() => {
     setRefreshNonce((current) => current + 1);
@@ -241,6 +295,10 @@ export function LocationOperationPanel({ operationId, onDismiss }: Props) {
   const counters = operation.counters;
   const progress = Math.round(operationByteProgress(counters) * 100);
   const checkpoints = orderedCheckpoints(operation.titleCheckpoints);
+  const titleAssets = assetsByTitle(assets);
+  // FR-091: while some of what the plan describes has not happened yet, every
+  // asset row says which side of that line it is on.
+  const showPlannedState = showsAssetPlannedState(operation, assets);
   const fallbackCount = toCount(operation.verificationFallbackCount);
   const terminal = isTerminalOperationState(operation.state);
 
@@ -406,6 +464,8 @@ export function LocationOperationPanel({ operationId, onDismiss }: Props) {
                 <CheckpointRow
                   key={checkpoint.titleId}
                   checkpoint={checkpoint}
+                  assets={titleAssets.get(checkpoint.titleId) ?? null}
+                  showPlannedState={showPlannedState}
                   expanded={expanded.has(checkpoint.titleId)}
                   onToggle={() => toggleCheckpoint(checkpoint.titleId)}
                   t={t}
@@ -458,17 +518,22 @@ function Counter({
 
 function CheckpointRow({
   checkpoint,
+  assets,
+  showPlannedState,
   expanded,
   onToggle,
   t,
 }: {
   checkpoint: LocationTitleCheckpoint;
+  assets: LocationTitleAssets | null;
+  showPlannedState: boolean;
   expanded: boolean;
   onToggle: () => void;
   t: (key: string, values?: Record<string, string | number>) => string;
 }) {
   const attention = checkpointNeedsAttention(checkpoint);
   const mergeTarget = checkpointMergeTarget(checkpoint);
+  const lines = assetLines(assets);
   return (
     <li
       id={`location-operation-checkpoint-${checkpoint.titleId}`}
@@ -546,6 +611,56 @@ function CheckpointRow({
             <div>
               <dt className="inline">{t("move.checkpointDetail")}: </dt>
               <dd className="inline">{checkpoint.detail}</dd>
+            </div>
+          ) : null}
+          {/* FR-091: the counters say how many files were renamed and
+              deduplicated; this says which ones, and whether it has happened
+              yet. A title with no collisions shows nothing rather than an
+              empty heading. */}
+          {lines.length > 0 ? (
+            <div id={`location-operation-assets-${checkpoint.titleId}`}>
+              <dt>{t("move.assetsHeading")}</dt>
+              <dd>
+                <ul className="mt-0.5 space-y-0.5">
+                  {lines.map((line) => (
+                    <li
+                      key={line.key}
+                      id={`location-operation-asset-${checkpoint.titleId}-${line.key}`}
+                      data-asset-kind={line.kind}
+                      data-asset-done={line.done ? "true" : "false"}
+                      className="break-words"
+                    >
+                      <span className="font-[var(--font-code)] break-all">
+                        {t(assetLineTextKey(line.kind), {
+                          from: line.from,
+                          to: line.to ?? t("move.assetUnknownCounterpart"),
+                        })}
+                      </span>
+                      {line.provenanceLabel ? (
+                        <span className="ml-1 text-muted-foreground">
+                          {t("move.assetProvenance", {
+                            library: line.provenanceLabel,
+                          })}
+                        </span>
+                      ) : null}
+                      {showPlannedState ? (
+                        <span
+                          className="ml-1"
+                          id={`location-operation-asset-state-${checkpoint.titleId}-${line.key}`}
+                        >
+                          <Badge tone={line.done ? "neutral" : "info"}>
+                            {t(
+                              line.done
+                                ? "move.assetStateDone"
+                                : "move.assetStatePlanned",
+                            )}
+                          </Badge>
+                        </span>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              </dd>
             </div>
           ) : null}
         </dl>

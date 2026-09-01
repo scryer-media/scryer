@@ -25,11 +25,13 @@
 //! | [`transfer_effects`] | Series↔anime facet conversion and the link/kind/collection dispositions a transfer states (FR-057–058, FR-060–062). |
 //! | [`merge`] | Identity mapping and per-table dispositions when a destination title already exists (FR-063–067). |
 //! | [`adoption`] | "Files are already there": destination accounting against stored catalog proof (FR-050–053). |
+//! | [`asset_listing`] | Which files a finished operation renamed and deduplicated, read back off its confirmed plan (FR-091). |
 //! | [`ownership_guard`] | Persisted + in-process (title, root) ownership for the duration of an operation (FR-084). |
 //! | [`backfill`] | The throttled, resumable full-hash convergence job (FR-047). |
 //! | [`media_server_refresh`] | Targeted media-server refresh for the folders a finished operation changed (FR-088). |
 
 pub mod adoption;
+pub mod asset_listing;
 pub mod backfill;
 pub mod classify;
 pub mod collisions;

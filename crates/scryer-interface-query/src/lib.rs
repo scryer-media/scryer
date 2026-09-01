@@ -34,7 +34,8 @@ use scryer_interface_media::mappers::{
     from_application_upgrade_status, from_backup_info, from_catalog_discovery, from_collection,
     from_dashboard_activity_stats, from_delete_preview, from_delete_titles_preview,
     from_change_title_folder_preview, from_discovery_home, from_discovery_home_cards,
-    from_location_operation, from_root_move_preview, location_destination_into_application,
+    from_location_operation, from_location_operation_asset_listing, from_root_move_preview,
+    location_destination_into_application,
     from_discovery_home_filter_options,
     from_discovery_item, from_discovery_items_result, from_domain_event, from_download_queue_item,
     from_episode, from_external_import_monitor_warmup_progress, from_job_definition, from_job_run,
@@ -1584,6 +1585,40 @@ impl CatalogQueries {
             .await
             .map_err(to_gql_error)?;
         Ok(Some(from_location_operation(&operation, &checkpoints)))
+    }
+
+    /// Which files one location operation renames and deduplicates, per title.
+    ///
+    /// Activity's counters say how many; this says which ones, and whether each
+    /// has happened yet or is still only what the confirmed plan intends
+    /// (FR-091). It is a separate read from `locationOperation` because the
+    /// per-file identities live in the operation's stored plan, which a
+    /// progress poll has no reason to load.
+    async fn location_operation_assets(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Location-operation identity.")] id: ID,
+    ) -> GqlResult<Option<LocationOperationAssetListingPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let operation_id = id.to_string();
+        let Some(operation) = app
+            .location_operation(&operation_id)
+            .await
+            .map_err(to_gql_error)?
+        else {
+            return Ok(None);
+        };
+        // The same source-and-destination gate reading the operation itself
+        // applies (FR-083); this reads the same two libraries' paths.
+        app.require_location_operation_permission(&actor, &operation)
+            .await
+            .map_err(to_gql_error)?;
+        let listing = app
+            .location_operation_asset_listing(&operation_id)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(Some(from_location_operation_asset_listing(&listing)))
     }
 
     /// Preview deleting all media files for one title without changing files.
