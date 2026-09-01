@@ -105,12 +105,20 @@ export const PendingImportCard = React.memo(function PendingImportCard({
     !isOwnershipConflict && !(item.titleId && item.facet === "MOVIE");
 
   return (
-    <Card className="border-border/80 bg-card/60">
+    <Card
+      id={`pending-import-card-${item.id}`}
+      className="border-border/80 bg-card/60"
+    >
       <CardHeader className="space-y-2">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="space-y-1">
             <CardTitle className="text-base">{item.displayName}</CardTitle>
-            <p className="text-sm text-muted-foreground">{summary}</p>
+            <p
+              id={`pending-import-status-${item.id}`}
+              className="text-sm text-muted-foreground"
+            >
+              {summary}
+            </p>
             <p className="text-xs text-muted-foreground">{t("pendingImports.library")} {libraryLabel}</p>
           </div>
           <div className="flex flex-col gap-2 sm:flex-row">
@@ -118,6 +126,11 @@ export const PendingImportCard = React.memo(function PendingImportCard({
               <Button
                 type="button"
                 size="sm"
+                id={
+                  item.titleId
+                    ? `pending-import-bind-episodes-${item.id}`
+                    : `pending-import-search-${item.id}`
+                }
                 variant={isActive ? "secondary" : "default"}
                 onClick={() => onOpenSearch(item)}
                 disabled={isBusy}
@@ -130,6 +143,7 @@ export const PendingImportCard = React.memo(function PendingImportCard({
               <Button
                 type="button"
                 size="sm"
+                id={`pending-import-ignore-${item.id}`}
                 variant="destructive"
                 onClick={() => onRequestIgnore(item)}
                 disabled={isBusy}
@@ -353,6 +367,7 @@ export const PendingImportCard = React.memo(function PendingImportCard({
                     <div className="flex justify-end">
                       <Button
                         type="button"
+                        id={`pending-import-bind-selected-${item.id}`}
                         disabled={isBusy || selectedEpisodeIds.length === 0}
                         onClick={() => void onBind()}
                       >

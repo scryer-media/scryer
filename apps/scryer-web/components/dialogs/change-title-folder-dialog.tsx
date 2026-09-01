@@ -353,19 +353,28 @@ export function ChangeTitleFolderDialog({
               {folderMatchOutcomeMessage(result, t)}
             </div>
             {result.detachedMediaFileCount > 0 ? (
-              <p className="text-xs text-muted-foreground">
+              <p
+                id="change-title-folder-detached-media"
+                className="text-xs text-muted-foreground"
+              >
                 {t("title.changeFolderDetachedMedia", {
                   count: result.detachedMediaFileCount,
                 })}
               </p>
             ) : null}
             {result.scan ? (
-              <p className="text-xs text-muted-foreground">
+              <p
+                id="change-title-folder-scan-summary"
+                className="text-xs text-muted-foreground"
+              >
                 {scanSummary(result.scan)}
               </p>
             ) : null}
             {result.swappedTitleScan ? (
-              <p className="text-xs text-muted-foreground">
+              <p
+                id="change-title-folder-swapped-scan-summary"
+                className="text-xs text-muted-foreground"
+              >
                 {scanSummary(result.swappedTitleScan)}
               </p>
             ) : null}

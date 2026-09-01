@@ -875,6 +875,7 @@ export function MoveTitlesDialog({
           <Button
             type="button"
             variant="outline"
+            id="move-titles-dismiss"
             onClick={() => onOpenChange(false)}
             disabled={starting}
           >

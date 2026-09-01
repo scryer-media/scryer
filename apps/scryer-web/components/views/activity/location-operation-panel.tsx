@@ -250,7 +250,7 @@ export function LocationOperationPanel({ operationId, onDismiss }: Props) {
           <div className="min-w-0">
             <p className="flex items-center gap-2 text-sm font-medium text-foreground">
               {t(`move.operationType.${operation.operationType}`)}
-              <Badge tone={operationTone(operation)}>
+              <Badge id="location-operation-state" tone={operationTone(operation)}>
                 {t(operationStateLabelKey(operation.state))}
               </Badge>
               {operation.cancelRequested && !terminal ? (
@@ -305,7 +305,7 @@ export function LocationOperationPanel({ operationId, onDismiss }: Props) {
 
         <div className="space-y-1">
           <Progress value={progress} />
-          <p className="text-xs text-muted-foreground">
+          <p id="location-operation-progress" className="text-xs text-muted-foreground">
             {t("move.operationProgress", {
               titles: `${toCount(counters.titlesProcessed)}/${toCount(counters.titlesTotal)}`,
               files: `${toCount(counters.filesProcessed)}/${toCount(counters.filesTotal)}`,
@@ -315,14 +315,28 @@ export function LocationOperationPanel({ operationId, onDismiss }: Props) {
         </div>
 
         <dl className="grid grid-cols-2 gap-2 sm:grid-cols-5">
-          <Counter label={t("move.counterDedups")} value={toCount(counters.dedups)} />
-          <Counter label={t("move.counterRenames")} value={toCount(counters.renames)} />
-          <Counter label={t("move.counterNoOps")} value={toCount(counters.noOps)} />
           <Counter
+            counterKey="dedups"
+            label={t("move.counterDedups")}
+            value={toCount(counters.dedups)}
+          />
+          <Counter
+            counterKey="renames"
+            label={t("move.counterRenames")}
+            value={toCount(counters.renames)}
+          />
+          <Counter
+            counterKey="no-ops"
+            label={t("move.counterNoOps")}
+            value={toCount(counters.noOps)}
+          />
+          <Counter
+            counterKey="unresolved"
             label={t("move.counterUnresolved")}
             value={toCount(counters.unresolved)}
           />
           <Counter
+            counterKey="blocked"
             label={t("move.counterBlocked")}
             value={toCount(counters.titlesBlocked)}
           />
@@ -400,9 +414,20 @@ function operationTone(
   }
 }
 
-function Counter({ label, value }: { label: string; value: number }) {
+function Counter({
+  counterKey,
+  label,
+  value,
+}: {
+  counterKey: string;
+  label: string;
+  value: number;
+}) {
   return (
-    <div className="min-w-0 rounded-lg border border-border bg-muted/10 px-2 py-1">
+    <div
+      id={`location-operation-counter-${counterKey}`}
+      className="min-w-0 rounded-lg border border-border bg-muted/10 px-2 py-1"
+    >
       <dt className="truncate text-xs text-muted-foreground">{label}</dt>
       <dd className="text-sm text-foreground">{value}</dd>
     </div>
@@ -423,6 +448,7 @@ function CheckpointRow({
   const attention = checkpointNeedsAttention(checkpoint);
   return (
     <li
+      id={`location-operation-checkpoint-${checkpoint.titleId}`}
       className={cn(
         "rounded-lg border px-2 py-1",
         attention

@@ -42,6 +42,7 @@ import {
   titleOverviewOpenButtonId,
   titleOverviewRowId,
   titleOverviewSearchButtonId,
+  titleOverviewSelectId,
 } from "@/lib/utils/dom-ids";
 import {
   bytesToReadable,
@@ -618,6 +619,7 @@ export const TitleTable = React.memo(function TitleTable({
         >
           <TableCell className="px-0 text-center align-middle">
             <Checkbox
+              id={titleOverviewSelectId(item.id)}
               checked={selectedTitleIds.has(item.id)}
               onCheckedChange={() => onToggleSelected(item.id)}
               aria-label={t("title.selectTitle", { name: item.name })}

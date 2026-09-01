@@ -198,6 +198,7 @@ export function BulkTitleEditDialog({
               <Select value="__current__" disabled>
                 <SelectTrigger
                   id="bulk-title-edit-destination-library"
+                  aria-label={t("move.destinationLibrary")}
                   className="h-9 w-full text-sm"
                 >
                   <SelectValue />
@@ -237,7 +238,13 @@ export function BulkTitleEditDialog({
               }}
               disabled={busy || (Boolean(onRequestMove) && sortedRootFolders.length === 0)}
             >
-              <SelectTrigger className="h-9 w-full font-[var(--font-code)] text-sm">
+              <SelectTrigger
+                id="bulk-title-edit-destination-root"
+                aria-label={
+                  onRequestMove ? t("move.destinationRoot") : t("title.rootFolder")
+                }
+                className="h-9 w-full font-[var(--font-code)] text-sm"
+              >
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
