@@ -37,8 +37,9 @@ import { startLocationOperationMutation } from "@/lib/graphql/mutations";
 import { locationOperationPreviewQuery } from "@/lib/graphql/queries";
 import {
   adoptionAccounting,
+  adoptionBlockedReasonKey,
   ambiguousCandidates,
-  blockingTitles,
+  blockingTitleRows,
   classBlocksStart,
   classificationLabelKey,
   classifiedTitlePlacement,
@@ -292,10 +293,10 @@ export function MoveTitlesDialog({
     () => orderedClassificationGroups(preview?.classification),
     [preview],
   );
-  const blocked = React.useMemo(
-    () => blockingTitles(preview?.classification),
-    [preview],
-  );
+  // Both ways a title can stop the plan: the classification refusing it, and an
+  // adoption refusing its files while the title itself still classifies as a
+  // plain root move (FR-052, FR-086).
+  const blocked = React.useMemo(() => blockingTitleRows(preview), [preview]);
   const planKindCounts = React.useMemo(
     () => orderedPlanKindCounts(preview?.counts),
     [preview],
@@ -706,35 +707,53 @@ export function MoveTitlesDialog({
                     {t("move.blockedHelp")}
                   </p>
                   <ul className="space-y-1">
-                    {blocked.map((entry) => (
-                      <li
-                        key={entry.titleId}
-                        className="space-y-1 text-sm text-[var(--scry-danger-text)]"
-                      >
-                        <span className="flex items-center justify-between gap-2">
-                          <span className="min-w-0 truncate">
-                            {titleById.get(entry.titleId)?.name ?? entry.titleId}
-                            {entry.reason ? ` — ${entry.reason}` : ""}
+                    {blocked.map((row) => {
+                      const adoptionReasonKey = adoptionBlockedReasonKey(
+                        row.adoptionReasonCode,
+                      );
+                      return (
+                        <li
+                          key={row.titleId}
+                          className="space-y-1 text-sm text-[var(--scry-danger-text)]"
+                        >
+                          <span className="flex items-center justify-between gap-2">
+                            <span className="min-w-0 truncate">
+                              {titleById.get(row.titleId)?.name ?? row.titleId}
+                              {row.reason ? ` — ${row.reason}` : ""}
+                            </span>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              id={`move-titles-deselect-${row.titleId}`}
+                              onClick={() => deselect(row.titleId)}
+                              disabled={starting}
+                            >
+                              <X className="mr-1 h-3.5 w-3.5" />
+                              {t("move.deselect")}
+                            </Button>
                           </span>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            id={`move-titles-deselect-${entry.titleId}`}
-                            onClick={() => deselect(entry.titleId)}
-                            disabled={starting}
-                          >
-                            <X className="mr-1 h-3.5 w-3.5" />
-                            {t("move.deselect")}
-                          </Button>
-                        </span>
-                        <BlockedIdentityDetail
-                          entry={entry}
-                          titleName={titleName}
-                          t={t}
-                        />
-                      </li>
-                    ))}
+                          {/* FR-052's refusal names its files in the accounting
+                              panel; here it names the title the user is being
+                              told to deselect. */}
+                          {adoptionReasonKey ? (
+                            <span
+                              id={`move-titles-adoption-blocked-${row.titleId}`}
+                              className="block text-xs"
+                            >
+                              {t(adoptionReasonKey)}
+                            </span>
+                          ) : null}
+                          {row.entry ? (
+                            <BlockedIdentityDetail
+                              entry={row.entry}
+                              titleName={titleName}
+                              t={t}
+                            />
+                          ) : null}
+                        </li>
+                      );
+                    })}
                   </ul>
                 </div>
               ) : null}

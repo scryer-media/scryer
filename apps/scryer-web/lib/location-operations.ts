@@ -1374,6 +1374,169 @@ export function adoptionBlocks(
   return accounting?.blocks === true;
 }
 
+/**
+ * The reason codes an adoption refusal stamps on its `Blocked` plan items
+ * (FR-052). The other two adoption codes are surfaced and never refused, so
+ * they are not among them.
+ */
+export type AdoptionBlockingReasonCode =
+  | typeof ADOPTION_REASON_CODES.missing
+  | typeof ADOPTION_REASON_CODES.ambiguous
+  | typeof ADOPTION_REASON_CODES.unreadable;
+
+/**
+ * Severity order for a title carrying more than one refusal: a folder that
+ * could not be read at all comes before a file that was looked for and not
+ * found, which comes before one that matched too many candidates.
+ */
+const ADOPTION_BLOCKING_REASON_ORDER: AdoptionBlockingReasonCode[] = [
+  ADOPTION_REASON_CODES.unreadable,
+  ADOPTION_REASON_CODES.missing,
+  ADOPTION_REASON_CODES.ambiguous,
+];
+
+function adoptionBlockingReasonCode(
+  item: LocationPlanItem,
+): AdoptionBlockingReasonCode | null {
+  const code = item.reasonCode;
+  if (
+    code &&
+    (ADOPTION_BLOCKING_REASON_ORDER as readonly string[]).includes(code)
+  ) {
+    return code as AdoptionBlockingReasonCode;
+  }
+  return null;
+}
+
+/** One title an adoption refusal stops, as the plan items name it (FR-052). */
+export type AdoptionBlockedTitle = {
+  titleId: string;
+  /** Every refusal reason stamped on this title, in severity order. */
+  reasonCodes: AdoptionBlockingReasonCode[];
+  /**
+   * The reason the row leads with, or null when only the title-level rollup
+   * named this title. That rollup always reads "missing" — even for a title
+   * whose only problem is ambiguity — so it marks the title as refused without
+   * ever being read as a reason.
+   */
+  primaryReasonCode: AdoptionBlockingReasonCode | null;
+};
+
+/**
+ * Every title an adoption refusal blocks, in payload order.
+ *
+ * The refusal rides on `BLOCKED` plan items and not on the classification — the
+ * title itself still classifies as a plain root move — so the plan is the only
+ * place the deselect affordance can learn which titles FR-052's "resolve them
+ * or deselect the title" is actually about.
+ */
+export function adoptionBlockedTitles(
+  preview: LocationOperationPreview | null | undefined,
+): AdoptionBlockedTitle[] {
+  if (!preview || preview.mode !== "FILES_ALREADY_THERE") {
+    return [];
+  }
+  const reasonsByTitle = new Map<string, Set<AdoptionBlockingReasonCode>>();
+  const order: string[] = [];
+  for (const section of preview.sections ?? []) {
+    for (const item of section.items) {
+      const code = adoptionBlockingReasonCode(item);
+      if (!code || !item.titleId) {
+        continue;
+      }
+      let reasons = reasonsByTitle.get(item.titleId);
+      if (!reasons) {
+        reasons = new Set<AdoptionBlockingReasonCode>();
+        reasonsByTitle.set(item.titleId, reasons);
+        order.push(item.titleId);
+      }
+      // The same rule the accounting reads by: a per-file refusal names the
+      // file it is about, and the title-level rollup carries no source path.
+      // Only the former says which reason applies. An unreadable destination
+      // has no tracked file to name and is always its own reason.
+      if (code === ADOPTION_REASON_CODES.unreadable || item.sourcePath) {
+        reasons.add(code);
+      }
+    }
+  }
+  return order.map((titleId) => {
+    const reasons = reasonsByTitle.get(titleId);
+    const reasonCodes = ADOPTION_BLOCKING_REASON_ORDER.filter(
+      (code) => reasons?.has(code) === true,
+    );
+    return {
+      titleId,
+      reasonCodes,
+      primaryReasonCode: reasonCodes[0] ?? null,
+    };
+  });
+}
+
+/** Translation key for one adoption refusal reason, when there is one to state. */
+export function adoptionBlockedReasonKey(
+  code: AdoptionBlockingReasonCode | null | undefined,
+): string | null {
+  return code ? `move.adoptionBlockedReason.${code}` : null;
+}
+
+/**
+ * One row of the dialog's deselect list: a title the plan refuses to start
+ * with, whichever of the two ways it is blocked.
+ */
+export type BlockingTitleRow = {
+  titleId: string;
+  /** The classified row, when the classification is what blocks the title. */
+  entry: LocationClassifiedTitle | null;
+  /** The classification's own prose, when it carried any. */
+  reason: string | null;
+  /** The adoption refusal's reason, when an adoption is what blocks it. */
+  adoptionReasonCode: AdoptionBlockingReasonCode | null;
+};
+
+/**
+ * Every title the user must deselect to proceed: the classification-blocked
+ * ones first, in render order, then the adoption-refused ones in payload order.
+ *
+ * A title blocked both ways — an adoption whose title also needs resolution —
+ * gets one row carrying both reasons, so the deselect control is never rendered
+ * twice for the same id (FR-016, FR-052, FR-086).
+ */
+export function blockingTitleRows(
+  preview: LocationOperationPreview | null | undefined,
+): BlockingTitleRow[] {
+  const rows: BlockingTitleRow[] = [];
+  const byTitle = new Map<string, BlockingTitleRow>();
+  for (const entry of blockingTitles(preview?.classification)) {
+    if (byTitle.has(entry.titleId)) {
+      continue;
+    }
+    const row: BlockingTitleRow = {
+      titleId: entry.titleId,
+      entry,
+      reason: entry.reason,
+      adoptionReasonCode: null,
+    };
+    byTitle.set(entry.titleId, row);
+    rows.push(row);
+  }
+  for (const blocked of adoptionBlockedTitles(preview)) {
+    const existing = byTitle.get(blocked.titleId);
+    if (existing) {
+      existing.adoptionReasonCode = blocked.primaryReasonCode;
+      continue;
+    }
+    const row: BlockingTitleRow = {
+      titleId: blocked.titleId,
+      entry: null,
+      reason: null,
+      adoptionReasonCode: blocked.primaryReasonCode,
+    };
+    byTitle.set(blocked.titleId, row);
+    rows.push(row);
+  }
+  return rows;
+}
+
 /** Terminal operations neither progress nor resume. */
 export function isTerminalOperationState(state: LocationOperationState): boolean {
   return (
