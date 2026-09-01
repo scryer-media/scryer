@@ -55,7 +55,7 @@ export function SettingsSecurityContainer() {
   const navigate = useNavigate();
   const client = useClient();
   const t = useTranslate();
-  const { token, user, logout } = useAuth();
+  const { token, user, login, adoptSession, logout } = useAuth();
   const [settings, setSettings] = React.useState<SecuritySettings>(
     DEFAULT_SECURITY_SETTINGS,
   );
@@ -65,6 +65,7 @@ export function SettingsSecurityContainer() {
   const [adminPasswordRequiredOpen, setAdminPasswordRequiredOpen] = React.useState(false);
   const [confirmBusy, setConfirmBusy] = React.useState(false);
   const [saveBusy, setSaveBusy] = React.useState(false);
+  const [confirmPassword, setConfirmPassword] = React.useState("");
   const [confirmError, setConfirmError] = React.useState<string | null>(null);
   const [passwordMinLengthDraft, setPasswordMinLengthDraft] = React.useState(
     String(DEFAULT_SECURITY_SETTINGS.passwordMinLength),
@@ -97,6 +98,7 @@ export function SettingsSecurityContainer() {
 
   const openAdminPasswordRequiredDialog = React.useCallback(() => {
     setEnableConfirmOpen(false);
+    setConfirmPassword("");
     setConfirmError(null);
     setAdminPasswordRequiredOpen(true);
   }, []);
@@ -246,7 +248,13 @@ export function SettingsSecurityContainer() {
     }
 
     if (enabled) {
+      if (user?.hasPassword === false) {
+        openAdminPasswordRequiredDialog();
+        return;
+      }
+
       setConfirmError(null);
+      setConfirmPassword("");
       setEnableConfirmOpen(true);
       return;
     }
@@ -254,8 +262,10 @@ export function SettingsSecurityContainer() {
     setDisableConfirmOpen(true);
   }, [
     confirmBusy,
+    openAdminPasswordRequiredDialog,
     saveBusy,
     settings.formLoginEnabled,
+    user?.hasPassword,
   ]);
 
   const handleConfirmEnable = React.useCallback(async () => {
@@ -264,6 +274,30 @@ export function SettingsSecurityContainer() {
 
     setConfirmBusy(true);
     setConfirmError(null);
+
+    let verifiedSession: Awaited<ReturnType<typeof login>>;
+    const currentUsername = user?.username.trim();
+    if (!currentUsername) {
+      setConfirmError(t("settings.securityCredentialsInvalid"));
+      setConfirmBusy(false);
+      return;
+    }
+
+    try {
+      verifiedSession = await login(currentUsername, confirmPassword, {
+        persistSession: false,
+      });
+    } catch {
+      setConfirmError(t("settings.securityCredentialsInvalid"));
+      setConfirmBusy(false);
+      return;
+    }
+
+    if (!hasAppPermission(verifiedSession.user, APP_PERMISSIONS.manageUsers)) {
+      setConfirmError(t("settings.securityCredentialsInsufficient"));
+      setConfirmBusy(false);
+      return;
+    }
 
     setEnableConfirmOpen(false);
     try {
@@ -284,13 +318,14 @@ export function SettingsSecurityContainer() {
       );
 
       if (effectiveChangesNow) {
-        logout();
+        adoptSession(verifiedSession.token, verifiedSession.user);
         disposeWsClient();
         window.location.reload();
         return;
       }
 
       setEnableConfirmOpen(false);
+      setConfirmPassword("");
       setConfirmError(null);
     } catch (error) {
       const saveErrorMessage = errorMessage(error, t("settings.securitySaveFailed"));
@@ -306,8 +341,10 @@ export function SettingsSecurityContainer() {
       setConfirmBusy(false);
     }
   }, [
+    adoptSession,
     applySecuritySettings,
-    logout,
+    confirmPassword,
+    login,
     openAdminPasswordRequiredDialog,
     settings.effectiveFormLoginEnabled,
     settings.envOverrideActive,
@@ -318,6 +355,7 @@ export function SettingsSecurityContainer() {
     settings.mfaRequireJellyfinLogin,
     t,
     effectivePasswordMinLength,
+    user?.username,
   ]);
 
   const handleCancelEnable = React.useCallback(() => {
@@ -326,6 +364,7 @@ export function SettingsSecurityContainer() {
     }
 
     setEnableConfirmOpen(false);
+    setConfirmPassword("");
     setConfirmError(null);
   }, [confirmBusy]);
 
@@ -657,10 +696,12 @@ export function SettingsSecurityContainer() {
       disableConfirmOpen={disableConfirmOpen}
       adminPasswordRequiredOpen={adminPasswordRequiredOpen}
       confirmBusy={confirmBusy}
+      confirmPassword={confirmPassword}
       confirmError={confirmError}
       passwordMinLengthDraft={passwordMinLengthDraft}
       minPasswordLength={MIN_PASSWORD_LENGTH}
       onToggle={handleToggle}
+      onConfirmPasswordChange={setConfirmPassword}
       onConfirmEnable={handleConfirmEnable}
       onCancelEnable={handleCancelEnable}
       onConfirmDisable={handleConfirmDisable}
