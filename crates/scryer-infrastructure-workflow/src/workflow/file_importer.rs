@@ -1408,6 +1408,7 @@ fn copy_regular_source_to_destination_once(
 /// gate expressed at the only place an import copies bytes — an import that
 /// errors here never reaches source cleanup, so a corrupt copy can never cost
 /// the user the original.
+#[allow(clippy::too_many_arguments)]
 fn copy_regular_source_to_destination(
     source: &Path,
     dest: &Path,

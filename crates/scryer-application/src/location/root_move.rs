@@ -567,7 +567,7 @@ fn plan_title(
                         .with_title(draft.title_id.clone())
                         .with_paths(
                             Some(path_to_stored_string(&file.path)),
-                            Some(path_to_stored_string(&destination_folder.join(&final_name))),
+                            Some(path_to_stored_string(destination_folder.join(&final_name))),
                         )
                         .with_reason_code(plan_reasons::FILE_OUTSIDE_TITLE_FOLDER)
                         .with_detail(

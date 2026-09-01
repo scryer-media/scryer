@@ -555,19 +555,19 @@ impl AppUseCase {
                         crate::JobRunStatus::Completed,
                         summary,
                         None,
-                        Some(outcome.counters.clone()),
+                        Some(outcome.counters),
                     ),
                     LocationOperationState::CompletedWithWarnings => (
                         crate::JobRunStatus::Warning,
                         summary,
                         None,
-                        Some(outcome.counters.clone()),
+                        Some(outcome.counters),
                     ),
                     LocationOperationState::Canceled => (
                         crate::JobRunStatus::Warning,
                         summary,
                         None,
-                        Some(outcome.counters.clone()),
+                        Some(outcome.counters),
                     ),
                     LocationOperationState::Failed => (
                         crate::JobRunStatus::Failed,
@@ -575,7 +575,7 @@ impl AppUseCase {
                         Some(outcome.detail.clone().unwrap_or_else(|| {
                             "the location operation stopped on an error".to_string()
                         })),
-                        Some(outcome.counters.clone()),
+                        Some(outcome.counters),
                     ),
                     // A non-terminal outcome means the runner handed the
                     // operation back for someone else to continue; the run stays
@@ -1194,7 +1194,7 @@ impl AppUseCase {
             verification_depth: depth,
             free_space,
             case_rule,
-            naming: CollisionNaming::from_source_library(&source_library_label(&libraries)),
+            naming: CollisionNaming::from_source_library(source_library_label(&libraries)),
         });
 
         Ok(RootMovePlanning {
@@ -1405,7 +1405,7 @@ async fn read_destination_entries(destination_folder: &Path) -> Vec<DestinationI
             continue;
         }
         let name = entry.file_name().to_string_lossy().to_string();
-        let path = path_to_stored_string(&entry.path());
+        let path = path_to_stored_string(entry.path());
         items.push(
             DestinationItem::companion(name, metadata.len())
                 .with_content(ContentFacts::new(metadata.len()))

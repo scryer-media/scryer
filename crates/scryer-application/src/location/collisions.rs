@@ -337,10 +337,9 @@ pub fn dedup_verdict(incoming: &ContentFacts, destination: &ContentFacts) -> Ded
     if let (Some(left), Some(right)) = (
         incoming.sampled_proof.as_deref(),
         destination.sampled_proof.as_deref(),
-    ) {
-        if left != right {
-            return DedupVerdict::DifferentContent;
-        }
+    ) && left != right
+    {
+        return DedupVerdict::DifferentContent;
     }
 
     match (
@@ -901,20 +900,18 @@ pub fn plan_collisions(request: &CollisionPlanRequest) -> CollisionPlan {
         // media file, when that media file was renamed.
         let mut followed = false;
         let mut target = item.proposed_name.clone();
-        if let Some(parent_id) = item.companion_of.as_deref() {
-            if let Some(parent) = decisions.get(parent_id) {
-                if parent.final_name != parent.proposed_name {
-                    if let Some(next) = follow_media_rename(
-                        &item.proposed_name,
-                        &parent.proposed_name,
-                        &parent.final_name,
-                        case_rule,
-                    ) {
-                        target = next;
-                        followed = true;
-                    }
-                }
-            }
+        if let Some(parent_id) = item.companion_of.as_deref()
+            && let Some(parent) = decisions.get(parent_id)
+            && parent.final_name != parent.proposed_name
+            && let Some(next) = follow_media_rename(
+                &item.proposed_name,
+                &parent.proposed_name,
+                &parent.final_name,
+                case_rule,
+            )
+        {
+            target = next;
+            followed = true;
         }
         let decision = decide_item(item, target, request, &mut index, followed);
         decisions.insert(item.id.clone(), decision);
@@ -940,23 +937,22 @@ fn decide_item(
 
     // A "collision" with the moving title's own path under a different case is
     // a rename, not a collision (spec Edge Cases, FR-090).
-    if let (Some(existing), Some(source_path)) = (existing, item.source_path.as_deref()) {
-        if let Some(destination_path) = existing.path.as_deref() {
-            if is_self_collision(source_path, destination_path, case_rule) {
-                index.reserve(&target_name);
-                return CollisionDecision {
-                    item_id: item.id.clone(),
-                    kind: item.kind,
-                    disposition: CollisionDisposition::CaseOnlyRename,
-                    proposed_name: item.proposed_name.clone(),
-                    final_name: target_name,
-                    collided_with: None,
-                    recycle_source: false,
-                    merge_catalog_associations: false,
-                    warnings: Vec::new(),
-                };
-            }
-        }
+    if let (Some(existing), Some(source_path)) = (existing, item.source_path.as_deref())
+        && let Some(destination_path) = existing.path.as_deref()
+        && is_self_collision(source_path, destination_path, case_rule)
+    {
+        index.reserve(&target_name);
+        return CollisionDecision {
+            item_id: item.id.clone(),
+            kind: item.kind,
+            disposition: CollisionDisposition::CaseOnlyRename,
+            proposed_name: item.proposed_name.clone(),
+            final_name: target_name,
+            collided_with: None,
+            recycle_source: false,
+            merge_catalog_associations: false,
+            warnings: Vec::new(),
+        };
     }
 
     let Some(existing) = existing else {
