@@ -1198,6 +1198,7 @@ mod tests {
                 destination_root_id: "root".to_string(),
                 reason_code: None,
                 reason: None,
+                destination_identity: None,
             }],
             counts: ClassificationCounts {
                 root_move: 1,

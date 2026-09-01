@@ -21,6 +21,7 @@
 //! | [`verify`] | Verified streaming copy: CRC + full BLAKE3 in one pass, depth-governed read-back (FR-040–044). |
 //! | [`collisions`] | Destination-wins naming, disambiguation, sidecar grouping, BLAKE3 dedup (FR-072–075). |
 //! | [`hardlinks`] | Link-count detection and the seeding/disk warnings previews surface (FR-085). |
+//! | [`identity`] | Destination-title detection by stable metadata identity and redirects (FR-055). |
 //! | [`merge`] | Identity mapping and per-table dispositions when a destination title already exists (FR-063–067). |
 //! | [`adoption`] | "Files are already there": destination accounting against stored catalog proof (FR-050–053). |
 //! | [`ownership_guard`] | Persisted + in-process (title, root) ownership for the duration of an operation (FR-084). |
@@ -34,6 +35,7 @@ pub mod execution;
 pub mod executor;
 pub mod folder_match;
 pub mod hardlinks;
+pub mod identity;
 pub mod merge;
 pub mod model;
 pub mod operations;

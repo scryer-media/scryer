@@ -18,6 +18,8 @@ use serde::{Deserialize, Serialize};
 
 use scryer_domain::MediaFacet;
 
+use crate::location::identity::DestinationIdentityOutcome;
+
 /// The single class a selected title falls into for a requested destination.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
@@ -138,6 +140,9 @@ pub mod reason_codes {
     pub const ALREADY_AT_DESTINATION: &str = "already_at_destination";
     /// The title cannot be placed because its folder is unknown.
     pub const NO_FOLDER_MATCH: &str = "no_folder_match";
+    /// More than one destination title shares a metadata identity with this
+    /// title; the user picks one before the job starts (FR-055, FR-016).
+    pub const AMBIGUOUS_DESTINATION_IDENTITY: &str = "ambiguous_destination_identity";
 }
 
 /// The destination a selection was previewed against.
@@ -229,8 +234,16 @@ pub struct TitleClassificationFacts {
     /// Another location operation already owns this title (FR-084).
     pub owned_by_operation: Option<String>,
     /// Any other outstanding user decision the caller already knows about
-    /// (ambiguous destination identity, unmapped merge records).
+    /// (unmapped merge records).
     pub unresolved: Option<String>,
+    /// What destination-title detection concluded for this title (FR-055),
+    /// from [`crate::location::identity::detect_destination_titles`].
+    ///
+    /// `None` means detection was not run — for a same-library root move there
+    /// is no destination library to detect against. Additive with a serde
+    /// default so plans persisted before FR-055 landed still deserialize.
+    #[serde(default)]
+    pub destination_identity: Option<DestinationIdentityOutcome>,
 }
 
 impl TitleClassificationFacts {
@@ -257,6 +270,7 @@ impl TitleClassificationFacts {
             active_work: None,
             owned_by_operation: None,
             unresolved: None,
+            destination_identity: None,
         }
     }
 
@@ -300,6 +314,14 @@ impl TitleClassificationFacts {
 
     pub fn with_unresolved(mut self, detail: impl Into<String>) -> Self {
         self.unresolved = Some(detail.into());
+        self
+    }
+
+    /// Attach the FR-055 detection outcome for this title. An ambiguous outcome
+    /// becomes a `NeedsResolution` classification; a unique one rides along so
+    /// the preview and the merge engine read the same merge target.
+    pub fn with_destination_identity(mut self, outcome: DestinationIdentityOutcome) -> Self {
+        self.destination_identity = Some(outcome);
         self
     }
 
@@ -347,9 +369,38 @@ pub struct TitleClassification {
     pub destination_root_id: String,
     pub reason_code: Option<String>,
     pub reason: Option<String>,
+    /// The FR-055 detection outcome this classification was reached with, when
+    /// the caller ran detection. Carried onto every class so the preview can
+    /// state "merges into X", "a same-named title already exists", or "choose
+    /// which title this is" without re-deriving anything.
+    ///
+    /// Additive with a serde default: plans persisted before FR-055 landed read
+    /// back as "detection was not run".
+    #[serde(default)]
+    pub destination_identity: Option<DestinationIdentityOutcome>,
 }
 
 impl TitleClassification {
+    /// The existing destination title this title merges into (US7, D8), or
+    /// `None` for a transfer into a new destination title (FR-056).
+    ///
+    /// This is what fills
+    /// [`crate::location::model::TitleCheckpointPlacement::merged_into_title_id`].
+    pub fn merge_target_title_id(&self) -> Option<&str> {
+        self.destination_identity
+            .as_ref()
+            .and_then(DestinationIdentityOutcome::merge_target)
+    }
+
+    /// A destination title with the same name and no shared identity. It is
+    /// never merged into (FR-055); the preview says it exists so the user is not
+    /// surprised by two same-named titles in one library.
+    pub fn same_named_destination_title_id(&self) -> Option<&str> {
+        self.destination_identity
+            .as_ref()
+            .and_then(|outcome| outcome.same_name_title_id.as_deref())
+    }
+
     pub fn to_classified_title(&self) -> ClassifiedTitle {
         ClassifiedTitle {
             title_id: self.title_id.clone(),
@@ -419,10 +470,12 @@ impl SelectionClassification {
 /// 2. **No-op** — already at the destination, so nothing can go wrong and
 ///    nothing needs resolving.
 /// 3. **Blocked** — an active download or import, another operation's ownership,
-///    or a caller-supplied unresolved decision (FR-086, FR-084, FR-016). This
-///    sits *above* the fileless fast path on purpose: a fileless title with an
-///    in-flight import is exactly the case where files are about to land in the
-///    old root.
+///    an ambiguous destination-title identity (FR-055), or a caller-supplied
+///    unresolved decision (FR-086, FR-084, FR-016). This sits *above* the
+///    fileless fast path on purpose: a fileless title with an in-flight import
+///    is exactly the case where files are about to land in the old root, and a
+///    fileless title with an ambiguous destination identity is still a merge
+///    decision the user owes.
 /// 4. **Catalog-only** — no tracked files, so there is nothing to move (FR-076).
 /// 5. The move itself: cross-library or same-library root move.
 pub fn classify_title(
@@ -449,6 +502,7 @@ pub fn classify_title(
         destination_root_id: root_id,
         reason_code: reason_code.map(str::to_string),
         reason,
+        destination_identity: facts.destination_identity.clone(),
     };
 
     // 1. Incompatible: FR-017's explanation names the source library and facet.
@@ -535,6 +589,18 @@ pub fn classify_title(
                 "location operation {operation_id} is already working on \"{}\"",
                 facts.title_name
             )),
+        );
+    }
+    // FR-055: more than one destination title claims an identity this title
+    // holds. It is never auto-merged into either; the user decides first.
+    if let Some(outcome) = facts.destination_identity.as_ref()
+        && outcome.needs_resolution()
+    {
+        return classified(
+            TitleLocationClass::NeedsResolution,
+            destination_root_id,
+            outcome.reason_code(),
+            outcome.blocked_reason(&facts.title_name),
         );
     }
     if let Some(detail) = facts.unresolved.as_deref() {
@@ -825,7 +891,11 @@ mod tests {
         ];
         let library = movies_library(&["root-a", "root-b"]);
 
-        let result = classify_selection(&titles, &DestinationRequest::to_root("root-b"), Some(&library));
+        let result = classify_selection(
+            &titles,
+            &DestinationRequest::to_root("root-b"),
+            Some(&library),
+        );
 
         assert_eq!(result.counts.needs_resolution, 1);
         assert_eq!(result.counts.catalog_only, 0);
@@ -890,7 +960,10 @@ mod tests {
         assert_eq!(classification.class, TitleLocationClass::Incompatible);
         assert!(classification.blocks_start());
         let reason = classification.reason.expect("reason");
-        assert!(reason.contains("Movies"), "names the source library: {reason}");
+        assert!(
+            reason.contains("Movies"),
+            "names the source library: {reason}"
+        );
         assert!(reason.contains("movie"), "names the source facet: {reason}");
     }
 
@@ -898,11 +971,26 @@ mod tests {
     /// movie/episodic boundary is not.
     #[test]
     fn facet_compatibility_matches_the_documented_boundaries() {
-        assert!(facets_are_compatible(&MediaFacet::Series, &MediaFacet::Anime));
-        assert!(facets_are_compatible(&MediaFacet::Anime, &MediaFacet::Series));
-        assert!(facets_are_compatible(&MediaFacet::Movie, &MediaFacet::Movie));
-        assert!(!facets_are_compatible(&MediaFacet::Movie, &MediaFacet::Series));
-        assert!(!facets_are_compatible(&MediaFacet::Anime, &MediaFacet::Movie));
+        assert!(facets_are_compatible(
+            &MediaFacet::Series,
+            &MediaFacet::Anime
+        ));
+        assert!(facets_are_compatible(
+            &MediaFacet::Anime,
+            &MediaFacet::Series
+        ));
+        assert!(facets_are_compatible(
+            &MediaFacet::Movie,
+            &MediaFacet::Movie
+        ));
+        assert!(!facets_are_compatible(
+            &MediaFacet::Movie,
+            &MediaFacet::Series
+        ));
+        assert!(!facets_are_compatible(
+            &MediaFacet::Anime,
+            &MediaFacet::Movie
+        ));
     }
 
     /// A root that belongs to another library is rejected rather than silently
@@ -923,6 +1011,137 @@ mod tests {
             classification.reason_code.as_deref(),
             Some(reason_codes::ROOT_NOT_IN_DESTINATION_LIBRARY)
         );
+    }
+
+    /// FR-055 + FR-016: an ambiguous destination identity is a blocked title
+    /// carrying the machine-readable reason code, not a silent merge.
+    #[test]
+    fn ambiguous_destination_identity_blocks_the_title() {
+        use crate::location::identity::{
+            DestinationTitleCandidate, IdentityRedirects, SourceTitleIdentity,
+            detect_destination_title,
+        };
+
+        let outcome = detect_destination_title(
+            &SourceTitleIdentity::new("moving", MediaFacet::Movie)
+                .with_name("The Gift")
+                .with_identity("tmdb", "603")
+                .with_identity("imdb", "tt0133093"),
+            &[
+                DestinationTitleCandidate::new("dest-a", MediaFacet::Movie)
+                    .with_name("The Matrix")
+                    .with_identity("tmdb", "603"),
+                DestinationTitleCandidate::new("dest-b", MediaFacet::Movie)
+                    .with_name("The Matrix Reloaded")
+                    .with_identity("imdb", "tt0133093"),
+            ],
+            &IdentityRedirects::new(),
+        );
+
+        let facts = TitleClassificationFacts::new("moving", MediaFacet::Movie, "lib-a", "root-a")
+            .with_name("The Gift")
+            .with_tracked_files(4)
+            .with_destination_identity(outcome);
+        let destination_library = DestinationLibraryFacts {
+            library_id: "lib-b".to_string(),
+            library_name: "Movies B".to_string(),
+            facet: MediaFacet::Movie,
+            root_ids: vec!["root-b".to_string()],
+        };
+
+        let classification = classify_title(
+            &facts,
+            &DestinationRequest::to_library_root("lib-b", "root-b"),
+            Some(&destination_library),
+        );
+
+        assert_eq!(classification.class, TitleLocationClass::NeedsResolution);
+        assert!(classification.blocks_start());
+        assert_eq!(
+            classification.reason_code.as_deref(),
+            Some(reason_codes::AMBIGUOUS_DESTINATION_IDENTITY)
+        );
+        assert!(
+            classification.merge_target_title_id().is_none(),
+            "FR-055: an ambiguous title is never auto-merged"
+        );
+        assert!(
+            classification
+                .reason
+                .as_deref()
+                .expect("reason")
+                .contains("The Matrix")
+        );
+    }
+
+    /// FR-055: a unique match crosses libraries as a transfer that carries its
+    /// merge target, and a same-name-only match crosses as a plain transfer that
+    /// still records the same-named title.
+    #[test]
+    fn identity_outcomes_ride_along_on_cross_library_transfers() {
+        use crate::location::identity::{
+            DestinationTitleCandidate, IdentityRedirects, SourceTitleIdentity,
+            detect_destination_title,
+        };
+
+        let candidates = vec![
+            DestinationTitleCandidate::new("twin", MediaFacet::Movie)
+                .with_name("The Gift")
+                .with_identity("tmdb", "999"),
+            DestinationTitleCandidate::new("real", MediaFacet::Movie)
+                .with_name("Amélie")
+                .with_identity("tmdb", "194"),
+        ];
+        let redirects = IdentityRedirects::new();
+        let destination_library = DestinationLibraryFacts {
+            library_id: "lib-b".to_string(),
+            library_name: "Movies B".to_string(),
+            facet: MediaFacet::Movie,
+            root_ids: vec!["root-b".to_string()],
+        };
+        let destination = DestinationRequest::to_library_root("lib-b", "root-b");
+
+        let merging = detect_destination_title(
+            &SourceTitleIdentity::new("merging", MediaFacet::Movie)
+                .with_name("Amelie")
+                .with_identity("tmdb", "194"),
+            &candidates,
+            &redirects,
+        );
+        let same_name = detect_destination_title(
+            &SourceTitleIdentity::new("same-name", MediaFacet::Movie)
+                .with_name("The Gift")
+                .with_identity("tmdb", "1"),
+            &candidates,
+            &redirects,
+        );
+
+        let titles = vec![
+            TitleClassificationFacts::new("merging", MediaFacet::Movie, "lib-a", "root-a")
+                .with_tracked_files(2)
+                .with_destination_identity(merging),
+            TitleClassificationFacts::new("same-name", MediaFacet::Movie, "lib-a", "root-a")
+                .with_tracked_files(2)
+                .with_destination_identity(same_name),
+        ];
+
+        let result = classify_selection(&titles, &destination, Some(&destination_library));
+
+        assert_eq!(result.counts.cross_library_transfer, 2);
+        assert!(!result.blocks_start());
+
+        let merging = result.classification_of("merging").expect("title present");
+        assert_eq!(merging.merge_target_title_id(), Some("real"));
+
+        let same_name = result
+            .classification_of("same-name")
+            .expect("title present");
+        assert_eq!(
+            same_name.merge_target_title_id(),
+            None,
+            "FR-055: a same name is never enough to merge"
+        );
+        assert_eq!(same_name.same_named_destination_title_id(), Some("twin"));
     }
 
     /// A selection spanning three source libraries into one destination
