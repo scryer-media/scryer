@@ -39,8 +39,8 @@ use crate::{
     PluginStore, PostProcessingScriptStore, QualityProfileStore, ReleaseStore, RuleSetStore,
     SeedingProfileStore, SettingsStore, ShowStore, SmgEnrollmentConfig,
     SqliteLogicalBackupExporter, SqliteServices, SubtitleDownloadStore,
-    SubtitleProviderConfigStore, TitleImageStore, TitleStore, TotpStore, WantedStore,
-    WebauthnStore, WorkflowOperationStore,
+    SubtitleProviderConfigStore, TitleImageStore, TitleMergeStore, TitleStore, TotpStore,
+    WantedStore, WebauthnStore, WorkflowOperationStore,
 };
 use crate::{LibraryStore, UserStore};
 
@@ -1461,6 +1461,12 @@ impl DatastoreAssembly {
                 .with_library_probe_signatures(library_probe_store.clone())
                 .with_library_scan_unmatched_items(library_scan_unmatched_store.clone())
                 .with_location_operation_repository(location_operation_store.clone())
+                // The US7 merge store needs only the datastore, so it is
+                // built here rather than threaded through both store
+                // variants: nothing else in the assembly holds it.
+                .with_title_merge_repository(Arc::new(TitleMergeStore::new(
+                    self.datastore(),
+                )))
                 .with_title_images(title_image_store.clone())
                 .with_image_proxy(image_proxy_store.clone())
                 .with_housekeeping(housekeeping_store.clone())
@@ -1570,6 +1576,12 @@ impl DatastoreAssembly {
                 .with_library_probe_signatures(library_probe_store.clone())
                 .with_library_scan_unmatched_items(library_scan_unmatched_store.clone())
                 .with_location_operation_repository(location_operation_store.clone())
+                // The US7 merge store needs only the datastore, so it is
+                // built here rather than threaded through both store
+                // variants: nothing else in the assembly holds it.
+                .with_title_merge_repository(Arc::new(TitleMergeStore::new(
+                    self.datastore(),
+                )))
                 .with_title_images(title_image_store.clone())
                 .with_image_proxy(image_proxy_store.clone())
                 .with_housekeeping(housekeeping_store.clone())

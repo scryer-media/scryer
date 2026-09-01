@@ -61,6 +61,7 @@ const PREVIEW_QUERY: &str = r#"
               sameNamedDestinationTitleId
               sameNamedDestinationTitleName
               ambiguousDestinationTitleIds
+              ambiguousDestinationCandidates { titleId titleName sharedIdentities }
             }
           }
         }
@@ -74,6 +75,31 @@ const PREVIEW_QUERY: &str = r#"
         }
         verification { depth files bytes applies }
         confirmation { requirement typedPhrase typedPrompt }
+        merges {
+          sourceTitleId
+          destinationTitleId
+          sourceLibraryId
+          destinationLibraryId
+          blocked
+          blockedRecords { table reason sourceId detail }
+          destinationWins { setting destinationValue sourceValue }
+          dispositions { table disposition sourceRowCount note }
+          roleChanges {
+            fileId
+            sourceEpisodeId
+            destinationEpisodeId
+            previousRole
+            newRole
+            reason
+            detail
+          }
+          reservedTagConflicts { prefix setting destinationValue sourceValue }
+          freeFormTagsAdded
+          mediaRequestRepoints { requestId previousLibraryId destinationLibraryId }
+          dropped { table sourceRowCount decision reason }
+          postMergeWork
+          notes
+        }
       }
     }
 "#;
@@ -820,4 +846,301 @@ fn manage_one_library_actor(library_id: &str) -> User {
             loaded: true,
         },
     }
+}
+
+// ── US7 ──────────────────────────────────────────────────────────────────────
+
+/// A second movie library on its own root, so a selection has somewhere to
+/// cross into.
+async fn create_second_movie_library(
+    ctx: &TestContext,
+    root: &std::path::Path,
+) -> (String, String) {
+    let library = ctx
+        .libraries
+        .create(
+            scryer_domain::Library {
+                id: Id::new().0,
+                name: "Archive Movies".to_string(),
+                slug: "archive-movies".to_string(),
+                facet: MediaFacet::Movie,
+                is_default: false,
+                roots: Vec::new(),
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+            },
+            vec![LibraryRootDraft {
+                path: root.to_string_lossy().to_string(),
+                is_default: true,
+            }],
+        )
+        .await
+        .expect("create the destination movie library");
+    let root_id = library.roots[0].id.clone();
+    (library.id, root_id)
+}
+
+/// A movie title placed in `library_id` on `root_id`, carrying `external_ids`.
+async fn title_in_library(
+    ctx: &TestContext,
+    name: &str,
+    library_id: &str,
+    root_id: &str,
+    external_ids: Vec<ExternalId>,
+) -> Title {
+    let title = create_catalog_title(ctx, name, MediaFacet::Movie, external_ids, vec![], true).await;
+    ctx.titles
+        .transfer_to_library(&title.id, library_id, root_id, None, &[])
+        .await
+        .expect("place the title in the destination library");
+    ctx.titles
+        .get_by_id(&title.id)
+        .await
+        .expect("load title")
+        .expect("title exists")
+}
+
+/// FR-071 / US7: a unique canonical identity match in the destination library is
+/// previewed as a merge, and the preview carries the whole decision — what the
+/// destination keeps, what is unioned per table, what is dropped, and the notes
+/// explaining where the live schema differs from the merge inventory.
+#[tokio::test]
+async fn graphql_location_operation_preview_surfaces_the_merge_summary() {
+    let ctx = TestContext::new().await;
+    let source_root = tempfile::tempdir().expect("source root tempdir");
+    let destination_root = tempfile::tempdir().expect("destination root tempdir");
+    let (source_root_id, _second) =
+        configure_two_movie_roots(&ctx, source_root.path(), destination_root.path()).await;
+    let archive_root = tempfile::tempdir().expect("archive root tempdir");
+    let (destination_library_id, destination_root_id) =
+        create_second_movie_library(&ctx, archive_root.path()).await;
+
+    let destination = title_in_library(
+        &ctx,
+        "Twin Film",
+        &destination_library_id,
+        &destination_root_id,
+        vec![ExternalId {
+            source: "tmdb".to_string(),
+            value: "424242".to_string(),
+        }],
+    )
+    .await;
+
+    let folder = make_folder(source_root.path(), "Twin Film (2024)");
+    let source = create_catalog_title(
+        &ctx,
+        "Twin Film",
+        MediaFacet::Movie,
+        vec![ExternalId {
+            source: "tmdb".to_string(),
+            value: "424242".to_string(),
+        }],
+        vec![],
+        true,
+    )
+    .await;
+    move_title_to_root(&ctx, &source.id, &source_root_id).await;
+    set_title_folder_path(&ctx, &source.id, &folder).await;
+    let file = write_media(&folder, "Twin.Film.2024.mkv");
+    seed_media_row(&ctx, &source.id, &file).await;
+
+    let body = gql(
+        &ctx,
+        PREVIEW_QUERY,
+        json!({ "input": {
+            "titleIds": [source.id],
+            "destination": {
+                "libraryId": destination_library_id,
+                "rootId": destination_root_id
+            }
+        }}),
+    )
+    .await;
+    assert_no_errors(&body);
+    let preview = &body["data"]["locationOperationPreview"];
+
+    // FR-055 + US7: a merge is a startable cross-library transfer carrying its
+    // target, not a blocked title.
+    assert_eq!(preview["blocksStart"], false);
+    let transfers = group(preview, "CROSS_LIBRARY_TRANSFER");
+    assert_eq!(transfers["count"], 1);
+    assert_eq!(transfers["titles"][0]["mergeTargetTitleId"], destination.id);
+    assert_eq!(transfers["titles"][0]["destinationIdentityMatch"], "UNIQUE");
+    assert_eq!(
+        transfers["titles"][0]["ambiguousDestinationCandidates"],
+        json!([]),
+        "a unique match is not a choice: {transfers}"
+    );
+
+    // FR-071: the summary the user confirms.
+    let merges = preview["merges"].as_array().expect("merge summaries");
+    assert_eq!(merges.len(), 1, "{preview}");
+    let merge = &merges[0];
+    assert_eq!(merge["sourceTitleId"], source.id);
+    assert_eq!(merge["destinationTitleId"], destination.id);
+    assert_eq!(merge["destinationLibraryId"], destination_library_id);
+    assert_eq!(merge["blocked"], false);
+    assert_eq!(merge["blockedRecords"], json!([]));
+
+    // FR-063: the destination keeps the title id, and the payload says which.
+    let title_id_wins = merge["destinationWins"]
+        .as_array()
+        .expect("destination-wins entries")
+        .iter()
+        .find(|entry| entry["setting"] == "title id")
+        .expect("FR-063 names the title id");
+    assert_eq!(title_id_wins["destinationValue"], destination.id);
+    assert_eq!(title_id_wins["sourceValue"], source.id);
+
+    // FR-064: per-table dispositions, as enums rather than free text.
+    let media_files = merge["dispositions"]
+        .as_array()
+        .expect("dispositions")
+        .iter()
+        .find(|entry| entry["table"] == "media_files")
+        .expect("media_files is inventoried");
+    assert_eq!(media_files["disposition"], "UNION");
+    assert_eq!(media_files["sourceRowCount"], 1);
+
+    // The Group 6 work list is an enum the client can act on.
+    let work = merge["postMergeWork"].as_array().expect("post-merge work");
+    assert!(
+        work.iter()
+            .any(|value| value == "DROP_SOURCE_INDEXER_COVERAGE"),
+        "{merge}"
+    );
+
+    // The live-schema deviations reach the operator rather than reading as an
+    // omission from the inventory.
+    let notes = merge["notes"].as_array().expect("notes");
+    assert!(
+        notes
+            .iter()
+            .any(|note| note.as_str().is_some_and(|note| note.contains("wanted_items"))),
+        "{merge}"
+    );
+}
+
+/// FR-055 / FR-016: an ambiguous identity blocks, and the payload names the
+/// candidates rather than handing the client ids it cannot render.
+#[tokio::test]
+async fn graphql_an_ambiguous_destination_identity_names_its_candidates() {
+    let ctx = TestContext::new().await;
+    let source_root = tempfile::tempdir().expect("source root tempdir");
+    let spare_root = tempfile::tempdir().expect("spare root tempdir");
+    let (source_root_id, _second) =
+        configure_two_movie_roots(&ctx, source_root.path(), spare_root.path()).await;
+    let archive_root = tempfile::tempdir().expect("archive root tempdir");
+    let (destination_library_id, destination_root_id) =
+        create_second_movie_library(&ctx, archive_root.path()).await;
+
+    let first = title_in_library(
+        &ctx,
+        "Split A",
+        &destination_library_id,
+        &destination_root_id,
+        vec![ExternalId {
+            source: "tmdb".to_string(),
+            value: "111".to_string(),
+        }],
+    )
+    .await;
+    let second = title_in_library(
+        &ctx,
+        "Split B",
+        &destination_library_id,
+        &destination_root_id,
+        vec![ExternalId {
+            source: "imdb".to_string(),
+            value: "tt222".to_string(),
+        }],
+    )
+    .await;
+
+    let folder = make_folder(source_root.path(), "Split Source (2024)");
+    let source = create_catalog_title(
+        &ctx,
+        "Split Source",
+        MediaFacet::Movie,
+        vec![
+            ExternalId {
+                source: "tmdb".to_string(),
+                value: "111".to_string(),
+            },
+            ExternalId {
+                source: "imdb".to_string(),
+                value: "tt222".to_string(),
+            },
+        ],
+        vec![],
+        true,
+    )
+    .await;
+    move_title_to_root(&ctx, &source.id, &source_root_id).await;
+    set_title_folder_path(&ctx, &source.id, &folder).await;
+    let file = write_media(&folder, "Split.Source.2024.mkv");
+    seed_media_row(&ctx, &source.id, &file).await;
+
+    let body = gql(
+        &ctx,
+        PREVIEW_QUERY,
+        json!({ "input": {
+            "titleIds": [source.id],
+            "destination": {
+                "libraryId": destination_library_id,
+                "rootId": destination_root_id
+            }
+        }}),
+    )
+    .await;
+    assert_no_errors(&body);
+    let preview = &body["data"]["locationOperationPreview"];
+
+    assert_eq!(preview["blocksStart"], true);
+    let blocked = group(preview, "NEEDS_RESOLUTION");
+    assert_eq!(blocked["count"], 1);
+    let title = &blocked["titles"][0];
+    assert_eq!(title["reasonCode"], "ambiguous_destination_identity");
+    assert_eq!(title["destinationIdentityMatch"], "AMBIGUOUS");
+    assert_eq!(title["mergeTargetTitleId"], Value::Null);
+
+    let candidates = title["ambiguousDestinationCandidates"]
+        .as_array()
+        .expect("candidates");
+    assert_eq!(candidates.len(), 2, "{title}");
+    let named: Vec<&str> = candidates
+        .iter()
+        .filter_map(|candidate| candidate["titleName"].as_str())
+        .collect();
+    assert!(named.contains(&"Split A"), "{candidates:?}");
+    assert!(named.contains(&"Split B"), "{candidates:?}");
+    let ids: Vec<&str> = candidates
+        .iter()
+        .filter_map(|candidate| candidate["titleId"].as_str())
+        .collect();
+    assert!(ids.contains(&first.id.as_str()));
+    assert!(ids.contains(&second.id.as_str()));
+    // The identities are why each candidate is on the list.
+    let identities: Vec<&str> = candidates
+        .iter()
+        .flat_map(|candidate| {
+            candidate["sharedIdentities"]
+                .as_array()
+                .expect("shared identities")
+                .iter()
+                .filter_map(|value| value.as_str())
+        })
+        .collect();
+    assert!(identities.contains(&"tmdb:111"), "{identities:?}");
+    assert!(identities.contains(&"imdb:tt222"), "{identities:?}");
+
+    // The ids-only list the web already reads stays in agreement with it.
+    let id_only = title["ambiguousDestinationTitleIds"]
+        .as_array()
+        .expect("ids");
+    assert_eq!(id_only.len(), candidates.len());
+
+    // Nothing merges: the preview has no merge summary to confirm.
+    assert_eq!(preview["merges"], json!([]));
 }

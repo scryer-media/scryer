@@ -30,8 +30,14 @@ use crate::location::model::{
 use crate::location::operations::{RootMovePreviewRequest, StartRootMoveRequest};
 use crate::location::preview::{PlanConfirmationRequest, PlanItemKind};
 use crate::location::root_move::plan_reasons;
+use crate::location::merge::MergedMediaRole;
+use crate::location::merge::engine::MergeCatalogSnapshot;
+use crate::location::merge::map::EpisodeIdentityFacts;
+use crate::location::merge::roles::FileEpisodeRoleRow;
+use crate::location::model::TitleCheckpointState;
 use crate::location::test_support::{
-    InMemoryLocationOperationStore, queued_operation, title_boundary_cancel_check,
+    InMemoryLocationOperationStore, InMemoryTitleMergeStore, queued_operation,
+    title_boundary_cancel_check,
 };
 
 /// Two movie libraries, each with its own real root directory, and the operation
@@ -40,6 +46,8 @@ struct TransferFixture {
     app: AppUseCase,
     user: User,
     operations: Arc<InMemoryLocationOperationStore>,
+    /// The US7 merge engine, over the same in-memory catalog the app holds.
+    merges: Arc<InMemoryTitleMergeStore>,
     temp: tempfile::TempDir,
     source_library_id: String,
     source_root_id: String,
@@ -155,10 +163,22 @@ impl TransferFixture {
         )
         .await;
         let operations = Arc::new(InMemoryLocationOperationStore::new());
+        let merges = Arc::new(InMemoryTitleMergeStore::new());
         let app = app.with_test_overrides({
             let operations = operations.clone();
-            move |services| services.with_location_operation_repository(operations)
+            let merges = merges.clone();
+            move |services| {
+                services
+                    .with_location_operation_repository(operations)
+                    .with_title_merge_repository(merges)
+            }
         });
+        // The merge store reads the catalog the app was built with, so it is
+        // bound once the app exists rather than constructed with it.
+        merges.bind(
+            app.services.catalog.titles.clone(),
+            app.services.library.media_files.clone(),
+        );
 
         let source_library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
         let source_library = app
@@ -196,6 +216,7 @@ impl TransferFixture {
             app,
             user,
             operations,
+            merges,
             temp,
         }
     }
@@ -258,6 +279,126 @@ impl TransferFixture {
             .expect("seed media file row");
 
         self.title(&title.id).await
+    }
+
+    /// A monitored source title owning `folder_name`, with several hashed files
+    /// inside it. The hashes are what let the collision engine prove a
+    /// duplicate against the destination without reading anything (D4).
+    async fn seed_source_title_with_files(
+        &self,
+        name: &str,
+        year: i32,
+        folder_name: &str,
+        external_ids: Vec<ExternalId>,
+        files: &[(&str, &[u8])],
+    ) -> Title {
+        let title = self
+            .create_title(
+                name,
+                year,
+                Vec::new(),
+                external_ids,
+                &self.source_library_id,
+                &self.source_root_id,
+            )
+            .await;
+
+        let folder = self.source_root().join(folder_name);
+        std::fs::create_dir_all(&folder).expect("create source title folder");
+        self.app
+            .services
+            .catalog
+            .titles
+            .set_folder_path(&title.id, folder.to_string_lossy().as_ref())
+            .await
+            .expect("set source title folder");
+
+        for (file_name, content) in files {
+            let path = folder.join(file_name);
+            std::fs::write(&path, content).expect("write source fixture file");
+            self.seed_media_file(&title.id, &path, content).await;
+        }
+
+        self.title(&title.id).await
+    }
+
+    /// A title in the destination library that already owns a folder with
+    /// content in it, so a merge has two sides and the collision engine has
+    /// destination entries to plan against.
+    ///
+    /// Every seeded file carries a persisted full BLAKE3 derived from its
+    /// content, because the FR-073 dedup gate refuses to call two files
+    /// identical without one on both sides (D4).
+    async fn seed_destination_title_with_files(
+        &self,
+        name: &str,
+        year: i32,
+        folder_name: &str,
+        external_ids: Vec<ExternalId>,
+        files: &[(&str, &[u8])],
+    ) -> Title {
+        let title = self
+            .create_title(
+                name,
+                year,
+                Vec::new(),
+                external_ids,
+                &self.destination_library_id,
+                &self.destination_root_id,
+            )
+            .await;
+
+        let folder = self.destination_root().join(folder_name);
+        std::fs::create_dir_all(&folder).expect("create destination title folder");
+        self.app
+            .services
+            .catalog
+            .titles
+            .set_folder_path(&title.id, folder.to_string_lossy().as_ref())
+            .await
+            .expect("set destination title folder");
+
+        for (file_name, content) in files {
+            let path = folder.join(file_name);
+            std::fs::write(&path, content).expect("write destination fixture file");
+            self.seed_media_file(&title.id, &path, content).await;
+        }
+
+        self.title(&title.id).await
+    }
+
+    /// One tracked media file with its full-BLAKE3 already persisted.
+    async fn seed_media_file(&self, title_id: &str, path: &Path, content: &[u8]) -> String {
+        let file_id = self
+            .app
+            .services
+            .library
+            .media_files
+            .insert_media_file(&InsertMediaFileInput {
+                title_id: title_id.to_string(),
+                file_path: path.to_string_lossy().to_string(),
+                size_bytes: content.len() as i64,
+                role: MediaFileRole::Primary,
+                ..Default::default()
+            })
+            .await
+            .expect("seed media file row");
+        self.app
+            .services
+            .library
+            .media_files
+            .update_media_file_content_hashes(
+                &file_id,
+                &crate::location::model::PersistedContentHashes {
+                    full_blake3: blake3::hash(content).to_hex().to_string(),
+                    move_crc: None,
+                    crc_algorithm: None,
+                    hash_computed_at: Some(Utc::now()),
+                },
+            )
+            .await
+            .expect("persist the fixture file's full hash");
+        file_id
     }
 
     /// A fileless title already living in the destination library, used to stage
@@ -610,27 +751,321 @@ async fn a_same_named_destination_title_is_warned_about_and_never_merged_into() 
     assert_ne!(transferred.id, survivor.id);
 }
 
-/// FR-055: exactly one destination title shares a canonical identity, so this is
-/// a merge — and the merge engine is a later phase. The title is blocked with a
-/// reason that says so, rather than being folded together with no rules or
-/// transferred in beside its own twin.
+// ── US7 ──────────────────────────────────────────────────────────────────────
+
+fn merge_episode(id: &str, season: &str, number: &str) -> EpisodeIdentityFacts {
+    EpisodeIdentityFacts {
+        id: id.to_string(),
+        episode_type: scryer_domain::EpisodeType::Standard,
+        season_number: Some(season.to_string()),
+        episode_number: Some(number.to_string()),
+        absolute_number: None,
+        collection_id: None,
+    }
+}
+
+/// A Group 0 snapshot where both sides claim primary for the same episode
+/// (FR-068/FR-070).
+fn contested_slot_snapshot(
+    source_title_id: &str,
+    destination_title_id: &str,
+) -> MergeCatalogSnapshot {
+    let row = |file_id: &str, episode_id: &str| FileEpisodeRoleRow {
+        file_id: file_id.to_string(),
+        episode_id: episode_id.to_string(),
+        role: MergedMediaRole::Primary,
+        is_filler: false,
+    };
+    MergeCatalogSnapshot {
+        source_title_id: source_title_id.to_string(),
+        destination_title_id: destination_title_id.to_string(),
+        source_episodes: vec![merge_episode("s-e1", "1", "1")],
+        destination_episodes: vec![merge_episode("d-e1", "1", "1")],
+        source_file_episode_rows: vec![row("incoming-file", "s-e1")],
+        destination_file_episode_rows: vec![row("destination-file", "d-e1")],
+        ..MergeCatalogSnapshot::default()
+    }
+}
+
+/// The FR-066 refusal, staged as a Group 0 snapshot: the source has an episode
+/// no destination episode can be mapped onto, and a `wanted_items` row refers
+/// to it.
+fn unmappable_snapshot(source_title_id: &str, destination_title_id: &str) -> MergeCatalogSnapshot {
+    let episode = merge_episode;
+    MergeCatalogSnapshot {
+        source_title_id: source_title_id.to_string(),
+        destination_title_id: destination_title_id.to_string(),
+        source_episodes: vec![episode("s-e1", "1", "1"), episode("s-e2", "1", "2")],
+        destination_episodes: vec![episode("d-e1", "1", "1")],
+        episode_references: std::collections::BTreeMap::from([(
+            "wanted_items".to_string(),
+            std::collections::BTreeSet::from(["s-e2".to_string()]),
+        )]),
+        ..MergeCatalogSnapshot::default()
+    }
+}
+
+/// US7.1–US7.5 end to end: a unique canonical identity match is a merge, and a
+/// merge is a startable cross-library transfer.
+///
+/// Both sides carry files; one of the incoming files is byte-identical to a
+/// file the destination already has, so FR-073 deduplicates it rather than
+/// landing a second copy; the rest move into the *destination title's* folder
+/// (FR-063) rather than into a folder named after the title that is about to
+/// stop existing. When it settles the source title is gone (FR-067), the
+/// destination title owns the media, the checkpoint records where the title
+/// went, and Activity counts one merge (FR-091).
 #[tokio::test]
-async fn a_unique_identity_match_blocks_the_title_as_a_pending_merge() {
+async fn a_unique_identity_match_merges_into_the_destination_title() {
     let fixture = TransferFixture::new().await;
-    let twin = fixture
-        .seed_destination_title("Same Film", 2018, vec![external_id("tmdb", "4242")])
-        .await;
-    let title = fixture
-        .seed_source_title(
+    let destination = fixture
+        .seed_destination_title_with_files(
             "Same Film",
             2018,
             "Same Film (2018)",
-            "Same.Film.2018.mkv",
-            1024,
-            Vec::new(),
             vec![external_id("tmdb", "4242")],
+            &[("Same.Film.2018.Bonus.mkv", b"identical-bonus-content")],
         )
         .await;
+    let title = fixture
+        .seed_source_title_with_files(
+            "Same Film",
+            2018,
+            "Same Film 2018",
+            vec![external_id("tmdb", "4242")],
+            &[
+                ("Same.Film.2018.mkv", b"the incoming feature"),
+                ("Same.Film.2018.Bonus.mkv", b"identical-bonus-content"),
+            ],
+        )
+        .await;
+
+    // ── Preview ─────────────────────────────────────────────────────────────
+    let preview = fixture.preview(&[&title.id]).await;
+    assert_eq!(
+        preview.classification.counts.cross_library_transfer, 1,
+        "a merge rides the cross-library machinery rather than blocking"
+    );
+    assert!(!preview.classification.blocks_start());
+    let classified = classified_titles(&preview);
+    assert_eq!(
+        classified[0].merge_target_title_id(),
+        Some(destination.id.as_str())
+    );
+
+    // FR-071: the merge summary is on the plan, and it is what the fingerprint
+    // was taken over.
+    assert_eq!(preview.plan.merges.len(), 1);
+    assert_eq!(preview.plan.merges[0].destination_title_id, destination.id);
+    assert!(!preview.plan.merges[0].is_blocked());
+    let merge_item = items_of(&preview, PlanItemKind::Merge)
+        .into_iter()
+        .find(|item| item.reason_code.as_deref() == Some(plan_reasons::TITLE_MERGE))
+        .expect("the preview states the merge");
+    assert!(
+        merge_item
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains(&destination.id))
+    );
+
+    // FR-063 + FR-073: the files are planned into the destination title's own
+    // folder, and the byte-identical bonus feature deduplicates against it.
+    let planned = preview
+        .execution
+        .title(&title.id)
+        .expect("the merge title is executable work");
+    assert_eq!(
+        planned.merge_target_title_id.as_deref(),
+        Some(destination.id.as_str())
+    );
+    assert_eq!(
+        planned.destination_folder_path.as_deref(),
+        Some(
+            fixture
+                .destination_root()
+                .join("Same Film (2018)")
+                .to_string_lossy()
+                .as_ref()
+        ),
+        "the merged content lands in the surviving title's folder"
+    );
+    assert_eq!(
+        planned.deduplicated_sources.len(),
+        1,
+        "the byte-identical incoming copy is recycled, not written twice"
+    );
+    assert_eq!(planned.files.len(), 1, "only the new feature is copied");
+
+    // OQ7: the preview has no operation of its own to exclude.
+    assert_eq!(fixture.merges.excluded_operations(), vec![None]);
+
+    // SC-004: what the preview counts is what Activity will count. The plan's
+    // merge and dedup facts are the runner's counters once the title settles.
+    let previewed_merges = preview
+        .execution
+        .titles
+        .iter()
+        .filter(|title| title.merges())
+        .count();
+    let previewed_dedups: usize = preview
+        .execution
+        .titles
+        .iter()
+        .map(|title| title.deduplicated_sources.len())
+        .sum();
+    assert_eq!(previewed_merges, 1);
+    assert_eq!(previewed_dedups, 1);
+
+    // ── Execution ───────────────────────────────────────────────────────────
+    let operation = fixture.start_and_settle(&[&title.id]).await;
+    assert!(
+        matches!(
+            operation.state,
+            LocationOperationState::Completed | LocationOperationState::CompletedWithWarnings
+        ),
+        "unexpected terminal state: {:?} ({:?})",
+        operation.state,
+        operation.detail
+    );
+
+    // FR-067: the source title is removed, and only after the transaction.
+    assert!(
+        fixture
+            .app
+            .services
+            .catalog
+            .titles
+            .get_by_id(&title.id)
+            .await
+            .expect("read the source title")
+            .is_none(),
+        "the merged-away title is gone"
+    );
+    let survivor = fixture.title(&destination.id).await;
+    assert_eq!(survivor.library_id, fixture.destination_library_id);
+
+    // The destination title owns the merged media, at its own folder.
+    let paths = fixture.media_paths(&destination.id).await;
+    assert!(
+        paths.iter().any(|path| path.ends_with("Same.Film.2018.mkv")),
+        "the incoming feature followed the merge: {paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .all(|path| path.starts_with(fixture.destination_root().to_string_lossy().as_ref())),
+        "nothing is left pointing at the source root: {paths:?}"
+    );
+
+    // FR-091 / SC-004: the preview's merge count is the outcome's merge count.
+    assert_eq!(operation.counters.merges, previewed_merges as i64);
+    assert_eq!(operation.counters.dedups, previewed_dedups as i64);
+    assert_eq!(operation.counters.merges, 1);
+
+    // FR-073: the redundant source row does not survive as a second row on the
+    // merged title pointing into the recycle bin.
+    assert_eq!(
+        paths
+            .iter()
+            .filter(|path| path.ends_with("Same.Film.2018.Bonus.mkv"))
+            .count(),
+        1,
+        "the deduplicated copy leaves exactly one catalog row: {paths:?}"
+    );
+    let checkpoint = fixture
+        .operations
+        .checkpoint(&operation.id, &title.id)
+        .expect("the merged title has a checkpoint");
+    assert_eq!(
+        checkpoint.placement.merged_into_title_id.as_deref(),
+        Some(destination.id.as_str()),
+        "D8: the checkpoint records the title this one merged into"
+    );
+
+    // The engine ran once, with the plan the preview described, and Group 0 was
+    // told to exclude the operation performing the merge (OQ7).
+    let executed = fixture.merges.executed();
+    assert_eq!(executed.len(), 1);
+    assert_eq!(executed[0].destination_title_id, destination.id);
+    assert!(
+        fixture
+            .merges
+            .excluded_operations()
+            .iter()
+            .any(|excluded| excluded.as_deref() == Some(operation.id.as_str())),
+        "the merging operation excludes itself from the OQ7 resumable-operation check"
+    );
+}
+
+/// FR-068–FR-070 / US7.3: both sides hold a primary for the same logical slot,
+/// so the destination's stays primary and the incoming one becomes additional.
+/// The demotion is in the preview before anything runs, and it is never silent.
+#[tokio::test]
+async fn an_incoming_primary_is_demoted_and_the_preview_says_so_first() {
+    let fixture = TransferFixture::new().await;
+    let destination = fixture
+        .seed_destination_title("Two Primaries", 2021, vec![external_id("tmdb", "7007")])
+        .await;
+    let title = fixture
+        .seed_source_title(
+            "Two Primaries",
+            2021,
+            "Two Primaries (2021)",
+            "Two.Primaries.2021.mkv",
+            1024,
+            Vec::new(),
+            vec![external_id("tmdb", "7007")],
+        )
+        .await;
+    fixture.merges.stage_snapshot(
+        &title.id,
+        &destination.id,
+        contested_slot_snapshot(&title.id, &destination.id),
+    );
+
+    let preview = fixture.preview(&[&title.id]).await;
+    assert_eq!(preview.classification.counts.cross_library_transfer, 1);
+    assert!(!preview.classification.blocks_start());
+
+    let summary = &preview.plan.merges[0];
+    assert_eq!(summary.role_changes.len(), 1);
+    let change = &summary.role_changes[0];
+    assert_eq!(change.previous_role, MergedMediaRole::Primary);
+    assert_eq!(change.new_role, MergedMediaRole::Additional);
+    assert_eq!(change.destination_episode_id, "d-e1");
+
+    let stated = items_of(&preview, PlanItemKind::RoleChange)
+        .into_iter()
+        .filter(|item| item.reason_code.as_deref() == Some(plan_reasons::MERGE_ROLE_CHANGE))
+        .filter_map(|item| item.detail.as_deref())
+        .collect::<Vec<_>>();
+    assert_eq!(stated.len(), 1, "FR-070: the demotion has its own line");
+    assert!(stated[0].contains("additional"), "{}", stated[0]);
+}
+
+/// FR-066 / US7.4: episode identities that cannot be mapped block the operation
+/// at preview time, naming the records rather than attaching them to a guess.
+#[tokio::test]
+async fn an_unmappable_episode_blocks_the_merge_before_anything_starts() {
+    let fixture = TransferFixture::new().await;
+    let destination = fixture
+        .seed_destination_title("Blocked Merge", 2019, vec![external_id("tmdb", "5150")])
+        .await;
+    let title = fixture
+        .seed_source_title(
+            "Blocked Merge",
+            2019,
+            "Blocked Merge (2019)",
+            "Blocked.Merge.2019.mkv",
+            1024,
+            Vec::new(),
+            vec![external_id("tmdb", "5150")],
+        )
+        .await;
+    fixture
+        .merges
+        .stage_snapshot(&title.id, &destination.id, unmappable_snapshot(&title.id, &destination.id));
 
     let preview = fixture.preview(&[&title.id]).await;
     assert_eq!(preview.classification.counts.needs_resolution, 1);
@@ -638,21 +1073,32 @@ async fn a_unique_identity_match_blocks_the_title_as_a_pending_merge() {
     assert!(preview.classification.blocks_start());
 
     let classified = classified_titles(&preview);
-    assert_eq!(classified[0].class, TitleLocationClass::NeedsResolution);
     assert_eq!(
         classified[0].reason_code.as_deref(),
-        Some(reason_codes::MERGE_NOT_YET_SUPPORTED)
+        Some(reason_codes::MERGE_RECORDS_UNMAPPED)
     );
-    assert_eq!(classified[0].merge_target_title_id(), Some(twin.id.as_str()));
-    assert!(
-        classified[0]
-            .reason
-            .as_deref()
-            .is_some_and(|reason| reason.contains(&twin.id)),
-        "the explanation names the title it would merge into"
-    );
+    let reason = classified[0].reason.as_deref().expect("reason");
+    assert!(reason.contains("wanted_items"), "{reason}");
+    assert!(reason.contains("s-e2"), "{reason}");
 
-    // FR-016: the job cannot start while the title is included.
+    // The refusal is on the plan too, one item per blocked record: FR-066
+    // blocks on the episode itself *and* on every table whose rows reference
+    // it, because each is a separate thing the user can act on.
+    let blocked: Vec<&str> = items_of(&preview, PlanItemKind::Blocked)
+        .into_iter()
+        .filter(|item| item.reason_code.as_deref() == Some(plan_reasons::MERGE_RECORDS_UNMAPPED))
+        .filter_map(|item| item.detail.as_deref())
+        .collect();
+    assert!(
+        blocked.iter().any(|detail| detail.contains("episodes")),
+        "the unmappable episode itself is named: {blocked:?}"
+    );
+    assert!(
+        blocked.iter().any(|detail| detail.contains("wanted_items")),
+        "so is the table whose rows reference it: {blocked:?}"
+    );
+    assert!(preview.plan.merges[0].is_blocked());
+
     let error = fixture
         .app
         .start_root_move(
@@ -667,23 +1113,144 @@ async fn a_unique_identity_match_blocks_the_title_as_a_pending_merge() {
             },
         )
         .await
-        .expect_err("a blocked selection cannot start");
+        .expect_err("a blocked merge cannot start");
     assert!(
         matches!(error, AppError::LocationPlanRefused { .. } | AppError::Validation(_)),
         "unexpected error: {error:?}"
     );
 
-    // Nothing moved and nothing was merged.
+    // Nothing moved, nothing merged, and the engine was never asked to execute.
     assert_eq!(
         fixture.title(&title.id).await.library_id,
         fixture.source_library_id
     );
+    assert!(fixture.merges.executed().is_empty());
+}
+
+/// FR-033 for a merge: `execute_title_merge` is one transaction, so a crash
+/// leaves either no merge or a complete one. This is the second case — the
+/// merge committed and the checkpoint that should have settled it did not.
+///
+/// The resumed run must recognize the merge as already applied and settle,
+/// rather than re-planning against a source title that no longer exists. Two
+/// things make that work: the admission check reads a missing source title with
+/// a present destination as this operation's own footprint (FR-089), and the
+/// reconciler asks the same question before touching the engine.
+#[tokio::test]
+async fn a_merge_that_committed_before_the_crash_settles_idempotently_on_resume() {
+    let fixture = TransferFixture::new().await;
+    let destination = fixture
+        .seed_destination_title_with_files(
+            "Interrupted Merge",
+            2020,
+            "Interrupted Merge (2020)",
+            vec![external_id("tmdb", "9001")],
+            &[("Interrupted.Merge.2020.Extra.mkv", b"destination extra")],
+        )
+        .await;
+    let title = fixture
+        .seed_source_title_with_files(
+            "Interrupted Merge",
+            2020,
+            "Interrupted Merge 2020",
+            vec![external_id("tmdb", "9001")],
+            &[("Interrupted.Merge.2020.mkv", b"the incoming feature")],
+        )
+        .await;
+
+    let preview = fixture.preview(&[&title.id]).await;
+    let operation_id = "operation-merge-resume";
+    let operation = queued_operation(
+        operation_id,
+        LocationOperationType::CrossLibraryTransfer,
+        LocationExecutionMode::MoveWithScryer,
+        preview.plan.verification.depth,
+    );
+    let plan_json = serde_json::to_string(&preview.execution).expect("serialize plan");
+    fixture
+        .app
+        .services
+        .library
+        .location_operations
+        .create_location_operation(&operation, Some(&plan_json))
+        .await
+        .expect("persist the operation");
+
+    // The store dies the moment the merged title's checkpoint would advance
+    // past `reconciling` — after Groups 1–5 committed.
+    fixture
+        .operations
+        .fail_checkpoint_writes_from(TitleCheckpointState::CleaningUp);
+    let crashed = fixture
+        .app
+        .run_root_move(operation_id, &preview.execution)
+        .await;
+    assert!(crashed.is_err(), "the injected store failure aborts the run");
+
+    // The merge is committed and the checkpoint is not settled: exactly the
+    // window this test exists for.
     assert!(
         fixture
-            .source_root()
-            .join("Same Film (2018)")
-            .join("Same.Film.2018.mkv")
-            .exists()
+            .app
+            .services
+            .catalog
+            .titles
+            .get_by_id(&title.id)
+            .await
+            .expect("read the source title")
+            .is_none(),
+        "the transaction committed before the crash"
+    );
+    assert_eq!(fixture.merges.executed().len(), 1);
+    let checkpoint = fixture
+        .operations
+        .checkpoint(operation_id, &title.id)
+        .expect("the interrupted title has a checkpoint");
+    assert!(!checkpoint.state.is_settled());
+
+    // ── Resume ──────────────────────────────────────────────────────────────
+    fixture.operations.clear_checkpoint_faults();
+    let resumed_plan = fixture
+        .app
+        .resume_location_operation(operation_id)
+        .await
+        .expect("resume")
+        .plan()
+        .expect("an interrupted merge resumes through the same runner");
+    let outcome = fixture
+        .app
+        .run_root_move(operation_id, &resumed_plan)
+        .await
+        .expect("resumed run");
+
+    assert!(
+        matches!(
+            outcome.state,
+            LocationOperationState::Completed | LocationOperationState::CompletedWithWarnings
+        ),
+        "unexpected terminal state: {:?} ({:?})",
+        outcome.state,
+        outcome.detail
+    );
+    assert_eq!(
+        fixture.merges.executed().len(),
+        1,
+        "the merge is never executed a second time"
+    );
+    assert_eq!(outcome.counters.merges, 1);
+    let settled = fixture
+        .operations
+        .checkpoint(operation_id, &title.id)
+        .expect("checkpoint");
+    assert!(settled.state.is_settled());
+    assert_eq!(
+        settled.placement.merged_into_title_id.as_deref(),
+        Some(destination.id.as_str())
+    );
+    assert_eq!(
+        fixture.operations.open_claim_count(),
+        0,
+        "a finished operation owns nothing (FR-084)"
     );
 }
 

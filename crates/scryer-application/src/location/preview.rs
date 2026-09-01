@@ -26,6 +26,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::helpers::{HashDomain, blake3_identity_hex};
 use crate::location::classify::ClassificationCounts;
+use crate::location::merge::summary::MergePreviewSummary;
 use crate::location::model::{
     LocationExecutionMode, LocationOperationType, VerificationDepth,
 };
@@ -377,6 +378,19 @@ pub struct LocationPlan {
     pub free_space: FreeSpaceEstimate,
     pub verification: VerificationStatement,
     pub confirmation: PlanConfirmation,
+    /// The FR-071 merge summary for every title in this plan that merges into
+    /// an existing destination title (US7), in plan order. Empty for every plan
+    /// with no merge in it, which is every plan outside a cross-library
+    /// transfer.
+    ///
+    /// This is part of the fingerprinted material (see
+    /// [`build_plan_fingerprint`]) because the merge decision is derived from
+    /// catalog state — the destination title's episodes, collections, links,
+    /// tags, and episode-scoped rows — that no plan *item* mentions. Leaving it
+    /// out would let the destination gain an episode between preview and start
+    /// and still confirm a fingerprint that no longer describes the merge.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub merges: Vec<MergePreviewSummary>,
 }
 
 impl LocationPlan {
@@ -524,6 +538,7 @@ pub struct LocationPlanBuilder {
     classification: ClassificationCounts,
     free_space: FreeSpaceEstimate,
     verification: VerificationStatement,
+    merges: Vec<MergePreviewSummary>,
     sample_limit: usize,
 }
 
@@ -536,8 +551,16 @@ impl LocationPlanBuilder {
             classification: ClassificationCounts::default(),
             free_space: FreeSpaceEstimate::unknown(),
             verification: VerificationStatement::none(depth),
+            merges: Vec::new(),
             sample_limit: PLAN_SECTION_SAMPLE_LIMIT,
         }
+    }
+
+    /// Record one title's FR-071 merge summary. Order is the caller's, and it
+    /// is the order the fingerprint is taken over.
+    pub fn merge(&mut self, summary: MergePreviewSummary) -> &mut Self {
+        self.merges.push(summary);
+        self
     }
 
     pub fn push(&mut self, item: PlanItem) -> &mut Self {
@@ -579,7 +602,7 @@ impl LocationPlanBuilder {
     }
 
     pub fn build(&self) -> LocationPlan {
-        let fingerprint = build_plan_fingerprint(&self.header, &self.items);
+        let fingerprint = build_plan_fingerprint(&self.header, &self.items, &self.merges);
         let counts = build_counts(&self.items);
         let sections = build_sections(&self.items, self.sample_limit);
         let verification = VerificationStatement {
@@ -597,18 +620,35 @@ impl LocationPlanBuilder {
             classification: self.classification,
             free_space: self.free_space.clone(),
             verification,
+            merges: self.merges.clone(),
         }
     }
 }
 
-/// Fingerprint over the complete plan: header, selection, and every item in the
-/// order the planner produced them (FR-081).
+/// Fingerprint over the complete plan: header, selection, every item in the
+/// order the planner produced them, and every merge summary (FR-081).
 ///
 /// Domain-separated through [`HashDomain::LocationPlan`], the same way the
 /// rename plan and delete preview are, so a plan fingerprint can never be
 /// substituted for another kind of identity.
-pub fn build_plan_fingerprint(header: &LocationPlanHeader, items: &[PlanItem]) -> PlanFingerprint {
-    let payload = serde_json::to_string(&(header, items)).unwrap_or_default();
+///
+/// # Why the merge summaries are hashed and not only the items
+///
+/// Everything else a plan decides is visible in an item: a path, a size, a
+/// reason code. A merge is decided from catalog state on *both* sides — the
+/// destination's episodes, collections, links, tags, and every episode-scoped
+/// row referencing the source — and the plan items can only ever carry a
+/// readable digest of that. Hashing [`MergePreviewSummary`] itself is what
+/// makes FR-081's guarantee hold for US7: if a destination episode appears
+/// between preview and start, the identity map changes, the summary changes,
+/// and the confirmation the user is holding is refused as stale rather than
+/// executing a merge nobody previewed.
+pub fn build_plan_fingerprint(
+    header: &LocationPlanHeader,
+    items: &[PlanItem],
+    merges: &[MergePreviewSummary],
+) -> PlanFingerprint {
+    let payload = serde_json::to_string(&(header, items, merges)).unwrap_or_default();
     PlanFingerprint(blake3_identity_hex(HashDomain::LocationPlan, payload))
 }
 
@@ -980,6 +1020,40 @@ mod tests {
         let mut rebuilt = LocationPlanBuilder::new(header());
         rebuilt.extend(items);
         assert_eq!(first.fingerprint, rebuilt.build().fingerprint);
+    }
+
+    /// FR-081 for US7: the merge decision is catalog state no plan item spells
+    /// out, so it is hashed in its own right. A destination that gains an
+    /// episode between preview and start changes the identity map, changes the
+    /// summary, and voids the confirmation.
+    #[test]
+    fn a_changed_merge_summary_invalidates_the_confirmation() {
+        let items = vec![move_item("title-1", "/src/a.mkv", "/dst/a.mkv", 10)];
+        let summary = |free_form: &str| MergePreviewSummary {
+            source_title_id: "title-1".to_string(),
+            destination_title_id: "destination".to_string(),
+            free_form_tags_added: vec![free_form.to_string()],
+            ..MergePreviewSummary::default()
+        };
+
+        let mut without = LocationPlanBuilder::new(header());
+        without.extend(items.clone());
+        let without = without.build();
+
+        let mut with = LocationPlanBuilder::new(header());
+        with.extend(items.clone());
+        with.merge(summary("rewatch"));
+        let with = with.build();
+
+        let mut changed = LocationPlanBuilder::new(header());
+        changed.extend(items);
+        changed.merge(summary("4k"));
+        let changed = changed.build();
+
+        assert_ne!(without.fingerprint, with.fingerprint);
+        assert_ne!(with.fingerprint, changed.fingerprint);
+        assert_eq!(with.merges.len(), 1);
+        assert!(without.merges.is_empty());
     }
 
     #[test]

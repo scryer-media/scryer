@@ -59,6 +59,7 @@ use crate::location::executor::{
 };
 use crate::location::hardlinks::{HardlinkFact, hardlink_warnings};
 use crate::location::identity::DestinationIdentityOutcome;
+use crate::location::merge::summary::MergePreviewSummary;
 use crate::location::transfer_effects::{
     FacetConversion, SettingDisposition, TitleAssociationFacts, collection_statement,
     series_movie_link_statement,
@@ -114,6 +115,21 @@ pub mod plan_reasons {
     /// What a transfer does to the title's collections, when it does anything
     /// worth stating (FR-062).
     pub const COLLECTION_PRESERVATION: &str = "collection_preservation";
+    /// The title merges into an existing destination title rather than
+    /// transferring into a new one (US7, FR-055, FR-063).
+    pub const TITLE_MERGE: &str = "title_merge";
+    /// One setting the destination keeps and the source loses (FR-063).
+    pub const MERGE_DESTINATION_WINS: &str = "merge_destination_wins";
+    /// One reserved `scryer:` setting whose two sides disagreed (OQ9, FR-071).
+    pub const MERGE_RESERVED_TAG_CONFLICT: &str = "merge_reserved_tag_conflict";
+    /// One category the merge deliberately does not carry (FR-071).
+    pub const MERGE_DROPPED_DATA: &str = "merge_dropped_data";
+    /// One media-file role the merge resolves per logical slot; never silent
+    /// (FR-068–FR-070).
+    pub const MERGE_ROLE_CHANGE: &str = "merge_role_change";
+    /// The merge cannot run: episode-scoped records reference source identities
+    /// that do not map onto the destination (FR-066).
+    pub const MERGE_RECORDS_UNMAPPED: &str = "merge_records_unmapped";
 }
 
 /// One file of planned work, in the serialized form a resumed run reads back.
@@ -165,6 +181,17 @@ pub struct RootMoveTitleExecution {
     /// Source files proven redundant against identical destination content, so
     /// they are recycled instead of copied (FR-073).
     pub deduplicated_sources: Vec<String>,
+    /// Media-file ids of those redundant sources, when they were tracked media
+    /// rather than companion assets.
+    ///
+    /// The file is recycled and the destination's copy survives, so the source
+    /// row is a duplicate of the survivor's and is removed with it (FR-073:
+    /// "retain or merge catalog associations onto the survivor"). Kept beside
+    /// the paths rather than folded into them because cleanup acts on paths and
+    /// the catalog acts on ids, and defaulted so a plan serialized before the
+    /// field existed still loads.
+    #[serde(default)]
+    pub deduplicated_media_file_ids: Vec<String>,
     /// Destination paths whose file name the collision planner changed so
     /// destination content keeps its own name (FR-074/075). Kept beside
     /// `deduplicated_sources` because Activity counts both (FR-091), and
@@ -191,6 +218,16 @@ pub struct RootMoveTitleExecution {
     /// (`REMATCH_DERIVED_TAG_PREFIXES` precedent, FR-057).
     #[serde(default)]
     pub dropped_tag_prefixes: Vec<String>,
+    /// The existing destination title this title merges into (US7, FR-055).
+    ///
+    /// This is the one field that turns the transfer's catalog flip into the
+    /// merge engine's Groups 1–5 transaction: with it set the reconciler runs
+    /// [`crate::location::merge::engine::execute_merge`] instead of
+    /// `set_title_library_and_root`, and the checkpoint records
+    /// `merged_into_title_id`. Defaulted so a plan serialized before US7 landed
+    /// still reads back as a plain transfer.
+    #[serde(default)]
+    pub merge_target_title_id: Option<String>,
 }
 
 impl RootMoveTitleExecution {
@@ -202,6 +239,12 @@ impl RootMoveTitleExecution {
         self.destination_library_id != self.source_library_id
     }
 
+    /// Whether this title's catalog step is the US7 merge rather than the
+    /// FR-056 flip.
+    pub fn merges(&self) -> bool {
+        self.merge_target_title_id.is_some()
+    }
+
     pub fn placement(&self) -> TitleCheckpointPlacement {
         TitleCheckpointPlacement {
             source_library_id: Some(self.source_library_id.clone()),
@@ -210,7 +253,10 @@ impl RootMoveTitleExecution {
             destination_library_id: Some(self.destination_library_id.clone()),
             destination_root_id: Some(self.destination_root_id.clone()),
             destination_folder_path: self.destination_folder_path.clone(),
-            merged_into_title_id: None,
+            // FR-091: the executor's `merge_count` is derived from this, counted
+            // once the title settles, exactly the way the dedup and rename
+            // counters are counted off the plan.
+            merged_into_title_id: self.merge_target_title_id.clone(),
         }
     }
 
@@ -353,6 +399,14 @@ pub struct RootMoveTitleDraft {
     /// Link, collection, and episode counts behind the FR-060–FR-062
     /// statements.
     pub associations: TitleAssociationFacts,
+    /// The merge the engine planned for this title at preview time (US7,
+    /// FR-066, FR-071), or `None` when the title is not a merge candidate.
+    ///
+    /// A summary whose [`MergePreviewSummary::is_blocked`] is set never reaches
+    /// this planner as a startable title — the caller has already classified it
+    /// `NeedsResolution` — but it is carried anyway so the preview can name the
+    /// blocking records beside the title rather than only in the class reason.
+    pub merge_summary: Option<MergePreviewSummary>,
 }
 
 impl RootMoveTitleDraft {
@@ -360,6 +414,16 @@ impl RootMoveTitleDraft {
     /// (FR-056) rather than a root move.
     pub fn crosses_libraries(&self) -> bool {
         self.destination_library_id != self.source_library_id
+    }
+
+    /// The existing destination title this title merges into (US7, FR-055).
+    ///
+    /// Read off the detection outcome rather than stored beside it, so the
+    /// planner and the classifier can never disagree about which titles merge.
+    pub fn merge_target_title_id(&self) -> Option<&str> {
+        self.destination_identity
+            .as_ref()
+            .and_then(DestinationIdentityOutcome::merge_target)
     }
 
     /// The destination folder name differs from the source folder name, so the
@@ -453,6 +517,13 @@ pub fn build_root_move_plan(request: &RootMovePlanRequest) -> PlannedRootMove {
         let (title_execution, items, warnings) = plan_title(request, draft, index as i64);
         builder.extend(items);
         plan_warnings.extend(warnings.iter().cloned());
+        // FR-071 + FR-081: the merge summary is both what the preview shows and
+        // part of what the fingerprint covers, so it is recorded for every
+        // merge candidate — including a blocked one, whose records the user has
+        // to see before deciding anything.
+        if let Some(summary) = draft.merge_summary.clone() {
+            builder.merge(summary);
+        }
         if let Some(title_execution) = title_execution {
             execution.titles.push(title_execution);
         }
@@ -512,6 +583,10 @@ fn plan_title(
                             .unwrap_or_else(|| format!("\"{}\" needs a decision", draft.title_name)),
                     ),
             );
+            // FR-066: an unmappable merge is refused per *record*, and the
+            // records are what the user acts on. One line each, so the preview
+            // can be read rather than parsed.
+            items.extend(blocked_merge_items(draft));
             return (None, items, warnings);
         }
         TitleLocationClass::NoOp => {
@@ -571,6 +646,7 @@ fn plan_title(
                 same_volume: draft.same_volume,
                 files: Vec::new(),
                 deduplicated_sources: Vec::new(),
+                deduplicated_media_file_ids: Vec::new(),
                 renamed_destinations: Vec::new(),
                 prune_directories: Vec::new(),
                 warnings: transfer_warnings,
@@ -579,6 +655,10 @@ fn plan_title(
                 // it lands in.
                 converted_facet: converted_facet(draft),
                 dropped_tag_prefixes: dropped_tag_prefixes(draft),
+                // FR-076 does not exempt a fileless title from US7 either: a
+                // catalog-only title with a unique destination identity is
+                // still a merge, and folding its rows in is the whole change.
+                merge_target_title_id: draft.merge_target_title_id().map(str::to_string),
             };
             return (Some(execution), items, warnings);
         }
@@ -649,6 +729,7 @@ fn plan_title(
 
     let mut files = Vec::new();
     let mut deduplicated_sources = Vec::new();
+    let mut deduplicated_media_file_ids = Vec::new();
     let mut renamed_destinations = Vec::new();
     for file in &draft.files {
         let item_id = collision_item_id(file);
@@ -698,6 +779,9 @@ fn plan_title(
                 // Proven duplicate: no bytes are written, the source copy is
                 // recycled (FR-073). The preview says so before confirmation.
                 deduplicated_sources.push(source_display.clone());
+                if let Some(media_file_id) = file.media_file_id.as_deref() {
+                    deduplicated_media_file_ids.push(media_file_id.to_string());
+                }
                 items.push(
                     PlanItem::new(PlanItemKind::Dedup)
                         .with_title(draft.title_id.clone())
@@ -783,11 +867,13 @@ fn plan_title(
         same_volume: draft.same_volume,
         files,
         deduplicated_sources,
+        deduplicated_media_file_ids,
         renamed_destinations,
         prune_directories: prune_directories_for(draft),
         warnings: warnings.clone(),
         converted_facet: converted_facet(draft),
         dropped_tag_prefixes: dropped_tag_prefixes(draft),
+        merge_target_title_id: draft.merge_target_title_id().map(str::to_string),
     };
 
     (Some(execution), items, warnings)
@@ -815,18 +901,33 @@ fn transfer_items(draft: &RootMoveTitleDraft) -> Vec<PlanItem> {
         return Vec::new();
     }
 
-    let mut items = vec![
-        PlanItem::new(PlanItemKind::CatalogChange)
-            .with_title(draft.title_id.clone())
-            .with_reason_code(plan_reasons::LIBRARY_TRANSFER)
-            .with_detail(format!(
-                "\"{}\" moves from library {} to library {}; its own settings, tags, monitoring, history, and requests travel with it, and anything it inherited from {} is replaced by the destination library's defaults",
-                draft.title_name,
-                draft.source_library_id,
-                draft.destination_library_id,
-                draft.source_library_id
-            )),
-    ];
+    // US7: a merge is not a transfer that also merges — it is a different
+    // catalog outcome, and saying "its own settings travel with it" over a
+    // merge would be the opposite of FR-063's destination-wins rule.
+    let mut items = if let Some(merge_target) = draft.merge_target_title_id() {
+        vec![
+            PlanItem::new(PlanItemKind::Merge)
+                .with_title(draft.title_id.clone())
+                .with_reason_code(plan_reasons::TITLE_MERGE)
+                .with_detail(format!(
+                    "\"{}\" merges into the existing title {merge_target} in library {}; the destination keeps its title id, metadata identity, monitoring, settings, quality configuration, and naming, and this title's additive data is unioned onto it",
+                    draft.title_name, draft.destination_library_id
+                )),
+        ]
+    } else {
+        vec![
+            PlanItem::new(PlanItemKind::CatalogChange)
+                .with_title(draft.title_id.clone())
+                .with_reason_code(plan_reasons::LIBRARY_TRANSFER)
+                .with_detail(format!(
+                    "\"{}\" moves from library {} to library {}; its own settings, tags, monitoring, history, and requests travel with it, and anything it inherited from {} is replaced by the destination library's defaults",
+                    draft.title_name,
+                    draft.source_library_id,
+                    draft.destination_library_id,
+                    draft.source_library_id
+                )),
+        ]
+    };
 
     if let Some(warning) = same_named_destination_warning(draft) {
         items.push(
@@ -837,8 +938,120 @@ fn transfer_items(draft: &RootMoveTitleDraft) -> Vec<PlanItem> {
         );
     }
 
+    items.extend(merge_items(draft));
     items.extend(facet_conversion_items(draft));
     items.extend(association_items(draft));
+
+    items
+}
+
+/// FR-066: one `Blocked` item per record the merge engine could not map, so the
+/// preview names the table and the identity rather than only the count.
+fn blocked_merge_items(draft: &RootMoveTitleDraft) -> Vec<PlanItem> {
+    draft
+        .merge_summary
+        .iter()
+        .flat_map(|summary| summary.blocked.iter())
+        .map(|record| {
+            PlanItem::new(PlanItemKind::Blocked)
+                .with_title(draft.title_id.clone())
+                .with_reason_code(plan_reasons::MERGE_RECORDS_UNMAPPED)
+                .with_detail(format!(
+                    "\"{}\" cannot merge into an existing destination title: {}",
+                    draft.title_name,
+                    record.summary_line()
+                ))
+        })
+        .collect()
+}
+
+/// FR-071 as plan items: what the destination keeps, what disagreed, what is
+/// dropped, and which roles change.
+///
+/// The summary itself rides on the plan (and on the fingerprint) as structured
+/// data; these items are the readable form of the same decision, in the same
+/// vocabulary every other preview line uses, so Activity and the confirmation
+/// dialog do not need a second renderer for merges.
+fn merge_items(draft: &RootMoveTitleDraft) -> Vec<PlanItem> {
+    let Some(summary) = draft.merge_summary.as_ref() else {
+        return Vec::new();
+    };
+
+    // A blocked merge performs none of this; its records are listed by
+    // `blocked_merge_items` on the blocking branch instead.
+    if summary.is_blocked() {
+        return Vec::new();
+    }
+
+    let mut items = Vec::new();
+
+    for entry in &summary.destination_wins {
+        let detail = match (entry.destination_value.as_deref(), entry.source_value.as_deref()) {
+            (Some(destination), Some(source)) => format!(
+                "the destination's {} ({destination}) wins; \"{}\" loses its own ({source})",
+                entry.setting, draft.title_name
+            ),
+            _ => format!(
+                "the destination title's {} wins for the merged title",
+                entry.setting
+            ),
+        };
+        items.push(
+            PlanItem::new(PlanItemKind::CatalogChange)
+                .with_title(draft.title_id.clone())
+                .with_reason_code(plan_reasons::MERGE_DESTINATION_WINS)
+                .with_detail(detail),
+        );
+    }
+
+    for conflict in &summary.reserved_tag_conflicts {
+        let setting = conflict
+            .setting
+            .clone()
+            .unwrap_or_else(|| conflict.prefix.clone());
+        items.push(
+            PlanItem::new(PlanItemKind::Warning)
+                .with_title(draft.title_id.clone())
+                .with_reason_code(plan_reasons::MERGE_RESERVED_TAG_CONFLICT)
+                .with_detail(match conflict.destination_value.as_deref() {
+                    Some(destination) => format!(
+                        "{setting}: the destination keeps \"{destination}\" and \"{}\" loses \"{}\"",
+                        draft.title_name,
+                        conflict.source_value.clone().unwrap_or_default()
+                    ),
+                    None => format!(
+                        "{setting}: the destination has no value, so \"{}\" loses \"{}\"",
+                        draft.title_name,
+                        conflict.source_value.clone().unwrap_or_default()
+                    ),
+                }),
+        );
+    }
+
+    // FR-070: every role change appears, and none of them is silent.
+    for change in &summary.role_changes {
+        items.push(
+            PlanItem::new(PlanItemKind::RoleChange)
+                .with_title(draft.title_id.clone())
+                .with_reason_code(plan_reasons::MERGE_ROLE_CHANGE)
+                .with_detail(change.describe()),
+        );
+    }
+
+    for dropped in &summary.dropped {
+        if dropped.source_row_count == 0 {
+            continue;
+        }
+        items.push(
+            PlanItem::new(PlanItemKind::Warning)
+                .with_title(draft.title_id.clone())
+                .with_reason_code(plan_reasons::MERGE_DROPPED_DATA)
+                .with_detail(format!(
+                    "{} row(s) in {} are not carried over ({}): {}",
+                    dropped.source_row_count, dropped.table, dropped.decision, dropped.reason
+                )),
+        );
+    }
 
     items
 }
@@ -1101,6 +1314,7 @@ mod tests {
             destination_identity: None,
             facet_conversion: None,
             associations: TitleAssociationFacts::default(),
+            merge_summary: None,
         }
     }
 
@@ -1622,6 +1836,182 @@ mod tests {
         let execution = planned.execution.title("title-1").expect("title planned");
         assert_eq!(execution.converted_facet, Some(MediaFacet::Anime));
         assert_eq!(details_for(&planned, plan_reasons::FACET_CONVERSION).len(), 1);
+    }
+
+    // ── US7 ─────────────────────────────────────────────────────────────────
+
+    /// A transfer draft whose destination holds the same canonical title, with
+    /// the merge the engine planned for it.
+    fn merge_draft(summary: Option<MergePreviewSummary>) -> RootMoveTitleDraft {
+        use crate::location::identity::{DestinationIdentityOutcome, IdentityCandidate};
+        use crate::location::merge::DestinationIdentityMatch;
+
+        let mut draft = transfer_draft(None, TitleAssociationFacts::default());
+        draft.destination_identity = Some(DestinationIdentityOutcome {
+            match_kind: DestinationIdentityMatch::Unique,
+            matched_title_id: Some("destination".to_string()),
+            candidates: vec![IdentityCandidate {
+                title_id: "destination".to_string(),
+                title_name: "Some Show".to_string(),
+                shared_identities: Vec::new(),
+            }],
+            same_name_title_id: None,
+            same_name_title_name: None,
+        });
+        draft.merge_summary = summary;
+        draft
+    }
+
+    fn merge_summary() -> MergePreviewSummary {
+        use crate::location::merge::MergedMediaRole;
+        use crate::location::merge::roles::{MediaRoleChange, RoleChangeReason};
+        use crate::location::merge::summary::{DestinationWinsEntry, DroppedCategory, ReservedTagConflict};
+
+        MergePreviewSummary {
+            source_title_id: "title-1".to_string(),
+            destination_title_id: "destination".to_string(),
+            destination_wins: vec![DestinationWinsEntry {
+                setting: "title id".to_string(),
+                destination_value: Some("destination".to_string()),
+                source_value: Some("title-1".to_string()),
+            }],
+            role_changes: vec![MediaRoleChange {
+                file_id: "file-in".to_string(),
+                source_episode_id: "s-e1".to_string(),
+                destination_episode_id: "d-e1".to_string(),
+                previous_role: MergedMediaRole::Primary,
+                new_role: MergedMediaRole::Additional,
+                reason: RoleChangeReason::DestinationPrimaryRetained,
+            }],
+            reserved_tag_conflicts: vec![ReservedTagConflict {
+                prefix: "scryer:quality-profile:".to_string(),
+                setting: Some("quality profile".to_string()),
+                destination_value: Some("dest-profile".to_string()),
+                source_value: Some("source-profile".to_string()),
+            }],
+            dropped: vec![DroppedCategory {
+                table: "pending_releases".to_string(),
+                source_row_count: 2,
+                decision: "OQ5".to_string(),
+                reason: "the delay queue re-derives against the destination profile".to_string(),
+            }],
+            ..MergePreviewSummary::default()
+        }
+    }
+
+    fn details_of<'a>(
+        planned: &'a PlannedRootMove,
+        kind: PlanItemKind,
+        reason_code: &str,
+    ) -> Vec<&'a str> {
+        planned
+            .plan
+            .section(kind)
+            .map(|section| {
+                section
+                    .items
+                    .items
+                    .iter()
+                    .filter(|item| item.reason_code.as_deref() == Some(reason_code))
+                    .filter_map(|item| item.detail.as_deref())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// US7: a merge is a startable transfer whose catalog outcome is the merge
+    /// engine's. It is previewed as a merge, not as a library transfer, and its
+    /// instruction set carries the target the reconciler and the checkpoint
+    /// both read.
+    #[test]
+    fn a_merge_is_previewed_as_a_merge_and_carries_its_target() {
+        let planned = build_root_move_plan(&request(vec![merge_draft(Some(merge_summary()))]));
+
+        let merged = details_of(&planned, PlanItemKind::Merge, plan_reasons::TITLE_MERGE);
+        assert_eq!(merged.len(), 1);
+        assert!(merged[0].contains("destination"));
+        // FR-063 is the opposite of the transfer statement, so the transfer
+        // statement must not be there.
+        assert!(details_for(&planned, plan_reasons::LIBRARY_TRANSFER).is_empty());
+
+        // FR-071: what wins, what disagreed, what is dropped, which roles move.
+        assert_eq!(
+            details_of(&planned, PlanItemKind::CatalogChange, plan_reasons::MERGE_DESTINATION_WINS)
+                .len(),
+            1
+        );
+        let conflicts = details_of(
+            &planned,
+            PlanItemKind::Warning,
+            plan_reasons::MERGE_RESERVED_TAG_CONFLICT,
+        );
+        assert_eq!(conflicts.len(), 1);
+        assert!(conflicts[0].contains("quality profile"));
+        let dropped =
+            details_of(&planned, PlanItemKind::Warning, plan_reasons::MERGE_DROPPED_DATA);
+        assert_eq!(dropped.len(), 1);
+        assert!(dropped[0].contains("pending_releases"));
+        // FR-070: the demotion is a line item of its own.
+        let roles =
+            details_of(&planned, PlanItemKind::RoleChange, plan_reasons::MERGE_ROLE_CHANGE);
+        assert_eq!(roles.len(), 1);
+        assert!(roles[0].contains("additional"));
+
+        let execution = planned.execution.title("title-1").expect("title planned");
+        assert!(execution.merges());
+        assert_eq!(
+            execution.placement().merged_into_title_id.as_deref(),
+            Some("destination")
+        );
+        // FR-091: the runner counts a merge off the plan, once the title settles.
+        assert_eq!(
+            planned.work_plan().titles[0]
+                .placement
+                .merged_into_title_id
+                .as_deref(),
+            Some("destination")
+        );
+        // FR-081: the summary is fingerprinted material, not decoration.
+        assert_eq!(planned.plan.merges.len(), 1);
+    }
+
+    /// FR-066: a merge the engine refused names the blocking records in the
+    /// preview, and the plan refuses to start.
+    #[test]
+    fn a_blocked_merge_names_its_records_and_stops_the_start() {
+        use crate::location::merge::map::{MergeBlockReason, MergeBlockedRecord};
+
+        let mut summary = merge_summary();
+        summary.blocked = vec![MergeBlockedRecord {
+            table: "wanted_items".to_string(),
+            reason: MergeBlockReason::UnmappedEpisode,
+            source_id: "s-e2".to_string(),
+            detail: "no destination episode carries standard S01E02".to_string(),
+        }];
+        let mut draft = merge_draft(Some(summary));
+        // The classifier has already refused it; the planner represents it.
+        draft.class = TitleLocationClass::NeedsResolution;
+        draft.blocked_reason = Some("wanted_items (unmapped_episode): s-e2".to_string());
+
+        let mut plan_request = request(vec![draft]);
+        plan_request.classification = ClassificationCounts {
+            needs_resolution: 1,
+            ..ClassificationCounts::default()
+        };
+        let planned = build_root_move_plan(&plan_request);
+
+        assert!(planned.plan.blocks_start());
+        assert!(planned.execution.titles.is_empty());
+        assert_eq!(planned.execution.unresolved_titles, 1);
+        let named =
+            details_of(&planned, PlanItemKind::Blocked, plan_reasons::MERGE_RECORDS_UNMAPPED);
+        assert_eq!(named.len(), 1);
+        assert!(named[0].contains("wanted_items"));
+        assert!(named[0].contains("s-e2"));
+        // The refusal is still fingerprinted: re-previewing after the user maps
+        // the episode has to produce a different plan.
+        assert_eq!(planned.plan.merges.len(), 1);
+        assert!(planned.plan.merges[0].is_blocked());
     }
 
     /// A root move is not root-wide, so it takes the simple confirmation

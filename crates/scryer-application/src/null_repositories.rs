@@ -912,6 +912,39 @@ fn location_operation_repository_missing() -> AppError {
     AppError::Repository("location operation repository is not configured".to_string())
 }
 
+/// The US7 merge engine with no datastore behind it.
+///
+/// Unlike the location-operation null repository, **both** halves fail here.
+/// There is no safe "nothing is happening" answer for a merge: an empty
+/// snapshot would plan a merge over a destination the engine cannot see, which
+/// is precisely the guess FR-066 exists to prevent. A deployment with no merge
+/// store configured must refuse the merge, not perform an unexamined one.
+#[derive(Default)]
+pub struct NullTitleMergeRepository;
+
+#[async_trait]
+impl crate::location::merge::engine::TitleMergeRepository for NullTitleMergeRepository {
+    async fn load_merge_snapshot(
+        &self,
+        _source_title_id: &str,
+        _destination_title_id: &str,
+        _current_operation_id: Option<&str>,
+    ) -> AppResult<crate::location::merge::engine::MergeCatalogSnapshot> {
+        Err(title_merge_repository_missing())
+    }
+
+    async fn execute_title_merge(
+        &self,
+        _plan: &crate::location::merge::engine::MergePlan,
+    ) -> AppResult<crate::location::merge::engine::MergeOutcome> {
+        Err(title_merge_repository_missing())
+    }
+}
+
+fn title_merge_repository_missing() -> AppError {
+    AppError::Repository("title merge repository is not configured".to_string())
+}
+
 #[derive(Default)]
 pub struct NullMediaFileRepository;
 

@@ -79,6 +79,33 @@ pub struct MediaRoleChange {
     pub reason: RoleChangeReason,
 }
 
+impl MediaRoleChange {
+    /// The sentence FR-070 asks the preview to show for this change. Phrased
+    /// once, here, so the plan item, the GraphQL payload, and any log line
+    /// cannot describe the same demotion three different ways.
+    pub fn describe(&self) -> String {
+        let why = match self.reason {
+            RoleChangeReason::DestinationPrimaryRetained => {
+                "the destination already has a primary for that slot, and no destination primary is demoted by a move"
+            }
+            RoleChangeReason::SourcePrimaryAlreadyClaimed => {
+                "another source file already claimed primary for that destination episode"
+            }
+            RoleChangeReason::CollapsedSourceEpisodes => {
+                "two source episodes map onto that one destination episode, so their rows collapse into one"
+            }
+        };
+        format!(
+            "file {} becomes {} for episode {} (was {} for source episode {}): {why}",
+            self.file_id,
+            self.new_role.as_str(),
+            self.destination_episode_id,
+            self.previous_role.as_str(),
+            self.source_episode_id
+        )
+    }
+}
+
 /// The rows Group 1 writes, plus everything the preview has to show.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MergedRolePlan {

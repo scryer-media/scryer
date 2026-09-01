@@ -66,6 +66,11 @@ pub struct AppLibraryServices {
     pub(crate) library_scan_unmatched_items: Arc<dyn LibraryScanUnmatchedItemRepository>,
     /// Persisted location-operation state, read by the ownership guard (FR-084).
     pub(crate) location_operations: Arc<dyn crate::ports::LocationOperationRepository>,
+    /// The US7 merge engine's Group 0 read and Groups 1–5 transaction. Read at
+    /// preview time to plan the merge (FR-066/FR-071) and again at the title
+    /// checkpoint to run it (FR-063–FR-067).
+    pub(crate) title_merges:
+        Arc<dyn crate::location::merge::engine::TitleMergeRepository>,
 }
 
 #[derive(Clone)]
@@ -302,6 +307,7 @@ impl AppServices {
                     null_repositories::NullLibraryScanUnmatchedItemRepository,
                 ),
                 location_operations: Arc::new(null_repositories::NullLocationOperationRepository),
+                title_merges: Arc::new(null_repositories::NullTitleMergeRepository),
             },
             integrations: AppIntegrationServices {
                 indexer_configs,

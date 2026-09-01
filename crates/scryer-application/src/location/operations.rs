@@ -67,9 +67,12 @@ use crate::location::collisions::{
     CollisionNaming, ContentFacts, DestinationItem, FullHash, PathCaseRule, RecycleAvailability,
 };
 use crate::location::execution::{
-    ImportFilePermissionsApplier, RootMoveAdmission, RootMoveCatalog, RootMoveFileMover,
-    RootMoveReconciler, RecycleBinSourceRecycler, TitlePlacementSnapshot,
+    ImportFilePermissionsApplier, PostMergeWorkRequest, PostMergeWorkScheduler, RootMoveAdmission,
+    RootMoveCatalog, RootMoveFileMover, RootMoveReconciler, RecycleBinSourceRecycler,
+    TitlePlacementSnapshot,
 };
+use crate::location::merge::engine::{MergePlan, plan_merge};
+use crate::location::merge::summary::PostMergeWork;
 use crate::location::executor::{LocationOperationRunner, OperationRunOutcome};
 use crate::location::hardlinks::detect_hardlinks;
 use crate::location::identity::{
@@ -518,7 +521,11 @@ impl AppUseCase {
             self.services.library.location_operations.as_ref(),
             &recycler,
         )
-        .with_permissions(permissions);
+        .with_permissions(permissions)
+        // US7: the merge engine and the Group 6 scheduler the executor hands
+        // the returned work list to.
+        .with_merges(self.services.library.title_merges.as_ref())
+        .with_post_merge_work(Arc::new(AppUseCasePostMergeWork { app: self.clone() }));
 
         // Activity's run mirrors the same pulse the operation row gets, so a
         // long copy shows a moving row in the jobs list instead of "queued"
@@ -1190,6 +1197,15 @@ impl AppUseCase {
             .transfer_association_facts(&titles, &destination_library)
             .await?;
 
+        // C2 / FR-066 / FR-071: the merge is decided *at preview time*, by the
+        // same `plan_merge` the executor runs. A refusal therefore reaches the
+        // user before they confirm anything, and the summary they confirm is
+        // the decision that will be carried out rather than a description of
+        // one.
+        let merge_plans = self
+            .plan_destination_merges(&titles, &destination_identities)
+            .await?;
+
         // Classification facts, including the FR-086 blockers.
         let mut facts = Vec::with_capacity(titles.len());
         let mut media_files_by_title: BTreeMap<String, Vec<crate::TitleMediaFile>> = BTreeMap::new();
@@ -1245,12 +1261,33 @@ impl AppUseCase {
             if let Some(outcome) = destination_identities.get(&title.id) {
                 fact = fact.with_destination_identity(outcome.clone());
             }
+            // FR-066: the merge engine refused, so the title needs the user
+            // before the job can start — with the blocking records named, not
+            // just a count.
+            if let Some(plan) = merge_plans.get(&title.id)
+                && let Some(reason) = plan.summary.blocked_reason()
+            {
+                fact = fact.with_unresolved_reason(
+                    crate::location::classify::reason_codes::MERGE_RECORDS_UNMAPPED,
+                    format!(
+                        "\"{}\" cannot merge into {}: {reason}",
+                        title.name, plan.destination_title_id
+                    ),
+                );
+            }
             facts.push(fact);
             media_files_by_title.insert(title.id.clone(), media_files);
         }
 
         let classification =
             classify_selection(&facts, &request.destination, Some(&destination_facts));
+
+        // The destination titles this selection merges into, read once. Their
+        // folders are where the merging titles' files land (FR-063: the
+        // destination's naming wins, and it already owns a folder).
+        let merge_destination_titles = self
+            .merge_destination_titles(&destination_identities)
+            .await?;
 
         // Folder-naming policy for the destination library's facet (FR-013).
         let folder_template = self
@@ -1312,6 +1349,9 @@ impl AppUseCase {
                 destination_identity: classified.destination_identity.clone(),
                 facet_conversion: classified.facet_conversion.clone(),
                 associations: classified.associations,
+                merge_summary: merge_plans
+                    .get(&title.id)
+                    .map(|plan| plan.summary.clone()),
             };
 
             if !classified.class.moves_files() {
@@ -1329,14 +1369,66 @@ impl AppUseCase {
                 continue;
             };
 
-            // FR-013: calculated fresh from the destination policy, which is
-            // what repairs a stale folder name.
-            let destination_folder = crate::library::rename::configured_title_folder_path(
-                &destination_root_path.to_string_lossy(),
-                title,
-                &folder_template,
-                title.year,
-            );
+            // FR-013 for a transfer, FR-063 for a merge.
+            //
+            // A merge has no destination folder of its own to calculate: the
+            // destination title already owns one, and the merged content is
+            // that title's content from the moment Groups 1–5 commit. Sending
+            // the files anywhere else would leave the surviving title owning a
+            // folder that holds half of its media. Routing them into the
+            // destination's folder is also what makes FR-073 work here for
+            // free: the collision engine reads that folder's entries, and two
+            // copies of the same episode dedup against each other instead of
+            // landing side by side.
+            let merge_destination = classified
+                .merge_target_title_id()
+                .and_then(|id| merge_destination_titles.get(id));
+
+            // A merge also lands on the *destination title's* root, not on the
+            // one the request named, when the two differ. FR-063 gives the
+            // destination its placement along with everything else, and a
+            // checkpoint recording a root that does not contain the folder
+            // would be an audit trail nobody can follow.
+            let (destination_root_id, destination_root_path) = match merge_destination {
+                Some(destination_title)
+                    if destination_title.root_folder_id != classified.destination_root_id =>
+                {
+                    match destination_library
+                        .roots
+                        .iter()
+                        .find(|root| root.id == destination_title.root_folder_id)
+                    {
+                        Some(root) => (
+                            destination_title.root_folder_id.clone(),
+                            PathBuf::from(root.path.clone()),
+                        ),
+                        None => (
+                            classified.destination_root_id.clone(),
+                            destination_root_path,
+                        ),
+                    }
+                }
+                _ => (
+                    classified.destination_root_id.clone(),
+                    destination_root_path,
+                ),
+            };
+            draft.destination_root_id = destination_root_id;
+            draft.destination_root_path = Some(destination_root_path.clone());
+
+            let destination_folder = match merge_destination {
+                Some(destination_title) => merge_destination_folder(
+                    destination_title,
+                    &destination_root_path,
+                    &folder_template,
+                ),
+                None => crate::library::rename::configured_title_folder_path(
+                    &destination_root_path.to_string_lossy(),
+                    title,
+                    &folder_template,
+                    title.year,
+                ),
+            };
             draft.destination_folder_path = Some(destination_folder.clone());
 
             let media_files = media_files_by_title
@@ -1355,7 +1447,20 @@ impl AppUseCase {
             draft.hardlinks =
                 detect_hardlinks(draft.files.iter().map(|file| file.path.clone()).collect())
                     .await?;
-            draft.destination_entries = read_destination_entries(&destination_folder).await;
+            // FR-073 needs a *proven* hash on both sides, and the only place a
+            // destination file's hash exists without reading it again is the
+            // catalog. For a merge the destination folder's contents are the
+            // destination title's tracked media, so the persisted hashes are
+            // right there; without them every identical episode would be
+            // renamed beside its twin rather than deduplicated (D4).
+            let destination_hashes = match merge_destination {
+                Some(destination_title) => {
+                    self.persisted_hashes_for_title(&destination_title.id).await?
+                }
+                None => BTreeMap::new(),
+            };
+            draft.destination_entries =
+                read_destination_entries(&destination_folder, &destination_hashes).await;
             draft.recycle = match source_root_path.as_deref() {
                 Some(root) => {
                     let config = self
@@ -1528,6 +1633,93 @@ impl AppUseCase {
             &candidates,
             &IdentityRedirects::new(),
         ))
+    }
+
+    /// Plan every merge this selection would perform, at preview time
+    /// (C2, FR-066, FR-071).
+    ///
+    /// # Why this is a preview-time read and not an execution-time one
+    ///
+    /// [`plan_merge`] is a pure function over a Group 0 snapshot, and it is the
+    /// *only* thing that decides whether a merge can run at all. Deferring it
+    /// to the title checkpoint would mean the user confirms a plan whose
+    /// central question — "can these two titles actually be folded together?" —
+    /// has not been asked yet, and an FR-066 refusal would arrive as a failed
+    /// title halfway through a move instead of as a blocked row in the preview.
+    ///
+    /// `current_operation_id` is deliberately `None` here: no operation exists
+    /// during a preview, and a *second* operation holding the source title is
+    /// exactly the OQ7 hazard the snapshot is asked to report.
+    async fn plan_destination_merges(
+        &self,
+        titles: &[Title],
+        identities: &BTreeMap<String, DestinationIdentityOutcome>,
+    ) -> AppResult<BTreeMap<String, MergePlan>> {
+        let mut plans = BTreeMap::new();
+        for title in titles {
+            let Some(destination_title_id) = identities
+                .get(&title.id)
+                .and_then(DestinationIdentityOutcome::merge_target)
+            else {
+                continue;
+            };
+            let snapshot = self
+                .services
+                .library
+                .title_merges
+                .load_merge_snapshot(&title.id, destination_title_id, None)
+                .await?;
+            plans.insert(title.id.clone(), plan_merge(&snapshot));
+        }
+        Ok(plans)
+    }
+
+    /// The destination titles a selection merges into, keyed by their id.
+    async fn merge_destination_titles(
+        &self,
+        identities: &BTreeMap<String, DestinationIdentityOutcome>,
+    ) -> AppResult<BTreeMap<String, Title>> {
+        let mut destinations: BTreeMap<String, Title> = BTreeMap::new();
+        for outcome in identities.values() {
+            let Some(destination_title_id) = outcome.merge_target() else {
+                continue;
+            };
+            if destinations.contains_key(destination_title_id) {
+                continue;
+            }
+            let title = self
+                .services
+                .catalog
+                .titles
+                .get_by_id(destination_title_id)
+                .await?
+                .ok_or_else(|| {
+                    AppError::NotFound(format!("destination title {destination_title_id}"))
+                })?;
+            destinations.insert(destination_title_id.to_string(), title);
+        }
+        Ok(destinations)
+    }
+
+    /// Persisted full-BLAKE3 state for one title's tracked media, keyed by
+    /// stored path, so the collision planner can prove a duplicate without
+    /// reading a byte (D4, FR-047).
+    async fn persisted_hashes_for_title(
+        &self,
+        title_id: &str,
+    ) -> AppResult<BTreeMap<String, FullHash>> {
+        Ok(self
+            .services
+            .library
+            .media_files
+            .list_media_files_for_title(title_id)
+            .await?
+            .into_iter()
+            .map(|file| {
+                let hash = FullHash::from_persisted(file.content_hashes.as_ref());
+                (file.file_path, hash)
+            })
+            .collect())
     }
 
     /// Series-movie links, collections, and episodes for the titles that cross
@@ -1802,7 +1994,16 @@ async fn collect_source_files(
 
 /// What already sits in the destination folder, for the collision planner
 /// (FR-072–075). An absent folder simply has nothing in it.
-async fn read_destination_entries(destination_folder: &Path) -> Vec<DestinationItem> {
+///
+/// `known_hashes` maps a stored destination path to the full BLAKE3 the catalog
+/// has for it. Anything not in the map keeps [`FullHash::Absent`], which the
+/// dedup gate reads as "unproven" and therefore as *not* a duplicate (D4) —
+/// the same conservative answer this function gave before hashes were passed at
+/// all.
+async fn read_destination_entries(
+    destination_folder: &Path,
+    known_hashes: &BTreeMap<String, FullHash>,
+) -> Vec<DestinationItem> {
     let Ok(mut entries) = tokio::fs::read_dir(destination_folder).await else {
         return Vec::new();
     };
@@ -1816,13 +2017,43 @@ async fn read_destination_entries(destination_folder: &Path) -> Vec<DestinationI
         }
         let name = entry.file_name().to_string_lossy().to_string();
         let path = path_to_stored_string(entry.path());
+        let full_hash = known_hashes.get(&path).cloned().unwrap_or(FullHash::Absent);
         items.push(
             DestinationItem::companion(name, metadata.len())
-                .with_content(ContentFacts::new(metadata.len()))
+                .with_content(ContentFacts::new(metadata.len()).with_full_hash(full_hash))
                 .with_path(path),
         );
     }
     items
+}
+
+/// The folder a merging title's content moves into (FR-063).
+///
+/// The destination title's own folder when it owns one — which is the whole
+/// point: its content is already there and stays there. When it owns none (a
+/// fileless destination title, which is a perfectly ordinary way to have a
+/// wanted-list entry), the destination library's naming policy calculates one
+/// from the *destination* title, so the surviving title's folder is named after
+/// the surviving title.
+fn merge_destination_folder(
+    destination_title: &Title,
+    destination_root_path: &Path,
+    folder_template: &str,
+) -> PathBuf {
+    destination_title
+        .folder_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(stored_path_to_path_buf)
+        .unwrap_or_else(|| {
+            crate::library::rename::configured_title_folder_path(
+                &destination_root_path.to_string_lossy(),
+                destination_title,
+                folder_template,
+                destination_title.year,
+            )
+        })
 }
 
 /// A refused confirmation keeps its prose *and* its code: the client re-previews
@@ -1896,6 +2127,23 @@ impl RootMoveCatalog for AppUseCaseRootMoveCatalog {
             .await
     }
 
+    async fn delete_media_file(&self, media_file_id: &str) -> AppResult<()> {
+        match self
+            .app
+            .services
+            .library
+            .media_files
+            .delete_media_file(media_file_id)
+            .await
+        {
+            Ok(()) => Ok(()),
+            // Cleanup is re-entered on resume, so a row that has already gone
+            // is a completed removal rather than a failure.
+            Err(AppError::NotFound(_)) => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+
     async fn set_media_file_content_hashes(
         &self,
         media_file_id: &str,
@@ -1948,6 +2196,145 @@ impl RootMoveCatalog for AppUseCaseRootMoveCatalog {
                 drop_tag_prefixes,
             )
             .await
+    }
+}
+
+// ── Group 6 ──────────────────────────────────────────────────────────────────
+
+/// The production [`PostMergeWorkScheduler`]: the merge engine's Group 6 work
+/// list, mapped onto the subsystems that already own each cache.
+///
+/// | Work | Where it goes |
+/// |---|---|
+/// | `ReindexTitleSearchTerms` | The destination title is re-persisted through `TitleRepository::update_metadata`, which is the write path that rebuilds `title_search_terms`. The merge writes `titles.tags` with raw SQL inside its transaction, so the projection is genuinely stale until this runs. |
+/// | `RegenerateRecommendations` | `queue_title_more_like_this_refresh_if_due`, the same queue hydration uses. |
+/// | `RecomputeStatistics` | Nothing to invalidate: Scryer keeps no persisted title or library statistics cache — Activity and the dashboard derive their counts on read — so this is satisfied by construction, and it is logged rather than silently skipped. |
+/// | `DropSourceIndexerCoverage` | `prune_scope_key_coverage` over every reversible scope key the merge retired: the source title, its episodes, its collections, and its series-movie links. The irreversible `episode_set:b3:` and `series_pack_set:b3:` forms cannot be reconstructed and are left to expire, which is exactly why OQ4 drops coverage uniformly rather than remapping it. |
+///
+/// Every step is best effort. A failure here leaves a correct catalog with a
+/// stale derived cache, which the next natural refresh repairs; failing the
+/// title over one would undo a committed merge's checkpoint for no gain.
+struct AppUseCasePostMergeWork {
+    app: AppUseCase,
+}
+
+#[async_trait::async_trait]
+impl PostMergeWorkScheduler for AppUseCasePostMergeWork {
+    async fn schedule_post_merge_work(&self, request: PostMergeWorkRequest) -> AppResult<()> {
+        for work in &request.work {
+            match work {
+                PostMergeWork::ReindexTitleSearchTerms => {
+                    self.reindex_search_terms(&request.destination_title_id)
+                        .await;
+                }
+                PostMergeWork::RegenerateRecommendations => {
+                    self.regenerate_recommendations(&request.destination_title_id)
+                        .await;
+                }
+                PostMergeWork::RecomputeStatistics => {
+                    tracing::debug!(
+                        operation_id = %request.operation_id,
+                        destination_title_id = %request.destination_title_id,
+                        "merge statistics need no recomputation: Scryer derives title and library counts on read"
+                    );
+                }
+                PostMergeWork::DropSourceIndexerCoverage => {
+                    self.drop_source_coverage(&request).await;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl AppUseCasePostMergeWork {
+    async fn reindex_search_terms(&self, destination_title_id: &str) {
+        let title = match self
+            .app
+            .services
+            .catalog
+            .titles
+            .get_by_id(destination_title_id)
+            .await
+        {
+            Ok(Some(title)) => title,
+            Ok(None) => return,
+            Err(error) => {
+                tracing::warn!(
+                    destination_title_id,
+                    error = %error,
+                    "could not read the merged title to rebuild its search projection"
+                );
+                return;
+            }
+        };
+        // Writing the tags back is a no-op to the row and a rebuild to the
+        // projection: the merge already wrote the merged array, and this is the
+        // repository path that re-derives `title_search_terms` from it.
+        if let Err(error) = self
+            .app
+            .services
+            .catalog
+            .titles
+            .update_metadata(destination_title_id, None, None, Some(title.tags), None)
+            .await
+        {
+            tracing::warn!(
+                destination_title_id,
+                error = %error,
+                "could not rebuild the merged title's search projection; it rebuilds on the title's next write"
+            );
+        }
+    }
+
+    async fn regenerate_recommendations(&self, destination_title_id: &str) {
+        let Ok(Some(title)) = self
+            .app
+            .services
+            .catalog
+            .titles
+            .get_by_id(destination_title_id)
+            .await
+        else {
+            return;
+        };
+        if let Err(error) = self
+            .app
+            .queue_title_more_like_this_refresh_if_due(
+                &title,
+                crate::catalog::workflow::HydrationSource::BackgroundDue,
+            )
+            .await
+        {
+            tracing::warn!(
+                destination_title_id,
+                error = %error,
+                "could not queue the merged title's recommendation refresh"
+            );
+        }
+    }
+
+    async fn drop_source_coverage(&self, request: &PostMergeWorkRequest) {
+        let mut scope_keys = vec![format!("title:{}", request.source_title_id)];
+        scope_keys.extend(
+            request
+                .retired_episode_ids
+                .iter()
+                .map(|id| format!("episode:{id}")),
+        );
+        for collection_id in &request.retired_collection_ids {
+            scope_keys.push(format!("collection:{collection_id}"));
+            scope_keys.push(format!("series_pack_collection:{collection_id}"));
+        }
+        scope_keys.extend(
+            request
+                .retired_series_movie_link_ids
+                .iter()
+                .map(|id| format!("series_movie:{id}")),
+        );
+        for scope_key in scope_keys {
+            self.app.prune_scope_key_coverage(&scope_key, None).await;
+        }
     }
 }
 

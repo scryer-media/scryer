@@ -8,7 +8,7 @@
 //! | Seam | Implementation here | What it guarantees |
 //! |---|---|---|
 //! | [`TitleFileMover`] | [`RootMoveFileMover`] | Same-filesystem rename with no verification pass (FR-032); otherwise a verified streaming copy at the operation's depth (FR-040–043), or a proof of a destination an interrupted run already placed. Configured permissions land on the destination straight after verification (FR-031). |
-//! | [`TitleReconciler`] | [`RootMoveReconciler`] | Catalog ownership flips only after every planned file for the title is verified; then sources are recycled and *empty* source directories removed, in that order (FR-031, FR-044). |
+//! | [`TitleReconciler`] | [`RootMoveReconciler`] | Catalog ownership flips only after every planned file for the title is verified; then sources are recycled and *empty* source directories removed, in that order (FR-031, FR-044). For a title that merges into an existing destination title, the flip is replaced by the US7 merge engine's Groups 1–5 transaction (FR-063–FR-067). |
 //! | [`TitleAdmissionCheck`] | [`RootMoveAdmission`] | The FR-089 scope rule: a changed catalog input or an unprocessed source that vanished is stale; this operation's own partial destination content is resumable. |
 //!
 //! # Why the source is never touched by the mover
@@ -38,6 +38,8 @@ use crate::location::executor::{
     FileMoveRequest, PlannedTitle, TitleAdmission, TitleAdmissionCheck, TitleAdmissionContext,
     TitleFileMover, TitleReconciler, TitleStepOutcome,
 };
+use crate::location::merge::engine::{MergeOutcome, TitleMergeRepository, execute_merge, plan_merge};
+use crate::location::merge::summary::PostMergeWork;
 use crate::location::model::{LocationOperation, VerificationDepth};
 use crate::location::preview::PlanInputChange;
 use crate::location::root_move::{RootMoveExecutionPlan, RootMoveTitleExecution};
@@ -140,6 +142,14 @@ pub trait RootMoveCatalog: Send + Sync {
     /// Point a tracked media file at its new path.
     async fn set_media_file_path(&self, media_file_id: &str, stored_path: &str) -> AppResult<()>;
 
+    /// Drop the catalog row for a source copy the collision engine proved
+    /// redundant (FR-073).
+    ///
+    /// The destination's row is the survivor and keeps every association; this
+    /// removes the duplicate that would otherwise point into the recycle bin.
+    /// A row that is already gone is success — cleanup runs again on resume.
+    async fn delete_media_file(&self, media_file_id: &str) -> AppResult<()>;
+
     /// Assign the folder the title now owns.
     async fn set_title_folder_path(&self, title_id: &str, stored_path: &str) -> AppResult<()>;
 
@@ -195,6 +205,54 @@ pub trait RootMoveCatalog: Send + Sync {
         hashes: &crate::location::model::PersistedContentHashes,
     ) -> AppResult<()> {
         let _ = (media_file_id, hashes);
+        Ok(())
+    }
+}
+
+// ── Seam: Group 6 post-merge work ────────────────────────────────────────────
+
+/// What the merge retired, handed to the dispatcher so it can invalidate the
+/// derived caches keyed on ids that no longer exist (OQ4).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PostMergeWorkRequest {
+    pub operation_id: String,
+    pub source_title_id: String,
+    pub destination_title_id: String,
+    pub work: Vec<PostMergeWork>,
+    /// Source episode ids the merge mapped away. Their `episode:` coverage rows
+    /// survive the cascade because coverage is keyed on a composed string, not
+    /// on a foreign key.
+    pub retired_episode_ids: Vec<String>,
+    /// Source collection ids, for the `collection:` and
+    /// `series_pack_collection:` forms.
+    pub retired_collection_ids: Vec<String>,
+    /// Source series-movie link ids, for the `series_movie:` form.
+    pub retired_series_movie_link_ids: Vec<String>,
+}
+
+/// Schedules the Group 6 work [`crate::location::merge::engine::execute_merge`]
+/// hands back.
+///
+/// A seam because Group 6 reaches subsystems the merge engine is deliberately
+/// blind to — the title search projection, the recommendation refresh queue,
+/// the convergence coverage cache — and because every one of them is a derived
+/// cache: losing this call to a crash costs a stale index, never a wrong
+/// catalog. That is why it runs *after* the transaction and why a failure here
+/// is a warning rather than a failed title.
+#[async_trait]
+pub trait PostMergeWorkScheduler: Send + Sync {
+    async fn schedule_post_merge_work(&self, request: PostMergeWorkRequest) -> AppResult<()>;
+}
+
+/// Schedules nothing. The right default for a reconciler wired without the
+/// use-case layer: the caches it would refresh are all derived, so a test that
+/// never asks about them is not lied to.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NoPostMergeWork;
+
+#[async_trait]
+impl PostMergeWorkScheduler for NoPostMergeWork {
+    async fn schedule_post_merge_work(&self, _request: PostMergeWorkRequest) -> AppResult<()> {
         Ok(())
     }
 }
@@ -444,6 +502,8 @@ pub struct RootMoveReconciler<'a> {
     store: &'a dyn LocationOperationRepository,
     recycler: &'a dyn SourceRecycler,
     permissions: Arc<dyn PlacedContentPermissions>,
+    merges: Option<&'a dyn TitleMergeRepository>,
+    post_merge: Arc<dyn PostMergeWorkScheduler>,
 }
 
 impl<'a> RootMoveReconciler<'a> {
@@ -459,11 +519,25 @@ impl<'a> RootMoveReconciler<'a> {
             store,
             recycler,
             permissions: Arc::new(NoPlacedContentPermissions),
+            merges: None,
+            post_merge: Arc::new(NoPostMergeWork),
         }
     }
 
     pub fn with_permissions(mut self, permissions: Arc<dyn PlacedContentPermissions>) -> Self {
         self.permissions = permissions;
+        self
+    }
+
+    /// The US7 merge engine. Required for a plan holding any merge title; a
+    /// plan with none never reaches it.
+    pub fn with_merges(mut self, merges: &'a dyn TitleMergeRepository) -> Self {
+        self.merges = Some(merges);
+        self
+    }
+
+    pub fn with_post_merge_work(mut self, scheduler: Arc<dyn PostMergeWorkScheduler>) -> Self {
+        self.post_merge = scheduler;
         self
     }
 
@@ -473,6 +547,140 @@ impl<'a> RootMoveReconciler<'a> {
                 "the confirmed plan has no instructions for title {title_id}"
             ))
         })
+    }
+
+    /// US7's catalog step: Groups 1–5 in one transaction, then Group 6 handed
+    /// to the scheduler.
+    ///
+    /// # Why the plan is re-derived here rather than read off the confirmed one
+    ///
+    /// The confirmed plan carries the *preview's* merge summary, which is what
+    /// the user agreed to and what the fingerprint covers. The transaction has
+    /// to run against the catalog as it is at this instant — this title's media
+    /// files have just been repointed at their new paths, and FR-067's gate
+    /// asserts on rows that exist now. Re-deriving is also what makes the
+    /// FR-081 fingerprint meaningful: if the two disagreed, start would have
+    /// refused the confirmation before reaching here.
+    ///
+    /// # Resume idempotence
+    ///
+    /// `execute_title_merge` is one transaction, so a crash leaves either no
+    /// merge or a complete one. A complete merge with an unsettled checkpoint
+    /// is handled by the caller, which asks [`Self::merge_already_applied`]
+    /// before doing anything at all. Re-planning would fail anyway — Group 0
+    /// reads the source title and cannot find it — which is exactly the failure
+    /// mode that check avoids turning into a failed title.
+    async fn merge_title(
+        &self,
+        operation: &LocationOperation,
+        planned: &RootMoveTitleExecution,
+        destination_title_id: &str,
+        outcome: &mut TitleStepOutcome,
+    ) -> AppResult<()> {
+        let merges = self.merges.ok_or_else(|| {
+            AppError::Validation(format!(
+                "\"{}\" merges into {destination_title_id}, but no merge engine is configured",
+                planned.title_name
+            ))
+        })?;
+
+        let snapshot = merges
+            .load_merge_snapshot(
+                &planned.title_id,
+                destination_title_id,
+                // OQ7 is about a *second* operation still holding the source
+                // title. This one legitimately holds it — it is the operation
+                // performing the merge — so it excludes itself.
+                Some(&operation.id),
+            )
+            .await?;
+        let plan = plan_merge(&snapshot);
+        // FR-066 again, at the last possible moment: the preview refused a
+        // blocked merge, and anything that became unmappable since is a failed
+        // title rather than a merge attached to a guess. A failed title is
+        // contained — the rest of the operation runs on.
+        if plan.is_blocked() {
+            return Err(AppError::Validation(format!(
+                "\"{}\" can no longer merge into {destination_title_id}: {}",
+                planned.title_name,
+                plan.summary
+                    .blocked_reason()
+                    .unwrap_or_else(|| "unmappable records".to_string())
+            )));
+        }
+
+        let merge_outcome = execute_merge(merges, &plan).await?;
+        for conflict in &plan.summary.reserved_tag_conflicts {
+            outcome.warnings.push(format!(
+                "the destination title keeps its {} and \"{}\" loses \"{}\"",
+                conflict
+                    .setting
+                    .clone()
+                    .unwrap_or_else(|| conflict.prefix.clone()),
+                planned.title_name,
+                conflict.source_value.clone().unwrap_or_default()
+            ));
+        }
+        self.schedule_post_merge_work(operation, planned, &plan, &merge_outcome)
+            .await;
+        Ok(())
+    }
+
+    /// Whether this title's merge already committed.
+    ///
+    /// The source title row is the evidence, and it is sound evidence: FR-084
+    /// gives this operation exclusive ownership of the title for its whole
+    /// duration, so nothing else can have removed it. Requiring the destination
+    /// to be present too keeps the answer from being "yes" for a catalog that
+    /// lost both.
+    async fn merge_already_applied(
+        &self,
+        source_title_id: &str,
+        destination_title_id: &str,
+    ) -> AppResult<bool> {
+        if self.catalog.title_placement(source_title_id).await?.is_some() {
+            return Ok(false);
+        }
+        Ok(self
+            .catalog
+            .title_placement(destination_title_id)
+            .await?
+            .is_some())
+    }
+
+    /// Group 6: derived-cache regeneration, scheduled after the transaction and
+    /// never allowed to fail the title.
+    async fn schedule_post_merge_work(
+        &self,
+        operation: &LocationOperation,
+        planned: &RootMoveTitleExecution,
+        plan: &crate::location::merge::engine::MergePlan,
+        merge_outcome: &MergeOutcome,
+    ) {
+        let map = plan.identity_map.as_ref();
+        let request = PostMergeWorkRequest {
+            operation_id: operation.id.clone(),
+            source_title_id: planned.title_id.clone(),
+            destination_title_id: merge_outcome.destination_title_id.clone(),
+            work: merge_outcome.post_merge_work.clone(),
+            retired_episode_ids: map
+                .map(|map| map.episodes.keys().cloned().collect())
+                .unwrap_or_default(),
+            retired_collection_ids: map
+                .map(|map| map.collections.keys().cloned().collect())
+                .unwrap_or_default(),
+            retired_series_movie_link_ids: map
+                .map(|map| map.series_movie_links.keys().cloned().collect())
+                .unwrap_or_default(),
+        };
+        if let Err(error) = self.post_merge.schedule_post_merge_work(request).await {
+            tracing::warn!(
+                operation_id = %operation.id,
+                title_id = %planned.title_id,
+                error = %error,
+                "the merge committed but its derived-cache refresh could not be scheduled; the caches rebuild on their next natural refresh"
+            );
+        }
     }
 }
 
@@ -496,6 +704,28 @@ impl TitleReconciler for RootMoveReconciler<'_> {
             }
         }
 
+        // US7, before anything else: a merge whose transaction already
+        // committed has nothing left to reconcile. Its media-file paths were
+        // written *before* that transaction, so re-writing them here would
+        // reach for rows the merge has already repointed. Asking first is what
+        // makes a resumed merge a settle rather than a second attempt.
+        if let Some(destination_title_id) = planned.merge_target_title_id.as_deref()
+            && self
+                .merge_already_applied(&title.title_id, destination_title_id)
+                .await?
+        {
+            tracing::info!(
+                operation_id = %operation.id,
+                title_id = %title.title_id,
+                destination_title_id,
+                "the merge for this title already committed; settling its checkpoint without re-planning"
+            );
+            for warning in &planned.warnings {
+                outcome.warnings.push(warning.clone());
+            }
+            return Ok(outcome);
+        }
+
         // Media-file paths first, then the folder, then the root: each step is
         // individually correct, and an interruption between them leaves rows
         // pointing at real files rather than at a folder nothing lives in.
@@ -506,6 +736,30 @@ impl TitleReconciler for RootMoveReconciler<'_> {
             self.catalog
                 .set_media_file_path(media_file_id, &file.destination_path)
                 .await?;
+        }
+
+        // FR-073: a source copy proven identical to destination content is
+        // recycled rather than moved, so its catalog row is a duplicate of the
+        // survivor's. Dropping it here — before the merge repoints what is
+        // left — is what keeps "retain or merge catalog associations onto the
+        // survivor" true; leaving it would give the surviving title a second
+        // row pointing at a path in the recycle bin.
+        for media_file_id in &planned.deduplicated_media_file_ids {
+            self.catalog.delete_media_file(media_file_id).await?;
+        }
+
+        // US7: for a merge there is no source title left to point anywhere —
+        // the destination title owns the folder (FR-063) and keeps the one it
+        // already had, which is the folder this title's files just moved into.
+        // Groups 1–5 repoint everything else, in one transaction, and the
+        // checkpoint's `merged_into_title_id` records where the title went.
+        if let Some(destination_title_id) = planned.merge_target_title_id.as_deref() {
+            self.merge_title(operation, planned, destination_title_id, &mut outcome)
+                .await?;
+            for warning in &planned.warnings {
+                outcome.warnings.push(warning.clone());
+            }
+            return Ok(outcome);
         }
 
         if let Some(folder) = planned.destination_folder_path.as_deref() {
@@ -706,6 +960,22 @@ impl TitleAdmissionCheck for RootMoveAdmission<'_> {
         };
 
         let Some(placement) = self.catalog.title_placement(title_id).await? else {
+            // US7: a merge title whose source row is gone is this operation's
+            // own completed Groups 1–5 transaction, not a foreign deletion —
+            // FR-084 gives it exclusive ownership of the title, so nothing else
+            // could have removed it. Admitting it lets the reconciler recognize
+            // the merge as already applied and settle the checkpoint that the
+            // crash left behind (FR-033, FR-089).
+            if let Some(destination_title_id) = planned.merge_target_title_id.as_deref()
+                && self
+                    .catalog
+                    .title_placement(destination_title_id)
+                    .await?
+                    .is_some()
+            {
+                debug_assert!(!PlanInputChange::SettledSourceItem.is_stale());
+                return Ok(TitleAdmission::Proceed);
+            }
             return Ok(stale(
                 PlanInputChange::CatalogInput,
                 format!("title {title_id} no longer exists"),
@@ -758,11 +1028,17 @@ impl TitleAdmissionCheck for RootMoveAdmission<'_> {
 
         // Tracked files that appeared or disappeared in the catalog change what
         // the plan would move, so the plan no longer describes reality.
+        //
+        // A deduplicated source counts as planned even though it moves no
+        // bytes: FR-073 decided at preview time that its destination twin
+        // already exists, so its catalog row is content the plan accounted for
+        // and is about to recycle — not a file that appeared underneath it.
         let planned_media: BTreeSet<String> = planned
             .files
             .iter()
             .filter(|file| file.media_file_id.is_some())
             .map(|file| file.source_path.clone())
+            .chain(planned.deduplicated_sources.iter().cloned())
             .collect();
         let planned_destinations: BTreeSet<String> = planned
             .files

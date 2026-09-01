@@ -8853,6 +8853,27 @@ type LinkedAccountPayload {
 }
 
 """
+One destination title an ambiguous identity points at, with what it shares.
+
+The ids alone cannot be chosen between; the name is what the user reads and
+the shared identities are why the candidate is on the list at all (FR-055).
+"""
+type LocationAmbiguousDestinationCandidatePayload {
+	"""
+	The candidate destination title.
+	"""
+	titleId: ID!
+	"""
+	Its name in the destination library.
+	"""
+	titleName: String!
+	"""
+	The identities both titles carry, as `source:external_id`, sorted.
+	"""
+	sharedIdentities: [String!]!
+}
+
+"""
 One classification group: a class, its count, and the titles in it.
 """
 type LocationClassificationGroupPayload {
@@ -8938,6 +8959,11 @@ type LocationClassifiedTitlePayload {
 	identity. Empty for every other outcome.
 	"""
 	ambiguousDestinationTitleIds: [ID!]!
+	"""
+	The same titles with the names and shared identities the user needs to
+	tell them apart. Empty for every outcome that is not ambiguous.
+	"""
+	ambiguousDestinationCandidates: [LocationAmbiguousDestinationCandidatePayload!]!
 	"""
 	The series↔anime facet conversion this destination performs, or null when
 	the destination library's facet is the title's own (FR-057).
@@ -9137,6 +9163,369 @@ type LocationFreeSpaceEstimatePayload {
 	Whether the space suffices, or null when it could not be determined.
 	"""
 	sufficient: Boolean
+}
+
+"""
+Why one record stops a merge from running (FR-066).
+"""
+enum LocationMergeBlockReasonValue {
+	"""
+	No destination episode carries the source episode's identity.
+	"""
+	UNMAPPED_EPISODE
+	"""
+	More than one destination episode carries it.
+	"""
+	AMBIGUOUS_DESTINATION_EPISODE
+	"""
+	Two source episodes carry the same identity.
+	"""
+	AMBIGUOUS_SOURCE_EPISODE
+	"""
+	The source episode has no season/episode pair and no absolute number.
+	"""
+	UNIDENTIFIABLE_EPISODE
+	"""
+	A record references a source episode that is not in the catalog.
+	"""
+	UNKNOWN_EPISODE_REFERENCE
+	"""
+	No destination collection carries the source collection's identity.
+	"""
+	UNMAPPED_COLLECTION
+	"""
+	More than one destination collection carries it.
+	"""
+	AMBIGUOUS_DESTINATION_COLLECTION
+	"""
+	Two source collections carry the same identity.
+	"""
+	AMBIGUOUS_SOURCE_COLLECTION
+	"""
+	No destination series-movie link carries the source link's identity.
+	"""
+	UNMAPPED_SERIES_MOVIE_LINK
+	"""
+	More than one destination link carries it.
+	"""
+	AMBIGUOUS_DESTINATION_SERIES_MOVIE_LINK
+	"""
+	Two source links carry the same identity.
+	"""
+	AMBIGUOUS_SOURCE_SERIES_MOVIE_LINK
+	"""
+	Another resumable location operation still holds the source title.
+	"""
+	RESUMABLE_OPERATION_HOLDS_SOURCE
+	"""
+	An unconsumed manual-import selection is an active import on the source.
+	"""
+	ACTIVE_MANUAL_IMPORT_SELECTION
+}
+
+"""
+One record the merge engine could not map, so the merge cannot run (FR-066).
+"""
+type LocationMergeBlockedRecordPayload {
+	"""
+	The table whose source rows cannot be carried.
+	"""
+	table: String!
+	"""
+	Why the record blocks the merge.
+	"""
+	reason: LocationMergeBlockReasonValue!
+	"""
+	The source identity that could not be mapped.
+	"""
+	sourceId: ID!
+	"""
+	The sentence explaining what would otherwise be guessed at.
+	"""
+	detail: String!
+}
+
+"""
+One setting the destination title keeps and the merging title loses (FR-063).
+"""
+type LocationMergeDestinationWinsPayload {
+	"""
+	The setting, in the words the rule states it.
+	"""
+	setting: String!
+	"""
+	The value the destination keeps, when it is a value worth naming.
+	"""
+	destinationValue: String
+	"""
+	The value the merging title loses, when it is a value worth naming.
+	"""
+	sourceValue: String
+}
+
+"""
+How one table's rows are treated when a title merges into another (FR-064).
+"""
+enum LocationMergeDispositionValue {
+	"""
+	Source rows are re-pointed and kept beside the destination's own.
+	"""
+	UNION
+	"""
+	Source rows are rewritten through the source-to-destination identity map.
+	"""
+	MAP
+	"""
+	The destination's value stands and the source's is discarded.
+	"""
+	DESTINATION_WINS
+	"""
+	Source rows are intentionally not carried over.
+	"""
+	DROP
+}
+
+"""
+One category of data the merge deliberately does not carry (FR-071).
+"""
+type LocationMergeDroppedCategoryPayload {
+	"""
+	The table the rows live in.
+	"""
+	table: String!
+	"""
+	How many source rows are dropped.
+	"""
+	sourceRowCount: Long!
+	"""
+	The adjudication that decided it.
+	"""
+	decision: String!
+	"""
+	Why dropping is the right answer.
+	"""
+	reason: String!
+}
+
+"""
+One media request whose library follows the content into the destination.
+"""
+type LocationMergeMediaRequestRepointPayload {
+	"""
+	The request being repointed.
+	"""
+	requestId: ID!
+	"""
+	The library it belonged to.
+	"""
+	previousLibraryId: ID!
+	"""
+	The library it belongs to after the merge.
+	"""
+	destinationLibraryId: ID!
+}
+
+"""
+The role a media file holds for one logical slot after a merge (FR-068).
+"""
+enum LocationMergeMediaRoleValue {
+	"""
+	The file that represents the slot.
+	"""
+	PRIMARY
+	"""
+	A further file kept alongside the primary.
+	"""
+	ADDITIONAL
+}
+
+"""
+Derived-cache work a completed merge leaves behind for Scryer to redo.
+"""
+enum LocationMergePostMergeWorkValue {
+	"""
+	Rebuild the merged title's search projection.
+	"""
+	REINDEX_TITLE_SEARCH_TERMS
+	"""
+	Refresh the merged title's recommendations.
+	"""
+	REGENERATE_RECOMMENDATIONS
+	"""
+	Recompute title and library statistics.
+	"""
+	RECOMPUTE_STATISTICS
+	"""
+	Drop the retired title's indexer coverage rows.
+	"""
+	DROP_SOURCE_INDEXER_COVERAGE
+}
+
+"""
+What merging one title into an existing destination title would do (FR-071).
+
+The same decision the merge itself is built from, so the preview can never
+describe a merge the engine would not perform.
+"""
+type LocationMergePreviewPayload {
+	"""
+	The title that merges away.
+	"""
+	sourceTitleId: ID!
+	"""
+	The title that survives.
+	"""
+	destinationTitleId: ID!
+	"""
+	Library the merging title comes from.
+	"""
+	sourceLibraryId: ID
+	"""
+	Library the surviving title lives in.
+	"""
+	destinationLibraryId: ID
+	"""
+	Whether unmappable records stop this merge from running.
+	"""
+	blocked: Boolean!
+	"""
+	The records that block it, one per line the user can act on.
+	"""
+	blockedRecords: [LocationMergeBlockedRecordPayload!]!
+	"""
+	What the destination keeps.
+	"""
+	destinationWins: [LocationMergeDestinationWinsPayload!]!
+	"""
+	What carries forward, per table, with counts.
+	"""
+	dispositions: [LocationMergeTableDispositionPayload!]!
+	"""
+	Every media-file role the merge changes.
+	"""
+	roleChanges: [LocationMergeRoleChangePayload!]!
+	"""
+	Reserved settings whose values disagree.
+	"""
+	reservedTagConflicts: [LocationMergeReservedTagConflictPayload!]!
+	"""
+	Free-form tags the merging title contributes.
+	"""
+	freeFormTagsAdded: [String!]!
+	"""
+	Requests whose library follows the content.
+	"""
+	mediaRequestRepoints: [LocationMergeMediaRequestRepointPayload!]!
+	"""
+	What is not carried over, and why.
+	"""
+	dropped: [LocationMergeDroppedCategoryPayload!]!
+	"""
+	Derived caches the merge leaves for Scryer to rebuild afterwards.
+	"""
+	postMergeWork: [LocationMergePostMergeWorkValue!]!
+	"""
+	Anything else the operator should read before confirming, including the
+	notes explaining where this schema differs from the merge inventory.
+	"""
+	notes: [String!]!
+}
+
+"""
+One reserved setting whose two sides disagreed; the destination's wins.
+"""
+type LocationMergeReservedTagConflictPayload {
+	"""
+	The reserved tag prefix, for grouping and translation.
+	"""
+	prefix: String!
+	"""
+	Human-readable name of the setting, when the prefix is a known one.
+	"""
+	setting: String
+	"""
+	The value the destination keeps.
+	"""
+	destinationValue: String
+	"""
+	The value the merging title loses.
+	"""
+	sourceValue: String
+}
+
+"""
+One media-file role the merge resolves, never silently (FR-068 to FR-070).
+"""
+type LocationMergeRoleChangePayload {
+	"""
+	The media file whose role changes.
+	"""
+	fileId: ID!
+	"""
+	The source episode the file was attached to.
+	"""
+	sourceEpisodeId: ID!
+	"""
+	The destination episode it is attached to after the merge.
+	"""
+	destinationEpisodeId: ID!
+	"""
+	The role it held.
+	"""
+	previousRole: LocationMergeMediaRoleValue!
+	"""
+	The role it holds after the merge.
+	"""
+	newRole: LocationMergeMediaRoleValue!
+	"""
+	Why the role changed.
+	"""
+	reason: LocationMergeRoleChangeReasonValue!
+	"""
+	The sentence the preview shows for this change.
+	"""
+	detail: String!
+}
+
+"""
+Why a media file's role changed in a merge (FR-070).
+"""
+enum LocationMergeRoleChangeReasonValue {
+	"""
+	The destination already had a primary for the slot, and a move never
+	demotes one.
+	"""
+	DESTINATION_PRIMARY_RETAINED
+	"""
+	Another source file already claimed primary for that destination episode.
+	"""
+	SOURCE_PRIMARY_ALREADY_CLAIMED
+	"""
+	Two source episodes collapsed onto one destination episode.
+	"""
+	COLLAPSED_SOURCE_EPISODES
+}
+
+"""
+One table's contribution to the merge, with the rows it applies to (FR-064).
+"""
+type LocationMergeTableDispositionPayload {
+	"""
+	The table.
+	"""
+	table: String!
+	"""
+	How its rows are treated.
+	"""
+	disposition: LocationMergeDispositionValue!
+	"""
+	Source rows the disposition applies to.
+	"""
+	sourceRowCount: Long!
+	"""
+	Why, in one line.
+	"""
+	note: String!
 }
 
 """
@@ -9377,6 +9766,11 @@ type LocationOperationPreviewPayload {
 	Whether blocking items or classes stop this plan from starting.
 	"""
 	blocksStart: Boolean!
+	"""
+	One summary per title that merges into an existing destination title.
+	Empty for every plan with no merge in it.
+	"""
+	merges: [LocationMergePreviewPayload!]!
 }
 
 """

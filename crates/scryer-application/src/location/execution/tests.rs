@@ -76,6 +76,15 @@ impl RootMoveCatalog for FakeCatalog {
         Ok(())
     }
 
+    async fn delete_media_file(&self, media_file_id: &str) -> AppResult<()> {
+        self.state
+            .lock()
+            .expect("lock")
+            .writes
+            .push(format!("delete-media:{media_file_id}"));
+        Ok(())
+    }
+
     async fn set_title_folder_path(&self, title_id: &str, stored_path: &str) -> AppResult<()> {
         let mut state = self.state.lock().expect("lock");
         state
@@ -241,11 +250,13 @@ fn single_title_plan(
                 size_bytes,
             }],
             deduplicated_sources: Vec::new(),
+            deduplicated_media_file_ids: Vec::new(),
             renamed_destinations: Vec::new(),
             prune_directories: vec![path_to_stored_string(&source_folder)],
             warnings: Vec::new(),
             converted_facet: None,
             dropped_tag_prefixes: Vec::new(),
+            merge_target_title_id: None,
         }],
         ..RootMoveExecutionPlan::default()
     }
@@ -980,11 +991,13 @@ async fn catalog_only_titles_complete_without_touching_the_filesystem() {
             same_volume: None,
             files: Vec::new(),
             deduplicated_sources: Vec::new(),
+            deduplicated_media_file_ids: Vec::new(),
             renamed_destinations: Vec::new(),
             prune_directories: Vec::new(),
             warnings: Vec::new(),
             converted_facet: None,
             dropped_tag_prefixes: Vec::new(),
+            merge_target_title_id: None,
         }],
         ..RootMoveExecutionPlan::default()
     };

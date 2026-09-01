@@ -146,11 +146,11 @@ pub mod reason_codes {
     /// More than one destination title shares a metadata identity with this
     /// title; the user picks one before the job starts (FR-055, FR-016).
     pub const AMBIGUOUS_DESTINATION_IDENTITY: &str = "ambiguous_destination_identity";
-    /// Exactly one destination title shares a metadata identity, so this is a
-    /// merge rather than a transfer (FR-055). The merge engine (US7) is not
-    /// built yet, so the title is blocked instead of being merged silently or
-    /// transferred into a second copy of itself.
-    pub const MERGE_NOT_YET_SUPPORTED: &str = "merge_not_yet_supported";
+    /// The merge this title would perform references source episode identities
+    /// that cannot be mapped onto the destination, so the merge engine refuses
+    /// to attach those records to a guess (FR-066). The blocking records are
+    /// named in the explanation.
+    pub const MERGE_RECORDS_UNMAPPED: &str = "merge_records_unmapped";
 }
 
 /// The destination a selection was previewed against.
@@ -244,6 +244,11 @@ pub struct TitleClassificationFacts {
     /// Any other outstanding user decision the caller already knows about
     /// (unmapped merge records).
     pub unresolved: Option<String>,
+    /// The machine-readable code for [`Self::unresolved`], when the caller has
+    /// one. Carried separately so an FR-066 merge block groups and translates
+    /// like every other blocking reason instead of arriving as prose only.
+    #[serde(default)]
+    pub unresolved_reason_code: Option<String>,
     /// What destination-title detection concluded for this title (FR-055),
     /// from [`crate::location::identity::detect_destination_titles`].
     ///
@@ -287,6 +292,7 @@ impl TitleClassificationFacts {
             active_work: None,
             owned_by_operation: None,
             unresolved: None,
+            unresolved_reason_code: None,
             destination_identity: None,
             tags: Vec::new(),
             associations: TitleAssociationFacts::default(),
@@ -332,6 +338,18 @@ impl TitleClassificationFacts {
     }
 
     pub fn with_unresolved(mut self, detail: impl Into<String>) -> Self {
+        self.unresolved = Some(detail.into());
+        self
+    }
+
+    /// An outstanding decision that carries a machine-readable code — the
+    /// FR-066 merge block is the one this exists for.
+    pub fn with_unresolved_reason(
+        mut self,
+        reason_code: impl Into<String>,
+        detail: impl Into<String>,
+    ) -> Self {
+        self.unresolved_reason_code = Some(reason_code.into());
         self.unresolved = Some(detail.into());
         self
     }
@@ -521,10 +539,11 @@ impl SelectionClassification {
 /// 2. **No-op** — already at the destination, so nothing can go wrong and
 ///    nothing needs resolving.
 /// 3. **Blocked** — an active download or import, another operation's ownership,
-///    an ambiguous destination-title identity (FR-055), a unique destination
-///    identity (a merge, which US7 owns and this phase refuses rather than
-///    guesses), or a caller-supplied unresolved decision (FR-086, FR-084,
-///    FR-016). This sits *above* the
+///    an ambiguous destination-title identity (FR-055), or a caller-supplied
+///    unresolved decision such as the merge engine's FR-066 refusal (FR-086,
+///    FR-084, FR-016). A *unique* destination identity is deliberately not here:
+///    that is a merge, and a merge is a startable cross-library transfer that
+///    carries its merge target (US7). This sits *above* the
 ///    fileless fast path on purpose: a fileless title with an in-flight import
 ///    is exactly the case where files are about to land in the old root, and a
 ///    fileless title with an ambiguous destination identity is still a merge
@@ -675,29 +694,18 @@ pub fn classify_title(
             outcome.blocked_reason(&facts.title_name),
         );
     }
-    // FR-055: exactly one destination title shares a canonical identity, so
-    // this title merges (US7) rather than transfers (FR-056). The merge engine
-    // is a later phase, and the two wrong answers here are both silent: folding
-    // the records together with no rules, or transferring the title in beside
-    // its own twin. Blocking is the third option and the only honest one (C3).
-    if let Some(outcome) = facts.destination_identity.as_ref()
-        && let Some(merge_target) = outcome.merge_target()
-    {
-        return classified(
-            TitleLocationClass::NeedsResolution,
-            destination_root_id,
-            Some(reason_codes::MERGE_NOT_YET_SUPPORTED),
-            Some(format!(
-                "\"{}\" merges into an existing title ({merge_target}) in the destination library; merging lands in a later phase",
-                facts.title_name
-            )),
-        );
-    }
+    // FR-055 + US7: exactly one destination title shares a canonical identity,
+    // so this title merges rather than transfers (FR-056). A merge is not a
+    // separate class — it rides the cross-library machinery, and the merge
+    // target it carries in `destination_identity` is what tells the planner,
+    // the executor, and `merged_into_title_id` apart from a plain transfer. The
+    // one thing that *does* block it is an FR-066 refusal from the merge
+    // engine, which the caller supplies through `unresolved` below.
     if let Some(detail) = facts.unresolved.as_deref() {
         return classified(
             TitleLocationClass::NeedsResolution,
             destination_root_id,
-            None,
+            facts.unresolved_reason_code.as_deref(),
             Some(detail.to_string()),
         );
     }
@@ -1307,18 +1315,15 @@ mod tests {
         let result = classify_selection(&titles, &destination, Some(&destination_library));
 
         // FR-055 splits these two apart: a shared identity is a merge, and a
-        // shared name is not. Only the merge is held back, and only because the
-        // merge engine is a later phase (US7) — the transfer beside it runs.
-        assert_eq!(result.counts.cross_library_transfer, 1);
-        assert_eq!(result.counts.needs_resolution, 1);
-        assert!(result.blocks_start());
+        // shared name is not. Both start — the merge rides the cross-library
+        // machinery (US7) and is told apart by the merge target it carries.
+        assert_eq!(result.counts.cross_library_transfer, 2);
+        assert_eq!(result.counts.needs_resolution, 0);
+        assert!(!result.blocks_start());
 
         let merging = result.classification_of("merging").expect("title present");
-        assert_eq!(merging.class, TitleLocationClass::NeedsResolution);
-        assert_eq!(
-            merging.reason_code.as_deref(),
-            Some(reason_codes::MERGE_NOT_YET_SUPPORTED)
-        );
+        assert_eq!(merging.class, TitleLocationClass::CrossLibraryTransfer);
+        assert_eq!(merging.reason_code, None);
         assert_eq!(
             merging.merge_target_title_id(),
             Some("real"),
@@ -1339,6 +1344,46 @@ mod tests {
             "FR-055: a same name is never enough to merge"
         );
         assert_eq!(same_name.same_named_destination_title_id(), Some("twin"));
+    }
+
+    /// FR-066: the merge engine's refusal arrives as a caller-supplied
+    /// unresolved decision, and it keeps its machine-readable code so the UI
+    /// groups it rather than parsing the record list out of prose.
+    #[test]
+    fn an_unmappable_merge_record_blocks_the_title_with_its_own_code() {
+        let facts =
+            TitleClassificationFacts::new("merging", MediaFacet::Movie, "lib-a", "root-a")
+                .with_tracked_files(2)
+                .with_unresolved_reason(
+                    reason_codes::MERGE_RECORDS_UNMAPPED,
+                    "wanted_items (unmapped_episode): e-1",
+                );
+        let destination_library = DestinationLibraryFacts {
+            library_id: "lib-b".to_string(),
+            library_name: "Movies B".to_string(),
+            facet: MediaFacet::Movie,
+            root_ids: vec!["root-b".to_string()],
+        };
+
+        let classification = classify_title(
+            &facts,
+            &DestinationRequest::to_library_root("lib-b", "root-b"),
+            Some(&destination_library),
+        );
+
+        assert_eq!(classification.class, TitleLocationClass::NeedsResolution);
+        assert!(classification.blocks_start());
+        assert_eq!(
+            classification.reason_code.as_deref(),
+            Some(reason_codes::MERGE_RECORDS_UNMAPPED)
+        );
+        assert!(
+            classification
+                .reason
+                .as_deref()
+                .expect("reason")
+                .contains("wanted_items")
+        );
     }
 
     /// A selection spanning three source libraries into one destination

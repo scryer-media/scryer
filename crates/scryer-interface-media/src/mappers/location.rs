@@ -10,8 +10,13 @@ use async_graphql::ID;
 use scryer_application::location::classify::{
     DestinationRequest, SelectionClassification, TitleClassification, TitleLocationClass,
 };
-use scryer_application::location::identity::DestinationIdentityOutcome;
-use scryer_application::location::merge::DestinationIdentityMatch;
+use scryer_application::location::identity::{DestinationIdentityOutcome, MetadataIdentity};
+use scryer_application::location::merge::map::{MergeBlockReason};
+use scryer_application::location::merge::roles::RoleChangeReason;
+use scryer_application::location::merge::summary::{MergePreviewSummary, PostMergeWork};
+use scryer_application::location::merge::{
+    DestinationIdentityMatch, MergeDisposition, MergedMediaRole,
+};
 use scryer_application::location::model::{
     LocationExecutionMode, LocationOperation, LocationOperationCounters, LocationOperationState,
     LocationOperationType, TitleCheckpoint, TitleCheckpointState, VerificationDepth,
@@ -26,19 +31,26 @@ use scryer_application::location::transfer_effects::{
 };
 
 use crate::types::{
-    CancelLocationOperationPayload, LocationClassificationGroupPayload,
-    LocationClassifiedTitlePayload, LocationConfirmationRequirementValue,
-    LocationDestinationIdentityMatchValue, LocationDestinationInput,
-    LocationExecutionModeValue, LocationFacetConversionPayload,
+    CancelLocationOperationPayload, LocationAmbiguousDestinationCandidatePayload,
+    LocationClassificationGroupPayload, LocationClassifiedTitlePayload,
+    LocationConfirmationRequirementValue, LocationDestinationIdentityMatchValue,
+    LocationDestinationInput, LocationExecutionModeValue, LocationFacetConversionPayload,
     LocationFacetConvertedSettingPayload, LocationFacetSettingDispositionValue,
-    LocationFreeSpaceEstimatePayload, LocationOperationCountersPayload,
-    LocationOperationPayload, LocationOperationPreviewPayload, LocationOperationStateValue,
-    LocationOperationTypeValue, LocationPlanConfirmationPayload, LocationPlanCountsPayload,
-    LocationPlanItemKindValue, LocationPlanItemPayload, LocationPlanKindCountPayload,
-    LocationPlanSectionPayload, LocationSelectionClassificationPayload,
-    LocationTitleCheckpointPayload, LocationTitleCheckpointStateValue,
-    LocationVerificationStatementPayload, Long, MediaFacetValue, ResumeLocationOperationPayload,
-    StartLocationOperationPayload, TitleLocationClassValue, VerificationDepthValue,
+    LocationFreeSpaceEstimatePayload, LocationMergeBlockReasonValue,
+    LocationMergeBlockedRecordPayload, LocationMergeDestinationWinsPayload,
+    LocationMergeDispositionValue, LocationMergeDroppedCategoryPayload,
+    LocationMergeMediaRequestRepointPayload, LocationMergeMediaRoleValue,
+    LocationMergePostMergeWorkValue, LocationMergePreviewPayload,
+    LocationMergeReservedTagConflictPayload, LocationMergeRoleChangePayload,
+    LocationMergeRoleChangeReasonValue, LocationMergeTableDispositionPayload,
+    LocationOperationCountersPayload, LocationOperationPayload,
+    LocationOperationPreviewPayload, LocationOperationStateValue, LocationOperationTypeValue,
+    LocationPlanConfirmationPayload, LocationPlanCountsPayload, LocationPlanItemKindValue,
+    LocationPlanItemPayload, LocationPlanKindCountPayload, LocationPlanSectionPayload,
+    LocationSelectionClassificationPayload, LocationTitleCheckpointPayload,
+    LocationTitleCheckpointStateValue, LocationVerificationStatementPayload, Long, MediaFacetValue,
+    ResumeLocationOperationPayload, StartLocationOperationPayload, TitleLocationClassValue,
+    VerificationDepthValue,
 };
 
 /// Plan-item kinds in the order the preview presents them; the same order the
@@ -256,6 +268,29 @@ fn from_classified_title(title: &TitleClassification) -> LocationClassifiedTitle
             .into_iter()
             .map(ID::from)
             .collect(),
+        // FR-055: the ids alone cannot be chosen between. The candidates carry
+        // the name the user reads and the identities that put each one on the
+        // list, and they are emitted only for an outcome that actually needs
+        // resolving — `ambiguous_title_ids` is empty for every other one, so
+        // the two lists always agree.
+        ambiguous_destination_candidates: identity
+            .filter(|outcome| outcome.needs_resolution())
+            .map(|outcome| {
+                outcome
+                    .candidates
+                    .iter()
+                    .map(|candidate| LocationAmbiguousDestinationCandidatePayload {
+                        title_id: ID::from(candidate.title_id.clone()),
+                        title_name: candidate.title_name.clone(),
+                        shared_identities: candidate
+                            .shared_identities
+                            .iter()
+                            .map(MetadataIdentity::display)
+                            .collect(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
         facet_conversion: title
             .facet_conversion
             .as_ref()
@@ -404,6 +439,184 @@ fn from_location_plan(
         confirmation: from_plan_confirmation(&plan.confirmation),
         warnings,
         blocks_start: plan.blocks_start(),
+        merges: plan.merges.iter().map(from_merge_summary).collect(),
+    }
+}
+
+// ── US7: the merge preview (FR-071) ─────────────────────────────────────────
+
+fn from_merge_summary(summary: &MergePreviewSummary) -> LocationMergePreviewPayload {
+    LocationMergePreviewPayload {
+        source_title_id: ID::from(summary.source_title_id.clone()),
+        destination_title_id: ID::from(summary.destination_title_id.clone()),
+        source_library_id: summary.source_library_id.clone().map(ID::from),
+        destination_library_id: summary.destination_library_id.clone().map(ID::from),
+        blocked: summary.is_blocked(),
+        blocked_records: summary
+            .blocked
+            .iter()
+            .map(|record| LocationMergeBlockedRecordPayload {
+                table: record.table.clone(),
+                reason: from_merge_block_reason(record.reason),
+                source_id: ID::from(record.source_id.clone()),
+                detail: record.detail.clone(),
+            })
+            .collect(),
+        destination_wins: summary
+            .destination_wins
+            .iter()
+            .map(|entry| LocationMergeDestinationWinsPayload {
+                setting: entry.setting.clone(),
+                destination_value: entry.destination_value.clone(),
+                source_value: entry.source_value.clone(),
+            })
+            .collect(),
+        dispositions: summary
+            .dispositions
+            .iter()
+            .map(|entry| LocationMergeTableDispositionPayload {
+                table: entry.table.clone(),
+                disposition: from_merge_disposition(entry.disposition),
+                source_row_count: Long(entry.source_row_count),
+                note: entry.note.clone(),
+            })
+            .collect(),
+        role_changes: summary
+            .role_changes
+            .iter()
+            .map(|change| LocationMergeRoleChangePayload {
+                file_id: ID::from(change.file_id.clone()),
+                source_episode_id: ID::from(change.source_episode_id.clone()),
+                destination_episode_id: ID::from(change.destination_episode_id.clone()),
+                previous_role: from_merged_media_role(change.previous_role),
+                new_role: from_merged_media_role(change.new_role),
+                reason: from_role_change_reason(change.reason),
+                // Phrased by the application, not here: the plan item and this
+                // payload have to say the same thing about the same demotion.
+                detail: change.describe(),
+            })
+            .collect(),
+        reserved_tag_conflicts: summary
+            .reserved_tag_conflicts
+            .iter()
+            .map(|conflict| LocationMergeReservedTagConflictPayload {
+                prefix: conflict.prefix.clone(),
+                setting: conflict.setting.clone(),
+                destination_value: conflict.destination_value.clone(),
+                source_value: conflict.source_value.clone(),
+            })
+            .collect(),
+        free_form_tags_added: summary.free_form_tags_added.clone(),
+        media_request_repoints: summary
+            .media_request_repoints
+            .iter()
+            .map(|repoint| LocationMergeMediaRequestRepointPayload {
+                request_id: ID::from(repoint.request_id.clone()),
+                previous_library_id: ID::from(repoint.previous_library_id.clone()),
+                destination_library_id: ID::from(repoint.destination_library_id.clone()),
+            })
+            .collect(),
+        dropped: summary
+            .dropped
+            .iter()
+            .map(|dropped| LocationMergeDroppedCategoryPayload {
+                table: dropped.table.clone(),
+                source_row_count: Long(dropped.source_row_count),
+                decision: dropped.decision.clone(),
+                reason: dropped.reason.clone(),
+            })
+            .collect(),
+        post_merge_work: summary
+            .post_merge_work
+            .iter()
+            .map(|work| from_post_merge_work(*work))
+            .collect(),
+        notes: summary.notes.clone(),
+    }
+}
+
+fn from_merge_disposition(value: MergeDisposition) -> LocationMergeDispositionValue {
+    match value {
+        MergeDisposition::Union => LocationMergeDispositionValue::Union,
+        MergeDisposition::Map => LocationMergeDispositionValue::Map,
+        MergeDisposition::DestinationWins => LocationMergeDispositionValue::DestinationWins,
+        MergeDisposition::Drop => LocationMergeDispositionValue::Drop,
+    }
+}
+
+fn from_merged_media_role(value: MergedMediaRole) -> LocationMergeMediaRoleValue {
+    match value {
+        MergedMediaRole::Primary => LocationMergeMediaRoleValue::Primary,
+        MergedMediaRole::Additional => LocationMergeMediaRoleValue::Additional,
+    }
+}
+
+fn from_role_change_reason(value: RoleChangeReason) -> LocationMergeRoleChangeReasonValue {
+    match value {
+        RoleChangeReason::DestinationPrimaryRetained => {
+            LocationMergeRoleChangeReasonValue::DestinationPrimaryRetained
+        }
+        RoleChangeReason::SourcePrimaryAlreadyClaimed => {
+            LocationMergeRoleChangeReasonValue::SourcePrimaryAlreadyClaimed
+        }
+        RoleChangeReason::CollapsedSourceEpisodes => {
+            LocationMergeRoleChangeReasonValue::CollapsedSourceEpisodes
+        }
+    }
+}
+
+fn from_post_merge_work(value: PostMergeWork) -> LocationMergePostMergeWorkValue {
+    match value {
+        PostMergeWork::ReindexTitleSearchTerms => {
+            LocationMergePostMergeWorkValue::ReindexTitleSearchTerms
+        }
+        PostMergeWork::RegenerateRecommendations => {
+            LocationMergePostMergeWorkValue::RegenerateRecommendations
+        }
+        PostMergeWork::RecomputeStatistics => LocationMergePostMergeWorkValue::RecomputeStatistics,
+        PostMergeWork::DropSourceIndexerCoverage => {
+            LocationMergePostMergeWorkValue::DropSourceIndexerCoverage
+        }
+    }
+}
+
+fn from_merge_block_reason(value: MergeBlockReason) -> LocationMergeBlockReasonValue {
+    match value {
+        MergeBlockReason::UnmappedEpisode => LocationMergeBlockReasonValue::UnmappedEpisode,
+        MergeBlockReason::AmbiguousDestinationEpisode => {
+            LocationMergeBlockReasonValue::AmbiguousDestinationEpisode
+        }
+        MergeBlockReason::AmbiguousSourceEpisode => {
+            LocationMergeBlockReasonValue::AmbiguousSourceEpisode
+        }
+        MergeBlockReason::UnidentifiableEpisode => {
+            LocationMergeBlockReasonValue::UnidentifiableEpisode
+        }
+        MergeBlockReason::UnknownEpisodeReference => {
+            LocationMergeBlockReasonValue::UnknownEpisodeReference
+        }
+        MergeBlockReason::UnmappedCollection => LocationMergeBlockReasonValue::UnmappedCollection,
+        MergeBlockReason::AmbiguousDestinationCollection => {
+            LocationMergeBlockReasonValue::AmbiguousDestinationCollection
+        }
+        MergeBlockReason::AmbiguousSourceCollection => {
+            LocationMergeBlockReasonValue::AmbiguousSourceCollection
+        }
+        MergeBlockReason::UnmappedSeriesMovieLink => {
+            LocationMergeBlockReasonValue::UnmappedSeriesMovieLink
+        }
+        MergeBlockReason::AmbiguousDestinationSeriesMovieLink => {
+            LocationMergeBlockReasonValue::AmbiguousDestinationSeriesMovieLink
+        }
+        MergeBlockReason::AmbiguousSourceSeriesMovieLink => {
+            LocationMergeBlockReasonValue::AmbiguousSourceSeriesMovieLink
+        }
+        MergeBlockReason::ResumableOperationHoldsSource => {
+            LocationMergeBlockReasonValue::ResumableOperationHoldsSource
+        }
+        MergeBlockReason::ActiveManualImportSelection => {
+            LocationMergeBlockReasonValue::ActiveManualImportSelection
+        }
     }
 }
 

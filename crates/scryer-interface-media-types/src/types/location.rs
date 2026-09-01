@@ -262,9 +262,26 @@ pub struct LocationClassifiedTitlePayload {
     /// The destination titles the user is choosing between, for an ambiguous
     /// identity. Empty for every other outcome.
     pub ambiguous_destination_title_ids: Vec<ID>,
+    /// The same titles with the names and shared identities the user needs to
+    /// tell them apart. Empty for every outcome that is not ambiguous.
+    pub ambiguous_destination_candidates: Vec<LocationAmbiguousDestinationCandidatePayload>,
     /// The series↔anime facet conversion this destination performs, or null when
     /// the destination library's facet is the title's own (FR-057).
     pub facet_conversion: Option<LocationFacetConversionPayload>,
+}
+
+#[derive(SimpleObject, Clone)]
+/// One destination title an ambiguous identity points at, with what it shares.
+///
+/// The ids alone cannot be chosen between; the name is what the user reads and
+/// the shared identities are why the candidate is on the list at all (FR-055).
+pub struct LocationAmbiguousDestinationCandidatePayload {
+    /// The candidate destination title.
+    pub title_id: ID,
+    /// Its name in the destination library.
+    pub title_name: String,
+    /// The identities both titles carry, as `source:external_id`, sorted.
+    pub shared_identities: Vec<String>,
 }
 
 /// What a facet conversion does to one title-level setting (FR-057).
@@ -421,6 +438,224 @@ pub struct LocationOperationPreviewPayload {
     pub warnings: Vec<String>,
     /// Whether blocking items or classes stop this plan from starting.
     pub blocks_start: bool,
+    /// One summary per title that merges into an existing destination title.
+    /// Empty for every plan with no merge in it.
+    pub merges: Vec<LocationMergePreviewPayload>,
+}
+
+/// How one table's rows are treated when a title merges into another (FR-064).
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+pub enum LocationMergeDispositionValue {
+    /// Source rows are re-pointed and kept beside the destination's own.
+    Union,
+    /// Source rows are rewritten through the source-to-destination identity map.
+    Map,
+    /// The destination's value stands and the source's is discarded.
+    DestinationWins,
+    /// Source rows are intentionally not carried over.
+    Drop,
+}
+
+/// Why one record stops a merge from running (FR-066).
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+pub enum LocationMergeBlockReasonValue {
+    /// No destination episode carries the source episode's identity.
+    UnmappedEpisode,
+    /// More than one destination episode carries it.
+    AmbiguousDestinationEpisode,
+    /// Two source episodes carry the same identity.
+    AmbiguousSourceEpisode,
+    /// The source episode has no season/episode pair and no absolute number.
+    UnidentifiableEpisode,
+    /// A record references a source episode that is not in the catalog.
+    UnknownEpisodeReference,
+    /// No destination collection carries the source collection's identity.
+    UnmappedCollection,
+    /// More than one destination collection carries it.
+    AmbiguousDestinationCollection,
+    /// Two source collections carry the same identity.
+    AmbiguousSourceCollection,
+    /// No destination series-movie link carries the source link's identity.
+    UnmappedSeriesMovieLink,
+    /// More than one destination link carries it.
+    AmbiguousDestinationSeriesMovieLink,
+    /// Two source links carry the same identity.
+    AmbiguousSourceSeriesMovieLink,
+    /// Another resumable location operation still holds the source title.
+    ResumableOperationHoldsSource,
+    /// An unconsumed manual-import selection is an active import on the source.
+    ActiveManualImportSelection,
+}
+
+/// The role a media file holds for one logical slot after a merge (FR-068).
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+pub enum LocationMergeMediaRoleValue {
+    /// The file that represents the slot.
+    Primary,
+    /// A further file kept alongside the primary.
+    Additional,
+}
+
+/// Why a media file's role changed in a merge (FR-070).
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+pub enum LocationMergeRoleChangeReasonValue {
+    /// The destination already had a primary for the slot, and a move never
+    /// demotes one.
+    DestinationPrimaryRetained,
+    /// Another source file already claimed primary for that destination episode.
+    SourcePrimaryAlreadyClaimed,
+    /// Two source episodes collapsed onto one destination episode.
+    CollapsedSourceEpisodes,
+}
+
+/// Derived-cache work a completed merge leaves behind for Scryer to redo.
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+pub enum LocationMergePostMergeWorkValue {
+    /// Rebuild the merged title's search projection.
+    ReindexTitleSearchTerms,
+    /// Refresh the merged title's recommendations.
+    RegenerateRecommendations,
+    /// Recompute title and library statistics.
+    RecomputeStatistics,
+    /// Drop the retired title's indexer coverage rows.
+    DropSourceIndexerCoverage,
+}
+
+#[derive(SimpleObject, Clone)]
+/// One record the merge engine could not map, so the merge cannot run (FR-066).
+pub struct LocationMergeBlockedRecordPayload {
+    /// The table whose source rows cannot be carried.
+    pub table: String,
+    /// Why the record blocks the merge.
+    pub reason: LocationMergeBlockReasonValue,
+    /// The source identity that could not be mapped.
+    pub source_id: ID,
+    /// The sentence explaining what would otherwise be guessed at.
+    pub detail: String,
+}
+
+#[derive(SimpleObject, Clone)]
+/// One setting the destination title keeps and the merging title loses (FR-063).
+pub struct LocationMergeDestinationWinsPayload {
+    /// The setting, in the words the rule states it.
+    pub setting: String,
+    /// The value the destination keeps, when it is a value worth naming.
+    pub destination_value: Option<String>,
+    /// The value the merging title loses, when it is a value worth naming.
+    pub source_value: Option<String>,
+}
+
+#[derive(SimpleObject, Clone)]
+/// One table's contribution to the merge, with the rows it applies to (FR-064).
+pub struct LocationMergeTableDispositionPayload {
+    /// The table.
+    pub table: String,
+    /// How its rows are treated.
+    pub disposition: LocationMergeDispositionValue,
+    /// Source rows the disposition applies to.
+    pub source_row_count: Long,
+    /// Why, in one line.
+    pub note: String,
+}
+
+#[derive(SimpleObject, Clone)]
+/// One media-file role the merge resolves, never silently (FR-068 to FR-070).
+pub struct LocationMergeRoleChangePayload {
+    /// The media file whose role changes.
+    pub file_id: ID,
+    /// The source episode the file was attached to.
+    pub source_episode_id: ID,
+    /// The destination episode it is attached to after the merge.
+    pub destination_episode_id: ID,
+    /// The role it held.
+    pub previous_role: LocationMergeMediaRoleValue,
+    /// The role it holds after the merge.
+    pub new_role: LocationMergeMediaRoleValue,
+    /// Why the role changed.
+    pub reason: LocationMergeRoleChangeReasonValue,
+    /// The sentence the preview shows for this change.
+    pub detail: String,
+}
+
+#[derive(SimpleObject, Clone)]
+/// One reserved setting whose two sides disagreed; the destination's wins.
+pub struct LocationMergeReservedTagConflictPayload {
+    /// The reserved tag prefix, for grouping and translation.
+    pub prefix: String,
+    /// Human-readable name of the setting, when the prefix is a known one.
+    pub setting: Option<String>,
+    /// The value the destination keeps.
+    pub destination_value: Option<String>,
+    /// The value the merging title loses.
+    pub source_value: Option<String>,
+}
+
+#[derive(SimpleObject, Clone)]
+/// One media request whose library follows the content into the destination.
+pub struct LocationMergeMediaRequestRepointPayload {
+    /// The request being repointed.
+    pub request_id: ID,
+    /// The library it belonged to.
+    pub previous_library_id: ID,
+    /// The library it belongs to after the merge.
+    pub destination_library_id: ID,
+}
+
+#[derive(SimpleObject, Clone)]
+/// One category of data the merge deliberately does not carry (FR-071).
+pub struct LocationMergeDroppedCategoryPayload {
+    /// The table the rows live in.
+    pub table: String,
+    /// How many source rows are dropped.
+    pub source_row_count: Long,
+    /// The adjudication that decided it.
+    pub decision: String,
+    /// Why dropping is the right answer.
+    pub reason: String,
+}
+
+#[derive(SimpleObject, Clone)]
+/// What merging one title into an existing destination title would do (FR-071).
+///
+/// The same decision the merge itself is built from, so the preview can never
+/// describe a merge the engine would not perform.
+pub struct LocationMergePreviewPayload {
+    /// The title that merges away.
+    pub source_title_id: ID,
+    /// The title that survives.
+    pub destination_title_id: ID,
+    /// Library the merging title comes from.
+    pub source_library_id: Option<ID>,
+    /// Library the surviving title lives in.
+    pub destination_library_id: Option<ID>,
+    /// Whether unmappable records stop this merge from running.
+    pub blocked: bool,
+    /// The records that block it, one per line the user can act on.
+    pub blocked_records: Vec<LocationMergeBlockedRecordPayload>,
+    /// What the destination keeps.
+    pub destination_wins: Vec<LocationMergeDestinationWinsPayload>,
+    /// What carries forward, per table, with counts.
+    pub dispositions: Vec<LocationMergeTableDispositionPayload>,
+    /// Every media-file role the merge changes.
+    pub role_changes: Vec<LocationMergeRoleChangePayload>,
+    /// Reserved settings whose values disagree.
+    pub reserved_tag_conflicts: Vec<LocationMergeReservedTagConflictPayload>,
+    /// Free-form tags the merging title contributes.
+    pub free_form_tags_added: Vec<String>,
+    /// Requests whose library follows the content.
+    pub media_request_repoints: Vec<LocationMergeMediaRequestRepointPayload>,
+    /// What is not carried over, and why.
+    pub dropped: Vec<LocationMergeDroppedCategoryPayload>,
+    /// Derived caches the merge leaves for Scryer to rebuild afterwards.
+    pub post_merge_work: Vec<LocationMergePostMergeWorkValue>,
+    /// Anything else the operator should read before confirming, including the
+    /// notes explaining where this schema differs from the merge inventory.
+    pub notes: Vec<String>,
 }
 
 #[derive(SimpleObject, Clone)]

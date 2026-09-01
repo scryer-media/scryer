@@ -602,11 +602,21 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // changes meaning): OBJECT 341->343, ENUM 124->125, public types 656->659.
     // The FR-060/FR-062 link and collection dispositions ride the existing plan
     // items behind new reason codes, so they add no type.
+    // Merging into an existing destination title (T085, US7, FR-063 to FR-071)
+    // adds the FR-071 preview summary on the existing preview payload and the
+    // named candidates behind the ids-only ambiguous list. Nine payload objects
+    // (merge preview, blocked record, destination-wins entry, table
+    // disposition, role change, reserved-tag conflict, media-request repoint,
+    // dropped category, ambiguous candidate) and five enums (disposition,
+    // block reason, media role, role-change reason, post-merge work):
+    // OBJECT 343->352, ENUM 125->130, public types 659->673. No new query,
+    // mutation, or input: `merges` and `ambiguousDestinationCandidates` are
+    // additive fields on payloads that already exist.
     assert_eq!(subscription_field_count, 14);
-    assert_eq!(public_types.len(), 659);
-    assert_eq!(kind_count("OBJECT"), 343);
+    assert_eq!(public_types.len(), 673);
+    assert_eq!(kind_count("OBJECT"), 352);
     assert_eq!(kind_count("INPUT_OBJECT"), 179);
-    assert_eq!(kind_count("ENUM"), 125);
+    assert_eq!(kind_count("ENUM"), 130);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
     assert!(query_field_names.contains(&"backupSettings"));
