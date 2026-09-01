@@ -676,6 +676,16 @@ impl VerifiedCopier {
     }
 }
 
+/// Read one existing file end to end and produce its content hashes.
+///
+/// The same single streaming pass a copy uses (D2), against a file nothing is
+/// copying: adoption proves content that is already at its destination
+/// (FR-050), and the full-hash convergence job hashes files in place (FR-047).
+pub async fn hash_existing_file(path: &Path) -> AppResult<StreamedContentHashes> {
+    let path = path.to_path_buf();
+    spawn_verify_blocking(move || hash_source(&path)).await?
+}
+
 /// Runs one blocking filesystem step off the async runtime, the way
 /// [`crate::fs_integrity`] does.
 async fn spawn_verify_blocking<T, F>(work: F) -> AppResult<AppResult<T>>

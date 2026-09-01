@@ -46,6 +46,10 @@ use serde::{Deserialize, Serialize};
 
 use scryer_domain::MediaFacet;
 
+use crate::location::adoption::{
+    AdoptionAccounting, AdoptionFileProof, TitleAdoptionAccounting,
+    plan_reasons as adoption_reasons,
+};
 use crate::location::classify::{
     ClassificationCounts, DestinationLibraryFacts, DestinationRequest, SelectionClassification,
     TitleClassificationFacts, TitleLocationClass, classify_selection,
@@ -311,6 +315,16 @@ pub struct RootMoveExecutionPlan {
     /// zero on a running operation and non-zero only on a preview.
     #[serde(default)]
     pub unresolved_titles: i64,
+    /// What adoption matched each adopted file on, keyed by its stored
+    /// destination path (FR-050–053).
+    ///
+    /// Carried on the instruction set rather than re-derived at execution time
+    /// for the same reason the facet flip is: it is what the user confirmed,
+    /// and a resumed run must prove exactly what the preview promised (FR-089).
+    /// Empty for every managed move, and defaulted so a plan serialized before
+    /// adoption existed still reads back.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub adoption_proofs: BTreeMap<String, AdoptionFileProof>,
 }
 
 impl RootMoveExecutionPlan {
@@ -411,6 +425,13 @@ pub struct RootMoveTitleDraft {
     /// `NeedsResolution` — but it is carried anyway so the preview can name the
     /// blocking records beside the title rather than only in the class reason.
     pub merge_summary: Option<MergePreviewSummary>,
+    /// What the destination already holds for this title, matched against the
+    /// catalog (FR-050/051). Set only for a
+    /// [`LocationExecutionMode::FilesAlreadyThere`] request; `None` on every
+    /// managed move, and `None` on an adoption whose destination folder could
+    /// not be read, which the planner reports as a blocked title rather than as
+    /// an empty accounting.
+    pub adoption: Option<TitleAdoptionAccounting>,
 }
 
 impl RootMoveTitleDraft {
@@ -454,6 +475,12 @@ pub struct RootMovePlanRequest {
     /// the fingerprint (FR-081).
     pub selection: Vec<String>,
     pub titles: Vec<RootMoveTitleDraft>,
+    /// The mode the user chose in the move workflow (FR-011). Only
+    /// [`LocationExecutionMode::MoveWithScryer`] and
+    /// [`LocationExecutionMode::FilesAlreadyThere`] are ever *requested*;
+    /// [`LocationExecutionMode::CatalogOnly`] is derived by the planner for a
+    /// selection with nothing on disk (FR-076).
+    pub mode: LocationExecutionMode,
     pub classification: ClassificationCounts,
     pub verification_depth: VerificationDepth,
     pub free_space: FreeSpaceEstimate,
@@ -486,10 +513,8 @@ impl PlannedRootMove {
 /// guarantee callers may rely on is that `execution.titles` follows the input
 /// order and carries ascending sequences starting at zero.
 pub fn build_root_move_plan(request: &RootMovePlanRequest) -> PlannedRootMove {
-    let header = LocationPlanHeader::new(
-        operation_type_for(&request.titles),
-        execution_mode_for(&request.titles),
-    )
+    let mode = execution_mode_for(request.mode, &request.titles);
+    let header = LocationPlanHeader::new(operation_type_for(mode, &request.titles), mode)
     .with_source(
         request.source_library_id.clone(),
         request.source_root_id.clone(),
@@ -529,6 +554,16 @@ pub fn build_root_move_plan(request: &RootMovePlanRequest) -> PlannedRootMove {
             builder.merge(summary);
         }
         if let Some(title_execution) = title_execution {
+            // US3: the proof each adopted file was matched on rides the
+            // instruction set, so a resumed run re-proves what the preview
+            // promised rather than whatever the catalog says later (FR-089).
+            if let Some(accounting) = draft.adoption.as_ref() {
+                for adopted in &accounting.adopted {
+                    execution
+                        .adoption_proofs
+                        .insert(adopted.destination_path.clone(), adopted.proof.clone());
+                }
+            }
             execution.titles.push(title_execution);
         }
     }
@@ -542,12 +577,25 @@ pub fn build_root_move_plan(request: &RootMovePlanRequest) -> PlannedRootMove {
 
 /// The operation type Activity and the resume path see (FR-091).
 ///
-/// The two share one planner and one runner, so this is a label rather than a
-/// branch — but it is a label the user reads, and a selection that changes
-/// library is a cross-library transfer, not a root move. A mixed selection
-/// (US6.3: libraries A, B, C into A) contains transfers, so the operation is
-/// one; nothing about a title's own class changes because of it.
-fn operation_type_for(titles: &[RootMoveTitleDraft]) -> LocationOperationType {
+/// Root move and cross-library transfer share one planner and one runner, so
+/// between those two this is a label rather than a branch — but it is a label
+/// the user reads, and a selection that changes library is a cross-library
+/// transfer, not a root move. A mixed selection (US6.3: libraries A, B, C into
+/// A) contains transfers, so the operation is one; nothing about a title's own
+/// class changes because of it.
+///
+/// Adoption is the one type this *does* branch on, because it is the mode the
+/// user chose rather than a shape the selection happens to have (US3). It is
+/// read off the **effective** mode, so a selection that collapsed to the
+/// catalog-only fast path (FR-076) is not filed as an adoption: nothing was
+/// adopted, and Activity should not say otherwise.
+fn operation_type_for(
+    mode: LocationExecutionMode,
+    titles: &[RootMoveTitleDraft],
+) -> LocationOperationType {
+    if mode == LocationExecutionMode::FilesAlreadyThere {
+        return LocationOperationType::Adoption;
+    }
     if titles.iter().any(RootMoveTitleDraft::crosses_libraries) {
         LocationOperationType::CrossLibraryTransfer
     } else {
@@ -556,12 +604,18 @@ fn operation_type_for(titles: &[RootMoveTitleDraft]) -> LocationOperationType {
 }
 
 /// A plan with no file-bearing title needs no move mode; the catalog-only mode
-/// is what FR-076 asks the UI to skip the chooser for.
-fn execution_mode_for(titles: &[RootMoveTitleDraft]) -> LocationExecutionMode {
-    if titles.iter().any(|title| title.class.moves_files()) {
-        LocationExecutionMode::MoveWithScryer
-    } else {
-        LocationExecutionMode::CatalogOnly
+/// is what FR-076 asks the UI to skip the chooser for — including for a request
+/// that asked for adoption, since there is nothing on disk to adopt.
+fn execution_mode_for(
+    requested: LocationExecutionMode,
+    titles: &[RootMoveTitleDraft],
+) -> LocationExecutionMode {
+    if !titles.iter().any(|title| title.class.moves_files()) {
+        return LocationExecutionMode::CatalogOnly;
+    }
+    match requested {
+        LocationExecutionMode::FilesAlreadyThere => LocationExecutionMode::FilesAlreadyThere,
+        _ => LocationExecutionMode::MoveWithScryer,
     }
 }
 
@@ -667,6 +721,13 @@ fn plan_title(
             return (Some(execution), items, warnings);
         }
         TitleLocationClass::RootMove | TitleLocationClass::CrossLibraryTransfer => {}
+    }
+
+    // US3: the files are already where they are going. Everything above this
+    // line is mode-independent — a blocked title is blocked either way, and a
+    // fileless title takes the FR-076 fast path either way.
+    if request.mode == LocationExecutionMode::FilesAlreadyThere {
+        return plan_adopted_title(draft, sequence, items, warnings);
     }
 
     let Some(destination_folder) = draft.destination_folder_path.clone() else {
@@ -874,6 +935,216 @@ fn plan_title(
         deduplicated_media_file_ids,
         renamed_destinations,
         prune_directories: prune_directories_for(draft),
+        warnings: warnings.clone(),
+        converted_facet: converted_facet(draft),
+        dropped_tag_prefixes: dropped_tag_prefixes(draft),
+        merge_target_title_id: draft.merge_target_title_id().map(str::to_string),
+    };
+
+    (Some(execution), items, warnings)
+}
+
+/// One title's adoption plan (T051, FR-050–053).
+///
+/// Rides the shared preview core exactly as a managed move does — same items,
+/// same fingerprint, same complete counts (FR-051: "apply the same
+/// title/folder/library/merge preview as a managed move"). Three things differ,
+/// and each one is a spec rule rather than a shortcut:
+///
+/// - **Nothing is copied.** Adopted files are still [`PlanItemKind::Move`]
+///   items, because the content really did move and the verification statement
+///   has to cover them (FR-080), but the caller contributes no bytes to the
+///   free-space estimate: the destination already holds them.
+/// - **Unaccounted media refuses the confirmation.** A title with a missing or
+///   ambiguous tracked file emits [`PlanItemKind::Blocked`] items and no
+///   instructions at all, so [`LocationPlan::blocks_start`] refuses the start
+///   (FR-052, US3.2). It is a refusal, not a warning.
+/// - **The source is the user's.** No `prune_directories`, and no
+///   `deduplicated_sources` decided here: whether a source copy the user kept is
+///   provably redundant is settled at execution time by the verification record
+///   (FR-053, and see [`crate::location::adoption::AdoptionFileVerifier`]).
+fn plan_adopted_title(
+    draft: &RootMoveTitleDraft,
+    sequence: i64,
+    mut items: Vec<PlanItem>,
+    mut warnings: Vec<String>,
+) -> (Option<RootMoveTitleExecution>, Vec<PlanItem>, Vec<String>) {
+    let Some(destination_folder) = draft.destination_folder_path.clone() else {
+        items.push(
+            PlanItem::new(PlanItemKind::Blocked)
+                .with_title(draft.title_id.clone())
+                .with_reason_code(adoption_reasons::ADOPTION_DESTINATION_UNREADABLE)
+                .with_detail(format!(
+                    "no destination folder could be resolved for \"{}\", so nothing about it can be accounted for",
+                    draft.title_name
+                )),
+        );
+        return (None, items, warnings);
+    };
+    let destination_folder_display = path_to_stored_string(&destination_folder);
+
+    let Some(accounting) = draft.adoption.as_ref() else {
+        items.push(
+            PlanItem::new(PlanItemKind::Blocked)
+                .with_title(draft.title_id.clone())
+                .with_paths(
+                    Option::<String>::None,
+                    Some(destination_folder_display.clone()),
+                )
+                .with_reason_code(adoption_reasons::ADOPTION_DESTINATION_UNREADABLE)
+                .with_detail(format!(
+                    "{destination_folder_display} could not be scanned, so \"{}\" cannot be adopted",
+                    draft.title_name
+                )),
+        );
+        return (None, items, warnings);
+    };
+
+    // FR-056/FR-055 apply to an adoption that also changes library, exactly as
+    // they do to a managed transfer: the ownership flip is the same flip.
+    items.extend(transfer_items(draft));
+    warnings.extend(transfer_warnings(draft));
+
+    let source_folder_display = draft
+        .source_folder_path
+        .as_deref()
+        .map(path_to_stored_string);
+    if draft.repairs_folder_name() {
+        items.push(
+            PlanItem::new(PlanItemKind::Rename)
+                .with_title(draft.title_id.clone())
+                .with_paths(
+                    source_folder_display.clone(),
+                    Some(destination_folder_display.clone()),
+                )
+                .with_reason_code(plan_reasons::FOLDER_NAME_REPAIR)
+                .with_detail(
+                    "the catalog's folder for this title becomes the folder the content was moved into"
+                        .to_string(),
+                ),
+        );
+    }
+
+    // FR-051: every additional file is surfaced. Adoption neither adopts nor
+    // removes them — they are the user's content sitting in a folder Scryer is
+    // about to own, and silently ignoring them is what FR-027 exists against.
+    for file in &accounting.additional {
+        items.push(
+            PlanItem::new(PlanItemKind::UnmanagedContent)
+                .with_title(draft.title_id.clone())
+                .with_paths(Option::<String>::None, Some(file.path.clone()))
+                .with_size(file.size_bytes)
+                .with_reason_code(adoption_reasons::ADOPTION_ADDITIONAL_FILE)
+                .with_detail(format!(
+                    "{} is at the destination but no tracked file claims it; it is left exactly as it is",
+                    file.path
+                )),
+        );
+    }
+
+    // FR-052: a refusal, one item per unaccounted file so the user can act on
+    // each, plus the title-level line the preview groups them under.
+    if !accounting.unaccounted.is_empty() {
+        for file in &accounting.unaccounted {
+            let reason_code = match file.accounting {
+                AdoptionAccounting::Ambiguous => adoption_reasons::ADOPTION_MEDIA_AMBIGUOUS,
+                _ => adoption_reasons::ADOPTION_MEDIA_MISSING,
+            };
+            items.push(
+                PlanItem::new(PlanItemKind::Blocked)
+                    .with_title(draft.title_id.clone())
+                    .with_paths(
+                        Some(file.source_path.clone()),
+                        Some(destination_folder_display.clone()),
+                    )
+                    .with_size(file.size_bytes)
+                    .with_reason_code(reason_code)
+                    .with_detail(file.detail.clone()),
+            );
+        }
+        let counts = accounting.counts();
+        let detail = format!(
+            "\"{}\" cannot be adopted: {} tracked file(s) are missing at the destination and {} are ambiguous",
+            draft.title_name, counts.missing, counts.ambiguous
+        );
+        items.push(
+            PlanItem::new(PlanItemKind::Blocked)
+                .with_title(draft.title_id.clone())
+                .with_reason_code(adoption_reasons::ADOPTION_MEDIA_MISSING)
+                .with_detail(detail.clone()),
+        );
+        warnings.push(detail);
+        return (None, items, warnings);
+    }
+
+    let mut files = Vec::with_capacity(accounting.adopted.len());
+    for adopted in &accounting.adopted {
+        let mut item = PlanItem::new(PlanItemKind::Move)
+            .with_title(draft.title_id.clone())
+            .with_paths(
+                Some(adopted.source_path.clone()),
+                Some(adopted.destination_path.clone()),
+            )
+            .with_size(adopted.size_bytes)
+            .with_reason_code(adoption_reasons::ADOPTED_AT_DESTINATION)
+            .with_detail(format!(
+                "already at the destination; matched on {} and verified in place",
+                adopted.proof.strength.as_str()
+            ));
+        item.media_file_id = Some(adopted.media_file_id.clone());
+        items.push(item);
+
+        files.push(RootMoveFileExecution {
+            media_file_id: Some(adopted.media_file_id.clone()),
+            source_path: adopted.source_path.clone(),
+            destination_path: adopted.destination_path.clone(),
+            size_bytes: adopted.size_bytes,
+        });
+    }
+
+    // FR-053, stated before confirmation: source cleanup is the user's, and the
+    // one exception needs proof this preview does not have yet.
+    if !files.is_empty() {
+        let warning = format!(
+            "adoption does not delete anything at \"{}\"'s old location; a source copy is only recycled when the destination is proven identical to the full hash the catalog holds",
+            draft.title_name
+        );
+        items.push(
+            PlanItem::new(PlanItemKind::Warning)
+                .with_title(draft.title_id.clone())
+                .with_reason_code(adoption_reasons::ADOPTION_REDUNDANT_SOURCE)
+                .with_detail(warning.clone()),
+        );
+        warnings.push(warning);
+    }
+
+    let execution = RootMoveTitleExecution {
+        title_id: draft.title_id.clone(),
+        title_name: draft.title_name.clone(),
+        sequence,
+        class: draft.class,
+        source_library_id: draft.source_library_id.clone(),
+        source_root_id: draft.source_root_id.clone(),
+        source_folder_path: source_folder_display,
+        destination_library_id: draft.destination_library_id.clone(),
+        destination_root_id: draft.destination_root_id.clone(),
+        destination_folder_path: Some(destination_folder_display),
+        destination_root_path: draft
+            .destination_root_path
+            .as_deref()
+            .map(path_to_stored_string),
+        source_root_path: draft.source_root_path.as_deref().map(path_to_stored_string),
+        // Nothing is copied, so the rename-vs-copy question never arises.
+        same_volume: None,
+        files,
+        // FR-053: the redundancy exception is decided at execution time against
+        // a persisted verification record, never optimistically here.
+        deduplicated_sources: Vec::new(),
+        deduplicated_media_file_ids: Vec::new(),
+        renamed_destinations: Vec::new(),
+        // Adoption never removes the user's directories. The recycle exception
+        // is about redundant *content*; a folder the user still has is theirs.
+        prune_directories: Vec::new(),
         warnings: warnings.clone(),
         converted_facet: converted_facet(draft),
         dropped_tag_prefixes: dropped_tag_prefixes(draft),
@@ -1319,10 +1590,18 @@ mod tests {
             facet_conversion: None,
             associations: TitleAssociationFacts::default(),
             merge_summary: None,
+            adoption: None,
         }
     }
 
     fn request(titles: Vec<RootMoveTitleDraft>) -> RootMovePlanRequest {
+        request_in_mode(titles, LocationExecutionMode::MoveWithScryer)
+    }
+
+    fn request_in_mode(
+        titles: Vec<RootMoveTitleDraft>,
+        mode: LocationExecutionMode,
+    ) -> RootMovePlanRequest {
         let selection = titles.iter().map(|title| title.title_id.clone()).collect();
         RootMovePlanRequest {
             source_library_id: Some("lib-1".to_string()),
@@ -1331,6 +1610,7 @@ mod tests {
             destination_root_id: Some("root-b".to_string()),
             selection,
             titles,
+            mode,
             classification: ClassificationCounts::default(),
             verification_depth: VerificationDepth::Full,
             free_space: FreeSpaceEstimate::unknown(),
@@ -2060,5 +2340,201 @@ mod tests {
         let indexed = classes_by_title(&classification);
 
         assert_eq!(indexed.get("t1"), Some(&TitleLocationClass::RootMove));
+    }
+
+    // ── US3: adoption plans (T051) ───────────────────────────────────────────
+
+    use crate::location::adoption::{
+        AdoptedMediaFile, AdoptionAccounting, AdoptionFileProof, AdoptionMatchStrength,
+        TitleAdoptionAccounting, UnaccountedMediaFile,
+    };
+
+    fn adopted_draft(accounting: TitleAdoptionAccounting) -> RootMoveTitleDraft {
+        let mut draft = draft(TitleLocationClass::RootMove);
+        draft.adoption = Some(accounting);
+        draft
+    }
+
+    fn adopted_file(strength: AdoptionMatchStrength) -> AdoptedMediaFile {
+        AdoptedMediaFile {
+            media_file_id: "mf-1".to_string(),
+            source_path: "/a/Some Movie/movie.mkv".to_string(),
+            destination_path: "/b/Some Movie (2024)/movie.mkv".to_string(),
+            size_bytes: 1_000,
+            proof: AdoptionFileProof {
+                strength,
+                full_blake3: matches!(strength, AdoptionMatchStrength::FullHash)
+                    .then(|| "abcd".to_string()),
+                signature: None,
+            },
+        }
+    }
+
+    /// US3.1: the adoption preview is the managed-move preview — same item
+    /// vocabulary, same fingerprint machinery — with the mode and type the user
+    /// chose (FR-051).
+    #[test]
+    fn an_adoption_plan_is_typed_as_an_adoption_and_moves_no_bytes_of_its_own() {
+        let accounting = TitleAdoptionAccounting {
+            adopted: vec![adopted_file(AdoptionMatchStrength::IdentityOnly)],
+            ..TitleAdoptionAccounting::default()
+        };
+        let planned = build_root_move_plan(&request_in_mode(
+            vec![adopted_draft(accounting)],
+            LocationExecutionMode::FilesAlreadyThere,
+        ));
+
+        assert_eq!(
+            planned.plan.header.operation_type,
+            LocationOperationType::Adoption
+        );
+        assert_eq!(
+            planned.plan.header.mode,
+            LocationExecutionMode::FilesAlreadyThere
+        );
+        assert!(!planned.plan.blocks_start());
+        assert_eq!(planned.execution.titles.len(), 1);
+        assert_eq!(planned.execution.titles[0].files.len(), 1);
+        // Nothing is copied, so nothing is recycled and nothing is pruned
+        // (FR-053: source cleanup is the user's).
+        assert!(planned.execution.titles[0].deduplicated_sources.is_empty());
+        assert!(planned.execution.titles[0].prune_directories.is_empty());
+        // The verification statement still covers the adopted bytes: they are
+        // read at the operation's depth even though they were never written.
+        assert_eq!(planned.plan.verification.files, 1);
+        assert_eq!(planned.plan.verification.bytes, 1_000);
+    }
+
+    #[test]
+    fn an_adoption_carries_the_match_proof_into_the_instruction_set() {
+        let accounting = TitleAdoptionAccounting {
+            adopted: vec![adopted_file(AdoptionMatchStrength::FullHash)],
+            ..TitleAdoptionAccounting::default()
+        };
+        let planned = build_root_move_plan(&request_in_mode(
+            vec![adopted_draft(accounting)],
+            LocationExecutionMode::FilesAlreadyThere,
+        ));
+
+        let proof = planned
+            .execution
+            .adoption_proofs
+            .get("/b/Some Movie (2024)/movie.mkv")
+            .expect("the adopted file's proof rides the plan");
+        assert_eq!(proof.strength, AdoptionMatchStrength::FullHash);
+        assert_eq!(proof.full_blake3.as_deref(), Some("abcd"));
+    }
+
+    /// US3.2: a tracked file that is not accounted for at the destination
+    /// refuses the confirmation — a refusal, not a warning (FR-052).
+    #[test]
+    fn unaccounted_tracked_media_blocks_the_confirmation() {
+        let accounting = TitleAdoptionAccounting {
+            unaccounted: vec![UnaccountedMediaFile {
+                media_file_id: "mf-1".to_string(),
+                source_path: "/a/Some Movie/movie.mkv".to_string(),
+                size_bytes: 1_000,
+                accounting: AdoptionAccounting::Missing,
+                detail: "no file at the destination matches movie.mkv".to_string(),
+            }],
+            ..TitleAdoptionAccounting::default()
+        };
+        let planned = build_root_move_plan(&request_in_mode(
+            vec![adopted_draft(accounting)],
+            LocationExecutionMode::FilesAlreadyThere,
+        ));
+
+        assert!(planned.plan.blocks_start());
+        assert!(
+            planned.execution.titles.is_empty(),
+            "a blocked title contributes no instructions"
+        );
+        let refusal = planned.plan.confirm(&PlanConfirmationRequest {
+            fingerprint: planned.plan.fingerprint.clone(),
+            typed_confirmation: None,
+        });
+        assert_eq!(
+            refusal,
+            Err(crate::location::preview::PlanConfirmationError::Blocked)
+        );
+    }
+
+    #[test]
+    fn an_ambiguous_match_blocks_with_its_own_reason_code() {
+        let accounting = TitleAdoptionAccounting {
+            unaccounted: vec![UnaccountedMediaFile {
+                media_file_id: "mf-1".to_string(),
+                source_path: "/a/Some Movie/movie.mkv".to_string(),
+                size_bytes: 1_000,
+                accounting: AdoptionAccounting::Ambiguous,
+                detail: "two destination files could be movie.mkv".to_string(),
+            }],
+            ..TitleAdoptionAccounting::default()
+        };
+        let planned = build_root_move_plan(&request_in_mode(
+            vec![adopted_draft(accounting)],
+            LocationExecutionMode::FilesAlreadyThere,
+        ));
+
+        let blocked = planned
+            .plan
+            .section(PlanItemKind::Blocked)
+            .expect("blocked section");
+        assert!(blocked.items.items.iter().any(|item| {
+            item.reason_code.as_deref()
+                == Some(crate::location::adoption::plan_reasons::ADOPTION_MEDIA_AMBIGUOUS)
+        }));
+    }
+
+    /// FR-051: a destination file nothing claims is surfaced, never ignored.
+    #[test]
+    fn additional_destination_files_are_surfaced_without_blocking() {
+        let accounting = TitleAdoptionAccounting {
+            adopted: vec![adopted_file(AdoptionMatchStrength::IdentityOnly)],
+            additional: vec![crate::location::adoption::AdditionalDestinationFile {
+                path: "/b/Some Movie (2024)/extra.mkv".to_string(),
+                size_bytes: 42,
+            }],
+            ..TitleAdoptionAccounting::default()
+        };
+        let planned = build_root_move_plan(&request_in_mode(
+            vec![adopted_draft(accounting)],
+            LocationExecutionMode::FilesAlreadyThere,
+        ));
+
+        assert!(!planned.plan.blocks_start());
+        let unmanaged = planned
+            .plan
+            .section(PlanItemKind::UnmanagedContent)
+            .expect("unmanaged content section");
+        assert_eq!(unmanaged.items.total, 1);
+    }
+
+    /// FR-076 outranks the mode: a fileless title has nothing to adopt, so the
+    /// plan collapses to the catalog-only fast path and is not filed as an
+    /// adoption.
+    #[test]
+    fn a_fileless_selection_in_adoption_mode_is_still_the_catalog_only_fast_path() {
+        let planned = build_root_move_plan(&request_in_mode(
+            vec![draft(TitleLocationClass::CatalogOnly)],
+            LocationExecutionMode::FilesAlreadyThere,
+        ));
+
+        assert_eq!(planned.plan.header.mode, LocationExecutionMode::CatalogOnly);
+        assert_eq!(
+            planned.plan.header.operation_type,
+            LocationOperationType::RootMove
+        );
+    }
+
+    #[test]
+    fn an_adoption_with_no_accounting_at_all_is_blocked_rather_than_empty() {
+        let planned = build_root_move_plan(&request_in_mode(
+            vec![draft(TitleLocationClass::RootMove)],
+            LocationExecutionMode::FilesAlreadyThere,
+        ));
+
+        assert!(planned.plan.blocks_start());
+        assert!(planned.execution.titles.is_empty());
     }
 }

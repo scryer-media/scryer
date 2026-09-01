@@ -59,6 +59,10 @@ use scryer_domain::{
 
 use crate::domain_events::{DomainEventActor, new_job_run_domain_event};
 
+use crate::location::adoption::{
+    AdoptionFileVerifier, DestinationFileFact, TrackedMediaFact, choose_adoption_folder,
+    match_title_adoption,
+};
 use crate::location::classify::{
     DestinationLibraryFacts, DestinationRequest, SelectionClassification, TitleClassificationFacts,
     TitleLocationClass, classify_selection,
@@ -144,7 +148,32 @@ impl AppUseCase {
         actor: &User,
         request: RootMovePreviewRequest,
     ) -> AppResult<RootMovePreview> {
-        let planned = self.plan_root_move(actor, &request).await?;
+        self.preview_location_change(actor, request, LocationExecutionMode::MoveWithScryer)
+            .await
+    }
+
+    /// Build the shared preview for **Files are already there** (US3,
+    /// FR-050–053).
+    ///
+    /// Same preview model, same fingerprint, same confirmation rules as a
+    /// managed move (FR-051) — the mode is what changes, and the mode is what
+    /// the user chose in the move workflow (FR-011).
+    pub async fn preview_adoption(
+        &self,
+        actor: &User,
+        request: RootMovePreviewRequest,
+    ) -> AppResult<RootMovePreview> {
+        self.preview_location_change(actor, request, LocationExecutionMode::FilesAlreadyThere)
+            .await
+    }
+
+    async fn preview_location_change(
+        &self,
+        actor: &User,
+        request: RootMovePreviewRequest,
+        mode: LocationExecutionMode,
+    ) -> AppResult<RootMovePreview> {
+        let planned = self.plan_root_move(actor, &request, mode).await?;
         Ok(RootMovePreview {
             plan: planned.planned.plan,
             classification: planned.classification,
@@ -163,11 +192,36 @@ impl AppUseCase {
         actor: &User,
         request: StartRootMoveRequest,
     ) -> AppResult<LocationOperationAccepted> {
+        self.start_location_change(actor, request, LocationExecutionMode::MoveWithScryer)
+            .await
+    }
+
+    /// Confirm a previewed adoption and start it (US3, FR-052).
+    ///
+    /// The refusal a title with unaccounted media produces is the shared one:
+    /// its plan carries [`crate::location::preview::PlanItemKind::Blocked`]
+    /// items, so `confirm` returns
+    /// [`PlanConfirmationError::Blocked`] before anything is persisted.
+    pub async fn start_adoption(
+        &self,
+        actor: &User,
+        request: StartRootMoveRequest,
+    ) -> AppResult<LocationOperationAccepted> {
+        self.start_location_change(actor, request, LocationExecutionMode::FilesAlreadyThere)
+            .await
+    }
+
+    async fn start_location_change(
+        &self,
+        actor: &User,
+        request: StartRootMoveRequest,
+        mode: LocationExecutionMode,
+    ) -> AppResult<LocationOperationAccepted> {
         let preview_request = RootMovePreviewRequest {
             title_ids: request.title_ids.clone(),
             destination: request.destination.clone(),
         };
-        let planned = self.plan_root_move(actor, &preview_request).await?;
+        let planned = self.plan_root_move(actor, &preview_request, mode).await?;
         let plan = planned.planned.plan;
 
         plan.confirm(&request.confirmation)
@@ -358,13 +412,16 @@ impl AppUseCase {
             ));
         }
         // A cross-library transfer is a root move that also flips catalog
-        // ownership (FR-056): it is planned by the same planner, persisted as
-        // the same `RootMoveExecutionPlan`, and walked by the same runner, so it
-        // resumes here. Every *other* type resumes through its own phase and
-        // must not be run under root-move rules.
+        // ownership (FR-056), and an adoption is one that proves the destination
+        // instead of writing it (FR-050): all three are planned by the same
+        // planner, persisted as the same `RootMoveExecutionPlan`, and walked by
+        // the same runner, so they resume here. Every *other* type resumes
+        // through its own phase and must not be run under these rules.
         if !matches!(
             operation.operation_type,
-            LocationOperationType::RootMove | LocationOperationType::CrossLibraryTransfer
+            LocationOperationType::RootMove
+                | LocationOperationType::CrossLibraryTransfer
+                | LocationOperationType::Adoption
         ) {
             return Ok(LocationResumeDecision::not_resumable(format!(
                 "a {} operation does not resume through the root-move runner",
@@ -417,7 +474,7 @@ impl AppUseCase {
         // A root whose volume has not mounted yet — the ordinary shape of a
         // boot — would fail every copy and drive the operation to a terminal
         // Failed, turning a boot-order accident into a permanent one.
-        if let Some(unavailable) = unavailable_plan_root(&plan).await {
+        if let Some(unavailable) = unavailable_plan_root(&plan, operation.mode).await {
             return Ok(LocationResumeDecision::not_resumable(format!(
                 "{unavailable} is not available right now, so this operation stays interrupted and can be resumed once it is back"
             )));
@@ -572,15 +629,20 @@ impl AppUseCase {
         operation_id: &str,
         plan: &RootMoveExecutionPlan,
     ) -> AppResult<OperationRunOutcome> {
-        let job_run_id = self
-            .location_operation(operation_id)
-            .await
-            .ok()
-            .flatten()
-            .and_then(|operation| operation.job_run_id);
+        let row = self.location_operation(operation_id).await.ok().flatten();
+        let job_run_id = row
+            .as_ref()
+            .and_then(|operation| operation.job_run_id.clone());
+        // The mode is what decides whether this run copies bytes or proves the
+        // ones already there (FR-050). It is read off the persisted row rather
+        // than re-derived, so a resumed adoption is still an adoption.
+        let mode = row
+            .as_ref()
+            .map(|operation| operation.mode)
+            .unwrap_or(LocationExecutionMode::MoveWithScryer);
 
         let outcome = self
-            .execute_root_move(operation_id, plan, job_run_id.as_deref())
+            .execute_root_move(operation_id, plan, mode, job_run_id.as_deref())
             .await;
         if let Some(job_run_id) = job_run_id {
             self.close_location_operation_job_run_for(&job_run_id, &outcome)
@@ -606,17 +668,43 @@ impl AppUseCase {
         &self,
         operation_id: &str,
         plan: &RootMoveExecutionPlan,
+        mode: LocationExecutionMode,
         job_run_id: Option<&str>,
     ) -> AppResult<OperationRunOutcome> {
+        let adopting = mode == LocationExecutionMode::FilesAlreadyThere;
         let catalog = AppUseCaseRootMoveCatalog { app: self.clone() };
         let recycler = self.root_move_recycler(plan).await;
         let permissions = self.root_move_permissions(plan).await?;
-        // The mover gets its own catalog handle so each verified copy's hashes
-        // land on the media file as they are produced (FR-041, migration 0205),
-        // instead of the backfill job reading every moved file a second time.
-        let mover = RootMoveFileMover::new(VerifiedCopier::new(), permissions.clone())
-            .with_catalog(Arc::new(AppUseCaseRootMoveCatalog { app: self.clone() }));
-        let admission = RootMoveAdmission::new(plan, &catalog);
+        // US3: adoption copies nothing. The same runner walks the same plan and
+        // the same reconciler flips catalog ownership at the same per-title
+        // checkpoint; only the per-file step differs, because there is nothing
+        // to move and everything to prove (FR-050, FR-053).
+        //
+        // Both movers are bound here rather than boxed so the runner keeps
+        // borrowing a concrete `&dyn TitleFileMover` for the whole run.
+        let copy_mover;
+        let adoption_mover;
+        let mover: &dyn crate::location::executor::TitleFileMover = if adopting {
+            adoption_mover = AdoptionFileVerifier::new(plan)
+                .with_catalog(Arc::new(AppUseCaseRootMoveCatalog { app: self.clone() }));
+            &adoption_mover
+        } else {
+            // The mover gets its own catalog handle so each verified copy's
+            // hashes land on the media file as they are produced (FR-041,
+            // migration 0205), instead of the backfill job reading every moved
+            // file a second time.
+            copy_mover = RootMoveFileMover::new(VerifiedCopier::new(), permissions.clone())
+                .with_catalog(Arc::new(AppUseCaseRootMoveCatalog { app: self.clone() }));
+            &copy_mover
+        };
+        let admission = {
+            let admission = RootMoveAdmission::new(plan, &catalog);
+            if adopting {
+                admission.adopting()
+            } else {
+                admission
+            }
+        };
         let reconciler = RootMoveReconciler::new(
             plan,
             &catalog,
@@ -639,7 +727,7 @@ impl AppUseCase {
 
         let mut runner = LocationOperationRunner::new(
             self.services.library.location_operations.as_ref(),
-            &mover,
+            mover,
             &admission,
             &reconciler,
         )
@@ -1070,11 +1158,25 @@ impl LocationResumeDecision {
 /// The parent-first stat the full-hash backfill job uses is the same idea: an
 /// unmounted share answers "no such directory" immediately, where opening
 /// content under it can block on a dead mount.
-async fn unavailable_plan_root(plan: &RootMoveExecutionPlan) -> Option<String> {
+///
+/// An adoption is the one mode that does **not** require its source root: FR-053
+/// says a stale or unavailable source mount must not block adoption, and a
+/// resume that refused on it would turn that allowance off the moment a process
+/// restarted (US3.3, FR-033).
+async fn unavailable_plan_root(
+    plan: &RootMoveExecutionPlan,
+    mode: LocationExecutionMode,
+) -> Option<String> {
+    let requires_source = mode != LocationExecutionMode::FilesAlreadyThere;
     let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
     for title in &plan.titles {
         for (label, root) in [
-            ("the source root", title.source_root_path.as_deref()),
+            (
+                "the source root",
+                requires_source
+                    .then(|| title.source_root_path.as_deref())
+                    .flatten(),
+            ),
             (
                 "the destination root",
                 title.destination_root_path.as_deref(),
@@ -1181,6 +1283,7 @@ impl AppUseCase {
         &self,
         actor: &User,
         request: &RootMovePreviewRequest,
+        mode: LocationExecutionMode,
     ) -> AppResult<RootMovePlanning> {
         if request.title_ids.is_empty() {
             return Err(AppError::Validation(
@@ -1454,6 +1557,7 @@ impl AppUseCase {
                 merge_summary: merge_plans
                     .get(&title.id)
                     .map(|plan| plan.summary.clone()),
+                adoption: None,
             };
 
             if !classified.class.moves_files() {
@@ -1531,6 +1635,38 @@ impl AppUseCase {
                     title.year,
                 ),
             };
+            // US3: nothing is planned to move, because it already did. The
+            // destination folder is resolved against what is actually on disk,
+            // the tracked media is accounted for against it (FR-050/051), and
+            // none of the collision, hardlink, or free-space machinery applies —
+            // no bytes are written.
+            if mode == LocationExecutionMode::FilesAlreadyThere {
+                let adoption_folder = resolve_adoption_folder(
+                    destination_folder.clone(),
+                    source_folder_path.as_deref(),
+                    &destination_root_path,
+                )
+                .await;
+                draft.destination_folder_path = Some(adoption_folder.clone());
+                draft.adoption = account_for_adoption(
+                    &adoption_folder,
+                    source_folder_path.as_deref(),
+                    media_files_by_title
+                        .get(&title.id)
+                        .map(Vec::as_slice)
+                        .unwrap_or_default(),
+                )
+                .await;
+                if a_source_path.is_none() {
+                    a_source_path = source_folder_path.clone().or(source_root_path.clone());
+                }
+                if a_destination_path.is_none() {
+                    a_destination_path = Some(destination_root_path.clone());
+                }
+                drafts.push(draft);
+                continue;
+            }
+
             draft.destination_folder_path = Some(destination_folder.clone());
 
             let media_files = media_files_by_title
@@ -1652,6 +1788,7 @@ impl AppUseCase {
             destination_root_id: request.destination.root_id.clone(),
             selection,
             titles: drafts,
+            mode,
             classification: classification.counts,
             verification_depth: depth,
             free_space,
@@ -2092,6 +2229,229 @@ async fn collect_source_files(
     directories.sort();
     directories.dedup();
     Ok((files, directories))
+}
+
+// ── Adoption fact gathering (US3) ────────────────────────────────────────────
+
+/// Which folder an adoption accounts against.
+///
+/// The pure rule lives in [`crate::location::adoption::choose_adoption_folder`];
+/// this is the two `stat`s it needs.
+async fn resolve_adoption_folder(
+    calculated: PathBuf,
+    source_folder: Option<&Path>,
+    destination_root: &Path,
+) -> PathBuf {
+    let calculated_exists = is_existing_directory(&calculated).await;
+    let source_named = source_folder
+        .and_then(|folder| folder.file_name())
+        .map(|name| destination_root.join(name));
+    let source_named_exists = match source_named.as_deref() {
+        Some(path) => is_existing_directory(path).await,
+        None => false,
+    };
+    choose_adoption_folder(
+        calculated,
+        calculated_exists,
+        source_named,
+        source_named_exists,
+    )
+}
+
+async fn is_existing_directory(path: &Path) -> bool {
+    tokio::fs::metadata(path)
+        .await
+        .map(|metadata| metadata.is_dir())
+        .unwrap_or(false)
+}
+
+/// Account for one title's tracked media against what the destination folder
+/// actually holds (FR-050, FR-051).
+///
+/// `None` means the folder could not be scanned at all, which the planner
+/// reports as a blocked title rather than as "nothing is there".
+///
+/// # How much proof this reads, and why not more
+///
+/// FR-050 asks for size, stored identity, the sampled proof, and the persisted
+/// full BLAKE3 "where already persisted". A preview is an interactive screen, so
+/// the reads are bounded to the ones that can actually decide something:
+///
+/// - **Size and the stored file signature**: one `stat` per destination file. An
+///   external `mv` preserves the mtime, so the signature the catalog already
+///   holds is real evidence that costs nothing.
+/// - **The sampled head+tail proof**: read for a destination file only when some
+///   tracked file of the same size still has a readable source to compare
+///   against. With the source gone — the ordinary US3 case — there is nothing to
+///   compare a sample to, so reading one would be pure cost.
+/// - **The full BLAKE3**: read only when several destination files share a size
+///   and a tracked file of that size carries a current persisted hash. That is
+///   the one case where hashing turns an ambiguity into an answer; hashing a
+///   library to render a preview is not something a preview may do.
+///
+/// Everything not read stays absent, and absent evidence never resolves
+/// anything on its own — the matcher's floor is size plus structural identity,
+/// and it refuses rather than guesses (FR-052).
+async fn account_for_adoption(
+    destination_folder: &Path,
+    source_folder: Option<&Path>,
+    media_files: &[crate::TitleMediaFile],
+) -> Option<crate::location::adoption::TitleAdoptionAccounting> {
+    let destination_files = walk_destination_files(destination_folder).await?;
+
+    let mut tracked: Vec<TrackedMediaFact> = Vec::with_capacity(media_files.len());
+    for media_file in media_files {
+        let path = stored_path_to_path_buf(&media_file.file_path);
+        let mut fact = TrackedMediaFact::new(
+            media_file.id.clone(),
+            media_file.file_path.clone(),
+            media_file.size_bytes.max(0) as u64,
+        )
+        .with_full_blake3(FullHash::from_persisted(media_file.content_hashes.as_ref()))
+        .with_signature(stored_file_signature(media_file));
+        if let Some(relative) = source_folder
+            .and_then(|folder| path.strip_prefix(folder).ok())
+            .map(|relative| relative.to_string_lossy().to_string())
+        {
+            fact = fact.with_relative_path(relative);
+        }
+        // The source is usually gone — that is the story — so a proof is read
+        // only when there is something to read (FR-053).
+        if tokio::fs::symlink_metadata(&path).await.is_ok() {
+            fact = fact.with_sampled_proof(sampled_proof_of(&path).await);
+        }
+        tracked.push(fact);
+    }
+
+    let mut sizes_with_source_proof: BTreeMap<u64, bool> = BTreeMap::new();
+    let mut sizes_with_persisted_hash: BTreeMap<u64, bool> = BTreeMap::new();
+    for fact in &tracked {
+        if fact.sampled_proof.is_some() {
+            sizes_with_source_proof.insert(fact.size_bytes, true);
+        }
+        if fact.full_blake3.as_known().is_some() {
+            sizes_with_persisted_hash.insert(fact.size_bytes, true);
+        }
+    }
+    let mut destination_size_counts: BTreeMap<u64, usize> = BTreeMap::new();
+    for file in &destination_files {
+        *destination_size_counts.entry(file.size_bytes).or_insert(0) += 1;
+    }
+
+    let mut destination = Vec::with_capacity(destination_files.len());
+    for file in destination_files {
+        let mut fact = DestinationFileFact::new(
+            path_to_stored_string(&file.path),
+            file.size_bytes,
+        )
+        .with_signature(file.signature.clone());
+        if let Some(relative) = file.relative_path.clone() {
+            fact = fact.with_relative_path(relative);
+        }
+        if sizes_with_source_proof.contains_key(&file.size_bytes) {
+            fact = fact.with_sampled_proof(sampled_proof_of(&file.path).await);
+        } else if sizes_with_persisted_hash.contains_key(&file.size_bytes)
+            && destination_size_counts
+                .get(&file.size_bytes)
+                .copied()
+                .unwrap_or(0)
+                > 1
+        {
+            if let Ok(hashes) =
+                crate::location::verify::hash_existing_file(&file.path).await
+            {
+                fact = fact.with_full_blake3(FullHash::known(hashes.full_blake3));
+            }
+        }
+        destination.push(fact);
+    }
+
+    Some(match_title_adoption(&tracked, &destination))
+}
+
+/// One file the destination walk found, before it becomes a matcher fact.
+struct DestinationScanFile {
+    path: PathBuf,
+    relative_path: Option<String>,
+    size_bytes: u64,
+    signature: Option<crate::file_source_signature::FileSourceSignature>,
+}
+
+/// Everything beneath the destination folder, at every depth.
+///
+/// The recursion matters: a title moved by hand keeps its season folders, and a
+/// listing one level deep would report every episode missing.
+async fn walk_destination_files(folder: &Path) -> Option<Vec<DestinationScanFile>> {
+    let root = folder.to_path_buf();
+    let walked = tokio::task::spawn_blocking({
+        let root = root.clone();
+        move || {
+            crate::library::filesystem_walk::FilesystemWalker::new()
+                .skip_unreadable_subdirectories()
+                .skip_symlinked_directories()
+                .confine_to_root()
+                .walk(&root)
+        }
+    })
+    .await
+    .ok()?
+    .ok()?;
+
+    let mut files = Vec::new();
+    for listing in walked {
+        for path in listing.files {
+            let Ok(metadata) = tokio::fs::symlink_metadata(&path).await else {
+                continue;
+            };
+            if !metadata.is_file() {
+                continue;
+            }
+            let relative = path
+                .strip_prefix(&root)
+                .ok()
+                .map(|relative| relative.to_string_lossy().to_string());
+            files.push(DestinationScanFile {
+                relative_path: relative,
+                size_bytes: metadata.len(),
+                signature: crate::file_source_signature::file_source_signature_from_metadata(
+                    &metadata,
+                )
+                .ok(),
+                path,
+            });
+        }
+    }
+    files.sort_by(|left, right| left.path.cmp(&right.path));
+    Some(files)
+}
+
+/// The signature the catalog stored for a media file, when it stored one this
+/// build understands. A half-written pair proves nothing and reads back absent.
+fn stored_file_signature(
+    media_file: &crate::TitleMediaFile,
+) -> Option<crate::file_source_signature::FileSourceSignature> {
+    match (
+        media_file.source_signature_scheme.as_deref(),
+        media_file.source_signature_value.as_deref(),
+    ) {
+        (Some(scheme), Some(value))
+            if scheme == crate::file_source_signature::MEDIA_FILE_SOURCE_SIGNATURE_SCHEME =>
+        {
+            Some(crate::file_source_signature::FileSourceSignature {
+                scheme: scheme.to_string(),
+                value: value.to_string(),
+            })
+        }
+        _ => None,
+    }
+}
+
+async fn sampled_proof_of(path: &Path) -> Option<scryer_domain::ImportContentProof> {
+    let path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || crate::fs_integrity::import_content_proof(&path))
+        .await
+        .ok()?
+        .ok()
 }
 
 /// What already sits in the destination folder, for the collision planner

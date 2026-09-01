@@ -1020,9 +1020,10 @@ async fn an_operation_whose_root_is_not_available_is_left_interrupted_rather_tha
     );
 }
 
-/// FR-033 across operation types: only the two types the root-move runner
-/// walks (`root_move`, `cross_library_transfer`) resume through it. The other
-/// four are planned types with no producer today — nothing writes such a row —
+/// FR-033 across operation types: only the three types this runner walks
+/// (`root_move`, `cross_library_transfer`, and — since T051 — `adoption`, which
+/// is the same plan proven instead of written) resume through it. The remaining
+/// three are planned types with no producer today — nothing writes such a row —
 /// but a row that arrived from a later build, or from a workflow added after
 /// this one, must not be walked under root-move rules just because the runner
 /// is the only one there is. It declines, naming the type.
@@ -1034,7 +1035,6 @@ async fn an_operation_type_the_root_move_runner_does_not_walk_declines_resume() 
         LocationOperationType::FolderReassignment,
         LocationOperationType::RootChange,
         LocationOperationType::RootConsolidation,
-        LocationOperationType::Adoption,
     ]
     .into_iter()
     .enumerate()
