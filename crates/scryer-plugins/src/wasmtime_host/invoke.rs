@@ -12,24 +12,17 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use scryer_application::{AppError, AppResult};
+use scryer_plugin_sdk::SubtitleSyncPluginProcessResponse;
 use scryer_plugin_sdk::command::{PluginCommandRequest, PluginCommandResponse};
-use scryer_plugin_sdk::{ArchivePluginProcessResponse, SubtitleSyncPluginProcessResponse};
 use wasmtime::{Linker, Module, Store};
 use wasmtime_wasi::p2::pipe::MemoryOutputPipe;
 
 use crate::runtime_backing::PluginInstanceSpec;
 use crate::wasmtime_host::sandbox::{self, HostCtx, HostLimits, PreparedSandbox};
-use crate::wasmtime_host::{command_host, crypto_host, engine, error, module_cache};
+use crate::wasmtime_host::{command_host, engine, error, module_cache};
 
 /// Amount of guest stderr forwarded to tracing / attached to error messages.
 const STDERR_TAIL_BYTES: usize = 8 * 1024;
-
-/// Identifying context for one invocation (tracing span + error messages).
-pub(crate) struct ArchiveInvocation<'a> {
-    pub(crate) plugin_id: &'a str,
-    pub(crate) plugin_version: &'a str,
-    pub(crate) operation: &'a str,
-}
 
 /// Identifying context for one subtitle-sync command invocation.
 pub(crate) struct SubtitleSyncInvocation<'a> {
@@ -58,153 +51,6 @@ async fn prepare_command_module(
             timeout.as_millis()
         )),
     }
-}
-
-/// Instantiate the archive guest and run one request→response exchange.
-pub(crate) async fn process_archive(
-    spec: &PluginInstanceSpec,
-    request_json: &str,
-    invocation: ArchiveInvocation<'_>,
-) -> AppResult<ArchivePluginProcessResponse> {
-    let span = tracing::info_span!(
-        "archive_plugin_invoke",
-        plugin_id = invocation.plugin_id,
-        plugin_version = invocation.plugin_version,
-        operation = invocation.operation,
-    );
-    let _enter = span.enter();
-
-    let started = Instant::now();
-    let request_bytes = request_json.as_bytes().to_vec();
-    let request_len = request_bytes.len();
-
-    let engine = engine::shared_async_engine();
-
-    let module = prepare_command_module(Arc::clone(&spec.wasm), spec.timeout)
-        .await
-        .map_err(|error| {
-            AppError::Repository(format!(
-                "archive extractor plugin {}@{} failed to prepare: {error}",
-                invocation.plugin_id, invocation.plugin_version
-            ))
-        })?;
-
-    let mut linker: Linker<HostCtx> = Linker::new(engine);
-    wasmtime_wasi::p1::add_to_linker_async(&mut linker, |ctx: &mut HostCtx| &mut ctx.wasi)
-        .map_err(|error| {
-            AppError::Repository(format!(
-                "failed to wire WASI preview1 for archive plugin: {error:#}"
-            ))
-        })?;
-    crypto_host::add_to_linker(&mut linker).map_err(|error| {
-        AppError::Repository(format!(
-            "failed to register archive crypto host functions: {error:#}"
-        ))
-    })?;
-    let PreparedSandbox {
-        wasi,
-        stdout,
-        stderr,
-        _scratch,
-    } = sandbox::build_sandbox(&spec.preopens, request_bytes)?;
-
-    let mut store = Store::new(
-        engine,
-        HostCtx::new(wasi, HostLimits::new(spec.memory_max_bytes)),
-    );
-    store.limiter(|ctx: &mut HostCtx| &mut ctx.limits);
-    store.set_epoch_deadline(engine::deadline_ticks(spec.timeout));
-
-    let instance = match linker.instantiate_async(&mut store, &module).await {
-        Ok(instance) => instance,
-        Err(error) => {
-            let denied = store.data().limits.memory_denied;
-            let failure = error::classify_error(&error, denied);
-            return Err(finish_error(
-                &invocation,
-                spec.timeout,
-                &tail_of(&stderr),
-                &failure,
-                started,
-                request_len,
-            ));
-        }
-    };
-
-    let start = match instance.get_typed_func::<(), ()>(&mut store, "_start") {
-        Ok(start) => start,
-        Err(error) => {
-            let failure = error::protocol_failure(format!(
-                "guest is not a wasip1 command (missing _start): {error:#}"
-            ));
-            return Err(finish_error(
-                &invocation,
-                spec.timeout,
-                &tail_of(&stderr),
-                &failure,
-                started,
-                request_len,
-            ));
-        }
-    };
-
-    let call_result = start.call_async(&mut store, ()).await;
-    let denied = store.data().limits.memory_denied;
-    let stdout_bytes = stdout.contents();
-    let stderr_tail = tail_of(&stderr);
-
-    if !stderr_tail.is_empty() {
-        tracing::debug!(
-            target: "scryer_plugins::archive",
-            plugin_id = invocation.plugin_id,
-            stderr = stderr_tail.as_str(),
-            "archive plugin stderr",
-        );
-    }
-
-    if let Err(failure) = error::interpret_start_result(call_result, denied) {
-        return Err(finish_error(
-            &invocation,
-            spec.timeout,
-            &stderr_tail,
-            &failure,
-            started,
-            request_len,
-        ));
-    }
-
-    let response: ArchivePluginProcessResponse = match serde_json::from_slice(&stdout_bytes) {
-        Ok(response) => response,
-        Err(error) => {
-            let failure = error::protocol_failure(format!(
-                "stdout was not a valid ArchivePluginProcessResponse JSON: {error}"
-            ));
-            return Err(finish_error(
-                &invocation,
-                spec.timeout,
-                &stderr_tail,
-                &failure,
-                started,
-                request_len,
-            ));
-        }
-    };
-
-    let duration_ms = started.elapsed().as_millis() as u64;
-    let response_bytes = stdout_bytes.len();
-    tracing::debug!(
-        target: "scryer_plugins::archive",
-        plugin_id = invocation.plugin_id,
-        plugin_version = invocation.plugin_version,
-        operation = invocation.operation,
-        duration_ms,
-        request_bytes = request_len,
-        response_bytes,
-        disposition = "ok",
-        "archive plugin invocation complete",
-    );
-
-    Ok(response)
 }
 
 /// Instantiate a marker-selected native command and run one typed exchange.
@@ -495,37 +341,6 @@ pub(crate) async fn process_subtitle_sync(
     Ok(response)
 }
 
-/// Log the failing disposition and build the operator-facing `AppError`.
-fn finish_error(
-    invocation: &ArchiveInvocation<'_>,
-    budget: Duration,
-    stderr_tail: &str,
-    failure: &error::RunFailure,
-    started: Instant,
-    request_len: usize,
-) -> AppError {
-    let duration_ms = started.elapsed().as_millis() as u64;
-    let disposition = format!("{:?}", failure.kind);
-    tracing::debug!(
-        target: "scryer_plugins::archive",
-        plugin_id = invocation.plugin_id,
-        plugin_version = invocation.plugin_version,
-        operation = invocation.operation,
-        duration_ms,
-        request_bytes = request_len,
-        disposition,
-        "archive plugin invocation failed",
-    );
-    let ctx = error::InvocationContext {
-        plugin_id: invocation.plugin_id,
-        plugin_version: invocation.plugin_version,
-        operation: invocation.operation,
-        budget,
-        stderr_tail,
-    };
-    error::to_app_error(failure, &ctx)
-}
-
 fn finish_command_error(
     invocation: &CommandInvocation<'_>,
     budget: Duration,
@@ -726,15 +541,15 @@ mod tests {
                 memory_max_bytes: None,
                 command_host: crate::wasmtime_host::command_host::CommandHost::disabled(),
             };
-            let invocation = ArchiveInvocation {
+            let invocation = SubtitleSyncInvocation {
                 plugin_id: "sleepy",
                 plugin_version: "1.0.0",
-                operation: "Inspect",
+                operation: "Sync",
             };
 
             let timed = tokio::time::timeout(
                 Duration::from_millis(100),
-                process_archive(&spec, "{}", invocation),
+                process_subtitle_sync(&spec, "{}", invocation),
             )
             .await;
 

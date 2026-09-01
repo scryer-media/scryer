@@ -3,7 +3,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use scryer_application::{AppError, AppResult};
-use wasmtime::{Caller, ExternType, Instance, Linker, Store, ValType};
+use scryer_plugin_sdk::host::HOST_ABI_MODULE;
+use wasmtime::{Caller, ExternType, Instance, Linker, Memory, Store, ValType};
 use wasmtime_wasi::{FsPerms, WasiCtxBuilder};
 
 use crate::plugin_http_host::{
@@ -13,7 +14,10 @@ use crate::plugin_http_host::{
 use crate::process_host::{PROCESS_HOST_NAMESPACE, ProcessHost};
 use crate::runtime_backing::PreopenSpec;
 use crate::socket_host::{SOCKET_HOST_NAMESPACE, SocketHost};
-use crate::wasmtime_host::{engine, module_cache};
+use crate::wasmtime_host::{
+    command_host::{CommandHost, MAX_HOST_REQUEST_BYTES},
+    engine, module_cache,
+};
 
 const DEFAULT_LEGACY_MEMORY_CAP_BYTES: usize = 512 * 1024 * 1024;
 const DEFAULT_LEGACY_TABLE_ELEMENTS: usize = 1_000_000;
@@ -34,6 +38,7 @@ pub(crate) struct LegacyPluginSpec {
     pub(crate) destination_cooldown_key: Option<String>,
     pub(crate) socket_host: SocketHost,
     pub(crate) process_host: ProcessHost,
+    pub(crate) command_host: CommandHost,
     pub(crate) plugin_id: String,
 }
 
@@ -52,6 +57,7 @@ impl LegacyPluginSpec {
             destination_cooldown_key: None,
             socket_host: SocketHost::disabled(),
             process_host: ProcessHost::disabled(),
+            command_host: CommandHost::disabled(),
             plugin_id: plugin_id.into(),
         }
     }
@@ -72,6 +78,8 @@ pub(crate) fn validate_legacy_module(wasm: &[u8], required_exports: &[&str]) -> 
         .map_err(|error| format!("failed to wire WASI preview1: {error:#}"))?;
     add_extism_compat_to_linker(&mut linker)
         .map_err(|error| format!("failed to wire Extism compatibility ABI: {error:#}"))?;
+    add_command_host_to_linker(&mut linker)
+        .map_err(|error| format!("failed to wire typed host-service ABI: {error:#}"))?;
     linker
         .instantiate_pre(&module)
         .map_err(|error| format!("legacy plugin imports do not match the host ABI: {error:#}"))?;
@@ -119,6 +127,9 @@ impl LegacyPlugin {
             AppError::Repository(format!(
                 "failed to wire Extism compatibility ABI: {error:#}"
             ))
+        })?;
+        add_command_host_to_linker(&mut linker).map_err(|error| {
+            AppError::Repository(format!("failed to wire typed host-service ABI: {error:#}"))
         })?;
 
         let wasi = build_legacy_wasi(&spec.preopens)?;
@@ -256,6 +267,7 @@ struct LegacyHostState {
     http: PluginHttpHost,
     socket_host: SocketHost,
     process_host: ProcessHost,
+    command_host: CommandHost,
     plugin_id: String,
     timeout: Duration,
     call_started_at: Instant,
@@ -291,6 +303,7 @@ impl LegacyHostState {
             ),
             socket_host: spec.socket_host,
             process_host: spec.process_host,
+            command_host: spec.command_host,
             plugin_id: spec.plugin_id,
             timeout: spec.timeout,
             call_started_at: Instant::now(),
@@ -536,6 +549,137 @@ impl ExchangeMemory {
     fn store_u64(&mut self, offset: u64, value: i64) {
         let _ = self.write(offset, &(value as u64).to_le_bytes());
     }
+}
+
+fn add_command_host_to_linker(linker: &mut Linker<LegacyHostState>) -> wasmtime::Result<()> {
+    linker.func_wrap(
+        HOST_ABI_MODULE,
+        "scryer_host_call",
+        legacy_command_host_call,
+    )?;
+    linker.func_wrap(
+        HOST_ABI_MODULE,
+        "scryer_host_response_len",
+        legacy_command_host_response_len,
+    )?;
+    linker.func_wrap(
+        HOST_ABI_MODULE,
+        "scryer_host_response_read",
+        legacy_command_host_response_read,
+    )?;
+    linker.func_wrap(
+        HOST_ABI_MODULE,
+        "scryer_host_response_drop",
+        legacy_command_host_response_drop,
+    )?;
+    Ok(())
+}
+
+fn legacy_command_host_call(
+    mut caller: Caller<'_, LegacyHostState>,
+    request_ptr: i32,
+    request_len: i32,
+) -> i32 {
+    if usize::try_from(request_len)
+        .ok()
+        .is_none_or(|len| len > MAX_HOST_REQUEST_BYTES)
+    {
+        return 0;
+    }
+    let Ok(request) = legacy_guest_memory_read(&mut caller, request_ptr, request_len) else {
+        return 0;
+    };
+    caller
+        .data()
+        .command_host
+        .call(&request)
+        .ok()
+        .and_then(|handle| i32::try_from(handle).ok())
+        .unwrap_or(0)
+}
+
+fn legacy_command_host_response_len(caller: Caller<'_, LegacyHostState>, handle: i32) -> i32 {
+    let Ok(handle) = u32::try_from(handle) else {
+        return -1;
+    };
+    caller
+        .data()
+        .command_host
+        .response_len(handle)
+        .and_then(|len| i32::try_from(len).ok())
+        .unwrap_or(-1)
+}
+
+fn legacy_command_host_response_read(
+    mut caller: Caller<'_, LegacyHostState>,
+    handle: i32,
+    destination_ptr: i32,
+    destination_len: i32,
+) -> i32 {
+    let Ok(handle) = u32::try_from(handle) else {
+        return -1;
+    };
+    let Some(response) = caller.data().command_host.response(handle) else {
+        return -1;
+    };
+    if response.len() > usize::try_from(destination_len).unwrap_or(0)
+        || legacy_guest_memory_write(&mut caller, destination_ptr, &response).is_err()
+    {
+        return -1;
+    }
+    i32::try_from(response.len()).unwrap_or(-1)
+}
+
+fn legacy_command_host_response_drop(mut caller: Caller<'_, LegacyHostState>, handle: i32) {
+    if let Ok(handle) = u32::try_from(handle) {
+        caller.data_mut().command_host.drop_response(handle);
+    }
+}
+
+fn legacy_guest_memory(caller: &mut Caller<'_, LegacyHostState>) -> Result<Memory, String> {
+    caller
+        .get_export("memory")
+        .and_then(|export| export.into_memory())
+        .ok_or_else(|| "legacy plugin did not export memory".to_string())
+}
+
+fn legacy_guest_memory_read(
+    caller: &mut Caller<'_, LegacyHostState>,
+    pointer: i32,
+    len: i32,
+) -> Result<Vec<u8>, String> {
+    let start = usize::try_from(pointer).map_err(|_| "negative memory pointer".to_string())?;
+    let len = usize::try_from(len).map_err(|_| "negative memory length".to_string())?;
+    let end = start
+        .checked_add(len)
+        .ok_or_else(|| "memory range overflow".to_string())?;
+    let memory = legacy_guest_memory(caller)?;
+    if end > memory.data_size(&*caller) {
+        return Err("memory range is out of bounds".to_string());
+    }
+    let mut bytes = vec![0; len];
+    memory
+        .read(&*caller, start, &mut bytes)
+        .map_err(|error| format!("failed to read guest memory: {error}"))?;
+    Ok(bytes)
+}
+
+fn legacy_guest_memory_write(
+    caller: &mut Caller<'_, LegacyHostState>,
+    pointer: i32,
+    bytes: &[u8],
+) -> Result<(), String> {
+    let start = usize::try_from(pointer).map_err(|_| "negative memory pointer".to_string())?;
+    let end = start
+        .checked_add(bytes.len())
+        .ok_or_else(|| "memory range overflow".to_string())?;
+    let memory = legacy_guest_memory(caller)?;
+    if end > memory.data_size(&*caller) {
+        return Err("memory range is out of bounds".to_string());
+    }
+    memory
+        .write(&mut *caller, start, bytes)
+        .map_err(|error| format!("failed to write guest memory: {error}"))
 }
 
 fn add_extism_compat_to_linker(linker: &mut Linker<LegacyHostState>) -> wasmtime::Result<()> {
@@ -981,6 +1125,19 @@ mod tests {
         )
         .unwrap();
         validate_legacy_module(&valid, &["scryer_describe"]).expect("valid legacy module");
+
+        let typed_host_imports = wat::parse_str(
+            r#"(module
+                (import "scryer:host/v1" "scryer_host_call" (func (param i32 i32) (result i32)))
+                (import "scryer:host/v1" "scryer_host_response_len" (func (param i32) (result i32)))
+                (import "scryer:host/v1" "scryer_host_response_read" (func (param i32 i32 i32) (result i32)))
+                (import "scryer:host/v1" "scryer_host_response_drop" (func (param i32)))
+                (memory (export "memory") 1)
+                (func (export "scryer_describe") (result i32) (i32.const 0)))"#,
+        )
+        .unwrap();
+        validate_legacy_module(&typed_host_imports, &["scryer_describe"])
+            .expect("legacy modules may import the typed host-service ABI");
 
         let unknown_import = wat::parse_str(
             r#"(module

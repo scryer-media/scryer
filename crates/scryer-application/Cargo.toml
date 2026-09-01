@@ -12,7 +12,6 @@ runtime = [
     "runtime-plugin-trust",
 ]
 runtime-archives = [
-    "dep:lzma-rs",
     "dep:par2-rs",
     "dep:zstd",
 ]
@@ -66,7 +65,6 @@ brotli = { version = "8", optional = true }
 tar = "0.4"
 flate2 = "1"
 zstd = { version = "0.13", default-features = false, optional = true }
-lzma-rs = { version = "0.3", optional = true }
 par2-rs = { version = "0.7.1", optional = true }
 tempfile = "3"
 chardetng = { version = "1", optional = true }

@@ -10,7 +10,7 @@ use scryer_plugin_sdk::{
 };
 
 use crate::runtime_backing::{PluginInstanceSpec, PluginRuntimeBacking, PreopenSpec};
-use crate::wasmtime_host::{ArchiveInvocation, process_archive};
+use crate::wasmtime_host::{ArchiveInvocation, process_archive_component};
 
 const GUEST_SOURCE_ROOT: &str = "/scryer/source";
 const GUEST_OUTPUT_ROOT: &str = "/scryer/output";
@@ -25,7 +25,11 @@ pub struct WasmArchiveExtractorClient {
 
 impl WasmArchiveExtractorClient {
     pub fn new(wasm_bytes: Vec<u8>, descriptor: PluginDescriptor) -> AppResult<Self> {
-        let backing = PluginRuntimeBacking::for_descriptor(&descriptor);
+        // Classify from the artifact, not the descriptor: a descriptor alone
+        // cannot tell a component from the removed core-module build, and the
+        // upgrade diagnostic belongs here rather than at first extraction.
+        let backing = PluginRuntimeBacking::for_artifact(&descriptor, &wasm_bytes)
+            .map_err(AppError::Repository)?;
         Ok(Self {
             wasm_bytes: Arc::new(wasm_bytes),
             plugin_id: descriptor.id,
@@ -41,16 +45,18 @@ impl ArchiveExtractorClient for WasmArchiveExtractorClient {
         &self,
         request: ArchivePluginProcessRequest,
     ) -> AppResult<ArchivePluginProcessResponse> {
-        // The archive kind runs exclusively on the native wasmtime host (RFC
-        // §7.2.6): the raw crypto ABI belongs to it and to nothing else.
+        // The archive kind runs exclusively on the WASI Preview 2 component
+        // host: the crypto interface belongs to it and to nothing else.
         match self.backing {
-            PluginRuntimeBacking::WasmtimeArchive => {}
+            PluginRuntimeBacking::WasmtimeArchiveComponent => {}
             PluginRuntimeBacking::LegacyReactor
             | PluginRuntimeBacking::WasmtimeSubtitleSync
             | PluginRuntimeBacking::WasmtimeCommand
-            | PluginRuntimeBacking::WasmtimeIndexerComponent => {
+            | PluginRuntimeBacking::WasmtimeIndexerComponent
+            | PluginRuntimeBacking::WasmtimeSubtitleComponent => {
                 return Err(AppError::Repository(
-                    "archive extractor plugin requires the wasmtime runtime backing".to_string(),
+                    "archive extractor plugin requires the WASI component runtime backing"
+                        .to_string(),
                 ));
             }
         }
@@ -77,7 +83,7 @@ impl ArchiveExtractorClient for WasmArchiveExtractorClient {
                     plugin_version: &plugin_version,
                     operation,
                 };
-                process_archive(&spec, &input, invocation).await
+                process_archive_component(&spec, &input, invocation).await
             },
         )
         .await
@@ -174,6 +180,9 @@ impl PreparedArchiveRequest {
             // None = the host's provisional default cap;
             // operator-overridable.
             memory_max_bytes: None,
+            // Archive extractors are the terminal delegation boundary. Keeping
+            // host services disabled prevents extractor -> host -> extractor
+            // recursion even when the invoking plugin used host extraction.
             command_host: crate::wasmtime_host::command_host::CommandHost::disabled(),
         }
     }

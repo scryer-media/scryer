@@ -12,29 +12,21 @@ use scryer_plugin_sdk::{EXPORT_DESCRIBE, PluginDescriptor};
 use wasmtime::{ExternType, Linker, Module, Store};
 
 use crate::wasmtime_host::sandbox::{self, BareSandbox, HostCtx, HostLimits};
-use crate::wasmtime_host::{command_host, crypto_host, engine, error, module_cache};
+use crate::wasmtime_host::{command_host, engine, error, module_cache};
 
 /// Describe runs reuse the 10s describe budget of the Extism path.
 const DESCRIBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
-pub(crate) fn validate_archive_module(wasm: &[u8]) -> Result<(), String> {
-    validate_command_module_with_crypto(wasm, true, "archive extractor")
-}
-
 pub(crate) fn validate_subtitle_sync_module(wasm: &[u8]) -> Result<(), String> {
-    validate_command_module_with_crypto(wasm, false, "subtitle sync")
+    validate_command_module(wasm, "subtitle sync")
 }
 
 /// Validate the common wasip1 command shape used by marker-selected artifacts.
+///
+/// The archive extractor no longer has a core-module form: it is a WASI
+/// Preview 2 component validated by `validate_archive_component`, so the
+/// crypto host ABI this function once registered for it is gone with it.
 pub(crate) fn validate_command_module(wasm: &[u8], kind: &str) -> Result<(), String> {
-    validate_command_module_with_crypto(wasm, false, kind)
-}
-
-fn validate_command_module_with_crypto(
-    wasm: &[u8],
-    with_crypto: bool,
-    kind: &str,
-) -> Result<(), String> {
     let engine = engine::shared_async_engine();
     let module = module_cache::command_module(wasm)
         .map_err(|error| format!("failed to compile {kind} plugin WASM: {error}"))?;
@@ -44,11 +36,6 @@ fn validate_command_module_with_crypto(
         .map_err(|error| format!("failed to wire WASI preview1 for {kind} plugin: {error:#}"))?;
     command_host::add_to_linker(&mut linker)
         .map_err(|error| format!("failed to register native command host functions: {error:#}"))?;
-    if with_crypto {
-        crypto_host::add_to_linker(&mut linker).map_err(|error| {
-            format!("failed to register archive crypto host functions: {error:#}")
-        })?;
-    }
     linker
         .instantiate_pre(&module)
         .map_err(|error| format!("{kind} plugin imports do not match the host ABI: {error:#}"))?;
@@ -136,13 +123,6 @@ fn run_describe(module: &Module) -> AppResult<PluginDescriptor> {
             "failed to register native command host functions for describe: {error:#}"
         ))
     })?;
-    // The command binary imports the §5 crypto ABI even though describe does not
-    // call it — the imports must be satisfied to instantiate at all.
-    crypto_host::add_to_linker(&mut linker).map_err(|error| {
-        AppError::Repository(format!(
-            "failed to register crypto host for archive describe: {error:#}"
-        ))
-    })?;
     let BareSandbox {
         wasi,
         stdout,
@@ -216,7 +196,6 @@ mod tests {
                 (func (export "_start")))"#,
         )
         .unwrap();
-        validate_archive_module(&valid).expect("valid archive command");
         validate_subtitle_sync_module(&valid).expect("valid subtitle command");
 
         let native_host_imports = wat::parse_str(
@@ -239,8 +218,8 @@ mod tests {
                 (func (export "_start")))"#,
         )
         .unwrap();
-        let error =
-            validate_archive_module(&unknown_import).expect_err("unknown host import must fail");
+        let error = validate_subtitle_sync_module(&unknown_import)
+            .expect_err("unknown host import must fail");
         assert!(error.contains("imports do not match"), "{error}");
 
         let wrong_start = wat::parse_str(
@@ -249,8 +228,8 @@ mod tests {
                 (func (export "_start") (param i32)))"#,
         )
         .unwrap();
-        let error =
-            validate_archive_module(&wrong_start).expect_err("wrong _start signature must fail");
+        let error = validate_subtitle_sync_module(&wrong_start)
+            .expect_err("wrong _start signature must fail");
         assert!(error.contains("() -> ()"), "{error}");
     }
 
@@ -262,8 +241,8 @@ mod tests {
                 (func (export "_start")))"#,
         )
         .unwrap();
-        let error =
-            validate_archive_module(&threads).expect_err("threads are disabled by the host engine");
+        let error = validate_subtitle_sync_module(&threads)
+            .expect_err("threads are disabled by the host engine");
         assert!(error.contains("compile"), "{error}");
     }
 

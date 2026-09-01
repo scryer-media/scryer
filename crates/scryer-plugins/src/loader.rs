@@ -129,10 +129,12 @@ fn module_flavor_for_artifact(
     Ok(
         match PluginRuntimeBacking::for_artifact(descriptor, wasm)? {
             PluginRuntimeBacking::LegacyReactor => ModuleFlavor::LegacyReactor,
-            PluginRuntimeBacking::WasmtimeArchive
-            | PluginRuntimeBacking::WasmtimeSubtitleSync
-            | PluginRuntimeBacking::WasmtimeCommand => ModuleFlavor::Command,
+            PluginRuntimeBacking::WasmtimeSubtitleSync | PluginRuntimeBacking::WasmtimeCommand => {
+                ModuleFlavor::Command
+            }
             PluginRuntimeBacking::WasmtimeIndexerComponent => ModuleFlavor::IndexerComponent,
+            PluginRuntimeBacking::WasmtimeArchiveComponent => ModuleFlavor::ArchiveComponent,
+            PluginRuntimeBacking::WasmtimeSubtitleComponent => ModuleFlavor::SubtitleComponent,
         },
     )
 }
@@ -498,6 +500,7 @@ pub struct WasmIndexerPluginProvider {
     plugins: HashMap<String, LoadedPlugin>,
     aliases: HashMap<String, String>,
     indexer_error_recorder: Arc<dyn IndexerErrorRecorder>,
+    archive_provider: Option<Arc<dyn ArchiveExtractorPluginProvider>>,
 }
 
 impl WasmIndexerPluginProvider {
@@ -507,6 +510,7 @@ impl WasmIndexerPluginProvider {
             plugins: HashMap::new(),
             aliases: HashMap::new(),
             indexer_error_recorder: Arc::new(NullIndexerErrorRecorder),
+            archive_provider: None,
         }
     }
 
@@ -515,6 +519,15 @@ impl WasmIndexerPluginProvider {
         indexer_error_recorder: Arc<dyn IndexerErrorRecorder>,
     ) -> Self {
         self.indexer_error_recorder = indexer_error_recorder;
+        self
+    }
+
+    /// Give this provider's plugins the host-owned archive-extraction service.
+    pub fn with_archive_extractor_provider(
+        mut self,
+        archive_provider: Arc<dyn ArchiveExtractorPluginProvider>,
+    ) -> Self {
+        self.archive_provider = Some(archive_provider);
         self
     }
 
@@ -901,6 +914,7 @@ impl IndexerPluginProvider for WasmIndexerPluginProvider {
                     config.clone(),
                     indexer_proxy_config.cloned(),
                     Arc::clone(&self.indexer_error_recorder),
+                    self.archive_provider.clone(),
                 )
             }
             PluginRuntimeBacking::LegacyReactor => {
@@ -911,6 +925,7 @@ impl IndexerPluginProvider for WasmIndexerPluginProvider {
                     config.clone(),
                     indexer_proxy_config.cloned(),
                     Arc::clone(&self.indexer_error_recorder),
+                    self.archive_provider.clone(),
                 )
             }
             other => Err(AppError::Repository(format!(
@@ -987,11 +1002,14 @@ impl DynamicPluginProvider {
     }
 
     /// Replace the inner provider. This is called after install/uninstall/toggle.
-    pub fn reload(&self, new_provider: WasmIndexerPluginProvider) {
+    pub fn reload(&self, mut new_provider: WasmIndexerPluginProvider) {
         let mut guard = self
             .inner
             .write()
             .expect("DynamicPluginProvider lock poisoned");
+        // Reloads rebuild the provider from the plugin set alone; the host
+        // services wired in at bootstrap have to survive them.
+        new_provider.archive_provider = guard.archive_provider.clone();
         *guard = new_provider;
         // Clear the client cache — WASM bytes may have changed.
         if let Ok(mut cache) = self.client_cache.lock() {
@@ -1246,6 +1264,7 @@ impl IndexerPluginProvider for DynamicPluginProvider {
 pub struct WasmDownloadClientPluginProvider {
     plugins: HashMap<String, LoadedPlugin>,
     aliases: HashMap<String, String>,
+    archive_provider: Option<Arc<dyn ArchiveExtractorPluginProvider>>,
 }
 
 impl WasmDownloadClientPluginProvider {
@@ -1253,7 +1272,17 @@ impl WasmDownloadClientPluginProvider {
         Self {
             plugins: HashMap::new(),
             aliases: HashMap::new(),
+            archive_provider: None,
         }
+    }
+
+    /// Give this provider's plugins the host-owned archive-extraction service.
+    pub fn with_archive_extractor_provider(
+        mut self,
+        archive_provider: Arc<dyn ArchiveExtractorPluginProvider>,
+    ) -> Self {
+        self.archive_provider = Some(archive_provider);
+        self
     }
 
     pub fn with_external_bytes(self, wasm_bytes: &[u8]) -> Self {
@@ -1361,6 +1390,7 @@ impl WasmDownloadClientPluginProvider {
     fn create_download_client(
         loaded: &LoadedPlugin,
         config: &DownloadClientConfig,
+        archive_provider: Option<Arc<dyn ArchiveExtractorPluginProvider>>,
     ) -> Option<Arc<dyn DownloadClient>> {
         let wasm_bytes = match loaded.materialize_wasm() {
             Ok(wasm_bytes) => wasm_bytes,
@@ -1414,12 +1444,13 @@ impl WasmDownloadClientPluginProvider {
                 loaded.descriptor.clone(),
                 config.id.clone(),
                 config.name.clone(),
-                crate::wasmtime_host::command_host::CommandHost::for_download_client(
+                crate::wasmtime_host::command_host::CommandHost::with_archive_provider(
                     loaded.descriptor.id.clone(),
                     command_config,
                     allowed_hosts,
                     crate::download_client_adapter::DOWNLOAD_CLIENT_PLUGIN_TIMEOUT,
                     None,
+                    archive_provider,
                 ),
             )));
         }
@@ -1459,6 +1490,15 @@ impl WasmDownloadClientPluginProvider {
             }
         }
 
+        spec.command_host = crate::wasmtime_host::command_host::CommandHost::with_archive_provider(
+            loaded.descriptor.id.clone(),
+            spec.config.clone(),
+            spec.allowed_hosts.clone(),
+            spec.timeout,
+            None,
+            archive_provider,
+        );
+
         match LegacyPlugin::instantiate(spec) {
             Ok(plugin) => {
                 let client = WasmDownloadClient::new(
@@ -1486,7 +1526,7 @@ impl DownloadClientPluginProvider for WasmDownloadClientPluginProvider {
     fn client_for_config(&self, config: &DownloadClientConfig) -> Option<Arc<dyn DownloadClient>> {
         let provider = config.client_type.trim().to_ascii_lowercase();
         let loaded = self.get_loaded(&provider)?;
-        Self::create_download_client(loaded, config)
+        Self::create_download_client(loaded, config, self.archive_provider.clone())
     }
 
     fn available_provider_types(&self) -> Vec<String> {
@@ -1580,11 +1620,12 @@ impl DynamicDownloadClientPluginProvider {
         }
     }
 
-    pub fn reload(&self, new_provider: WasmDownloadClientPluginProvider) {
+    pub fn reload(&self, mut new_provider: WasmDownloadClientPluginProvider) {
         let mut guard = self
             .inner
             .write()
             .expect("DynamicDownloadClientPluginProvider lock poisoned");
+        new_provider.archive_provider = guard.archive_provider.clone();
         *guard = new_provider;
         if let Ok(mut cache) = self.client_cache.lock() {
             cache.clear();
@@ -2095,6 +2136,7 @@ pub fn build_download_client_plugin_provider_from_runtime_plugins(
 pub struct WasmSubtitlePluginProvider {
     plugins: HashMap<String, LoadedPlugin>,
     aliases: HashMap<String, String>,
+    archive_provider: Option<Arc<dyn ArchiveExtractorPluginProvider>>,
 }
 
 impl WasmSubtitlePluginProvider {
@@ -2102,7 +2144,16 @@ impl WasmSubtitlePluginProvider {
         Self {
             plugins: HashMap::new(),
             aliases: HashMap::new(),
+            archive_provider: None,
         }
+    }
+
+    pub fn with_archive_extractor_provider(
+        mut self,
+        archive_provider: Arc<dyn ArchiveExtractorPluginProvider>,
+    ) -> Self {
+        self.archive_provider = Some(archive_provider);
+        self
     }
 
     pub fn with_external_bytes(self, wasm_bytes: &[u8]) -> Self {
@@ -2319,11 +2370,12 @@ impl SubtitlePluginProvider for WasmSubtitlePluginProvider {
                 return None;
             }
         };
-        match WasmSubtitleClient::new(
+        match WasmSubtitleClient::new_with_archive_provider(
             wasm_bytes,
             loaded.descriptor.clone(),
             config.clone(),
             host_bindings.clone(),
+            self.archive_provider.clone(),
         ) {
             Ok(client) => Some(Arc::new(client)),
             Err(error) => {
@@ -2430,11 +2482,12 @@ impl DynamicSubtitlePluginProvider {
         }
     }
 
-    pub fn reload(&self, new_provider: WasmSubtitlePluginProvider) {
+    pub fn reload(&self, mut new_provider: WasmSubtitlePluginProvider) {
         let mut guard = self
             .inner
             .write()
             .expect("DynamicSubtitlePluginProvider lock poisoned");
+        new_provider.archive_provider = guard.archive_provider.clone();
         *guard = new_provider;
         if let Ok(mut cache) = self.client_cache.lock() {
             cache.clear();
@@ -3251,8 +3304,8 @@ fn load_from_bytes(wasm_bytes: &[u8]) -> Result<(PluginDescriptor, Vec<u8>), Str
                     &required_exports_for_descriptor(&embedded.descriptor),
                 )?;
             }
-            PluginRuntimeBacking::WasmtimeArchive => {
-                crate::wasmtime_host::validate_archive_module(&bytes)?;
+            PluginRuntimeBacking::WasmtimeArchiveComponent => {
+                crate::wasmtime_host::validate_archive_component(&bytes)?;
             }
             PluginRuntimeBacking::WasmtimeSubtitleSync => {
                 crate::wasmtime_host::validate_subtitle_sync_module(&bytes)?;
@@ -3266,6 +3319,9 @@ fn load_from_bytes(wasm_bytes: &[u8]) -> Result<(PluginDescriptor, Vec<u8>), Str
             PluginRuntimeBacking::WasmtimeIndexerComponent => {
                 crate::wasmtime_host::validate_indexer_component(&bytes)?;
             }
+            PluginRuntimeBacking::WasmtimeSubtitleComponent => {
+                crate::wasmtime_host::validate_subtitle_component(&bytes)?;
+            }
         }
         let descriptor = embedded.descriptor;
         debug!(
@@ -3277,7 +3333,33 @@ fn load_from_bytes(wasm_bytes: &[u8]) -> Result<(PluginDescriptor, Vec<u8>), Str
         return Ok((descriptor, bytes));
     }
 
-    if crate::wasmtime_host::component_host::is_indexer_component(&bytes)? {
+    if crate::wasmtime_host::component_host::is_component_binary(&bytes)? {
+        // An archive or subtitle component can still self-describe through its
+        // world's `describe` export, so a missing custom section is not fatal
+        // for it. The two worlds are told apart by their imports, so the wrong
+        // one fails to link rather than returning a foreign descriptor.
+        for (source, describe) in [
+            (
+                "archive_component",
+                crate::wasmtime_host::archive_component_describe
+                    as fn(&[u8]) -> Result<PluginDescriptor, String>,
+            ),
+            (
+                "subtitle_component",
+                crate::wasmtime_host::subtitle_component_describe
+                    as fn(&[u8]) -> Result<PluginDescriptor, String>,
+            ),
+        ] {
+            if let Ok(descriptor) = describe(&bytes) {
+                debug!(
+                    descriptor_source = source,
+                    descriptor_load_ms = started_at.elapsed().as_millis() as u64,
+                    plugin_id = descriptor.id.as_str(),
+                    "loaded plugin descriptor"
+                );
+                return Ok((descriptor, bytes));
+            }
+        }
         return Err(
             "WASI Preview 2 indexer components must embed a top-level plugin descriptor"
                 .to_string(),
@@ -3351,6 +3433,7 @@ impl PluginDescriptorLoader for WasmPluginDescriptorLoader {
 pub struct WasmNotificationPluginProvider {
     plugins: HashMap<String, LoadedPlugin>,
     aliases: HashMap<String, String>,
+    archive_provider: Option<Arc<dyn ArchiveExtractorPluginProvider>>,
 }
 
 impl WasmNotificationPluginProvider {
@@ -3358,7 +3441,17 @@ impl WasmNotificationPluginProvider {
         Self {
             plugins: HashMap::new(),
             aliases: HashMap::new(),
+            archive_provider: None,
         }
+    }
+
+    /// Give this provider's plugins the host-owned archive-extraction service.
+    pub fn with_archive_extractor_provider(
+        mut self,
+        archive_provider: Arc<dyn ArchiveExtractorPluginProvider>,
+    ) -> Self {
+        self.archive_provider = Some(archive_provider);
+        self
     }
 
     pub fn with_external_bytes(self, wasm_bytes: &[u8]) -> Self {
@@ -3460,6 +3553,7 @@ impl WasmNotificationPluginProvider {
     fn create_notification_client(
         loaded: &LoadedPlugin,
         config: &NotificationChannelConfig,
+        archive_provider: Option<Arc<dyn ArchiveExtractorPluginProvider>>,
     ) -> Option<Arc<dyn NotificationClient>> {
         let wasm_bytes = match loaded.materialize_wasm() {
             Ok(wasm_bytes) => wasm_bytes,
@@ -3498,6 +3592,15 @@ impl WasmNotificationPluginProvider {
             }
         }
 
+        spec.command_host = crate::wasmtime_host::command_host::CommandHost::with_archive_provider(
+            loaded.descriptor.id.clone(),
+            spec.config.clone(),
+            spec.allowed_hosts.clone(),
+            spec.timeout,
+            None,
+            archive_provider,
+        );
+
         match LegacyPlugin::instantiate(spec) {
             Ok(plugin) => {
                 let client = WasmNotificationClient::new(
@@ -3527,7 +3630,7 @@ impl NotificationPluginProvider for WasmNotificationPluginProvider {
     ) -> Option<Arc<dyn NotificationClient>> {
         let provider = config.channel_type.as_str().to_ascii_lowercase();
         let loaded = self.get_loaded(&provider)?;
-        Self::create_notification_client(loaded, config)
+        Self::create_notification_client(loaded, config, self.archive_provider.clone())
     }
 
     fn available_provider_types(&self) -> Vec<String> {
@@ -3618,11 +3721,12 @@ impl DynamicNotificationPluginProvider {
         }
     }
 
-    pub fn reload(&self, new_provider: WasmNotificationPluginProvider) {
+    pub fn reload(&self, mut new_provider: WasmNotificationPluginProvider) {
         let mut guard = self
             .inner
             .write()
             .expect("DynamicNotificationPluginProvider lock poisoned");
+        new_provider.archive_provider = guard.archive_provider.clone();
         *guard = new_provider;
         if let Ok(mut cache) = self.client_cache.lock() {
             cache.clear();
@@ -5002,11 +5106,20 @@ mod tests {
         assert!(error.contains("invalid runtime marker"), "got: {error}");
 
         // An artifact whose descriptor puts it on a non-indexer runtime is a
-        // descriptor/artifact mismatch, not something to run anyway.
+        // descriptor/artifact mismatch, not something to run anyway. The
+        // archive kind is component-only now, so the mismatch has to be built
+        // from a component for that branch to be the one that fires.
         let archive = descriptor("archive_extractor");
+        let archive_component = wat::parse_str("(component)").expect("component WAT must parse");
+        let error = indexer_runtime_backing(&archive, &archive_component)
+            .expect_err("an archive runtime is not valid for an indexer");
+        assert!(error.contains("not valid for an indexer"), "got: {error}");
+
+        // A pre-component archive artifact is refused outright, with the
+        // upgrade instruction rather than a runtime-mismatch message.
         let error =
             indexer_runtime_backing(&archive, &crate::command_abi::test_support::unmarked_wasm())
-                .expect_err("an archive runtime is not valid for an indexer");
-        assert!(error.contains("not valid for an indexer"), "got: {error}");
+                .expect_err("a core-module archive artifact is not usable at all");
+        assert!(error.contains("wasm32-wasip2"), "got: {error}");
     }
 }

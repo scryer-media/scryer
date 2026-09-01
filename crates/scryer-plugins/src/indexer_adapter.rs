@@ -2,8 +2,9 @@ use async_trait::async_trait;
 #[cfg(test)]
 use scryer_application::NullIndexerErrorRecorder;
 use scryer_application::{
-    AppError, AppResult, DownloadSourceKind, IndexerClient, IndexerErrorOperation,
-    IndexerErrorRecorder, IndexerResponseAttributes, IndexerRoutingPlan, IndexerSearchCompletion,
+    AppError, AppResult, ArchiveExtractorPluginProvider, DownloadSourceKind, IndexerClient,
+    IndexerErrorOperation, IndexerErrorRecorder, IndexerResponseAttributes, IndexerRoutingPlan,
+    IndexerSearchCompletion,
     IndexerSearchIncompleteReason as HostIncompleteReason, IndexerSearchPlanCapability,
     IndexerSearchPlanRequest, IndexerSearchPlanSummary, IndexerSearchResponse, IndexerSearchResult,
     IndexerSearchStrategyEvent, IndexerSearchStrategyEventSink, SearchMode, is_valid_magnet_uri,
@@ -251,6 +252,7 @@ impl WasmIndexerClient {
         config: IndexerConfig,
         indexer_proxy_config: Option<IndexerProxyConfig>,
         indexer_error_recorder: Arc<dyn IndexerErrorRecorder>,
+        archive_provider: Option<Arc<dyn ArchiveExtractorPluginProvider>>,
     ) -> Result<Self, AppError> {
         let spec = build_legacy_spec(
             wasm_bytes,
@@ -258,6 +260,7 @@ impl WasmIndexerClient {
             &indexer_name,
             &config,
             indexer_proxy_config,
+            archive_provider,
         );
         let worker = IndexerPluginWorker::start(spec, &descriptor, &indexer_name)?;
 
@@ -299,6 +302,7 @@ impl WasmIndexerClient {
             config,
             indexer_proxy_config,
             Arc::new(NullIndexerErrorRecorder),
+            None,
         )
     }
 
@@ -309,6 +313,7 @@ impl WasmIndexerClient {
         config: IndexerConfig,
         indexer_proxy_config: Option<IndexerProxyConfig>,
         indexer_error_recorder: Arc<dyn IndexerErrorRecorder>,
+        archive_provider: Option<Arc<dyn ArchiveExtractorPluginProvider>>,
     ) -> Result<Self, AppError> {
         let inputs =
             build_runtime_inputs(&descriptor, &indexer_name, &config, indexer_proxy_config);
@@ -323,6 +328,7 @@ impl WasmIndexerClient {
             inputs.destination_cooldown_key,
             inputs.timeout,
             None,
+            archive_provider,
         );
 
         info!(
@@ -1011,6 +1017,7 @@ fn build_legacy_spec(
     indexer_name: &str,
     config: &IndexerConfig,
     indexer_proxy_config: Option<IndexerProxyConfig>,
+    archive_provider: Option<Arc<dyn ArchiveExtractorPluginProvider>>,
 ) -> LegacyPluginSpec {
     let inputs = build_runtime_inputs(descriptor, indexer_name, config, indexer_proxy_config);
     let mut spec = LegacyPluginSpec::new(wasm_bytes, descriptor.id.clone());
@@ -1019,8 +1026,21 @@ fn build_legacy_spec(
     for (key, value) in inputs.config_entries {
         spec.config.insert(key, value);
     }
-    spec.indexer_proxy_policy = inputs.indexer_proxy_policy;
-    spec.destination_cooldown_key = inputs.destination_cooldown_key;
+    spec.indexer_proxy_policy = inputs.indexer_proxy_policy.clone();
+    spec.destination_cooldown_key = inputs.destination_cooldown_key.clone();
+    // Legacy-ABI indexers reach the typed host services through the same
+    // `scryer:host/v1` imports as command guests, so they get the archive
+    // service on the same terms.
+    spec.command_host = CommandHost::for_indexer(
+        descriptor.id.clone(),
+        spec.config.clone(),
+        spec.allowed_hosts.clone(),
+        inputs.indexer_proxy_policy,
+        inputs.destination_cooldown_key,
+        spec.timeout,
+        None,
+        archive_provider,
+    );
     spec
 }
 
@@ -2476,7 +2496,7 @@ mod tests {
             Some(r#"{"base_url":"http://localhost:9696/1","api_path":"/api"}"#.to_string());
 
         let inputs = build_runtime_inputs(&descriptor, "Managed Child", &config, None);
-        let spec = build_legacy_spec(Vec::new(), &descriptor, "Managed Child", &config, None);
+        let spec = build_legacy_spec(Vec::new(), &descriptor, "Managed Child", &config, None, None);
 
         assert_eq!(spec.timeout, inputs.timeout);
         assert_eq!(inputs.timeout, scryer_outbound_http::INDEXER_HTTP_TIMEOUT);

@@ -20,6 +20,8 @@ pub(crate) enum ModuleFlavor {
     LegacyReactor,
     Command,
     IndexerComponent,
+    ArchiveComponent,
+    SubtitleComponent,
 }
 
 impl ModuleFlavor {
@@ -28,6 +30,8 @@ impl ModuleFlavor {
             Self::LegacyReactor => "legacy_reactor",
             Self::Command => "command",
             Self::IndexerComponent => "indexer_component",
+            Self::ArchiveComponent => "archive_component",
+            Self::SubtitleComponent => "subtitle_component",
         }
     }
 }
@@ -141,7 +145,19 @@ pub(crate) fn command_module(wasm: &[u8]) -> Result<Arc<Module>, String> {
 }
 
 pub(crate) fn indexer_component(wasm: &[u8]) -> Result<Arc<Component>, String> {
-    match artifact_for(ModuleFlavor::IndexerComponent, wasm)? {
+    component_for(ModuleFlavor::IndexerComponent, wasm)
+}
+
+pub(crate) fn archive_component(wasm: &[u8]) -> Result<Arc<Component>, String> {
+    component_for(ModuleFlavor::ArchiveComponent, wasm)
+}
+
+pub(crate) fn subtitle_component(wasm: &[u8]) -> Result<Arc<Component>, String> {
+    component_for(ModuleFlavor::SubtitleComponent, wasm)
+}
+
+fn component_for(flavor: ModuleFlavor, wasm: &[u8]) -> Result<Arc<Component>, String> {
+    match artifact_for(flavor, wasm)? {
         CachedArtifact::Component(component) => Ok(component),
         CachedArtifact::Module(_) => unreachable!("component cache returned a core module"),
     }
@@ -159,6 +175,8 @@ pub(crate) fn reset_failed_modules(wasm: &[u8]) {
         ModuleFlavor::LegacyReactor,
         ModuleFlavor::Command,
         ModuleFlavor::IndexerComponent,
+        ModuleFlavor::ArchiveComponent,
+        ModuleFlavor::SubtitleComponent,
     ] {
         let key = ModuleKey {
             flavor,
@@ -322,7 +340,10 @@ fn compile_registered(
     let started = Instant::now();
     let engine = match key.flavor {
         ModuleFlavor::LegacyReactor => engine::shared_engine(),
-        ModuleFlavor::Command | ModuleFlavor::IndexerComponent => engine::shared_async_engine(),
+        ModuleFlavor::Command
+        | ModuleFlavor::IndexerComponent
+        | ModuleFlavor::ArchiveComponent
+        | ModuleFlavor::SubtitleComponent => engine::shared_async_engine(),
     };
     let (cache_hits_before, cache_misses_before) = engine::cache_statistics();
     let result = match key.flavor {
@@ -330,10 +351,14 @@ fn compile_registered(
             .map(Arc::new)
             .map(CachedArtifact::Module)
             .map_err(|error| format!("failed to compile plugin WASM: {error:#}")),
-        ModuleFlavor::IndexerComponent => Component::from_binary(engine, wasm)
-            .map(Arc::new)
-            .map(CachedArtifact::Component)
-            .map_err(|error| format!("failed to compile plugin component: {error:#}")),
+        ModuleFlavor::IndexerComponent
+        | ModuleFlavor::ArchiveComponent
+        | ModuleFlavor::SubtitleComponent => {
+            Component::from_binary(engine, wasm)
+                .map(Arc::new)
+                .map(CachedArtifact::Component)
+                .map_err(|error| format!("failed to compile plugin component: {error:#}"))
+        }
     };
 
     let registered_waiter = {

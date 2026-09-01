@@ -64,7 +64,7 @@
       "$ref": "#/$defs/SubtitleSyncAlignRequest"
     },
     "subtitle_sync_align_result": {
-      "$ref": "#/$defs/PluginResult27"
+      "$ref": "#/$defs/PluginResult28"
     },
     "subtitle_sync_process_request": {
       "$ref": "#/$defs/SubtitleSyncPluginProcessRequest"
@@ -112,7 +112,7 @@
       "$ref": "#/$defs/ArchivePluginProcessRequest"
     },
     "archive_process_result": {
-      "$ref": "#/$defs/PluginResult28"
+      "$ref": "#/$defs/PluginResult29"
     },
     "notification_request": {
       "$ref": "#/$defs/PluginNotificationRequest"
@@ -1828,7 +1828,8 @@
       "enum": [
         "rar",
         "zip",
-        "7z"
+        "7z",
+        "xz"
       ]
     },
     "ArchiveExtractorDescriptor": {
@@ -6603,6 +6604,18 @@
             "ProcessExec"
           ],
           "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "ArchiveExtract": {
+              "$ref": "#/$defs/PluginArchiveExtractRequest"
+            }
+          },
+          "required": [
+            "ArchiveExtract"
+          ],
+          "additionalProperties": false
         }
       ]
     },
@@ -6859,6 +6872,44 @@
         "command"
       ]
     },
+    "PluginArchiveExtractRequest": {
+      "description": "A bounded archive submitted to the host-owned extraction service.\n\nThe host stages `content` into a private workspace, delegates extraction to\nthe installed archive-extractor plugin, and returns the extracted members.\nThis is a general-purpose service: any command plugin family that needs to\nopen a container it cannot decode itself uses it, rather than each family\ngrowing its own bespoke extraction call.",
+      "type": "object",
+      "properties": {
+        "content": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0,
+            "maximum": 255
+          }
+        },
+        "format": {
+          "description": "One of the `ArchivePluginFormat` wire values: `rar`, `zip`, `7z`, `xz`.",
+          "type": "string"
+        },
+        "filename": {
+          "description": "Preferred staged file name. The host sanitizes it and falls back to a\ngenerated name derived from `format`.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "password": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "content",
+        "format"
+      ]
+    },
     "PluginHostResponse": {
       "description": "A single response over the native host-service transport.",
       "oneOf": [
@@ -6991,6 +7042,18 @@
           },
           "required": [
             "ProcessExec"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "ArchiveExtract": {
+              "$ref": "#/$defs/PluginResult27"
+            }
+          },
+          "required": [
+            "ArchiveExtract"
           ],
           "additionalProperties": false
         }
@@ -7445,6 +7508,70 @@
         "exit_code"
       ]
     },
+    "PluginResult27": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "$ref": "#/$defs/PluginArchiveExtractResponse"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "err": {
+              "$ref": "#/$defs/PluginError"
+            }
+          },
+          "required": [
+            "err"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "PluginArchiveExtractResponse": {
+      "description": "The members extracted by the host-owned archive-extraction service.",
+      "type": "object",
+      "properties": {
+        "files": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PluginArchiveExtractedFile"
+          },
+          "default": []
+        }
+      }
+    },
+    "PluginArchiveExtractedFile": {
+      "description": "One member read back out of a host-extracted archive.",
+      "type": "object",
+      "properties": {
+        "relative_path": {
+          "description": "Path relative to the extraction root, using `/` separators.",
+          "type": "string"
+        },
+        "content": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0,
+            "maximum": 255
+          }
+        }
+      },
+      "required": [
+        "relative_path",
+        "content"
+      ]
+    },
     "PluginSearchPlanRequest": {
       "type": "object",
       "properties": {
@@ -7742,7 +7869,7 @@
         }
       ]
     },
-    "PluginResult27": {
+    "PluginResult28": {
       "oneOf": [
         {
           "type": "object",
@@ -8736,7 +8863,7 @@
         }
       ]
     },
-    "PluginResult28": {
+    "PluginResult29": {
       "oneOf": [
         {
           "type": "object",

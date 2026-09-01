@@ -54,14 +54,21 @@ impl SubtitleSyncClient for WasmSubtitleSyncClient {
         match self.backing {
             PluginRuntimeBacking::LegacyReactor => self.align_subtitle_legacy(job).await,
             PluginRuntimeBacking::WasmtimeSubtitleSync => self.align_subtitle_command(job).await,
-            PluginRuntimeBacking::WasmtimeArchive => Err(AppError::Repository(
-                "subtitle sync plugin cannot use the archive runtime backing".to_string(),
+            PluginRuntimeBacking::WasmtimeArchiveComponent => Err(AppError::Repository(
+                "subtitle sync plugin cannot use the archive component runtime backing".to_string(),
             )),
             PluginRuntimeBacking::WasmtimeCommand => Err(AppError::Repository(
                 "subtitle sync plugin cannot use the generic command runtime backing".to_string(),
             )),
             PluginRuntimeBacking::WasmtimeIndexerComponent => Err(AppError::Repository(
                 "subtitle sync plugin cannot use the indexer component runtime backing".to_string(),
+            )),
+            // Alignment is its own contract (`SubtitleSyncPluginProcessRequest`
+            // on a wasip1 command), not a `PluginSubtitleCommand`, so the
+            // subtitle-provider world does not carry it.
+            PluginRuntimeBacking::WasmtimeSubtitleComponent => Err(AppError::Repository(
+                "subtitle sync plugin cannot use the subtitle provider component runtime backing"
+                    .to_string(),
             )),
         }
     }

@@ -63,21 +63,23 @@ pub(crate) struct PluginInstanceSpec {
 pub(crate) enum PluginRuntimeBacking {
     /// Existing Extism-PDK reactor artifacts on Scryer's native Wasmtime host.
     LegacyReactor,
-    /// The native wasmtime archive host.
-    WasmtimeArchive,
+    /// Versioned WASI Preview 2 component ABI for archive extractors.
+    WasmtimeArchiveComponent,
     /// Native wasmtime command host for SDK 3.5 subtitle-sync plugins.
     WasmtimeSubtitleSync,
     /// Versioned native command ABI for all descriptor families.
     WasmtimeCommand,
     /// Versioned WASI Preview 2 component ABI for indexer plugins.
     WasmtimeIndexerComponent,
+    /// Versioned WASI Preview 2 component ABI for subtitle providers.
+    WasmtimeSubtitleComponent,
 }
 
 impl PluginRuntimeBacking {
     /// Backing selected from the descriptor kind.
     pub(crate) fn for_descriptor(descriptor: &PluginDescriptor) -> Self {
         match descriptor.kind() {
-            PluginKind::ArchiveExtractor => Self::WasmtimeArchive,
+            PluginKind::ArchiveExtractor => Self::WasmtimeArchiveComponent,
             PluginKind::SubtitleProvider => {
                 let command_sync = descriptor.subtitle().is_some_and(|subtitle| {
                     subtitle.capabilities.mode == SubtitleProviderMode::Sync
@@ -99,15 +101,35 @@ impl PluginRuntimeBacking {
 
     /// Select a runtime from the artifact marker before descriptor heuristics.
     pub(crate) fn for_artifact(descriptor: &PluginDescriptor, wasm: &[u8]) -> Result<Self, String> {
-        if crate::wasmtime_host::component_host::is_indexer_component(wasm)? {
+        if crate::wasmtime_host::component_host::is_component_binary(wasm)? {
             return match descriptor.provider {
                 scryer_plugin_sdk::ProviderDescriptor::Indexer(_) => {
                     Ok(Self::WasmtimeIndexerComponent)
                 }
-                _ => {
-                    Err("WASI component artifacts are currently supported only for indexers".into())
+                scryer_plugin_sdk::ProviderDescriptor::ArchiveExtractor(_) => {
+                    Ok(Self::WasmtimeArchiveComponent)
                 }
+                // The component funnel is per-family by descriptor, not one
+                // catch-all: each family has its own world, so accepting an
+                // artifact here is the same statement as "a host exists for
+                // that world". Download clients and notifications join this
+                // arm as their worlds land.
+                scryer_plugin_sdk::ProviderDescriptor::Subtitle(_) => {
+                    Ok(Self::WasmtimeSubtitleComponent)
+                }
+                _ => Err(
+                    "WASI component artifacts are currently supported only for indexers, \
+                     archive extractors, and subtitle providers"
+                        .into(),
+                ),
             };
+        }
+        // Hard cut: the archive extractor has no core-module form any more.
+        // Saying so here — rather than failing later on a missing crypto import
+        // — is what turns a stale installed artifact into an actionable
+        // "upgrade the plugin" message.
+        if descriptor.kind() == PluginKind::ArchiveExtractor {
+            return Err(crate::wasmtime_host::ARCHIVE_CORE_MODULE_REJECTED.to_string());
         }
         if command_abi::command_abi_version(wasm)?.is_some() {
             return Ok(Self::WasmtimeCommand);
@@ -120,9 +142,8 @@ impl PluginRuntimeBacking {
 mod tests {
     use super::*;
 
-    #[test]
-    fn descriptor_kind_selects_expected_runtime_backing() {
-        let mut descriptor = PluginDescriptor {
+    fn archive_descriptor() -> PluginDescriptor {
+        PluginDescriptor {
             id: "archive".to_string(),
             name: "Archive".to_string(),
             version: "1.0.0".to_string(),
@@ -139,10 +160,134 @@ mod tests {
                     capabilities: scryer_plugin_sdk::ArchiveExtractorCapabilities::default(),
                 },
             ),
-        };
+        }
+    }
+
+    fn subtitle_descriptor(mode: SubtitleProviderMode) -> PluginDescriptor {
+        PluginDescriptor {
+            id: "subtitles".to_string(),
+            name: "Subtitles".to_string(),
+            version: "1.0.0".to_string(),
+            sdk_version: scryer_plugin_sdk::SDK_VERSION.to_string(),
+            sdk_constraint: scryer_plugin_sdk::current_sdk_constraint(),
+            socket_permissions: Vec::new(),
+            provider: scryer_plugin_sdk::ProviderDescriptor::Subtitle(
+                scryer_plugin_sdk::SubtitleDescriptor {
+                    provider_type: "fixture-subtitles".to_string(),
+                    provider_aliases: Vec::new(),
+                    config_fields: Vec::new(),
+                    default_base_url: None,
+                    allowed_hosts: Vec::new(),
+                    capabilities: scryer_plugin_sdk::SubtitleCapabilities {
+                        mode,
+                        ..Default::default()
+                    },
+                },
+            ),
+        }
+    }
+
+    /// The component funnel is per-family: a subtitle component now selects the
+    /// subtitle component host rather than being refused as an unsupported
+    /// family.
+    #[test]
+    fn component_subtitle_artifacts_select_the_subtitle_component_backing() {
+        let descriptor = subtitle_descriptor(SubtitleProviderMode::Catalog);
+        let component = wat::parse_str("(component)").expect("component WAT must parse");
+
+        assert_eq!(
+            PluginRuntimeBacking::for_artifact(&descriptor, &component)
+                .expect("a subtitle component must select a runtime"),
+            PluginRuntimeBacking::WasmtimeSubtitleComponent
+        );
+    }
+
+    /// The component path is additive: an unmarked core-module subtitle
+    /// artifact still routes to the legacy reactor, and a command-marked one
+    /// still routes to the command runtime.
+    #[test]
+    fn non_component_subtitle_artifacts_keep_their_existing_backings() {
+        let descriptor = subtitle_descriptor(SubtitleProviderMode::Catalog);
+
+        assert_eq!(
+            PluginRuntimeBacking::for_artifact(
+                &descriptor,
+                &command_abi::test_support::unmarked_wasm()
+            )
+            .expect("a legacy subtitle artifact must select a runtime"),
+            PluginRuntimeBacking::LegacyReactor
+        );
+        assert_eq!(
+            PluginRuntimeBacking::for_artifact(
+                &descriptor,
+                &command_abi::test_support::command_marked_wasm()
+            )
+            .expect("a marked subtitle artifact must select a runtime"),
+            PluginRuntimeBacking::WasmtimeCommand
+        );
+    }
+
+    /// A sync-capable subtitle descriptor keeps selecting the subtitle-sync
+    /// command runtime from a plain core module: the component funnel only
+    /// fires on a component artifact.
+    #[test]
+    fn a_command_model_sync_subtitle_still_selects_the_sync_backing() {
+        let mut descriptor = subtitle_descriptor(SubtitleProviderMode::Sync);
+        if let scryer_plugin_sdk::ProviderDescriptor::Subtitle(subtitle) = &mut descriptor.provider {
+            subtitle.capabilities.sync = Some(scryer_plugin_sdk::SubtitleSyncCapabilities {
+                command_model: true,
+                ..Default::default()
+            });
+        }
+
+        assert_eq!(
+            PluginRuntimeBacking::for_artifact(
+                &descriptor,
+                &command_abi::test_support::unmarked_wasm()
+            )
+            .expect("a sync subtitle artifact must select a runtime"),
+            PluginRuntimeBacking::WasmtimeSubtitleSync
+        );
+    }
+
+    /// The hard cut's operator-facing contract: a pre-component archive
+    /// artifact is refused at runtime selection with an upgrade instruction,
+    /// not deep inside instantiation with a missing-import trap.
+    #[test]
+    fn core_module_archive_artifacts_are_rejected_with_an_upgrade_diagnostic() {
+        let descriptor = archive_descriptor();
+        let core_module = wat::parse_str(
+            r#"(module
+                (memory (export "memory") 1)
+                (func (export "_start")))"#,
+        )
+        .expect("core module WAT must parse");
+
+        let error = PluginRuntimeBacking::for_artifact(&descriptor, &core_module)
+            .expect_err("a core-module archive artifact must not select a runtime");
+
+        assert_eq!(error, crate::wasmtime_host::ARCHIVE_CORE_MODULE_REJECTED);
+        assert!(error.contains("wasm32-wasip2"), "{error}");
+    }
+
+    #[test]
+    fn component_archive_artifacts_select_the_component_backing() {
+        let descriptor = archive_descriptor();
+        let component = wat::parse_str("(component)").expect("component WAT must parse");
+
+        assert_eq!(
+            PluginRuntimeBacking::for_artifact(&descriptor, &component)
+                .expect("an archive component must select a runtime"),
+            PluginRuntimeBacking::WasmtimeArchiveComponent
+        );
+    }
+
+    #[test]
+    fn descriptor_kind_selects_expected_runtime_backing() {
+        let mut descriptor = archive_descriptor();
         assert_eq!(
             PluginRuntimeBacking::for_descriptor(&descriptor),
-            PluginRuntimeBacking::WasmtimeArchive
+            PluginRuntimeBacking::WasmtimeArchiveComponent
         );
 
         descriptor.provider = scryer_plugin_sdk::ProviderDescriptor::Notification(

@@ -650,6 +650,7 @@ pub enum ArchivePluginFormat {
     Zip,
     #[serde(rename = "7z")]
     SevenZip,
+    Xz,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -1092,6 +1093,11 @@ pub struct ArchivePluginProcessRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+// PAR2 recovery is deliberately absent here. Verifying and repairing a PAR2 set
+// is plugin-internal and data-driven: an extractor scans the source directory it
+// is given, notices the `.par2` files, and repairs before extracting as part of
+// processing. The host neither orchestrates nor observes it, so it is not an
+// operation on this enum.
 pub enum ArchivePluginOperation {
     Inspect {
         source_dir: String,
@@ -2911,6 +2917,14 @@ mod tests {
         assert_eq!(json, "\"7z\"");
         let parsed: ArchivePluginFormat = serde_json::from_str("\"7z\"").unwrap();
         assert_eq!(parsed, ArchivePluginFormat::SevenZip);
+    }
+
+    #[test]
+    fn xz_archive_format_uses_xz_wire_value() {
+        let json = serde_json::to_string(&ArchivePluginFormat::Xz).unwrap();
+        assert_eq!(json, "\"xz\"");
+        let parsed: ArchivePluginFormat = serde_json::from_str("\"xz\"").unwrap();
+        assert_eq!(parsed, ArchivePluginFormat::Xz);
     }
 
     #[test]
