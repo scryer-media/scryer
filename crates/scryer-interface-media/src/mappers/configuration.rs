@@ -615,7 +615,9 @@ pub fn from_indexer_proxy_config(config: IndexerProxyConfig) -> IndexerProxyConf
         id: config.id.into(),
         name: config.name,
         provider_type: config.provider_type.as_str().to_string(),
-        protocol: config.protocol.as_str().to_string(),
+        protocol: config
+            .protocol
+            .map(|protocol| protocol.as_str().to_string()),
         base_url: config.base_url,
         request_timeout_seconds: i32::try_from(config.request_timeout_seconds).unwrap_or(i32::MAX),
         is_enabled: config.is_enabled,

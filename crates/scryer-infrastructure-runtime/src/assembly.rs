@@ -750,7 +750,10 @@ impl DatastoreAssembly {
             db.encryption_key_state(),
         ));
         let indexer_error_store = Arc::new(IndexerErrorStore::new(datastore.clone()));
-        let indexer_proxy_config_store = Arc::new(IndexerProxyConfigStore::new(datastore.clone()));
+        let indexer_proxy_config_store = Arc::new(IndexerProxyConfigStore::new(
+            datastore.clone(),
+            db.encryption_key_state(),
+        ));
         let download_client_config_store = Arc::new(DownloadClientConfigStore::new(
             datastore.clone(),
             db.encryption_key_state(),
@@ -884,7 +887,10 @@ impl DatastoreAssembly {
             db.encryption_key_state(),
         ));
         let indexer_error_store = Arc::new(IndexerErrorStore::new(datastore.clone()));
-        let indexer_proxy_config_store = Arc::new(IndexerProxyConfigStore::new(datastore.clone()));
+        let indexer_proxy_config_store = Arc::new(IndexerProxyConfigStore::new(
+            datastore.clone(),
+            db.encryption_key_state(),
+        ));
         let download_client_config_store = Arc::new(DownloadClientConfigStore::new(
             datastore.clone(),
             db.encryption_key_state(),

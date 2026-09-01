@@ -455,9 +455,16 @@ impl ConfigMutations {
                 NewIndexerProxyConfig {
                     name: input.name,
                     provider_type,
+                    // The GraphQL input does not yet carry the transport-proxy
+                    // fields; WP3 adds them. Until then every mutation
+                    // configures a challenge solver exactly as before.
+                    protocol: None,
                     base_url: input.base_url,
                     request_timeout_seconds,
                     is_enabled: input.is_enabled.unwrap_or(true),
+                    username: None,
+                    password: None,
+                    remote_dns: None,
                 },
             )
             .await
@@ -493,6 +500,11 @@ impl ConfigMutations {
                     base_url: input.base_url,
                     request_timeout_seconds,
                     is_enabled: input.is_enabled,
+                    // Omitted patches: credentials and remote DNS keep their
+                    // stored values until WP3 exposes them.
+                    username: None,
+                    password: None,
+                    remote_dns: None,
                 },
             )
             .await

@@ -369,6 +369,8 @@ fn indexer_proxy_provider_types_round_trip() {
     for provider in [
         IndexerProxyProviderType::Byparr,
         IndexerProxyProviderType::Trawl,
+        IndexerProxyProviderType::Http,
+        IndexerProxyProviderType::Socks5,
     ] {
         assert_eq!(
             IndexerProxyProviderType::parse(provider.as_str()),
@@ -379,7 +381,37 @@ fn indexer_proxy_provider_types_round_trip() {
         IndexerProxyProviderType::parse("TRAWL"),
         Some(IndexerProxyProviderType::Trawl)
     );
+    assert_eq!(
+        IndexerProxyProviderType::parse(" SOCKS5 "),
+        Some(IndexerProxyProviderType::Socks5)
+    );
     assert_eq!(IndexerProxyProviderType::parse("unknown"), None);
+    // `socks5h` is not its own provider: it is Socks5 plus remote DNS.
+    assert_eq!(IndexerProxyProviderType::parse("socks5h"), None);
+}
+
+#[test]
+fn indexer_proxy_provider_types_split_solver_from_transport() {
+    assert_eq!(
+        IndexerProxyProviderType::Byparr.kind(),
+        IndexerProxyKind::ChallengeSolver
+    );
+    assert_eq!(
+        IndexerProxyProviderType::Trawl.kind(),
+        IndexerProxyKind::ChallengeSolver
+    );
+    assert_eq!(
+        IndexerProxyProviderType::Http.kind(),
+        IndexerProxyKind::Transport
+    );
+    assert_eq!(
+        IndexerProxyProviderType::Socks5.kind(),
+        IndexerProxyKind::Transport
+    );
+    assert!(IndexerProxyProviderType::Trawl.is_challenge_solver());
+    assert!(!IndexerProxyProviderType::Trawl.is_transport());
+    assert!(IndexerProxyProviderType::Socks5.is_transport());
+    assert!(!IndexerProxyProviderType::Socks5.is_challenge_solver());
 }
 
 #[test]

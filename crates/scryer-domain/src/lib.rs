@@ -995,11 +995,29 @@ pub struct IndexerConfig {
     pub updated_at: DateTime<Utc>,
 }
 
+/// What an indexer proxy actually does to a request.
+///
+/// Derived from the provider type rather than stored: a provider is either a
+/// challenge solver or a transport and never both, so a second persisted
+/// column would only be a way for the two to disagree.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum IndexerProxyKind {
+    /// The proxy fetches the page itself and hands back a solved response
+    /// (Byparr, Trawl). Requires a `ChallengeSolverProtocol`.
+    ChallengeSolver,
+    /// The proxy only carries bytes: an HTTP CONNECT or SOCKS5 hop that
+    /// Scryer's own HTTP client dials through. Carries no solver protocol.
+    Transport,
+}
+
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum IndexerProxyProviderType {
     Byparr,
     Trawl,
+    Http,
+    Socks5,
 }
 
 impl IndexerProxyProviderType {
@@ -1007,6 +1025,8 @@ impl IndexerProxyProviderType {
         match self {
             Self::Byparr => "byparr",
             Self::Trawl => "trawl",
+            Self::Http => "http",
+            Self::Socks5 => "socks5",
         }
     }
 
@@ -1014,8 +1034,25 @@ impl IndexerProxyProviderType {
         match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
             "byparr" => Some(Self::Byparr),
             "trawl" => Some(Self::Trawl),
+            "http" => Some(Self::Http),
+            "socks5" => Some(Self::Socks5),
             _ => None,
         }
+    }
+
+    pub fn kind(self) -> IndexerProxyKind {
+        match self {
+            Self::Byparr | Self::Trawl => IndexerProxyKind::ChallengeSolver,
+            Self::Http | Self::Socks5 => IndexerProxyKind::Transport,
+        }
+    }
+
+    pub fn is_challenge_solver(self) -> bool {
+        matches!(self.kind(), IndexerProxyKind::ChallengeSolver)
+    }
+
+    pub fn is_transport(self) -> bool {
+        matches!(self.kind(), IndexerProxyKind::Transport)
     }
 }
 
@@ -1072,15 +1109,32 @@ pub struct IndexerProxyConfig {
     pub id: String,
     pub name: String,
     pub provider_type: IndexerProxyProviderType,
-    pub protocol: ChallengeSolverProtocol,
+    /// Solve protocol spoken by challenge-solver providers. `None` for
+    /// transport providers, which speak no application protocol of their own.
+    pub protocol: Option<ChallengeSolverProtocol>,
     pub base_url: String,
     pub request_timeout_seconds: u32,
     pub is_enabled: bool,
+    /// Proxy credentials. Named `*_encrypted` for the at-rest column they map
+    /// to; in memory these hold plaintext, exactly like
+    /// `IndexerConfig::api_key_encrypted`. The store encrypts on write and
+    /// decrypts on read.
+    pub username_encrypted: Option<String>,
+    pub password_encrypted: Option<String>,
+    /// SOCKS5 `socks5h` semantics: resolve the destination hostname at the
+    /// proxy rather than locally. Meaningless for the other providers.
+    pub remote_dns: bool,
     pub last_health_status: Option<IndexerProxyHealthStatus>,
     pub last_error_message: Option<String>,
     pub last_error_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+impl IndexerProxyConfig {
+    pub fn kind(&self) -> IndexerProxyKind {
+        self.provider_type.kind()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

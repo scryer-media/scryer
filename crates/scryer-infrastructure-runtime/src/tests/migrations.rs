@@ -4726,3 +4726,105 @@ async fn migration_0186_postgres_relaxes_the_token_check_and_adds_the_canonical_
     })?;
     result
 }
+
+#[tokio::test]
+async fn migration_0208_relaxes_the_proxy_protocol_and_preserves_solver_rows() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .expect("migration test database should open");
+    // The pre-0208 shape, verbatim from the 0198 baseline.
+    sqlx::raw_sql(
+        "CREATE TABLE indexer_proxy_configs (
+             id TEXT PRIMARY KEY NOT NULL,
+             name TEXT NOT NULL,
+             provider_type TEXT NOT NULL,
+             protocol TEXT NOT NULL,
+             base_url TEXT NOT NULL,
+             request_timeout_seconds INTEGER NOT NULL DEFAULT 60,
+             is_enabled INTEGER NOT NULL DEFAULT 1,
+             last_health_status TEXT,
+             last_error_message TEXT,
+             last_error_at TEXT,
+             created_at TEXT NOT NULL DEFAULT (datetime('now')),
+             updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+         );
+         CREATE INDEX idx_indexer_proxy_configs_provider_type
+             ON indexer_proxy_configs(provider_type);
+         INSERT INTO indexer_proxy_configs (
+             id, name, provider_type, protocol, base_url, request_timeout_seconds,
+             is_enabled, last_health_status, last_error_message, last_error_at,
+             created_at, updated_at
+         ) VALUES (
+             'solver-1', 'Trawl', 'trawl', 'request_solution_v1', 'http://trawl:8191',
+             45, 1, 'healthy', NULL, NULL, '2026-01-01T00:00:00Z', '2026-01-02T00:00:00Z'
+         );",
+    )
+    .execute(&pool)
+    .await
+    .expect("initialize pre-0208 schema");
+
+    run_embedded_migration(
+        &pool,
+        include_str!("../../../scryer/src/db/migrations/0208_indexer_transport_proxies.sql"),
+    )
+    .await;
+
+    let solver: (
+        String,
+        Option<String>,
+        i64,
+        i64,
+        Option<String>,
+        Option<String>,
+        i64,
+    ) = sqlx::query_as(
+        "SELECT provider_type, protocol, request_timeout_seconds, is_enabled,
+                    username_encrypted, password_encrypted, remote_dns
+               FROM indexer_proxy_configs
+              WHERE id = 'solver-1'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("the existing solver row must survive the rebuild");
+    assert_eq!(
+        solver,
+        (
+            "trawl".into(),
+            Some("request_solution_v1".into()),
+            45,
+            1,
+            None,
+            None,
+            0,
+        )
+    );
+
+    // The point of the rebuild: a transport row with no protocol is now legal.
+    sqlx::query(
+        "INSERT INTO indexer_proxy_configs (
+             id, name, provider_type, protocol, base_url, request_timeout_seconds,
+             is_enabled, username_encrypted, password_encrypted, remote_dns,
+             created_at, updated_at
+         ) VALUES (
+             'socks-1', 'Gateway', 'socks5', NULL, 'socks5://gateway:1080', 30,
+             1, 'enc:user', 'enc:pass', 1, '2026-02-01T00:00:00Z', '2026-02-01T00:00:00Z'
+         )",
+    )
+    .execute(&pool)
+    .await
+    .expect("a transport proxy stores no solver protocol");
+
+    let index_present: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sqlite_master
+          WHERE type = 'index' AND name = 'idx_indexer_proxy_configs_provider_type'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("read index catalog");
+    assert_eq!(
+        index_present, 1,
+        "the rebuild must recreate the provider_type index it dropped"
+    );
+}

@@ -437,8 +437,9 @@ pub struct IndexerProxyConfigPayload {
     pub name: String,
     /// Proxy provider type.
     pub provider_type: String,
-    /// Proxy protocol.
-    pub protocol: String,
+    /// Challenge-solver protocol, or null for transport proxies, which speak
+    /// no protocol of their own.
+    pub protocol: Option<String>,
     /// Proxy base URL.
     pub base_url: String,
     /// Request timeout in seconds.

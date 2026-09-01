@@ -479,9 +479,18 @@ pub struct IndexerConfigUpdate {
 pub struct NewIndexerProxyConfig {
     pub name: String,
     pub provider_type: scryer_domain::IndexerProxyProviderType,
+    /// Only meaningful for challenge-solver providers; supplying one for a
+    /// transport provider is rejected rather than silently dropped. `None` on
+    /// a solver provider takes the single protocol Scryer speaks.
+    pub protocol: Option<scryer_domain::ChallengeSolverProtocol>,
     pub base_url: String,
     pub request_timeout_seconds: Option<u32>,
     pub is_enabled: bool,
+    /// Plaintext proxy credentials. Persisted encrypted at rest.
+    pub username: Option<String>,
+    pub password: Option<String>,
+    /// SOCKS5 only: resolve destination hostnames at the proxy (`socks5h`).
+    pub remote_dns: Option<bool>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -491,6 +500,12 @@ pub struct IndexerProxyConfigUpdate {
     pub base_url: Option<String>,
     pub request_timeout_seconds: Option<u32>,
     pub is_enabled: Option<bool>,
+    /// Write-only credentials, following the codebase's nested-`Option`
+    /// patch convention: outer `None` leaves the stored secret untouched,
+    /// `Some(None)` clears it, `Some(Some(value))` replaces it.
+    pub username: Option<Option<String>>,
+    pub password: Option<Option<String>>,
+    pub remote_dns: Option<bool>,
 }
 
 impl IndexerProxyConfigUpdate {
@@ -499,6 +514,9 @@ impl IndexerProxyConfigUpdate {
             || self.base_url.is_some()
             || self.request_timeout_seconds.is_some()
             || self.is_enabled.is_some()
+            || self.username.is_some()
+            || self.password.is_some()
+            || self.remote_dns.is_some()
     }
 }
 

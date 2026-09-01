@@ -1546,6 +1546,43 @@ pub fn indexer_proxy_health_reqwest_client(timeout: Duration) -> Result<Client, 
         .build()
 }
 
+/// Egress credentials for an operator-configured transport proxy.
+#[derive(Clone, Copy, Debug)]
+pub struct TransportProxyCredentials<'a> {
+    pub username: &'a str,
+    pub password: &'a str,
+}
+
+/// Builds a client whose every request is carried through an operator-managed
+/// transport proxy (`http`/`https` CONNECT, or `socks5`/`socks5h`).
+///
+/// `proxy_url` is the proxy endpoint itself, not the destination. reqwest
+/// supplies the SOCKS default port (1080) when the URL omits one, and the
+/// `socks5h` scheme is what makes the proxy resolve the destination hostname.
+///
+/// This is the WP1 seam: the indexer-proxy health probe is currently its only
+/// caller and builds a client per call. WP2 owns the real egress path and is
+/// expected to grow a cached factory around this same construction, so keep
+/// the client options here in step with `reqwest_client_builder`.
+pub fn indexer_transport_proxy_reqwest_client(
+    proxy_url: &str,
+    credentials: Option<TransportProxyCredentials<'_>>,
+    timeout: Duration,
+) -> Result<Client, reqwest::Error> {
+    let mut proxy = reqwest::Proxy::all(proxy_url)?;
+    if let Some(credentials) = credentials {
+        proxy = proxy.basic_auth(credentials.username, credentials.password);
+    }
+    reqwest_client_builder()
+        .timeout(timeout)
+        .redirect(reqwest::redirect::Policy::limited(
+            DEFAULT_TRUSTED_REDIRECT_HOPS,
+        ))
+        .user_agent(INDEXER_PROXY_USER_AGENT)
+        .proxy(proxy)
+        .build()
+}
+
 pub fn external_arr_reqwest_client() -> Client {
     let mut builder = reqwest_client_builder().redirect(reqwest::redirect::Policy::none());
     if let Ok(proxy_url) = std::env::var("SCRYER_EXTERNAL_ARR_PROXY_URL")

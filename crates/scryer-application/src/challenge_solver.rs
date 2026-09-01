@@ -55,10 +55,18 @@ pub enum SolverErrorKind {
     MissingSolution,
 }
 
+/// Reported when a transport proxy (plain HTTP or SOCKS5) reaches a
+/// challenge-solver code path. Transport proxies carry bytes and solve
+/// nothing, so this message names a routing bug rather than a service fault.
+pub const TRANSPORT_PROXY_NOT_A_SOLVER_MESSAGE: &str =
+    "transport proxies do not solve browser challenges";
+
 pub fn solver_provider_name(provider: scryer_domain::IndexerProxyProviderType) -> &'static str {
     match provider {
         scryer_domain::IndexerProxyProviderType::Byparr => "Byparr",
         scryer_domain::IndexerProxyProviderType::Trawl => "Trawl",
+        scryer_domain::IndexerProxyProviderType::Http => "HTTP proxy",
+        scryer_domain::IndexerProxyProviderType::Socks5 => "SOCKS5 proxy",
     }
 }
 
@@ -66,9 +74,10 @@ pub fn solver_error_message(
     provider: scryer_domain::IndexerProxyProviderType,
     kind: SolverErrorKind,
 ) -> &'static str {
-    use scryer_domain::IndexerProxyProviderType::{Byparr, Trawl};
+    use scryer_domain::IndexerProxyProviderType::{Byparr, Http, Socks5, Trawl};
 
     match (provider, kind) {
+        (Http | Socks5, _) => TRANSPORT_PROXY_NOT_A_SOLVER_MESSAGE,
         (Byparr, SolverErrorKind::Unreachable) => BYPARR_UNREACHABLE_MESSAGE,
         (Byparr, SolverErrorKind::Timeout) => BYPARR_TIMEOUT_MESSAGE,
         (Byparr, SolverErrorKind::Unavailable) => BYPARR_UNAVAILABLE_MESSAGE,
@@ -126,7 +135,11 @@ pub fn solver_solve_request(
     request_timeout_seconds: u32,
 ) -> ChallengeSolverRequest<'_> {
     let max_timeout = match provider {
-        scryer_domain::IndexerProxyProviderType::Byparr => request_timeout_seconds,
+        // Transport proxies never reach a solve endpoint; seconds is the
+        // harmless reading if a caller ever gets here by mistake.
+        scryer_domain::IndexerProxyProviderType::Byparr
+        | scryer_domain::IndexerProxyProviderType::Http
+        | scryer_domain::IndexerProxyProviderType::Socks5 => request_timeout_seconds,
         scryer_domain::IndexerProxyProviderType::Trawl => {
             request_timeout_seconds.saturating_mul(1_000)
         }
