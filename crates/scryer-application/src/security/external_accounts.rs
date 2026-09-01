@@ -680,32 +680,8 @@ impl AppUseCase {
             .await?;
 
         if let Some(mut existing) = existing {
-            if existing.user_id != actor.id {
-                return Err(AppError::Validation(
-                    "external account is already linked to another Scryer user".into(),
-                ));
-            }
-            if matches!(
-                existing.status,
-                scryer_domain::ExternalAccountStatus::Disabled
-            ) {
-                return Err(AppError::Validation(
-                    "external account is disabled and must be repaired by an administrator".into(),
-                ));
-            }
-            existing.external_user_id = Some(verified.external_user_id);
-            existing.username = verified.username;
-            existing.display_name = verified.display_name;
-            existing.avatar_url = verified.avatar_url;
-            existing.status = scryer_domain::ExternalAccountStatus::Active;
-            let now = Utc::now();
-            existing.verified_at = Some(now);
-            existing.updated_at = now;
             return self
-                .services
-                .identity
-                .external_accounts
-                .update(existing)
+                .refresh_verified_external_account(actor, &mut existing, verified)
                 .await;
         }
 
@@ -713,22 +689,63 @@ impl AppUseCase {
         let account = scryer_domain::UserExternalAccount {
             id: scryer_domain::Id::new().0,
             user_id: actor.id.clone(),
-            provider: verified.provider,
-            connection_id: verified.connection_id,
-            external_user_id: Some(verified.external_user_id),
-            username: verified.username,
-            display_name: verified.display_name,
-            avatar_url: verified.avatar_url,
+            provider: verified.provider.clone(),
+            connection_id: verified.connection_id.clone(),
+            external_user_id: Some(verified.external_user_id.clone()),
+            username: verified.username.clone(),
+            display_name: verified.display_name.clone(),
+            avatar_url: verified.avatar_url.clone(),
             status: scryer_domain::ExternalAccountStatus::Active,
             verified_at: Some(now),
             last_login_at: None,
             created_at: now,
             updated_at: now,
         };
+        let created_account_id = account.id.clone();
+        let mut account = self
+            .services
+            .identity
+            .external_accounts
+            .create_or_get_by_provider_identity(account)
+            .await?;
+        if account.id == created_account_id {
+            return Ok(account);
+        }
+        self.refresh_verified_external_account(actor, &mut account, verified)
+            .await
+    }
+
+    async fn refresh_verified_external_account(
+        &self,
+        actor: &User,
+        existing: &mut scryer_domain::UserExternalAccount,
+        verified: VerifiedExternalIdentity,
+    ) -> AppResult<scryer_domain::UserExternalAccount> {
+        if existing.user_id != actor.id {
+            return Err(AppError::Validation(
+                "external account is already linked to another Scryer user".into(),
+            ));
+        }
+        if matches!(
+            existing.status,
+            scryer_domain::ExternalAccountStatus::Disabled
+        ) {
+            return Err(AppError::Validation(
+                "external account is disabled and must be repaired by an administrator".into(),
+            ));
+        }
+        existing.external_user_id = Some(verified.external_user_id);
+        existing.username = verified.username;
+        existing.display_name = verified.display_name;
+        existing.avatar_url = verified.avatar_url;
+        existing.status = scryer_domain::ExternalAccountStatus::Active;
+        let now = Utc::now();
+        existing.verified_at = Some(now);
+        existing.updated_at = now;
         self.services
             .identity
             .external_accounts
-            .create(account)
+            .update(existing.clone())
             .await
     }
 
@@ -1297,6 +1314,13 @@ mod tests {
     #[derive(Default)]
     struct TestExternalAccountRepository {
         accounts: Mutex<Vec<UserExternalAccount>>,
+        first_lookup_race: Option<Arc<TestExternalAccountLookupRace>>,
+        claim_winner: Mutex<Option<UserExternalAccount>>,
+    }
+
+    struct TestExternalAccountLookupRace {
+        barrier: tokio::sync::Barrier,
+        remaining_waiters: Mutex<usize>,
     }
 
     #[derive(Default)]
@@ -1331,6 +1355,45 @@ mod tests {
         fn new(accounts: Vec<UserExternalAccount>) -> Self {
             Self {
                 accounts: Mutex::new(accounts),
+                first_lookup_race: None,
+                claim_winner: Mutex::new(None),
+            }
+        }
+
+        fn with_first_lookup_race(accounts: Vec<UserExternalAccount>, waiters: usize) -> Self {
+            Self {
+                accounts: Mutex::new(accounts),
+                first_lookup_race: Some(Arc::new(TestExternalAccountLookupRace {
+                    barrier: tokio::sync::Barrier::new(waiters),
+                    remaining_waiters: Mutex::new(waiters),
+                })),
+                claim_winner: Mutex::new(None),
+            }
+        }
+
+        fn with_claim_winner(winner: UserExternalAccount) -> Self {
+            Self {
+                accounts: Mutex::new(Vec::new()),
+                first_lookup_race: None,
+                claim_winner: Mutex::new(Some(winner)),
+            }
+        }
+
+        async fn wait_for_racing_initial_lookup(&self) {
+            let Some(race) = self.first_lookup_race.as_ref() else {
+                return;
+            };
+            let should_wait = {
+                let mut remaining_waiters = race.remaining_waiters.lock().await;
+                if *remaining_waiters == 0 {
+                    false
+                } else {
+                    *remaining_waiters -= 1;
+                    true
+                }
+            };
+            if should_wait {
+                race.barrier.wait().await;
             }
         }
     }
@@ -1451,6 +1514,26 @@ mod tests {
             Ok(account)
         }
 
+        async fn create_or_get_by_provider_identity(
+            &self,
+            account: UserExternalAccount,
+        ) -> AppResult<UserExternalAccount> {
+            if let Some(winner) = self.claim_winner.lock().await.take() {
+                self.accounts.lock().await.push(winner.clone());
+                return Ok(winner);
+            }
+            let mut accounts = self.accounts.lock().await;
+            if let Some(existing) = accounts.iter().find(|existing| {
+                existing.provider == account.provider
+                    && existing.connection_id == account.connection_id
+                    && existing.external_user_id == account.external_user_id
+            }) {
+                return Ok(existing.clone());
+            }
+            accounts.push(account.clone());
+            Ok(account)
+        }
+
         async fn list_by_user_id(&self, user_id: &str) -> AppResult<Vec<UserExternalAccount>> {
             Ok(self
                 .accounts
@@ -1478,7 +1561,7 @@ mod tests {
             connection_id: &str,
             external_user_id: &str,
         ) -> AppResult<Option<UserExternalAccount>> {
-            Ok(self
+            let account = self
                 .accounts
                 .lock()
                 .await
@@ -1488,7 +1571,11 @@ mod tests {
                         && account.connection_id == connection_id
                         && account.external_user_id.as_deref() == Some(external_user_id)
                 })
-                .cloned())
+                .cloned();
+            if account.is_none() {
+                self.wait_for_racing_initial_lookup().await;
+            }
+            Ok(account)
         }
 
         async fn get_pending_claim_by_provider_username(
@@ -3292,6 +3379,141 @@ mod tests {
         assert!(
             matches!(result, Err(AppError::Validation(message)) if message.contains("disabled"))
         );
+    }
+
+    #[tokio::test]
+    async fn concurrent_first_links_converge_on_one_owner() {
+        let first_actor = regular_user("first-user");
+        let second_actor = regular_user("second-user");
+        let external_accounts = Arc::new(TestExternalAccountRepository::with_first_lookup_race(
+            Vec::new(),
+            2,
+        ));
+        let app = test_app_with_external_accounts(
+            Arc::new(TestSettingsRepository::default()),
+            external_accounts.clone(),
+        );
+        let verified = || VerifiedExternalIdentity {
+            provider: ExternalAccountProvider::Jellyfin,
+            connection_id: "jellyfin-main".to_string(),
+            external_user_id: "same-remote-user".to_string(),
+            username: "same-user".to_string(),
+            display_name: Some("Same User".to_string()),
+            avatar_url: None,
+            remote_password_configured: None,
+        };
+
+        let (first, second) = tokio::join!(
+            app.link_verified_external_account(&first_actor, verified()),
+            app.link_verified_external_account(&second_actor, verified()),
+        );
+
+        assert_eq!(usize::from(first.is_ok()) + usize::from(second.is_ok()), 1);
+        assert_eq!(
+            usize::from(matches!(
+                &first,
+                Err(AppError::Validation(message))
+                    if message == "external account is already linked to another Scryer user"
+            )) + usize::from(matches!(
+                &second,
+                Err(AppError::Validation(message))
+                    if message == "external account is already linked to another Scryer user"
+            )),
+            1,
+            "the losing first-link attempt must normalize to the ordinary cross-user conflict"
+        );
+
+        let accounts = external_accounts.accounts.lock().await;
+        assert_eq!(accounts.len(), 1);
+        assert_eq!(
+            accounts[0].external_user_id.as_deref(),
+            Some("same-remote-user")
+        );
+        assert!(
+            accounts[0].user_id == first_actor.id || accounts[0].user_id == second_actor.id,
+            "the unique provider identity must have exactly one owner"
+        );
+    }
+
+    #[tokio::test]
+    async fn atomic_claim_same_actor_refreshes_returned_account_metadata() {
+        let actor = regular_user("same-user");
+        let mut winner = active_jellyfin_account(&actor.id);
+        winner.external_user_id = Some("remote-user".to_string());
+        winner.username = "stale-username".to_string();
+        winner.display_name = Some("Stale Name".to_string());
+        winner.avatar_url = Some("https://jellyfin.example.test/stale.png".to_string());
+        let external_accounts = Arc::new(TestExternalAccountRepository::with_claim_winner(winner));
+        let app = test_app_with_external_accounts(
+            Arc::new(TestSettingsRepository::default()),
+            external_accounts.clone(),
+        );
+
+        let linked = app
+            .link_verified_external_account(
+                &actor,
+                VerifiedExternalIdentity {
+                    provider: ExternalAccountProvider::Jellyfin,
+                    connection_id: "jellyfin-main".to_string(),
+                    external_user_id: "remote-user".to_string(),
+                    username: "fresh-username".to_string(),
+                    display_name: Some("Fresh Name".to_string()),
+                    avatar_url: Some("https://jellyfin.example.test/fresh.png".to_string()),
+                    remote_password_configured: None,
+                },
+            )
+            .await
+            .expect("same actor should refresh the account returned by the atomic claim");
+
+        assert_eq!(linked.username, "fresh-username");
+        assert_eq!(linked.display_name.as_deref(), Some("Fresh Name"));
+        assert_eq!(
+            linked.avatar_url.as_deref(),
+            Some("https://jellyfin.example.test/fresh.png")
+        );
+        assert_eq!(linked.status, ExternalAccountStatus::Active);
+        assert!(linked.verified_at.is_some());
+
+        let accounts = external_accounts.accounts.lock().await;
+        assert_eq!(accounts.len(), 1);
+        assert_eq!(accounts[0], linked);
+    }
+
+    #[tokio::test]
+    async fn atomic_claim_rejects_a_disabled_returned_account() {
+        let actor = regular_user("disabled-user");
+        let mut winner = active_jellyfin_account(&actor.id);
+        winner.external_user_id = Some("remote-user".to_string());
+        winner.status = ExternalAccountStatus::Disabled;
+        let external_accounts = Arc::new(TestExternalAccountRepository::with_claim_winner(winner));
+        let app = test_app_with_external_accounts(
+            Arc::new(TestSettingsRepository::default()),
+            external_accounts.clone(),
+        );
+
+        let result = app
+            .link_verified_external_account(
+                &actor,
+                VerifiedExternalIdentity {
+                    provider: ExternalAccountProvider::Jellyfin,
+                    connection_id: "jellyfin-main".to_string(),
+                    external_user_id: "remote-user".to_string(),
+                    username: "attempted-refresh".to_string(),
+                    display_name: None,
+                    avatar_url: None,
+                    remote_password_configured: None,
+                },
+            )
+            .await;
+
+        assert!(
+            matches!(result, Err(AppError::Validation(message)) if message.contains("disabled")),
+            "a disabled account returned by the atomic claim must remain disabled"
+        );
+        let accounts = external_accounts.accounts.lock().await;
+        assert_eq!(accounts.len(), 1);
+        assert_eq!(accounts[0].status, ExternalAccountStatus::Disabled);
+        assert_eq!(accounts[0].username, "disabled-user");
     }
 
     #[tokio::test]

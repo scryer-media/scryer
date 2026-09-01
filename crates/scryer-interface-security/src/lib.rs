@@ -27,6 +27,39 @@ fn emby_connection_mode(value: EmbyConnectionModeValue) -> scryer_application::E
     }
 }
 
+fn to_oauth_jellyfin_link_gql_error(error: scryer_application::AppError) -> Error {
+    match error {
+        scryer_application::AppError::Validation(message)
+            if message == "Jellyfin account could not be linked" =>
+        {
+            Error::new("Jellyfin account could not be linked")
+                .extend_with(|_, extensions| extensions.set("code", "REQUEST_CONFLICT"))
+        }
+        other => to_gql_error(other),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn oauth_jellyfin_link_conflict_uses_request_conflict_code() {
+        let error = to_oauth_jellyfin_link_gql_error(scryer_application::AppError::Validation(
+            "Jellyfin account could not be linked".into(),
+        ));
+
+        assert_eq!(error.message, "Jellyfin account could not be linked");
+        assert!(matches!(
+            error
+                .extensions
+                .as_ref()
+                .and_then(|extensions| extensions.get("code")),
+            Some(async_graphql::Value::String(code)) if code == "REQUEST_CONFLICT"
+        ));
+    }
+}
+
 async fn user_payload_from_user(
     app: &scryer_application::AppUseCase,
     user: scryer_domain::User,
@@ -450,15 +483,7 @@ impl UserMutations {
         )
         .await
         .map(from_linked_account)
-        .map_err(|error| match error {
-            scryer_application::AppError::Validation(message)
-                if message == "Jellyfin account could not be linked" =>
-            {
-                Error::new("Jellyfin account could not be linked")
-                    .extend_with(|_, extensions| extensions.set("code", "REQUEST_CONFLICT"))
-            }
-            other => to_gql_error(other),
-        })
+        .map_err(to_oauth_jellyfin_link_gql_error)
     }
 
     /// Links the authenticated actor to Emby using the selected connection mode and credentials.

@@ -2937,6 +2937,13 @@ impl UserExternalAccountRepository for NullUserExternalAccountRepository {
         Err(AppError::Repository("not configured".into()))
     }
 
+    async fn create_or_get_by_provider_identity(
+        &self,
+        _: scryer_domain::UserExternalAccount,
+    ) -> AppResult<scryer_domain::UserExternalAccount> {
+        Err(AppError::Repository("not configured".into()))
+    }
+
     async fn list_by_user_id(&self, _: &str) -> AppResult<Vec<scryer_domain::UserExternalAccount>> {
         Ok(Vec::new())
     }

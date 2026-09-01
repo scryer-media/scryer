@@ -2283,6 +2283,13 @@ pub trait UserExternalAccountRepository: Send + Sync {
         &self,
         account: scryer_domain::UserExternalAccount,
     ) -> AppResult<scryer_domain::UserExternalAccount>;
+    /// Atomically claims an external provider identity or returns its current
+    /// owner. Implementations must use the provider-identity uniqueness
+    /// constraint as the arbitration point rather than a caller-side lookup.
+    async fn create_or_get_by_provider_identity(
+        &self,
+        account: scryer_domain::UserExternalAccount,
+    ) -> AppResult<scryer_domain::UserExternalAccount>;
     async fn list_by_user_id(
         &self,
         user_id: &str,
