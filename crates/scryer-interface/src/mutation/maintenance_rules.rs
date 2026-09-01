@@ -292,9 +292,7 @@ impl MaintenanceRuleMutations {
                 &actor,
                 input.id.as_ref(),
                 crate::mappers::maintenance_effect_arming_into_application(input.arming),
-                input
-                    .acknowledged_candidate_count
-                    .map(|count| i64::from(count)),
+                input.acknowledged_candidate_count.map(i64::from),
             )
             .await
             .map_err(to_gql_error)?;

@@ -444,7 +444,7 @@ impl MaintenanceEvaluationRunRepository for InMemoryMaintenanceEvaluationRepo {
             .filter(|run| rule_set_id.is_none_or(|id| run.rule_set_id == id))
             .cloned()
             .collect();
-        rows.sort_by(|left, right| right.started_at.cmp(&left.started_at));
+        rows.sort_by_key(|run| std::cmp::Reverse(run.started_at));
         if let Some(limit) = limit {
             rows.truncate(limit);
         }
