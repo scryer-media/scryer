@@ -73,8 +73,13 @@ impl MaintenanceRuleSetRepository for MaintenanceRuleSetStore {
         updated_at: DateTime<Utc>,
     ) -> AppResult<()> {
         let revision_args = revision_args(revision);
+        // The disarm rides in the pointer update rather than in a second call:
+        // arming acknowledges one specific matcher's blast radius, so there must
+        // be no instant at which the new revision is in force under the old
+        // revision's arming.
         let pointer_args = vec![
             SqlArg::I64(revision.revision_number),
+            SqlArg::Text(MaintenanceEffectArming::None.as_storage_str().to_string()),
             SqlArg::Timestamp(updated_at),
             SqlArg::Text(revision.rule_set_id.clone()),
         ];
@@ -91,7 +96,7 @@ impl MaintenanceRuleSetRepository for MaintenanceRuleSetStore {
                     SqlRuntime::execute(
                         SqlExec::Tx(tx),
                         "UPDATE maintenance_rule_sets
-                            SET current_revision_number = {}, updated_at = {}
+                            SET current_revision_number = {}, effect_arming = {}, updated_at = {}
                           WHERE id = {}",
                         &pointer_args,
                     )

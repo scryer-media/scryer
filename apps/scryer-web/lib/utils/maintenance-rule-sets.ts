@@ -131,16 +131,32 @@ export function updateMaintenanceRuleMetadataInput(
   };
 }
 
+/// Kinds the backend's title executor has no implementation for, even though
+/// their descriptor claims a title subject.
+///
+/// This mirrors `EXECUTABLE_TITLE_RULE_ACTIONS` in
+/// `crates/scryer-application/src/maintenance_rules/action_execution.rs`: the
+/// season- and episode-only kinds are already excluded by the subject filter
+/// below, so this list carries only the show-subject kind that would otherwise
+/// slip through. The API refuses to save a rule using it, so offering it here
+/// would only produce a validation error the operator cannot act on. Change one
+/// side, change the other.
+const TITLE_EXECUTOR_UNSUPPORTED_ACTION_KINDS: MaintenanceActionKind[] = [
+  "UNMONITOR_SHOW_DELETE_EXISTING_FILES",
+];
+
 /// Descriptors offerable for a title-scoped rule. The season- and episode-only
 /// kinds stay in the enum but are never selectable here, and the filter reads
-/// the descriptors rather than hardcoding which kinds those are.
+/// the descriptors rather than hardcoding which kinds those are — except for the
+/// executor gap above, which no descriptor field expresses.
 export function titleScopedActionDescriptors(
   descriptors: MaintenanceActionDescriptor[],
 ): MaintenanceActionDescriptor[] {
-  return descriptors.filter((descriptor) =>
-    descriptor.supportedSubjects.some(
-      (subject) => subject === "MOVIE" || subject === "SHOW",
-    ),
+  return descriptors.filter(
+    (descriptor) =>
+      descriptor.supportedSubjects.some(
+        (subject) => subject === "MOVIE" || subject === "SHOW",
+      ) && !TITLE_EXECUTOR_UNSUPPORTED_ACTION_KINDS.includes(descriptor.kind),
   );
 }
 

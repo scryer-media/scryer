@@ -219,6 +219,39 @@ test("only descriptors that support a movie or a show are offerable for a title 
   );
 });
 
+test("an action the backend's title executor cannot run is never offered", () => {
+  // Its descriptor says SHOW, so the subject filter alone would offer it — and
+  // the API would then refuse to save the rule, leaving the operator with a
+  // validation error and nothing to do about it. Mirrors
+  // EXECUTABLE_TITLE_RULE_ACTIONS in
+  // crates/scryer-application/src/maintenance_rules/action_execution.rs.
+  const withShowDelete: MaintenanceActionDescriptor[] = [
+    ...descriptors,
+    {
+      kind: "UNMONITOR_SHOW_DELETE_EXISTING_FILES",
+      supportedSubjects: ["SHOW"],
+      riskClass: "HIGH",
+      effectClasses: ["DELETE_FILES"],
+      timingMode: "GRACE",
+      allowedRepeatModes: ["ONCE"],
+      requiresTargetQualityProfile: false,
+    },
+  ];
+
+  const offerable = titleScopedActionDescriptors(withShowDelete).map(
+    (d) => d.kind,
+  );
+  assert.equal(
+    offerable.includes("UNMONITOR_SHOW_DELETE_EXISTING_FILES"),
+    false,
+  );
+  assert.deepEqual(offerable, [
+    "DO_NOTHING",
+    "DELETE_TITLE_AND_FILES",
+    "CHANGE_QUALITY_PROFILE_AND_SEARCH_IF_CHANGED",
+  ]);
+});
+
 test("the quality-profile field follows the descriptor rather than a hardcoded kind", () => {
   assert.equal(
     actionRequiresTargetQualityProfile(

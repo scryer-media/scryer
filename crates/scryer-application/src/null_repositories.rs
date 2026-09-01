@@ -1448,8 +1448,11 @@ impl crate::ports::MaintenanceCandidateRepository for NullMaintenanceEvaluationR
         _id: &str,
         _state: scryer_domain::MaintenanceCandidateState,
         _state_reason: &str,
+        _expected_states: &[scryer_domain::MaintenanceCandidateState],
         _updated_at: DateTime<Utc>,
-    ) -> AppResult<()> {
+    ) -> AppResult<bool> {
+        // A refusal, not `Ok(false)`: an unconfigured store never wrote the row,
+        // which is a different thing from losing a race for it.
         Err(AppError::Repository(
             MAINTENANCE_EVALUATION_NOT_CONFIGURED.to_string(),
         ))
@@ -1472,6 +1475,7 @@ impl crate::ports::MaintenanceCandidateRepository for NullMaintenanceEvaluationR
         &self,
         _rule_set_id: &str,
         _due_before: DateTime<Utc>,
+        _stale_before: DateTime<Utc>,
         _limit: usize,
     ) -> AppResult<Vec<scryer_domain::LifecycleCandidate>> {
         Ok(vec![])

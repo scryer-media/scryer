@@ -35,7 +35,7 @@ use scryer_rules::maintenance::{
     MaintenanceOutcome, MaintenancePolicy, MaintenanceRulesEngine, MaintenanceRulesEvaluator,
 };
 use serde::Serialize;
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::jobs::{JobKey, JobTriggerSource};
 use crate::maintenance_rules::facts::{
@@ -56,6 +56,21 @@ use crate::{AppError, AppResult, AppUseCase};
 /// background job, not a latency path, so the chunk exists to bound peak memory
 /// and query size rather than to go fast.
 pub const MAINTENANCE_EVALUATION_TITLE_CHUNK: usize = 200;
+
+/// The candidate states the evaluator is allowed to move a row out of.
+///
+/// [`MaintenanceCandidateState::Executing`] is deliberately absent: that state
+/// means the action handler holds a lease, and the two jobs are independently
+/// schedulable. Every evaluator write is a compare-and-set against this set, so
+/// an evaluation pass that runs while an action is executing can neither cancel
+/// the row out from under the executor nor overwrite the terminal state the
+/// executor just wrote.
+const EVALUATOR_WRITABLE_STATES: &[MaintenanceCandidateState] = &[
+    MaintenanceCandidateState::Observing,
+    MaintenanceCandidateState::PendingAction,
+    MaintenanceCandidateState::Due,
+    MaintenanceCandidateState::Blocked,
+];
 
 /// Stable `state_reason` values written by the evaluator. They are part of the
 /// operator-visible contract: a UI filtering on "why did this cancel" compares
@@ -874,19 +889,40 @@ impl AppUseCase {
             .get_active_candidate(rule_set_id, &title.id)
             .await?;
 
+        // A candidate under an execution lease belongs to the action handler for
+        // the length of that lease, so this pass leaves it entirely alone — no
+        // advance, no cancel, no hold, not even an evaluated tally. The executor
+        // re-evaluates the subject on fresh facts immediately before it acts, so
+        // nothing is lost by not deciding here; deciding anyway is how a cancel
+        // lands on top of a succeeded row, or a succeeded row on top of a
+        // cancel.
+        if let Some(candidate) = active.as_ref()
+            && candidate.state == MaintenanceCandidateState::Executing
+        {
+            debug!(
+                rule_set_id,
+                title_id = title.id.as_str(),
+                candidate_id = candidate.id.as_str(),
+                "skipping a candidate the action handler holds a lease on"
+            );
+            return Ok(());
+        }
+
         // Exclusions are honoured from the first shadow evaluation (RFC 11):
         // an excluded subject is never evaluated, and an existing candidate for
         // it becomes terminal rather than lingering as live membership.
         if excluded.contains(&title.id) {
-            if let Some(candidate) = active {
-                candidates
+            if let Some(candidate) = active
+                && candidates
                     .transition_candidate_state(
                         &candidate.id,
                         MaintenanceCandidateState::Excluded,
                         candidate_reason::EXCLUDED,
+                        EVALUATOR_WRITABLE_STATES,
                         evaluation_time,
                     )
-                    .await?;
+                    .await?
+            {
                 counts.excluded += 1;
             }
             return Ok(());
@@ -899,15 +935,20 @@ impl AppUseCase {
         if let Some(candidate) = active.as_ref()
             && candidate.revision_number != detail.rule_set.current_revision_number
         {
-            candidates
+            if candidates
                 .transition_candidate_state(
                     &candidate.id,
                     MaintenanceCandidateState::Canceled,
                     candidate_reason::REVISION_SUPERSEDED,
+                    EVALUATOR_WRITABLE_STATES,
                     evaluation_time,
                 )
-                .await?;
-            counts.superseded += 1;
+                .await?
+            {
+                counts.superseded += 1;
+            }
+            // The row is no longer this pass's to continue either way: it either
+            // closed here, or another writer moved it and owns what happens next.
             active = None;
         }
 
@@ -1001,15 +1042,17 @@ impl AppUseCase {
             }
             MaintenanceOutcome::NoMatch => {
                 counts.no_match += 1;
-                if let Some(candidate) = active {
-                    candidates
+                if let Some(candidate) = active
+                    && candidates
                         .transition_candidate_state(
                             &candidate.id,
                             MaintenanceCandidateState::Canceled,
                             candidate_reason::NO_MATCH,
+                            EVALUATOR_WRITABLE_STATES,
                             evaluation_time,
                         )
-                        .await?;
+                        .await?
+                {
                     counts.canceled += 1;
                 }
             }

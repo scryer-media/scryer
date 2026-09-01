@@ -142,6 +142,7 @@ async fn a_rule_set_may_hold_only_one_active_candidate_per_title() {
             "cand-1",
             MaintenanceCandidateState::Canceled,
             "no_match",
+            &[MaintenanceCandidateState::Observing],
             Utc::now(),
         )
         .await
@@ -265,6 +266,7 @@ async fn listing_filters_by_rule_state_and_library_and_counts_by_state() {
             "cand-3",
             MaintenanceCandidateState::Canceled,
             "no_match",
+            &[MaintenanceCandidateState::Observing],
             Utc::now(),
         )
         .await
@@ -650,6 +652,7 @@ async fn the_execution_lease_is_exclusive_and_reclaimable_when_stale() {
             "cand-1",
             MaintenanceCandidateState::Succeeded,
             "action_succeeded",
+            &[MaintenanceCandidateState::Executing],
             later,
         )
         .await
@@ -692,7 +695,7 @@ async fn due_selection_returns_only_actionable_states_past_their_due_time() {
         .expect("create blocked");
 
     let due = store
-        .list_due_candidates("rule-a", now, 10)
+        .list_due_candidates("rule-a", now, now - chrono::Duration::hours(1), 10)
         .await
         .expect("list due");
     let ids: Vec<&str> = due.iter().map(|row| row.id.as_str()).collect();
@@ -701,6 +704,133 @@ async fn due_selection_returns_only_actionable_states_past_their_due_time() {
         vec!["cand-blocked", "cand-due"],
         "oldest due first; blocked re-checks, future stays out"
     );
+
+    let _ = std::fs::remove_file(db);
+}
+
+#[tokio::test]
+async fn due_selection_returns_an_abandoned_lease_but_not_a_live_one() {
+    let (services, db) = temp_services("scryer_maintenance_due_stale_lease").await;
+    seed_rule_set(&services, "rule-a").await;
+    let store = evaluation_store(&services);
+    let now = Utc::now();
+
+    let mut row = candidate("cand-leased", "rule-a", "title-1", 1);
+    row.state = MaintenanceCandidateState::Due;
+    row.due_at = now - chrono::Duration::hours(1);
+    store.create_candidate(&row).await.expect("create");
+    assert!(
+        store
+            .lease_candidate_for_execution("cand-leased", now - chrono::Duration::hours(1), now)
+            .await
+            .expect("lease"),
+        "the candidate must lease before it can be stranded"
+    );
+
+    // A worker holding a fresh lease is doing its job; selecting the row again
+    // would put two workers on one candidate.
+    let live = store
+        .list_due_candidates("rule-a", now, now - chrono::Duration::hours(1), 10)
+        .await
+        .expect("list with a live lease");
+    assert!(
+        live.is_empty(),
+        "a fresh executing lease must stay out of the selection: {live:?}"
+    );
+
+    // Once the lease has gone stale nobody is driving the row. Before this arm
+    // existed it was never selected again, so the lease's own reclaim branch
+    // could not fire and the row stayed `executing` forever — permanently
+    // inflating the count destructive arming makes an operator acknowledge.
+    let later = now + chrono::Duration::hours(2);
+    let stranded = store
+        .list_due_candidates("rule-a", later, later - chrono::Duration::hours(1), 10)
+        .await
+        .expect("list with a stale lease");
+    let ids: Vec<&str> = stranded.iter().map(|row| row.id.as_str()).collect();
+    assert_eq!(ids, vec!["cand-leased"]);
+    assert_eq!(stranded[0].state, MaintenanceCandidateState::Executing);
+
+    assert!(
+        store
+            .lease_candidate_for_execution("cand-leased", later - chrono::Duration::hours(1), later)
+            .await
+            .expect("reclaim"),
+        "the selected stale row must be re-leasable, or the reclaim is still dead code"
+    );
+
+    let _ = std::fs::remove_file(db);
+}
+
+#[tokio::test]
+async fn a_candidate_transition_lands_only_from_a_state_the_caller_expected() {
+    let (services, db) = temp_services("scryer_maintenance_transition_cas").await;
+    seed_rule_set(&services, "rule-a").await;
+    let store = evaluation_store(&services);
+    let now = Utc::now();
+
+    let mut row = candidate("cand-1", "rule-a", "title-1", 1);
+    row.state = MaintenanceCandidateState::Due;
+    store.create_candidate(&row).await.expect("create");
+    assert!(
+        store
+            .lease_candidate_for_execution("cand-1", now - chrono::Duration::hours(1), now)
+            .await
+            .expect("lease")
+    );
+
+    // The evaluator's expectation set never includes `executing`, so its write
+    // finds no row and says so rather than cancelling a leased candidate out
+    // from under the worker that owns it.
+    assert!(
+        !store
+            .transition_candidate_state(
+                "cand-1",
+                MaintenanceCandidateState::Canceled,
+                "no_match",
+                &[
+                    MaintenanceCandidateState::Observing,
+                    MaintenanceCandidateState::Blocked,
+                ],
+                now,
+            )
+            .await
+            .expect("compare-and-set"),
+        "a transition whose expectation does not hold must not write"
+    );
+    let unchanged = store
+        .get_active_candidate("rule-a", "title-1")
+        .await
+        .expect("read")
+        .expect("exists");
+    assert_eq!(unchanged.state, MaintenanceCandidateState::Executing);
+    assert_eq!(unchanged.state_reason, "execution_leased");
+
+    // The lease holder's own write names `executing`, and lands.
+    assert!(
+        store
+            .transition_candidate_state(
+                "cand-1",
+                MaintenanceCandidateState::Succeeded,
+                "action_succeeded",
+                &[MaintenanceCandidateState::Executing],
+                now,
+            )
+            .await
+            .expect("compare-and-set")
+    );
+
+    let refused = store
+        .transition_candidate_state(
+            "cand-1",
+            MaintenanceCandidateState::Canceled,
+            "no_match",
+            &[],
+            now,
+        )
+        .await
+        .expect_err("an empty expectation is the unconditional write this replaced");
+    assert!(refused.to_string().contains("expects"), "{refused}");
 
     let _ = std::fs::remove_file(db);
 }

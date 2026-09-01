@@ -5481,8 +5481,15 @@ pub trait MaintenanceRuleSetRepository: Send + Sync {
         revision: &MaintenanceRuleRevision,
     ) -> AppResult<()>;
 
-    /// Append `revision` and repoint the rule set at it, atomically. Existing
-    /// revisions are never rewritten.
+    /// Append `revision`, repoint the rule set at it, and reset its
+    /// `effect_arming` to [`scryer_domain::MaintenanceEffectArming::None`] — all
+    /// three atomically. Existing revisions are never rewritten.
+    ///
+    /// The disarm is part of the same write on purpose: arming acknowledges the
+    /// blast radius of one specific matcher and action, so it must never outlive
+    /// the revision it was granted against. A new revision that left the rule
+    /// armed would execute destructively under an acknowledgement given for a
+    /// matcher that no longer exists.
     async fn add_revision(
         &self,
         revision: &MaintenanceRuleRevision,
@@ -5591,13 +5598,26 @@ pub trait MaintenanceCandidateRepository: Send + Sync {
         updated_at: DateTime<Utc>,
     ) -> AppResult<()>;
 
+    /// Compare-and-set the candidate's state: the write lands only while the row
+    /// is still in one of `expected_states`, and the returned flag says whether
+    /// it did.
+    ///
+    /// The evaluator (8h) and the action handler (12h) are independently
+    /// schedulable and both write candidate state, so an unconditional UPDATE
+    /// here is a lost update: the evaluator could overwrite a leased `executing`
+    /// row, or clobber the executor's terminal write and leave a finished action
+    /// looking live. Every caller therefore names the states its decision was
+    /// made against — the executor's terminal writes expect `Executing`, meaning
+    /// they still hold the lease — and treats `false` as "someone else owns this
+    /// row now", never as an error.
     async fn transition_candidate_state(
         &self,
         id: &str,
         state: scryer_domain::MaintenanceCandidateState,
         state_reason: &str,
+        expected_states: &[scryer_domain::MaintenanceCandidateState],
         updated_at: DateTime<Utc>,
-    ) -> AppResult<()>;
+    ) -> AppResult<bool>;
 
     /// Cancel every active candidate of one rule set in a single write. Used
     /// when a whole rule is superseded or retired; returns how many rows moved.
@@ -5616,11 +5636,19 @@ pub trait MaintenanceCandidateRepository: Send + Sync {
 
     /// Candidates of one rule whose materialized `due_at` has passed and whose
     /// state can still reach execution (observing, pending_action, due,
-    /// blocked). Ordered oldest due first.
+    /// blocked), plus any `executing` row abandoned by a crashed worker — one
+    /// untouched since `stale_before`. Ordered oldest due first.
+    ///
+    /// The stale-`executing` arm is what makes
+    /// [`Self::lease_candidate_for_execution`]'s reclaim reachable at all:
+    /// without it a candidate whose worker died mid-run is never selected again,
+    /// so it stays `executing` forever and keeps inflating the count destructive
+    /// arming makes an operator acknowledge.
     async fn list_due_candidates(
         &self,
         rule_set_id: &str,
         due_before: DateTime<Utc>,
+        stale_before: DateTime<Utc>,
         limit: usize,
     ) -> AppResult<Vec<scryer_domain::LifecycleCandidate>>;
 
@@ -5635,7 +5663,14 @@ pub trait MaintenanceCandidateRepository: Send + Sync {
         updated_at: DateTime<Utc>,
     ) -> AppResult<bool>;
 
-    /// Persist the bounded failed-attempt counter for the current generation.
+    /// Persist the bounded attempt counter for the current generation.
+    ///
+    /// The executor writes this as a *reservation*, before the action's external
+    /// side effects begin, not as an after-the-fact tally of failures. That is
+    /// what makes a reclaimed execution compute attempt N+1 instead of colliding
+    /// with the `(idempotency_key, attempt)` row an interrupted attempt already
+    /// wrote — and it is what makes the attempt cap bound a crash loop, which a
+    /// counter only advanced on a *handled* failure never could.
     async fn record_candidate_attempts(
         &self,
         id: &str,

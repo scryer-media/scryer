@@ -88,6 +88,15 @@ async fn adding_a_revision_repoints_the_rule_set_and_preserves_the_old_one() {
         .await
         .expect("create rule set");
 
+    store
+        .update_rule_set_arming(
+            "rule-b",
+            scryer_domain::MaintenanceEffectArming::Destructive,
+            Utc::now(),
+        )
+        .await
+        .expect("arm the rule against revision 1");
+
     let updated_at = Utc::now();
     store
         .add_revision(&revision("rule-b", 2), updated_at)
@@ -100,6 +109,13 @@ async fn adding_a_revision_repoints_the_rule_set_and_preserves_the_old_one() {
         .unwrap()
         .expect("rule set exists");
     assert_eq!(loaded.current_revision_number, 2);
+    // The pointer move and the disarm are one write: arming acknowledges one
+    // matcher's blast radius, so it must not carry over to the next revision.
+    assert_eq!(
+        loaded.effect_arming,
+        scryer_domain::MaintenanceEffectArming::None,
+        "appending a revision must disarm the rule"
+    );
 
     let first = store
         .get_revision("rule-b", 1)

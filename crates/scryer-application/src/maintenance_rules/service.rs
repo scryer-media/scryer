@@ -24,6 +24,9 @@ use scryer_rules::validation::{
     ValidationResult, maintenance_referenced_facts, validate_maintenance_rule,
 };
 
+use crate::maintenance_rules::action_execution::{
+    EXECUTABLE_TITLE_RULE_ACTIONS, title_rule_action_not_executable,
+};
 use crate::maintenance_rules::facts::{
     MaintenanceLibraryRef, MaintenanceTitlePeople, MaintenanceTitleWatch, build_title_input,
 };
@@ -255,6 +258,21 @@ impl AppUseCase {
 
     /// Appends revision N+1. Revision N is left exactly as it was written, so a
     /// candidate recorded against it stays attributable (RFC 7.1).
+    ///
+    /// Appending a revision also disarms the rule
+    /// ([`MaintenanceEffectArming::None`]), atomically with the append. Arming
+    /// never outlives the revision it was granted against: an operator armed a
+    /// specific matcher plus action after acknowledging *that* matcher's blast
+    /// radius, so a replacement matcher has to be armed again on its own terms.
+    /// Without this, catalog-settings authority alone would be enough to swap an
+    /// armed rule's matcher and have the next handler pass act destructively
+    /// under someone else's acknowledgement.
+    ///
+    /// A mode change or a metadata rename does *not* disarm: neither changes
+    /// what the rule matches or what it does, so the acknowledgement still
+    /// describes the same blast radius.
+    ///
+    /// [`MaintenanceEffectArming::None`]: scryer_domain::MaintenanceEffectArming::None
     pub async fn update_maintenance_rule_matcher(
         &self,
         actor: &User,
@@ -292,6 +310,9 @@ impl AppUseCase {
             .await?;
 
         rule_set.current_revision_number = revision_number;
+        // Mirrors what `add_revision` wrote in the same transaction, so the
+        // detail this returns can never claim an arming the store just cleared.
+        rule_set.effect_arming = scryer_domain::MaintenanceEffectArming::None;
         rule_set.updated_at = now;
         Ok(MaintenanceRuleSetDetail {
             rule_set,
@@ -699,7 +720,20 @@ fn prepare_matcher(
 /// need only be legal for one of them. Which one applies to a given candidate
 /// is decided per title from its facet at evaluation time; rejecting an action
 /// here because it is movie-only would make it unusable in movie libraries.
-fn validate_title_scope_action(spec: &MaintenanceActionSpec) -> AppResult<()> {
+///
+/// Passing the descriptor's subject check is necessary but not sufficient: the
+/// action also has to be one the title executor dispatches. The show-subject
+/// `unmonitor_show_delete_existing_files` used to pass here and then hard-fail
+/// at execution, burning its three attempts into a terminal `Failed` candidate,
+/// so [`EXECUTABLE_TITLE_RULE_ACTIONS`] — the executor's own list — is the gate
+/// on both sides.
+pub(super) fn validate_title_scope_action(spec: &MaintenanceActionSpec) -> AppResult<()> {
+    if !EXECUTABLE_TITLE_RULE_ACTIONS.contains(&spec.kind) {
+        return Err(AppError::Validation(title_rule_action_not_executable(
+            spec.kind,
+        )));
+    }
+
     if spec.validate(ActionSubjectKind::Movie).is_ok()
         || spec.validate(ActionSubjectKind::Show).is_ok()
     {

@@ -37,10 +37,35 @@ const NEEDS_UPGRADE_HISTORY_MATCHER: &str = "package whatever\n\
      \tinput.facts.last_upgraded_at != \"\"\n\
      }\n";
 
+/// What a test wants [`InMemoryMaintenanceRuleRepo::get_rule_set`] to answer
+/// instead of reading storage.
+///
+/// The executor's safety recheck is the only caller of that read during a
+/// handler pass, and it has to tell two failures apart: a rule that is genuinely
+/// gone (cancel the candidate — its authorization no longer exists) from a store
+/// it merely could not reach (hold, like every other unresolvable signal).
+/// Deleting the rule for real cannot exercise this, because a deleted rule is
+/// not in the pass's rule listing at all.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum MaintenanceRuleReadFault {
+    /// The rule set is gone.
+    Missing,
+    /// The store could not answer.
+    Unreachable,
+}
+
 #[derive(Default)]
 pub(super) struct InMemoryMaintenanceRuleRepo {
     rule_sets: Mutex<Vec<MaintenanceRuleSet>>,
     revisions: Mutex<Vec<MaintenanceRuleRevision>>,
+    read_fault: Mutex<Option<MaintenanceRuleReadFault>>,
+}
+
+impl InMemoryMaintenanceRuleRepo {
+    /// Make every subsequent single-rule read fail this way.
+    pub(super) async fn fail_rule_set_reads(&self, fault: MaintenanceRuleReadFault) {
+        *self.read_fault.lock().await = Some(fault);
+    }
 }
 
 impl InMemoryMaintenanceRuleRepo {
@@ -66,6 +91,15 @@ impl MaintenanceRuleSetRepository for InMemoryMaintenanceRuleRepo {
     }
 
     async fn get_rule_set(&self, id: &str) -> AppResult<Option<MaintenanceRuleSet>> {
+        match *self.read_fault.lock().await {
+            Some(MaintenanceRuleReadFault::Missing) => return Ok(None),
+            Some(MaintenanceRuleReadFault::Unreachable) => {
+                return Err(AppError::Repository(
+                    "maintenance rule store is unreachable".to_string(),
+                ));
+            }
+            None => {}
+        }
         Ok(self
             .rule_sets
             .lock()
@@ -96,6 +130,10 @@ impl MaintenanceRuleSetRepository for InMemoryMaintenanceRuleRepo {
             .find(|rule_set| rule_set.id == revision.rule_set_id)
             .ok_or_else(|| AppError::NotFound(revision.rule_set_id.clone()))?;
         rule_set.current_revision_number = revision.revision_number;
+        // The SQL store disarms in the same transaction as the pointer move; a
+        // permissive double here would hide an arming that survived a matcher
+        // swap.
+        rule_set.effect_arming = scryer_domain::MaintenanceEffectArming::None;
         rule_set.updated_at = updated_at;
         self.revisions.lock().await.push(revision.clone());
         Ok(())
@@ -487,6 +525,57 @@ async fn an_action_that_supports_neither_movies_nor_shows_is_rejected() {
         error.to_string().contains("title-scoped"),
         "the message should name the scope: {error}"
     );
+}
+
+#[tokio::test]
+async fn an_action_the_title_executor_cannot_run_is_rejected_at_authoring_time() {
+    let MaintenanceFixture { app, user, .. } = maintenance_app();
+
+    // The show-subject delete action passes the descriptor's subject check — a
+    // title-scoped rule covers shows — so it used to save cleanly and then hard
+    // fail at execution, three attempts into a terminal `Failed` candidate that
+    // nothing could rescue. Authoring now refuses it up front.
+    let error = app
+        .create_maintenance_rule_set(
+            &user,
+            MaintenanceRuleDraft {
+                action_spec: MaintenanceActionSpec::new(
+                    MaintenanceActionKind::UnmonitorShowDeleteExistingFiles,
+                ),
+                ..draft(MONITORED_MATCHER)
+            },
+        )
+        .await
+        .expect_err("an action the executor refuses must not be savable");
+
+    assert!(matches!(error, AppError::Validation(_)), "{error:?}");
+    assert!(
+        error
+            .to_string()
+            .contains("cannot run for a title-scoped rule"),
+        "{error}"
+    );
+
+    // The same gate applies to a matcher replacement, not just to creation.
+    let created = app
+        .create_maintenance_rule_set(&user, draft(MONITORED_MATCHER))
+        .await
+        .expect("create a rule with a runnable action");
+    let refused = app
+        .update_maintenance_rule_matcher(
+            &user,
+            &created.rule_set.id,
+            MaintenanceMatcherDraft {
+                rego_source: MONITORED_MATCHER.to_string(),
+                action_spec: MaintenanceActionSpec::new(
+                    MaintenanceActionKind::UnmonitorShowDeleteExistingFiles,
+                ),
+                grace_days: 7,
+            },
+        )
+        .await
+        .expect_err("a revision cannot smuggle in an unrunnable action either");
+    assert!(matches!(refused, AppError::Validation(_)), "{refused:?}");
 }
 
 #[tokio::test]

@@ -65,6 +65,69 @@ pub const MAINTENANCE_MAX_ACTION_ATTEMPTS: i64 = 3;
 /// run and may be re-leased.
 const EXECUTION_LEASE_STALE_AFTER_MINUTES: i64 = 60;
 
+/// How many of a candidate's action-run rows a reclaim scans looking for the
+/// `running` row an interrupted attempt left behind. Attempts are capped at
+/// [`MAINTENANCE_MAX_ACTION_ATTEMPTS`] and holds append rows of their own, so a
+/// small bound covers every row that could still be open without reading a
+/// candidate's whole history.
+const MAINTENANCE_ORPHANED_RUN_SCAN_LIMIT: usize = 20;
+
+/// The states the executor may move a selected candidate into `due` from.
+///
+/// `executing` is absent on purpose: a stranded lease is reclaimed by
+/// [`MaintenanceCandidateRepository::lease_candidate_for_execution`]'s own stale
+/// arm, which is the only writer allowed to decide that a lease is abandoned.
+///
+/// [`MaintenanceCandidateRepository::lease_candidate_for_execution`]: crate::ports::MaintenanceCandidateRepository::lease_candidate_for_execution
+const EXECUTOR_DUE_EXPECTED_STATES: &[MaintenanceCandidateState] = &[
+    MaintenanceCandidateState::Observing,
+    MaintenanceCandidateState::PendingAction,
+    MaintenanceCandidateState::Blocked,
+];
+
+/// The only state an executor's terminal write may move a candidate out of: the
+/// lease it took itself. Zero rows affected means this worker no longer owns the
+/// candidate — its lease went stale and was reclaimed while it worked — so the
+/// pass records [`CandidateOutcome::LeaseLost`] and writes nothing further
+/// rather than stamping a result over the new owner's.
+const EXECUTOR_TERMINAL_EXPECTED_STATES: &[MaintenanceCandidateState] =
+    &[MaintenanceCandidateState::Executing];
+
+/// The action kinds [`AppUseCase::execute_maintenance_action`] actually
+/// dispatches for a title-scoped rule.
+///
+/// This is the single source of truth for "can a title rule run this action":
+/// authoring checks it (`validate_title_scope_action`) and the executor's match
+/// refuses everything outside it. Before, the two disagreed —
+/// `unmonitor_show_delete_existing_files` is show-subject, so it passed
+/// authoring, and then hard-failed at execution three times into a terminal
+/// `Failed` candidate. A kind is on this list only when the executor has a real
+/// implementation for it; `unmonitor_title_delete_all_files` is on it because it
+/// does dispatch (its file-deletion half is a declared MVP gap that reports
+/// [`execution_reason::ACTION_NOT_FULLY_SUPPORTED`], not a missing arm).
+///
+/// The web rule builder mirrors this list —
+/// `TITLE_EXECUTOR_UNSUPPORTED_ACTION_KINDS` in
+/// `apps/scryer-web/lib/utils/maintenance-rule-sets.ts` — so an operator is
+/// never offered an action the backend would refuse to save. Change one, change
+/// the other.
+pub const EXECUTABLE_TITLE_RULE_ACTIONS: &[MaintenanceActionKind] = &[
+    MaintenanceActionKind::DoNothing,
+    MaintenanceActionKind::UnmonitorScopeKeepFiles,
+    MaintenanceActionKind::DeleteTitleAndFiles,
+    MaintenanceActionKind::UnmonitorTitleDeleteAllFiles,
+    MaintenanceActionKind::ChangeQualityProfileAndSearchIfChanged,
+];
+
+/// The refusal both the authoring check and the executor's rejection arm speak,
+/// so an operator reads the same sentence wherever they hit the boundary.
+pub(crate) fn title_rule_action_not_executable(kind: MaintenanceActionKind) -> String {
+    format!(
+        "this action cannot run for a title-scoped rule yet: {}",
+        kind.as_wire_str()
+    )
+}
+
 /// Stable `hold_reason` / `state_reason` values the executor writes. Part of
 /// the operator-visible contract, like `candidate_reason` on the evaluator.
 pub mod execution_reason {
@@ -96,6 +159,9 @@ pub mod execution_reason {
     pub const RETRY_PENDING: &str = "retry_pending";
     /// The attempt budget is exhausted or the failure was terminal.
     pub const ACTION_FAILED: &str = "action_failed";
+    /// An attempt's worker stopped before it finished; the abandoned lease was
+    /// reclaimed and its `running` action-run row closed out.
+    pub const LEASE_RECLAIMED: &str = "lease_reclaimed";
 }
 
 /// Job report for [`JobKey::LifecycleActionHandling`], serialized onto the run.
@@ -160,6 +226,15 @@ impl AppUseCase {
     /// acknowledge the number of candidates the arming would expose. Arming is
     /// deliberately independent of the instance gates — execution requires
     /// both.
+    ///
+    /// Arming never outlives the revision it was granted against: what an
+    /// operator acknowledged is one matcher's blast radius under one action, so
+    /// appending a revision resets the rule to
+    /// [`MaintenanceEffectArming::None`] and this call has to be repeated
+    /// against the new matcher (see
+    /// [`AppUseCase::update_maintenance_rule_matcher`]). Mode changes and
+    /// metadata renames leave arming alone, because neither moves the matcher or
+    /// the action.
     pub async fn set_maintenance_rule_arming(
         &self,
         actor: &User,
@@ -390,6 +465,10 @@ impl AppUseCase {
                 }
             };
 
+            // The selection covers abandoned leases as well as due work: a
+            // candidate whose worker died mid-run is `executing` with nothing
+            // driving it, and only this pass can hand it back to the lease's
+            // reclaim arm.
             let due = self
                 .services
                 .customization
@@ -397,6 +476,7 @@ impl AppUseCase {
                 .list_due_candidates(
                     &detail.rule_set.id,
                     now,
+                    now - Duration::minutes(EXECUTION_LEASE_STALE_AFTER_MINUTES),
                     MAINTENANCE_MAX_ACTIONS_PER_RULE_PER_RUN * 2,
                 )
                 .await?;
@@ -465,17 +545,26 @@ impl AppUseCase {
         let now = Utc::now();
         let candidates = &self.services.customization.maintenance_evaluation;
 
-        // Selection bookkeeping, then the atomic lease. Only the lease decides
-        // ownership; the Due transition is what makes it contestable.
-        if candidate.state != MaintenanceCandidateState::Due {
-            candidates
+        // A candidate arriving already `executing` is an abandoned lease the
+        // selection reclaimed: it goes straight to the lease, whose stale arm is
+        // the only writer allowed to decide a lease is dead. Everything else is
+        // moved to `due` first — that transition is what makes ownership
+        // contestable — and a lost compare-and-set there means another writer
+        // reached the row between selection and now.
+        let reclaiming = candidate.state == MaintenanceCandidateState::Executing;
+        if !reclaiming
+            && candidate.state != MaintenanceCandidateState::Due
+            && !candidates
                 .transition_candidate_state(
                     &candidate.id,
                     MaintenanceCandidateState::Due,
                     "due",
+                    EXECUTOR_DUE_EXPECTED_STATES,
                     now,
                 )
-                .await?;
+                .await?
+        {
+            return Ok(CandidateOutcome::LeaseLost);
         }
         let stale_before = now - Duration::minutes(EXECUTION_LEASE_STALE_AFTER_MINUTES);
         if !candidates
@@ -485,7 +574,36 @@ impl AppUseCase {
             return Ok(CandidateOutcome::LeaseLost);
         }
 
+        if reclaiming {
+            // The interrupted attempt left a `running` row that will never be
+            // finished by anyone else. Close it out before this attempt starts,
+            // so the candidate's history reads as one abandoned attempt followed
+            // by a new one rather than two attempts that both appear live.
+            self.finalize_orphaned_maintenance_action_runs(&candidate.id)
+                .await?;
+        }
+
+        // Attempts are counted as reservations (see below), so a candidate that
+        // crash-looped through its budget is terminal here rather than being
+        // retried forever — the failure path that would normally notice never
+        // got to run.
         let attempt = candidate.action_attempts + 1;
+        if attempt > MAINTENANCE_MAX_ACTION_ATTEMPTS {
+            return Ok(
+                if self
+                    .finish_maintenance_candidate(
+                        &candidate.id,
+                        MaintenanceCandidateState::Failed,
+                        execution_reason::ACTION_FAILED,
+                    )
+                    .await?
+                {
+                    CandidateOutcome::Failed
+                } else {
+                    CandidateOutcome::LeaseLost
+                },
+            );
+        }
         let execution_key = maintenance_action_idempotency_key(detail, &candidate);
         let run_id = Id::new().0;
         let mut run = LifecycleActionRun {
@@ -519,6 +637,16 @@ impl AppUseCase {
         // execution key, whose (key, attempt) uniqueness is what makes a
         // crashed or concurrent duplicate attempt detectable.
         if matches!(decision, SafetyDecision::Proceed(_)) {
+            // The attempt is *reserved* here — durably, and strictly before the
+            // run row and any external side effect. A counter only advanced
+            // after a handled failure leaves an interrupted attempt invisible:
+            // the reclaiming pass would compute the same attempt number, collide
+            // with the orphaned `(idempotency_key, attempt)` row, and hand the
+            // candidate back to `due` forever. Reserving first also makes the
+            // attempt cap bound a crash loop, not just a failure loop.
+            candidates
+                .record_candidate_attempts(&candidate.id, attempt, Utc::now())
+                .await?;
             run.idempotency_key = execution_key;
             if let Err(error) = candidates.start_action_run(&run).await {
                 candidates
@@ -526,6 +654,7 @@ impl AppUseCase {
                         &candidate.id,
                         MaintenanceCandidateState::Due,
                         "duplicate_attempt_detected",
+                        EXECUTOR_TERMINAL_EXPECTED_STATES,
                         Utc::now(),
                     )
                     .await?;
@@ -537,26 +666,40 @@ impl AppUseCase {
             candidates.start_action_run(&run).await?;
         }
 
+        // Every terminal write below is a compare-and-set against this worker's
+        // own lease: `false` means the lease went stale and was reclaimed while
+        // the action ran, so the pass reports `LeaseLost` and leaves the new
+        // owner's row alone. The action-run row is still finished either way —
+        // it is this worker's evidence of what it did, and that stays true no
+        // matter who owns the candidate now.
         let outcome = match decision {
             SafetyDecision::Hold(reason) => {
-                self.finish_candidate_hold(&mut run, &candidate, reason)
-                    .await?;
-                CandidateOutcome::Held
+                if self
+                    .finish_candidate_hold(&mut run, &candidate, reason)
+                    .await?
+                {
+                    CandidateOutcome::Held
+                } else {
+                    CandidateOutcome::LeaseLost
+                }
             }
             SafetyDecision::Cancel(reason) => {
                 run.status = LifecycleActionRunStatus::Held;
                 run.hold_reason = Some(reason.to_string());
                 run.finished_at = Some(Utc::now());
                 candidates.finish_action_run(&run).await?;
-                candidates
-                    .transition_candidate_state(
+                if self
+                    .finish_maintenance_candidate(
                         &candidate.id,
                         MaintenanceCandidateState::Canceled,
                         reason,
-                        Utc::now(),
                     )
-                    .await?;
-                CandidateOutcome::Canceled
+                    .await?
+                {
+                    CandidateOutcome::Canceled
+                } else {
+                    CandidateOutcome::LeaseLost
+                }
             }
             SafetyDecision::Excluded => {
                 run.status = LifecycleActionRunStatus::Held;
@@ -565,15 +708,18 @@ impl AppUseCase {
                 );
                 run.finished_at = Some(Utc::now());
                 candidates.finish_action_run(&run).await?;
-                candidates
-                    .transition_candidate_state(
+                if self
+                    .finish_maintenance_candidate(
                         &candidate.id,
                         MaintenanceCandidateState::Excluded,
                         crate::maintenance_rules::evaluation::candidate_reason::EXCLUDED,
-                        Utc::now(),
                     )
-                    .await?;
-                CandidateOutcome::Canceled
+                    .await?
+                {
+                    CandidateOutcome::Canceled
+                } else {
+                    CandidateOutcome::LeaseLost
+                }
             }
             SafetyDecision::Proceed(title) => {
                 match self
@@ -585,32 +731,41 @@ impl AppUseCase {
                         run.detail = evidence.to_string();
                         run.finished_at = Some(Utc::now());
                         candidates.finish_action_run(&run).await?;
-                        candidates
-                            .transition_candidate_state(
+                        if self
+                            .finish_maintenance_candidate(
                                 &candidate.id,
                                 MaintenanceCandidateState::Succeeded,
                                 execution_reason::ACTION_SUCCEEDED,
-                                Utc::now(),
                             )
-                            .await?;
-                        CandidateOutcome::Executed
+                            .await?
+                        {
+                            CandidateOutcome::Executed
+                        } else {
+                            CandidateOutcome::LeaseLost
+                        }
                     }
                     Ok(ActionResult::AlreadySatisfied { detail: evidence }) => {
                         run.status = LifecycleActionRunStatus::AlreadySatisfied;
                         run.detail = evidence.to_string();
                         run.finished_at = Some(Utc::now());
                         candidates.finish_action_run(&run).await?;
-                        candidates
-                            .transition_candidate_state(
+                        if self
+                            .finish_maintenance_candidate(
                                 &candidate.id,
                                 MaintenanceCandidateState::Succeeded,
                                 execution_reason::ALREADY_SATISFIED,
-                                Utc::now(),
                             )
-                            .await?;
-                        CandidateOutcome::AlreadySatisfied
+                            .await?
+                        {
+                            CandidateOutcome::AlreadySatisfied
+                        } else {
+                            CandidateOutcome::LeaseLost
+                        }
                     }
                     Err(error) => {
+                        // The attempt was already reserved before the action
+                        // ran, so nothing is counted here — only the verdict on
+                        // the budget it consumed.
                         let terminal = matches!(
                             error,
                             AppError::Validation(_)
@@ -621,11 +776,8 @@ impl AppUseCase {
                         run.error = Some(error.to_string());
                         run.finished_at = Some(Utc::now());
                         candidates.finish_action_run(&run).await?;
-                        candidates
-                            .record_candidate_attempts(&candidate.id, attempt, Utc::now())
-                            .await?;
-                        candidates
-                            .transition_candidate_state(
+                        if self
+                            .finish_maintenance_candidate(
                                 &candidate.id,
                                 if terminal {
                                     MaintenanceCandidateState::Failed
@@ -637,10 +789,13 @@ impl AppUseCase {
                                 } else {
                                     execution_reason::RETRY_PENDING
                                 },
-                                Utc::now(),
                             )
-                            .await?;
-                        CandidateOutcome::Failed
+                            .await?
+                        {
+                            CandidateOutcome::Failed
+                        } else {
+                            CandidateOutcome::LeaseLost
+                        }
                     }
                 }
             }
@@ -649,25 +804,83 @@ impl AppUseCase {
         Ok(outcome)
     }
 
+    /// Returns whether this worker still held the lease when it wrote the hold.
     async fn finish_candidate_hold(
         &self,
         run: &mut LifecycleActionRun,
         candidate: &LifecycleCandidate,
         reason: &'static str,
-    ) -> AppResult<()> {
+    ) -> AppResult<bool> {
         let candidates = &self.services.customization.maintenance_evaluation;
         run.status = LifecycleActionRunStatus::Held;
         run.hold_reason = Some(reason.to_string());
         run.finished_at = Some(Utc::now());
         candidates.finish_action_run(run).await?;
-        candidates
+        self.finish_maintenance_candidate(&candidate.id, MaintenanceCandidateState::Blocked, reason)
+            .await
+    }
+
+    /// Write a candidate's post-execution state, but only while this worker
+    /// still owns the lease it took. `false` means it does not: another pass
+    /// reclaimed the candidate as stale, and this worker must stop writing.
+    async fn finish_maintenance_candidate(
+        &self,
+        candidate_id: &str,
+        state: MaintenanceCandidateState,
+        reason: &str,
+    ) -> AppResult<bool> {
+        let moved = self
+            .services
+            .customization
+            .maintenance_evaluation
             .transition_candidate_state(
-                &candidate.id,
-                MaintenanceCandidateState::Blocked,
+                candidate_id,
+                state,
                 reason,
+                EXECUTOR_TERMINAL_EXPECTED_STATES,
                 Utc::now(),
             )
-            .await
+            .await?;
+        if !moved {
+            warn!(
+                candidate_id,
+                "maintenance execution lease was lost before its result could be recorded"
+            );
+        }
+        Ok(moved)
+    }
+
+    /// Close out the `running` action-run rows an interrupted attempt left for
+    /// this candidate.
+    ///
+    /// A row stuck at `running` is not evidence of work in flight — the worker
+    /// that wrote it is gone — so it is finished as failed with a stable
+    /// [`execution_reason::LEASE_RECLAIMED`] message. Only rows already stored
+    /// are touched: the reclaiming attempt inserts its own row afterwards, at
+    /// the next attempt number, which is what keeps it clear of the orphan's
+    /// `(idempotency_key, attempt)` uniqueness.
+    async fn finalize_orphaned_maintenance_action_runs(&self, candidate_id: &str) -> AppResult<()> {
+        let candidates = &self.services.customization.maintenance_evaluation;
+        let orphans: Vec<LifecycleActionRun> = candidates
+            .list_action_runs(
+                None,
+                Some(candidate_id),
+                Some(MAINTENANCE_ORPHANED_RUN_SCAN_LIMIT),
+            )
+            .await?
+            .into_iter()
+            .filter(|run| run.status == LifecycleActionRunStatus::Running)
+            .collect();
+        for mut orphan in orphans {
+            orphan.status = LifecycleActionRunStatus::Failed;
+            orphan.error = Some(format!(
+                "{}: the worker holding this attempt stopped before it finished",
+                execution_reason::LEASE_RECLAIMED
+            ));
+            orphan.finished_at = Some(Utc::now());
+            candidates.finish_action_run(&orphan).await?;
+        }
+        Ok(())
     }
 
     /// The ordered pre-execution rechecks (RFC 8 step 3, RFC 9.10). Order
@@ -688,7 +901,15 @@ impl AppUseCase {
             .await
         {
             Ok(rule_set) => rule_set,
-            Err(_) => return SafetyDecision::Cancel(execution_reason::RULE_NOT_ELIGIBLE),
+            // Only a rule that is genuinely gone cancels: the candidate's
+            // authorization no longer exists, so there is nothing to re-check
+            // later. Every other error is the repository being unreachable,
+            // which says nothing about the rule — it holds, like every sibling
+            // check on this path.
+            Err(AppError::NotFound(_)) => {
+                return SafetyDecision::Cancel(execution_reason::RULE_NOT_ELIGIBLE);
+            }
+            Err(_) => return SafetyDecision::Hold(execution_reason::RULE_NOT_ELIGIBLE),
         };
         let gates = match self.load_maintenance_gates().await {
             Ok(gates) => gates,
@@ -910,12 +1131,15 @@ impl AppUseCase {
             | MaintenanceActionKind::UnmonitorScopeDeleteFiles
             | MaintenanceActionKind::UnmonitorSeasonDeleteFilesThenDeleteShowIfEmpty
             | MaintenanceActionKind::UnmonitorSeasonThenUnmonitorShowIfEmpty => {
-                // Season/episode scopes cannot be authored for title rules;
-                // a stored candidate carrying one is a contract violation.
-                Err(AppError::Validation(format!(
-                    "action {:?} is not executable for a title-scoped rule",
-                    kind
-                )))
+                // Exactly the complement of `EXECUTABLE_TITLE_RULE_ACTIONS`, and
+                // the authoring check now refuses the same set, so a rule
+                // carrying one of these can no longer be saved. Rules stored
+                // before that check existed still land here, which is why the
+                // arm stays: a stored candidate carrying an undispatched action
+                // is refused rather than silently reinterpreted. The match is
+                // deliberately exhaustive so a new catalog kind is a compile
+                // error until it is placed on one side or the other.
+                Err(AppError::Validation(title_rule_action_not_executable(kind)))
             }
         }
     }
@@ -1041,5 +1265,77 @@ impl MaintenanceRuleSetDetail {
     /// The action kind string the revision in force stores.
     fn revision_action_kind(&self) -> String {
         self.action_spec.kind.as_wire_str().to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::maintenance_rules::MaintenanceActionSpec;
+    use crate::maintenance_rules::service::validate_title_scope_action;
+
+    /// The kinds spelled out in `execute_maintenance_action`'s rejection arm,
+    /// restated here literally. This list and that arm are edited together; the
+    /// test below is what makes a one-sided edit fail.
+    const EXECUTOR_REJECTION_ARM_KINDS: &[MaintenanceActionKind] = &[
+        MaintenanceActionKind::UnmonitorShowDeleteExistingFiles,
+        MaintenanceActionKind::UnmonitorScopeDeleteFiles,
+        MaintenanceActionKind::UnmonitorSeasonDeleteFilesThenDeleteShowIfEmpty,
+        MaintenanceActionKind::UnmonitorSeasonThenUnmonitorShowIfEmpty,
+    ];
+
+    fn spec_for(kind: MaintenanceActionKind) -> MaintenanceActionSpec {
+        if kind == MaintenanceActionKind::ChangeQualityProfileAndSearchIfChanged {
+            MaintenanceActionSpec::change_quality_profile("profile-1")
+        } else {
+            MaintenanceActionSpec::new(kind)
+        }
+    }
+
+    /// Every catalog kind is either dispatched by the title executor or refused
+    /// by it, and authoring answers identically for all nine.
+    ///
+    /// This is the mechanical link the `unmonitor_show_delete_existing_files`
+    /// trap needed: it was savable (show-subject, so the descriptor check passed)
+    /// and then unconditionally refused at execution, so a rule using it failed
+    /// three attempts into a terminal `Failed` and never recovered.
+    #[test]
+    fn authoring_and_the_title_executor_agree_on_every_action_kind() {
+        for kind in MaintenanceActionKind::ALL.iter().copied() {
+            let dispatched = EXECUTABLE_TITLE_RULE_ACTIONS.contains(&kind);
+            let refused = EXECUTOR_REJECTION_ARM_KINDS.contains(&kind);
+            assert_ne!(
+                dispatched, refused,
+                "{kind:?} must appear on exactly one of the executor's two sides"
+            );
+
+            let authored = validate_title_scope_action(&spec_for(kind)).is_ok();
+            assert_eq!(
+                authored, dispatched,
+                "{kind:?}: authoring must accept exactly what the executor dispatches"
+            );
+        }
+
+        assert_eq!(
+            EXECUTABLE_TITLE_RULE_ACTIONS.len() + EXECUTOR_REJECTION_ARM_KINDS.len(),
+            MaintenanceActionKind::ALL.len(),
+            "the two sides must together cover the closed catalog exactly once"
+        );
+    }
+
+    /// The specific regression: the show-subject delete action is savable no
+    /// longer, and the refusal says so in words an operator can act on.
+    #[test]
+    fn a_show_scoped_delete_action_is_refused_at_authoring_time() {
+        let refused = validate_title_scope_action(&spec_for(
+            MaintenanceActionKind::UnmonitorShowDeleteExistingFiles,
+        ))
+        .expect_err("an action the executor cannot dispatch must not be savable");
+        assert!(
+            refused
+                .to_string()
+                .contains("cannot run for a title-scoped rule"),
+            "{refused}"
+        );
     }
 }
