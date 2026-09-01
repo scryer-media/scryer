@@ -673,6 +673,7 @@ fn from_title_checkpoint(checkpoint: &TitleCheckpoint) -> LocationTitleCheckpoin
             .as_deref()
             .map(display_path),
         merged_into_title_id: placement.merged_into_title_id.clone().map(ID::from),
+        merged_into_title_name: placement.merged_into_title_name.clone(),
         files_total: Long(checkpoint.files_total),
         files_verified: Long(checkpoint.files_verified),
         bytes_total: Long(checkpoint.bytes_total),

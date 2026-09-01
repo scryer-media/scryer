@@ -10098,6 +10098,12 @@ type LocationTitleCheckpointPayload {
 	"""
 	mergedIntoTitleId: ID
 	"""
+	Name of that surviving title, resolved from the catalog when the
+	checkpoint is read. Null when it merged into a title that has since been
+	deleted, in which case the id still identifies it.
+	"""
+	mergedIntoTitleName: String
+	"""
 	Files planned for this title.
 	"""
 	filesTotal: Long!

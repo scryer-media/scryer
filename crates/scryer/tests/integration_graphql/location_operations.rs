@@ -144,7 +144,16 @@ const OPERATION_QUERY: &str = r#"
         cancelRequested
         detail
         counters { titlesTotal filesTotal bytesTotal titlesProcessed }
-        titleCheckpoints { titleId sequence state classification sourceFolderPath destinationFolderPath }
+        titleCheckpoints {
+          titleId
+          sequence
+          state
+          classification
+          sourceFolderPath
+          destinationFolderPath
+          mergedIntoTitleId
+          mergedIntoTitleName
+        }
       }
     }
 "#;

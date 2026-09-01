@@ -4200,6 +4200,7 @@ export const LOCATION_OPERATION_FIELDS = `
       destinationRootId
       destinationFolderPath
       mergedIntoTitleId
+      mergedIntoTitleName
       filesTotal
       filesVerified
       bytesTotal

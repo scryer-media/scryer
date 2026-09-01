@@ -359,6 +359,12 @@ export type LocationTitleCheckpoint = {
   destinationRootId: string | null;
   destinationFolderPath: string | null;
   mergedIntoTitleId: string | null;
+  /**
+   * Name of the surviving title, resolved from the catalog when the checkpoint
+   * is read. Null when that title has since been deleted — optional on the
+   * client type because a cached checkpoint may predate the field.
+   */
+  mergedIntoTitleName?: string | null;
   filesTotal: LongValue;
   filesVerified: LongValue;
   bytesTotal: LongValue;
@@ -722,6 +728,45 @@ export function mergeStatement(
 function titleName(value: string | null | undefined): string | null {
   const trimmed = value?.trim();
   return trimmed ? trimmed : null;
+}
+
+/** What Activity's "merged into" checkpoint row states (US7, FR-091). */
+export type CheckpointMergeTarget = {
+  /** The surviving title. Always present — it is what the merge recorded. */
+  titleId: string;
+  /** Its name, or null when the catalog no longer has that title. */
+  name: string | null;
+  /** What the row shows: the name when there is one, the id otherwise. */
+  label: string;
+  /**
+   * True when `label` is the raw id. The row renders an id in a code face and a
+   * name in prose, so the two never read as the same kind of thing.
+   */
+  isIdFallback: boolean;
+};
+
+/**
+ * The merge target of one settled checkpoint, or null when the title did not
+ * merge. The name is resolved server-side at read time, so a destination
+ * deleted after the merge falls back to the id rather than losing the row.
+ */
+export function checkpointMergeTarget(
+  checkpoint: Pick<
+    LocationTitleCheckpoint,
+    "mergedIntoTitleId" | "mergedIntoTitleName"
+  >,
+): CheckpointMergeTarget | null {
+  const titleId = checkpoint.mergedIntoTitleId?.trim();
+  if (!titleId) {
+    return null;
+  }
+  const name = titleName(checkpoint.mergedIntoTitleName);
+  return {
+    titleId,
+    name,
+    label: name ?? titleId,
+    isIdFallback: name === null,
+  };
 }
 
 /** The destination library a cross-library transfer states it lands in (FR-016). */

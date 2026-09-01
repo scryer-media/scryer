@@ -337,6 +337,24 @@ pub struct TitleCheckpointPlacement {
     pub destination_folder_path: Option<String>,
     /// Set when this title merges into an existing destination title (D8, US7).
     pub merged_into_title_id: Option<String>,
+    /// Name of that surviving title, resolved from the catalog when the
+    /// checkpoint is read — **not** a persisted column.
+    ///
+    /// 0206 has no column for it and this campaign's migrations are immutable,
+    /// so the store resolves it in the same `SELECT` that reads the checkpoint
+    /// (one `LEFT JOIN titles`, no extra round-trip). The writer never sets it:
+    /// [`crate::location::root_move::RootMoveTitleExecution::placement`] leaves
+    /// it `None` and the upsert has no parameter for it.
+    ///
+    /// Consequences of resolving live rather than freezing the name: a
+    /// destination renamed after the merge reads out under its *current* name,
+    /// and one deleted afterwards reads out as `None` so the row falls back to
+    /// the id it already showed. Neither case shows less than the id-only row
+    /// did, and the current name is what a user chasing "where did my title
+    /// go?" actually needs. Freezing the name at execution time would take a
+    /// new column, so it is a follow-up, not a workaround.
+    #[serde(default)]
+    pub merged_into_title_name: Option<String>,
 }
 
 /// Per-title checkpoint row: the unit resume restarts from.

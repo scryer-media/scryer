@@ -49,11 +49,12 @@ const OPERATION_COLUMNS: &str = "id, operation_type, execution_mode, state, init
     job_run_id, workflow_operation_id, cancel_requested, cancel_requested_at,
     failure_reason, confirmed_at, started_at, completed_at, created_at, updated_at";
 
-const CHECKPOINT_COLUMNS: &str = "operation_id, title_id, sequence, state, classification,
-    source_library_id, source_root_id, source_folder_path,
-    destination_library_id, destination_root_id, destination_folder_path,
-    merged_into_title_id, file_total, file_completed_count, bytes_total, bytes_completed,
-    blocked_reason, failure_reason, note, checkpointed_at, created_at, updated_at";
+const CHECKPOINT_COLUMNS: &str = "c.operation_id, c.title_id, c.sequence, c.state, c.classification,
+    c.source_library_id, c.source_root_id, c.source_folder_path,
+    c.destination_library_id, c.destination_root_id, c.destination_folder_path,
+    c.merged_into_title_id, c.file_total, c.file_completed_count, c.bytes_total,
+    c.bytes_completed, c.blocked_reason, c.failure_reason, c.note, c.checkpointed_at,
+    c.created_at, c.updated_at";
 
 const VERIFICATION_COLUMNS: &str = "id, operation_id, title_id, media_file_id, source_path,
     destination_path, size_bytes, requested_depth, applied_depth, fell_back, fallback_reason,
@@ -395,10 +396,22 @@ impl LocationOperationRepository for LocationOperationStore {
         &self,
         operation_id: &str,
     ) -> AppResult<Vec<TitleCheckpoint>> {
+        // US7: `merged_into_title_id` alone reads out as an opaque string in
+        // Activity. 0206 has no column for the surviving title's name and this
+        // campaign's migrations are immutable, so it is resolved here — in the
+        // same statement, against the title the merge left standing (FR-067
+        // deletes the *source*, so the destination is the row that survives).
+        //
+        // LEFT, never INNER: this table is deliberately foreign-key-free so its
+        // rows outlive a deleted catalog entity (0206 header). A destination
+        // deleted after the merge must still yield its checkpoint, with a null
+        // name the reader falls back from — not a vanished row.
         let sql = format!(
-            "SELECT {CHECKPOINT_COLUMNS} FROM location_operation_title_checkpoints
-             WHERE operation_id = {{}}
-             ORDER BY sequence ASC, title_id ASC"
+            "SELECT {CHECKPOINT_COLUMNS}, t.name AS merged_into_title_name
+             FROM location_operation_title_checkpoints c
+             LEFT JOIN titles t ON t.id = c.merged_into_title_id
+             WHERE c.operation_id = {{}}
+             ORDER BY c.sequence ASC, c.title_id ASC"
         );
         SqlRuntime::fetch_all(
             self.datastore.read_exec(),
@@ -812,6 +825,12 @@ fn row_to_checkpoint(row: &SqlRow) -> AppResult<TitleCheckpoint> {
             destination_root_id: row.opt_text("destination_root_id")?,
             destination_folder_path: row.opt_text("destination_folder_path")?,
             merged_into_title_id: row.opt_text("merged_into_title_id")?,
+            // Joined, not stored. Blank-filtered so an empty catalog name never
+            // renders as an empty pair of quotation marks.
+            merged_into_title_name: row
+                .opt_text("merged_into_title_name")?
+                .map(|name| name.trim().to_string())
+                .filter(|name| !name.is_empty()),
         },
         files_total: row.i64("file_total")?,
         files_verified: row.i64("file_completed_count")?,
@@ -1215,6 +1234,10 @@ mod tests {
                 destination_root_id: Some("root-2".to_string()),
                 destination_folder_path: Some("/archive/movies/Arrival (2016)".to_string()),
                 merged_into_title_id: Some("title-99".to_string()),
+                // Resolved by the read's join, never written by the upsert.
+                // `title-99` is not in the catalog here, so it stays null and
+                // the round-trip comparison below still holds.
+                merged_into_title_name: None,
             },
             files_total: 3,
             files_verified: 1,
@@ -1322,6 +1345,112 @@ mod tests {
             row.opt_text("failure_reason").expect("column"),
             row.opt_text("note").expect("column"),
         )
+    }
+
+    /// A catalog title, for the checkpoint read's `merged_into_title_id` join.
+    async fn insert_title(store: &LocationOperationStore, id: &str, name: &str) {
+        SqlRuntime::execute_write(
+            &store.datastore,
+            "test_insert_title",
+            // `root_folder_id` is non-null by trigger since migration 0136.
+            "INSERT INTO titles (id, name, name_normalized, facet, monitored, status, tags,
+                                 external_ids, created_at, library_id, root_folder_id)
+             VALUES ({}, {}, {}, 'movie', 1, 'active', '[]', '[]',
+                     '2026-01-01T00:00:00Z', 'library-2', 'root-2')",
+            vec![
+                SqlArg::Text(id.to_string()),
+                SqlArg::Text(name.to_string()),
+                SqlArg::Text(id.to_string()),
+            ],
+        )
+        .await
+        .expect("the title should persist");
+    }
+
+    /// US7: Activity's "merged into" row states a name, and the name is the
+    /// *surviving* title's — resolved when the checkpoint is read, because 0206
+    /// has no column to freeze it in.
+    #[tokio::test]
+    async fn a_merged_checkpoint_reads_back_the_surviving_titles_name() {
+        let store = test_store().await;
+        store
+            .create_location_operation(&operation("op-1", LocationOperationState::Moving), None)
+            .await
+            .expect("the operation should persist");
+        insert_title(&store, "title-99", "Arrival (Director's Cut)").await;
+
+        let now = timestamp();
+        let checkpoint = |title_id: &str, merged_into: Option<&str>| TitleCheckpoint {
+            operation_id: "op-1".to_string(),
+            title_id: title_id.to_string(),
+            sequence: 1,
+            state: TitleCheckpointState::Completed,
+            classification: Some(TitleLocationClass::CrossLibraryTransfer),
+            placement: TitleCheckpointPlacement {
+                merged_into_title_id: merged_into.map(str::to_string),
+                ..TitleCheckpointPlacement::default()
+            },
+            files_total: 1,
+            files_verified: 1,
+            bytes_total: 10,
+            bytes_verified: 10,
+            detail: None,
+            started_at: Some(now),
+            updated_at: now,
+            completed_at: Some(now),
+        };
+        for (title_id, merged_into) in [
+            ("title-1", Some("title-99")),
+            // Merged into a title that has since been deleted.
+            ("title-2", Some("title-gone")),
+            // Not a merge at all.
+            ("title-3", None),
+        ] {
+            store
+                .upsert_location_title_checkpoint(&checkpoint(title_id, merged_into))
+                .await
+                .expect("the checkpoint should persist");
+        }
+
+        let loaded = store
+            .list_location_title_checkpoints("op-1")
+            .await
+            .expect("the read should succeed");
+        let named = |title_id: &str| {
+            loaded
+                .iter()
+                .find(|row| row.title_id == title_id)
+                .expect("the checkpoint exists")
+                .placement
+                .clone()
+        };
+
+        assert_eq!(
+            named("title-1").merged_into_title_name.as_deref(),
+            Some("Arrival (Director's Cut)"),
+            "the surviving title's name rides the checkpoint read"
+        );
+        assert_eq!(
+            named("title-1").merged_into_title_id.as_deref(),
+            Some("title-99"),
+            "the id stays beside the name rather than being replaced by it"
+        );
+
+        // The join is LEFT on purpose: 0206 keeps these rows free of foreign
+        // keys so they outlive a deleted catalog entity. A destination that is
+        // gone must still yield its checkpoint, with a null name the reader
+        // falls back from.
+        assert_eq!(named("title-2").merged_into_title_name, None);
+        assert_eq!(
+            named("title-2").merged_into_title_id.as_deref(),
+            Some("title-gone"),
+            "a deleted destination still says which id it was"
+        );
+
+        // A non-merging title gains nothing from the join.
+        assert_eq!(named("title-3").merged_into_title_id, None);
+        assert_eq!(named("title-3").merged_into_title_name, None);
+        assert_eq!(loaded.len(), 3, "the join must not multiply rows");
     }
 
     #[tokio::test]

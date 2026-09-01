@@ -257,6 +257,10 @@ impl RootMoveTitleExecution {
             // once the title settles, exactly the way the dedup and rename
             // counters are counted off the plan.
             merged_into_title_id: self.merge_target_title_id.clone(),
+            // Read-side only: 0206 has no column for the name, so the store
+            // resolves it when it reads the checkpoint back. Writing it here
+            // would be writing a field the upsert discards.
+            merged_into_title_name: None,
         }
     }
 

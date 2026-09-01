@@ -8,6 +8,7 @@ import {
   canCancelOperation,
   canResumeOperation,
   CLASSIFICATION_ORDER,
+  checkpointMergeTarget,
   checkpointNeedsAttention,
   classBlocksStart,
   classifiedTitlePlacement,
@@ -494,6 +495,54 @@ test("checkpoints render in confirmed-plan order", () => {
   assert.deepEqual(
     ordered.map((entry) => entry.titleId),
     ["a", "b", "c"],
+  );
+});
+
+test("a merged checkpoint names the surviving title, falling back to its id", () => {
+  // Not a merge at all.
+  assert.equal(checkpointMergeTarget(checkpoint()), null);
+  assert.equal(
+    checkpointMergeTarget(checkpoint({ mergedIntoTitleId: "   " })),
+    null,
+  );
+
+  // The ordinary case: the catalog still has the surviving title, so the row
+  // reads as prose rather than as an identifier.
+  assert.deepEqual(
+    checkpointMergeTarget(
+      checkpoint({
+        mergedIntoTitleId: "title-99",
+        mergedIntoTitleName: "Arrival (Director's Cut)",
+      }),
+    ),
+    {
+      titleId: "title-99",
+      name: "Arrival (Director's Cut)",
+      label: "Arrival (Director's Cut)",
+      isIdFallback: false,
+    },
+  );
+
+  // The surviving title was deleted after the merge, so the server could not
+  // resolve a name. The row still states where the title went.
+  assert.deepEqual(checkpointMergeTarget(checkpoint({ mergedIntoTitleId: "title-99" })), {
+    titleId: "title-99",
+    name: null,
+    label: "title-99",
+    isIdFallback: true,
+  });
+
+  // A blank name is not a name — it must not render as empty quotation marks.
+  assert.deepEqual(
+    checkpointMergeTarget(
+      checkpoint({ mergedIntoTitleId: "title-99", mergedIntoTitleName: "  " }),
+    ),
+    {
+      titleId: "title-99",
+      name: null,
+      label: "title-99",
+      isIdFallback: true,
+    },
   );
 });
 

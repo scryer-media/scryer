@@ -17,6 +17,7 @@ import { locationOperationQuery } from "@/lib/graphql/queries";
 import {
   canCancelOperation,
   canResumeOperation,
+  checkpointMergeTarget,
   checkpointNeedsAttention,
   checkpointStateLabelKey,
   classificationLabelKey,
@@ -467,6 +468,7 @@ function CheckpointRow({
   t: (key: string, values?: Record<string, string | number>) => string;
 }) {
   const attention = checkpointNeedsAttention(checkpoint);
+  const mergeTarget = checkpointMergeTarget(checkpoint);
   return (
     <li
       id={`location-operation-checkpoint-${checkpoint.titleId}`}
@@ -515,11 +517,19 @@ function CheckpointRow({
           </div>
           {/* A merged title has no destination folder of its own: it became
               part of another title, and that is the fact to state (FR-071). */}
-          {checkpoint.mergedIntoTitleId ? (
+          {mergeTarget ? (
             <div id={`location-operation-checkpoint-merged-${checkpoint.titleId}`}>
               <dt className="inline">{t("move.checkpointMergedInto")}: </dt>
-              <dd className="inline font-[var(--font-code)] break-all">
-                {checkpoint.mergedIntoTitleId}
+              {/* The surviving title's name when the catalog still has it; the
+                  id, in a code face, when it does not. */}
+              <dd
+                className={
+                  mergeTarget.isIdFallback
+                    ? "inline font-[var(--font-code)] break-all"
+                    : "inline break-words"
+                }
+              >
+                {mergeTarget.label}
               </dd>
             </div>
           ) : null}

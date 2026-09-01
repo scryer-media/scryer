@@ -718,6 +718,10 @@ pub struct LocationTitleCheckpointPayload {
     pub destination_folder_path: Option<String>,
     /// Destination title this one merges into, when it merges.
     pub merged_into_title_id: Option<ID>,
+    /// Name of that surviving title, resolved from the catalog when the
+    /// checkpoint is read. Null when it merged into a title that has since been
+    /// deleted, in which case the id still identifies it.
+    pub merged_into_title_name: Option<String>,
     /// Files planned for this title.
     pub files_total: Long,
     /// Files whose destination is verified.
