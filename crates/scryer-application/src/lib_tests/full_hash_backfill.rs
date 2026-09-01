@@ -296,7 +296,7 @@ async fn files_on_an_unavailable_mount_are_skipped_and_do_not_stall_the_sweep() 
     {
         let mut rows = media_files.store.lock().await;
         rows[0].file_path = crate::stored_paths::path_to_stored_string(
-            &dir.path().join("unmounted-share").join("gone.mkv"),
+            dir.path().join("unmounted-share").join("gone.mkv"),
         );
     }
 

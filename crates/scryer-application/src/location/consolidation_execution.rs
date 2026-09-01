@@ -377,7 +377,7 @@ impl AppUseCase {
             .services
             .catalog
             .titles
-            .list_for_libraries(None, &[library.id.clone()], None)
+            .list_for_libraries(None, std::slice::from_ref(&library.id), None)
             .await?;
         let mut titles: Vec<Title> = all_titles
             .iter()
@@ -868,7 +868,7 @@ impl AppUseCase {
             .services
             .catalog
             .titles
-            .list_for_libraries(None, &[library.id.clone()], None)
+            .list_for_libraries(None, std::slice::from_ref(&library.id), None)
             .await?;
         let still_on_source = titles
             .iter()
@@ -984,7 +984,7 @@ impl AppUseCase {
             .services
             .catalog
             .titles
-            .list_for_libraries(None, &[library.id.clone()], None)
+            .list_for_libraries(None, std::slice::from_ref(&library.id), None)
             .await?
             .into_iter()
             .filter(|title| title.root_folder_id == consolidation.destination_root_id)

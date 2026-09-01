@@ -215,7 +215,7 @@ impl LocationOperationRepository for InMemoryLocationOperationStore {
             .filter(|operation| operation.state.is_active())
             .cloned()
             .collect();
-        active.sort_by(|left, right| left.created_at.cmp(&right.created_at));
+        active.sort_by_key(|left| left.created_at);
         Ok(active)
     }
 

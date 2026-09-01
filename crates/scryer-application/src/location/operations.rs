@@ -1220,7 +1220,7 @@ async fn unavailable_plan_root(
             (
                 "the source root",
                 requires_source
-                    .then(|| title.source_root_path.as_deref())
+                    .then_some(title.source_root_path.as_deref())
                     .flatten(),
             ),
             (
@@ -1537,7 +1537,7 @@ impl AppUseCase {
         // destination root with no path), and the counts must follow the drafts
         // or the preview would claim a moving title it produced no work for.
         let mut classification_counts = classification.counts;
-        let mut downgrade_to_needs_resolution =
+        let downgrade_to_needs_resolution =
             |counts: &mut crate::location::classify::ClassificationCounts,
              was: TitleLocationClass| {
                 match was {
@@ -2436,13 +2436,11 @@ async fn account_for_adoption(
                 .copied()
                 .unwrap_or(0)
                 > 1
-        {
-            if let Ok(hashes) =
+            && let Ok(hashes) =
                 crate::location::verify::hash_existing_file(&file.path).await
             {
                 fact = fact.with_full_blake3(FullHash::known(hashes.full_blake3));
             }
-        }
         destination.push(fact);
     }
 

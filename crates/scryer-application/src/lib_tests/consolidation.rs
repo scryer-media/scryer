@@ -123,6 +123,7 @@ impl ConsolidationFixture {
         self.temp.path().join("keep-disk")
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn seed_title_on(
         &self,
         root_id: &str,
@@ -452,10 +453,10 @@ fn external_id(source: &str, value: &str) -> ExternalId {
     }
 }
 
-fn plan_items<'a>(
-    preview: &'a RootConsolidationPreview,
+fn plan_items(
+    preview: &RootConsolidationPreview,
     kind: PlanItemKind,
-) -> Vec<&'a crate::location::preview::PlanItem> {
+) -> Vec<&crate::location::preview::PlanItem> {
     preview
         .plan
         .section(kind)

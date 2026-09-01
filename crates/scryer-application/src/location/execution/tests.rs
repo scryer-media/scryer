@@ -248,8 +248,8 @@ fn single_title_plan(
             same_volume: None,
             files: vec![RootMoveFileExecution {
                 media_file_id: Some("mf-1".to_string()),
-                source_path: path_to_stored_string(&source_folder.join(file_name)),
-                destination_path: path_to_stored_string(&destination_folder.join(file_name)),
+                source_path: path_to_stored_string(source_folder.join(file_name)),
+                destination_path: path_to_stored_string(destination_folder.join(file_name)),
                 size_bytes,
             }],
             deduplicated_sources: Vec::new(),

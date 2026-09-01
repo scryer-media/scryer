@@ -231,6 +231,7 @@ impl TransferFixture {
 
     /// A monitored movie in the source library owning `folder_name` under the
     /// source root, with one tracked media file inside it.
+    #[allow(clippy::too_many_arguments)]
     async fn seed_source_title(
         &self,
         name: &str,

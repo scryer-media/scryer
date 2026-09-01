@@ -332,10 +332,10 @@ impl RootChangeFixture {
     }
 }
 
-fn plan_items<'a>(
-    preview: &'a RootChangePreview,
+fn plan_items(
+    preview: &RootChangePreview,
     kind: PlanItemKind,
-) -> Vec<&'a crate::location::preview::PlanItem> {
+) -> Vec<&crate::location::preview::PlanItem> {
     preview
         .plan
         .section(kind)
