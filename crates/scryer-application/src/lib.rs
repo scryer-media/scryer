@@ -671,6 +671,14 @@ pub enum AppError {
         code: crate::location::preview::PlanConfirmationError,
     },
 
+    /// A direct `rootFolderId` write on a title that already has tracked files.
+    /// Retired by FR-077: relocating a title with content on disk is the move
+    /// workflow's job, so the refusal carries its own code and the title it
+    /// refused for, and a client routes to the preview without parsing prose
+    /// (FR-077, SC-009).
+    #[error("validation: {message}")]
+    DirectRootWriteRetired { message: String, title_id: String },
+
     #[error("no auto-eligible release found")]
     NoAutoEligibleRelease {
         candidate_count: usize,
@@ -781,6 +789,20 @@ pub enum AppError {
 impl AppError {
     pub fn canceled(message: impl Into<String>) -> Self {
         Self::Canceled(message.into())
+    }
+
+    /// The FR-077 refusal, worded once so every path that retires a direct root
+    /// write says the same thing: the options update path and the reused-title
+    /// branch of the creation path (SC-009).
+    pub fn direct_root_write_retired(title_name: &str, title_id: &str) -> Self {
+        Self::DirectRootWriteRetired {
+            message: format!(
+                "changing rootFolderId directly is retired for titles with tracked files: \
+                 '{title_name}' already has files on disk, so preview the change with \
+                 locationOperationPreview and run it with startLocationOperation"
+            ),
+            title_id: title_id.to_string(),
+        }
     }
 
     pub fn download_submit_unavailable(message: impl Into<String>) -> Self {

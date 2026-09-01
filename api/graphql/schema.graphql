@@ -20251,9 +20251,9 @@ input TitleOptionsInput {
 	"""
 	qualityProfileId: ID
 	"""
-	Root-folder identity; omission preserves the current value, null clears it, and a value replaces it.
+	Root-folder identity used when a title is created; omission preserves the current value, null clears it, and a value replaces it. Changing the root of an existing title that has tracked files is refused: preview the change with locationOperationPreview and run it with startLocationOperation.
 	"""
-	rootFolderId: ID
+	rootFolderId: ID @deprecated(reason: "Retired for existing titles with tracked files: use locationOperationPreview and startLocationOperation to move a title. Still accepted at title creation and for titles with no tracked files.")
 	"""
 	Monitoring policy; omission preserves the current value, null clears it, and a value replaces it.
 	"""

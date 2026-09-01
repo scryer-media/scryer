@@ -612,6 +612,11 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // OBJECT 343->352, ENUM 125->130, public types 659->673. No new query,
     // mutation, or input: `merges` and `ambiguousDestinationCandidates` are
     // additive fields on payloads that already exist.
+    // Retiring the direct root write (T093, FR-077/SC-009) deprecates the
+    // TitleOptionsInput.rootFolderId input field. Deprecated input fields drop
+    // out of default introspection the way deprecated output fields do, but
+    // this census counts types and root fields only, so every count below is
+    // unchanged.
     assert_eq!(subscription_field_count, 14);
     assert_eq!(public_types.len(), 673);
     assert_eq!(kind_count("OBJECT"), 352);

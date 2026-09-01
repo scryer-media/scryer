@@ -1,5 +1,204 @@
 use super::*;
 
+/// A movie library with two roots plus a title parked on the first one, which
+/// is what every FR-077 direct-root-write case needs before it can ask for a
+/// second root.
+async fn bootstrap_two_root_movie_library(
+    name: &str,
+) -> (AppUseCase, User, Arc<MockMediaFileRepo>, Library, Title) {
+    let media_files = Arc::new(MockMediaFileRepo::default());
+    let (app, user, _) = bootstrap_with_cutoff_projection_state(
+        Arc::new(StoredSettingsRepo::default()),
+        Arc::new(StoredQualityProfileRepo::default()),
+        media_files.clone(),
+    );
+    let library = app
+        .create_library(
+            &user,
+            MediaFacet::Movie,
+            name.to_string(),
+            vec![
+                LibraryRootDraft {
+                    path: format!("/Volumes/Media/{name}/RootA"),
+                    is_default: true,
+                },
+                LibraryRootDraft {
+                    path: format!("/Volumes/Media/{name}/RootB"),
+                    is_default: false,
+                },
+            ],
+            None,
+        )
+        .await
+        .expect("two-root movie library should be created");
+    let title = app
+        .create_title_without_hydration_in_library(
+            &user,
+            NewTitle {
+                name: format!("{name} Title"),
+                facet: MediaFacet::Movie,
+                monitored: true,
+                ..Default::default()
+            },
+            library.id.clone(),
+        )
+        .await
+        .expect("title should be created")
+        .title;
+    (app, user, media_files, library, title)
+}
+
+fn other_root_id(library: &Library, current_root_folder_id: &str) -> String {
+    library
+        .roots
+        .iter()
+        .find(|root| root.id != current_root_folder_id)
+        .expect("library should have a second root")
+        .id
+        .clone()
+}
+
+/// FR-077/SC-009: a title with content on disk cannot have its root rewritten
+/// through the options path; the refusal is typed and names the move workflow.
+#[tokio::test]
+async fn direct_root_write_is_refused_for_a_title_with_tracked_files() {
+    let (app, user, media_files, library, title) =
+        bootstrap_two_root_movie_library("RootWriteRefused").await;
+    media_files
+        .insert_media_file(&InsertMediaFileInput {
+            title_id: title.id.clone(),
+            file_path: "/Volumes/Media/RootWriteRefused/RootA/Tracked.mkv".into(),
+            size_bytes: 1_000,
+            role: MediaFileRole::Primary,
+            ..Default::default()
+        })
+        .await
+        .expect("insert tracked file");
+    let destination_root_id = other_root_id(&library, &title.root_folder_id);
+
+    let error = app
+        .update_title_metadata_with_root_folder_id(
+            &user,
+            &title.id,
+            None,
+            None,
+            None,
+            Some(Some(destination_root_id)),
+        )
+        .await
+        .expect_err("a tracked-file title must refuse a direct root write");
+
+    assert!(
+        matches!(
+            &error,
+            AppError::DirectRootWriteRetired { message, title_id }
+                if title_id == &title.id
+                    && message.contains("locationOperationPreview")
+                    && message.contains("startLocationOperation")
+        ),
+        "unexpected error: {error:?}"
+    );
+    let stored = app
+        .services
+        .catalog
+        .titles
+        .get_by_id(&title.id)
+        .await
+        .expect("load title")
+        .expect("title exists");
+    assert_eq!(stored.root_folder_id, title.root_folder_id);
+}
+
+/// Re-submitting the root the title already sits on is not a move, so clients
+/// that echo the whole options object back on every save keep working.
+#[tokio::test]
+async fn resubmitting_the_current_root_on_a_tracked_title_is_not_a_move() {
+    let (app, user, media_files, _library, title) =
+        bootstrap_two_root_movie_library("RootWriteNoop").await;
+    media_files
+        .insert_media_file(&InsertMediaFileInput {
+            title_id: title.id.clone(),
+            file_path: "/Volumes/Media/RootWriteNoop/RootA/Tracked.mkv".into(),
+            size_bytes: 1_000,
+            role: MediaFileRole::Primary,
+            ..Default::default()
+        })
+        .await
+        .expect("insert tracked file");
+
+    let updated = app
+        .update_title_metadata_with_root_folder_id(
+            &user,
+            &title.id,
+            Some("Renamed While Root Unchanged".into()),
+            None,
+            None,
+            Some(Some(title.root_folder_id.clone())),
+        )
+        .await
+        .expect("a no-op root write must still apply the rest of the patch");
+
+    assert_eq!(updated.name, "Renamed While Root Unchanged");
+    assert_eq!(updated.root_folder_id, title.root_folder_id);
+}
+
+/// FR-076/FR-077: a fileless title's root is a catalog pointer, so the direct
+/// path stays open for it.
+#[tokio::test]
+async fn fileless_title_keeps_the_direct_root_write_path() {
+    let (app, user, _media_files, library, title) =
+        bootstrap_two_root_movie_library("RootWriteFileless").await;
+    let destination_root_id = other_root_id(&library, &title.root_folder_id);
+
+    let updated = app
+        .update_title_metadata_with_root_folder_id(
+            &user,
+            &title.id,
+            None,
+            None,
+            None,
+            Some(Some(destination_root_id.clone())),
+        )
+        .await
+        .expect("a fileless title may still be reassigned directly");
+
+    assert_eq!(updated.root_folder_id, destination_root_id);
+}
+
+/// FR-077 keeps root selection at creation a direct assignment; the refusal is
+/// the update path's alone.
+#[tokio::test]
+async fn creating_a_title_still_assigns_the_requested_root_directly() {
+    let (app, user, _media_files, library, title) =
+        bootstrap_two_root_movie_library("RootWriteCreate").await;
+    let destination_root_id = other_root_id(&library, &title.root_folder_id);
+
+    let created = app
+        .add_title_with_options_patch_outcome_in_library(
+            &user,
+            // What the GraphQL layer builds from `TitleOptionsInput.rootFolderId`
+            // on the creation path: the resolved root rides on the request and
+            // the patch carries it too.
+            NewTitle {
+                name: "Created On The Second Root".into(),
+                facet: MediaFacet::Movie,
+                monitored: true,
+                root_folder_id: Some(destination_root_id.clone()),
+                ..Default::default()
+            },
+            library.id.clone(),
+            TitleOptionsPatch {
+                root_folder_id: Some(Some(destination_root_id.clone())),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("creation may assign a root directly");
+
+    assert_eq!(created.title.root_folder_id, destination_root_id);
+    assert_ne!(created.title.id, title.id);
+}
+
 #[tokio::test]
 async fn update_title_metadata_changes_name_and_tags() {
     let (app, user) = bootstrap();

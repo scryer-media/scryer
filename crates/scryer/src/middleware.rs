@@ -2853,6 +2853,11 @@ pub(crate) fn map_app_error(error: AppError) -> Response {
         AppError::LocationPlanRefused { message, .. } => {
             (StatusCode::BAD_REQUEST, Json(ErrorResponse::new(message))).into_response()
         }
+        // The retired direct root write is a GraphQL-side contract too; over
+        // REST it stays the validation failure it is.
+        AppError::DirectRootWriteRetired { message, .. } => {
+            (StatusCode::BAD_REQUEST, Json(ErrorResponse::new(message))).into_response()
+        }
         AppError::NoAutoEligibleRelease { .. } => (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse::new(

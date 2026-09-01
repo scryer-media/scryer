@@ -412,6 +412,16 @@ pub fn to_gql_error(err: AppError) -> Error {
                 extensions.set("refusalCode", code.as_str());
             })
         }
+        // The retired direct root write (FR-077). Its own code, so a client can
+        // route the user into the move workflow instead of surfacing a generic
+        // validation failure, and the title id so a bulk edit can name the row
+        // that refused.
+        AppError::DirectRootWriteRetired { message, title_id } => {
+            Error::new(format!("validation: {message}")).extend_with(|_, extensions| {
+                extensions.set("code", "DIRECT_ROOT_WRITE_RETIRED");
+                extensions.set("titleId", title_id);
+            })
+        }
         AppError::NoAutoEligibleRelease {
             candidate_count,
             reasons,
@@ -564,6 +574,7 @@ fn app_error_kind(err: &AppError) -> &'static str {
         AppError::Unauthorized(_) => "Unauthorized",
         AppError::Validation(_) => "Validation",
         AppError::LocationPlanRefused { .. } => "LocationPlanRefused",
+        AppError::DirectRootWriteRetired { .. } => "DirectRootWriteRetired",
         AppError::NoAutoEligibleRelease { .. } => "NoAutoEligibleRelease",
         AppError::PluginInstallInProgress(_) => "PluginInstallInProgress",
         AppError::NotFound(_) => "NotFound",

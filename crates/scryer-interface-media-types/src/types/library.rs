@@ -667,7 +667,10 @@ pub struct ExternalIdInput {
 pub struct TitleOptionsInput {
     /// Quality profile identity; omission preserves the current value, null clears it, and a value replaces it.
     pub quality_profile_id: MaybeUndefined<ID>,
-    /// Root-folder identity; omission preserves the current value, null clears it, and a value replaces it.
+    /// Root-folder identity used when a title is created; omission preserves the current value, null clears it, and a value replaces it. Changing the root of an existing title that has tracked files is refused: preview the change with locationOperationPreview and run it with startLocationOperation.
+    #[graphql(
+        deprecation = "Retired for existing titles with tracked files: use locationOperationPreview and startLocationOperation to move a title. Still accepted at title creation and for titles with no tracked files."
+    )]
     pub root_folder_id: MaybeUndefined<ID>,
     /// Monitoring policy; omission preserves the current value, null clears it, and a value replaces it.
     pub monitor_type: MaybeUndefined<MonitorTypeValue>,

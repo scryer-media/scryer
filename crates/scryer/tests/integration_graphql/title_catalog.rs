@@ -804,7 +804,11 @@ async fn graphql_title_options_input_uses_root_folder_id() {
         &ctx,
         r#"{
             titleOptionsInput: __type(name: "TitleOptionsInput") {
-                inputFields { name }
+                inputFields(includeDeprecated: true) {
+                    name
+                    isDeprecated
+                    deprecationReason
+                }
             }
             titlePayload: __type(name: "TitlePayload") {
                 fields {
@@ -823,14 +827,32 @@ async fn graphql_title_options_input_uses_root_folder_id() {
     )
     .await;
     assert_no_errors(&body);
-    let fields = body["data"]["titleOptionsInput"]["inputFields"]
+    let input_fields = body["data"]["titleOptionsInput"]["inputFields"]
         .as_array()
-        .expect("input fields")
+        .expect("input fields");
+    let fields = input_fields
         .iter()
         .filter_map(|field| field["name"].as_str())
         .collect::<Vec<_>>();
     assert!(fields.contains(&"rootFolderId"));
     assert!(!fields.contains(&"rootFolderPath"));
+
+    // FR-077/SC-009: the field is still served for creation and for fileless
+    // titles, but it carries the deprecation that points existing clients at
+    // the move workflow, so default introspection hides it.
+    let root_folder_id_input = input_fields
+        .iter()
+        .find(|field| field["name"].as_str() == Some("rootFolderId"))
+        .expect("rootFolderId input field");
+    assert_eq!(root_folder_id_input["isDeprecated"], true);
+    let deprecation_reason = root_folder_id_input["deprecationReason"]
+        .as_str()
+        .expect("deprecation reason");
+    assert!(
+        deprecation_reason.contains("locationOperationPreview")
+            && deprecation_reason.contains("startLocationOperation"),
+        "unexpected deprecation reason: {deprecation_reason}"
+    );
 
     let title_fields = body["data"]["titlePayload"]["fields"]
         .as_array()
@@ -3266,6 +3288,292 @@ async fn graphql_update_title_root_folder_id_omitted_preserves_override() {
     );
     let stored_root_folder_id = stored_title_root_folder_id(&ctx, &title_id).await;
     assert_eq!(stored_root_folder_id, custom_root_id);
+}
+
+/// FR-077/SC-009: the retired direct root write. A title with tracked files
+/// gets a typed refusal that routes the caller into the move workflow, while
+/// re-submitting the root it already sits on is not a move and still passes.
+#[tokio::test]
+async fn graphql_update_title_root_folder_id_is_refused_for_tracked_file_titles() {
+    let ctx = TestContext::new().await;
+    let library = create_title_catalog_library(
+        &ctx,
+        "MOVIE",
+        "Retired Root Write Library",
+        &[
+            ("/library/retired-root-default", true),
+            ("/library/retired-root-custom", false),
+        ],
+    )
+    .await;
+    let library_id = library_id(&library);
+    let default_root_id = library_root_id(&library, "/library/retired-root-default");
+    let custom_root_id = library_root_id(&library, "/library/retired-root-custom");
+
+    let add_body = gql(
+        &ctx,
+        r#"mutation($input: AddTitleInput!) {
+            addTitle(input: $input) {
+                title { id rootFolderId }
+            }
+        }"#,
+        json!({
+            "input": {
+                "name": "Retired Root Write Movie",
+                "facet": "MOVIE",
+                "libraryId": library_id,
+                "monitored": true,
+                "tags": [],
+                "options": {
+                    "rootFolderId": custom_root_id
+                }
+            }
+        }),
+    )
+    .await;
+    assert_no_errors(&add_body);
+    let added = &add_body["data"]["addTitle"]["title"];
+    assert_eq!(added["rootFolderId"], custom_root_id);
+    let title_id = added["id"].as_str().expect("title id").to_string();
+
+    ctx.media_files
+        .insert_media_file(&InsertMediaFileInput {
+            title_id: title_id.clone(),
+            file_path: "/library/retired-root-custom/Retired Root Write Movie/movie.mkv"
+                .to_string(),
+            size_bytes: 1_200,
+            ..Default::default()
+        })
+        .await
+        .expect("insert tracked movie file");
+
+    let refused = gql(
+        &ctx,
+        r#"mutation($input: UpdateTitleInput!) {
+            updateTitle(input: $input) { id rootFolderId }
+        }"#,
+        json!({
+            "input": {
+                "titleId": title_id,
+                "options": {
+                    "rootFolderId": default_root_id
+                }
+            }
+        }),
+    )
+    .await;
+    let errors = refused["errors"]
+        .as_array()
+        .unwrap_or_else(|| panic!("a tracked-file root write must be refused: {refused}"));
+    assert_eq!(errors[0]["extensions"]["code"], "DIRECT_ROOT_WRITE_RETIRED");
+    assert_eq!(errors[0]["extensions"]["titleId"], title_id);
+    let message = errors[0]["message"].as_str().expect("error message");
+    assert!(
+        message.contains("locationOperationPreview") && message.contains("startLocationOperation"),
+        "refusal must name the move workflow: {message}"
+    );
+    let stored_root_folder_id = stored_title_root_folder_id(&ctx, &title_id).await;
+    assert_eq!(stored_root_folder_id, custom_root_id);
+
+    let unchanged = gql(
+        &ctx,
+        r#"mutation($input: UpdateTitleInput!) {
+            updateTitle(input: $input) { id rootFolderId }
+        }"#,
+        json!({
+            "input": {
+                "titleId": title_id,
+                "options": {
+                    "rootFolderId": custom_root_id
+                }
+            }
+        }),
+    )
+    .await;
+    assert_no_errors(&unchanged);
+    assert_eq!(
+        unchanged["data"]["updateTitle"]["rootFolderId"],
+        custom_root_id
+    );
+}
+
+/// FR-077/SC-009 on the creation path's reuse branch. Reusing a title that
+/// already exists is not creating it, so a root rewrite there is the same
+/// direct write the move workflow replaces. Genuinely new titles, same-value
+/// re-adds, and fileless reuse all stay on the direct path.
+#[tokio::test]
+async fn graphql_add_title_reuse_is_refused_when_it_would_change_a_tracked_titles_root() {
+    let ctx = TestContext::new().await;
+    let library = create_title_catalog_library(
+        &ctx,
+        "MOVIE",
+        "Retired Reuse Root Library",
+        &[
+            ("/library/retired-reuse-default", true),
+            ("/library/retired-reuse-custom", false),
+        ],
+    )
+    .await;
+    let library_id = library_id(&library);
+    let default_root_id = library_root_id(&library, "/library/retired-reuse-default");
+    let custom_root_id = library_root_id(&library, "/library/retired-reuse-custom");
+
+    let add = r#"mutation($input: AddTitleInput!) {
+        addTitle(input: $input) {
+            reusedExistingTitle
+            title { id rootFolderId }
+        }
+    }"#;
+    let add_input = |name: &str, tvdb: &str, options: Value| {
+        json!({
+            "input": {
+                "name": name,
+                "facet": "MOVIE",
+                "libraryId": library_id,
+                "monitored": true,
+                "tags": [],
+                "externalIds": [{ "source": "tvdb", "value": tvdb }],
+                "options": options
+            }
+        })
+    };
+
+    let first = gql(
+        &ctx,
+        add,
+        add_input(
+            "Retired Reuse Movie",
+            "770077",
+            json!({ "rootFolderId": custom_root_id }),
+        ),
+    )
+    .await;
+    assert_no_errors(&first);
+    assert_eq!(first["data"]["addTitle"]["reusedExistingTitle"], false);
+    let title_id = first["data"]["addTitle"]["title"]["id"]
+        .as_str()
+        .expect("title id")
+        .to_string();
+    assert_eq!(
+        first["data"]["addTitle"]["title"]["rootFolderId"],
+        custom_root_id
+    );
+
+    ctx.media_files
+        .insert_media_file(&InsertMediaFileInput {
+            title_id: title_id.clone(),
+            file_path: "/library/retired-reuse-custom/Retired Reuse Movie/movie.mkv".to_string(),
+            size_bytes: 1_200,
+            ..Default::default()
+        })
+        .await
+        .expect("insert tracked movie file");
+
+    let refused = gql(
+        &ctx,
+        add,
+        add_input(
+            "Retired Reuse Movie",
+            "770077",
+            json!({ "rootFolderId": default_root_id }),
+        ),
+    )
+    .await;
+    let errors = refused["errors"]
+        .as_array()
+        .unwrap_or_else(|| panic!("reuse must not rewrite a tracked title's root: {refused}"));
+    assert_eq!(errors[0]["extensions"]["code"], "DIRECT_ROOT_WRITE_RETIRED");
+    assert_eq!(errors[0]["extensions"]["titleId"], title_id);
+    assert_eq!(
+        stored_title_root_folder_id(&ctx, &title_id).await,
+        custom_root_id
+    );
+
+    // Reuse that does not touch the root, and reuse that re-submits the root
+    // the title already sits on, are both unaffected.
+    let untouched = gql(
+        &ctx,
+        add,
+        add_input(
+            "Retired Reuse Movie",
+            "770077",
+            json!({ "monitorType": "ALL_EPISODES" }),
+        ),
+    )
+    .await;
+    assert_no_errors(&untouched);
+    assert_eq!(untouched["data"]["addTitle"]["reusedExistingTitle"], true);
+    assert_eq!(
+        untouched["data"]["addTitle"]["title"]["rootFolderId"],
+        custom_root_id
+    );
+
+    let same_value = gql(
+        &ctx,
+        add,
+        add_input(
+            "Retired Reuse Movie",
+            "770077",
+            json!({ "rootFolderId": custom_root_id }),
+        ),
+    )
+    .await;
+    assert_no_errors(&same_value);
+    assert_eq!(same_value["data"]["addTitle"]["reusedExistingTitle"], true);
+    assert_eq!(
+        same_value["data"]["addTitle"]["title"]["rootFolderId"],
+        custom_root_id
+    );
+
+    // A fileless title's root is a catalog pointer, so reuse may still move it.
+    let fileless_first = gql(
+        &ctx,
+        add,
+        add_input(
+            "Retired Reuse Fileless Movie",
+            "770078",
+            json!({ "rootFolderId": custom_root_id }),
+        ),
+    )
+    .await;
+    assert_no_errors(&fileless_first);
+    let fileless_reused = gql(
+        &ctx,
+        add,
+        add_input(
+            "Retired Reuse Fileless Movie",
+            "770078",
+            json!({ "rootFolderId": default_root_id }),
+        ),
+    )
+    .await;
+    assert_no_errors(&fileless_reused);
+    assert_eq!(
+        fileless_reused["data"]["addTitle"]["reusedExistingTitle"],
+        true
+    );
+    assert_eq!(
+        fileless_reused["data"]["addTitle"]["title"]["rootFolderId"],
+        default_root_id
+    );
+
+    // Creating a genuinely new title still assigns the requested root.
+    let created = gql(
+        &ctx,
+        add,
+        add_input(
+            "Retired Reuse New Movie",
+            "770079",
+            json!({ "rootFolderId": default_root_id }),
+        ),
+    )
+    .await;
+    assert_no_errors(&created);
+    assert_eq!(created["data"]["addTitle"]["reusedExistingTitle"], false);
+    assert_eq!(
+        created["data"]["addTitle"]["title"]["rootFolderId"],
+        default_root_id
+    );
 }
 
 #[tokio::test]
