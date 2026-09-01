@@ -71,6 +71,10 @@ pub const RECYCLE_BIN_ENABLED_KEY: &str = "recycle_bin.enabled";
 pub const RECYCLE_BIN_PATH_KEY: &str = "recycle_bin.path";
 pub const RECYCLE_BIN_RETENTION_DAYS_KEY: &str = "recycle_bin.retention_days";
 pub const VERIFICATION_DEPTH_KEY: &str = "verification.depth";
+/// Where the full-hash backfill job resumes (FR-047). Internal bookkeeping, not
+/// an operator-facing preference: it holds the media-file id the last run
+/// stopped after, and is cleared when a sweep reaches the end of the queue.
+pub const FULL_HASH_BACKFILL_CURSOR_KEY: &str = "verification.full_hash_backfill.cursor";
 
 pub(crate) fn default_indexer_routing_categories_for_scope(scope_id: &str) -> Vec<String> {
     match scope_id {

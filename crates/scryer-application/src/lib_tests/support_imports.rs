@@ -132,6 +132,7 @@ impl FileImporter for CopyingFileImporter {
             size_bytes,
             destination_disposition: scryer_domain::ImportDestinationDisposition::Created,
             source_cleanup: None,
+            verification: None,
         })
     }
 
@@ -249,6 +250,7 @@ fn mock_media_file(id: String, input: &InsertMediaFileInput) -> TitleMediaFile {
         announced_size_bytes: input.announced_size_bytes,
         source_signature_scheme: input.source_signature_scheme.clone(),
         source_signature_value: input.source_signature_value.clone(),
+        content_hashes: None,
         quality_label: input.quality_label.clone(),
         scan_status: "pending".to_string(),
         created_at: Utc::now().to_rfc3339(),
@@ -834,6 +836,53 @@ impl MediaFileRepository for MockMediaFileRepo {
             .ok_or_else(|| AppError::NotFound(format!("media file {}", file_id)))?;
         list.remove(position);
         Ok(())
+    }
+
+    /// Mirrors the SQL queue: rows with no full hash, in id order, after the
+    /// cursor. The ordering is what makes the backfill job's cursor mean
+    /// anything, so the double has to honour it.
+    async fn list_media_files_missing_full_hash(
+        &self,
+        after_id: Option<&str>,
+        limit: u32,
+    ) -> AppResult<Vec<crate::MediaFileHashCandidate>> {
+        let list = self.store.lock().await;
+        let mut candidates: Vec<_> = list
+            .iter()
+            .filter(|entry| entry.content_hashes.is_none())
+            .filter(|entry| after_id.is_none_or(|cursor| entry.id.as_str() > cursor))
+            .map(|entry| crate::MediaFileHashCandidate {
+                id: entry.id.clone(),
+                title_id: entry.title_id.clone(),
+                file_path: entry.file_path.clone(),
+                size_bytes: entry.size_bytes,
+            })
+            .collect();
+        candidates.sort_by(|left, right| left.id.cmp(&right.id));
+        candidates.truncate(limit as usize);
+        Ok(candidates)
+    }
+
+    async fn update_media_file_content_hashes(
+        &self,
+        file_id: &str,
+        hashes: &crate::location::model::PersistedContentHashes,
+    ) -> AppResult<()> {
+        let mut list = self.store.lock().await;
+        let entry = list
+            .iter_mut()
+            .find(|entry| entry.id == file_id)
+            .ok_or_else(|| AppError::NotFound(format!("media file {file_id}")))?;
+        entry.content_hashes = Some(hashes.clone());
+        Ok(())
+    }
+
+    async fn clear_media_file_content_hashes(&self, file_id: &str) -> AppResult<bool> {
+        let mut list = self.store.lock().await;
+        let Some(entry) = list.iter_mut().find(|entry| entry.id == file_id) else {
+            return Ok(false);
+        };
+        Ok(entry.content_hashes.take().is_some())
     }
 }
 

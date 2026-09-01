@@ -178,151 +178,47 @@ impl LocationOperationState {
     }
 }
 
-/// How thoroughly a copied file is proven before its source may be touched.
+// The verification value types live in [`scryer_domain`]: the import worker
+// serializes them across a process boundary, so they cannot depend on anything
+// here. Re-exported under their established paths — this module is still where
+// the operation model names them.
+pub use scryer_domain::{
+    AppliedVerificationDepth, FileVerificationOutcome, MoveCrcAlgorithm, StreamedContentHashes,
+    VerificationDepth,
+};
+
+/// The 0205 columns as they read back off a media file row.
 ///
-/// FR-042: **full** (default) reads the destination back and compares it against
-/// the CRC streamed during the copy; **quick** uses the sampled head+tail proof
-/// plus size and is the universal floor — full falls back to it, and verification
-/// never drops below it.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum VerificationDepth {
-    /// Full destination read-back compared against the streamed CRC.
-    #[default]
-    Full,
-    /// Sampled head+tail content proof plus size.
-    Quick,
-}
-
-impl VerificationDepth {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Full => "full",
-            Self::Quick => "quick",
-        }
-    }
-
-    /// Parse a persisted setting value. Unknown values are an error rather than a
-    /// silent downgrade so a corrupt setting cannot quietly weaken verification.
-    pub fn from_setting(value: &str) -> Result<Self, String> {
-        match value.trim() {
-            "full" => Ok(Self::Full),
-            "quick" => Ok(Self::Quick),
-            other => Err(format!("unsupported verification depth: {other}")),
-        }
-    }
-}
-
-/// The depth actually applied to one file, including the fallback case.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
-#[serde(rename_all = "snake_case")]
-pub struct AppliedVerificationDepth {
-    /// The depth the operation was configured to apply.
-    pub requested: VerificationDepth,
-    /// The depth actually achieved for this file.
-    pub applied: VerificationDepth,
-    /// True when `requested` was `Full` but only the quick floor could run
-    /// (FR-042 fallback); recorded so the reduced guarantee is auditable.
-    pub fell_back: bool,
-}
-
-impl AppliedVerificationDepth {
-    /// The depth was applied exactly as requested.
-    pub fn exact(depth: VerificationDepth) -> Self {
-        Self {
-            requested: depth,
-            applied: depth,
-            fell_back: false,
-        }
-    }
-
-    /// Full verification was requested but only the quick floor could run.
-    pub fn quick_fallback() -> Self {
-        Self {
-            requested: VerificationDepth::Full,
-            applied: VerificationDepth::Quick,
-            fell_back: true,
-        }
-    }
-}
-
-/// Outcome of verifying one destination file.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
-#[serde(rename_all = "snake_case")]
-pub enum FileVerificationOutcome {
-    /// Destination content matched at the applied depth; source removal is
-    /// unblocked for this file (FR-044).
-    Verified,
-    /// Destination content did not match; the source is never touched.
-    Mismatch,
-    /// Verification could not run at all (unreadable destination, vanished
-    /// mount); treated as a failure, never as a pass.
-    Unavailable,
-}
-
-impl FileVerificationOutcome {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Verified => "verified",
-            Self::Mismatch => "mismatch",
-            Self::Unavailable => "unavailable",
-        }
-    }
-
-    /// Parse a persisted value. An unreadable outcome is never treated as a
-    /// pass (FR-044).
-    pub fn parse(value: &str) -> Option<Self> {
-        match value.trim() {
-            "verified" => Some(Self::Verified),
-            "mismatch" => Some(Self::Mismatch),
-            "unavailable" => Some(Self::Unavailable),
-            _ => None,
-        }
-    }
-
-    /// Only a verified file may have its source recycled or removed (FR-044).
-    pub fn permits_source_removal(&self) -> bool {
-        matches!(self, Self::Verified)
-    }
-}
-
-/// CRC algorithm identifier persisted alongside a stored CRC so a future default
-/// change cannot be mistaken for a corruption (FR-041 "algorithm-tagged").
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum MoveCrcAlgorithm {
-    /// CRC-64/NVME — the default; see [`crate::location::verify`].
-    #[default]
-    Crc64Nvme,
-}
-
-impl MoveCrcAlgorithm {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Crc64Nvme => "crc64_nvme",
-        }
-    }
-
-    pub fn from_setting(value: &str) -> Result<Self, String> {
-        match value.trim() {
-            "crc64_nvme" => Ok(Self::Crc64Nvme),
-            other => Err(format!("unsupported move CRC algorithm: {other}")),
-        }
-    }
-}
-
-/// Hashes produced by one streaming copy pass (D2): read once at the source,
-/// both values persisted with the destination media file.
+/// `None` on a media file means the row has never been hashed end to end, or a
+/// scan saw its sampled proof change and invalidated it (FR-046). The CRC is
+/// only interpretable next to its algorithm tag, so both travel together and a
+/// row missing the tag reads back without a CRC rather than with an
+/// unattributable one.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct StreamedContentHashes {
-    /// Bytes streamed through the hashers.
-    pub size_bytes: u64,
-    /// Algorithm tag for `move_crc`.
-    pub crc_algorithm: MoveCrcAlgorithm,
-    /// Streaming CRC over the copied bytes; the move-corruption check.
-    pub move_crc: u64,
-    /// Full-file BLAKE3 (hex); the dedup identity (D4, FR-073).
+pub struct PersistedContentHashes {
+    /// Full-file BLAKE3 (hex).
     pub full_blake3: String,
+    /// Streaming CRC and its algorithm tag, when one was persisted. Absent for
+    /// a hash the backfill job produced before a CRC existed for that row, or
+    /// for a row whose stored tag is not one this build understands.
+    pub move_crc: Option<u64>,
+    pub crc_algorithm: Option<MoveCrcAlgorithm>,
+    /// When the hash was computed. Its absence is what separates a hash whose
+    /// vintage can be attested from one that cannot (see
+    /// [`crate::location::collisions::FullHash`]).
+    pub hash_computed_at: Option<DateTime<Utc>>,
+}
+
+impl PersistedContentHashes {
+    /// The write side: what one streaming pass produced, stamped with when.
+    pub fn from_streamed(hashes: &StreamedContentHashes, computed_at: DateTime<Utc>) -> Self {
+        Self {
+            full_blake3: hashes.full_blake3.clone(),
+            move_crc: Some(hashes.move_crc),
+            crc_algorithm: Some(hashes.crc_algorithm),
+            hash_computed_at: Some(computed_at),
+        }
+    }
 }
 
 /// Per-file verification record persisted for the operation (D5) and surfaced in

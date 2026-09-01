@@ -253,7 +253,7 @@ async fn correcting_a_match_to_an_unowned_folder_reassigns_and_rescans_without_t
     assert!(
         paths
             .iter()
-            .all(|path| !path.starts_with(wrong_folder.to_string_lossy().as_ref())),
+            .all(|path| !path.starts_with(&*wrong_folder.to_string_lossy())),
         "old-folder associations should be detached, got {paths:?}"
     );
 

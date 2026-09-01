@@ -85,7 +85,7 @@ pub(crate) use scan_title_files::{
 };
 use scan_title_files::{
     TitleScanLayoutSummary, classify_title_scan_layout, merge_title_scan_option_tags,
-    title_media_file_matches_snapshot,
+    title_media_file_matches_snapshot, title_media_file_quick_proof_changed,
 };
 use scan_title_finalize::finalize_movie_scan_file;
 pub(crate) use scan_title_finalize::finalize_title_scan_file;

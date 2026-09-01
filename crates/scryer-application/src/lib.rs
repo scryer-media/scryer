@@ -476,7 +476,7 @@ pub use ports::{
     JobRunRepository, LibraryProbeRepository, LibraryRepository,
     LibraryScanUnmatchedItemRepository, LocationOperationProgress, LocationOperationRepository,
     LocationOwnershipClaim, LocationOwnershipOutcome, LogicalBackupExporter, MediaAnalyzer,
-    MediaFileRepository,
+    MediaFileHashCandidate, MediaFileRepository,
     MediaRequestQuery, MediaRequestRepository, MediaServerConnectionRepository, MediaServerUser,
     MediaServerUserGroup, MediaServerUserGroupStatus, NOTIFICATION_REQUEST_SCHEMA_VERSION,
     NewMediaRequest, NormalizedIndexerSearchCandidate, NotificationActorPayload,

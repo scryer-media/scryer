@@ -4027,6 +4027,11 @@ pub async fn start_background_acquisition_poller(
     )
     .await;
     app.set_job_next_run_at(
+        JobKey::FullHashBackfill,
+        Utc::now() + chrono::Duration::minutes(15),
+    )
+    .await;
+    app.set_job_next_run_at(
         JobKey::Housekeeping,
         Utc::now() + chrono::Duration::hours(24),
     )
@@ -4050,6 +4055,10 @@ pub async fn start_background_acquisition_poller(
     let mut registry_refresh_interval = tokio::time::interval(std::time::Duration::from_hours(1));
     let mut health_check_interval = tokio::time::interval(std::time::Duration::from_hours(6));
     let mut staged_nzb_prune_interval = tokio::time::interval(std::time::Duration::from_hours(1));
+    // FR-047: the backfill's own throttling lives inside the job; the interval
+    // only decides how often a bounded sweep is offered a turn.
+    let mut full_hash_backfill_interval =
+        tokio::time::interval(std::time::Duration::from_mins(30));
     let mut housekeeping_interval = tokio::time::interval(std::time::Duration::from_hours(24));
     let mut prowlarr_sync_interval = tokio::time::interval(std::time::Duration::from_mins(5));
     let mut direct_indexer_caps_interval =
@@ -4062,6 +4071,7 @@ pub async fn start_background_acquisition_poller(
     registry_refresh_interval.tick().await;
     health_check_interval.tick().await;
     staged_nzb_prune_interval.tick().await;
+    full_hash_backfill_interval.tick().await;
     housekeeping_interval.tick().await;
     prowlarr_sync_interval.tick().await;
     direct_indexer_caps_interval.tick().await;
@@ -4154,6 +4164,19 @@ pub async fn start_background_acquisition_poller(
                     if let Err(e) = app.run_scheduled_job_now(JobKey::StagedNzbPrune, JobTriggerSource::ScheduledInterval).await {
                         warn!(error = %e, "periodic staged nzb prune failed");
                         metrics::counter!("scryer_task_errors_total", "task" => "staged_nzb_prune").increment(1);
+                    }
+                }).await;
+            }
+            _ = full_hash_backfill_interval.tick() => {
+                let app = app.clone();
+                run_task("full_hash_backfill", async move {
+                    app.set_job_next_run_at(
+                        JobKey::FullHashBackfill,
+                        Utc::now() + chrono::Duration::minutes(30),
+                    ).await;
+                    if let Err(e) = app.run_scheduled_job_now(JobKey::FullHashBackfill, JobTriggerSource::ScheduledInterval).await {
+                        warn!(error = %e, "periodic full hash backfill failed");
+                        metrics::counter!("scryer_task_errors_total", "task" => "full_hash_backfill").increment(1);
                     }
                 }).await;
             }

@@ -153,6 +153,7 @@ pub enum JobKey {
     AutoBackup,
     PendingReleaseProcessing,
     StagedNzbPrune,
+    FullHashBackfill,
     DiscoverySync,
     TitleImageCacheRefresh,
     TitleDeletion,
@@ -162,6 +163,7 @@ pub enum JobKey {
     RecycleBinPurge,
     AcquisitionSearch,
     ApplicationUpgrade,
+    LocationOperation,
 }
 
 impl JobKey {
@@ -182,6 +184,7 @@ impl JobKey {
             Self::AutoBackup => "auto_backup",
             Self::PendingReleaseProcessing => "pending_release_processing",
             Self::StagedNzbPrune => "staged_nzb_prune",
+            Self::FullHashBackfill => "full_hash_backfill",
             Self::DiscoverySync => "discovery_sync",
             Self::TitleImageCacheRefresh => "title_image_cache_refresh",
             Self::TitleDeletion => "title_deletion",
@@ -191,6 +194,7 @@ impl JobKey {
             Self::RecycleBinPurge => "recycle_bin_purge",
             Self::AcquisitionSearch => "acquisition_search",
             Self::ApplicationUpgrade => "application_upgrade",
+            Self::LocationOperation => "location_operation",
         }
     }
 
@@ -211,6 +215,7 @@ impl JobKey {
             "auto_backup" => Some(Self::AutoBackup),
             "pending_release_processing" => Some(Self::PendingReleaseProcessing),
             "staged_nzb_prune" => Some(Self::StagedNzbPrune),
+            "full_hash_backfill" => Some(Self::FullHashBackfill),
             "discovery_sync" => Some(Self::DiscoverySync),
             "title_image_cache_refresh" => Some(Self::TitleImageCacheRefresh),
             "title_deletion" => Some(Self::TitleDeletion),
@@ -220,6 +225,7 @@ impl JobKey {
             "recycle_bin_purge" => Some(Self::RecycleBinPurge),
             "acquisition_search" => Some(Self::AcquisitionSearch),
             "application_upgrade" => Some(Self::ApplicationUpgrade),
+            "location_operation" => Some(Self::LocationOperation),
             _ => None,
         }
     }
@@ -241,6 +247,7 @@ impl JobKey {
             Self::AutoBackup => "Automatic Backup",
             Self::PendingReleaseProcessing => "Pending Release Processing",
             Self::StagedNzbPrune => "Staged NZB Prune",
+            Self::FullHashBackfill => "Full Hash Backfill",
             Self::DiscoverySync => "Discovery Sync",
             Self::TitleImageCacheRefresh => "Title Image Cache Refresh",
             Self::TitleDeletion => "Title Deletion",
@@ -250,6 +257,7 @@ impl JobKey {
             Self::RecycleBinPurge => "Recycle Bin Purge",
             Self::AcquisitionSearch => "Acquisition Search",
             Self::ApplicationUpgrade => "Application Upgrade",
+            Self::LocationOperation => "Location Operation",
         }
     }
 
@@ -282,6 +290,9 @@ impl JobKey {
                 "Compatibility job; pending releases are re-evaluated during RSS sync."
             }
             Self::StagedNzbPrune => "Prune expired staged NZB artifacts.",
+            Self::FullHashBackfill => {
+                "Slowly compute missing full-file content hashes so duplicate detection and move verification have something to compare."
+            }
             Self::DiscoverySync => {
                 "Evaluate local discovery freshness and refresh SMG discovery snapshots."
             }
@@ -323,15 +334,18 @@ impl JobKey {
             | Self::RecycleBinRestore
             | Self::RecycleBinPurge
             | Self::ApplicationUpgrade => JobCategory::System,
-            Self::Housekeeping | Self::PendingReleaseProcessing | Self::StagedNzbPrune => {
-                JobCategory::Maintenance
-            }
+            Self::Housekeeping
+            | Self::PendingReleaseProcessing
+            | Self::StagedNzbPrune
+            | Self::FullHashBackfill => JobCategory::Maintenance,
         }
     }
 
     pub fn section(self) -> JobSection {
         match self {
-            Self::PendingReleaseProcessing | Self::StagedNzbPrune => JobSection::Maintenance,
+            Self::PendingReleaseProcessing | Self::StagedNzbPrune | Self::FullHashBackfill => {
+                JobSection::Maintenance
+            }
             _ => JobSection::Primary,
         }
     }
@@ -347,7 +361,8 @@ impl JobKey {
             | Self::PluginRegistryRefresh
             | Self::Housekeeping
             | Self::HealthChecks
-            | Self::StagedNzbPrune => JobScheduleKind::Interval,
+            | Self::StagedNzbPrune
+            | Self::FullHashBackfill => JobScheduleKind::Interval,
             Self::DiscoverySync => JobScheduleKind::StartupAndInterval,
             Self::AutoBackup => JobScheduleKind::DailyAtTime,
             Self::LibraryScanMovies
@@ -379,6 +394,7 @@ impl JobKey {
             Self::AutoBackup => "Daily at configured local time",
             Self::PendingReleaseProcessing => "Re-evaluated during RSS sync",
             Self::StagedNzbPrune => "Every hour",
+            Self::FullHashBackfill => "Every 30 minutes",
             Self::DiscoverySync => "Dynamic discovery evaluator with daily backstop",
             Self::LibraryScanMovies
             | Self::LibraryScanSeries
@@ -405,6 +421,7 @@ impl JobKey {
             Self::Housekeeping => Some(24 * 3600),
             Self::HealthChecks => Some(6 * 3600),
             Self::StagedNzbPrune => Some(3600),
+            Self::FullHashBackfill => Some(30 * 60),
             Self::DiscoverySync => Some(24 * 3600),
             _ => None,
         }
@@ -418,6 +435,8 @@ impl JobKey {
             Self::SubtitleSearch => Some(120),
             Self::HealthChecks => Some(30),
             Self::DiscoverySync => Some(30 * 60),
+            // Boot is the busiest moment there is; the first sweep waits it out.
+            Self::FullHashBackfill => Some(15 * 60),
             _ => None,
         }
     }
@@ -449,7 +468,7 @@ impl JobKey {
     }
 }
 
-pub const ALL_JOB_KEYS: [JobKey; 16] = [
+pub const ALL_JOB_KEYS: [JobKey; 17] = [
     JobKey::LibraryScanMovies,
     JobKey::LibraryScanSeries,
     JobKey::LibraryScanAnime,
@@ -464,6 +483,7 @@ pub const ALL_JOB_KEYS: [JobKey; 16] = [
     JobKey::AutoBackup,
     JobKey::PendingReleaseProcessing,
     JobKey::StagedNzbPrune,
+    JobKey::FullHashBackfill,
     JobKey::DiscoverySync,
     JobKey::TitleImageCacheRefresh,
 ];

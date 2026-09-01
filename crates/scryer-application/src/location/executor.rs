@@ -620,6 +620,7 @@ impl<'a> LocationOperationRunner<'a> {
 
             let outcome = verified.outcome;
             let detail = verified.detail.clone();
+
             let record = verified.into_record(
                 FileVerificationIdentity {
                     operation_id: &operation.id,

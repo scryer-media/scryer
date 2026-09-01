@@ -24,8 +24,10 @@
 //! | [`merge`] | Identity mapping and per-table dispositions when a destination title already exists (FR-063–067). |
 //! | [`adoption`] | "Files are already there": destination accounting against stored catalog proof (FR-050–053). |
 //! | [`ownership_guard`] | Persisted + in-process (title, root) ownership for the duration of an operation (FR-084). |
+//! | [`backfill`] | The throttled, resumable full-hash convergence job (FR-047). |
 
 pub mod adoption;
+pub mod backfill;
 pub mod classify;
 pub mod collisions;
 pub mod execution;

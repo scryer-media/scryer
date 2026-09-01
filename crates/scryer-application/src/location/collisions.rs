@@ -231,6 +231,23 @@ impl FullHash {
         }
     }
 
+    /// Read the 0205 columns off a media file row.
+    ///
+    /// Invalidation clears the whole group (FR-046), so a stored hash is
+    /// current by construction — *provided* the row can say when it was
+    /// computed. A hash with no `hash_computed_at` is a vintage nothing can
+    /// attest, so it reads back [`FullHash::Stale`]: the backfill job will
+    /// recompute it, and until then it proves nothing rather than proving
+    /// something unfounded (D4: never a guess).
+    pub fn from_persisted(hashes: Option<&crate::location::model::PersistedContentHashes>) -> Self {
+        match hashes {
+            None => Self::Absent,
+            Some(hashes) if hashes.full_blake3.trim().is_empty() => Self::Absent,
+            Some(hashes) if hashes.hash_computed_at.is_none() => Self::Stale,
+            Some(hashes) => Self::known(hashes.full_blake3.clone()),
+        }
+    }
+
     fn missing_reason(&self) -> Option<&'static str> {
         match self {
             Self::Known(_) => None,
@@ -275,6 +292,13 @@ impl ContentFacts {
 
     pub fn with_stale_full_blake3(mut self) -> Self {
         self.full_blake3 = FullHash::Stale;
+        self
+    }
+
+    /// Attach an already-resolved hash state (the read-model path: a planner
+    /// carries [`FullHash`] straight off the media file row).
+    pub fn with_full_hash(mut self, full_blake3: FullHash) -> Self {
+        self.full_blake3 = full_blake3;
         self
     }
 }
@@ -1151,6 +1175,44 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    /// FR-046 clears the whole 0205 column group, so a persisted hash is
+    /// current by construction — but only when the row can say *when* it was
+    /// computed.
+    #[test]
+    fn a_persisted_hash_with_a_vintage_reads_back_as_known() {
+        let hashes = crate::location::model::PersistedContentHashes {
+            full_blake3: "abc".to_string(),
+            move_crc: Some(7),
+            crc_algorithm: Some(crate::location::model::MoveCrcAlgorithm::Crc64Nvme),
+            hash_computed_at: Some(chrono::Utc::now()),
+        };
+
+        assert_eq!(
+            FullHash::from_persisted(Some(&hashes)),
+            FullHash::known("abc")
+        );
+    }
+
+    /// A hash nothing can date is a hash nothing can vouch for; it reads back
+    /// stale so the backfill job recomputes it and the dedup gate refuses it in
+    /// the meantime.
+    #[test]
+    fn a_persisted_hash_without_a_vintage_reads_back_as_stale() {
+        let hashes = crate::location::model::PersistedContentHashes {
+            full_blake3: "abc".to_string(),
+            move_crc: None,
+            crc_algorithm: None,
+            hash_computed_at: None,
+        };
+
+        assert_eq!(FullHash::from_persisted(Some(&hashes)), FullHash::Stale);
+    }
+
+    #[test]
+    fn an_unhashed_row_reads_back_as_absent() {
+        assert_eq!(FullHash::from_persisted(None), FullHash::Absent);
     }
 
     #[test]

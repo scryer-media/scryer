@@ -95,6 +95,19 @@ impl RootMoveCatalog for FakeCatalog {
         }
         Ok(())
     }
+
+    async fn set_media_file_content_hashes(
+        &self,
+        media_file_id: &str,
+        hashes: &crate::location::model::PersistedContentHashes,
+    ) -> AppResult<()> {
+        self.state
+            .lock()
+            .expect("lock")
+            .writes
+            .push(format!("hashes:{media_file_id}={}", hashes.full_blake3));
+        Ok(())
+    }
 }
 
 /// A recycler that records what it was handed instead of touching a bin.
@@ -270,6 +283,54 @@ async fn same_filesystem_moves_rename_and_skip_verification() {
     assert!(recycler.recycled().is_empty());
     // The empty source folder was removed (FR-031).
     assert!(!source_root.join("Movie").exists());
+}
+
+/// FR-032/FR-041: a same-filesystem rename copies no bytes, so there are no
+/// hashes to persist. Writing one anyway would put an unfounded value on the
+/// media file and take it off the backfill queue.
+#[tokio::test]
+async fn a_rename_placement_persists_no_content_hashes() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let source_root = temp.path().join("a");
+    let destination_root = temp.path().join("b");
+    let plan = single_title_plan(&source_root, &destination_root, "movie.mkv", 11);
+    write_file(&plan.titles[0].files[0].source(), b"hello world");
+    std::fs::create_dir_all(
+        plan.titles[0].files[0]
+            .destination()
+            .parent()
+            .expect("destination parent"),
+    )
+    .expect("create destination folder");
+
+    let catalog = Arc::new(FakeCatalog::with_title("title-1", placement_for(&plan)));
+    let mover = RootMoveFileMover::without_permissions().with_catalog(catalog.clone());
+    let work_plan = plan.to_work_plan();
+    let planned_title = &work_plan.titles[0];
+
+    let verified = mover
+        .move_file(FileMoveRequest {
+            operation_id: "op-1",
+            title: planned_title,
+            file: &planned_title.files[0],
+            depth: VerificationDepth::Full,
+        })
+        .await
+        .expect("rename placement");
+
+    assert!(verified.permits_source_removal());
+    assert!(
+        verified.hashes.is_none(),
+        "a rename streams no bytes through the hashers"
+    );
+    assert!(
+        !catalog
+            .writes()
+            .iter()
+            .any(|write| write.starts_with("hashes:")),
+        "a rename must not write content hashes: {:?}",
+        catalog.writes()
+    );
 }
 
 /// US2.5 / FR-031: a cross-filesystem move copies, verifies with the real

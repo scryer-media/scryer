@@ -44,7 +44,7 @@ use crate::location::classify::{
     TitleLocationClass, classify_selection,
 };
 use crate::location::collisions::{
-    CollisionNaming, ContentFacts, DestinationItem, PathCaseRule, RecycleAvailability,
+    CollisionNaming, ContentFacts, DestinationItem, FullHash, PathCaseRule, RecycleAvailability,
 };
 use crate::location::execution::{
     ImportFilePermissionsApplier, RootMoveAdmission, RootMoveCatalog, RootMoveFileMover,
@@ -234,6 +234,19 @@ impl AppUseCase {
             .await
     }
 
+    /// Per-title checkpoints in plan order, for the operation's Activity view
+    /// (FR-091).
+    pub async fn location_operation_checkpoints(
+        &self,
+        operation_id: &str,
+    ) -> AppResult<Vec<crate::location::model::TitleCheckpoint>> {
+        self.services
+            .library
+            .location_operations
+            .list_location_title_checkpoints(operation_id)
+            .await
+    }
+
     /// Resume one persisted operation from its last verified checkpoint
     /// (FR-033). Returns `None` when the operation is unknown, terminal, or was
     /// stored without its plan.
@@ -319,7 +332,11 @@ impl AppUseCase {
         let catalog = AppUseCaseRootMoveCatalog { app: self.clone() };
         let recycler = self.root_move_recycler(plan).await;
         let permissions = self.root_move_permissions(plan).await?;
-        let mover = RootMoveFileMover::new(VerifiedCopier::new(), permissions.clone());
+        // The mover gets its own catalog handle so each verified copy's hashes
+        // land on the media file as they are produced (FR-041, migration 0205),
+        // instead of the backfill job reading every moved file a second time.
+        let mover = RootMoveFileMover::new(VerifiedCopier::new(), permissions.clone())
+            .with_catalog(Arc::new(AppUseCaseRootMoveCatalog { app: self.clone() }));
         let admission = RootMoveAdmission::new(plan, &catalog);
         let reconciler = RootMoveReconciler::new(
             plan,
@@ -340,7 +357,7 @@ impl AppUseCase {
         .await
     }
 
-    fn spawn_location_operation(&self, operation_id: String, plan: RootMoveExecutionPlan) {
+    pub fn spawn_location_operation(&self, operation_id: String, plan: RootMoveExecutionPlan) {
         let app = self.clone();
         tokio::spawn(async move {
             if let Err(error) = app.run_root_move(&operation_id, &plan).await {
@@ -405,7 +422,7 @@ impl AppUseCase {
 
     /// FR-083: the initiating user must hold management permission for the
     /// source library and every destination library involved.
-    async fn require_location_operation_permission(
+    pub async fn require_location_operation_permission(
         &self,
         actor: &User,
         operation: &LocationOperation,
@@ -897,9 +914,9 @@ async fn collect_source_files(
     source_folder: Option<&Path>,
     media_files: &[crate::TitleMediaFile],
 ) -> AppResult<(Vec<SourceFile>, Vec<PathBuf>)> {
-    let media_by_path: BTreeMap<String, String> = media_files
+    let media_by_path: BTreeMap<&str, &crate::TitleMediaFile> = media_files
         .iter()
-        .map(|file| (file.file_path.clone(), file.id.clone()))
+        .map(|file| (file.file_path.as_str(), file))
         .collect();
 
     let mut files = Vec::new();
@@ -935,9 +952,16 @@ async fn collect_source_files(
                     .strip_prefix(&folder)
                     .ok()
                     .map(std::path::Path::to_path_buf);
+                let tracked = media_by_path.get(stored.as_str()).copied();
                 seen.insert(stored.clone());
                 files.push(SourceFile {
-                    media_file_id: media_by_path.get(&stored).cloned(),
+                    media_file_id: tracked.map(|file| file.id.clone()),
+                    // The persisted hash, never a fresh read: planning does no
+                    // hashing, and an absent hash means "unproven", which the
+                    // dedup gate treats as *not* a duplicate (D4).
+                    full_blake3: tracked
+                        .map(|file| FullHash::from_persisted(file.content_hashes.as_ref()))
+                        .unwrap_or(FullHash::Absent),
                     path,
                     relative_path: relative,
                     size_bytes,
@@ -959,6 +983,7 @@ async fn collect_source_files(
             .unwrap_or_else(|_| media_file.size_bytes.max(0) as u64);
         files.push(SourceFile {
             media_file_id: Some(media_file.id.clone()),
+            full_blake3: FullHash::from_persisted(media_file.content_hashes.as_ref()),
             path,
             relative_path: None,
             size_bytes,
@@ -1058,6 +1083,19 @@ impl RootMoveCatalog for AppUseCaseRootMoveCatalog {
             .library
             .media_files
             .update_media_file_path(media_file_id, stored_path)
+            .await
+    }
+
+    async fn set_media_file_content_hashes(
+        &self,
+        media_file_id: &str,
+        hashes: &crate::location::model::PersistedContentHashes,
+    ) -> AppResult<()> {
+        self.app
+            .services
+            .library
+            .media_files
+            .update_media_file_content_hashes(media_file_id, hashes)
             .await
     }
 

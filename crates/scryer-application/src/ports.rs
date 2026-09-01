@@ -4963,6 +4963,43 @@ pub trait FileImporter: Send + Sync {
         .await
     }
 
+    /// [`FileImporter::import_file_with_execution_context`] with the operator's
+    /// verification depth (FR-045).
+    ///
+    /// An importer that copies bytes must compute the streaming CRC + BLAKE3
+    /// during the copy, prove the destination at `depth` before the source
+    /// becomes removable (FR-044), and report both on
+    /// [`ImportFileResult::verification`]. The default ignores the depth and
+    /// delegates: an importer that cannot verify reports no verification rather
+    /// than an unfounded pass.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "file placement keeps transfer, permission, source-snapshot, lane, and verification context explicit"
+    )]
+    async fn import_file_verified_with_execution_context(
+        &self,
+        source: &Path,
+        dest: &Path,
+        mode: scryer_domain::ImportMode,
+        expected_source: Option<&scryer_domain::ImportSourceSnapshot>,
+        progress: Option<ImportFileTransferProgressSender>,
+        permissions: &ImportFilePermissions,
+        context: &ImportFileExecutionContext,
+        depth: crate::location::model::VerificationDepth,
+    ) -> AppResult<ImportFileResult> {
+        let _ = depth;
+        self.import_file_with_execution_context(
+            source,
+            dest,
+            mode,
+            expected_source,
+            progress,
+            permissions,
+            context,
+        )
+        .await
+    }
+
     async fn remove_import_source_after_verified_import(
         &self,
         guard: scryer_domain::ImportSourceCleanupGuard,
@@ -4984,6 +5021,22 @@ pub trait FileImporter: Send + Sync {
 #[async_trait]
 pub trait MediaAnalyzer: Send + Sync {
     async fn analyze_file(&self, path: PathBuf) -> AppResult<MediaAnalysisOutcome>;
+}
+
+/// One row off the full-hash backfill queue (FR-047).
+///
+/// Deliberately narrow: the job hashes a path, so it only needs the identity,
+/// the path, and the recorded size to sanity-check against. Hydrating whole
+/// media-file records to walk a catalog-sized queue would defeat the "low
+/// impact" half of the requirement.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MediaFileHashCandidate {
+    pub id: String,
+    pub title_id: String,
+    /// Stored-path string; the job resolves it through
+    /// [`crate::stored_paths`] like every other path consumer.
+    pub file_path: String,
+    pub size_bytes: i64,
 }
 
 #[async_trait]
@@ -5102,6 +5155,40 @@ pub trait MediaFileRepository: Send + Sync {
         source_signature_scheme: Option<String>,
         source_signature_value: Option<String>,
     ) -> AppResult<()>;
+
+    /// One page of the full-hash backfill queue (FR-047), ordered by id so the
+    /// cursor is a plain "everything after this id" and the ordering survives a
+    /// restart. Rows that already carry a full hash are excluded by the
+    /// migration 0205 partial index, so the queue drains monotonically.
+    ///
+    /// The default is an empty queue: a repository that does not implement the
+    /// backfill simply has no work, never phantom work.
+    async fn list_media_files_missing_full_hash(
+        &self,
+        after_id: Option<&str>,
+        limit: u32,
+    ) -> AppResult<Vec<MediaFileHashCandidate>> {
+        let _ = (after_id, limit);
+        Ok(Vec::new())
+    }
+
+    /// Persist the 0205 columns for one file. Writes all four together so a row
+    /// can never carry a hash whose vintage or CRC algorithm is unknown.
+    async fn update_media_file_content_hashes(
+        &self,
+        file_id: &str,
+        hashes: &crate::location::model::PersistedContentHashes,
+    ) -> AppResult<()> {
+        let _ = (file_id, hashes);
+        Ok(())
+    }
+
+    /// Clear the 0205 columns, putting the file back on the backfill queue
+    /// (FR-046). Returns whether a row actually changed.
+    async fn clear_media_file_content_hashes(&self, file_id: &str) -> AppResult<bool> {
+        let _ = file_id;
+        Ok(false)
+    }
 
     async fn update_media_file_path(&self, file_id: &str, file_path: &str) -> AppResult<()>;
 

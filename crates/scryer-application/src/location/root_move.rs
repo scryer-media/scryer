@@ -50,7 +50,7 @@ use crate::location::classify::{
 };
 use crate::location::collisions::{
     CollisionDisposition, CollisionNaming, CollisionPlan, CollisionPlanRequest, ContentFacts,
-    DestinationItem, IncomingItem, PathCaseRule, RecycleAvailability, plan_collisions,
+    DestinationItem, FullHash, IncomingItem, PathCaseRule, RecycleAvailability, plan_collisions,
 };
 use crate::location::executor::{OperationWorkPlan, PlannedFile, PlannedTitle};
 use crate::location::hardlinks::{HardlinkFact, hardlink_warnings};
@@ -218,6 +218,11 @@ impl RootMoveExecutionPlan {
 pub struct SourceFile {
     /// Tracked media file id, or `None` for a companion asset.
     pub media_file_id: Option<String>,
+    /// The file's persisted full-BLAKE3 state (D4, FR-047). Carried on the
+    /// draft rather than looked up during planning: planning performs no IO,
+    /// and the dedup gate needs the *persisted* hash, never a fresh read.
+    /// Companion assets are always [`FullHash::Absent`] — nothing hashes them.
+    pub full_blake3: FullHash,
     pub path: PathBuf,
     /// Path relative to the title's folder. `None` when the file lives outside
     /// the folder, in which case it is placed in the destination folder root.
@@ -670,8 +675,10 @@ fn plan_title_collisions(
             IncomingItem::companion(id, name, file.size_bytes)
         };
         incoming.push(
-            item.with_content(ContentFacts::new(file.size_bytes))
-                .with_source_path(path_to_stored_string(&file.path)),
+            item.with_content(
+                ContentFacts::new(file.size_bytes).with_full_hash(file.full_blake3.clone()),
+            )
+            .with_source_path(path_to_stored_string(&file.path)),
         );
     }
 
@@ -741,6 +748,7 @@ mod tests {
     fn file(id: Option<&str>, path: &str, relative: Option<&str>, size: u64) -> SourceFile {
         SourceFile {
             media_file_id: id.map(str::to_string),
+            full_blake3: FullHash::Absent,
             path: PathBuf::from(path),
             relative_path: relative.map(PathBuf::from),
             size_bytes: size,
@@ -968,6 +976,7 @@ mod tests {
         title.destination_folder_path = Some(PathBuf::from("/b/Some Movie"));
         title.files = vec![SourceFile {
             media_file_id: Some("mf-1".to_string()),
+            full_blake3: FullHash::Absent,
             path: PathBuf::from("/a/Some Movie/movie.mkv"),
             relative_path: Some(PathBuf::from("movie.mkv")),
             size_bytes: 1_000,
@@ -984,6 +993,67 @@ mod tests {
         assert_eq!(planned.plan.counts.for_kind(PlanItemKind::Rename), 1);
         assert!(execution.deduplicated_sources.is_empty());
         assert_ne!(execution.files[0].destination_path, "/b/Some Movie/movie.mkv");
+    }
+
+    /// D4, unlocked by FR-047: once the backfill job has hashed both sides, the
+    /// same look-alike collision that could only be renamed above resolves as a
+    /// proven duplicate. This is the whole point of persisting the hash — the
+    /// planner does no IO, so a dedup it cannot read off the catalog is a dedup
+    /// that never happens.
+    #[test]
+    fn matching_persisted_hashes_turn_a_look_alike_into_a_proven_dedup() {
+        const HASH: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+        let mut title = draft(TitleLocationClass::RootMove);
+        title.destination_folder_path = Some(PathBuf::from("/b/Some Movie"));
+        title.files = vec![SourceFile {
+            media_file_id: Some("mf-1".to_string()),
+            full_blake3: FullHash::known(HASH),
+            path: PathBuf::from("/a/Some Movie/movie.mkv"),
+            relative_path: Some(PathBuf::from("movie.mkv")),
+            size_bytes: 1_000,
+        }];
+        title.destination_entries = vec![
+            DestinationItem::media("movie.mkv", 1_000)
+                .with_content(ContentFacts::new(1_000).with_full_blake3(HASH)),
+        ];
+
+        let planned = build_root_move_plan(&request(vec![title]));
+        let execution = planned.execution.title("title-1").expect("planned");
+
+        assert_eq!(planned.plan.counts.for_kind(PlanItemKind::Dedup), 1);
+        assert_eq!(planned.plan.counts.for_kind(PlanItemKind::Rename), 0);
+        assert_eq!(
+            execution.deduplicated_sources,
+            vec!["/a/Some Movie/movie.mkv".to_string()]
+        );
+    }
+
+    /// A stale hash proves nothing. The row is queued for backfill, and until it
+    /// is rehashed the planner must treat the look-alike as unproven rather than
+    /// deduplicate on a hash of bytes that are gone (FR-046).
+    #[test]
+    fn a_stale_persisted_hash_does_not_deduplicate() {
+        const HASH: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+        let mut title = draft(TitleLocationClass::RootMove);
+        title.destination_folder_path = Some(PathBuf::from("/b/Some Movie"));
+        title.files = vec![SourceFile {
+            media_file_id: Some("mf-1".to_string()),
+            full_blake3: FullHash::Stale,
+            path: PathBuf::from("/a/Some Movie/movie.mkv"),
+            relative_path: Some(PathBuf::from("movie.mkv")),
+            size_bytes: 1_000,
+        }];
+        title.destination_entries = vec![
+            DestinationItem::media("movie.mkv", 1_000)
+                .with_content(ContentFacts::new(1_000).with_full_blake3(HASH)),
+        ];
+
+        let planned = build_root_move_plan(&request(vec![title]));
+
+        assert_eq!(planned.plan.counts.for_kind(PlanItemKind::Dedup), 0);
+        assert_eq!(planned.plan.counts.for_kind(PlanItemKind::Rename), 1);
     }
 
     /// FR-085: hardlinked sources warn about the broken link and the recycle

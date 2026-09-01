@@ -17,6 +17,7 @@ mod acquisition_recovery;
 mod discovery_sync;
 mod downloads;
 mod folder_match;
+mod full_hash_backfill;
 mod import_rejection_reopen;
 mod indexer_download_client_mappings;
 mod libraries;

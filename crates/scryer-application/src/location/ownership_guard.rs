@@ -481,6 +481,15 @@ impl crate::AppUseCase {
         )
     }
 
+    /// Every open claim, for background work that cannot enumerate its own
+    /// entities up front and only needs to *skip* what is owned rather than
+    /// refuse (the full-hash backfill job, FR-047/SC-007).
+    pub(crate) async fn location_ownership_open_claims(
+        &self,
+    ) -> AppResult<Vec<crate::ports::LocationOwnershipClaim>> {
+        self.location_ownership_guard().open_claims().await
+    }
+
     /// The choke point every mutating entry point calls (FR-084). `entry` names
     /// the [`GuardedEntry`] constant registered for this call site.
     pub(crate) async fn ensure_location_ownership_allows(

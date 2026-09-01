@@ -36,6 +36,8 @@ pub enum JobKeyValue {
     PendingReleaseProcessing,
     /// Staged NZB pruning.
     StagedNzbPrune,
+    /// Background full-file content-hash backfill.
+    FullHashBackfill,
     /// Discovery synchronization.
     DiscoverySync,
     /// Title-image cache refresh.

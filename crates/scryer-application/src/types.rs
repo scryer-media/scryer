@@ -646,6 +646,10 @@ pub struct TitleMediaFile {
     pub role: crate::MediaFileRole,
     pub source_signature_scheme: Option<String>,
     pub source_signature_value: Option<String>,
+    /// Persisted full-file hashes (migration 0205, FR-041/046/047), separate
+    /// from the sampled head+tail proof above. `None` when nothing has read the
+    /// file end to end yet, or when a scan invalidated the stored values.
+    pub content_hashes: Option<crate::location::model::PersistedContentHashes>,
     pub quality_label: Option<String>,
     pub scan_status: String,
     pub created_at: String,

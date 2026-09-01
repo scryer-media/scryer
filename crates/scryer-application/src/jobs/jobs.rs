@@ -1608,6 +1608,13 @@ impl AppUseCase {
                     serde_json::to_string(&CountSummary { count }).ok(),
                 ))
             }
+            JobKey::FullHashBackfill => {
+                let summary = self.run_full_hash_backfill_job().await?;
+                Ok(JobExecutionOutcome::new(
+                    Some(summary.summary_text()),
+                    serde_json::to_string(&summary).ok(),
+                ))
+            }
             JobKey::DiscoverySync => self.run_discovery_sync_job(run.trigger_source).await,
             JobKey::TitleImageCacheRefresh => {
                 let summary = self.run_title_image_cache_refresh().await?;

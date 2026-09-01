@@ -2365,6 +2365,9 @@ impl AppUseCase {
                             || existing.source_signature_scheme != desired_scheme
                             || existing.source_signature_value != desired_value
                             || existing.scan_status != "scanned",
+                        should_invalidate_full_hashes: title_media_file_quick_proof_changed(
+                            existing, &snapshot,
+                        ),
                     }
                 } else {
                     PlannedTitleScanRecord::New

@@ -144,6 +144,25 @@ pub trait RootMoveCatalog: Send + Sync {
 
     /// Update the title's root reference (FR-078 synthetic id).
     async fn set_title_root(&self, title_id: &str, root_folder_id: &str) -> AppResult<()>;
+
+    /// Persist the hashes the copy pass produced onto the moved media file
+    /// (FR-041, migration 0205).
+    ///
+    /// The operation's own per-file record (0206) is the audit trail; this is
+    /// the *read model* the dedup gate and the backfill queue consult. Without
+    /// it a verified move would hand its expensive hash to an audit table and
+    /// leave the media file queued for the backfill job to read all over again.
+    ///
+    /// Defaulted to a no-op so a catalog that only exercises placement does not
+    /// have to care.
+    async fn set_media_file_content_hashes(
+        &self,
+        media_file_id: &str,
+        hashes: &crate::location::model::PersistedContentHashes,
+    ) -> AppResult<()> {
+        let _ = (media_file_id, hashes);
+        Ok(())
+    }
 }
 
 // ── Seam: recycling ──────────────────────────────────────────────────────────
@@ -195,6 +214,13 @@ pub trait SourceRecycler: Send + Sync {
 pub struct RootMoveFileMover {
     copier: VerifiedCopier,
     permissions: Arc<dyn PlacedContentPermissions>,
+    /// Where the streamed hashes are persisted (FR-041, migration 0205).
+    ///
+    /// The mover is the only place that ever holds them, so it is the only
+    /// place that can hand them to the read model. `None` for a mover wired
+    /// without a catalog, in which case the backfill job picks the files up
+    /// later — a missing hash costs a re-read, never correctness.
+    catalog: Option<Arc<dyn RootMoveCatalog>>,
 }
 
 impl RootMoveFileMover {
@@ -202,13 +228,58 @@ impl RootMoveFileMover {
         Self {
             copier,
             permissions,
+            catalog: None,
         }
+    }
+
+    /// Persist each copy's hashes onto its media file, so a moved file leaves
+    /// the backfill queue instead of being read a second time (D4).
+    pub fn with_catalog(mut self, catalog: Arc<dyn RootMoveCatalog>) -> Self {
+        self.catalog = Some(catalog);
+        self
     }
 
     /// A mover that changes no permissions — the right shape for a deployment
     /// with no configured modes, and for tests.
     pub fn without_permissions() -> Self {
         Self::new(VerifiedCopier::new(), Arc::new(NoPlacedContentPermissions))
+    }
+
+    /// FR-041/D4: the hashes the copy already computed go onto the media file
+    /// (0205) as well as into the operation's audit record (0206).
+    ///
+    /// Only for a verified destination — a hash of bytes that failed their
+    /// check describes content we are about to refuse to trust. A
+    /// same-filesystem rename carries no hashes at all (FR-032), and a
+    /// companion asset has no media-file row.
+    async fn persist_content_hashes(&self, request: &FileMoveRequest<'_>, verified: &VerifiedFile) {
+        let Some(catalog) = self.catalog.as_ref() else {
+            return;
+        };
+        if !verified.permits_source_removal() {
+            return;
+        }
+        let (Some(media_file_id), Some(hashes)) = (
+            request.file.media_file_id.as_deref(),
+            verified.hashes.as_ref(),
+        ) else {
+            return;
+        };
+
+        let persisted =
+            crate::location::model::PersistedContentHashes::from_streamed(hashes, chrono::Utc::now());
+        if let Err(error) = catalog
+            .set_media_file_content_hashes(media_file_id, &persisted)
+            .await
+        {
+            // Not fatal: the bytes are placed and proven, and the backfill job
+            // recomputes whatever did not land.
+            tracing::warn!(
+                error = %error,
+                media_file_id,
+                "failed to persist move content hashes; the backfill job will recompute them"
+            );
+        }
     }
 }
 
@@ -250,6 +321,7 @@ impl TitleFileMover for RootMoveFileMover {
         if verified.permits_source_removal() {
             self.permissions.apply_to_file(destination).await?;
         }
+        self.persist_content_hashes(&request, &verified).await;
         Ok(verified)
     }
 }
