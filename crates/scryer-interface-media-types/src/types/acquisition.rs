@@ -444,6 +444,13 @@ pub struct IndexerProxyConfigPayload {
     pub base_url: String,
     /// Request timeout in seconds.
     pub request_timeout_seconds: i32,
+    /// Whether a username or password is stored for this proxy, without
+    /// exposing either value. Always false for challenge solvers, which take
+    /// no credentials.
+    pub has_credentials: bool,
+    /// Whether destination hostnames are resolved at the proxy (`socks5h`).
+    /// Always false outside SOCKS5.
+    pub remote_dns: bool,
     /// Whether the proxy is enabled.
     pub is_enabled: bool,
     /// Most recent health status, or null before the first check.
@@ -822,10 +829,22 @@ pub struct CreateIndexerProxyConfigInput {
     pub name: String,
     /// Proxy provider implementation identifier.
     pub provider_type: String,
+    /// Challenge-solver protocol. Omit to take the single protocol Scryer
+    /// speaks; transport proxies reject any value because they speak none.
+    pub protocol: Option<String>,
     /// Proxy base URL.
     pub base_url: String,
     /// Request timeout in seconds.
     pub request_timeout_seconds: Option<i32>,
+    /// Transport-proxy username. Write-only: stored encrypted and never read
+    /// back. Challenge solvers reject it.
+    pub username: Option<String>,
+    /// Transport-proxy password. Write-only: stored encrypted and never read
+    /// back. Requires a username; challenge solvers reject it.
+    pub password: Option<String>,
+    /// SOCKS5 only: resolve destination hostnames at the proxy. A `socks5h://`
+    /// base URL implies true.
+    pub remote_dns: Option<bool>,
     /// Whether the proxy is enabled.
     pub is_enabled: Option<bool>,
 }
@@ -841,6 +860,14 @@ pub struct UpdateIndexerProxyConfigInput {
     pub base_url: Option<String>,
     /// Replacement request timeout in seconds; omission preserves it.
     pub request_timeout_seconds: Option<i32>,
+    /// Replacement transport-proxy username. Write-only: omission preserves
+    /// the stored value, null clears it, and it is never read back.
+    pub username: MaybeUndefined<String>,
+    /// Replacement transport-proxy password. Write-only: omission preserves
+    /// the stored value, null clears it, and it is never read back.
+    pub password: MaybeUndefined<String>,
+    /// Replacement SOCKS5 remote-DNS state; omission preserves it.
+    pub remote_dns: Option<bool>,
     /// Replacement enabled state; omission preserves it.
     pub is_enabled: Option<bool>,
 }

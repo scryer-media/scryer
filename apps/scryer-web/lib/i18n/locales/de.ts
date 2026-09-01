@@ -201,6 +201,18 @@ const de: LocaleDictionary = {
   "settings.users": "Benutzer",
   "settings.indexers": "Indexer",
   "settings.indexerProxies": "Indexer-Proxys",
+  "settings.indexerProxyUsername": "Benutzername",
+  "settings.indexerProxyPassword": "Passwort",
+  "settings.indexerProxyCredentialsStored": "Zugangsdaten hinterlegt",
+  "settings.indexerProxyCredentialUnchanged": "Unverändert",
+  "settings.indexerProxyClearCredentials": "Gespeicherte Zugangsdaten löschen",
+  "settings.indexerProxyCredentialsHelp":
+    "Zugangsdaten werden verschlüsselt gespeichert und nie wieder angezeigt. Lassen Sie beide Felder leer, wenn der Proxy keine benötigt.",
+  "settings.indexerProxyCredentialsStoredHelp":
+    "Für diesen Proxy sind Zugangsdaten hinterlegt. Lassen Sie die Felder leer, um sie zu behalten, oder geben Sie neue Werte ein, um sie zu ersetzen.",
+  "settings.indexerProxyRemoteDns": "DNS am Proxy auflösen",
+  "settings.indexerProxyRemoteDnsHelp":
+    "DNS am Proxy aufzulösen entspricht dem socks5h-Verhalten: Der Proxy löst die Ziel-Hostnamen auf, nicht dieser Rechner.",
   "settings.qualityProfiles": "Qualitätsprofile",
   "settings.downloadClients": "Download-Clients",
   "settings.downloadClientRouting": "Download-Client-Routing",

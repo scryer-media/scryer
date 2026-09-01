@@ -20,11 +20,16 @@ import type { IndexerSettingsTab } from "@/components/root/types";
 import type {
   ConfigFieldDef,
   IndexerProxyDraft,
+  IndexerProxyProviderTypeValue,
   IndexerProxyRecord,
   IndexerRecord,
   ProviderTypeInfo,
   IndexerDownloadClientMappingCatalog,
   IndexerDownloadClientMappingCatalogResource,
+} from "@/lib/types";
+import {
+  isIndexerProxyProviderType,
+  supportsIndexerProxyRemoteDns,
 } from "@/lib/types";
 import { runConnectionFeedback } from "@/lib/utils/connection-feedback";
 import {
@@ -83,7 +88,28 @@ const INDEXER_PROXY_INITIAL_DRAFT: IndexerProxyDraft = {
   name: "",
   baseUrl: "http://localhost:8191",
   requestTimeoutSeconds: 60,
+  username: "",
+  password: "",
+  hasStoredCredentials: false,
+  clearCredentials: false,
+  remoteDns: false,
   isEnabled: true,
+};
+
+/**
+ * Each provider's base URL has to match its own scheme, so switching provider
+ * in the editor reseeds the placeholder rather than leaving a solver URL on a
+ * SOCKS row.
+ */
+const INDEXER_PROXY_DEFAULT_BASE_URLS: Record<
+  IndexerProxyProviderTypeValue,
+  string
+> = {
+  byparr: "http://localhost:8191",
+  trawl: "http://localhost:8191",
+  http: "http://localhost:3128",
+  socks4: "socks4://localhost:1080",
+  socks5: "socks5://localhost:1080",
 };
 
 function serializeConfigValues(
@@ -1025,10 +1051,19 @@ export function SettingsIndexersContainer({
     setEditingProxyId(proxy.id);
     setIsProxyEditorOpen(true);
     setIndexerProxyDraft({
-      providerType: proxy.providerType === "trawl" ? "trawl" : "byparr",
+      providerType: isIndexerProxyProviderType(proxy.providerType)
+        ? proxy.providerType
+        : "byparr",
       name: proxy.name,
       baseUrl: proxy.baseUrl,
       requestTimeoutSeconds: proxy.requestTimeoutSeconds,
+      // Credentials are write-only: they are never read back, so the editor
+      // opens with blank inputs meaning "leave the stored secret alone".
+      username: "",
+      password: "",
+      hasStoredCredentials: proxy.hasCredentials,
+      clearCredentials: false,
+      remoteDns: proxy.remoteDns,
       isEnabled: proxy.isEnabled,
     });
     setGlobalStatus(`Editing indexer proxy ${proxy.name}`);
@@ -1039,6 +1074,36 @@ export function SettingsIndexersContainer({
     setIndexerProxyDraft({ ...INDEXER_PROXY_INITIAL_DRAFT });
     setIsProxyEditorOpen(true);
   }, []);
+
+  const changeIndexerProxyProvider = useCallback(
+    (providerType: IndexerProxyProviderTypeValue) => {
+      setIndexerProxyDraft((prev) => {
+        if (prev.providerType === providerType) {
+          return prev;
+        }
+        const previousDefault =
+          INDEXER_PROXY_DEFAULT_BASE_URLS[prev.providerType];
+        return {
+          ...prev,
+          providerType,
+          // Only reseed a URL the operator has not customized; a typed value
+          // survives so switching provider by accident costs nothing.
+          baseUrl:
+            prev.baseUrl.trim() === "" || prev.baseUrl === previousDefault
+              ? INDEXER_PROXY_DEFAULT_BASE_URLS[providerType]
+              : prev.baseUrl,
+          // Fields the new provider rejects must not linger in the draft.
+          username: "",
+          password: "",
+          clearCredentials: false,
+          remoteDns: supportsIndexerProxyRemoteDns(providerType)
+            ? prev.remoteDns
+            : false,
+        };
+      });
+    },
+    [],
+  );
 
   const submitIndexerProxy = useCallback(async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -1192,6 +1257,7 @@ export function SettingsIndexersContainer({
         submitIndexerProxy={submitIndexerProxy}
         resetIndexerProxyDraft={resetIndexerProxyDraft}
         startCreateIndexerProxy={startCreateIndexerProxy}
+        changeIndexerProxyProvider={changeIndexerProxyProvider}
         editIndexerProxy={editIndexerProxy}
         testIndexerProxy={testIndexerProxy}
         deleteIndexerProxy={deleteIndexerProxy}

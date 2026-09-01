@@ -201,6 +201,18 @@ const es: LocaleDictionary = {
   "settings.users": "Usuarios",
   "settings.indexers": "Indexadores",
   "settings.indexerProxies": "Proxies de indexadores",
+  "settings.indexerProxyUsername": "Usuario",
+  "settings.indexerProxyPassword": "Contraseña",
+  "settings.indexerProxyCredentialsStored": "Credenciales configuradas",
+  "settings.indexerProxyCredentialUnchanged": "Sin cambios",
+  "settings.indexerProxyClearCredentials": "Borrar las credenciales guardadas",
+  "settings.indexerProxyCredentialsHelp":
+    "Las credenciales se guardan cifradas y no vuelven a mostrarse. Deja ambos campos vacíos si el proxy no necesita ninguna.",
+  "settings.indexerProxyCredentialsStoredHelp":
+    "Este proxy tiene credenciales guardadas. Deja los campos vacíos para conservarlas o escribe valores nuevos para reemplazarlas.",
+  "settings.indexerProxyRemoteDns": "Resolver DNS en el proxy",
+  "settings.indexerProxyRemoteDnsHelp":
+    "Resolver el DNS en el proxy es el comportamiento socks5h: el proxy resuelve los nombres de destino en lugar de esta máquina.",
   "settings.qualityProfiles": "Perfiles de calidad",
   "settings.downloadClients": "Clientes de descarga",
   "settings.downloadClientRouting": "Enrutamiento de clientes de descarga",

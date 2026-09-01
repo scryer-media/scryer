@@ -1,4 +1,10 @@
 import type { IndexerProxyDraft, UiDateTimeFormat } from "../types/index.ts";
+// Imported from the module rather than the barrel: these are runtime values,
+// and the barrel's extensionless re-exports only resolve for erased types.
+import {
+  supportsIndexerProxyCredentials,
+  supportsIndexerProxyRemoteDns,
+} from "../types/indexers.ts";
 
 function buildIndexerProxyCommonInput(draft: IndexerProxyDraft) {
   return {
@@ -9,10 +15,46 @@ function buildIndexerProxyCommonInput(draft: IndexerProxyDraft) {
   };
 }
 
+/**
+ * Remote DNS is a SOCKS-only setting: the API rejects `true` on anything else,
+ * so the field never leaves the client for another provider.
+ */
+function buildIndexerProxyRemoteDnsInput(draft: IndexerProxyDraft) {
+  return supportsIndexerProxyRemoteDns(draft.providerType)
+    ? { remoteDns: draft.remoteDns }
+    : {};
+}
+
+/**
+ * Credentials are write-only, the same convention as the indexer API key: an
+ * omitted field keeps whatever is stored, an explicit null clears it, and a
+ * value replaces it. Challenge solvers and SOCKS4 take no credentials at all.
+ */
+function buildIndexerProxyCredentialInput(
+  draft: IndexerProxyDraft,
+  { allowClear }: { allowClear: boolean },
+): { username?: string | null; password?: string | null } {
+  if (!supportsIndexerProxyCredentials(draft.providerType)) {
+    return {};
+  }
+  if (allowClear && draft.clearCredentials) {
+    return { username: null, password: null };
+  }
+  const username = draft.username.trim();
+  const password = draft.password.trim();
+  return {
+    ...(username ? { username } : {}),
+    ...(password ? { password } : {}),
+  };
+}
+
 export function buildCreateIndexerProxyInput(draft: IndexerProxyDraft) {
   return {
     providerType: draft.providerType,
     ...buildIndexerProxyCommonInput(draft),
+    ...buildIndexerProxyRemoteDnsInput(draft),
+    // Nothing is stored yet, so there is nothing to clear.
+    ...buildIndexerProxyCredentialInput(draft, { allowClear: false }),
   };
 }
 
@@ -23,6 +65,8 @@ export function buildUpdateIndexerProxyInput(
   return {
     id,
     ...buildIndexerProxyCommonInput(draft),
+    ...buildIndexerProxyRemoteDnsInput(draft),
+    ...buildIndexerProxyCredentialInput(draft, { allowClear: true }),
   };
 }
 

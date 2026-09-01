@@ -446,6 +446,8 @@ const INDEXER_PROXY_CONFIG_FIELDS = `
     protocol
     baseUrl
     requestTimeoutSeconds
+    hasCredentials
+    remoteDns
     isEnabled
     lastHealthStatus
     lastErrorMessage

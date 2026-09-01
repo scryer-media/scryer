@@ -305,6 +305,19 @@ const ru: LocaleDictionary = {
     "settings.createInvite": "Создать приглашение",
     "settings.users": "Пользователи",
     "settings.indexers": "Индексаторы",
+    "settings.indexerProxyUsername": "Имя пользователя",
+    "settings.indexerProxyPassword": "Пароль",
+    "settings.indexerProxyCredentialsStored": "Учётные данные заданы",
+    "settings.indexerProxyCredentialUnchanged": "Без изменений",
+    "settings.indexerProxyClearCredentials":
+      "Удалить сохранённые учётные данные",
+    "settings.indexerProxyCredentialsHelp":
+      "Учётные данные хранятся в зашифрованном виде и больше не показываются. Оставьте оба поля пустыми, если прокси их не требует.",
+    "settings.indexerProxyCredentialsStoredHelp":
+      "Для этого прокси сохранены учётные данные. Оставьте поля пустыми, чтобы сохранить их, или введите новые значения для замены.",
+    "settings.indexerProxyRemoteDns": "Разрешать DNS на прокси",
+    "settings.indexerProxyRemoteDnsHelp":
+      "Разрешение DNS на прокси — это поведение socks5h: имена узлов назначения разрешает прокси, а не эта машина.",
     "settings.qualityProfiles": "Профили качества",
     "settings.downloadClients": "Клиенты загрузки",
     "settings.mediaServers": "Медиасерверы",

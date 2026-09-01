@@ -42,13 +42,71 @@ export type IndexerRecord = {
   updatedAt: string;
 };
 
+/**
+ * Every indexer proxy provider the API accepts, in the order the editor lists
+ * them: challenge solvers first, then transport proxies.
+ */
+export const INDEXER_PROXY_PROVIDER_TYPES = [
+  "byparr",
+  "trawl",
+  "http",
+  "socks4",
+  "socks5",
+] as const;
+
+export type IndexerProxyProviderTypeValue =
+  (typeof INDEXER_PROXY_PROVIDER_TYPES)[number];
+
+const TRANSPORT_INDEXER_PROXY_PROVIDER_TYPES: ReadonlySet<string> = new Set([
+  "http",
+  "socks4",
+  "socks5",
+]);
+
+export function isIndexerProxyProviderType(
+  value: string,
+): value is IndexerProxyProviderTypeValue {
+  return (INDEXER_PROXY_PROVIDER_TYPES as readonly string[]).includes(value);
+}
+
+/**
+ * Transport proxies carry indexer traffic; challenge solvers answer browser
+ * challenges. The two kinds take entirely different settings.
+ */
+export function isTransportIndexerProxyProvider(providerType: string): boolean {
+  return TRANSPORT_INDEXER_PROXY_PROVIDER_TYPES.has(providerType);
+}
+
+/**
+ * Which providers accept a username and password. Challenge solvers take none,
+ * and SOCKS4 is rejected too: the HTTP client builds its SOCKS4 connector
+ * without auth, so a credential would be silently dropped on the wire.
+ */
+export function supportsIndexerProxyCredentials(providerType: string): boolean {
+  return providerType === "http" || providerType === "socks5";
+}
+
+/**
+ * Remote DNS is the `socks4a` / `socks5h` behaviour, so it is a SOCKS-only
+ * choice. An HTTP CONNECT proxy always resolves the destination itself, and a
+ * solver fetches the page entirely on its own side.
+ */
+export function supportsIndexerProxyRemoteDns(providerType: string): boolean {
+  return providerType === "socks4" || providerType === "socks5";
+}
+
 export type IndexerProxyRecord = {
   id: string;
   name: string;
   providerType: string;
-  protocol: string;
+  /** Null for transport proxies, which speak no challenge-solver protocol. */
+  protocol: string | null;
   baseUrl: string;
   requestTimeoutSeconds: number;
+  /** Whether a username or password is stored, never the values themselves. */
+  hasCredentials: boolean;
+  /** SOCKS5 only: destination hostnames are resolved at the proxy. */
+  remoteDns: boolean;
   isEnabled: boolean;
   lastHealthStatus: string | null;
   lastErrorMessage: string | null;
@@ -71,10 +129,22 @@ export type IndexerDraft = {
 };
 
 export type IndexerProxyDraft = {
-  providerType: "byparr" | "trawl";
+  providerType: IndexerProxyProviderTypeValue;
   name: string;
   baseUrl: string;
   requestTimeoutSeconds: number;
+  /**
+   * Write-only transport-proxy credentials. Blank on an edit means "leave the
+   * stored secret alone" — they are never read back from the API.
+   */
+  username: string;
+  password: string;
+  /** Whether the proxy being edited already has a stored credential. */
+  hasStoredCredentials: boolean;
+  /** Explicitly drop the stored credentials instead of leaving them alone. */
+  clearCredentials: boolean;
+  /** SOCKS5 only: resolve destination hostnames at the proxy (`socks5h`). */
+  remoteDns: boolean;
   isEnabled: boolean;
 };
 

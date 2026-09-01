@@ -49,6 +49,23 @@ fn optional_scalar_input<T>(value: MaybeUndefined<T>) -> Option<Option<T>> {
     }
 }
 
+/// Parse an optional challenge-solver protocol from GraphQL input.
+///
+/// Whether a protocol is *allowed* for the provider is the workflow's call —
+/// this only rejects a value that names no protocol at all.
+fn parse_challenge_solver_protocol(
+    raw: Option<&str>,
+) -> GqlResult<Option<scryer_domain::ChallengeSolverProtocol>> {
+    raw.map(|value| {
+        scryer_domain::ChallengeSolverProtocol::parse(value).ok_or_else(|| {
+            to_gql_error(AppError::Validation(format!(
+                "unsupported indexer proxy protocol '{value}'"
+            )))
+        })
+    })
+    .transpose()
+}
+
 async fn enrich_download_client_config_json(
     _client_type: &str,
     config_json: String,
@@ -449,22 +466,23 @@ impl ConfigMutations {
                 })
             })
             .transpose()?;
+        let protocol = parse_challenge_solver_protocol(input.protocol.as_deref())?;
         let config = app
             .create_indexer_proxy_config(
                 &actor,
                 NewIndexerProxyConfig {
                     name: input.name,
                     provider_type,
-                    // The GraphQL input does not yet carry the transport-proxy
-                    // fields; WP3 adds them. Until then every mutation
-                    // configures a challenge solver exactly as before.
-                    protocol: None,
+                    protocol,
                     base_url: input.base_url,
                     request_timeout_seconds,
                     is_enabled: input.is_enabled.unwrap_or(true),
-                    username: None,
-                    password: None,
-                    remote_dns: None,
+                    // Write-only: plaintext in, never echoed back out. The
+                    // workflow validates them per provider kind and the store
+                    // encrypts at rest.
+                    username: input.username,
+                    password: input.password,
+                    remote_dns: input.remote_dns,
                 },
             )
             .await
@@ -500,11 +518,11 @@ impl ConfigMutations {
                     base_url: input.base_url,
                     request_timeout_seconds,
                     is_enabled: input.is_enabled,
-                    // Omitted patches: credentials and remote DNS keep their
-                    // stored values until WP3 exposes them.
-                    username: None,
-                    password: None,
-                    remote_dns: None,
+                    // Write-only credentials: an omitted field keeps the stored
+                    // secret, an explicit null clears it. Nothing is read back.
+                    username: optional_scalar_input(input.username),
+                    password: optional_scalar_input(input.password),
+                    remote_dns: input.remote_dns,
                 },
             )
             .await
@@ -980,6 +998,46 @@ mod tests {
             options: vec![],
             help_text: None,
         }
+    }
+
+    #[test]
+    fn indexer_proxy_protocol_input_parses_or_names_the_bad_value() {
+        assert_eq!(parse_challenge_solver_protocol(None).unwrap(), None);
+        assert_eq!(
+            parse_challenge_solver_protocol(Some("request_solution_v1")).unwrap(),
+            Some(scryer_domain::ChallengeSolverProtocol::RequestSolutionV1)
+        );
+        // Casing and dashes normalize, matching the domain parser.
+        assert_eq!(
+            parse_challenge_solver_protocol(Some("Request-Solution-V1")).unwrap(),
+            Some(scryer_domain::ChallengeSolverProtocol::RequestSolutionV1)
+        );
+
+        let error = parse_challenge_solver_protocol(Some("socks5"))
+            .expect_err("an unknown protocol must be rejected");
+        assert!(
+            error.message.contains("socks5"),
+            "error should name the rejected value: {}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn indexer_proxy_credential_patches_distinguish_omitted_from_cleared() {
+        // Write-only convention: omitted keeps the stored secret, explicit null
+        // clears it, a value replaces it.
+        assert_eq!(
+            optional_scalar_input(MaybeUndefined::<String>::Undefined),
+            None
+        );
+        assert_eq!(
+            optional_scalar_input(MaybeUndefined::<String>::Null),
+            Some(None)
+        );
+        assert_eq!(
+            optional_scalar_input(MaybeUndefined::Value("operator".to_string())),
+            Some(Some("operator".to_string()))
+        );
     }
 
     #[test]

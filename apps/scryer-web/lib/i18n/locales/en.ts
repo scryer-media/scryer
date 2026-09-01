@@ -313,6 +313,18 @@ const en: LocaleDictionary = {
   "settings.users": "Users",
   "settings.indexers": "Indexers",
   "settings.indexerProxies": "Indexer Proxies",
+  "settings.indexerProxyUsername": "Username",
+  "settings.indexerProxyPassword": "Password",
+  "settings.indexerProxyCredentialsStored": "Credentials set",
+  "settings.indexerProxyCredentialUnchanged": "Unchanged",
+  "settings.indexerProxyClearCredentials": "Clear stored credentials",
+  "settings.indexerProxyCredentialsHelp":
+    "Credentials are stored encrypted and never shown again. Leave both empty if the proxy needs none.",
+  "settings.indexerProxyCredentialsStoredHelp":
+    "Credentials are stored for this proxy. Leave the fields empty to keep them, or type new values to replace them.",
+  "settings.indexerProxyRemoteDns": "Resolve DNS at proxy",
+  "settings.indexerProxyRemoteDnsHelp":
+    "Resolving DNS at the proxy is the socks5h behaviour: the proxy looks up destination hostnames instead of this machine.",
   "settings.qualityProfiles": "Quality Profiles",
   "settings.downloadClients": "Download Clients",
   "settings.mediaServers": "Media Servers",

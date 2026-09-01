@@ -1738,6 +1738,11 @@ input CreateIndexerProxyConfigInput {
 	"""
 	providerType: String!
 	"""
+	Challenge-solver protocol. Omit to take the single protocol Scryer
+	speaks; transport proxies reject any value because they speak none.
+	"""
+	protocol: String
+	"""
 	Proxy base URL.
 	"""
 	baseUrl: String!
@@ -1745,6 +1750,21 @@ input CreateIndexerProxyConfigInput {
 	Request timeout in seconds.
 	"""
 	requestTimeoutSeconds: Int
+	"""
+	Transport-proxy username. Write-only: stored encrypted and never read
+	back. Challenge solvers reject it.
+	"""
+	username: String
+	"""
+	Transport-proxy password. Write-only: stored encrypted and never read
+	back. Requires a username; challenge solvers reject it.
+	"""
+	password: String
+	"""
+	SOCKS5 only: resolve destination hostnames at the proxy. A `socks5h://`
+	base URL implies true.
+	"""
+	remoteDns: Boolean
 	"""
 	Whether the proxy is enabled.
 	"""
@@ -7289,9 +7309,10 @@ type IndexerProxyConfigPayload {
 	"""
 	providerType: String!
 	"""
-	Proxy protocol.
+	Challenge-solver protocol, or null for transport proxies, which speak
+	no protocol of their own.
 	"""
-	protocol: String!
+	protocol: String
 	"""
 	Proxy base URL.
 	"""
@@ -7300,6 +7321,17 @@ type IndexerProxyConfigPayload {
 	Request timeout in seconds.
 	"""
 	requestTimeoutSeconds: Int!
+	"""
+	Whether a username or password is stored for this proxy, without
+	exposing either value. Always false for challenge solvers, which take
+	no credentials.
+	"""
+	hasCredentials: Boolean!
+	"""
+	Whether destination hostnames are resolved at the proxy (`socks5h`).
+	Always false outside SOCKS5.
+	"""
+	remoteDns: Boolean!
 	"""
 	Whether the proxy is enabled.
 	"""
@@ -20719,6 +20751,20 @@ input UpdateIndexerProxyConfigInput {
 	Replacement request timeout in seconds; omission preserves it.
 	"""
 	requestTimeoutSeconds: Int
+	"""
+	Replacement transport-proxy username. Write-only: omission preserves
+	the stored value, null clears it, and it is never read back.
+	"""
+	username: String
+	"""
+	Replacement transport-proxy password. Write-only: omission preserves
+	the stored value, null clears it, and it is never read back.
+	"""
+	password: String
+	"""
+	Replacement SOCKS5 remote-DNS state; omission preserves it.
+	"""
+	remoteDns: Boolean
 	"""
 	Replacement enabled state; omission preserves it.
 	"""

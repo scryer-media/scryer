@@ -57,8 +57,9 @@ mod tests {
     use super::discovery::{discovery_surface_value, preferred_discovery_poster_source};
     use super::{
         discovery_home_query_from_input, from_download_queue_item, from_import_record,
-        from_indexer_config_with_fields, from_title_history_record, from_wanted_item,
-        provider_config_values_from_json_with_fields, provider_config_values_to_json,
+        from_indexer_config_with_fields, from_indexer_proxy_config, from_title_history_record,
+        from_wanted_item, provider_config_values_from_json_with_fields,
+        provider_config_values_to_json,
     };
     use crate::types::{
         BoolConfigValuePayload, DiscoveryHomeFiltersInput, DiscoveryHomeInput,
@@ -69,8 +70,9 @@ mod tests {
     use chrono::Utc;
     use scryer_application::{AcquisitionScopeState, AcquisitionScopeStatus};
     use scryer_domain::{
-        CompletedDownload, ConfigFieldDef, ConfigFieldType, ConfigFieldValueSource, ImportRecord,
-        ImportStatus, ImportType, IndexerConfig, TitleHistoryEventType, TitleHistoryRecord,
+        ChallengeSolverProtocol, CompletedDownload, ConfigFieldDef, ConfigFieldType,
+        ConfigFieldValueSource, ImportRecord, ImportStatus, ImportType, IndexerConfig,
+        IndexerProxyConfig, IndexerProxyProviderType, TitleHistoryEventType, TitleHistoryRecord,
     };
     use serde_json::{Value, json};
 
@@ -652,5 +654,86 @@ mod tests {
             &[],
         );
         assert_eq!(disabled.prowlarr_minimum_seeders, Some(0));
+    }
+
+    fn indexer_proxy_config(
+        provider_type: IndexerProxyProviderType,
+        username: Option<&str>,
+        password: Option<&str>,
+    ) -> IndexerProxyConfig {
+        IndexerProxyConfig {
+            id: "proxy-1".to_string(),
+            name: "Gateway".to_string(),
+            provider_type,
+            protocol: provider_type
+                .is_challenge_solver()
+                .then_some(ChallengeSolverProtocol::RequestSolutionV1),
+            base_url: "socks5://gateway:1080".to_string(),
+            request_timeout_seconds: 60,
+            is_enabled: true,
+            username_encrypted: username.map(str::to_string),
+            password_encrypted: password.map(str::to_string),
+            remote_dns: true,
+            last_health_status: None,
+            last_error_message: None,
+            last_error_at: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn indexer_proxy_payload_reports_stored_credentials_without_exposing_them() {
+        let payload = from_indexer_proxy_config(indexer_proxy_config(
+            IndexerProxyProviderType::Socks5,
+            Some("operator"),
+            Some("hunter2"),
+        ));
+
+        assert!(payload.has_credentials);
+        assert!(payload.remote_dns);
+        assert_eq!(payload.protocol, None);
+        // The point of the flag: no field on the payload carries the secret, so
+        // rendering every string-bearing field must not surface either value.
+        let rendered = format!(
+            "{}|{}|{}|{:?}|{:?}|{:?}",
+            payload.name,
+            payload.provider_type,
+            payload.base_url,
+            payload.protocol,
+            payload.last_health_status,
+            payload.last_error_message
+        );
+        assert!(!rendered.contains("operator"));
+        assert!(!rendered.contains("hunter2"));
+
+        // A username alone still counts as "credentials set".
+        let username_only = from_indexer_proxy_config(indexer_proxy_config(
+            IndexerProxyProviderType::Http,
+            Some("operator"),
+            None,
+        ));
+        assert!(username_only.has_credentials);
+
+        // An empty stored value is not a credential.
+        let blank = from_indexer_proxy_config(indexer_proxy_config(
+            IndexerProxyProviderType::Http,
+            Some(""),
+            Some(""),
+        ));
+        assert!(!blank.has_credentials);
+    }
+
+    #[test]
+    fn indexer_proxy_payload_keeps_solver_rows_unchanged() {
+        let payload = from_indexer_proxy_config(indexer_proxy_config(
+            IndexerProxyProviderType::Trawl,
+            None,
+            None,
+        ));
+
+        assert_eq!(payload.provider_type, "trawl");
+        assert_eq!(payload.protocol.as_deref(), Some("request_solution_v1"));
+        assert!(!payload.has_credentials);
     }
 }

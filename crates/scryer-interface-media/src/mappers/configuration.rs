@@ -611,6 +611,15 @@ pub fn from_indexer_config_with_fields(
 }
 
 pub fn from_indexer_proxy_config(config: IndexerProxyConfig) -> IndexerProxyConfigPayload {
+    // Credentials are write-only, exactly like `IndexerConfig.api_key_encrypted`:
+    // the payload says whether one is stored, never what it is.
+    let has_credentials = [
+        config.username_encrypted.as_deref(),
+        config.password_encrypted.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|value| !value.is_empty());
     IndexerProxyConfigPayload {
         id: config.id.into(),
         name: config.name,
@@ -620,6 +629,8 @@ pub fn from_indexer_proxy_config(config: IndexerProxyConfig) -> IndexerProxyConf
             .map(|protocol| protocol.as_str().to_string()),
         base_url: config.base_url,
         request_timeout_seconds: i32::try_from(config.request_timeout_seconds).unwrap_or(i32::MAX),
+        has_credentials,
+        remote_dns: config.remote_dns,
         is_enabled: config.is_enabled,
         last_health_status: config
             .last_health_status

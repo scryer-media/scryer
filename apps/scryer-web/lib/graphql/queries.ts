@@ -2123,6 +2123,8 @@ const indexerProxyConfigFieldSelection = `
     protocol
     baseUrl
     requestTimeoutSeconds
+    hasCredentials
+    remoteDns
     isEnabled
     lastHealthStatus
     lastErrorMessage
