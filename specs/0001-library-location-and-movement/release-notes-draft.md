@@ -76,25 +76,26 @@ gradually fills in full-file hashes for content that was already in your library
   destination changes between preview and confirm, the confirmation is refused
   and you are asked to review a fresh plan.
 
-### You choose how thoroughly copies are verified
+### Copies are verified — moves always fully, imports at your chosen depth
 
 - **Every copy computes a checksum over the bytes as they are written**, in the
   same single read of the source that also produces a full-file BLAKE3 hash.
   Both are stored with the media file.
-- **Verification depth is your preference.** *Full* (the default) reads the
-  destination back completely — bypassing the OS cache where the platform allows
-  it — and compares it against the checksum computed during the copy. *Quick
-  check* compares size plus the head-and-tail content proof. Quick is the floor:
-  full verification falls back to it when a full read-back cannot run, and
-  verification never drops below it.
-- **The depth you get is always stated.** The preview says which depth will
-  apply before you confirm; Activity and each file's result record "verified
-  (full)" or "verified (quick)", including files that fell back.
+- **Library and root moves always verify fully.** The destination is read back
+  completely — bypassing the OS cache where the platform allows it — and
+  compared against the checksum computed during the copy, before the source is
+  ever touched. This is not configurable: content already in your library is
+  never put at a selectable level of risk by a move.
+- **For download-client import copies, verification depth is your preference.**
+  *Full* (the default) reads the imported copy back completely; *quick check*
+  compares size plus the head-and-tail content proof. Quick is the floor in
+  both contexts: full verification falls back to it when a full read-back
+  cannot run, and verification never drops below it.
+- **The depth applied is always stated.** The preview says what will apply
+  before you confirm; Activity and each file's result record "verified (full)"
+  or "verified (quick)", including files that fell back.
 - A source file is recycled or removed only after the verification that applies
   to it has passed.
-- **Cross-device copies from your download client use the same machinery** and
-  honor the same preference, so imports get the same corruption check that
-  library moves do.
 
 ### Full-file hashes converge in the background
 
@@ -230,11 +231,13 @@ gradually fills in full-file hashes for content that was already in your library
   reaches them or a move or import rewrites them. Until then, deduplication
   simply does not fire for those files — Scryer will not delete anything on
   weaker evidence.
-- The verification-depth preference defaults to **full**. If your library lives
-  on a slow network mount and a full read-back after every copy is too expensive,
-  switch it to quick check. In this release the preference is available through
-  the API (`verificationSettings` / `updateVerificationSettings`) and is not yet
-  exposed in the web settings UI.
+- The verification-depth preference applies to **download-client import copies
+  only** and defaults to **full**. If completed downloads land on a slow network
+  mount and a full read-back after every import is too expensive, switch it to
+  quick check. Library and root moves ignore the preference and always verify
+  fully. In this release the preference is available through the API
+  (`verificationSettings` / `updateVerificationSettings`) and is not yet exposed
+  in the web settings UI.
 
 ## API and integration compatibility
 
