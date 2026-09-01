@@ -4,6 +4,8 @@ use scryer_application::{
 use sqlx::sqlite::SqliteRow;
 use sqlx::{QueryBuilder, Row, Sqlite, SqlitePool};
 
+use crate::media::libraries::state_store::decode_release_decision_explanation;
+
 pub async fn list_wanted_items_query(
     pool: &SqlitePool,
     query: &AcquisitionScopeStatesQuery,
@@ -247,6 +249,7 @@ pub async fn count_wanted_items_query(
 fn row_to_wanted_item(row: &SqliteRow) -> AppResult<AcquisitionScopeState> {
     let latest_release_decision = match row.try_get::<Option<String>, _>("latest_decision_id") {
         Ok(Some(id)) => Some(ReleaseDecision {
+            explanation_json: latest_release_decision_explanation(row, &id)?,
             id,
             wanted_item_id: row
                 .try_get("latest_decision_wanted_item_id")
@@ -269,9 +272,6 @@ fn row_to_wanted_item(row: &SqliteRow) -> AppResult<AcquisitionScopeState> {
                 .map_err(|e| AppError::Repository(e.to_string()))?,
             current_score: row.try_get("latest_decision_current_score").unwrap_or(None),
             score_delta: row.try_get("latest_decision_score_delta").unwrap_or(None),
-            explanation_json: row
-                .try_get("latest_decision_explanation_json")
-                .unwrap_or(None),
             created_at: row
                 .try_get("latest_decision_created_at")
                 .map_err(|e| AppError::Repository(e.to_string()))?,
@@ -322,4 +322,24 @@ fn row_to_wanted_item(row: &SqliteRow) -> AppResult<AcquisitionScopeState> {
             .try_get("updated_at")
             .map_err(|e| AppError::Repository(e.to_string()))?,
     })
+}
+
+fn latest_release_decision_explanation(
+    row: &SqliteRow,
+    decision_id: &str,
+) -> AppResult<Option<String>> {
+    let encoded = row
+        .try_get::<Option<Vec<u8>>, _>("latest_decision_explanation_json")
+        .map_err(|error| AppError::Repository(error.to_string()))?;
+    match decode_release_decision_explanation(encoded.as_deref()) {
+        Ok(explanation) => Ok(explanation),
+        Err(error) => {
+            tracing::warn!(
+                decision_id,
+                error = %error,
+                "release decision explanation could not be decoded"
+            );
+            Ok(None)
+        }
+    }
 }

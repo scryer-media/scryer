@@ -300,8 +300,8 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
                 ));
             }
             StatusCode::BAD_REQUEST => {
-                return Err(AppError::Validation(
-                    "Jellyfin rejected the supplied credentials".into(),
+                return Err(AppError::Unauthorized(
+                    "invalid Jellyfin credentials".into(),
                 ));
             }
             status => {

@@ -203,6 +203,7 @@ pub fn from_activity_event(event: ActivityEvent) -> ActivityEventPayload {
         actor_display_name: event.actor_display_name,
         title_id: event.title_id.map(Into::into),
         facet: event.facet.as_deref().and_then(MediaFacetValue::parse),
+        episode_ids: event.episode_ids.into_iter().map(Into::into).collect(),
         message: event.message,
         occurred_at: event.occurred_at,
     }

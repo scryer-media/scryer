@@ -343,6 +343,39 @@ pub struct DownloadClientBindingRecord {
     pub ended_at: Option<DateTime<Utc>>,
 }
 
+/// One finished download, read from the durable registry/submission rows rather
+/// than from a client's live list.
+///
+/// Download history was projected only from the live tracked-download snapshot,
+/// so a client that evicts finished jobs from its own list (rTorrent does)
+/// erased history entries for downloads Scryer had already imported. These rows
+/// are the persisted side of that projection: the canonical download, its
+/// terminal tracked state, and the submission columns a history row is built
+/// from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TerminalDownloadHistoryRow {
+    pub download_id: scryer_domain::download_identity::DownloadId,
+    pub origin: DownloadOrigin,
+    /// The persisted [`scryer_domain::TrackedDownloadState`] string. Only
+    /// terminal states are returned.
+    pub tracked_state: String,
+    pub tracked_reason: Option<String>,
+    pub tracked_detail: Option<String>,
+    pub title_id: Option<String>,
+    pub episode_id: Option<String>,
+    pub facet: Option<String>,
+    pub source_title: Option<String>,
+    pub client_id: Option<String>,
+    pub client_type: Option<String>,
+    pub client_name: Option<String>,
+    pub download_client_item_id: Option<String>,
+    pub source_provider_name: Option<String>,
+    pub size_bytes: Option<i64>,
+    pub submitted_at: Option<DateTime<Utc>>,
+    /// When the row last changed state; the history sort value.
+    pub last_state_at: Option<DateTime<Utc>>,
+}
+
 /// One observed client job, keyed by the configured-client/native-item locator.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ObservedClientJob {

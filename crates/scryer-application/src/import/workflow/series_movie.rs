@@ -1498,7 +1498,8 @@ async fn import_movie_download(
         title,
         scoring_context: &scoring_context,
         scope: &title_scope,
-        scope_runtime_minutes: title.runtime_minutes,
+        // A movie is one member: its own runtime, and nothing to reinterpret.
+        scope_size_basis: crate::quality_profile::CoverageSizeBasis::single(title.runtime_minutes),
         // The announced half of the evidence: the parse as it came off the
         // release name. `prepared.parsed` already carries the probe's findings,
         // so passing it would make both scoring passes identical.
@@ -2273,7 +2274,8 @@ async fn import_series_movie_download(
         title,
         scoring_context: &scoring_context,
         scope: &link_scope,
-        scope_runtime_minutes: movie.runtime_minutes,
+        // The linked movie is one member; see the title path above.
+        scope_size_basis: crate::quality_profile::CoverageSizeBasis::single(movie.runtime_minutes),
         // The announced half of the evidence; see the title path above.
         parsed: &parsed,
         accepted: prepared.accepted.as_ref(),

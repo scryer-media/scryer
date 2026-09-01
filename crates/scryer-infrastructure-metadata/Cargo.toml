@@ -1,6 +1,6 @@
 [package]
 name = "scryer-infrastructure-metadata"
-version = "0.18.22"
+version = "0.19.4"
 edition.workspace = true
 publish = false
 build = "build.rs"
@@ -13,10 +13,9 @@ scryer-infrastructure-library = { path = "../scryer-infrastructure-library" }
 scryer-infrastructure-sql = { path = "../scryer-infrastructure-sql" }
 async-trait = { workspace = true }
 aws-lc-rs = { workspace = true }
-base64 = "0.23"
+base64 = { workspace = true }
 blake3 = "1"
 chrono = { workspace = true }
-ml-dsa = "0.1.1"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider", "http2", "gzip", "brotli", "zstd", "deflate", "stream"] }
 serde = { workspace = true }
 serde_json = { workspace = true }

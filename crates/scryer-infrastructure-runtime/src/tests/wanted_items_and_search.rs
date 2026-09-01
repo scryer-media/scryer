@@ -243,6 +243,213 @@ async fn list_wanted_items_filters_on_latest_decision_code() {
 }
 
 #[tokio::test]
+async fn release_decision_explanations_are_compressed_and_hydrated_across_read_paths() {
+    let (services, db) = temp_services("scryer_release_decision_explanation").await;
+    let workflow = wanted_store(&services);
+    let catalog = title_store(&services);
+    let now = Utc::now();
+    let title = make_test_title("title-explanation", None);
+    TitleRepository::create(&catalog, title.clone())
+        .await
+        .expect("title should insert");
+
+    let wanted = AcquisitionScopeState {
+        id: "wanted-explanation".to_string(),
+        title_id: title.id.clone(),
+        title_name: Some(title.name.clone()),
+        title_slug: None,
+        title_facet: None,
+        library_id: None,
+        library_name: None,
+        library_slug: None,
+        episode_id: None,
+        collection_id: None,
+        series_movie_link_id: None,
+        season_number: None,
+        episode_number: None,
+        media_type: "movie".to_string(),
+        last_search_at: None,
+        status: AcquisitionScopeStatus::Wanted,
+        grabbed_release: None,
+        landed_bar: None,
+        latest_release_decision: None,
+        mismatch_recovery_eligible: false,
+        created_at: now.to_rfc3339(),
+        updated_at: now.to_rfc3339(),
+    };
+    workflow
+        .upsert_acquisition_scope_state(&wanted)
+        .await
+        .expect("wanted item should insert");
+
+    let explanation = serde_json::json!({
+        "candidate": {
+            "source": "synthetic-indexer",
+            "source_kind": "torrent",
+            "guid": "synthetic-guid",
+            "download_url_present": true,
+            "link_present": true,
+            "external_id_conflicts": null,
+        },
+        "auto_decision": {
+            "eligible": false,
+            "code": "episode_mismatch",
+            "summary": "Synthetic episode mismatch decision",
+        },
+        "quality_profile_decision": {
+            "allowed": true,
+            "block_codes": [],
+            "release_score": 1050,
+            "preference_score": 50,
+            "scoring_log": [
+                {"code": "quality_tier", "delta": 1000},
+                {"code": "preferred_protocol", "delta": 50},
+            ],
+        },
+        "parsed": {
+            "raw_title": "Synthetic.Show.S03E07.WEBDL-1080p.x265-EXAMPLE",
+            "normalized_title": "synthetic show",
+            "normalized_title_variants": ["synthetic show"],
+            "year": null,
+            "quality": "WEBDL-1080p",
+            "source": "Web",
+            "release_group": "EXAMPLE",
+            "disposition": "Parsed",
+            "parse_family": "Episode",
+            "parse_confidence": 0.98,
+            "is_ambiguous": false,
+            "parse_hints": ["synthetic exact identity"],
+        },
+    });
+    let explanation_json = explanation.to_string();
+    workflow
+        .insert_release_decision(&ReleaseDecision {
+            id: "decision-explanation".to_string(),
+            wanted_item_id: wanted.id.clone(),
+            title_id: title.id.clone(),
+            release_title: "Synthetic Show S03E07".to_string(),
+            release_url: Some("https://example.invalid/release".to_string()),
+            release_size_bytes: Some(1_000_000),
+            decision_code: "episode_mismatch".to_string(),
+            candidate_score: 1050,
+            current_score: Some(1000),
+            score_delta: Some(50),
+            explanation_json: Some(explanation_json.clone()),
+            created_at: now.to_rfc3339(),
+        })
+        .await
+        .expect("decision should insert");
+
+    let stored = sqlx::query(
+        "SELECT typeof(explanation_json) AS storage_type, explanation_json
+           FROM release_decisions
+          WHERE id = ?",
+    )
+    .bind("decision-explanation")
+    .fetch_one(services.pool())
+    .await
+    .expect("stored explanation should load");
+    assert_eq!(stored.get::<String, _>("storage_type"), "blob");
+    let encoded = stored.get::<Vec<u8>, _>("explanation_json");
+    assert_eq!(encoded.first(), Some(&1));
+    assert!(encoded.len() < explanation_json.len());
+
+    let decisions = workflow
+        .list_release_decisions_for_title(&title.id, 10, 0)
+        .await
+        .expect("decisions should list");
+    assert_eq!(decisions.len(), 1);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(
+            decisions[0]
+                .explanation_json
+                .as_deref()
+                .expect("listed explanation should decode")
+        )
+        .expect("listed explanation should remain JSON"),
+        explanation
+    );
+
+    let wanted_items = workflow
+        .list_acquisition_scope_states(AcquisitionScopeStatesQuery {
+            title_id: Some(title.id.clone()),
+            limit: 10,
+            ..AcquisitionScopeStatesQuery::default()
+        })
+        .await
+        .expect("wanted item should list");
+    let latest = wanted_items[0]
+        .latest_release_decision
+        .as_ref()
+        .expect("latest decision should hydrate");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(
+            latest
+                .explanation_json
+                .as_deref()
+                .expect("latest explanation should decode")
+        )
+        .expect("latest explanation should remain JSON"),
+        explanation
+    );
+
+    sqlx::query("UPDATE release_decisions SET explanation_json = x'0200' WHERE id = ?")
+        .bind("decision-explanation")
+        .execute(services.pool())
+        .await
+        .expect("explanation should corrupt for the read-path test");
+    let corrupt = workflow
+        .list_release_decisions_for_title(&title.id, 10, 0)
+        .await
+        .expect("corrupt explanation must not fail the decision list");
+    assert_eq!(corrupt.len(), 1);
+    assert_eq!(corrupt[0].explanation_json, None);
+    let corrupt_wanted_items = workflow
+        .list_acquisition_scope_states(AcquisitionScopeStatesQuery {
+            title_id: Some(title.id.clone()),
+            limit: 10,
+            ..AcquisitionScopeStatesQuery::default()
+        })
+        .await
+        .expect("corrupt explanation must not fail the latest-decision projection");
+    let corrupt_latest = corrupt_wanted_items[0]
+        .latest_release_decision
+        .as_ref()
+        .expect("corruption must preserve the latest decision");
+    assert_eq!(corrupt_latest.id, "decision-explanation");
+    assert_eq!(corrupt_latest.explanation_json, None);
+
+    workflow
+        .insert_release_decision(&ReleaseDecision {
+            id: "decision-invalid-explanation".to_string(),
+            wanted_item_id: wanted.id.clone(),
+            title_id: title.id.clone(),
+            release_title: "Invalid Explanation".to_string(),
+            release_url: None,
+            release_size_bytes: None,
+            decision_code: "episode_mismatch".to_string(),
+            candidate_score: 0,
+            current_score: None,
+            score_delta: None,
+            explanation_json: Some("not-json".to_string()),
+            created_at: (now + chrono::Duration::seconds(1)).to_rfc3339(),
+        })
+        .await
+        .expect("invalid explanation should not suppress its decision row");
+    let invalid_stored = sqlx::query("SELECT explanation_json FROM release_decisions WHERE id = ?")
+        .bind("decision-invalid-explanation")
+        .fetch_one(services.pool())
+        .await
+        .expect("invalid-explanation decision should remain stored");
+    assert_eq!(
+        invalid_stored.get::<Option<Vec<u8>>, _>("explanation_json"),
+        None
+    );
+
+    let _ = std::fs::remove_file(db);
+}
+
+#[tokio::test]
 async fn title_search_matches_aliases_slug_and_typos_with_direct_priority() {
     let (services, db) = temp_services("scryer_catalog_title_search").await;
     let catalog = title_store(&services);

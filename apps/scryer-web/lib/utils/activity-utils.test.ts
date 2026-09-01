@@ -139,11 +139,9 @@ test("blocked movie rows direct the operator to review the file mapping", () => 
 });
 
 test("an imported torrent that is still seeding gets its own badge", () => {
-  // The backend deliberately added no display state for it: the row still
-  // displays as COMPLETED, so the badge has to read the tracked state.
   const row = deriveQueueRowPresentation(
     blockedItem({
-      displayState: "COMPLETED",
+      displayState: "IMPORTED_SEEDING",
       trackedState: "IMPORTED_SEEDING",
       trackedStatus: "OK",
       trackedMatchType: "SUBMISSION",
@@ -156,7 +154,7 @@ test("an imported torrent that is still seeding gets its own badge", () => {
     translate,
   );
 
-  assert.equal(row.displayStateKey, "COMPLETED");
+  assert.equal(row.displayStateKey, "IMPORTED_SEEDING");
   assert.equal(row.statusBadgeKey, "IMPORTED_SEEDING");
   assert.equal(row.statusLabel, translations["queue.state.importedSeeding"]);
 });

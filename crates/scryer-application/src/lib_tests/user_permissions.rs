@@ -46,17 +46,39 @@ async fn update_user_password_is_hashed() {
     .await
     .expect("create user");
 
-    let updated = app
+    let first_updated = app
         .set_user_password(&user, &created.id, "after-pass".to_string())
         .await
         .expect("update password");
+    let first_auth_session_version = app
+        .services
+        .identity
+        .users
+        .auth_session_version(&created.id)
+        .await
+        .expect("load first authentication epoch")
+        .expect("first authentication epoch");
 
-    assert!(updated.password_hash.is_some());
+    let second_updated = app
+        .set_user_password(&user, &created.id, "final-pass".to_string())
+        .await
+        .expect("replace password unconditionally");
+    let second_auth_session_version = app
+        .services
+        .identity
+        .users
+        .auth_session_version(&created.id)
+        .await
+        .expect("load second authentication epoch")
+        .expect("second authentication epoch");
+
+    assert!(first_updated.password_hash.is_some());
     assert_ne!(
-        updated.password_hash, created.password_hash,
+        first_updated.password_hash, created.password_hash,
         "password hash should change when password is updated"
     );
-    assert_ne!(updated.password_hash, Some("after-pass".to_string()));
+    assert_ne!(second_updated.password_hash, Some("final-pass".to_string()));
+    assert_ne!(first_auth_session_version, second_auth_session_version);
 }
 
 #[tokio::test]
@@ -164,6 +186,129 @@ async fn self_password_change_rejects_password_shorter_than_minimum() {
         Err(error) => panic!("expected password-length validation error, got {error}"),
         Ok(_) => panic!("expected password-length validation error"),
     }
+}
+
+#[tokio::test]
+async fn stale_self_password_change_cannot_overwrite_a_newer_change() {
+    let users = Arc::new(MockUserRepo::default());
+    let (app, admin) = bootstrap_with_user_repo(users.clone());
+    let app = Arc::new(app);
+    let created = create_user_with_permissions(
+        &app,
+        &admin,
+        "self-password-race-user",
+        "before-pass",
+        vec![TestPermissionPreset::CatalogView],
+    )
+    .await
+    .expect("create user");
+
+    users.pause_next_own_password_update().await;
+    let stale_app = app.clone();
+    let stale_actor = created.clone();
+    let stale_change = tokio::spawn(async move {
+        stale_app
+            .change_own_password(
+                &stale_actor,
+                "stale-password".to_string(),
+                "before-pass".to_string(),
+            )
+            .await
+    });
+    timeout(Duration::from_secs(5), users.wait_for_own_password_update())
+        .await
+        .expect("stale password change should reach the conditional write");
+
+    app.change_own_password(
+        &created,
+        "winning-password".to_string(),
+        "before-pass".to_string(),
+    )
+    .await
+    .expect("newer password change should win");
+    users.resume_own_password_update();
+
+    let stale_result = timeout(Duration::from_secs(5), stale_change)
+        .await
+        .expect("stale password change should finish")
+        .expect("stale password task should not panic");
+    assert!(matches!(
+        stale_result,
+        Err(AppError::ReauthenticationRequired(_))
+    ));
+
+    let stored = app
+        .services
+        .identity
+        .users
+        .get_by_id(&created.id)
+        .await
+        .expect("load winning password")
+        .expect("user should remain present");
+    let hash = stored
+        .password_hash
+        .as_deref()
+        .expect("stored password hash");
+    assert!(app.validate_password("winning-password", hash).unwrap());
+    assert!(!app.validate_password("stale-password", hash).unwrap());
+}
+
+#[tokio::test]
+async fn concurrent_initial_password_claims_allow_exactly_one_winner() {
+    let users = Arc::new(MockUserRepo::default());
+    let (app, _) = bootstrap_with_user_repo(users.clone());
+    let app = Arc::new(app);
+    let mut user =
+        test_user_with_app_permissions("initial-password-race-user", AppPermissionMask::NONE);
+    user.authorization.actor_capabilities = scryer_domain::ActorCapabilityMask::MANAGE_OWN_ACCOUNT;
+    let user = app
+        .services
+        .identity
+        .users
+        .create(user)
+        .await
+        .expect("create passwordless user");
+
+    users.pause_next_own_password_update().await;
+    let first_app = app.clone();
+    let first_actor = user.clone();
+    let first_claim = tokio::spawn(async move {
+        first_app
+            .set_initial_own_password(&first_actor, "first-password".to_string())
+            .await
+    });
+    timeout(Duration::from_secs(5), users.wait_for_own_password_update())
+        .await
+        .expect("first claim should reach the conditional write");
+
+    app.set_initial_own_password(&user, "winning-password".to_string())
+        .await
+        .expect("second claim should win");
+    users.resume_own_password_update();
+
+    let first_result = timeout(Duration::from_secs(5), first_claim)
+        .await
+        .expect("first claim should finish")
+        .expect("first claim task should not panic");
+    assert!(matches!(
+        first_result,
+        Err(AppError::ReauthenticationRequired(_))
+    ));
+
+    let stored = app
+        .services
+        .identity
+        .users
+        .get_by_id(&user.id)
+        .await
+        .expect("load winning password")
+        .expect("user should remain present");
+    let hash = stored
+        .password_hash
+        .as_deref()
+        .expect("stored password hash");
+    assert!(app.validate_password("winning-password", hash).unwrap());
+    assert!(!app.validate_password("first-password", hash).unwrap());
 }
 
 #[tokio::test]
@@ -450,14 +595,16 @@ async fn form_login_transition_requires_usable_admin_and_repairs_default_identit
         .await
         .expect("load default admin")
         .expect("default admin repaired");
+    let auth_session_version = scryer_domain::Id::new().0;
     let default_admin = app
         .services
         .identity
         .users
-        .update_password_hash(
+        .update_password_and_invalidate_sessions(
             &default_admin.id,
             app.hash_password("admin").expect("hash bootstrap password"),
             false,
+            &auth_session_version,
         )
         .await
         .expect("seed bootstrap password");

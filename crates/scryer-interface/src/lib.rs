@@ -16,7 +16,8 @@ pub use scryer_interface_query as query;
 pub use scryer_interface_subscription as subscription;
 
 pub use context::{
-    ApiContext, ApiSchema, LogBuffer, RestoreContext, RestoreRestartHandle, build_schema,
-    build_schema_with_log_buffer, build_schema_with_log_buffer_and_restore,
+    ApiContext, ApiSchema, GRAPHQL_RECURSIVE_DEPTH_LIMIT, LogBuffer, LoginAttemptPrincipal,
+    RestoreContext, RestoreRestartHandle, build_schema, build_schema_with_log_buffer,
+    build_schema_with_log_buffer_and_restore,
     build_schema_with_log_buffer_and_restore_and_application_upgrade, export_schema_sdl,
 };

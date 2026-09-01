@@ -126,6 +126,23 @@ pub trait IndexerErrorRepository: Send + Sync {
     ) -> crate::AppResult<u32>;
 }
 
+/// The id of the throwaway `IndexerConfig` a connection test probes under.
+///
+/// A connection test runs before the indexer exists (or without touching the
+/// stored one), so there is no `indexers` row to key error history on and
+/// `indexer_errors.indexer_id` is a foreign key onto that table.
+pub const CONNECTION_TEST_INDEXER_ID: &str = "test-connection";
+
+/// Whether error history may be persisted for this indexer id.
+///
+/// Capture paths ask before recording: writing history for the connection-test
+/// id can only ever fail the foreign key, and a storage failure raised behind a
+/// failed probe buries the probe's own error — which is the one thing the
+/// operator asked the connection test for.
+pub fn indexer_error_history_is_persistable(indexer_id: &str) -> bool {
+    indexer_id.trim() != CONNECTION_TEST_INDEXER_ID
+}
+
 pub trait IndexerErrorRecorder: Send + Sync {
     fn record(&self, error: NewIndexerError) -> crate::AppResult<()>;
 }

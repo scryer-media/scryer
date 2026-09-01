@@ -170,9 +170,127 @@ enum ScopedPackMemberReconciliation {
     Unresolved,
 }
 
-/// Reconcile a pack member only when its local scene numbering is corroborated
-/// by one monitored catalog episode in the verified submission scope.
+/// Reconcile a pack member whose own numbering found nothing in the catalog,
+/// corroborated in every lane by the pack's verified submission scope.
 fn reconcile_unresolved_pack_member_from_expected_scope(
+    title: &scryer_domain::Title,
+    pack: &VerifiedEpisodePack,
+    source_path: &Path,
+    catalog: &[scryer_domain::Episode],
+    expected_episode_ids: Option<&HashSet<String>>,
+) -> ScopedPackMemberReconciliation {
+    match reconcile_pack_member_from_scene_numbering(
+        title,
+        pack,
+        source_path,
+        catalog,
+        expected_episode_ids,
+    ) {
+        ScopedPackMemberReconciliation::Unresolved => {
+            reconcile_pack_member_from_absolute_numbering(
+                pack,
+                source_path,
+                catalog,
+                expected_episode_ids,
+            )
+        }
+        reconciled => reconciled,
+    }
+}
+
+/// Map a pack member that numbers itself absolutely onto the one catalog
+/// episode carrying that absolute number.
+///
+/// Two shapes arrive here. A true absolute token (`- 231`) parses with no
+/// season at all. A bare `E###` token parses as an inferred season 1, which is
+/// a misparse — so that lane is taken only when the catalog holds no such
+/// season-1 episode and the pack declares the season the absolute lands in.
+/// Without that cross-check the remap would be a guess.
+fn reconcile_pack_member_from_absolute_numbering(
+    pack: &VerifiedEpisodePack,
+    source_path: &Path,
+    catalog: &[scryer_domain::Episode],
+    expected_episode_ids: Option<&HashSet<String>>,
+) -> ScopedPackMemberReconciliation {
+    if pack.is_extras_release {
+        return ScopedPackMemberReconciliation::Unresolved;
+    }
+    let parsed = parsed_release_from_file_stem(source_path);
+    let Some(identity) = parsed.episode.as_ref() else {
+        return ScopedPackMemberReconciliation::Unresolved;
+    };
+    if identity.air_date.is_some()
+        || identity.special_kind.is_some()
+        || !identity.special_absolute_episode_numbers.is_empty()
+        || identity.full_season
+        || identity.is_series_pack
+        || identity.is_multi_season
+        || identity.is_season_extra
+        || identity.release_type == crate::ParsedEpisodeReleaseType::SeasonPack
+    {
+        return ScopedPackMemberReconciliation::Unresolved;
+    }
+    let declared_seasons = pack
+        .declared_seasons
+        .as_ref()
+        .filter(|seasons| !seasons.is_empty());
+
+    let absolute_number = match identity.season {
+        None => match parsed_absolute_numbers(identity).as_slice() {
+            [number] => *number,
+            _ => return ScopedPackMemberReconciliation::Unresolved,
+        },
+        Some(season) => {
+            // An explicit absolute companion means the member is not a bare
+            // `E###` misparse, and a declared season is the only thing that can
+            // corroborate reading its episode number as an absolute.
+            if identity.absolute_episode.is_some()
+                || !identity.absolute_episode_numbers.is_empty()
+                || declared_seasons.is_none()
+            {
+                return ScopedPackMemberReconciliation::Unresolved;
+            }
+            let [episode_number] = identity.episode_numbers.as_slice() else {
+                return ScopedPackMemberReconciliation::Unresolved;
+            };
+            // A catalog episode at the parsed numbering means the parse was
+            // right: an explicit S01E05 is never reread as absolute 5.
+            if catalog.iter().any(|episode| {
+                catalog_episode_season(episode) == Some(season)
+                    && catalog_episode_number(episode) == Some(*episode_number)
+            }) {
+                return ScopedPackMemberReconciliation::Unresolved;
+            }
+            *episode_number
+        }
+    };
+
+    let mut absolute_matches = catalog
+        .iter()
+        .filter(|episode| catalog_episode_absolute_number(episode) == Some(absolute_number));
+    let Some(episode) = absolute_matches.next() else {
+        return ScopedPackMemberReconciliation::Unresolved;
+    };
+    if absolute_matches.next().is_some() {
+        return ScopedPackMemberReconciliation::Unresolved;
+    }
+    if episode.episode_type != scryer_domain::EpisodeType::Standard {
+        return ScopedPackMemberReconciliation::Unresolved;
+    }
+    if declared_seasons.is_some_and(|seasons| {
+        !catalog_episode_season(episode).is_some_and(|season| seasons.contains(&season))
+    }) {
+        return ScopedPackMemberReconciliation::Unresolved;
+    }
+    if expected_episode_ids.is_some_and(|expected| !expected.contains(&episode.id)) {
+        return ScopedPackMemberReconciliation::Unresolved;
+    }
+    ScopedPackMemberReconciliation::Resolved(episode.id.clone())
+}
+
+/// Reconcile a pack member only when its local scene numbering is corroborated
+/// by one catalog episode in the verified submission scope.
+fn reconcile_pack_member_from_scene_numbering(
     title: &scryer_domain::Title,
     pack: &VerifiedEpisodePack,
     source_path: &Path,
@@ -217,7 +335,6 @@ fn reconcile_unresolved_pack_member_from_expected_scope(
         .iter()
         .filter(|episode| {
             expected_episode_ids.contains(&episode.id)
-                && episode.monitored
                 && episode.episode_type == scryer_domain::EpisodeType::Standard
                 && catalog_episode_number(episode) == Some(*episode_number)
                 && catalog_episode_season(episode)
@@ -768,16 +885,10 @@ fn finalize_pack_member_disposition(
                         .to_string(),
                 };
             }
-            if episodes.iter().any(|episode| episode.monitored) {
-                PlannedEpisodeMemberDisposition::Import { episodes }
-            } else {
-                PlannedEpisodeMemberDisposition::Ignore {
-                    episodes,
-                    reason_code: "unmonitored_pack_episode",
-                    message: "Unmonitored catalog episode in a verified pack was intentionally ignored."
-                        .to_string(),
-                }
-            }
+            // Monitoring decides what Scryer goes and gets, never what it
+            // keeps: like Sonarr, a resolved pack member imports even when
+            // its episodes are unmonitored — the bytes are already here.
+            PlannedEpisodeMemberDisposition::Import { episodes }
         }
         PlannedMemberDraft::Ignore {
             reason_code,
@@ -1052,6 +1163,161 @@ mod series_plan_tests {
         assert!(matches!(
             plan_parsed_pack_identity(false, &part_two, None, &catalog),
             PlannedMemberDraft::Resolved(ref episodes) if episodes[0].id == "ep-2"
+        ));
+    }
+
+    fn catalog_episode_in_season(
+        id: &str,
+        season: u32,
+        episode: u32,
+        absolute: u32,
+    ) -> scryer_domain::Episode {
+        let mut catalog = catalog_episode(id, episode, absolute);
+        catalog.collection_id = Some(format!("season-{season}"));
+        catalog.season_number = Some(season.to_string());
+        catalog.episode_label = Some(format!("S{season:02}E{episode:02}"));
+        catalog
+    }
+
+    fn declared_season_pack(season: Option<u32>) -> VerifiedEpisodePack {
+        VerifiedEpisodePack {
+            declared_seasons: season.map(|season| HashSet::from([season])),
+            is_extras_release: false,
+        }
+    }
+
+    fn pack_member(file_name: &str) -> PathBuf {
+        Path::new("/downloads/Quiet Meridian Season 13").join(file_name)
+    }
+
+    fn reconciled_absolute_member(
+        pack: &VerifiedEpisodePack,
+        file_name: &str,
+        catalog: &[scryer_domain::Episode],
+        expected_episode_ids: Option<&HashSet<String>>,
+    ) -> ScopedPackMemberReconciliation {
+        reconcile_pack_member_from_absolute_numbering(
+            pack,
+            &pack_member(file_name),
+            catalog,
+            expected_episode_ids,
+        )
+    }
+
+    /// `[GroupTag] Quiet Meridian - 231 ...` parses as a bare absolute with no
+    /// season of its own; the declared season is what corroborates the map.
+    #[test]
+    fn absolute_numbered_pack_member_maps_through_the_catalog_absolute_number() {
+        let catalog = vec![
+            catalog_episode_in_season("ep-s13e01", 13, 1, 230),
+            catalog_episode_in_season("ep-s13e02", 13, 2, 231),
+        ];
+        let expected = episode_id_set(&catalog);
+
+        assert!(matches!(
+            reconciled_absolute_member(
+                &declared_season_pack(Some(13)),
+                "[GroupTag] Quiet Meridian - 231 [BD][h.264][1080p][FLAC] [ABB6F939].mkv",
+                &catalog,
+                Some(&expected),
+            ),
+            ScopedPackMemberReconciliation::Resolved(ref episode_id) if episode_id == "ep-s13e02"
+        ));
+    }
+
+    /// A bare `E###` token is only readable as an inferred season 1, which the
+    /// catalog contradicts; the declared season resolves the misparse.
+    #[test]
+    fn bare_episode_token_pack_member_remaps_onto_the_declared_season() {
+        let catalog = vec![
+            catalog_episode_in_season("ep-s13e01", 13, 1, 230),
+            catalog_episode_in_season("ep-s13e02", 13, 2, 231),
+        ];
+        let expected = episode_id_set(&catalog);
+
+        assert!(matches!(
+            reconciled_absolute_member(
+                &declared_season_pack(Some(13)),
+                "E230.mkv",
+                &catalog,
+                Some(&expected),
+            ),
+            ScopedPackMemberReconciliation::Resolved(ref episode_id) if episode_id == "ep-s13e01"
+        ));
+    }
+
+    #[test]
+    fn a_catalogued_season_episode_is_never_reread_as_an_absolute() {
+        let catalog = vec![
+            catalog_episode_in_season("ep-s01e05", 1, 5, 5),
+            catalog_episode_in_season("ep-s13e01", 13, 1, 230),
+        ];
+        let expected = episode_id_set(&catalog);
+
+        assert!(matches!(
+            reconciled_absolute_member(
+                &declared_season_pack(Some(1)),
+                "Quiet.Meridian.S01E05.1080p.WEB-DL.x264-GroupTag.mkv",
+                &catalog,
+                Some(&expected),
+            ),
+            ScopedPackMemberReconciliation::Unresolved
+        ));
+    }
+
+    #[test]
+    fn an_absolute_outside_the_declared_season_is_left_unresolved() {
+        let catalog = vec![catalog_episode_in_season("ep-s12e24", 12, 24, 231)];
+        let expected = episode_id_set(&catalog);
+
+        assert!(matches!(
+            reconciled_absolute_member(
+                &declared_season_pack(Some(13)),
+                "[GroupTag] Quiet Meridian - 231 [BD][h.264][1080p][FLAC] [ABB6F939].mkv",
+                &catalog,
+                Some(&expected),
+            ),
+            ScopedPackMemberReconciliation::Unresolved
+        ));
+    }
+
+    #[test]
+    fn a_shared_absolute_number_is_left_unresolved() {
+        let catalog = vec![
+            catalog_episode_in_season("ep-s13e01", 13, 1, 230),
+            catalog_episode_in_season("ep-s13e02", 13, 2, 230),
+        ];
+        let expected = episode_id_set(&catalog);
+
+        assert!(matches!(
+            reconciled_absolute_member(
+                &declared_season_pack(Some(13)),
+                "E230.mkv",
+                &catalog,
+                Some(&expected),
+            ),
+            ScopedPackMemberReconciliation::Unresolved
+        ));
+    }
+
+    /// Without a declared season nothing corroborates rereading `E230` as an
+    /// absolute, so the misparse lane stays shut.
+    #[test]
+    fn a_bare_episode_token_needs_a_declared_season() {
+        let catalog = vec![catalog_episode_in_season("ep-s13e01", 13, 1, 230)];
+
+        assert!(matches!(
+            reconciled_absolute_member(&declared_season_pack(None), "E230.mkv", &catalog, None),
+            ScopedPackMemberReconciliation::Unresolved
+        ));
+        assert!(matches!(
+            reconciled_absolute_member(
+                &declared_season_pack(None),
+                "[GroupTag] Quiet Meridian - 230 [BD][h.264][1080p][FLAC] [ABB6F939].mkv",
+                &catalog,
+                None,
+            ),
+            ScopedPackMemberReconciliation::Resolved(ref episode_id) if episode_id == "ep-s13e01"
         ));
     }
 }

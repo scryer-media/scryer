@@ -423,6 +423,7 @@ export function SettingsSeedingProfilesSection({
                     <TableRow
                       key={profile.id}
                       id={selectorId("settings-seeding-profile-row", profile.id)}
+                      data-ui="settings-table-row"
                       className="border-[var(--scry-border3)] hover:bg-[var(--scry-rowHover)]"
                     >
                       <TableCell className="truncate font-medium text-[var(--scry-ink2)]">

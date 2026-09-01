@@ -1,8 +1,9 @@
 
 import * as React from "react";
-import { FileVideo, Loader2 } from "lucide-react";
+import { Check, ChevronsUpDown, FileVideo, Loader2, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
 import {
   MediaInfoBadges,
   type MediaInfoFile,
@@ -15,13 +16,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   Table,
   TableBody,
@@ -132,7 +127,7 @@ function episodeLabel(ep: AvailableEpisode): string {
   const tag = `S${seasonTag}E${episodeTag}`;
   const absolute = ep.absoluteNumber?.trim();
   if (absolute) {
-    return `${tag} · Absolute ${absolute}${ep.title ? ` — ${ep.title}` : ""}`;
+    return `${tag} (${absolute})${ep.title ? ` ${ep.title}` : ""}`;
   }
   return ep.title ? `${tag} - ${ep.title}` : tag;
 }
@@ -181,6 +176,203 @@ function episodeTargetValue(episodeId: string): string {
 function seriesMovieTargetValue(seriesMovieLinkId: string): string {
   return `${SERIES_MOVIE_TARGET_PREFIX}${seriesMovieLinkId}`;
 }
+
+type ManualImportTargetSelectProps = {
+  candidateId: string;
+  value: string;
+  groupedEpisodes: ReadonlyMap<string, AvailableEpisode[]>;
+  seriesMovies: readonly AvailableSeriesMovie[];
+  targetLabels: ReadonlyMap<string, string>;
+  onChange: (candidateId: string, value: string) => void;
+};
+
+type ManualImportTargetListRow =
+  | { kind: "group"; key: string; label: string }
+  | { kind: "option"; key: string; label: string; value: string };
+
+function buildManualImportTargetRows(
+  groupedEpisodes: ReadonlyMap<string, AvailableEpisode[]>,
+  seriesMovies: readonly AvailableSeriesMovie[],
+  query: string,
+): ManualImportTargetListRow[] {
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const matches = (label: string, groupLabel = "") =>
+    normalizedQuery.length === 0 ||
+    `${groupLabel} ${label}`.toLocaleLowerCase().includes(normalizedQuery);
+  const rows: ManualImportTargetListRow[] = [];
+
+  const unassignedLabel = "Skip (unassigned)";
+  if (matches(unassignedLabel)) {
+    rows.push({
+      kind: "option",
+      key: UNASSIGNED,
+      label: unassignedLabel,
+      value: UNASSIGNED,
+    });
+  }
+
+  const matchingSeriesMovies = seriesMovies.filter((movie) =>
+    matches(seriesMovieLabel(movie), "Series movies"),
+  );
+  if (matchingSeriesMovies.length > 0) {
+    rows.push({ kind: "group", key: "group:series-movies", label: "Series movies" });
+    matchingSeriesMovies.forEach((movie) => {
+      const value = seriesMovieTargetValue(movie.seriesMovieLinkId);
+      rows.push({ kind: "option", key: value, label: seriesMovieLabel(movie), value });
+    });
+  }
+
+  groupedEpisodes.forEach((episodesInSeason, seasonLabel) => {
+    const matchingEpisodes = episodesInSeason.filter((episode) =>
+      matches(episodeLabel(episode), seasonLabel),
+    );
+    if (matchingEpisodes.length === 0) {
+      return;
+    }
+    rows.push({ kind: "group", key: `group:${seasonLabel}`, label: seasonLabel });
+    matchingEpisodes.forEach((episode) => {
+      const value = episodeTargetValue(episode.id);
+      rows.push({ kind: "option", key: value, label: episodeLabel(episode), value });
+    });
+  });
+
+  return rows;
+}
+
+function ManualImportTargetPickerContent({
+  value,
+  groupedEpisodes,
+  seriesMovies,
+  onSelect,
+}: {
+  value: string;
+  groupedEpisodes: ReadonlyMap<string, AvailableEpisode[]>;
+  seriesMovies: readonly AvailableSeriesMovie[];
+  onSelect: (value: string) => void;
+}) {
+  const [query, setQuery] = React.useState("");
+  const scrollRef = React.useRef<HTMLDivElement>(null);
+  const rows = React.useMemo(
+    () => buildManualImportTargetRows(groupedEpisodes, seriesMovies, query),
+    [groupedEpisodes, query, seriesMovies],
+  );
+  React.useEffect(() => {
+    scrollRef.current?.scrollTo({ top: 0 });
+  }, [query]);
+
+  return (
+    <PopoverContent
+      align="start"
+      className="z-[90] w-[var(--radix-popover-trigger-width)] min-w-[280px] p-2"
+    >
+      <div className="relative mb-2">
+        <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+        <Input
+          autoFocus
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Filter episodes..."
+          aria-label="Filter import targets"
+          className="h-8 pl-8 text-xs"
+        />
+      </div>
+      {rows.length === 0 ? (
+        <div className="px-2 py-6 text-center text-xs text-muted-foreground">
+          No matching targets.
+        </div>
+      ) : (
+        <div
+          ref={scrollRef}
+          role="listbox"
+          aria-label="Import target"
+          className="h-[280px] overflow-y-auto overscroll-contain"
+        >
+          <div className="w-full">
+            {rows.map((row) => (
+              <div key={row.key}>
+                {row.kind === "group" ? (
+                    <div className="px-2 pt-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60">
+                      {row.label}
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      role="option"
+                      aria-selected={row.value === value}
+                      id={
+                        row.value === UNASSIGNED
+                          ? selectorId("activity-manual-import-skip-option")
+                          : row.value.startsWith(SERIES_MOVIE_TARGET_PREFIX)
+                            ? selectorId(
+                                "activity-manual-import-series-movie-option",
+                                row.value.slice(SERIES_MOVIE_TARGET_PREFIX.length),
+                              )
+                            : selectorId(
+                                "activity-manual-import-episode-option",
+                                row.value.slice(EPISODE_TARGET_PREFIX.length),
+                              )
+                      }
+                      className="flex h-9 w-full items-center gap-2 rounded-md px-2 text-left text-xs text-foreground hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
+                      onClick={() => onSelect(row.value)}
+                    >
+                      <Check
+                        className={`h-3.5 w-3.5 shrink-0 ${
+                          row.value === value ? "opacity-100" : "opacity-0"
+                        }`}
+                      />
+                      <span className="truncate">{row.label}</span>
+                    </button>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </PopoverContent>
+  );
+}
+
+const ManualImportTargetSelect = React.memo(function ManualImportTargetSelect({
+  candidateId,
+  value,
+  groupedEpisodes,
+  seriesMovies,
+  targetLabels,
+  onChange,
+}: ManualImportTargetSelectProps) {
+  const [open, setOpen] = React.useState(false);
+
+  return (
+    <Popover modal open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          id={selectorId("activity-manual-import-assign", candidateId)}
+          variant="outline"
+          role="combobox"
+          aria-expanded={open}
+          className="h-8 w-full justify-between gap-2 px-3 text-xs font-normal"
+        >
+          <span className="truncate">
+            {targetLabels.get(value) ?? "Select target..."}
+          </span>
+          <ChevronsUpDown className="h-3.5 w-3.5 shrink-0 opacity-60" />
+        </Button>
+      </PopoverTrigger>
+      {open ? (
+        <ManualImportTargetPickerContent
+          value={value}
+          groupedEpisodes={groupedEpisodes}
+          seriesMovies={seriesMovies}
+          onSelect={(nextValue) => {
+            onChange(candidateId, nextValue);
+            setOpen(false);
+          }}
+        />
+      ) : null}
+    </Popover>
+  );
+});
 
 type Props = {
   open: boolean;
@@ -297,6 +489,27 @@ export function ManualImportDialog({
   }, [loadPreview, open]);
 
   const groupedEpisodes = React.useMemo(() => groupEpisodesBySeason(episodes), [episodes]);
+  const targetLabels = React.useMemo(() => {
+    const labels = new Map<string, string>([[UNASSIGNED, "Skip (unassigned)"]]);
+    seriesMovies.forEach((movie) => {
+      labels.set(
+        seriesMovieTargetValue(movie.seriesMovieLinkId),
+        seriesMovieLabel(movie),
+      );
+    });
+    episodes.forEach((episode) => {
+      labels.set(episodeTargetValue(episode.id), episodeLabel(episode));
+    });
+    return labels;
+  }, [episodes, seriesMovies]);
+  const handleMappingChange = React.useCallback((candidateId: string, value: string) => {
+    setMappings((previous) => {
+      if (previous[candidateId] === value) {
+        return previous;
+      }
+      return { ...previous, [candidateId]: value };
+    });
+  }, []);
 
   const assignedCount = React.useMemo(
     () => Object.values(mappings).filter((v) => v !== UNASSIGNED).length,
@@ -468,62 +681,14 @@ export function ManualImportDialog({
                         )}
                       </TableCell>
                       <TableCell>
-                        <Select
+                        <ManualImportTargetSelect
+                          candidateId={file.candidateId}
                           value={mappings[file.candidateId] ?? UNASSIGNED}
-                          onValueChange={(value) =>
-                            setMappings((prev) => ({ ...prev, [file.candidateId]: value }))
-                          }
-                        >
-                          <SelectTrigger
-                            id={selectorId("activity-manual-import-assign", file.candidateId)}
-                            className="h-8 w-full text-xs"
-                          >
-                            <SelectValue placeholder="Select target..." />
-                          </SelectTrigger>
-                          <SelectContent className="max-h-[300px]">
-                            <SelectItem
-                              id={selectorId("activity-manual-import-skip-option")}
-                              value={UNASSIGNED}
-                            >
-                              <span className="text-muted-foreground/60">Skip (unassigned)</span>
-                            </SelectItem>
-                            {seriesMovies.length > 0 && (
-                              <>
-                                <div className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60">
-                                  Series movies
-                                </div>
-                                {seriesMovies.map((movie) => (
-                                  <SelectItem
-                                    key={movie.seriesMovieLinkId}
-                                    id={selectorId(
-                                      "activity-manual-import-series-movie-option",
-                                      movie.seriesMovieLinkId,
-                                    )}
-                                    value={seriesMovieTargetValue(movie.seriesMovieLinkId)}
-                                  >
-                                    {seriesMovieLabel(movie)}
-                                  </SelectItem>
-                                ))}
-                              </>
-                            )}
-                            {Array.from(groupedEpisodes.entries()).map(([seasonLabel, eps]) => (
-                              <React.Fragment key={seasonLabel}>
-                                <div className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60">
-                                  {seasonLabel}
-                                </div>
-                                {eps.map((ep) => (
-                                  <SelectItem
-                                    key={ep.id}
-                                    id={selectorId("activity-manual-import-episode-option", ep.id)}
-                                    value={episodeTargetValue(ep.id)}
-                                  >
-                                    {episodeLabel(ep)}
-                                  </SelectItem>
-                                ))}
-                              </React.Fragment>
-                            ))}
-                          </SelectContent>
-                        </Select>
+                          groupedEpisodes={groupedEpisodes}
+                          seriesMovies={seriesMovies}
+                          targetLabels={targetLabels}
+                          onChange={handleMappingChange}
+                        />
                       </TableCell>
                     </TableRow>
                   ))}

@@ -9,13 +9,12 @@ use crate::event_views::{
 };
 use crate::events::retention::user_facing_domain_event_types;
 use scryer_domain::{
-    AcquisitionCandidateRejectedEventData, AcquisitionSearchCompletedEventData, AppPermission,
-    ConfigurationChangeAction, ConfigurationChangedEventData, DiscoverySearchCompletedEventData,
-    DomainEventPayload, DownloadQueueCommandAction, DownloadQueueItemCommandIssuedEventData,
-    ImportRequestKind, ImportRequestedEventData, LibraryPermission, MediaFacet,
-    MetadataHydrationState, MetadataHydrationUpdatedEventData, PostProcessingCompletedEventData,
-    PostProcessingResult, SubtitleDownloadedEventData, SubtitleSearchFailedEventData,
-    TitleUpdatedEventData,
+    AcquisitionCandidateRejectedEventData, AppPermission, ConfigurationChangeAction,
+    ConfigurationChangedEventData, DomainEventPayload, DownloadQueueCommandAction,
+    DownloadQueueItemCommandIssuedEventData, ImportRequestKind, ImportRequestedEventData,
+    LibraryPermission, MediaFacet, MetadataHydrationState, MetadataHydrationUpdatedEventData,
+    PostProcessingCompletedEventData, PostProcessingResult, SubtitleDownloadedEventData,
+    SubtitleSearchFailedEventData, TitleUpdatedEventData,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -796,29 +795,6 @@ impl AppUseCase {
         }
     }
 
-    pub(crate) async fn emit_discovery_search_completed_event(
-        &self,
-        actor: impl Into<DomainEventActor>,
-        search_type: impl Into<String>,
-        query: Option<String>,
-        result_count: i64,
-    ) {
-        let actor = actor.into();
-        if let Err(error) = self
-            .append_domain_event(new_global_domain_event(
-                actor,
-                DomainEventPayload::DiscoverySearchCompleted(DiscoverySearchCompletedEventData {
-                    search_type: search_type.into(),
-                    query,
-                    result_count,
-                }),
-            ))
-            .await
-        {
-            tracing::warn!(error = %error, "failed to append discovery search domain event");
-        }
-    }
-
     pub(crate) async fn emit_metadata_hydration_updated_event(
         &self,
         title: &Title,
@@ -841,34 +817,6 @@ impl AppUseCase {
                 title_id = %title.id,
                 error = %error,
                 "failed to append metadata hydration domain event"
-            );
-        }
-    }
-
-    pub(crate) async fn emit_acquisition_search_completed_event(
-        &self,
-        actor: impl Into<DomainEventActor>,
-        title: &Title,
-        result_count: i64,
-    ) {
-        let actor = actor.into();
-        if let Err(error) = self
-            .append_domain_event(new_title_domain_event(
-                actor,
-                title,
-                DomainEventPayload::AcquisitionSearchCompleted(
-                    AcquisitionSearchCompletedEventData {
-                        title: title_context_snapshot(title),
-                        result_count,
-                    },
-                ),
-            ))
-            .await
-        {
-            tracing::warn!(
-                title_id = %title.id,
-                error = %error,
-                "failed to append acquisition search domain event"
             );
         }
     }

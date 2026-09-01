@@ -65,6 +65,7 @@ const pt_BR: LocaleDictionary = {
   "label.unknownType": "tipo desconhecido",
   "label.yearUnknown": "ano desconhecido",
   "label.noArt": "sem capa",
+  "color.magenta": "Magenta",
   "nav.dashboard": "Painel",
   "nav.movies": "Filmes",
   "nav.series": "Séries",

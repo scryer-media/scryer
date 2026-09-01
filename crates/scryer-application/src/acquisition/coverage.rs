@@ -1,4 +1,5 @@
 use super::*;
+use crate::quality_profile::CoverageSizeBasis;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ReleaseCoverage {
@@ -208,6 +209,79 @@ pub(crate) fn resolve_release_coverage(
     coverage_from_episode_ids(covered).unwrap_or(ReleaseCoverage::Unknown)
 }
 
+/// Whether a release's parsed numbering actively contradicts a wanted
+/// episode's numbering, absolute numbering included.
+///
+/// A veto fires only on a positive contradiction: the release asserts a
+/// numbering scheme the subject also carries, and the assertion cannot cover
+/// the subject. A release that asserts nothing comparable is left alone — the
+/// coverage resolver and the admission ladder own the benefit-of-the-doubt
+/// cases. An explicit episode-number agreement wins outright, so a stray
+/// absolute parse can never veto a release that already names the wanted
+/// episode.
+///
+/// The absolute arm is what keeps an absolute-numbered release for a *different*
+/// episode from being adopted by an episode-scoped search: without it, an anime
+/// release named only by absolute number sails past the season/episode checks
+/// and the Unknown-coverage fallback stamps it as covering the wanted episode.
+pub(crate) fn parsed_numbering_contradicts_episode(
+    expected_season: Option<u32>,
+    expected_episode: Option<u32>,
+    expected_absolute: Option<u32>,
+    episode: &ParsedEpisodeMetadata,
+) -> bool {
+    if expected_season.is_none() && expected_episode.is_none() && expected_absolute.is_none() {
+        return false;
+    }
+    if let (Some(expected), Some(found)) = (expected_season, episode.season)
+        && expected != found
+    {
+        return true;
+    }
+    if let Some(expected) = expected_episode
+        && !episode.episode_numbers.is_empty()
+        && !episode.episode_numbers.contains(&expected)
+    {
+        return true;
+    }
+    if expected_episode.is_some_and(|expected| episode.episode_numbers.contains(&expected)) {
+        return false;
+    }
+    if let Some(expected) = expected_absolute
+        && (episode.absolute_episode.is_some() || !episode.absolute_episode_numbers.is_empty())
+        && episode.absolute_episode != Some(expected)
+        && !episode.absolute_episode_numbers.contains(&expected)
+    {
+        return true;
+    }
+    false
+}
+
+/// [`parsed_numbering_contradicts_episode`] against a catalog episode record.
+pub(crate) fn parsed_release_contradicts_requested_episode(
+    parsed: &ParsedReleaseMetadata,
+    requested: &Episode,
+) -> bool {
+    let Some(episode) = parsed.episode.as_ref() else {
+        return false;
+    };
+    parsed_numbering_contradicts_episode(
+        requested
+            .season_number
+            .as_deref()
+            .and_then(|value| value.parse::<u32>().ok()),
+        requested
+            .episode_number
+            .as_deref()
+            .and_then(|value| value.parse::<u32>().ok()),
+        requested
+            .absolute_number
+            .as_deref()
+            .and_then(|value| value.parse::<u32>().ok()),
+        episode,
+    )
+}
+
 /// A series pack is worth considering only when it can fill more than 30% of
 /// the regular, already-aired episodes the operator monitors. This deliberately
 /// counts episodes not already owned by a primary file or an in-flight
@@ -314,9 +388,10 @@ pub(crate) fn in_flight_series_pack_episode_ids(
             };
             submissions.iter().any(|submission| {
                 let identity = crate::contracts::ClientJobLocator::from_submission(submission);
-                crate::acquisition_workflow::submission_is_queued(
+                crate::acquisition_workflow::submission_is_live_claim(
+                    submission,
                     tracked_states.get(&identity).copied(),
-                    crate::acquisition_workflow::submission_is_active(submission, dl_snapshot),
+                    dl_snapshot,
                 ) && crate::acquisition_workflow::submission_scope_intersects(
                     &submission.scope,
                     &membership,
@@ -406,14 +481,37 @@ pub(crate) fn coverage_runtime_minutes(
     episodes: &[Episode],
     default_runtime_minutes: Option<i32>,
 ) -> Option<i32> {
+    coverage_size_basis(coverage, parsed, episodes, default_runtime_minutes).total_runtime_minutes
+}
+
+/// The runtime basis size scoring reads a release against: the whole coverage's
+/// runtime, one member's, and how many members there are.
+///
+/// The total is exactly what [`coverage_runtime_minutes`] has always returned —
+/// that function now reads it off this one, so the two cannot drift. What is new
+/// is the other two fields, which let the scorer notice that an aggregate
+/// release's reported bytes describe one member instead of the payload
+/// (`quality_profile::CoverageSizeBasis`).
+///
+/// A member runtime is the coverage's own average rather than any single
+/// episode's: uneven durations inside a pack are exactly the case where picking
+/// one member would be arbitrary.
+pub(crate) fn coverage_size_basis(
+    coverage: &ReleaseCoverage,
+    parsed: &ParsedReleaseMetadata,
+    episodes: &[Episode],
+    default_runtime_minutes: Option<i32>,
+) -> CoverageSizeBasis {
     match coverage {
-        ReleaseCoverage::SingleEpisode(episode_id) => episode_span_runtime_minutes(
-            episodes,
-            std::slice::from_ref(episode_id),
-            default_runtime_minutes,
-        ),
+        ReleaseCoverage::SingleEpisode(episode_id) => {
+            CoverageSizeBasis::single(episode_span_runtime_minutes(
+                episodes,
+                std::slice::from_ref(episode_id),
+                default_runtime_minutes,
+            ))
+        }
         ReleaseCoverage::EpisodeSet(episode_ids) => {
-            episode_span_runtime_minutes(episodes, episode_ids, default_runtime_minutes)
+            episode_span_size_basis(episodes, episode_ids, default_runtime_minutes)
         }
         ReleaseCoverage::Collection(collection_id) => {
             let season_episodes = episodes
@@ -421,7 +519,7 @@ pub(crate) fn coverage_runtime_minutes(
                 .filter(|episode| episode.collection_id.as_deref() == Some(collection_id))
                 .collect::<Vec<_>>();
             if season_episodes.is_empty() {
-                return default_runtime_minutes;
+                return CoverageSizeBasis::single(default_runtime_minutes);
             }
             let count = i32::try_from(season_episodes.len()).unwrap_or(0);
             if parsed
@@ -429,9 +527,16 @@ pub(crate) fn coverage_runtime_minutes(
                 .as_ref()
                 .is_some_and(|episode| episode.is_partial_season)
             {
-                return Some(
-                    default_runtime_minutes.unwrap_or(UNKNOWN_EPISODE_RUNTIME_MINUTES)
-                        * (count.max(2) / 2).max(1),
+                // Half a season, as the estimate has always read it. The member
+                // runtime is the title default because a partial season names no
+                // episodes to average over.
+                let member_runtime =
+                    default_runtime_minutes.unwrap_or(UNKNOWN_EPISODE_RUNTIME_MINUTES);
+                let effective_count = (count.max(2) / 2).max(1);
+                return CoverageSizeBasis::aggregate(
+                    Some(member_runtime * effective_count),
+                    Some(member_runtime),
+                    effective_count,
                 );
             }
             let total = season_episodes
@@ -447,10 +552,56 @@ pub(crate) fn coverage_runtime_minutes(
                     )
                 })
                 .sum::<i32>();
-            (total > 0).then_some(total)
+            CoverageSizeBasis::aggregate(
+                (total > 0).then_some(total),
+                mean_member_runtime_minutes(total, count, default_runtime_minutes),
+                count,
+            )
         }
-        ReleaseCoverage::Title | ReleaseCoverage::Unknown => default_runtime_minutes,
+        ReleaseCoverage::Title | ReleaseCoverage::Unknown => {
+            CoverageSizeBasis::single(default_runtime_minutes)
+        }
     }
+}
+
+/// [`episode_span_runtime_minutes`] as a size basis: the same total, plus the
+/// member count and average the scorer needs to recognise a pack-shaped size.
+///
+/// The import lane and a re-derived incumbent bar go through this, and the grab
+/// lane through [`coverage_size_basis`], so the same file gets the same basis
+/// wherever it is judged.
+pub(crate) fn episode_span_size_basis(
+    episodes: &[Episode],
+    episode_ids: &[String],
+    default_runtime_minutes: Option<i32>,
+) -> CoverageSizeBasis {
+    let count = i32::try_from(episode_ids.len()).unwrap_or(i32::MAX);
+    if count == 0 {
+        // No span to speak of, exactly as `episode_span_runtime_minutes` says.
+        // The caller decides what to fall back to.
+        return CoverageSizeBasis::single(None);
+    }
+    let total = episode_span_runtime_minutes(episodes, episode_ids, default_runtime_minutes);
+    CoverageSizeBasis::aggregate(
+        total,
+        mean_member_runtime_minutes(total.unwrap_or(0), count, default_runtime_minutes),
+        count,
+    )
+}
+
+/// The average member runtime of a span, falling back to the caller's default
+/// when the span has no runtime to divide.
+fn mean_member_runtime_minutes(
+    total_runtime_minutes: i32,
+    member_count: i32,
+    default_runtime_minutes: Option<i32>,
+) -> Option<i32> {
+    if member_count > 1 && total_runtime_minutes > 0 {
+        return Some((total_runtime_minutes / member_count).max(1));
+    }
+    (total_runtime_minutes > 0)
+        .then_some(total_runtime_minutes)
+        .or(default_runtime_minutes)
 }
 
 fn coverage_from_episode_ids(mut episode_ids: Vec<String>) -> Option<ReleaseCoverage> {
@@ -583,6 +734,110 @@ mod tests {
     }
 
     #[test]
+    fn absolute_only_release_for_a_different_episode_contradicts_the_wanted_episode() {
+        let mismatched = ParsedEpisodeMetadata {
+            absolute_episode: Some(18),
+            absolute_episode_numbers: vec![18],
+            ..Default::default()
+        };
+        assert!(parsed_numbering_contradicts_episode(
+            Some(20),
+            Some(122),
+            Some(1344),
+            &mismatched
+        ));
+
+        let matching = ParsedEpisodeMetadata {
+            absolute_episode: Some(1344),
+            absolute_episode_numbers: vec![1344],
+            ..Default::default()
+        };
+        assert!(!parsed_numbering_contradicts_episode(
+            Some(20),
+            Some(122),
+            Some(1344),
+            &matching
+        ));
+    }
+
+    #[test]
+    fn explicit_episode_agreement_overrides_a_stray_absolute_parse() {
+        let episode = ParsedEpisodeMetadata {
+            season: Some(20),
+            episode_numbers: vec![122],
+            absolute_episode: Some(3),
+            ..Default::default()
+        };
+        assert!(!parsed_numbering_contradicts_episode(
+            Some(20),
+            Some(122),
+            Some(1344),
+            &episode
+        ));
+    }
+
+    #[test]
+    fn release_without_numbering_assertions_is_not_a_contradiction() {
+        let episode = ParsedEpisodeMetadata::default();
+        assert!(!parsed_numbering_contradicts_episode(
+            Some(20),
+            Some(122),
+            Some(1344),
+            &episode
+        ));
+        assert!(!parsed_numbering_contradicts_episode(
+            None, None, None, &episode
+        ));
+    }
+
+    #[test]
+    fn season_and_episode_number_contradictions_still_veto() {
+        let wrong_season = ParsedEpisodeMetadata {
+            season: Some(1),
+            episode_numbers: vec![122],
+            ..Default::default()
+        };
+        assert!(parsed_numbering_contradicts_episode(
+            Some(20),
+            Some(122),
+            None,
+            &wrong_season
+        ));
+
+        let wrong_episode = ParsedEpisodeMetadata {
+            season: Some(20),
+            episode_numbers: vec![121],
+            ..Default::default()
+        };
+        assert!(parsed_numbering_contradicts_episode(
+            Some(20),
+            Some(122),
+            Some(1344),
+            &wrong_episode
+        ));
+    }
+
+    #[test]
+    fn contradiction_against_catalog_episode_reads_absolute_number() {
+        let requested = episode("ep-122", "20", "122", Some("1344"));
+        let mismatched = parsed_with_episode(ParsedEpisodeMetadata {
+            absolute_episode: Some(18),
+            absolute_episode_numbers: vec![18],
+            ..Default::default()
+        });
+        assert!(parsed_release_contradicts_requested_episode(
+            &mismatched,
+            &requested
+        ));
+
+        let unnumbered = ParsedReleaseMetadata::empty("release", "test");
+        assert!(!parsed_release_contradicts_requested_episode(
+            &unnumbered,
+            &requested
+        ));
+    }
+
+    #[test]
     fn absolute_range_resolves_to_episode_set_scope() {
         let episodes = vec![
             episode("ep-14", "1", "14", Some("14")),
@@ -692,6 +947,192 @@ mod tests {
             coverage_runtime_minutes(&coverage, &parsed, &episodes, Some(24)),
             Some(13 * 24)
         );
+    }
+
+    // ── size bases ────────────────────────────────────────────────────────
+
+    fn episode_of(id: &str, season: &str, number: &str, minutes: i64) -> Episode {
+        let mut episode = episode(id, season, number, Some(number));
+        episode.duration_seconds = Some(minutes * 60);
+        episode
+    }
+
+    /// A range pack's basis carries what a member is, not only what the span
+    /// sums to: the member runtime is what a size reported per episode is read
+    /// against.
+    #[test]
+    fn an_episode_range_basis_carries_the_member_runtime() {
+        let episodes = vec![
+            episode("ep-14", "1", "14", Some("14")),
+            episode("ep-15", "1", "15", Some("15")),
+        ];
+        let parsed = parsed_with_episode(ParsedEpisodeMetadata {
+            absolute_episode: Some(14),
+            absolute_episode_numbers: vec![14, 15],
+            release_type: ParsedEpisodeReleaseType::RangePack,
+            ..Default::default()
+        });
+        let coverage = resolve_release_coverage(&parsed, &episodes, &[], None);
+
+        let basis = coverage_size_basis(&coverage, &parsed, &episodes, Some(45));
+        assert_eq!(basis.total_runtime_minutes, Some(50));
+        assert_eq!(basis.member_runtime_minutes, Some(25));
+        assert_eq!(basis.member_count, 2);
+        assert!(basis.covers_multiple_members());
+    }
+
+    /// Uneven durations average. Picking any one episode of a pack would be
+    /// arbitrary, and a season with a double-length finale is the ordinary case,
+    /// not the exception.
+    #[test]
+    fn a_full_season_basis_averages_uneven_episode_durations() {
+        let episodes = vec![
+            episode_of("ep-1", "1", "1", 20),
+            episode_of("ep-2", "1", "2", 25),
+            episode_of("ep-3", "1", "3", 45),
+        ];
+        let parsed = parsed_with_episode(ParsedEpisodeMetadata {
+            season: Some(1),
+            full_season: true,
+            release_type: ParsedEpisodeReleaseType::SeasonPack,
+            ..Default::default()
+        });
+
+        let basis = coverage_size_basis(
+            &ReleaseCoverage::Collection("season-1".to_string()),
+            &parsed,
+            &episodes,
+            Some(25),
+        );
+        assert_eq!(basis.total_runtime_minutes, Some(90));
+        assert_eq!(basis.member_runtime_minutes, Some(30));
+        assert_eq!(basis.member_count, 3);
+    }
+
+    /// The partial-season estimate is unchanged — half the season, rounded the
+    /// way it always was — and the member count is the estimate's own, so the
+    /// two halves of the basis describe the same release.
+    #[test]
+    fn a_partial_season_basis_keeps_the_half_season_estimate() {
+        let episodes = (1..=26)
+            .map(|number| {
+                let number = number.to_string();
+                episode(&format!("ep-{number}"), "17", &number, Some(&number))
+            })
+            .collect::<Vec<_>>();
+        let parsed = parsed_with_episode(ParsedEpisodeMetadata {
+            season: Some(17),
+            release_type: ParsedEpisodeReleaseType::SeasonPack,
+            full_season: true,
+            is_partial_season: true,
+            season_part: Some(2),
+            ..Default::default()
+        });
+
+        let basis = coverage_size_basis(
+            &ReleaseCoverage::Collection("season-17".to_string()),
+            &parsed,
+            &episodes,
+            Some(24),
+        );
+        assert_eq!(basis.total_runtime_minutes, Some(13 * 24));
+        assert_eq!(basis.member_runtime_minutes, Some(24));
+        assert_eq!(basis.member_count, 13);
+        // …and the total is still exactly what the runtime accessor reports.
+        assert_eq!(
+            coverage_runtime_minutes(
+                &ReleaseCoverage::Collection("season-17".to_string()),
+                &parsed,
+                &episodes,
+                Some(24)
+            ),
+            basis.total_runtime_minutes
+        );
+    }
+
+    /// A multi-season or complete-series pack arrives as an `EpisodeSet` of
+    /// every eligible episode; the basis spans all of them and still knows what
+    /// one of them is.
+    #[test]
+    fn a_multi_season_pack_basis_spans_every_member() {
+        let episodes = (1..=12)
+            .map(|number| {
+                let number = number.to_string();
+                episode_of(&format!("s1-{number}"), "1", &number, 25)
+            })
+            .chain((1..=12).map(|number| {
+                let number = number.to_string();
+                episode_of(&format!("s2-{number}"), "2", &number, 25)
+            }))
+            .collect::<Vec<_>>();
+        let episode_ids = episodes
+            .iter()
+            .map(|episode| episode.id.clone())
+            .collect::<Vec<_>>();
+
+        let basis = episode_span_size_basis(&episodes, &episode_ids, Some(25));
+        assert_eq!(basis.total_runtime_minutes, Some(24 * 25));
+        assert_eq!(basis.member_runtime_minutes, Some(25));
+        assert_eq!(basis.member_count, 24);
+    }
+
+    /// Episodes the catalog has no duration for fall back to the title's own
+    /// runtime, exactly as the total always did — the member runtime cannot
+    /// invent evidence the total does not have.
+    #[test]
+    fn missing_episode_runtimes_fall_back_to_the_title_default() {
+        let episodes = (1..=6)
+            .map(|number| {
+                let number = number.to_string();
+                let mut episode = episode(&format!("ep-{number}"), "1", &number, Some(&number));
+                episode.duration_seconds = None;
+                episode
+            })
+            .collect::<Vec<_>>();
+        let episode_ids = episodes
+            .iter()
+            .map(|episode| episode.id.clone())
+            .collect::<Vec<_>>();
+
+        let basis = episode_span_size_basis(&episodes, &episode_ids, Some(50));
+        assert_eq!(basis.total_runtime_minutes, Some(300));
+        assert_eq!(basis.member_runtime_minutes, Some(50));
+        assert_eq!(basis.member_count, 6);
+
+        // With no title runtime either, the assumed episode length stands in.
+        let unknown = episode_span_size_basis(&episodes, &episode_ids, None);
+        assert_eq!(
+            unknown.total_runtime_minutes,
+            Some(6 * UNKNOWN_EPISODE_RUNTIME_MINUTES)
+        );
+        assert_eq!(
+            unknown.member_runtime_minutes,
+            Some(UNKNOWN_EPISODE_RUNTIME_MINUTES)
+        );
+    }
+
+    /// A scope with no episodes has no basis of its own; the caller's fallback
+    /// decides, which is how a title or link scope keeps the movie's runtime.
+    #[test]
+    fn an_empty_span_defers_to_the_callers_runtime() {
+        let basis = episode_span_size_basis(&[], &[], Some(45));
+        assert_eq!(basis, CoverageSizeBasis::single(None));
+        assert_eq!(
+            basis.or_runtime(Some(118)),
+            CoverageSizeBasis::single(Some(118))
+        );
+    }
+
+    /// Title and movie coverage is one member, so nothing about it is ever
+    /// reinterpreted.
+    #[test]
+    fn a_title_scope_is_a_single_member_basis() {
+        let parsed = parsed_with_episode(ParsedEpisodeMetadata::default());
+        for coverage in [ReleaseCoverage::Title, ReleaseCoverage::Unknown] {
+            let basis = coverage_size_basis(&coverage, &parsed, &[], Some(118));
+            assert_eq!(basis, CoverageSizeBasis::single(Some(118)));
+            assert!(!basis.covers_multiple_members());
+        }
     }
 
     #[test]

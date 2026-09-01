@@ -200,10 +200,10 @@ test("applyRenameTemplatePreview omits missing optional values and truncates pre
   const template = "{title} - S{season_order:2}E{episode:2}{?absolute_episode: ({absolute_episode})}{?episode_title: - {episode_title|truncate:8}} - {quality}.{ext}";
   assert.equal(
     applyRenameTemplatePreview(template, episodeTokens, {
-      title: "Bleach", season_order: "0", episode: "4", absolute_episode: "",
-      episode_title: "Diamond Dust Rebellion", quality: "2160p", ext: "mkv",
+      title: "The Grey Harbor", season_order: "0", episode: "4", absolute_episode: "",
+      episode_title: "Harbor Signal Uprising", quality: "2160p", ext: "mkv",
     }),
-    "Bleach - S00E04 - Diamond  - 2160p.mkv",
+    "The Grey Harbor - S00E04 - Harbor S - 2160p.mkv",
   );
 });
 

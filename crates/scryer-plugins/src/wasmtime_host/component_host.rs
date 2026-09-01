@@ -7,7 +7,7 @@
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use scryer_application::{
     CapturedIndexerHttpHeader, CapturedIndexerHttpResponse, challenge_solver as solver,
@@ -209,6 +209,19 @@ impl ComponentHost {
             .unwrap_or_else(|poisoned| poisoned.into_inner().clone())
     }
 
+    fn remaining_operation_timeout(&self) -> Result<Duration, TransportError> {
+        let deadline = self
+            .inner
+            .operation_deadline
+            .lock()
+            .map(|deadline| *deadline)
+            .unwrap_or_else(|poisoned| *poisoned.into_inner());
+        deadline
+            .checked_duration_since(Instant::now())
+            .filter(|remaining| !remaining.is_zero())
+            .ok_or(TransportError::Timeout)
+    }
+
     fn provider_profile(&self) -> Option<Vec<u8>> {
         self.inner.provider_profile.clone()
     }
@@ -329,11 +342,13 @@ impl ComponentHost {
             return Ok(direct.response);
         };
 
-        // A configured solver owns the first target attempt. This keeps one
-        // guest HTTP call to one target attempt: the old command host's
-        // direct -> solve -> direct flow would hide retries from the plugin's
-        // own retry and quota accounting. A reusable solved session is the
-        // only direct path, and it is still exactly one request.
+        // A configured solver owns the initial target attempt. A guest GET may
+        // first validate a cached clearance session; if that response is still
+        // challenged, the stale session is invalidated and the same request
+        // falls through to a fresh solve. A successful solve can require one
+        // replay against the already-prepared origin so the guest receives raw
+        // origin bytes rather than browser-rendered solver content. These
+        // attempts remain one logical guest operation under the same deadline.
         let session_headers = request.method.eq_ignore_ascii_case("GET").then(|| {
             solver::SolvedSessionCache::shared().session_headers(&policy.config.id, &request.url)
         });
@@ -341,21 +356,28 @@ impl ComponentHost {
             let direct = self
                 .send_direct_request(target.client(), target.url(), &request, &session_headers)
                 .await?;
-            self.capture_indexer_response(direct.captured_response.clone());
             if solver::looks_like_challenge_response(
                 direct.response.status,
                 &component_header_map(&direct.response.headers),
                 &direct.response.body,
             ) {
                 solver::SolvedSessionCache::shared().invalidate(&policy.config.id, &request.url);
+            } else {
+                self.capture_indexer_response(direct.captured_response.clone());
+                return Ok(direct.response);
             }
-            return Ok(direct.response);
         }
         if !request.method.eq_ignore_ascii_case("GET") {
             return Err(TransportError::Transport);
         }
         let solved = self
-            .solve_proxy_request(&request, policy, &extra_ca_bundle_pem)
+            .solve_proxy_request(
+                target.client(),
+                target.url(),
+                &request,
+                policy,
+                &extra_ca_bundle_pem,
+            )
             .await?;
         self.capture_indexer_response(solved.captured_response.clone());
         Ok(solved.response)
@@ -370,9 +392,8 @@ impl ComponentHost {
     ) -> Result<ComponentHttpResult, TransportError> {
         let method = reqwest::Method::from_bytes(request.method.as_bytes())
             .map_err(|_| TransportError::InvalidRequest)?;
-        let mut builder = client
-            .request(method, url.clone())
-            .timeout(self.inner.timeout);
+        let timeout = self.remaining_operation_timeout()?;
+        let mut builder = client.request(method, url.clone()).timeout(timeout);
         let merged_cookie = component_merged_cookie(request, extra_headers);
         for header in &request.headers {
             if extra_headers
@@ -405,6 +426,8 @@ impl ComponentHost {
 
     async fn solve_proxy_request(
         &self,
+        target_client: &reqwest::Client,
+        target_url: &reqwest::Url,
         request: &HttpRequest,
         policy: &IndexerProxyPolicy,
         extra_ca_bundle_pem: &str,
@@ -415,7 +438,8 @@ impl ComponentHost {
         let provider = policy.config.provider_type;
         let solver_timeout = scryer_outbound_http::effective_indexer_proxy_request_timeout(
             policy.config.request_timeout_seconds,
-        );
+        )
+        .min(self.remaining_operation_timeout()?);
         let proxy_client =
             scryer_outbound_http::indexer_proxy_reqwest_client_with_extra_ca(extra_ca_bundle_pem)
                 .map_err(|_| {
@@ -481,12 +505,23 @@ impl ComponentHost {
         if body.len() > self.inner.max_response_bytes {
             return Err(TransportError::ResponseTooLarge);
         }
-        if !solver::solution_retry_headers(&solution).is_empty() {
-            solver::SolvedSessionCache::shared().store_solution(
-                &policy.config.id,
-                &request.url,
-                &solution,
-            );
+        let retry_headers = solver::solution_retry_headers(&solution);
+        if !retry_headers.is_empty() {
+            let replay = self
+                .send_direct_request(target_client, target_url, request, &retry_headers)
+                .await?;
+            if !solver::looks_like_challenge_response(
+                replay.response.status,
+                &component_header_map(&replay.response.headers),
+                &replay.response.body,
+            ) {
+                solver::SolvedSessionCache::shared().store_solution(
+                    &policy.config.id,
+                    &request.url,
+                    &solution,
+                );
+            }
+            return Ok(replay);
         }
         Ok(component_solved_response(status, headers, body))
     }
@@ -1475,8 +1510,430 @@ mod tests {
         );
     }
 
+    fn component_solver_test_host(server_uri: String, proxy_id: &str) -> ComponentHost {
+        component_solver_test_host_with_timeout(server_uri, proxy_id, Duration::from_secs(120))
+    }
+
+    fn component_solver_test_host_with_timeout(
+        server_uri: String,
+        proxy_id: &str,
+        timeout: Duration,
+    ) -> ComponentHost {
+        let now = chrono::Utc::now();
+        ComponentHost::for_indexer(
+            BTreeMap::new(),
+            vec!["127.0.0.1".to_string()],
+            Some(IndexerProxyPolicy {
+                indexer_id: "component-indexer".to_string(),
+                indexer_name: "Component indexer".to_string(),
+                config: scryer_domain::IndexerProxyConfig {
+                    id: proxy_id.to_string(),
+                    name: "Component solver".to_string(),
+                    provider_type: scryer_domain::IndexerProxyProviderType::Trawl,
+                    protocol: scryer_domain::ChallengeSolverProtocol::RequestSolutionV1,
+                    base_url: server_uri,
+                    request_timeout_seconds: 60,
+                    is_enabled: true,
+                    last_health_status: None,
+                    last_error_message: None,
+                    last_error_at: None,
+                    created_at: now,
+                    updated_at: now,
+                },
+            }),
+            timeout,
+            Some(1024 * 1024),
+        )
+        .expect("component host should accept a configured solver")
+    }
+
+    fn component_solver_request(target_url: String, headers: Vec<Header>) -> HttpRequest {
+        HttpRequest {
+            method: "GET".to_string(),
+            url: target_url,
+            headers,
+            body: Vec::new(),
+        }
+    }
+
     #[tokio::test(flavor = "multi_thread")]
-    async fn component_http_uses_configured_solver_as_its_only_target_attempt() {
+    async fn component_http_replays_solver_clearance_and_caches_session() {
+        use wiremock::matchers::{body_json, header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let target_url = format!("{}/search", server.uri());
+        Mock::given(method("POST"))
+            .and(path("/v1"))
+            .and(body_json(serde_json::json!({
+                "cmd": "request.get",
+                "url": target_url,
+                "maxTimeout": 60_000,
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "ok",
+                "solution": {
+                    "url": "https://solver.example/diagnostic-only",
+                    "status": 200,
+                    "headers": {"content-type": "application/json"},
+                    "cookies": [{"name": "clearance", "value": "solved"}],
+                    "userAgent": "solver-test",
+                    "response": "<html><body><pre>{\"wrapped\":true}</pre></body></html>",
+                },
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/search"))
+            .and(header("user-agent", "solver-test"))
+            .and(header("cookie", "original=one; clearance=solved"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "application/json")
+                    .set_body_string(r#"{"origin":true}"#),
+            )
+            .expect(2)
+            .mount(&server)
+            .await;
+
+        let host = component_solver_test_host(server.uri(), "component-solver-replay-cache");
+        let headers = vec![Header {
+            name: "cookie".to_string(),
+            value: "original=one".to_string(),
+        }];
+        let first = host
+            .http(component_solver_request(
+                target_url.clone(),
+                headers.clone(),
+            ))
+            .await
+            .expect("solver clearance should replay the origin");
+        let second = host
+            .http(component_solver_request(target_url, headers))
+            .await
+            .expect("cached solver clearance should replay the origin");
+
+        assert_eq!(first.status, 200);
+        assert_eq!(first.body, br#"{"origin":true}"#);
+        assert_eq!(second.status, 200);
+        assert_eq!(second.body, br#"{"origin":true}"#);
+        assert_eq!(
+            server
+                .received_requests()
+                .await
+                .expect("recorded requests")
+                .len(),
+            3,
+            "the second request must use the cached clearance without another solver call"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn component_http_does_not_cache_an_unchallenged_user_agent_only_replay() {
+        use wiremock::matchers::{body_json, header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let connection_url = format!("{}/connection", server.uri());
+        let search_url = format!("{}/search", server.uri());
+        Mock::given(method("POST"))
+            .and(path("/v1"))
+            .and(body_json(serde_json::json!({
+                "cmd": "request.get",
+                "url": connection_url,
+                "maxTimeout": 60_000,
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "ok",
+                "solution": {
+                    "url": connection_url,
+                    "status": 200,
+                    "headers": {},
+                    "cookies": [],
+                    "userAgent": "connection-agent",
+                    "response": "connection validation",
+                },
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/connection"))
+            .and(header("user-agent", "connection-agent"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("connection origin"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/search"))
+            .and(header("user-agent", "connection-agent"))
+            .respond_with(
+                ResponseTemplate::new(403)
+                    .insert_header("content-type", "text/html")
+                    .set_body_string("<html><title>Just a moment</title><div>cf-chl</div></html>"),
+            )
+            .expect(0)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1"))
+            .and(body_json(serde_json::json!({
+                "cmd": "request.get",
+                "url": search_url,
+                "maxTimeout": 60_000,
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "ok",
+                "solution": {
+                    "url": search_url,
+                    "status": 200,
+                    "headers": {},
+                    "cookies": [{"name": "clearance", "value": "fresh"}],
+                    "userAgent": "search-agent",
+                    "response": "search validation",
+                },
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/search"))
+            .and(header("user-agent", "search-agent"))
+            .and(header("cookie", "clearance=fresh"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("search origin"))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let host = component_solver_test_host(server.uri(), "component-solver-cache-admission");
+        let connection = host
+            .http(component_solver_request(connection_url, Vec::new()))
+            .await
+            .expect("connection validation should replay its origin response");
+        let search = host
+            .http(component_solver_request(search_url, Vec::new()))
+            .await
+            .expect("the challenged search should invoke the solver");
+
+        assert_eq!(connection.body, b"connection origin");
+        assert_eq!(search.body, b"search origin");
+        assert_eq!(
+            server
+                .received_requests()
+                .await
+                .expect("recorded requests")
+                .len(),
+            4,
+            "a user-agent-only connection response must not seed the origin cache"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn component_http_recovers_a_challenged_cached_session_in_the_same_request() {
+        use wiremock::matchers::{body_json, header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let target_url = format!("{}/search", server.uri());
+        let proxy_id = "component-solver-stale-cache-recovery";
+        let stale_solution = solver::ChallengeSolverSolution {
+            url: Some(target_url.clone()),
+            status: Some(200),
+            cookies: Some(vec![serde_json::json!({
+                "name": "clearance",
+                "value": "stale",
+            })]),
+            user_agent: Some("stale-agent".to_string()),
+            headers: None,
+            response: None,
+        };
+        solver::SolvedSessionCache::shared().store_solution(proxy_id, &target_url, &stale_solution);
+
+        Mock::given(method("GET"))
+            .and(path("/search"))
+            .and(header("user-agent", "stale-agent"))
+            .and(header("cookie", "clearance=stale"))
+            .respond_with(
+                ResponseTemplate::new(403)
+                    .insert_header("content-type", "text/html")
+                    .set_body_string("<html><title>Just a moment</title><div>cf-chl</div></html>"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1"))
+            .and(body_json(serde_json::json!({
+                "cmd": "request.get",
+                "url": target_url,
+                "maxTimeout": 60_000,
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "ok",
+                "solution": {
+                    "url": target_url,
+                    "status": 200,
+                    "headers": {},
+                    "cookies": [{"name": "clearance", "value": "fresh"}],
+                    "userAgent": "fresh-agent",
+                    "response": "fresh solver response",
+                },
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/search"))
+            .and(header("user-agent", "fresh-agent"))
+            .and(header("cookie", "clearance=fresh"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("fresh origin response"))
+            .expect(2)
+            .mount(&server)
+            .await;
+
+        let host = component_solver_test_host(server.uri(), proxy_id);
+        let recovered = host
+            .http(component_solver_request(target_url.clone(), Vec::new()))
+            .await
+            .expect("a stale cache entry should recover within the same request");
+        let cached = host
+            .http(component_solver_request(target_url, Vec::new()))
+            .await
+            .expect("the refreshed clearance should be cached");
+
+        assert_eq!(recovered.status, 200);
+        assert_eq!(recovered.body, b"fresh origin response");
+        assert_eq!(cached.status, 200);
+        assert_eq!(cached.body, b"fresh origin response");
+        assert_eq!(
+            server
+                .received_requests()
+                .await
+                .expect("recorded requests")
+                .len(),
+            4,
+            "recovery should perform one stale attempt, one solve, one replay, and one cached request"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn component_http_shares_one_deadline_across_solver_and_clearance_replay() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let target_url = format!("{}/search", server.uri());
+        Mock::given(method("POST"))
+            .and(path("/v1"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_delay(Duration::from_millis(100))
+                    .set_body_json(serde_json::json!({
+                        "status": "ok",
+                        "solution": {
+                            "url": target_url,
+                            "status": 200,
+                            "headers": {},
+                            "cookies": [{"name": "clearance", "value": "solved"}],
+                            "userAgent": "solver-test",
+                            "response": "<html><body>solver response</body></html>",
+                        },
+                    })),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/search"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_delay(Duration::from_millis(100))
+                    .set_body_string("origin response"),
+            )
+            .mount(&server)
+            .await;
+
+        let host = component_solver_test_host_with_timeout(
+            server.uri(),
+            "component-solver-shared-deadline",
+            Duration::from_millis(150),
+        );
+        let error = host
+            .http(component_solver_request(target_url.clone(), Vec::new()))
+            .await
+            .expect_err("the replay must use only the solver operation's remaining budget");
+
+        assert_eq!(error, TransportError::Timeout);
+
+        let solver_request = server
+            .received_requests()
+            .await
+            .expect("recorded requests")
+            .into_iter()
+            .find(|request| request.url.path() == "/v1")
+            .expect("the solver command should be sent to /v1");
+        assert_eq!(solver_request.method.as_str(), "POST");
+        let solver_command: serde_json::Value = serde_json::from_slice(&solver_request.body)
+            .expect("the solver command should contain JSON");
+        assert_eq!(
+            solver_command,
+            serde_json::json!({
+                "cmd": "request.get",
+                "url": target_url,
+                "maxTimeout": 60_000,
+            })
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn component_http_keeps_terminal_solver_response_without_retry_headers() {
+        use wiremock::matchers::{body_json, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let target_url = format!("{}/search", server.uri());
+        Mock::given(method("POST"))
+            .and(path("/v1"))
+            .and(body_json(serde_json::json!({
+                "cmd": "request.get",
+                "url": target_url,
+                "maxTimeout": 60_000,
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "ok",
+                "solution": {
+                    "url": target_url,
+                    "status": 200,
+                    "headers": {"content-type": "application/rss+xml"},
+                    "cookies": [],
+                    "response": "<rss>terminal-solver-response</rss>",
+                },
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let host = component_solver_test_host(server.uri(), "component-solver-terminal-response");
+        let response = host
+            .http(component_solver_request(target_url, Vec::new()))
+            .await
+            .expect("terminal solver response should remain supported");
+
+        assert_eq!(response.status, 200);
+        assert_eq!(response.body, b"<rss>terminal-solver-response</rss>");
+        assert_eq!(
+            server
+                .received_requests()
+                .await
+                .expect("recorded requests")
+                .len(),
+            1,
+            "a terminal solver response without replay headers must not hit the origin"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn component_http_does_not_cache_a_replayed_challenge() {
         use wiremock::matchers::{body_json, method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -1495,62 +1952,133 @@ mod tests {
                     "url": target_url,
                     "status": 200,
                     "headers": {},
-                    "cookies": [],
+                    "cookies": [{"name": "clearance", "value": "stale"}],
                     "userAgent": "solver-test",
-                    "response": "<rss></rss>",
+                    "response": "<html><body>solver response</body></html>",
+                },
+            })))
+            .expect(2)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/search"))
+            .respond_with(
+                ResponseTemplate::new(403)
+                    .insert_header("content-type", "text/html")
+                    .set_body_string("<html><title>Just a moment</title><div>cf-chl</div></html>"),
+            )
+            .expect(2)
+            .mount(&server)
+            .await;
+
+        let host = component_solver_test_host(server.uri(), "component-solver-stale-clearance");
+        let first = host
+            .http(component_solver_request(target_url.clone(), Vec::new()))
+            .await
+            .expect("stale clearance response should be returned to the guest");
+        let second = host
+            .http(component_solver_request(target_url, Vec::new()))
+            .await
+            .expect("stale clearance must invoke the solver again");
+
+        assert_eq!(first.status, 403);
+        assert_eq!(second.status, 403);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn component_http_preserves_replayed_origin_rate_limits() {
+        use wiremock::matchers::{body_json, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let target_url = format!("{}/search", server.uri());
+        Mock::given(method("POST"))
+            .and(path("/v1"))
+            .and(body_json(serde_json::json!({
+                "cmd": "request.get",
+                "url": target_url,
+                "maxTimeout": 60_000,
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "ok",
+                "solution": {
+                    "url": target_url,
+                    "status": 200,
+                    "headers": {},
+                    "cookies": [{"name": "clearance", "value": "solved"}],
+                    "userAgent": "solver-test",
+                    "response": "<html><body><pre>rate limited</pre></body></html>",
                 },
             })))
             .expect(1)
             .mount(&server)
             .await;
+        Mock::given(method("GET"))
+            .and(path("/search"))
+            .respond_with(
+                ResponseTemplate::new(429)
+                    .insert_header("retry-after", "120")
+                    .set_body_string("Request limit reached"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
 
-        let now = chrono::Utc::now();
-        let host = ComponentHost::for_indexer(
-            BTreeMap::new(),
-            vec!["127.0.0.1".to_string()],
-            Some(IndexerProxyPolicy {
-                indexer_id: "component-indexer".to_string(),
-                indexer_name: "Component indexer".to_string(),
-                config: scryer_domain::IndexerProxyConfig {
-                    id: "component-trawl".to_string(),
-                    name: "Component solver".to_string(),
-                    provider_type: scryer_domain::IndexerProxyProviderType::Trawl,
-                    protocol: scryer_domain::ChallengeSolverProtocol::RequestSolutionV1,
-                    base_url: server.uri(),
-                    request_timeout_seconds: 60,
-                    is_enabled: true,
-                    last_health_status: None,
-                    last_error_message: None,
-                    last_error_at: None,
-                    created_at: now,
-                    updated_at: now,
-                },
-            }),
-            Duration::from_secs(120),
-            Some(1024 * 1024),
-        )
-        .expect("component host should accept a configured solver");
-
+        let host = component_solver_test_host(server.uri(), "component-solver-rate-limit");
         let response = host
-            .http(HttpRequest {
-                method: "GET".to_string(),
-                url: target_url,
-                headers: Vec::new(),
-                body: Vec::new(),
-            })
+            .http(component_solver_request(target_url, Vec::new()))
             .await
-            .expect("challenge response should be solved asynchronously");
+            .expect("origin rate limit should be returned to the guest");
 
-        assert_eq!(response.status, 200);
-        assert_eq!(response.body, b"<rss></rss>");
-        assert_eq!(
-            server
-                .received_requests()
-                .await
-                .expect("recorded requests")
-                .len(),
-            1,
-            "the component host must not make a hidden direct target retry"
-        );
+        assert_eq!(response.status, 429);
+        assert_eq!(response.body, b"Request limit reached");
+        assert!(response.headers.iter().any(|header| {
+            header.name.eq_ignore_ascii_case("retry-after") && header.value == "120"
+        }));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn component_http_preserves_replayed_origin_failures() {
+        use wiremock::matchers::{body_json, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let target_url = format!("{}/search", server.uri());
+        Mock::given(method("POST"))
+            .and(path("/v1"))
+            .and(body_json(serde_json::json!({
+                "cmd": "request.get",
+                "url": target_url,
+                "maxTimeout": 60_000,
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "ok",
+                "solution": {
+                    "url": target_url,
+                    "status": 200,
+                    "headers": {},
+                    "cookies": [{"name": "clearance", "value": "solved"}],
+                    "userAgent": "solver-test",
+                    "response": "<html><body><pre>upstream failure</pre></body></html>",
+                },
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/search"))
+            .respond_with(ResponseTemplate::new(502).set_body_string("origin unavailable"))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let host = component_solver_test_host(server.uri(), "component-solver-origin-failure");
+        let response = host
+            .http(component_solver_request(target_url, Vec::new()))
+            .await
+            .expect("origin failure should be returned to the guest");
+
+        assert_eq!(response.status, 502);
+        assert_eq!(response.body, b"origin unavailable");
     }
 }

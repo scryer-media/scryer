@@ -2,9 +2,10 @@
 mod tests {
     use super::{
         DownloadQueueBucket, TrackedDownloadBackgroundWorkKind, TrackedDownloadWorkDrain,
-        apply_import_record_to_queue_item, apply_tracked_download_activity_projection,
-        apply_tracked_download_queue_metadata, build_download_queue_status_detail,
-        canonicalize_download_queue_item_clients, classify_download_queue_item,
+        apply_import_record_to_queue_item, apply_submission_to_queue_item,
+        apply_tracked_download_activity_projection, apply_tracked_download_queue_metadata,
+        build_download_queue_status_detail, canonicalize_download_queue_item_clients,
+        classify_download_queue_item,
         collect_download_client_filter_options, dedupe_download_queue_items,
         derive_download_queue_display_state, derive_indexer_base_url_from_config_fields,
         download_queue_client_filter_key, normalize_indexer_config_json,
@@ -14,6 +15,7 @@ mod tests {
         synthetic_tracked_snapshot_queue_item, tracked_download_queue_snapshot,
     };
     use crate::DownloadDisplayState;
+    use crate::{DownloadSubmission, DownloadSubmissionPurpose};
     use chrono::{Duration, Utc};
     use scryer_domain::{
         ConfigFieldDef, ConfigFieldOption, ConfigFieldRole, ConfigFieldType,
@@ -537,6 +539,71 @@ mod tests {
         }
     }
 
+    fn submission_for_client(client_id: &str, client_type: &str) -> DownloadSubmission {
+        DownloadSubmission {
+            download_id: scryer_domain::download_identity::DownloadId::new(),
+            title_id: "title-1".to_string(),
+            facet: "anime".to_string(),
+            download_client_id: Some(client_id.to_string()),
+            download_client_type: client_type.to_string(),
+            download_client_item_id: "hash-1".to_string(),
+            source_hint: None,
+            source_provider_id: None,
+            source_provider_name: None,
+            source_kind: None,
+            source_title: None,
+            info_hash: None,
+            release_size_bytes: None,
+            request_signature: None,
+            purpose: DownloadSubmissionPurpose::Standard,
+            scope: crate::SubmissionScope::Title,
+        }
+    }
+
+    /// A client-observed row often knows only its provider type — the plugin
+    /// pollers report `client_id == client_type` — and with two configured
+    /// clients of the same type the unique-type canonicalization cannot pick
+    /// one, so the row rendered "rtorrent" where the operator expects the
+    /// configured name. The submission remembers the routed config id;
+    /// enrichment restores it and the follow-up canonicalize resolves the name.
+    #[test]
+    fn submission_enrichment_restores_the_configured_client_identity() {
+        let configs = vec![
+            client_config("cfg-identity", "E2E rTorrent Identity", "rtorrent", 1),
+            client_config("cfg-cleanup", "E2E rTorrent Seed Cleanup", "rtorrent", 2),
+        ];
+
+        let mut degraded = item("hash-1", DownloadQueueState::Completed);
+        degraded.client_id = "rtorrent".to_string();
+        degraded.client_name = "rtorrent".to_string();
+        degraded.client_type = "rtorrent".to_string();
+
+        apply_submission_to_queue_item(
+            &mut degraded,
+            &submission_for_client("cfg-cleanup", "rtorrent"),
+        );
+        assert_eq!(degraded.client_id, "cfg-cleanup");
+        assert!(
+            degraded.client_name.is_empty(),
+            "a type-derived stand-in name must not survive identity recovery"
+        );
+
+        let mut items = vec![degraded];
+        canonicalize_download_queue_item_clients(&mut items, &configs);
+        assert_eq!(items[0].client_name, "E2E rTorrent Seed Cleanup");
+        assert_eq!(items[0].client_type, "rtorrent");
+
+        // An item that already names a real config keeps it: the submission is
+        // a fallback, never an override.
+        let mut exact = item("hash-1", DownloadQueueState::Completed);
+        exact.client_id = "cfg-identity".to_string();
+        exact.client_name = "E2E rTorrent Identity".to_string();
+        exact.client_type = "rtorrent".to_string();
+        apply_submission_to_queue_item(&mut exact, &submission_for_client("cfg-cleanup", "rtorrent"));
+        assert_eq!(exact.client_id, "cfg-identity");
+        assert_eq!(exact.client_name, "E2E rTorrent Identity");
+    }
+
     #[test]
     fn dedupe_download_queue_items_merges_duplicate_client_job_ids() {
         let mut first = item("job-1", DownloadQueueState::Completed);
@@ -713,7 +780,7 @@ mod tests {
         assert_eq!(projected.progress_percent, 100);
         assert_eq!(
             derive_download_queue_display_state(&projected),
-            DownloadDisplayState::Completed
+            DownloadDisplayState::ImportedSeeding
         );
     }
 
@@ -1015,26 +1082,54 @@ mod tests {
 
     #[test]
     fn a_settled_import_without_a_warning_still_reads_as_completed() {
-        for tracked_state in [
+        let mut queue_item = item("job-imported", DownloadQueueState::Downloading);
+        let metadata = tracked_download_queue_snapshot(&tracked_in_state(
+            &queue_item,
             TrackedDownloadState::Imported,
-            TrackedDownloadState::ImportedSeeding,
-        ] {
-            let mut queue_item = item("job-imported", DownloadQueueState::Downloading);
-            let metadata =
-                tracked_download_queue_snapshot(&tracked_in_state(&queue_item, tracked_state));
-            apply_tracked_download_activity_projection(&mut queue_item, &metadata);
+        ));
+        apply_tracked_download_activity_projection(&mut queue_item, &metadata);
 
-            assert_eq!(
-                queue_item.state,
-                DownloadQueueState::Completed,
-                "{tracked_state:?}"
-            );
-            assert_eq!(
-                derive_download_queue_display_state(&queue_item),
-                DownloadDisplayState::Completed,
-                "{tracked_state:?}"
-            );
-        }
+        assert_eq!(queue_item.state, DownloadQueueState::Completed);
+        assert_eq!(
+            derive_download_queue_display_state(&queue_item),
+            DownloadDisplayState::Completed
+        );
+    }
+
+    #[test]
+    fn an_imported_seeding_row_remains_visible_in_activity() {
+        let mut queue_item = item("job-imported-seeding", DownloadQueueState::Downloading);
+        let metadata = tracked_download_queue_snapshot(&tracked_in_state(
+            &queue_item,
+            TrackedDownloadState::ImportedSeeding,
+        ));
+        apply_tracked_download_activity_projection(&mut queue_item, &metadata);
+
+        assert_eq!(queue_item.state, DownloadQueueState::Completed);
+        assert_eq!(
+            derive_download_queue_display_state(&queue_item),
+            DownloadDisplayState::ImportedSeeding
+        );
+        assert!(crate::matches_download_activity_filter(
+            &queue_item,
+            crate::DownloadActivityFilter::Seeding
+        ));
+        assert!(crate::matches_download_activity_filter(
+            &queue_item,
+            crate::DownloadActivityFilter::All
+        ));
+    }
+
+    #[test]
+    fn an_import_failure_outranks_the_imported_seeding_projection() {
+        let mut queue_item = item("job-seeding-import-failed", DownloadQueueState::Completed);
+        queue_item.tracked_state = Some(TrackedDownloadState::ImportedSeeding);
+        queue_item.import_status = Some(ImportStatus::Failed);
+
+        assert_eq!(
+            derive_download_queue_display_state(&queue_item),
+            DownloadDisplayState::ImportFailed
+        );
     }
 
     #[test]

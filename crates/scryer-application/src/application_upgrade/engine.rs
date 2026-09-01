@@ -390,7 +390,8 @@ impl AppUseCase {
             "upgrade manifest signature bundle",
         )
         .await?;
-        verify_upgrade_manifest_signature(manifest_raw.clone(), bundle_raw).await?;
+        verify_upgrade_manifest_signature(manifest_raw.clone(), bundle_raw, &request.expected_tag)
+            .await?;
         let manifest = parse_and_validate_upgrade_manifest(&manifest_raw)?;
         self.run_upgrade_pipeline(run, request, &manifest, &client, None)
             .await
@@ -1018,14 +1019,19 @@ fn application_upgrade_http_client() -> AppResult<reqwest::Client> {
 async fn verify_upgrade_manifest_signature(
     manifest_raw: Vec<u8>,
     bundle_raw: Vec<u8>,
+    release_tag: &str,
 ) -> AppResult<()> {
-    verify_signed_blob(manifest_raw, bundle_raw, scryer_release_required_signer())
-        .await
-        .map_err(|error| {
-            AppError::Validation(format!(
-                "upgrade manifest signature verification failed: {error}"
-            ))
-        })
+    verify_signed_blob(
+        manifest_raw,
+        bundle_raw,
+        scryer_release_required_signer(release_tag),
+    )
+    .await
+    .map_err(|error| {
+        AppError::Validation(format!(
+            "upgrade manifest signature verification failed: {error}"
+        ))
+    })
 }
 
 fn release_asset_url(tag: &str, filename: &str) -> AppResult<url::Url> {
@@ -3217,6 +3223,7 @@ mod tests {
         let error = verify_upgrade_manifest_signature(
             b"{\"schema\":\"scryer.upgrade.manifest.v1\"}".to_vec(),
             b"not a sigstore bundle".to_vec(),
+            "scryer-v0.19.4",
         )
         .await
         .expect_err("garbage signature bundle must be rejected");
@@ -3225,6 +3232,26 @@ mod tests {
                 .to_string()
                 .contains("upgrade manifest signature verification failed")
         );
+    }
+
+    #[cfg(feature = "runtime-plugin-trust")]
+    #[tokio::test]
+    async fn real_signed_upgrade_manifest_requires_its_exact_release_tag() {
+        let manifest =
+            include_bytes!("../../test-fixtures/sigstore/scryer-upgrade-manifest-v0.19.3.json");
+        let bundle = include_bytes!(
+            "../../test-fixtures/sigstore/scryer-upgrade-manifest-v0.19.3.sigstore.json"
+        );
+
+        verify_upgrade_manifest_signature(manifest.to_vec(), bundle.to_vec(), "scryer-v0.19.3")
+            .await
+            .expect("the real signed Scryer release must verify for its own tag");
+
+        let error =
+            verify_upgrade_manifest_signature(manifest.to_vec(), bundle.to_vec(), "scryer-v0.19.4")
+                .await
+                .expect_err("a valid Scryer release signature must not verify for another tag");
+        assert!(error.to_string().contains("workflow identity mismatch"));
     }
 
     #[cfg(unix)]

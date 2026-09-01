@@ -65,6 +65,7 @@ const fr: LocaleDictionary = {
   "label.unknownType": "type inconnu",
   "label.yearUnknown": "année inconnue",
   "label.noArt": "pas d'illustration",
+  "color.magenta": "Magenta",
   "nav.dashboard": "Tableau de bord",
   "nav.movies": "Films",
   "nav.series": "Séries",

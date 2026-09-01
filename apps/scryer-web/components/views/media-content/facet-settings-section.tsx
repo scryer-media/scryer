@@ -70,8 +70,8 @@ type FacetSettingsSectionProps = {
   headerStatus?: ReactNode;
   /** When true, render an empty secondary-nav column (portal target) beside the sub-nav. */
   showSecondaryNav?: boolean;
-  /** Content column width. "wide" suits dense tables; "reference" keeps a form column plus side reference. */
-  contentWidth?: "default" | "wide" | "reference";
+  /** Content column width. "full" suits the widest tables; "reference" keeps a form column plus side reference. */
+  contentWidth?: "default" | "wide" | "full" | "reference";
   /** Optional trailing breadcrumb segment (e.g. the active library name). */
   trailingCrumb?: string;
 };
@@ -218,9 +218,11 @@ export function FacetSettingsSection({
             "mx-auto w-full px-4 py-5 sm:px-6 md:px-[30px] md:py-[26px] md:pb-[60px]",
             contentWidth === "reference"
               ? "max-w-[1780px]"
-              : contentWidth === "wide"
-                ? "max-w-[1280px]"
-                : "max-w-[920px]",
+              : contentWidth === "full"
+                ? "max-w-[1780px]"
+                : contentWidth === "wide"
+                  ? "max-w-[1280px]"
+                  : "max-w-[920px]",
           )}
         >
           {contentWidth === "reference" ? (

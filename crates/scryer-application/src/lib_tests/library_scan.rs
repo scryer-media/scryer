@@ -590,8 +590,9 @@ impl RecordingExactIdMetadataGateway {
         }
     }
 
-    /// SMG answers every facet with the full identity set. Only movies may keep
-    /// it: a series or anime title still carries exactly its TVDB id.
+    /// SMG answers every facet with the full identity set, and every facet keeps
+    /// it: a scan-created series or anime title carries the same identity set a
+    /// movie does.
     fn with_rich_external_ids(mut self) -> Self {
         self.rich_external_ids = true;
         self
@@ -3038,13 +3039,13 @@ async fn movie_full_scan_creates_a_tmdb_primary_title_from_a_radarr_hint() {
     );
 }
 
-/// The batched search returns SMG's full identity set for every facet, but only
-/// movies are addressed by SMG title id. A scan-created series must still carry
-/// exactly the one TVDB id it carried before the title-id surface existed --
-/// indexer search subjects, RSS candidate indexes and notification payloads all
-/// read these ids without checking the facet.
+/// The batched search returns SMG's full identity set for every facet, and a
+/// scan-created series keeps all of it -- indexer search subjects, RSS candidate
+/// indexes, notification payloads and the `externalIds` readback all read these
+/// ids without checking the facet, so throwing the non-TVDB ids away left a
+/// series unidentifiable everywhere downstream.
 #[tokio::test]
-async fn series_full_scan_keeps_only_the_tvdb_id_from_a_rich_gateway_match() {
+async fn series_full_scan_keeps_every_identity_from_a_rich_gateway_match() {
     let tempdir = tempfile::tempdir().expect("tempdir");
     let series_root = tempdir.path().join("series");
     let folder = series_root.join("Rich Identity Show (1999)");
@@ -3107,20 +3108,25 @@ async fn series_full_scan_keeps_only_the_tvdb_id_from_a_rich_gateway_match() {
         .await
         .expect("list series titles");
     assert_eq!(titles.len(), 1);
-    let external_ids = titles[0]
+    let mut external_ids = titles[0]
         .external_ids
         .iter()
         .map(|id| (id.source.to_ascii_lowercase(), id.value.clone()))
         .collect::<Vec<_>>();
+    external_ids.sort();
     assert_eq!(
         external_ids,
-        vec![("tvdb".to_string(), "900001".to_string())],
-        "a scan-created series carries only its TVDB id"
+        vec![
+            ("imdb".to_string(), "tt0055555".to_string()),
+            ("smg".to_string(), "5555".to_string()),
+            ("tmdb".to_string(), "6666".to_string()),
+            ("tvdb".to_string(), "900001".to_string()),
+        ],
+        "a scan-created series keeps every identity the gateway returned"
     );
 }
 
-/// The movie side of the same match keeps every identity SMG returned, because
-/// movies are the facet addressed by title id.
+/// The movie side of the same match keeps every identity SMG returned.
 #[tokio::test]
 async fn movie_full_scan_keeps_every_identity_from_a_rich_gateway_match() {
     let tempdir = tempfile::tempdir().expect("tempdir");
@@ -7422,12 +7428,13 @@ async fn background_hydration_completes_without_inline_recommendation_refresh() 
 }
 
 #[tokio::test]
-async fn interactive_hydration_refreshes_recommendations_inline() {
+async fn interactive_hydration_queues_recommendations_off_the_hydration_path() {
     let recommendation_calls = Arc::new(AtomicUsize::new(0));
+    let recommendation_release = Arc::new(Notify::new());
     let metadata_gateway = Arc::new(CountingRecommendationMetadataGateway {
         movies: HashMap::from([(91_602, make_movie_metadata(91_602, "Hydrated Movie"))]),
         title_recommendation_calls: Arc::clone(&recommendation_calls),
-        recommendation_release: None,
+        recommendation_release: Some(Arc::clone(&recommendation_release)),
     });
     let (app, _user, titles) = bootstrap_with_metadata_gateway_and_titles(metadata_gateway);
     let title = make_due_hydration_title("movie-interactive-hydration", MediaFacet::Movie, 91_602);
@@ -7435,21 +7442,33 @@ async fn interactive_hydration_refreshes_recommendations_inline() {
         .await
         .expect("seed due movie title");
 
-    app.hydrate_titles_bulk(vec![crate::catalog_workflow::HydrationTarget {
-        title,
-        requested_tvdb_id: None,
-        requested_movie_ref: None,
-        sync_wanted_after_completion: false,
-        source: crate::catalog_workflow::HydrationSource::Interactive,
-    }])
+    timeout(
+        Duration::from_secs(2),
+        app.hydrate_titles_bulk(vec![crate::catalog_workflow::HydrationTarget {
+            title,
+            requested_tvdb_id: None,
+            requested_movie_ref: None,
+            sync_wanted_after_completion: false,
+            source: crate::catalog_workflow::HydrationSource::Interactive,
+        }]),
+    )
     .await
+    .expect("interactive hydration should not wait for recommendation refresh")
     .expect("hydrate title");
 
+    timeout(Duration::from_secs(2), async {
+        while recommendation_calls.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("queued recommendation refresh should reach the metadata gateway");
     assert_eq!(
         recommendation_calls.load(Ordering::SeqCst),
         1,
-        "interactive hydration should keep recommendation refresh inline"
+        "interactive hydration should queue one recommendation refresh"
     );
+    recommendation_release.notify_one();
 }
 
 #[tokio::test]

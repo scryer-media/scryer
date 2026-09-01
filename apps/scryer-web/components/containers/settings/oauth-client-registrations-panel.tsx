@@ -170,7 +170,9 @@ export function OAuthClientRegistrationsPanel() {
     }
   }, [client, deleteTarget, reload, resetDraft]);
 
-  const managedClients = clients.filter((client) => client.source === "MANAGED");
+  const managedClients = clients.filter(
+    (client) => client.source === "MANAGED" && client.clientId !== "generic-native",
+  );
   const customClients = clients.filter((client) => client.source === "CUSTOM");
   const editingClient = customClients.find((client) => client.clientId === editingClientId);
 
@@ -182,10 +184,6 @@ export function OAuthClientRegistrationsPanel() {
             <h3 className="text-[15px] font-semibold text-[var(--scry-ink2)]">
               OAuth applications
             </h3>
-            <p className="text-xs leading-5 text-[var(--scry-muted3)]">
-              Register public clients with exact HTTPS callback URLs. Every client uses
-              authorization code flow with S256 PKCE and library-only access.
-            </p>
           </div>
           {loading ? <Loader2 className="h-4 w-4 animate-spin text-[var(--scry-muted3)]" /> : null}
         </div>

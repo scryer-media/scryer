@@ -23,8 +23,9 @@ use scryer_application::{
 use scryer_domain::{ActorCapabilityMask, AppPermissionMask, Id};
 use scryer_interface::RequestLoaders;
 use scryer_interface::context::{
-    ApiKeyManagementSession, AuthRuntimeStateHandle, ConnectionAuthEpoch, InteractiveSession,
-    MfaVerification, OAuthActorSession, RequestSessionPersistence,
+    ApiKeyManagementSession, AuthRuntimeStateHandle, AuthlessDefaultSession, ConnectionAuthEpoch,
+    InteractiveSession, LoginAttemptLimiter, MfaVerification, OAuthActorSession,
+    RequestSessionPersistence,
 };
 use scryer_logging::{ActorContext, LogContext, RequestContext, context_span, update_context};
 use std::collections::HashMap;
@@ -41,11 +42,17 @@ use uuid::Uuid;
 use crate::base_path::BasePath;
 use crate::http_error::ErrorResponse;
 use crate::rate_limit::{
-    HttpRateLimitClass, RateLimitKey, ScryerRateLimiter, classify_graphql,
-    rate_limited_graphql_response, should_precheck_graphql_login,
+    AuthenticationRequestAnalysis, GraphqlRateLimitClass, HttpRateLimitClass, RateLimitDecision,
+    RateLimitKey, ScryerRateLimiter, analyze_authentication_request, classify_graphql,
+    classify_graphql_request, rate_limited_graphql_error, rate_limited_graphql_response,
+    rate_limited_graphql_single_response,
 };
 
 const X_FORWARDED_PROTO: &str = "x-forwarded-proto";
+// Sized for `installUploadedPlugin`: real plugin components are multi-MB and
+// travel inline as base64, so this must stay well above the artifact ceiling.
+pub(crate) const GRAPHQL_MAX_MESSAGE_BYTES: usize = 64 * 1024 * 1024;
+const GRAPHQL_MAX_BATCH_OPERATIONS: usize = 10;
 const GRAPHQL_POST_EXECUTION_TIMEOUT_CODE: &str = "GRAPHQL_EXECUTION_TIMEOUT";
 const AUTHENTICATION_REQUIRED_CODE: &str = "AUTHENTICATION_REQUIRED";
 const MFA_STEP_UP_REQUIRED_CODE: &str = "MFA_STEP_UP_REQUIRED";
@@ -1008,6 +1015,9 @@ pub(crate) async fn graphql_ws_handler(
 ) -> Response {
     let schema = state.schema.clone();
     let app = state.app.clone();
+    let rate_limiter = state.rate_limiter.clone();
+    let client_ip = request_client_ip(&headers, Some(remote_addr)).unwrap_or(remote_addr.ip());
+    let peer_ip = remote_addr.ip();
     let auth_runtime = state.auth_runtime.clone();
     let auth_snapshot = auth_runtime.snapshot();
     let auth_enabled = auth_snapshot.effective_form_login_enabled;
@@ -1074,13 +1084,19 @@ pub(crate) async fn graphql_ws_handler(
             .as_ref()
             .and_then(ResolvedActor::oauth_session)
     }));
+    let rate_limit_user_id = Arc::new(StdRwLock::new(
+        initial_actor.as_ref().map(|actor| actor.user.id.clone()),
+    ));
     let authless_web_client_proof = state.authless_web_client_proof.clone();
     let ws_headers = headers.clone();
     let connection_span_for_init = connection_span.clone();
     let connection_context_for_init = connection_context.clone();
     let oauth_session_for_init = oauth_session.clone();
+    let rate_limit_user_id_for_init = rate_limit_user_id.clone();
 
-    ws.protocols(ALL_WEBSOCKET_PROTOCOLS)
+    ws.max_message_size(GRAPHQL_MAX_MESSAGE_BYTES)
+        .max_frame_size(GRAPHQL_MAX_MESSAGE_BYTES)
+        .protocols(ALL_WEBSOCKET_PROTOCOLS)
         .on_upgrade(move |stream| async move {
             let app_for_init = app.clone();
             let initial_actor = initial_actor.clone();
@@ -1089,18 +1105,25 @@ pub(crate) async fn graphql_ws_handler(
             let connection_span_for_init = connection_span_for_init.clone();
             let connection_context_for_init = connection_context_for_init.clone();
             let oauth_session_for_init = oauth_session_for_init.clone();
-            let executor = ContextualGraphqlExecutor::new(
+            let rate_limit_user_id_for_init = rate_limit_user_id_for_init.clone();
+            let rate_limiter = rate_limiter.clone();
+            let executor = ContextualGraphqlExecutor::new(ContextualGraphqlExecutorConfig {
                 schema,
-                app.clone(),
-                connection_context.clone(),
+                app: app.clone(),
+                connection_context: connection_context.clone(),
                 oauth_session,
-            );
+                rate_limit_user_id,
+                rate_limiter,
+                client_ip,
+                peer_ip,
+            });
             GraphQLWebSocket::new(stream, executor, protocol)
                 .with_data(initial_data)
                 .on_connection_init(move |value: serde_json::Value| {
                     let connection_span = connection_span_for_init.clone();
                     let connection_context = connection_context_for_init.clone();
                     let oauth_session = oauth_session_for_init.clone();
+                    let rate_limit_user_id = rate_limit_user_id_for_init.clone();
                     let app_for_init = app_for_init.clone();
                     let initial_actor = initial_actor.clone();
                     let proof_state = proof_state.clone();
@@ -1129,6 +1152,10 @@ pub(crate) async fn graphql_ws_handler(
                             .write()
                             .expect("OAuth session lock must not be poisoned") =
                             actor.as_ref().and_then(ResolvedActor::oauth_session);
+                        *rate_limit_user_id
+                            .write()
+                            .expect("rate limit user lock must not be poisoned") =
+                            actor.as_ref().map(|actor| actor.user.id.clone());
                         if let Some(actor) = actor.as_ref() {
                             let mut updated_context = connection_context
                                 .read()
@@ -1156,20 +1183,34 @@ struct ContextualGraphqlExecutor {
     app: AppUseCase,
     connection_context: Arc<StdRwLock<LogContext>>,
     oauth_session: Arc<StdRwLock<Option<OAuthActorSession>>>,
+    rate_limit_user_id: Arc<StdRwLock<Option<String>>>,
+    rate_limiter: ScryerRateLimiter,
+    client_ip: IpAddr,
+    peer_ip: IpAddr,
+}
+
+struct ContextualGraphqlExecutorConfig {
+    schema: scryer_interface::ApiSchema,
+    app: AppUseCase,
+    connection_context: Arc<StdRwLock<LogContext>>,
+    oauth_session: Arc<StdRwLock<Option<OAuthActorSession>>>,
+    rate_limit_user_id: Arc<StdRwLock<Option<String>>>,
+    rate_limiter: ScryerRateLimiter,
+    client_ip: IpAddr,
+    peer_ip: IpAddr,
 }
 
 impl ContextualGraphqlExecutor {
-    fn new(
-        schema: scryer_interface::ApiSchema,
-        app: AppUseCase,
-        connection_context: Arc<StdRwLock<LogContext>>,
-        oauth_session: Arc<StdRwLock<Option<OAuthActorSession>>>,
-    ) -> Self {
+    fn new(config: ContextualGraphqlExecutorConfig) -> Self {
         Self {
-            schema,
-            app,
-            connection_context,
-            oauth_session,
+            schema: config.schema,
+            app: config.app,
+            connection_context: config.connection_context,
+            oauth_session: config.oauth_session,
+            rate_limit_user_id: config.rate_limit_user_id,
+            rate_limiter: config.rate_limiter,
+            client_ip: config.client_ip,
+            peer_ip: config.peer_ip,
         }
     }
 
@@ -1188,20 +1229,94 @@ impl ContextualGraphqlExecutor {
     }
 }
 
+fn login_attempt_limiter(
+    rate_limiter: ScryerRateLimiter,
+    rate_limit_key: RateLimitKey,
+) -> LoginAttemptLimiter {
+    let check_limiter = rate_limiter.clone();
+    let check_key = rate_limit_key.clone();
+    let record_limiter = rate_limiter.clone();
+    let record_key = rate_limit_key;
+    LoginAttemptLimiter::new(
+        move |principal| {
+            check_limiter
+                .check_login_principal(&check_key, principal)
+                .map_err(|decision| rate_limited_graphql_error(&decision))
+        },
+        move |principal| record_limiter.record_login_principal_failure(&record_key, principal),
+        move |principal| rate_limiter.clear_login_principal_failures(principal),
+    )
+}
+
+fn check_graphql_request_rate_limits(
+    rate_limiter: &ScryerRateLimiter,
+    rate_limit_key: &RateLimitKey,
+    request: &GraphQLRequest,
+    authentication: &AuthenticationRequestAnalysis,
+) -> Result<(), RateLimitDecision> {
+    if let Some(class) = graphql_request_rate_limit_class(request, authentication) {
+        rate_limiter.check_graphql(class, rate_limit_key)?;
+    }
+    if let Some(principal) = authentication.principal.as_ref() {
+        rate_limiter.check_login_principal(rate_limit_key, principal)?;
+    }
+    Ok(())
+}
+
+fn graphql_request_rate_limit_class(
+    request: &GraphQLRequest,
+    authentication: &AuthenticationRequestAnalysis,
+) -> Option<GraphqlRateLimitClass> {
+    if authentication.rejected {
+        authentication.class
+    } else {
+        Some(
+            authentication
+                .class
+                .unwrap_or_else(|| classify_graphql_request(request)),
+        )
+    }
+}
+
 impl Executor for ContextualGraphqlExecutor {
     fn execute(&self, request: GraphQLRequest) -> impl Future<Output = GraphQLResponse> + Send {
         let span = context_span(self.operation_context(&request));
         let schema = self.schema.clone();
         let app = self.app.clone();
         let oauth_session = self.oauth_session.clone();
+        let rate_limiter = self.rate_limiter.clone();
+        let rate_limit_user_id = self
+            .rate_limit_user_id
+            .read()
+            .expect("rate limit user lock must not be poisoned")
+            .clone();
+        let rate_limit_key = RateLimitKey::for_client_and_peer(
+            self.client_ip,
+            self.peer_ip,
+            rate_limit_user_id.as_deref(),
+        );
         async move {
+            let authentication = analyze_authentication_request(&request);
+            if let Err(decision) = check_graphql_request_rate_limits(
+                &rate_limiter,
+                &rate_limit_key,
+                &request,
+                &authentication,
+            ) {
+                return rate_limited_graphql_single_response(&decision);
+            }
+            if authentication.rejected {
+                return authentication_mutation_single_field_response();
+            }
             if validate_ws_oauth_session(&app, &oauth_session)
                 .await
                 .is_err()
             {
                 return oauth_access_revoked_response();
             }
-            schema.execute(request).await
+            schema
+                .execute(request.data(login_attempt_limiter(rate_limiter, rate_limit_key)))
+                .await
         }
         .instrument(span)
     }
@@ -1212,6 +1327,36 @@ impl Executor for ContextualGraphqlExecutor {
         session_data: Option<Arc<Data>>,
     ) -> BoxStream<'static, GraphQLResponse> {
         let span = context_span(self.operation_context(&request));
+        let rate_limit_user_id = self
+            .rate_limit_user_id
+            .read()
+            .expect("rate limit user lock must not be poisoned")
+            .clone();
+        let authentication = analyze_authentication_request(&request);
+        let rate_limit_key = RateLimitKey::for_client_and_peer(
+            self.client_ip,
+            self.peer_ip,
+            rate_limit_user_id.as_deref(),
+        );
+        if let Err(decision) = check_graphql_request_rate_limits(
+            &self.rate_limiter,
+            &rate_limit_key,
+            &request,
+            &authentication,
+        ) {
+            return Box::pin(stream::once(async move {
+                rate_limited_graphql_single_response(&decision)
+            }));
+        }
+        if authentication.rejected {
+            return Box::pin(stream::once(async {
+                authentication_mutation_single_field_response()
+            }));
+        }
+        let request = request.data(login_attempt_limiter(
+            self.rate_limiter.clone(),
+            rate_limit_key,
+        ));
         let app = self.app.clone();
         let oauth_session = self.oauth_session.clone();
         Box::pin(ContextualGraphqlResponseStream {
@@ -1310,6 +1455,28 @@ fn rate_limited_graphql_http_response(decision: &crate::rate_limit::RateLimitDec
         .unwrap()
 }
 
+fn authentication_mutation_single_field_response() -> GraphQLResponse {
+    let mut extensions = ErrorExtensionValues::default();
+    extensions.set("code", "AUTHENTICATION_MUTATION_SINGLE_FIELD_REQUIRED");
+    let mut error = ServerError::new(
+        "authentication-sensitive mutations must contain exactly one top-level field",
+        None,
+    );
+    error.extensions = Some(extensions);
+    GraphQLResponse::from_errors(vec![error])
+}
+
+fn authentication_mutation_single_field_http_response() -> Response {
+    let batch =
+        async_graphql::BatchResponse::Single(authentication_mutation_single_field_response());
+    let body = serde_json::to_vec(&batch).unwrap_or_else(|_| b"{}".to_vec());
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body))
+        .unwrap()
+}
+
 fn oauth_access_revoked_http_response() -> Response {
     (
         StatusCode::UNAUTHORIZED,
@@ -1357,16 +1524,36 @@ pub(crate) async fn graphql_handler(
     body: async_graphql_axum::GraphQLBatchRequest,
 ) -> Response {
     let batch = body.into_inner();
-    let client_ip = request_client_ip(&headers, Some(remote_addr)).unwrap_or(remote_addr.ip());
-    let rate_limit_class = classify_graphql(&batch);
-    let precheck_login = should_precheck_graphql_login(&batch);
-    if (rate_limit_class != crate::rate_limit::GraphqlRateLimitClass::Login || precheck_login)
-        && let Err(decision) = state
-            .rate_limiter
-            .check_graphql(rate_limit_class, &RateLimitKey::new(client_ip, None))
-    {
-        return rate_limited_graphql_http_response(&decision);
+    if batch.iter().count() > GRAPHQL_MAX_BATCH_OPERATIONS {
+        return graphql_batch_limit_response();
     }
+    let client_ip = request_client_ip(&headers, Some(remote_addr)).unwrap_or(remote_addr.ip());
+    let peer_ip = remote_addr.ip();
+    let rate_limit_class = classify_graphql(&batch);
+    let authentication_requests = batch
+        .iter()
+        .map(analyze_authentication_request)
+        .collect::<Vec<_>>();
+    let rate_limit_key = RateLimitKey::for_client_and_peer(client_ip, peer_ip, None);
+    for (request, authentication) in batch.iter().zip(&authentication_requests) {
+        if let Err(decision) = check_graphql_request_rate_limits(
+            &state.rate_limiter,
+            &rate_limit_key,
+            request,
+            authentication,
+        ) {
+            return rate_limited_graphql_http_response(&decision);
+        }
+    }
+    if authentication_requests
+        .iter()
+        .any(|analysis| analysis.rejected)
+    {
+        return authentication_mutation_single_field_http_response();
+    }
+    let has_authentication_request = authentication_requests
+        .iter()
+        .any(|analysis| analysis.class.is_some());
 
     let api_key_bearer = authorization_token_from_headers(&headers)
         .ok()
@@ -1394,8 +1581,9 @@ pub(crate) async fn graphql_handler(
             "Scryer web client proof is required for unauthenticated access",
         );
     }
-    let rate_limit_key = RateLimitKey::new(
+    let rate_limit_key = RateLimitKey::for_client_and_peer(
         client_ip,
+        peer_ip,
         actor.as_ref().map(|actor| actor.user.id.as_str()),
     );
     let request_span = context_span(graphql_request_log_context(
@@ -1406,11 +1594,12 @@ pub(crate) async fn graphql_handler(
     let session_persistence = RequestSessionPersistence {
         default_persist_session: default_persist_session_for_request(&headers, Some(remote_addr)),
     };
+    let login_attempt_limiter = login_attempt_limiter(state.rate_limiter.clone(), rate_limit_key);
     if let Some(actor) = actor.as_ref()
-        && (rate_limit_class != crate::rate_limit::GraphqlRateLimitClass::Login || precheck_login)
+        && !has_authentication_request
         && let Err(decision) = state.rate_limiter.check_graphql(
             rate_limit_class,
-            &RateLimitKey::new(client_ip, Some(&actor.user.id)),
+            &RateLimitKey::for_client_and_peer(client_ip, peer_ip, Some(&actor.user.id)),
         )
     {
         return rate_limited_graphql_http_response(&decision);
@@ -1419,6 +1608,7 @@ pub(crate) async fn graphql_handler(
     let batch = if let Some(actor) = actor {
         let oauth_session = actor.oauth_session();
         let interactive_session = actor.is_interactive_session();
+        let authless_default_session = actor.is_authless_default_session();
         let api_key_management_session = actor.can_manage_api_keys();
         // Request-scoped dataloaders: the batch cache lives for exactly this
         // HTTP request (shared across a batched request's entries — same actor,
@@ -1433,6 +1623,9 @@ pub(crate) async fn graphql_handler(
                     .data(loaders);
                 if interactive_session {
                     req = req.data(InteractiveSession);
+                }
+                if authless_default_session {
+                    req = req.data(AuthlessDefaultSession);
                 }
                 if api_key_management_session {
                     req = req.data(ApiKeyManagementSession);
@@ -1452,6 +1645,9 @@ pub(crate) async fn graphql_handler(
                         if interactive_session {
                             req = req.data(InteractiveSession);
                         }
+                        if authless_default_session {
+                            req = req.data(AuthlessDefaultSession);
+                        }
                         if api_key_management_session {
                             req = req.data(ApiKeyManagementSession);
                         }
@@ -1468,20 +1664,22 @@ pub(crate) async fn graphql_handler(
     };
 
     let batch = match batch {
-        async_graphql::BatchRequest::Single(req) => {
-            async_graphql::BatchRequest::Single(req.data(session_persistence))
-        }
+        async_graphql::BatchRequest::Single(req) => async_graphql::BatchRequest::Single(
+            req.data(session_persistence).data(login_attempt_limiter),
+        ),
         async_graphql::BatchRequest::Batch(reqs) => async_graphql::BatchRequest::Batch(
             reqs.into_iter()
-                .map(|req| req.data(session_persistence))
+                .map(|req| {
+                    req.data(session_persistence)
+                        .data(login_attempt_limiter.clone())
+                })
                 .collect(),
         ),
     };
 
     let schema = state.schema.clone();
-    let rate_limiter = state.rate_limiter.clone();
     let execution_timeout = graphql_post_execution_timeout();
-    let mut batch_response = match tokio::time::timeout(
+    let batch_response = match tokio::time::timeout(
         execution_timeout,
         schema.execute_batch(batch).instrument(request_span.clone()),
     )
@@ -1499,13 +1697,6 @@ pub(crate) async fn graphql_handler(
             graphql_execution_timeout_response()
         }
     };
-    if rate_limit_class == crate::rate_limit::GraphqlRateLimitClass::Login
-        && !precheck_login
-        && !batch_response.is_ok()
-        && let Err(decision) = rate_limiter.record_failed_login(&rate_limit_key)
-    {
-        batch_response = rate_limited_graphql_response(&decision);
-    }
     if let Err(error) = state
         .app
         .image_proxy_repository()
@@ -1698,6 +1889,26 @@ fn graphql_execution_timeout_response() -> async_graphql::BatchResponse {
     async_graphql::BatchResponse::Single(GraphQLResponse::from_errors(vec![error]))
 }
 
+fn graphql_batch_limit_response() -> Response {
+    let mut extensions = ErrorExtensionValues::default();
+    extensions.set("code", "GRAPHQL_BATCH_LIMIT_EXCEEDED");
+    extensions.set("maxOperations", GRAPHQL_MAX_BATCH_OPERATIONS);
+    let mut error = ServerError::new(
+        format!("GraphQL batches may contain at most {GRAPHQL_MAX_BATCH_OPERATIONS} operations"),
+        None,
+    );
+    error.extensions = Some(extensions);
+    let batch_response =
+        async_graphql::BatchResponse::Single(GraphQLResponse::from_errors(vec![error]));
+    let body = serde_json::to_vec(&batch_response).unwrap_or_else(|_| b"{}".to_vec());
+
+    Response::builder()
+        .status(StatusCode::BAD_REQUEST)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body))
+        .unwrap()
+}
+
 fn graphql_post_execution_timeout() -> Duration {
     // Resolver-specific deadlines still fail faster. This transport guard must
     // remain above both the longest valid indexer operation and an operator's
@@ -1848,6 +2059,10 @@ impl ResolvedActor {
             && !self.token_claims.is_oauth_access_token()
     }
 
+    fn is_authless_default_session(&self) -> bool {
+        self.source == ResolvedActorSource::AuthlessDefault
+    }
+
     fn can_manage_api_keys(&self) -> bool {
         self.is_interactive_session() || self.source == ResolvedActorSource::AuthlessDefault
     }
@@ -1860,6 +2075,7 @@ impl ResolvedActor {
         MfaVerification {
             verified_until: self.token_claims.mfa_verified_until,
             step_up_verified_until: self.token_claims.mfa_step_up_verified_until,
+            security_action_verified_until: self.token_claims.security_action_verified_until,
             session_scope: self.token_claims.session_scope,
             persist_session: self.token_claims.persist_session,
             auth_session_version: self.token_claims.auth_session_version.clone(),
@@ -1888,6 +2104,9 @@ fn graphql_ws_connection_data(connection_epoch: u64, actor: Option<ResolvedActor
         data.insert(actor.mfa_verification());
         if actor.is_interactive_session() {
             data.insert(InteractiveSession);
+        }
+        if actor.is_authless_default_session() {
+            data.insert(AuthlessDefaultSession);
         }
         if actor.can_manage_api_keys() {
             data.insert(ApiKeyManagementSession);
@@ -2584,7 +2803,7 @@ pub(crate) async fn rate_limit_http_api(
 
     let client_ip =
         request_client_ip(request.headers(), Some(remote_addr)).unwrap_or(remote_addr.ip());
-    let key = RateLimitKey::new(client_ip, None);
+    let key = RateLimitKey::for_client_and_peer(client_ip, remote_addr.ip(), None);
     match auth_state.rate_limiter.check_http(rate_limit_class, &key) {
         Ok(()) => next.run(request).await,
         Err(decision) => {
@@ -2687,6 +2906,7 @@ pub(crate) fn map_app_error(error: AppError) -> Response {
             response
         }
         AppError::MfaStepUpRequired(message)
+        | AppError::ReauthenticationRequired(message)
         | AppError::TotpEnrollmentRequired(message)
         | AppError::MfaEnrollmentRequired(message)
         | AppError::PasswordChangeRequired(message)
@@ -4580,6 +4800,195 @@ mod tests {
             &headers,
             Some(SocketAddr::from((Ipv4Addr::new(172, 18, 0, 2), 3000))),
         ));
+    }
+
+    #[test]
+    fn http_and_websocket_share_positive_authentication_classification() {
+        for (query, expected_class, expected_rejected) in [
+            (
+                "mutation { login(input: { username: \"alice\", password: \"password\" }) { token } }",
+                Some(GraphqlRateLimitClass::Login),
+                false,
+            ),
+            (
+                "mutation { webauthnAuthenticateStart(username: \"alice\") { challengeId } }",
+                Some(GraphqlRateLimitClass::AuthStart),
+                false,
+            ),
+            (
+                "mutation { login(input: { username: \"alice\", password: \"password\" }) { token } updateSecuritySettings(input: {}) { formLoginEnabled } }",
+                Some(GraphqlRateLimitClass::Login),
+                true,
+            ),
+            ("mutation { updateSecuritySettings(input: {", None, true),
+            (
+                "mutation { ...A } fragment A on Mutation { ...A }",
+                None,
+                true,
+            ),
+        ] {
+            let request = GraphQLRequest::new(query);
+            let authentication = analyze_authentication_request(&request);
+            assert_eq!(authentication.rejected, expected_rejected);
+            assert_eq!(
+                graphql_request_rate_limit_class(&request, &authentication),
+                expected_class
+            );
+        }
+    }
+
+    #[test]
+    fn generic_rejections_do_not_consume_authentication_quota_but_mixed_auth_does() {
+        let client_ip = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10));
+        let peer_ip = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 11));
+        let key = RateLimitKey::for_client_and_peer(client_ip, peer_ip, None);
+        let limiter = ScryerRateLimiter::for_authentication_test(1, 1, 1, 10);
+
+        for query in [
+            "mutation { updateSecuritySettings(input: {",
+            "mutation { ...A } fragment A on Mutation { ...A }",
+        ] {
+            let request = GraphQLRequest::new(query);
+            let authentication = analyze_authentication_request(&request);
+            check_graphql_request_rate_limits(&limiter, &key, &request, &authentication)
+                .expect("generic rejection must not consume authentication quota");
+        }
+
+        let login = GraphQLRequest::new(
+            "mutation { login(input: { username: \"alice\", password: \"password\" }) { token } }",
+        );
+        let login_authentication = analyze_authentication_request(&login);
+        check_graphql_request_rate_limits(&limiter, &key, &login, &login_authentication)
+            .expect("first real login should consume the available authentication quota");
+        assert!(
+            check_graphql_request_rate_limits(&limiter, &key, &login, &login_authentication)
+                .is_err()
+        );
+
+        let mixed_limiter = ScryerRateLimiter::for_authentication_test(1, 1, 1, 10);
+        let mixed = GraphQLRequest::new(
+            "mutation { login(input: { username: \"alice\", password: \"password\" }) { token } updateSecuritySettings(input: {}) { formLoginEnabled } }",
+        );
+        let mixed_authentication = analyze_authentication_request(&mixed);
+        check_graphql_request_rate_limits(&mixed_limiter, &key, &mixed, &mixed_authentication)
+            .expect("positively classified mixed authentication should consume quota");
+        assert!(
+            check_graphql_request_rate_limits(&mixed_limiter, &key, &login, &login_authentication,)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn blocked_authentication_principals_consume_transport_quotas_first() {
+        let client_ip = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 20));
+        let peer_ip = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 21));
+        let request = GraphQLRequest::new(
+            "mutation { login(input: { username: \"alice\", password: \"password\" }) { token } }",
+        );
+        let authentication = analyze_authentication_request(&request);
+        let principal = authentication.principal.as_ref().expect("login principal");
+
+        let peer_limiter = ScryerRateLimiter::for_authentication_test(10, 10, 1, 1);
+        let first_key = RateLimitKey::for_client_and_peer(client_ip, peer_ip, None);
+        peer_limiter.record_login_principal_failure(&first_key, principal);
+        assert!(
+            check_graphql_request_rate_limits(
+                &peer_limiter,
+                &first_key,
+                &request,
+                &authentication,
+            )
+            .is_err()
+        );
+        let same_peer_key = RateLimitKey::for_client_and_peer(
+            IpAddr::V4(Ipv4Addr::new(203, 0, 113, 22)),
+            peer_ip,
+            None,
+        );
+        assert!(
+            peer_limiter
+                .check_graphql(GraphqlRateLimitClass::Login, &same_peer_key)
+                .is_err(),
+            "the shared peer quota must be consumed before the principal rejection"
+        );
+
+        let client_limiter = ScryerRateLimiter::for_authentication_test(1, 10, 10, 1);
+        let first_key = RateLimitKey::for_client_and_peer(client_ip, peer_ip, None);
+        client_limiter.record_login_principal_failure(&first_key, principal);
+        assert!(
+            check_graphql_request_rate_limits(
+                &client_limiter,
+                &first_key,
+                &request,
+                &authentication,
+            )
+            .is_err()
+        );
+        let same_client_key = RateLimitKey::for_client_and_peer(
+            client_ip,
+            IpAddr::V4(Ipv4Addr::new(203, 0, 113, 23)),
+            None,
+        );
+        assert!(
+            client_limiter
+                .check_graphql(GraphqlRateLimitClass::Login, &same_client_key)
+                .is_err(),
+            "the client login quota must be consumed before the principal rejection"
+        );
+    }
+
+    #[tokio::test]
+    async fn oversized_graphql_batch_returns_before_authentication_metering() {
+        let context = common::TestContext::new().await;
+        let limiter = ScryerRateLimiter::for_authentication_test(1, 1, 1, 10);
+        let state = AuthState {
+            app: context.app.clone(),
+            schema: context.schema.clone(),
+            auth_runtime: context.auth_runtime.clone(),
+            rate_limiter: limiter.clone(),
+            ws_origin_policy: WebSocketOriginPolicy::default(),
+            authless_web_client_proof: AuthlessWebClientProofState::new(),
+        };
+        let router = Router::new()
+            .route("/graphql", post(graphql_handler))
+            .with_state(state);
+        let operation = serde_json::json!({
+            "query": "mutation { login(input: { username: \"alice\", password: \"password\" }) { token } }"
+        });
+        let body = serde_json::to_vec(&vec![operation; GRAPHQL_MAX_BATCH_OPERATIONS + 1])
+            .expect("serialize oversized batch");
+        let remote_addr = SocketAddr::from((Ipv4Addr::new(203, 0, 113, 30), 3000));
+        let mut request = Request::builder()
+            .method(Method::POST)
+            .uri("/graphql")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body))
+            .expect("GraphQL request");
+        request.extensions_mut().insert(ConnectInfo(remote_addr));
+
+        let response = router.oneshot(request).await.expect("GraphQL response");
+        let status = response.status();
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("GraphQL response body");
+        let body_text = String::from_utf8_lossy(&body);
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "unexpected response: {body_text}"
+        );
+        assert!(
+            body_text.contains("GRAPHQL_BATCH_LIMIT_EXCEEDED"),
+            "oversized batch should return the dedicated batch error"
+        );
+
+        let key = RateLimitKey::for_client_and_peer(remote_addr.ip(), remote_addr.ip(), None);
+        assert!(
+            limiter
+                .check_graphql(GraphqlRateLimitClass::Login, &key)
+                .is_ok(),
+            "oversized batch must not consume authentication quota"
+        );
     }
 
     #[test]

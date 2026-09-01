@@ -1294,12 +1294,14 @@ impl DatastoreAssembly {
 
     pub fn indexer_search_learning_repository(&self) -> Arc<dyn IndexerSearchLearningRepository> {
         match &self.stores {
-            DatastoreStores::Sqlite { db, .. } => {
-                Arc::new(IndexerSearchLearningStore::new(db.datastore()))
-            }
-            DatastoreStores::Postgres { db, .. } => {
-                Arc::new(IndexerSearchLearningStore::new(db.datastore()))
-            }
+            DatastoreStores::Sqlite { db, .. } => Arc::new(IndexerSearchLearningStore::new(
+                db.datastore(),
+                db.encryption_key_state(),
+            )),
+            DatastoreStores::Postgres { db, .. } => Arc::new(IndexerSearchLearningStore::new(
+                db.datastore(),
+                db.encryption_key_state(),
+            )),
         }
     }
 
@@ -1697,11 +1699,11 @@ pub fn datastore_file_path(database_url: &str) -> PathBuf {
 mod tests {
     use super::*;
     use scryer_application::{
-        BACKUP_TABLE_CATALOG, BackupBundleExportRequest, BackupExportSecrets,
-        BackupTableClassification, DiscoverySyncStateRecord, LogicalBackupExporter,
-        SettingsRepository, SystemInfoProvider, TitleImageKind, TitleImageRepository,
-        TitleImageSourceResult, TitleImageVariantRecord, TitleRepository, UserRepository,
-        inspect_backup_bundle,
+        AcquisitionScopeStateRepository, BACKUP_TABLE_CATALOG, BackupBundleExportRequest,
+        BackupExportSecrets, BackupTableClassification, DiscoverySyncStateRecord,
+        LogicalBackupExporter, ReleaseDecision, SettingsRepository, SystemInfoProvider,
+        TitleImageKind, TitleImageRepository, TitleImageSourceResult, TitleImageVariantRecord,
+        TitleRepository, UserRepository, inspect_backup_bundle,
     };
     use scryer_domain::{ExternalId, MediaFacet, Title, User};
     use sqlx::Row;
@@ -2374,6 +2376,46 @@ mod tests {
                 coverage_fingerprint,
             )
             .await?;
+        let now = chrono::Utc::now();
+        SqlRuntime::execute(
+            datastore.read_exec(),
+            "INSERT INTO wanted_items (
+                 id, title_id, media_type, status, created_at, updated_at
+             ) VALUES ({}, {}, {}, {}, {}, {})",
+            &[
+                SqlArg::Text("backup-matrix-wanted".to_string()),
+                SqlArg::Text("backup-lattice-title".to_string()),
+                SqlArg::Text("movie".to_string()),
+                SqlArg::Text("wanted".to_string()),
+                SqlArg::Timestamp(now),
+                SqlArg::Timestamp(now),
+            ],
+        )
+        .await?;
+        WantedStore::new(datastore.clone())
+            .insert_release_decision(&ReleaseDecision {
+                id: "backup-matrix-release-decision".to_string(),
+                wanted_item_id: "backup-matrix-wanted".to_string(),
+                title_id: "backup-lattice-title".to_string(),
+                release_title: "Synthetic Backup Release".to_string(),
+                release_url: None,
+                release_size_bytes: Some(1_000_000),
+                decision_code: "eligible".to_string(),
+                candidate_score: 100,
+                current_score: None,
+                score_delta: None,
+                explanation_json: Some(
+                    serde_json::json!({
+                        "quality_profile_decision": {
+                            "scoring_log": [{"code": "backup_matrix", "delta": 100}],
+                        },
+                        "fingerprint": coverage_fingerprint,
+                    })
+                    .to_string(),
+                ),
+                created_at: now.to_rfc3339(),
+            })
+            .await?;
         let coverage_searched_at = chrono::DateTime::parse_from_rfc3339(coverage_searched_at)
             .map_err(|error| {
                 AppError::Repository(format!("invalid backup matrix coverage timestamp: {error}"))
@@ -2466,6 +2508,21 @@ mod tests {
         assert_eq!(emby.text("api_key")?, "source-fingerprint-emby-api-key");
         assert_eq!(emby.text("server_id")?, "source-fingerprint-emby-server-id");
         assert!(emby.bool("connect_enabled")?);
+
+        let release_decisions = WantedStore::new(datastore.clone())
+            .list_release_decisions_for_title("backup-lattice-title", 10, 0)
+            .await?;
+        assert_eq!(release_decisions.len(), 1);
+        let explanation = release_decisions[0]
+            .explanation_json
+            .as_deref()
+            .expect("restored release decision should retain its explanation");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(explanation)
+                .map_err(|error| AppError::Repository(error.to_string()))?["fingerprint"],
+            "source-fingerprint",
+            "compressed release-decision explanations should survive logical backup restore"
+        );
 
         let coverage = ScopeIndexerCoverageStore::new(datastore.clone());
         assert_eq!(

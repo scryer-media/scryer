@@ -2770,6 +2770,76 @@ async fn migration_0173_requeues_only_unhydrated_movie_titles_without_tvdb_ids()
 }
 
 #[tokio::test]
+async fn migration_0200_queues_idle_supported_movies_without_interrupting_active_retries() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .expect("migration test database should open");
+    sqlx::raw_sql(
+        r#"CREATE TABLE titles (
+               id TEXT PRIMARY KEY,
+               facet TEXT NOT NULL,
+               external_ids TEXT NOT NULL,
+               metadata_fetched_at TEXT,
+               metadata_hydration_next_attempt_at TEXT,
+               metadata_hydration_attempt_count INTEGER NOT NULL DEFAULT 0
+           );
+           INSERT INTO titles VALUES
+             ('smg-only', 'movie', '[{"source":"smg","value":"101"}]', NULL, NULL, 0),
+             ('tmdb-only', 'movie', '[{"source":"tmdb","value":"102"}]', NULL, NULL, 0),
+             ('imdb-only', 'movie', '[{"source":"imdb","value":"tt0000103"}]', NULL, NULL, 0),
+             ('tvdb-only', 'movie', '[{"source":"tvdb","value":"104"}]', NULL, NULL, 0),
+             ('blank-id', 'movie', '[{"source":"tmdb","value":"  "}]', NULL, NULL, 0),
+             ('unsupported-id', 'movie', '[{"source":"wikidata","value":"Q105"}]', NULL, NULL, 0),
+             ('series-smg', 'series', '[{"source":"smg","value":"106"}]', NULL, NULL, 0),
+             ('already-fetched', 'movie', '[{"source":"smg","value":"107"}]', '2026-01-01T00:00:00Z', NULL, 0),
+             ('already-scheduled', 'movie', '[{"source":"tmdb","value":"108"}]', NULL, 'preserve', 0),
+             ('already-attempted', 'movie', '[{"source":"imdb","value":"tt0000109"}]', NULL, NULL, 2);"#,
+    )
+    .execute(&pool)
+    .await
+    .expect("title fixture should initialize");
+
+    sqlx::raw_sql(include_str!(
+        "../../../scryer/src/db/migrations/0200_movie_supported_identity_hydration.sql"
+    ))
+    .execute(&pool)
+    .await
+    .expect("migration 0200 should apply");
+
+    let states = sqlx::query_as::<_, (String, Option<String>, i64)>(
+        "SELECT id, metadata_hydration_next_attempt_at, metadata_hydration_attempt_count
+           FROM titles ORDER BY id",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("hydration states should load")
+    .into_iter()
+    .map(|(id, next_attempt, attempt_count)| (id, (next_attempt, attempt_count)))
+    .collect::<std::collections::BTreeMap<_, _>>();
+
+    for id in ["smg-only", "tmdb-only", "imdb-only", "tvdb-only"] {
+        assert!(states[id].0.is_some(), "{id} should be queued");
+        assert_eq!(states[id].1, 0);
+    }
+    for id in [
+        "blank-id",
+        "unsupported-id",
+        "series-smg",
+        "already-fetched",
+        "already-attempted",
+    ] {
+        assert_eq!(states[id].0, None, "{id} should remain unscheduled");
+    }
+    assert_eq!(states["already-attempted"].1, 2);
+    assert_eq!(
+        states["already-scheduled"],
+        (Some("preserve".to_string()), 0)
+    );
+}
+
+#[tokio::test]
 async fn migrations_0179_and_0180_backfill_and_finalize_canonical_download_identity() {
     crate::spellfix::register_spellfix_auto_extension()
         .expect("spellfix auto-extension should register");
@@ -3875,6 +3945,631 @@ async fn migration_0186_admits_token_less_identity_states_without_disturbing_exi
 
     drop(pool);
     let _ = std::fs::remove_file(db);
+}
+
+#[tokio::test]
+async fn migration_0201_compacts_discovery_payloads_and_rekeys_recommendation_cards() {
+    crate::spellfix::register_spellfix_auto_extension()
+        .expect("spellfix auto-extension should register");
+    let db = std::env::temp_dir().join(format!(
+        "scryer_migration_0201_discovery_storage_{}.db",
+        chrono::Utc::now().timestamp_micros()
+    ));
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect(&sqlite_url_with_create(db.to_string_lossy().as_ref()))
+        .await
+        .expect("migration test database should open");
+    crate::migrations::replay_source_catalog_for_fresh_install(&pool, Some(200), true)
+        .await
+        .expect("0200 fixture schema should install");
+
+    sqlx::query(
+        "INSERT INTO discovery_sync_runs (
+            id, kind, status, trigger_source, region, language,
+            raw_ack_json, created_at, updated_at
+         ) VALUES (
+            'acked-run', 'context_snapshot', 'complete', 'test', 'US', 'eng',
+            '{\"status\":\"ACKNOWLEDGED\"}',
+            '2026-08-01T00:00:00Z', '2026-08-02T00:00:00Z'
+         )",
+    )
+    .execute(&pool)
+    .await
+    .expect("legacy sync run should insert");
+    sqlx::query(
+        "INSERT INTO titles (
+            id, library_id, name, name_normalized, facet, root_folder_id, created_at
+         ) VALUES (
+            'source-title', 'movie_default_library', 'Source', 'source', 'movie',
+            'canonical_root_for_movie_default_library', '2026-08-01T00:00:00Z'
+         )",
+    )
+    .execute(&pool)
+    .await
+    .expect("source title should insert");
+    sqlx::query(
+        "INSERT INTO discovery_titles (
+            id, target_key, target_key_norm, language, target_kind,
+            display_title, created_at, updated_at
+         ) VALUES (
+            'legacy-card', 'tmdb:movie:10', 'tmdb:movie:10', 'eng', 'movie',
+            'Legacy Card', '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z'
+         )",
+    )
+    .execute(&pool)
+    .await
+    .expect("legacy discovery title should insert");
+    sqlx::query(
+        "INSERT INTO title_more_like_this_items (
+            source_title_id, discovery_title_id, sort_index, created_at, updated_at
+         ) VALUES (
+            'source-title', 'legacy-card', 0,
+            '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z'
+         )",
+    )
+    .execute(&pool)
+    .await
+    .expect("legacy recommendation edge should insert");
+
+    crate::migrations::run_migrations(&pool, crate::types::MigrationMode::Apply)
+        .await
+        .expect("0201 should apply");
+
+    let acknowledged_at: Option<String> = sqlx::query_scalar(
+        "SELECT acknowledged_at FROM discovery_sync_runs WHERE id = 'acked-run'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("acknowledgement timestamp should load");
+    assert_eq!(acknowledged_at.as_deref(), Some("2026-08-02T00:00:00Z"));
+
+    let columns = sqlx::query("PRAGMA table_info(discovery_sync_runs)")
+        .fetch_all(&pool)
+        .await
+        .expect("sync-run columns should load")
+        .into_iter()
+        .map(|row| row.get::<String, _>("name"))
+        .collect::<HashSet<_>>();
+    assert!(columns.contains("acknowledged_at"));
+    for removed in [
+        "raw_submit_json",
+        "raw_changes_json",
+        "raw_final_status_json",
+        "raw_ack_json",
+    ] {
+        assert!(!columns.contains(removed), "{removed} should be removed");
+    }
+
+    let card: (i64, Option<Vec<u8>>) = sqlx::query_as(
+        "SELECT payload_version, payload_blob
+         FROM title_recommendation_cards
+         WHERE discovery_title_id = 'legacy-card'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("recommendation card placeholder should load");
+    assert_eq!(card, (1, None));
+    let recommendation_fk: String = sqlx::query_scalar(
+        "SELECT \"table\"
+         FROM pragma_foreign_key_list('title_more_like_this_items')
+         WHERE \"from\" = 'discovery_title_id'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("recommendation foreign key should load");
+    assert_eq!(recommendation_fk, "title_recommendation_cards");
+    let integrity: String = sqlx::query_scalar("PRAGMA integrity_check")
+        .fetch_one(&pool)
+        .await
+        .expect("integrity check should run");
+    assert_eq!(integrity, "ok");
+
+    drop(pool);
+    let _ = std::fs::remove_file(db);
+}
+
+#[tokio::test]
+async fn migration_0201_postgres_uses_native_payload_and_timestamp_types() -> AppResult<()> {
+    let Some(raw_url) = std::env::var("SCRYER_TEST_POSTGRES_URL")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(());
+    };
+    let admin_pool = sqlx::PgPool::connect(&raw_url)
+        .await
+        .map_err(|error| AppError::Repository(format!("failed to connect to postgres: {error}")))?;
+    let schema = format!(
+        "scryer_0201_migration_{}",
+        chrono::Utc::now().timestamp_micros()
+    );
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
+        .execute(&admin_pool)
+        .await
+        .map_err(|error| {
+            AppError::Repository(format!("failed to create postgres schema: {error}"))
+        })?;
+    let mut schema_url = url::Url::parse(&raw_url)
+        .map_err(|error| AppError::Validation(format!("invalid postgres URL: {error}")))?;
+    schema_url
+        .query_pairs_mut()
+        .append_pair("options", &format!("-csearch_path={schema}"));
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .connect(schema_url.as_str())
+        .await
+        .map_err(|error| {
+            AppError::Repository(format!("failed to open postgres schema: {error}"))
+        })?;
+
+    let result = async {
+        crate::postgres::replay_source_catalog_for_fresh_install(&pool, Some(200)).await?;
+        sqlx::query(
+            "INSERT INTO discovery_sync_runs (
+                id, kind, status, trigger_source, region, language,
+                raw_ack_json, created_at, updated_at
+             ) VALUES (
+                'acked-run', 'context_snapshot', 'complete', 'test', 'US', 'eng',
+                '{\"status\":\"ACKNOWLEDGED\"}'::jsonb,
+                '2026-08-01T00:00:00Z'::timestamptz,
+                '2026-08-02T00:00:00Z'::timestamptz
+             )",
+        )
+        .execute(&pool)
+        .await
+        .map_err(|error| AppError::Repository(error.to_string()))?;
+        sqlx::query(
+            "INSERT INTO titles (
+                id, library_id, name, name_normalized, facet, root_folder_id, created_at
+             ) VALUES (
+                'source-title', 'movie_default_library', 'Source', 'source', 'movie',
+                'canonical_root_for_movie_default_library',
+                '2026-08-01T00:00:00Z'::timestamptz
+             )",
+        )
+        .execute(&pool)
+        .await
+        .map_err(|error| AppError::Repository(error.to_string()))?;
+        sqlx::query(
+            "INSERT INTO discovery_titles (
+                id, target_key, target_key_norm, language, target_kind,
+                display_title, created_at, updated_at
+             ) VALUES (
+                'legacy-card', 'tmdb:movie:10', 'tmdb:movie:10', 'eng', 'movie',
+                'Legacy Card', '2026-08-01T00:00:00Z'::timestamptz,
+                '2026-08-01T00:00:00Z'::timestamptz
+             )",
+        )
+        .execute(&pool)
+        .await
+        .map_err(|error| AppError::Repository(error.to_string()))?;
+        sqlx::query(
+            "INSERT INTO title_more_like_this_items (
+                source_title_id, discovery_title_id, sort_index, created_at, updated_at
+             ) VALUES (
+                'source-title', 'legacy-card', 0,
+                '2026-08-01T00:00:00Z'::timestamptz,
+                '2026-08-01T00:00:00Z'::timestamptz
+             )",
+        )
+        .execute(&pool)
+        .await
+        .map_err(|error| AppError::Repository(error.to_string()))?;
+
+        let services = crate::PostgresServices::new_with_mode(
+            schema_url.as_str(),
+            crate::types::MigrationMode::Apply,
+        )
+        .await?;
+        drop(services);
+
+        let acknowledged_at: chrono::DateTime<chrono::Utc> = sqlx::query_scalar(
+            "SELECT acknowledged_at FROM discovery_sync_runs WHERE id = 'acked-run'",
+        )
+        .fetch_one(&pool)
+        .await
+        .map_err(|error| AppError::Repository(error.to_string()))?;
+        assert_eq!(acknowledged_at.to_rfc3339(), "2026-08-02T00:00:00+00:00");
+
+        let card: (i32, Option<Vec<u8>>) = sqlx::query_as(
+            "SELECT payload_version, payload_blob
+             FROM title_recommendation_cards
+             WHERE discovery_title_id = 'legacy-card'",
+        )
+        .fetch_one(&pool)
+        .await
+        .map_err(|error| AppError::Repository(error.to_string()))?;
+        assert_eq!(card, (1, None));
+
+        let column_types: Vec<(String, String)> = sqlx::query_as(
+            "SELECT column_name, data_type
+             FROM information_schema.columns
+             WHERE table_schema = current_schema()
+               AND table_name IN ('title_recommendation_cards', 'discovery_sync_runs')
+               AND column_name IN ('payload_blob', 'acknowledged_at')
+             ORDER BY column_name",
+        )
+        .fetch_all(&pool)
+        .await
+        .map_err(|error| AppError::Repository(error.to_string()))?;
+        assert_eq!(
+            column_types,
+            vec![
+                (
+                    "acknowledged_at".to_string(),
+                    "timestamp with time zone".to_string()
+                ),
+                ("payload_blob".to_string(), "bytea".to_string()),
+            ]
+        );
+
+        let raw_columns: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)
+             FROM information_schema.columns
+             WHERE table_schema = current_schema()
+               AND table_name = 'discovery_sync_runs'
+               AND column_name IN (
+                   'raw_submit_json', 'raw_changes_json',
+                   'raw_final_status_json', 'raw_ack_json'
+               )",
+        )
+        .fetch_one(&pool)
+        .await
+        .map_err(|error| AppError::Repository(error.to_string()))?;
+        assert_eq!(raw_columns, 0);
+
+        let recommendation_fk: String = sqlx::query_scalar(
+            "SELECT ccu.table_name
+             FROM information_schema.table_constraints tc
+             JOIN information_schema.constraint_column_usage ccu
+               ON ccu.constraint_schema = tc.constraint_schema
+              AND ccu.constraint_name = tc.constraint_name
+             WHERE tc.table_schema = current_schema()
+               AND tc.table_name = 'title_more_like_this_items'
+               AND tc.constraint_type = 'FOREIGN KEY'
+               AND ccu.column_name = 'discovery_title_id'",
+        )
+        .fetch_one(&pool)
+        .await
+        .map_err(|error| AppError::Repository(error.to_string()))?;
+        assert_eq!(recommendation_fk, "title_recommendation_cards");
+        Ok(())
+    }
+    .await;
+
+    drop(pool);
+    let cleanup = sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
+        .execute(&admin_pool)
+        .await;
+    drop(admin_pool);
+    cleanup.map_err(|error| {
+        AppError::Repository(format!("failed to drop postgres schema: {error}"))
+    })?;
+    result
+}
+
+#[tokio::test]
+async fn migrations_0202_and_0203_bind_factor_state_and_session_epochs() {
+    crate::spellfix::register_spellfix_auto_extension()
+        .expect("spellfix auto-extension should register");
+    let db = std::env::temp_dir().join(format!(
+        "scryer_migration_0202_0203_factor_state_{}.db",
+        chrono::Utc::now().timestamp_micros()
+    ));
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect(&sqlite_url_with_create(db.to_string_lossy().as_ref()))
+        .await
+        .expect("migration test database should open");
+    crate::migrations::replay_source_catalog_for_fresh_install(&pool, Some(201), true)
+        .await
+        .expect("0201 fixture schema should install");
+
+    sqlx::query(
+        "INSERT INTO totp_credentials (
+            id, user_id, secret_base32, algorithm, digits, period_seconds,
+            created_at, updated_at
+         ) VALUES (
+            'credential', '00000000000000000000000000000001', 'JBSWY3DPEHPK3PXP',
+            'SHA1', 6, 30, '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z'
+         )",
+    )
+    .execute(&pool)
+    .await
+    .expect("legacy TOTP credential should insert");
+    for (id, expires_at) in [
+        ("expired-challenge", "2000-01-01T00:00:00Z"),
+        ("stale-challenge", "2999-01-01T00:00:00Z"),
+        ("newest-challenge", "2999-06-01T00:00:00Z"),
+    ] {
+        sqlx::query(
+            "INSERT INTO totp_enrollment_challenges (
+                id, user_id, secret_base32, algorithm, digits, period_seconds,
+                created_at, expires_at
+             ) VALUES (
+                $1, '00000000000000000000000000000001', 'JBSWY3DPEHPK3PXP',
+                'SHA1', 6, 30, '2026-08-01T00:00:00Z', $2
+             )",
+        )
+        .bind(id)
+        .bind(expires_at)
+        .execute(&pool)
+        .await
+        .expect("legacy enrollment challenge should insert");
+    }
+    sqlx::query(
+        "INSERT INTO oauth_authorization_codes (
+            id, code_hash, client_id, user_id, redirect_uri, scope,
+            code_challenge, code_challenge_method, created_at, expires_at
+         ) VALUES (
+            'stale-code', 'stale-hash', 'client', '00000000000000000000000000000001',
+            'https://client.test/callback', 'profile', 'challenge', 'S256',
+            '2026-08-01T00:00:00Z', '2999-01-01T00:00:00Z'
+         )",
+    )
+    .execute(&pool)
+    .await
+    .expect("pre-epoch authorization code should insert");
+
+    crate::migrations::run_migrations(&pool, crate::types::MigrationMode::Apply)
+        .await
+        .expect("0202 and 0203 should apply");
+
+    let credential: (Option<String>, i64) = sqlx::query_as(
+        "SELECT attempt_window_started_at, attempt_count
+         FROM totp_credentials WHERE id = 'credential'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("credential attempt state should load");
+    assert_eq!(credential, (None, 0));
+
+    let challenge_ids: Vec<String> =
+        sqlx::query_scalar("SELECT id FROM totp_enrollment_challenges")
+            .fetch_all(&pool)
+            .await
+            .expect("surviving enrollment challenges should load");
+    assert_eq!(challenge_ids, vec!["newest-challenge".to_string()]);
+    let unique_index: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)
+         FROM pragma_index_list('totp_enrollment_challenges')
+         WHERE name = 'totp_enrollment_challenges_one_active_per_user'
+           AND \"unique\" = 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("one-active-per-user index should load");
+    assert_eq!(unique_index, 1);
+
+    for table in ["totp_enrollment_challenges", "webauthn_challenges"] {
+        let has_session_version: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM pragma_table_info($1)
+             WHERE name = 'auth_session_version'",
+        )
+        .bind(table)
+        .fetch_one(&pool)
+        .await
+        .expect("challenge session-version column should load");
+        assert_eq!(has_session_version, 1, "{table} should carry the epoch");
+    }
+
+    let remaining_codes: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM oauth_authorization_codes")
+            .fetch_one(&pool)
+            .await
+            .expect("authorization code count should load");
+    assert_eq!(remaining_codes, 0);
+    sqlx::query(
+        "INSERT INTO oauth_authorization_codes (
+            id, code_hash, client_id, user_id, redirect_uri, scope,
+            code_challenge, code_challenge_method, created_at, expires_at
+         ) VALUES (
+            'epochless-code', 'epochless-hash', 'client',
+            '00000000000000000000000000000001', 'https://client.test/callback',
+            'profile', 'challenge', 'S256',
+            '2026-08-01T00:00:00Z', '2999-01-01T00:00:00Z'
+         )",
+    )
+    .execute(&pool)
+    .await
+    .expect("epoch column default should admit legacy-shaped inserts");
+    let default_epoch: String = sqlx::query_scalar(
+        "SELECT auth_session_version FROM oauth_authorization_codes
+         WHERE id = 'epochless-code'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("defaulted epoch should load");
+    assert_eq!(default_epoch, "");
+
+    let integrity: String = sqlx::query_scalar("PRAGMA integrity_check")
+        .fetch_one(&pool)
+        .await
+        .expect("integrity check should run");
+    assert_eq!(integrity, "ok");
+
+    drop(pool);
+    let _ = std::fs::remove_file(db);
+}
+
+#[tokio::test]
+async fn migrations_0202_and_0203_postgres_bind_factor_state_and_session_epochs() -> AppResult<()> {
+    let Some(raw_url) = std::env::var("SCRYER_TEST_POSTGRES_URL")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(());
+    };
+    let admin_pool = sqlx::PgPool::connect(&raw_url)
+        .await
+        .map_err(|error| AppError::Repository(format!("failed to connect to postgres: {error}")))?;
+    let schema = format!(
+        "scryer_0202_0203_migration_{}",
+        chrono::Utc::now().timestamp_micros()
+    );
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
+        .execute(&admin_pool)
+        .await
+        .map_err(|error| {
+            AppError::Repository(format!("failed to create postgres schema: {error}"))
+        })?;
+    let mut schema_url = url::Url::parse(&raw_url)
+        .map_err(|error| AppError::Validation(format!("invalid postgres URL: {error}")))?;
+    schema_url
+        .query_pairs_mut()
+        .append_pair("options", &format!("-csearch_path={schema}"));
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .connect(schema_url.as_str())
+        .await
+        .map_err(|error| {
+            AppError::Repository(format!("failed to open postgres schema: {error}"))
+        })?;
+
+    let result = async {
+        crate::postgres::replay_source_catalog_for_fresh_install(&pool, Some(201)).await?;
+        for (id, expires_at) in [
+            ("expired-challenge", "2000-01-01T00:00:00Z"),
+            ("stale-challenge", "2999-01-01T00:00:00Z"),
+            ("newest-challenge", "2999-06-01T00:00:00Z"),
+        ] {
+            sqlx::query(
+                "INSERT INTO totp_enrollment_challenges (
+                    id, user_id, secret_base32, algorithm, digits, period_seconds,
+                    created_at, expires_at
+                 ) VALUES (
+                    $1, '00000000000000000000000000000001', 'JBSWY3DPEHPK3PXP',
+                    'SHA1', 6, 30, '2026-08-01T00:00:00Z'::timestamptz,
+                    $2::timestamptz
+                 )",
+            )
+            .bind(id)
+            .bind(expires_at)
+            .execute(&pool)
+            .await
+            .map_err(|error| AppError::Repository(error.to_string()))?;
+        }
+        sqlx::query(
+            "INSERT INTO oauth_authorization_codes (
+                id, code_hash, client_id, user_id, redirect_uri, scope,
+                code_challenge, code_challenge_method, created_at, expires_at
+             ) VALUES (
+                'stale-code', 'stale-hash', 'client',
+                '00000000000000000000000000000001', 'https://client.test/callback',
+                'profile', 'challenge', 'S256',
+                '2026-08-01T00:00:00Z'::timestamptz, '2999-01-01T00:00:00Z'::timestamptz
+             )",
+        )
+        .execute(&pool)
+        .await
+        .map_err(|error| AppError::Repository(error.to_string()))?;
+
+        let services = crate::PostgresServices::new_with_mode(
+            schema_url.as_str(),
+            crate::types::MigrationMode::Apply,
+        )
+        .await?;
+        drop(services);
+
+        let challenge_ids: Vec<String> =
+            sqlx::query_scalar("SELECT id FROM totp_enrollment_challenges")
+                .fetch_all(&pool)
+                .await
+                .map_err(|error| AppError::Repository(error.to_string()))?;
+        assert_eq!(challenge_ids, vec!["newest-challenge".to_string()]);
+        let unique_index: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)
+             FROM pg_indexes
+             WHERE schemaname = current_schema()
+               AND tablename = 'totp_enrollment_challenges'
+               AND indexname = 'totp_enrollment_challenges_one_active_per_user'
+               AND indexdef LIKE 'CREATE UNIQUE INDEX%'",
+        )
+        .fetch_one(&pool)
+        .await
+        .map_err(|error| AppError::Repository(error.to_string()))?;
+        assert_eq!(unique_index, 1);
+
+        let epoch_column: (String, Option<String>) = sqlx::query_as(
+            "SELECT is_nullable, column_default
+             FROM information_schema.columns
+             WHERE table_schema = current_schema()
+               AND table_name = 'oauth_authorization_codes'
+               AND column_name = 'auth_session_version'",
+        )
+        .fetch_one(&pool)
+        .await
+        .map_err(|error| AppError::Repository(error.to_string()))?;
+        assert_eq!(epoch_column.0, "NO");
+        assert_eq!(epoch_column.1.as_deref(), Some("''::text"));
+
+        let remaining_codes: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM oauth_authorization_codes")
+                .fetch_one(&pool)
+                .await
+                .map_err(|error| AppError::Repository(error.to_string()))?;
+        assert_eq!(remaining_codes, 0);
+        sqlx::query(
+            "INSERT INTO oauth_authorization_codes (
+                id, code_hash, client_id, user_id, redirect_uri, scope,
+                code_challenge, code_challenge_method, created_at, expires_at
+             ) VALUES (
+                'epochless-code', 'epochless-hash', 'client',
+                '00000000000000000000000000000001', 'https://client.test/callback',
+                'profile', 'challenge', 'S256',
+                '2026-08-01T00:00:00Z'::timestamptz, '2999-01-01T00:00:00Z'::timestamptz
+             )",
+        )
+        .execute(&pool)
+        .await
+        .map_err(|error| AppError::Repository(error.to_string()))?;
+        let default_epoch: String = sqlx::query_scalar(
+            "SELECT auth_session_version FROM oauth_authorization_codes
+             WHERE id = 'epochless-code'",
+        )
+        .fetch_one(&pool)
+        .await
+        .map_err(|error| AppError::Repository(error.to_string()))?;
+        assert_eq!(default_epoch, "");
+
+        let attempt_state_columns: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)
+             FROM information_schema.columns
+             WHERE table_schema = current_schema()
+               AND table_name = 'totp_credentials'
+               AND column_name IN ('attempt_window_started_at', 'attempt_count')",
+        )
+        .fetch_one(&pool)
+        .await
+        .map_err(|error| AppError::Repository(error.to_string()))?;
+        assert_eq!(attempt_state_columns, 2);
+        let challenge_epoch_columns: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)
+             FROM information_schema.columns
+             WHERE table_schema = current_schema()
+               AND table_name IN ('totp_enrollment_challenges', 'webauthn_challenges')
+               AND column_name = 'auth_session_version'",
+        )
+        .fetch_one(&pool)
+        .await
+        .map_err(|error| AppError::Repository(error.to_string()))?;
+        assert_eq!(challenge_epoch_columns, 2);
+        Ok(())
+    }
+    .await;
+
+    drop(pool);
+    let cleanup = sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
+        .execute(&admin_pool)
+        .await;
+    drop(admin_pool);
+    cleanup.map_err(|error| {
+        AppError::Repository(format!("failed to drop postgres schema: {error}"))
+    })?;
+    result
 }
 
 #[tokio::test]

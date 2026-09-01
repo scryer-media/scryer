@@ -1,7 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use chrono::{DateTime, Utc};
 use scryer_application::{AppError, AppResult};
+use scryer_infrastructure_library::media::libraries::state_store::encode_release_decision_explanation;
+use scryer_infrastructure_sql::domain_event_payload::{
+    derive_domain_event_projections, encode_domain_event_payload,
+};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -85,9 +90,135 @@ fn normalize_import_object(
         "settings_definitions" => normalize_settings_definition_import_object(object, now),
         "settings_values" => normalize_settings_value_import_object(object, now),
         "titles" => normalize_title_import_object(object, now),
+        "domain_events" => normalize_domain_event_import_object(object)?,
+        "release_decisions" => normalize_release_decision_import_object(object)?,
         _ => {}
     }
     Ok(())
+}
+
+fn normalize_domain_event_import_object(object: &mut JsonMap<String, JsonValue>) -> AppResult<()> {
+    let Some(payload) = object.get("payload_json").cloned() else {
+        return Ok(());
+    };
+    if is_blob_marker(&payload) {
+        return Ok(());
+    }
+    let payload = legacy_json_value(payload, "domain_events.payload_json")?;
+    let encoded = encode_domain_event_payload(&payload).map_err(|error| {
+        AppError::Validation(format!(
+            "failed to encode restored domain event payload: {error}"
+        ))
+    })?;
+    let event_type = object
+        .get("event_type")
+        .and_then(JsonValue::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let projections = derive_domain_event_projections(&event_type, &payload);
+    object.insert(
+        "import_status".to_string(),
+        projections
+            .import_status
+            .map_or(JsonValue::Null, JsonValue::String),
+    );
+    object.insert(
+        "media_file_delete_reason".to_string(),
+        projections
+            .media_file_delete_reason
+            .map_or(JsonValue::Null, JsonValue::String),
+    );
+    object.insert(
+        "download_id".to_string(),
+        projections
+            .download_id
+            .map_or(JsonValue::Null, JsonValue::String),
+    );
+    object.insert("payload_json".to_string(), blob_value(&encoded));
+    Ok(())
+}
+
+fn normalize_release_decision_import_object(
+    object: &mut JsonMap<String, JsonValue>,
+) -> AppResult<()> {
+    let Some(explanation) = object.get("explanation_json").cloned() else {
+        return Ok(());
+    };
+    if explanation.is_null() || is_blob_marker(&explanation) {
+        return Ok(());
+    }
+    let decision_id = object
+        .get("id")
+        .and_then(JsonValue::as_str)
+        .unwrap_or("<unknown>");
+    let encoded = (|| -> AppResult<Vec<u8>> {
+        let explanation = legacy_json_value(explanation, "release_decisions.explanation_json")?;
+        let compact = serde_json::to_string(&explanation).map_err(|error| {
+            AppError::Validation(format!(
+                "failed to compact restored release explanation: {error}"
+            ))
+        })?;
+        encode_release_decision_explanation(Some(&compact))
+            .map_err(|error| {
+                AppError::Validation(format!(
+                    "failed to encode restored release explanation: {error}"
+                ))
+            })?
+            .ok_or_else(|| {
+                AppError::Validation(
+                    "present restored release explanation encoded as null".to_string(),
+                )
+            })
+    })();
+    match encoded {
+        Ok(encoded) => {
+            object.insert("explanation_json".to_string(), blob_value(&encoded));
+        }
+        Err(error) => {
+            tracing::warn!(
+                decision_id,
+                error = %error,
+                "discarding invalid release-decision explanation during backup restore"
+            );
+            object.insert("explanation_json".to_string(), JsonValue::Null);
+        }
+    }
+    Ok(())
+}
+
+fn legacy_json_value(value: JsonValue, field: &str) -> AppResult<JsonValue> {
+    match value {
+        JsonValue::String(value) => serde_json::from_str(&value).map_err(|error| {
+            AppError::Validation(format!("restored {field} is invalid JSON: {error}"))
+        }),
+        JsonValue::Object(_) | JsonValue::Array(_) | JsonValue::Bool(_) | JsonValue::Number(_) => {
+            Ok(value)
+        }
+        JsonValue::Null => Err(AppError::Validation(format!(
+            "restored {field} is unexpectedly null"
+        ))),
+    }
+}
+
+fn is_blob_marker(value: &JsonValue) -> bool {
+    value
+        .as_object()
+        .and_then(|object| object.get("__scryer_type"))
+        .and_then(JsonValue::as_str)
+        == Some("blob")
+}
+
+fn blob_value(bytes: &[u8]) -> JsonValue {
+    JsonValue::Object(JsonMap::from_iter([
+        (
+            "__scryer_type".to_string(),
+            JsonValue::String("blob".to_string()),
+        ),
+        (
+            "base64".to_string(),
+            JsonValue::String(BASE64.encode(bytes)),
+        ),
+    ]))
 }
 
 fn normalize_column_value(
@@ -346,11 +477,13 @@ fn missing_or_blank(value: Option<&JsonValue>) -> bool {
 mod tests {
     use std::collections::BTreeMap;
 
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
     use chrono::TimeZone;
     use serde_json::{Map as JsonMap, Value as JsonValue, json};
 
     use super::{
-        ImportColumnKind, ImportColumnRule, normalize_import_object_for_target,
+        ImportColumnKind, ImportColumnRule, normalize_domain_event_import_object,
+        normalize_import_object_for_target, normalize_release_decision_import_object,
         normalize_title_import_object, strip_nonportable_backup_fields,
         validate_restore_manifest_table_set,
     };
@@ -790,5 +923,118 @@ mod tests {
                 .to_string()
                 .contains("missing required column `value_json`")
         );
+    }
+
+    #[test]
+    fn legacy_domain_event_payloads_restore_as_compressed_blobs_with_projections() {
+        let payload = serde_json::json!({
+            "type": "import_rejected",
+            "data": { "status": "failed", "reason": "synthetic" }
+        });
+        let mut object = JsonMap::from_iter([
+            (
+                "event_type".to_string(),
+                JsonValue::String("import_rejected".to_string()),
+            ),
+            (
+                "payload_json".to_string(),
+                JsonValue::String(payload.to_string()),
+            ),
+        ]);
+
+        normalize_domain_event_import_object(&mut object).unwrap();
+
+        assert_eq!(
+            object.get("import_status"),
+            Some(&JsonValue::String("failed".to_string()))
+        );
+        let bytes = blob_marker_bytes(object.get("payload_json").unwrap());
+        assert_eq!(
+            scryer_infrastructure_sql::domain_event_payload::decode_domain_event_payload(&bytes)
+                .unwrap(),
+            payload
+        );
+    }
+
+    #[test]
+    fn legacy_release_explanations_restore_as_compressed_blobs() {
+        let explanation = serde_json::json!({
+            "quality_profile_decision": { "scoring_log": [{ "code": "quality_tier", "delta": 10 }] }
+        });
+        let mut object =
+            JsonMap::from_iter([("explanation_json".to_string(), explanation.clone())]);
+
+        normalize_release_decision_import_object(&mut object).unwrap();
+
+        let bytes = blob_marker_bytes(object.get("explanation_json").unwrap());
+        let decoded = scryer_infrastructure_library::media::libraries::state_store::decode_release_decision_explanation(Some(&bytes))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<JsonValue>(&decoded).unwrap(),
+            explanation
+        );
+    }
+
+    #[test]
+    fn invalid_and_oversized_release_explanations_restore_as_null() {
+        for explanation in [
+            JsonValue::String("not-json".to_string()),
+            JsonValue::String(
+                serde_json::to_string(&"x".repeat(70 * 1024))
+                    .expect("oversized explanation should serialize"),
+            ),
+        ] {
+            let mut object = JsonMap::from_iter([
+                (
+                    "id".to_string(),
+                    JsonValue::String("decision-1".to_string()),
+                ),
+                ("explanation_json".to_string(), explanation),
+            ]);
+
+            normalize_release_decision_import_object(&mut object)
+                .expect("invalid diagnostics must not abort restore");
+
+            assert_eq!(object.get("explanation_json"), Some(&JsonValue::Null));
+        }
+    }
+
+    #[test]
+    fn binary_and_null_release_explanations_remain_unchanged() {
+        for explanation in [
+            JsonValue::Null,
+            json!({"__scryer_type": "blob", "base64": "AQIDBA=="}),
+        ] {
+            let mut object =
+                JsonMap::from_iter([("explanation_json".to_string(), explanation.clone())]);
+            normalize_release_decision_import_object(&mut object).unwrap();
+            assert_eq!(object.get("explanation_json"), Some(&explanation));
+        }
+    }
+
+    #[test]
+    fn invalid_domain_event_payloads_still_abort_restore() {
+        let mut object = JsonMap::from_iter([
+            (
+                "event_type".to_string(),
+                JsonValue::String("title_updated".to_string()),
+            ),
+            (
+                "payload_json".to_string(),
+                JsonValue::String("not-json".to_string()),
+            ),
+        ]);
+
+        assert!(normalize_domain_event_import_object(&mut object).is_err());
+    }
+
+    fn blob_marker_bytes(value: &JsonValue) -> Vec<u8> {
+        let encoded = value
+            .as_object()
+            .and_then(|object| object.get("base64"))
+            .and_then(JsonValue::as_str)
+            .expect("blob marker should contain base64");
+        BASE64.decode(encoded).expect("blob marker should decode")
     }
 }

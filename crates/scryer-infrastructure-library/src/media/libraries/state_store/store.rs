@@ -25,6 +25,8 @@ use crate::queries::common::parse_utc_datetime;
 use crate::queries::sql_runtime::repo_err;
 use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, StoreDatastore};
 
+use super::{decode_release_decision_explanation, encode_release_decision_explanation};
+
 // Throttle the SQLite full VACUUM so it does not run on every
 // daily maintenance tick. `auto_vacuum` is not enabled on the connection, so
 // `PRAGMA incremental_vacuum` would be a no-op; instead gate a full VACUUM on
@@ -33,6 +35,33 @@ use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, StoreData
 // small absolute floor (skip trivially small databases).
 const SQLITE_VACUUM_MIN_FREELIST_FRACTION: f64 = 0.10;
 const SQLITE_VACUUM_MIN_FREELIST_PAGES: i64 = 2_000;
+
+fn validate_sqlite_checkpoint_result(
+    busy: i64,
+    log_frames: i64,
+    checkpointed_frames: i64,
+) -> AppResult<()> {
+    if busy == 0 && (log_frames < 0 || checkpointed_frames >= log_frames) {
+        return Ok(());
+    }
+
+    Err(scryer_application::AppError::Repository(format!(
+        "sqlite WAL checkpoint incomplete: busy={busy}, log_frames={log_frames}, checkpointed_frames={checkpointed_frames}"
+    )))
+}
+
+#[cfg(test)]
+mod sqlite_checkpoint_tests {
+    use super::validate_sqlite_checkpoint_result;
+
+    #[test]
+    fn checkpoint_result_requires_no_busy_or_uncheckpointed_frames() {
+        assert!(validate_sqlite_checkpoint_result(0, 0, 0).is_ok());
+        assert!(validate_sqlite_checkpoint_result(0, -1, -1).is_ok());
+        assert!(validate_sqlite_checkpoint_result(1, 10, 10).is_err());
+        assert!(validate_sqlite_checkpoint_result(0, 10, 9).is_err());
+    }
+}
 
 const LIBRARY_PROBE_COLUMNS: &str = "title_id, path, probe_signature_scheme, probe_signature_value, last_probed_at, last_changed_at";
 
@@ -333,8 +362,10 @@ fn wanted_seed_row_to_item(row: &SqlRow) -> AppResult<AcquisitionScopeState> {
 }
 
 fn release_decision_row_to_item(row: &SqlRow) -> AppResult<ReleaseDecision> {
+    let id = row.text("id")?;
     Ok(ReleaseDecision {
-        id: row.text("id")?,
+        explanation_json: release_decision_explanation_from_row(row, "explanation_json", &id)?,
+        id,
         wanted_item_id: row.text("wanted_item_id")?,
         title_id: row.text("title_id")?,
         release_title: row.text("release_title")?,
@@ -344,14 +375,27 @@ fn release_decision_row_to_item(row: &SqlRow) -> AppResult<ReleaseDecision> {
         candidate_score: row.i32("candidate_score")?,
         current_score: row.opt_i32("current_score")?,
         score_delta: row.opt_i32("score_delta")?,
-        explanation_json: match row {
-            SqlRow::Sqlite(_) => row.opt_text("explanation_json")?,
-            SqlRow::Postgres(_) => row
-                .opt_json("explanation_json")?
-                .map(|value| value.to_string()),
-        },
         created_at: required_timestamp_text(row, "created_at")?,
     })
+}
+
+fn release_decision_explanation_from_row(
+    row: &SqlRow,
+    column: &str,
+    decision_id: &str,
+) -> AppResult<Option<String>> {
+    let encoded = row.opt_bytes(column)?;
+    match decode_release_decision_explanation(encoded.as_deref()) {
+        Ok(explanation) => Ok(explanation),
+        Err(error) => {
+            tracing::warn!(
+                decision_id,
+                error = %error,
+                "release decision explanation could not be decoded"
+            );
+            Ok(None)
+        }
+    }
 }
 
 fn json_text_from_row(row: &SqlRow, column: &str) -> AppResult<Option<String>> {
@@ -366,6 +410,11 @@ fn json_text_from_row(row: &SqlRow, column: &str) -> AppResult<Option<String>> {
 fn wanted_row_to_item(row: &SqlRow) -> AppResult<AcquisitionScopeState> {
     let latest_release_decision = match row.opt_text("latest_decision_id")? {
         Some(id) => Some(ReleaseDecision {
+            explanation_json: release_decision_explanation_from_row(
+                row,
+                "latest_decision_explanation_json",
+                &id,
+            )?,
             id,
             wanted_item_id: row.text("latest_decision_wanted_item_id")?,
             title_id: row.text("latest_decision_title_id")?,
@@ -378,7 +427,6 @@ fn wanted_row_to_item(row: &SqlRow) -> AppResult<AcquisitionScopeState> {
                 .unwrap_or_default(),
             current_score: row.opt_i32("latest_decision_current_score")?,
             score_delta: row.opt_i32("latest_decision_score_delta")?,
-            explanation_json: json_text_from_row(row, "latest_decision_explanation_json")?,
             created_at: required_timestamp_text(row, "latest_decision_created_at")?,
         }),
         None => None,
@@ -923,6 +971,18 @@ impl AcquisitionScopeStateRepository for WantedStore {
     }
 
     async fn insert_release_decision(&self, decision: &ReleaseDecision) -> AppResult<String> {
+        let explanation_json =
+            match encode_release_decision_explanation(decision.explanation_json.as_deref()) {
+                Ok(encoded) => encoded,
+                Err(error) => {
+                    tracing::warn!(
+                        decision_id = %decision.id,
+                        error = %error,
+                        "release decision explanation could not be encoded"
+                    );
+                    None
+                }
+            };
         execute_datastore_write(
             &self.datastore,
             "insert_release_decision",
@@ -941,7 +1001,7 @@ impl AcquisitionScopeStateRepository for WantedStore {
                 SqlArg::I32(decision.candidate_score),
                 SqlArg::OptI32(decision.current_score),
                 SqlArg::OptI32(decision.score_delta),
-                opt_json_arg_for_datastore(&self.datastore, decision.explanation_json.as_deref())?,
+                SqlArg::OptBytes(explanation_json),
                 timestamp_arg_for_datastore(&self.datastore, &decision.created_at)?,
             ],
         )
@@ -1184,6 +1244,43 @@ async fn delete_media_files_by_ids_shared(
 
 #[async_trait]
 impl HousekeepingRepository for HousekeepingStore {
+    async fn delete_stale_workflow_operations(
+        &self,
+        completed_days: i64,
+        warning_failed_days: i64,
+    ) -> AppResult<u32> {
+        let now = Utc::now();
+        execute_housekeeping_delete(
+            &self.datastore,
+            "delete_stale_workflow_operations",
+            "DELETE FROM workflow_operations
+              WHERE job_key IS NOT NULL
+                AND (
+                    (status = 'completed' AND started_at <= {})
+                    OR (status IN ('warning', 'failed') AND started_at <= {})
+                )
+                AND id NOT IN (
+                    SELECT id
+                      FROM (
+                            SELECT id,
+                                   ROW_NUMBER() OVER (
+                                       PARTITION BY job_key
+                                       ORDER BY started_at DESC NULLS LAST, id DESC
+                                   ) AS retention_rank
+                              FROM workflow_operations
+                             WHERE job_key IS NOT NULL
+                               AND status IN ('completed', 'warning', 'failed')
+                      ) terminal_workflow_operations
+                     WHERE retention_rank = 1
+                )",
+            vec![
+                SqlArg::Timestamp(now - Duration::days(completed_days)),
+                SqlArg::Timestamp(now - Duration::days(warning_failed_days)),
+            ],
+        )
+        .await
+    }
+
     async fn delete_release_decisions_older_than(&self, days: i64) -> AppResult<u32> {
         execute_housekeeping_delete(
             &self.datastore,
@@ -1232,7 +1329,7 @@ impl HousekeepingRepository for HousekeepingStore {
 
         let sql = format!(
             "DELETE FROM domain_events
-              WHERE occurred_at < {{}}
+              WHERE occurred_at <= {{}}
                 AND event_type IN ({})",
             placeholders(event_types.len())
         );
@@ -1437,10 +1534,6 @@ impl HousekeepingRepository for HousekeepingStore {
                             .execute(&pool)
                             .await
                             .map_err(repo_err)?;
-                        sqlx::query("PRAGMA wal_checkpoint(PASSIVE)")
-                            .execute(&pool)
-                            .await
-                            .map_err(repo_err)?;
                         // Throttled full VACUUM: only reclaim when
                         // the free-page ratio shows meaningful bloat, so the daily
                         // maintenance tick does not pay the VACUUM cost every run.
@@ -1474,7 +1567,26 @@ impl HousekeepingRepository for HousekeepingStore {
                         Ok(())
                     },
                 )
-                .await
+                .await?;
+
+                let (busy, log_frames, checkpointed_frames) = SqlRuntime::run_serialized_sqlite(
+                    &self.datastore,
+                    "sqlite_database_checkpoint",
+                    |pool| async move {
+                        sqlx::query_as::<_, (i64, i64, i64)>("PRAGMA wal_checkpoint(TRUNCATE)")
+                            .fetch_one(&pool)
+                            .await
+                            .map_err(repo_err)
+                    },
+                )
+                .await?;
+                tracing::info!(
+                    busy,
+                    log_frames,
+                    checkpointed_frames,
+                    "completed sqlite WAL checkpoint"
+                );
+                validate_sqlite_checkpoint_result(busy, log_frames, checkpointed_frames)
             }
             StoreDatastore::Postgres { pool } => sqlx::query("VACUUM (ANALYZE)")
                 .execute(pool)

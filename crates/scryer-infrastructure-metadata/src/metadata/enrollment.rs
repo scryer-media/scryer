@@ -3,10 +3,13 @@ use std::sync::{LazyLock, OnceLock, mpsc};
 use std::thread;
 use std::time::Duration;
 
-use aws_lc_rs::{digest, hmac, rand::SecureRandom};
+use aws_lc_rs::{
+    digest, hmac,
+    rand::SecureRandom,
+    signature::{KeyPair as _, ML_DSA_65_SIGNING, PqdsaKeyPair},
+};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use ml_dsa::{Keypair, MlDsa65, SigningKey};
 use scryer_application::{SettingsRepository, SmgScryerUpdateNotice};
 use scryer_outbound_http::{
     OutboundHttpClient, OutboundHttpError, OutboundRequestError, RateLimitRegistry, RequestPolicy,
@@ -549,11 +552,9 @@ fn generate_pq_keypair_sync() -> Result<PqKeypair, EnrollmentError> {
     rng.fill(&mut seed_bytes)
         .map_err(|_| EnrollmentError::Other("failed to generate ML-DSA seed".to_string()))?;
 
-    let mut seed = ml_dsa::Seed::default();
-    seed.copy_from_slice(&seed_bytes);
-    let keypair = SigningKey::<MlDsa65>::from_seed(&seed);
-    let public_key = keypair.verifying_key().encode();
-    let public_key_bytes = public_key.as_slice();
+    let keypair = PqdsaKeyPair::from_seed(&ML_DSA_65_SIGNING, &seed_bytes)
+        .map_err(|_| EnrollmentError::Other("failed to derive ML-DSA keypair".to_string()))?;
+    let public_key_bytes = keypair.public_key().as_ref();
 
     Ok(PqKeypair {
         seed_b64: base64::engine::general_purpose::STANDARD.encode(seed_bytes),
@@ -892,8 +893,6 @@ async fn sign_pq_seed(seed_b64: &str, message: &[u8]) -> Result<String, String> 
 }
 
 fn sign_pq_seed_sync(seed_b64: &str, message: &[u8]) -> Result<String, String> {
-    use ml_dsa::Signer;
-
     let seed_bytes = base64::engine::general_purpose::STANDARD
         .decode(seed_b64.as_bytes())
         .map_err(|e| format!("failed to decode ML-DSA seed: {e}"))?;
@@ -903,12 +902,14 @@ fn sign_pq_seed_sync(seed_b64: &str, message: &[u8]) -> Result<String, String> {
             seed_bytes.len()
         ));
     }
-    let mut seed = ml_dsa::Seed::default();
-    seed.copy_from_slice(&seed_bytes);
-    let keypair = SigningKey::<MlDsa65>::from_seed(&seed);
-    let signature = keypair.sign(message);
-    let encoded = signature.encode();
-    Ok(base64::engine::general_purpose::STANDARD.encode(encoded.as_slice()))
+    let keypair = PqdsaKeyPair::from_seed(&ML_DSA_65_SIGNING, &seed_bytes)
+        .map_err(|_| "failed to derive ML-DSA keypair".to_string())?;
+    let mut signature = vec![0_u8; ML_DSA_65_SIGNING.signature_len()];
+    let signature_len = keypair
+        .sign(message, &mut signature)
+        .map_err(|_| "failed to sign with ML-DSA keypair".to_string())?;
+    signature.truncate(signature_len);
+    Ok(base64::engine::general_purpose::STANDARD.encode(signature))
 }
 
 fn canonical_pq_request_message_v2(
@@ -1059,6 +1060,7 @@ mod tests {
         is_transient_enrollment_status, pq_registration_proof_message,
         send_enrollment_request_with_retry, sign_bootstrap_mac, sign_pq_request,
     };
+    use base64::Engine as _;
     use scryer_outbound_http::parse_retry_after;
     use std::sync::{
         Arc,
@@ -1308,6 +1310,18 @@ mod tests {
     }
 
     #[test]
+    fn aws_lc_ml_dsa_matches_legacy_zero_seed_public_key() {
+        use aws_lc_rs::signature::{KeyPair as _, ML_DSA_65_SIGNING, PqdsaKeyPair};
+
+        let keypair = PqdsaKeyPair::from_seed(&ML_DSA_65_SIGNING, &[0_u8; 32])
+            .expect("derive ML-DSA-65 keypair");
+        assert_eq!(
+            super::sha256_hex_bytes(keypair.public_key().as_ref()),
+            "085ba380ff386dd52e42349c6eb88489d6058ea541a4e3fb0dce9a3fd1f7a911"
+        );
+    }
+
+    #[test]
     fn pq_crypto_executor_generates_keys_and_signs_requests() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -1340,6 +1354,27 @@ mod tests {
             )
             .await
             .expect("signed v2 pq request");
+
+            let public_key = base64::engine::general_purpose::STANDARD
+                .decode(&keypair.public_key_b64)
+                .expect("decode public key");
+            let signature = base64::engine::general_purpose::STANDARD
+                .decode(&v2_signature)
+                .expect("decode signature");
+            let message = canonical_pq_request_message_v2(
+                "get",
+                "smg.example",
+                "/graphql?extensions=%7B%7D",
+                124,
+                "nonce-1",
+                "abc123",
+            );
+            aws_lc_rs::signature::UnparsedPublicKey::new(
+                &aws_lc_rs::signature::ML_DSA_65,
+                public_key,
+            )
+            .verify(&message, &signature)
+            .expect("AWS-LC verifies the generated ML-DSA-65 signature");
 
             assert_eq!(missing_nonce_error, "pqsig-v2 signing requires nonce");
             assert!(!v2_signature.is_empty());

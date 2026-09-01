@@ -270,6 +270,11 @@ pub(crate) fn activity_event_from_domain_event(event: &DomainEvent) -> Option<Ac
         _ => return None,
     };
 
+    let episode_ids = match &event.payload {
+        DomainEventPayload::ImportCompleted(data) => data.episode_ids.clone(),
+        _ => Vec::new(),
+    };
+
     Some(ActivityEvent {
         id: event.event_id.clone(),
         kind,
@@ -280,6 +285,7 @@ pub(crate) fn activity_event_from_domain_event(event: &DomainEvent) -> Option<Ac
         actor_display_name: event.actor_display_name.clone(),
         title_id: event.title_id.clone(),
         facet: event.facet.as_ref().map(|facet| facet.as_str().to_string()),
+        episode_ids,
         message,
         occurred_at: event.occurred_at,
     })
@@ -1438,6 +1444,14 @@ mod tests {
             assert_eq!(
                 activity.message, message,
                 "fixture {index} activity message changed"
+            );
+            assert_eq!(
+                activity.episode_ids,
+                match &domain_event.payload {
+                    DomainEventPayload::ImportCompleted(data) => data.episode_ids.clone(),
+                    _ => Vec::new(),
+                },
+                "fixture {index} import episode context changed"
             );
 
             if index != 1 {

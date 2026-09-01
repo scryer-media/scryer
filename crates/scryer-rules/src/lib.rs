@@ -1375,7 +1375,7 @@ score_entry["internal"] := 300 if {
             applied_facets: vec!["anime".to_string()],
         };
         let mut matching_input = test_input();
-        matching_input.release.release_group = Some("Judas".to_string());
+        matching_input.release.release_group = Some("GroupTag".to_string());
         matching_input.release.raw_title = "Show.Batch.1080p".to_string();
         matching_input.file = Some(test_file_doc());
         matching_input

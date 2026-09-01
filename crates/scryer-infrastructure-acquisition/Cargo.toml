@@ -1,6 +1,6 @@
 [package]
 name = "scryer-infrastructure-acquisition"
-version = "0.18.22"
+version = "0.19.4"
 edition.workspace = true
 publish = false
 build = "build.rs"
@@ -14,7 +14,7 @@ scryer-infrastructure-sql = { path = "../scryer-infrastructure-sql" }
 scryer-infrastructure-crypto = { path = "../scryer-infrastructure-crypto" }
 async-compression = { version = "0.4", default-features = false, features = ["tokio", "zstd", "gzip"] }
 async-trait = { workspace = true }
-base64 = "0.23"
+base64 = { workspace = true }
 chrono = { workspace = true }
 aws-lc-rs = { workspace = true }
 filetime = "0.2"
@@ -26,7 +26,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 sqlx = { workspace = true }
 tokio = { workspace = true }
-tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+tokio-tungstenite = { version = "0.29", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 tokio-util = { version = "0.7", features = ["rt", "io"] }
 toml = { workspace = true }
 tracing = { workspace = true }

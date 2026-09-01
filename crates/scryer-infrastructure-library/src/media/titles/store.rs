@@ -2118,10 +2118,18 @@ fn apply_title_metadata_update(title: &mut Title, metadata: TitleMetadataUpdate)
     Ok(())
 }
 
-fn title_has_tvdb_external_id(title: &Title) -> bool {
-    title.external_ids.iter().any(|external_id| {
+fn title_has_supported_hydration_identity(title: &Title) -> bool {
+    external_ids_support_title_hydration(&title.facet, &title.external_ids)
+}
+
+fn external_ids_support_title_hydration(facet: &MediaFacet, external_ids: &[ExternalId]) -> bool {
+    external_ids.iter().any(|external_id| {
         let source = external_id.source.trim().to_ascii_lowercase();
-        source == "tvdb"
+        let has_value = !external_id.value.trim().is_empty();
+        has_value
+            && (source == "tvdb"
+                || (facet == &MediaFacet::Movie
+                    && matches!(source.as_str(), "smg" | "tmdb" | "imdb")))
     })
 }
 
@@ -3437,7 +3445,7 @@ async fn persist_title_tx(
 }
 
 fn scheduled_hydration_attempt(title: &Title) -> Option<chrono::DateTime<Utc>> {
-    if title.metadata_fetched_at.is_none() && title_has_tvdb_external_id(title) {
+    if title.metadata_fetched_at.is_none() && title_has_supported_hydration_identity(title) {
         Some(Utc::now())
     } else {
         None
@@ -3620,6 +3628,44 @@ mod tests {
     use super::*;
 
     use sqlx::sqlite::SqlitePoolOptions;
+
+    fn hydration_identity(source: &str, value: &str) -> Vec<ExternalId> {
+        vec![ExternalId {
+            source: source.to_string(),
+            value: value.to_string(),
+        }]
+    }
+
+    #[test]
+    fn hydration_identity_support_is_facet_aware_and_requires_a_value() {
+        for source in ["smg", "tmdb", "imdb", "tvdb"] {
+            assert!(external_ids_support_title_hydration(
+                &MediaFacet::Movie,
+                &hydration_identity(source, "123")
+            ));
+        }
+
+        assert!(external_ids_support_title_hydration(
+            &MediaFacet::Series,
+            &hydration_identity("tvdb", "123")
+        ));
+        assert!(external_ids_support_title_hydration(
+            &MediaFacet::Anime,
+            &hydration_identity(" TVDB ", "123")
+        ));
+        assert!(!external_ids_support_title_hydration(
+            &MediaFacet::Series,
+            &hydration_identity("tmdb", "123")
+        ));
+        assert!(!external_ids_support_title_hydration(
+            &MediaFacet::Movie,
+            &hydration_identity("tmdb", "   ")
+        ));
+        assert!(!external_ids_support_title_hydration(
+            &MediaFacet::Movie,
+            &hydration_identity("wikidata", "Q123")
+        ));
+    }
 
     async fn delete_test_store() -> (TitleStore, sqlx::SqlitePool) {
         let pool = SqlitePoolOptions::new()

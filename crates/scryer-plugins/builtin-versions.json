@@ -1,0 +1,13 @@
+{
+  "plugins": {
+    "newznab": {
+      "version": "2.1.0",
+      "wasm_blake3": "f7b7bd76cbb415065729f2246b0bd75fea54a757d421b9116407d8b650e4b00a"
+    },
+    "torznab": {
+      "version": "2.1.0",
+      "wasm_blake3": "18d694ac3d1a2182684ee524afbc79bb0e8cff33e9ab5df069cb92da653a344f"
+    }
+  },
+  "schemaVersion": 2
+}

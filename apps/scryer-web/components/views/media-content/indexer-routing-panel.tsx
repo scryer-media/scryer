@@ -123,6 +123,7 @@ export const IndexerRoutingPanel = React.memo(function IndexerRoutingPanel({
                     <TableRow
                       key={indexer.id}
                       id={selectorId("indexer-routing-row", indexer.name)}
+                      data-ui="settings-table-row"
                     >
                       <TableCell>{index + 1}</TableCell>
                       <TableCell>{indexer.name}</TableCell>

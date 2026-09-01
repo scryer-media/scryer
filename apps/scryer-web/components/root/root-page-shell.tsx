@@ -1763,6 +1763,7 @@ function AuthenticatedHomePage({
                     <GlobalSearchProvider
                       activeFacet={activeFacet}
                       authenticatedUser={authenticatedUser}
+                      onOpenOverview={handleOpenOverview}
                       queueFacet={queueFacet}
                       uiLanguage={uiLanguage}
                     >

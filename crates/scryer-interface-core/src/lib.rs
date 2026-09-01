@@ -142,11 +142,101 @@ pub struct ConnectionAuthEpoch(pub u64);
 pub struct MfaVerification {
     pub verified_until: Option<i64>,
     pub step_up_verified_until: Option<i64>,
+    pub security_action_verified_until: Option<i64>,
     pub session_scope: JwtSessionScope,
     pub persist_session: bool,
     pub auth_session_version: Option<String>,
     pub password_change_required_after_enrollment: bool,
     pub oauth_authorization_source: OAuthAuthorizationSource,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+pub enum LoginAttemptPrincipal {
+    Local {
+        username: String,
+    },
+    Jellyfin {
+        connection_id: String,
+        username: String,
+    },
+    Emby {
+        connection_id: String,
+        username: String,
+    },
+}
+
+impl LoginAttemptPrincipal {
+    pub fn local(username: &str) -> Option<Self> {
+        let username = username.trim();
+        (!username.is_empty()).then(|| Self::Local {
+            username: username.to_string(),
+        })
+    }
+
+    pub fn jellyfin(connection_id: &str, username: &str) -> Option<Self> {
+        Self::external(connection_id, username, |connection_id, username| {
+            Self::Jellyfin {
+                connection_id,
+                username,
+            }
+        })
+    }
+
+    pub fn emby(connection_id: &str, username: &str) -> Option<Self> {
+        Self::external(connection_id, username, |connection_id, username| {
+            Self::Emby {
+                connection_id,
+                username,
+            }
+        })
+    }
+
+    fn external(
+        connection_id: &str,
+        username: &str,
+        build: impl FnOnce(String, String) -> Self,
+    ) -> Option<Self> {
+        let connection_id = connection_id.trim();
+        let username = username.trim();
+        (!connection_id.is_empty() && !username.is_empty())
+            .then(|| build(connection_id.to_string(), username.to_ascii_lowercase()))
+    }
+}
+
+type LoginAttemptCheck = dyn Fn(&LoginAttemptPrincipal) -> GqlResult<()> + Send + Sync;
+type LoginAttemptOutcome = dyn Fn(&LoginAttemptPrincipal) + Send + Sync;
+
+#[derive(Clone)]
+pub struct LoginAttemptLimiter {
+    check: Arc<LoginAttemptCheck>,
+    record_failure: Arc<LoginAttemptOutcome>,
+    clear_success: Arc<LoginAttemptOutcome>,
+}
+
+impl LoginAttemptLimiter {
+    pub fn new(
+        check: impl Fn(&LoginAttemptPrincipal) -> GqlResult<()> + Send + Sync + 'static,
+        record_failure: impl Fn(&LoginAttemptPrincipal) + Send + Sync + 'static,
+        clear_success: impl Fn(&LoginAttemptPrincipal) + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            check: Arc::new(check),
+            record_failure: Arc::new(record_failure),
+            clear_success: Arc::new(clear_success),
+        }
+    }
+
+    pub fn check(&self, principal: &LoginAttemptPrincipal) -> GqlResult<()> {
+        (self.check)(principal)
+    }
+
+    pub fn record_failure(&self, principal: &LoginAttemptPrincipal) {
+        (self.record_failure)(principal);
+    }
+
+    pub fn clear_success(&self, principal: &LoginAttemptPrincipal) {
+        (self.clear_success)(principal);
+    }
 }
 
 #[derive(Clone)]
@@ -155,6 +245,10 @@ pub struct ApiContext {
     pub auth_runtime: AuthRuntimeStateHandle,
     pub restore: Option<RestoreContext>,
     pub application_upgrade_assessment: InstallationAssessment,
+}
+
+pub fn login_attempt_limiter_from_ctx<'a>(ctx: &'a Context<'a>) -> Option<&'a LoginAttemptLimiter> {
+    ctx.data_opt::<LoginAttemptLimiter>()
 }
 
 /// Per-HTTP-request session persistence policy. This is intentionally absent
@@ -377,6 +471,9 @@ pub fn to_gql_error(err: AppError) -> Error {
             coded_gql_error(message, "DOWNLOAD_SUBMIT_REJECTED")
         }
         AppError::MfaStepUpRequired(message) => coded_gql_error(message, "MFA_STEP_UP_REQUIRED"),
+        AppError::ReauthenticationRequired(message) => {
+            coded_gql_error(message, "REAUTHENTICATION_REQUIRED")
+        }
         AppError::TotpEnrollmentRequired(message) => {
             coded_gql_error(message, "TOTP_ENROLLMENT_REQUIRED")
         }
@@ -422,6 +519,23 @@ fn repository_gql_error(message: String) -> Error {
     })
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LoginErrorClassification {
+    Progression,
+    InfrastructureFailure,
+    MaskedPrimaryFailure,
+}
+
+pub fn classify_login_error(err: &AppError) -> LoginErrorClassification {
+    if login_progression_error(err) {
+        LoginErrorClassification::Progression
+    } else if matches!(err, AppError::Repository(_)) {
+        LoginErrorClassification::InfrastructureFailure
+    } else {
+        LoginErrorClassification::MaskedPrimaryFailure
+    }
+}
+
 fn login_progression_error(err: &AppError) -> bool {
     matches!(
         err,
@@ -452,6 +566,7 @@ fn app_error_kind(err: &AppError) -> &'static str {
         AppError::ArchiveExtractionTimedOut { .. } => "ArchiveExtractionTimedOut",
         AppError::TemporaryUnavailable { .. } => "TemporaryUnavailable",
         AppError::MfaStepUpRequired(_) => "MfaStepUpRequired",
+        AppError::ReauthenticationRequired(_) => "ReauthenticationRequired",
         AppError::TotpEnrollmentRequired(_) => "TotpEnrollmentRequired",
         AppError::MfaEnrollmentRequired(_) => "MfaEnrollmentRequired",
         AppError::PasswordChangeRequired(_) => "PasswordChangeRequired",
@@ -468,14 +583,16 @@ fn app_error_kind(err: &AppError) -> &'static str {
 }
 
 pub fn to_login_gql_error(method: &'static str, err: AppError) -> Error {
-    if login_progression_error(&err) {
-        return to_gql_error(err);
-    }
-
     let error_kind = app_error_kind(&err);
-    match err {
-        AppError::Repository(message) => repository_gql_error(message),
-        _ => {
+    match classify_login_error(&err) {
+        LoginErrorClassification::Progression => to_gql_error(err),
+        LoginErrorClassification::InfrastructureFailure => {
+            let AppError::Repository(message) = err else {
+                return to_gql_error(err);
+            };
+            repository_gql_error(message)
+        }
+        LoginErrorClassification::MaskedPrimaryFailure => {
             tracing::debug!(login_method = method, error_kind, "masked login failure");
             Error::new(LOGIN_FAILED_MESSAGE).extend_with(|_, extensions| {
                 extensions.set("code", "LOGIN_FAILED");
@@ -509,7 +626,7 @@ pub async fn to_login_gql_error_after_timing(
     started_at: Instant,
     err: AppError,
 ) -> Error {
-    if login_progression_error(&err) {
+    if classify_login_error(&err) == LoginErrorClassification::Progression {
         return to_gql_error(err);
     }
 
@@ -544,6 +661,10 @@ pub struct OAuthActorSession {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct InteractiveSession;
 
+/// Marker for the intentional unauthenticated default actor.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AuthlessDefaultSession;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ApiKeyManagementSession;
 
@@ -565,6 +686,55 @@ pub fn interactive_session_actor_from_ctx(ctx: &Context<'_>) -> GqlResult<User> 
         )));
     }
     actor_from_ctx(ctx)
+}
+
+/// Returns the actor allowed to manage TOTP factors.
+///
+/// The intentionally configured authless default actor retains this legacy
+/// capability; API-key and OAuth actors do not receive either marker.
+pub fn totp_management_actor_from_ctx(ctx: &Context<'_>) -> GqlResult<User> {
+    if ctx.data_opt::<InteractiveSession>().is_none()
+        && ctx.data_opt::<AuthlessDefaultSession>().is_none()
+    {
+        return Err(to_gql_error(AppError::Unauthorized(
+            "an interactive session is required for this operation".into(),
+        )));
+    }
+    actor_from_ctx(ctx)
+}
+
+/// Starts TOTP enrollment only with an account-security grant, except for the
+/// intentional authless default actor's established management behavior.
+pub fn totp_enrollment_actor_from_ctx(ctx: &Context<'_>) -> GqlResult<User> {
+    if ctx.data_opt::<AuthlessDefaultSession>().is_some() {
+        return actor_from_ctx(ctx);
+    }
+    account_security_actor_from_ctx(ctx)
+}
+
+/// Returns the interactive actor only while its account-security freshness grant is valid.
+pub fn account_security_actor_from_ctx(ctx: &Context<'_>) -> GqlResult<User> {
+    let actor = actor_from_ctx(ctx)?;
+    if ctx.data_opt::<InteractiveSession>().is_none() {
+        return Err(to_gql_error(AppError::Unauthorized(
+            "interactive session authentication is required".into(),
+        )));
+    }
+    if mfa_verification_from_ctx(ctx)
+        .security_action_verified_until
+        .is_some_and(|expires_at| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|now| expires_at > now.as_secs() as i64)
+                .unwrap_or(false)
+        })
+    {
+        return Ok(actor);
+    }
+
+    Err(to_gql_error(AppError::ReauthenticationRequired(
+        "reauthentication is required before changing authentication factors".into(),
+    )))
 }
 
 pub fn oauth_actor_session_from_ctx(ctx: &Context<'_>) -> Option<OAuthActorSession> {
@@ -704,6 +874,22 @@ mod tests {
             assert_eq!(error.message, LOGIN_FAILED_MESSAGE);
             assert_eq!(graphql_error_code(&error), Some("LOGIN_FAILED"));
         }
+    }
+
+    #[test]
+    fn login_error_classification_matches_masking_behavior() {
+        assert_eq!(
+            classify_login_error(&AppError::Unauthorized("invalid credentials".into())),
+            LoginErrorClassification::MaskedPrimaryFailure
+        );
+        assert_eq!(
+            classify_login_error(&AppError::Repository("connection unavailable".into())),
+            LoginErrorClassification::InfrastructureFailure
+        );
+        assert_eq!(
+            classify_login_error(&AppError::MfaStepUpRequired("MFA required".into())),
+            LoginErrorClassification::Progression
+        );
     }
 
     #[test]

@@ -27,6 +27,7 @@ const PENDING_DISPLAY_STATES: DownloadDisplayState[] = [
 const NON_PENDING_DISPLAY_STATES: DownloadDisplayState[] = [
   "PAUSED",
   "COMPLETED",
+  "IMPORTED_SEEDING",
   "FAILED",
   "IMPORT_BLOCKED",
   "IMPORT_FAILED",

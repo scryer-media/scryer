@@ -1525,6 +1525,137 @@ hook_id = "migrate_title_catalog_sort_keys"
 engine = "all"
 scope = "all"
 
+[[migration]]
+version = 197
+description = "compact domain events and release decision explanations"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0197_compact_event_storage_pre.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0197_compact_event_storage.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration.steps]]
+kind = "rust"
+hook_id = "compact_event_storage"
+engine = "all"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0197_compact_event_storage_post.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration]]
+version = 198
+description = "seed canonical postgres defaults outside the released baseline"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0198_seed_canonical_defaults.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0198_seed_canonical_defaults.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 199
+description = "compact housekeeping indexes"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0199_housekeeping_index_compaction.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0199_housekeeping_index_compaction.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 200
+description = "queue movie hydration for supported identities"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0200_movie_supported_identity_hydration.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0200_movie_supported_identity_hydration.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 201
+description = "bound discovery storage"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0201_bound_discovery_storage.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0201_bound_discovery_storage.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 202
+description = "account security factor state"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0202_account_security_factor_state.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0202_account_security_factor_state.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 203
+description = "bind OAuth authorization codes to session epochs"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0203_oauth_authorization_code_session_epoch.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0203_oauth_authorization_code_session_epoch.sql"
+engine = "postgres"
+scope = "all"
+
 [[baseline]]
 through_version = 140
 file = "baselines/0140_baseline.sql"
@@ -1533,4 +1664,14 @@ engine = "sqlite"
 [[baseline]]
 through_version = 140
 file = "postgres/baselines/0140_baseline.sql"
+engine = "postgres"
+
+[[baseline]]
+through_version = 198
+file = "baselines/0198_baseline.sql"
+engine = "sqlite"
+
+[[baseline]]
+through_version = 198
+file = "postgres/baselines/0198_baseline.sql"
 engine = "postgres"

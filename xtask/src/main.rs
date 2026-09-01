@@ -1,11 +1,13 @@
 use anyhow::{Context, Result, anyhow, bail};
 use base64::Engine;
 use clap::{Args, Parser, Subcommand};
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 #[cfg(unix)]
 use signal_hook::consts::signal::{SIGINT, SIGTERM};
 #[cfg(unix)]
 use signal_hook::iterator::{Handle as SignalHandle, Signals};
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, Write};
 #[cfg(unix)]
@@ -26,6 +28,42 @@ const DEFAULT_SERVE_BIND: &str = "127.0.0.1:18080";
 const DEFAULT_SERVE_FRONTEND_PORT: u16 = 3000;
 const DEFAULT_SERVE_BACKEND_RUST_MIN_STACK: &str = "16777216";
 const XTASK_SERVE_DEV_API_KEY_SEED: &str = "admin|xtask-serve|ska_AAAAAAAAAAAAAAAAAAAAAA.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA|never";
+const BUILTIN_VERSION_MANIFEST_PATH: &str = "crates/scryer-plugins/builtin-versions.json";
+const BUILTIN_ASSET_DIR: &str = "crates/scryer-plugins/builtins";
+
+struct ServeBuiltinAssetSpec {
+    plugin_id: &'static str,
+    artifact_stem: &'static str,
+}
+
+const SERVE_BUILTIN_ASSETS: &[ServeBuiltinAssetSpec] = &[
+    ServeBuiltinAssetSpec {
+        plugin_id: "newznab",
+        artifact_stem: "newznab_indexer",
+    },
+    ServeBuiltinAssetSpec {
+        plugin_id: "torznab",
+        artifact_stem: "torznab_indexer",
+    },
+];
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ServeBuiltinVersionManifest {
+    schema_version: u32,
+    plugins: BTreeMap<String, ServeBuiltinVersionPin>,
+}
+
+#[derive(Deserialize)]
+struct ServeBuiltinVersionPin {
+    version: String,
+}
+
+#[derive(Deserialize)]
+struct ServeBuiltinDescriptor {
+    id: String,
+    version: String,
+}
 
 #[cfg(unix)]
 struct SignalForwarder {
@@ -129,6 +167,7 @@ enum TrashGuidesCommand {
 #[derive(Subcommand)]
 enum BuiltinsCommand {
     Sync,
+    Materialize,
 }
 
 #[derive(Args)]
@@ -341,6 +380,7 @@ fn delegate_release(ctx: &TaskContext, args: &ReleaseArgs) -> Result<()> {
 fn delegate_builtins(ctx: &TaskContext, args: &BuiltinsArgs) -> Result<()> {
     let forwarded = match args.command {
         BuiltinsCommand::Sync => vec!["builtins".to_string(), "sync".to_string()],
+        BuiltinsCommand::Materialize => vec!["builtins".to_string(), "materialize".to_string()],
     };
     delegate_to_package(ctx, "xtask-release", &forwarded)
 }
@@ -1050,7 +1090,72 @@ fn ensure_frontend_dependencies(ctx: &TaskContext, web_dir: &Path) -> Result<()>
     Ok(())
 }
 
+fn ensure_serve_builtin_plugins(ctx: &TaskContext) -> Result<()> {
+    if serve_builtin_assets_are_current(ctx)? {
+        ok("Built-in plugin assets are current");
+        return Ok(());
+    }
+
+    step("Built-in plugin assets are missing or stale; materializing pinned versions");
+    delegate_to_package(
+        ctx,
+        "xtask-release",
+        &["builtins".to_string(), "materialize".to_string()],
+    )?;
+
+    if !serve_builtin_assets_are_current(ctx)? {
+        bail!("built-in plugin materialization completed without current assets");
+    }
+
+    ok("Built-in plugin assets are current");
+    Ok(())
+}
+
+fn serve_builtin_assets_are_current(ctx: &TaskContext) -> Result<bool> {
+    let manifest_path = ctx.path(BUILTIN_VERSION_MANIFEST_PATH);
+    let manifest = fs::read(&manifest_path)
+        .with_context(|| format!("failed to read {}", manifest_path.display()))
+        .and_then(|bytes| {
+            serde_json::from_slice::<ServeBuiltinVersionManifest>(&bytes)
+                .with_context(|| format!("failed to parse {}", manifest_path.display()))
+        })?;
+
+    Ok(manifest.schema_version == 2
+        && serve_builtin_assets_match_manifest(&ctx.path(BUILTIN_ASSET_DIR), &manifest))
+}
+
+fn serve_builtin_assets_match_manifest(
+    asset_dir: &Path,
+    manifest: &ServeBuiltinVersionManifest,
+) -> bool {
+    SERVE_BUILTIN_ASSETS.iter().all(|spec| {
+        let Some(pin) = manifest.plugins.get(spec.plugin_id) else {
+            return false;
+        };
+        let wasm = asset_dir.join(format!("{}.wasm.zst", spec.artifact_stem));
+        let descriptor_path = asset_dir.join(format!("{}.descriptor.json", spec.artifact_stem));
+        let description = asset_dir.join(format!("{}.description.txt", spec.artifact_stem));
+        if !nonempty_file(&wasm) || !nonempty_file(&descriptor_path) || !nonempty_file(&description)
+        {
+            return false;
+        }
+
+        serde_json::from_slice::<ServeBuiltinDescriptor>(
+            &fs::read(descriptor_path).unwrap_or_default(),
+        )
+        .is_ok_and(|descriptor| {
+            descriptor.id == spec.plugin_id
+                && descriptor.version.trim_start_matches('v') == pin.version.trim_start_matches('v')
+        })
+    })
+}
+
+fn nonempty_file(path: &Path) -> bool {
+    path.is_file() && fs::metadata(path).is_ok_and(|metadata| metadata.len() > 0)
+}
+
 fn serve_local_scryer(ctx: &TaskContext, args: ServeArgs, mode: ServeMode) -> Result<()> {
+    ensure_serve_builtin_plugins(ctx)?;
     require_command("npm")?;
 
     let env_file = ctx.path(".env");
@@ -1353,4 +1458,70 @@ pub(crate) fn run_checked(command: &mut Command) -> Result<()> {
 
 pub(crate) fn run_capture(command: &mut Command) -> Result<String> {
     xtask_support::run_capture(command)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn manifest(version: &str) -> ServeBuiltinVersionManifest {
+        ServeBuiltinVersionManifest {
+            schema_version: 2,
+            plugins: SERVE_BUILTIN_ASSETS
+                .iter()
+                .map(|spec| {
+                    (
+                        spec.plugin_id.to_string(),
+                        ServeBuiltinVersionPin {
+                            version: version.to_string(),
+                        },
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    fn write_builtin_assets(asset_dir: &Path, version: &str) {
+        fs::create_dir_all(asset_dir).unwrap();
+        for spec in SERVE_BUILTIN_ASSETS {
+            fs::write(
+                asset_dir.join(format!("{}.wasm.zst", spec.artifact_stem)),
+                b"wasm",
+            )
+            .unwrap();
+            fs::write(
+                asset_dir.join(format!("{}.descriptor.json", spec.artifact_stem)),
+                serde_json::json!({ "id": spec.plugin_id, "version": version }).to_string(),
+            )
+            .unwrap();
+            fs::write(
+                asset_dir.join(format!("{}.description.txt", spec.artifact_stem)),
+                "description",
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn builtin_preflight_accepts_matching_assets() {
+        let temp = tempfile::tempdir().unwrap();
+        let manifest = manifest("2.0.1");
+        write_builtin_assets(temp.path(), "2.0.1");
+
+        assert!(serve_builtin_assets_match_manifest(temp.path(), &manifest));
+    }
+
+    #[test]
+    fn builtin_preflight_requires_materialization_for_missing_or_stale_assets() {
+        let temp = tempfile::tempdir().unwrap();
+        let manifest = manifest("2.0.1");
+        write_builtin_assets(temp.path(), "2.0.0");
+
+        assert!(!serve_builtin_assets_match_manifest(temp.path(), &manifest));
+
+        write_builtin_assets(temp.path(), "2.0.1");
+        fs::remove_file(temp.path().join("torznab_indexer.wasm.zst")).unwrap();
+
+        assert!(!serve_builtin_assets_match_manifest(temp.path(), &manifest));
+    }
 }

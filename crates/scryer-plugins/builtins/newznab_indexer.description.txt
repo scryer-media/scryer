@@ -1,1 +1,0 @@
-Generic Newznab protocol indexer for compatible services

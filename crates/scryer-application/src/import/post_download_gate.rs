@@ -332,7 +332,7 @@ pub(crate) fn build_import_profile_decision(
     profile: &crate::QualityProfile,
     parsed: &crate::ParsedReleaseMetadata,
     category_hint: &str,
-    runtime_minutes: Option<i32>,
+    size_basis: crate::quality_profile::CoverageSizeBasis,
     size_bytes: Option<i64>,
     has_existing_file: bool,
 ) -> crate::QualityProfileDecision {
@@ -353,7 +353,7 @@ pub(crate) fn build_import_profile_decision(
         parsed,
         size_bytes,
         Some(category_hint),
-        runtime_minutes,
+        size_basis,
         profile.criteria.prefer_remux,
         &weights,
     );
@@ -734,7 +734,13 @@ pub(crate) async fn probe_and_validate(
             &resolved_profile,
             &rescored_for_rules,
             category_hint,
-            title.runtime_minutes,
+            // The probe knows the title and the file, not the scope: no
+            // coverage reaches here, so this is the single-member basis the
+            // lane has always used. The canonical score — the number anything
+            // is compared by — is built in
+            // [`compute_post_download_acquisition_decision`], from the scope's
+            // real basis.
+            crate::quality_profile::CoverageSizeBasis::single(title.runtime_minutes),
             Some(size_bytes),
             has_existing_file,
         );
@@ -1428,7 +1434,7 @@ pub(crate) fn compute_post_download_acquisition_decision(
     title: &Title,
     parsed: &crate::ParsedReleaseMetadata,
     acceptance: &ImportedFileAcceptance,
-    runtime_minutes: Option<i32>,
+    size_basis: crate::quality_profile::CoverageSizeBasis,
     size_bytes: i64,
     prior_rescore_changes: &[String],
     is_filler: bool,
@@ -1444,7 +1450,7 @@ pub(crate) fn compute_post_download_acquisition_decision(
         }
     }
 
-    let view = context.view(runtime_minutes, is_filler);
+    let view = context.view(size_basis, is_filler);
 
     // **Parse parity with the grab lane.** Most release names say nothing about
     // audio, and the grab path fills that in from the title's original language
@@ -1891,8 +1897,14 @@ mod tests {
             &crate::ScoringPersona::default(),
         );
         let parsed = crate::parse_release_metadata("Example Title 1080p");
-        let decision =
-            build_import_profile_decision(&resolved, &parsed, "movie", None, None, false);
+        let decision = build_import_profile_decision(
+            &resolved,
+            &parsed,
+            "movie",
+            crate::quality_profile::CoverageSizeBasis::default(),
+            None,
+            false,
+        );
         let input = crate::user_rule_input::build_rule_input(
             &parsed,
             &resolved,

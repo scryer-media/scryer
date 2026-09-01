@@ -1,5 +1,5 @@
 name: Configure sccache R2
-description: Configure a trusted release build to use S3-compatible Cloudflare R2 storage.
+description: Configure a trusted CI build to use S3-compatible Cloudflare R2 storage.
 
 inputs:
   endpoint:

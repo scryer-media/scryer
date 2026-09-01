@@ -10,6 +10,7 @@ pub fn is_known_migration_hook_id(hook_id: &str) -> bool {
         "backfill_canonical_download_identity" => true,
         "disable_invalid_user_rule_runtime_wrappers" => true,
         "backfill_blake3_identities" => true,
+        "compact_event_storage" => true,
         #[cfg(test)]
         "test_insert_hook_marker" => true,
         _ => false,

@@ -9,6 +9,7 @@ import type { Translate } from "@/components/root/types";
 import { buildViewPath } from "@/lib/utils/routing";
 import { formatUiDateTime } from "@/lib/utils/date-format";
 import { selectorId, wantedItemRowId, wantedItemSearchNowId } from "@/lib/utils/dom-ids";
+import { parseDecisionExplanation } from "@/lib/utils/release-decision-explanation";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
@@ -42,6 +43,7 @@ import {
 import { ConvergenceBadge } from "@/components/views/convergence-badge";
 import { CutoffUnmetView } from "@/components/views/cutoff-unmet-view";
 import type { CutoffUnmetItem } from "@/components/views/cutoff-unmet-view";
+import { WantedScoringBreakdown } from "@/components/views/wanted-scoring-breakdown";
 import type {
   AcquisitionSearchJob,
   PendingReleaseItem,
@@ -107,11 +109,6 @@ type WantedViewState = {
   pauseItem: (id: string) => Promise<void>;
   resumeItem: (id: string) => Promise<void>;
   triggerMismatchRecovery: (titleId: string) => Promise<void>;
-};
-
-type ReleaseDecisionExplanationEntry = {
-  code: string;
-  delta: number;
 };
 
 function formatWantedMediaType(mediaType: WantedMediaType, t: Translate) {
@@ -371,38 +368,6 @@ function NoStandbyCandidates({ item }: { item: WantedItem }) {
     return null;
   }
   return <span className="text-xs text-muted-foreground">{t("wanted.noStandbyCandidates")}</span>;
-}
-
-function parseDecisionExplanation(
-  explanationJson: unknown,
-): ReleaseDecisionExplanationEntry[] {
-  if (!explanationJson) return [];
-
-  try {
-    const parsed = explanationJson;
-    if (!Array.isArray(parsed)) return [];
-
-    return parsed.flatMap((entry) => {
-      if (
-        !entry ||
-        typeof entry !== "object" ||
-        typeof entry.code !== "string" ||
-        entry.code.trim().length === 0 ||
-        typeof entry.delta !== "number" ||
-        !Number.isFinite(entry.delta)
-      ) {
-        return [];
-      }
-
-      return [{ code: entry.code, delta: entry.delta }];
-    });
-  } catch {
-    return [];
-  }
-}
-
-function formatSignedDelta(delta: number) {
-  return delta > 0 ? `+${delta}` : `${delta}`;
 }
 
 type PendingViewState = {
@@ -852,7 +817,7 @@ function WantedItemsCard({
                                       <span>{t("wanted.scoreBreakdown")}</span>
                                     </button>
                                     {scoringExpanded ? (
-                                      <ScoringBreakdown entries={scoringEntries} />
+                                      <WantedScoringBreakdown entries={scoringEntries} />
                                     ) : null}
                                   </div>
                                 ) : null}
@@ -1144,7 +1109,7 @@ function WantedItemsCard({
                                       {scoringExpanded ? (
                                         <TableRow>
                                           <TableCell colSpan={7} className="bg-background/70 p-3">
-                                            <ScoringBreakdown entries={scoringEntries} />
+                                            <WantedScoringBreakdown entries={scoringEntries} />
                                           </TableCell>
                                         </TableRow>
                                       ) : null}
@@ -1198,36 +1163,6 @@ function WantedItemsCard({
         )}
       </CardContent>
     </Card>
-  );
-}
-
-function ScoringBreakdown({
-  entries,
-}: {
-  entries: ReleaseDecisionExplanationEntry[];
-}) {
-  const t = useTranslate();
-
-  return (
-    <div className="mt-3 rounded-md border border-border/70 bg-background/60 p-3">
-      <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-4 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-        <span>{t("wanted.scoreCode")}</span>
-        <span>{t("wanted.decDelta")}</span>
-      </div>
-      <div className="mt-2 space-y-1">
-        {entries.map((entry, index) => (
-          <div
-            key={`${entry.code}-${index}`}
-            className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-4 font-[var(--font-code)] text-xs text-foreground"
-          >
-            <span className="truncate" title={entry.code}>
-              {entry.code}
-            </span>
-            <span>{formatSignedDelta(entry.delta)}</span>
-          </div>
-        ))}
-      </div>
-    </div>
   );
 }
 

@@ -189,11 +189,11 @@ fn render_missing_token_empty() {
 #[test]
 fn render_rename_template_optional_group_includes_present_guard() {
     let t = tokens(&[
-        ("title", "Bleach"),
+        ("title", "Quiet Meridian"),
         ("season_order", "0"),
         ("episode", "4"),
         ("absolute_episode", ""),
-        ("episode_title", "The Diamond Dust Rebellion"),
+        ("episode_title", "The Sudden Signal Rehearsal"),
         ("quality", "2160p"),
         ("ext", "mkv"),
     ]);
@@ -201,11 +201,11 @@ fn render_rename_template_optional_group_includes_present_guard() {
 
     assert_eq!(
         render_rename_template(template, &t),
-        "Bleach - S00E04 - The Diamond Dust Rebellion - 2160p.mkv"
+        "Quiet Meridian - S00E04 - The Sudden Signal Rehearsal - 2160p.mkv"
     );
 
     let numbered = tokens(&[
-        ("title", "Bleach"),
+        ("title", "Quiet Meridian"),
         ("season_order", "1"),
         ("episode", "1"),
         ("absolute_episode", "1"),
@@ -218,7 +218,7 @@ fn render_rename_template_optional_group_includes_present_guard() {
     ]);
     assert_eq!(
         render_rename_template(template, &numbered),
-        "Bleach - S01E01 (1) - A title that is deliberately longer than sixty-four characters to ve - 1080p.mkv"
+        "Quiet Meridian - S01E01 (1) - A title that is deliberately longer than sixty-four characters t - 1080p.mkv"
     );
 }
 

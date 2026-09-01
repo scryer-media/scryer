@@ -1,7 +1,7 @@
 import * as React from "react";
 import {
   Edit,
-  History,
+  Logs,
   Lock,
   Plus,
   Power,
@@ -461,7 +461,7 @@ function IndexerDownloadClientSelect({
     : null;
 
   return (
-    <div className="min-w-[210px] space-y-1.5">
+    <div className="min-w-0 space-y-1.5">
       <Label className={showLabel ? "block" : "sr-only"} htmlFor={selectId}>
         {label}
       </Label>
@@ -700,7 +700,7 @@ function IndexerSeedingProfileSelect({
   );
 
   return (
-    <div className="min-w-[190px] space-y-1.5">
+    <div className="min-w-0 space-y-1.5">
       <Label className={showLabel ? "block" : "sr-only"} htmlFor={selectId}>
         {label}
       </Label>
@@ -1270,18 +1270,35 @@ export function SettingsIndexersSection({
             className="max-w-64"
           />
         </div>
-        <div className="overflow-x-auto">
-          <Table id="settings-indexers-table" className="min-w-[1360px]">
+        <div className="min-w-0">
+          <Table
+            id="settings-indexers-table"
+            overflow="clip"
+            layout="fixed"
+            density="dense"
+            className="[&_td]:px-2 [&_th]:px-2"
+          >
+            <colgroup>
+              <col className="w-[13%]" />
+              <col className="w-[10%]" />
+              <col className="w-[7%]" />
+              <col className="w-[16%]" />
+              <col className="w-[16%]" />
+              <col className="w-[5%]" />
+              <col className="w-[6%]" />
+              <col className="w-[4%]" />
+              <col className="w-[10%]" />
+              <col className="w-[13%]" />
+            </colgroup>
             <TableHeader>
               <TableRow>
                 <TableHead>{t("label.name")}</TableHead>
                 <TableHead>{t("settings.indexerProvider")}</TableHead>
-                <TableHead>{t("settings.baseUrl")}</TableHead>
                 <TableHead>Proxy</TableHead>
-                <TableHead className="min-w-[220px]">
+                <TableHead>
                   {t("settings.indexerDownloadClient")}
                 </TableHead>
-                <TableHead className="min-w-[200px]">
+                <TableHead>
                   {t("settings.seedingProfileColumn")}
                 </TableHead>
                 <TableHead className="text-center">
@@ -1343,9 +1360,6 @@ export function SettingsIndexersSection({
                     <IndexerProviderTypeCell
                       providerType={indexer.providerType}
                     />
-                  </TableCell>
-                  <TableCell className="max-w-[260px] truncate">
-                    {indexer.baseUrl}
                   </TableCell>
                   <TableCell>
                     {assignedProxy ? (
@@ -1436,7 +1450,7 @@ export function SettingsIndexersSection({
                     />
                   </TableCell>
                   <TableCell className="text-right">
-                    <div className="flex justify-end gap-2">
+                    <div className="flex flex-wrap justify-end gap-2">
                       <IndexerActionButton
                         id={selectorId("settings-indexer-error-history", indexer.name)}
                         tone="search"
@@ -1446,49 +1460,49 @@ export function SettingsIndexersSection({
                         })}
                         label={t("indexerErrors.history")}
                       >
-                        <History className="h-4 w-4" />
+                        <Logs className="h-4 w-4" />
+                      </IndexerActionButton>
+                      {!indexer.isManaged && indexer.supportsManagedChildrenSync ? (
+                        <IndexerActionButton
+                          id={selectorId("settings-indexer-sync", indexer.name)}
+                          tone="search"
+                          onClick={() => void syncIndexer(indexer)}
+                          disabled={mutatingIndexerId === indexer.id}
+                          label={t("settings.indexerSyncNow")}
+                        >
+                          <RefreshCw className={cn(
+                            "h-4 w-4",
+                            mutatingIndexerId === indexer.id && "animate-spin",
+                          )} />
+                        </IndexerActionButton>
+                      ) : null}
+                      <IndexerActionButton
+                        id={selectorId(
+                          "settings-indexer-toggle",
+                          indexer.name,
+                        )}
+                        tone={indexer.isEnabled ? "disabled" : "enabled"}
+                        onClick={() => void toggleIndexerEnabled(indexer)}
+                        disabled={mutatingIndexerId === indexer.id}
+                        label={
+                          indexer.isEnabled
+                            ? t("label.disable")
+                            : t("label.enable")
+                        }
+                      >
+                        {indexer.isEnabled ? (
+                          <PowerOff className="h-4 w-4" />
+                        ) : (
+                          <Power className="h-4 w-4" />
+                        )}
                       </IndexerActionButton>
                       {indexer.isManaged ? (
                         <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-1 text-xs text-muted-foreground">
                           <Lock className="h-3 w-3" />
-                          {t("settings.managedIndexerReadOnlyShort")}
+                          {t("settings.managedIndexerBadge")}
                         </span>
                       ) : (
                         <>
-                          {indexer.supportsManagedChildrenSync ? (
-                            <IndexerActionButton
-                              id={selectorId("settings-indexer-sync", indexer.name)}
-                              tone="search"
-                              onClick={() => void syncIndexer(indexer)}
-                              disabled={mutatingIndexerId === indexer.id}
-                              label={t("settings.indexerSyncNow")}
-                            >
-                              <RefreshCw className={cn(
-                                "h-4 w-4",
-                                mutatingIndexerId === indexer.id && "animate-spin",
-                              )} />
-                            </IndexerActionButton>
-                          ) : null}
-                          <IndexerActionButton
-                            id={selectorId(
-                              "settings-indexer-toggle",
-                              indexer.name,
-                            )}
-                            tone={indexer.isEnabled ? "disabled" : "enabled"}
-                            onClick={() => void toggleIndexerEnabled(indexer)}
-                            disabled={mutatingIndexerId === indexer.id}
-                            label={
-                              indexer.isEnabled
-                                ? t("label.disable")
-                                : t("label.enable")
-                            }
-                          >
-                            {indexer.isEnabled ? (
-                              <PowerOff className="h-4 w-4" />
-                            ) : (
-                              <Power className="h-4 w-4" />
-                            )}
-                          </IndexerActionButton>
                           <IndexerActionButton
                             id={selectorId("settings-indexer-edit", indexer.name)}
                             tone="edit"
@@ -1522,7 +1536,7 @@ export function SettingsIndexersSection({
               })}
               {settingsIndexers.length === 0 ? (
                 <TableRow id="settings-indexers-empty-row">
-                  <TableCell colSpan={10} className="text-muted-foreground">
+                  <TableCell colSpan={11} className="text-muted-foreground">
                     {t("settings.noIndexersFound")}
                   </TableCell>
                 </TableRow>

@@ -19,8 +19,72 @@ pub(crate) struct CapsSnapshotRefreshOutcome {
 }
 
 const PROWLARR_MANAGED_CHILD_RATE_LIMIT_SECONDS: i64 = 2;
+const MANAGED_CHILD_LOCAL_DISABLES_KEY: &str = "locally_disabled_children";
 
-fn merge_managed_caps_snapshot(existing: Option<&str>, desired: Option<&str>) -> Option<String> {
+fn managed_child_is_locally_disabled(metadata: Option<&str>, child_key: &str) -> bool {
+    metadata
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+        .and_then(|value| value.get(MANAGED_CHILD_LOCAL_DISABLES_KEY)?.as_array().cloned())
+        .is_some_and(|keys| {
+            keys.iter()
+                .filter_map(serde_json::Value::as_str)
+                .any(|key| key == child_key)
+        })
+}
+
+fn with_managed_child_local_disable(
+    metadata: Option<&str>,
+    child_key: &str,
+    locally_disabled: bool,
+) -> AppResult<Option<String>> {
+    let mut value = match metadata.map(str::trim).filter(|raw| !raw.is_empty()) {
+        Some(raw) => serde_json::from_str::<serde_json::Value>(raw)
+            .map_err(|error| AppError::Repository(format!("invalid managed child metadata: {error}")))?,
+        None => serde_json::json!({}),
+    };
+    let object = value.as_object_mut().ok_or_else(|| {
+        AppError::Repository("managed indexer metadata must be a JSON object".into())
+    })?;
+    let mut disabled_children = object
+        .get(MANAGED_CHILD_LOCAL_DISABLES_KEY)
+        .and_then(serde_json::Value::as_array)
+        .map(|keys| {
+            keys.iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if locally_disabled {
+        if !disabled_children.iter().any(|key| key == child_key) {
+            disabled_children.push(child_key.to_string());
+        }
+    } else {
+        disabled_children.retain(|key| key != child_key);
+    }
+    if disabled_children.is_empty() {
+        object.remove(MANAGED_CHILD_LOCAL_DISABLES_KEY);
+    } else {
+        object.insert(
+            MANAGED_CHILD_LOCAL_DISABLES_KEY.to_string(),
+            serde_json::Value::Array(
+                disabled_children
+                    .into_iter()
+                    .map(serde_json::Value::String)
+                    .collect(),
+            ),
+        );
+    }
+    if object.is_empty() {
+        Ok(None)
+    } else {
+        serde_json::to_string(&value)
+            .map(Some)
+            .map_err(|error| AppError::Repository(error.to_string()))
+    }
+}
+
+fn merge_managed_child_metadata(existing: Option<&str>, desired: Option<&str>) -> Option<String> {
     let desired = desired?.trim();
     if desired.is_empty() {
         return None;
@@ -694,6 +758,10 @@ impl AppUseCase {
                 "at least one indexer field must be provided".into(),
             ));
         }
+        let mut changes_other_than_enabled = update.clone();
+        changes_other_than_enabled.is_enabled = None;
+        let managed_enabled_only =
+            update.is_enabled.is_some() && !changes_other_than_enabled.has_changes();
 
         let normalized_name = update.name.map(|value| value.trim().to_string());
         if normalized_name.as_ref().is_some_and(String::is_empty) {
@@ -714,6 +782,14 @@ impl AppUseCase {
             .get_by_id(config_id)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("indexer config '{config_id}' not found")))?;
+        if existing.managed_parent_config_id.is_some()
+            && managed_enabled_only
+            && let Some(requested_enabled) = update.is_enabled
+        {
+            return self
+                .set_managed_child_indexer_enabled(actor, &existing, requested_enabled)
+                .await;
+        }
         if existing.managed_parent_config_id.is_some() {
             return Err(AppError::Validation(
                 "managed child indexers are controlled by their parent sync and cannot be edited directly"
@@ -1224,7 +1300,11 @@ impl AppUseCase {
 
         for desired in desired_children {
             if let Some(existing) = existing_by_key.remove(&desired.child_key) {
-                let managed_metadata_json = merge_managed_caps_snapshot(
+                let locally_disabled = managed_child_is_locally_disabled(
+                    parent.managed_metadata_json.as_deref(),
+                    &desired.child_key,
+                );
+                let managed_metadata_json = merge_managed_child_metadata(
                     existing.managed_metadata_json.as_deref(),
                     desired.managed_metadata_json.as_deref(),
                 )
@@ -1244,7 +1324,7 @@ impl AppUseCase {
                                 None
                             },
                             rate_limit_burst: None,
-                            is_enabled: Some(desired.is_enabled),
+                            is_enabled: Some(desired.is_enabled && !locally_disabled),
                             enable_interactive_search: Some(desired.enable_interactive_search),
                             enable_auto_search: Some(desired.enable_auto_search),
                             indexer_proxy_config_id: Some(parent.indexer_proxy_config_id.clone()),
@@ -1291,7 +1371,11 @@ impl AppUseCase {
                             rate_limit_seconds: managed_rate_limit_seconds,
                             rate_limit_burst: None,
                             disabled_until: None,
-                            is_enabled: desired.is_enabled,
+                            is_enabled: desired.is_enabled
+                                && !managed_child_is_locally_disabled(
+                                    parent.managed_metadata_json.as_deref(),
+                                    &desired.child_key,
+                                ),
                             enable_interactive_search: desired.enable_interactive_search,
                             enable_auto_search: desired.enable_auto_search,
                             indexer_proxy_config_id: parent.indexer_proxy_config_id.clone(),
@@ -1345,6 +1429,107 @@ impl AppUseCase {
     }
 }
 impl AppUseCase {
+    async fn set_managed_child_indexer_enabled(
+        &self,
+        actor: &User,
+        child: &IndexerConfig,
+        requested_enabled: bool,
+    ) -> AppResult<IndexerConfig> {
+        let child_id = child.id.clone();
+        let (updated, parent_id) = self
+            .set_managed_child_local_disable(&child_id, !requested_enabled)
+            .await?;
+
+        if !requested_enabled {
+            self.publish_indexers_changed();
+            return Ok(updated);
+        }
+
+        if let Err(error) = self.sync_indexer_config(actor, &parent_id).await {
+            if let Err(restore_error) = self.set_managed_child_local_disable(&child_id, true).await {
+                tracing::error!(
+                    child_id = %child_id,
+                    error = %restore_error,
+                    "failed to restore managed child local disable after sync failure"
+                );
+            } else {
+                self.publish_indexers_changed();
+            }
+            return Err(error);
+        }
+        self.services
+            .integrations
+            .indexer_configs
+            .get_by_id(&child_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("indexer config '{child_id}' not found")))
+    }
+
+    async fn set_managed_child_local_disable(
+        &self,
+        child_id: &str,
+        locally_disabled: bool,
+    ) -> AppResult<(IndexerConfig, String)> {
+        let child_id = child_id.to_string();
+        let (updated, parent_id) = {
+            let _sync_guard = self
+                .runtime
+                .integrations
+                .managed_indexer_sync_lock
+                .clone()
+                .lock_owned()
+                .await;
+            let current = self
+                .services
+                .integrations
+                .indexer_configs
+                .get_by_id(&child_id)
+                .await?
+                .ok_or_else(|| {
+                    AppError::NotFound(format!("indexer config '{child_id}' not found"))
+                })?;
+            let parent_id = current.managed_parent_config_id.clone().ok_or_else(|| {
+                AppError::Validation("managed child indexer requires a parent".into())
+            })?;
+            let child_key = current.managed_child_key.as_deref().ok_or_else(|| {
+                AppError::Validation("managed child indexer requires a child key".into())
+            })?;
+            let parent = self
+                .services
+                .integrations
+                .indexer_configs
+                .get_by_id(&parent_id)
+                .await?
+                .ok_or_else(|| AppError::NotFound(format!("indexer config '{parent_id}' not found")))?;
+            let metadata = with_managed_child_local_disable(
+                parent.managed_metadata_json.as_deref(),
+                child_key,
+                locally_disabled,
+            )?;
+            self.services
+                .integrations
+                .indexer_configs
+                .update(IndexerConfigUpdate {
+                    id: parent_id.clone(),
+                    managed_metadata_json: Some(metadata),
+                    ..Default::default()
+                })
+                .await?;
+            let updated = self
+                .services
+                .integrations
+                .indexer_configs
+                .update(IndexerConfigUpdate {
+                    id: child_id.clone(),
+                    is_enabled: Some(false),
+                    ..Default::default()
+                })
+                .await?;
+            (updated, parent_id)
+        };
+        Ok((updated, parent_id))
+    }
+
     async fn set_managed_child_indexers_enabled_state(
         &self,
         parent_config_id: &str,
@@ -1401,7 +1586,7 @@ impl AppUseCase {
     ) -> AppResult<()> {
         for scope_id in MANAGED_INDEXER_SCOPE_IDS {
             let entries = routing_by_scope.remove(*scope_id).unwrap_or_default();
-            self.update_indexer_routing(actor, scope_id, entries)
+            self.update_indexer_routing_without_sync_lock(actor, scope_id, entries)
                 .await?;
         }
         Ok(())

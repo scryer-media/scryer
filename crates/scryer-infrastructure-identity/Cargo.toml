@@ -1,6 +1,6 @@
 [package]
 name = "scryer-infrastructure-identity"
-version = "0.18.22"
+version = "0.19.4"
 edition.workspace = true
 publish = false
 

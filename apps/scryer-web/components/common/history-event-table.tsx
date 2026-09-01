@@ -134,7 +134,7 @@ function HistoryEpisodes({
         episodeIds.map((episodeId, index) => [`episode${index}`, episodeId]),
       ),
     }),
-    [event.titleId, ...episodeIds],
+    [event.titleId, episodeIds],
   );
   const [{ data, fetching }] = useQuery<Record<string, HistoryEpisode | null>>({
     query,

@@ -1,7 +1,7 @@
 use super::*;
 use crate::contracts::{
     ClientJobLocator, DownloadClientBindingRecord, DownloadRecord, ObservationResolution,
-    ObservedClientJob,
+    ObservedClientJob, TerminalDownloadHistoryRow,
 };
 use crate::types::{
     ApiKeyRecord, EpisodeMediaAvailability, IndexerSearchPlanCapability, IndexerSearchPlanRequest,
@@ -185,10 +185,7 @@ pub struct DiscoverySyncRunRecord {
     pub page_count: Option<i32>,
     pub item_count: Option<i64>,
     pub facet_count: Option<i64>,
-    pub raw_submit_json: Option<String>,
-    pub raw_changes_json: Option<String>,
-    pub raw_final_status_json: Option<String>,
-    pub raw_ack_json: Option<String>,
+    pub acknowledged_at: Option<DateTime<Utc>>,
     pub error_text: Option<String>,
     pub started_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
@@ -457,14 +454,14 @@ pub struct DiscoverySectionRecord {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct DiscoverySourceTagRecord {
     pub category: Option<String>,
     pub name: Option<String>,
     pub values: Vec<String>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct DiscoveryExternalIdRecord {
     pub source: String,
     pub kind: String,
@@ -472,21 +469,21 @@ pub struct DiscoveryExternalIdRecord {
     pub key: String,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct DiscoveryRankComponentRecord {
     pub component_index: i32,
     pub component_name: Option<String>,
     pub component_value: Option<String>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct DiscoveryItemLibraryProvenanceRecord {
     pub subject_key: String,
     pub title_id: Option<String>,
     pub library_id: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct DiscoveryItemRecord {
     pub id: String,
     pub run_id: String,
@@ -2073,10 +2070,32 @@ pub trait ShowRepository: Send + Sync {
 #[async_trait]
 pub trait UserRepository: Send + Sync {
     async fn get_by_username(&self, username: &str) -> AppResult<Option<User>>;
+    async fn get_login_snapshot_by_username(
+        &self,
+        username: &str,
+    ) -> AppResult<Option<crate::types::UserLoginSnapshot>> {
+        let Some(user) = self.get_by_username(username).await? else {
+            return Ok(None);
+        };
+        let auth_session_version = self.auth_session_version(&user.id).await?;
+        Ok(Some(crate::types::UserLoginSnapshot {
+            user,
+            auth_session_version,
+        }))
+    }
     async fn create(&self, user: User) -> AppResult<User>;
     async fn list_all(&self) -> AppResult<Vec<User>>;
     async fn get_by_id(&self, id: &str) -> AppResult<Option<User>>;
     async fn auth_session_version(&self, user_id: &str) -> AppResult<Option<String>>;
+    async fn rotate_auth_session_version(
+        &self,
+        _user_id: &str,
+        _auth_session_version: &str,
+    ) -> AppResult<User> {
+        Err(AppError::Repository(
+            "authentication-session rotation is not configured".into(),
+        ))
+    }
     async fn reset_authentication_factors_and_invalidate_sessions(
         &self,
         _user_id: &str,
@@ -2086,22 +2105,21 @@ pub trait UserRepository: Send + Sync {
             "authentication-factor recovery is not configured".into(),
         ))
     }
-    async fn update_password_hash(
+    async fn update_password_and_invalidate_sessions(
         &self,
         id: &str,
         password_hash: String,
         password_change_required: bool,
+        auth_session_version: &str,
     ) -> AppResult<User>;
-    async fn set_temporary_password_and_invalidate_sessions(
+    async fn update_own_password_and_invalidate_sessions(
         &self,
-        _id: &str,
-        _password_hash: String,
-        _auth_session_version: &str,
-    ) -> AppResult<User> {
-        Err(AppError::Repository(
-            "temporary-password replacement is not configured".into(),
-        ))
-    }
+        id: &str,
+        password_hash: String,
+        password_change_required: bool,
+        auth_session_version: &str,
+        expected_password_hash: Option<&str>,
+    ) -> AppResult<User>;
     async fn complete_required_password_change(
         &self,
         _id: &str,
@@ -2182,6 +2200,14 @@ pub trait OAuthRepository: Send + Sync {
         id: &str,
         consumed_at: chrono::DateTime<chrono::Utc>,
     ) -> AppResult<bool>;
+    async fn consume_authorization_code_and_create_refresh_grant(
+        &self,
+        code: OAuthAuthorizationCodeRecord,
+        consumed_at: chrono::DateTime<chrono::Utc>,
+        grant: OAuthRefreshGrantRecord,
+        token: OAuthRefreshTokenRecord,
+        require_active_client_registration: bool,
+    ) -> AppResult<Option<OAuthRefreshGrantRecord>>;
     async fn create_refresh_grant(
         &self,
         grant: OAuthRefreshGrantRecord,
@@ -2779,6 +2805,16 @@ pub trait WebauthnRepository: Send + Sync {
         &self,
         credential: WebauthnCredentialRecord,
     ) -> AppResult<WebauthnCredentialRecord>;
+    /// Installs a passkey only while the observed authentication session remains current.
+    async fn create_credential_for_current_session(
+        &self,
+        _credential: WebauthnCredentialRecord,
+        _expected_auth_session_version: Option<&str>,
+    ) -> AppResult<WebauthnCredentialRecord> {
+        Err(AppError::Repository(
+            "atomic passkey creation for the current session is not configured".into(),
+        ))
+    }
     async fn update_credential(
         &self,
         credential: WebauthnCredentialRecord,
@@ -2793,6 +2829,17 @@ pub trait WebauthnRepository: Send + Sync {
         credential_record_id: &str,
         user_id: &str,
     ) -> AppResult<()>;
+    /// Deletes a passkey only when another sign-in route and the current session remain valid.
+    async fn delete_credential_preserving_login_route_for_current_session(
+        &self,
+        _credential_record_id: &str,
+        _user_id: &str,
+        _expected_auth_session_version: Option<&str>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "atomic passkey deletion for the current session is not configured".into(),
+        ))
+    }
     async fn create_challenge(
         &self,
         challenge: WebauthnChallengeRecord,
@@ -2804,6 +2851,7 @@ pub trait WebauthnRepository: Send + Sync {
     async fn create_login_verification_challenge(
         &self,
         _challenge: LoginVerificationChallengeRecord,
+        _expected_auth_session_version: &Option<String>,
     ) -> AppResult<LoginVerificationChallengeRecord> {
         Err(AppError::Repository(
             "login verification challenges are not configured".into(),
@@ -2860,6 +2908,39 @@ pub trait TotpRepository: Send + Sync {
         user_id: &str,
         auth_session_version: &str,
     ) -> AppResult<()>;
+    /// Atomically installs a newly verified TOTP factor while the observed session remains current.
+    async fn complete_enrollment_for_current_session(
+        &self,
+        _credential: TotpCredentialRecord,
+        _challenge_id: &str,
+        _recovery_codes: Vec<TotpRecoveryCodeRecord>,
+        _expected_auth_session_version: Option<&str>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "atomic TOTP enrollment completion for the current session is not configured".into(),
+        ))
+    }
+    /// Atomically removes a TOTP factor and its related secrets for the current session.
+    async fn disable_for_current_session(
+        &self,
+        _user_id: &str,
+        _expected_auth_session_version: Option<&str>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "atomic TOTP disablement for the current session is not configured".into(),
+        ))
+    }
+    /// Atomically replaces recovery codes for the current session.
+    async fn replace_recovery_codes_for_current_session(
+        &self,
+        _user_id: &str,
+        _codes: Vec<TotpRecoveryCodeRecord>,
+        _expected_auth_session_version: Option<&str>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "atomic recovery-code replacement for the current session is not configured".into(),
+        ))
+    }
     async fn replace_recovery_codes(
         &self,
         user_id: &str,
@@ -2875,6 +2956,33 @@ pub trait TotpRepository: Send + Sync {
         user_id: &str,
         used_at: &str,
     ) -> AppResult<()>;
+    /// Atomically reserves one verification attempt for the credential's rolling window.
+    async fn reserve_totp_attempt(
+        &self,
+        user_id: &str,
+        attempted_at: &str,
+        window_started_after: &str,
+        limit: i32,
+    ) -> AppResult<bool> {
+        let _ = (user_id, attempted_at, window_started_after, limit);
+        Err(AppError::Repository(
+            "atomic TOTP attempt reservations are not configured".into(),
+        ))
+    }
+    /// Clears the rolling attempt reservation after a successful verification.
+    async fn clear_totp_attempt_reservations(&self, user_id: &str) -> AppResult<()> {
+        let _ = user_id;
+        Err(AppError::Repository(
+            "atomic TOTP attempt reservations are not configured".into(),
+        ))
+    }
+    /// Atomically accepts one previously unused TOTP time step.
+    async fn claim_totp_step(&self, user_id: &str, step: i64, used_at: &str) -> AppResult<bool> {
+        let _ = (user_id, step, used_at);
+        Err(AppError::Repository(
+            "atomic TOTP step claims are not configured".into(),
+        ))
+    }
     async fn record_failed_attempt(&self, attempt: TotpFailedAttemptRecord) -> AppResult<()>;
     async fn count_failed_attempts_since(&self, user_id: &str, since: &str) -> AppResult<i64>;
     async fn clear_failed_attempts(&self, user_id: &str) -> AppResult<u64>;
@@ -3207,6 +3315,11 @@ pub trait LogicalBackupExporter: Send + Sync {
 
 #[async_trait]
 pub trait HousekeepingRepository: Send + Sync {
+    async fn delete_stale_workflow_operations(
+        &self,
+        completed_days: i64,
+        warning_failed_days: i64,
+    ) -> AppResult<u32>;
     async fn delete_release_decisions_older_than(&self, days: i64) -> AppResult<u32>;
     async fn delete_release_attempts_older_than(&self, days: i64) -> AppResult<u32>;
     async fn delete_history_events_older_than(&self, days: i64) -> AppResult<u32>;
@@ -3300,6 +3413,18 @@ pub struct IndexerSearchLearningContext {
     /// leave it `None`, which resolves to the neutral value. Plan 112 owns how
     /// the scheduler acts on the resulting value under quota pressure.
     pub background_value: Option<f64>,
+    /// Whether this pass may be served from the persisted search-candidate
+    /// corpus instead of firing the indexer.
+    ///
+    /// Reuse is a **background-lane** economy: convergence cycles walk the same
+    /// scopes repeatedly and a candidate set persisted hours ago is as good as
+    /// a fresh one for them. An operator-triggered search is the opposite — the
+    /// user is asking "what is on the indexer *now*", usually seconds after a
+    /// release they expect to see appeared. Serving that from a corpus snapshot
+    /// taken before the release existed reports "nothing new" for up to the
+    /// whole reuse window, which is how an explicit upgrade search stopped
+    /// finding a PROPER registered moments earlier.
+    pub candidate_reuse_allowed: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -3337,6 +3462,8 @@ pub struct NormalizedIndexerSearchCandidate {
     pub thumbs_up: Option<i32>,
     pub thumbs_down: Option<i32>,
     pub grabs: Option<i64>,
+    pub grab_current: Option<i64>,
+    pub grab_max: Option<i64>,
     pub languages: Vec<String>,
     pub subtitles: Vec<String>,
     pub response_tvdb_id: Option<String>,
@@ -3368,8 +3495,10 @@ pub struct IndexerSearchCandidateWrite {
     pub indexer_id: String,
     pub scope_key: String,
     pub query_signature: String,
-    /// A one-way digest of the canonical release URL/title used for first-seen
-    /// suppression within one streaming search session.
+    /// The release's cross-indexer content identity
+    /// ([`crate::release_candidate_fingerprint`]): the durable candidate key
+    /// the store dedups by across runs, sessions, and indexers — no longer
+    /// session-scoped despite the field name.
     pub session_identity_hash: String,
     pub normalized: NormalizedIndexerSearchCandidate,
     pub created_at: chrono::DateTime<chrono::Utc>,
@@ -3411,6 +3540,16 @@ pub trait IndexerSearchLearningRepository: Send + Sync {
         &self,
         _run: &IndexerSearchRunWrite,
         _candidates: &[IndexerSearchCandidateWrite],
+    ) -> AppResult<()> {
+        Ok(())
+    }
+
+    /// Makes the evaluated subset from one search pass reusable and discards
+    /// every staged payload that automatic acquisition rejected.
+    async fn finalize_search_session(
+        &self,
+        _search_session_id: &str,
+        _admissible_fingerprints: &[String],
     ) -> AppResult<()> {
         Ok(())
     }
@@ -3571,6 +3710,27 @@ pub struct IdentityTrackedStateTarget<'a> {
 #[async_trait]
 pub trait DownloadSubmissionRepository: Send + Sync {
     async fn record_submission(&self, submission: DownloadSubmission) -> AppResult<()>;
+
+    /// The most recent downloads whose durable tracked state is terminal
+    /// (imported / failed / ignored), newest first, capped at `limit`.
+    ///
+    /// Download history is projected from the live client snapshot, which is
+    /// only as durable as the client's own list: rTorrent (among others) evicts
+    /// finished jobs, and an imported download then disappeared from history
+    /// entirely. These rows are merged into that projection so a finished grab
+    /// stays visible once the client forgets it.
+    ///
+    /// Terminality is read the same way `bound_download_is_terminal_tx` reads
+    /// it — the canonical identity state first, then the submission's
+    /// `tracked_state` — so this cannot drift into a parallel notion of "done".
+    /// Defaults to empty so a store without the query simply contributes no
+    /// durable rows.
+    async fn list_terminal_download_history_rows(
+        &self,
+        _limit: usize,
+    ) -> AppResult<Vec<TerminalDownloadHistoryRow>> {
+        Ok(Vec::new())
+    }
 
     /// The grab-time infohash of a submission for this title whose release
     /// title normalizes to `normalized_release_name`, when one was recorded.
@@ -4442,6 +4602,7 @@ pub trait DownloadQueueCommandRepository: Send + Sync {
     async fn list_latest_delete_commands_for_sources(
         &self,
         sources: &[(Option<String>, String, String, bool)],
+        completed_only: bool,
     ) -> AppResult<Vec<crate::DownloadQueueCommandRecord>>;
 
     async fn prune_terminal_delete_commands_older_than(&self, days: i64) -> AppResult<u32>;
@@ -5365,6 +5526,14 @@ pub trait PluginDescriptorLoader: Send + Sync {
 
 #[async_trait]
 pub trait IndexerClient: Send + Sync {
+    async fn finalize_search_session(
+        &self,
+        _search_session_id: &str,
+        _admissible_fingerprints: &[String],
+    ) -> AppResult<()> {
+        Ok(())
+    }
+
     fn search_plan_capability(&self) -> Option<IndexerSearchPlanCapability> {
         None
     }
@@ -5445,6 +5614,78 @@ pub trait IndexerClient: Send + Sync {
         }
         response.results = results;
         Ok(response)
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the streaming adapter preserves the complete search envelope"
+    )]
+    async fn search_queries_stream(
+        &self,
+        queries: Vec<String>,
+        ids: std::collections::HashMap<String, String>,
+        category: Option<String>,
+        facet: Option<String>,
+        id_search_facet: Option<String>,
+        newznab_categories: Option<Vec<String>>,
+        indexer_routing: Option<IndexerRoutingPlan>,
+        mode: SearchMode,
+        operation: IndexerErrorOperation,
+        season: Option<u32>,
+        episode: Option<u32>,
+        absolute_episode: Option<u32>,
+        tagged_aliases: Vec<TaggedAlias>,
+        learning_context: Option<IndexerSearchLearningContext>,
+        cancel_token: tokio_util::sync::CancellationToken,
+        page_sink: crate::IndexerSearchPageSink,
+    ) -> AppResult<IndexerSearchResponse> {
+        let mut combined: Option<IndexerSearchResponse> = None;
+        for query in queries {
+            let mut response = self
+                .search_stream(
+                    query,
+                    ids.clone(),
+                    category.clone(),
+                    facet.clone(),
+                    id_search_facet.clone(),
+                    newznab_categories.clone(),
+                    indexer_routing.clone(),
+                    mode,
+                    operation,
+                    season,
+                    episode,
+                    absolute_episode,
+                    tagged_aliases.clone(),
+                    learning_context.clone(),
+                    cancel_token.child_token(),
+                    page_sink.clone(),
+                )
+                .await?;
+            if let Some(existing) = combined.as_mut() {
+                existing.results.append(&mut response.results);
+                existing
+                    .indexer_outcomes
+                    .append(&mut response.indexer_outcomes);
+                if response.completion != IndexerSearchCompletion::Complete {
+                    existing.completion = response.completion;
+                }
+                existing.api_current = response.api_current.or(existing.api_current);
+                existing.api_max = response.api_max.or(existing.api_max);
+                existing.grab_current = response.grab_current.or(existing.grab_current);
+                existing.grab_max = response.grab_max.or(existing.grab_max);
+            } else {
+                combined = Some(response);
+            }
+        }
+        Ok(combined.unwrap_or(IndexerSearchResponse {
+            results: Vec::new(),
+            completion: IndexerSearchCompletion::Complete,
+            api_current: None,
+            api_max: None,
+            grab_current: None,
+            grab_max: None,
+            indexer_outcomes: Vec::new(),
+        }))
     }
 
     #[expect(

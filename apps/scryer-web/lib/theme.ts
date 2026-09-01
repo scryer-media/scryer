@@ -84,9 +84,12 @@ export const HIGHLIGHT_COLOR_PRESETS: readonly HighlightColorPreset[] = [
   { value: "#3b82f6", labelKey: "color.sky" },
   { value: "#14b8a6", labelKey: "color.teal" },
   { value: "#10b981", labelKey: "color.emerald" },
-  { value: "#f59e0b", labelKey: "color.amber" },
+  { value: "#16a34a", labelKey: "color.green" },
+  { value: "#06b6d4", labelKey: "color.cyan" },
   { value: "#f43f5e", labelKey: "color.rose" },
+  { value: "#dc2626", labelKey: "color.red" },
   { value: "#c71684", labelKey: "color.fuchsia" },
+  { value: "#d60270", labelKey: "color.magenta" },
   { value: "#e8512f", labelKey: "color.crab" },
 ] as const;
 

@@ -182,6 +182,7 @@ pub(crate) enum ReleaseAutoDecisionCode {
     RepackGroupMismatch,
     MinimumSeeders,
     PackBelowMissingThreshold,
+    SubtitlesOnly,
 }
 
 impl ReleaseAutoDecisionCode {
@@ -213,6 +214,7 @@ impl ReleaseAutoDecisionCode {
             "repack_group_mismatch" => Some(Self::RepackGroupMismatch),
             "minimum_seeders" => Some(Self::MinimumSeeders),
             "pack_below_missing_threshold" => Some(Self::PackBelowMissingThreshold),
+            "subtitles_only" => Some(Self::SubtitlesOnly),
             _ => None,
         }
     }
@@ -243,6 +245,7 @@ impl ReleaseAutoDecisionCode {
             Self::RepackGroupMismatch => "repack_group_mismatch",
             Self::MinimumSeeders => "minimum_seeders",
             Self::PackBelowMissingThreshold => "pack_below_missing_threshold",
+            Self::SubtitlesOnly => "subtitles_only",
         }
     }
 
@@ -288,6 +291,7 @@ impl ReleaseAutoDecisionCode {
             Self::PackBelowMissingThreshold => {
                 "series pack does not meet the missing-episode threshold"
             }
+            Self::SubtitlesOnly => "release carries subtitles only and no video",
         }
     }
 
@@ -1247,7 +1251,7 @@ fn candidate_numbering_contradicts_subject(
     candidate: &IndexerSearchResult,
     subject: &ResolvedReleaseSearchSubject,
 ) -> bool {
-    if subject.season.is_none() && subject.episode.is_none() {
+    if subject.season.is_none() && subject.episode.is_none() && subject.absolute_episode.is_none() {
         return false;
     }
     let Some(parsed) = candidate.parsed_release_metadata.as_ref() else {
@@ -1256,18 +1260,12 @@ fn candidate_numbering_contradicts_subject(
     let Some(episode) = parsed.episode.as_ref() else {
         return true;
     };
-    if let (Some(expected_season), Some(found_season)) = (subject.season, episode.season)
-        && expected_season != found_season
-    {
-        return true;
-    }
-    if let Some(expected_episode) = subject.episode
-        && !episode.episode_numbers.is_empty()
-        && !episode.episode_numbers.contains(&expected_episode)
-    {
-        return true;
-    }
-    false
+    crate::acquisition_coverage::parsed_numbering_contradicts_episode(
+        subject.season,
+        subject.episode,
+        subject.absolute_episode,
+        episode,
+    )
 }
 
 /// A candidate's PROPER/REPACK rank, `0` when it could not be parsed.
@@ -1477,10 +1475,36 @@ pub(crate) fn automatic_candidate_delay_decision(
     )
 }
 
+/// Terminal extensions that mark a release as carrying subtitles and nothing
+/// else. `mks` is Matroska's subtitle-only container; `sup` is a PGS bitmap
+/// track. Wider than `scryer_domain::SUBTITLE_EXTENSIONS`, which classifies
+/// files on disk rather than release names.
+const SUBTITLES_ONLY_RELEASE_EXTENSIONS: &[&str] =
+    &["mks", "srt", "ass", "ssa", "sub", "idx", "vtt", "sup"];
+
+/// Only a terminal extension counts: `...mks.mkv` is a video release, and
+/// "subs" or "ass" inside a release name is just a word.
+fn release_title_is_subtitles_only(release_title: &str) -> bool {
+    release_title
+        .trim_end()
+        .rsplit_once('.')
+        .is_some_and(|(_, extension)| {
+            SUBTITLES_ONLY_RELEASE_EXTENSIONS
+                .iter()
+                .any(|subtitle_extension| extension.eq_ignore_ascii_case(subtitle_extension))
+        })
+}
+
 pub(crate) fn evaluate_auto_candidate(
     candidate: &IndexerSearchResult,
     context: &AutoCandidateEvaluationContext<'_>,
 ) -> ReleaseAutoDecisionCode {
+    // Ahead of every other gate: a subtitle-only release carries no video, so
+    // nothing the rest of the ladder measures can make it grabbable.
+    if release_title_is_subtitles_only(&candidate.title) {
+        return ReleaseAutoDecisionCode::SubtitlesOnly;
+    }
+
     let parse_state = candidate_parse_state(candidate);
     let title_match = candidate_title_match(candidate, &context.subject.title_evidence);
     let matches_title = title_match.is_some();
@@ -1512,11 +1536,15 @@ pub(crate) fn evaluate_auto_candidate(
     // by target derivation and by the RSS lane. A `Collection` is exempt because
     // a season pack's scope *is* its monitored members; refusing a whole season
     // because one episode is unmonitored would reintroduce the partial-monitoring
-    // trap.
-    if !matches!(
-        context.subject.submission_scope,
-        SubmissionScope::Collection { .. }
-    ) && let Some(SubmissionScope::EpisodeSet { episode_ids }) = &candidate.coverage_scope
+    // trap. An operator-started search is exempt the way Sonarr's spec skips
+    // the monitored check for user searches: the operator asking for a release
+    // outranks the monitoring flags it happens to touch.
+    if !context.user_invoked
+        && !matches!(
+            context.subject.submission_scope,
+            SubmissionScope::Collection { .. }
+        )
+        && let Some(SubmissionScope::EpisodeSet { episode_ids }) = &candidate.coverage_scope
         && episode_ids
             .iter()
             .any(|episode_id| context.unmonitored_episode_ids.contains(episode_id))
@@ -3045,6 +3073,57 @@ mod tests {
     }
 
     #[test]
+    fn subtitle_containers_are_recognised_only_as_a_terminal_extension() {
+        for subtitles_only in [
+            "Quiet.Meridian.S01E01.1080p.WEB-DL-GroupTag.mks",
+            "Quiet.Meridian.S01E01.1080p.WEB-DL-GroupTag.MKS",
+            "Quiet.Meridian.S01E01.1080p.WEB-DL-GroupTag.srt",
+            "Quiet.Meridian.S01E01.1080p.WEB-DL-GroupTag.sup",
+        ] {
+            assert!(
+                release_title_is_subtitles_only(subtitles_only),
+                "{subtitles_only} carries subtitles only"
+            );
+        }
+
+        for content in [
+            "Quiet.Meridian.S01E01.1080p.WEB-DL-GroupTag.mks.mkv",
+            "Quiet.Meridian.S01E01.1080p.WEB-DL.[subs included]-GroupTag",
+            "Quiet.Meridian.S01E01.ass.kicker.1080p.WEB-DL-GroupTag",
+            "Quiet Meridian S01E01 1080p WEB-DL GroupTag",
+        ] {
+            assert!(
+                !release_title_is_subtitles_only(content),
+                "{content} is a content release"
+            );
+        }
+    }
+
+    #[test]
+    fn a_subtitles_only_candidate_is_never_admissible() {
+        let mut title = make_title();
+        title.name = "Quiet Meridian".to_string();
+        title.facet = MediaFacet::Series;
+        title.tagged_aliases = Vec::new();
+        let subject = numbering_scoped_subject(&title, Some(1), Some(1));
+
+        let mut subtitles_only =
+            make_candidate("Quiet.Meridian.S01E01.1080p.WEB-DL-GroupTag.mks", None);
+        subtitles_only.quality_profile_decision = Some(allowed_quality_decision(2400));
+        assert_eq!(
+            decision_for(&title, &subject, &subtitles_only),
+            ReleaseAutoDecisionCode::SubtitlesOnly
+        );
+
+        let mut content = make_candidate("Quiet.Meridian.S01E01.1080p.WEB-DL-GroupTag.mkv", None);
+        content.quality_profile_decision = Some(allowed_quality_decision(2400));
+        assert_eq!(
+            decision_for(&title, &subject, &content),
+            ReleaseAutoDecisionCode::Eligible
+        );
+    }
+
+    #[test]
     fn episode_subject_rejects_candidates_without_episode_identity() {
         // Bare-title junk for a generic name ("Pals") carries neither a
         // contradicting year nor episode numbering — the movie-shaped parse is
@@ -4507,9 +4586,21 @@ mod tests {
             ReleaseAutoDecisionCode::EpisodeNotMonitored
         );
 
+        // An operator-started search skips the monitored check the way
+        // Sonarr's spec does for user searches: the same batch is fine.
+        let context = AutoCandidateEvaluationContext {
+            user_invoked: true,
+            ..context
+        };
+        assert_eq!(
+            evaluate_auto_candidate(&candidate, &context),
+            ReleaseAutoDecisionCode::Eligible
+        );
+
         // Every episode monitored: the same batch is fine.
         let all_monitored = HashSet::new();
         let context = AutoCandidateEvaluationContext {
+            user_invoked: false,
             unmonitored_episode_ids: &all_monitored,
             ..context
         };

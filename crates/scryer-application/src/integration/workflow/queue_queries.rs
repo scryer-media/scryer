@@ -394,6 +394,33 @@ fn apply_submission_to_queue_item(item: &mut DownloadQueueItem, submission: &Dow
     if crate::import_parameters::submission_has_scryer_origin(submission) {
         item.is_scryer_origin = true;
     }
+    // The submission remembers exactly which configured client the grab was
+    // routed to. A client-observed row often carries only a provider-type
+    // identity ("qbittorrent" as both id and type), and the unique-type
+    // canonicalization above it cannot pick a config when two clients share the
+    // type — so the row rendered the provider type where the operator expects
+    // the configured name. Restore the real id here and let the canonicalize
+    // pass that follows enrichment resolve it to the configured name.
+    let item_client_id = item.client_id.trim();
+    let item_has_type_fallback_id =
+        item_client_id.is_empty() || item_client_id.eq_ignore_ascii_case(item.client_type.trim());
+    if item_has_type_fallback_id
+        && let Some(submission_client_id) = submission
+            .download_client_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    {
+        item.client_id = submission_client_id.to_string();
+        if item.client_type.trim().is_empty() {
+            item.client_type = submission.download_client_type.clone();
+        }
+        // The name belongs to the config, not the submission; clear a
+        // type-derived stand-in so canonicalization fills the configured name.
+        if item.client_name.trim().eq_ignore_ascii_case(item.client_type.trim()) {
+            item.client_name = String::new();
+        }
+    }
     if let Some(source_title) = submission
         .source_title
         .as_deref()
@@ -850,6 +877,12 @@ impl AppUseCase {
 
         canonicalize_download_queue_item_clients(&mut items, enabled_clients);
         enrich_download_queue_items_from_submissions(self, &mut items).await;
+        // Submission enrichment can have just restored a row's real configured
+        // client id (a client-observed row only knows its provider type, and
+        // with two same-type clients the unique-type pass above cannot pick
+        // one). Canonicalize once more so that id resolves to the configured
+        // name before anything renders it.
+        canonicalize_download_queue_item_clients(&mut items, enabled_clients);
 
         let mut items = dedupe_download_queue_items(items)
             .into_iter()
@@ -1874,11 +1907,11 @@ mod queue_query_unit_tests {
     fn submission_enrichment_prefers_raw_release_title() {
         let mut item = queue_item();
         let mut submitted = submission(SubmissionScope::Title);
-        submitted.source_title = Some("Judas.Bleach.252-279.BD-GROUP".to_string());
+        submitted.source_title = Some("GroupTag.Quiet.Meridian.252-279.BD-GROUP".to_string());
 
         apply_submission_to_queue_item(&mut item, &submitted);
 
-        assert_eq!(item.title_name, "Judas.Bleach.252-279.BD-GROUP");
+        assert_eq!(item.title_name, "GroupTag.Quiet.Meridian.252-279.BD-GROUP");
 
         item.title_name = "Client Display Name".to_string();
         submitted.source_title = Some("  ".to_string());

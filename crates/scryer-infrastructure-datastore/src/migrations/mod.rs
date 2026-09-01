@@ -7,6 +7,7 @@ mod blake3_identities_upgrade_tests;
 #[path = "blocklist_release_identity_upgrade_tests.rs"]
 mod blocklist_release_identity_upgrade_tests;
 pub mod canonical_download_identity;
+pub mod event_storage;
 pub mod hook_ids;
 pub mod known_bad;
 pub mod notification_targets;
@@ -787,6 +788,7 @@ async fn run_rust_hook(
         "backfill_blake3_identities" => {
             blake3_identities::backfill_blake3_identities_sqlite(tx).await
         }
+        "compact_event_storage" => event_storage::compact_event_storage_sqlite(tx).await,
         #[cfg(test)]
         "test_insert_hook_marker" => {
             let marker = match install_kind {

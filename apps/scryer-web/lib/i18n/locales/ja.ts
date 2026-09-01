@@ -65,6 +65,7 @@ const ja: LocaleDictionary = {
   "label.unknownType": "不明なタイプ",
   "label.yearUnknown": "年不明",
   "label.noArt": "アートなし",
+  "color.magenta": "マゼンタ",
   "nav.dashboard": "ダッシュボード",
   "nav.movies": "映画",
   "nav.series": "シリーズ",

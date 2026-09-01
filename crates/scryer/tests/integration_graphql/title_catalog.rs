@@ -1415,8 +1415,12 @@ async fn graphql_add_movie_accepts_smg_and_tmdb_identity_without_tvdb() {
     );
 }
 
+/// A series holds every external id it was added with. Search subjects, RSS
+/// candidate indexes and notification payloads read imdb/tmdb/smg ids without
+/// checking the facet, so `addTitle` must store them for a series exactly as it
+/// does for a movie, and `externalIds` must read them all back.
 #[tokio::test]
-async fn graphql_add_series_discards_movie_identities_from_search_input() {
+async fn graphql_add_series_keeps_every_identity_from_search_input() {
     let ctx = TestContext::new().await;
     let body = gql(
         &ctx,
@@ -1449,7 +1453,85 @@ async fn graphql_add_series_discards_movie_identities_from_search_input() {
     assert_no_errors(&body);
     assert_eq!(
         body["data"]["addTitle"]["title"]["externalIds"],
-        json!([{ "source": "tvdb", "value": "12345" }])
+        json!([
+            { "source": "smg", "value": "202" },
+            { "source": "tmdb", "value": "2020" },
+            { "source": "imdb", "value": "tt0202020" },
+            { "source": "tvdb", "value": "12345" },
+        ])
+    );
+}
+
+/// The e2e harness verifies an added series by reading its imdb id back out of
+/// `titles { items { externalIds } }`. A series added with imdb + tvdb must
+/// therefore store and list both, not just the tvdb id.
+#[tokio::test]
+async fn graphql_added_series_lists_both_its_imdb_and_tvdb_ids() {
+    let ctx = TestContext::new().await;
+    let body = gql(
+        &ctx,
+        r#"mutation($input: AddTitleInput!) {
+            addTitle(input: $input) {
+                title { id externalIds { source value } }
+            }
+        }"#,
+        json!({
+            "input": {
+                "name": "Quiet Meridian",
+                "facet": "SERIES",
+                "monitored": true,
+                "tags": [],
+                "tvdbId": "770001",
+                "imdbId": "tt0770001"
+            }
+        }),
+    )
+    .await;
+    assert_no_errors(&body);
+    let title_id = body["data"]["addTitle"]["title"]["id"]
+        .as_str()
+        .expect("added series id")
+        .to_string();
+
+    let listed = gql(
+        &ctx,
+        r#"query($facet: MediaFacetValue) { titles(facet: $facet) { items { id externalIds { source value } } } }"#,
+        json!({ "facet": "SERIES" }),
+    )
+    .await;
+    assert_no_errors(&listed);
+    let item = listed["data"]["titles"]["items"]
+        .as_array()
+        .expect("titles items")
+        .iter()
+        .find(|item| item["id"] == title_id.as_str())
+        .expect("added series in titles readback")
+        .clone();
+    let mut external_ids = item["externalIds"]
+        .as_array()
+        .expect("externalIds")
+        .iter()
+        .map(|external_id| {
+            (
+                external_id["source"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+                external_id["value"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+            )
+        })
+        .collect::<Vec<_>>();
+    external_ids.sort();
+    assert_eq!(
+        external_ids,
+        vec![
+            ("imdb".to_string(), "tt0770001".to_string()),
+            ("tvdb".to_string(), "770001".to_string()),
+        ],
+        "a series keeps both its imdb and tvdb ids through the externalIds readback"
     );
 }
 

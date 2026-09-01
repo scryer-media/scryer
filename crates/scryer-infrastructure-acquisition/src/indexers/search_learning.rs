@@ -3,10 +3,14 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 use chrono::{DateTime, SecondsFormat, Utc};
 use scryer_application::{
-    AppError, AppResult, IndexerSearchCandidateWrite, IndexerSearchLearningKey,
+    AppError, AppResult, HashDomain, IndexerSearchCandidateWrite, IndexerSearchLearningKey,
     IndexerSearchLearningRecord, IndexerSearchLearningRepository, IndexerSearchRunWrite,
     NormalizedIndexerSearchCandidate, ReusableIndexerSearchCandidate,
-    ReusableIndexerSearchStrategy,
+    ReusableIndexerSearchStrategy, blake3_identity_hex,
+};
+use scryer_infrastructure_crypto::{
+    EncryptionKey,
+    config::{current_encryption_key, decrypt_optional_value, encrypt_optional_value},
 };
 
 use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, StoreDatastore, repo_err};
@@ -18,11 +22,18 @@ fn sqlite_timestamp(timestamp: DateTime<Utc>) -> String {
 #[derive(Clone)]
 pub struct IndexerSearchLearningStore {
     datastore: StoreDatastore,
+    encryption_key: std::sync::Arc<std::sync::RwLock<Option<EncryptionKey>>>,
 }
 
 impl IndexerSearchLearningStore {
-    pub fn new(datastore: StoreDatastore) -> Self {
-        Self { datastore }
+    pub fn new(
+        datastore: StoreDatastore,
+        encryption_key: std::sync::Arc<std::sync::RwLock<Option<EncryptionKey>>>,
+    ) -> Self {
+        Self {
+            datastore,
+            encryption_key,
+        }
     }
 
     async fn get_record(
@@ -51,6 +62,7 @@ impl IndexerSearchLearningStore {
         &self,
         rows: Vec<SqlRow>,
     ) -> AppResult<Vec<ReusableIndexerSearchCandidate>> {
+        let key = current_encryption_key(&self.encryption_key)?;
         let mut order = Vec::with_capacity(rows.len());
         let mut candidates = HashMap::with_capacity(rows.len());
         for row in &rows {
@@ -62,9 +74,19 @@ impl IndexerSearchLearningStore {
                     provider_ref: row.opt_text("provider_ref")?,
                     source: row.text("source")?,
                     title: row.text("title")?,
-                    download_url: row.opt_text("download_url")?,
+                    download_url: decrypt_optional_value(
+                        key.as_ref(),
+                        row.opt_text("encrypted_download_url")?,
+                        "indexer candidate grab URL",
+                        true,
+                    )?,
                     download_url_credential_keys: Vec::new(),
-                    link_url: row.opt_text("link_url")?,
+                    link_url: decrypt_optional_value(
+                        key.as_ref(),
+                        row.opt_text("encrypted_link_url")?,
+                        "indexer candidate link URL",
+                        true,
+                    )?,
                     link_url_credential_keys: Vec::new(),
                     size_bytes: row.opt_i64("size_bytes")?,
                     published_at: row.opt_text("published_at")?,
@@ -72,6 +94,8 @@ impl IndexerSearchLearningStore {
                     thumbs_up: row.opt_i32("thumbs_up")?,
                     thumbs_down: row.opt_i32("thumbs_down")?,
                     grabs: row.opt_i64("grabs")?,
+                    grab_current: row.opt_i64("grab_current")?,
+                    grab_max: row.opt_i64("grab_max")?,
                     languages: Vec::new(),
                     subtitles: Vec::new(),
                     response_tvdb_id: row.opt_text("response_tvdb_id")?,
@@ -107,10 +131,10 @@ impl IndexerSearchLearningStore {
         let value_rows = SqlRuntime::fetch_all(
             self.datastore.read_exec(),
             &format!(
-                "SELECT candidate_id, value_kind, value
-                   FROM indexer_search_candidate_values
-                  WHERE candidate_id IN ({placeholders})
-                  ORDER BY candidate_id, value_kind, ordinal"
+                "SELECT source_id AS candidate_id, value_kind, value
+                   FROM indexer_search_candidate_source_values
+                  WHERE source_id IN ({placeholders})
+                  ORDER BY source_id, value_kind, ordinal"
             ),
             &candidate_args(),
         )
@@ -129,30 +153,6 @@ impl IndexerSearchLearningStore {
                 "series_name" => candidate.series_names.push(value),
                 "tag" => candidate.tags.push(value),
                 "provider_category" => candidate.provider_categories.push(value),
-                _ => {}
-            }
-        }
-
-        let credential_rows = SqlRuntime::fetch_all(
-            self.datastore.read_exec(),
-            &format!(
-                "SELECT candidate_id, url_kind, query_key
-                   FROM indexer_search_candidate_url_credentials
-                  WHERE candidate_id IN ({placeholders})
-                  ORDER BY candidate_id, url_kind, ordinal"
-            ),
-            &candidate_args(),
-        )
-        .await?;
-        for row in &credential_rows {
-            let candidate_id = row.text("candidate_id")?;
-            let Some(candidate) = candidates.get_mut(&candidate_id) else {
-                continue;
-            };
-            let query_key = row.text("query_key")?;
-            match row.text("url_kind")?.as_str() {
-                "download" => candidate.download_url_credential_keys.push(query_key),
-                "link" => candidate.link_url_credential_keys.push(query_key),
                 _ => {}
             }
         }
@@ -310,12 +310,14 @@ impl IndexerSearchLearningRepository for IndexerSearchLearningStore {
     ) -> AppResult<()> {
         let run = run.clone();
         let candidates = candidates.to_vec();
+        let encryption_key = current_encryption_key(&self.encryption_key)?;
         SqlRuntime::run_in_transaction(
             &self.datastore,
             "record_indexer_search_diagnostics",
             move |tx| {
                 let run = run.clone();
                 let candidates = candidates.clone();
+                let encryption_key = encryption_key.clone();
                 Box::pin(async move {
                     SqlRuntime::execute(
                         SqlExec::Tx(tx),
@@ -348,77 +350,146 @@ impl IndexerSearchLearningRepository for IndexerSearchLearningStore {
 
                     for candidate in candidates {
                         let IndexerSearchCandidateWrite {
-                            id,
+                            id: _,
                             run_id,
                             search_session_id,
                             indexer_id,
-                            scope_key,
-                            query_signature,
+                            scope_key: _,
+                            query_signature: _,
                             session_identity_hash,
                             normalized,
                             created_at,
                             reusable_until,
                             expires_at,
                         } = candidate;
-                        let inserted = SqlRuntime::execute(
+                        let candidate_id = session_identity_hash.clone();
+                        let source_reference = normalized
+                            .provider_ref
+                            .as_deref()
+                            .filter(|value| !value.trim().is_empty())
+                            .or(normalized.download_url.as_deref())
+                            .or(normalized.link_url.as_deref())
+                            .unwrap_or(normalized.source.as_str())
+                            .to_string();
+                        let source_identity = blake3_identity_hex(
+                            HashDomain::CandidateSessionIdentity,
+                            format!("candidate-source-reference\0{source_reference}"),
+                        );
+                        let source_id = blake3_identity_hex(
+                            HashDomain::CandidateSessionIdentity,
+                            format!("source\0{candidate_id}\0{indexer_id}\0{source_identity}"),
+                        );
+                        let encrypted_download_url = encrypt_optional_value(
+                            encryption_key.as_ref(),
+                            normalized.download_url.as_ref(),
+                            "indexer candidate grab URL",
+                            true,
+                        )?;
+                        let encrypted_link_url = encrypt_optional_value(
+                            encryption_key.as_ref(),
+                            normalized.link_url.as_ref(),
+                            "indexer candidate link URL",
+                            true,
+                        )?;
+                        SqlRuntime::execute(
                             SqlExec::Tx(tx),
                             "INSERT INTO indexer_search_candidates (
-                                id, run_id, search_session_id, indexer_id, scope_key, query_signature,
-                                session_identity_hash,
-                                provider_ref, source, title, download_url, link_url,
-                                size_bytes, published_at, source_kind, thumbs_up, thumbs_down,
-                                grabs, response_tvdb_id, response_tmdb_id, response_imdb_id,
-                                season, episode, absolute_episode, release_group, provider_source,
-                                info_hash, seeders, peers, download_volume_factor,
-                                upload_volume_factor, protected, created_at, reusable_until,
-                                expires_at
-                             ) VALUES (
-                                {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {},
-                                {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {},
-                                {}, {}, {}, {}, {}
-                             ) ON CONFLICT DO NOTHING",
+                                id, fingerprint, title, normalized_title, size_bytes, source_kind,
+                                info_hash, created_at, updated_at, reusable_until, expires_at
+                             ) VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})
+                             ON CONFLICT(fingerprint) DO UPDATE SET
+                                title = excluded.title,
+                                normalized_title = excluded.normalized_title,
+                                size_bytes = excluded.size_bytes,
+                                source_kind = excluded.source_kind,
+                                info_hash = excluded.info_hash,
+                                updated_at = excluded.updated_at,
+                                reusable_until = excluded.reusable_until,
+                                expires_at = excluded.expires_at",
                             &[
-                                SqlArg::Text(id.clone()),
-                                SqlArg::Text(run_id),
-                                SqlArg::Text(search_session_id),
-                                SqlArg::Text(indexer_id),
-                                SqlArg::Text(scope_key),
-                                SqlArg::Text(query_signature),
-                                SqlArg::Text(session_identity_hash),
-                                SqlArg::OptText(normalized.provider_ref.clone()),
-                                SqlArg::Text(normalized.source.clone()),
+                                SqlArg::Text(candidate_id.clone()),
+                                SqlArg::Text(candidate_id.clone()),
                                 SqlArg::Text(normalized.title.clone()),
-                                SqlArg::OptText(normalized.download_url.clone()),
-                                SqlArg::OptText(normalized.link_url.clone()),
+                                SqlArg::Text(normalized.title.to_lowercase()),
                                 SqlArg::OptI64(normalized.size_bytes),
-                                SqlArg::OptText(normalized.published_at.clone()),
                                 SqlArg::OptText(normalized.source_kind.clone()),
-                                SqlArg::OptI32(normalized.thumbs_up),
-                                SqlArg::OptI32(normalized.thumbs_down),
-                                SqlArg::OptI64(normalized.grabs),
-                                SqlArg::OptText(normalized.response_tvdb_id.clone()),
-                                SqlArg::OptText(normalized.response_tmdb_id.clone()),
-                                SqlArg::OptText(normalized.response_imdb_id.clone()),
-                                SqlArg::OptI64(normalized.season),
-                                SqlArg::OptI64(normalized.episode),
-                                SqlArg::OptI64(normalized.absolute_episode),
-                                SqlArg::OptText(normalized.release_group.clone()),
-                                SqlArg::OptText(normalized.provider_source.clone()),
                                 SqlArg::OptText(normalized.info_hash.clone()),
-                                SqlArg::OptI64(normalized.seeders),
-                                SqlArg::OptI64(normalized.peers),
-                                SqlArg::OptF64(normalized.download_volume_factor),
-                                SqlArg::OptF64(normalized.upload_volume_factor),
-                                SqlArg::OptBool(normalized.protected),
+                                SqlArg::Timestamp(created_at),
                                 SqlArg::Timestamp(created_at),
                                 SqlArg::Timestamp(reusable_until),
                                 SqlArg::Timestamp(expires_at),
                             ],
                         )
                         .await?;
-                        if inserted == 0 {
-                            continue;
-                        }
+
+                        SqlRuntime::execute(
+                            SqlExec::Tx(tx),
+                            "INSERT INTO indexer_search_candidate_sources (
+                                id, candidate_id, indexer_id, source_identity, provider_ref, source,
+                                encrypted_download_url, encrypted_link_url, published_at, thumbs_up,
+                                thumbs_down, grabs, grab_current, grab_max, response_tvdb_id,
+                                response_tmdb_id, response_imdb_id, season, episode, absolute_episode,
+                                release_group, provider_source, seeders, peers, download_volume_factor,
+                                upload_volume_factor, protected, first_seen_at, last_seen_at,
+                                reusable_until, expires_at
+                             ) VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {},
+                                       {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})
+                             ON CONFLICT(candidate_id, indexer_id, source_identity) DO UPDATE SET
+                                provider_ref = excluded.provider_ref,
+                                source = excluded.source,
+                                encrypted_download_url = excluded.encrypted_download_url,
+                                encrypted_link_url = excluded.encrypted_link_url,
+                                published_at = excluded.published_at,
+                                thumbs_up = excluded.thumbs_up,
+                                thumbs_down = excluded.thumbs_down,
+                                grabs = excluded.grabs,
+                                grab_current = excluded.grab_current,
+                                grab_max = excluded.grab_max,
+                                response_tvdb_id = excluded.response_tvdb_id,
+                                response_tmdb_id = excluded.response_tmdb_id,
+                                response_imdb_id = excluded.response_imdb_id,
+                                season = excluded.season,
+                                episode = excluded.episode,
+                                absolute_episode = excluded.absolute_episode,
+                                release_group = excluded.release_group,
+                                provider_source = excluded.provider_source,
+                                seeders = excluded.seeders,
+                                peers = excluded.peers,
+                                download_volume_factor = excluded.download_volume_factor,
+                                upload_volume_factor = excluded.upload_volume_factor,
+                                protected = excluded.protected,
+                                last_seen_at = excluded.last_seen_at,
+                                reusable_until = excluded.reusable_until,
+                                expires_at = excluded.expires_at",
+                            &[
+                                SqlArg::Text(source_id.clone()), SqlArg::Text(candidate_id),
+                                SqlArg::Text(indexer_id), SqlArg::Text(source_identity),
+                                SqlArg::OptText(normalized.provider_ref.clone()), SqlArg::Text(normalized.source.clone()),
+                                SqlArg::OptText(encrypted_download_url), SqlArg::OptText(encrypted_link_url),
+                                SqlArg::OptText(normalized.published_at.clone()), SqlArg::OptI32(normalized.thumbs_up),
+                                SqlArg::OptI32(normalized.thumbs_down), SqlArg::OptI64(normalized.grabs),
+                                SqlArg::OptI64(normalized.grab_current), SqlArg::OptI64(normalized.grab_max),
+                                SqlArg::OptText(normalized.response_tvdb_id.clone()), SqlArg::OptText(normalized.response_tmdb_id.clone()),
+                                SqlArg::OptText(normalized.response_imdb_id.clone()), SqlArg::OptI64(normalized.season),
+                                SqlArg::OptI64(normalized.episode), SqlArg::OptI64(normalized.absolute_episode),
+                                SqlArg::OptText(normalized.release_group.clone()), SqlArg::OptText(normalized.provider_source.clone()),
+                                SqlArg::OptI64(normalized.seeders), SqlArg::OptI64(normalized.peers),
+                                SqlArg::OptF64(normalized.download_volume_factor), SqlArg::OptF64(normalized.upload_volume_factor),
+                                SqlArg::OptBool(normalized.protected), SqlArg::Timestamp(created_at),
+                                SqlArg::Timestamp(created_at), SqlArg::Timestamp(reusable_until), SqlArg::Timestamp(expires_at),
+                            ],
+                        ).await?;
+                        SqlRuntime::execute(
+                            SqlExec::Tx(tx),
+                            "INSERT INTO indexer_search_run_candidate_sources (run_id, source_id, search_session_id)
+                             VALUES ({}, {}, {}) ON CONFLICT DO NOTHING",
+                            &[SqlArg::Text(run_id), SqlArg::Text(source_id.clone()), SqlArg::Text(search_session_id)],
+                        ).await?;
+                        SqlRuntime::execute(
+                            SqlExec::Tx(tx),
+                            "DELETE FROM indexer_search_candidate_source_values WHERE source_id = {}",
+                            &[SqlArg::Text(source_id.clone())],
+                        ).await?;
 
                         for (value_kind, values) in [
                             ("language", &normalized.languages),
@@ -432,11 +503,11 @@ impl IndexerSearchLearningRepository for IndexerSearchLearningStore {
                             for (ordinal, value) in values.iter().enumerate() {
                                 SqlRuntime::execute(
                                     SqlExec::Tx(tx),
-                                    "INSERT INTO indexer_search_candidate_values (
-                                        candidate_id, value_kind, ordinal, value
+                                    "INSERT INTO indexer_search_candidate_source_values (
+                                        source_id, value_kind, ordinal, value
                                      ) VALUES ({}, {}, {}, {})",
                                     &[
-                                        SqlArg::Text(id.clone()),
+                                        SqlArg::Text(source_id.clone()),
                                         SqlArg::Text(value_kind.to_string()),
                                         SqlArg::I64(ordinal as i64),
                                         SqlArg::Text(value.clone()),
@@ -446,27 +517,87 @@ impl IndexerSearchLearningRepository for IndexerSearchLearningStore {
                             }
                         }
 
-                        for (url_kind, query_keys) in [
-                            ("download", &normalized.download_url_credential_keys),
-                            ("link", &normalized.link_url_credential_keys),
-                        ] {
-                            for (ordinal, query_key) in query_keys.iter().enumerate() {
-                                SqlRuntime::execute(
-                                    SqlExec::Tx(tx),
-                                    "INSERT INTO indexer_search_candidate_url_credentials (
-                                        candidate_id, url_kind, ordinal, query_key
-                                     ) VALUES ({}, {}, {}, {})",
-                                    &[
-                                        SqlArg::Text(id.clone()),
-                                        SqlArg::Text(url_kind.to_string()),
-                                        SqlArg::I64(ordinal as i64),
-                                        SqlArg::Text(query_key.clone()),
-                                    ],
-                                )
-                                .await?;
-                            }
-                        }
                     }
+                    Ok(())
+                })
+            },
+        )
+        .await
+    }
+
+    async fn finalize_search_session(
+        &self,
+        search_session_id: &str,
+        admissible_fingerprints: &[String],
+    ) -> AppResult<()> {
+        let search_session_id = search_session_id.to_string();
+        let admissible_fingerprints = admissible_fingerprints.to_vec();
+        SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "finalize_indexer_search_session",
+            move |tx| {
+                let search_session_id = search_session_id.clone();
+                let admissible_fingerprints = admissible_fingerprints.clone();
+                Box::pin(async move {
+                    let mut args = vec![SqlArg::Text(search_session_id.clone())];
+                    let rejected_clause = if admissible_fingerprints.is_empty() {
+                        String::new()
+                    } else {
+                        args.extend(admissible_fingerprints.into_iter().map(SqlArg::Text));
+                        format!(
+                            " AND c.fingerprint NOT IN ({})",
+                            std::iter::repeat_n("{}", args.len() - 1)
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )
+                    };
+                    SqlRuntime::execute(
+                        SqlExec::Tx(tx),
+                        &format!(
+                            "DELETE FROM indexer_search_run_candidate_sources
+                              WHERE search_session_id = {{}}
+                                AND source_id IN (
+                                    SELECT s.id
+                                      FROM indexer_search_candidate_sources s
+                                      JOIN indexer_search_candidates c ON c.id = s.candidate_id
+                                     WHERE 1 = 1{rejected_clause}
+                                )"
+                        ),
+                        &args,
+                    )
+                    .await?;
+                    SqlRuntime::execute(
+                        SqlExec::Tx(tx),
+                        "UPDATE indexer_search_runs
+                            SET completion_state = CASE completion_state
+                                WHEN 'received_complete' THEN 'complete'
+                                WHEN 'received_partial' THEN 'partial'
+                                ELSE completion_state
+                            END
+                          WHERE search_session_id = {}",
+                        &[SqlArg::Text(search_session_id)],
+                    )
+                    .await?;
+                    SqlRuntime::execute(
+                        SqlExec::Tx(tx),
+                        "DELETE FROM indexer_search_candidate_sources
+                          WHERE NOT EXISTS (
+                              SELECT 1 FROM indexer_search_run_candidate_sources rc
+                               WHERE rc.source_id = indexer_search_candidate_sources.id
+                          )",
+                        &[],
+                    )
+                    .await?;
+                    SqlRuntime::execute(
+                        SqlExec::Tx(tx),
+                        "DELETE FROM indexer_search_candidates
+                          WHERE NOT EXISTS (
+                              SELECT 1 FROM indexer_search_candidate_sources s
+                               WHERE s.candidate_id = indexer_search_candidates.id
+                          )",
+                        &[],
+                    )
+                    .await?;
                     Ok(())
                 })
             },
@@ -484,21 +615,25 @@ impl IndexerSearchLearningRepository for IndexerSearchLearningStore {
     ) -> AppResult<Vec<ReusableIndexerSearchCandidate>> {
         let rows = SqlRuntime::fetch_all(
             self.datastore.read_exec(),
-            "SELECT c.id, c.provider_ref, c.source, c.title, c.download_url, c.link_url,
-                    c.size_bytes, c.published_at, c.source_kind, c.thumbs_up, c.thumbs_down,
-                    c.grabs, c.response_tvdb_id, c.response_tmdb_id, c.response_imdb_id,
-                    c.season, c.episode, c.absolute_episode, c.release_group,
-                    c.provider_source, c.info_hash, c.seeders, c.peers,
-                    c.download_volume_factor, c.upload_volume_factor, c.protected
-             FROM indexer_search_candidates c
-             JOIN indexer_search_runs r ON r.id = c.run_id
-             WHERE c.indexer_id = {}
-               AND c.scope_key = {}
+            "SELECT DISTINCT s.id, s.provider_ref, s.source, c.title,
+                    s.encrypted_download_url, s.encrypted_link_url, c.size_bytes,
+                    s.published_at, c.source_kind, s.thumbs_up, s.thumbs_down,
+                    s.grabs, s.grab_current, s.grab_max, s.response_tvdb_id,
+                    s.response_tmdb_id, s.response_imdb_id, s.season, s.episode,
+                    s.absolute_episode, s.release_group, s.provider_source, c.info_hash,
+                    s.seeders, s.peers, s.download_volume_factor,
+                    s.upload_volume_factor, s.protected
+             FROM indexer_search_candidate_sources s
+             JOIN indexer_search_candidates c ON c.id = s.candidate_id
+             JOIN indexer_search_run_candidate_sources rc ON rc.source_id = s.id
+             JOIN indexer_search_runs r ON r.id = rc.run_id
+             WHERE s.indexer_id = {}
+               AND r.scope_key = {}
                AND r.indexer_fingerprint = {}
-               AND c.reusable_until >= {}
-               AND c.expires_at >= {}
+               AND s.reusable_until >= {}
+               AND s.expires_at >= {}
                AND r.completion_state IN ('complete', 'partial')
-             ORDER BY c.created_at DESC
+             ORDER BY s.last_seen_at DESC
              LIMIT {}",
             &[
                 SqlArg::Text(indexer_id.to_string()),
@@ -511,6 +646,7 @@ impl IndexerSearchLearningRepository for IndexerSearchLearningStore {
         )
         .await?;
 
+        let key = current_encryption_key(&self.encryption_key)?;
         let mut order = Vec::with_capacity(rows.len());
         let mut candidates = HashMap::with_capacity(rows.len());
         for row in &rows {
@@ -522,9 +658,19 @@ impl IndexerSearchLearningRepository for IndexerSearchLearningStore {
                     provider_ref: row.opt_text("provider_ref")?,
                     source: row.text("source")?,
                     title: row.text("title")?,
-                    download_url: row.opt_text("download_url")?,
+                    download_url: decrypt_optional_value(
+                        key.as_ref(),
+                        row.opt_text("encrypted_download_url")?,
+                        "indexer candidate grab URL",
+                        true,
+                    )?,
                     download_url_credential_keys: Vec::new(),
-                    link_url: row.opt_text("link_url")?,
+                    link_url: decrypt_optional_value(
+                        key.as_ref(),
+                        row.opt_text("encrypted_link_url")?,
+                        "indexer candidate link URL",
+                        true,
+                    )?,
                     link_url_credential_keys: Vec::new(),
                     size_bytes: row.opt_i64("size_bytes")?,
                     published_at: row.opt_text("published_at")?,
@@ -532,6 +678,8 @@ impl IndexerSearchLearningRepository for IndexerSearchLearningStore {
                     thumbs_up: row.opt_i32("thumbs_up")?,
                     thumbs_down: row.opt_i32("thumbs_down")?,
                     grabs: row.opt_i64("grabs")?,
+                    grab_current: row.opt_i64("grab_current")?,
+                    grab_max: row.opt_i64("grab_max")?,
                     languages: Vec::new(),
                     subtitles: Vec::new(),
                     response_tvdb_id: row.opt_text("response_tvdb_id")?,
@@ -566,10 +714,10 @@ impl IndexerSearchLearningRepository for IndexerSearchLearningStore {
             .join(", ");
         let candidate_args = || order.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>();
         let values_sql = format!(
-            "SELECT candidate_id, value_kind, value
-             FROM indexer_search_candidate_values
-             WHERE candidate_id IN ({placeholders})
-             ORDER BY candidate_id, value_kind, ordinal"
+            "SELECT source_id AS candidate_id, value_kind, value
+             FROM indexer_search_candidate_source_values
+             WHERE source_id IN ({placeholders})
+             ORDER BY source_id, value_kind, ordinal"
         );
         let value_rows =
             SqlRuntime::fetch_all(self.datastore.read_exec(), &values_sql, &candidate_args())
@@ -592,31 +740,6 @@ impl IndexerSearchLearningRepository for IndexerSearchLearningStore {
             }
         }
 
-        let credentials_sql = format!(
-            "SELECT candidate_id, url_kind, query_key
-             FROM indexer_search_candidate_url_credentials
-             WHERE candidate_id IN ({placeholders})
-             ORDER BY candidate_id, url_kind, ordinal"
-        );
-        let credential_rows = SqlRuntime::fetch_all(
-            self.datastore.read_exec(),
-            &credentials_sql,
-            &candidate_args(),
-        )
-        .await?;
-        for row in &credential_rows {
-            let candidate_id = row.text("candidate_id")?;
-            let Some(candidate) = candidates.get_mut(&candidate_id) else {
-                continue;
-            };
-            let query_key = row.text("query_key")?;
-            match row.text("url_kind")?.as_str() {
-                "download" => candidate.download_url_credential_keys.push(query_key),
-                "link" => candidate.link_url_credential_keys.push(query_key),
-                _ => {}
-            }
-        }
-
         Ok(order
             .into_iter()
             .filter_map(|id| candidates.remove(&id))
@@ -630,15 +753,19 @@ impl IndexerSearchLearningRepository for IndexerSearchLearningStore {
     ) -> AppResult<Vec<ReusableIndexerSearchCandidate>> {
         let rows = SqlRuntime::fetch_all(
             self.datastore.read_exec(),
-            "SELECT c.id, c.provider_ref, c.source, c.title, c.download_url, c.link_url,
-                    c.size_bytes, c.published_at, c.source_kind, c.thumbs_up, c.thumbs_down,
-                    c.grabs, c.response_tvdb_id, c.response_tmdb_id, c.response_imdb_id,
-                    c.season, c.episode, c.absolute_episode, c.release_group,
-                    c.provider_source, c.info_hash, c.seeders, c.peers,
-                    c.download_volume_factor, c.upload_volume_factor, c.protected
-             FROM indexer_search_candidates c
-             WHERE c.run_id = {}
-             ORDER BY c.created_at ASC, c.id ASC",
+            "SELECT s.id, s.provider_ref, s.source, c.title,
+                    s.encrypted_download_url, s.encrypted_link_url, c.size_bytes,
+                    s.published_at, c.source_kind, s.thumbs_up, s.thumbs_down,
+                    s.grabs, s.grab_current, s.grab_max, s.response_tvdb_id,
+                    s.response_tmdb_id, s.response_imdb_id, s.season, s.episode,
+                    s.absolute_episode, s.release_group, s.provider_source, c.info_hash,
+                    s.seeders, s.peers, s.download_volume_factor,
+                    s.upload_volume_factor, s.protected
+             FROM indexer_search_run_candidate_sources rc
+             JOIN indexer_search_candidate_sources s ON s.id = rc.source_id
+             JOIN indexer_search_candidates c ON c.id = s.candidate_id
+             WHERE rc.run_id = {}
+             ORDER BY s.first_seen_at ASC, s.id ASC",
             &[SqlArg::Text(run_id.to_string())],
         )
         .await?;
@@ -657,10 +784,11 @@ impl IndexerSearchLearningRepository for IndexerSearchLearningStore {
             self.datastore.read_exec(),
             "SELECT r.id, r.query_signature, r.branch, r.completion_state, r.retry_at,
                     EXISTS (
-                        SELECT 1 FROM indexer_search_candidates c
-                        WHERE c.run_id = r.id
-                          AND c.reusable_until >= {}
-                          AND c.expires_at >= {}
+                        SELECT 1 FROM indexer_search_run_candidate_sources rc
+                        JOIN indexer_search_candidate_sources s ON s.id = rc.source_id
+                        WHERE rc.run_id = r.id
+                          AND s.reusable_until >= {}
+                          AND s.expires_at >= {}
                     ) AS has_reusable_candidates
              FROM indexer_search_runs r
              WHERE r.indexer_id = {}
@@ -718,16 +846,27 @@ impl IndexerSearchLearningRepository for IndexerSearchLearningStore {
         let deleted_candidates = SqlRuntime::execute_write(
             &self.datastore,
             "cleanup_indexer_search_candidates",
-            "DELETE FROM indexer_search_candidates WHERE id IN (
-                SELECT id FROM indexer_search_candidates
-                WHERE expires_at < {} OR created_at < {}
-                ORDER BY created_at ASC LIMIT {}
+            "DELETE FROM indexer_search_candidate_sources WHERE id IN (
+                SELECT id FROM indexer_search_candidate_sources
+                WHERE expires_at < {} OR first_seen_at < {}
+                ORDER BY first_seen_at ASC LIMIT {}
              )",
             vec![
                 SqlArg::Timestamp(Utc::now()),
                 SqlArg::Timestamp(candidate_cutoff),
                 SqlArg::I64(limit),
             ],
+        )
+        .await?;
+        SqlRuntime::execute_write(
+            &self.datastore,
+            "cleanup_orphan_indexer_search_candidates",
+            "DELETE FROM indexer_search_candidates
+              WHERE NOT EXISTS (
+                  SELECT 1 FROM indexer_search_candidate_sources s
+                   WHERE s.candidate_id = indexer_search_candidates.id
+              )",
+            vec![],
         )
         .await?;
         let deleted_runs = SqlRuntime::execute_write(
@@ -936,38 +1075,14 @@ mod tests {
         sqlx::query(
             "CREATE TABLE indexer_search_candidates (
                 id TEXT PRIMARY KEY,
-                run_id TEXT NOT NULL,
-                search_session_id TEXT NOT NULL DEFAULT '',
-                indexer_id TEXT NOT NULL,
-                scope_key TEXT NOT NULL,
-                query_signature TEXT NOT NULL,
-                session_identity_hash TEXT NOT NULL DEFAULT '',
-                provider_ref TEXT,
-                source TEXT NOT NULL,
+                fingerprint TEXT NOT NULL UNIQUE,
                 title TEXT NOT NULL,
-                download_url TEXT,
-                link_url TEXT,
+                normalized_title TEXT NOT NULL,
                 size_bytes INTEGER,
-                published_at TEXT,
                 source_kind TEXT,
-                thumbs_up INTEGER,
-                thumbs_down INTEGER,
-                grabs INTEGER,
-                response_tvdb_id TEXT,
-                response_tmdb_id TEXT,
-                response_imdb_id TEXT,
-                season INTEGER,
-                episode INTEGER,
-                absolute_episode INTEGER,
-                release_group TEXT,
-                provider_source TEXT,
                 info_hash TEXT,
-                seeders INTEGER,
-                peers INTEGER,
-                download_volume_factor REAL,
-                upload_volume_factor REAL,
-                protected INTEGER,
                 created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
                 reusable_until TEXT NOT NULL,
                 expires_at TEXT NOT NULL
             )",
@@ -976,42 +1091,77 @@ mod tests {
         .await
         .expect("search candidate table should be created");
         sqlx::query(
-            "CREATE UNIQUE INDEX indexer_search_candidates_session_identity_unique
-                ON indexer_search_candidates (search_session_id, session_identity_hash)
-                WHERE search_session_id <> ''",
+            "CREATE TABLE indexer_search_candidate_sources (
+                id TEXT PRIMARY KEY,
+                candidate_id TEXT NOT NULL,
+                indexer_id TEXT NOT NULL,
+                source_identity TEXT NOT NULL,
+                provider_ref TEXT,
+                source TEXT NOT NULL,
+                encrypted_download_url TEXT,
+                encrypted_link_url TEXT,
+                published_at TEXT,
+                thumbs_up INTEGER,
+                thumbs_down INTEGER,
+                grabs INTEGER,
+                grab_current INTEGER,
+                grab_max INTEGER,
+                response_tvdb_id TEXT,
+                response_tmdb_id TEXT,
+                response_imdb_id TEXT,
+                season INTEGER,
+                episode INTEGER,
+                absolute_episode INTEGER,
+                release_group TEXT,
+                provider_source TEXT,
+                seeders INTEGER,
+                peers INTEGER,
+                download_volume_factor REAL,
+                upload_volume_factor REAL,
+                protected INTEGER,
+                first_seen_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL,
+                reusable_until TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                UNIQUE(candidate_id, indexer_id, source_identity)
+            )",
         )
         .execute(&pool)
         .await
-        .expect("session identity index should be created");
+        .expect("search candidate source table should be created");
         sqlx::query(
-            "CREATE TABLE indexer_search_candidate_values (
-                candidate_id TEXT NOT NULL,
+            "CREATE TABLE indexer_search_run_candidate_sources (
+                run_id TEXT NOT NULL,
+                source_id TEXT NOT NULL,
+                search_session_id TEXT NOT NULL,
+                PRIMARY KEY (run_id, source_id)
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("search run candidate source table should be created");
+        sqlx::query(
+            "CREATE TABLE indexer_search_candidate_source_values (
+                source_id TEXT NOT NULL,
                 value_kind TEXT NOT NULL,
                 ordinal INTEGER NOT NULL,
                 value TEXT NOT NULL,
-                PRIMARY KEY (candidate_id, value_kind, ordinal)
+                PRIMARY KEY (source_id, value_kind, ordinal)
             )",
         )
         .execute(&pool)
         .await
         .expect("search candidate value table should be created");
-        sqlx::query(
-            "CREATE TABLE indexer_search_candidate_url_credentials (
-                candidate_id TEXT NOT NULL,
-                url_kind TEXT NOT NULL,
-                ordinal INTEGER NOT NULL,
-                query_key TEXT NOT NULL,
-                PRIMARY KEY (candidate_id, url_kind, ordinal)
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("search candidate URL credential table should be created");
 
-        let store = IndexerSearchLearningStore::new(StoreDatastore::Sqlite {
-            pool: pool.clone(),
-            writer_gate: std::sync::Arc::new(tokio::sync::Mutex::new(())),
-        });
+        let store = IndexerSearchLearningStore::new(
+            StoreDatastore::Sqlite {
+                pool: pool.clone(),
+                writer_gate: std::sync::Arc::new(tokio::sync::Mutex::new(())),
+            },
+            std::sync::Arc::new(std::sync::RwLock::new(Some(EncryptionKey::from_bytes(
+                [7; 32],
+            )))),
+        );
 
         (store, pool)
     }
@@ -1152,7 +1302,7 @@ mod tests {
 
     #[tokio::test]
     async fn sqlite_store_reloads_only_fresh_matching_search_candidates() {
-        let (store, _) = sqlite_store().await;
+        let (store, pool) = sqlite_store().await;
         let now = Utc::now();
         let run = IndexerSearchRunWrite {
             id: "run-1".into(),
@@ -1165,8 +1315,8 @@ mod tests {
             page: Some(0),
             range_min_size: None,
             range_max_size: None,
-            result_count: 1,
-            completion_state: "complete".into(),
+            result_count: 2,
+            completion_state: "received_complete".into(),
             retry_at: None,
             error_summary: None,
             indexer_fingerprint: "fingerprint-1".into(),
@@ -1194,6 +1344,8 @@ mod tests {
                 thumbs_up: None,
                 thumbs_down: None,
                 grabs: Some(7),
+                grab_current: Some(10),
+                grab_max: Some(100),
                 languages: vec!["en".into(), "ja".into()],
                 subtitles: vec!["en".into()],
                 response_tvdb_id: Some("1234".into()),
@@ -1220,8 +1372,14 @@ mod tests {
             reusable_until: now + chrono::Duration::hours(24),
             expires_at: now + chrono::Duration::days(7),
         };
+        let mut rejected_candidate = candidate.clone();
+        rejected_candidate.id = "candidate-rejected".into();
+        rejected_candidate.session_identity_hash = "candidate-hash-rejected".into();
+        rejected_candidate.normalized.provider_ref = Some("release-rejected".into());
+        rejected_candidate.normalized.download_url =
+            Some("https://example.invalid/get?id=release-rejected&apikey=secret".into());
         store
-            .record_search_diagnostics(&run, std::slice::from_ref(&candidate))
+            .record_search_diagnostics(&run, &[candidate.clone(), rejected_candidate])
             .await
             .expect("diagnostics should persist");
 
@@ -1231,7 +1389,7 @@ mod tests {
                 .await
                 .expect("the persisted page should rehydrate")
                 .len(),
-            1
+            2
         );
 
         let mut duplicate_run = run.clone();
@@ -1243,14 +1401,35 @@ mod tests {
             .record_search_diagnostics(&duplicate_run, &[duplicate_candidate])
             .await
             .expect("duplicate page diagnostics should persist its run");
-        assert!(
+        store
+            .finalize_search_session(&run.search_session_id, &["candidate-hash-1".into()])
+            .await
+            .expect("evaluated candidates should finalize");
+        assert_eq!(
+            store
+                .list_search_run_candidates(&run.id)
+                .await
+                .expect("rejected candidates should be removed")
+                .len(),
+            1
+        );
+        assert_eq!(
             store
                 .list_search_run_candidates(&duplicate_run.id)
                 .await
                 .expect("duplicate page candidates should rehydrate")
-                .is_empty(),
-            "a session identity is admitted only once"
+                .len(),
+            1,
+            "each run observes the shared canonical source"
         );
+        let encrypted_url: String = sqlx::query_scalar(
+            "SELECT encrypted_download_url FROM indexer_search_candidate_sources LIMIT 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("encrypted URL should be stored");
+        assert!(!encrypted_url.contains("example.invalid"));
+        assert!(!encrypted_url.contains("secret"));
 
         let completed_state = store
             .list_reusable_search_strategies(
@@ -1265,7 +1444,10 @@ mod tests {
         assert_eq!(completed_state.len(), 1);
         assert_eq!(completed_state[0].run_id, duplicate_run.id);
         assert_eq!(completed_state[0].completion_state, "complete");
-        assert_eq!(completed_state[0].candidate_run_id, None);
+        assert_eq!(
+            completed_state[0].candidate_run_id.as_deref(),
+            Some(duplicate_run.id.as_str())
+        );
 
         let mut partial_run = run.clone();
         partial_run.id = "run-3".into();
@@ -1291,7 +1473,7 @@ mod tests {
         assert_eq!(partial_state[0].completion_state, "partial");
         assert_eq!(
             partial_state[0].candidate_run_id.as_deref(),
-            Some(run.id.as_str())
+            Some(duplicate_run.id.as_str())
         );
 
         let reusable = store
@@ -1310,9 +1492,11 @@ mod tests {
             Some("release-1")
         );
         assert_eq!(reusable[0].normalized.languages, ["en", "ja"]);
-        assert_eq!(
-            reusable[0].normalized.download_url_credential_keys,
-            ["apikey"]
+        assert!(
+            reusable[0]
+                .normalized
+                .download_url_credential_keys
+                .is_empty()
         );
         assert!(
             store
@@ -1412,8 +1596,10 @@ mod tests {
             .await
             .map_err(repo_err)?;
         }
-        let store =
-            IndexerSearchLearningStore::new(StoreDatastore::Postgres { pool: pool.clone() });
+        let store = IndexerSearchLearningStore::new(
+            StoreDatastore::Postgres { pool: pool.clone() },
+            std::sync::Arc::new(std::sync::RwLock::new(None)),
+        );
 
         store.prune_indexer("idx-pruned").await?;
         let kept: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM indexer_search_learning")

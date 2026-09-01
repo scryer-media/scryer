@@ -175,6 +175,107 @@ fn cross_indexer_release_dedup_prefers_higher_priority_source() {
 }
 
 #[test]
+fn cross_indexer_release_dedup_prefers_unlimited_grabs() {
+    let mut limited = make_search_result(
+        "Limited Source",
+        "Synthetic.Run.S01E12.720p.WEB-DL.x264-GRP",
+        "https://example.test/limited",
+        DownloadSourceKind::NzbUrl,
+    );
+    limited
+        .extra
+        .insert("grab_current".into(), serde_json::json!(1));
+    limited
+        .extra
+        .insert("grab_max".into(), serde_json::json!(100));
+    let unlimited = make_search_result(
+        "Unlimited Source",
+        "Synthetic.Run.S01E12.720p.WEB-DL.x264-GRP",
+        "https://example.test/unlimited",
+        DownloadSourceKind::NzbUrl,
+    );
+
+    let deduped = dedupe_cross_indexer_release_results(
+        vec![limited, unlimited],
+        &HashMap::from([
+            ("Limited Source".to_string(), 1),
+            ("Unlimited Source".to_string(), 50),
+        ]),
+        "nzb",
+    );
+
+    assert_eq!(deduped.len(), 1);
+    assert_eq!(deduped[0].source, "Unlimited Source");
+}
+
+#[test]
+fn cross_indexer_release_dedup_prefers_lower_grab_usage() {
+    let mut higher_usage = make_search_result(
+        "Higher Usage",
+        "Synthetic.Run.S01E12.720p.WEB-DL.x264-GRP",
+        "https://example.test/higher",
+        DownloadSourceKind::NzbUrl,
+    );
+    higher_usage
+        .extra
+        .insert("grab_current".into(), serde_json::json!(80));
+    higher_usage
+        .extra
+        .insert("grab_max".into(), serde_json::json!(100));
+    let mut lower_usage = make_search_result(
+        "Lower Usage",
+        "Synthetic.Run.S01E12.720p.WEB-DL.x264-GRP",
+        "https://example.test/lower",
+        DownloadSourceKind::NzbUrl,
+    );
+    lower_usage
+        .extra
+        .insert("grab_current".into(), serde_json::json!(2));
+    lower_usage
+        .extra
+        .insert("grab_max".into(), serde_json::json!(10));
+
+    let deduped = dedupe_cross_indexer_release_results(
+        vec![higher_usage, lower_usage],
+        &HashMap::new(),
+        "nzb",
+    );
+
+    assert_eq!(deduped.len(), 1);
+    assert_eq!(deduped[0].source, "Lower Usage");
+}
+
+#[test]
+fn only_admissible_automatic_decisions_are_reusable() {
+    for decision in [
+        "eligible",
+        "pending_delay",
+        "minimum_age",
+        "download_client_unavailable",
+    ] {
+        let mut candidate = make_search_result(
+            "Synthetic Source",
+            "Synthetic.Run.S01E12.720p.WEB-DL.x264-GRP",
+            "https://example.test/admissible",
+            DownloadSourceKind::NzbUrl,
+        );
+        candidate.auto_decision_code = Some(decision.into());
+        assert!(candidate_is_reusable(&candidate), "{decision}");
+    }
+
+    for decision in ["quality_rejected", "title_mismatch", "blocked"] {
+        let mut candidate = make_search_result(
+            "Synthetic Source",
+            "Synthetic.Run.S01E12.720p.WEB-DL.x264-GRP",
+            "https://example.test/rejected",
+            DownloadSourceKind::NzbUrl,
+        );
+        candidate.auto_decision_code = Some(decision.into());
+        assert!(!candidate_is_reusable(&candidate), "{decision}");
+    }
+}
+
+#[test]
 fn cross_indexer_release_dedup_prefers_profile_protocol_before_indexer_priority() {
     let results = vec![
         make_search_result(

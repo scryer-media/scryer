@@ -251,6 +251,7 @@ pub(crate) use audio_requirements::{
     required_audio_languages_match, resolve_required_audio_requirements,
     title_audio_language_context,
 };
+pub use catalog::discovery::release_candidate_fingerprint;
 pub use catalog::facets::handler::{
     FacetHandler, HydrationResult, movie_to_hydration_result, series_to_hydration_result,
 };
@@ -286,7 +287,7 @@ pub use contracts::{
     StagedNzbRef, StorageRootUsage, SubmissionConflictPolicy, SubmissionScope,
     SubmissionScopeConflict, SubtitleGenerationInput, SubtitleProviderConfigUpdate,
     SubtitleProviderValidationResult, SubtitleStreamDetail, SuccessfulGrabCommit,
-    TitleHistoryFilter, TitleHistoryPage, WantedSearchOutcome,
+    TerminalDownloadHistoryRow, TitleHistoryFilter, TitleHistoryPage, WantedSearchOutcome,
 };
 pub use domain_events::DomainEventActor;
 pub use download_client_path_mappings::{
@@ -394,9 +395,11 @@ pub(crate) use helpers::{
 pub(crate) use helpers::{filesystem_space, filesystem_space_raw};
 pub use image_proxy::image_proxy_source_token;
 pub use indexer_errors::{
-    ClassifiedIndexerError, IndexerErrorRecorder, IndexerErrorRepository, NullIndexerErrorRecorder,
-    UNKNOWN_INDEXER_ERROR_MESSAGE, classify_indexer_http_response, classify_newznab_error_message,
-    indexer_response_content_type, redact_indexer_response_headers, unknown_indexer_error,
+    CONNECTION_TEST_INDEXER_ID, ClassifiedIndexerError, IndexerErrorRecorder,
+    IndexerErrorRepository, NullIndexerErrorRecorder, UNKNOWN_INDEXER_ERROR_MESSAGE,
+    classify_indexer_http_response, classify_newznab_error_message,
+    indexer_error_history_is_persistable, indexer_response_content_type,
+    redact_indexer_response_headers, unknown_indexer_error,
 };
 pub use jobs::definitions::{
     JobCategory, JobDefinition, JobKey, JobRun, JobRunRecord, JobRunStatus, JobRunTracker,
@@ -608,9 +611,9 @@ pub use types::{
     TotpEnrollmentComplete, TotpEnrollmentStart, TotpFailedAttemptRecord, TotpRecoveryCodeRecord,
     TotpStatus, UiDateTimeFormat, UiDefaultLandingView, UiDensity, UiSettings, UiSettingsFacet,
     UiSettingsUpdate, UiSidebarMode, UiTableColumnSetting, UiTableViewMode, UiTheme,
-    UpdateRecycleBinSettings, UserAuthFactorStatus, WantedKind, WantedStatusCount,
-    WebauthnChallengePurpose, WebauthnChallengeRecord, WebauthnChallengeStart,
-    WebauthnChallengeType, WebauthnCredentialRecord,
+    UpdateRecycleBinSettings, UserAuthFactorStatus, UserLoginSnapshot, VerifiedLocalCredentials,
+    WantedKind, WantedStatusCount, WebauthnChallengePurpose, WebauthnChallengeRecord,
+    WebauthnChallengeStart, WebauthnChallengeType, WebauthnCredentialRecord,
 };
 pub use types::{
     CapturedIndexerHttpHeader, CapturedIndexerHttpResponse, INDEXER_CAPS_REFRESH_ERROR_PREFIX,
@@ -718,6 +721,9 @@ pub enum AppError {
 
     #[error("{0}")]
     MfaStepUpRequired(String),
+
+    #[error("{0}")]
+    ReauthenticationRequired(String),
 
     #[error("{0}")]
     TotpEnrollmentRequired(String),

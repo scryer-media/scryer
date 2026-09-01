@@ -50,5 +50,6 @@ export type ActivityEvent = {
   actorDisplayName?: string | null;
   titleId?: string | null;
   facet?: Facet | null;
+  episodeIds?: string[];
   occurredAt?: string | null;
 };

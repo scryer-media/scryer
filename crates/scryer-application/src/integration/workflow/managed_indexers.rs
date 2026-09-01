@@ -29,7 +29,7 @@ fn apply_managed_child_routing(
     for scope_id in MANAGED_INDEXER_SCOPE_IDS {
         let Some(categories) = desired_scopes.get(*scope_id).cloned() else {
             if let Some(entries) = routing_by_scope.get_mut(*scope_id) {
-                entries.retain(|entry| entry.indexer_id != indexer_id);
+                entries.retain(|entry| entry.indexer_id != indexer_id || !entry.enabled);
             }
             continue;
         };
@@ -161,9 +161,12 @@ impl AppUseCase {
             let Some(existing) = existing_by_key.get(&desired.child_key) else {
                 continue;
             };
-            let managed_metadata_json = desired
-                .managed_metadata_json
-                .or_else(|| existing.managed_metadata_json.clone());
+            let managed_metadata_json = merge_managed_child_metadata(
+                existing.managed_metadata_json.as_deref(),
+                desired.managed_metadata_json.as_deref(),
+            )
+            .or_else(|| desired.managed_metadata_json.clone())
+            .or_else(|| existing.managed_metadata_json.clone());
             if existing.caps_snapshot_json.as_deref() == Some(caps_snapshot_json.as_str())
                 && existing.managed_metadata_json == managed_metadata_json
             {
@@ -271,5 +274,61 @@ impl AppUseCase {
         }
 
         Ok(prepared)
+    }
+}
+
+#[cfg(test)]
+mod routing_tests {
+    use super::*;
+
+    fn routing_entry(enabled: bool, categories: &[&str], priority: i32) -> IndexerRoutingSettingsEntry {
+        IndexerRoutingSettingsEntry {
+            indexer_id: "managed-child".to_string(),
+            enabled,
+            categories: categories.iter().map(|value| (*value).to_string()).collect(),
+            priority,
+        }
+    }
+
+    #[test]
+    fn managed_routing_keeps_disabled_tombstone_until_scope_returns() {
+        let mut routing_by_scope = HashMap::from([(
+            "movie".to_string(),
+            vec![routing_entry(false, &["2000"], 7)],
+        )]);
+
+        apply_managed_child_routing(&mut routing_by_scope, "managed-child", &HashMap::new());
+
+        let tombstone = &routing_by_scope["movie"][0];
+        assert!(!tombstone.enabled);
+        assert_eq!(tombstone.categories, vec!["2000"]);
+        assert_eq!(tombstone.priority, 7);
+
+        let desired_scopes = HashMap::from([(
+            "movie".to_string(),
+            vec!["2010".to_string(), "2020".to_string()],
+        )]);
+        apply_managed_child_routing(
+            &mut routing_by_scope,
+            "managed-child",
+            &desired_scopes,
+        );
+
+        let restored = &routing_by_scope["movie"][0];
+        assert!(!restored.enabled);
+        assert_eq!(restored.categories, vec!["2010", "2020"]);
+        assert_eq!(restored.priority, 7);
+    }
+
+    #[test]
+    fn managed_routing_removes_enabled_entry_for_omitted_scope() {
+        let mut routing_by_scope = HashMap::from([(
+            "movie".to_string(),
+            vec![routing_entry(true, &["2000"], 7)],
+        )]);
+
+        apply_managed_child_routing(&mut routing_by_scope, "managed-child", &HashMap::new());
+
+        assert!(routing_by_scope["movie"].is_empty());
     }
 }

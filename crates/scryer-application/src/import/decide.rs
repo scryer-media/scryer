@@ -109,10 +109,11 @@ pub(crate) struct ImportDecisionInput<'a> {
     /// requirements a single time instead of twice.
     pub scoring_context: &'a ResolvedScoringContext,
     pub scope: &'a crate::SubmissionScope,
-    /// The runtime basis for this scope: the episode span's runtime, the title's,
-    /// or the linked movie's. Size scoring is runtime-derived, so this is what
+    /// The size basis for this scope: the episode span's runtime, the title's,
+    /// or the linked movie's, together with the per-member runtime and member
+    /// count a pack needs. Size scoring is runtime-derived, so this is what
     /// keeps the import's number comparable with the grab's.
-    pub scope_runtime_minutes: Option<i32>,
+    pub scope_size_basis: crate::quality_profile::CoverageSizeBasis,
     /// The **announced** evidence: the canonical import parse as it came off the
     /// release name, before the probe merged its findings in.
     ///
@@ -254,7 +255,7 @@ pub(crate) async fn decide_import(
             input.title,
             input.scope,
             input.scoring_context,
-            input.scope_runtime_minutes,
+            input.scope_size_basis.total_runtime_minutes,
             crate::quality::canonical_context::SubjectIntent::Import,
         )
         .await;
@@ -393,7 +394,7 @@ fn score_landed(
         input.title,
         input.parsed,
         input.accepted,
-        input.scope_runtime_minutes,
+        input.scope_size_basis,
         crate::canonical_scoring::size_basis_bytes(size_bytes, input.announced_size_bytes),
         input.prior_rescore_changes,
         input.is_filler,

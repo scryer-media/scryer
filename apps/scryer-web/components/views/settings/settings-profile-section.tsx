@@ -20,8 +20,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Loader2 } from "lucide-react";
-import { useEffect, useState, type FormEvent } from "react";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { Check, Loader2, Palette } from "lucide-react";
+import { lazy, Suspense, useEffect, useState, type FormEvent } from "react";
+import { useTheme } from "next-themes";
 import { TotpQrCode } from "@/components/common/totp-qr-code";
 import { isVisibleExternalAccountProvider } from "@/lib/constants/integration-providers";
 import { useTranslate } from "@/lib/context/translate-context";
@@ -39,10 +45,16 @@ import type {
 import { formatUiDateTime } from "@/lib/utils/date-format";
 import { selectorId } from "@/lib/utils/dom-ids";
 import { cn } from "@/lib/utils";
-import { HIGHLIGHT_COLOR_PRESETS } from "@/lib/theme";
+import {
+  applyHighlightColor,
+  HIGHLIGHT_COLOR_PRESETS,
+  isDarkTheme,
+} from "@/lib/theme";
 import { canSubmitJellyfinLink as canSubmitJellyfinLinkDraft } from "@/lib/utils/external-account-link-gate";
 
 const TOTP_CODE_LENGTH = 6;
+
+const HighlightColorPicker = lazy(() => import("./highlight-color-picker"));
 
 type TotpProfileAction = "regenerateRecoveryCodes" | "disable" | null;
 
@@ -231,11 +243,45 @@ export function SettingsProfileSection({
 }: Props) {
   const t = useTranslate();
   const dateTimeFormat = useUiDateTimeFormat();
+  const { resolvedTheme, theme } = useTheme();
   const [pendingTotpAction, setPendingTotpAction] =
     useState<TotpProfileAction>(null);
   const [submittedTotpAction, setSubmittedTotpAction] = useState(false);
   const [pendingPasskeyDeletionId, setPendingPasskeyDeletionId] =
     useState<string | null>(null);
+  const [customColorPickerOpen, setCustomColorPickerOpen] = useState(false);
+  const [previewHighlightColor, setPreviewHighlightColor] = useState<
+    string | null
+  >(null);
+  const darkThemeActive = isDarkTheme(resolvedTheme ?? theme);
+  const savedHighlightColor =
+    highlightColor ?? HIGHLIGHT_COLOR_PRESETS[0].value;
+  const selectedHighlightColor =
+    previewHighlightColor ?? savedHighlightColor;
+
+  useEffect(() => {
+    if (previewHighlightColor === null || typeof document === "undefined") {
+      return undefined;
+    }
+
+    applyHighlightColor(
+      document.documentElement,
+      previewHighlightColor,
+      darkThemeActive,
+    );
+    return () => {
+      applyHighlightColor(
+        document.documentElement,
+        highlightColor,
+        darkThemeActive,
+      );
+    };
+  }, [darkThemeActive, highlightColor, previewHighlightColor]);
+
+  const closeCustomColorPicker = () => {
+    setPreviewHighlightColor(null);
+    setCustomColorPickerOpen(false);
+  };
   const passwordMismatch =
     confirmPassword.length > 0 && newPassword !== confirmPassword;
   const showSponsorButton = !hideSponsorButton;
@@ -342,9 +388,7 @@ export function SettingsProfileSection({
             className="flex flex-wrap items-center gap-2.5"
           >
             {HIGHLIGHT_COLOR_PRESETS.map((preset) => {
-              const selected =
-                (highlightColor ?? HIGHLIGHT_COLOR_PRESETS[0].value) ===
-                preset.value;
+              const selected = selectedHighlightColor === preset.value;
               const savingThis = savingHighlightColor === preset.value;
               return (
                 <button
@@ -360,22 +404,75 @@ export function SettingsProfileSection({
                   disabled={savingHighlightColor !== null}
                   onClick={() => onSelectHighlightColor(preset.value)}
                   className={cn(
-                    "relative h-[30px] w-[30px] rounded-[9px] outline-none transition",
-                    "ring-offset-2 ring-offset-[var(--scry-card2)]",
-                    "focus-visible:ring-2 focus-visible:ring-[var(--scry-accent-ring)]",
+                    "relative size-8 shrink-0 rounded-[9px] border-0 outline-none transition",
+                    "focus-visible:ring-2 focus-visible:ring-[var(--scry-accent-ring)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--scry-card2)]",
                     "disabled:cursor-not-allowed",
                     selected
-                      ? "ring-2 ring-[var(--scry-accent-ring)]"
-                      : "ring-0 enabled:hover:scale-105 disabled:opacity-60",
+                      ? "scale-105"
+                      : "enabled:hover:scale-105 disabled:opacity-60",
                   )}
                   style={{ backgroundColor: preset.value }}
                 >
                   {savingThis ? (
                     <Loader2 className="absolute inset-0 m-auto h-3.5 w-3.5 animate-spin text-white" />
+                  ) : selected ? (
+                    <Check className="absolute inset-0 m-auto h-4 w-4 text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]" />
                   ) : null}
                 </button>
               );
             })}
+            <Popover
+              open={customColorPickerOpen}
+              onOpenChange={(open) => {
+                if (open) {
+                  setCustomColorPickerOpen(true);
+                } else {
+                  closeCustomColorPicker();
+                }
+              }}
+            >
+              <PopoverTrigger asChild>
+                <Button
+                  id="settings-profile-highlight-color-custom"
+                  type="button"
+                  variant="outline"
+                  size="icon-sm"
+                  title={`${t("profile.highlightColorCustom")}: ${selectedHighlightColor}`}
+                  aria-label={`${t("profile.highlightColorCustom")}: ${selectedHighlightColor}`}
+                  disabled={savingHighlightColor !== null}
+                  className="rounded-[9px] border-0 p-0 text-white shadow-none hover:brightness-110 hover:text-white"
+                  style={{ backgroundColor: selectedHighlightColor }}
+                >
+                  <Palette className="size-5 drop-shadow-[0_1px_2px_rgba(0,0,0,0.9)]" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent
+                align="end"
+                sideOffset={8}
+                className="w-[min(22rem,calc(100vw-2rem))] border-primary/45 bg-[var(--scry-card2)] p-4"
+              >
+                {customColorPickerOpen ? (
+                  <Suspense
+                    fallback={
+                      <div className="flex h-64 items-center justify-center">
+                        <Loader2 className="h-5 w-5 animate-spin text-[var(--scry-muted3)]" />
+                      </div>
+                    }
+                  >
+                    <HighlightColorPicker
+                      value={selectedHighlightColor}
+                      onPreview={setPreviewHighlightColor}
+                      onApply={(value) => {
+                        setPreviewHighlightColor(null);
+                        onSelectHighlightColor(value);
+                        setCustomColorPickerOpen(false);
+                      }}
+                      onCancel={closeCustomColorPicker}
+                    />
+                  </Suspense>
+                ) : null}
+              </PopoverContent>
+            </Popover>
           </div>
         </div>
         <div className={PROFILE_ROW_CARD_CLASS}>

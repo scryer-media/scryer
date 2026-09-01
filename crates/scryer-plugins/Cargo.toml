@@ -1,6 +1,6 @@
 [package]
 name = "scryer-plugins"
-version = "0.18.22"
+version = "0.19.4"
 edition.workspace = true
 
 [dependencies]
@@ -18,11 +18,11 @@ tokio-util = { workspace = true }
 tracing = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
-aws-lc-sys = "0.44"
+aws-lc-rs = { workspace = true }
 crc-fast = "1.10.0"
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls-no-provider", "http2"] }
 quick-xml = { workspace = true }
-base64 = "0.23"
+base64 = { workspace = true }
 glob = "0.3"
 rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs", "logging", "std", "tls12"] }
 rustls-native-certs = "0.8"
@@ -33,7 +33,7 @@ tempfile = "3"
 libc = "0.2"
 blake3 = "1"
 # RFC 123 WP1: native wasmtime archive host (crypto ABI + command protocol).
-wasmparser = "0.258"
+wasmparser = "0.254"
 wasmtime = { workspace = true }
 wasmtime-wasi = { workspace = true }
 

@@ -1142,10 +1142,14 @@ fn no_drift_anywhere_on_the_curve_cliffs_the_way_a_bucket_step_did() {
     assert!(worst > 0);
 }
 
-/// **D21.** A release far below anything its quality and runtime could produce
-/// is refused, not merely penalised: it is not that release.
+/// **D21, as it now reads.** A release far below anything its quality and
+/// runtime could produce is *penalised*, not refused.
+///
+/// The veto is gone. Its false positives were not fakes but honest aggregates
+/// whose indexer reported one member's size, and the profile's minimum score
+/// still refuses a genuinely tiny release on the numbers.
 #[test]
-fn size_implausibly_small_blocks_a_release_a_tenth_of_its_size() {
+fn size_implausibly_small_penalises_a_release_a_tenth_of_its_size() {
     // 1080p WEB-DL, 120 min → expected ≈ 7.5 GiB. 400 MiB is ~5% of that.
     let release = parse_release_metadata("Portmere.2024.1080p.WEB-DL.H.264-GRP");
     let weights = balanced_weights();
@@ -1160,27 +1164,32 @@ fn size_implausibly_small_blocks_a_release_a_tenth_of_its_size() {
         &weights,
     );
 
-    assert!(!decision.allowed);
     assert!(
-        decision
-            .block_codes
-            .contains(&"size_implausibly_small_for_quality".to_string()),
-        "{:?}",
+        decision.allowed,
+        "a tiny movie is a penalty now, not a block: {:?}",
         decision.block_codes
+    );
+    assert_eq!(decision.scoring_log[0].code, "size_tiny_for_quality");
+    assert_eq!(decision.scoring_log[0].delta, weights.size_tiny);
+    assert!(
+        !decision
+            .scoring_log
+            .iter()
+            .any(|entry| entry.delta == BLOCK_SCORE),
+        "{:?}",
+        decision.scoring_log
     );
 }
 
-/// **BL2.** A veto is a verdict *on top of* the honest number, never instead of
-/// it.
+/// **BL2.** The honest number is always in the log.
 ///
 /// `total` — the bar every later comparison uses — is the pass's score with the
-/// `BLOCK_SCORE` entries stripped out. If the veto replaced the band entry, a
-/// vetoed file would carry **no** size term, and at import (where both passes
-/// see the same bytes, so nothing is "introduced" and the verdict is
-/// `Consistent`) it would land with a bar 2500 points above the same file just
-/// the other side of the threshold.
+/// `BLOCK_SCORE` entries stripped out. When the bottom veto existed, replacing
+/// the band entry with it would have left a refused file carrying **no** size
+/// term and a bar 2500 points above the same file a byte the other side of the
+/// threshold. Nothing replaces the band today either.
 #[test]
-fn a_vetoed_release_still_carries_the_size_penalty_it_earned() {
+fn a_tiny_release_carries_the_size_penalty_it_earned() {
     let release = parse_release_metadata("Portmere.2024.1080p.WEB-DL.H.264-GRP");
     let weights = balanced_weights();
 
@@ -1194,7 +1203,6 @@ fn a_vetoed_release_still_carries_the_size_penalty_it_earned() {
         &weights,
     );
 
-    assert!(!decision.allowed, "the 400 MiB movie is still vetoed");
     let non_block: i32 = decision
         .scoring_log
         .iter()
@@ -1203,20 +1211,20 @@ fn a_vetoed_release_still_carries_the_size_penalty_it_earned() {
         .sum();
     assert_eq!(
         non_block, weights.size_tiny,
-        "the band the veto replaced must still be in the log: {:?}",
+        "the band must be in the log: {:?}",
         decision.scoring_log
     );
 }
 
-/// The same property stated as monotonicity: crossing the veto threshold
-/// *downwards* must never improve the bar. It used to improve it by 2500.
+/// The same property stated as monotonicity: getting smaller must never improve
+/// the bar. It used to improve it by 2500 as the veto replaced the band.
 #[test]
-fn the_bar_is_monotone_across_the_minimum_size_veto_threshold() {
+fn the_bar_is_monotone_across_the_bottom_of_the_size_curve() {
     let release = parse_release_metadata("Portmere.2024.1080p.WEB-DL.H.264-GRP");
     let weights = balanced_weights();
 
     // Expected ≈ 7.04 GiB for a 120-minute 1080p WEB-DL H.264 movie, so the
-    // 0.10 veto sits at ≈ 721 MiB. One sample either side of it.
+    // 0.10 curve anchor sits at ≈ 721 MiB. One sample either side of it.
     let bar_at = |size_mib: i64| {
         let mut decision = QualityProfileDecision::new();
         apply_size_scoring_for_category(
@@ -1238,18 +1246,18 @@ fn the_bar_is_monotone_across_the_minimum_size_veto_threshold() {
 
     let (just_above, allowed_above) = bar_at(760);
     let (just_below, allowed_below) = bar_at(680);
-    assert!(allowed_above, "760 MiB is above the veto");
-    assert!(!allowed_below, "680 MiB is below the veto");
+    assert!(allowed_above, "neither sample is refused on size");
+    assert!(allowed_below, "the anchor is not a veto any more");
     assert!(
         just_below <= just_above,
         "the smaller file scored better: {just_below} > {just_above}"
     );
 }
 
-/// **MA5.** The episodic floor is calibrated against Sonarr's shipped
-/// `QualityDefinition.MinSize` (4 MB/min at 1080p). At the old 0.10 the implied
-/// floor was 9.5 MB/min for a Bluray episode and an ordinary 4.5 MB/min WEB-DL
-/// episode was vetoed on every cycle.
+/// **MA5.** The episodic curve anchor is calibrated against Sonarr's shipped
+/// `QualityDefinition.MinSize` (4 MB/min at 1080p), so an ordinary 4.5 MB/min
+/// WEB-DL episode sits above it and takes the tiny penalty at less than full
+/// strength.
 #[test]
 fn an_ordinary_episode_at_sonarrs_minimum_bitrate_is_not_vetoed() {
     let release = parse_release_metadata("Portmere.S01E04.1080p.WEB-DL.H.264-GRP");
@@ -1274,9 +1282,10 @@ fn an_ordinary_episode_at_sonarrs_minimum_bitrate_is_not_vetoed() {
     assert_eq!(decision.scoring_log[0].code, "size_tiny_for_quality");
 }
 
-/// …and the veto still fires below the calibrated floor.
+/// …and below the calibrated anchor it is the full tiny penalty, still not a
+/// block.
 #[test]
-fn an_episode_far_under_the_calibrated_floor_is_still_vetoed() {
+fn an_episode_far_under_the_calibrated_floor_is_penalised_at_full_strength() {
     let release = parse_release_metadata("Portmere.S01E04.1080p.WEB-DL.H.264-GRP");
     let weights = balanced_weights();
 
@@ -1291,20 +1300,19 @@ fn an_episode_far_under_the_calibrated_floor_is_still_vetoed() {
         &weights,
     );
 
-    assert!(!decision.allowed);
-    assert!(
-        decision
-            .block_codes
-            .contains(&"size_implausibly_small_for_quality".to_string())
-    );
+    assert!(decision.allowed, "{:?}", decision.block_codes);
+    assert_eq!(decision.scoring_log[0].code, "size_tiny_for_quality");
+    assert_eq!(decision.scoring_log[0].delta, weights.size_tiny);
 }
 
-/// Sonarr skips the size check entirely for specials
-/// (`AcceptableSizeSpecification.cs:29-33`). A seven-minute S00 short in a
-/// 45-minute series has no recorded runtime, so the model expects the series
-/// average and vetoes a perfectly genuine file.
+/// A special used to be the one shape exempt from the minimum-size veto
+/// (Sonarr's `AcceptableSizeSpecification.cs:29-33`), because a seven-minute S00
+/// short has no recorded runtime and reads as a fraction of the series average.
+/// With no veto left there is nothing to exempt it from: a special takes exactly
+/// the penalty an ordinary episode of the same size takes, and the exemption
+/// helper is gone with the veto.
 #[test]
-fn a_special_is_never_vetoed_on_size() {
+fn a_special_takes_the_same_size_penalty_as_any_other_episode() {
     let weights = balanced_weights();
     let special = parse_release_metadata("Portmere.S00E03.1080p.WEB-DL.H.264-GRP");
     assert_eq!(
@@ -1322,35 +1330,35 @@ fn a_special_is_never_vetoed_on_size() {
         &weights,
     );
 
-    assert!(
-        decision.allowed,
-        "a special must not be vetoed on a runtime nobody recorded: {:?}",
-        decision.block_codes
-    );
-    // The penalty side of the curve still fires — only the veto is skipped.
+    assert!(decision.allowed, "{:?}", decision.block_codes);
     assert_eq!(decision.scoring_log[0].code, "size_tiny_for_quality");
     assert_eq!(decision.scoring_log[0].delta, weights.size_tiny);
 
-    // The same bytes under an ordinary episode number are still vetoed, so the
-    // exemption is the special and not the size.
+    // The same bytes under an ordinary episode number score identically: the
+    // size term no longer asks what kind of episode this is.
     let ordinary = parse_release_metadata("Portmere.S01E03.1080p.WEB-DL.H.264-GRP");
-    let mut decision = QualityProfileDecision::new();
+    let mut ordinary_decision = QualityProfileDecision::new();
     apply_size_scoring_for_category(
-        &mut decision,
+        &mut ordinary_decision,
         &ordinary,
         Some(60 * 1024 * 1024),
         Some("series"),
         Some(45),
         &weights,
     );
-    assert!(!decision.allowed);
+    assert!(ordinary_decision.allowed);
+    assert_eq!(
+        ordinary_decision.preference_score,
+        decision.preference_score
+    );
 }
 
-/// The veto stops short of the range the import pipeline's sample filter owns.
+/// The size curve says nothing about files the import pipeline's sample filter
+/// owns.
 ///
 /// A `.strm` stream pointer holds a URL, not media, and its byte count says
-/// nothing about the release. Vetoing it would make stream-pointer imports fail
-/// on the length of their own filename.
+/// nothing about the release. Refusing it here would make stream-pointer imports
+/// fail on the length of their own filename.
 #[test]
 fn a_file_too_small_to_be_media_at_all_is_penalised_but_not_vetoed() {
     let release = parse_release_metadata("Portmere.2024.1080p.WEB-DL.H.264-GRP");
@@ -1377,6 +1385,258 @@ fn a_file_too_small_to_be_media_at_all_is_penalised_but_not_vetoed() {
         );
         assert_eq!(decision.scoring_log[0].delta, weights.size_tiny);
     }
+}
+
+// ── coverage-aware pack sizes ─────────────────────────────────────────────
+
+const GIB_F: f64 = 1024.0 * 1024.0 * 1024.0;
+
+fn gib(value: f64) -> i64 {
+    (value * GIB_F) as i64
+}
+
+/// One 45-minute 1080p WEB-DL H.264 episode, at the top of the expected band:
+/// 8.5 Mbps × 1.10 codec × 0.80 source × 45 min ≈ 2.47 GiB.
+const EPISODE_SIZE_GIB: f64 = 2.5;
+const EPISODE_RUNTIME_MINUTES: i32 = 45;
+
+fn score_pack_size(
+    release_title: &str,
+    size_bytes: i64,
+    basis: CoverageSizeBasis,
+    weights: &ScoringWeights,
+) -> QualityProfileDecision {
+    let release = parse_release_metadata(release_title);
+    let mut decision = QualityProfileDecision::new();
+    apply_size_scoring_for_category_with_remux_preference(
+        &mut decision,
+        &release,
+        Some(size_bytes),
+        Some("series"),
+        basis,
+        false,
+        weights,
+    );
+    decision
+}
+
+/// The basis a season pack of `episodes` equal-length episodes has.
+fn season_basis(episodes: i32) -> CoverageSizeBasis {
+    CoverageSizeBasis::aggregate(
+        Some(EPISODE_RUNTIME_MINUTES * episodes),
+        Some(EPISODE_RUNTIME_MINUTES),
+        episodes,
+    )
+}
+
+/// A pack whose reported size really is the whole payload reads as the whole
+/// payload. The reinterpretation is unreachable for it, and no diagnostic
+/// claims otherwise.
+#[test]
+fn an_honestly_sized_pack_is_scored_on_its_total_runtime() {
+    let weights = balanced_weights();
+    let decision = score_pack_size(
+        "Quiet.Meridian.S01.1080p.WEB-DL.H.264-GroupTag",
+        gib(EPISODE_SIZE_GIB * 12.0),
+        season_basis(12),
+        &weights,
+    );
+
+    assert!(decision.allowed);
+    assert_eq!(decision.scoring_log.len(), 1, "{:?}", decision.scoring_log);
+    assert_eq!(decision.scoring_log[0].code, "size_expected_for_quality");
+    assert!(
+        !decision
+            .scoring_log
+            .iter()
+            .any(|entry| entry.code == SIZE_PACK_MEMBER_BASIS_CODE),
+        "an unambiguous size must not be reinterpreted"
+    );
+}
+
+/// **The bridge shape.** An indexer lists a season pack under one episode's byte
+/// count. Against the pack's total runtime that is a twentieth of what it should
+/// be — the reading that used to refuse the release outright. Read against one
+/// member it is an ordinary episode, so the release survives, and the
+/// interpretation can never pay: the size term is capped at zero.
+#[test]
+fn a_pack_carrying_one_members_size_is_read_as_that_member() {
+    let weights = balanced_weights();
+
+    for episodes in [12, 24, 26] {
+        let decision = score_pack_size(
+            "Quiet.Meridian.S01.1080p.WEB-DL.H.264-GroupTag",
+            gib(EPISODE_SIZE_GIB),
+            season_basis(episodes),
+            &weights,
+        );
+
+        assert!(
+            decision.allowed,
+            "{episodes}-episode pack was refused: {:?}",
+            decision.block_codes
+        );
+        assert_eq!(
+            decision.scoring_log.last().map(|entry| entry.code.as_str()),
+            Some(SIZE_PACK_MEMBER_BASIS_CODE),
+            "{episodes}-episode pack: {:?}",
+            decision.scoring_log
+        );
+        assert_eq!(
+            decision.scoring_log.last().map(|entry| entry.delta),
+            Some(0),
+            "the diagnostic must carry no weight of its own"
+        );
+        assert!(
+            decision.preference_score <= 0,
+            "{episodes}-episode pack earned {} from an inferred size",
+            decision.preference_score
+        );
+        assert_ne!(
+            decision.scoring_log[0].code, "size_tiny_for_quality",
+            "{episodes}-episode pack still took the tiny penalty: {:?}",
+            decision.scoring_log
+        );
+    }
+}
+
+/// A single episode has nothing to reinterpret: one member, one reading, and the
+/// tiny penalty stands.
+#[test]
+fn a_single_episode_is_never_reinterpreted_as_a_member() {
+    let weights = balanced_weights();
+    let decision = score_pack_size(
+        "Quiet.Meridian.S01E04.1080p.WEB-DL.H.264-GroupTag",
+        gib(0.1),
+        CoverageSizeBasis::single(Some(EPISODE_RUNTIME_MINUTES)),
+        &weights,
+    );
+
+    assert!(decision.allowed);
+    assert_eq!(decision.scoring_log.len(), 1, "{:?}", decision.scoring_log);
+    assert_eq!(decision.scoring_log[0].code, "size_tiny_for_quality");
+}
+
+/// When neither reading is plausible the release is simply small, and it takes
+/// the penalty in full. 300 MiB is a twentieth of one episode, never mind
+/// twelve.
+#[test]
+fn a_genuinely_tiny_pack_keeps_the_full_tiny_penalty() {
+    let weights = balanced_weights();
+    let decision = score_pack_size(
+        "Quiet.Meridian.S01.1080p.WEB-DL.H.264-GroupTag",
+        300 * 1024 * 1024,
+        season_basis(12),
+        &weights,
+    );
+
+    assert!(decision.allowed, "{:?}", decision.block_codes);
+    assert_eq!(decision.scoring_log.len(), 1, "{:?}", decision.scoring_log);
+    assert_eq!(decision.scoring_log[0].code, "size_tiny_for_quality");
+    assert_eq!(decision.scoring_log[0].delta, weights.size_tiny);
+}
+
+/// The member reading uses the **codec-adjusted** thresholds, the same ones the
+/// total reading uses. AV1 carries a 1.5× upper multiplier, so a member ratio of
+/// ~2.8 is inside AV1's plausible range and outside H.265's — and the two
+/// releases, identical but for the codec, come out on opposite sides.
+#[test]
+fn the_member_reading_respects_codec_adjusted_thresholds() {
+    let weights = balanced_weights();
+
+    // 8.5 Mbps × 0.50 (AV1) × 0.80 (WEB-DL) × 45 min ≈ 1.12 GiB per episode;
+    // 3.15 GiB is ~2.8× that.
+    let av1 = score_pack_size(
+        "Salt.and.Signal.S01.1080p.WEB-DL.AV1-GroupTag",
+        gib(3.15),
+        season_basis(12),
+        &weights,
+    );
+    assert_eq!(
+        av1.scoring_log.last().map(|entry| entry.code.as_str()),
+        Some(SIZE_PACK_MEMBER_BASIS_CODE),
+        "AV1's headroom must reach the member reading too: {:?}",
+        av1.scoring_log
+    );
+    assert!(av1.preference_score <= 0);
+
+    // 8.5 × 0.75 (H.265) × 0.80 × 45 ≈ 1.68 GiB per episode; 4.71 GiB is the
+    // same ~2.8×, which for H.265 is past `massive` and therefore not evidence
+    // of anything.
+    let h265 = score_pack_size(
+        "Salt.and.Signal.S01.1080p.WEB-DL.H.265-GroupTag",
+        gib(4.71),
+        season_basis(12),
+        &weights,
+    );
+    assert!(
+        !h265
+            .scoring_log
+            .iter()
+            .any(|entry| entry.code == SIZE_PACK_MEMBER_BASIS_CODE),
+        "a member reading past `massive` is division talking: {:?}",
+        h265.scoring_log
+    );
+    assert_eq!(h265.scoring_log[0].code, "size_tiny_for_quality");
+}
+
+/// The reinterpretation spares a penalty; it never grants a bonus. A pack whose
+/// member reading lands in the expected band would earn `size_expected` if the
+/// size were not in doubt — capped to zero because it is.
+#[test]
+fn an_inferred_member_size_can_never_earn_a_bonus() {
+    let weights = balanced_weights();
+    assert!(
+        weights.size_expected > 0,
+        "fixture precondition: the expected band pays"
+    );
+
+    let inferred = score_pack_size(
+        "Quiet.Meridian.S01.1080p.WEB-DL.H.264-GroupTag",
+        gib(EPISODE_SIZE_GIB),
+        season_basis(12),
+        &weights,
+    );
+    let unambiguous = score_pack_size(
+        "Quiet.Meridian.S01E04.1080p.WEB-DL.H.264-GroupTag",
+        gib(EPISODE_SIZE_GIB),
+        CoverageSizeBasis::single(Some(EPISODE_RUNTIME_MINUTES)),
+        &weights,
+    );
+
+    assert_eq!(inferred.preference_score, 0);
+    assert!(
+        unambiguous.preference_score > inferred.preference_score,
+        "an inferred size outscored a measured one: {} vs {}",
+        inferred.preference_score,
+        unambiguous.preference_score
+    );
+}
+
+/// The upper veto is untouched, and it still fires before anything else can
+/// speak. A pack cannot reinterpret its way out of being far too large, because
+/// the reinterpretation is only reachable from the bottom of the curve.
+#[test]
+fn the_upper_veto_still_blocks_an_impossible_pack() {
+    let weights = balanced_weights();
+    let decision = score_pack_size(
+        "Quiet.Meridian.S01.1080p.WEB-DL.H.264-GroupTag",
+        gib(600.0),
+        season_basis(12),
+        &weights,
+    );
+
+    assert!(!decision.allowed);
+    assert!(
+        decision
+            .block_codes
+            .contains(&"size_implausible_for_quality".to_string()),
+        "{:?}",
+        decision.block_codes
+    );
+    // The band is still logged first: a veto is a verdict on top of the honest
+    // number, never instead of it.
+    assert_eq!(decision.scoring_log[0].code, "size_excessive_for_quality");
 }
 
 #[test]
@@ -2206,4 +2466,33 @@ fn bare_season_before_release_metadata_bounds_the_neutral_title() {
         "unexpected title: {}",
         isolated.normalized_title
     );
+}
+
+/// A spelled-out season plus an arc name defeated the same title anchor: the
+/// neutral title read "Quiet Meridian Season 1 The Arc Name" and the candidate
+/// failed title matching before its real title was ever compared.
+#[test]
+fn a_spelled_season_number_bounds_the_neutral_title() {
+    let release = "[GroupTag] Quiet Meridian - Season 1 - The Arc Name [BD 1080p][HEVC x265 10bit]";
+    let parsed = parse_release_metadata(release);
+    assert_eq!(parsed.normalized_title, "QUIET MERIDIAN", "{release}");
+}
+
+/// The numeric successor is what makes the word a marker; without one the title
+/// keeps its own text. "Part 2" never bounds at all — in a sequel or multi-part
+/// title it is the part of the name that tells releases apart.
+#[test]
+fn a_spelled_season_without_a_number_keeps_the_title_text() {
+    for release in [
+        "[GroupTag] Quiet Meridian Season of the Lantern [BD 1080p]",
+        "Quiet.Meridian.Part.Two.1080p.BluRay.x264-GroupTag",
+        "Quiet.Meridian.Part.2.1080p.BluRay.x264-GroupTag",
+    ] {
+        let parsed = parse_release_metadata(release);
+        assert!(
+            parsed.normalized_title.len() > "QUIET MERIDIAN".len(),
+            "{release} truncated to {}",
+            parsed.normalized_title
+        );
+    }
 }

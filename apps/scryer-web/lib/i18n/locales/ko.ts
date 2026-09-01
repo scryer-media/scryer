@@ -65,6 +65,7 @@ const ko: LocaleDictionary = {
   "label.unknownType": "알 수 없는 유형",
   "label.yearUnknown": "연도 미상",
   "label.noArt": "아트 없음",
+  "color.magenta": "마젠타",
   "nav.dashboard": "대시보드",
   "nav.movies": "영화",
   "nav.series": "시리즈",

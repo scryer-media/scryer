@@ -525,6 +525,16 @@ impl BlocklistRepository for TestLibraryStateStore {
 
 #[async_trait]
 impl HousekeepingRepository for TestLibraryStateStore {
+    async fn delete_stale_workflow_operations(
+        &self,
+        completed_days: i64,
+        warning_failed_days: i64,
+    ) -> AppResult<u32> {
+        self.housekeeping
+            .delete_stale_workflow_operations(completed_days, warning_failed_days)
+            .await
+    }
+
     async fn delete_release_decisions_older_than(&self, days: i64) -> AppResult<u32> {
         self.housekeeping
             .delete_release_decisions_older_than(days)
@@ -1545,6 +1555,7 @@ async fn test_graphql_handler(
         request = request.data(MfaVerification {
             verified_until: claims.mfa_verified_until,
             step_up_verified_until: claims.mfa_step_up_verified_until,
+            security_action_verified_until: claims.security_action_verified_until,
             session_scope: claims.session_scope,
             persist_session: claims.persist_session,
             auth_session_version: claims.auth_session_version.clone(),

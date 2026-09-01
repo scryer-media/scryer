@@ -27,10 +27,9 @@ pub(super) async fn title_requires_scan_hydration(
 ) -> AppResult<bool> {
     let hydratable = match title.facet {
         MediaFacet::Movie => crate::catalog_workflow::movie_title_ref(title).is_some(),
-        MediaFacet::Series | MediaFacet::Anime => title
-            .external_ids
-            .iter()
-            .any(|external_id| external_id.source.eq_ignore_ascii_case("tvdb")),
+        MediaFacet::Series | MediaFacet::Anime => {
+            crate::catalog_workflow::extract_tvdb_id(title).is_some()
+        }
     };
     if !hydratable {
         return Ok(false);
@@ -284,7 +283,12 @@ fn rank_movie_media_file_for_primary(
     context: &crate::quality::canonical_context::ResolvedScoringContext,
     file: &TitleMediaFile,
 ) -> (usize, i32) {
-    let bar = app.incumbent_bar(file, context, None);
+    let bar = app.incumbent_bar(
+        file,
+        context,
+        // A movie is one member: the title's own runtime, filled in by `view`.
+        crate::quality_profile::CoverageSizeBasis::default(),
+    );
     (crate::admission::tier_sort_key(bar.tier_index), bar.score)
 }
 

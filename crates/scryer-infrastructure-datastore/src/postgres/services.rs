@@ -359,6 +359,125 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn postgres_0198_preserves_conflicting_custom_defaults_from_env_url() -> AppResult<()> {
+        let Some(raw_url) = std::env::var("SCRYER_TEST_POSTGRES_URL")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+        else {
+            eprintln!(
+                "skipping PostgreSQL 0198 conflict test; SCRYER_TEST_POSTGRES_URL is not set"
+            );
+            return Ok(());
+        };
+
+        let admin_pool = sqlx::PgPool::connect(&raw_url).await.map_err(|error| {
+            AppError::Repository(format!("failed to connect to postgres: {error}"))
+        })?;
+        let schema = next_test_schema_name();
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
+            .execute(&admin_pool)
+            .await
+            .map_err(|error| {
+                AppError::Repository(format!("failed to create test schema: {error}"))
+            })?;
+
+        let result = async {
+            let schema_url = postgres_url_with_search_path(&raw_url, &schema)?;
+            let pool = sqlx::PgPool::connect(&schema_url)
+                .await
+                .map_err(|error| AppError::Repository(error.to_string()))?;
+            crate::postgres::migrations::replay_source_catalog_for_fresh_install(&pool, Some(197))
+                .await?;
+
+            sqlx::query(
+                "INSERT INTO libraries
+                    (id, facet, name, slug, is_default, created_at, updated_at)
+                 VALUES
+                    ('custom_movies', 'movie', 'Custom Movies', 'movies', false,
+                     '1970-01-01T00:00:00Z', '1970-01-01T00:00:00Z'),
+                    ('custom_series_paths', 'series', 'Custom Series Paths', 'custom-series', false,
+                     '1970-01-01T00:00:00Z', '1970-01-01T00:00:00Z')",
+            )
+            .execute(&pool)
+            .await
+            .map_err(|error| AppError::Repository(error.to_string()))?;
+            sqlx::query(
+                "INSERT INTO library_roots
+                    (id, library_id, path, normalized_path, is_default, created_at, updated_at)
+                 VALUES
+                    ('custom_movies_root', 'custom_movies', '/custom/movies', '/custom/movies', false,
+                     '1970-01-01T00:00:00Z', '1970-01-01T00:00:00Z'),
+                    ('custom_series_root', 'custom_series_paths', '/data/series', '/data/series', false,
+                     '1970-01-01T00:00:00Z', '1970-01-01T00:00:00Z')",
+            )
+            .execute(&pool)
+            .await
+            .map_err(|error| AppError::Repository(error.to_string()))?;
+
+            crate::postgres::migrations::run_migrations(&pool, MigrationMode::Apply).await?;
+
+            let custom_movies: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM libraries
+                  WHERE id = 'custom_movies' AND facet = 'movie' AND slug = 'movies'",
+            )
+            .fetch_one(&pool)
+            .await
+            .map_err(|error| AppError::Repository(error.to_string()))?;
+            assert_eq!(custom_movies, 1);
+            let canonical_movie_rows: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM libraries WHERE id = 'movie_default_library'",
+            )
+            .fetch_one(&pool)
+            .await
+            .map_err(|error| AppError::Repository(error.to_string()))?;
+            assert_eq!(canonical_movie_rows, 0);
+            let conflicting_canonical_roots: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM library_roots
+                  WHERE id IN (
+                    'canonical_root_for_movie_default_library',
+                    'canonical_root_for_series_default_library'
+                  )",
+            )
+            .fetch_one(&pool)
+            .await
+            .map_err(|error| AppError::Repository(error.to_string()))?;
+            assert_eq!(conflicting_canonical_roots, 0);
+            let preserved_custom_roots: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM library_roots
+                  WHERE id IN ('custom_movies_root', 'custom_series_root')",
+            )
+            .fetch_one(&pool)
+            .await
+            .map_err(|error| AppError::Repository(error.to_string()))?;
+            assert_eq!(preserved_custom_roots, 2);
+            let canonical_anime_root: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM library_roots
+                  WHERE id = 'canonical_root_for_anime_default_library'",
+            )
+            .fetch_one(&pool)
+            .await
+            .map_err(|error| AppError::Repository(error.to_string()))?;
+            assert_eq!(canonical_anime_root, 1);
+
+            pool.close().await;
+            Ok::<_, AppError>(())
+        }
+        .await;
+
+        let cleanup = sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
+            .execute(&admin_pool)
+            .await;
+        admin_pool.close().await;
+        if let Err(error) = cleanup {
+            return Err(AppError::Repository(format!(
+                "failed to drop test schema {schema}: {error}"
+            )));
+        }
+        result
+    }
+
+    #[tokio::test]
     async fn postgres_execute_batch_insert_multi_chunk_renumbers_placeholders() -> AppResult<()> {
         use crate::queries::sql_runtime::{SqlArg, SqlRuntime, StoreDatastore};
 

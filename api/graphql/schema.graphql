@@ -260,6 +260,10 @@ type ActivityEventPayload {
 	"""
 	facet: MediaFacetValue
 	"""
+	Episodes affected by the activity when it originated from an import.
+	"""
+	episodeIds: [ID!]!
+	"""
 	Human-readable activity message.
 	"""
 	message: String!
@@ -4021,6 +4025,10 @@ enum DownloadActivityFilterValue {
 	"""
 	POST_PROCESSING
 	"""
+	Include imported torrents still retained for seeding.
+	"""
+	SEEDING
+	"""
 	Include items the client reported a recoverable problem for.
 	"""
 	WARNING
@@ -4226,6 +4234,10 @@ enum DownloadDisplayStateValue {
 	Download and processing completed.
 	"""
 	COMPLETED
+	"""
+	Import completed, but the torrent remains managed while seeding.
+	"""
+	IMPORTED_SEEDING
 	"""
 	Download or processing failed.
 	"""
@@ -8652,6 +8664,10 @@ type LoginPayload {
 	"""
 	mfaVerifiedUntil: DateTime
 	"""
+	UTC time through which account-security changes may be authorized.
+	"""
+	securityActionVerifiedUntil: DateTime
+	"""
 	True when the token can only complete MFA enrollment.
 	"""
 	mfaEnrollmentRequired: Boolean!
@@ -10997,7 +11013,7 @@ type MutationRoot {
 	"""
 	webauthnRegisterStart: WebauthnChallengePayload!
 	"""
-	Completes passkey registration using the challenge ID and browser response, then returns a passkey summary.
+	Completes passkey registration using the authorized enrollment challenge.
 	"""
 	webauthnRegisterComplete(
 		"""
@@ -11050,7 +11066,29 @@ type MutationRoot {
 		input: TotpVerifyInput!
 	): LoginPayload!
 	"""
-	Disables TOTP after verifying the supplied code and returns updated status.
+	Verifies the current local password and returns a fresh account-security session.
+	"""
+	accountSecurityPasswordVerify(
+		"""
+		Current local password used to reauthenticate this interactive session.
+		"""
+		currentPassword: String!
+	): LoginPayload!
+	"""
+	Starts a passkey assertion that reauthenticates the current interactive session.
+	"""
+	accountSecurityPasskeyStart: WebauthnChallengePayload!
+	"""
+	Completes a passkey reauthentication assertion and returns a fresh account-security session.
+	"""
+	accountSecurityPasskeyComplete(
+		"""
+		Passkey assertion response for the current account-security challenge.
+		"""
+		input: WebauthnCompleteInput!
+	): LoginPayload!
+	"""
+	Disables TOTP after verifying the current TOTP code.
 	"""
 	totpDisable(
 		"""
@@ -11072,7 +11110,7 @@ type MutationRoot {
 	"""
 	webauthnAuthenticateStart(
 		"""
-		Optional username to narrow passkey discovery; omit or pass null for usernameless authentication.
+		Optional compatibility hint that is not used to select or reveal an account; passkeys always start discoverable authentication.
 		"""
 		username: String
 	): WebauthnChallengePayload!
@@ -15381,6 +15419,10 @@ type RecycledItemPayload {
 	Time the file entered the recycle bin in UTC.
 	"""
 	recycledAt: DateTime!
+	"""
+	Time the retention policy schedules this file for permanent deletion in UTC.
+	"""
+	scheduledDeletionAt: DateTime!
 	"""
 	Media root containing the original file.
 	"""

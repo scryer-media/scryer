@@ -7,7 +7,7 @@
 
 use super::canonical::*;
 use crate::import::post_download_gate::build_stream_pointer_media_file_analysis;
-use crate::quality_profile::BLOCK_SCORE;
+use crate::quality_profile::{BLOCK_SCORE, CoverageSizeBasis, SIZE_PACK_MEMBER_BASIS_CODE};
 use crate::release_parser::{VideoCodec, parse_release_metadata};
 use crate::scoring_weights::balanced_weights;
 use crate::{MediaFileAnalysis, ParsedReleaseMetadata, QualityProfile};
@@ -34,7 +34,7 @@ fn ctx<'a>(
         weights,
         required_audio_languages: &[],
         category: "movie",
-        runtime_minutes: None,
+        size_basis: CoverageSizeBasis::default(),
         rules: None,
         title_id: None,
         library_name: None,
@@ -604,14 +604,14 @@ fn episode_ctx<'a>(
     profile: &'a QualityProfile,
     weights: &'a crate::scoring_weights::ScoringWeights,
     tags: &'a [String],
-    runtime_minutes: Option<i32>,
+    size_basis: CoverageSizeBasis,
 ) -> ScoringContext<'a> {
     ScoringContext {
         profile,
         weights,
         required_audio_languages: &[],
         category: "series",
-        runtime_minutes,
+        size_basis,
         rules: None,
         title_id: None,
         library_name: None,
@@ -659,7 +659,7 @@ fn feature_length_episode(id: &str, duration_seconds: i64) -> scryer_domain::Epi
 #[test]
 fn one_episode_scores_the_same_at_grab_at_import_and_as_a_bar() {
     use crate::acquisition_coverage::{
-        ReleaseCoverage, coverage_runtime_minutes, episode_span_runtime_minutes,
+        ReleaseCoverage, coverage_size_basis, episode_span_size_basis,
     };
 
     let profile = series_profile();
@@ -674,37 +674,38 @@ fn one_episode_scores_the_same_at_grab_at_import_and_as_a_bar() {
     let parsed = parse_release_metadata("Glass.Harbor.S01E01.1080p.WEB-DL.H.264-GRP");
     let size_bytes = (5.5 * GIB as f64) as i64;
 
-    // 1. Grab: the coverage's runtime.
-    let grab_runtime = coverage_runtime_minutes(
+    // 1. Grab: the coverage's basis.
+    let grab_basis = coverage_size_basis(
         &ReleaseCoverage::SingleEpisode("ep-01".to_string()),
         &parsed,
         &episodes,
         TITLE_RUNTIME_MINUTES,
     );
-    // 2. Import: the target episodes' runtime.
-    let import_runtime =
-        episode_span_runtime_minutes(&episodes, &episode_ids, TITLE_RUNTIME_MINUTES);
+    // 2. Import: the target episodes' basis.
+    let import_basis = episode_span_size_basis(&episodes, &episode_ids, TITLE_RUNTIME_MINUTES);
     // 3. Incumbent bar: the file's `covers`.
-    let bar_runtime = episode_span_runtime_minutes(&episodes, &episode_ids, TITLE_RUNTIME_MINUTES);
+    let bar_basis = episode_span_size_basis(&episodes, &episode_ids, TITLE_RUNTIME_MINUTES);
 
-    assert_eq!(grab_runtime, Some(90));
-    assert_eq!(grab_runtime, import_runtime);
-    assert_eq!(grab_runtime, bar_runtime);
+    // One episode is one member, so the total and the member runtime are the
+    // same number and no aggregate reinterpretation is even reachable.
+    assert_eq!(grab_basis, CoverageSizeBasis::single(Some(90)));
+    assert_eq!(grab_basis, import_basis);
+    assert_eq!(grab_basis, bar_basis);
 
     let evidence = ReleaseEvidence::announced(parsed.clone(), Some(size_bytes));
     let grab_score = score_release(
         &evidence,
-        &episode_ctx(&profile, &weights, &tags, grab_runtime),
+        &episode_ctx(&profile, &weights, &tags, grab_basis),
     )
     .release_score;
     let import_score = score_release(
         &evidence,
-        &episode_ctx(&profile, &weights, &tags, import_runtime),
+        &episode_ctx(&profile, &weights, &tags, import_basis),
     )
     .release_score;
     let bar_score = score_release(
         &evidence,
-        &episode_ctx(&profile, &weights, &tags, bar_runtime),
+        &episode_ctx(&profile, &weights, &tags, bar_basis),
     )
     .release_score;
 
@@ -715,7 +716,12 @@ fn one_episode_scores_the_same_at_grab_at_import_and_as_a_bar() {
     // average gives a different number, which is the bug this pins.
     let title_basis = score_release(
         &evidence,
-        &episode_ctx(&profile, &weights, &tags, TITLE_RUNTIME_MINUTES),
+        &episode_ctx(
+            &profile,
+            &weights,
+            &tags,
+            CoverageSizeBasis::single(TITLE_RUNTIME_MINUTES),
+        ),
     )
     .release_score;
     assert_ne!(
@@ -729,7 +735,7 @@ fn one_episode_scores_the_same_at_grab_at_import_and_as_a_bar() {
 #[test]
 fn a_multi_episode_file_scores_against_the_sum_of_its_episodes() {
     use crate::acquisition_coverage::{
-        ReleaseCoverage, coverage_runtime_minutes, episode_span_runtime_minutes,
+        ReleaseCoverage, coverage_size_basis, episode_span_size_basis,
     };
 
     let mut first = feature_length_episode("ep-01", 24 * 60);
@@ -740,16 +746,112 @@ fn a_multi_episode_file_scores_against_the_sum_of_its_episodes() {
     let episode_ids = vec!["ep-01".to_string(), "ep-02".to_string()];
 
     let parsed = parse_release_metadata("Glass.Harbor.S01E01E02.1080p.WEB-DL.H.264-GRP");
-    let grab_runtime = coverage_runtime_minutes(
+    let grab_basis = coverage_size_basis(
         &ReleaseCoverage::EpisodeSet(episode_ids.clone()),
         &parsed,
         &episodes,
         Some(24),
     );
-    let import_runtime = episode_span_runtime_minutes(&episodes, &episode_ids, Some(24));
+    let import_basis = episode_span_size_basis(&episodes, &episode_ids, Some(24));
 
-    assert_eq!(grab_runtime, Some(48));
-    assert_eq!(grab_runtime, import_runtime);
+    assert_eq!(grab_basis.total_runtime_minutes, Some(48));
+    // Two members of 24 minutes each: the basis carries both the sum and the
+    // member, so an aggregate whose listed size is one episode's can be read
+    // that way at grab and at import alike.
+    assert_eq!(grab_basis.member_runtime_minutes, Some(24));
+    assert_eq!(grab_basis.member_count, 2);
+    assert_eq!(grab_basis, import_basis);
+}
+
+/// **The pack shape, at every site.** A season pack listed under one episode's
+/// byte count is read as that member — and it has to be read that way by the
+/// grab lane, by the import rescore and by a re-derived incumbent bar, or the
+/// three disagree about the same release again.
+///
+/// The evidence is identical at all three; only the caller differs. So is the
+/// number.
+#[test]
+fn a_pack_listed_at_one_members_size_scores_the_same_everywhere() {
+    use crate::acquisition_coverage::{
+        ReleaseCoverage, coverage_size_basis, episode_span_size_basis,
+    };
+
+    let profile = series_profile();
+    let weights = balanced_weights();
+    let tags: Vec<String> = Vec::new();
+
+    // A twelve-episode season of 45-minute episodes.
+    let episodes = (1..=12)
+        .map(|number| {
+            let mut episode = feature_length_episode(&format!("ep-{number:02}"), 45 * 60);
+            episode.episode_number = Some(number.to_string());
+            episode
+        })
+        .collect::<Vec<_>>();
+    let episode_ids = episodes
+        .iter()
+        .map(|episode| episode.id.clone())
+        .collect::<Vec<_>>();
+
+    let parsed = parse_release_metadata("Quiet.Meridian.S01.1080p.WEB-DL.H.264-GroupTag");
+    // What the indexer reported: one episode, not twelve.
+    let size_bytes = (2.5 * GIB as f64) as i64;
+
+    let grab_basis = coverage_size_basis(
+        &ReleaseCoverage::Collection("season-1".to_string()),
+        &parsed,
+        &episodes,
+        Some(45),
+    );
+    let import_basis = episode_span_size_basis(&episodes, &episode_ids, Some(45));
+    let bar_basis = episode_span_size_basis(&episodes, &episode_ids, Some(45));
+
+    assert_eq!(grab_basis, import_basis);
+    assert_eq!(grab_basis, bar_basis);
+    assert_eq!(grab_basis.total_runtime_minutes, Some(540));
+    assert_eq!(grab_basis.member_runtime_minutes, Some(45));
+    assert_eq!(grab_basis.member_count, 12);
+
+    let evidence = ReleaseEvidence::announced(parsed.clone(), Some(size_bytes));
+    let scored_with =
+        |basis| score_release(&evidence, &episode_ctx(&profile, &weights, &tags, basis));
+    let grab = scored_with(grab_basis);
+    let import = scored_with(import_basis);
+    let bar = scored_with(bar_basis);
+
+    assert_eq!(grab.release_score, import.release_score);
+    assert_eq!(grab.release_score, bar.release_score);
+    assert_eq!(grab.total, import.total);
+    assert_eq!(grab.total, bar.total);
+
+    // And the release survives, on the member reading, with the interpretation
+    // named in the log.
+    assert!(
+        grab.announced_decision.allowed,
+        "{:?}",
+        grab.announced_decision.block_codes
+    );
+    assert!(
+        grab.announced_decision
+            .scoring_log
+            .iter()
+            .any(|entry| entry.code == SIZE_PACK_MEMBER_BASIS_CODE),
+        "{:?}",
+        grab.announced_decision.scoring_log
+    );
+
+    // Scored against the season's total runtime with no member to fall back on
+    // — the reading before this change — the same bytes take the tiny penalty.
+    let total_only = scored_with(CoverageSizeBasis::single(Some(540)));
+    assert!(
+        total_only
+            .announced_decision
+            .scoring_log
+            .iter()
+            .any(|entry| entry.code == "size_tiny_for_quality"),
+        "fixture precondition: the member reading must be doing the work"
+    );
+    assert!(grab.release_score > total_only.release_score);
 }
 
 // ── I2 / I4: grab and import agree ──────────────────────────────────────────
@@ -1213,8 +1315,8 @@ fn a_landed_file_inside_the_overhead_band_is_scored_on_its_announced_size() {
     assert_eq!(size_basis_bytes(at_the_edge, Some(announced)), announced);
     assert_eq!(size_basis_bytes(announced - 1, Some(announced)), announced);
     assert_eq!(size_basis_bytes(announced, Some(announced)), announced);
-    // A payload that landed larger than announced is still the release the
-    // grab admitted; the grab's number stands.
+    // A modest excess is still packaging/measurement drift, so the grab's
+    // number stands inside the reciprocal band too.
     assert_eq!(
         size_basis_bytes(announced + GIB, Some(announced)),
         announced
@@ -1231,6 +1333,67 @@ fn a_real_shortfall_is_scored_on_what_landed() {
     );
     let short = (announced as f64 * 0.80) as i64;
     assert_eq!(size_basis_bytes(short, Some(announced)), short);
+}
+
+#[test]
+fn a_material_excess_is_scored_on_what_landed() {
+    let announced = 10 * GIB;
+    let materially_larger = 12 * GIB;
+    assert_eq!(
+        size_basis_bytes(materially_larger, Some(announced)),
+        materially_larger
+    );
+    assert_eq!(
+        persisted_announced_size_bytes(materially_larger, Some(announced)),
+        None,
+        "a discarded announcement must not become the incumbent's size basis"
+    );
+}
+
+#[test]
+fn a_landed_aggregate_does_not_keep_a_member_sized_announcement() {
+    let profile = series_profile();
+    let weights = balanced_weights();
+    let tags: Vec<String> = Vec::new();
+    let basis = CoverageSizeBasis::aggregate(Some(12 * 45), Some(45), 12);
+    let parsed = parse_release_metadata("Quiet.Meridian.S01.1080p.WEB-DL.H.264-GroupTag");
+    let announced = (2.5 * GIB as f64) as i64;
+    let landed = 30 * GIB;
+
+    let selected = size_basis_bytes(landed, Some(announced));
+    assert_eq!(selected, landed);
+    assert_eq!(
+        persisted_announced_size_bytes(landed, Some(announced)),
+        None
+    );
+
+    let landed_score = score_release(
+        &ReleaseEvidence::announced(parsed.clone(), Some(selected)),
+        &episode_ctx(&profile, &weights, &tags, basis),
+    );
+    assert!(
+        !landed_score
+            .announced_decision
+            .scoring_log
+            .iter()
+            .any(|entry| entry.code == SIZE_PACK_MEMBER_BASIS_CODE),
+        "known aggregate bytes were still read as one member: {:?}",
+        landed_score.announced_decision.scoring_log
+    );
+
+    let member_score = score_release(
+        &ReleaseEvidence::announced(parsed, Some(announced)),
+        &episode_ctx(&profile, &weights, &tags, basis),
+    );
+    assert!(
+        member_score
+            .announced_decision
+            .scoring_log
+            .iter()
+            .any(|entry| entry.code == SIZE_PACK_MEMBER_BASIS_CODE),
+        "fixture precondition: the announcement must look member-sized"
+    );
+    assert!(landed_score.total > member_score.total);
 }
 
 #[test]

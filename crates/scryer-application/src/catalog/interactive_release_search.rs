@@ -464,7 +464,7 @@ impl AppUseCase {
             cancel,
         } = context;
 
-        let mut set: JoinSet<(String, AppResult<Vec<IndexerSearchResult>>)> = JoinSet::new();
+        let mut set = JoinSet::new();
         for indexer_id in dispatch {
             let app = self.clone();
             let actor = actor.clone();
@@ -481,7 +481,7 @@ impl AppUseCase {
                 )
                 .await;
                 let outcome = app
-                    .search_and_evaluate_subject_restricted(
+                    .search_and_evaluate_subject_restricted_with_outcome(
                         &title,
                         &subject,
                         &actor.id,
@@ -492,16 +492,19 @@ impl AppUseCase {
                     )
                     .await;
                 let outcome = match outcome {
-                    Ok(mut results) => {
+                    Ok(mut search_outcome) => {
+                        let failure_reason = search_outcome
+                            .incomplete_indexer_reasons
+                            .remove(&indexer_id);
                         app.attach_candidate_tokens(
                             &actor,
                             &title,
                             &subject,
-                            &mut results,
+                            &mut search_outcome.results,
                             preserve_subject_scope,
                         )
                         .await;
-                        Ok(results)
+                        Ok((search_outcome.results, failure_reason))
                     }
                     Err(error) => Err(error),
                 };
@@ -523,7 +526,7 @@ impl AppUseCase {
                     }
                 };
                 match outcome {
-                    Ok(batch) => {
+                    Ok((batch, failure_reason)) => {
                         self.merge_interactive_indexer_batch(
                             &job_id,
                             &indexer_id,
@@ -532,6 +535,15 @@ impl AppUseCase {
                             &preferred_source_kind,
                         )
                         .await;
+                        if let Some(reason) = failure_reason {
+                            self.set_interactive_indexer_status(
+                                &job_id,
+                                &indexer_id,
+                                InteractiveReleaseSearchIndexerStatus::Failed,
+                                Some(reason),
+                            )
+                            .await;
+                        }
                     }
                     Err(error) if error.is_canceled() => {
                         // Job is being cancelled; leave the status as-is.
@@ -557,7 +569,7 @@ impl AppUseCase {
         }
 
         let now = self.runtime.environment.now();
-        let completion = {
+        {
             let mut registry = self
                 .runtime
                 .acquisition
@@ -582,22 +594,7 @@ impl AppUseCase {
             if entry.snapshot.state == InteractiveReleaseSearchState::Running {
                 entry.snapshot.state = InteractiveReleaseSearchState::Completed;
                 entry.snapshot.completed_at = Some(now);
-                Some(entry.snapshot.results.len())
-            } else {
-                None
             }
-        };
-
-        // Once per job (never per indexer), and only when the job actually
-        // completed — a cancelled one-shot search does not emit either.
-        if let Some(result_count) = completion {
-            self.emit_discovery_search_completed_event(
-                &actor,
-                subject.category.clone(),
-                subject.queries.first().cloned(),
-                result_count as i64,
-            )
-            .await;
         }
     }
 

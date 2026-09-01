@@ -609,8 +609,8 @@ mod tests {
         let bundle =
             compile_source_bundle(&source_db_root()).expect("compile source migration bundle");
         assert!(
-            bundle.catalog.find_migration(177).is_some(),
-            "migration 0177 must be registered in migration_manifest.toml"
+            bundle.catalog.find_migration(198).is_some(),
+            "migration 0198 must be registered in migration_manifest.toml"
         );
         assert!(
             bundle
@@ -625,6 +625,20 @@ mod tests {
                 .latest_baseline_at_or_below(140, EngineScope::Postgres)
                 .is_some_and(|baseline| baseline.file == "postgres/baselines/0140_baseline.sql"),
             "PostgreSQL should register the latest manifest-owned baseline"
+        );
+        assert!(
+            bundle
+                .catalog
+                .latest_baseline_at_or_below(198, EngineScope::Sqlite)
+                .is_some_and(|baseline| baseline.file == "baselines/0198_baseline.sql"),
+            "SQLite should register the 0198 baseline"
+        );
+        assert!(
+            bundle
+                .catalog
+                .latest_baseline_at_or_below(198, EngineScope::Postgres)
+                .is_some_and(|baseline| baseline.file == "postgres/baselines/0198_baseline.sql"),
+            "PostgreSQL should register the 0198 baseline"
         );
     }
 
@@ -664,8 +678,11 @@ mod tests {
     }
 
     #[test]
-    fn postgres_0140_baseline_keeps_sqlite_builtin_seed_parity() {
-        let postgres = source_postgres_0140_baseline_sql();
+    fn postgres_0198_keeps_sqlite_builtin_seed_parity_without_rewriting_the_baseline() {
+        let postgres = fs::read_to_string(
+            source_db_root().join("postgres/migrations/0198_seed_canonical_defaults.sql"),
+        )
+        .expect("PostgreSQL 0198 seed migration should be readable");
         let sqlite = fs::read_to_string(source_db_root().join("baselines/0140_baseline.sql"))
             .expect("SQLite 0140 baseline should be readable");
 
@@ -676,13 +693,13 @@ mod tests {
             "canonical_root_for_anime_default_library",
             "canonical_root_for_movie_default_library",
             "canonical_root_for_series_default_library",
-            "VALUES ('1080p', '1080P', 0, '1970-01-01T00:00:00Z')",
-            "VALUES ('1080p', '720P', 1, '1970-01-01T00:00:00Z')",
-            "VALUES ('4k', '1080P', 1, '1970-01-01T00:00:00Z')",
-            "VALUES ('4k', '2160P', 0, '1970-01-01T00:00:00Z')",
-            "VALUES ('4k', '720P', 2, '1970-01-01T00:00:00Z')",
-            "VALUES ('1080p', '1080P', 'system'",
-            "VALUES ('4k', '4K', 'system'",
+            "('1080p', '1080P', 0, '1970-01-01T00:00:00Z')",
+            "('1080p', '720P', 1, '1970-01-01T00:00:00Z')",
+            "('4k', '1080P', 1, '1970-01-01T00:00:00Z')",
+            "('4k', '2160P', 0, '1970-01-01T00:00:00Z')",
+            "('4k', '720P', 2, '1970-01-01T00:00:00Z')",
+            "('1080p', '1080P', 'system'",
+            "('4k', '4K', 'system'",
             "00000000000000000000000000000001",
         ] {
             assert!(sqlite.contains(seed), "SQLite baseline missing seed {seed}");
@@ -690,6 +707,85 @@ mod tests {
                 postgres.contains(seed),
                 "PostgreSQL baseline missing seed {seed}"
             );
+        }
+        for guard in [
+            "INNER JOIN libraries parent",
+            "parent.id = roots.library_id",
+            "parent.facet = roots.facet",
+            "parent.slug = roots.slug",
+            "ON CONFLICT DO NOTHING",
+        ] {
+            assert!(
+                postgres.contains(guard),
+                "PostgreSQL 0198 must guard canonical roots with `{guard}`"
+            );
+        }
+    }
+
+    #[test]
+    fn released_0_18_21_sql_assets_are_immutable() {
+        let root = source_db_root();
+        let mut paths = vec![
+            root.join("baselines/0140_baseline.sql"),
+            root.join("postgres/baselines/0140_baseline.sql"),
+        ];
+        for relative_dir in ["migrations", "postgres/migrations"] {
+            for entry in fs::read_dir(root.join(relative_dir)).expect("migration directory") {
+                let path = entry.expect("migration entry").path();
+                let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                    continue;
+                };
+                let version = name
+                    .get(..4)
+                    .and_then(|version| version.parse::<u32>().ok());
+                if version.is_some_and(|version| version <= 173) {
+                    paths.push(path);
+                }
+            }
+        }
+        paths.sort_by_key(|path| {
+            path.strip_prefix(&root)
+                .expect("asset should be under db root")
+                .to_string_lossy()
+                .replace('\\', "/")
+        });
+
+        let mut hasher = Blake3Hasher::new();
+        for path in paths {
+            let relative = path
+                .strip_prefix(&root)
+                .expect("asset should be under db root")
+                .to_string_lossy()
+                .replace('\\', "/");
+            hasher.update(relative.as_bytes());
+            hasher.update(&[0]);
+            hasher.update(&fs::read(&path).expect("released SQL asset should be readable"));
+            hasher.update(&[0]);
+        }
+        assert_eq!(
+            hasher.finalize().to_hex().as_str(),
+            "57b821be60b4e6cab89d76ad2961d05288cca5bd19e8314c2083eb4f66a43f58"
+        );
+    }
+
+    #[test]
+    fn migration_0197_converges_binary_event_storage_without_the_stream_index() {
+        let root = source_db_root();
+        let sqlite = fs::read_to_string(root.join("migrations/0197_compact_event_storage_pre.sql"))
+            .expect("SQLite 0197 pre-migration should be readable");
+        let postgres =
+            fs::read_to_string(root.join("postgres/migrations/0197_compact_event_storage.sql"))
+                .expect("PostgreSQL 0197 migration should be readable");
+
+        assert!(sqlite.contains("payload_json BLOB NOT NULL"));
+        assert!(sqlite.contains("explanation_json BLOB"));
+        assert!(postgres.contains("ALTER COLUMN payload_json TYPE bytea"));
+        assert!(postgres.contains("ALTER COLUMN explanation_json TYPE bytea"));
+        for sql in [&sqlite, &postgres] {
+            assert!(sql.contains("DROP INDEX IF EXISTS idx_domain_events_stream_sequence"));
+            assert!(sql.contains("import_status"));
+            assert!(sql.contains("media_file_delete_reason"));
+            assert!(sql.contains("download_id"));
         }
     }
 
@@ -878,6 +974,27 @@ mod tests {
         assert!(postgres_sql.contains("jsonb_array_elements"));
         assert!(postgres_sql.contains("('tmdb', 'imdb')"));
         assert!(postgres_sql.contains("= 'tvdb'"));
+    }
+
+    #[test]
+    fn migration_0200_queues_supported_movie_identities_for_both_engines() {
+        let db_root = source_db_root();
+        let manifest = fs::read_to_string(db_root.join("migration_manifest.toml"))
+            .expect("migration manifest should be readable");
+        assert!(manifest.contains("version = 200"));
+
+        for relative_path in [
+            "migrations/0200_movie_supported_identity_hydration.sql",
+            "postgres/migrations/0200_movie_supported_identity_hydration.sql",
+        ] {
+            let sql = fs::read_to_string(db_root.join(relative_path))
+                .expect("0200 migration should be readable");
+            assert!(sql.contains("facet = 'movie'"));
+            assert!(sql.contains("('smg', 'tvdb', 'tmdb', 'imdb')"));
+            assert!(sql.contains("metadata_fetched_at IS NULL"));
+            assert!(sql.contains("metadata_hydration_next_attempt_at IS NULL"));
+            assert!(sql.contains("metadata_hydration_attempt_count = 0"));
+        }
     }
 
     #[test]

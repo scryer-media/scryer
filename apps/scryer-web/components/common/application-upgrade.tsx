@@ -45,22 +45,6 @@ function phaseLabelKey(phase: ApplicationUpgradePhase | null): string {
   return `appUpgrade.phase.${phase ?? "unknown"}`;
 }
 
-function eligibilityReasonKey(reason: ApplicationUpgradeStatus["eligibilityReason"]): string {
-  switch (reason) {
-    case "eligible":
-    case "managed_by_docker":
-    case "managed_by_homebrew":
-    case "managed_by_winget":
-    case "windows_supervised":
-    case "disabled_by_operator":
-    case "unsupported_layout":
-    case "install_dir_not_writable":
-      return `appUpgrade.eligibility.${reason}`;
-    default:
-      return "appUpgrade.eligibility.unknown";
-  }
-}
-
 function runStatusLabel(run: JobRun, t: ReturnType<typeof useTranslate>): string {
   return t(RUN_STATUS_KEYS[run.status]);
 }
@@ -242,7 +226,7 @@ export function ApplicationUpgradeSection() {
         {loading && !status ? <p className="text-sm text-[var(--scry-muted3)]">{t("appUpgrade.loading")}</p> : null}
         {status ? (
           <>
-            <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <dl className="grid gap-3 sm:grid-cols-3">
               <div className="rounded-[12px] border border-[var(--scry-line2)] bg-[var(--scry-card2)] p-3">
                 <dt className="text-xs uppercase tracking-[0.12em] text-[var(--scry-muted3)]">{t("appUpgrade.currentVersion")}</dt>
                 <dd className="mt-1 font-semibold text-[var(--scry-ink2)]">{status.currentVersion || t("label.unknown")}</dd>
@@ -255,18 +239,7 @@ export function ApplicationUpgradeSection() {
                 <dt className="text-xs uppercase tracking-[0.12em] text-[var(--scry-muted3)]">{t("appUpgrade.installationKind")}</dt>
                 <dd className="mt-1 font-semibold text-[var(--scry-ink2)]">{t(INSTALLATION_KIND_KEYS[status.installationKind])}</dd>
               </div>
-              <div className="rounded-[12px] border border-[var(--scry-line2)] bg-[var(--scry-card2)] p-3">
-                <dt className="text-xs uppercase tracking-[0.12em] text-[var(--scry-muted3)]">{t("appUpgrade.managementOwner")}</dt>
-                <dd className="mt-1 font-semibold text-[var(--scry-ink2)]">{t(status.managementOwner === "IN_APP" ? "appUpgrade.owner.inApp" : "appUpgrade.owner.operator")}</dd>
-              </div>
             </dl>
-
-            <div className="rounded-[12px] border border-[var(--scry-line2)] bg-[var(--scry-card2)] p-3 text-sm">
-              <p className="font-medium text-[var(--scry-ink2)]">{t("appUpgrade.eligibility")}</p>
-              <p className="mt-1 text-[var(--scry-muted3)]">
-                {t(eligibilityReasonKey(status.eligibilityReason))}
-              </p>
-            </div>
 
             {rebootRequired ? (
               <div className="rounded-[12px] border border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] p-3 text-sm text-[var(--scry-warning-text)]">

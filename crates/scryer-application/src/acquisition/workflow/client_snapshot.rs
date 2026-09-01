@@ -1,3 +1,10 @@
+/// How long an item may sit in `Downloading` before its claim on an empty
+/// scope stops suppressing background searches and falls back to the D18
+/// pseudo-incumbent comparison. A healthy download finishes well inside this;
+/// what exceeds it is the stalled-swarm shape that would otherwise freeze its
+/// scope indefinitely, since a dead torrent never fails on its own.
+pub(crate) const STALE_INITIAL_CLAIM_SECONDS: i64 = 24 * 60 * 60;
+
 /// Snapshot of the download client's current queue and recent history,
 /// fetched once per polling cycle to avoid repeated API calls.
 pub(crate) struct DownloadClientSnapshot {
@@ -9,6 +16,20 @@ pub(crate) struct DownloadClientSnapshot {
     /// Raw native item ID counts for legacy rows that predate configured
     /// client IDs. Used only when the raw ID is unique in the snapshot.
     active_raw_item_id_counts: std::collections::HashMap<String, usize>,
+    /// Active items that have been *downloading* longer than
+    /// [`STALE_INITIAL_CLAIM_SECONDS`], by exact identity and by raw item id.
+    ///
+    /// A live download suppresses background searches for the empty scope it
+    /// claims, but a claim this old is a stalled-swarm shape, not a claim — the
+    /// scope falls back to the D18 pseudo-incumbent comparison so a strictly
+    /// better release can still be acquired beside it. Only `Downloading`
+    /// qualifies: `Queued`/`Paused`/`Warning` are operator-visible states with
+    /// their own exits. Computed at snapshot build, where the full queue item
+    /// (state and `queued_at`) is in hand; an item without a parseable
+    /// `queued_at` never reads as stale, so clients that report no age keep
+    /// the suppression.
+    stale_downloading_client_ids: std::collections::HashSet<String>,
+    stale_downloading_raw_item_ids: std::collections::HashSet<String>,
     /// Download client item IDs of items that completed successfully.
     completed_client_ids: std::collections::HashSet<String>,
     completed_raw_item_id_counts: std::collections::HashMap<String, usize>,
@@ -236,16 +257,39 @@ async fn record_failed_release_outcome(
             .await;
     }
 }
+/// Record one completed client item in the snapshot's completed sets. Both the
+/// queue listing (a finished item the client still shows) and the history
+/// listing report completed items — often the same item — so the insert-guard
+/// keeps the raw-id count a per-item count rather than a per-listing count.
+fn note_completed_item(
+    completed_client_ids: &mut std::collections::HashSet<String>,
+    completed_raw_item_id_counts: &mut std::collections::HashMap<String, usize>,
+    client_id: &str,
+    download_client_item_id: &str,
+) {
+    if completed_client_ids.insert(download_client_item_identity(
+        Some(client_id),
+        download_client_item_id,
+    )) {
+        *completed_raw_item_id_counts
+            .entry(download_client_item_id.to_string())
+            .or_insert(0) += 1;
+    }
+}
+
 impl DownloadClientSnapshot {
     pub(crate) async fn fetch(app: &AppUseCase) -> Self {
         let mut active_titles = std::collections::HashSet::new();
         let mut active_client_ids = std::collections::HashSet::new();
         let mut active_raw_item_id_counts = std::collections::HashMap::new();
+        let mut stale_downloading_client_ids = std::collections::HashSet::new();
+        let mut stale_downloading_raw_item_ids = std::collections::HashSet::new();
         let mut completed_client_ids = std::collections::HashSet::new();
         let mut completed_raw_item_id_counts = std::collections::HashMap::new();
         let mut failed_by_download_id = std::collections::HashMap::new();
         let mut queue_listing_failed = false;
         let mut history_listing_failed = false;
+        let now = chrono::Utc::now();
 
         // Fetch current queue
         match app.services.integrations.download_client.list_queue().await {
@@ -255,6 +299,14 @@ impl DownloadClientSnapshot {
                         DownloadQueueState::Queued
                         | DownloadQueueState::Downloading
                         | DownloadQueueState::Paused
+                        // Post-download client work (verify/repair/extract) and
+                        // a completed download awaiting import are both live
+                        // claims on their scope: the bytes exist and are on
+                        // their way to becoming the file.
+                        | DownloadQueueState::Verifying
+                        | DownloadQueueState::Repairing
+                        | DownloadQueueState::Extracting
+                        | DownloadQueueState::ImportPending
                         // A warned download is live work the client is still
                         // holding, so the double-submit guard has to see it;
                         // otherwise an automatic search grabs a second copy
@@ -268,6 +320,40 @@ impl DownloadClientSnapshot {
                             *active_raw_item_id_counts
                                 .entry(item.download_client_item_id.clone())
                                 .or_insert(0) += 1;
+                            if item.state == DownloadQueueState::Downloading
+                                && item
+                                    .queued_at
+                                    .as_deref()
+                                    .and_then(crate::quality_profile::parse_published_at)
+                                    .is_some_and(|queued_at| {
+                                        now.signed_duration_since(queued_at).num_seconds()
+                                            >= STALE_INITIAL_CLAIM_SECONDS
+                                    })
+                            {
+                                stale_downloading_client_ids.insert(
+                                    download_client_item_identity(
+                                        Some(item.client_id.as_str()),
+                                        &item.download_client_item_id,
+                                    ),
+                                );
+                                stale_downloading_raw_item_ids
+                                    .insert(item.download_client_item_id.clone());
+                            }
+                        }
+                        // A finished download still sitting in the client's
+                        // queue view (Weaver holds items there until import
+                        // removes them) is bytes on disk awaiting import — the
+                        // double-submit guard must see it as a claim, not as
+                        // "gone". History listing below also reports completed
+                        // items; the insert-guard keeps the raw-id count a
+                        // per-item count rather than a per-listing count.
+                        DownloadQueueState::Completed => {
+                            note_completed_item(
+                                &mut completed_client_ids,
+                                &mut completed_raw_item_id_counts,
+                                &item.client_id,
+                                &item.download_client_item_id,
+                            );
                         }
                         _ => {}
                     }
@@ -300,13 +386,12 @@ impl DownloadClientSnapshot {
             Ok(history) => {
                 for item in &history {
                     if item.state == DownloadQueueState::Completed {
-                        completed_client_ids.insert(download_client_item_identity(
-                            Some(item.client_id.as_str()),
+                        note_completed_item(
+                            &mut completed_client_ids,
+                            &mut completed_raw_item_id_counts,
+                            &item.client_id,
                             &item.download_client_item_id,
-                        ));
-                        *completed_raw_item_id_counts
-                            .entry(item.download_client_item_id.clone())
-                            .or_insert(0) += 1;
+                        );
                     } else if item.state == DownloadQueueState::Failed {
                         // `Warning` is not a failure: it stays out of this map
                         // so failure recovery never fires on a download the
@@ -352,6 +437,8 @@ impl DownloadClientSnapshot {
             active_titles,
             active_client_ids,
             active_raw_item_id_counts,
+            stale_downloading_client_ids,
+            stale_downloading_raw_item_ids,
             completed_client_ids,
             completed_raw_item_id_counts,
             failed_by_download_id,
@@ -410,6 +497,26 @@ impl DownloadClientSnapshot {
         let exact_key = download_client_item_identity(client_id, download_client_item_id);
         self.active_client_ids.contains(&exact_key)
             || self.active_raw_item_id_counts.get(download_client_item_id) == Some(&1)
+    }
+
+    /// Whether this item's live claim has gone stale: still `Downloading`, but
+    /// for longer than [`STALE_INITIAL_CLAIM_SECONDS`]. Mirrors
+    /// `has_active_client_item`'s two-way identity match; a blind cycle is
+    /// never stale (possibly-active must keep suppressing).
+    pub(crate) fn active_downloading_is_stale(
+        &self,
+        client_id: Option<&str>,
+        download_client_item_id: &str,
+    ) -> bool {
+        if self.queue_listing_failed {
+            return false;
+        }
+        let exact_key = download_client_item_identity(client_id, download_client_item_id);
+        self.stale_downloading_client_ids.contains(&exact_key)
+            || (self.active_raw_item_id_counts.get(download_client_item_id) == Some(&1)
+                && self
+                    .stale_downloading_raw_item_ids
+                    .contains(download_client_item_id))
     }
 
     fn has_completed_client_item(
@@ -473,6 +580,28 @@ fn submission_is_completed(
     dl_snapshot.has_completed_client_item(
         submission.download_client_id.as_deref(),
         &submission.download_client_item_id,
+    )
+}
+
+/// The D18 liveness question for a submission with the snapshot in hand: does
+/// this submission still hold a claim on its scope?
+///
+/// The tracked-state ledger is authoritative when it has an entry, but it can
+/// lag a full import behind the client — the row often appears only when the
+/// import finishes. Until then the client snapshot stands in, and a download
+/// the client reports as *completed* is exactly as much a claim as one it is
+/// still downloading: the bytes exist and are on their way to becoming the
+/// file. Without the completed leg, every scope is unprotected for the whole
+/// import window and an automatic search grabs a second copy beside it.
+pub(crate) fn submission_is_live_claim(
+    submission: &DownloadSubmission,
+    tracked_state: Option<scryer_domain::TrackedDownloadState>,
+    dl_snapshot: &DownloadClientSnapshot,
+) -> bool {
+    submission_is_queued(
+        tracked_state,
+        submission_is_active(submission, dl_snapshot)
+            || submission_is_completed(submission, dl_snapshot),
     )
 }
 /// Check grabbed wanted items against the download client. If a grabbed
@@ -1755,6 +1884,8 @@ mod client_snapshot_tests {
             active_titles: std::collections::HashSet::new(),
             active_client_ids: std::collections::HashSet::new(),
             active_raw_item_id_counts: std::collections::HashMap::new(),
+            stale_downloading_client_ids: std::collections::HashSet::new(),
+            stale_downloading_raw_item_ids: std::collections::HashSet::new(),
             completed_client_ids: std::collections::HashSet::new(),
             completed_raw_item_id_counts: std::collections::HashMap::new(),
             failed_by_download_id: std::collections::HashMap::new(),
@@ -2003,6 +2134,59 @@ mod client_snapshot_tests {
         // No tracked row: the client is the only witness.
         assert!(submission_is_queued(None, true));
         assert!(!submission_is_queued(None, false));
+    }
+
+    fn live_claim_submission(item_id: &str) -> DownloadSubmission {
+        DownloadSubmission {
+            download_id: scryer_domain::download_identity::DownloadId::new(),
+            title_id: "title".to_string(),
+            facet: "series".to_string(),
+            download_client_id: Some("client-1".to_string()),
+            download_client_type: "weaver".to_string(),
+            download_client_item_id: item_id.to_string(),
+            source_hint: None,
+            source_provider_id: None,
+            source_provider_name: None,
+            source_kind: None,
+            source_title: Some("Show.S01E01.1080p.WEB-DL-GROUP".to_string()),
+            info_hash: None,
+            release_size_bytes: None,
+            request_signature: None,
+            purpose: Default::default(),
+            scope: SubmissionScope::Episode {
+                episode_id: "ep-1".to_string(),
+            },
+        }
+    }
+
+    /// A downloaded-but-not-yet-imported item is as much a claim on its scope
+    /// as one still downloading. The tracked-state ledger often gains its row
+    /// only when the import *finishes*, so for the whole import window the
+    /// client snapshot is the only witness — and the client reports the item
+    /// as completed, not active. Without the completed leg the scope sits
+    /// unprotected for that window and an automatic search grabs a second
+    /// copy beside the bytes already on disk.
+    #[test]
+    fn a_completed_unimported_download_is_a_live_claim() {
+        let submission = live_claim_submission("11818");
+        let mut snap = snapshot(false, false);
+
+        // Invisible to both sets: no claim (the item left the client).
+        assert!(!submission_is_live_claim(&submission, None, &snap));
+
+        // Completed in the client, no tracked row yet: still a claim.
+        snap.completed_client_ids
+            .insert(download_client_item_identity(Some("client-1"), "11818"));
+        assert!(submission_is_live_claim(&submission, None, &snap));
+
+        // A terminal tracked state releases the claim regardless of the
+        // client still listing the finished item.
+        for state in [
+            scryer_domain::TrackedDownloadState::Imported,
+            scryer_domain::TrackedDownloadState::Failed,
+        ] {
+            assert!(!submission_is_live_claim(&submission, Some(state), &snap));
+        }
     }
 
     /// The client-echoed fallback name must shed SABnzbd's `.nzb` suffix, or

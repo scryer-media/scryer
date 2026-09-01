@@ -131,6 +131,7 @@ impl FromApplication<scryer_application::DownloadDisplayState> for DownloadDispl
             scryer_application::DownloadDisplayState::Paused => Self::Paused,
             scryer_application::DownloadDisplayState::PostProcessing => Self::PostProcessing,
             scryer_application::DownloadDisplayState::Completed => Self::Completed,
+            scryer_application::DownloadDisplayState::ImportedSeeding => Self::ImportedSeeding,
             scryer_application::DownloadDisplayState::Failed => Self::Failed,
             scryer_application::DownloadDisplayState::Warning => Self::Warning,
             scryer_application::DownloadDisplayState::Importing => Self::Importing,
@@ -164,6 +165,7 @@ impl IntoApplication<scryer_application::DownloadActivityFilter> for DownloadAct
             Self::Queued => scryer_application::DownloadActivityFilter::Queued,
             Self::Paused => scryer_application::DownloadActivityFilter::Paused,
             Self::PostProcessing => scryer_application::DownloadActivityFilter::PostProcessing,
+            Self::Seeding => scryer_application::DownloadActivityFilter::Seeding,
             Self::Warning => scryer_application::DownloadActivityFilter::Warning,
         }
     }

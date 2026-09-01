@@ -299,6 +299,7 @@ export function SettingsSecurityContainer() {
       return;
     }
 
+    setEnableConfirmOpen(false);
     try {
       await submitPasswordMinLength(false);
       const nextSettings = await applySecuritySettings(
@@ -333,6 +334,7 @@ export function SettingsSecurityContainer() {
         return;
       }
 
+      setEnableConfirmOpen(true);
       setConfirmError(saveErrorMessage);
       toast.error(saveErrorMessage);
     } finally {
@@ -379,6 +381,7 @@ export function SettingsSecurityContainer() {
     const effectiveChangesNow =
       !settings.envOverrideActive && settings.effectiveFormLoginEnabled;
 
+    setDisableConfirmOpen(false);
     setConfirmBusy(true);
     try {
       await submitPasswordMinLength(false);
@@ -406,6 +409,7 @@ export function SettingsSecurityContainer() {
 
       setDisableConfirmOpen(false);
     } catch (error) {
+      setDisableConfirmOpen(true);
       toast.error(errorMessage(error, t("settings.securitySaveFailed")));
     } finally {
       setConfirmBusy(false);
@@ -687,7 +691,7 @@ export function SettingsSecurityContainer() {
   return (
     <SettingsSecuritySection
       settings={settings}
-      loading={loading || saveBusy}
+      loading={loading}
       enableConfirmOpen={enableConfirmOpen}
       disableConfirmOpen={disableConfirmOpen}
       adminPasswordRequiredOpen={adminPasswordRequiredOpen}

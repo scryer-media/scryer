@@ -54,6 +54,7 @@ const ACTIVITY_STATUS_OPTIONS: DownloadActivityStatus[] = [
   "QUEUED",
   "PAUSED",
   "POST_PROCESSING",
+  "SEEDING",
   "WARNING",
 ];
 const ACTIVITY_QUEUE_SORT: SortConfig = { key: "PROGRESS", direction: "DESC" };

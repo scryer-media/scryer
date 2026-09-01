@@ -21,6 +21,11 @@ tmp
 *.db-*
 dev-seed.json
 
+# Generated from crates/scryer-plugins/builtin-versions.json by the local
+# built-in sync command or the CI provenance job. These are verified build
+# inputs, never source-controlled artifacts.
+crates/scryer-plugins/builtins/
+
 # Local agent skills
 .agents
 skills-lock.json

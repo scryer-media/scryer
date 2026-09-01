@@ -14,7 +14,6 @@ import {
   Film,
   Pause,
   Play,
-  RefreshCw,
   Search,
   Server,
   Terminal,
@@ -124,6 +123,7 @@ const LOG_LEVEL_COLORS: Record<string, string> = {
 const TRACING_LINE_RE =
   /^(\d{4}-\d{2}-\d{2}T[\d:.]+Z)\s+(ERROR|WARN|INFO|DEBUG|TRACE)\s+([\w:]+):\s+(.*)/;
 const KV_RE = /(\w+)=("(?:[^"\\]|\\.)*"|\S+)/g;
+const UUID_RE = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
 
 type ParsedLine = {
   timestamp: string;
@@ -207,6 +207,21 @@ function materializeLogLineEntry(entry: RawLogLineEntry): LogLineEntry {
   };
 }
 
+function humanLogText(value: string): React.ReactNode {
+  const fragments: React.ReactNode[] = [];
+  let cursor = 0;
+  for (const match of value.matchAll(UUID_RE)) {
+    const index = match.index ?? 0;
+    if (index > cursor) fragments.push(value.slice(cursor, index));
+    fragments.push(
+      <em key={index} className="italic">{"<UUID>"}</em>,
+    );
+    cursor = index + match[0].length;
+  }
+  if (cursor < value.length) fragments.push(value.slice(cursor));
+  return fragments.length > 0 ? fragments : value;
+}
+
 function HighlightedLine({ entry }: { entry: LogLineEntry }) {
   if (entry.structured) {
     const levelColor = LOG_LEVEL_COLORS[entry.structured.level] ?? "text-zinc-700 dark:text-zinc-300";
@@ -219,7 +234,9 @@ function HighlightedLine({ entry }: { entry: LogLineEntry }) {
         <span className="text-zinc-600 dark:text-zinc-400">{entry.structured.target}</span>
         <span className="text-zinc-500 dark:text-zinc-500">:</span>
         {" "}
-        <span className="text-zinc-700 dark:text-zinc-300">{entry.structured.human.split(": ").slice(1).join(": ")}</span>
+        <span className="text-zinc-700 dark:text-zinc-300">
+          {humanLogText(entry.structured.human.split(": ").slice(1).join(": "))}
+        </span>
       </span>
     );
   }
@@ -691,14 +708,13 @@ export function SystemView({
 }) {
   const t = useTranslate();
   const dateTimeFormat = useUiDateTimeFormat();
-  const { systemHealth, systemLoading, refreshSystem } = state;
+  const { systemHealth } = state;
   const healthPlaceholder = "\u2014";
   const statusReady = systemHealth?.serviceReady === true;
   const facetStats: Array<[string, number | string]> = [
     ["Movies", systemHealth?.titlesMovie ?? healthPlaceholder],
     ["Series", systemHealth?.titlesSeries ?? healthPlaceholder],
     ["Anime", systemHealth?.titlesAnime ?? healthPlaceholder],
-    ["Other", systemHealth?.titlesOther ?? healthPlaceholder],
   ];
   const recentEventPreview = systemHealth?.recentEventPreview ?? [];
   const indexerStats = systemHealth?.indexerStats ?? null;
@@ -708,30 +724,11 @@ export function SystemView({
       <ApplicationUpgradeSection />
       <section className={SYSTEM_PANEL_CLASS}>
         <div className={SYSTEM_PANEL_HEADER_CLASS}>
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div className="space-y-1">
-              <h2 className={SYSTEM_PANEL_TITLE_CLASS}>Service health</h2>
-              <p className={`text-sm ${SYSTEM_MUTED_TEXT_CLASS}`}>
-                {systemHealth
-                  ? statusReady
-                    ? t("system.loaded")
-                    : t("system.notReady")
-                  : t("system.notLoaded")}
-              </p>
-              <p className="min-h-4 text-xs font-medium text-[var(--scry-faint)]">
-                {scryerVersion ? `Scryer v${scryerVersion}` : "\u00a0"}
-              </p>
-            </div>
-            <Button
-              size="sm"
-              variant="primary"
-              className="w-full justify-start sm:w-32"
-              onClick={() => void refreshSystem()}
-              disabled={systemLoading}
-            >
-              <RefreshCw className={systemLoading ? "h-4 w-4 animate-spin" : "h-4 w-4"} />
-              {systemLoading ? t("system.refreshing") : t("label.refresh")}
-            </Button>
+          <div className="space-y-1">
+            <h2 className={SYSTEM_PANEL_TITLE_CLASS}>Service health</h2>
+            <p className="min-h-4 text-xs font-medium text-[var(--scry-faint)]">
+              {scryerVersion ? `Scryer v${scryerVersion}` : "\u00a0"}
+            </p>
           </div>
         </div>
         <div className={SYSTEM_PANEL_BODY_CLASS}>
@@ -804,7 +801,7 @@ export function SystemView({
                   </span>
                   <p className="font-semibold text-[var(--scry-ink2)]">Datastore</p>
                 </div>
-                <div className="grid gap-3 md:grid-cols-2">
+                <div className="min-w-0 space-y-3">
                   <div>
                     <p className={`text-xs uppercase tracking-[0.12em] ${SYSTEM_MUTED_TEXT_CLASS}`}>
                       {t("system.dbPathLabel")}
@@ -813,27 +810,21 @@ export function SystemView({
                       {systemHealth?.dbPath ?? healthPlaceholder}
                     </p>
                   </div>
-                  <div>
+                  <div className="min-w-0">
                     <p className={`text-xs uppercase tracking-[0.12em] ${SYSTEM_MUTED_TEXT_CLASS}`}>
                       Migration
                     </p>
-                    <div className="mt-1 flex flex-wrap gap-2">
-                      {systemHealth ? (
-                        <code className="rounded-[7px] border border-[var(--scry-border3)] bg-[var(--scry-inset)] px-2 py-1 text-xs text-[var(--scry-ink2)]">
-                          {systemHealth.dbMigrationVersion ?? "unknown"}
-                        </code>
-                      ) : (
-                        <code className="rounded-[7px] border border-[var(--scry-border3)] bg-[var(--scry-inset)] px-2 py-1 text-xs text-[var(--scry-ink2)]">
-                          {healthPlaceholder}
-                        </code>
-                      )}
-                      <code
-                        className={`min-w-[13rem] rounded-[7px] border border-[var(--scry-border3)] bg-[var(--scry-inset)] px-2 py-1 text-xs text-[var(--scry-ink2)] ${
-                          systemHealth?.datastoreMigrationKey ? "" : "invisible"
-                        }`}
-                      >
-                        {systemHealth?.datastoreMigrationKey ?? healthPlaceholder}
+                    <div className="mt-1 grid min-w-0 gap-2">
+                      <code className="block w-fit max-w-full break-all whitespace-normal rounded-[7px] border border-[var(--scry-border3)] bg-[var(--scry-inset)] px-2 py-1 text-xs text-[var(--scry-ink2)]">
+                        {systemHealth
+                          ? (systemHealth.dbMigrationVersion ?? "unknown")
+                          : healthPlaceholder}
                       </code>
+                      {systemHealth?.datastoreMigrationKey ? (
+                        <code className="block w-fit max-w-full break-all whitespace-normal rounded-[7px] border border-[var(--scry-border3)] bg-[var(--scry-inset)] px-2 py-1 text-xs text-[var(--scry-ink2)]">
+                          {systemHealth.datastoreMigrationKey}
+                        </code>
+                      ) : null}
                     </div>
                   </div>
                 </div>
@@ -844,7 +835,7 @@ export function SystemView({
               <p className="mb-3 font-semibold text-[var(--scry-ink2)]">
                 {t("system.facetLabel")}
               </p>
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-3 gap-2">
                 {facetStats.map(([label, value]) => (
                   <div
                     key={label}

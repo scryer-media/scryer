@@ -308,11 +308,37 @@ fn submission_blocks_search_for_wanted_item(
         return true;
     }
 
-    // Everything genuinely in flight — `Downloading | ImportPending | Importing`,
-    // `ImportBlocked`, or active in the client — is **not** a skip any more. It
-    // becomes a queued pseudo-incumbent on the admission ladder (D18), so a
-    // better release can still be grabbed over a slow or stuck one while an
-    // equal-or-worse one is refused with a reason that says so.
+    // An initial acquisition already claiming an empty scope must finish (or
+    // fail authoritatively) before another corpus search is admitted. This is
+    // especially important for a season/title pack: its submission covers the
+    // child episodes across later scheduler cycles, after the cycle-local pack
+    // proposal is gone. Occupied scopes retain queued-pseudo-incumbent behavior
+    // so genuine upgrade searches can still compare against an in-flight grab.
+    //
+    // One escape: a claim still `Downloading` past the staleness bound is a
+    // stalled swarm, not a claim — a dead torrent never fails on its own, and
+    // without this the scope would freeze until an operator noticed. The scope
+    // re-enters the D18 comparison (Sonarr's `QueueSpecification` shape), so
+    // only a strictly better release is grabbed beside the stall.
+    let tracked_submission_is_live = tracked_state.is_some_and(|state| {
+        matches!(
+            state,
+            scryer_domain::TrackedDownloadState::Downloading
+                | scryer_domain::TrackedDownloadState::ImportPending
+                | scryer_domain::TrackedDownloadState::Importing
+                | scryer_domain::TrackedDownloadState::ImportBlocked
+        )
+    });
+    if !scope_is_occupied
+        && !dl_snapshot.active_downloading_is_stale(
+            submission.download_client_id.as_deref(),
+            &submission.download_client_item_id,
+        )
+        && (tracked_submission_is_live
+            || submission_is_active(submission, dl_snapshot))
+    {
+        return true;
+    }
 
     // A completed download for a scope with nothing in it is on its way to
     // becoming that file. Searching again would fetch the same episode twice,
@@ -1113,7 +1139,7 @@ async fn plan_series_pack_for_title(
     {
         return Ok(None);
     }
-    let (candidates, fired_indexer_ids) = app
+    let search_outcome = app
         .search_and_score_subject_restricted_with_fired_indexers(
             search_title,
             &title_subject,
@@ -1133,33 +1159,44 @@ async fn plan_series_pack_for_title(
         app,
         title,
         &title_subject,
-        candidates,
+        search_outcome.results,
         &episodes,
         &owned_episode_ids,
         claimed_episode_ids,
     )
     .await;
-
-    if evaluated_candidates.is_empty() {
-        record_series_pack_search_coverage(
-            app,
-            &convergence,
-            &fired_indexer_ids,
-            &qualifying_collection_ids,
+    let session_finalized = app
+        .finalize_evaluated_search_session_or_warn(
+            &search_outcome.search_session_id,
+            &evaluated_candidates,
+            &title.id,
         )
         .await;
+
+    if evaluated_candidates.is_empty() {
+        if session_finalized {
+            record_series_pack_search_coverage(
+                app,
+                &convergence,
+                &search_outcome.complete_indexer_ids,
+                &qualifying_collection_ids,
+            )
+            .await;
+        }
         return Ok(None);
     }
 
     let anchors =
         series_pack_candidate_anchors(app, title, &evaluated_candidates, &episodes).await?;
-    record_series_pack_search_coverage(
-        app,
-        &convergence,
-        &fired_indexer_ids,
-        &qualifying_collection_ids,
-    )
-    .await;
+    if session_finalized {
+        record_series_pack_search_coverage(
+            app,
+            &convergence,
+            &search_outcome.complete_indexer_ids,
+            &qualifying_collection_ids,
+        )
+        .await;
+    }
     let blocklist = app.load_title_release_blocklist_signatures(&title.id).await;
 
     // Only the *best* candidate's coverage here, not the union across the list.
@@ -2708,7 +2745,7 @@ async fn process_single_target(
         })
         .collect::<Vec<_>>();
 
-    let mut scored = match app
+    let search_outcome = match app
         .search_and_score_subject_restricted(
             &search_title,
             &subject,
@@ -2734,6 +2771,7 @@ async fn process_single_target(
             return Ok(());
         }
     };
+    let mut scored = search_outcome.results;
     for candidate in season_extras {
         if !scored
             .iter()
@@ -2747,6 +2785,24 @@ async fn process_single_target(
     let results = app
         .evaluate_search_results_for_subject(&search_title, &subject, scored, false)
         .await;
+    // A finalize failure withholds coverage (the scope re-searches next cycle)
+    // but never the grab walk below: these are live results in hand, and
+    // retention bookkeeping does not outrank acquiring with them.
+    if app
+        .finalize_evaluated_search_session_or_warn(
+            &search_outcome.search_session_id,
+            &results,
+            &title.id,
+        )
+        .await
+    {
+        app.record_search_coverage(
+            &search_title,
+            &subject,
+            &search_outcome.complete_indexer_ids,
+        )
+        .await;
+    }
 
     // Cooldown state, not cadence: the upgrade policy and failed-grab handling
     // read when this scope last actually searched.
@@ -2755,9 +2811,6 @@ async fn process_single_target(
         .workflow
         .acquisition_scope_states
         .record_acquisition_scope_search_attempt(&item.id, &now.to_rfc3339())
-        .await;
-
-    app.emit_acquisition_search_completed_event(None, title, results.len() as i64)
         .await;
 
     if results.is_empty() {
@@ -4324,6 +4377,8 @@ mod task_runner_tests {
             active_titles: Default::default(),
             active_client_ids: Default::default(),
             active_raw_item_id_counts: Default::default(),
+            stale_downloading_client_ids: Default::default(),
+            stale_downloading_raw_item_ids: Default::default(),
             completed_client_ids: Default::default(),
             completed_raw_item_id_counts: Default::default(),
             failed_by_download_id: Default::default(),
@@ -4344,6 +4399,8 @@ mod task_runner_tests {
             active_titles: Default::default(),
             active_client_ids: Default::default(),
             active_raw_item_id_counts: Default::default(),
+            stale_downloading_client_ids: Default::default(),
+            stale_downloading_raw_item_ids: Default::default(),
             completed_client_ids: Default::default(),
             completed_raw_item_id_counts: Default::default(),
             failed_by_download_id: Default::default(),
@@ -4408,45 +4465,90 @@ mod task_runner_tests {
         ));
     }
 
-    /// **D18.** An active download no longer freezes its scope. It becomes a
-    /// queued pseudo-incumbent instead, so a genuinely better release can be
-    /// grabbed over a slow one and an equal-or-worse one is refused by the
-    /// admission ladder with `queued_better_or_equal` — a reason an operator can
-    /// read, rather than a silent scope-level skip.
+    /// An active initial acquisition owns an empty scope. Episode search must
+    /// wait for the existing download or pack to resolve.
     #[test]
-    fn an_active_submission_no_longer_freezes_the_scope() {
-        let item = wanted_episode_item("title-bluey", "Bluey", 1);
+    fn an_active_submission_blocks_an_empty_scope() {
+        let item = wanted_episode_item("title-synthetic", "Synthetic Show", 1);
         let episode_id = item.episode_id.as_deref().expect("episode id");
         let submission = episode_submission(&item.title_id, episode_id, "job-upgrade");
         let snapshot = snapshot_with_job("job-upgrade", false);
 
-        assert!(!submission_blocks_search_for_wanted_item(
+        assert!(submission_blocks_search_for_wanted_item(
             &submission,
             &item,
             None,
             &snapshot,
             None,
-            true,
+            false,
         ));
     }
 
-    /// A held import is a real claim on the scope, so it still counts as
-    /// queued — but it no longer *blocks*, which is the behaviour change D18
-    /// makes deliberately: a stuck download used to make its scope permanently
-    /// unsearchable.
+    /// Import-blocked media still owns an empty scope until an operator resolves
+    /// or removes that manual import.
     #[test]
-    fn an_import_blocked_submission_no_longer_freezes_the_scope() {
-        let item = wanted_episode_item("title-bluey", "Bluey", 1);
+    fn an_import_blocked_submission_blocks_an_empty_scope() {
+        let item = wanted_episode_item("title-synthetic", "Synthetic Show", 1);
         let episode_id = item.episode_id.as_deref().expect("episode id");
         let submission = episode_submission(&item.title_id, episode_id, "job-blocked");
         let snapshot = snapshot_with_job("job-blocked", true);
 
-        assert!(!submission_blocks_search_for_wanted_item(
+        assert!(submission_blocks_search_for_wanted_item(
             &submission,
             &item,
             None,
             &snapshot,
             Some(scryer_domain::TrackedDownloadState::ImportBlocked),
+            false,
+        ));
+    }
+
+    /// A claim still `Downloading` past the staleness bound stops suppressing
+    /// its empty scope: a dead swarm never fails on its own, and without the
+    /// escape the scope froze until an operator noticed. The scope falls back
+    /// to the D18 pseudo-incumbent comparison; a fresh download keeps the
+    /// suppression, and so does a stale one on a blind cycle.
+    #[test]
+    fn a_stale_downloading_claim_stops_blocking_its_empty_scope() {
+        let item = wanted_episode_item("title-bluey", "Bluey", 1);
+        let episode_id = item.episode_id.as_deref().expect("episode id");
+        let submission = episode_submission(&item.title_id, episode_id, "job-stalled");
+
+        // Fresh active download: suppressed, exactly the new rule.
+        let fresh = snapshot_with_job("job-stalled", false);
+        assert!(submission_blocks_search_for_wanted_item(
+            &submission,
+            &item,
+            None,
+            &fresh,
+            Some(scryer_domain::TrackedDownloadState::Downloading),
+            false,
+        ));
+
+        // The same download past the staleness bound: back to D18 comparison.
+        let mut stale = snapshot_with_job("job-stalled", false);
+        stale
+            .stale_downloading_client_ids
+            .insert(download_client_item_identity(Some("primary"), "job-stalled"));
+        stale
+            .stale_downloading_raw_item_ids
+            .insert("job-stalled".to_string());
+        assert!(!submission_blocks_search_for_wanted_item(
+            &submission,
+            &item,
+            None,
+            &stale,
+            Some(scryer_domain::TrackedDownloadState::Downloading),
+            false,
+        ));
+
+        // An occupied scope was never suppressed and stays comparison-based.
+        assert!(!submission_blocks_search_for_wanted_item(
+            &submission,
+            &item,
+            None,
+            &stale,
+            Some(scryer_domain::TrackedDownloadState::Downloading),
             true,
         ));
     }

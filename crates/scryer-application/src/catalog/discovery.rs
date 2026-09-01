@@ -27,6 +27,65 @@ struct PreparedReleaseScoringInputs {
     now: chrono::DateTime<chrono::Utc>,
 }
 
+pub(crate) struct ScoredSearchOutcome {
+    pub results: Vec<IndexerSearchResult>,
+    pub complete_indexer_ids: Vec<String>,
+    pub incomplete_indexer_reasons: HashMap<String, String>,
+    pub search_session_id: String,
+}
+
+/// The release's cross-indexer content identity — THE fingerprint, singular.
+///
+/// This is both what the search client stages candidates under and what
+/// `finalize_evaluated_search_session` retains by. The two sides must agree
+/// byte-for-byte or every finalize silently discards its whole session's
+/// corpus (no fingerprint ever matches), so there is exactly one
+/// implementation and the infrastructure crate calls this one.
+///
+/// Identity tiers: a torrent is its infohash wherever it came from; an NZB is
+/// its normalized title plus exact announced size (conservative — indexers
+/// that disagree on size yield separate candidates rather than a false merge);
+/// anything else is scoped to its indexer and guid.
+pub fn release_candidate_fingerprint(candidate: &IndexerSearchResult) -> String {
+    let info_hash = candidate
+        .extra
+        .get("info_hash")
+        .and_then(Value::as_str)
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty());
+    let normalized_title = candidate
+        .title
+        .split(|ch: char| !ch.is_alphanumeric())
+        .filter(|part| !part.is_empty())
+        .map(str::to_lowercase)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let identity = if let Some(info_hash) = info_hash {
+        format!("torrent\0{info_hash}")
+    } else if !normalized_title.is_empty() && candidate.size_bytes.is_some_and(|size| size > 0) {
+        format!(
+            "nzb\0{normalized_title}\0{}",
+            candidate.size_bytes.unwrap_or_default()
+        )
+    } else {
+        format!(
+            "scoped\0{}\0{}\0{}\0{}",
+            candidate.source,
+            candidate.guid.as_deref().unwrap_or_default(),
+            normalized_title,
+            candidate.size_bytes.unwrap_or_default()
+        )
+    };
+    crate::blake3_identity_hex(crate::HashDomain::CandidateSessionIdentity, identity)
+}
+
+fn candidate_is_reusable(candidate: &IndexerSearchResult) -> bool {
+    matches!(
+        candidate.auto_decision_code.as_deref(),
+        Some("eligible" | "pending_delay" | "minimum_age" | "download_client_unavailable")
+    )
+}
+
 fn release_search_tagged_aliases(title: &Title) -> Vec<TaggedAlias> {
     let mut aliases = title.tagged_aliases.clone();
     let mut seen: HashSet<String> = aliases
@@ -331,6 +390,42 @@ fn record_query_coverage_outcomes(
     }
 }
 
+fn incomplete_indexer_reason(outcome: IndexerSearchOutcome) -> Option<String> {
+    let (reason, retry_after) = match outcome {
+        IndexerSearchOutcome::Complete { .. } => return None,
+        IndexerSearchOutcome::Partial {
+            reason: Some(IndexerSearchIncompleteReason::RateLimited),
+            retry_after,
+            ..
+        } => ("indexer search was rate limited", retry_after),
+        // Unattested legacy responses are operationally successful; they only
+        // withhold convergence coverage until the plugin declares semantics.
+        IndexerSearchOutcome::Partial {
+            reason: Some(IndexerSearchIncompleteReason::Unattested),
+            ..
+        } => return None,
+        IndexerSearchOutcome::Partial {
+            reason: Some(IndexerSearchIncompleteReason::UpstreamFailure),
+            retry_after,
+            ..
+        } => ("indexer upstream search failed", retry_after),
+        IndexerSearchOutcome::Partial { retry_after, .. } => {
+            ("indexer search returned partial results", retry_after)
+        }
+        IndexerSearchOutcome::Deferred { retry_after } => {
+            ("indexer search was deferred", retry_after)
+        }
+        IndexerSearchOutcome::Skipped { retry_after } => {
+            ("indexer search was skipped", retry_after)
+        }
+        IndexerSearchOutcome::Errored => ("indexer search failed", None),
+    };
+    Some(match retry_after {
+        Some(delay) => format!("{reason}; retry after {}s", delay.as_secs()),
+        None => reason.to_string(),
+    })
+}
+
 fn completely_covered_indexers(
     aggregate: HashMap<String, QueryCoverageAggregate>,
     required_query_count: usize,
@@ -468,6 +563,40 @@ pub(crate) fn compare_release_search_results(
     crate::acquisition::scoring::RankHead::compare(left, right)
 }
 
+fn grab_quota_preference(candidate: &IndexerSearchResult) -> (u8, u64, u64) {
+    let current = candidate.extra.get("grab_current").and_then(Value::as_u64);
+    let maximum = candidate.extra.get("grab_max").and_then(Value::as_u64);
+    match (current, maximum) {
+        (_, None | Some(0)) => (0, 0, 1),
+        (Some(current), Some(maximum)) if current < maximum => (1, current, maximum),
+        (None, Some(maximum)) => (2, 0, maximum),
+        (Some(current), Some(maximum)) => (3, current, maximum),
+    }
+}
+
+fn source_is_preferred_for_grab(
+    candidate: &IndexerSearchResult,
+    existing: &IndexerSearchResult,
+) -> bool {
+    let candidate_quota = grab_quota_preference(candidate);
+    let existing_quota = grab_quota_preference(existing);
+    candidate_quota.0 < existing_quota.0
+        || (candidate_quota.0 == existing_quota.0
+            && candidate_quota.0 == 1
+            && u128::from(candidate_quota.1) * u128::from(existing_quota.2)
+                < u128::from(existing_quota.1) * u128::from(candidate_quota.2))
+}
+
+fn source_grab_sort_priority(candidate: &IndexerSearchResult, configured: i64) -> i64 {
+    let (class, current, maximum) = grab_quota_preference(candidate);
+    let usage = if class == 1 {
+        (u128::from(current) * 1_000_000 / u128::from(maximum)) as i64
+    } else {
+        0
+    };
+    i64::from(class) * 2_000_000_000 + usage * 1_000 + configured.clamp(0, 999)
+}
+
 pub(crate) fn dedupe_cross_indexer_release_results(
     results: Vec<IndexerSearchResult>,
     indexer_priority_by_name: &HashMap<String, i64>,
@@ -504,6 +633,8 @@ pub(crate) fn dedupe_cross_indexer_release_results(
             let new_preferred = source_kind_matches_preference(result, preferred_source_kind);
             let new_wins = if existing_preferred != new_preferred {
                 new_preferred
+            } else if grab_quota_preference(existing) != grab_quota_preference(result) {
+                source_is_preferred_for_grab(result, existing)
             } else {
                 new_prio < existing_prio
             };
@@ -632,6 +763,7 @@ impl AppUseCase {
             episode,
             absolute_episode,
             &mut prepared,
+            false,
         )
         .await
     }
@@ -659,6 +791,7 @@ impl AppUseCase {
         episode: Option<u32>,
         absolute_episode: Option<u32>,
         prepared: &mut Option<PreparedReleaseScoringInputs>,
+        preserve_duplicate_sources: bool,
     ) -> AppResult<Vec<IndexerSearchResult>> {
         if prepared.is_none() {
             let blocklist = self.load_title_release_blocklist_signatures(title_id).await;
@@ -826,7 +959,7 @@ impl AppUseCase {
             {
                 continue;
             }
-            let candidate_runtime_minutes = crate::acquisition_coverage::coverage_runtime_minutes(
+            let candidate_size_basis = crate::acquisition_coverage::coverage_size_basis(
                 &release_coverage,
                 &scored_release_metadata,
                 &prepared.catalog_episodes,
@@ -871,9 +1004,7 @@ impl AppUseCase {
                     scored_release_metadata.clone(),
                     result.size_bytes,
                 ),
-                &prepared
-                    .canonical_context
-                    .view(candidate_runtime_minutes, false),
+                &prepared.canonical_context.view(candidate_size_basis, false),
             );
             let decision = scored_release.announced_decision;
 
@@ -912,11 +1043,14 @@ impl AppUseCase {
                         .as_ref()
                         .and_then(|episode| episode.episode_numbers.iter().min().copied())
                         .unwrap_or(0),
-                    indexer_priority: prepared
-                        .indexer_priority_by_name
-                        .get(&result.source)
-                        .copied()
-                        .unwrap_or(i64::MAX),
+                    indexer_priority: source_grab_sort_priority(
+                        &result,
+                        prepared
+                            .indexer_priority_by_name
+                            .get(&result.source)
+                            .copied()
+                            .unwrap_or(i64::MAX),
+                    ),
                     negated_seeders: crate::acquisition::scoring::listing_negated_seeders(&result),
                     usenet_age_hours: if matches!(
                         result.source_kind,
@@ -958,11 +1092,16 @@ impl AppUseCase {
             scored.push(scored_result);
         }
 
-        let mut scored = dedupe_cross_indexer_release_results(
-            scored,
-            &prepared.indexer_priority_by_name,
-            &prepared.preferred_source_kind,
-        );
+        let mut scored = if preserve_duplicate_sources {
+            scored.retain(|candidate| grab_quota_preference(candidate).0 != 3);
+            scored
+        } else {
+            dedupe_cross_indexer_release_results(
+                scored,
+                &prepared.indexer_priority_by_name,
+                &prepared.preferred_source_kind,
+            )
+        };
 
         scored.sort_by(|left, right| {
             crate::acquisition::scoring::compare_ranked_results(
@@ -971,6 +1110,7 @@ impl AppUseCase {
                 &rank_by_key,
                 release_search_key,
             )
+            .then_with(|| left.indexer_id.cmp(&right.indexer_id))
         });
         scored.truncate(200);
 
@@ -986,7 +1126,7 @@ impl AppUseCase {
     pub(crate) async fn search_and_score_releases(
         &self,
         request: ReleaseSearchRequest<'_>,
-    ) -> AppResult<(Vec<IndexerSearchResult>, Vec<String>)> {
+    ) -> AppResult<ScoredSearchOutcome> {
         let ReleaseSearchRequest {
             queries,
             imdb_id,
@@ -1089,7 +1229,12 @@ impl AppUseCase {
                     scope_id = scope_id.as_deref().unwrap_or("none"),
                     "all indexers disabled for scope, skipping search"
                 );
-                return Ok((Vec::new(), Vec::new()));
+                return Ok(ScoredSearchOutcome {
+                    results: Vec::new(),
+                    complete_indexer_ids: Vec::new(),
+                    incomplete_indexer_reasons: HashMap::new(),
+                    search_session_id: Uuid::new_v4().to_string(),
+                });
             }
         }
 
@@ -1135,7 +1280,7 @@ impl AppUseCase {
         } else {
             effective_queries
         };
-        let required_query_count = effective_queries.len();
+        let required_query_count = usize::from(!effective_queries.is_empty());
 
         let mut set = JoinSet::new();
         let (page_tx, mut page_source) = mpsc::channel(2);
@@ -1157,15 +1302,22 @@ impl AppUseCase {
             ids.insert("mal_id".to_string(), mal_id);
         }
         let search_session_id = Uuid::new_v4().to_string();
-        let learning_context = if mode == SearchMode::Auto && !title_id.trim().is_empty() {
+        let learning_context = if !title_id.trim().is_empty() {
             Some(IndexerSearchLearningContext {
                 title_id: title_id.to_string(),
                 facet: search_facet.as_str().to_string(),
                 subject_kind: search_subject_kind,
-                search_session_id,
+                search_session_id: search_session_id.clone(),
                 // The convergence value hint rides the Auto background context so
                 // the scheduler can lane-rank this scope.
                 background_value,
+                // Only the background convergence lanes set a value hint, and
+                // only they may be served from the persisted candidate corpus.
+                // An explicit operator search (queue-best-release, the UI search
+                // buttons) must fire the indexer live: the user is asking what
+                // exists *now*, and a corpus snapshot persisted before a new
+                // release appeared would hide it for the whole reuse window.
+                candidate_reuse_allowed: background_value.is_some(),
             })
         } else {
             None
@@ -1175,45 +1327,37 @@ impl AppUseCase {
             SearchMode::Auto => IndexerErrorOperation::AutomaticSearch,
         };
 
-        for query in effective_queries {
-            let indexer_client = self.services.integrations.indexer_client.clone();
-            let ids = ids.clone();
-            let category = category.clone();
-            let facet = Some(search_facet.as_str().to_string());
-            let id_search_facet = id_search_facet
-                .as_ref()
-                .map(|facet| facet.as_str().to_string());
-            let indexer_routing = indexer_routing.clone();
-            let newznab_categories = newznab_categories.clone();
-            let tagged_aliases = tagged_aliases.to_vec();
-            let learning_context = learning_context.clone();
-            let query = query.clone();
-            let query_cancel_token = cancel_token.child_token();
-            let page_sink = page_sink.clone();
-
-            set.spawn(async move {
-                indexer_client
-                    .search_stream(
-                        query,
-                        ids,
-                        category.clone(),
-                        facet,
-                        id_search_facet,
-                        newznab_categories,
-                        indexer_routing,
-                        mode,
-                        indexer_error_operation,
-                        season,
-                        episode,
-                        absolute_episode,
-                        tagged_aliases,
-                        learning_context,
-                        query_cancel_token,
-                        page_sink,
-                    )
-                    .await
-            });
-        }
+        let indexer_client = self.services.integrations.indexer_client.clone();
+        let facet = Some(search_facet.as_str().to_string());
+        let id_search_facet = id_search_facet
+            .as_ref()
+            .map(|facet| facet.as_str().to_string());
+        let tagged_aliases = tagged_aliases.to_vec();
+        let query_cancel_token = cancel_token.child_token();
+        let plan_page_sink = page_sink.clone();
+        let plan_indexer_routing = indexer_routing.clone();
+        set.spawn(async move {
+            indexer_client
+                .search_queries_stream(
+                    effective_queries,
+                    ids,
+                    category,
+                    facet,
+                    id_search_facet,
+                    newznab_categories,
+                    plan_indexer_routing,
+                    mode,
+                    indexer_error_operation,
+                    season,
+                    episode,
+                    absolute_episode,
+                    tagged_aliases,
+                    learning_context,
+                    query_cancel_token,
+                    plan_page_sink,
+                )
+                .await
+        });
 
         drop(page_sink);
 
@@ -1228,6 +1372,7 @@ impl AppUseCase {
         // query. Candidates from incomplete queries remain usable, but one
         // partial, missing, or failed query withholds coverage for that indexer.
         let mut coverage_by_indexer = HashMap::new();
+        let mut incomplete_indexer_reasons = HashMap::new();
 
         loop {
             if !page_source_open && !search_tasks_open {
@@ -1266,6 +1411,7 @@ impl AppUseCase {
                                     episode,
                                     absolute_episode,
                                     &mut scoring_inputs,
+                                    mode == SearchMode::Auto,
                                 )
                                 .await?;
                             continue;
@@ -1287,6 +1433,13 @@ impl AppUseCase {
             match result {
                 Ok(Ok(response)) => {
                     successful_searches += 1;
+                    for outcome in &response.indexer_outcomes {
+                        if let Some(reason) = incomplete_indexer_reason(outcome.outcome) {
+                            incomplete_indexer_reasons
+                                .entry(outcome.indexer_id.clone())
+                                .or_insert(reason);
+                        }
+                    }
                     record_query_coverage_outcomes(
                         &mut coverage_by_indexer,
                         &response.indexer_outcomes,
@@ -1324,10 +1477,15 @@ impl AppUseCase {
             return Err(AppError::Repository(details));
         }
 
-        Ok((
-            scored_results,
-            completely_covered_indexers(coverage_by_indexer, required_query_count),
-        ))
+        Ok(ScoredSearchOutcome {
+            results: scored_results,
+            complete_indexer_ids: completely_covered_indexers(
+                coverage_by_indexer,
+                required_query_count,
+            ),
+            incomplete_indexer_reasons,
+            search_session_id,
+        })
     }
 
     pub(crate) async fn search_and_evaluate_subject(
@@ -1367,8 +1525,36 @@ impl AppUseCase {
         restrict_to_indexer_ids: Option<std::collections::HashSet<String>>,
         background_value: Option<f64>,
     ) -> AppResult<Vec<IndexerSearchResult>> {
-        let results = self
-            .search_and_score_subject_restricted(
+        Ok(self
+            .search_and_evaluate_subject_restricted_with_outcome(
+                title,
+                subject,
+                caller_label,
+                mode,
+                cancel_token,
+                restrict_to_indexer_ids,
+                background_value,
+            )
+            .await?
+            .results)
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "interactive search also needs the restricted indexer's completion status"
+    )]
+    pub(crate) async fn search_and_evaluate_subject_restricted_with_outcome(
+        &self,
+        title: &Title,
+        subject: &crate::acquisition_release_search::ResolvedReleaseSearchSubject,
+        caller_label: &str,
+        mode: SearchMode,
+        cancel_token: CancellationToken,
+        restrict_to_indexer_ids: Option<std::collections::HashSet<String>>,
+        background_value: Option<f64>,
+    ) -> AppResult<ScoredSearchOutcome> {
+        let mut outcome = self
+            .search_and_score_subject_restricted_with_fired_indexers(
                 title,
                 subject,
                 caller_label,
@@ -1378,14 +1564,30 @@ impl AppUseCase {
                 background_value,
             )
             .await?;
-        Ok(self
+        outcome.results = self
             .evaluate_search_results_for_subject(
                 title,
                 subject,
-                results,
-                matches!(mode, SearchMode::Interactive),
+                outcome.results,
+                // A background value is the mark of the convergence sweep; a
+                // search without one was started by an operator even when it
+                // runs auto decisioning (`queue_best_release`), and Sonarr
+                // skips the monitored check for exactly those searches.
+                matches!(mode, SearchMode::Interactive) || background_value.is_none(),
             )
-            .await)
+            .await;
+        if self
+            .finalize_evaluated_search_session_or_warn(
+                &outcome.search_session_id,
+                &outcome.results,
+                &title.id,
+            )
+            .await
+        {
+            self.record_search_coverage(title, subject, &outcome.complete_indexer_ids)
+                .await;
+        }
+        Ok(outcome)
     }
 
     /// Search and score `subject` while leaving admission evaluation to the
@@ -1404,26 +1606,17 @@ impl AppUseCase {
         cancel_token: CancellationToken,
         restrict_to_indexer_ids: Option<std::collections::HashSet<String>>,
         background_value: Option<f64>,
-    ) -> AppResult<Vec<IndexerSearchResult>> {
-        let (results, fired_indexer_ids) = self
-            .search_and_score_subject_restricted_with_fired_indexers(
-                title,
-                subject,
-                caller_label,
-                mode,
-                cancel_token,
-                restrict_to_indexer_ids,
-                background_value,
-            )
-            .await?;
-
-        // Every generic scoped corpus search — background, interactive, or
-        // pack — may update per-indexer convergence coverage.
-        // The series-pack title lane opts into its own keys through the narrow
-        // lower-level helper below.
-        self.record_search_coverage(title, subject, &fired_indexer_ids)
-            .await;
-        Ok(results)
+    ) -> AppResult<ScoredSearchOutcome> {
+        self.search_and_score_subject_restricted_with_fired_indexers(
+            title,
+            subject,
+            caller_label,
+            mode,
+            cancel_token,
+            restrict_to_indexer_ids,
+            background_value,
+        )
+        .await
     }
 
     /// Search and score without writing generic scope coverage. The series-pack
@@ -1442,39 +1635,86 @@ impl AppUseCase {
         cancel_token: CancellationToken,
         restrict_to_indexer_ids: Option<std::collections::HashSet<String>>,
         background_value: Option<f64>,
-    ) -> AppResult<(Vec<IndexerSearchResult>, Vec<String>)> {
+    ) -> AppResult<ScoredSearchOutcome> {
         let tagged_aliases = release_search_tagged_aliases(title);
-        let (results, fired_indexer_ids) = self
-            .search_and_score_releases(ReleaseSearchRequest {
-                queries: subject.queries.clone(),
-                imdb_id: subject.imdb_id.clone(),
-                tmdb_id: subject.tmdb_id.clone(),
-                tvdb_id: subject.tvdb_id.clone(),
-                anidb_id: subject.anidb_id.clone(),
-                mal_id: subject.mal_id.clone(),
-                category: Some(subject.category.clone()),
-                owner_facet: subject.owner_facet.clone(),
-                search_facet: subject.search_facet.clone(),
-                id_search_facet: subject.id_search_facet.clone(),
-                newznab_categories: subject.newznab_categories.clone(),
-                title_id: subject.title_id.as_str(),
-                title_tags: &subject.title_tags,
-                library_id: Some(title.library_id.as_str()),
-                caller_label,
-                mode,
-                runtime_minutes: subject.runtime_minutes,
-                season: subject.season,
-                episode: subject.episode,
-                absolute_episode: subject.absolute_episode,
-                tagged_aliases: &tagged_aliases,
-                search_subject_kind: subject.subject_kind,
-                parse_context: &subject.title_evidence.parse_context,
-                cancel_token,
-                restrict_to_indexer_ids,
-                background_value,
-            })
-            .await?;
-        Ok((results, fired_indexer_ids))
+        self.search_and_score_releases(ReleaseSearchRequest {
+            queries: subject.queries.clone(),
+            imdb_id: subject.imdb_id.clone(),
+            tmdb_id: subject.tmdb_id.clone(),
+            tvdb_id: subject.tvdb_id.clone(),
+            anidb_id: subject.anidb_id.clone(),
+            mal_id: subject.mal_id.clone(),
+            category: Some(subject.category.clone()),
+            owner_facet: subject.owner_facet.clone(),
+            search_facet: subject.search_facet.clone(),
+            id_search_facet: subject.id_search_facet.clone(),
+            newznab_categories: subject.newznab_categories.clone(),
+            title_id: subject.title_id.as_str(),
+            title_tags: &subject.title_tags,
+            library_id: Some(title.library_id.as_str()),
+            caller_label,
+            mode,
+            runtime_minutes: subject.runtime_minutes,
+            season: subject.season,
+            episode: subject.episode,
+            absolute_episode: subject.absolute_episode,
+            tagged_aliases: &tagged_aliases,
+            search_subject_kind: subject.subject_kind,
+            parse_context: &subject.title_evidence.parse_context,
+            cancel_token,
+            restrict_to_indexer_ids,
+            background_value,
+        })
+        .await
+    }
+
+    pub(crate) async fn finalize_evaluated_search_session(
+        &self,
+        search_session_id: &str,
+        evaluated: &[IndexerSearchResult],
+    ) -> AppResult<()> {
+        let mut fingerprints = evaluated
+            .iter()
+            .filter(|candidate| candidate_is_reusable(candidate))
+            .map(release_candidate_fingerprint)
+            .collect::<Vec<_>>();
+        fingerprints.sort_unstable();
+        fingerprints.dedup();
+        self.services
+            .integrations
+            .indexer_client
+            .finalize_search_session(search_session_id, &fingerprints)
+            .await
+    }
+
+    /// Finalization is retention bookkeeping and must never veto acquisition:
+    /// a search that just returned live candidates still grabs, whatever the
+    /// corpus tables did. `false` means the session was not finalized — the
+    /// caller must then withhold convergence coverage, because coverage
+    /// without a pruned corpus behind it is the claim the retention model
+    /// forbids. Nothing else is owed: the staged runs stay `received_*`, which
+    /// excludes them from reuse, and the scope simply re-searches next cycle.
+    pub(crate) async fn finalize_evaluated_search_session_or_warn(
+        &self,
+        search_session_id: &str,
+        evaluated: &[IndexerSearchResult],
+        title_id: &str,
+    ) -> bool {
+        match self
+            .finalize_evaluated_search_session(search_session_id, evaluated)
+            .await
+        {
+            Ok(()) => true,
+            Err(error) => {
+                warn!(
+                    title_id,
+                    search_session_id,
+                    error = %error,
+                    "search candidate cache finalization failed; withholding coverage and continuing"
+                );
+                false
+            }
+        }
     }
 
     /// Interactive search for a title (movie or standalone). Resolves all
@@ -1633,14 +1873,6 @@ impl AppUseCase {
         self.attach_candidate_tokens(actor, &title, &subject, &mut results, false)
             .await;
 
-        self.emit_discovery_search_completed_event(
-            actor,
-            subject.category.clone(),
-            subject.queries.first().cloned(),
-            results.len() as i64,
-        )
-        .await;
-
         Ok(results)
     }
 
@@ -1702,14 +1934,6 @@ impl AppUseCase {
         self.attach_candidate_tokens(actor, &search_title, &subject, &mut results, true)
             .await;
 
-        self.emit_discovery_search_completed_event(
-            actor,
-            subject.category.clone(),
-            subject.queries.first().cloned(),
-            results.len() as i64,
-        )
-        .await;
-
         Ok(results)
     }
 
@@ -1760,14 +1984,6 @@ impl AppUseCase {
             .await?;
         self.attach_candidate_tokens(actor, &title, &subject, &mut results, false)
             .await;
-
-        self.emit_discovery_search_completed_event(
-            actor,
-            subject.category.clone(),
-            subject.queries.first().cloned(),
-            results.len() as i64,
-        )
-        .await;
 
         Ok(results)
     }

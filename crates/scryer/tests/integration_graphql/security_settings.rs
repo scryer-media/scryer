@@ -101,6 +101,11 @@ async fn graphql_oauth_client_registration_lifecycle_enforces_admin_access_and_r
     )
     .await;
     assert_no_errors(&listed);
+    let auth_session_version = ctx
+        .app
+        .current_actor_auth_session_version(&admin)
+        .await
+        .expect("load admin session version");
     assert!(
         listed["data"]["oauthClientRegistrations"]
             .as_array()
@@ -207,6 +212,7 @@ async fn graphql_oauth_client_registration_lifecycle_enforces_admin_access_and_r
                 CODE_CHALLENGE,
                 "S256",
                 scryer_application::OAuthAuthorizationSource::Authenticated,
+                auth_session_version.as_deref(),
             )
             .await
             .is_err()
@@ -222,6 +228,7 @@ async fn graphql_oauth_client_registration_lifecycle_enforces_admin_access_and_r
             CODE_CHALLENGE,
             "S256",
             scryer_application::OAuthAuthorizationSource::Authenticated,
+            auth_session_version.as_deref(),
         )
         .await
         .expect("create custom client authorization code");
@@ -922,6 +929,11 @@ async fn create_oauth_refresh_grant_for_security_test(
     const CODE_VERIFIER: &str = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
     const CODE_CHALLENGE: &str = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
 
+    let auth_session_version = ctx
+        .app
+        .current_actor_auth_session_version(user)
+        .await
+        .unwrap_or_else(|err| panic!("load OAuth authorization session version ({state}): {err}"));
     let issued = ctx
         .app
         .create_oauth_authorization_code(
@@ -932,6 +944,7 @@ async fn create_oauth_refresh_grant_for_security_test(
             CODE_CHALLENGE,
             "S256",
             authorization_source,
+            auth_session_version.as_deref(),
         )
         .await
         .unwrap_or_else(|err| panic!("create OAuth authorization code ({state}): {err}"));

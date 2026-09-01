@@ -16,7 +16,7 @@ use scryer_application::{
     NewIndexerError, NullIndexerErrorRepository, RateLimitCooldownAction, RuntimePluginLoad,
     SearchMode, classify_indexer_http_response,
     external_import::{EXTERNAL_IMPORT_HOST_RPS_LANE, EXTERNAL_IMPORT_HOST_RPS_PROFILE},
-    indexer_response_content_type, unknown_indexer_error,
+    indexer_error_history_is_persistable, indexer_response_content_type, unknown_indexer_error,
 };
 use scryer_domain::{
     ConfigFieldDef, ConfigFieldRole, ConfigFieldType, ConfigFieldValueSource,
@@ -404,6 +404,12 @@ impl ProwlarrErrorCapture {
         operation: IndexerErrorOperation,
         response: CapturedIndexerHttpResponse,
     ) {
+        if !indexer_error_history_is_persistable(&self.indexer_id) {
+            // A connection test probes under a synthetic id with no `indexers`
+            // row; persisting history for it can only fail the foreign key, and
+            // that failure must never stand in for the probe's own error.
+            return;
+        }
         let classified =
             classify_indexer_http_response(&response).unwrap_or_else(unknown_indexer_error);
         let error = NewIndexerError {

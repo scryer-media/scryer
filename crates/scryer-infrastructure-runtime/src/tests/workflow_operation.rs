@@ -343,9 +343,145 @@ async fn reconcile_interrupted_job_runs_preserves_a_reboot_required_upgrade_run(
     );
 }
 
+async fn seed_workflow_operation(
+    services: &SqliteServices,
+    id: &str,
+    job_key: Option<&str>,
+    status: &str,
+    started_at: chrono::DateTime<chrono::Utc>,
+) {
+    sqlx::query(
+        "INSERT INTO workflow_operations
+         (id, operation_type, status, started_at, completed_at, created_at, updated_at,
+          job_key, trigger_source)
+         VALUES (?, 'retention-test', ?, ?, ?, ?, ?, ?, 'manual')",
+    )
+    .bind(id)
+    .bind(status)
+    .bind(started_at)
+    .bind(started_at)
+    .bind(started_at)
+    .bind(started_at)
+    .bind(job_key)
+    .execute(&services.pool)
+    .await
+    .expect("seed workflow operation");
+}
+
+#[tokio::test]
+async fn housekeeping_prunes_stale_terminal_job_runs_and_preserves_each_job_latest() {
+    let (services, _db) = temp_services("workflow_operation_retention").await;
+    let now = Utc::now();
+    for (id, job_key, status, started_at) in [
+        (
+            "completed-cutoff",
+            Some("job-a"),
+            "completed",
+            now - chrono::Duration::days(7),
+        ),
+        (
+            "completed-new",
+            Some("job-a"),
+            "completed",
+            now - chrono::Duration::days(1),
+        ),
+        (
+            "failed-old",
+            Some("job-b"),
+            "failed",
+            now - chrono::Duration::days(31),
+        ),
+        (
+            "warning-cutoff",
+            Some("job-b"),
+            "warning",
+            now - chrono::Duration::days(30),
+        ),
+        (
+            "mixed-new",
+            Some("job-b"),
+            "completed",
+            now - chrono::Duration::days(2),
+        ),
+        (
+            "tie-a",
+            Some("job-c"),
+            "completed",
+            now - chrono::Duration::days(100),
+        ),
+        (
+            "tie-z",
+            Some("job-c"),
+            "failed",
+            now - chrono::Duration::days(100),
+        ),
+        (
+            "only-terminal",
+            Some("job-d"),
+            "completed",
+            now - chrono::Duration::days(100),
+        ),
+        (
+            "queued-old",
+            Some("job-e"),
+            "queued",
+            now - chrono::Duration::days(100),
+        ),
+        (
+            "discovering-old",
+            Some("job-e"),
+            "discovering",
+            now - chrono::Duration::days(100),
+        ),
+        (
+            "running-old",
+            Some("job-e"),
+            "running",
+            now - chrono::Duration::days(100),
+        ),
+        (
+            "explicit-operation",
+            None,
+            "completed",
+            now - chrono::Duration::days(100),
+        ),
+    ] {
+        seed_workflow_operation(&services, id, job_key, status, started_at).await;
+    }
+
+    let deleted = housekeeping_store(&services)
+        .delete_stale_workflow_operations(7, 30)
+        .await
+        .expect("prune stale workflow operations");
+    assert_eq!(deleted, 4);
+
+    let remaining =
+        sqlx::query_scalar::<_, String>("SELECT id FROM workflow_operations ORDER BY id ASC")
+            .fetch_all(&services.pool)
+            .await
+            .expect("list retained workflow operations")
+            .into_iter()
+            .collect::<HashSet<_>>();
+    assert_eq!(
+        remaining,
+        HashSet::from([
+            "completed-new".to_string(),
+            "mixed-new".to_string(),
+            "tie-z".to_string(),
+            "only-terminal".to_string(),
+            "queued-old".to_string(),
+            "discovering-old".to_string(),
+            "running-old".to_string(),
+            "explicit-operation".to_string(),
+        ])
+    );
+}
+
 #[tokio::test]
 async fn migration_registers_job_run_listing_indexes() {
-    let (services, _db) = temp_services("workflow_operation_indexes").await;
+    let services = SqliteServices::new("sqlite::memory:")
+        .await
+        .expect("in-memory db should initialize");
     let rows = sqlx::query("PRAGMA index_list('workflow_operations')")
         .fetch_all(&services.pool)
         .await
@@ -360,7 +496,48 @@ async fn migration_registers_job_run_listing_indexes() {
         "idx_workflow_operations_actor_recent_started",
         "idx_workflow_operations_actor_job_started",
         "idx_workflow_operations_active_job_started",
+        "idx_workflow_operations_status_started",
     ] {
         assert!(index_names.contains(expected), "missing index {expected}");
     }
+
+    for removed in [
+        "idx_operations_status_time",
+        "idx_workflow_operations_job_key_status",
+    ] {
+        assert!(!index_names.contains(removed), "unexpected index {removed}");
+    }
+
+    for index_name in [
+        "idx_workflow_operations_actor_recent_started",
+        "idx_workflow_operations_actor_job_started",
+    ] {
+        let definition: String =
+            sqlx::query_scalar("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?")
+                .bind(index_name)
+                .fetch_one(&services.pool)
+                .await
+                .expect("load workflow operation index definition");
+        assert!(definition.contains("actor_user_id IS NOT NULL"));
+    }
+
+    let domain_event_indexes = sqlx::query("PRAGMA index_list('domain_events')")
+        .fetch_all(&services.pool)
+        .await
+        .expect("list domain event indexes")
+        .into_iter()
+        .map(|row| row.get::<String, _>("name"))
+        .collect::<HashSet<_>>();
+    assert!(domain_event_indexes.contains("idx_domain_events_event_type_sequence"));
+    assert!(domain_event_indexes.contains("idx_domain_events_occurred_at"));
+    assert!(!domain_event_indexes.contains("idx_domain_events_facet_sequence"));
+
+    let title_index_definition: String = sqlx::query_scalar(
+        "SELECT sql FROM sqlite_master
+          WHERE type = 'index' AND name = 'idx_domain_events_title_sequence'",
+    )
+    .fetch_one(&services.pool)
+    .await
+    .expect("load domain event title index definition");
+    assert!(title_index_definition.contains("title_id IS NOT NULL"));
 }

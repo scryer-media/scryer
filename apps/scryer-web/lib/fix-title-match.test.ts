@@ -22,8 +22,8 @@ test("Fix Match search variables use canonical GraphQL facet enums", () => {
     ["anime", "ANIME"],
     [" ANIME ", "ANIME"],
   ] as const) {
-    assert.deepEqual(buildFixTitleMatchSearchVariables("Bleach", facet), {
-      query: "Bleach",
+    assert.deepEqual(buildFixTitleMatchSearchVariables("Quiet Meridian", facet), {
+      query: "Quiet Meridian",
       type: expected,
       limit: 8,
     });

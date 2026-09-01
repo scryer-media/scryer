@@ -694,12 +694,13 @@ async fn nzbgeek_search_rate_limited() {
 }
 
 #[tokio::test]
-async fn nzbgeek_search_server_error_fallback() {
+async fn nzbgeek_search_server_error_is_deferred() {
     let ctx = TestContext::new().await;
-    let _call_count = 0u32;
 
-    // First call (movie search) returns 500, second (fallback search) returns results.
-    // Since wiremock mocks are matched in reverse order, mount the fallback first.
+    // Strategy orchestration owns generic fallback. The direct plugin client
+    // instead reports a typed upstream deferral for a provider 500.
+    // Keep a viable fallback response mounted so a client-side fallback would
+    // turn this test red by returning results.
     Mock::given(method("GET"))
         .and(path("/api"))
         .and(query_param("t", "search"))
@@ -736,11 +737,20 @@ async fn nzbgeek_search_server_error_fallback() {
         )
         .await;
 
-    // The client should fall back to t=search on 500
+    let error = results.expect_err("a provider 500 should defer the direct search");
     assert!(
-        results.is_ok(),
-        "should fall back to generic search on 500: {:?}",
-        results.err()
+        matches!(
+            &error,
+            scryer_application::AppError::TemporaryUnavailable {
+                retry_after: None,
+                ..
+            }
+        ),
+        "expected a recoverable upstream deferral: {error:?}"
+    );
+    assert!(
+        error.to_string().contains("UpstreamFailure"),
+        "expected the upstream failure reason: {error}"
     );
 }
 

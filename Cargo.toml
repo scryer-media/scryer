@@ -44,21 +44,22 @@ members = [
     "crates/scryer-mock-apis",
     "crates/scryer-mediainfo",
 ]
-exclude = ["test-plugins/test-indexer"]
+exclude = ["test-plugins/test-indexer", "benchmarks/criterion"]
 resolver = "2"
 
 [workspace.package]
 edition = "2024"
 
 [workspace.dependencies]
-tokio = { version = "1.53", features = ["full"] }
+tokio = { version = "1.53", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }
+base64 = "0.22"
 dotenvy = "0.15"
 thiserror = "2.0"
 async-trait = "0.1"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter", "json"] }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter", "json", "tracing-log"] }
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1.26", features = ["v4", "serde"] }
 async-graphql = { version = "7.2", default-features = false, features = ["chrono", "dataloader"] }
@@ -85,7 +86,6 @@ windows-native-keyring-store = "1"
 wiremock = "0.6"
 strum = { version = "0.28", features = ["derive"] }
 governor = "0.10.4"
-criterion = "0.8.2"
 fixedbitset = "0.5"
 
 [profile.release]
@@ -111,6 +111,10 @@ incremental = true
 [profile.release-launcher]
 inherits = "release"
 opt-level = "z"
+lto = "thin"
+
+[profile.release-thin]
+inherits = "release"
 lto = "thin"
 
 [profile.release-lean]
@@ -175,9 +179,6 @@ opt-level = 3
 opt-level = 3
 
 [profile.release-lean.package.miniz_oxide]
-opt-level = 3
-
-[profile.release-lean.package.ml-dsa]
 opt-level = 3
 
 [profile.release-lean.package.ravif]
@@ -263,9 +264,6 @@ opt-level = 3
 opt-level = 3
 
 [profile.rc.package.miniz_oxide]
-opt-level = 3
-
-[profile.rc.package.ml-dsa]
 opt-level = 3
 
 [profile.rc.package.ravif]

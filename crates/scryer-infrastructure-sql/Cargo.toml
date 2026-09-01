@@ -1,6 +1,6 @@
 [package]
 name = "scryer-infrastructure-sql"
-version = "0.18.22"
+version = "0.19.4"
 edition.workspace = true
 publish = false
 
@@ -12,3 +12,8 @@ serde = { workspace = true }
 sqlx = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+zstd = { version = "0.13", default-features = false }
+
+[dev-dependencies]
+blake3 = "1"
+zstd = { version = "0.13", default-features = false, features = ["zdict_builder"] }

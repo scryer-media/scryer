@@ -21,6 +21,7 @@ import {
   type UIEvent,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -159,6 +160,12 @@ const activityFilterOptions: ActivityFilterChipOption<DownloadActivityStatus>[] 
     labelKey: "activity.activityFilter.postProcessing",
     icon: HardDrive,
     iconClassName: "text-[var(--scry-info-text-soft)]",
+  },
+  {
+    value: "SEEDING",
+    labelKey: "activity.activityFilter.seeding",
+    icon: ArrowUp,
+    iconClassName: "text-[var(--scry-success-text)]",
   },
   {
     value: "WARNING",
@@ -344,6 +351,8 @@ export function ActivityView({ state }: { state: ActivityViewState }) {
   const [filterPopoverOpen, setFilterPopoverOpen] = useState(false);
   const rowActionBusyRef = useRef<Record<string, true>>({});
   const resultsScrollRef = useRef<HTMLDivElement>(null);
+  const [queueScrollMargin, setQueueScrollMargin] = useState(0);
+  const [activeImportsExpanded, setActiveImportsExpanded] = useState(false);
   const scrollHeightClass = isMobile ? "max-h-[70vh]" : "max-h-[1700px]";
 
   const setRowBusy = useCallback((rowId: string, busy: boolean) => {
@@ -473,13 +482,7 @@ export function ActivityView({ state }: { state: ActivityViewState }) {
         void requestMoreItems();
       }
     },
-    [
-      activeTab,
-      queueLoading,
-      queueLoadingMore,
-      requestMoreItems,
-      visibleHasMore,
-    ],
+    [queueLoading, queueLoadingMore, requestMoreItems, visibleHasMore],
   );
 
   const emptyStateLabel =
@@ -614,6 +617,47 @@ export function ActivityView({ state }: { state: ActivityViewState }) {
     return items;
   }, [activeSortConfig.direction, activeSortConfig.key, activeTab, queueItems, t]);
 
+  const hiddenActiveImportCount = Math.max(0, activeImportStreams.length - 7);
+  const visibleActiveImportStreams = activeImportsExpanded
+    ? activeImportStreams
+    : activeImportStreams.slice(0, 7);
+  const activeImportDisclosureLabel = activeImportsExpanded
+    ? "Show fewer import activities"
+    : `Click to see ${hiddenActiveImportCount} more import activities`;
+  const activeImportLayoutKey = `${visibleActiveImportStreams
+    .map((stream) => stream.id)
+    .join("|")}:${hiddenActiveImportCount}:${activeImportsExpanded}`;
+  useLayoutEffect(() => {
+    if (activeTab !== "activity" || isMobile) {
+      setQueueScrollMargin(0);
+      return;
+    }
+
+    const scrollElement = resultsScrollRef.current;
+    if (!scrollElement) {
+      return;
+    }
+
+    const prefixElements = Array.from(
+      scrollElement.querySelectorAll<HTMLElement>("[data-activity-virtual-prefix]"),
+    );
+    const measurePrefix = () => {
+      const nextMargin = prefixElements.reduce(
+        (height, element) => height + element.getBoundingClientRect().height,
+        0,
+      );
+      setQueueScrollMargin((currentMargin) =>
+        Math.abs(currentMargin - nextMargin) < 0.5 ? currentMargin : nextMargin,
+      );
+    };
+
+    measurePrefix();
+    const resizeObserver = new ResizeObserver(measurePrefix);
+    resizeObserver.observe(scrollElement);
+    prefixElements.forEach((element) => resizeObserver.observe(element));
+    return () => resizeObserver.disconnect();
+  }, [activeImportLayoutKey, activeTab, isMobile, queueLoading]);
+
   const queueVirtualizer = useVirtualizer({
     count: activeTab === "activity" ? sortedQueueItems.length : 0,
     getScrollElement: () => resultsScrollRef.current,
@@ -628,6 +672,7 @@ export function ActivityView({ state }: { state: ActivityViewState }) {
         ? baseHeight + detailRow.getBoundingClientRect().height
         : baseHeight;
     },
+    scrollMargin: queueScrollMargin,
     overscan: 8,
   });
   const virtualRows = activeTab === "activity" ? queueVirtualizer.getVirtualItems() : [];
@@ -645,11 +690,15 @@ export function ActivityView({ state }: { state: ActivityViewState }) {
           .map((virtualRow) => sortedQueueItems[virtualRow.index])
           .filter((item): item is DownloadQueueItem => Boolean(item))
       : sortedQueueItems;
-  const virtualPaddingTop = virtualRows[0]?.start ?? 0;
+  const virtualPaddingTop = Math.max(
+    0,
+    (virtualRows[0]?.start ?? queueScrollMargin) - queueScrollMargin,
+  );
   const virtualPaddingBottom = virtualRows.length
     ? Math.max(
         0,
-        queueVirtualizer.getTotalSize() - virtualRows[virtualRows.length - 1].end,
+        queueVirtualizer.getTotalSize() -
+          (virtualRows[virtualRows.length - 1].end - queueScrollMargin),
       )
     : 0;
 
@@ -1012,8 +1061,9 @@ export function ActivityView({ state }: { state: ActivityViewState }) {
       ) : null}
     </>
   );
-  const renderActiveImportRows = () =>
-    activeImportStreams.map((stream) => {
+  const renderActiveImportRows = () => (
+    <>
+      {visibleActiveImportStreams.map((stream) => {
       const progress =
         stream.totalBytes > 0
           ? Math.min(100, Math.round((stream.bytes / stream.totalBytes) * 100))
@@ -1027,7 +1077,12 @@ export function ActivityView({ state }: { state: ActivityViewState }) {
       const destinationName = stream.destinationPath.split(/[\\/]/).pop() || stream.destinationPath;
 
       return (
-        <TableRow key={`active-import-${stream.id}`} className="bg-[var(--scry-accent-bg)]/25">
+        <TableRow
+          key={`active-import-${stream.id}`}
+          className="bg-[var(--scry-accent-bg)]/25"
+          data-activity-virtual-prefix
+          data-ui="activity-row"
+        >
           <TableCell className="min-w-0 align-middle">
             <div className="truncate font-medium text-foreground" title={stream.destinationPath}>
               {destinationName}
@@ -1078,7 +1133,30 @@ export function ActivityView({ state }: { state: ActivityViewState }) {
           </TableCell>
         </TableRow>
       );
-    });
+      })}
+      {hiddenActiveImportCount > 0 ? (
+        <TableRow data-activity-virtual-prefix>
+          <TableCell colSpan={6} className="p-0">
+            <button
+              type="button"
+              aria-expanded={activeImportsExpanded}
+              className="flex w-full items-center justify-center gap-2 px-4 py-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-[var(--scry-rowHover)] hover:text-foreground"
+              onClick={() => setActiveImportsExpanded((expanded) => !expanded)}
+            >
+              <ChevronRight
+                className={cn(
+                  "h-3.5 w-3.5 transition-transform",
+                  activeImportsExpanded && "rotate-90",
+                )}
+                aria-hidden="true"
+              />
+              {activeImportDisclosureLabel}
+            </button>
+          </TableCell>
+        </TableRow>
+      ) : null}
+    </>
+  );
 
   const activeActivityLabel =
     activeTab === "import"
@@ -1231,7 +1309,7 @@ export function ActivityView({ state }: { state: ActivityViewState }) {
 
           {activeTab === "activity" && activeImportStreams.length > 0 ? (
             <div className="space-y-2 sm:hidden">
-              {activeImportStreams.map((stream) => {
+              {visibleActiveImportStreams.map((stream) => {
                 const progress =
                   stream.totalBytes > 0
                     ? Math.min(100, Math.round((stream.bytes / stream.totalBytes) * 100))
@@ -1300,6 +1378,25 @@ export function ActivityView({ state }: { state: ActivityViewState }) {
                   </div>
                 );
               })}
+              {hiddenActiveImportCount > 0 ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="w-full gap-2 text-xs text-muted-foreground"
+                  aria-expanded={activeImportsExpanded}
+                  onClick={() => setActiveImportsExpanded((expanded) => !expanded)}
+                >
+                  <ChevronRight
+                    className={cn(
+                      "h-3.5 w-3.5 transition-transform",
+                      activeImportsExpanded && "rotate-90",
+                    )}
+                    aria-hidden="true"
+                  />
+                  {activeImportDisclosureLabel}
+                </Button>
+              ) : null}
             </div>
           ) : null}
           {isMobile ? (
@@ -1333,7 +1430,9 @@ export function ActivityView({ state }: { state: ActivityViewState }) {
               className={`${scrollHeightClass} overflow-y-auto rounded-xl border border-border/60`}
             >
               <Table overflow="clip" layout="fixed" density="dense">
-                <TableHeader>
+                <TableHeader
+                  data-activity-virtual-prefix={activeTab === "activity" ? "" : undefined}
+                >
                   <TableRow>
                     {activeTab === "import" ? (
                       <TableCheckboxHead>

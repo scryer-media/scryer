@@ -138,9 +138,16 @@ impl AppUseCase {
         let now = Utc::now();
         let profile = DEFAULT_TOTP_PROFILE;
         let secret_base32 = generate_base32_secret(TOTP_SECRET_BYTES)?;
+        let auth_session_version = self
+            .services
+            .identity
+            .users
+            .auth_session_version(&actor.id)
+            .await?;
         let challenge = TotpEnrollmentChallengeRecord {
             id: Id::new().0,
             user_id: actor.id.clone(),
+            auth_session_version,
             secret_base32: secret_base32.clone(),
             algorithm: profile.algorithm.storage_value().to_string(),
             digits: profile.digits,
@@ -170,8 +177,10 @@ impl AppUseCase {
     ) -> AppResult<TotpEnrollmentComplete> {
         self.require_actor_capability(actor, scryer_domain::ActorCapability::ManageOwnAccount)
             .await?;
-        self.totp_enrollment_complete_inner(actor, challenge_id, code)
-            .await
+        let complete = self
+            .totp_enrollment_complete_inner(actor, challenge_id, code)
+            .await?;
+        Ok(complete)
     }
 
     pub async fn complete_login_mfa_enrollment(
@@ -180,8 +189,10 @@ impl AppUseCase {
         challenge_id: &str,
         code: &str,
     ) -> AppResult<TotpEnrollmentComplete> {
-        self.totp_enrollment_complete_inner(actor, challenge_id, code)
-            .await
+        let complete = self
+            .totp_enrollment_complete_inner(actor, challenge_id, code)
+            .await?;
+        Ok(complete)
     }
 
     async fn totp_enrollment_complete_inner(
@@ -210,7 +221,6 @@ impl AppUseCase {
                 "TOTP enrollment challenge has expired".into(),
             ));
         }
-
         let profile = TotpProfile::from_enrollment_challenge(&challenge)?;
         let normalized_code = normalize_totp_code(code, profile.digits)?;
         let secret = base32_decode(&challenge.secret_base32)?;
@@ -233,18 +243,17 @@ impl AppUseCase {
             updated_at: now.to_rfc3339(),
             last_used_at: None,
         };
+        let (recovery_codes, recovery_code_records) = self.generate_totp_recovery_codes(actor)?;
         self.services
             .identity
             .totp
-            .upsert_credential(credential.clone())
+            .complete_enrollment_for_current_session(
+                credential.clone(),
+                challenge_id,
+                recovery_code_records,
+                challenge.auth_session_version.as_deref(),
+            )
             .await?;
-        self.services
-            .identity
-            .totp
-            .delete_enrollment_challenge(challenge_id, &actor.id)
-            .await?;
-
-        let recovery_codes = self.replace_totp_recovery_codes(actor).await?;
         let status = self
             .totp_status_from_credential(actor, Some(credential))
             .await?;
@@ -260,37 +269,43 @@ impl AppUseCase {
         self.verify_totp_for_user(actor, code).await
     }
 
-    pub async fn totp_disable(&self, actor: &User, code: &str) -> AppResult<TotpStatus> {
+    pub async fn totp_disable(
+        &self,
+        actor: &User,
+        code: &str,
+        expected_auth_session_version: Option<&str>,
+    ) -> AppResult<TotpStatus> {
         self.require_actor_capability(actor, scryer_domain::ActorCapability::ManageOwnAccount)
             .await?;
         self.verify_totp_for_user(actor, code).await?;
         self.services
             .identity
             .totp
-            .delete_credential_for_user(&actor.id)
+            .disable_for_current_session(&actor.id, expected_auth_session_version)
             .await?;
-        self.services
-            .identity
-            .totp
-            .replace_recovery_codes(&actor.id, Vec::new())
-            .await?;
-        self.services
-            .identity
-            .totp
-            .clear_failed_attempts(&actor.id)
-            .await?;
-        self.totp_status(actor).await
+        let status = self.totp_status(actor).await?;
+        Ok(status)
     }
 
     pub async fn totp_regenerate_recovery_codes(
         &self,
         actor: &User,
         code: &str,
+        expected_auth_session_version: Option<&str>,
     ) -> AppResult<TotpEnrollmentComplete> {
         self.require_actor_capability(actor, scryer_domain::ActorCapability::ManageOwnAccount)
             .await?;
         self.verify_totp_for_user(actor, code).await?;
-        let recovery_codes = self.replace_totp_recovery_codes(actor).await?;
+        let (recovery_codes, recovery_code_records) = self.generate_totp_recovery_codes(actor)?;
+        self.services
+            .identity
+            .totp
+            .replace_recovery_codes_for_current_session(
+                &actor.id,
+                recovery_code_records,
+                expected_auth_session_version,
+            )
+            .await?;
         let status = self.totp_status(actor).await?;
         Ok(TotpEnrollmentComplete {
             status,
@@ -330,8 +345,34 @@ impl AppUseCase {
         ))
     }
 
+    pub async fn require_api_key_mfa_step_up(
+        &self,
+        actor: &User,
+        mfa_step_up_verified_until: Option<i64>,
+    ) -> AppResult<()> {
+        if mfa_step_up_verified_until.is_some_and(|expires_at| expires_at > Utc::now().timestamp())
+        {
+            return Ok(());
+        }
+
+        if self
+            .services
+            .identity
+            .totp
+            .get_credential_for_user(&actor.id)
+            .await?
+            .is_none()
+        {
+            return Ok(());
+        }
+
+        Err(AppError::MfaStepUpRequired(
+            "MFA verification is required before creating an API key".into(),
+        ))
+    }
+
     pub async fn verify_totp_for_user(&self, actor: &User, code: &str) -> AppResult<DateTime<Utc>> {
-        let Some(mut credential) = self
+        let Some(credential) = self
             .services
             .identity
             .totp
@@ -343,59 +384,59 @@ impl AppUseCase {
             ));
         };
 
-        self.ensure_totp_attempt_allowed(&actor.id).await?;
-        match self
-            .verify_totp_or_recovery_code(&mut credential, code)
-            .await
-        {
-            Ok(()) => {
-                self.services
-                    .identity
-                    .totp
-                    .clear_failed_attempts(&actor.id)
-                    .await?;
-                Ok(Utc::now() + Duration::minutes(MFA_FRESHNESS_TTL_MINUTES))
-            }
-            Err(error) => {
-                self.record_totp_failed_attempt(&actor.id).await?;
-                Err(error)
-            }
+        let attempted_at = Utc::now();
+        let attempt_reserved = self
+            .services
+            .identity
+            .totp
+            .reserve_totp_attempt(
+                &actor.id,
+                &attempted_at.to_rfc3339(),
+                &(attempted_at - Duration::minutes(TOTP_FAILED_ATTEMPT_WINDOW_MINUTES))
+                    .to_rfc3339(),
+                TOTP_FAILED_ATTEMPT_LIMIT as i32,
+            )
+            .await?;
+        if !attempt_reserved {
+            return Err(AppError::TotpInvalidCode(
+                "too many TOTP attempts; try again shortly".into(),
+            ));
         }
+
+        self.verify_totp_or_recovery_code(&credential, code).await?;
+        self.services
+            .identity
+            .totp
+            .clear_totp_attempt_reservations(&actor.id)
+            .await?;
+        Ok(Utc::now() + Duration::minutes(MFA_FRESHNESS_TTL_MINUTES))
     }
 
     async fn verify_totp_or_recovery_code(
         &self,
-        credential: &mut TotpCredentialRecord,
+        credential: &TotpCredentialRecord,
         code: &str,
     ) -> AppResult<()> {
-        let profile = match TotpProfile::from_credential(credential) {
-            Ok(profile) => profile,
-            Err(_) => {
-                return match self
-                    .verify_totp_recovery_code(&credential.user_id, code)
-                    .await
-                {
-                    Ok(()) => Ok(()),
-                    Err(_) => Err(AppError::TotpInvalidCode("invalid TOTP code".into())),
-                };
-            }
-        };
-        if let Ok(normalized_code) = normalize_totp_code(code, profile.digits) {
+        let compact = code
+            .chars()
+            .filter(|ch| !ch.is_ascii_whitespace())
+            .collect::<String>();
+        if compact.chars().all(|ch| ch.is_ascii_digit()) {
+            let profile = TotpProfile::from_credential(credential)?;
+            let normalized_code = normalize_totp_code(&compact, profile.digits)?;
             let secret = base32_decode(&credential.secret_base32)?;
             let now = Utc::now();
             if let Some(step) = matching_totp_step(&secret, &normalized_code, now, profile)?
-                && accepts_totp_step(step, credential.last_accepted_step)
-            {
-                credential.last_accepted_step = Some(step);
-                credential.last_used_at = Some(now.to_rfc3339());
-                credential.updated_at = now.to_rfc3339();
-                self.services
+                && self
+                    .services
                     .identity
                     .totp
-                    .upsert_credential(credential.clone())
-                    .await?;
+                    .claim_totp_step(&credential.user_id, step, &now.to_rfc3339())
+                    .await?
+            {
                 return Ok(());
             }
+            return Err(AppError::TotpInvalidCode("invalid TOTP code".into()));
         }
 
         self.verify_totp_recovery_code(&credential.user_id, code)
@@ -403,10 +444,9 @@ impl AppUseCase {
     }
 
     async fn verify_totp_recovery_code(&self, user_id: &str, code: &str) -> AppResult<()> {
-        let normalized = normalize_recovery_code(code);
-        if normalized.is_empty() {
+        let Some(normalized) = normalize_recovery_code(code) else {
             return Err(AppError::TotpInvalidCode("invalid TOTP code".into()));
-        }
+        };
 
         let recovery_codes = self
             .services
@@ -415,7 +455,18 @@ impl AppUseCase {
             .list_recovery_codes_for_user(user_id)
             .await?;
         for recovery_code in recovery_codes {
-            if self.validate_password(&normalized, &recovery_code.code_hash)? {
+            let normalized = normalized.clone();
+            let code_hash = recovery_code.code_hash.clone();
+            let app = self.clone();
+            let valid =
+                tokio::task::spawn_blocking(move || app.validate_password(&normalized, &code_hash))
+                    .await
+                    .map_err(|error| {
+                        AppError::Repository(format!(
+                            "recovery-code verification task failed: {error}"
+                        ))
+                    })??;
+            if valid {
                 if recovery_code.used_at.is_some() {
                     return Err(AppError::TotpRecoveryCodeUsed(
                         "TOTP recovery code was already used".into(),
@@ -433,7 +484,10 @@ impl AppUseCase {
         Err(AppError::TotpInvalidCode("invalid TOTP code".into()))
     }
 
-    async fn replace_totp_recovery_codes(&self, actor: &User) -> AppResult<Vec<String>> {
+    fn generate_totp_recovery_codes(
+        &self,
+        actor: &User,
+    ) -> AppResult<(Vec<String>, Vec<TotpRecoveryCodeRecord>)> {
         let now = Utc::now().to_rfc3339();
         let mut display_codes = Vec::with_capacity(TOTP_RECOVERY_CODE_COUNT);
         let mut records = Vec::with_capacity(TOTP_RECOVERY_CODE_COUNT);
@@ -449,12 +503,7 @@ impl AppUseCase {
             });
             display_codes.push(display);
         }
-        self.services
-            .identity
-            .totp
-            .replace_recovery_codes(&actor.id, records)
-            .await?;
-        Ok(display_codes)
+        Ok((display_codes, records))
     }
 
     async fn totp_status_from_credential(
@@ -486,35 +535,6 @@ impl AppUseCase {
             .delete_expired_enrollment_challenges(&Utc::now().to_rfc3339())
             .await?;
         Ok(())
-    }
-
-    async fn ensure_totp_attempt_allowed(&self, user_id: &str) -> AppResult<()> {
-        let since =
-            (Utc::now() - Duration::minutes(TOTP_FAILED_ATTEMPT_WINDOW_MINUTES)).to_rfc3339();
-        let attempts = self
-            .services
-            .identity
-            .totp
-            .count_failed_attempts_since(user_id, &since)
-            .await?;
-        if attempts >= TOTP_FAILED_ATTEMPT_LIMIT {
-            return Err(AppError::TotpInvalidCode(
-                "too many invalid TOTP attempts; try again shortly".into(),
-            ));
-        }
-        Ok(())
-    }
-
-    async fn record_totp_failed_attempt(&self, user_id: &str) -> AppResult<()> {
-        self.services
-            .identity
-            .totp
-            .record_failed_attempt(TotpFailedAttemptRecord {
-                id: Id::new().0,
-                user_id: user_id.to_string(),
-                attempted_at: Utc::now().to_rfc3339(),
-            })
-            .await
     }
 }
 
@@ -579,11 +599,23 @@ fn normalize_totp_code(code: &str, digits: i32) -> AppResult<String> {
     Ok(normalized)
 }
 
-fn normalize_recovery_code(code: &str) -> String {
-    code.chars()
-        .filter(|ch| ch.is_ascii_alphanumeric())
-        .map(|ch| ch.to_ascii_uppercase())
-        .collect()
+fn normalize_recovery_code(code: &str) -> Option<String> {
+    let trimmed = code.trim();
+    let compact = match trimmed.len() {
+        26 => trimmed.to_string(),
+        32 if [4, 9, 14, 19, 24, 29]
+            .iter()
+            .all(|index| trimmed.as_bytes().get(*index) == Some(&b'-')) =>
+        {
+            trimmed.chars().filter(|ch| *ch != '-').collect()
+        }
+        _ => return None,
+    };
+    let normalized = compact.to_ascii_uppercase();
+    normalized
+        .chars()
+        .all(|ch| ch.is_ascii() && BASE32_ALPHABET.contains(&(ch as u8)))
+        .then_some(normalized)
 }
 
 fn group_recovery_code(code: &str) -> String {
@@ -668,10 +700,6 @@ fn base32_decode(value: &str) -> AppResult<Vec<u8>> {
     }
 
     Ok(output)
-}
-
-fn accepts_totp_step(step: i64, last_accepted_step: Option<i64>) -> bool {
-    last_accepted_step.is_none_or(|last_step| step > last_step)
 }
 
 fn base32_index(ch: char) -> Option<u8> {
@@ -766,14 +794,6 @@ mod tests {
     }
 
     #[test]
-    fn accepted_totp_step_rejects_replay() {
-        assert!(accepts_totp_step(42, None));
-        assert!(accepts_totp_step(42, Some(41)));
-        assert!(!accepts_totp_step(42, Some(42)));
-        assert!(!accepts_totp_step(42, Some(43)));
-    }
-
-    #[test]
     fn normalize_totp_code_rejects_invalid_values() {
         assert_eq!(normalize_totp_code("123 456", 6).unwrap(), "123456");
         assert!(normalize_totp_code("12345", 6).is_err());
@@ -787,6 +807,7 @@ mod tests {
         let challenge = TotpEnrollmentChallengeRecord {
             id: "challenge_1".into(),
             user_id: "user_1".into(),
+            auth_session_version: None,
             secret_base32: "JBSWY3DPEHPK3PXP".into(),
             algorithm: "SHA512".into(),
             digits: 8,

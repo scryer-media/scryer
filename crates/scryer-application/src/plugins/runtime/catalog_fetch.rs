@@ -321,7 +321,7 @@ fn artifact_required_features_supported(
     artifact: &CatalogV3PluginArtifact,
     supported_features: &HashSet<String>,
 ) -> bool {
-    artifact.runtime == CATALOG_V3_RUNTIME_WASIP1
+    catalog_v3_runtime_is_supported(&artifact.runtime)
         && artifact
             .required_features
             .iter()
@@ -615,6 +615,7 @@ fn central_catalog_required_signer() -> RequiredSigner {
     RequiredSigner {
         github_repository: CENTRAL_CATALOG_REPO.to_string(),
         github_workflow: Some(CENTRAL_CATALOG_WORKFLOW.to_string()),
+        github_ref: None,
     }
 }
 
@@ -848,7 +849,7 @@ impl AppUseCase {
                         StoredPluginCatalogStatusPayload {
                             github_available: false,
                             blocked_actions: plugin_catalog_blocked_actions(),
-                            message: Some(PLUGIN_CATALOG_OUTAGE_MESSAGE.to_string()),
+                            message: Some(format!("Plugin catalog refresh failed: {last_error}")),
                             restore_warnings: stored_status.restore_warnings,
                             last_error: Some(last_error),
                         },
@@ -1122,6 +1123,7 @@ impl AppUseCase {
         let signer = RequiredSigner {
             github_repository: repo.slug(),
             github_workflow: None,
+            github_ref: None,
         };
         let data_urls = vec![catalog_url.clone()];
         let signature_urls = vec![signed_catalog_json_bundle_url(&catalog_url)];
@@ -1400,6 +1402,7 @@ impl AppUseCase {
         let signer = RequiredSigner {
             github_repository: CENTRAL_CATALOG_REPO.to_string(),
             github_workflow: Some(CENTRAL_CATALOG_WORKFLOW.to_string()),
+            github_ref: None,
         };
         let (compressed_manifest, actual_url) = self
             .fetch_verified_blob_from_locations(

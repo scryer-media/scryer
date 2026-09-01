@@ -425,7 +425,7 @@ impl DockerPostgresContainer {
             "POSTGRES_PASSWORD=postgres",
             "-p",
             &format!("127.0.0.1:{port}:5432"),
-            "postgres:17-alpine",
+            "postgres:18-alpine",
         ]);
         run_capture(&mut command).with_context(|| {
             format!(
@@ -964,9 +964,9 @@ ALTER TABLE ONLY public.download_jobs
 
         let checked_in = std::fs::read_to_string(
             Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../crates/scryer/src/db/postgres/baselines/0140_baseline.sql"),
+                .join("../crates/scryer/src/db/postgres/baselines/0198_baseline.sql"),
         )
-        .expect("PostgreSQL 0140 baseline should be readable");
+        .expect("active PostgreSQL baseline should be readable");
         assert!(checked_in.ends_with(POSTGRES_BUILTIN_BASELINE_SEED_SQL));
     }
 

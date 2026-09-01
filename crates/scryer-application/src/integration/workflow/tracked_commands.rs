@@ -2970,6 +2970,21 @@ pub(crate) async fn finalize_tracked_terminal_state_with(
         return;
     };
 
+    // The settled download must stop conflicting new submissions for its
+    // scope: the submission guard's 30s caches still hold it as accepted and
+    // the cached client snapshot predates this transition, which would turn an
+    // upgrade queued in that window into a phantom non-replaceable conflict.
+    // Only the transition invalidates — reconcile re-offers a held row every
+    // poll and would otherwise empty the caches on every tick.
+    if trigger == TerminalSettleTrigger::Transition
+        && let Some(title_id) = td.title_id.as_deref()
+    {
+        app.runtime
+            .acquisition
+            .download_submission_guards
+            .forget_settled_download(title_id);
+    }
+
     let cleanup = crate::import::import::reconcile_terminal_download_cleanup_for_tracked(
         app, td, state, cache,
     )

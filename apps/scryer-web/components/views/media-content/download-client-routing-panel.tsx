@@ -270,6 +270,7 @@ export const DownloadClientRoutingPanel = React.memo(function DownloadClientRout
                     <TableRow
                       key={client.id}
                       id={selectorId("download-client-routing-row", client.name)}
+                      data-ui="settings-table-row"
                     >
                       <TableCell>{index + 1}</TableCell>
                       <TableCell>{client.name}</TableCell>

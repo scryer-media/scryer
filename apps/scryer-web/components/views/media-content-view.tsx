@@ -3458,7 +3458,7 @@ export function MediaContentView({
             facetSettingsSection === "renaming"
               ? "reference"
               : facetSettingsSection === "routing"
-                ? "wide"
+                ? "full"
               : facetSettingsSection === "library" && libraryRoutingWide
               ? "wide"
               : "default"

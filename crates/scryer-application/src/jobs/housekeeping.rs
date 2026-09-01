@@ -3,7 +3,8 @@ use crate::domain_events::{
     DomainEventActor, deleted_media_update, new_title_domain_event, title_context_snapshot,
 };
 use crate::events::retention::{
-    OPERATIONAL_DOMAIN_EVENT_RETENTION_DAYS, operational_domain_event_types,
+    ACQUISITION_TELEMETRY_RETENTION_DAYS, OPERATIONAL_DOMAIN_EVENT_RETENTION_DAYS,
+    acquisition_telemetry_domain_event_types, operational_domain_event_types,
     user_facing_domain_event_types,
 };
 use std::collections::{HashMap, HashSet};
@@ -11,10 +12,12 @@ use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 
 const RELEASE_DECISION_RETENTION_DAYS: i64 = 30;
+const WORKFLOW_COMPLETED_RETENTION_DAYS: i64 = 7;
+const WORKFLOW_WARNING_FAILED_RETENTION_DAYS: i64 = 30;
 const RELEASE_ATTEMPT_RETENTION_DAYS: i64 = 90;
 pub const INDEXER_ERROR_RETENTION_DAYS: i64 = 30;
 const DOWNLOAD_DELETE_RETENTION_DAYS: i64 = 7;
-const DISCOVERY_SUCCESSFUL_GENERATIONS_TO_RETAIN: usize = 2;
+const DISCOVERY_SUCCESSFUL_GENERATIONS_TO_RETAIN: usize = 1;
 const DISCOVERY_DIAGNOSTIC_RETENTION_DAYS: i64 = 30;
 const TITLE_IMAGE_BLOB_GC_BATCH_SIZE: u32 = 100;
 const TITLE_IMAGE_BLOB_GC_MAX_BATCHES: usize = 10;
@@ -685,6 +688,15 @@ impl AppUseCase {
         let user_facing_domain_event_types = user_facing_domain_event_types();
         let operational_domain_event_types = operational_domain_event_types();
 
+        let stale_workflow_operations = self
+            .services
+            .workflow
+            .housekeeping
+            .delete_stale_workflow_operations(
+                WORKFLOW_COMPLETED_RETENTION_DAYS,
+                WORKFLOW_WARNING_FAILED_RETENTION_DAYS,
+            )
+            .await?;
         let stale_release_decisions = self
             .services
             .workflow
@@ -764,10 +776,21 @@ impl AppUseCase {
                 &operational_domain_event_types,
             )
             .await?;
+        let stale_acquisition_telemetry = self
+            .services
+            .workflow
+            .housekeeping
+            .delete_domain_events_older_than_for_types(
+                ACQUISITION_TELEMETRY_RETENTION_DAYS,
+                &acquisition_telemetry_domain_event_types(),
+            )
+            .await?;
 
         let stale_history_records = stale_release_decisions
+            + stale_workflow_operations
             + stale_release_attempts
             + stale_operational_domain_events
+            + stale_acquisition_telemetry
             + stale_history_events
             + stale_domain_events
             + stale_download_import_artifacts
@@ -878,6 +901,7 @@ impl AppUseCase {
             orphaned_media_files,
             stale_release_decisions,
             stale_release_attempts,
+            stale_workflow_operations,
             stale_indexer_errors,
             stale_history_events,
             stale_operational_domain_events,

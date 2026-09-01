@@ -25,7 +25,7 @@ impl HydrationSource {
     }
 
     fn refresh_recommendations_inline(&self) -> bool {
-        matches!(self, Self::Interactive | Self::Maintenance)
+        matches!(self, Self::Maintenance)
     }
 }
 

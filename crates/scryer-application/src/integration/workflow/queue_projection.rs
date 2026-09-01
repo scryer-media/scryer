@@ -53,7 +53,11 @@ fn base_download_queue_display_state(item: &DownloadQueueItem) -> DownloadDispla
             return DownloadDisplayState::Importing;
         }
         Some(ImportStatus::Completed) if item.state != DownloadQueueState::Warning => {
-            return DownloadDisplayState::Completed;
+            return if item.tracked_state == Some(TrackedDownloadState::ImportedSeeding) {
+                DownloadDisplayState::ImportedSeeding
+            } else {
+                DownloadDisplayState::Completed
+            };
         }
         Some(ImportStatus::Failed | ImportStatus::Skipped)
             if matches!(
@@ -69,6 +73,12 @@ fn base_download_queue_display_state(item: &DownloadQueueItem) -> DownloadDispla
             return DownloadDisplayState::ImportFailed;
         }
         _ => {}
+    }
+
+    if item.tracked_state == Some(TrackedDownloadState::ImportedSeeding)
+        && item.state != DownloadQueueState::Warning
+    {
+        return DownloadDisplayState::ImportedSeeding;
     }
 
     match item.tracked_state {
@@ -120,6 +130,7 @@ fn bucket_for_base_display_state(state: DownloadDisplayState) -> DownloadQueueBu
         | DownloadDisplayState::Downloading
         | DownloadDisplayState::Paused
         | DownloadDisplayState::PostProcessing
+        | DownloadDisplayState::ImportedSeeding
         // A warned download is still live in the client and still recoverable,
         // so it belongs with the activity it is part of, not in history.
         | DownloadDisplayState::Warning => DownloadQueueBucket::Activity,
@@ -243,6 +254,7 @@ fn classify_download_queue_item(item: &DownloadQueueItem) -> ClassifiedDownloadQ
         DownloadDisplayState::Queued => Some(DownloadActivityFilter::Queued),
         DownloadDisplayState::Paused => Some(DownloadActivityFilter::Paused),
         DownloadDisplayState::PostProcessing => Some(DownloadActivityFilter::PostProcessing),
+        DownloadDisplayState::ImportedSeeding => Some(DownloadActivityFilter::Seeding),
         // Every activity state needs its own filter: the queue page asks for an
         // explicit list of them, so a state that belongs to no filter is a
         // state the operator can never see.

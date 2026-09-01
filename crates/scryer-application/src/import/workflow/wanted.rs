@@ -478,13 +478,14 @@ async fn execute_resolved_episode_import(
     // a double-length premiere or a 7-minute special against the average puts it
     // in a different size band than the grab decision used — the same file,
     // scored two ways. The grab lane has always used the covered episodes'
-    // runtime (`coverage_runtime_minutes`); this is the same function.
-    let scope_runtime_minutes = crate::acquisition_coverage::episode_span_runtime_minutes(
+    // runtime (`coverage_size_basis`); this is the same derivation, and it
+    // carries the member count and per-member runtime a pack is judged by.
+    let scope_size_basis = crate::acquisition_coverage::episode_span_size_basis(
         target_episodes,
         &target_episode_ids,
         title.runtime_minutes,
     )
-    .or(title.runtime_minutes);
+    .or_runtime(title.runtime_minutes);
 
     // **The one import decision** (design §3). Subject, landed score, truth
     // verdict and admission all live in `decide_import`; what is left here is
@@ -499,7 +500,7 @@ async fn execute_resolved_episode_import(
         title,
         scoring_context: &scoring_context,
         scope: &episode_scope,
-        scope_runtime_minutes,
+        scope_size_basis,
         parsed: &announced_parsed,
         accepted: prepared.accepted.as_ref(),
         prior_rescore_changes: &prepared.rescore_changes,

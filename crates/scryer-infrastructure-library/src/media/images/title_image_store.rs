@@ -1,3 +1,6 @@
+use crate::queries::sql_runtime::{
+    SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTx, StoreDatastore, repo_err,
+};
 use async_trait::async_trait;
 use chrono::Utc;
 use scryer_application::{
@@ -7,16 +10,13 @@ use scryer_application::{
 use scryer_domain::{
     DomainEvent, DomainEventActorKind, DomainEventStream, Id, MediaFacet, NewDomainEvent,
 };
-use serde_json::Value as JsonValue;
-use sqlx::{Row, types::Json};
-
-use crate::queries::sql_runtime::{
-    SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTx, StoreDatastore, repo_err,
+use scryer_infrastructure_sql::domain_event_payload::{
+    decode_domain_event_payload, derive_domain_event_projections, encode_domain_event_payload,
 };
 
 use super::{normalize_title_image_source_url, title_image_blob_digest};
 
-const DOMAIN_EVENT_COLUMNS: &str = "sequence, event_id, occurred_at, actor_kind, actor_user_id, actor_display_name, title_id, facet, correlation_id, causation_id, schema_version, stream_kind, stream_id, payload_json";
+const DOMAIN_EVENT_COLUMNS: &str = "sequence, event_id, occurred_at, actor_kind, actor_user_id, actor_display_name, title_id, facet, correlation_id, causation_id, schema_version, stream_kind, stream_id, event_type, payload_json";
 
 #[derive(Clone)]
 pub struct TitleImageStore {
@@ -751,16 +751,28 @@ async fn append_domain_event_tx(
     event: &NewDomainEvent,
 ) -> AppResult<DomainEvent> {
     let payload = serde_json::to_value(&event.payload).map_err(repo_err)?;
+    let event_type = event.payload.event_type().as_str();
+    let encoded_payload = encode_domain_event_payload(&payload).map_err(|error| {
+        AppError::Repository(format!(
+            "failed to encode domain event {} ({event_type}): {error}",
+            event.event_id
+        ))
+    })?;
+    let projections = derive_domain_event_projections(event_type, &payload);
     SqlRuntime::execute(
         SqlExec::Tx(tx),
         "INSERT INTO domain_events (
-            event_id, occurred_at, actor_user_id, title_id, facet, correlation_id, causation_id,
-            schema_version, stream_kind, stream_id, event_type, payload_json
-         ) VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+            event_id, occurred_at, actor_kind, actor_user_id, actor_display_name,
+            title_id, facet, correlation_id, causation_id, schema_version,
+            stream_kind, stream_id, event_type, payload_json, import_status,
+            media_file_delete_reason, download_id
+         ) VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
         &[
             SqlArg::Text(event.event_id.clone()),
             SqlArg::Timestamp(event.occurred_at),
+            SqlArg::Text(event.actor_kind.as_str().to_string()),
             SqlArg::OptText(event.actor_user_id.clone()),
+            SqlArg::Text(event.actor_display_name.clone()),
             SqlArg::OptText(event.title_id.clone()),
             SqlArg::OptText(event.facet.as_ref().map(|facet| facet.as_str().to_string())),
             SqlArg::OptText(event.correlation_id.clone()),
@@ -768,8 +780,11 @@ async fn append_domain_event_tx(
             SqlArg::I32(event.schema_version),
             SqlArg::Text(event.stream.kind().to_string()),
             SqlArg::OptText(event.stream.identifier().map(str::to_string)),
-            SqlArg::Text(event.payload.event_type().as_str().to_string()),
-            SqlArg::Json(payload),
+            SqlArg::Text(event_type.to_string()),
+            SqlArg::OptBytes(Some(encoded_payload)),
+            SqlArg::OptText(projections.import_status),
+            SqlArg::OptText(projections.media_file_delete_reason),
+            SqlArg::OptText(projections.download_id),
         ],
     )
     .await?;
@@ -793,11 +808,27 @@ async fn fetch_domain_event_by_event_id(
 }
 
 fn domain_event_from_row(row: &SqlRow) -> AppResult<DomainEvent> {
+    let event_id = row.text("event_id")?;
+    let event_type = row.text("event_type")?;
     let stream_kind = row.text("stream_kind")?;
-    let payload = serde_json::from_value(json_from_row(row, "payload_json")?).map_err(repo_err)?;
+    let encoded_payload = row.opt_bytes("payload_json")?.ok_or_else(|| {
+        AppError::Repository(format!(
+            "domain event {event_id} ({event_type}) payload is null"
+        ))
+    })?;
+    let decoded_payload = decode_domain_event_payload(&encoded_payload).map_err(|error| {
+        AppError::Repository(format!(
+            "failed to decode domain event {event_id} ({event_type}): {error}"
+        ))
+    })?;
+    let payload = serde_json::from_value(decoded_payload).map_err(|error| {
+        AppError::Repository(format!(
+            "failed to deserialize domain event {event_id} ({event_type}): {error}"
+        ))
+    })?;
     Ok(DomainEvent {
         sequence: row.i64("sequence")?,
-        event_id: row.text("event_id")?,
+        event_id,
         occurred_at: row.timestamp("occurred_at")?,
         actor_kind: DomainEventActorKind::parse(row.text("actor_kind")?.as_str())
             .unwrap_or(DomainEventActorKind::System),
@@ -838,18 +869,5 @@ fn stream_from_parts(kind: &str, identifier: Option<String>) -> AppResult<Domain
         other => Err(AppError::Repository(format!(
             "unknown domain event stream kind: {other}"
         ))),
-    }
-}
-
-fn json_from_row(row: &SqlRow, column: &str) -> AppResult<JsonValue> {
-    match row {
-        SqlRow::Sqlite(row) => {
-            let raw: String = row.try_get(column).map_err(repo_err)?;
-            serde_json::from_str(&raw).map_err(repo_err)
-        }
-        SqlRow::Postgres(row) => {
-            let raw: Json<JsonValue> = row.try_get(column).map_err(repo_err)?;
-            Ok(raw.0)
-        }
     }
 }

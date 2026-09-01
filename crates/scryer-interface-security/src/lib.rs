@@ -8,9 +8,11 @@ use scryer_application::{
 use scryer_domain::AppPermission;
 
 use scryer_interface_core::{
-    actor_from_ctx, app_from_ctx, auth_runtime_from_ctx, default_persist_session_from_ctx,
-    login_verification_required_gql_error, persist_session_or_default,
-    require_config_app_permission, to_gql_error, to_login_gql_error_after_timing,
+    LoginAttemptPrincipal, LoginErrorClassification, actor_from_ctx, app_from_ctx,
+    auth_runtime_from_ctx, classify_login_error, default_persist_session_from_ctx,
+    login_attempt_limiter_from_ctx, login_verification_required_gql_error,
+    persist_session_or_default, require_config_app_permission, to_gql_error,
+    to_login_gql_error_after_timing,
 };
 use scryer_interface_media::mappers::{from_linked_account, from_user_with_auth_factor_status};
 use scryer_interface_media::types::*;
@@ -92,6 +94,8 @@ async fn login_payload_from_user(
         user: user_payload_from_user(app, user).await?,
         expires_at,
         mfa_verified_until,
+        security_action_verified_until: (!password_change_required)
+            .then(|| app.security_action_verified_until()),
         mfa_enrollment_required: false,
         password_change_required,
         persist_session,
@@ -124,6 +128,7 @@ async fn login_mfa_enrollment_payload_from_user(
         user: user_payload_from_user(app, user).await?,
         expires_at,
         mfa_verified_until: None,
+        security_action_verified_until: None,
         mfa_enrollment_required: true,
         password_change_required: false,
         persist_session,
@@ -347,6 +352,7 @@ impl UserMutations {
             .reset_user_mfa(&actor, &id)
             .await
             .map_err(to_gql_error)?;
+        auth_runtime_from_ctx(ctx).invalidate_connections();
         let user = app
             .attach_user_authorization(user)
             .await
@@ -472,7 +478,7 @@ impl UserMutations {
             input.persist_session,
             default_persist_session_from_ctx(ctx),
         );
-        let user = match app
+        let (user, auth_session_version) = match app
             .federated_login_with_plex(input.connection_id.to_string(), input.plex_auth_token)
             .await
         {
@@ -487,7 +493,16 @@ impl UserMutations {
                 .await);
             }
         };
-        login_payload_from_user(&app, user, None, None, persist_session, None, false).await
+        login_payload_from_user(
+            &app,
+            user,
+            None,
+            None,
+            persist_session,
+            Some(&auth_session_version),
+            false,
+        )
+        .await
     }
 
     /// Authenticates through Jellyfin, applies configured TOTP requirements, and issues a session or MFA-enrollment token.
@@ -505,16 +520,32 @@ impl UserMutations {
             input.persist_session,
             default_persist_session_from_ctx(ctx),
         );
-        let user = match app
-            .federated_login_with_jellyfin(
-                input.connection_id.to_string(),
-                input.username,
-                input.password,
-            )
+        let connection_id = input.connection_id.to_string();
+        let principal = LoginAttemptPrincipal::jellyfin(&connection_id, &input.username);
+        if let Some(principal) = principal.as_ref()
+            && let Some(limiter) = login_attempt_limiter_from_ctx(ctx)
+        {
+            limiter.check(principal)?;
+        }
+        let (user, auth_session_version) = match app
+            .federated_login_with_jellyfin(connection_id, input.username, input.password)
             .await
         {
-            Ok(user) => user,
+            Ok(user) => {
+                if let Some(principal) = principal.as_ref()
+                    && let Some(limiter) = login_attempt_limiter_from_ctx(ctx)
+                {
+                    limiter.clear_success(principal);
+                }
+                user
+            }
             Err(err) => {
+                if classify_login_error(&err) == LoginErrorClassification::MaskedPrimaryFailure
+                    && let Some(principal) = principal.as_ref()
+                    && let Some(limiter) = login_attempt_limiter_from_ctx(ctx)
+                {
+                    limiter.record_failure(principal);
+                }
                 return Err(to_login_gql_error_after_timing(
                     "jellyfin",
                     LoginFailureTimingClass::FastMasked,
@@ -540,29 +571,24 @@ impl UserMutations {
                 jellyfin_mfa_required,
                 persist_session,
                 input.totp_code.as_deref(),
+                Some(&auth_session_version),
             )
             .await
             .map_err(to_gql_error)?
         {
             LoginVerificationRequirement::Satisfied(satisfied) => {
-                let expected_auth_session_version = satisfied
-                    .mfa_verified_until
-                    .is_some()
-                    .then_some(&satisfied.auth_session_version);
                 login_payload_from_user(
                     &app,
                     user,
                     satisfied.mfa_verified_until,
                     None,
                     persist_session,
-                    expected_auth_session_version,
+                    Some(&auth_session_version),
                     false,
                 )
                 .await
             }
-            LoginVerificationRequirement::EnrollmentRequired {
-                auth_session_version,
-            } => {
+            LoginVerificationRequirement::EnrollmentRequired { .. } => {
                 login_mfa_enrollment_payload_from_user(
                     &app,
                     user,
@@ -598,17 +624,37 @@ impl UserMutations {
             input.persist_session,
             default_persist_session_from_ctx(ctx),
         );
-        let user = match app
+        let connection_id = input.connection_id.to_string();
+        let principal = LoginAttemptPrincipal::emby(&connection_id, &input.username);
+        if let Some(principal) = principal.as_ref()
+            && let Some(limiter) = login_attempt_limiter_from_ctx(ctx)
+        {
+            limiter.check(principal)?;
+        }
+        let (user, auth_session_version) = match app
             .federated_login_with_emby(
-                input.connection_id.to_string(),
+                connection_id,
                 emby_connection_mode(input.mode),
                 input.username,
                 input.password,
             )
             .await
         {
-            Ok(user) => user,
+            Ok(user) => {
+                if let Some(principal) = principal.as_ref()
+                    && let Some(limiter) = login_attempt_limiter_from_ctx(ctx)
+                {
+                    limiter.clear_success(principal);
+                }
+                user
+            }
             Err(err) => {
+                if classify_login_error(&err) == LoginErrorClassification::MaskedPrimaryFailure
+                    && let Some(principal) = principal.as_ref()
+                    && let Some(limiter) = login_attempt_limiter_from_ctx(ctx)
+                {
+                    limiter.record_failure(principal);
+                }
                 return Err(to_login_gql_error_after_timing(
                     "emby",
                     LoginFailureTimingClass::FastMasked,
@@ -633,29 +679,24 @@ impl UserMutations {
                 emby_mfa_required,
                 persist_session,
                 input.totp_code.as_deref(),
+                Some(&auth_session_version),
             )
             .await
             .map_err(to_gql_error)?
         {
             LoginVerificationRequirement::Satisfied(satisfied) => {
-                let expected_auth_session_version = satisfied
-                    .mfa_verified_until
-                    .is_some()
-                    .then_some(&satisfied.auth_session_version);
                 login_payload_from_user(
                     &app,
                     user,
                     satisfied.mfa_verified_until,
                     None,
                     persist_session,
-                    expected_auth_session_version,
+                    Some(&auth_session_version),
                     false,
                 )
                 .await
             }
-            LoginVerificationRequirement::EnrollmentRequired {
-                auth_session_version,
-            } => {
+            LoginVerificationRequirement::EnrollmentRequired { .. } => {
                 login_mfa_enrollment_payload_from_user(
                     &app,
                     user,

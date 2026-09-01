@@ -63,6 +63,7 @@ const zh_CN: LocaleDictionary = {
   "label.unknownType": "未知类型",
   "label.yearUnknown": "年份未知",
   "label.noArt": "无封面",
+  "color.magenta": "洋红色",
   "nav.dashboard": "仪表板",
   "nav.movies": "电影",
   "nav.series": "剧集",

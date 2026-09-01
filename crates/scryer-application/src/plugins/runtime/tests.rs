@@ -233,6 +233,7 @@ mod catalog_artifact_selection_tests {
             required_signer: RequiredSigner {
                 github_repository: "scryer-media/alpha".to_string(),
                 github_workflow: None,
+                github_ref: None,
             },
             releases,
         }
@@ -343,6 +344,22 @@ mod catalog_artifact_selection_tests {
 
         assert_eq!(selected.required_features, Vec::<String>::new());
         assert_eq!(selected.url, "https://example.invalid/plugin.zst");
+    }
+
+    #[test]
+    fn wasip2_artifact_is_selectable() {
+        let mut component = artifact(&[], "https://example.invalid/plugin.wasm.zst");
+        component.runtime = "wasm32-wasip2".to_string();
+        let release = release(vec![component]);
+
+        let selected = select_catalog_release_artifact(
+            &release,
+            &HashSet::new(),
+            RuntimePerformanceClass::Slow,
+        )
+        .expect("WASIp2 artifact");
+
+        assert_eq!(selected.runtime, "wasm32-wasip2");
     }
 
     #[test]

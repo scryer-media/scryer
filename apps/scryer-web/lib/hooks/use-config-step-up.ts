@@ -60,9 +60,10 @@ export function useConfigStepUp({
   t: Translate;
 }) {
   const [configStepUpPolicy, setConfigStepUpPolicy] = useState({
-    loading: false,
+    loading: initialMfaRequireConfigStepUp === null,
     required: initialMfaRequireConfigStepUp === true,
     error: false,
+    resolved: initialMfaRequireConfigStepUp !== null,
   });
   const usedInitialPolicyRef = useRef(false);
   const [configStepUpNow, setConfigStepUpNow] = useState(() => Date.now());
@@ -76,7 +77,11 @@ export function useConfigStepUp({
   const refreshConfigStepUpPolicy = useCallback(async (options?: { force?: boolean }) => {
     if (!protectedSettingsRoute) {
       usedInitialPolicyRef.current = false;
-      setConfigStepUpPolicy({ loading: false, required: false, error: false });
+      setConfigStepUpPolicy((current) => ({
+        ...current,
+        loading: false,
+        error: false,
+      }));
       return;
     }
 
@@ -90,6 +95,7 @@ export function useConfigStepUp({
         loading: false,
         required: initialMfaRequireConfigStepUp,
         error: false,
+        resolved: true,
       });
       return;
     }
@@ -97,7 +103,7 @@ export function useConfigStepUp({
     usedInitialPolicyRef.current = true;
     setConfigStepUpPolicy((current) => ({
       ...current,
-      loading: true,
+      loading: !current.resolved,
       error: false,
     }));
     try {
@@ -117,10 +123,15 @@ export function useConfigStepUp({
         loading: false,
         required: runtimeState?.mfaRequireConfigStepUp === true,
         error: false,
+        resolved: true,
       });
     } catch (error) {
       console.warn("Failed to refresh MFA step-up policy", error);
-      setConfigStepUpPolicy({ loading: false, required: false, error: true });
+      setConfigStepUpPolicy((current) => ({
+        ...current,
+        loading: false,
+        error: !current.resolved,
+      }));
     }
   }, [initialMfaRequireConfigStepUp, protectedSettingsRoute]);
 

@@ -5,13 +5,12 @@ use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_m
 use scryer_mediainfo::analyze_file;
 
 #[allow(dead_code, unused_imports)]
-#[path = "../src/scan.rs"]
+#[path = "../../../crates/scryer-mediainfo/src/scan.rs"]
 mod scan;
 
 fn media(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("media")
+        .join("../../crates/scryer-mediainfo/tests/media")
         .join(name)
 }
 

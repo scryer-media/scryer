@@ -1,0 +1,47 @@
+name: Download verified built-ins
+description: Restore the verified, pinned built-in plugin inputs before Cargo compiles them.
+
+inputs:
+  run-id:
+    description: GitHub Actions run identifier that produced the inputs.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      with:
+        name: scryer-builtins-${{ inputs.run-id }}
+        path: crates/scryer-plugins/builtins
+
+    - name: Verify downloaded built-ins
+      shell: bash
+      run: |
+        set -euo pipefail
+        test -s crates/scryer-plugins/builtins/newznab_indexer.wasm.zst
+        test -s crates/scryer-plugins/builtins/newznab_indexer.descriptor.json
+        test -s crates/scryer-plugins/builtins/newznab_indexer.description.txt
+        test -s crates/scryer-plugins/builtins/torznab_indexer.wasm.zst
+        test -s crates/scryer-plugins/builtins/torznab_indexer.descriptor.json
+        test -s crates/scryer-plugins/builtins/torznab_indexer.description.txt
+        test -s crates/scryer-plugins/builtins/provenance.json
+        test -s crates/scryer-plugins/builtins/provenance/catalog-v3.redirect.bundle.json
+        test -s crates/scryer-plugins/builtins/provenance/catalog-v3.bundle.sigstore
+        test -s crates/scryer-plugins/builtins/provenance/newznab_indexer.wasm.zst.sigstore
+        test -s crates/scryer-plugins/builtins/provenance/torznab_indexer.wasm.zst.sigstore
+        test -s crates/scryer-plugins/builtins/sigstore-trusted-root.json
+        test -s crates/scryer-plugins/builtins/sigstore-trusted-root.provenance.json
+        node <<'NODE'
+        const crypto = require('crypto');
+        const fs = require('fs');
+        const rootPath = 'crates/scryer-plugins/builtins/sigstore-trusted-root.json';
+        const receiptPath = 'crates/scryer-plugins/builtins/sigstore-trusted-root.provenance.json';
+        const receipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8'));
+        const actual = crypto.createHash('sha256').update(fs.readFileSync(rootPath)).digest('hex');
+        if (receipt.target !== 'trusted_root.json' || !/^https:\/\//.test(receipt.source)) {
+          throw new Error('Sigstore trust-root receipt has an invalid source or target');
+        }
+        if (!/^[0-9a-f]{64}$/.test(receipt.sha256) || receipt.sha256 !== actual) {
+          throw new Error(`Sigstore trust-root digest mismatch: expected ${receipt.sha256}, got ${actual}`);
+        }
+        NODE

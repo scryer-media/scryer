@@ -924,6 +924,29 @@ impl DownloadSubmissionRepository for TrackingDownloadSubmissionRepo {
             .await
     }
 
+    async fn upsert_identity_tracked_state_for_download_returning_previous(
+        &self,
+        target: IdentityTrackedStateTarget<'_>,
+        tracked_state: &str,
+        preserve_previous: &[&str],
+        reason: Option<&str>,
+        detail: Option<&str>,
+    ) -> AppResult<Option<String>> {
+        let mut identity = target.identity.clone();
+        if let Some(download_id) = target.canonical_download_id {
+            identity.download_id = Some(download_id.to_wire());
+        }
+        self.upsert_identity_tracked_state_returning_previous(
+            &identity,
+            target.source_identity,
+            tracked_state,
+            preserve_previous,
+            reason,
+            detail,
+        )
+        .await
+    }
+
     async fn get_identity_tracked_state_reason(
         &self,
         identity: &DownloadSubmissionIdentity,
@@ -1582,6 +1605,14 @@ impl TrackingHousekeepingRepo {
 
 #[async_trait]
 impl HousekeepingRepository for TrackingHousekeepingRepo {
+    async fn delete_stale_workflow_operations(
+        &self,
+        _completed_days: i64,
+        _warning_failed_days: i64,
+    ) -> AppResult<u32> {
+        Ok(0)
+    }
+
     async fn delete_release_decisions_older_than(&self, _days: i64) -> AppResult<u32> {
         Ok(0)
     }
@@ -2256,6 +2287,7 @@ impl DownloadQueueCommandRepository for TrackingDownloadQueueCommandRepo {
     async fn list_latest_delete_commands_for_sources(
         &self,
         sources: &[(Option<String>, String, String, bool)],
+        completed_only: bool,
     ) -> AppResult<Vec<DownloadQueueCommandRecord>> {
         let queued = self.queued.lock().await;
         Ok(sources
@@ -2263,8 +2295,11 @@ impl DownloadQueueCommandRepository for TrackingDownloadQueueCommandRepo {
             .filter_map(|(client_id, client_type, item_id, is_history)| {
                 queued
                     .iter()
+                    .rev()
                     .find(|record| {
-                        record.client_id.as_deref() == client_id.as_deref()
+                        (!completed_only
+                            || record.status == scryer_domain::DownloadQueueDeleteStatus::Completed)
+                            && record.client_id.as_deref() == client_id.as_deref()
                             && record.client_type == *client_type
                             && record.download_client_item_id == *item_id
                             && record.is_history == *is_history

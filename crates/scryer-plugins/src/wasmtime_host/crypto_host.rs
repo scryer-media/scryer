@@ -13,7 +13,10 @@
 //! `archive_component_host` is the only consumer: it wires these functions
 //! straight into the generated WIT `Host` implementation.
 
-use std::mem::MaybeUninit;
+use aws_lc_rs::{
+    cipher::{AES_128, AES_256, DecryptingKey, DecryptionContext, UnboundCipherKey},
+    iv::{FixedLength, IV_LEN_128_BIT},
+};
 
 pub(crate) const AES_BLOCK_LEN: usize = 16;
 const AES_128_KEY_LEN: usize = 16;
@@ -80,25 +83,17 @@ fn aes_cbc_decrypt_in_place(
         return Ok(());
     }
 
-    let mut aes_key = MaybeUninit::<aws_lc_sys::AES_KEY>::uninit();
-    let bits = (key.len() * 8) as u32;
-    let set_key_result =
-        unsafe { aws_lc_sys::AES_set_decrypt_key(key.as_ptr(), bits, aes_key.as_mut_ptr()) };
-    if set_key_result != 0 {
-        return Err(AesDecryptError::KeyLength);
-    }
-    let aes_key = unsafe { aes_key.assume_init() };
-    let mut iv = *iv;
-    unsafe {
-        aws_lc_sys::AES_cbc_encrypt(
-            buf.as_ptr(),
-            buf.as_mut_ptr(),
-            buf.len(),
-            &aes_key,
-            iv.as_mut_ptr(),
-            aws_lc_sys::AES_DECRYPT,
-        );
-    }
+    let algorithm = match key.len() {
+        AES_128_KEY_LEN => &AES_128,
+        AES_256_KEY_LEN => &AES_256,
+        _ => return Err(AesDecryptError::KeyLength),
+    };
+    let key = UnboundCipherKey::new(algorithm, key).map_err(|_| AesDecryptError::KeyLength)?;
+    let decrypting_key = DecryptingKey::cbc(key).map_err(|_| AesDecryptError::KeyLength)?;
+    let context = DecryptionContext::Iv128(FixedLength::<IV_LEN_128_BIT>::from(iv));
+    decrypting_key
+        .decrypt(buf, context)
+        .map_err(|_| AesDecryptError::BlockAlignment)?;
     Ok(())
 }
 
@@ -120,6 +115,29 @@ mod tests {
         );
 
         assert_eq!(aes_cbc_decrypt(&key, &iv, &ciphertext).unwrap(), expected);
+    }
+
+    #[test]
+    fn aes_cbc_decrypts_nist_aes256_vector() {
+        let key = hex_bytes(
+            "603deb1015ca71be2b73aef0857d77811\
+             f352c073b6108d72d9810a30914dff4",
+        );
+        let iv: [u8; AES_BLOCK_LEN] = hex_bytes("000102030405060708090a0b0c0d0e0f")
+            .try_into()
+            .unwrap();
+        let mut buf = hex_bytes(
+            "f58c4c04d6e5f1ba779eabfb5f7bfbd6\
+             9cfc4e967edb808d679f777bc6702c7d",
+        );
+        let expected = hex_bytes(
+            "6bc1bee22e409f96e93d7e117393172a\
+             ae2d8a571e03ac9c9eb76fac45af8e51",
+        );
+
+        aes_cbc_decrypt_in_place(&key, &iv, &mut buf).unwrap();
+
+        assert_eq!(buf, expected);
     }
 
     #[test]

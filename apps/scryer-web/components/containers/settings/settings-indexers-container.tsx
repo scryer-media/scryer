@@ -877,10 +877,6 @@ export function SettingsIndexersContainer({
 
   const toggleIndexerEnabled = useCallback(
     async (indexer: IndexerRecord) => {
-      if (indexer.isManaged) {
-        setGlobalStatus(t("settings.managedIndexerReadOnly"));
-        return;
-      }
       const nextIsEnabled = !indexer.isEnabled;
       setMutatingIndexerId(indexer.id);
       try {

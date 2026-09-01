@@ -50,6 +50,10 @@ struct SearchStrategy {
     episode: Option<u32>,
     absolute_episode: Option<u32>,
     generic_query_only: bool,
+    /// Ask the provider's generic function instead of the facet-scoped one,
+    /// while keeping the routed categories. Narrower than `generic_query_only`,
+    /// which also strips the categories and the structured context.
+    omit_request_facet: bool,
     label: String,
 }
 
@@ -259,7 +263,8 @@ fn prepare_search_strategies(
         let category = (!strategy.generic_query_only)
             .then(|| context.category.clone())
             .flatten();
-        let facet = (!strategy.generic_query_only).then(|| strategy.request_facet.clone());
+        let facet = (!strategy.generic_query_only && !strategy.omit_request_facet)
+            .then(|| strategy.request_facet.clone());
         let newznab_categories = (!strategy.generic_query_only)
             .then(|| context.per_indexer_categories.clone())
             .flatten();
@@ -453,7 +458,22 @@ fn sanitize_indexer_error_message(message: &str) -> String {
 }
 
 const SEARCH_CANDIDATE_REUSE_HOURS: i64 = 24;
-const SEARCH_CANDIDATE_RETENTION_DAYS: i64 = 7;
+
+/// Whether this search pass may be served from the persisted candidate corpus.
+///
+/// Reuse requires all three: Auto mode (Interactive never reused), a learning
+/// context (no context means no diagnostics to rehydrate from), and the
+/// context's own consent — which only the background convergence lanes give.
+/// Operator-triggered Auto searches leave `candidate_reuse_allowed` false and
+/// always fire the indexer live.
+fn candidate_reuse_permitted(
+    mode: SearchMode,
+    learning_context: Option<&IndexerSearchLearningContext>,
+) -> bool {
+    mode == SearchMode::Auto
+        && learning_context.is_some_and(|context| context.candidate_reuse_allowed)
+}
+const SEARCH_CANDIDATE_RETENTION_DAYS: i64 = 1;
 const SEARCH_RUN_RETENTION_DAYS: i64 = 90;
 const SEARCH_DIAGNOSTIC_CLEANUP_LIMIT: u32 = 500;
 const SEARCH_DIAGNOSTIC_CLEANUP_RETRY_SECONDS: i64 = 3_600;
@@ -493,7 +513,6 @@ struct SearchDiagnosticsContext {
     search_session_id: String,
     scope_key: String,
     indexer_fingerprint: String,
-    credentials: HashMap<String, String>,
 }
 
 impl SearchDiagnosticsContext {
@@ -534,7 +553,6 @@ impl SearchDiagnosticsContext {
             search_session_id: learning_context.search_session_id.clone(),
             scope_key,
             indexer_fingerprint,
-            credentials: indexer_credentials(config),
         })
     }
 
@@ -548,11 +566,11 @@ impl SearchDiagnosticsContext {
         let now = Utc::now();
         let run_id = uuid::Uuid::new_v4().to_string();
         let (completion_state, incomplete_reason, retry_after) = match response.completion {
-            IndexerSearchCompletion::Complete => ("complete", None, None),
+            IndexerSearchCompletion::Complete => ("received_complete", None, None),
             IndexerSearchCompletion::Partial {
                 reason,
                 retry_after,
-            } => ("partial", reason, retry_after),
+            } => ("received_partial", reason, retry_after),
         };
         let candidates = response
             .results
@@ -565,7 +583,11 @@ impl SearchDiagnosticsContext {
                 scope_key: self.scope_key.clone(),
                 query_signature: query_signature.to_string(),
                 session_identity_hash: candidate_session_identity_hash(candidate),
-                normalized: normalized_candidate(candidate, &self.credentials),
+                normalized: normalized_candidate(
+                    candidate,
+                    response.grab_current,
+                    response.grab_max,
+                ),
                 created_at: now,
                 reusable_until: now + Duration::hours(SEARCH_CANDIDATE_REUSE_HOURS),
                 expires_at: now + Duration::days(SEARCH_CANDIDATE_RETENTION_DAYS),
@@ -746,7 +768,7 @@ impl SearchDiagnosticsContext {
             .list_search_run_candidates(run_id)
             .await?
             .into_iter()
-            .map(|record| reusable_candidate_from_record(record, config, &self.credentials))
+            .map(|record| reusable_candidate_from_record(record, config))
             .collect::<Option<Vec<_>>>()
             .ok_or_else(|| {
                 AppError::Repository(
@@ -768,152 +790,13 @@ fn digest_json(domain: HashDomain, value: &serde_json::Value) -> String {
     blake3_identity_hex(domain, String::from_utf8_lossy(&bytes))
 }
 
+/// Delegates to the one canonical fingerprint. Staging writes under this value
+/// and `finalize_search_session` retains by it, so this must be the same
+/// function the discovery layer computes admissible fingerprints with — a
+/// local reimplementation that drifted would silently discard every session's
+/// corpus at finalize.
 fn candidate_session_identity_hash(candidate: &IndexerSearchResult) -> String {
-    let identity = candidate
-        .download_url
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .or_else(|| {
-            candidate
-                .link
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-        })
-        .unwrap_or(candidate.title.as_str());
-    blake3_identity_hex(HashDomain::CandidateSessionIdentity, identity)
-}
-
-fn normalized_credential_key(key: &str) -> String {
-    key.chars()
-        .filter(|ch| ch.is_ascii_alphanumeric())
-        .flat_map(char::to_lowercase)
-        .collect()
-}
-
-fn is_sensitive_credential_key(key: &str) -> bool {
-    let normalized = normalized_credential_key(key);
-    normalized == "key"
-        || normalized.contains("apikey")
-        || normalized.contains("passkey")
-        || normalized.contains("token")
-        || normalized.contains("secret")
-        || normalized.contains("password")
-}
-
-fn collect_indexer_credentials(
-    value: &serde_json::Value,
-    credentials: &mut HashMap<String, String>,
-) {
-    let Some(object) = value.as_object() else {
-        return;
-    };
-    for (key, value) in object {
-        if let Some(secret) = value.as_str().filter(|secret| !secret.trim().is_empty())
-            && is_sensitive_credential_key(key)
-        {
-            credentials.insert(normalized_credential_key(key), secret.to_string());
-        }
-        if value.is_object() {
-            collect_indexer_credentials(value, credentials);
-        }
-    }
-}
-
-fn indexer_credentials(config: &IndexerConfig) -> HashMap<String, String> {
-    let mut credentials = HashMap::new();
-    if let Some(api_key) = config
-        .api_key_encrypted
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        credentials.insert("apikey".to_string(), api_key.to_string());
-    }
-    if let Some(config_json) = config
-        .config_json
-        .as_deref()
-        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
-    {
-        collect_indexer_credentials(&config_json, &mut credentials);
-    }
-    credentials
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ReusableUrlReference {
-    url: String,
-    credential_query_keys: Vec<String>,
-}
-
-fn reusable_url_reference(
-    raw: Option<&str>,
-    credentials: &HashMap<String, String>,
-) -> Option<ReusableUrlReference> {
-    let raw = raw.map(str::trim).filter(|value| !value.is_empty())?;
-    let mut url = url::Url::parse(raw).ok()?;
-    if !matches!(url.scheme(), "http" | "https" | "magnet")
-        || !url.username().is_empty()
-        || url.password().is_some()
-    {
-        return None;
-    }
-    if credentials.values().any(|secret| {
-        secret.len() >= 4
-            && (url.path().contains(secret)
-                || url
-                    .fragment()
-                    .is_some_and(|fragment| fragment.contains(secret)))
-    }) {
-        return None;
-    }
-
-    let pairs = url
-        .query_pairs()
-        .map(|(key, value)| (key.into_owned(), value.into_owned()))
-        .collect::<Vec<_>>();
-    url.set_query(None);
-    let mut credential_query_keys = Vec::new();
-    {
-        let mut query = url.query_pairs_mut();
-        for (key, value) in pairs {
-            let carries_known_secret = credentials
-                .values()
-                .any(|secret| !secret.is_empty() && secret == &value);
-            if is_sensitive_credential_key(&key) || carries_known_secret {
-                if !credential_query_keys.contains(&key) {
-                    credential_query_keys.push(key);
-                }
-            } else {
-                query.append_pair(&key, &value);
-            }
-        }
-    }
-
-    Some(ReusableUrlReference {
-        url: url.into(),
-        credential_query_keys,
-    })
-}
-
-fn rehydrate_url_reference(
-    url: Option<&str>,
-    credential_query_keys: &[String],
-    credentials: &HashMap<String, String>,
-) -> Option<String> {
-    let mut url = url::Url::parse(url?).ok()?;
-    {
-        let mut query = url.query_pairs_mut();
-        for key in credential_query_keys {
-            let normalized = normalized_credential_key(key);
-            let secret = credentials
-                .get(&normalized)
-                .or_else(|| credentials.get("apikey"))?;
-            query.append_pair(key, secret);
-        }
-    }
-    Some(url.into())
+    scryer_application::release_candidate_fingerprint(candidate)
 }
 
 fn candidate_extra_string(candidate: &IndexerSearchResult, key: &str) -> Option<String> {
@@ -956,28 +839,25 @@ fn candidate_extra_bool(candidate: &IndexerSearchResult, key: &str) -> Option<bo
 
 fn normalized_candidate(
     candidate: &IndexerSearchResult,
-    credentials: &HashMap<String, String>,
+    grab_current: Option<u32>,
+    grab_max: Option<u32>,
 ) -> NormalizedIndexerSearchCandidate {
-    let download = reusable_url_reference(candidate.download_url.as_deref(), credentials);
-    let link = reusable_url_reference(candidate.link.as_deref(), credentials);
     NormalizedIndexerSearchCandidate {
         provider_ref: candidate.guid.clone(),
         source: candidate.source.clone(),
         title: candidate.title.clone(),
-        download_url: download.as_ref().map(|reference| reference.url.clone()),
-        download_url_credential_keys: download
-            .map(|reference| reference.credential_query_keys)
-            .unwrap_or_default(),
-        link_url: link.as_ref().map(|reference| reference.url.clone()),
-        link_url_credential_keys: link
-            .map(|reference| reference.credential_query_keys)
-            .unwrap_or_default(),
+        download_url: candidate.download_url.clone(),
+        download_url_credential_keys: Vec::new(),
+        link_url: candidate.link.clone(),
+        link_url_credential_keys: Vec::new(),
         size_bytes: candidate.size_bytes,
         published_at: candidate.published_at.clone(),
         source_kind: candidate.source_kind.map(|kind| kind.as_str().to_string()),
         thumbs_up: candidate.thumbs_up,
         thumbs_down: candidate.thumbs_down,
         grabs: candidate.indexer_grabs,
+        grab_current: grab_current.map(i64::from),
+        grab_max: grab_max.map(i64::from),
         languages: candidate.indexer_languages.clone().unwrap_or_default(),
         subtitles: candidate.indexer_subtitles.clone().unwrap_or_default(),
         response_tvdb_id: candidate.response_attributes.tvdb_id.clone(),
@@ -1005,23 +885,14 @@ fn normalized_candidate(
 fn reusable_candidate_from_record(
     record: ReusableIndexerSearchCandidate,
     config: &IndexerConfig,
-    credentials: &HashMap<String, String>,
 ) -> Option<IndexerSearchResult> {
     let normalized = record.normalized;
     let title = normalized.title.trim().to_string();
     if title.is_empty() {
         return None;
     }
-    let download_url = rehydrate_url_reference(
-        normalized.download_url.as_deref(),
-        &normalized.download_url_credential_keys,
-        credentials,
-    );
-    let link = rehydrate_url_reference(
-        normalized.link_url.as_deref(),
-        &normalized.link_url_credential_keys,
-        credentials,
-    );
+    let download_url = normalized.download_url.clone();
+    let link = normalized.link_url.clone();
     if download_url.is_none() && link.is_none() {
         return None;
     }
@@ -1036,6 +907,8 @@ fn reusable_candidate_from_record(
         ("absolute_episode", normalized.absolute_episode),
         ("seeders", normalized.seeders),
         ("peers", normalized.peers),
+        ("grab_current", normalized.grab_current),
+        ("grab_max", normalized.grab_max),
     ] {
         if let Some(value) = value {
             extra.insert(key.to_string(), serde_json::json!(value));
@@ -2038,6 +1911,21 @@ impl IndexerBackoffTracker {
 /// awaiting the same indexer's feed will share a single HTTP fetch.
 type RssFeedCache = Arc<Mutex<HashMap<String, Arc<RssFeedCacheEntry>>>>;
 
+/// Indexer ids observed answering the facet-scoped RSS form with "function not
+/// available". They keep sweeping — the next cycle just asks the bare-query way.
+type RssBareQueryIndexers = Arc<Mutex<HashSet<String>>>;
+
+/// Which shape the RSS "latest releases" sweep takes for one indexer. Both
+/// forms participate in RSS; only the request differs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RssRequestForm {
+    /// The facet-scoped nab function (`tvsearch`/`movie`), carrying the routed
+    /// categories.
+    Nab,
+    /// The bare "latest releases" query every newznab-shaped endpoint answers.
+    BareQuery,
+}
+
 struct RssFeedCacheEntry {
     cell: tokio::sync::OnceCell<Result<Vec<IndexerSearchResult>, String>>,
     initialization_lock: Arc<Mutex<()>>,
@@ -2070,6 +1958,7 @@ pub struct MultiIndexerSearchClient {
     rate_limiter: IndexerRateLimiter,
     backoff_tracker: IndexerBackoffTracker,
     rss_feed_cache: RssFeedCache,
+    rss_bare_query_indexers: RssBareQueryIndexers,
     background_search_limit: Arc<Semaphore>,
     interactive_search_limit: Arc<Semaphore>,
 }
@@ -2097,6 +1986,7 @@ impl MultiIndexerSearchClient {
             rate_limiter: IndexerRateLimiter::new(),
             backoff_tracker: IndexerBackoffTracker::new(),
             rss_feed_cache: Arc::new(Mutex::new(HashMap::new())),
+            rss_bare_query_indexers: Arc::new(Mutex::new(HashSet::new())),
             background_search_limit: Arc::new(Semaphore::new(
                 BACKGROUND_INDEXER_SEARCH_CONCURRENCY_LIMIT,
             )),
@@ -2243,34 +2133,46 @@ impl MultiIndexerSearchClient {
         now: DateTime<Utc>,
         activity: SchedulerRssActivity,
     ) -> RssFreshnessContext {
-        const RSS_TARGET_INTERVAL_SECS: i64 = 15 * 60;
+        // The first poll of an indexer has no persisted cadence entry yet, so
+        // the phased window, the safe-poll time and the freshness risk are all
+        // derived from this interval. It has to honour
+        // `SCRYER_RSS_TARGET_INTERVAL_SECS` too, or the override would not take
+        // effect until after a full default-length window had already elapsed.
+        let rss_target_interval_secs = crate::upstream_scheduler::rss_target_interval()
+            .as_secs()
+            .clamp(1, i64::MAX as u64) as i64;
         let last_successful_poll_at = activity.last_successful_poll_at;
         let last_attempt_at = activity.last_attempt_at;
-        let phase = stable_phase_seconds(&config.id, RSS_TARGET_INTERVAL_SECS as u64) as i64;
+        let phase = stable_phase_seconds(&config.id, rss_target_interval_secs as u64) as i64;
         let timestamp = now.timestamp();
-        let window_start = timestamp - timestamp.rem_euclid(RSS_TARGET_INTERVAL_SECS);
+        let window_start = timestamp - timestamp.rem_euclid(rss_target_interval_secs);
         let phased_safe_poll_at =
             DateTime::<Utc>::from_timestamp(window_start + phase, 0).unwrap_or(now);
         let target_interval = activity
             .target_interval
             .and_then(|duration| chrono::Duration::from_std(duration).ok())
-            .unwrap_or_else(|| Duration::seconds(RSS_TARGET_INTERVAL_SECS));
-        let latest_safe_poll_at = last_successful_poll_at
-            .map(|last_activity| last_activity + target_interval)
-            .or(activity.latest_safe_poll_at)
-            .unwrap_or(phased_safe_poll_at);
+            .unwrap_or_else(|| Duration::seconds(rss_target_interval_secs));
+        let latest_safe_poll_at = [
+            last_successful_poll_at.map(|last_activity| last_activity + target_interval),
+            last_attempt_at.map(|last_activity| last_activity + target_interval),
+            activity.latest_safe_poll_at,
+        ]
+        .into_iter()
+        .flatten()
+        .max()
+        .unwrap_or(phased_safe_poll_at);
         let freshness_risk = activity.freshness_risk.unwrap_or_else(|| {
             last_successful_poll_at
                 .map(|last_activity| {
                     let elapsed = (now - last_activity).num_seconds().max(0) as f64;
-                    (elapsed / RSS_TARGET_INTERVAL_SECS as f64).clamp(0.0, 1.0)
+                    (elapsed / rss_target_interval_secs as f64).clamp(0.0, 1.0)
                 })
                 .unwrap_or_else(|| {
                     if now >= latest_safe_poll_at {
                         1.0
                     } else {
                         let elapsed = timestamp - window_start;
-                        (elapsed as f64 / RSS_TARGET_INTERVAL_SECS as f64).clamp(0.0, 1.0)
+                        (elapsed as f64 / rss_target_interval_secs as f64).clamp(0.0, 1.0)
                     }
                 })
         });
@@ -2280,7 +2182,7 @@ impl MultiIndexerSearchClient {
             last_attempt_at,
             target_interval: activity
                 .target_interval
-                .unwrap_or_else(|| std::time::Duration::from_secs(RSS_TARGET_INTERVAL_SECS as u64)),
+                .unwrap_or_else(|| std::time::Duration::from_secs(rss_target_interval_secs as u64)),
             latest_safe_poll_at,
             estimated_feed_depth: activity.estimated_feed_depth,
             freshness_risk,
@@ -2433,11 +2335,24 @@ impl MultiIndexerSearchClient {
         .await
     }
 
-    fn search_limit_for_mode(&self, mode: SearchMode) -> Arc<Semaphore> {
-        if matches!(mode, SearchMode::Interactive) {
-            self.interactive_search_limit.clone()
-        } else {
+    /// The background lane's budget bounds machine-initiated sweeps: RSS and
+    /// the convergence lanes that consent to corpus reuse. An operator's
+    /// Auto-mode search — queue-best-release, the UI search buttons, and the
+    /// acquisition-search job they start — admits through the interactive lane
+    /// so it is never queued behind that sweep.
+    fn search_limit_for_mode(
+        &self,
+        mode: SearchMode,
+        is_rss_request: bool,
+        learning_context: Option<&IndexerSearchLearningContext>,
+    ) -> Arc<Semaphore> {
+        let background_pass = mode == SearchMode::Auto
+            && (is_rss_request
+                || learning_context.is_some_and(|context| context.candidate_reuse_allowed));
+        if background_pass {
             self.background_search_limit.clone()
+        } else {
+            self.interactive_search_limit.clone()
         }
     }
 
@@ -2662,6 +2577,9 @@ impl MultiIndexerSearchClient {
             .then_some("season".to_string());
         caps.episode_param =
             node_supports_param(snapshot.tv_search.as_ref(), "ep").then_some("ep".to_string());
+        if matches!(transport_kind, Some(NabTransportKind::DirectNab)) {
+            preserve_direct_nab_native_capabilities(&mut caps, static_caps, id_facet);
+        }
 
         let id_dispatch_mode = if caps.has_facet(id_facet) {
             IdDispatchMode::Aggregate
@@ -3311,9 +3229,50 @@ impl IndexerClient for MultiIndexerSearchClient {
         cancel_token: CancellationToken,
         page_sink: IndexerSearchPageSink,
     ) -> AppResult<IndexerSearchResponse> {
+        self.search_queries_stream(
+            vec![query],
+            ids,
+            category,
+            facet,
+            id_search_facet,
+            newznab_categories,
+            indexer_routing,
+            mode,
+            operation,
+            season,
+            episode,
+            absolute_episode,
+            tagged_aliases,
+            learning_context,
+            cancel_token,
+            page_sink,
+        )
+        .await
+    }
+
+    async fn search_queries_stream(
+        &self,
+        queries: Vec<String>,
+        ids: HashMap<String, String>,
+        category: Option<String>,
+        facet: Option<String>,
+        id_search_facet: Option<String>,
+        newznab_categories: Option<Vec<String>>,
+        indexer_routing: Option<IndexerRoutingPlan>,
+        mode: SearchMode,
+        operation: IndexerErrorOperation,
+        season: Option<u32>,
+        episode: Option<u32>,
+        absolute_episode: Option<u32>,
+        tagged_aliases: Vec<scryer_domain::TaggedAlias>,
+        learning_context: Option<IndexerSearchLearningContext>,
+        cancel_token: CancellationToken,
+        page_sink: IndexerSearchPageSink,
+    ) -> AppResult<IndexerSearchResponse> {
         if cancel_token.is_cancelled() {
             return Err(AppError::canceled("indexer search canceled"));
         }
+        let query = queries.first().cloned().unwrap_or_default();
         let is_rss_request = Self::is_rss_sync_request(
             &query,
             !ids.is_empty(),
@@ -3727,7 +3686,8 @@ impl IndexerClient for MultiIndexerSearchClient {
             AppResult<IndexerSearchResponse>,
             bool,
         )>::new();
-        let search_limit = self.search_limit_for_mode(mode);
+        let search_limit =
+            self.search_limit_for_mode(mode, is_rss_request, learning_context.as_ref());
         for scheduler_admission in scheduler_decision.decisions {
             let candidate_id = Self::scheduler_admission_candidate_id(&scheduler_admission);
             let Some(dispatch) = scheduler_dispatches.remove(candidate_id.as_str()) else {
@@ -3832,7 +3792,12 @@ impl IndexerClient for MultiIndexerSearchClient {
             {
                 info!(
                     indexer = config.name.as_str(),
-                    reason, "ProwlarrNabProxy running in query-only fallback mode"
+                    transport = resolved_caps
+                        .transport_kind
+                        .map(NabTransportKind::as_str)
+                        .unwrap_or("unknown"),
+                    reason,
+                    "NAB indexer running in query-only fallback mode"
                 );
             }
 
@@ -4205,25 +4170,10 @@ impl IndexerClient for MultiIndexerSearchClient {
                 continue;
             }
 
-            let mut strategies: Vec<SearchStrategy> = build_strategies(&StrategyParams {
-                query: &query,
-                query_facet: &facet,
-                id_facet: &id_search_facet,
-                ids: &available_ids,
-                season,
-                episode,
-                absolute_episode,
-                caps: &caps,
-                id_dispatch_mode: resolved_caps.id_dispatch_mode,
-                text_dispatch_mode: resolved_caps.text_dispatch_mode,
-                is_alias_query: false,
-            });
-
-            if facet == "anime"
-                && let Some(alias_query) = preferred_anime_alias_query(&query, &tagged_aliases)
-            {
-                let alias_strategies = build_strategies(&StrategyParams {
-                    query: &alias_query,
+            let mut strategies = Vec::new();
+            for strategy_query in &queries {
+                strategies.extend(build_strategies(&StrategyParams {
+                    query: strategy_query,
                     query_facet: &facet,
                     id_facet: &id_search_facet,
                     ids: &available_ids,
@@ -4233,12 +4183,42 @@ impl IndexerClient for MultiIndexerSearchClient {
                     caps: &caps,
                     id_dispatch_mode: resolved_caps.id_dispatch_mode,
                     text_dispatch_mode: resolved_caps.text_dispatch_mode,
-                    is_alias_query: true,
-                });
+                    is_alias_query: false,
+                }));
 
-                strategies.extend(alias_strategies);
+                if facet == "anime"
+                    && let Some(alias_query) =
+                        preferred_anime_alias_query(strategy_query, &tagged_aliases)
+                {
+                    strategies.extend(build_strategies(&StrategyParams {
+                        query: &alias_query,
+                        query_facet: &facet,
+                        id_facet: &id_search_facet,
+                        ids: &available_ids,
+                        season,
+                        episode,
+                        absolute_episode,
+                        caps: &caps,
+                        id_dispatch_mode: resolved_caps.id_dispatch_mode,
+                        text_dispatch_mode: resolved_caps.text_dispatch_mode,
+                        is_alias_query: true,
+                    }));
+                }
             }
+            let mut rss_form = None;
             if is_rss_request && strategies.is_empty() {
+                let function_unavailable_observed = self
+                    .rss_bare_query_indexers
+                    .lock()
+                    .await
+                    .contains(&config.id);
+                let form = rss_request_form(
+                    &caps,
+                    resolved_caps.text_dispatch_mode,
+                    &facet,
+                    function_unavailable_observed,
+                );
+                rss_form = Some(form);
                 strategies.push(SearchStrategy {
                     request_query: String::new(),
                     request_facet: facet.clone(),
@@ -4247,6 +4227,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                     episode: None,
                     absolute_episode: None,
                     generic_query_only: false,
+                    omit_request_facet: form == RssRequestForm::BareQuery,
                     label: "rss".into(),
                 });
             }
@@ -4320,7 +4301,15 @@ impl IndexerClient for MultiIndexerSearchClient {
                 episode,
                 absolute_episode,
             );
-            let reusable_strategies = if mode == SearchMode::Auto {
+            // Corpus reuse is opt-in per pass: only the background convergence
+            // lanes mark their learning context reusable. An operator-triggered
+            // Auto search (queue-best-release, the UI search buttons) fires the
+            // indexer live — a corpus snapshot persisted before a new release
+            // appeared would hide it for the whole reuse window, which is how
+            // an explicit upgrade search stopped seeing a just-registered
+            // PROPER. Interactive searches never reused.
+            let reusable_strategies = if candidate_reuse_permitted(mode, learning_context.as_ref())
+            {
                 match search_diagnostics.as_ref() {
                     Some(diagnostics) => diagnostics.reusable_strategies(config).await,
                     None => HashMap::new(),
@@ -4341,13 +4330,13 @@ impl IndexerClient for MultiIndexerSearchClient {
             let backoff_tracker = self.backoff_tracker.clone();
             let indexer_configs = self.indexer_configs.clone();
             let indexer_errors = self.indexer_errors.clone();
+            let rss_bare_query_indexers = self.rss_bare_query_indexers.clone();
             let client = client.clone();
             let primary_strategies = primary_strategies.clone();
             let fallback_strategies = fallback_strategies.clone();
             let search_limit = search_limit.clone();
             let rate_limiter = self.rate_limiter.clone();
             let rate_limit_seconds = config.rate_limit_seconds;
-            let persisted_config = config.clone();
             let task_cancel_token = cancel_token.child_token();
             let scheduler_lease_for_task = scheduler_lease.clone();
             let live_search_admitted = scheduler_lease_for_task.is_some();
@@ -4367,6 +4356,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                 let mut reusable_strategies = reusable_strategies;
                 let mut any_strategy_fired = false;
                 let mut all_strategies_complete = true;
+                let mut only_unattested_incompleteness = true;
                 let mut primary_attempted;
                 let mut primary_had_error;
                 let mut primary_usable_result_count = 0_usize;
@@ -4416,7 +4406,10 @@ impl IndexerClient for MultiIndexerSearchClient {
                     || primary_selection.deferred_count > 0
                     || !primary_selection.live.is_empty();
                 primary_had_error = primary_selection.deferred_count > 0;
-                all_strategies_complete &= primary_selection.deferred_count == 0;
+                if primary_selection.deferred_count > 0 {
+                    all_strategies_complete = false;
+                    only_unattested_incompleteness = false;
+                }
                 primary_usable_result_count = primary_usable_result_count
                     .saturating_add(primary_selection.replayed_result_count);
                 let primary_live = primary_selection.live;
@@ -4432,6 +4425,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                 } else {
                     primary_had_error = true;
                     all_strategies_complete = false;
+                    only_unattested_incompleteness = false;
                     StrategyTierOutcomes::Legacy(tokio::task::JoinSet::new())
                 };
 
@@ -4457,6 +4451,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                     batch_had_timeout |= outcome.timed_out;
                     if !outcome.request_fired {
                         all_strategies_complete = false;
+                        only_unattested_incompleteness = false;
                         if outcome.response.as_ref().is_err_and(|err| err.is_canceled()) {
                             return (
                                 indexer_id,
@@ -4478,8 +4473,16 @@ impl IndexerClient for MultiIndexerSearchClient {
                     let diagnostic_labels = outcome.labels.join("|");
                     match outcome.response {
                         Ok(mut response) => {
-                            all_strategies_complete &=
-                                response.completion == IndexerSearchCompletion::Complete;
+                            if response.completion != IndexerSearchCompletion::Complete {
+                                all_strategies_complete = false;
+                                only_unattested_incompleteness &= matches!(
+                                    response.completion,
+                                    IndexerSearchCompletion::Partial {
+                                        reason: Some(IndexerSearchIncompleteReason::Unattested),
+                                        ..
+                                    }
+                                );
+                            }
                             let raw_result_count = response.results.len();
                             batch_health.mark_success();
                             debug!(
@@ -4505,6 +4508,21 @@ impl IndexerClient for MultiIndexerSearchClient {
                                 outcome.elapsed,
                                 Some(response.results.len()),
                             );
+
+                            for result in &mut response.results {
+                                if let Some(current) = response.grab_current {
+                                    result.extra.insert(
+                                        "grab_current".to_string(),
+                                        serde_json::json!(current),
+                                    );
+                                }
+                                if let Some(max) = response.grab_max {
+                                    result.extra.insert(
+                                        "grab_max".to_string(),
+                                        serde_json::json!(max),
+                                    );
+                                }
+                            }
 
                             filter_strategy_results(
                                 &mut response.results,
@@ -4535,8 +4553,8 @@ impl IndexerClient for MultiIndexerSearchClient {
                                 }
                             }
                             if page_sink.is_some() {
-                                let mut persisted = if let Some(diagnostics) = search_diagnostics.as_ref() {
-                                    let run_id = match diagnostics
+                                if let Some(diagnostics) = search_diagnostics.as_ref()
+                                    && let Err(error) = diagnostics
                                         .persist_response(
                                             &outcome.strategy_id,
                                             &diagnostic_labels,
@@ -4544,33 +4562,16 @@ impl IndexerClient for MultiIndexerSearchClient {
                                             &response,
                                         )
                                         .await
-                                    {
-                                        Ok(run_id) => run_id,
-                                        Err(error) => {
-                                            return (
-                                                indexer_id,
-                                                indexer_name,
-                                                scheduler_lease_for_task.clone(),
-                                                Err(error),
-                                                true,
-                                            );
-                                        }
-                                    };
-                                    match diagnostics.persisted_candidates(&run_id, &persisted_config).await {
-                                        Ok(candidates) => candidates,
-                                        Err(error) => {
-                                            return (
-                                                indexer_id,
-                                                indexer_name,
-                                                scheduler_lease_for_task.clone(),
-                                                Err(error),
-                                                true,
-                                            );
-                                        }
-                                    }
-                                } else {
-                                    std::mem::take(&mut response.results)
-                                };
+                                {
+                                    return (
+                                        indexer_id,
+                                        indexer_name,
+                                        scheduler_lease_for_task.clone(),
+                                        Err(error),
+                                        true,
+                                    );
+                                }
+                                let mut persisted = std::mem::take(&mut response.results);
                                 for result in &mut persisted {
                                     result.indexer_id = Some(indexer_id.clone());
                                 }
@@ -4625,6 +4626,22 @@ impl IndexerClient for MultiIndexerSearchClient {
                             }
                             primary_had_error = true;
                             all_strategies_complete = false;
+                            only_unattested_incompleteness = false;
+                            // The endpoint does not implement the facet-scoped
+                            // function it was asked for. That is a wrong request
+                            // form, not a broken indexer, so it is remembered
+                            // rather than held against the indexer's health: the
+                            // next sweep asks the bare-query way, and only that
+                            // form's failures are health events.
+                            let wrong_rss_request_form = rss_form
+                                == Some(RssRequestForm::Nab)
+                                && newznab_function_is_unavailable(&err);
+                            if wrong_rss_request_form {
+                                rss_bare_query_indexers
+                                    .lock()
+                                    .await
+                                    .insert(indexer_id.clone());
+                            }
                             if let Some(diagnostics) = search_diagnostics.as_ref() {
                                 diagnostics
                                     .record_error(
@@ -4635,15 +4652,17 @@ impl IndexerClient for MultiIndexerSearchClient {
                                     )
                                     .await;
                             }
-                            batch_health.mark_error(
-                                &err,
-                                outcome.retry_after,
-                                outcome.rate_limited,
-                            );
-                            if scryer_application::challenge_solver::is_solver_service_error_message(
-                                &err.to_string(),
-                            ) {
-                                batch_health.mark_solver_failure();
+                            if !wrong_rss_request_form {
+                                batch_health.mark_error(
+                                    &err,
+                                    outcome.retry_after,
+                                    outcome.rate_limited,
+                                );
+                                if scryer_application::challenge_solver::is_solver_service_error_message(
+                                    &err.to_string(),
+                                ) {
+                                    batch_health.mark_solver_failure();
+                                }
                             }
                             debug!(
                                 indexer = indexer_name.as_str(),
@@ -4717,7 +4736,10 @@ impl IndexerClient for MultiIndexerSearchClient {
                             );
                         }
                     };
-                    all_strategies_complete &= fallback_selection.deferred_count == 0;
+                    if fallback_selection.deferred_count > 0 {
+                        all_strategies_complete = false;
+                        only_unattested_incompleteness = false;
+                    }
                     let fallback_live = fallback_selection.live;
                     let mut fallback_outcomes = if fallback_live.is_empty() {
                         StrategyTierOutcomes::Legacy(tokio::task::JoinSet::new())
@@ -4730,6 +4752,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                         )
                     } else {
                         all_strategies_complete = false;
+                        only_unattested_incompleteness = false;
                         StrategyTierOutcomes::Legacy(tokio::task::JoinSet::new())
                     };
 
@@ -4755,6 +4778,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                         batch_had_timeout |= outcome.timed_out;
                         if !outcome.request_fired {
                             all_strategies_complete = false;
+                            only_unattested_incompleteness = false;
                             if outcome.response.as_ref().is_err_and(|err| err.is_canceled()) {
                                 return (
                                     indexer_id,
@@ -4775,8 +4799,18 @@ impl IndexerClient for MultiIndexerSearchClient {
                         let diagnostic_labels = outcome.labels.join("|");
                         match outcome.response {
                             Ok(mut response) => {
-                                all_strategies_complete &=
-                                    response.completion == IndexerSearchCompletion::Complete;
+                                if response.completion != IndexerSearchCompletion::Complete {
+                                    all_strategies_complete = false;
+                                    only_unattested_incompleteness &= matches!(
+                                        response.completion,
+                                        IndexerSearchCompletion::Partial {
+                                            reason: Some(
+                                                IndexerSearchIncompleteReason::Unattested
+                                            ),
+                                            ..
+                                        }
+                                    );
+                                }
                                 let raw_result_count = response.results.len();
                                 batch_health.mark_success();
                                 debug!(
@@ -4830,8 +4864,8 @@ impl IndexerClient for MultiIndexerSearchClient {
                                     }
                                 }
                                 if page_sink.is_some() {
-                                    let mut persisted = if let Some(diagnostics) = search_diagnostics.as_ref() {
-                                        let run_id = match diagnostics
+                                    if let Some(diagnostics) = search_diagnostics.as_ref()
+                                        && let Err(error) = diagnostics
                                             .persist_response(
                                                 &outcome.strategy_id,
                                                 &diagnostic_labels,
@@ -4839,33 +4873,16 @@ impl IndexerClient for MultiIndexerSearchClient {
                                                 &response,
                                             )
                                             .await
-                                        {
-                                            Ok(run_id) => run_id,
-                                            Err(error) => {
-                                                return (
-                                                    indexer_id,
-                                                    indexer_name,
-                                                    scheduler_lease_for_task.clone(),
-                                                    Err(error),
-                                                    true,
-                                                );
-                                            }
-                                        };
-                                        match diagnostics.persisted_candidates(&run_id, &persisted_config).await {
-                                            Ok(candidates) => candidates,
-                                            Err(error) => {
-                                                return (
-                                                    indexer_id,
-                                                    indexer_name,
-                                                    scheduler_lease_for_task.clone(),
-                                                    Err(error),
-                                                    true,
-                                                );
-                                            }
-                                        }
-                                    } else {
-                                        std::mem::take(&mut response.results)
-                                    };
+                                    {
+                                        return (
+                                            indexer_id,
+                                            indexer_name,
+                                            scheduler_lease_for_task.clone(),
+                                            Err(error),
+                                            true,
+                                        );
+                                    }
+                                    let mut persisted = std::mem::take(&mut response.results);
                                     for result in &mut persisted {
                                         result.indexer_id = Some(indexer_id.clone());
                                     }
@@ -4919,6 +4936,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                                     );
                                 }
                                 all_strategies_complete = false;
+                                only_unattested_incompleteness = false;
                                 if let Some(diagnostics) = search_diagnostics.as_ref() {
                                     diagnostics
                                         .record_error(
@@ -5061,7 +5079,8 @@ impl IndexerClient for MultiIndexerSearchClient {
                             IndexerSearchCompletion::Complete
                         } else {
                             IndexerSearchCompletion::Partial {
-                                reason: None,
+                                reason: only_unattested_incompleteness
+                                    .then_some(IndexerSearchIncompleteReason::Unattested),
                                 retry_after: scheduler_retry_after,
                             }
                         },
@@ -5293,6 +5312,16 @@ impl IndexerClient for MultiIndexerSearchClient {
     async fn prune_search_learning(&self, indexer_id: &str) -> AppResult<()> {
         self.search_learning.prune_indexer(indexer_id).await
     }
+
+    async fn finalize_search_session(
+        &self,
+        search_session_id: &str,
+        admissible_fingerprints: &[String],
+    ) -> AppResult<()> {
+        self.search_learning
+            .finalize_search_session(search_session_id, admissible_fingerprints)
+            .await
+    }
 }
 
 /// Build parallel search strategies for interactive mode.
@@ -5358,6 +5387,7 @@ fn build_strategies(p: &StrategyParams<'_>) -> Vec<SearchStrategy> {
                     episode: None,
                     absolute_episode: Some(absolute_episode),
                     generic_query_only: false,
+                    omit_request_facet: false,
                     label: "ids_abs".into(),
                 });
             }
@@ -5371,6 +5401,7 @@ fn build_strategies(p: &StrategyParams<'_>) -> Vec<SearchStrategy> {
                     episode: structured_episode,
                     absolute_episode: None,
                     generic_query_only: false,
+                    omit_request_facet: false,
                     label: "ids_sxex".into(),
                 });
             }
@@ -5385,6 +5416,7 @@ fn build_strategies(p: &StrategyParams<'_>) -> Vec<SearchStrategy> {
                 episode: structured_episode,
                 absolute_episode: structured_absolute_episode,
                 generic_query_only: false,
+                omit_request_facet: false,
                 label: "ids".into(),
             });
         }
@@ -5404,6 +5436,7 @@ fn build_strategies(p: &StrategyParams<'_>) -> Vec<SearchStrategy> {
             episode: text_episode,
             absolute_episode: text_absolute_episode,
             generic_query_only,
+            omit_request_facet: false,
             label: if is_alias_query {
                 "freetext_alias".into()
             } else {
@@ -5426,11 +5459,48 @@ fn build_strategies(p: &StrategyParams<'_>) -> Vec<SearchStrategy> {
             episode: text_episode,
             absolute_episode: text_absolute_episode,
             generic_query_only,
+            omit_request_facet: false,
             label: "fallback".into(),
         });
     }
 
     strategies
+}
+
+/// Whether a failed strategy says the endpoint does not implement the newznab
+/// function that was asked for.
+fn newznab_function_is_unavailable(error: &AppError) -> bool {
+    matches!(
+        scryer_application::classify_newznab_error_message(&error.to_string())
+            .map(|classified| classified.classification),
+        Some(
+            IndexerErrorClassification::NewznabFunctionNotAvailable
+                | IndexerErrorClassification::NewznabNoSuchFunction
+        )
+    )
+}
+
+/// Pick the request form for one indexer's RSS sweep. The facet-scoped nab
+/// function is used only where the caps advertise it and the endpoint has not
+/// already answered "function not available"; everything else asks the bare
+/// "latest releases" query, which is a request-form choice and never a reason
+/// to drop the indexer from the sweep.
+fn rss_request_form(
+    caps: &IndexerProviderCapabilities,
+    text_dispatch_mode: TextDispatchMode,
+    facet: &str,
+    function_unavailable_observed: bool,
+) -> RssRequestForm {
+    if function_unavailable_observed {
+        return RssRequestForm::BareQuery;
+    }
+    if matches!(text_dispatch_mode, TextDispatchMode::FacetScoped)
+        && caps.supports_query_for_facet(facet)
+    {
+        RssRequestForm::Nab
+    } else {
+        RssRequestForm::BareQuery
+    }
 }
 
 fn stored_caps_snapshot(config: &IndexerConfig) -> Option<IndexerCapsSnapshot> {
@@ -5472,6 +5542,53 @@ fn supported_external_ids_from_caps_snapshot(snapshot: &IndexerCapsSnapshot) -> 
     ids.sort();
     ids.dedup();
     ids
+}
+
+fn preserve_direct_nab_native_capabilities(
+    caps: &mut IndexerProviderCapabilities,
+    static_caps: &IndexerProviderCapabilities,
+    facet: &str,
+) {
+    let native_ids = static_caps
+        .supported_ids
+        .get(facet)
+        .into_iter()
+        .flatten()
+        .filter(|id| !matches!(id.as_str(), "imdb_id" | "tvdb_id" | "tmdb_id"))
+        .cloned()
+        .collect::<Vec<_>>();
+    if native_ids.is_empty() {
+        return;
+    }
+
+    let supported_ids = caps.supported_ids.entry(facet.to_string()).or_default();
+    for id in native_ids {
+        if !supported_ids.contains(&id) {
+            supported_ids.push(id.clone());
+        }
+        if !caps.supported_external_ids.contains(&id) {
+            caps.supported_external_ids.push(id);
+        }
+    }
+
+    for input in [
+        IndexerSearchInputCapability::IdQuery,
+        IndexerSearchInputCapability::AggregateIdQuery,
+        IndexerSearchInputCapability::Season,
+        IndexerSearchInputCapability::Episode,
+        IndexerSearchInputCapability::AbsoluteEpisode,
+    ] {
+        if static_caps.search_inputs.contains(&input) && !caps.search_inputs.contains(&input) {
+            caps.search_inputs.push(input);
+        }
+    }
+
+    if caps.season_param.is_none() {
+        caps.season_param.clone_from(&static_caps.season_param);
+    }
+    if caps.episode_param.is_none() {
+        caps.episode_param.clone_from(&static_caps.episode_param);
+    }
 }
 
 fn text_dispatch_mode_for_static(
@@ -5943,6 +6060,7 @@ mod tests {
             episode: None,
             absolute_episode: None,
             generic_query_only: false,
+            omit_request_facet: false,
             label: "ids_tmdb".to_string(),
         };
         let text_strategy = SearchStrategy {
@@ -5953,6 +6071,7 @@ mod tests {
             episode: None,
             absolute_episode: None,
             generic_query_only: false,
+            omit_request_facet: false,
             label: "freetext".to_string(),
         };
 
@@ -6427,6 +6546,213 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn failed_rss_attempt_defers_until_its_cadence_boundary() {
+        let now = Utc::now();
+        let scheduler = crate::upstream_scheduler::InMemoryUpstreamScheduler::new();
+        let host_key = HostKey::from("failed-rss-cadence.example.test");
+        let destination_key = DestinationKey::from(host_key.to_string());
+        let rss_request_key = "rss:*".to_string();
+        let target_interval = crate::upstream_scheduler::rss_target_interval();
+        let target_interval_chrono =
+            Duration::from_std(target_interval).expect("RSS target interval should fit chrono");
+        let last_successful_poll_at = now - target_interval_chrono - Duration::minutes(5);
+        let expected_latest_safe_poll_at = now + target_interval_chrono;
+        let lease = |issued_at| SchedulerLease {
+            lease_id: uuid::Uuid::new_v4().to_string(),
+            candidate_id: SchedulerCandidateId::new(),
+            host_key: host_key.clone(),
+            destination_key: destination_key.clone(),
+            account_quota_key: None,
+            rss_request_key: Some(rss_request_key.clone()),
+            operation: SchedulerOperation::Rss,
+            intent: SchedulerIntent::BackgroundRss,
+            issued_at,
+        };
+
+        scheduler
+            .record_feedback(SchedulerFeedback {
+                lease: Some(lease(last_successful_poll_at)),
+                host_key: host_key.clone(),
+                destination_key: destination_key.clone(),
+                account_quota_key: None,
+                outcome: SchedulerFeedbackOutcome::Success,
+                observed_api_current: None,
+                observed_api_max: None,
+                observed_grab_current: None,
+                observed_grab_max: None,
+                retry_after: None,
+                cooldown_action: RateLimitCooldownAction::None,
+                rss_last_seen_release_identity: None,
+                rss_last_seen_release_published_at: None,
+                rss_feed_result_count: Some(0),
+                rss_seen_release_identities: Vec::new(),
+                observed_at: last_successful_poll_at,
+            })
+            .await
+            .expect("successful RSS feedback should be recorded");
+        scheduler
+            .record_feedback(SchedulerFeedback {
+                lease: Some(lease(now)),
+                host_key: host_key.clone(),
+                destination_key: destination_key.clone(),
+                account_quota_key: None,
+                outcome: SchedulerFeedbackOutcome::RateLimited,
+                observed_api_current: None,
+                observed_api_max: None,
+                observed_grab_current: None,
+                observed_grab_max: None,
+                retry_after: None,
+                cooldown_action: RateLimitCooldownAction::AlreadyRecorded,
+                rss_last_seen_release_identity: None,
+                rss_last_seen_release_published_at: None,
+                rss_feed_result_count: None,
+                rss_seen_release_identities: Vec::new(),
+                observed_at: now,
+            })
+            .await
+            .expect("rate-limited RSS feedback should be recorded");
+
+        let snapshot = scheduler
+            .snapshot(scryer_application::SchedulerSnapshotFilter::default())
+            .await
+            .expect("scheduler snapshot should succeed");
+        let activity = MultiIndexerSearchClient::scheduler_rss_activity(
+            Some(&snapshot),
+            &host_key,
+            &destination_key,
+            None,
+            Some(&rss_request_key),
+        );
+        assert_eq!(
+            activity.last_successful_poll_at,
+            Some(last_successful_poll_at)
+        );
+        assert_eq!(activity.last_attempt_at, Some(now));
+        assert_eq!(
+            activity.latest_safe_poll_at,
+            Some(expected_latest_safe_poll_at)
+        );
+
+        let freshness =
+            MultiIndexerSearchClient::rss_freshness_context(&mock_indexer_config(), now, activity);
+        assert_eq!(freshness.latest_safe_poll_at, expected_latest_safe_poll_at);
+
+        let candidate = |candidate_id| SchedulerCandidate {
+            candidate_id,
+            plugin_config_id: Some("idx-1".to_string()),
+            plugin_kind: SchedulerPluginKind::Indexer,
+            operation: SchedulerOperation::Rss,
+            intent: SchedulerIntent::BackgroundRss,
+            host_key: host_key.clone(),
+            destination_key: destination_key.clone(),
+            account_quota_key: None,
+            rss_request_key: Some(rss_request_key.clone()),
+            estimated_cost: EstimatedCost::ONE_API_CALL,
+            expected_value: ExpectedValueHint::default(),
+            learning_context: None,
+            deadline_at: None,
+            freshness: Some(freshness.clone()),
+            cancel_token: CancellationToken::new(),
+        };
+
+        let next_tick_delay =
+            std::cmp::min(std::time::Duration::from_secs(60), target_interval / 2);
+        let deferred = scheduler
+            .admit_batch(SchedulerBatchRequest {
+                batch_id: "failed-rss-next-tick".to_string(),
+                now: now
+                    + Duration::from_std(next_tick_delay)
+                        .expect("next RSS tick delay should fit chrono"),
+                candidates: vec![candidate(SchedulerCandidateId::new())],
+            })
+            .await
+            .expect("scheduler should evaluate the next RSS tick");
+        assert!(matches!(
+            deferred.decisions.as_slice(),
+            [SchedulerAdmission::Defer {
+                reason: scryer_application::DeferralReason::RssCadence,
+                ..
+            }]
+        ));
+
+        let admitted = scheduler
+            .admit_batch(SchedulerBatchRequest {
+                batch_id: "failed-rss-boundary".to_string(),
+                now: expected_latest_safe_poll_at,
+                candidates: vec![candidate(SchedulerCandidateId::new())],
+            })
+            .await
+            .expect("scheduler should evaluate the RSS cadence boundary");
+        assert!(matches!(
+            admitted.decisions.as_slice(),
+            [SchedulerAdmission::Admit {
+                reason: scryer_application::AdmissionReason::RssFreshness,
+                ..
+            }]
+        ));
+    }
+
+    #[test]
+    fn persisted_rss_boundary_is_not_shortened_by_activity_timestamps() {
+        let now = Utc::now();
+        let persisted_latest_safe_poll_at = now + Duration::minutes(30);
+        let freshness = MultiIndexerSearchClient::rss_freshness_context(
+            &mock_indexer_config(),
+            now,
+            SchedulerRssActivity {
+                last_successful_poll_at: Some(now - Duration::minutes(20)),
+                last_attempt_at: Some(now),
+                target_interval: Some(std::time::Duration::from_secs(15 * 60)),
+                latest_safe_poll_at: Some(persisted_latest_safe_poll_at),
+                freshness_risk: Some(0.5),
+                ..SchedulerRssActivity::default()
+            },
+        );
+
+        assert_eq!(freshness.latest_safe_poll_at, persisted_latest_safe_poll_at);
+    }
+
+    #[test]
+    fn successful_rss_poll_keeps_the_normal_target_interval() {
+        let now = Utc::now();
+        let target_interval = std::time::Duration::from_secs(15 * 60);
+        let freshness = MultiIndexerSearchClient::rss_freshness_context(
+            &mock_indexer_config(),
+            now,
+            SchedulerRssActivity {
+                last_successful_poll_at: Some(now),
+                last_attempt_at: Some(now),
+                target_interval: Some(target_interval),
+                latest_safe_poll_at: Some(now + Duration::minutes(15)),
+                freshness_risk: Some(0.0),
+                ..SchedulerRssActivity::default()
+            },
+        );
+
+        assert_eq!(freshness.target_interval, target_interval);
+        assert_eq!(freshness.latest_safe_poll_at, now + Duration::minutes(15));
+    }
+
+    #[test]
+    fn first_rss_poll_keeps_its_stable_phase() {
+        let now = DateTime::<Utc>::from_timestamp(1_700_000_000, 0).expect("valid timestamp");
+        let target_interval = crate::upstream_scheduler::rss_target_interval();
+        let interval_seconds = target_interval.as_secs() as i64;
+        let window_start = now.timestamp() - now.timestamp().rem_euclid(interval_seconds);
+        let phase = stable_phase_seconds("idx-1", target_interval.as_secs()) as i64;
+        let expected =
+            DateTime::<Utc>::from_timestamp(window_start + phase, 0).expect("valid phase");
+
+        let freshness = MultiIndexerSearchClient::rss_freshness_context(
+            &mock_indexer_config(),
+            now,
+            SchedulerRssActivity::default(),
+        );
+
+        assert_eq!(freshness.latest_safe_poll_at, expected);
+    }
+
     fn managed_auto_mode_metadata(enable_rss: bool, enable_automatic_search: bool) -> String {
         serde_json::json!({
             "enable_rss": enable_rss,
@@ -6741,6 +7067,21 @@ mod tests {
             .collect()
     }
 
+    /// A consenting background context: the lane a convergence sweep's
+    /// searches run in. Auto-mode admission caps only apply to these passes —
+    /// a context-less Auto search is operator-shaped and uses the interactive
+    /// lane.
+    fn background_pass_context() -> IndexerSearchLearningContext {
+        IndexerSearchLearningContext {
+            title_id: "title-1".into(),
+            facet: "movie".into(),
+            subject_kind: ReleaseSearchSubjectKind::Title,
+            search_session_id: "session".into(),
+            background_value: Some(0.5),
+            candidate_reuse_allowed: true,
+        }
+    }
+
     async fn assert_leaf_search_limit_shared_across_clones(mode: SearchMode, limit: usize) {
         let config_count = limit + 4;
         let probe = StdArc::new(SearchConcurrencyProbe::default());
@@ -6759,41 +7100,56 @@ mod tests {
         );
         let first = multi.clone();
         let second = multi.clone();
+        let operation = match mode {
+            SearchMode::Interactive => IndexerErrorOperation::InteractiveSearch,
+            SearchMode::Auto => IndexerErrorOperation::AutomaticSearch,
+        };
+        // Auto-mode admission caps apply to background passes; a context-less
+        // Auto search would take the operator's interactive lane instead.
+        let learning_context = Some(background_pass_context());
+        let first_context = learning_context.clone();
         let first_search = tokio::spawn(async move {
-            first
-                .search(
-                    "Search Limit".to_string(),
-                    HashMap::new(),
-                    None,
-                    Some("movie".to_string()),
-                    None,
-                    None,
-                    None,
-                    mode,
-                    None,
-                    None,
-                    None,
-                    vec![],
-                )
-                .await
+            <MultiIndexerSearchClient as IndexerClient>::search(
+                &first,
+                "Search Limit".to_string(),
+                HashMap::new(),
+                None,
+                Some("movie".to_string()),
+                None,
+                None,
+                None,
+                mode,
+                operation,
+                None,
+                None,
+                None,
+                vec![],
+                first_context,
+                CancellationToken::new(),
+            )
+            .await
         });
+        let second_context = learning_context.clone();
         let second_search = tokio::spawn(async move {
-            second
-                .search(
-                    "Search Limit".to_string(),
-                    HashMap::new(),
-                    None,
-                    Some("movie".to_string()),
-                    None,
-                    None,
-                    None,
-                    mode,
-                    None,
-                    None,
-                    None,
-                    vec![],
-                )
-                .await
+            <MultiIndexerSearchClient as IndexerClient>::search(
+                &second,
+                "Search Limit".to_string(),
+                HashMap::new(),
+                None,
+                Some("movie".to_string()),
+                None,
+                None,
+                None,
+                mode,
+                operation,
+                None,
+                None,
+                None,
+                vec![],
+                second_context,
+                CancellationToken::new(),
+            )
+            .await
         });
 
         wait_for_started(&probe, limit).await;
@@ -7066,41 +7422,6 @@ mod tests {
         let freetext = reusable_strategy_provenance("freetext_alias");
         assert_eq!(freetext.strategy_kind, ReleaseStrategyKind::Freetext);
         assert!(!freetext.title_validated_upstream);
-    }
-
-    #[test]
-    fn reusable_candidate_urls_are_redacted_and_rehydrated_from_current_credentials() {
-        let credentials = HashMap::from([("apikey".to_string(), "old-secret".to_string())]);
-        let mut candidate = search_result("Example.S01E01.1080p");
-        candidate.guid = Some("release-1".into());
-        candidate.download_url =
-            Some("https://api.example.test/api?t=get&id=release-1&apikey=old-secret".into());
-
-        let normalized = normalized_candidate(&candidate, &credentials);
-        assert_eq!(
-            normalized.download_url.as_deref(),
-            Some("https://api.example.test/api?t=get&id=release-1")
-        );
-        assert_eq!(normalized.download_url_credential_keys, ["apikey"]);
-        assert!(
-            !normalized
-                .download_url
-                .as_deref()
-                .unwrap_or_default()
-                .contains("old-secret")
-        );
-
-        let current_credentials =
-            HashMap::from([("apikey".to_string(), "current-secret".to_string())]);
-        let rehydrated = rehydrate_url_reference(
-            normalized.download_url.as_deref(),
-            &normalized.download_url_credential_keys,
-            &current_credentials,
-        )
-        .expect("redacted URL should rehydrate");
-        assert!(rehydrated.contains("id=release-1"));
-        assert!(rehydrated.contains("apikey=current-secret"));
-        assert!(!rehydrated.contains("old-secret"));
     }
 
     fn response_with_titles(titles: &[&str]) -> AppResult<IndexerSearchResponse> {
@@ -8110,6 +8431,144 @@ mod tests {
         );
     }
 
+    #[test]
+    fn direct_nab_caps_preserve_provider_native_ids_and_structured_inputs() {
+        let mut config = mock_indexer_config();
+        config.provider_type = "animetosho-xyz".into();
+        config.caps_snapshot_json = Some(
+            serde_json::to_string(&prowlarr_caps_snapshot(&["q"], &["q"]))
+                .expect("serialize direct caps snapshot"),
+        );
+        let mut static_caps = anime_caps();
+        static_caps
+            .supported_ids
+            .insert("anime".into(), vec!["anidb_id".into(), "tvdb_id".into()]);
+        static_caps.search_inputs = vec![
+            IndexerSearchInputCapability::TitleQuery,
+            IndexerSearchInputCapability::IdQuery,
+            IndexerSearchInputCapability::AggregateIdQuery,
+            IndexerSearchInputCapability::Season,
+            IndexerSearchInputCapability::Episode,
+            IndexerSearchInputCapability::AbsoluteEpisode,
+        ];
+
+        let resolved = MultiIndexerSearchClient::resolve_search_capabilities(
+            &config,
+            &static_caps,
+            "anime",
+            "anime",
+        );
+
+        assert_eq!(resolved.id_dispatch_mode, IdDispatchMode::Aggregate);
+        assert_eq!(
+            resolved.caps.supported_ids.get("anime"),
+            Some(&vec!["anidb_id".to_string()])
+        );
+        assert_eq!(resolved.caps.season_param.as_deref(), Some("season"));
+        assert_eq!(resolved.caps.episode_param.as_deref(), Some("ep"));
+        assert!(
+            resolved
+                .caps
+                .search_inputs
+                .contains(&IndexerSearchInputCapability::AbsoluteEpisode)
+        );
+
+        let ids = HashMap::from([("anidb_id".to_string(), "1535".to_string())]);
+        let strategies = build_strategies(&StrategyParams {
+            query: "Synthetic Animation S02E03",
+            query_facet: "anime",
+            id_facet: "anime",
+            ids: &ids,
+            season: Some(2),
+            episode: Some(3),
+            absolute_episode: Some(21),
+            caps: &resolved.caps,
+            id_dispatch_mode: resolved.id_dispatch_mode,
+            text_dispatch_mode: resolved.text_dispatch_mode,
+            is_alias_query: false,
+        });
+        assert!(strategies.iter().any(|strategy| {
+            strategy.label == "ids_sxex"
+                && strategy.ids == ids
+                && strategy.season == Some(2)
+                && strategy.episode == Some(3)
+        }));
+        assert!(strategies.iter().any(|strategy| {
+            strategy.label == "ids_abs"
+                && strategy.ids == ids
+                && strategy.absolute_episode == Some(21)
+        }));
+    }
+
+    #[test]
+    fn direct_amenzb_caps_preserve_native_anidb_and_hash_ids() {
+        let mut config = mock_indexer_config();
+        config.provider_type = "amenzb".into();
+        config.caps_snapshot_json = Some(
+            serde_json::to_string(&prowlarr_caps_snapshot(&["q"], &["q"]))
+                .expect("serialize direct caps snapshot"),
+        );
+        let mut static_caps = anime_caps();
+        static_caps.supported_ids.insert(
+            "anime".into(),
+            vec![
+                "anidb_id".into(),
+                "anidb".into(),
+                "tvdb_id".into(),
+                "info_hash".into(),
+                "info_hash_v1".into(),
+                "btih".into(),
+            ],
+        );
+
+        let resolved = MultiIndexerSearchClient::resolve_search_capabilities(
+            &config,
+            &static_caps,
+            "anime",
+            "anime",
+        );
+
+        assert_eq!(resolved.id_dispatch_mode, IdDispatchMode::Aggregate);
+        assert_eq!(
+            resolved.caps.supported_ids.get("anime"),
+            Some(&vec![
+                "anidb_id".to_string(),
+                "anidb".to_string(),
+                "info_hash".to_string(),
+                "info_hash_v1".to_string(),
+                "btih".to_string(),
+            ])
+        );
+    }
+
+    #[test]
+    fn managed_nab_caps_do_not_preserve_provider_native_ids() {
+        let mut config = mock_indexer_config();
+        config.provider_type = "newznab".into();
+        config.managed_parent_config_id = Some("parent".into());
+        config.managed_metadata_json = Some(managed_metadata_with_caps(Some(
+            prowlarr_caps_snapshot(&["q"], &["q"]),
+        )));
+        let mut static_caps = anime_caps();
+        static_caps.search_inputs = vec![
+            IndexerSearchInputCapability::IdQuery,
+            IndexerSearchInputCapability::Season,
+            IndexerSearchInputCapability::Episode,
+        ];
+
+        let resolved = MultiIndexerSearchClient::resolve_search_capabilities(
+            &config,
+            &static_caps,
+            "anime",
+            "anime",
+        );
+
+        assert_eq!(resolved.id_dispatch_mode, IdDispatchMode::QueryOnly);
+        assert!(resolved.caps.supported_ids.is_empty());
+        assert_eq!(resolved.caps.season_param, None);
+        assert_eq!(resolved.caps.episode_param, None);
+    }
+
     #[tokio::test]
     async fn managed_prowlarr_caps_snapshot_can_aggregate_supported_ids() {
         let mut config = mock_indexer_config();
@@ -8537,6 +8996,152 @@ mod tests {
         assert_eq!(recorded[0].season, None);
         assert_eq!(recorded[0].episode, None);
         assert_eq!(recorded[0].absolute_episode, None);
+    }
+
+    #[test]
+    fn the_rss_form_uses_the_nab_function_only_where_the_caps_advertise_it() {
+        let facet_capable = IndexerProviderCapabilities {
+            rss: true,
+            query_param: Some("q".to_string()),
+            supported_query_facets: vec!["series".to_string()],
+            ..Default::default()
+        };
+        assert_eq!(
+            rss_request_form(
+                &facet_capable,
+                TextDispatchMode::FacetScoped,
+                "series",
+                false
+            ),
+            RssRequestForm::Nab
+        );
+        // An observed function-unavailable answer outranks the advertised caps.
+        assert_eq!(
+            rss_request_form(
+                &facet_capable,
+                TextDispatchMode::FacetScoped,
+                "series",
+                true
+            ),
+            RssRequestForm::BareQuery
+        );
+
+        let generic_only = IndexerProviderCapabilities {
+            rss: true,
+            query_param: Some("q".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            rss_request_form(
+                &generic_only,
+                TextDispatchMode::GenericOnly,
+                "series",
+                false
+            ),
+            RssRequestForm::BareQuery
+        );
+        assert_eq!(
+            rss_request_form(
+                &IndexerProviderCapabilities {
+                    rss: true,
+                    ..Default::default()
+                },
+                TextDispatchMode::None,
+                "series",
+                false
+            ),
+            RssRequestForm::BareQuery
+        );
+    }
+
+    #[test]
+    fn a_function_unavailable_answer_is_read_as_a_wrong_request_form() {
+        assert!(newznab_function_is_unavailable(&AppError::Repository(
+            "Newznab API error 203: Function not available".to_string()
+        )));
+        assert!(newznab_function_is_unavailable(&AppError::Repository(
+            "Newznab API error 202: No such function".to_string()
+        )));
+        assert!(!newznab_function_is_unavailable(&AppError::Repository(
+            "upstream status 503".to_string()
+        )));
+    }
+
+    /// The sweep is a "latest releases" question, so an endpoint that does not
+    /// implement the facet-scoped function must be asked the bare-query way
+    /// rather than dropped from RSS.
+    #[tokio::test]
+    async fn an_rss_sweep_falls_back_to_the_bare_query_form_after_a_function_unavailable_answer() {
+        let mut config = mock_indexer_config();
+        config.provider_type = "newznab".into();
+        config.managed_parent_config_id = Some("parent".into());
+        config.managed_metadata_json = Some(managed_metadata_with_caps(Some(
+            prowlarr_caps_snapshot(&["q", "imdbid"], &["q", "season", "ep", "tvdbid"]),
+        )));
+
+        let calls = StdArc::new(StdMutex::new(Vec::new()));
+        let client = Arc::new(ScriptedIndexerClient {
+            calls: calls.clone(),
+            responder: StdArc::new(|call| {
+                if call.facet.is_some() {
+                    Err(AppError::Repository(
+                        "Newznab API error 203: Function not available".to_string(),
+                    ))
+                } else {
+                    response_with_titles(&["Quiet.Meridian.S13E01.1080p.WEB-DL"])
+                }
+            }),
+        });
+        let multi = MultiIndexerSearchClient::new(
+            Arc::new(MockIndexerConfigRepository {
+                configs: vec![config],
+            }),
+            Arc::new(MockIndexerStatsTracker),
+            Arc::new(ScriptedIndexerPluginProvider {
+                client,
+                caps: IndexerProviderCapabilities {
+                    rss: true,
+                    supported_ids: HashMap::from([("series".into(), vec!["tvdb_id".into()])]),
+                    season_param: Some("season".into()),
+                    episode_param: Some("ep".into()),
+                    query_param: Some("q".into()),
+                    search: true,
+                    tvdb_search: true,
+                    ..Default::default()
+                },
+            }),
+        );
+
+        let rss_sweep = || {
+            multi.search(
+                String::new(),
+                HashMap::new(),
+                None,
+                None,
+                None,
+                None,
+                None,
+                SearchMode::Auto,
+                None,
+                None,
+                None,
+                vec![],
+            )
+        };
+
+        let _refused = rss_sweep().await;
+        let _accepted = rss_sweep().await.expect("bare-query sweep should answer");
+
+        let recorded = calls.lock().expect("calls").clone();
+        assert_eq!(recorded.len(), 2, "{recorded:?}");
+        assert_eq!(recorded[0].facet.as_deref(), Some("series"), "{recorded:?}");
+        assert_eq!(recorded[1].facet, None, "{recorded:?}");
+        // Only the facet-scoped function is given up; the sweep keeps sweeping
+        // the categories it was routed.
+        assert_eq!(
+            recorded[1].categories, recorded[0].categories,
+            "{recorded:?}"
+        );
     }
 
     #[tokio::test]
@@ -9932,6 +10537,7 @@ mod tests {
             episode: Some(5),
             absolute_episode: if label == "ids_abs" { Some(33) } else { None },
             generic_query_only: false,
+            omit_request_facet: false,
             label: label.into(),
         }
     }
@@ -10305,6 +10911,105 @@ mod tests {
         );
     }
 
+    /// Corpus reuse needs Auto mode AND the context's explicit consent, which
+    /// only the background convergence lanes give. An operator-triggered Auto
+    /// search (no consent) and every Interactive search fire the indexer live.
+    #[test]
+    fn candidate_reuse_requires_auto_mode_and_a_consenting_context() {
+        let background = IndexerSearchLearningContext {
+            title_id: "title-1".into(),
+            facet: "series".into(),
+            subject_kind: ReleaseSearchSubjectKind::Episode,
+            search_session_id: "session".into(),
+            background_value: Some(0.5),
+            candidate_reuse_allowed: true,
+        };
+        let operator = IndexerSearchLearningContext {
+            candidate_reuse_allowed: false,
+            background_value: None,
+            ..background.clone()
+        };
+
+        assert!(candidate_reuse_permitted(
+            SearchMode::Auto,
+            Some(&background)
+        ));
+        assert!(
+            !candidate_reuse_permitted(SearchMode::Auto, Some(&operator)),
+            "an explicit operator search must fire live"
+        );
+        assert!(
+            !candidate_reuse_permitted(SearchMode::Auto, None),
+            "no context, nothing to rehydrate from"
+        );
+        assert!(
+            !candidate_reuse_permitted(SearchMode::Interactive, Some(&background)),
+            "interactive searches never reused"
+        );
+    }
+
+    #[test]
+    fn operator_auto_searches_admit_through_the_interactive_lane() {
+        let multi = MultiIndexerSearchClient::new(
+            Arc::new(MockIndexerConfigRepository {
+                configs: vec![mock_indexer_config()],
+            }),
+            Arc::new(MockIndexerStatsTracker),
+            Arc::new(MockIndexerPluginProvider {
+                rss: false,
+                calls: Arc::new(AtomicUsize::new(0)),
+            }),
+        );
+        let background = IndexerSearchLearningContext {
+            title_id: "title-1".into(),
+            facet: "series".into(),
+            subject_kind: ReleaseSearchSubjectKind::Episode,
+            search_session_id: "session".into(),
+            background_value: Some(0.5),
+            candidate_reuse_allowed: true,
+        };
+        let operator = IndexerSearchLearningContext {
+            candidate_reuse_allowed: false,
+            background_value: None,
+            ..background.clone()
+        };
+
+        let background_lane =
+            |limit: &Arc<Semaphore>| Arc::ptr_eq(limit, &multi.background_search_limit);
+        assert!(
+            background_lane(&multi.search_limit_for_mode(SearchMode::Auto, true, None)),
+            "RSS stays on the bounded background lane"
+        );
+        assert!(
+            background_lane(&multi.search_limit_for_mode(
+                SearchMode::Auto,
+                false,
+                Some(&background)
+            )),
+            "consenting convergence passes stay on the background lane"
+        );
+        assert!(
+            !background_lane(&multi.search_limit_for_mode(
+                SearchMode::Auto,
+                false,
+                Some(&operator)
+            )),
+            "an operator's Auto search must not queue behind the background sweep"
+        );
+        assert!(
+            !background_lane(&multi.search_limit_for_mode(SearchMode::Auto, false, None)),
+            "a context-less non-RSS Auto pass is operator-shaped"
+        );
+        assert!(
+            !background_lane(&multi.search_limit_for_mode(
+                SearchMode::Interactive,
+                false,
+                Some(&background)
+            )),
+            "interactive mode always uses the interactive lane"
+        );
+    }
+
     #[tokio::test]
     async fn learned_outcome_suppresses_empty_id_after_working_alternative() {
         let repo: StdArc<dyn IndexerSearchLearningRepository> =
@@ -10315,6 +11020,7 @@ mod tests {
             subject_kind: ReleaseSearchSubjectKind::Episode,
             search_session_id: "test-session".into(),
             background_value: None,
+            candidate_reuse_allowed: true,
         };
 
         record_strategy_learning_outcome(
@@ -10367,6 +11073,7 @@ mod tests {
             subject_kind: ReleaseSearchSubjectKind::Episode,
             search_session_id: "test-session".into(),
             background_value: None,
+            candidate_reuse_allowed: true,
         };
 
         for _ in 0..LEARNED_EMPTY_SUPPRESSION_THRESHOLD {
@@ -10428,6 +11135,7 @@ mod tests {
             subject_kind: ReleaseSearchSubjectKind::Episode,
             search_session_id: "test-session".into(),
             background_value: None,
+            candidate_reuse_allowed: true,
         };
 
         record_strategy_learning_outcome(
@@ -10468,6 +11176,7 @@ mod tests {
             subject_kind: ReleaseSearchSubjectKind::Title,
             search_session_id: "test-session".into(),
             background_value: None,
+            candidate_reuse_allowed: true,
         };
 
         let result = <MultiIndexerSearchClient as IndexerClient>::search(
@@ -10524,6 +11233,7 @@ mod tests {
             subject_kind: ReleaseSearchSubjectKind::Title,
             search_session_id: "test-session".into(),
             background_value: None,
+            candidate_reuse_allowed: true,
         };
 
         let result = <MultiIndexerSearchClient as IndexerClient>::search(
@@ -10580,6 +11290,7 @@ mod tests {
             subject_kind: ReleaseSearchSubjectKind::Episode,
             search_session_id: "test-session".into(),
             background_value: None,
+            candidate_reuse_allowed: true,
         };
 
         let response = <MultiIndexerSearchClient as IndexerClient>::search(

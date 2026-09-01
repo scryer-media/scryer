@@ -868,6 +868,12 @@ pub(crate) async fn qualify_manual_import_video_candidate(
             source_path.display()
         ))
     })?;
+    std::fs::File::open(&canonical_path).map_err(|error| {
+        AppError::Validation(format!(
+            "manual import file is not accessible: {} ({error})",
+            source_path.display()
+        ))
+    })?;
     let has_known_video_extension = is_video_file(source_path);
     let has_file_extension = source_path.extension().is_some();
     if metadata.len() == 0 {
@@ -927,10 +933,9 @@ pub(crate) async fn qualify_manual_import_video_candidate(
     };
 
     #[cfg(not(feature = "runtime-media-analysis"))]
-    let video_facts = {
-        return Ok(None);
-    };
+    return Ok(None);
 
+    #[cfg(feature = "runtime-media-analysis")]
     Ok(Some(QualifiedManualImportVideo {
         source_entry_path: source_path.to_path_buf(),
         canonical_path,
@@ -1050,7 +1055,7 @@ async fn preview_manual_import(
     let verified_pack = verified_episode_pack(release_evidence, title);
     let expected_pack_episode_ids = match (verified_pack.as_ref(), release_evidence.scope()) {
         (Some(_), Some(scope)) => {
-            expected_episode_ids_from_submission_scope(app, title, scope).await
+            expected_episode_ids_from_submission_scope(app, title, scope, false).await
         }
         _ => None,
     };

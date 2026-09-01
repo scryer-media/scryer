@@ -659,22 +659,12 @@ async fn resolve_import_quality_profile(
         )),
     })
 }
+/// "Not media at all" — a sample, a promo, a zero-length placeholder. Owned by
+/// the import pipeline alone: scoring no longer has a floor to keep in step with
+/// it, because the smallness it used to veto below is now a penalty read off the
+/// size curve like any other band.
 const SAMPLE_SIZE_THRESHOLD: u64 = 50 * 1024 * 1024;
 
-/// The sample filter and the scorer's minimum-size veto floor are the same
-/// number, and they have to stay that way: the veto refuses "too small to be
-/// what it claims" and stops exactly where the sample filter takes over ("not
-/// media at all"). A gap between them is either a sample the scorer vetoes as a
-/// lie — a blocklist for a file the pipeline was going to discard anyway — or a
-/// band of files neither rule covers.
-///
-/// The assert lives here rather than beside the constant so the dependency runs
-/// one way: the import module already knows about scoring, scoring must never
-/// know about import.
-const _: () = assert!(
-    SAMPLE_SIZE_THRESHOLD as i64 == crate::quality_profile::MINIMUM_SIZE_VETO_FLOOR_BYTES,
-    "the sample-file threshold and the minimum-size veto floor must stay identical"
-);
 fn non_empty_string(value: Option<String>) -> Option<String> {
     value.filter(|value| !value.trim().is_empty())
 }

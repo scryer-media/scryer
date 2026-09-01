@@ -312,13 +312,16 @@ async fn acquisition_cycle_retries_standby_candidate_after_failed_grab() {
             .as_deref(),
         Some("failed")
     );
+    let expected_signature = crate::helpers::normalize_release_selection_signature(
+        Some("https://example.com/standby.torrent"),
+        Some("Standby.Release.1080p.WEB-DL"),
+        Some(DownloadSourceKind::TorrentFile),
+    )
+    .expect("standby signature");
     assert!(submissions.iter().any(|submission| {
         submission.download_client_item_id == format!("job-for-{}", title.id)
             && submission.source_title.as_deref() == Some("Standby.Release.1080p.WEB-DL")
-            && submission.request_signature.as_deref()
-                == Some(
-                    "torrent_file|https://example.com/standby.torrent|Standby.Release.1080p.WEB-DL",
-                )
+            && submission.request_signature.as_deref() == Some(expected_signature.as_str())
     }));
     let identities = download_submissions.identities.lock().await;
     assert!(
@@ -1156,11 +1159,16 @@ async fn tracked_download_failure_reuses_standby_recovery_policy() {
             .as_deref(),
         Some("failed")
     );
+    let expected_signature = crate::helpers::normalize_release_selection_signature(
+        Some("https://example.com/standby.nzb"),
+        Some("Standby.Release.1080p.WEB-DL"),
+        Some(DownloadSourceKind::NzbUrl),
+    )
+    .expect("standby signature");
     assert!(submissions.iter().any(|submission| {
         submission.download_client_item_id == format!("job-for-{}", title.id)
             && submission.source_title.as_deref() == Some("Standby.Release.1080p.WEB-DL")
-            && submission.request_signature.as_deref()
-                == Some("nzb_url|https://example.com/standby.nzb|Standby.Release.1080p.WEB-DL")
+            && submission.request_signature.as_deref() == Some(expected_signature.as_str())
     }));
 
     assert_eq!(
@@ -3146,15 +3154,14 @@ async fn acquisition_cycle_episode_submission_blocks_only_matching_episode() {
 
     app.run_background_acquisition_cycle_once().await;
 
-    // **D18.** An in-flight submission no longer freezes its scope: both
-    // episodes are searched, and the one with a download in the queue is
-    // refused by the admission ladder instead — with a reason that says so.
+    // An active initial acquisition owns its empty episode scope. The sibling
+    // episode remains independent and may still be searched.
     let searches = indexer_client.searches.lock().await.clone();
     assert!(
-        searches
+        !searches
             .iter()
             .any(|search| search.season == Some(1) && search.episode == Some(1)),
-        "the scope with a download in flight is searched again: {searches:?}"
+        "the scope with a download in flight was searched again: {searches:?}"
     );
     assert!(
         searches
@@ -3163,12 +3170,6 @@ async fn acquisition_cycle_episode_submission_blocks_only_matching_episode() {
         "and its sibling is unaffected: {searches:?}"
     );
 
-    let decisions = wanted_items.release_decisions.lock().await.clone();
-    let blocked = decisions
-        .iter()
-        .find(|decision| decision.release_title.contains("S01E01"))
-        .expect("the queued episode is still evaluated");
-    assert_eq!(blocked.decision_code, "queued_better_or_equal");
     assert!(
         !download_submissions
             .store
@@ -3386,29 +3387,18 @@ async fn acquisition_cycle_collection_submission_blocks_same_season_only() {
 
     app.run_background_acquisition_cycle_once().await;
 
-    // **D18.** A season pack in the queue no longer freezes its season: the
-    // season is searched again, and every candidate it turns up is compared
-    // against the pack that is already downloading. The neighbouring season was
-    // never its business and still is not.
+    // An active initial season pack owns every empty scope in its season. The
+    // neighbouring season remains independent and may still be searched.
     let searches = indexer_client.searches.lock().await.clone();
     assert!(
-        searches.iter().any(|search| search.season == Some(1)),
-        "the season with a pack in flight is searched again: {searches:?}"
+        !searches.iter().any(|search| search.season == Some(1)),
+        "the season with a pack in flight was searched again: {searches:?}"
     );
     assert!(
         searches
             .iter()
             .any(|search| search.season == Some(2) && search.episode == Some(1)),
         "and the neighbouring season is unaffected: {searches:?}"
-    );
-
-    let decisions = wanted_items.release_decisions.lock().await.clone();
-    assert!(
-        decisions
-            .iter()
-            .filter(|decision| decision.release_title.contains("Season 1"))
-            .all(|decision| decision.decision_code == "queued_better_or_equal"),
-        "an equal pack must be refused against the one already downloading: {decisions:?}"
     );
 }
 
@@ -4475,6 +4465,22 @@ async fn title_search_success_does_not_converge_an_episode_when_scoped_queries_f
             > first_scoped_count,
         "failed episode and season queries must remain retryable"
     );
+}
+
+#[tokio::test]
+async fn background_search_scopes_do_not_emit_search_completed_events() {
+    let (app, _, _) = seed_recent_failed_season_pack_fixture().await;
+    let domain_events = Arc::new(MockDomainEventRepo::default());
+    let app = app.with_test_overrides(|builder| builder.with_domain_events(domain_events.clone()));
+
+    app.run_background_acquisition_cycle_once().await;
+
+    assert!(domain_events.events.lock().await.iter().all(|event| {
+        !matches!(
+            event.payload,
+            DomainEventPayload::AcquisitionSearchCompleted(_)
+        )
+    }));
 }
 
 /// Anime title with two due Season 7 episodes (so the cycle attempts a season
@@ -8226,22 +8232,13 @@ async fn acquisition_cycle_title_submission_still_blocks_movie_search() {
 
     app.run_background_acquisition_cycle_once().await;
 
-    // **D18.** A title-scoped download in flight no longer suppresses the
-    // search; it becomes a pseudo-incumbent covering everything under the
-    // title, and an equal candidate is refused with a reason an operator can
-    // read rather than by a silent scope-level skip.
+    // An active initial title-scoped acquisition owns the empty movie scope.
     assert!(
-        !indexer_client.searches.lock().await.is_empty(),
-        "the scope is searchable while a download is in flight"
+        indexer_client.searches.lock().await.is_empty(),
+        "the scope was searched while a download was in flight"
     );
     let decisions = wanted_items.release_decisions.lock().await.clone();
-    assert!(!decisions.is_empty());
-    assert!(
-        decisions
-            .iter()
-            .all(|decision| decision.decision_code == "queued_better_or_equal"),
-        "an equal release must not be grabbed beside the one already downloading: {decisions:?}"
-    );
+    assert!(decisions.is_empty());
 }
 
 #[tokio::test]

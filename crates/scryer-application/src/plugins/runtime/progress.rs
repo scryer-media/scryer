@@ -105,6 +105,7 @@ impl AppUseCase {
             RequiredSigner {
                 github_repository: resolved.github_repo.slug(),
                 github_workflow: None,
+                github_ref: None,
             }
         };
         let data_urls = primary_and_mirrors(&resolved.artifact.url, &resolved.artifact.mirror_urls);

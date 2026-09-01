@@ -20,7 +20,7 @@ use crate::types::{PendingReleaseObservation, PendingReleaseRole};
 use chrono::{DateTime, Utc};
 use scryer_domain::{DomainEventPayload, ReleaseGrabbedEventData};
 use std::collections::{HashMap, HashSet};
-use tracing::{info, warn};
+use tracing::{debug, warn};
 
 const RSS_SYNC_MAX_GUIDS: usize = 2000;
 
@@ -296,6 +296,7 @@ fn rss_is_permanent_rejection(code: ReleaseAutoDecisionCode) -> bool {
             | ReleaseAutoDecisionCode::TitleMismatch
             | ReleaseAutoDecisionCode::EpisodeMismatch
             | ReleaseAutoDecisionCode::EpisodeNotMonitored
+            | ReleaseAutoDecisionCode::SubtitlesOnly
     )
 }
 
@@ -675,7 +676,7 @@ impl AppUseCase {
     pub(crate) async fn run_scheduled_rss_sync(&self) -> AppResult<RssSyncReport> {
         let now = Utc::now();
         let sync_start = std::time::Instant::now();
-        info!("starting RSS sync cycle");
+        debug!("starting RSS sync cycle");
 
         // Load all monitored titles for matching
         let titles = self
@@ -687,7 +688,7 @@ impl AppUseCase {
         let title_context_bank = build_title_context_bank(&titles);
 
         if title_context_bank.is_empty() {
-            info!("RSS sync: no monitored titles, skipping");
+            debug!("RSS sync: no monitored titles, skipping");
             metrics::counter!("scryer_rss_sync_total").increment(1);
             metrics::histogram!("scryer_rss_sync_duration_seconds")
                 .record(sync_start.elapsed().as_secs_f64());
@@ -725,7 +726,7 @@ impl AppUseCase {
                     v.sort();
                     v
                 };
-                info!(categories = ?sorted, "RSS sync: resolved categories from routing config");
+                debug!(categories = ?sorted, "RSS sync: resolved categories from routing config");
                 Some(sorted)
             }
         };
@@ -777,7 +778,7 @@ impl AppUseCase {
         }
         .results;
 
-        info!(
+        debug!(
             result_count = fresh_results.len(),
             "RSS sync: fetched releases from indexers"
         );
@@ -856,7 +857,7 @@ impl AppUseCase {
         // Release the write lock before doing any I/O
         drop(seen_guids);
 
-        info!(
+        debug!(
             new_count = new_results.len(),
             previously_seen = initial_seen_count,
             "RSS sync: filtered to new releases"
@@ -905,7 +906,7 @@ impl AppUseCase {
             }
         }
 
-        info!(
+        debug!(
             matched = matched_count,
             titles_matched = matched_by_title.len(),
             active_pending = pending_count,
@@ -1001,7 +1002,7 @@ impl AppUseCase {
 
         self.reconcile_release_age_unknown_pending(&now).await;
 
-        info!(
+        debug!(
             fetched = report.releases_fetched,
             matched = report.releases_matched,
             grabbed = report.releases_grabbed,
@@ -2390,7 +2391,7 @@ impl AppUseCase {
                 .or(title.digital_release_date.as_deref()),
         );
 
-        info!(
+        debug!(
             title = title.name.as_str(),
             release = best.title.as_str(),
             score = candidate_score,
@@ -2665,7 +2666,7 @@ impl AppUseCase {
                 let defer = is_download_submit_unavailable_error(&err)
                     || err.is_download_submit_ambiguous();
                 if err.is_download_source_gone() {
-                    info!(
+                    debug!(
                         release = best.title.as_str(),
                         "RSS download source gone; leaving it unblocked"
                     );
@@ -3646,6 +3647,7 @@ mod tests {
             ReleaseAutoDecisionCode::TitleMismatch,
             ReleaseAutoDecisionCode::EpisodeMismatch,
             ReleaseAutoDecisionCode::EpisodeNotMonitored,
+            ReleaseAutoDecisionCode::SubtitlesOnly,
         ] {
             assert!(rss_is_permanent_rejection(code));
         }

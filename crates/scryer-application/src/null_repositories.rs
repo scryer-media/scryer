@@ -756,6 +756,7 @@ impl DownloadQueueCommandRepository for NullDownloadQueueCommandRepository {
     async fn list_latest_delete_commands_for_sources(
         &self,
         _: &[(Option<String>, String, String, bool)],
+        _: bool,
     ) -> AppResult<Vec<DownloadQueueCommandRecord>> {
         Ok(vec![])
     }
@@ -1800,6 +1801,13 @@ pub struct NullHousekeepingRepository;
 
 #[async_trait]
 impl HousekeepingRepository for NullHousekeepingRepository {
+    async fn delete_stale_workflow_operations(
+        &self,
+        _completed_days: i64,
+        _warning_failed_days: i64,
+    ) -> AppResult<u32> {
+        Ok(0)
+    }
     async fn delete_release_decisions_older_than(&self, _days: i64) -> AppResult<u32> {
         Ok(0)
     }
@@ -2829,6 +2837,17 @@ impl OAuthRepository for NullOAuthRepository {
         Ok(false)
     }
 
+    async fn consume_authorization_code_and_create_refresh_grant(
+        &self,
+        _: OAuthAuthorizationCodeRecord,
+        _: chrono::DateTime<chrono::Utc>,
+        _: OAuthRefreshGrantRecord,
+        _: OAuthRefreshTokenRecord,
+        _: bool,
+    ) -> AppResult<Option<OAuthRefreshGrantRecord>> {
+        Ok(None)
+    }
+
     async fn create_refresh_grant(
         &self,
         _: OAuthRefreshGrantRecord,
@@ -3422,7 +3441,23 @@ pub mod test_nulls {
         async fn auth_session_version(&self, _: &str) -> AppResult<Option<String>> {
             Ok(None)
         }
-        async fn update_password_hash(&self, _: &str, _: String, _: bool) -> AppResult<User> {
+        async fn update_password_and_invalidate_sessions(
+            &self,
+            _: &str,
+            _: String,
+            _: bool,
+            _: &str,
+        ) -> AppResult<User> {
+            Err(AppError::Repository("not configured".into()))
+        }
+        async fn update_own_password_and_invalidate_sessions(
+            &self,
+            _: &str,
+            _: String,
+            _: bool,
+            _: &str,
+            _: Option<&str>,
+        ) -> AppResult<User> {
             Err(AppError::Repository("not configured".into()))
         }
         async fn update_login_status_and_rotate_session(

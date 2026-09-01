@@ -244,12 +244,12 @@ impl AppUseCase {
             for index in title_indices {
                 // The gate's runtime basis (D4): the length of what *this file*
                 // holds, summed over its whole span.
-                let runtime = crate::acquisition_coverage::episode_span_runtime_minutes(
+                let basis = crate::acquisition_coverage::episode_span_size_basis(
                     title_episodes,
                     &files[index].episode_ids,
                     title.runtime_minutes,
                 );
-                let bar = self.incumbent_bar(&files[index].file, &context, runtime);
+                let bar = self.incumbent_bar(&files[index].file, &context, basis);
                 bars_by_index.insert(index, bar.score);
             }
         }

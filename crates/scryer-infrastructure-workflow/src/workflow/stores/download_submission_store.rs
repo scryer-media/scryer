@@ -3,10 +3,10 @@ use super::*;
 use async_trait::async_trait;
 use chrono::Utc;
 use scryer_application::{
-    AppError, AppResult, CanonicalDownloadIdentityDisposition, ClientJobLocator,
+    AppError, AppResult, CanonicalDownloadIdentityDisposition, ClientJobLocator, DownloadOrigin,
     DownloadSubmission, DownloadSubmissionActorSnapshot, DownloadSubmissionIdentity,
     DownloadSubmissionRepository, IdentityTrackedStateTarget, PersistedSeedGoals,
-    SeedGoalResolutionSource,
+    SeedGoalResolutionSource, TerminalDownloadHistoryRow,
 };
 use scryer_domain::{Id, TrackedDownloadState, download_identity::DownloadId};
 
@@ -311,6 +311,137 @@ async fn client_name_snapshot_tx(
 
 fn canonical_tracked_state_key(canonical_download_id: &DownloadId) -> String {
     format!("download:{canonical_download_id}")
+}
+
+/// The durable tracked states that end a grab, spelled the way
+/// [`TrackedDownloadState::as_str`] spells them.
+///
+/// [`TERMINAL_DOWNLOAD_HISTORY_SQL`] filters on exactly these, inline, so its
+/// `LIMIT` cuts an already-filtered set;
+/// `terminal_history_states_match_the_domain_definition` pins the list to
+/// [`TrackedDownloadState::is_terminal`].
+const TERMINAL_HISTORY_TRACKED_STATES: [&str; 3] = ["imported", "failed", "ignored"];
+
+/// Durable download-history rows.
+///
+/// The terminal state is read the way `bound_download_is_terminal_tx` reads it:
+/// the canonical identity state first, then the submission's own
+/// `tracked_state`. Client identity prefers the canonical binding's snapshot and
+/// falls back to the submission's legacy locator columns, so a row still names
+/// its client after the binding was ended.
+static TERMINAL_DOWNLOAD_HISTORY_SQL: std::sync::LazyLock<String> =
+    std::sync::LazyLock::new(|| {
+        let states = TERMINAL_HISTORY_TRACKED_STATES
+            .iter()
+            .map(|state| format!("'{state}'"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        TERMINAL_DOWNLOAD_HISTORY_SQL_TEMPLATE.replace("{terminal_states}", &states)
+    });
+
+const TERMINAL_DOWNLOAD_HISTORY_SQL_TEMPLATE: &str = "SELECT * FROM (
+                SELECT
+                    d.id AS download_id,
+                    d.origin AS origin,
+                    COALESCE(
+                        (SELECT st.tracked_state
+                           FROM download_identity_states st
+                          WHERE st.canonical_download_id = d.id
+                          ORDER BY st.updated_at DESC, st.id DESC
+                          LIMIT 1),
+                        s.tracked_state
+                    ) AS tracked_state,
+                    (SELECT st.reason
+                       FROM download_identity_states st
+                      WHERE st.canonical_download_id = d.id
+                      ORDER BY st.updated_at DESC, st.id DESC
+                      LIMIT 1) AS tracked_reason,
+                    (SELECT st.detail
+                       FROM download_identity_states st
+                      WHERE st.canonical_download_id = d.id
+                      ORDER BY st.updated_at DESC, st.id DESC
+                      LIMIT 1) AS tracked_detail,
+                    s.title_id AS title_id,
+                    s.episode_id AS episode_id,
+                    s.facet AS facet,
+                    s.source_title AS source_title,
+                    s.source_provider_name AS source_provider_name,
+                    s.release_size_bytes AS size_bytes,
+                    s.submitted_at AS submitted_at,
+                    COALESCE(b.client_config_id, s.download_client_id) AS client_id,
+                    COALESCE(b.client_type_snapshot, s.download_client_type) AS client_type,
+                    COALESCE(b.client_name_snapshot, cl.name) AS client_name,
+                    COALESCE(b.native_item_id, s.download_client_item_id)
+                        AS download_client_item_id,
+                    COALESCE(
+                        d.terminal_at,
+                        s.tracked_state_at,
+                        b.last_seen_at,
+                        d.last_observed_at,
+                        d.created_at
+                    ) AS last_state_at
+                FROM downloads d
+                LEFT JOIN download_submissions s ON s.id = d.id
+                LEFT JOIN download_client_bindings b ON b.download_id = d.id
+                LEFT JOIN download_clients cl
+                       ON cl.id = COALESCE(b.client_config_id, s.download_client_id)
+            ) terminal_downloads
+            WHERE terminal_downloads.tracked_state IN ({terminal_states})
+            ORDER BY terminal_downloads.last_state_at DESC, terminal_downloads.download_id
+            LIMIT {}";
+
+fn terminal_download_history_row_from_row(row: &SqlRow) -> AppResult<TerminalDownloadHistoryRow> {
+    let raw_id = row.text("download_id")?;
+    let download_id = DownloadId::parse(&raw_id).ok_or_else(|| {
+        AppError::Repository(format!(
+            "invalid canonical download id {raw_id:?} in download history projection"
+        ))
+    })?;
+    let origin = match row.text("origin")?.as_str() {
+        "foreign_observation" => DownloadOrigin::ForeignObservation,
+        // `downloads.origin` is CHECK-constrained to the two known values, so a
+        // history row never needs to fail the whole page over an unknown one.
+        _ => DownloadOrigin::ScryerSubmission,
+    };
+    Ok(TerminalDownloadHistoryRow {
+        download_id,
+        origin,
+        tracked_state: row.text("tracked_state")?,
+        tracked_reason: blank_to_none(row.opt_text("tracked_reason")?),
+        tracked_detail: blank_to_none(row.opt_text("tracked_detail")?),
+        title_id: blank_to_none(row.opt_text("title_id")?),
+        episode_id: blank_to_none(row.opt_text("episode_id")?),
+        facet: blank_to_none(row.opt_text("facet")?),
+        source_title: blank_to_none(row.opt_text("source_title")?),
+        client_id: blank_to_none(row.opt_text("client_id")?),
+        client_type: blank_to_none(row.opt_text("client_type")?),
+        client_name: blank_to_none(row.opt_text("client_name")?),
+        download_client_item_id: blank_to_none(row.opt_text("download_client_item_id")?),
+        source_provider_name: blank_to_none(row.opt_text("source_provider_name")?),
+        size_bytes: row.opt_i64("size_bytes")?,
+        submitted_at: lenient_timestamp(row, "submitted_at")?,
+        last_state_at: lenient_timestamp(row, "last_state_at")?,
+    })
+}
+
+fn blank_to_none(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+/// Timestamps here are sort values, never identity. A legacy row stored in a
+/// form RFC3339 cannot read must not fail the whole history page, so an
+/// unparseable value simply sorts as absent.
+fn lenient_timestamp(
+    row: &SqlRow,
+    column: &str,
+) -> AppResult<Option<chrono::DateTime<chrono::Utc>>> {
+    Ok(opt_timestamp_string(row, column)?.and_then(|value| {
+        chrono::DateTime::parse_from_rfc3339(value.trim())
+            .ok()
+            .map(|value| value.with_timezone(&Utc))
+    }))
 }
 
 #[async_trait]
@@ -1280,6 +1411,25 @@ impl DownloadSubmissionRepository for DownloadSubmissionStore {
             },
         )
         .await
+    }
+
+    async fn list_terminal_download_history_rows(
+        &self,
+        limit: usize,
+    ) -> AppResult<Vec<TerminalDownloadHistoryRow>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            TERMINAL_DOWNLOAD_HISTORY_SQL.as_str(),
+            &[SqlArg::I64(limit as i64)],
+        )
+        .await?
+        .into_iter()
+        .map(|row| terminal_download_history_row_from_row(&row))
+        .collect()
     }
 
     async fn update_tracked_state(
@@ -2571,5 +2721,108 @@ mod seed_goal_tests {
             panic!("the original repository error should surface");
         };
         assert_eq!(message, FOREIGN_KEY_VIOLATION);
+    }
+
+    /// The history query inlines its terminal states so `LIMIT` cuts an
+    /// already-filtered set. Every variant is listed here on purpose: a new
+    /// `TrackedDownloadState` that is terminal has to be added to both this
+    /// list and the SQL, and this test is what says so.
+    #[test]
+    fn terminal_history_states_match_the_domain_definition() {
+        let mut expected = [
+            TrackedDownloadState::Downloading,
+            TrackedDownloadState::ImportPending,
+            TrackedDownloadState::Importing,
+            TrackedDownloadState::Imported,
+            TrackedDownloadState::ImportedSeeding,
+            TrackedDownloadState::ImportBlocked,
+            TrackedDownloadState::FailedPending,
+            TrackedDownloadState::Failed,
+            TrackedDownloadState::Ignored,
+        ]
+        .into_iter()
+        .filter(|state| state.is_terminal())
+        .map(TrackedDownloadState::as_str)
+        .collect::<Vec<_>>();
+        expected.sort_unstable();
+
+        let mut actual = TERMINAL_HISTORY_TRACKED_STATES.to_vec();
+        actual.sort_unstable();
+        assert_eq!(actual, expected);
+
+        for state in TERMINAL_HISTORY_TRACKED_STATES {
+            assert!(
+                TERMINAL_DOWNLOAD_HISTORY_SQL.contains(&format!("'{state}'")),
+                "the history query must filter on {state}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn terminal_history_rows_project_finished_downloads_only() {
+        let store = store().await;
+        let imported_id = DownloadId::new();
+        store
+            .record_submission_with_identity(
+                submission(imported_id, "job-1", "title-1"),
+                submission_identity(imported_id),
+                None,
+            )
+            .await
+            .expect("imported submission should persist");
+        let live_id = DownloadId::new();
+        store
+            .record_submission_with_identity(
+                submission(live_id, "job-2", "title-1"),
+                submission_identity(live_id),
+                None,
+            )
+            .await
+            .expect("live submission should persist");
+
+        store
+            .update_tracked_state(
+                &ClientJobLocator::new(Some("primary"), "qbittorrent", "job-1"),
+                TrackedDownloadState::Imported.as_str(),
+            )
+            .await
+            .expect("terminal state should persist");
+        store
+            .update_tracked_state(
+                &ClientJobLocator::new(Some("primary"), "qbittorrent", "job-2"),
+                TrackedDownloadState::Downloading.as_str(),
+            )
+            .await
+            .expect("live state should persist");
+
+        let rows = store
+            .list_terminal_download_history_rows(50)
+            .await
+            .expect("terminal history rows should read");
+
+        assert_eq!(
+            rows.iter().map(|row| row.download_id).collect::<Vec<_>>(),
+            vec![imported_id],
+            "only the finished download is durable history"
+        );
+        let row = &rows[0];
+        assert_eq!(row.tracked_state, TrackedDownloadState::Imported.as_str());
+        assert_eq!(row.title_id.as_deref(), Some("title-1"));
+        assert_eq!(row.download_client_item_id.as_deref(), Some("job-1"));
+        assert_eq!(row.client_type.as_deref(), Some("qbittorrent"));
+        assert_eq!(row.source_title.as_deref(), Some("Release job-1"));
+        assert_eq!(row.size_bytes, Some(123));
+    }
+
+    #[tokio::test]
+    async fn a_zero_limit_reads_nothing() {
+        let store = store().await;
+        assert!(
+            store
+                .list_terminal_download_history_rows(0)
+                .await
+                .expect("a zero limit should not error")
+                .is_empty()
+        );
     }
 }

@@ -267,7 +267,10 @@ export function IndexerErrorTable({
             const detail = details[item.id];
             return (
               <React.Fragment key={item.id}>
-                <TableRow id={selectorId("indexer-error-row", item.id)}>
+                <TableRow
+                  id={selectorId("indexer-error-row", item.id)}
+                  data-ui="settings-table-row"
+                >
                   <TableCell className="text-center">
                     <button
                       type="button"

@@ -1343,10 +1343,19 @@ struct SizeRatioThresholds {
     slightly_small: f64,
     small: f64,
     very_small: f64,
-    /// Floor below which the file cannot be the release it claims to be.
+    /// The bottom anchor of the size curve: the ratio at which the full
+    /// `size_tiny` weight is taken.
     ///
-    /// A veto, not a penalty (D21): a step, never interpolated, the mirror of
-    /// [`SizeRatioThresholds::implausible`] at the other end of the curve.
+    /// It used to be a veto as well — a step, never interpolated, the mirror of
+    /// [`SizeRatioThresholds::implausible`] at the other end of the curve. That
+    /// veto is gone. The one shape that reliably landed under it was not a fake
+    /// release but an honest aggregate — a season pack, a multi-episode file, a
+    /// complete-series pack — whose indexer reported **one member's** size
+    /// against the whole payload's runtime, and refusing those outright cost
+    /// real releases. Implausibly small is now a penalty like every other band,
+    /// read off the curve, with the aggregate case reinterpreted first
+    /// ([`CoverageSizeBasis`]). The number itself keeps its calibration, because
+    /// it is still where the full tiny penalty is pinned.
     ///
     /// **Calibrated against Sonarr's shipped `QualityDefinition.MinSize`**, which
     /// is the only published number for "too small to be this quality":
@@ -1360,22 +1369,21 @@ struct SizeRatioThresholds {
     ///
     /// The implied floor is `bitrate × codec × source × 7.5 MB/min × factor`.
     /// The binding case for episodic content is a 1080p Bluray H.264 episode
-    /// (8.5 × 1.10 × 1.35 × 7.5 ≈ 94.7 MB/min): at the old 0.10 the floor was
-    /// 9.5 MB/min, more than twice Sonarr's 4, and it refused perfectly ordinary
-    /// releases — a 1080p WEB-DL episode at 4.5 MB/min was vetoed on every
-    /// cycle. **0.04** puts it at 3.8 MB/min, just under Sonarr, and every other
-    /// episodic combination lands further below (720p WEB-DL H.264 → 0.9 vs 3;
-    /// 2160p Bluray remux → 14.2 vs 35).
+    /// (8.5 × 1.10 × 1.35 × 7.5 ≈ 94.7 MB/min): at the old 0.10 the anchor sat
+    /// at 9.5 MB/min, more than twice Sonarr's 4. **0.04** puts it at
+    /// 3.8 MB/min, just under Sonarr, and every other episodic combination lands
+    /// further below (720p WEB-DL H.264 → 0.9 vs 3; 2160p Bluray remux → 14.2 vs
+    /// 35).
     ///
     /// **Movies keep 0.10**, because there is no parity number to match: Radarr
     /// ships `MinSize = 0` for every movie quality (`Quality.cs:170-204`), so the
-    /// floor here is Scryer's own protection rather than a port of anyone's. A
+    /// number here is Scryer's own model rather than a port of anyone's. A
     /// feature's runtime is also nearly always known, which is what made the
-    /// episodic floor unsafe.
+    /// episodic number the sensitive one.
     ///
-    /// Everything between this and `very_small` still takes the full `size_tiny`
-    /// penalty, so a merely tiny release is refused on the numbers rather than
-    /// vetoed. Specials skip the veto entirely (`release_is_a_special`).
+    /// Anything at or below this ratio takes the full `size_tiny` penalty, and a
+    /// merely tiny release is refused on the numbers — through the profile's
+    /// minimum score — rather than vetoed.
     ///
     /// Not scaled by [`SizeRatioThresholds::with_upper_multiplier`]: AV1's
     /// headroom is about large encodes, and the whole low half of the curve is
@@ -1383,29 +1391,10 @@ struct SizeRatioThresholds {
     implausibly_small: f64,
 }
 
-/// Below this the minimum-size veto does not apply, whatever the ratio says.
-///
-/// It is the boundary between two different statements. "Too small for what it
-/// claims" is a judgement about media bytes and belongs to the size curve.
-/// "Not media at all" — a stream pointer (`.strm` holds a URL), a sample, a
-/// promo, a zero-length placeholder — belongs to the import pipeline's sample
-/// filter, which already knows things the scorer cannot (that a `.strm` is
-/// exempt, that a small file beside large ones in a pack is a promo). Letting
-/// the veto reach down there would put the two rules in contradiction, and would
-/// make a stream-pointer import fail on the size of its own URL.
-///
-/// The value is the import pipeline's own sample threshold
-/// (`import::workflow::completed::SAMPLE_SIZE_THRESHOLD`), duplicated rather
-/// than imported because scoring must not depend on the import module. The
-/// import side asserts the two are equal at compile time (a `const _: () =
-/// assert!(..)` next to `SAMPLE_SIZE_THRESHOLD`), so the duplication cannot
-/// drift — the dependency runs one way only.
-pub(crate) const MINIMUM_SIZE_VETO_FLOOR_BYTES: i64 = 50 * 1024 * 1024;
-
-/// The minimum-size veto ratio for episodic content, where Sonarr publishes a
+/// The bottom curve anchor for episodic content, where Sonarr publishes a
 /// number to match. See [`SizeRatioThresholds::implausibly_small`] for the
 /// arithmetic behind it.
-const EPISODIC_MINIMUM_SIZE_VETO_RATIO: f64 = 0.04;
+const EPISODIC_IMPLAUSIBLY_SMALL_RATIO: f64 = 0.04;
 
 impl SizeRatioThresholds {
     fn with_upper_multiplier(mut self, multiplier: f64) -> Self {
@@ -1443,7 +1432,7 @@ fn size_ratio_thresholds(media_category: MediaSizeCategory) -> SizeRatioThreshol
             slightly_small: 0.75,
             small: 0.55,
             very_small: 0.35,
-            implausibly_small: EPISODIC_MINIMUM_SIZE_VETO_RATIO,
+            implausibly_small: EPISODIC_IMPLAUSIBLY_SMALL_RATIO,
         },
         MediaSizeCategory::Anime => SizeRatioThresholds {
             implausible: 6.0,
@@ -1455,7 +1444,7 @@ fn size_ratio_thresholds(media_category: MediaSizeCategory) -> SizeRatioThreshol
             slightly_small: 0.65,
             small: 0.5,
             very_small: 0.3,
-            implausibly_small: EPISODIC_MINIMUM_SIZE_VETO_RATIO,
+            implausibly_small: EPISODIC_IMPLAUSIBLY_SMALL_RATIO,
         },
     }
 }
@@ -1581,6 +1570,87 @@ fn size_ratio_thresholds_for_codec(
     }
 }
 
+/// What a reported byte count is being compared against.
+///
+/// Size scoring is runtime-derived, and an aggregate release — a multi-episode
+/// file, a season pack, a multi-season or complete-series pack — has two
+/// runtimes that matter: the whole payload's, and one member's. Indexers report
+/// both, and nothing in a listing says which. A pack whose listing carries one
+/// episode's byte count against the pack's total runtime reads as a twentieth of
+/// what it should be, which is indistinguishable from a fake until the second
+/// interpretation is tried.
+///
+/// Derived once per scope from the release's coverage
+/// (`acquisition_coverage::coverage_size_basis` and
+/// `acquisition_coverage::episode_span_size_basis`) and carried on
+/// [`crate::canonical_scoring::ScoringContext`], so grab, import and a
+/// re-derived incumbent bar read the same basis for the same evidence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CoverageSizeBasis {
+    /// Runtime of everything the release covers, in minutes.
+    pub total_runtime_minutes: Option<i32>,
+    /// Runtime of one representative member of that coverage, in minutes. Equal
+    /// to `total_runtime_minutes` whenever the coverage is a single member.
+    pub member_runtime_minutes: Option<i32>,
+    /// How many members the coverage holds, after any partial-season estimate.
+    /// Never below 1.
+    pub member_count: i32,
+}
+
+impl Default for CoverageSizeBasis {
+    fn default() -> Self {
+        Self::single(None)
+    }
+}
+
+impl CoverageSizeBasis {
+    /// A movie, a single episode, or any scope whose coverage is one member.
+    pub fn single(runtime_minutes: Option<i32>) -> Self {
+        Self {
+            total_runtime_minutes: runtime_minutes,
+            member_runtime_minutes: runtime_minutes,
+            member_count: 1,
+        }
+    }
+
+    /// A release covering several members. Collapses to [`Self::single`] when
+    /// the count does not actually make it an aggregate.
+    pub fn aggregate(
+        total_runtime_minutes: Option<i32>,
+        member_runtime_minutes: Option<i32>,
+        member_count: i32,
+    ) -> Self {
+        if member_count <= 1 {
+            return Self::single(total_runtime_minutes.or(member_runtime_minutes));
+        }
+        Self {
+            total_runtime_minutes,
+            member_runtime_minutes,
+            member_count,
+        }
+    }
+
+    /// Whether reported bytes could describe one member rather than the payload.
+    pub fn covers_multiple_members(&self) -> bool {
+        self.member_count > 1
+    }
+
+    /// Fill in whatever the catalog could not supply with the title's own
+    /// runtime, leaving the member count alone.
+    pub fn or_runtime(self, default_runtime_minutes: Option<i32>) -> Self {
+        Self {
+            total_runtime_minutes: self.total_runtime_minutes.or(default_runtime_minutes),
+            member_runtime_minutes: self.member_runtime_minutes.or(default_runtime_minutes),
+            member_count: self.member_count,
+        }
+    }
+}
+
+/// Logged, with a zero delta, when the reported size was read as one member's
+/// rather than the whole pack's. Carries no weight of its own; it is there so an
+/// explanation says which interpretation produced the band above it.
+pub const SIZE_PACK_MEMBER_BASIS_CODE: &str = "size_pack_member_basis";
+
 /// Apply category-aware size scoring using a bitrate-based model.
 ///
 /// Expected file size is derived from `bitrate × runtime × codec_factor ×
@@ -1590,6 +1660,12 @@ fn size_ratio_thresholds_for_codec(
 ///
 /// When `runtime_minutes` is not available (TVDB metadata missing), category
 /// defaults are used (120 min movies, 45 min series, 24 min anime).
+///
+/// The wrapper's `runtime_minutes` is a **single-member** basis: it is the shape
+/// a movie or a lone episode has, and the only shape a caller with nothing but a
+/// runtime can honestly claim. Aggregate callers build a
+/// [`CoverageSizeBasis`] from their coverage and go through
+/// [`apply_size_scoring_for_category_with_remux_preference`].
 pub fn apply_size_scoring_for_category(
     decision: &mut QualityProfileDecision,
     release: &ParsedReleaseMetadata,
@@ -1603,7 +1679,7 @@ pub fn apply_size_scoring_for_category(
         release,
         size_bytes,
         category_hint,
-        runtime_minutes,
+        CoverageSizeBasis::single(runtime_minutes),
         false,
         weights,
     );
@@ -1614,7 +1690,7 @@ pub(crate) fn apply_size_scoring_for_category_with_remux_preference(
     release: &ParsedReleaseMetadata,
     size_bytes: Option<i64>,
     category_hint: Option<&str>,
-    runtime_minutes: Option<i32>,
+    size_basis: CoverageSizeBasis,
     prefer_remux: bool,
     weights: &ScoringWeights,
 ) {
@@ -1653,34 +1729,52 @@ pub(crate) fn apply_size_scoring_for_category_with_remux_preference(
         remux_size_factor,
     );
 
-    let runtime_min = runtime_minutes
-        .filter(|&r| r > 0)
-        .map(|r| r as f64)
-        .unwrap_or_else(|| default_runtime_minutes(media_category));
+    // bitrate (Mbps) × runtime (seconds) / 8 = megabytes → convert to GiB.
+    // Floored, because the ratio divides by it.
+    let expected_gib_for = |runtime_minutes: Option<i32>| {
+        let runtime_min = runtime_minutes
+            .filter(|&r| r > 0)
+            .map(f64::from)
+            .unwrap_or_else(|| default_runtime_minutes(media_category));
+        (bitrate * codec_factor * source_factor * (runtime_min * 60.0) / 8.0 / 1024.0).max(0.5)
+    };
 
-    // bitrate (Mbps) × runtime (seconds) / 8 = megabytes → convert to GiB
-    let expected_gib = bitrate * codec_factor * source_factor * (runtime_min * 60.0) / 8.0 / 1024.0;
-
-    let ratio = size_gib / expected_gib.max(0.5);
+    let ratio = size_gib / expected_gib_for(size_basis.total_runtime_minutes);
     let thresholds = size_ratio_thresholds_for_codec(media_category, release.video_codec.as_ref());
+    let curve = size_curve(&thresholds, weights);
+
+    // **The pack-versus-member reading.** The whole payload is tried first,
+    // always: that is what a size field is supposed to mean, and a pack that is
+    // honestly sized never reaches this branch. Only when the total reading
+    // falls off the bottom of the curve *and* the release covers more than one
+    // member is the same byte count re-read as one member's — the shape an
+    // indexer produces when it lists an episode's size beside a season pack's
+    // name.
+    //
+    // Plausible means the member reading lands in the ordinary part of the
+    // curve, `small` through `very_large`. Below that it is small either way and
+    // the interpretation buys nothing; at `massive` and above it is the
+    // arithmetic of division talking, not evidence.
+    //
+    // The contribution is capped at zero. The interpretation is an inference,
+    // never a measurement, so it may spare an honest pack a penalty it did not
+    // earn but must never let ambiguity *earn* a bonus over a release whose size
+    // is not in doubt.
+    if ratio < thresholds.very_small && size_basis.covers_multiple_members() {
+        let member_ratio = size_gib / expected_gib_for(size_basis.member_runtime_minutes);
+        if member_ratio >= thresholds.small && member_ratio < thresholds.massive {
+            let delta = interpolate_size_delta(member_ratio, &curve).min(0);
+            decision.log(size_band_code(member_ratio, &thresholds), delta);
+            decision.log(SIZE_PACK_MEMBER_BASIS_CODE, 0);
+            return;
+        }
+    }
 
     // The band still names itself in the scoring log — the code is what an
     // operator reads and what tests pin — while the delta comes from the curve,
     // so two releases in the same band no longer score identically and a release
     // that drifts across a boundary no longer jumps.
-    let code = match ratio {
-        r if r >= thresholds.excessive => "size_excessive_for_quality",
-        r if r >= thresholds.massive => "size_massive_for_quality",
-        r if r >= thresholds.very_large => "size_very_large_for_quality",
-        r if r >= thresholds.large => "size_large_for_quality",
-        r if r >= thresholds.expected => "size_expected_for_quality",
-        r if r >= thresholds.slightly_small => "size_slightly_small_for_quality",
-        r if r >= thresholds.small => "size_small_for_quality",
-        r if r >= thresholds.very_small => "size_very_small_for_quality",
-        _ => "size_tiny_for_quality",
-    };
-    let delta = interpolate_size_delta(ratio, &size_curve(&thresholds, weights));
-
+    //
     // **The band is logged before the veto, always.** `total` — the bar a file
     // is compared by — is the pass's score with every `BLOCK_SCORE` entry
     // stripped out (I5, `preference_score_without_blocks`). If the veto
@@ -1691,40 +1785,36 @@ pub(crate) fn apply_size_scoring_for_category_with_remux_preference(
     // other side of the threshold, then refuses every real upgrade as
     // `NotAnUpgrade`. A veto is a verdict *on top of* the honest number, not
     // instead of it.
-    decision.log(code, delta);
+    decision.log(
+        size_band_code(ratio, &thresholds),
+        interpolate_size_delta(ratio, &curve),
+    );
 
-    // The two vetoes stay steps: a file far larger or far smaller than anything
-    // its quality and runtime could produce is not a release that scored badly,
-    // it is not that release at all. Everything between them is one continuous
-    // curve, read at `ratio` (D3, D21).
+    // One veto is left, and it stays a step: a file far larger than anything its
+    // quality and runtime could produce is not a release that scored badly, it
+    // is not that release at all. The other end is a penalty now — the smallness
+    // that used to be refused outright is far more often a pack read against the
+    // wrong runtime than a fake, and a profile minimum score refuses the genuine
+    // article on the numbers. Everything below the veto is one continuous curve,
+    // read at `ratio` (D3, D21).
     if ratio >= thresholds.implausible {
         decision.log("size_implausible_for_quality", BLOCK_SCORE);
-        return;
-    }
-    if ratio < thresholds.implausibly_small
-        && raw_size_bytes >= MINIMUM_SIZE_VETO_FLOOR_BYTES
-        && !release_is_a_special(release)
-    {
-        decision.log("size_implausibly_small_for_quality", BLOCK_SCORE);
     }
 }
 
-/// Whether the release announces itself as a special, in which case the
-/// minimum-size veto does not apply.
-///
-/// Sonarr's `AcceptableSizeSpecification.cs:29-33` — "Special release found,
-/// skipping size check" — and for the same reason: a special's runtime is
-/// whatever the studio felt like, the catalog rarely records it, so the modelled
-/// expectation is the series average and a genuine seven-minute short reads as a
-/// fraction of it. The *penalty* side of the curve still fires; only the veto is
-/// skipped, so a short is refused on the numbers if it deserves to be and never
-/// on a runtime nobody knew.
-fn release_is_a_special(release: &ParsedReleaseMetadata) -> bool {
-    release.episode.as_ref().is_some_and(|episode| {
-        episode.special_kind.is_some()
-            || !episode.special_absolute_episode_numbers.is_empty()
-            || episode.season == Some(0)
-    })
+/// The band a size ratio falls in, as it appears in the scoring log.
+fn size_band_code(ratio: f64, thresholds: &SizeRatioThresholds) -> &'static str {
+    match ratio {
+        r if r >= thresholds.excessive => "size_excessive_for_quality",
+        r if r >= thresholds.massive => "size_massive_for_quality",
+        r if r >= thresholds.very_large => "size_very_large_for_quality",
+        r if r >= thresholds.large => "size_large_for_quality",
+        r if r >= thresholds.expected => "size_expected_for_quality",
+        r if r >= thresholds.slightly_small => "size_slightly_small_for_quality",
+        r if r >= thresholds.small => "size_small_for_quality",
+        r if r >= thresholds.very_small => "size_very_small_for_quality",
+        _ => "size_tiny_for_quality",
+    }
 }
 
 #[cfg(test)]
@@ -1752,7 +1842,7 @@ mod tests {
             release,
             size_bytes,
             category_hint,
-            runtime_minutes,
+            CoverageSizeBasis::single(runtime_minutes),
             prefer_remux,
             weights,
         );

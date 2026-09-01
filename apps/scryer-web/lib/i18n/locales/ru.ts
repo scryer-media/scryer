@@ -277,8 +277,6 @@ const ru: LocaleDictionary = {
     "settings.connectionBaseUrl": "Базовый URL",
     "settings.plexMachineId": "Идентификатор устройства",
     "settings.externalAccountInvites": "Приглашения для внешних учётных записей",
-    "settings.externalAccountInvitesUnavailable":
-        "Включите вход через медиасервер и настройте хотя бы одно подключение Jellyfin или Plex, прежде чем создавать приглашения для внешних учётных записей.",
     "settings.externalAccountInviteRequired":
         "Выберите пользователя и учётную запись медиасервера.",
     "settings.externalAccountInviteCreated": "Приглашение для внешней учётной записи создано.",
@@ -1417,6 +1415,7 @@ const ru: LocaleDictionary = {
     "activity.activityFilter.queued": "В очереди",
     "activity.activityFilter.paused": "Приостановлено",
     "activity.activityFilter.postProcessing": "Постобработка",
+    "activity.activityFilter.seeding": "Раздаётся",
     "activity.historyFilter.all": "Все",
     "activity.historyFilter.success": "Успешно",
     "activity.historyFilter.failed": "Ошибка",
@@ -3081,6 +3080,10 @@ const ru: LocaleDictionary = {
     "profile.highlightColor": "Цвет выделения",
     "profile.highlightColorHelp":
         "Используется для выделения выбранных элементов, активной навигации, значков и основных действий.",
+    "profile.highlightColorCustom": "Пользовательский цвет",
+    "profile.highlightColorModel": "Цветовая модель",
+    "profile.highlightColorApply": "Применить цвет",
+    "profile.highlightColorCancel": "Отмена",
     "profile.highlightColorSaved":
         "Цвет выделения обновлён.",
     "profile.highlightColorSaveFailed":
@@ -3091,9 +3094,13 @@ const ru: LocaleDictionary = {
     "color.sky": "Небесный",
     "color.teal": "Бирюзовый",
     "color.emerald": "Изумрудный",
+    "color.green": "Зелёный",
     "color.amber": "Янтарный",
+    "color.cyan": "Циан",
     "color.rose": "Розовый",
+    "color.red": "Красный",
     "color.fuchsia": "Фуксия",
+    "color.magenta": "Маджента",
     "color.crab": "Крабовый",
 
     "profile.changePassword": "Изменить пароль",

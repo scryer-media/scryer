@@ -6,7 +6,6 @@ import {
   normalizeQueueState,
 } from "@/lib/utils/download-queue";
 import { manualImportActions } from "@/lib/utils/manual-import-actions";
-import { isImportedSeedingRow } from "@/lib/utils/seeding-progress";
 
 export type TranslateFn = ReturnType<typeof useTranslate>;
 
@@ -108,13 +107,7 @@ export type QueueRowPresentation = {
   trackedStateKey: string;
   trackedMatchTypeKey: string;
   displayStateKey: string;
-  /**
-   * Key the status badge renders under. It is the display state for every row
-   * except one: a tracked download parked in `IMPORTED_SEEDING` displays as
-   * `COMPLETED` (the backend deliberately added no display state for it), so
-   * the badge reads the tracked state to keep "imported, still seeding" from
-   * being indistinguishable from a finished usenet download.
-   */
+  /** Key the status badge renders under; normally the projected display state. */
   statusBadgeKey: string;
   percent: number;
   remainingLabel: string | null;
@@ -143,14 +136,7 @@ export function deriveQueueRowPresentation(
   const trackedStateKey = normalizeQueueState(queueItem.trackedState);
   const trackedMatchTypeKey = normalizeQueueState(queueItem.trackedMatchType);
   const displayStateKey = queueItem.displayState;
-  // The seeding badge exists only because those rows display as `COMPLETED`. A
-  // client warning is already the specific state, so it must not be hidden
-  // behind "Imported · Seeding" — that is exactly how a stuck torrent would
-  // look healthy.
-  const statusBadgeKey =
-    isImportedSeedingRow(queueItem) && displayStateKey !== "WARNING"
-      ? "IMPORTED_SEEDING"
-      : displayStateKey;
+  const statusBadgeKey = displayStateKey;
   const reportedFailureReason = buildQueueStatusDetail(queueItem);
   const facetKey = normalizeQueueState(queueItem.facet);
   const failureReason =

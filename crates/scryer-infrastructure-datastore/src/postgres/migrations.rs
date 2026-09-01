@@ -524,6 +524,9 @@ async fn run_postgres_rust_hook(
         "backfill_blake3_identities" => {
             crate::migrations::blake3_identities::backfill_blake3_identities_postgres(tx).await
         }
+        "compact_event_storage" => {
+            crate::migrations::event_storage::compact_event_storage_postgres(tx).await
+        }
         #[cfg(test)]
         "test_insert_hook_marker" => {
             let marker = match install_kind {

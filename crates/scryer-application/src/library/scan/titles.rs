@@ -353,33 +353,30 @@ pub(crate) fn build_new_title_from_metadata_match(
     facet: &MediaFacet,
     selected: &MetadataSearchItem,
 ) -> NewTitle {
-    // Only movies are addressed by SMG title id. The batched search now returns
-    // smg/tmdb/imdb ids for every facet, but a scan-created series or anime title
-    // must carry exactly the one TVDB id it carried before that surface existed:
-    // those ids flow on into indexer search subjects, RSS candidate indexes and
-    // notification payloads, none of which are facet-aware.
-    let addresses_titles_by_smg_id = matches!(facet, MediaFacet::Movie);
+    // The batched search returns smg/tmdb/imdb ids for every facet, and every
+    // facet keeps them. Indexer search subjects, RSS candidate indexes,
+    // notification payloads and the `externalIds` readback all read these ids
+    // without checking the facet, so a scan-created series or anime title must
+    // carry the same identity set a movie does.
     let mut external_ids = Vec::new();
-    if addresses_titles_by_smg_id && let Some(smg_id) = selected.smg_id {
+    if let Some(smg_id) = selected.smg_id {
         push_metadata_match_external_id(&mut external_ids, "smg", &smg_id.to_string());
     }
     push_metadata_match_external_id(&mut external_ids, "tvdb", &selected.tvdb_id);
-    if addresses_titles_by_smg_id {
-        for external_id in &selected.external_ids {
-            let source = if external_id.source.eq_ignore_ascii_case("smg") {
-                Some("smg")
-            } else if external_id.source.eq_ignore_ascii_case("tvdb") {
-                Some("tvdb")
-            } else if external_id.source.eq_ignore_ascii_case("tmdb") {
-                Some("tmdb")
-            } else if external_id.source.eq_ignore_ascii_case("imdb") {
-                Some("imdb")
-            } else {
-                None
-            };
-            if let Some(source) = source {
-                push_metadata_match_external_id(&mut external_ids, source, &external_id.value);
-            }
+    for external_id in &selected.external_ids {
+        let source = if external_id.source.eq_ignore_ascii_case("smg") {
+            Some("smg")
+        } else if external_id.source.eq_ignore_ascii_case("tvdb") {
+            Some("tvdb")
+        } else if external_id.source.eq_ignore_ascii_case("tmdb") {
+            Some("tmdb")
+        } else if external_id.source.eq_ignore_ascii_case("imdb") {
+            Some("imdb")
+        } else {
+            None
+        };
+        if let Some(source) = source {
+            push_metadata_match_external_id(&mut external_ids, source, &external_id.value);
         }
     }
 

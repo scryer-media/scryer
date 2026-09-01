@@ -1890,6 +1890,7 @@ export const activityQuery = `query Activity($limit: Int, $offset: Int) {
     actorUserId
     actorDisplayName
     titleId
+    episodeIds
     occurredAt
   }
 }`;

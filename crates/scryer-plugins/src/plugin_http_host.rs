@@ -690,6 +690,17 @@ impl PluginHttpHost {
         capture: &IndexerErrorCaptureContext,
         response: CapturedIndexerHttpResponse,
     ) {
+        if !scryer_application::indexer_error_history_is_persistable(&capture.indexer_id) {
+            // A connection test has no stored indexer to hang history on. The
+            // probe's own error is the answer the operator is waiting for; a
+            // guaranteed foreign-key failure behind it is noise at best.
+            tracing::debug!(
+                indexer_id = capture.indexer_id.as_str(),
+                "skipping indexer error history for a synthetic indexer id"
+            );
+            return;
+        }
+
         let classified =
             classify_indexer_http_response(&response).unwrap_or_else(unknown_indexer_error);
         let error = scryer_application::NewIndexerError {
@@ -719,6 +730,9 @@ impl PluginHttpHost {
             operation = capture.operation.as_str(),
             "indexer plugin operation failed without an HTTP response"
         );
+        if !scryer_application::indexer_error_history_is_persistable(&capture.indexer_id) {
+            return;
+        }
         let error = scryer_application::NewIndexerError {
             id: uuid::Uuid::new_v4().to_string(),
             indexer_id: capture.indexer_id.clone(),
@@ -1237,6 +1251,81 @@ mod tests {
             self.errors.lock().expect("recorded errors").push(error);
             Ok(())
         }
+    }
+
+    /// Stands in for the real store, whose `indexer_errors.indexer_id` foreign
+    /// key rejects any id without an `indexers` row.
+    #[derive(Default)]
+    struct ForeignKeyRejectingRecorder {
+        attempts: Mutex<Vec<String>>,
+    }
+
+    impl IndexerErrorRecorder for ForeignKeyRejectingRecorder {
+        fn record(
+            &self,
+            error: scryer_application::NewIndexerError,
+        ) -> scryer_application::AppResult<()> {
+            self.attempts
+                .lock()
+                .expect("recorded attempts")
+                .push(error.indexer_id.clone());
+            Err(scryer_application::AppError::Repository(
+                "FOREIGN KEY constraint failed".to_string(),
+            ))
+        }
+    }
+
+    fn captured_failure_response() -> CapturedIndexerHttpResponse {
+        CapturedIndexerHttpResponse {
+            status: 401,
+            headers: Vec::new(),
+            body: b"unauthorized".to_vec(),
+        }
+    }
+
+    /// A connection test probes under a synthetic id that has no `indexers`
+    /// row. Persisting history for it can only fail the foreign key, so the
+    /// capture path must not attempt the write at all — the operator has to see
+    /// the probe's own error, not a storage failure raised behind it.
+    #[test]
+    fn the_connection_test_id_is_never_persisted_as_error_history() {
+        let recorder = Arc::new(ForeignKeyRejectingRecorder::default());
+        let capture = IndexerErrorCaptureContext {
+            indexer_id: scryer_application::CONNECTION_TEST_INDEXER_ID.to_string(),
+            indexer_name: "Test Connection".to_string(),
+            operation: IndexerErrorOperation::ConnectionTest,
+            recorder: recorder.clone(),
+        };
+
+        PluginHttpHost::record_captured_response(&capture, captured_failure_response());
+        PluginHttpHost::record_transport_failure(&capture);
+
+        assert!(
+            recorder
+                .attempts
+                .lock()
+                .expect("recorded attempts")
+                .is_empty(),
+            "the synthetic connection-test id must never reach the store"
+        );
+    }
+
+    /// The guard is scoped to the synthetic id: a real indexer still records.
+    #[test]
+    fn a_stored_indexer_id_still_records_error_history() {
+        let recorder = Arc::new(RecordingIndexerErrorRecorder::default());
+        let capture = IndexerErrorCaptureContext {
+            indexer_id: "indexer-1".to_string(),
+            indexer_name: "Test indexer".to_string(),
+            operation: IndexerErrorOperation::ConnectionTest,
+            recorder: recorder.clone(),
+        };
+
+        PluginHttpHost::record_captured_response(&capture, captured_failure_response());
+
+        let errors = recorder.errors.lock().expect("recorded errors");
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].indexer_id, "indexer-1");
     }
 
     const TEST_PLUGIN_HTTP_CA_CERT_PEM: &str = concat!(

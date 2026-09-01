@@ -138,6 +138,12 @@ export function normalizeActivityEvent(input: Partial<ActivityEvent>): ActivityE
     actorUserId: input.actorUserId ?? null,
     titleId: input.titleId ?? null,
     facet: input.facet ?? null,
+    episodeIds: Array.isArray(input.episodeIds)
+      ? input.episodeIds
+          .filter((episodeId): episodeId is string => typeof episodeId === "string")
+          .map((episodeId) => episodeId.trim())
+          .filter(Boolean)
+      : [],
     message: input.message ?? "",
     occurredAt: input.occurredAt ?? new Date().toISOString(),
   };

@@ -850,11 +850,24 @@ fn normalize_url_path(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::OnceLock;
+
+    use scryer_application::PluginDescriptorLoader;
     use scryer_plugin_sdk::{PluginDescriptor, ProviderDescriptor};
 
     fn descriptor() -> PluginDescriptor {
-        serde_json::from_str(include_str!("../builtins/newznab_indexer.descriptor.json"))
-            .expect("generic Newznab descriptor")
+        static DESCRIPTOR: OnceLock<PluginDescriptor> = OnceLock::new();
+        DESCRIPTOR
+            .get_or_init(|| {
+                let wasm = crate::builtins::decode_builtin_wasm(crate::builtins::NEWZNAB)
+                    .expect("materialized Newznab component");
+                let descriptor = crate::WasmPluginDescriptorLoader
+                    .load_descriptor_from_wasm_bytes(&wasm)
+                    .expect("Newznab component descriptor");
+                assert_eq!(descriptor.id, "newznab");
+                descriptor
+            })
+            .clone()
     }
 
     fn indexer_descriptor(descriptor: &PluginDescriptor) -> &IndexerDescriptor {
@@ -880,12 +893,28 @@ mod tests {
     fn resolution_precedence_is_explicit_alias_endpoint_then_custom() {
         let descriptor = descriptor();
         let indexer = indexer_descriptor(&descriptor);
-        let PluginProviderProfile::Newznab(first) = &indexer.provider_profiles[0].runtime_profile;
-        let PluginProviderProfile::Newznab(second) = &indexer.provider_profiles[1].runtime_profile;
-        let second_alias = indexer.provider_profiles[1]
+        let second_definition = indexer
+            .provider_profiles
+            .iter()
+            .find(|definition| !definition.legacy_provider_type_aliases.is_empty())
+            .expect("profile with a legacy alias");
+        let PluginProviderProfile::Newznab(second) = &second_definition.runtime_profile;
+        let first = indexer
+            .provider_profiles
+            .iter()
+            .find_map(|definition| match &definition.runtime_profile {
+                PluginProviderProfile::Newznab(profile)
+                    if profile.profile_id != second.profile_id =>
+                {
+                    Some(profile)
+                }
+                _ => None,
+            })
+            .expect("second profile");
+        let second_alias = second_definition
             .legacy_provider_type_aliases
             .first()
-            .expect("second profile alias");
+            .expect("legacy alias");
         let explicit_config = serde_json::json!({
             "profile_id": first.profile_id,
             "base_url": "https://custom.example"
@@ -999,7 +1028,14 @@ mod tests {
         let bytes = resolve_newznab_profile_bytes(
             indexer,
             &expected.profile_id,
-            Some(r#"{"api_key":"do-not-copy","additional_params":"attrs=poster"}"#),
+            Some(
+                &serde_json::json!({
+                    "profile_id": expected.profile_id,
+                    "api_key": "do-not-copy",
+                    "additional_params": "attrs=poster"
+                })
+                .to_string(),
+            ),
         )
         .expect("component profile");
         let payload = String::from_utf8(bytes).expect("UTF-8");

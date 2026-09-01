@@ -33,7 +33,7 @@ use std::sync::{
 use std::time::Duration;
 
 use axum::Router;
-use axum::extract::{Path as AxumPath, Query, State};
+use axum::extract::{DefaultBodyLimit, Path as AxumPath, Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -160,8 +160,8 @@ fn spawn_sigstore_trust_root_prime_task(app_use_case: AppUseCase) {
         loop {
             match app_use_case.prime_plugin_trust_roots_internal().await {
                 Ok(()) => {
-                    tracing::info!("sigstore trust roots primed");
-                    break;
+                    tracing::info!("sigstore trust roots refreshed; next refresh in 6 hours");
+                    tokio::time::sleep(Duration::from_secs(6 * 60 * 60)).await;
                 }
                 Err(error) => {
                     tracing::warn!(
@@ -1839,7 +1839,9 @@ async fn bootstrap_application(
         .route("/oauth/authorize", get(ui_fallback))
         .route(
             "/graphql",
-            post(graphql_handler).with_state(auth_state.clone()),
+            post(graphql_handler)
+                .with_state(auth_state.clone())
+                .layer(DefaultBodyLimit::max(middleware::GRAPHQL_MAX_MESSAGE_BYTES)),
         )
         .route(
             "/images/media/{token}/{variant}",

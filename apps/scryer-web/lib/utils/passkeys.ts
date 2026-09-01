@@ -1,6 +1,8 @@
 import type { Client } from "@urql/core";
 import { backendClient } from "@/lib/graphql/urql-client";
 import {
+  accountSecurityPasskeyCompleteMutation,
+  accountSecurityPasskeyStartMutation,
   webauthnAuthenticateCompleteMutation,
   webauthnAuthenticateStartMutation,
   loginVerificationPasskeyCompleteMutation,
@@ -380,6 +382,47 @@ export async function authenticateWithPasskey(
   }
 }
 
+export async function reauthenticateAccountSecurityWithPasskey(
+  client: Client = backendClient,
+): Promise<LoginPayload> {
+  ensurePasskeySupport();
+
+  try {
+    const start = await runMutation<
+      {
+        accountSecurityPasskeyStart: {
+          challengeId: string;
+          optionsJson: unknown;
+        };
+      },
+      Record<string, never>
+    >(client, accountSecurityPasskeyStartMutation, {}, "accountSecurityPasskeyStart");
+    const credential = await navigator.credentials.get(
+      parseRequestOptions(start.optionsJson, "manual"),
+    );
+    if (!(credential instanceof PublicKeyCredential)) {
+      throw new PasskeyClientError("invalid_response", "No passkey assertion was returned.");
+    }
+
+    return runMutation<
+      { accountSecurityPasskeyComplete: LoginPayload },
+      { input: { challengeId: string; responseJson: unknown } }
+    >(
+      client,
+      accountSecurityPasskeyCompleteMutation,
+      {
+        input: {
+          challengeId: start.challengeId,
+          responseJson: credentialToJson(credential),
+        },
+      },
+      "accountSecurityPasskeyComplete",
+    ) as Promise<LoginPayload>;
+  } catch (error) {
+    normalizePasskeyError(error);
+  }
+}
+
 export async function authenticateWithConditionalPasskey(
   persistSession?: boolean,
   signal?: AbortSignal,
@@ -539,7 +582,9 @@ export async function registerLoginEnrollmentPasskey(
   }
 }
 
-export async function registerPasskey(client: Client = backendClient): Promise<PasskeySummary> {
+export async function registerPasskey(
+  client: Client = backendClient,
+): Promise<PasskeySummary> {
   ensurePasskeySupport();
 
   try {
@@ -559,7 +604,9 @@ export async function registerPasskey(client: Client = backendClient): Promise<P
     }
 
     return runMutation<
-      { webauthnRegisterComplete: PasskeySummary },
+      {
+        webauthnRegisterComplete: PasskeySummary;
+      },
       {
         input: {
           challengeId: string;
@@ -578,7 +625,7 @@ export async function registerPasskey(client: Client = backendClient): Promise<P
         },
       },
       "webauthnRegisterComplete",
-    ) as Promise<PasskeySummary>;
+    );
   } catch (error) {
     normalizePasskeyError(error);
   }

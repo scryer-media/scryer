@@ -289,8 +289,6 @@ const en: LocaleDictionary = {
   "settings.openSecuritySettings": "Open security settings",
   "settings.externalAuthLinkingEnabled": "Linking enabled",
   "settings.externalAccountInvites": "External account invites",
-  "settings.externalAccountInvitesUnavailable":
-    "Enable media server login and configure at least one Jellyfin or Plex connection before creating external account invites.",
   "settings.externalAccountInviteRequired":
     "Choose a user and media server account.",
   "settings.externalAccountInviteCreated": "External account invite created.",
@@ -1082,6 +1080,8 @@ const en: LocaleDictionary = {
 
   "toast.catalogAdded": "Added to catalog",
   "toast.catalogAddedAutoSearch": "Automatic search queued.",
+  "toast.releaseGrabbed": "Release grabbed",
+  "toast.titleImported": "Title imported",
   "toast.viewInCatalog": "View in catalog",
 
   "label.back": "Back",
@@ -1264,6 +1264,8 @@ const en: LocaleDictionary = {
   "title.requiredAudioResetInherit": "Reset to inherit",
   "title.fixMatchHeading": "Fix metadata match",
   "title.fixMatchAction": "Fix Match",
+  "title.fixMatchDescriptionMovie":
+    "Repair the TVDB match for this movie. Local title and folder naming stay the same.",
   "title.fixMatchDescriptionSeries":
     "Repair the TVDB match for this title. Local title and folder naming stay the same.",
   "title.fixMatchDialogTitle": "Fix Match",
@@ -1359,6 +1361,7 @@ const en: LocaleDictionary = {
   "activity.activityFilter.queued": "Queued",
   "activity.activityFilter.paused": "Paused",
   "activity.activityFilter.postProcessing": "Post-Processing",
+  "activity.activityFilter.seeding": "Seeding",
   "activity.activityFilter.warning": "Warning",
   "activity.historyFilter.all": "All",
   "activity.historyFilter.success": "Success",
@@ -2419,6 +2422,10 @@ const en: LocaleDictionary = {
   "profile.highlightColor": "Highlight color",
   "profile.highlightColorHelp":
     "Used across selection, active navigation, badges, and primary actions.",
+  "profile.highlightColorCustom": "Custom color",
+  "profile.highlightColorModel": "Color model",
+  "profile.highlightColorApply": "Apply color",
+  "profile.highlightColorCancel": "Cancel",
   "profile.highlightColorSaved": "Highlight color updated.",
   "profile.highlightColorSaveFailed": "Failed to update highlight color.",
   "color.indigo": "Indigo",
@@ -2426,9 +2433,13 @@ const en: LocaleDictionary = {
   "color.sky": "Sky",
   "color.teal": "Teal",
   "color.emerald": "Emerald",
+  "color.green": "Green",
   "color.amber": "Amber",
+  "color.cyan": "Cyan",
   "color.rose": "Rose",
+  "color.red": "Red",
   "color.fuchsia": "Fuchsia",
+  "color.magenta": "Magenta",
   "color.crab": "Crab",
   "profile.changePassword": "Change Password",
   "profile.currentPassword": "Current Password",
