@@ -36,6 +36,7 @@ import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
 import { startLocationOperationMutation } from "@/lib/graphql/mutations";
 import { locationOperationPreviewQuery } from "@/lib/graphql/queries";
 import {
+  adoptionAccounting,
   ambiguousCandidates,
   blockingTitles,
   classBlocksStart,
@@ -60,15 +61,20 @@ import {
   refusalMessageKey,
   refusalNeedsFreshPreview,
   remainingSelection,
+  REQUESTABLE_MOVE_MODES,
   sameNamedDestinationTitle,
+  startModeInput,
   toCount,
   transferStatement,
   typedConfirmationSatisfied,
+  type AdoptionAccountingSummary,
+  type AdoptionFileLine,
   type ClassifiedTitlePlacement,
   type LocationClassifiedTitle,
   type LocationOperationPreview,
   type LocationPlanItem,
   type MergeSummaryPresentation,
+  type RequestableMoveMode,
   type TitleLocationClass,
 } from "@/lib/location-operations";
 import { formatByteCount } from "@/lib/utils/activity-utils";
@@ -102,14 +108,6 @@ type Props = {
   /** Fires with the accepted operation id after a successful confirm. */
   onStarted?: (operationId: string) => void;
 };
-
-/** Only `MOVE_WITH_SCRYER` executes in this phase; the rest are announced. */
-const MOVE_MODES = [
-  "MOVE_WITH_SCRYER",
-  "FILES_ALREADY_THERE",
-] as const;
-
-type MoveMode = (typeof MOVE_MODES)[number];
 
 function sortRoots(roots: LibraryRootRecord[]): LibraryRootRecord[] {
   return [...roots].sort((left, right) => {
@@ -147,7 +145,8 @@ export function MoveTitlesDialog({
     soleSourceLibraryId ?? "",
   );
   const [rootId, setRootId] = React.useState<string>(initialRootId ?? "");
-  const [mode, setMode] = React.useState<MoveMode>("MOVE_WITH_SCRYER");
+  const [mode, setMode] =
+    React.useState<RequestableMoveMode>("MOVE_WITH_SCRYER");
   const [deselected, setDeselected] = React.useState<Set<string>>(new Set());
   const [preview, setPreview] = React.useState<LocationOperationPreview | null>(
     null,
@@ -237,6 +236,9 @@ export function MoveTitlesDialog({
               libraryId: libraryId || null,
               rootId,
             },
+            // The mode chooses which plan gets built, so it is part of the
+            // request, not a flag applied afterwards (FR-050, FR-051).
+            mode,
           },
         },
         { requestPolicy: "network-only" },
@@ -284,7 +286,7 @@ export function MoveTitlesDialog({
     // `selectionKey` stands in for `selection`: the identity changes on every
     // render, the contents do not.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [client, libraryId, open, previewNonce, rootId, selectionKey, t]);
+  }, [client, libraryId, mode, open, previewNonce, rootId, selectionKey, t]);
 
   const groups = React.useMemo(
     () => orderedClassificationGroups(preview?.classification),
@@ -308,6 +310,9 @@ export function MoveTitlesDialog({
     () => mergePreviewsBySourceTitle(preview),
     [preview],
   );
+  // FR-051's accounting, read back out of the plan items the adoption planner
+  // already emitted. Null for every plan that is not an adoption.
+  const adoption = React.useMemo(() => adoptionAccounting(preview), [preview]);
 
   // FR-012's "current library/root/folder" rides on the classification payload
   // itself, so a no-op or catalog-only title states its placement too. These
@@ -380,6 +385,11 @@ export function MoveTitlesDialog({
           input: {
             titleIds: preview.selection,
             destination: { libraryId: libraryId || null, rootId },
+            // Read off the preview, not off the control: a confirmation states
+            // the mode the plan in hand was built from, so a mode the user
+            // changed after previewing meets the fingerprint refusal rather
+            // than starting the other workflow.
+            mode: startModeInput(preview),
             planFingerprint: preview.planFingerprint,
             typedConfirmation:
               preview.confirmation.requirement === "TYPED"
@@ -575,39 +585,37 @@ export function MoveTitlesDialog({
               </p>
               <RadioGroup
                 value={mode}
-                onValueChange={(value) => setMode(value as MoveMode)}
+                onValueChange={(value) =>
+                  setMode(value as RequestableMoveMode)
+                }
+                disabled={starting}
               >
-                {MOVE_MODES.map((option) => {
-                  const unavailable = option !== "MOVE_WITH_SCRYER";
-                  return (
-                    <label
-                      key={option}
-                      className={cn(
-                        "flex items-start gap-2 text-sm",
-                        unavailable && "opacity-60",
-                      )}
-                    >
-                      <RadioGroupItem
-                        value={option}
-                        disabled={unavailable}
-                        id={`move-titles-mode-${option}`}
-                        className="mt-0.5"
-                      />
-                      <span className="min-w-0">
-                        <span className="block text-foreground">
-                          {t(`move.mode.${option}`)}
-                        </span>
-                        <span className="block text-xs text-muted-foreground">
-                          {unavailable
-                            ? t("move.modeUnavailable")
-                            : t(`move.modeHelp.${option}`)}
-                        </span>
+                {REQUESTABLE_MOVE_MODES.map((option) => (
+                  <label key={option} className="flex items-start gap-2 text-sm">
+                    <RadioGroupItem
+                      value={option}
+                      disabled={starting}
+                      id={`move-titles-mode-${option}`}
+                      className="mt-0.5"
+                    />
+                    <span className="min-w-0">
+                      <span className="block text-foreground">
+                        {t(`move.mode.${option}`)}
                       </span>
-                    </label>
-                  );
-                })}
+                      <span className="block text-xs text-muted-foreground">
+                        {t(`move.modeHelp.${option}`)}
+                      </span>
+                    </span>
+                  </label>
+                ))}
               </RadioGroup>
             </div>
+          ) : null}
+
+          {/* FR-051: adoption states what it found before it states what it
+              would do, so a refusal is legible without opening the plan. */}
+          {adoption ? (
+            <AdoptionAccountingPanel accounting={adoption} t={t} />
           ) : null}
 
           {preview && !offersModeSelection(preview) ? (
@@ -1498,6 +1506,187 @@ function BlockedIdentityDetail({
           ))}
         </ul>
       )}
+    </div>
+  );
+}
+
+/**
+ * FR-051's accounting for an adoption: how much of the selection was found at
+ * the destination, what is still unaccounted for, and what is there that no
+ * tracked file claims.
+ *
+ * The four counts are the summary; the unresolved files are listed by name
+ * underneath, because FR-052's refusal is only actionable if the user can see
+ * which files it is about. The FR-053 line about source cleanup is stated
+ * before confirmation rather than after it.
+ */
+function AdoptionAccountingPanel({
+  accounting,
+  t,
+}: {
+  accounting: AdoptionAccountingSummary;
+  t: (key: string, values?: Record<string, string | number>) => string;
+}) {
+  const unresolvedCount =
+    accounting.missing.length +
+    accounting.ambiguous.length +
+    accounting.unreadable.length;
+  return (
+    <div
+      id="move-titles-adoption"
+      className={cn(
+        "space-y-3 rounded-lg border px-3 py-3",
+        accounting.blocks
+          ? "border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)]"
+          : "border-border bg-muted/20",
+      )}
+    >
+      <p className="text-sm font-medium text-foreground">
+        {t("move.adoptionHeading")}
+      </p>
+
+      <dl className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
+        <div id="move-titles-adoption-accounted">
+          <dt className="text-xs text-muted-foreground">
+            {t("move.adoptionAccountedFor")}
+          </dt>
+          <dd className="text-foreground">
+            {accounting.accountedForFiles}
+            {accounting.accountedForBytes > 0 ? (
+              <span className="ml-1 text-xs text-muted-foreground">
+                {formatByteCount(accounting.accountedForBytes)}
+              </span>
+            ) : null}
+          </dd>
+        </div>
+        <div id="move-titles-adoption-missing">
+          <dt className="text-xs text-muted-foreground">
+            {t("move.adoptionMissing")}
+          </dt>
+          <dd
+            className={cn(
+              "text-foreground",
+              accounting.missing.length > 0 &&
+                "text-[var(--scry-danger-text)]",
+            )}
+          >
+            {accounting.missing.length}
+          </dd>
+        </div>
+        <div id="move-titles-adoption-ambiguous">
+          <dt className="text-xs text-muted-foreground">
+            {t("move.adoptionAmbiguous")}
+          </dt>
+          <dd
+            className={cn(
+              "text-foreground",
+              accounting.ambiguous.length > 0 &&
+                "text-[var(--scry-danger-text)]",
+            )}
+          >
+            {accounting.ambiguous.length}
+          </dd>
+        </div>
+        <div id="move-titles-adoption-additional">
+          <dt className="text-xs text-muted-foreground">
+            {t("move.adoptionAdditional")}
+          </dt>
+          <dd className="text-foreground">
+            {accounting.additionalFiles}
+            {accounting.additionalBytes > 0 ? (
+              <span className="ml-1 text-xs text-muted-foreground">
+                {formatByteCount(accounting.additionalBytes)}
+              </span>
+            ) : null}
+          </dd>
+        </div>
+      </dl>
+
+      {accounting.blocks ? (
+        <div
+          id="move-titles-adoption-unresolved"
+          className="space-y-2 text-sm text-[var(--scry-danger-text)]"
+        >
+          <p className="flex items-start gap-2">
+            <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>
+              {t("move.adoptionBlocked", { count: unresolvedCount })}
+            </span>
+          </p>
+          <AdoptionFileList
+            id="move-titles-adoption-missing-files"
+            heading={t("move.adoptionMissingHeading")}
+            lines={accounting.missing}
+          />
+          <AdoptionFileList
+            id="move-titles-adoption-ambiguous-files"
+            heading={t("move.adoptionAmbiguousHeading")}
+            lines={accounting.ambiguous}
+          />
+          <AdoptionFileList
+            id="move-titles-adoption-unreadable-files"
+            heading={t("move.adoptionUnreadableHeading")}
+            lines={accounting.unreadable}
+          />
+          {accounting.listingComplete ? null : (
+            <p id="move-titles-adoption-sampled" className="text-xs">
+              {t("move.adoptionSampled")}
+            </p>
+          )}
+        </div>
+      ) : null}
+
+      {accounting.additional.length > 0 ? (
+        <AdoptionFileList
+          id="move-titles-adoption-additional-files"
+          heading={t("move.adoptionAdditionalHeading")}
+          lines={accounting.additional}
+          tone="muted"
+        />
+      ) : null}
+
+      {accounting.sourceCleanupNotice ? (
+        <p
+          id="move-titles-adoption-source-cleanup"
+          className="text-xs text-muted-foreground"
+        >
+          {t("move.adoptionSourceCleanup")}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+/** One named group of adoption file lines: path first, then what was concluded. */
+function AdoptionFileList({
+  id,
+  heading,
+  lines,
+  tone = "danger",
+}: {
+  id: string;
+  heading: string;
+  lines: AdoptionFileLine[];
+  tone?: "danger" | "muted";
+}) {
+  if (lines.length === 0) {
+    return null;
+  }
+  return (
+    <div id={id} className={tone === "muted" ? "text-muted-foreground" : undefined}>
+      <p className="text-xs font-medium">{heading}</p>
+      <ul className="ml-4 list-disc space-y-0.5 text-xs">
+        {lines.map((line, index) => (
+          <li key={`${line.sourcePath ?? line.destinationPath ?? "line"}-${index}`}>
+            <span className="font-[var(--font-code)] break-all">
+              {line.sourcePath ?? line.destinationPath ?? ""}
+            </span>
+            {line.detail ? (
+              <span className="block opacity-80">{line.detail}</span>
+            ) : null}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

@@ -41,6 +41,23 @@ pub enum LocationExecutionModeValue {
     CatalogOnly,
 }
 
+/// The filesystem side a client may ask for when previewing or starting a
+/// location operation (FR-011, FR-050).
+///
+/// Deliberately narrower than the reported `LocationExecutionModeValue`:
+/// `CATALOG_ONLY` is derived by the server for a selection with no files on
+/// disk (FR-076), so it is reported and never requested. Omitting the field
+/// asks for `MOVE_WITH_SCRYER`.
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+pub enum LocationExecutionModeInput {
+    /// Scryer performs and verifies the filesystem operation.
+    MoveWithScryer,
+    /// The user already moved the files; Scryer accounts for them at the
+    /// destination and adopts them where they lie.
+    FilesAlreadyThere,
+}
+
 /// Lifecycle state of a confirmed location operation, as shown in Activity.
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
 #[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
@@ -925,6 +942,8 @@ pub struct LocationOperationPreviewInput {
     pub title_ids: Vec<ID>,
     /// Where the selection would go.
     pub destination: LocationDestinationInput,
+    /// How the files would get there; omitted asks Scryer to do the moving.
+    pub mode: Option<LocationExecutionModeInput>,
 }
 
 #[derive(InputObject, Clone)]
@@ -934,6 +953,9 @@ pub struct StartLocationOperationInput {
     pub title_ids: Vec<ID>,
     /// Where the selection goes, matching the previewed destination.
     pub destination: LocationDestinationInput,
+    /// The mode the plan was previewed under; a different mode is a different
+    /// plan, so it produces a different fingerprint and is refused.
+    pub mode: Option<LocationExecutionModeInput>,
     /// Fingerprint of the previewed plan; a stale fingerprint is refused.
     pub plan_fingerprint: String,
     /// Phrase the user typed, for operations that require typed confirmation.

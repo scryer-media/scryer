@@ -3,6 +3,9 @@ import test from "node:test";
 
 import type { Translate } from "@/components/root/types";
 import {
+  ADOPTION_REASON_CODES,
+  adoptionAccounting,
+  adoptionBlocks,
   ambiguousCandidates,
   assetLineTextKey,
   assetLines,
@@ -47,8 +50,10 @@ import {
   refusalMessageKey,
   refusalNeedsFreshPreview,
   remainingSelection,
+  REQUESTABLE_MOVE_MODES,
   sameNamedDestinationTitle,
   shouldPollOperation,
+  startModeInput,
   showsAssetPlannedState,
   startRefusalCodeFromError,
   toCount,
@@ -62,6 +67,9 @@ import {
   type LocationOperation,
   type LocationOperationCounters,
   type LocationOperationPreview,
+  type LocationPlanCounts,
+  type LocationPlanItem,
+  type LocationPlanSection,
   type LocationSelectionClassification,
   type LocationOperationAssetListing,
   type LocationTitleAssets,
@@ -314,6 +322,215 @@ test("a fileless plan never offers a move mode (FR-076)", () => {
   assert.equal(offersModeSelection(preview()), true);
   assert.equal(offersModeSelection(preview({ mode: "CATALOG_ONLY" })), false);
   assert.equal(offersModeSelection(null), false);
+});
+
+test("only the two requestable modes are offered; catalog-only is derived", () => {
+  assert.deepEqual(
+    [...REQUESTABLE_MOVE_MODES],
+    ["MOVE_WITH_SCRYER", "FILES_ALREADY_THERE"],
+  );
+});
+
+test("the confirmed mode is read off the previewed plan, never off the control", () => {
+  assert.equal(startModeInput(preview()), "MOVE_WITH_SCRYER");
+  assert.equal(
+    startModeInput(preview({ mode: "FILES_ALREADY_THERE" })),
+    "FILES_ALREADY_THERE",
+  );
+  // A plan the server collapsed to catalog-only confirms as the managed move
+  // it degrades into: CATALOG_ONLY is not a mode a client may ask for.
+  assert.equal(startModeInput(preview({ mode: "CATALOG_ONLY" })), "MOVE_WITH_SCRYER");
+  assert.equal(startModeInput(null), "MOVE_WITH_SCRYER");
+});
+
+function adoptionItem(
+  overrides: Partial<LocationPlanItem> = {},
+): LocationPlanItem {
+  return {
+    kind: "BLOCKED",
+    titleId: "a",
+    mediaFileId: null,
+    sourcePath: null,
+    destinationPath: null,
+    sizeBytes: 0,
+    sameVolume: null,
+    reasonCode: null,
+    detail: null,
+    ...overrides,
+  };
+}
+
+function adoptionPreview(
+  sections: LocationPlanSection[],
+  byKind: LocationPlanCounts["byKind"],
+): LocationOperationPreview {
+  return preview({
+    mode: "FILES_ALREADY_THERE",
+    operationType: "ADOPTION",
+    sections,
+    counts: {
+      itemsTotal: 0,
+      titlesTotal: 1,
+      filesTotal: 0,
+      bytesTotal: 0,
+      byKind,
+    },
+  });
+}
+
+test("a managed-move preview has no adoption accounting to state", () => {
+  assert.equal(adoptionAccounting(preview()), null);
+  assert.equal(adoptionAccounting(preview({ mode: "CATALOG_ONLY" })), null);
+  assert.equal(adoptionAccounting(null), null);
+  assert.equal(adoptionBlocks(null), false);
+});
+
+test("a clean adoption counts what it found and states the FR-053 cleanup rule", () => {
+  const accounting = adoptionAccounting(
+    adoptionPreview(
+      [
+        {
+          kind: "MOVE",
+          itemsTotal: 2,
+          bytesTotal: 400,
+          complete: true,
+          items: [
+            adoptionItem({
+              kind: "MOVE",
+              sourcePath: "/old/A/one.mkv",
+              destinationPath: "/new/A/one.mkv",
+              sizeBytes: 200,
+              reasonCode: ADOPTION_REASON_CODES.adopted,
+            }),
+            adoptionItem({
+              kind: "MOVE",
+              sourcePath: "/old/A/two.mkv",
+              destinationPath: "/new/A/two.mkv",
+              sizeBytes: 200,
+              reasonCode: ADOPTION_REASON_CODES.adopted,
+            }),
+          ],
+        },
+        {
+          kind: "UNMANAGED_CONTENT",
+          itemsTotal: 1,
+          bytesTotal: 30,
+          complete: true,
+          items: [
+            adoptionItem({
+              kind: "UNMANAGED_CONTENT",
+              destinationPath: "/new/A/extra.nfo",
+              sizeBytes: 30,
+              reasonCode: ADOPTION_REASON_CODES.additional,
+            }),
+          ],
+        },
+        {
+          kind: "WARNING",
+          itemsTotal: 1,
+          bytesTotal: 0,
+          complete: true,
+          items: [
+            adoptionItem({
+              kind: "WARNING",
+              reasonCode: ADOPTION_REASON_CODES.redundantSource,
+              detail: "adoption does not delete anything at the old location",
+            }),
+          ],
+        },
+      ],
+      [
+        { kind: "MOVE", count: 2 },
+        { kind: "UNMANAGED_CONTENT", count: 1 },
+      ],
+    ),
+  );
+  assert.ok(accounting);
+  assert.equal(accounting.accountedForFiles, 2);
+  assert.equal(accounting.accountedForBytes, 400);
+  assert.equal(accounting.additionalFiles, 1);
+  assert.equal(accounting.additionalBytes, 30);
+  assert.equal(accounting.additional.length, 1);
+  assert.deepEqual(accounting.missing, []);
+  assert.deepEqual(accounting.ambiguous, []);
+  // FR-051: an additional file is surfaced and never blocks.
+  assert.equal(accounting.blocks, false);
+  assert.equal(adoptionBlocks(accounting), false);
+  assert.equal(
+    accounting.sourceCleanupNotice,
+    "adoption does not delete anything at the old location",
+  );
+});
+
+test("unaccounted media names its files and refuses the confirmation (FR-052)", () => {
+  const accounting = adoptionAccounting(
+    adoptionPreview(
+      [
+        {
+          kind: "BLOCKED",
+          itemsTotal: 3,
+          bytesTotal: 0,
+          complete: true,
+          items: [
+            adoptionItem({
+              sourcePath: "/old/A/one.mkv",
+              destinationPath: "/new/A",
+              reasonCode: ADOPTION_REASON_CODES.missing,
+              detail: "nothing at the destination matches this file",
+            }),
+            adoptionItem({
+              sourcePath: "/old/A/two.mkv",
+              destinationPath: "/new/A",
+              reasonCode: ADOPTION_REASON_CODES.ambiguous,
+              detail: "two destination files are equally plausible",
+            }),
+            // The title-level rollup carries no source path; counting it would
+            // invent a file the user cannot go and look at.
+            adoptionItem({
+              reasonCode: ADOPTION_REASON_CODES.missing,
+              detail: "1 tracked file is missing and 1 is ambiguous",
+            }),
+          ],
+        },
+      ],
+      [{ kind: "BLOCKED", count: 3 }],
+    ),
+  );
+  assert.ok(accounting);
+  assert.equal(accounting.missing.length, 1);
+  assert.equal(accounting.missing[0]?.sourcePath, "/old/A/one.mkv");
+  assert.equal(accounting.ambiguous.length, 1);
+  assert.equal(accounting.ambiguous[0]?.sourcePath, "/old/A/two.mkv");
+  assert.equal(accounting.blocks, true);
+  assert.equal(adoptionBlocks(accounting), true);
+  assert.equal(accounting.listingComplete, true);
+});
+
+test("an unreadable destination blocks, and a sampled block list says so", () => {
+  const accounting = adoptionAccounting(
+    adoptionPreview(
+      [
+        {
+          kind: "BLOCKED",
+          itemsTotal: 40,
+          bytesTotal: 0,
+          complete: false,
+          items: [
+            adoptionItem({
+              destinationPath: "/new/A",
+              reasonCode: ADOPTION_REASON_CODES.unreadable,
+              detail: "/new/A could not be scanned",
+            }),
+          ],
+        },
+      ],
+      [{ kind: "BLOCKED", count: 40 }],
+    ),
+  );
+  assert.ok(accounting);
+  assert.equal(accounting.unreadable.length, 1);
+  assert.equal(accounting.blocks, true);
+  assert.equal(accounting.listingComplete, false);
 });
 
 test("plan-kind counts render in order and drop kinds the plan never produced", () => {

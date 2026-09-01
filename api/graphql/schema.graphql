@@ -9031,6 +9031,27 @@ input LocationDestinationInput {
 }
 
 """
+The filesystem side a client may ask for when previewing or starting a
+location operation (FR-011, FR-050).
+
+Deliberately narrower than the reported `LocationExecutionModeValue`:
+`CATALOG_ONLY` is derived by the server for a selection with no files on
+disk (FR-076), so it is reported and never requested. Omitting the field
+asks for `MOVE_WITH_SCRYER`.
+"""
+enum LocationExecutionModeInput {
+	"""
+	Scryer performs and verifies the filesystem operation.
+	"""
+	MOVE_WITH_SCRYER
+	"""
+	The user already moved the files; Scryer accounts for them at the
+	destination and adopts them where they lie.
+	"""
+	FILES_ALREADY_THERE
+}
+
+"""
 How the filesystem side of an operation is performed.
 """
 enum LocationExecutionModeValue {
@@ -9770,6 +9791,10 @@ input LocationOperationPreviewInput {
 	Where the selection would go.
 	"""
 	destination: LocationDestinationInput!
+	"""
+	How the files would get there; omitted asks Scryer to do the moving.
+	"""
+	mode: LocationExecutionModeInput
 }
 
 """
@@ -13254,10 +13279,16 @@ type MutationRoot {
 	The plan is rebuilt server side and compared against the fingerprint the
 	client previewed; a stale fingerprint, or a selection that still holds
 	blocked or unresolved titles, is refused instead of started.
+	
+	The mode is confirmed the same way everything else is: it rebuilds the
+	plan, so confirming `FILES_ALREADY_THERE` against a managed-move
+	fingerprint fails the comparison rather than running the other workflow.
+	An adoption whose destination is missing or ambiguous media is refused
+	here, because its rebuilt plan is blocked (FR-052).
 	"""
 	startLocationOperation(
 		"""
-		Previewed selection, destination, plan fingerprint, and typed confirmation when one is required.
+		Previewed selection, destination, mode, plan fingerprint, and typed confirmation when one is required.
 		"""
 		input: StartLocationOperationInput!
 	): StartLocationOperationPayload!
@@ -15892,12 +15923,17 @@ type QueryRoot {
 	Preview moving selected titles to another library or root; nothing is moved.
 	
 	The returned fingerprint is what `startLocationOperation` confirms. A
-	changed filesystem, catalog, selection, or destination produces a
+	changed filesystem, catalog, selection, destination, or mode produces a
 	different fingerprint and voids the confirmation.
+	
+	The mode picks which preview runs: the managed move plans the copy, and
+	`FILES_ALREADY_THERE` instead accounts for what is already at the
+	destination (FR-050 to FR-053). The reported mode can still come back as
+	`CATALOG_ONLY` when the selection has no files on disk (FR-076).
 	"""
 	locationOperationPreview(
 		"""
-		Titles to move and the destination library or root they would move to.
+		Titles to move, the destination library or root they would move to, and how the files get there.
 		"""
 		input: LocationOperationPreviewInput!
 	): LocationOperationPreviewPayload!
@@ -18943,6 +18979,11 @@ input StartLocationOperationInput {
 	Where the selection goes, matching the previewed destination.
 	"""
 	destination: LocationDestinationInput!
+	"""
+	The mode the plan was previewed under; a different mode is a different
+	plan, so it produces a different fingerprint and is refused.
+	"""
+	mode: LocationExecutionModeInput
 	"""
 	Fingerprint of the previewed plan; a stale fingerprint is refused.
 	"""

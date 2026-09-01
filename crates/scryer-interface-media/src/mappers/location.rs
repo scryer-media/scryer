@@ -37,7 +37,8 @@ use crate::types::{
     CancelLocationOperationPayload, LocationAmbiguousDestinationCandidatePayload,
     LocationClassificationGroupPayload, LocationClassifiedTitlePayload,
     LocationConfirmationRequirementValue, LocationDestinationIdentityMatchValue,
-    LocationDestinationInput, LocationExecutionModeValue, LocationFacetConversionPayload,
+    LocationDestinationInput, LocationExecutionModeInput, LocationExecutionModeValue,
+    LocationFacetConversionPayload,
     LocationFacetConvertedSettingPayload, LocationFacetSettingDispositionValue,
     LocationFreeSpaceEstimatePayload, LocationMergeBlockReasonValue,
     LocationMergeBlockedRecordPayload, LocationMergeDestinationWinsPayload,
@@ -195,6 +196,25 @@ fn from_confirmation_requirement(
 
 /// The destination a client asked for. Both fields stay optional: the classifier
 /// is what decides where a title with no explicit root ends up.
+/// The execution mode a request asked for.
+///
+/// Omitting the field is the managed move, so a client written before adoption
+/// existed keeps the behavior it already had. `CATALOG_ONLY` is not in the
+/// input enum at all: it is the server's own conclusion about a fileless
+/// selection (FR-076), never something a caller may claim.
+pub fn location_execution_mode_into_application(
+    input: Option<LocationExecutionModeInput>,
+) -> LocationExecutionMode {
+    match input {
+        Some(LocationExecutionModeInput::FilesAlreadyThere) => {
+            LocationExecutionMode::FilesAlreadyThere
+        }
+        Some(LocationExecutionModeInput::MoveWithScryer) | None => {
+            LocationExecutionMode::MoveWithScryer
+        }
+    }
+}
+
 pub fn location_destination_into_application(
     input: LocationDestinationInput,
 ) -> DestinationRequest {

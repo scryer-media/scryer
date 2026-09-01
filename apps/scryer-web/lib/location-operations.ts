@@ -1188,6 +1188,192 @@ export function offersModeSelection(
   return preview.mode !== "CATALOG_ONLY";
 }
 
+/**
+ * The two modes a client may ask for. `CATALOG_ONLY` is the server's own
+ * conclusion about a fileless selection (FR-076), so it is reported and never
+ * requested; the input enum does not carry it.
+ */
+export const REQUESTABLE_MOVE_MODES = [
+  "MOVE_WITH_SCRYER",
+  "FILES_ALREADY_THERE",
+] as const;
+
+export type RequestableMoveMode = (typeof REQUESTABLE_MOVE_MODES)[number];
+
+/**
+ * The mode to confirm a previewed plan under.
+ *
+ * Read off the preview rather than off the dialog's own control, so a
+ * confirmation always states the mode the plan in hand was built from. A
+ * preview the server collapsed to catalog-only confirms as the managed move
+ * it degrades into: the server collapses it again the same way (FR-076).
+ */
+export function startModeInput(
+  preview: LocationOperationPreview | null | undefined,
+): RequestableMoveMode {
+  return preview?.mode === "FILES_ALREADY_THERE"
+    ? "FILES_ALREADY_THERE"
+    : "MOVE_WITH_SCRYER";
+}
+
+/** Reason codes the adoption planner stamps on its plan items (FR-050 to FR-053). */
+export const ADOPTION_REASON_CODES = {
+  adopted: "adopted_at_destination",
+  missing: "adoption_media_missing",
+  ambiguous: "adoption_media_ambiguous",
+  additional: "adoption_additional_file",
+  unreadable: "adoption_destination_unreadable",
+  redundantSource: "adoption_redundant_source",
+} as const;
+
+/** One file line the adoption accounting states, as the plan item carries it. */
+export type AdoptionFileLine = {
+  titleId: string | null;
+  /** Path the catalog holds, for a tracked file; null for a destination file. */
+  sourcePath: string | null;
+  /** Where the file is (or was looked for) at the destination. */
+  destinationPath: string | null;
+  sizeBytes: number;
+  detail: string | null;
+};
+
+/**
+ * FR-051's four-way accounting, read back out of the plan the preview already
+ * carries.
+ *
+ * The counts come from the plan's complete per-kind totals; the lines come from
+ * the sections, which the server may sample. `listingComplete` says which of the
+ * two the reader is looking at, so a truncated list is never mistaken for the
+ * whole refusal.
+ */
+export type AdoptionAccountingSummary = {
+  /** Tracked files found at the destination and adopted where they lie. */
+  accountedForFiles: number;
+  accountedForBytes: number;
+  /** Destination files no tracked media claims; surfaced, never touched. */
+  additionalFiles: number;
+  additionalBytes: number;
+  additional: AdoptionFileLine[];
+  /** Tracked files with no match at the destination (FR-052). */
+  missing: AdoptionFileLine[];
+  /** Tracked files whose match could not be narrowed to one file (FR-052). */
+  ambiguous: AdoptionFileLine[];
+  /** Destination folders that could not be scanned at all. */
+  unreadable: AdoptionFileLine[];
+  /** Whether every unaccounted file is listed above, or only a sample of them. */
+  listingComplete: boolean;
+  /** The FR-053 statement about what adoption does and does not delete. */
+  sourceCleanupNotice: string | null;
+  /** Whether the accounting refuses the confirmation (FR-052). */
+  blocks: boolean;
+};
+
+function adoptionFileLine(item: LocationPlanItem): AdoptionFileLine {
+  return {
+    titleId: item.titleId,
+    sourcePath: item.sourcePath,
+    destinationPath: item.destinationPath,
+    sizeBytes: toCount(item.sizeBytes),
+    detail: item.detail,
+  };
+}
+
+function planKindTotal(
+  preview: LocationOperationPreview,
+  kind: LocationPlanItemKind,
+): number {
+  const entry = (preview.counts?.byKind ?? []).find(
+    (count) => count.kind === kind,
+  );
+  return entry ? toCount(entry.count) : 0;
+}
+
+/**
+ * The adoption accounting for a preview, or null when this preview is not an
+ * adoption.
+ *
+ * Every unaccounted file gets its own plan item plus one title-level rollup
+ * carrying no source path. The rollup would double-count a file line and read
+ * as a phantom row, so only the per-file items (the ones naming a tracked
+ * file) become lines here.
+ */
+export function adoptionAccounting(
+  preview: LocationOperationPreview | null | undefined,
+): AdoptionAccountingSummary | null {
+  if (!preview || preview.mode !== "FILES_ALREADY_THERE") {
+    return null;
+  }
+  const missing: AdoptionFileLine[] = [];
+  const ambiguous: AdoptionFileLine[] = [];
+  const unreadable: AdoptionFileLine[] = [];
+  const additional: AdoptionFileLine[] = [];
+  let sourceCleanupNotice: string | null = null;
+  let listingComplete = true;
+
+  const sections = preview.sections ?? [];
+  for (const section of sections) {
+    if (section.kind === "BLOCKED" && !section.complete) {
+      listingComplete = false;
+    }
+    for (const item of section.items) {
+      switch (item.reasonCode) {
+        case ADOPTION_REASON_CODES.missing:
+          if (item.sourcePath) {
+            missing.push(adoptionFileLine(item));
+          }
+          break;
+        case ADOPTION_REASON_CODES.ambiguous:
+          if (item.sourcePath) {
+            ambiguous.push(adoptionFileLine(item));
+          }
+          break;
+        case ADOPTION_REASON_CODES.unreadable:
+          unreadable.push(adoptionFileLine(item));
+          break;
+        case ADOPTION_REASON_CODES.additional:
+          additional.push(adoptionFileLine(item));
+          break;
+        case ADOPTION_REASON_CODES.redundantSource:
+          sourceCleanupNotice = sourceCleanupNotice ?? item.detail;
+          break;
+        default:
+          break;
+      }
+    }
+  }
+
+  const additionalSection = sections.find(
+    (section) => section.kind === "UNMANAGED_CONTENT",
+  );
+  const adoptedSection = sections.find((section) => section.kind === "MOVE");
+
+  return {
+    accountedForFiles: planKindTotal(preview, "MOVE"),
+    accountedForBytes: toCount(adoptedSection?.bytesTotal ?? 0),
+    additionalFiles: planKindTotal(preview, "UNMANAGED_CONTENT"),
+    additionalBytes: toCount(additionalSection?.bytesTotal ?? 0),
+    additional,
+    missing,
+    ambiguous,
+    unreadable,
+    listingComplete,
+    sourceCleanupNotice,
+    blocks:
+      missing.length > 0 || ambiguous.length > 0 || unreadable.length > 0,
+  };
+}
+
+/**
+ * Whether an adoption preview has anything unresolved to state. A clean
+ * adoption still renders its accounting; this is what turns the panel from a
+ * summary into a refusal.
+ */
+export function adoptionBlocks(
+  accounting: AdoptionAccountingSummary | null | undefined,
+): boolean {
+  return accounting?.blocks === true;
+}
+
 /** Terminal operations neither progress nor resume. */
 export function isTerminalOperationState(state: LocationOperationState): boolean {
   return (

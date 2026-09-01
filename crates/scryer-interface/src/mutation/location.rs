@@ -6,6 +6,7 @@
 //! so a caller can never confirm one plan and execute another.
 
 use async_graphql::{Context, ID, Object, Result as GqlResult};
+use scryer_application::location::model::LocationExecutionMode;
 use scryer_application::location::operations::{LocationResumeDecision, StartRootMoveRequest};
 use scryer_application::location::preview::{PlanConfirmationRequest, PlanFingerprint};
 
@@ -13,6 +14,7 @@ use crate::context::{actor_from_ctx, app_from_ctx, to_gql_error};
 use crate::mappers::{
     from_canceled_location_operation, from_resumed_location_operation,
     from_started_location_operation, location_destination_into_application,
+    location_execution_mode_into_application,
 };
 use crate::types::{
     CancelLocationOperationPayload, ResumeLocationOperationPayload, StartLocationOperationInput,
@@ -29,16 +31,23 @@ impl LocationMutations {
     /// The plan is rebuilt server side and compared against the fingerprint the
     /// client previewed; a stale fingerprint, or a selection that still holds
     /// blocked or unresolved titles, is refused instead of started.
+    ///
+    /// The mode is confirmed the same way everything else is: it rebuilds the
+    /// plan, so confirming `FILES_ALREADY_THERE` against a managed-move
+    /// fingerprint fails the comparison rather than running the other workflow.
+    /// An adoption whose destination is missing or ambiguous media is refused
+    /// here, because its rebuilt plan is blocked (FR-052).
     async fn start_location_operation(
         &self,
         ctx: &Context<'_>,
         #[graphql(
-            desc = "Previewed selection, destination, plan fingerprint, and typed confirmation when one is required."
+            desc = "Previewed selection, destination, mode, plan fingerprint, and typed confirmation when one is required."
         )]
         input: StartLocationOperationInput,
     ) -> GqlResult<StartLocationOperationPayload> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
+        let mode = location_execution_mode_into_application(input.mode);
         let request = StartRootMoveRequest {
             title_ids: input
                 .title_ids
@@ -51,10 +60,11 @@ impl LocationMutations {
                 typed_confirmation: input.typed_confirmation,
             },
         };
-        let accepted = app
-            .start_root_move(&actor, request)
-            .await
-            .map_err(to_gql_error)?;
+        let accepted = match mode {
+            LocationExecutionMode::FilesAlreadyThere => app.start_adoption(&actor, request).await,
+            _ => app.start_root_move(&actor, request).await,
+        }
+        .map_err(to_gql_error)?;
         // A just-accepted operation has no checkpoints yet; they are written as
         // each title enters the run.
         let checkpoints = app

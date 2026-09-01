@@ -625,11 +625,19 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // out of default introspection the way deprecated output fields do, but
     // this census counts types and root fields only, so every count below is
     // unchanged.
+    // Reaching the "files are already there" adoption engine (T052, US3,
+    // FR-050 to FR-053) adds one enum, LocationExecutionModeInput, and an
+    // optional `mode` field on each of the two existing location inputs:
+    // ENUM 130->131, public types 677->678. The requestable enum is narrower
+    // than the reported LocationExecutionModeValue on purpose: CATALOG_ONLY is
+    // derived from a fileless selection (FR-076) and is never requestable.
+    // Query, mutation, subscription, OBJECT, and INPUT_OBJECT counts are
+    // unchanged: both fields join input objects that already exist.
     assert_eq!(subscription_field_count, 14);
-    assert_eq!(public_types.len(), 677);
+    assert_eq!(public_types.len(), 678);
     assert_eq!(kind_count("OBJECT"), 356);
     assert_eq!(kind_count("INPUT_OBJECT"), 179);
-    assert_eq!(kind_count("ENUM"), 130);
+    assert_eq!(kind_count("ENUM"), 131);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
     assert!(query_field_names.contains(&"backupSettings"));
@@ -662,6 +670,10 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     assert!(public_type_names.contains(&"LocationTitleCheckpointPayload"));
     assert!(public_type_names.contains(&"StartLocationOperationInput"));
     assert!(public_type_names.contains(&"TitleLocationClassValue"));
+    // US3: the requestable mode is its own enum, reachable from both location
+    // inputs, and distinct from the reported LocationExecutionModeValue.
+    assert!(public_type_names.contains(&"LocationExecutionModeInput"));
+    assert!(public_type_names.contains(&"LocationExecutionModeValue"));
     assert!(mutation_field_names.contains(&"cancelActiveImport"));
     assert!(mutation_field_names.contains(&"startApplicationUpgrade"));
     assert!(mutation_field_names.contains(&"accountSecurityPasswordVerify"));
@@ -772,6 +784,78 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     assert!(!public_type_names.contains(&"ExternalImportLibrarySettingKey"));
     assert!(!public_type_names.contains(&"ExternalImportLibrarySettingConfidence"));
     assert!(!public_type_names.contains(&"ExternalImportLibrarySettingDisposition"));
+}
+
+/// US3/FR-076: a client may ask for a managed move or for adoption, and may not
+/// ask for the catalog-only fast path. That is a schema-level guarantee, not a
+/// resolver check, so it is asserted against the published input enum.
+#[tokio::test]
+async fn graphql_introspection_location_mode_is_requestable_but_never_catalog_only() {
+    let ctx = TestContext::new().await;
+    let body = gql(
+        &ctx,
+        r#"
+        {
+          modeInput: __type(name: "LocationExecutionModeInput") {
+            kind
+            enumValues { name }
+          }
+          modeValue: __type(name: "LocationExecutionModeValue") {
+            enumValues { name }
+          }
+          previewInput: __type(name: "LocationOperationPreviewInput") {
+            inputFields { name type { kind name ofType { kind name } } }
+          }
+          startInput: __type(name: "StartLocationOperationInput") {
+            inputFields { name type { kind name ofType { kind name } } }
+          }
+        }
+        "#,
+        json!({}),
+    )
+    .await;
+    assert_no_errors(&body);
+
+    assert_eq!(body["data"]["modeInput"]["kind"], "ENUM");
+    let requestable = body["data"]["modeInput"]["enumValues"]
+        .as_array()
+        .expect("LocationExecutionModeInput should expose enumValues")
+        .iter()
+        .map(|value| value["name"].as_str().expect("enum value name"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        requestable,
+        vec!["MOVE_WITH_SCRYER", "FILES_ALREADY_THERE"],
+        "only the two modes a caller may ask for: {body}"
+    );
+
+    // The reported enum keeps the derived value the input enum refuses.
+    let reported = body["data"]["modeValue"]["enumValues"]
+        .as_array()
+        .expect("LocationExecutionModeValue should expose enumValues")
+        .iter()
+        .map(|value| value["name"].as_str().expect("enum value name"))
+        .collect::<Vec<_>>();
+    assert!(
+        reported.contains(&"CATALOG_ONLY"),
+        "the fileless fast path is still reported: {body}"
+    );
+
+    // Optional on both inputs: an existing client that never sends the field
+    // keeps asking for the managed move it always asked for.
+    for input_alias in ["previewInput", "startInput"] {
+        let mode = body["data"][input_alias]["inputFields"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{input_alias} should expose inputFields"))
+            .iter()
+            .find(|field| field["name"] == "mode")
+            .unwrap_or_else(|| panic!("{input_alias}.mode should exist: {body}"));
+        assert_eq!(mode["type"]["kind"], "ENUM", "{input_alias}.mode");
+        assert_eq!(
+            mode["type"]["name"], "LocationExecutionModeInput",
+            "{input_alias}.mode"
+        );
+    }
 }
 
 #[tokio::test]
