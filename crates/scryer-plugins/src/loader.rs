@@ -27,6 +27,7 @@ use crate::process_host::ProcessHost;
 use crate::runtime_backing::{PluginInstanceSpec, PluginRuntimeBacking};
 use crate::socket_host::SocketHost;
 use crate::subtitle_adapter::WasmSubtitleClient;
+use crate::subtitle_sync_adapter::WasmSubtitleSyncClient;
 use crate::types::{
     ArchivePluginFormat, ConfigFieldRole, ConfigFieldValueSource, PluginDescriptor,
     PluginHostBindingId as SdkHostBinding, PluginKind, ProviderDescriptor, SDK_VERSION,
@@ -2237,24 +2238,47 @@ impl WasmSubtitlePluginProvider {
         resolve_loaded_plugin(&self.plugins, &self.aliases, provider_type)
     }
 
-    /// Subtitle-*sync* alignment has no host.
+    /// Build the align client for a loaded subtitle-*sync* plugin.
     ///
-    /// It was never a `PluginSubtitleCommand`: alignment rode its own
-    /// `SubtitleSyncPluginProcessRequest` on the wasip1 stdin/stdout transport,
-    /// and that transport is gone. The `scryer:subtitle/subtitle-provider@1.0.0`
-    /// world carries `validate-config` / `search` / `download` / `generate` and
-    /// nothing else, so there is no component to route an align job to and this
-    /// says so rather than pretending a provider can align.
+    /// Alignment rode its own `SubtitleSyncPluginProcessRequest` on the wasip1
+    /// stdin/stdout transport, and when that transport was deleted the
+    /// capability was orphaned. It now travels as
+    /// `PluginSubtitleCommand::Sync` — the same request type, verbatim, inside
+    /// the command envelope the `scryer:subtitle/subtitle-provider@1.0.0`
+    /// world's opaque JSON payload already carries — so a sync plugin needs no
+    /// world of its own and routes through the ordinary subtitle component
+    /// host. See [`crate::subtitle_sync_adapter`].
     fn subtitle_sync_client_from_loaded(
         loaded: &LoadedPlugin,
     ) -> Option<Arc<dyn SubtitleSyncClient>> {
-        warn!(
-            plugin_id = loaded.descriptor.id.as_str(),
-            provider_type = loaded.descriptor.provider_type(),
-            "subtitle sync alignment is unavailable: the subtitle-provider component world \
-             carries no align operation, and the wasip1 subtitle-sync transport has been removed"
-        );
-        None
+        let wasm_bytes = match loaded.materialize_wasm() {
+            Ok(wasm_bytes) => wasm_bytes,
+            Err(error) => {
+                warn!(
+                    plugin_id = loaded.descriptor.id.as_str(),
+                    provider_type = loaded.descriptor.provider_type(),
+                    error = %error,
+                    "failed to materialize WASM subtitle sync plugin bytes"
+                );
+                return None;
+            }
+        };
+        // A pre-component artifact classifies here, so an operator running a
+        // stale subtitle-sync build gets the fleet's shared "rebuild against
+        // the component ABI" diagnostic at load rather than a missing-import
+        // trap an hour into an align job.
+        match WasmSubtitleSyncClient::new(wasm_bytes, &loaded.descriptor) {
+            Ok(client) => Some(Arc::new(client)),
+            Err(error) => {
+                warn!(
+                    plugin_id = loaded.descriptor.id.as_str(),
+                    provider_type = loaded.descriptor.provider_type(),
+                    error = %error,
+                    "subtitle sync plugin rejected"
+                );
+                None
+            }
+        }
     }
 }
 

@@ -954,6 +954,14 @@ impl TestContext {
         .with_staged_nzb_store(staged_nzb_store.clone())
         .with_staged_nzb_pipeline_limit(staged_nzb_pipeline_limit)
         .with_workflow_operations(workflow_operation_store)
+        // The plugin catalog client picks artifacts by matching their declared
+        // requirements against this capability-token set — WASI targets and
+        // wasm features in one namespace. Left empty, no catalog artifact is
+        // runnable and every downloadable plugin disappears from the listing,
+        // so the test host declares what the real one does.
+        .with_supported_plugin_required_features(
+            scryer_plugins::detect_plugin_runtime_capabilities(),
+        )
         .build();
 
         // Facet registry with all built-in facets

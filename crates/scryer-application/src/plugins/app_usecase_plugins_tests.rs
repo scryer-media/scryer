@@ -119,7 +119,7 @@ impl MockPluginInstallationRepo {
                         "version": release.version.clone(),
                         "sdk_constraint": release.sdk_constraint.clone(),
                         "artifacts": [{
-                            "runtime": "wasm32-wasip1",
+                            "runtime": "wasm32-wasip2",
                             "required_features": [],
                             "url": artifact_url,
                             "mirror_urls": [],
@@ -1187,7 +1187,7 @@ fn catalog_v3_artifact(
     wasm_digest: &str,
 ) -> serde_json::Value {
     serde_json::json!({
-        "runtime": "wasm32-wasip1",
+        "runtime": "wasm32-wasip2",
         "required_features": required_features,
         "url": url,
         "mirror_urls": [],
@@ -1479,7 +1479,19 @@ fn bootstrap_plugins_inner(
     )
     .with_plugin_installations(plugin_repo.clone())
     .with_plugin_descriptor_loader(plugin_descriptor_loader.clone())
-    .with_supported_plugin_required_features(supported_features.iter().copied());
+    // The runtime environment carries one capability-token set: the WASI
+    // targets this host can instantiate plus the wasm features it detected.
+    // Production assembles it via `scryer_plugins::detect_plugin_runtime_capabilities`;
+    // tests name the feature half and inherit the same target the fleet builds for.
+    .with_supported_plugin_required_features(
+        supported_features
+            .iter()
+            .copied()
+            .map(str::to_string)
+            .chain(std::iter::once(
+                crate::plugins::catalog::CATALOG_V3_RUNTIME_WASIP2.to_string(),
+            )),
+    );
     let plugin_provider = provider.map(Arc::new);
     if let Some(provider) = &plugin_provider {
         services = services.with_plugin_provider(provider.clone());
@@ -2456,7 +2468,7 @@ async fn list_available_plugins_includes_cached_verified_community_source() {
                 "version": "1.0.0",
                 "sdk_constraint": scryer_plugin_sdk::current_sdk_constraint(),
                 "artifacts": [{
-                    "runtime": "wasm32-wasip1",
+                    "runtime": "wasm32-wasip2",
                     "required_features": [],
                     "url": artifact_url,
                     "mirror_urls": [],
@@ -2515,7 +2527,7 @@ async fn list_available_plugins_ignores_cached_community_source_with_unapproved_
                 "version": "1.0.0",
                 "sdk_constraint": scryer_plugin_sdk::current_sdk_constraint(),
                 "artifacts": [{
-                    "runtime": "wasm32-wasip1",
+                    "runtime": "wasm32-wasip2",
                     "required_features": [],
                     "url": artifact_url,
                     "mirror_urls": [],

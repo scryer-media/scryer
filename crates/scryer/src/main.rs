@@ -1332,7 +1332,7 @@ async fn bootstrap_application(
         .with_runtime_environment(
             compiled_binary_lane(),
             data_dir.clone(),
-            scryer_plugins::detect_supported_plugin_required_features(),
+            scryer_plugins::detect_plugin_runtime_capabilities(),
         )
         .with_download_client_category_snapshot_store(download_client_category_snapshot_store)
         .with_smg_registration_secret(

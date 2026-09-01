@@ -1,5 +1,7 @@
 #[cfg(test)]
-use super::catalog::{CATALOG_V3_RUNTIME_WASIP1, ChildCatalog, ChildCatalogRelease};
+use super::catalog::{
+    CATALOG_V3_RUNTIME_WASIP1, CATALOG_V3_RUNTIME_WASIP2, ChildCatalog, ChildCatalogRelease,
+};
 use super::catalog::{
     CatalogV3, CatalogV3CommunitySource, CatalogV3DistributionArtifact, CatalogV3PluginArtifact,
     CatalogV3PluginEntry, CatalogV3PluginRelease, CatalogV3Redirect, CatalogV3RulePackEntry,
@@ -7,10 +9,10 @@ use super::catalog::{
     PLUGIN_CATALOG_JSON_OUTPUT_LIMIT, PLUGIN_CATALOG_REDIRECT_OUTPUT_LIMIT,
     PLUGIN_SIGNATURE_BUNDLE_OUTPUT_LIMIT, PluginLifecycleStatus,
     RULE_PACK_MANIFEST_FALLBACK_OUTPUT_LIMIT, RequiredSigner, artifact_encoding_from_url,
-    blake3_digest, bound_uncompressed_bytes, catalog_v3_runtime_is_supported, compress_zstd,
-    decompress_brotli, decompress_zstd, parse_and_validate_catalog_v3,
-    parse_and_validate_catalog_v3_redirect, parse_digest_string, redirect_bundle_url_for,
-    verify_digest_set, verify_signed_blob, verify_split_digest,
+    blake3_digest, bound_uncompressed_bytes, catalog_v3_artifact_is_runnable,
+    catalog_v3_artifact_preference, compress_zstd, decompress_brotli, decompress_zstd,
+    parse_and_validate_catalog_v3, parse_and_validate_catalog_v3_redirect, parse_digest_string,
+    redirect_bundle_url_for, verify_digest_set, verify_signed_blob, verify_split_digest,
 };
 use super::*;
 use crate::ProviderCatalogFamily;

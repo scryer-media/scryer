@@ -133,13 +133,8 @@ impl ArchiveComponentRuntime {
         wasi: WasiCtx,
         memory_max_bytes: Option<usize>,
         timeout: Duration,
-    ) -> Result<
-        (
-            Store<ArchiveComponentCtx>,
-            contract_v1_0::ArchiveExtractor,
-        ),
-        wasmtime::Error,
-    > {
+    ) -> Result<(Store<ArchiveComponentCtx>, contract_v1_0::ArchiveExtractor), wasmtime::Error>
+    {
         let mut store = Store::new(
             self.component.engine(),
             ArchiveComponentCtx {
