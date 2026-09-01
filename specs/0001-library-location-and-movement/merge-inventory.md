@@ -6,6 +6,27 @@
 **Status**: Analysis complete; dispositions proposed. Ten items marked
 `OPEN QUESTION` (§6) await adjudication before T085 (merge engine) is written.
 
+> **Corrections (2026-09-01, found during the T085 build).** The §"Sweep
+> method" schema replay applied `CREATE TABLE` and `ALTER TABLE` but **not
+> `DROP TABLE`**, so six classified tables do not exist in the live schema:
+> `title_history` (dropped in 0085), `policy_decisions` (0011), and `releases`,
+> `title_aliases`, `quarantine_items` (all 0122); `subtitle_blacklist` was
+> renamed `subtitle_blocklist` (0094, still media-file keyed). OQ1 and OQ2 are
+> therefore no-ops. Two index rows are also stale:
+> `idx_title_external_ids_lookup` / `_facet_lookup` no longer exist on either
+> engine (only `_library_lookup` survives; the §3 disposition — delete source
+> rows, never repoint — is unchanged), and
+> `idx_location_operation_owned_entities_active` is unique *globally* across
+> operations, so the merging operation's own dual claim needs a wider
+> pre-delete than §8 implies. `wanted_items` lost `next_search_at` /
+> `search_count` / `search_phase` in 0143 (destination-wins stands; the stated
+> reason is stale). The engine records all of this as data in
+> `INVENTORY_DEVIATIONS` (`crates/scryer-application/src/location/merge/engine.rs`)
+> and surfaces it in every merge preview's notes. The Postgres unique-index
+> verification flagged as a known limit in §9 is now **complete and clean**:
+> every constraint the engine relies on is equivalently defined on both
+> engines.
+
 ## Purpose
 
 D8 says the merge builds a full source→destination identity map up front, blocks

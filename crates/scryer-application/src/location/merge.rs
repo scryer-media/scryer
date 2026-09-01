@@ -7,12 +7,26 @@
 //! (FR-066, C3). Unions execute as transactional id-rewrites at the title
 //! checkpoint.
 
+//! # Module map
+//!
+//! | Module | Responsibility |
+//! |---|---|
+//! | [`map`] | Group 0: the source→destination identity map and the FR-066 block decision. |
+//! | [`roles`] | T086: post-merge media-role resolution per logical slot (FR-068–FR-070). |
+//! | [`summary`] | FR-071: the serializable preview summary, and the `titles.tags` partition (OQ9). |
+//! | [`engine`] | `plan_merge` / `execute_merge`, the repository seam, and the Group 6 post-merge work list. |
+
+pub mod engine;
+pub mod map;
+pub mod roles;
+pub mod summary;
+
 use serde::{Deserialize, Serialize};
 
 /// How one table's rows are treated when a source title merges into a
 /// destination title. The per-table assignment is the T081 inventory
 /// deliverable.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum MergeDisposition {
     /// Source rows are re-pointed at the destination identity and kept alongside
@@ -72,7 +86,10 @@ impl DestinationIdentityMatch {
 
 /// Role a media file holds for one logical slot after a merge. Every role change
 /// is previewed and no primary is silently demoted (FR-068–070).
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+/// `Ord` is derived so a `file_episode_map` row can sort deterministically in
+/// [`roles::MergedRolePlan`]: a preview and its execution must agree, and a
+/// resumed operation must repeat itself.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum MergedMediaRole {
     Primary,
