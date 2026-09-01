@@ -1870,6 +1870,8 @@ const es: LocaleDictionary = {
   "move.freeSpaceRequired": "Necesita {{required}} en el destino; {{available}} libres.",
   "move.freeSpaceUnknown": "desconocido",
   "move.freeSpaceInsufficient": "El destino no tiene suficiente espacio libre.",
+  "move.startRefusedNoSpace":
+    "El destino no tiene suficiente espacio libre para este movimiento. Libera espacio o mueve menos títulos y vuelve a intentarlo.",
   "move.freeSpaceNotProbed": "No se pudo medir el volumen de destino.",
   "move.freeSpaceRecycleOtherVolume": "La papelera está en otro volumen y necesita {{required}}.",
   "move.verificationStatementFull": "Los {{files}} archivo(s) ({{bytes}}) se releerán por completo y se compararán.",

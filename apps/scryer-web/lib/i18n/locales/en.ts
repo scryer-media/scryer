@@ -3448,6 +3448,8 @@ const en: LocaleDictionary = {
   "move.freeSpaceRequired": "Needs {{required}} on the destination; {{available}} free.",
   "move.freeSpaceUnknown": "unknown",
   "move.freeSpaceInsufficient": "The destination does not have enough free space.",
+  "move.startRefusedNoSpace":
+    "The destination does not have enough free space for this move. Free up space or move fewer titles, then try again.",
   "move.freeSpaceNotProbed": "The destination volume could not be measured.",
   "move.freeSpaceRecycleOtherVolume": "The recycle bin is on another volume and needs {{required}}.",
   "move.verificationStatementFull": "All {{files}} file(s) ({{bytes}}) will be read back in full and compared.",

@@ -316,6 +316,7 @@ async fn a_rename_placement_persists_no_content_hashes() {
             title: planned_title,
             file: &planned_title.files[0],
             depth: VerificationDepth::Full,
+            progress: &crate::location::verify::CopyProgress::none(),
         })
         .await
         .expect("rename placement");
@@ -369,6 +370,7 @@ async fn cross_filesystem_moves_copy_verify_then_flip_the_catalog() {
                     destination: request.file.destination_path.clone(),
                     depth: request.depth,
                     claim: DestinationClaim::ClaimHere,
+                    progress: request.progress.clone(),
                 })
                 .await?;
             if verified.permits_source_removal() {
@@ -650,6 +652,166 @@ async fn resume_never_recopies_a_verified_file() {
     assert_eq!(store.verifications().len(), 1);
     assert_eq!(catalog.writes().len(), 3);
     assert_eq!(store.open_claim_count(), 0, "a finished operation owns nothing");
+}
+
+/// The edge case FR-033 names: "crash mid-copy → partial destination state is
+/// expected and resumable". The crashed attempt's partial is under the staging
+/// name, so the resumed run clears it, copies cleanly, and ends with the file
+/// verified exactly once.
+#[tokio::test]
+async fn a_partial_left_by_a_crashed_copy_does_not_block_the_resumed_run() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let source_root = temp.path().join("a");
+    let destination_root = temp.path().join("b");
+    let plan = single_title_plan(&source_root, &destination_root, "movie.mkv", 11);
+    write_file(&plan.titles[0].files[0].source(), b"hello world");
+
+    // What a process killed mid-copy leaves behind.
+    let destination = plan.titles[0].files[0].destination();
+    let partial = crate::location::verify::partial_destination_path(&destination);
+    write_file(&partial, b"hell");
+
+    let store = InMemoryLocationOperationStore::new();
+    store.insert_operation(queued_operation(
+        "op-1",
+        LocationOperationType::RootMove,
+        LocationExecutionMode::MoveWithScryer,
+        VerificationDepth::Full,
+    ));
+    let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
+    let recycler = RecordingRecycler::default();
+    let mover = RootMoveFileMover::without_permissions().forcing_copies();
+    let admission = RootMoveAdmission::new(&plan, &catalog);
+    let reconciler = RootMoveReconciler::new(&plan, &catalog, &store, &recycler);
+
+    let outcome = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
+        .run("op-1", &plan.to_work_plan())
+        .await
+        .expect("run");
+
+    assert_eq!(outcome.state, LocationOperationState::Completed);
+    assert_eq!(
+        std::fs::read(&destination).expect("destination readable"),
+        b"hello world",
+        "the resumed copy wrote the whole file, not the crashed prefix"
+    );
+    assert!(!partial.exists(), "the abandoned partial is cleared");
+    assert_eq!(
+        store.verifications().len(),
+        1,
+        "the file is verified exactly once"
+    );
+    assert!(store.verifications()[0].outcome.permits_source_removal());
+}
+
+/// The narrower crash window: the copy finished and was promoted onto the
+/// destination, but the process died before the verification record was
+/// written. The destination proves against the source, so it is recorded and
+/// the move carries on instead of failing on a name it cannot claim.
+#[tokio::test]
+async fn a_destination_left_unrecorded_by_a_crash_is_proven_and_the_move_continues() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let source_root = temp.path().join("a");
+    let destination_root = temp.path().join("b");
+    let plan = single_title_plan(&source_root, &destination_root, "movie.mkv", 11);
+    let source = plan.titles[0].files[0].source();
+    write_file(&source, b"hello world");
+    let destination = plan.titles[0].files[0].destination();
+    write_file(&destination, b"hello world");
+
+    let store = InMemoryLocationOperationStore::new();
+    store.insert_operation(queued_operation(
+        "op-1",
+        LocationOperationType::RootMove,
+        LocationExecutionMode::MoveWithScryer,
+        VerificationDepth::Full,
+    ));
+    let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
+    let recycler = RecordingRecycler::default();
+    let mover = RootMoveFileMover::without_permissions().forcing_copies();
+    let admission = RootMoveAdmission::new(&plan, &catalog);
+    let reconciler = RootMoveReconciler::new(&plan, &catalog, &store, &recycler);
+
+    let outcome = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
+        .run("op-1", &plan.to_work_plan())
+        .await
+        .expect("run");
+
+    assert_eq!(outcome.state, LocationOperationState::Completed);
+    let records = store.verifications();
+    assert_eq!(records.len(), 1);
+    assert!(records[0].outcome.permits_source_removal());
+    assert!(
+        records[0]
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("movie.mkv")),
+        "the record says the destination was proven in place: {:?}",
+        records[0].detail
+    );
+    assert!(
+        records[0].hashes.is_some(),
+        "proving a placed destination recovers the hashes a copy would have streamed"
+    );
+    assert_eq!(catalog.writes().len(), 3, "the catalog still flipped");
+    assert_eq!(
+        recycler.recycled(),
+        vec![plan.titles[0].files[0].source_path.clone()],
+        "the source is redundant once the destination is proven"
+    );
+}
+
+/// The same window with a file that is not this operation's work: it does not
+/// prove, so the title fails with the path in the detail — and the file is
+/// neither replaced nor removed (C4).
+#[tokio::test]
+async fn a_destination_that_does_not_prove_fails_its_title_and_names_the_path() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let source_root = temp.path().join("a");
+    let destination_root = temp.path().join("b");
+    let plan = single_title_plan(&source_root, &destination_root, "movie.mkv", 11);
+    write_file(&plan.titles[0].files[0].source(), b"hello world");
+    let destination = plan.titles[0].files[0].destination();
+    write_file(&destination, b"a stranger's file");
+
+    let store = InMemoryLocationOperationStore::new();
+    store.insert_operation(queued_operation(
+        "op-1",
+        LocationOperationType::RootMove,
+        LocationExecutionMode::MoveWithScryer,
+        VerificationDepth::Full,
+    ));
+    let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
+    let recycler = RecordingRecycler::default();
+    let mover = RootMoveFileMover::without_permissions().forcing_copies();
+    let admission = RootMoveAdmission::new(&plan, &catalog);
+    let reconciler = RootMoveReconciler::new(&plan, &catalog, &store, &recycler);
+
+    let outcome = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
+        .run("op-1", &plan.to_work_plan())
+        .await
+        .expect("run");
+
+    assert_eq!(outcome.state, LocationOperationState::Failed);
+    assert!(
+        outcome
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("movie.mkv")),
+        "the failure names the file that did not prove: {:?}",
+        outcome.detail
+    );
+    assert_eq!(
+        std::fs::read(&destination).expect("destination readable"),
+        b"a stranger's file",
+        "a destination that did not prove is left exactly as it is"
+    );
+    assert!(
+        plan.titles[0].files[0].source().exists(),
+        "the source is never touched for an unproven destination (FR-044)"
+    );
+    assert!(catalog.writes().is_empty());
+    assert!(recycler.recycled().is_empty());
 }
 
 /// T033: a fileless title completes with no filesystem work at all — no
@@ -948,6 +1110,7 @@ async fn a_quick_floor_fallback_is_counted_on_the_operation() {
                     destination: request.file.destination_path.clone(),
                     depth: request.depth,
                     claim: DestinationClaim::ClaimHere,
+                    progress: request.progress.clone(),
                 })
                 .await
         }
@@ -1016,6 +1179,7 @@ async fn a_rejected_cache_bypass_stays_a_full_verification() {
             destination,
             depth: VerificationDepth::Full,
             claim: DestinationClaim::ClaimHere,
+            progress: crate::location::verify::CopyProgress::none(),
         })
         .await
         .expect("copy");

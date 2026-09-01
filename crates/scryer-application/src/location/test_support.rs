@@ -118,6 +118,19 @@ impl InMemoryLocationOperationStore {
     }
 }
 
+/// The ordinal of the cancel check the runner makes at the boundary *before*
+/// the `nth` title (1-based) of a plan whose titles each hold `files_per_title`
+/// files.
+///
+/// The runner reads the cancel flag twice over: once at each title boundary and
+/// once before each of that title's files, so a cancel can land inside a title
+/// as well as between two of them (FR-092). The boundary ordinals are therefore
+/// not the title numbers, and a test that wants a title boundary has to say so
+/// rather than count.
+pub(crate) fn title_boundary_cancel_check(nth: usize, files_per_title: usize) -> usize {
+    (nth - 1) * (1 + files_per_title) + 1
+}
+
 #[async_trait]
 impl LocationOperationRepository for InMemoryLocationOperationStore {
     async fn create_location_operation(
@@ -184,6 +197,10 @@ impl LocationOperationRepository for InMemoryLocationOperationStore {
             operation.state = progress.state;
             operation.counters = progress.counters;
             operation.verification_fallback_count = progress.verification_fallback_count;
+            // The SQL store stamps `updated_at` on every progress write, and
+            // the staleness heuristic that decides whether to offer a resume
+            // reads exactly that column, so the in-memory twin has to as well.
+            operation.updated_at = chrono::Utc::now();
             if progress.detail.is_some() || progress.clear_detail {
                 operation.detail = progress.detail.clone();
             }

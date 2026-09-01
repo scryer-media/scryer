@@ -1514,6 +1514,9 @@ pub struct AppRuntimeLibraryState {
     pub library_scan_analysis_limit: Arc<Semaphore>,
     /// In-process fast path for the location ownership guard (FR-084, D7).
     pub location_ownership: crate::location::ownership_guard::LocationOwnershipRegistry,
+    /// Which location operations have a runner alive in this process, so a
+    /// resume can never start a second one over live checkpoints (FR-033).
+    pub location_runners: crate::location::ownership_guard::LocationRunnerRegistry,
 }
 
 #[derive(Clone)]
@@ -1760,6 +1763,7 @@ impl AppRuntimeState {
                 )),
                 location_ownership:
                     crate::location::ownership_guard::LocationOwnershipRegistry::new(),
+                location_runners: crate::location::ownership_guard::LocationRunnerRegistry::new(),
             },
             jobs: AppRuntimeJobState {
                 job_run_tracker: JobRunTracker::new(),

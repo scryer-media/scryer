@@ -403,8 +403,9 @@ pub fn to_gql_error(err: AppError) -> Error {
         }
         // A refused location plan is a validation failure the client acts on:
         // `stale_plan` means re-preview, `blocked_items` means unblock the
-        // selection. The reason travels as a code so the client never has to
-        // parse the sentence (FR-016, FR-081).
+        // selection, `insufficient_space` means neither will help and the user
+        // has to free room. The reason travels as a code so the client never
+        // has to parse the sentence (FR-016, FR-080, FR-081).
         AppError::LocationPlanRefused { message, code } => {
             Error::new(format!("validation: {message}")).extend_with(|_, extensions| {
                 extensions.set("code", "LOCATION_PLAN_REFUSED");

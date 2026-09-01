@@ -32,7 +32,7 @@
 //! refuses.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 
 use crate::{AppError, AppResult};
@@ -167,6 +167,81 @@ impl LocationOwnershipRegistry {
             .read()
             .map(|claims| claims.is_empty())
             .unwrap_or(true)
+    }
+}
+
+/// Which operations have a runner alive *in this process* right now.
+///
+/// The persisted ownership claim is idempotent for the same operation — that is
+/// what makes a resume able to re-claim what it already holds — so it cannot
+/// tell a second runner apart from the same runner picking its work back up. A
+/// second runner over one set of checkpoints would double-walk the plan, so
+/// this is the guard that refuses it.
+///
+/// Scryer runs as a single process, which is what makes an in-process set the
+/// right authority here: a runner is either in this process or it is not
+/// running at all. The boot resume runs before anything is spawned, so it is
+/// never refused by its own predecessor.
+#[derive(Clone, Default)]
+pub struct LocationRunnerRegistry {
+    live: Arc<std::sync::Mutex<HashSet<String>>>,
+}
+
+impl LocationRunnerRegistry {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Register a runner for `operation_id`, unless one is already live.
+    ///
+    /// The returned guard deregisters on drop, so a runner that panics does not
+    /// leave the operation permanently unresumable.
+    pub fn begin(&self, operation_id: &str) -> Option<LiveRunnerGuard> {
+        let mut live = self.live.lock().ok()?;
+        if !live.insert(operation_id.to_string()) {
+            return None;
+        }
+        Some(LiveRunnerGuard {
+            registry: self.clone(),
+            operation_id: operation_id.to_string(),
+        })
+    }
+
+    pub fn is_live(&self, operation_id: &str) -> bool {
+        self.live
+            .lock()
+            .map(|live| live.contains(operation_id))
+            .unwrap_or(false)
+    }
+
+    fn finish(&self, operation_id: &str) {
+        if let Ok(mut live) = self.live.lock() {
+            live.remove(operation_id);
+        }
+    }
+}
+
+impl std::fmt::Debug for LocationRunnerRegistry {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("LocationRunnerRegistry")
+            .field(
+                "live",
+                &self.live.lock().map(|live| live.len()).unwrap_or(0),
+            )
+            .finish()
+    }
+}
+
+/// Holds an operation's in-process runner slot for as long as the runner runs.
+pub struct LiveRunnerGuard {
+    registry: LocationRunnerRegistry,
+    operation_id: String,
+}
+
+impl Drop for LiveRunnerGuard {
+    fn drop(&mut self) {
+        self.registry.finish(&self.operation_id);
     }
 }
 

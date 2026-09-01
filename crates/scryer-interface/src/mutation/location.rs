@@ -6,7 +6,7 @@
 //! so a caller can never confirm one plan and execute another.
 
 use async_graphql::{Context, ID, Object, Result as GqlResult};
-use scryer_application::location::operations::StartRootMoveRequest;
+use scryer_application::location::operations::{LocationResumeDecision, StartRootMoveRequest};
 use scryer_application::location::preview::{PlanConfirmationRequest, PlanFingerprint};
 
 use crate::context::{actor_from_ctx, app_from_ctx, to_gql_error};
@@ -117,19 +117,22 @@ impl LocationMutations {
             .await
             .map_err(to_gql_error)?;
 
-        let Some(plan) = app
+        // The reason comes from the application layer: it is the half that
+        // knows whether the operation is finished, has no stored plan, or is
+        // sitting on a volume that is not mounted right now.
+        let plan = match app
             .resume_location_operation(&operation_id)
             .await
             .map_err(to_gql_error)?
-        else {
-            return Ok(from_resumed_location_operation(
-                &operation_id,
-                false,
-                Some(
-                    "this operation has finished or has no stored plan, so there is nothing to resume"
-                        .to_string(),
-                ),
-            ));
+        {
+            LocationResumeDecision::Resume(plan) => *plan,
+            LocationResumeDecision::NotResumable(reason) => {
+                return Ok(from_resumed_location_operation(
+                    &operation_id,
+                    false,
+                    Some(reason),
+                ));
+            }
         };
         app.spawn_location_operation(operation_id.clone(), plan);
         Ok(from_resumed_location_operation(&operation_id, true, None))

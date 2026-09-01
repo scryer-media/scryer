@@ -279,10 +279,16 @@ export const OPERATION_POLL_INTERVAL_MS = 2_000;
 
 /**
  * How long an operation may go unwritten before the Activity view offers a
- * resume. A live runner checkpoints continuously, so silence this long means
- * the process died mid-run (FR-033).
+ * resume.
+ *
+ * A live runner pulses its progress every five seconds even in the middle of a
+ * single multi-hour file, so this is two dozen missed pulses — comfortably past
+ * any plausible slow write, and never reached by a run that is merely busy.
+ * Offering resume is only ever a hint anyway: the backend refuses a resume
+ * while a runner is alive, so a stale-looking-but-live operation costs the user
+ * a clear refusal rather than a second runner (FR-033).
  */
-export const OPERATION_STALL_THRESHOLD_MS = 60_000;
+export const OPERATION_STALL_THRESHOLD_MS = 120_000;
 
 /** Coerce a GraphQL `Long` (number or string) into a finite number. */
 export function toCount(value: LongValue | null | undefined): number {
@@ -400,8 +406,13 @@ export function isActiveWorkBlock(entry: LocationClassifiedTitle): boolean {
 
 /**
  * Whether the previewed plan may be confirmed. The backend refuses a blocked
- * plan anyway; the dialog mirrors the rule so the user sees a disabled confirm
- * and a deselect affordance instead of a raw mutation error.
+ * plan — and one the destination has no room for — anyway; the dialog mirrors
+ * the rules so the user sees a disabled confirm with the reason beside it
+ * instead of a raw mutation error.
+ *
+ * `sufficient` is deliberately compared against `false` and not treated as
+ * falsy: `null` means the volumes could not be measured, and an unmeasured
+ * destination stays startable (FR-080).
  */
 export function previewCanStart(
   preview: LocationOperationPreview | null | undefined,
@@ -410,6 +421,9 @@ export function previewCanStart(
     return false;
   }
   if (preview.blocksStart || preview.classification.blocksStart) {
+    return false;
+  }
+  if (preview.freeSpace?.sufficient === false) {
     return false;
   }
   return preview.selection.length > 0;
@@ -571,6 +585,20 @@ export function isBlockedSelectionMessage(
   );
 }
 
+/** Whether a failed start means the destination measured too small (FR-080). */
+export function isInsufficientSpaceMessage(
+  message: string | null | undefined,
+): boolean {
+  if (!message) {
+    return false;
+  }
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("insufficient_space") ||
+    normalized.includes("enough free space")
+  );
+}
+
 /**
  * Why the server refused to start a confirmed plan. These are the application's
  * own refusal codes, carried on the GraphQL error as
@@ -579,12 +607,14 @@ export function isBlockedSelectionMessage(
 export type LocationRefusalCode =
   | "stale_plan"
   | "blocked_items"
+  | "insufficient_space"
   | "typed_confirmation_required"
   | "typed_confirmation_mismatch";
 
 const REFUSAL_CODES: readonly string[] = [
   "stale_plan",
   "blocked_items",
+  "insufficient_space",
   "typed_confirmation_required",
   "typed_confirmation_mismatch",
 ];
@@ -632,18 +662,30 @@ export function recognizeStartRefusal(
   if (isBlockedSelectionMessage(message)) {
     return "blocked_items";
   }
+  if (isInsufficientSpaceMessage(message)) {
+    return "insufficient_space";
+  }
   return null;
 }
 
 /**
  * A refusal the dialog answers by re-previewing: the plan moved, or a title
  * became blocked between preview and confirm. Either way the fix is a fresh
- * plan (FR-016, FR-081). A typed-confirmation refusal is the user's to fix.
+ * plan (FR-016, FR-081). A typed-confirmation refusal is the user's to fix, and
+ * so is a shortfall of free space — re-previewing the same selection onto the
+ * same volume would only measure the same shortfall again (FR-080).
  */
 export function refusalNeedsFreshPreview(
   code: LocationRefusalCode | null,
 ): boolean {
   return code === "stale_plan" || code === "blocked_items";
+}
+
+/** The message a refusal should show, when the prose the server sent is not it. */
+export function refusalMessageKey(
+  code: LocationRefusalCode | null,
+): string | null {
+  return code === "insufficient_space" ? "move.startRefusedNoSpace" : null;
 }
 
 /** Translation key for a classification group heading. */

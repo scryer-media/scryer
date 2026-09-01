@@ -391,17 +391,26 @@ impl LocationPlan {
         self.counts.for_kind(PlanItemKind::Blocked) > 0 || self.classification.blocks_start()
     }
 
-    /// Validates a confirmation against this plan (FR-081, FR-082).
+    /// Validates a confirmation against this plan (FR-081, FR-082, FR-080).
     ///
     /// Order matters: a stale plan is reported before a missing typed phrase, so
     /// a user is never asked to retype a confirmation for a plan that is about
-    /// to be regenerated anyway.
+    /// to be regenerated anyway — and the same reasoning puts the space check
+    /// ahead of the typed phrase.
     pub fn confirm(&self, request: &PlanConfirmationRequest) -> Result<(), PlanConfirmationError> {
         if request.fingerprint != self.fingerprint {
             return Err(PlanConfirmationError::Stale);
         }
         if self.blocks_start() {
             return Err(PlanConfirmationError::Blocked);
+        }
+        // FR-080: a measured shortfall is a refusal, because starting would fill
+        // the destination volume and then fail partway through a title. An
+        // *unmeasured* volume is not — `sufficient()` answers `None` when it was
+        // never probed or could not be read, and refusing on "unknown" would
+        // block every move onto a volume Scryer cannot stat.
+        if self.free_space.sufficient() == Some(false) {
+            return Err(PlanConfirmationError::InsufficientSpace);
         }
         if self.confirmation.requires_typed_confirmation() {
             let phrase = request
@@ -436,6 +445,11 @@ pub enum PlanConfirmationError {
     Stale,
     /// Items still need a user decision (FR-016).
     Blocked,
+    /// The destination — or the recycle bin's volume — was measured and does
+    /// not have room for what the plan would write (FR-080). Unlike a stale
+    /// plan, re-previewing does not fix this: the user has to free space or
+    /// move less.
+    InsufficientSpace,
     /// A root-wide operation was confirmed without the typed phrase.
     TypedConfirmationRequired,
     /// The typed phrase did not match.
@@ -447,6 +461,7 @@ impl PlanConfirmationError {
         match self {
             Self::Stale => "stale_plan",
             Self::Blocked => "blocked_items",
+            Self::InsufficientSpace => "insufficient_space",
             Self::TypedConfirmationRequired => "typed_confirmation_required",
             Self::TypedConfirmationMismatch => "typed_confirmation_mismatch",
         }
@@ -1153,6 +1168,56 @@ mod tests {
         assert_eq!(
             blocked.confirm(&blocked_request),
             Err(PlanConfirmationError::Blocked)
+        );
+    }
+
+    /// FR-080: a measured shortfall refuses the confirmation. Starting anyway
+    /// would fill the destination volume and strand a title halfway through it,
+    /// which is exactly the state the whole subsystem exists to avoid.
+    #[test]
+    fn a_measured_shortfall_refuses_the_confirmation_but_an_unknown_one_does_not() {
+        let probe = fake_probe(&[("/src", "vol-a"), ("/dst", "vol-b")], &[("/dst", 9)]);
+        let short = estimate_free_space(
+            &FreeSpaceRequest {
+                source_path: PathBuf::from("/src"),
+                destination_path: PathBuf::from("/dst"),
+                moved_bytes: 10,
+                recycled_bytes: 0,
+                recycle_base_path: None,
+            },
+            &probe,
+        );
+        assert_eq!(short.sufficient(), Some(false));
+
+        let mut builder = LocationPlanBuilder::new(header());
+        builder.push(move_item("title-1", "/src/a.mkv", "/dst/a.mkv", 10));
+        builder.free_space(short);
+        let plan = builder.build();
+        assert_eq!(
+            plan.confirm(&PlanConfirmationRequest {
+                fingerprint: plan.fingerprint.clone(),
+                typed_confirmation: None,
+            }),
+            Err(PlanConfirmationError::InsufficientSpace)
+        );
+        assert_eq!(
+            PlanConfirmationError::InsufficientSpace.as_str(),
+            "insufficient_space"
+        );
+
+        // An unprobed volume answers "unknown", and unknown is startable: a
+        // destination Scryer cannot stat is not a destination it may refuse.
+        let mut unknown_builder = LocationPlanBuilder::new(header());
+        unknown_builder.push(move_item("title-1", "/src/a.mkv", "/dst/a.mkv", 10));
+        unknown_builder.free_space(FreeSpaceEstimate::unknown());
+        let unknown = unknown_builder.build();
+        assert_eq!(unknown.free_space.sufficient(), None);
+        assert_eq!(
+            unknown.confirm(&PlanConfirmationRequest {
+                fingerprint: unknown.fingerprint.clone(),
+                typed_confirmation: None,
+            }),
+            Ok(())
         );
     }
 

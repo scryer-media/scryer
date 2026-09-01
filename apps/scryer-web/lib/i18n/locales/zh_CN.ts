@@ -1701,6 +1701,8 @@ const zh_CN: LocaleDictionary = {
   "move.freeSpaceRequired": "目标需要 {{required}}；可用 {{available}}。",
   "move.freeSpaceUnknown": "未知",
   "move.freeSpaceInsufficient": "目标位置的可用空间不足。",
+  "move.startRefusedNoSpace":
+    "目标位置的可用空间不足以完成此次移动。请释放空间或减少要移动的作品数量后重试。",
   "move.freeSpaceNotProbed": "无法测量目标卷。",
   "move.freeSpaceRecycleOtherVolume": "回收站位于另一个卷上，需要 {{required}}。",
   "move.verificationStatementFull": "全部 {{files}} 个文件（{{bytes}}）都会被完整回读并比对。",

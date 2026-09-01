@@ -66,6 +66,22 @@
 //! is the quick check stamped [`AppliedVerificationDepth::quick_fallback`] with
 //! a `detail` naming the reason, never a pass and never something weaker.
 //!
+//! # The partial-copy name (FR-033, "crash mid-copy is resumable")
+//!
+//! A copy that claims its own destination never writes under the destination's
+//! real name. It writes to a sibling [`partial_destination_path`] and promotes
+//! that name onto the destination with
+//! [`crate::fs_safety::promote_staged_file`], which never replaces anything.
+//! The consequence is the one resume depends on: after a crash, ENOSPC, or a
+//! dropped network mount, the destination name either does not exist (so the
+//! resumed run copies it cleanly) or holds a complete file (so the resumed run
+//! proves it). It is never a truncated file under the real name, which the old
+//! `create_new` claim would have turned into a permanent "File exists" failure.
+//!
+//! An abandoned partial is this operation's own work by construction — the
+//! ownership guard means no other operation may write these paths — so the next
+//! attempt removes it before copying rather than leaving litter behind.
+//!
 //! Nothing here deletes, recycles, or rolls anything back. A mismatched
 //! destination is kept exactly as written so it can be inspected, and the source
 //! is never touched: source removal is the executor's step, gated on
@@ -174,6 +190,66 @@ pub enum DestinationClaim {
     AlreadyHeld,
 }
 
+/// Suffix the in-progress copy of a destination file carries until it is
+/// complete and promoted onto the real name.
+///
+/// Deterministic on purpose: the next attempt has to be able to *find* the
+/// partial a crashed attempt abandoned, and a random name would leave one
+/// behind on every interruption.
+pub const PARTIAL_COPY_SUFFIX: &str = ".scryer-partial";
+
+/// Where a copy writes while it is still in progress: a sibling of
+/// `destination` in the same directory, so the promotion is a rename inside one
+/// filesystem and the fsynced directory entry covers both names.
+pub fn partial_destination_path(destination: &Path) -> PathBuf {
+    let name = destination
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let parent = destination.parent().unwrap_or_else(|| Path::new("."));
+    parent.join(format!("{name}{PARTIAL_COPY_SUFFIX}"))
+}
+
+/// Observes bytes as they are written, so a caller can show intra-file progress
+/// for a copy that runs for hours (FR-091).
+///
+/// The sink is called on the blocking copy thread once per chunk and must do
+/// nothing but bookkeeping — the runner accumulates into an atomic and does the
+/// persisting on its own, throttled, schedule.
+#[derive(Clone, Default)]
+pub struct CopyProgress(Option<Arc<dyn Fn(u64) + Send + Sync>>);
+
+impl CopyProgress {
+    /// A copy nobody is watching.
+    pub fn none() -> Self {
+        Self(None)
+    }
+
+    pub fn from_fn(sink: impl Fn(u64) + Send + Sync + 'static) -> Self {
+        Self(Some(Arc::new(sink)))
+    }
+
+    /// Report `bytes` newly written to the destination.
+    pub fn advance(&self, bytes: u64) {
+        if let Some(sink) = &self.0 {
+            sink(bytes);
+        }
+    }
+
+    pub fn is_observed(&self) -> bool {
+        self.0.is_some()
+    }
+}
+
+impl std::fmt::Debug for CopyProgress {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CopyProgress")
+            .field("observed", &self.is_observed())
+            .finish()
+    }
+}
+
 /// One file's worth of verified-copy work.
 #[derive(Debug, Clone)]
 pub struct VerifiedCopyRequest {
@@ -183,6 +259,8 @@ pub struct VerifiedCopyRequest {
     /// quick floor instead.
     pub depth: VerificationDepth,
     pub claim: DestinationClaim,
+    /// Where intra-file byte progress is reported, when anyone is watching.
+    pub progress: CopyProgress,
 }
 
 /// What verifying one destination file concluded, without the identifiers that
@@ -365,7 +443,12 @@ impl VerifiedCopier {
     /// and surface, not an exception.
     pub async fn copy_and_verify(&self, request: VerifiedCopyRequest) -> AppResult<VerifiedFile> {
         let hashes = self
-            .copy(&request.source, &request.destination, request.claim)
+            .copy_with_progress(
+                &request.source,
+                &request.destination,
+                request.claim,
+                &request.progress,
+            )
             .await?;
         let assessment = self
             .verify(&request.source, &request.destination, &hashes, request.depth)
@@ -381,17 +464,149 @@ impl VerifiedCopier {
         })
     }
 
-    /// One streaming copy pass: every buffer is written and fed to both hashers
-    /// (D2). The destination is fsynced, and its directory entry with it.
+    /// One streaming copy pass with nobody watching the byte counter.
     pub async fn copy(
         &self,
         source: &Path,
         destination: &Path,
         claim: DestinationClaim,
     ) -> AppResult<StreamedContentHashes> {
-        let source = source.to_path_buf();
-        let destination = destination.to_path_buf();
-        spawn_verify_blocking(move || copy_with_streamed_hashes(&source, &destination, claim)).await?
+        self.copy_with_progress(source, destination, claim, &CopyProgress::none())
+            .await
+    }
+
+    /// One streaming copy pass: every buffer is written and fed to both hashers
+    /// (D2). The destination is fsynced, and its directory entry with it.
+    ///
+    /// A [`DestinationClaim::ClaimHere`] copy goes through
+    /// [`partial_destination_path`] and is promoted onto the destination only
+    /// once it is complete, so an interruption never leaves a truncated file
+    /// under the real name. A [`DestinationClaim::AlreadyHeld`] copy writes in
+    /// place: the caller already staged the name and owns the rollback.
+    pub async fn copy_with_progress(
+        &self,
+        source: &Path,
+        destination: &Path,
+        claim: DestinationClaim,
+        progress: &CopyProgress,
+    ) -> AppResult<StreamedContentHashes> {
+        match claim {
+            DestinationClaim::AlreadyHeld => {
+                let source = source.to_path_buf();
+                let destination = destination.to_path_buf();
+                let progress = progress.clone();
+                spawn_verify_blocking(move || {
+                    copy_with_streamed_hashes(
+                        &source,
+                        &destination,
+                        DestinationClaim::AlreadyHeld,
+                        &progress,
+                    )
+                })
+                .await?
+            }
+            DestinationClaim::ClaimHere => {
+                self.copy_through_partial(source, destination, progress)
+                    .await
+            }
+        }
+    }
+
+    /// Write to the partial name, then promote it onto the destination.
+    async fn copy_through_partial(
+        &self,
+        source: &Path,
+        destination: &Path,
+        progress: &CopyProgress,
+    ) -> AppResult<StreamedContentHashes> {
+        let partial = partial_destination_path(destination);
+        // A partial at this path can only be an earlier attempt of this
+        // operation's own copy of this file: the ownership guard means nothing
+        // else may write here. Clearing it is what makes the retry — and the
+        // resumed run — start from a clean file rather than appending to a
+        // truncated one.
+        clear_abandoned_partial(&partial).await?;
+
+        let hashes = {
+            let source = source.to_path_buf();
+            let partial = partial.clone();
+            let progress = progress.clone();
+            spawn_verify_blocking(move || {
+                copy_with_streamed_hashes(
+                    &source,
+                    &partial,
+                    DestinationClaim::ClaimHere,
+                    &progress,
+                )
+            })
+            .await?
+        };
+        let hashes = match hashes {
+            Ok(hashes) => hashes,
+            Err(error) => {
+                // The source is untouched, so the incomplete partial is worth
+                // nothing to anyone; leaving it would only confuse the next
+                // attempt's stat.
+                remove_partial_best_effort(&partial).await;
+                return Err(error);
+            }
+        };
+
+        if let Err(error) = crate::fs_safety::promote_staged_file(
+            &partial,
+            destination,
+            crate::fs_safety::MoveOptions::default(),
+        )
+        .await
+        {
+            remove_partial_best_effort(&partial).await;
+            return Err(AppError::Repository(format!(
+                "failed to place the completed copy at {}: {error}",
+                destination.display()
+            )));
+        }
+
+        // The promotion is a second directory-entry change, so the entry the
+        // reader will look for needs its own fsync.
+        sync_parent_directory_after_promotion(destination).await;
+        Ok(hashes)
+    }
+
+    /// Prove a destination file that is already there against its source, for
+    /// the crash window between a promotion and the verification record that
+    /// should have followed it.
+    ///
+    /// The source is read once to recover the hashes the interrupted copy
+    /// streamed, then the destination is proven at `requested` exactly as a
+    /// fresh copy would be. A destination that does not prove comes back as a
+    /// [`FileVerificationOutcome::Mismatch`] — never a silent removal, never a
+    /// pass.
+    pub async fn verify_existing_destination(
+        &self,
+        source: &Path,
+        destination: &Path,
+        requested: VerificationDepth,
+    ) -> AppResult<VerifiedFile> {
+        let hashes = {
+            let source = source.to_path_buf();
+            spawn_verify_blocking(move || hash_source(&source)).await?
+        }?;
+        let assessment = self.verify(source, destination, &hashes, requested).await?;
+
+        Ok(VerifiedFile {
+            source_path: source.to_path_buf(),
+            destination_path: destination.to_path_buf(),
+            hashes: Some(hashes),
+            depth: assessment.depth,
+            outcome: assessment.outcome,
+            detail: join_details(
+                Some(format!(
+                    "{} was already in place with no verification record and was proven against the source",
+                    destination.display()
+                )),
+                assessment.detail,
+            ),
+        })
     }
 
     /// Prove `destination` against the hashes streamed while it was written.
@@ -473,12 +688,87 @@ where
     })
 }
 
+/// Removes a partial an earlier attempt abandoned, so this attempt can claim
+/// the name.
+///
+/// A partial that cannot be removed is an error rather than something to work
+/// around: the copy would otherwise fail on the claim anyway, and the reason
+/// the caller needs to see is the removal failure, not "File exists".
+async fn clear_abandoned_partial(partial: &Path) -> AppResult<()> {
+    match tokio::fs::remove_file(partial).await {
+        Ok(()) => {
+            tracing::info!(
+                partial = %partial.display(),
+                "cleared an abandoned partial copy left by an interrupted attempt"
+            );
+            Ok(())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(AppError::Repository(format!(
+            "failed to clear the abandoned partial copy at {}: {error}",
+            partial.display()
+        ))),
+    }
+}
+
+/// Drops an incomplete partial after a failed attempt. Best effort: a stray
+/// partial costs a stat on the next attempt, never correctness, and the source
+/// it was copied from is untouched.
+async fn remove_partial_best_effort(partial: &Path) {
+    if let Err(error) = tokio::fs::remove_file(partial).await
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        tracing::warn!(
+            partial = %partial.display(),
+            %error,
+            "could not remove an incomplete partial copy; the next attempt will clear it"
+        );
+    }
+}
+
+async fn sync_parent_directory_after_promotion(destination: &Path) {
+    let destination = destination.to_path_buf();
+    let _ = tokio::task::spawn_blocking(move || {
+        sync_parent_directory_best_effort(&destination);
+    })
+    .await;
+}
+
+/// Streams the source through both hashers without writing anything, so an
+/// already-placed destination can be compared against what a copy of that
+/// source would have produced.
+fn hash_source(source: &Path) -> AppResult<StreamedContentHashes> {
+    let mut input = File::open(source).map_err(|error| {
+        AppError::Repository(format!(
+            "failed to open copy source: {}: {error}",
+            source.display()
+        ))
+    })?;
+
+    let mut hasher = StreamedContentHasher::new();
+    let mut buffer = vec![0u8; COPY_CHUNK_BYTES];
+    loop {
+        let read = input.read(&mut buffer).map_err(|error| {
+            AppError::Repository(format!(
+                "failed to read copy source: {}: {error}",
+                source.display()
+            ))
+        })?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(hasher.finalize())
+}
+
 /// Copies `source` into a destination this call either claims or was handed,
 /// hashing every buffer on the way through.
 fn copy_with_streamed_hashes(
     source: &Path,
     destination: &Path,
     claim: DestinationClaim,
+    progress: &CopyProgress,
 ) -> AppResult<StreamedContentHashes> {
     let mut input = File::open(source).map_err(|error| {
         AppError::Repository(format!(
@@ -508,6 +798,7 @@ fn copy_with_streamed_hashes(
                 destination.display()
             ))
         })?;
+        progress.advance(read as u64);
     }
 
     output.flush().map_err(|error| {
@@ -987,6 +1278,7 @@ mod tests {
             destination: destination.to_path_buf(),
             depth,
             claim: DestinationClaim::ClaimHere,
+            progress: CopyProgress::none(),
         }
     }
 
@@ -1292,6 +1584,158 @@ mod tests {
         }
     }
 
+    /// FR-033's crash rule, from the writing side: while the copy is running,
+    /// the destination's real name does not exist at all — the bytes are going
+    /// to the partial. A crash at any point during the copy therefore leaves
+    /// either nothing or a complete file under the destination name, never a
+    /// truncated one.
+    #[tokio::test]
+    async fn a_copy_writes_through_a_partial_and_never_a_truncated_destination() {
+        use std::sync::Mutex;
+
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.bin");
+        let data = write_pattern(&source, COPY_CHUNK_BYTES * 2 + 4096);
+        let destination = dir.path().join("destination.bin");
+        let partial = partial_destination_path(&destination);
+
+        let observed: Arc<Mutex<Vec<(bool, bool)>>> = Arc::new(Mutex::new(Vec::new()));
+        let progress = CopyProgress::from_fn({
+            let observed = observed.clone();
+            let destination = destination.clone();
+            let partial = partial.clone();
+            move |_bytes| {
+                observed
+                    .lock()
+                    .expect("lock")
+                    .push((destination.exists(), partial.exists()));
+            }
+        });
+
+        let hashes = VerifiedCopier::new()
+            .copy_with_progress(
+                &source,
+                &destination,
+                DestinationClaim::ClaimHere,
+                &progress,
+            )
+            .await
+            .expect("copy");
+
+        let observed = observed.lock().expect("lock").clone();
+        assert!(
+            observed.len() >= 3,
+            "a three-chunk copy should report three times: {observed:?}"
+        );
+        for (destination_exists, partial_exists) in &observed {
+            assert!(
+                !destination_exists,
+                "the destination name must not exist while the copy is in flight"
+            );
+            assert!(partial_exists, "the bytes go to the partial");
+        }
+
+        assert_eq!(std::fs::read(&destination).unwrap(), data);
+        assert!(
+            !partial.exists(),
+            "the partial is consumed by the promotion"
+        );
+        assert_eq!(hashes.size_bytes, data.len() as u64);
+    }
+
+    /// A partial an interrupted attempt abandoned is this operation's own work,
+    /// so the next attempt clears it and copies cleanly rather than failing on
+    /// a name it cannot claim.
+    #[tokio::test]
+    async fn an_abandoned_partial_is_cleared_before_the_next_attempt() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.bin");
+        let data = write_pattern(&source, 8192);
+        let destination = dir.path().join("destination.bin");
+        std::fs::write(
+            partial_destination_path(&destination),
+            b"the first few bytes a crashed attempt managed to write",
+        )
+        .unwrap();
+
+        let verified = VerifiedCopier::new()
+            .copy_and_verify(request(&source, &destination, VerificationDepth::Full))
+            .await
+            .expect("copy and verify");
+
+        assert_eq!(verified.outcome, FileVerificationOutcome::Verified);
+        assert_eq!(
+            std::fs::read(&destination).unwrap(),
+            data,
+            "the destination holds the whole source, not the abandoned prefix"
+        );
+        assert!(!partial_destination_path(&destination).exists());
+    }
+
+    /// The window between a completed copy's promotion and the verification
+    /// record that should have followed it: the destination is already there
+    /// and proves against the source, so it is recorded rather than copied a
+    /// second time.
+    #[tokio::test]
+    async fn an_unrecorded_destination_that_matches_the_source_is_proven_in_place() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.bin");
+        let data = write_pattern(&source, THREE_WINDOWS);
+        let destination = dir.path().join("destination.bin");
+        std::fs::copy(&source, &destination).expect("stage the interrupted run's destination");
+
+        let verified = VerifiedCopier::new()
+            .verify_existing_destination(&source, &destination, VerificationDepth::Full)
+            .await
+            .expect("verify in place");
+
+        assert_eq!(verified.outcome, FileVerificationOutcome::Verified);
+        assert!(verified.permits_source_removal());
+        let hashes = verified.hashes.expect("the source is hashed to prove it");
+        assert_eq!(hashes.full_blake3, blake3::hash(&data).to_hex().to_string());
+        assert!(
+            verified
+                .detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains("destination.bin")),
+            "the record says which file was proven in place: {:?}",
+            verified.detail
+        );
+    }
+
+    /// The same window, with a file that is *not* this operation's finished
+    /// work: it is reported as a mismatch naming the path, never removed and
+    /// never assumed good (C4).
+    #[tokio::test]
+    async fn an_unrecorded_destination_that_does_not_match_is_a_mismatch() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.bin");
+        write_pattern(&source, THREE_WINDOWS);
+        let destination = dir.path().join("destination.bin");
+        std::fs::write(&destination, b"somebody else's file").unwrap();
+
+        let verified = VerifiedCopier::new()
+            .verify_existing_destination(&source, &destination, VerificationDepth::Full)
+            .await
+            .expect("verify in place");
+
+        assert_eq!(verified.outcome, FileVerificationOutcome::Mismatch);
+        assert!(!verified.permits_source_removal());
+        assert!(
+            verified
+                .detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains("destination.bin")),
+            "{:?}",
+            verified.detail
+        );
+        assert_eq!(
+            std::fs::read(&destination).unwrap(),
+            b"somebody else's file",
+            "a destination that did not prove is kept exactly as it is"
+        );
+    }
+
     /// The copy claims the destination name rather than replacing whatever holds
     /// it.
     #[tokio::test]
@@ -1312,6 +1756,10 @@ mod tests {
             b"someone else's file",
             "the existing file must be untouched"
         );
+        assert!(
+            !partial_destination_path(&destination).exists(),
+            "the copy that could not be placed does not leave its partial behind"
+        );
     }
 
     /// A destination the caller already claimed is written without being created
@@ -1331,6 +1779,7 @@ mod tests {
                 destination: destination.clone(),
                 depth: VerificationDepth::Full,
                 claim: DestinationClaim::AlreadyHeld,
+                progress: CopyProgress::none(),
             })
             .await
             .expect("copy and verify");

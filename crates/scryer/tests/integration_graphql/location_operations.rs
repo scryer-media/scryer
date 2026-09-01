@@ -476,6 +476,75 @@ async fn graphql_start_location_operation_refuses_a_stale_fingerprint() {
     );
 }
 
+/// FR-080 now gates the start: a destination the preview measured as too small
+/// refuses the confirmation. The half that has to keep working is this one — a
+/// same-volume move is a rename, needs no destination space at all, and must
+/// not be refused however large the content is.
+///
+/// The refusing half is not reachable from here: making
+/// `FreeSpaceEstimate::sufficient()` answer `false` needs a source and a
+/// destination on genuinely different volumes, which a temp-directory fixture
+/// cannot stage. That decision is covered where it is made, in
+/// `location::preview`'s confirmation tests.
+#[tokio::test]
+async fn graphql_a_same_volume_move_is_never_refused_for_space() {
+    let ctx = TestContext::new().await;
+    let first_root = tempfile::tempdir().expect("first root tempdir");
+    let second_root = tempfile::tempdir().expect("second root tempdir");
+    let (_source_root_id, destination_root_id) =
+        configure_two_movie_roots(&ctx, first_root.path(), second_root.path()).await;
+
+    let folder = make_folder(first_root.path(), "Enormous Movie (2024)");
+    let title = movable_title(&ctx, "Enormous Movie", &folder, "Enormous.2024.mkv").await;
+
+    // A sparse file: the plan reads its logical length, so this is 8 TiB of
+    // planned content without a byte written. 8 TiB stays inside ext4's
+    // per-file ceiling, so the fixture behaves the same on every filesystem CI
+    // runs on.
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(folder.join("Enormous.2024.mkv"))
+        .expect("open the fixture file")
+        .set_len(8 * 1024 * 1024 * 1024 * 1024)
+        .expect("grow the fixture file sparsely");
+
+    let preview = gql(
+        &ctx,
+        PREVIEW_QUERY,
+        json!({ "input": {
+            "titleIds": [title.id],
+            "destination": { "rootId": destination_root_id }
+        }}),
+    )
+    .await;
+    assert_no_errors(&preview);
+    let previewed = &preview["data"]["locationOperationPreview"];
+    assert_eq!(previewed["counts"]["bytesTotal"], 8_796_093_022_208_i64);
+    assert_eq!(previewed["freeSpace"]["probed"], true);
+    assert_eq!(previewed["freeSpace"]["sameVolumeMove"], true);
+    assert_eq!(previewed["freeSpace"]["destinationTotalRequiredBytes"], 0);
+    assert_eq!(
+        previewed["freeSpace"]["sufficient"], true,
+        "a rename needs no destination space, whatever it is renaming: {previewed}"
+    );
+
+    let fingerprint = previewed["planFingerprint"]
+        .as_str()
+        .expect("preview fingerprint")
+        .to_string();
+    let body = gql(
+        &ctx,
+        START_MUTATION,
+        json!({ "input": {
+            "titleIds": [title.id],
+            "destination": { "rootId": destination_root_id },
+            "planFingerprint": fingerprint
+        }}),
+    )
+    .await;
+    assert_no_errors(&body);
+}
+
 #[tokio::test]
 async fn graphql_start_location_operation_accepts_the_previewed_plan() {
     let ctx = TestContext::new().await;

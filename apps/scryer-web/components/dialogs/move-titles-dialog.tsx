@@ -47,6 +47,7 @@ import {
   planKindLabelKey,
   previewCanStart,
   recognizeStartRefusal,
+  refusalMessageKey,
   refusalNeedsFreshPreview,
   remainingSelection,
   toCount,
@@ -389,12 +390,16 @@ export function MoveTitlesDialog({
       // A refused confirmation is nearly always "the plan moved under you", or
       // a title that became blocked between preview and confirm. Either way the
       // answer is a fresh plan, not a backend sentence about fingerprints.
-      if (refusalNeedsFreshPreview(recognizeStartRefusal(error, message))) {
+      const refusal = recognizeStartRefusal(error, message);
+      if (refusalNeedsFreshPreview(refusal)) {
         setPlanChanged(true);
         setStartError(null);
         setPreviewNonce((current) => current + 1);
       } else {
-        setStartError(message);
+        // A refusal Scryer has its own words for says them; anything else
+        // shows the server's sentence rather than a guess.
+        const key = refusalMessageKey(refusal);
+        setStartError(key ? t(key) : message);
       }
     } finally {
       setStarting(false);

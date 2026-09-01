@@ -24,6 +24,21 @@
 //!                              operation picks up from its checkpoints (FR-033)
 //! ```
 //!
+//! # What a resume refuses, and what it declines
+//!
+//! Resuming twice is the dangerous mistake: the persisted ownership claim is
+//! idempotent for the same operation — which is what lets a resume re-claim
+//! what it already holds — so nothing in the store would stop a second runner
+//! from walking the same checkpoints. An in-process runner registry is what
+//! refuses that, as an error.
+//!
+//! Everything else a resume cannot do it *declines*, with a reason, leaving the
+//! operation exactly as interrupted as it found it: already finished, no stored
+//! plan, or a root whose volume is not mounted. That last one is the boot case
+//! that matters — spawning into an unmounted share would fail every copy and
+//! drive the operation terminally `Failed`, turning a boot-order accident into
+//! a permanent one.
+//!
 //! # Why the preview is rebuilt on start
 //!
 //! The confirmation the client sends back is a fingerprint, not a plan. Trusting
@@ -294,8 +309,15 @@ impl AppUseCase {
     }
 
     /// Resume one persisted operation from its last verified checkpoint
-    /// (FR-033). Returns `None` when the operation is unknown, terminal, or was
-    /// stored without its plan.
+    /// (FR-033).
+    ///
+    /// Reports [`LocationResumeDecision::NotResumable`] — never an error, and
+    /// never a silent nothing — when the operation is unknown, terminal, stored
+    /// without its plan, or sitting on a volume that is not mounted right now.
+    /// The one case that *is* an error is a second resume of an operation whose
+    /// runner is still alive: that is a caller mistake with a real consequence
+    /// (two runners over one set of checkpoints), so it is refused rather than
+    /// quietly reported as "nothing to do".
     ///
     /// A resumable operation gets a *fresh* Activity job run before the plan is
     /// handed back, and the operation row is repointed at it. Job runs are
@@ -303,22 +325,40 @@ impl AppUseCase {
     /// non-terminal run it finds, so the run an interrupted operation started
     /// under is already `failed` by the time a resume happens, and reopening it
     /// would rewrite a settled Activity row. One run per attempt also keeps the
-    /// jobs list honest about how many times a move was picked back up.
+    /// jobs list honest about how many times a move was picked back up. It is
+    /// opened last, after every refusal, so a refused resume leaves no run
+    /// behind.
     pub async fn resume_location_operation(
         &self,
         operation_id: &str,
-    ) -> AppResult<Option<RootMoveExecutionPlan>> {
+    ) -> AppResult<LocationResumeDecision> {
         let Some(operation) = self.location_operation(operation_id).await? else {
-            return Ok(None);
+            return Ok(LocationResumeDecision::not_resumable(
+                "this operation no longer exists",
+            ));
         };
         if operation.state.is_terminal() {
-            return Ok(None);
+            return Ok(LocationResumeDecision::not_resumable(
+                "this operation has already finished, so there is nothing to resume",
+            ));
         }
         if operation.operation_type != LocationOperationType::RootMove {
             // Other operation types resume through their own phases; this one
             // must not run them under root-move rules.
-            return Ok(None);
+            return Ok(LocationResumeDecision::not_resumable(format!(
+                "a {} operation does not resume through the root-move runner",
+                operation.operation_type.as_str()
+            )));
         }
+        // A runner that is still alive owns these checkpoints. Re-claiming
+        // ownership is idempotent for the same operation, so nothing further
+        // down would stop a second runner from walking the same plan.
+        if self.runtime.library.location_runners.is_live(operation_id) {
+            return Err(AppError::Validation(format!(
+                "location operation {operation_id} is still running; wait for it to stop before resuming it"
+            )));
+        }
+
         let Some(plan_json) = self
             .services
             .library
@@ -326,13 +366,25 @@ impl AppUseCase {
             .get_location_operation_plan_json(operation_id)
             .await?
         else {
-            return Ok(None);
+            return Ok(LocationResumeDecision::not_resumable(
+                "this operation was stored without its plan, so there is nothing to resume",
+            ));
         };
         let plan: RootMoveExecutionPlan = serde_json::from_str(&plan_json).map_err(|error| {
             AppError::Repository(format!(
                 "location operation {operation_id} has an unreadable plan: {error}"
             ))
         })?;
+
+        // FR-033 is about picking work back up, not about deciding it is over.
+        // A root whose volume has not mounted yet — the ordinary shape of a
+        // boot — would fail every copy and drive the operation to a terminal
+        // Failed, turning a boot-order accident into a permanent one.
+        if let Some(unavailable) = unavailable_plan_root(&plan).await {
+            return Ok(LocationResumeDecision::not_resumable(format!(
+                "{unavailable} is not available right now, so this operation stays interrupted and can be resumed once it is back"
+            )));
+        }
 
         // The resumed attempt gets its own run, and the operation points at the
         // latest one. A resume is a continuation of work the user already
@@ -352,7 +404,7 @@ impl AppUseCase {
             .set_location_operation_job_run(operation_id, &job_run.id)
             .await?;
 
-        Ok(Some(plan))
+        Ok(LocationResumeDecision::Resume(Box::new(plan)))
     }
 
     /// Boot hook: pick every interrupted location operation back up (FR-033).
@@ -369,19 +421,26 @@ impl AppUseCase {
         let mut resumed = 0usize;
         for operation in operations {
             match self.resume_location_operation(&operation.id).await {
-                Ok(Some(plan)) => {
+                Ok(LocationResumeDecision::Resume(plan)) => {
                     tracing::info!(
                         operation_id = %operation.id,
                         state = operation.state.as_str(),
                         "resuming an interrupted location operation from its last verified checkpoint"
                     );
-                    self.spawn_location_operation(operation.id.clone(), plan);
+                    self.spawn_location_operation(operation.id.clone(), *plan);
                     resumed += 1;
                 }
-                Ok(None) => tracing::warn!(
+                // Deliberately left interrupted, not failed. The operation
+                // stays resumable — by the next boot, or by the user from
+                // Activity once whatever is missing is back. Nothing here
+                // schedules a retry: a startup path that decided on its own
+                // that a user's half-finished move was over would be worse than
+                // one that waits to be asked.
+                Ok(LocationResumeDecision::NotResumable(reason)) => tracing::warn!(
                     operation_id = %operation.id,
                     operation_type = operation.operation_type.as_str(),
-                    "an interrupted location operation could not be resumed and is left for the user"
+                    reason = %reason,
+                    "an interrupted location operation was not resumed and is left for the user"
                 ),
                 Err(error) => tracing::warn!(
                     operation_id = %operation.id,
@@ -414,7 +473,9 @@ impl AppUseCase {
             .flatten()
             .and_then(|operation| operation.job_run_id);
 
-        let outcome = self.execute_root_move(operation_id, plan).await;
+        let outcome = self
+            .execute_root_move(operation_id, plan, job_run_id.as_deref())
+            .await;
         if let Some(job_run_id) = job_run_id {
             self.close_location_operation_job_run_for(&job_run_id, &outcome)
                 .await;
@@ -426,6 +487,7 @@ impl AppUseCase {
         &self,
         operation_id: &str,
         plan: &RootMoveExecutionPlan,
+        job_run_id: Option<&str>,
     ) -> AppResult<OperationRunOutcome> {
         let catalog = AppUseCaseRootMoveCatalog { app: self.clone() };
         let recycler = self.root_move_recycler(plan).await;
@@ -444,20 +506,44 @@ impl AppUseCase {
         )
         .with_permissions(permissions);
 
-        LocationOperationRunner::new(
+        // Activity's run mirrors the same pulse the operation row gets, so a
+        // long copy shows a moving row in the jobs list instead of "queued"
+        // until it finishes (FR-091).
+        let observer = job_run_id.map(|job_run_id| LocationJobRunProgress {
+            app: self.clone(),
+            job_run_id: job_run_id.to_string(),
+        });
+
+        let mut runner = LocationOperationRunner::new(
             self.services.library.location_operations.as_ref(),
             &mover,
             &admission,
             &reconciler,
         )
-        .with_ownership_registry(&self.runtime.library.location_ownership)
-        .run(operation_id, &plan.to_work_plan())
-        .await
+        .with_ownership_registry(&self.runtime.library.location_ownership);
+        if let Some(observer) = observer.as_ref() {
+            runner = runner.with_progress_observer(observer);
+        }
+        runner.run(operation_id, &plan.to_work_plan()).await
     }
 
+    /// Start the background runner for an operation, unless one is already
+    /// alive for it in this process (FR-033).
     pub fn spawn_location_operation(&self, operation_id: String, plan: RootMoveExecutionPlan) {
+        let Some(guard) = self.runtime.library.location_runners.begin(&operation_id) else {
+            tracing::warn!(
+                operation_id = %operation_id,
+                "refused to start a second runner for a location operation that is already running"
+            );
+            return;
+        };
+
         let app = self.clone();
         tokio::spawn(async move {
+            // The guard releases the slot when this task ends, however it ends
+            // — including a panic — so a crashed runner never leaves an
+            // operation permanently unresumable.
+            let _guard = guard;
             if let Err(error) = app.run_root_move(&operation_id, &plan).await {
                 tracing::error!(
                     operation_id = %operation_id,
@@ -599,6 +685,55 @@ impl AppUseCase {
             counters.as_ref(),
         )
         .await;
+    }
+
+    /// Mirror one progress pulse onto the operation's Activity run.
+    ///
+    /// Everything here is best effort and nothing here returns: the jobs list
+    /// showing a slightly stale row is a cosmetic problem, and failing a move
+    /// over one would not be.
+    async fn write_location_operation_job_run_progress(
+        &self,
+        job_run_id: &str,
+        snapshot: &crate::location::executor::OperationProgressSnapshot<'_>,
+    ) {
+        let Some(mut run) = self.location_operation_job_run(job_run_id).await else {
+            return;
+        };
+        if run.status.is_terminal() {
+            // Something already settled this run; a pulse must not reopen it.
+            return;
+        }
+
+        let counters = &snapshot.counters;
+        run.progress_json = serde_json::to_string(&serde_json::json!({
+            "status": run.status.as_str(),
+            "phase": snapshot.state.as_str(),
+            "operationId": snapshot.operation_id,
+            "titlesTotal": counters.titles_total,
+            "titlesProcessed": counters.titles_processed,
+            "filesTotal": counters.files_total,
+            "filesProcessed": counters.files_processed,
+            "bytesTotal": counters.bytes_total,
+            "bytesProcessed": counters.bytes_processed,
+        }))
+        .ok();
+        run.updated_at = chrono::Utc::now();
+
+        match self.services.events.job_runs.update_job_run(&run).await {
+            Ok(updated) => {
+                self.runtime
+                    .jobs
+                    .job_run_tracker
+                    .upsert_active_run(crate::JobRun::from_record(&updated, None))
+                    .await;
+            }
+            Err(error) => tracing::warn!(
+                job_run_id = %job_run_id,
+                error = %error,
+                "could not mirror a location operation's progress onto its job run"
+            ),
+        }
     }
 
     /// The persisted run, when the repository still has it. A missing run is
@@ -763,6 +898,83 @@ impl AppUseCase {
 }
 
 // ── Activity job runs ────────────────────────────────────────────────────────
+
+/// Mirrors the runner's throttled progress pulse onto one Activity job run.
+struct LocationJobRunProgress {
+    app: AppUseCase,
+    job_run_id: String,
+}
+
+#[async_trait::async_trait]
+impl crate::location::executor::OperationProgressObserver for LocationJobRunProgress {
+    async fn observe(&self, snapshot: crate::location::executor::OperationProgressSnapshot<'_>) {
+        self.app
+            .write_location_operation_job_run_progress(&self.job_run_id, &snapshot)
+            .await;
+    }
+}
+
+/// What a resume decided to do (FR-033).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LocationResumeDecision {
+    /// Pick the operation back up with this plan.
+    ///
+    /// Boxed because the execution plan is much larger than the refusal, and an
+    /// enum sized by its biggest variant would be paid for on every call.
+    Resume(Box<RootMoveExecutionPlan>),
+    /// Nothing was started, and why. The operation is left exactly as it was —
+    /// still interrupted, still resumable later.
+    NotResumable(String),
+}
+
+impl LocationResumeDecision {
+    fn not_resumable(reason: impl Into<String>) -> Self {
+        Self::NotResumable(reason.into())
+    }
+
+    /// The plan, when the resume decided to run.
+    pub fn plan(self) -> Option<RootMoveExecutionPlan> {
+        match self {
+            Self::Resume(plan) => Some(*plan),
+            Self::NotResumable(_) => None,
+        }
+    }
+}
+
+/// The first root path in `plan` that is not a directory right now, described
+/// so the reason a resume gives names it.
+///
+/// The parent-first stat the full-hash backfill job uses is the same idea: an
+/// unmounted share answers "no such directory" immediately, where opening
+/// content under it can block on a dead mount.
+async fn unavailable_plan_root(plan: &RootMoveExecutionPlan) -> Option<String> {
+    let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+    for title in &plan.titles {
+        for (label, root) in [
+            ("the source root", title.source_root_path.as_deref()),
+            (
+                "the destination root",
+                title.destination_root_path.as_deref(),
+            ),
+        ] {
+            let Some(root) = root else {
+                continue;
+            };
+            if !seen.insert(root) {
+                continue;
+            }
+            let path = stored_path_to_path_buf(root);
+            let available = tokio::fs::metadata(&path)
+                .await
+                .map(|metadata| metadata.is_dir())
+                .unwrap_or(false);
+            if !available {
+                return Some(format!("{label} {root}"));
+            }
+        }
+    }
+    None
+}
 
 /// Who a location-operation job run belongs to, and why it was opened.
 enum LocationJobRunActor<'a> {
@@ -1425,6 +1637,9 @@ fn confirmation_error(error: PlanConfirmationError) -> AppError {
         }
         PlanConfirmationError::Blocked => {
             "some selected titles still need a decision; resolve or remove them before starting"
+        }
+        PlanConfirmationError::InsufficientSpace => {
+            "the destination does not have enough free space for this move; free space or move fewer titles"
         }
         PlanConfirmationError::TypedConfirmationRequired => {
             "this operation requires typed confirmation"

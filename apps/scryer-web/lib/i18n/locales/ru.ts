@@ -4785,6 +4785,8 @@ const ru: LocaleDictionary = {
   "move.freeSpaceRequired": "Требуется {{required}} в назначении; свободно {{available}}.",
   "move.freeSpaceUnknown": "неизвестно",
   "move.freeSpaceInsufficient": "В назначении недостаточно свободного места.",
+  "move.startRefusedNoSpace":
+    "В назначении недостаточно свободного места для этого перемещения. Освободите место или переместите меньше тайтлов и повторите попытку.",
   "move.freeSpaceNotProbed": "Не удалось измерить целевой том.",
   "move.freeSpaceRecycleOtherVolume": "Корзина находится на другом томе и требует {{required}}.",
   "move.verificationStatementFull": "Все {{files}} файлов ({{bytes}}) будут полностью перечитаны и сверены.",

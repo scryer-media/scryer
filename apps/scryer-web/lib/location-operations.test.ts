@@ -13,6 +13,7 @@ import {
   classMovesFiles,
   isActiveWorkBlock,
   isBlockedSelectionMessage,
+  isInsufficientSpaceMessage,
   isStalePlanMessage,
   isTerminalOperationState,
   offersModeSelection,
@@ -23,6 +24,7 @@ import {
   orderedPlanSections,
   previewCanStart,
   recognizeStartRefusal,
+  refusalMessageKey,
   refusalNeedsFreshPreview,
   remainingSelection,
   shouldPollOperation,
@@ -236,6 +238,21 @@ test("a plan with blocked items is not startable until they are deselected", () 
   );
   assert.equal(previewCanStart(preview({ selection: [] })), false);
   assert.equal(previewCanStart(null), false);
+});
+
+test("a destination measured too small is not startable, but an unmeasured one is", () => {
+  const withSpace = (sufficient: boolean | null) =>
+    preview({
+      freeSpace: { ...preview().freeSpace, sufficient, probed: sufficient !== null },
+    });
+
+  // FR-080: the backend refuses a measured shortfall, so the confirm is
+  // disabled rather than the user meeting a raw mutation error.
+  assert.equal(previewCanStart(withSpace(false)), false);
+  assert.equal(previewCanStart(withSpace(true)), true);
+  // `null` is "we could not measure it", which stays startable — refusing on
+  // unknown would block every move onto a volume Scryer cannot stat.
+  assert.equal(previewCanStart(withSpace(null)), true);
 });
 
 test("deselecting a title keeps the rest of the selection in submit order", () => {
@@ -554,6 +571,49 @@ test("the server's refusal code is preferred over the message prose", () => {
   assert.equal(refusalNeedsFreshPreview("blocked_items"), true);
   assert.equal(refusalNeedsFreshPreview("typed_confirmation_mismatch"), false);
   assert.equal(refusalNeedsFreshPreview(null), false);
+});
+
+test("a refusal for free space is recognized and is not re-previewable", () => {
+  const refused = {
+    graphQLErrors: [
+      {
+        message: "validation: the destination does not have enough free space",
+        extensions: {
+          code: "LOCATION_PLAN_REFUSED",
+          refusalCode: "insufficient_space",
+        },
+      },
+    ],
+  };
+
+  assert.equal(
+    startRefusalCodeFromError(refused),
+    "insufficient_space",
+    "the new code is recognized rather than dropped as unknown",
+  );
+  assert.equal(recognizeStartRefusal(refused, null), "insufficient_space");
+  // The prose fallback, for a refusal that lost its extensions in transit.
+  assert.equal(
+    recognizeStartRefusal(new Error("boom"), "insufficient_space"),
+    "insufficient_space",
+  );
+  assert.equal(
+    recognizeStartRefusal(
+      new Error("boom"),
+      "The destination does not have enough free space for this move.",
+    ),
+    "insufficient_space",
+  );
+  assert.equal(isInsufficientSpaceMessage("the plan went stale"), false);
+
+  // Re-previewing the same selection onto the same volume would only measure
+  // the same shortfall again, so the dialog says so instead.
+  assert.equal(refusalNeedsFreshPreview("insufficient_space"), false);
+  assert.equal(
+    refusalMessageKey("insufficient_space"),
+    "move.startRefusedNoSpace",
+  );
+  assert.equal(refusalMessageKey("stale_plan"), null);
 });
 
 test("every classified title states where it lives now (FR-012)", () => {

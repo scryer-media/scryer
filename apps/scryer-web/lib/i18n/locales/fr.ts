@@ -1870,6 +1870,8 @@ const fr: LocaleDictionary = {
   "move.freeSpaceRequired": "Nécessite {{required}} sur la destination ; {{available}} libres.",
   "move.freeSpaceUnknown": "inconnu",
   "move.freeSpaceInsufficient": "La destination n'a pas assez d'espace libre.",
+  "move.startRefusedNoSpace":
+    "La destination n'a pas assez d'espace libre pour ce déplacement. Libérez de l'espace ou déplacez moins de titres, puis réessayez.",
   "move.freeSpaceNotProbed": "Le volume de destination n'a pas pu être mesuré.",
   "move.freeSpaceRecycleOtherVolume": "La corbeille est sur un autre volume et nécessite {{required}}.",
   "move.verificationStatementFull": "Les {{files}} fichier(s) ({{bytes}}) seront relus intégralement puis comparés.",

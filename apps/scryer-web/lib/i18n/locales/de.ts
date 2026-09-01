@@ -1844,6 +1844,8 @@ const de: LocaleDictionary = {
   "move.freeSpaceRequired": "Benötigt {{required}} am Ziel; {{available}} frei.",
   "move.freeSpaceUnknown": "unbekannt",
   "move.freeSpaceInsufficient": "Am Ziel ist nicht genug freier Speicher.",
+  "move.startRefusedNoSpace":
+    "Am Ziel ist nicht genug freier Speicher für diesen Verschiebevorgang. Geben Sie Speicher frei oder verschieben Sie weniger Titel und versuchen Sie es erneut.",
   "move.freeSpaceNotProbed": "Der Ziel-Datenträger konnte nicht gemessen werden.",
   "move.freeSpaceRecycleOtherVolume": "Der Papierkorb liegt auf einem anderen Datenträger und benötigt {{required}}.",
   "move.verificationStatementFull": "Alle {{files}} Datei(en) ({{bytes}}) werden vollständig zurückgelesen und verglichen.",

@@ -1772,6 +1772,8 @@ const ko: LocaleDictionary = {
   "move.freeSpaceRequired": "대상에 {{required}}가 필요하며 {{available}}가 남아 있습니다.",
   "move.freeSpaceUnknown": "알 수 없음",
   "move.freeSpaceInsufficient": "대상에 여유 공간이 충분하지 않습니다.",
+  "move.startRefusedNoSpace":
+    "대상에 이 이동을 수행할 여유 공간이 충분하지 않습니다. 공간을 확보하거나 더 적은 수의 작품을 이동한 후 다시 시도하세요.",
   "move.freeSpaceNotProbed": "대상 볼륨을 측정할 수 없었습니다.",
   "move.freeSpaceRecycleOtherVolume": "휴지통이 다른 볼륨에 있어 {{required}}가 필요합니다.",
   "move.verificationStatementFull": "{{files}}개 파일({{bytes}}) 전부를 다시 읽어 비교합니다.",

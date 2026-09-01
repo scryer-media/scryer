@@ -7,7 +7,7 @@
 //!
 //! | Seam | Implementation here | What it guarantees |
 //! |---|---|---|
-//! | [`TitleFileMover`] | [`RootMoveFileMover`] | Same-filesystem rename with no verification pass (FR-032); otherwise a verified streaming copy at the operation's depth (FR-040–043). Configured permissions land on the destination straight after verification (FR-031). |
+//! | [`TitleFileMover`] | [`RootMoveFileMover`] | Same-filesystem rename with no verification pass (FR-032); otherwise a verified streaming copy at the operation's depth (FR-040–043), or a proof of a destination an interrupted run already placed. Configured permissions land on the destination straight after verification (FR-031). |
 //! | [`TitleReconciler`] | [`RootMoveReconciler`] | Catalog ownership flips only after every planned file for the title is verified; then sources are recycled and *empty* source directories removed, in that order (FR-031, FR-044). |
 //! | [`TitleAdmissionCheck`] | [`RootMoveAdmission`] | The FR-089 scope rule: a changed catalog input or an unprocessed source that vanished is stale; this operation's own partial destination content is resumable. |
 //!
@@ -221,6 +221,14 @@ pub struct RootMoveFileMover {
     /// without a catalog, in which case the backfill job picks the files up
     /// later — a missing hash costs a re-read, never correctness.
     catalog: Option<Arc<dyn RootMoveCatalog>>,
+    /// Skip the FR-032 rename fast path and always copy.
+    ///
+    /// The mover decides rename-vs-copy from the actual device ids, so a test
+    /// living inside one temp directory can never reach the copy path — which
+    /// is the path with the partial-copy staging, the read-back, and the
+    /// interrupted-destination proof on it. This is the only way to exercise
+    /// those against real files; production never sets it.
+    force_copies: bool,
 }
 
 impl RootMoveFileMover {
@@ -229,7 +237,16 @@ impl RootMoveFileMover {
             copier,
             permissions,
             catalog: None,
+            force_copies: false,
         }
+    }
+
+    /// Take the cross-filesystem copy path whatever the devices say. Test-only;
+    /// see [`RootMoveFileMover::force_copies`].
+    #[cfg(test)]
+    pub fn forcing_copies(mut self) -> Self {
+        self.force_copies = true;
+        self
     }
 
     /// Persist each copy's hashes onto its media file, so a moved file leaves
@@ -303,8 +320,18 @@ impl TitleFileMover for RootMoveFileMover {
             self.permissions.apply_to_directory(parent).await?;
         }
 
-        let verified = if same_filesystem(source, destination).await {
+        let verified = if !self.force_copies && same_filesystem(source, destination).await {
             move_with_rename(source, destination, request.depth).await?
+        } else if tokio::fs::symlink_metadata(destination).await.is_ok() {
+            // The runner only asks for files it has no verification record for,
+            // so a destination that is already there is the crash window
+            // between a completed copy's promotion and the record that should
+            // have followed it — or a file that appeared from outside. Either
+            // way it is proven against the source rather than replaced or
+            // trusted (FR-033, C4).
+            self.copier
+                .verify_existing_destination(source, destination, request.depth)
+                .await?
         } else {
             self.copier
                 .copy_and_verify(VerifiedCopyRequest {
@@ -312,6 +339,7 @@ impl TitleFileMover for RootMoveFileMover {
                     destination: destination.clone(),
                     depth: request.depth,
                     claim: DestinationClaim::ClaimHere,
+                    progress: request.progress.clone(),
                 })
                 .await?
         };

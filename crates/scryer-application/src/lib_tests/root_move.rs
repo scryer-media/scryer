@@ -21,7 +21,9 @@ use crate::location::operations::{
     RootMovePreviewRequest, StartRootMoveRequest, is_catalog_only,
 };
 use crate::location::preview::{PlanConfirmationRequest, PlanItemKind};
-use crate::location::test_support::{InMemoryLocationOperationStore, queued_operation};
+use crate::location::test_support::{
+    InMemoryLocationOperationStore, queued_operation, title_boundary_cancel_check,
+};
 
 /// Two roots in one movie library, both real directories, with the operation
 /// store the runner checkpoints through.
@@ -754,7 +756,9 @@ async fn an_interrupted_operation_resumes_from_its_persisted_plan_without_redoin
 
     // The runner checks the cancel flag once per unprocessed title, so the
     // second check is the boundary right after the first title settled.
-    fixture.operations.crash_on_cancel_check(2);
+    fixture
+        .operations
+        .crash_on_cancel_check(title_boundary_cancel_check(2, 1));
     let crashed = fixture
         .app
         .run_root_move(operation_id, &preview.execution)
@@ -803,6 +807,7 @@ async fn an_interrupted_operation_resumes_from_its_persisted_plan_without_redoin
         .resume_location_operation(operation_id)
         .await
         .expect("resume")
+        .plan()
         .expect("an interrupted root move is resumable");
     assert_eq!(resumed_plan, preview.execution);
 
@@ -847,6 +852,171 @@ async fn an_interrupted_operation_resumes_from_its_persisted_plan_without_redoin
         fixture.operations.open_claim_count(),
         0,
         "a finished operation owns nothing (FR-084)"
+    );
+}
+
+/// FR-033, the other half of resume: a second runner over one set of
+/// checkpoints would double-walk the plan, and the persisted ownership claim
+/// cannot stop it (re-claiming is idempotent for the same operation, which is
+/// what makes a real resume possible). The in-process runner registry is what
+/// refuses it, and it lets go the moment the run finishes.
+#[tokio::test]
+async fn a_resume_is_refused_while_the_operation_still_has_a_live_runner() {
+    let fixture = RootMoveFixture::new().await;
+    let title = fixture
+        .seed_title(
+            "Live Runner",
+            2016,
+            &fixture.root_a_id,
+            &fixture.root_a(),
+            "Live Runner (2016)",
+            &[("Live.Runner.2016.mkv", 900)],
+        )
+        .await;
+
+    let preview = fixture.preview(&[&title.id]).await;
+    let operation_id = "operation-live-runner";
+    let operation = queued_operation(
+        operation_id,
+        LocationOperationType::RootMove,
+        LocationExecutionMode::MoveWithScryer,
+        preview.plan.verification.depth,
+    );
+    let plan_json = serde_json::to_string(&preview.execution).expect("serialize plan");
+    fixture
+        .app
+        .services
+        .library
+        .location_operations
+        .create_location_operation(&operation, Some(&plan_json))
+        .await
+        .expect("persist the operation");
+
+    // Hold the slot the way a spawned runner does.
+    let guard = fixture
+        .app
+        .runtime
+        .library
+        .location_runners
+        .begin(operation_id)
+        .expect("the registry hands out the first runner slot");
+
+    let refused = fixture
+        .app
+        .resume_location_operation(operation_id)
+        .await
+        .expect_err("a live operation must not be resumed a second time");
+    assert!(
+        refused.to_string().contains("still running"),
+        "the refusal should say why: {refused}"
+    );
+    assert!(
+        fixture.recorded_job_runs().await.is_empty(),
+        "a refused resume opens no Activity run"
+    );
+
+    // The runner stops; the slot is free and the resume goes through.
+    drop(guard);
+    let plan = fixture
+        .app
+        .resume_location_operation(operation_id)
+        .await
+        .expect("resume")
+        .plan()
+        .expect("the operation is resumable once nothing is running it");
+    assert_eq!(plan, preview.execution);
+}
+
+/// FR-033 and the boot hook: a root whose volume has not mounted yet is the
+/// ordinary shape of a restart. Spawning into it would fail every copy and
+/// drive the operation terminally Failed, so a boot-order accident would become
+/// permanent. The operation is left interrupted instead, with a reason naming
+/// the path.
+#[tokio::test]
+async fn an_operation_whose_root_is_not_available_is_left_interrupted_rather_than_failed() {
+    let fixture = RootMoveFixture::new().await;
+    let title = fixture
+        .seed_title(
+            "Unmounted Root",
+            2017,
+            &fixture.root_a_id,
+            &fixture.root_a(),
+            "Unmounted Root (2017)",
+            &[("Unmounted.Root.2017.mkv", 700)],
+        )
+        .await;
+
+    let preview = fixture.preview(&[&title.id]).await;
+    let operation_id = "operation-unmounted-root";
+    let operation = queued_operation(
+        operation_id,
+        LocationOperationType::RootMove,
+        LocationExecutionMode::MoveWithScryer,
+        preview.plan.verification.depth,
+    );
+    let plan_json = serde_json::to_string(&preview.execution).expect("serialize plan");
+    fixture
+        .app
+        .services
+        .library
+        .location_operations
+        .create_location_operation(&operation, Some(&plan_json))
+        .await
+        .expect("persist the operation");
+
+    // The destination root's volume goes away, the way an unplugged disk or an
+    // unmounted share does between a crash and the next boot.
+    std::fs::remove_dir_all(fixture.root_b()).expect("remove the destination root");
+
+    let decision = fixture
+        .app
+        .resume_location_operation(operation_id)
+        .await
+        .expect("an unavailable root is not an error");
+    let crate::location::operations::LocationResumeDecision::NotResumable(reason) = decision else {
+        panic!("an operation on an unavailable root must not be resumed");
+    };
+    assert!(
+        reason.contains(fixture.root_b().to_string_lossy().as_ref()),
+        "the reason names the path that is missing: {reason}"
+    );
+
+    // The boot hook makes the same call, so it resumes nothing and fails
+    // nothing.
+    assert_eq!(
+        fixture
+            .app
+            .resume_interrupted_location_operations()
+            .await
+            .expect("boot resume"),
+        0
+    );
+    let untouched = fixture
+        .app
+        .location_operation(operation_id)
+        .await
+        .expect("read operation")
+        .expect("operation row");
+    assert!(
+        untouched.state.is_active(),
+        "the operation stays interrupted and resumable, got {:?}",
+        untouched.state
+    );
+    assert!(
+        fixture.recorded_job_runs().await.is_empty(),
+        "nothing was started, so no Activity run was opened"
+    );
+
+    // Once the volume is back, the same operation resumes normally.
+    std::fs::create_dir_all(fixture.root_b()).expect("remount the destination root");
+    assert!(
+        fixture
+            .app
+            .resume_location_operation(operation_id)
+            .await
+            .expect("resume")
+            .plan()
+            .is_some()
     );
 }
 
@@ -981,7 +1151,9 @@ async fn the_backfill_job_skips_files_owned_by_an_in_flight_operation() {
 
     // Interrupt after the first title, leaving the operation active and still
     // holding both titles.
-    fixture.operations.crash_on_cancel_check(2);
+    fixture
+        .operations
+        .crash_on_cancel_check(title_boundary_cancel_check(2, 1));
     assert!(
         fixture
             .app
@@ -1011,6 +1183,7 @@ async fn the_backfill_job_skips_files_owned_by_an_in_flight_operation() {
         .resume_location_operation(operation_id)
         .await
         .expect("resume")
+        .plan()
         .expect("resumable");
     let outcome = fixture
         .app
@@ -1146,7 +1319,9 @@ async fn a_canceled_move_closes_its_activity_run_as_a_warning_rather_than_a_fail
     let preview = fixture.preview(&[&first.id, &second.id]).await;
     // The cancel lands at the boundary after the first title settled, which is
     // where a user's request would be read.
-    fixture.operations.cancel_at_cancel_check(2);
+    fixture
+        .operations
+        .cancel_at_cancel_check(title_boundary_cancel_check(2, 1));
     let accepted = fixture
         .app
         .start_root_move(
@@ -1226,7 +1401,9 @@ async fn a_resumed_operation_reports_through_a_fresh_activity_run() {
     let preview = fixture.preview(&[&first.id, &second.id]).await;
     // The store dies at the boundary after the first title settled: the row
     // stays non-terminal, which is what a killed process leaves behind.
-    fixture.operations.crash_on_cancel_check(2);
+    fixture
+        .operations
+        .crash_on_cancel_check(title_boundary_cancel_check(2, 1));
     let accepted = fixture
         .app
         .start_root_move(
@@ -1274,6 +1451,7 @@ async fn a_resumed_operation_reports_through_a_fresh_activity_run() {
         .resume_location_operation(&operation_id)
         .await
         .expect("resume")
+        .plan()
         .expect("an interrupted root move is resumable");
 
     let repointed = fixture

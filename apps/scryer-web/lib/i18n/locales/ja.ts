@@ -1816,6 +1816,8 @@ const ja: LocaleDictionary = {
   "move.freeSpaceRequired": "移動先に {{required}} が必要です。空き {{available}}。",
   "move.freeSpaceUnknown": "不明",
   "move.freeSpaceInsufficient": "移動先の空き容量が足りません。",
+  "move.startRefusedNoSpace":
+    "移動先にこの移動を行うための空き容量が足りません。空き容量を増やすか、対象のタイトル数を減らしてからやり直してください。",
   "move.freeSpaceNotProbed": "移動先ボリュームを測定できませんでした。",
   "move.freeSpaceRecycleOtherVolume": "ごみ箱が別のボリュームにあり、{{required}} が必要です。",
   "move.verificationStatementFull": "{{files}} ファイル（{{bytes}}）すべてを完全に読み戻して照合します。",
