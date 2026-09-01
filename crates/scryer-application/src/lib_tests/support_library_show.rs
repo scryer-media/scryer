@@ -139,6 +139,34 @@ impl LibraryRepository for MockLibraryRepo {
         Ok(library.clone())
     }
 
+    /// The in-place path flip a root change performs (FR-021): the row keeps
+    /// its id, its library, and its default flag, and only `path` moves. The
+    /// real store's behaviour, which is the whole reason this is its own port
+    /// method rather than an `update` with a rewritten root list.
+    async fn set_root_path(&self, root_id: &str, path: &str) -> AppResult<Library> {
+        let mut libraries = self.libraries.lock().await;
+        if libraries.iter().any(|library| {
+            library
+                .roots
+                .iter()
+                .any(|root| root.id != root_id && root.path == path)
+        }) {
+            return Err(AppError::Validation(format!(
+                "library root '{path}' is already configured"
+            )));
+        }
+        let now = Utc::now();
+        for library in libraries.iter_mut() {
+            if let Some(root) = library.roots.iter_mut().find(|root| root.id == root_id) {
+                root.path = path.to_string();
+                root.updated_at = now;
+                library.updated_at = now;
+                return Ok(library.clone());
+            }
+        }
+        Err(AppError::NotFound(format!("library root {root_id}")))
+    }
+
     async fn delete_library(&self, library_id: &str) -> AppResult<bool> {
         let mut libraries = self.libraries.lock().await;
         let before = libraries.len();

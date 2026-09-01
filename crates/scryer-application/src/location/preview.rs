@@ -136,6 +136,21 @@ impl PlanItemKind {
     pub fn blocks_start(&self) -> bool {
         matches!(self, Self::Blocked)
     }
+
+    /// Whether one item of this kind is one file's worth of work, which is what
+    /// [`PlanCounts::files_total`] counts.
+    ///
+    /// Paths alone are not the test. A root change opens its plan with a
+    /// root-level statement carrying the old and new *root* paths (FR-021), and
+    /// a warning about a file already covered by a `Move` carries that file's
+    /// two paths a second time — counting either would tell the user their
+    /// three-file move touches four or six files. A title-level item (`Merge`,
+    /// `NoOp`, `Blocked`, `CatalogChange`) is not a file at all, and unmanaged
+    /// content is content the operation deliberately does *not* touch, counted
+    /// in its own section (FR-027).
+    pub fn describes_a_file(&self) -> bool {
+        matches!(self, Self::Move | Self::Rename | Self::Dedup | Self::RoleChange)
+    }
 }
 
 /// One previewed change. Item bodies are what the fingerprint is taken over, so
@@ -663,7 +678,9 @@ fn build_counts(items: &[PlanItem]) -> PlanCounts {
         if let Some(title_id) = item.title_id.as_deref() {
             titles.insert(title_id);
         }
-        if item.media_file_id.is_some() || item.source_path.is_some() {
+        if item.kind.describes_a_file()
+            && (item.media_file_id.is_some() || item.source_path.is_some())
+        {
             files_total += 1;
         }
         bytes_total = bytes_total.saturating_add(item.size_bytes as i64);

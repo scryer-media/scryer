@@ -886,7 +886,7 @@ impl TitleReconciler for RootMoveReconciler<'_> {
 
 /// Outcome of considering one source directory for removal.
 #[derive(Debug)]
-enum DirectoryPrune {
+pub(super) enum DirectoryPrune {
     Removed,
     AlreadyAbsent,
     NotEmpty,
@@ -898,7 +898,7 @@ enum DirectoryPrune {
 /// `remove_dir` already refuses a non-empty directory, but reading the entries
 /// first is what lets the caller *report* "still holds content" rather than an
 /// errno the user cannot act on (C3).
-async fn remove_directory_if_empty(path: &Path) -> DirectoryPrune {
+pub(super) async fn remove_directory_if_empty(path: &Path) -> DirectoryPrune {
     let mut entries = match tokio::fs::read_dir(path).await {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {

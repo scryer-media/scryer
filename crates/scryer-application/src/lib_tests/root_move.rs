@@ -1020,10 +1020,11 @@ async fn an_operation_whose_root_is_not_available_is_left_interrupted_rather_tha
     );
 }
 
-/// FR-033 across operation types: only the three types this runner walks
-/// (`root_move`, `cross_library_transfer`, and — since T051 — `adoption`, which
-/// is the same plan proven instead of written) resume through it. The remaining
-/// three are planned types with no producer today — nothing writes such a row —
+/// FR-033 across operation types: only the types this runner walks resume
+/// through it — `root_move`, `cross_library_transfer`, `adoption` (since T051,
+/// the same plan proven instead of written), and `root_change` (since T060,
+/// the same plan with one root id on both sides plus an idempotent tail). The
+/// rest are planned types with no producer today — nothing writes such a row —
 /// but a row that arrived from a later build, or from a workflow added after
 /// this one, must not be walked under root-move rules just because the runner
 /// is the only one there is. It declines, naming the type.
@@ -1033,7 +1034,6 @@ async fn an_operation_type_the_root_move_runner_does_not_walk_declines_resume() 
 
     for (index, operation_type) in [
         LocationOperationType::FolderReassignment,
-        LocationOperationType::RootChange,
         LocationOperationType::RootConsolidation,
     ]
     .into_iter()
@@ -1315,11 +1315,19 @@ async fn the_default_verification_depth_reaches_the_operation_and_every_record()
     assert!(!records[0].depth.fell_back);
 }
 
-/// US9.2: flipping the preference to quick changes what the preview promises,
-/// what the operation row records, and what each file's record is stamped with —
-/// so the reduced guarantee is auditable after the fact (FR-043).
+/// US9.2, as the operator settled it: the verification-depth preference is an
+/// **import** preference, and a location operation ignores it.
+///
+/// The preference governs the copy that lands a freshly downloaded file, which
+/// still exists at the download client if the copy was wrong. A move is the
+/// other case — it is the user's only copy, and the source is recycled once the
+/// destination verifies — so every location operation plans full depth however
+/// the preference is set. What stays is the *fallback*: when a full read-back
+/// cannot run, verification still drops to the quick floor and says so
+/// (FR-043), because a capability limit the user is told about is a different
+/// thing from a preference that quietly asked for less.
 #[tokio::test]
-async fn the_quick_verification_preference_is_recorded_end_to_end() {
+async fn a_quick_verification_preference_is_ignored_by_a_location_operation() {
     let fixture = RootMoveFixture::new().await;
     fixture
         .app
@@ -1344,23 +1352,39 @@ async fn the_quick_verification_preference_is_recorded_end_to_end() {
         .await;
 
     let preview = fixture.preview(&[&title.id]).await;
-    assert_eq!(preview.plan.verification.depth, VerificationDepth::Quick);
+    assert_eq!(
+        preview.plan.verification.depth,
+        VerificationDepth::Full,
+        "a move promises full verification whatever the import preference says"
+    );
 
     let operation = fixture.start_and_settle(&[&title.id]).await;
     assert_eq!(operation.state, LocationOperationState::Completed);
-    assert_eq!(operation.verification_depth, VerificationDepth::Quick);
+    assert_eq!(operation.verification_depth, VerificationDepth::Full);
+    assert_eq!(operation.verification_fallback_count, 0);
 
     let records = fixture.verifications();
     assert_eq!(records.len(), 1);
     assert_eq!(
         records[0].depth.applied,
+        VerificationDepth::Full,
+        "the per-file stamp is the audit trail, and it says full"
+    );
+    assert!(!records[0].depth.fell_back);
+
+    // The preference is still stored and still means something — to imports.
+    assert_eq!(
+        fixture.app.resolve_verification_depth().await,
         VerificationDepth::Quick,
-        "the per-file stamp is what makes 'verified (quick)' auditable"
+        "the setting is untouched; only the location path stopped reading it"
     );
-    assert!(
-        !records[0].depth.fell_back,
-        "quick was chosen, not fallen back to"
-    );
+
+    // And the quick floor is still expressible as a *fallback*, which is what
+    // a destination that cannot be read back records (FR-043).
+    let fallback = crate::location::model::AppliedVerificationDepth::quick_fallback();
+    assert_eq!(fallback.requested, VerificationDepth::Full);
+    assert_eq!(fallback.applied, VerificationDepth::Quick);
+    assert!(fallback.fell_back);
 }
 
 /// SC-007, against a live operation rather than a hand-placed claim: while an

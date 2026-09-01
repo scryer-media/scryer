@@ -80,6 +80,27 @@ impl LibraryRepository for LibraryStore {
         .await
     }
 
+    async fn set_root_path(&self, root_id: &str, path: &str) -> AppResult<Library> {
+        let root_id = root_id.to_string();
+        let path = path.trim().to_string();
+        if path.is_empty() {
+            return Err(AppError::Validation(
+                "a library root path cannot be empty".to_string(),
+            ));
+        }
+        SqlRuntime::run_in_transaction(&self.datastore, "set_library_root_path", move |tx| {
+            let root_id = root_id.clone();
+            let path = path.clone();
+            Box::pin(async move {
+                let library_id = set_root_path_tx(tx, &root_id, path).await?;
+                load_library_tx(tx, &library_id).await?.ok_or_else(|| {
+                    AppError::Repository("library of the relocated root was not found".to_string())
+                })
+            })
+        })
+        .await
+    }
+
     async fn delete_library(&self, library_id: &str) -> AppResult<bool> {
         let library_id = library_id.to_string();
         SqlRuntime::run_in_transaction(&self.datastore, "delete_library", move |tx| {
@@ -280,6 +301,63 @@ async fn update_library_tx(
     )
     .await?;
     insert_library_roots_tx(tx, library_id, roots, &existing_root_ids).await
+}
+
+/// Point one existing root row at a new path, in place (FR-021, FR-078).
+///
+/// The row is never deleted and reinserted, so the id, the library, the default
+/// flag, and every `titles.root_folder_id` reference survive untouched — the
+/// whole point of a root change is that the identity does not move with the
+/// path. Returns the library the root belongs to.
+async fn set_root_path_tx(
+    tx: &mut SqlTx<'_>,
+    root_id: &str,
+    path: String,
+) -> AppResult<String> {
+    let library_id = SqlRuntime::fetch_optional(
+        SqlExec::Tx(tx),
+        "SELECT library_id FROM library_roots WHERE id = {}",
+        &[SqlArg::Text(root_id.to_string())],
+    )
+    .await?
+    .map(|row| row.text("library_id"))
+    .transpose()?
+    .ok_or_else(|| AppError::NotFound(format!("library root {root_id}")))?;
+
+    let normalized_path = normalize_library_root_path(&path);
+    // `library_roots.normalized_path` is uniquely indexed, so a destination that
+    // is already somebody's root would fail here with a constraint violation the
+    // user cannot read. The caller refuses that case by name (it is
+    // consolidation, US5); this is the last line of defence, phrased.
+    let conflicting = SqlRuntime::fetch_optional(
+        SqlExec::Tx(tx),
+        "SELECT id FROM library_roots WHERE normalized_path = {} AND id <> {}",
+        &[
+            SqlArg::Text(normalized_path.clone()),
+            SqlArg::Text(root_id.to_string()),
+        ],
+    )
+    .await?
+    .map(|row| row.text("id"))
+    .transpose()?;
+    if let Some(conflicting) = conflicting {
+        return Err(AppError::Validation(format!(
+            "library root '{path}' is already configured as root {conflicting}"
+        )));
+    }
+
+    tx.execute(
+        "UPDATE library_roots SET path = {}, normalized_path = {}, updated_at = {} WHERE id = {}",
+        &[
+            SqlArg::Text(path),
+            SqlArg::Text(normalized_path),
+            SqlArg::Timestamp(Utc::now()),
+            SqlArg::Text(root_id.to_string()),
+        ],
+    )
+    .await?;
+
+    Ok(library_id)
 }
 
 /// A library's stored root ids, keyed by the normalized path each one points at.
@@ -611,6 +689,130 @@ mod tests {
                 .starts_with(scryer_domain::SYNTHETIC_ROOT_ID_PREFIX),
             "a newly added root should be allocated an id, got {}",
             added.id
+        );
+    }
+
+    /// US4.2, FR-021/FR-078: a root change writes the new path onto the row the
+    /// root already has. Everything that identifies it survives.
+    #[tokio::test]
+    async fn setting_a_root_path_keeps_the_root_id_and_its_default_status() {
+        let store = test_store().await;
+        let now = Utc::now();
+        let created = store
+            .create(
+                Library {
+                    id: "relocating-library".to_string(),
+                    facet: MediaFacet::Movie,
+                    name: "Relocating".to_string(),
+                    slug: "relocating".to_string(),
+                    is_default: false,
+                    roots: Vec::new(),
+                    created_at: now,
+                    updated_at: now,
+                },
+                vec![draft("/mnt/old-disk", true), draft("/mnt/other", false)],
+            )
+            .await
+            .expect("library should create");
+        let root_id = created
+            .roots
+            .iter()
+            .find(|root| root.path == "/mnt/old-disk")
+            .expect("the relocating root exists")
+            .id
+            .clone();
+
+        let updated = store
+            .set_root_path(&root_id, "/mnt/new-disk")
+            .await
+            .expect("the root path should flip");
+
+        let relocated = updated
+            .roots
+            .iter()
+            .find(|root| root.id == root_id)
+            .expect("the root keeps its identity across a path change");
+        assert_eq!(relocated.path, "/mnt/new-disk");
+        assert!(
+            relocated.is_default,
+            "a path change never moves the library default (FR-021)"
+        );
+        assert!(
+            !updated.roots.iter().any(|root| root.path == "/mnt/old-disk"),
+            "the old path is gone rather than left beside the new one"
+        );
+        assert_eq!(
+            updated.roots.len(),
+            2,
+            "the library's other root is untouched"
+        );
+
+        // The normalized column travels with the path, or the next lookup by
+        // path would still answer with the retired location.
+        let reread = store
+            .get_by_id("relocating-library")
+            .await
+            .expect("read back")
+            .expect("library exists");
+        assert_eq!(
+            reread
+                .roots
+                .iter()
+                .find(|root| root.id == root_id)
+                .expect("root still there")
+                .path,
+            "/mnt/new-disk"
+        );
+    }
+
+    /// FR-020: a destination that is already a configured root is
+    /// *consolidation* (US5), not a root change. The store refuses it in words
+    /// rather than as a unique-index violation.
+    #[tokio::test]
+    async fn setting_a_root_path_refuses_a_path_another_root_already_holds() {
+        let store = test_store().await;
+        let now = Utc::now();
+        let created = store
+            .create(
+                Library {
+                    id: "colliding-library".to_string(),
+                    facet: MediaFacet::Movie,
+                    name: "Colliding".to_string(),
+                    slug: "colliding".to_string(),
+                    is_default: false,
+                    roots: Vec::new(),
+                    created_at: now,
+                    updated_at: now,
+                },
+                vec![draft("/mnt/left", true), draft("/mnt/right", false)],
+            )
+            .await
+            .expect("library should create");
+        let left = created
+            .roots
+            .iter()
+            .find(|root| root.path == "/mnt/left")
+            .expect("left root")
+            .id
+            .clone();
+
+        let error = store
+            .set_root_path(&left, "/mnt/right")
+            .await
+            .expect_err("a configured root is not a root-change destination");
+        assert!(
+            matches!(error, AppError::Validation(_)),
+            "expected a validation refusal, got {error:?}"
+        );
+
+        // An unknown root is a not-found, not a silently ignored write.
+        let missing = store
+            .set_root_path("no-such-root", "/mnt/anywhere")
+            .await
+            .expect_err("an unknown root cannot be relocated");
+        assert!(
+            matches!(missing, AppError::NotFound(_)),
+            "expected a not-found refusal, got {missing:?}"
         );
     }
 }

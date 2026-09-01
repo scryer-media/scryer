@@ -1649,6 +1649,21 @@ pub trait LibraryRepository: Send + Sync {
         slug: String,
         roots: Vec<LibraryRootDraft>,
     ) -> AppResult<Library>;
+    /// Replace one root's configured path, keeping its identity (FR-021,
+    /// FR-078). Returns the library as it stands afterwards.
+    ///
+    /// # Why this is not [`LibraryRepository::update`]
+    ///
+    /// `update` is a replace-on-write of the whole root list, and it re-keys
+    /// root identity **by normalized path**: a root whose path is absent from
+    /// the submitted list is a *removed* root (refused outright while titles
+    /// reference it), and a path that is not already stored is allocated a
+    /// brand-new synthetic id. A path change submitted through `update` is
+    /// therefore read as "delete root A, create root B" — which is exactly the
+    /// identity change FR-021 forbids, and which the referenced-root guard
+    /// rejects before it can even happen. A root change needs the one write
+    /// `update` cannot express: the same row, a different path.
+    async fn set_root_path(&self, root_id: &str, path: &str) -> AppResult<Library>;
     async fn delete_library(&self, library_id: &str) -> AppResult<bool>;
     async fn app_permission_mask_for_user(&self, user_id: &str) -> AppResult<AppPermissionMask>;
     async fn set_app_permission_mask_for_user(

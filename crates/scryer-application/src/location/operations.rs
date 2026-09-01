@@ -88,7 +88,7 @@ use crate::location::identity::{
 };
 use crate::location::model::{
     LocationExecutionMode, LocationOperation, LocationOperationCounters, LocationOperationState,
-    LocationOperationType, VerificationDepth,
+    VerificationDepth,
 };
 use crate::location::ownership_guard::OwnedEntity;
 use crate::location::preview::{
@@ -104,6 +104,34 @@ use crate::location::verify::{VerifiedCopier, same_filesystem};
 use crate::services::AppUseCase;
 use crate::stored_paths::{path_to_stored_string, stored_path_to_path_buf};
 use crate::{AppError, AppResult};
+
+/// Every location operation verifies at full depth, whatever the operator's
+/// verification preference says.
+///
+/// # Why the preference does not reach here
+///
+/// The configured depth (`VERIFICATION_DEPTH_KEY`, FR-042) governs the
+/// **download-client import copy**: a file Scryer has just acquired, which
+/// still exists at the download client if the copy turns out to be wrong. A
+/// location operation is the opposite situation. It moves content the user
+/// already has — the only copy, in the library, sometimes for years — and the
+/// source is recycled once the destination verifies. Proving that destination
+/// with the sampled head+tail floor instead of a full read-back is a risk taken
+/// with banked data on the user's behalf, and it is not the operator's to take
+/// per-installation: a lost library file is a materially worse outcome than a
+/// re-downloadable import.
+///
+/// So every workflow in this subsystem — root move, root change, cross-library
+/// transfer, adoption, and consolidation when it lands — plans
+/// [`VerificationDepth::Full`] and never reads the preference.
+///
+/// This is a floor, not a guarantee of the *achieved* depth. When a full
+/// read-back cannot run, [`crate::location::verify`] still falls back to the
+/// quick floor and records the fallback on the file's verification record and
+/// on the operation's counter (FR-043) — that is a capability limit the user is
+/// told about, which is a different thing from a preference that quietly asked
+/// for less.
+pub const LOCATION_OPERATION_VERIFICATION_DEPTH: VerificationDepth = VerificationDepth::Full;
 
 /// What the caller asks to preview.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -417,11 +445,13 @@ impl AppUseCase {
         // planner, persisted as the same `RootMoveExecutionPlan`, and walked by
         // the same runner, so they resume here. Every *other* type resumes
         // through its own phase and must not be run under these rules.
-        if !matches!(
+        //
+        // A root change joins them (US4): its instruction set *is* a
+        // `RootMoveExecutionPlan` whose two sides carry the same root id, and
+        // its root-scoped tail rides on the same JSON and re-runs idempotently
+        // (FR-087).
+        if !crate::location::root_change_execution::resumes_through_root_move_runner(
             operation.operation_type,
-            LocationOperationType::RootMove
-                | LocationOperationType::CrossLibraryTransfer
-                | LocationOperationType::Adoption
         ) {
             return Ok(LocationResumeDecision::not_resumable(format!(
                 "a {} operation does not resume through the root-move runner",
@@ -725,6 +755,19 @@ impl AppUseCase {
             job_run_id: job_run_id.to_string(),
         });
 
+        // US4: the one act a root change performs that is not about a title —
+        // retiring the source location and flipping the root's configured path
+        // once every title has recycled (FR-087). Bound to the run rather than
+        // performed after it, so the operation is never readable as finished
+        // before its root has actually moved.
+        let epilogue = plan
+            .root_change
+            .as_ref()
+            .map(|tail| crate::location::root_change_execution::RootChangeEpilogue {
+                app: self,
+                tail,
+            });
+
         let mut runner = LocationOperationRunner::new(
             self.services.library.location_operations.as_ref(),
             mover,
@@ -734,6 +777,9 @@ impl AppUseCase {
         .with_ownership_registry(&self.runtime.library.location_ownership);
         if let Some(observer) = observer.as_ref() {
             runner = runner.with_progress_observer(observer);
+        }
+        if let Some(epilogue) = epilogue.as_ref() {
+            runner = runner.with_epilogue(epilogue);
         }
         runner.run(operation_id, &plan.to_work_plan()).await
     }
@@ -776,7 +822,7 @@ impl AppUseCase {
     // written here rather than by the jobs engine, which never sees these runs.
 
     /// Open the run one execution of a location operation reports through.
-    async fn open_location_operation_job_run(
+    pub(super) async fn open_location_operation_job_run(
         &self,
         operation_id: &str,
         titles_total: i64,
@@ -967,7 +1013,7 @@ impl AppUseCase {
 
     /// Write a terminal status onto a location-operation run, mirror it into the
     /// tracker, and announce it.
-    async fn close_location_operation_job_run(
+    pub(super) async fn close_location_operation_job_run(
         &self,
         run: &crate::JobRunRecord,
         status: crate::JobRunStatus,
@@ -1202,7 +1248,7 @@ async fn unavailable_plan_root(
 }
 
 /// Who a location-operation job run belongs to, and why it was opened.
-enum LocationJobRunActor<'a> {
+pub(super) enum LocationJobRunActor<'a> {
     /// A user confirmed a previewed plan: a manual trigger, attributed to them.
     Confirmed(&'a User),
     /// An execution picked back up. The user who confirmed the operation still
@@ -1498,7 +1544,7 @@ impl AppUseCase {
         let folder_template = self
             .title_folder_template_for(&destination_library.facet)
             .await?;
-        let depth = self.resolve_verification_depth().await;
+        let depth = LOCATION_OPERATION_VERIFICATION_DEPTH;
         let probe = SystemVolumeProbe;
 
         let mut drafts = Vec::with_capacity(titles.len());
@@ -2068,7 +2114,7 @@ impl AppUseCase {
     /// client: a preview must not depend on a network round-trip, and a
     /// submission Scryer has accepted but not yet bound to a client item is
     /// just as much an in-flight claim as one that is downloading.
-    async fn active_work_blocking_a_move(&self, title: &Title) -> AppResult<Option<String>> {
+    pub(super) async fn active_work_blocking_a_move(&self, title: &Title) -> AppResult<Option<String>> {
         let unbound = self
             .services
             .workflow
@@ -2145,7 +2191,7 @@ fn source_library_label(libraries: &BTreeMap<String, scryer_domain::Library>) ->
 /// the media-file table only knows about tracked media, and a title folder
 /// holds subtitles, artwork, NFOs, and trickplay directories that belong to it
 /// just as much.
-async fn collect_source_files(
+pub(super) async fn collect_source_files(
     source_folder: Option<&Path>,
     media_files: &[crate::TitleMediaFile],
 ) -> AppResult<(Vec<SourceFile>, Vec<PathBuf>)> {
@@ -2521,7 +2567,7 @@ fn merge_destination_folder(
 /// A refused confirmation keeps its prose *and* its code: the client re-previews
 /// on a stale plan and unblocks a selection on a blocked one, and it should not
 /// have to read a sentence to tell the two apart (FR-016, FR-081).
-fn confirmation_error(error: PlanConfirmationError) -> AppError {
+pub(super) fn confirmation_error(error: PlanConfirmationError) -> AppError {
     let message = match error {
         PlanConfirmationError::Stale => {
             "the preview no longer matches what is on disk or in the catalog; review a fresh preview before confirming"

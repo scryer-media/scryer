@@ -205,6 +205,10 @@ pub struct OperationWorkPlan {
     pub titles: Vec<PlannedTitle>,
     /// What classification decided before any title was queued.
     pub baseline: ClassifiedTitleBaseline,
+    /// Titles the operation must own even though they carry no instructions
+    /// (FR-084). A root change is the case: it owns every title assigned to the
+    /// root, and a catalog-only or blocked title produces no work to walk.
+    pub additional_owned_titles: Vec<String>,
 }
 
 impl OperationWorkPlan {
@@ -214,7 +218,15 @@ impl OperationWorkPlan {
         Self {
             titles,
             baseline: ClassifiedTitleBaseline::default(),
+            additional_owned_titles: Vec::new(),
         }
+    }
+
+    /// Claim these titles for the operation's duration alongside the ones in
+    /// the plan (FR-084).
+    pub fn with_additional_owned_titles(mut self, title_ids: Vec<String>) -> Self {
+        self.additional_owned_titles = title_ids;
+        self
     }
 
     /// Carry the selection's classification counts into the run, so the no-op
@@ -482,6 +494,36 @@ impl crate::location::verify::FileVerificationRecorder for StoreVerificationReco
     }
 }
 
+/// One operation-scoped act that has to happen after the last title and before
+/// the operation is reported finished.
+///
+/// # Why this is a seam and not a step in `run_title`
+///
+/// Almost everything a location operation does is per-title, which is why the
+/// runner is written per-title. A **root change** has exactly one thing that is
+/// not: retiring the source location and flipping the root's configured path,
+/// which FR-087 says may only happen once every title's recycling has completed.
+///
+/// Doing that after `run` returned would be the obvious shortcut and it is
+/// wrong: `run` writes the terminal state as its last act, so the operation
+/// would be readable as `completed` — to Activity, to a watching client, to a
+/// test — while the root still pointed at the retired path. It would also run
+/// after the ownership claims were released (FR-084), leaving the flip
+/// unprotected. Both problems disappear when the epilogue is part of the run.
+#[async_trait]
+pub trait OperationEpilogue: Send + Sync {
+    /// Called once, after every title has settled cleanly and before the
+    /// terminal state is written. Never called for a run that failed, was
+    /// canceled, or stopped for resume — those have not finished the work the
+    /// epilogue depends on, and the terminal run that eventually follows will
+    /// call it instead.
+    ///
+    /// Returned warnings join the operation's own, which is what turns a
+    /// `Completed` into a `CompletedWithWarnings`. An `Err` fails the
+    /// operation: the epilogue is work the user asked for, not bookkeeping.
+    async fn finish_operation(&self, operation: &LocationOperation) -> AppResult<Vec<String>>;
+}
+
 /// The operation runner (D5).
 pub struct LocationOperationRunner<'a> {
     store: &'a dyn LocationOperationRepository,
@@ -490,6 +532,7 @@ pub struct LocationOperationRunner<'a> {
     reconciler: &'a dyn TitleReconciler,
     registry: Option<&'a crate::location::ownership_guard::LocationOwnershipRegistry>,
     observer: Option<&'a dyn OperationProgressObserver>,
+    epilogue: Option<&'a dyn OperationEpilogue>,
     pulse_interval: Duration,
     retry: FileMoveRetry,
 }
@@ -508,9 +551,16 @@ impl<'a> LocationOperationRunner<'a> {
             reconciler,
             registry: None,
             observer: None,
+            epilogue: None,
             pulse_interval: PROGRESS_PULSE_INTERVAL,
             retry: FileMoveRetry::default(),
         }
+    }
+
+    /// Bind the operation-scoped act that runs after the last title (FR-087).
+    pub fn with_epilogue(mut self, epilogue: &'a dyn OperationEpilogue) -> Self {
+        self.epilogue = Some(epilogue);
+        self
     }
 
     /// Mirrors this run's claims into the in-process guard registry (D7), so a
@@ -778,6 +828,29 @@ impl<'a> LocationOperationRunner<'a> {
                     Some(describe_title_failures(&failures, plan.titles.len())),
                 )
                 .await;
+        }
+
+        // The one act that belongs to the operation rather than to a title, for
+        // the workflows that have one — a root change retiring its source
+        // location and flipping the root's path (FR-087). It runs here, inside
+        // the run, so the operation is never readable as finished before it is,
+        // and so it still holds its ownership claims while it works (FR-084).
+        if let Some(epilogue) = self.epilogue {
+            match epilogue.finish_operation(&operation).await {
+                Ok(warnings) => progress.warnings.extend(warnings),
+                Err(error) => {
+                    return self
+                        .finish(
+                            &operation,
+                            plan,
+                            &progress,
+                            LocationOperationState::Failed,
+                            Some(StopReason::Error),
+                            Some(error.to_string()),
+                        )
+                        .await;
+                }
+            }
         }
 
         // A cancel that arrives after the last title still lands as a completed
@@ -1316,6 +1389,11 @@ pub fn owned_entities(operation: &LocationOperation, plan: &OperationWorkPlan) -
         .titles
         .iter()
         .map(|title| OwnedEntity::Title(title.title_id.clone()))
+        .chain(
+            plan.additional_owned_titles
+                .iter()
+                .map(|title_id| OwnedEntity::Title(title_id.clone())),
+        )
         .collect();
     for root_id in [
         operation.source_root_id.as_ref(),
@@ -2126,6 +2204,112 @@ mod tests {
             detail: None,
             verified_at: Utc::now(),
         }
+    }
+
+    /// An epilogue that records what the operation row said while it ran, so
+    /// the ordering contract can be asserted rather than assumed.
+    struct RecordingEpilogue<'a> {
+        store: &'a FakeStore,
+        /// The operation states persisted at the moment the epilogue ran.
+        states_when_called: std::sync::Mutex<Vec<LocationOperationState>>,
+        warnings: Vec<String>,
+        fail_with: Option<String>,
+    }
+
+    impl<'a> RecordingEpilogue<'a> {
+        fn new(store: &'a FakeStore) -> Self {
+            Self {
+                store,
+                states_when_called: std::sync::Mutex::new(Vec::new()),
+                warnings: Vec::new(),
+                fail_with: None,
+            }
+        }
+
+        fn warning(mut self, warning: &str) -> Self {
+            self.warnings.push(warning.to_string());
+            self
+        }
+
+        fn failing(mut self, error: &str) -> Self {
+            self.fail_with = Some(error.to_string());
+            self
+        }
+    }
+
+    #[async_trait]
+    impl OperationEpilogue for RecordingEpilogue<'_> {
+        async fn finish_operation(&self, _operation: &LocationOperation) -> AppResult<Vec<String>> {
+            *self.states_when_called.lock().expect("lock") = self.store.operation_states();
+            match self.fail_with.as_deref() {
+                Some(error) => Err(AppError::Repository(error.to_string())),
+                None => Ok(self.warnings.clone()),
+            }
+        }
+    }
+
+    /// FR-087: an operation with an epilogue is never readable as finished
+    /// before the epilogue has run.
+    ///
+    /// A root change retires its source location and flips the root's path
+    /// here. Doing that after `run` returned would leave a window in which
+    /// Activity, a watching client, and a resume all see `completed` while the
+    /// root still points at the retired path.
+    #[tokio::test]
+    async fn an_epilogue_runs_before_the_terminal_state_and_its_warnings_are_the_operations() {
+        let store = FakeStore::with_operation(operation());
+        let mover = FakeMover::default();
+        let admission = ScriptedAdmission::new(&[]);
+        let reconciler = RecordingReconciler::default();
+        let epilogue = RecordingEpilogue::new(&store).warning("the old location was kept");
+
+        let outcome = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
+            .with_epilogue(&epilogue)
+            .run("op-1", &two_title_plan())
+            .await
+            .expect("the run should succeed");
+
+        let seen = epilogue.states_when_called.lock().expect("lock").clone();
+        assert!(
+            !seen.iter().any(|state| state.is_terminal()),
+            "the operation was already terminal when the epilogue ran: {seen:?}"
+        );
+        assert_eq!(outcome.state, LocationOperationState::CompletedWithWarnings);
+        assert!(
+            outcome
+                .warnings
+                .iter()
+                .any(|warning| warning == "the old location was kept")
+        );
+    }
+
+    /// The epilogue is work the user asked for, not bookkeeping: a root whose
+    /// path could not be flipped is a failed root change, however many bytes
+    /// arrived safely.
+    #[tokio::test]
+    async fn an_epilogue_that_fails_fails_the_operation() {
+        let store = FakeStore::with_operation(operation());
+        let mover = FakeMover::default();
+        let admission = ScriptedAdmission::new(&[]);
+        let reconciler = RecordingReconciler::default();
+        let epilogue = RecordingEpilogue::new(&store).failing("the root path could not be updated");
+
+        let outcome = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
+            .with_epilogue(&epilogue)
+            .run("op-1", &two_title_plan())
+            .await
+            .expect("a failed epilogue is a failed operation, not an error out of `run`");
+
+        assert_eq!(outcome.state, LocationOperationState::Failed);
+        assert_eq!(outcome.stop_reason, Some(StopReason::Error));
+        assert!(
+            outcome
+                .detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains("the root path could not be updated")),
+            "detail was {:?}",
+            outcome.detail
+        );
     }
 
     #[tokio::test]

@@ -625,6 +625,249 @@ impl PlannedRootChange {
     }
 }
 
+/// The root-scoped facts that ride on the persisted plan so a resumed run has
+/// them (T060 persistence, FR-033, FR-087).
+///
+/// Everything here is durable-by-necessity rather than by convenience: the
+/// retirement contract carries the recycle allowlist an in-retirement root
+/// depends on and the only list of directories cleanup is allowed to remove;
+/// the retention block is the set of post-conditions the path flip is checked
+/// against; and `assigned_title_ids` is FR-084's ownership claim, which covers
+/// titles the instruction set does not (a catalog-only title has no files, and
+/// a blocked title has no instructions at all).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RootChangeTail {
+    pub library_id: String,
+    /// The root's synthetic id. Identical on both sides of the operation
+    /// (FR-021, FR-078).
+    pub root_id: String,
+    pub source_root_path: String,
+    pub destination_root_path: String,
+    /// Every title assigned to the root at preview time (FR-023, FR-084).
+    pub assigned_title_ids: Vec<String>,
+    pub retention: RootIdentityRetention,
+    pub content: RootContentInventory,
+    pub retirement: RootRetirementContract,
+}
+
+impl RootChangeTail {
+    pub fn source_root(&self) -> PathBuf {
+        crate::stored_paths::stored_path_to_path_buf(&self.source_root_path)
+    }
+
+    pub fn destination_root(&self) -> PathBuf {
+        crate::stored_paths::stored_path_to_path_buf(&self.destination_root_path)
+    }
+
+    /// Re-anchor a path recorded against the source root onto the destination
+    /// root — the same rebase the planner used for every file (FR-026). `None`
+    /// when the path was never under the source root, which is what keeps a
+    /// custom recycle-bin location and any absolute path from elsewhere from
+    /// being rewritten.
+    pub fn rebase_onto_destination(&self, path: &Path) -> Option<PathBuf> {
+        rebase(path, &self.source_root(), &self.destination_root())
+    }
+}
+
+impl PlannedRootChange {
+    /// The persistable tail for this plan.
+    pub fn tail(&self, library_id: &str, assigned_title_ids: Vec<String>) -> RootChangeTail {
+        RootChangeTail {
+            library_id: library_id.to_string(),
+            root_id: self.retention.root_id.clone(),
+            source_root_path: self.retirement.source_root_path.clone(),
+            destination_root_path: self.retirement.destination_root_path.clone(),
+            assigned_title_ids,
+            retention: self.retention.clone(),
+            content: self.content.clone(),
+            retirement: self.retirement.clone(),
+        }
+    }
+}
+
+// ── Destination admissibility (T060 IO half, FR-020) ─────────────────────────
+
+/// Machine-readable codes for the reasons a **change root** request is refused
+/// before anything is planned. Named rather than prose so the client can route
+/// the user (notably: "this is consolidation, not a root change").
+pub mod refusal_codes {
+    /// A root path has to be absolute; a relative one means different things to
+    /// Scryer and to the user's shell.
+    pub const PATH_NOT_ABSOLUTE: &str = "root_change_path_not_absolute";
+    /// Source and destination are the same location, or one contains the other.
+    pub const PATHS_OVERLAP: &str = "root_change_paths_overlap";
+    /// The source root is a symlink. Moving out of one and retiring it would
+    /// act on the link, not on the content the user means.
+    pub const SOURCE_ROOT_IS_SYMLINK: &str = "root_change_source_root_is_symlink";
+    /// The source root is not a directory Scryer can read right now.
+    pub const SOURCE_ROOT_UNAVAILABLE: &str = "root_change_source_root_unavailable";
+    /// The destination exists and is not an empty directory.
+    pub const DESTINATION_NOT_EMPTY: &str = "root_change_destination_not_empty";
+    /// The destination does not exist and neither does its parent, so nothing
+    /// would create it.
+    pub const DESTINATION_PARENT_MISSING: &str = "root_change_destination_parent_missing";
+    /// FR-020's other branch: the destination is already a configured root, so
+    /// the user is asking for **consolidation** (US5), not a root change.
+    pub const DESTINATION_IS_CONFIGURED_ROOT: &str = "root_change_destination_is_configured_root";
+}
+
+/// A refusal, with the code the client routes on and the sentence it shows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RootChangeRefusal {
+    pub code: &'static str,
+    pub detail: String,
+}
+
+impl RootChangeRefusal {
+    fn new(code: &'static str, detail: impl Into<String>) -> Self {
+        Self {
+            code,
+            detail: detail.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for RootChangeRefusal {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}", self.detail)
+    }
+}
+
+/// What the destination path is, as the caller's `stat` found it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DestinationPathState {
+    /// Nothing exists at the path.
+    Missing { parent_exists: bool },
+    /// An existing directory, and whether it holds anything.
+    Directory { empty: bool },
+    /// Something that is not a directory: a file, a symlink, a device node.
+    NotADirectory,
+}
+
+/// The filesystem facts the caller gathered about a proposed root change.
+///
+/// Separated from the check itself for the same reason the planner is pure: the
+/// rules are then testable from literals, and the `stat`s happen once, in the
+/// use case, where they can be reported.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RootChangePathFacts {
+    /// Canonicalized where possible; the source root is expected to exist.
+    pub source_root: PathBuf,
+    /// The destination as the user gave it, with its existing ancestors
+    /// canonicalized.
+    pub destination_root: PathBuf,
+    pub source_root_is_symlink: bool,
+    pub source_root_is_directory: bool,
+    pub destination: DestinationPathState,
+    /// Every configured root path in the installation, canonicalized the same
+    /// way, paired with the id of the root that holds it.
+    pub configured_roots: Vec<(String, PathBuf)>,
+    /// The root being changed, so its own current path is not read as a
+    /// conflict with itself.
+    pub root_id: String,
+}
+
+/// FR-020's admissibility rules, ported from the absorbed relocation prototype
+/// and re-stated against the spec.
+///
+/// Deliberately *not* in [`build_root_change_plan`]: the planner is pure, and
+/// these are questions only the filesystem can answer. The use case asks them
+/// twice — once when the preview is built, and once when the operation is
+/// admitted — because the destination is an unmanaged path that anything could
+/// have written to between the two.
+pub fn check_root_change_paths(facts: &RootChangePathFacts) -> Result<(), RootChangeRefusal> {
+    for path in [&facts.source_root, &facts.destination_root] {
+        if !path.is_absolute() {
+            return Err(RootChangeRefusal::new(
+                refusal_codes::PATH_NOT_ABSOLUTE,
+                format!("{} is not an absolute path", path.display()),
+            ));
+        }
+    }
+
+    if facts.source_root_is_symlink {
+        return Err(RootChangeRefusal::new(
+            refusal_codes::SOURCE_ROOT_IS_SYMLINK,
+            format!(
+                "{} is a symlink; resolve it to the real directory before changing the root",
+                facts.source_root.display()
+            ),
+        ));
+    }
+    if !facts.source_root_is_directory {
+        return Err(RootChangeRefusal::new(
+            refusal_codes::SOURCE_ROOT_UNAVAILABLE,
+            format!(
+                "{} is not a readable directory right now, so its contents cannot be planned",
+                facts.source_root.display()
+            ),
+        ));
+    }
+
+    if facts.destination_root == facts.source_root
+        || facts.destination_root.starts_with(&facts.source_root)
+        || facts.source_root.starts_with(&facts.destination_root)
+    {
+        return Err(RootChangeRefusal::new(
+            refusal_codes::PATHS_OVERLAP,
+            format!(
+                "{} and {} overlap; a root change needs a destination outside the root it replaces",
+                facts.source_root.display(),
+                facts.destination_root.display()
+            ),
+        ));
+    }
+
+    // FR-020: "a new unconfigured path, **or** another existing root in the same
+    // library — the latter being consolidation". Consolidation has its own
+    // planner (US5, FR-024–FR-026) because it has a non-empty destination to
+    // collide with; routing the request there by name is better than accepting
+    // it here and destroying content.
+    if let Some((root_id, path)) = facts
+        .configured_roots
+        .iter()
+        .find(|(root_id, path)| root_id != &facts.root_id && path == &facts.destination_root)
+    {
+        return Err(RootChangeRefusal::new(
+            refusal_codes::DESTINATION_IS_CONFIGURED_ROOT,
+            format!(
+                "{} is already configured as root {root_id}; folding one root into another is a consolidation, not a root change",
+                path.display()
+            ),
+        ));
+    }
+
+    match facts.destination {
+        DestinationPathState::Missing {
+            parent_exists: true,
+        } => Ok(()),
+        DestinationPathState::Missing {
+            parent_exists: false,
+        } => Err(RootChangeRefusal::new(
+            refusal_codes::DESTINATION_PARENT_MISSING,
+            format!(
+                "{} does not exist and neither does the directory that would contain it",
+                facts.destination_root.display()
+            ),
+        )),
+        DestinationPathState::Directory { empty: true } => Ok(()),
+        DestinationPathState::Directory { empty: false } => Err(RootChangeRefusal::new(
+            refusal_codes::DESTINATION_NOT_EMPTY,
+            format!(
+                "{} already holds content; a root change needs an empty or not-yet-created destination",
+                facts.destination_root.display()
+            ),
+        )),
+        DestinationPathState::NotADirectory => Err(RootChangeRefusal::new(
+            refusal_codes::DESTINATION_NOT_EMPTY,
+            format!(
+                "{} exists and is not a directory",
+                facts.destination_root.display()
+            ),
+        )),
+    }
+}
+
 /// Build the root-change preview and execution plan (T060–T063).
 pub fn build_root_change_plan(request: &RootChangePlanRequest) -> PlannedRootChange {
     let accounting = build_accounting(&request.titles);

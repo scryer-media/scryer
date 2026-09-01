@@ -2633,6 +2633,12 @@ impl LibraryRepository for NullLibraryRepository {
         ))
     }
 
+    async fn set_root_path(&self, _root_id: &str, _path: &str) -> AppResult<Library> {
+        Err(AppError::Repository(
+            "library repository not configured".into(),
+        ))
+    }
+
     async fn delete_library(&self, _library_id: &str) -> AppResult<bool> {
         Ok(false)
     }

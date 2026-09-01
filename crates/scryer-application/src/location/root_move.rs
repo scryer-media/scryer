@@ -325,12 +325,23 @@ pub struct RootMoveExecutionPlan {
     /// adoption existed still reads back.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub adoption_proofs: BTreeMap<String, AdoptionFileProof>,
+    /// The root-scoped half of a **change root** operation (US4): the identity
+    /// the executor asserts after the path flip, the three content buckets, and
+    /// the retirement ordering contract (FR-021, FR-027, FR-028, FR-087).
+    ///
+    /// It rides on the persisted plan rather than in a column of its own
+    /// because resume needs every one of those facts and the plan JSON is
+    /// already the operation's recovery journal. `None` for every other
+    /// operation type, and defaulted so an operation persisted before root
+    /// change existed still resumes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_change: Option<crate::location::root_change::RootChangeTail>,
 }
 
 impl RootMoveExecutionPlan {
     /// The runner's work plan, in confirmed order.
     pub fn to_work_plan(&self) -> OperationWorkPlan {
-        OperationWorkPlan::new(
+        let mut work_plan = OperationWorkPlan::new(
             self.titles
                 .iter()
                 .map(RootMoveTitleExecution::to_planned_title)
@@ -339,7 +350,17 @@ impl RootMoveExecutionPlan {
         .with_baseline(ClassifiedTitleBaseline {
             no_ops: self.no_op_titles,
             unresolved: self.unresolved_titles,
-        })
+        });
+        // FR-084 for a root change: the operation owns *every* title assigned
+        // to the root, not only the ones that produce instructions. A
+        // catalog-only title has no files and a blocked title has no execution
+        // at all, and both would otherwise stay open to a scan or an import
+        // that moved them out from under an operation whose whole subject is
+        // the root they sit on.
+        if let Some(tail) = self.root_change.as_ref() {
+            work_plan = work_plan.with_additional_owned_titles(tail.assigned_title_ids.clone());
+        }
+        work_plan
     }
 
     pub fn title(&self, title_id: &str) -> Option<&RootMoveTitleExecution> {
