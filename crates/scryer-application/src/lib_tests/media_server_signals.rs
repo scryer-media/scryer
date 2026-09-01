@@ -518,7 +518,7 @@ impl MediaServerSignalRepository for InMemorySignalRepo {
         title_ids: &[String],
     ) -> AppResult<HashMap<String, Vec<UserMediaSignal>>> {
         Ok(group_by_title(
-            &*self.rows.lock().await,
+            &self.rows.lock().await,
             title_ids,
             MediaServerSignalKind::Movie,
         ))
@@ -529,7 +529,7 @@ impl MediaServerSignalRepository for InMemorySignalRepo {
         title_ids: &[String],
     ) -> AppResult<HashMap<String, Vec<UserMediaSignal>>> {
         Ok(group_by_title(
-            &*self.rows.lock().await,
+            &self.rows.lock().await,
             title_ids,
             MediaServerSignalKind::Episode,
         ))

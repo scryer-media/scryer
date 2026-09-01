@@ -159,7 +159,7 @@ async fn a_second_sweep_advances_the_generation_and_drops_what_it_did_not_report
         .await
         .expect("read");
     // Gone entirely, not left behind at an older generation.
-    assert!(surviving.get("title-other").is_none());
+    assert!(!surviving.contains_key("title-other"));
 
     let kept = &surviving.get("title-movie").expect("still played")[0];
     assert_eq!(kept.sync_generation, 2);
@@ -239,7 +239,7 @@ async fn movie_and_episode_reads_are_grouped_by_owning_title_and_never_mix_kinds
         .expect("movie read");
     assert_eq!(movies.len(), 1);
     assert_eq!(movies.get("title-movie").expect("movie bucket").len(), 1);
-    assert!(movies.get("title-series").is_none());
+    assert!(!movies.contains_key("title-series"));
 
     let episodes = store
         .episode_signals_for_titles(&title_ids)
