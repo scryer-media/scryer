@@ -422,6 +422,23 @@ impl AppUseCase {
             .resolve_folder_match_context(actor, title_id, folder_path)
             .await?;
 
+        // FR-084: a running location operation's plan is built against the very
+        // folder ownership this workflow rewrites. Both the edited title and,
+        // in a conflict, the candidate folder's owner must be unowned.
+        let mut guarded_titles = vec![crate::location::ownership_guard::OwnedEntity::Title(
+            title_id.to_string(),
+        )];
+        if let Some(owner) = context.owner.as_ref() {
+            guarded_titles.push(crate::location::ownership_guard::OwnedEntity::Title(
+                owner.id.clone(),
+            ));
+        }
+        self.ensure_location_ownership_allows(
+            &crate::location::ownership_guard::FOLDER_MATCH_ENTRY,
+            &guarded_titles,
+        )
+        .await?;
+
         match (context.ownership(), resolution) {
             // FR-005: an explicit no-op with an explanation, whatever the caller
             // asked for. Nothing is submitted.

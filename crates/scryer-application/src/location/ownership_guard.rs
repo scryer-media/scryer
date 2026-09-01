@@ -76,6 +76,7 @@ pub enum GuardedAction {
     LocationOperation,
     RootConfiguration,
     MaintenanceJob,
+    FolderMatch,
 }
 
 impl GuardedAction {
@@ -89,6 +90,7 @@ impl GuardedAction {
             Self::LocationOperation => "location_operation",
             Self::RootConfiguration => "root_configuration",
             Self::MaintenanceJob => "maintenance_job",
+            Self::FolderMatch => "folder_match",
         }
     }
 
@@ -103,6 +105,7 @@ impl GuardedAction {
             Self::LocationOperation => "another location operation",
             Self::RootConfiguration => "changing this root configuration",
             Self::MaintenanceJob => "this maintenance job",
+            Self::FolderMatch => "correcting this title's folder match",
         }
     }
 }
@@ -354,6 +357,16 @@ pub const RECYCLE_RESTORE_ENTRY: GuardedEntry = GuardedEntry {
     constant: "RECYCLE_RESTORE_ENTRY",
 };
 
+/// Folder-match correction reassigns the very folder ownership a running
+/// operation's plan was built against (US1 is itself a location workflow, just
+/// a synchronous catalog-only one that registers no persisted operation).
+pub const FOLDER_MATCH_ENTRY: GuardedEntry = GuardedEntry {
+    action: GuardedAction::FolderMatch,
+    module: "location/folder_match.rs",
+    function: "apply_title_folder_change",
+    constant: "FOLDER_MATCH_ENTRY",
+};
+
 /// Every registered mutating entry point. A new one is added here and nowhere
 /// else; [`guarded_entries_are_wired`] fails when this list and the code drift.
 pub const GUARDED_ENTRIES: &[&GuardedEntry] = &[
@@ -368,6 +381,7 @@ pub const GUARDED_ENTRIES: &[&GuardedEntry] = &[
     &LIBRARY_ROOTS_UPDATE_ENTRY,
     &LIBRARY_DELETE_ENTRY,
     &RECYCLE_RESTORE_ENTRY,
+    &FOLDER_MATCH_ENTRY,
 ];
 
 /// Actions that need no registered entry point because exclusivity is enforced
@@ -391,6 +405,7 @@ pub const ALL_GUARDED_ACTIONS: &[GuardedAction] = &[
     GuardedAction::LocationOperation,
     GuardedAction::RootConfiguration,
     GuardedAction::MaintenanceJob,
+    GuardedAction::FolderMatch,
 ];
 
 /// The choke point (D7): the one place that answers "may this action proceed
@@ -598,6 +613,10 @@ mod tests {
     /// Source of every module that registers a guarded entry point. The audit
     /// test reads these to prove a declared entry is actually wired.
     const GUARDED_ENTRY_SOURCES: &[(&str, &str)] = &[
+        (
+            "location/folder_match.rs",
+            include_str!("folder_match.rs"),
+        ),
         ("library/library.rs", include_str!("../library/library.rs")),
         ("library/rename.rs", include_str!("../library/rename.rs")),
         (
