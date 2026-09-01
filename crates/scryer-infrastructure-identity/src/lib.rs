@@ -1,5 +1,7 @@
 mod emby;
 pub mod external_identity;
+/// Maintenance safety: live playback observation (RFC 137 §9.10, WP-G).
+pub mod media_server_playback;
 pub mod oauth;
 pub mod users;
 

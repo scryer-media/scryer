@@ -15,6 +15,16 @@ const BACKGROUND_COLD_TARGET_VALUE: f64 = 0.25;
 /// evaluated concurrently. Indexer strategy admission is bounded separately.
 const BACKGROUND_ACQUISITION_TITLE_LIMIT: usize = 4;
 
+/// How far apart two instances' maintenance evaluation passes can drift. Much
+/// smaller than the eight-hour cadence on purpose: the jitter is there to keep
+/// a fleet from sweeping in lockstep, not to postpone the first pass.
+const MAINTENANCE_EVALUATION_JITTER_WINDOW: std::time::Duration =
+    std::time::Duration::from_secs(30 * 60);
+
+/// Same rationale, distinct salt, for the action handler's twelve-hour cadence.
+const LIFECYCLE_ACTION_HANDLING_JITTER_WINDOW: std::time::Duration =
+    std::time::Duration::from_secs(30 * 60);
+
 #[derive(Debug, Clone, Copy)]
 struct BackgroundAcquisitionSettings {
     max_scopes_per_cycle: usize,
@@ -4044,6 +4054,59 @@ pub async fn start_background_acquisition_poller(
     )
     .await;
 
+    // Maintenance evaluation (RFC 137 section 10) runs on an eight-hour
+    // cadence, offset by a per-instance jitter so a fleet of instances does not
+    // sweep their libraries in lockstep. The jitter window is deliberately much
+    // smaller than the cadence: it exists to spread load, not to delay the
+    // first pass by most of a working day. The job itself re-reads the instance
+    // gate at the start of every run, so an operator arming or disarming
+    // evaluation never has to restart Scryer.
+    let maintenance_evaluation_cadence = std::time::Duration::from_secs(
+        crate::jobs::MAINTENANCE_RULE_EVALUATION_INTERVAL_SECONDS as u64,
+    );
+    let maintenance_evaluation_offset = match app.discovery_scheduler_seed().await {
+        Ok(seed) => crate::scheduler::stable_jitter_offset(
+            &seed,
+            "maintenance_rule_evaluation",
+            "global",
+            MAINTENANCE_EVALUATION_JITTER_WINDOW,
+        ),
+        Err(error) => {
+            warn!(error = %error, "could not resolve the scheduler seed; maintenance evaluation runs unjittered");
+            std::time::Duration::ZERO
+        }
+    };
+    app.set_job_next_run_at(
+        JobKey::MaintenanceRuleEvaluation,
+        Utc::now()
+            + chrono::Duration::from_std(maintenance_evaluation_offset)
+                .unwrap_or_else(|_| chrono::Duration::zero()),
+    )
+    .await;
+
+    let lifecycle_action_cadence = std::time::Duration::from_secs(
+        crate::jobs::LIFECYCLE_ACTION_HANDLING_INTERVAL_SECONDS as u64,
+    );
+    let lifecycle_action_offset = match app.discovery_scheduler_seed().await {
+        Ok(seed) => crate::scheduler::stable_jitter_offset(
+            &seed,
+            "lifecycle_action_handling",
+            "global",
+            LIFECYCLE_ACTION_HANDLING_JITTER_WINDOW,
+        ),
+        Err(error) => {
+            warn!(error = %error, "could not resolve the scheduler seed; action handling runs unjittered");
+            std::time::Duration::ZERO
+        }
+    };
+    app.set_job_next_run_at(
+        JobKey::LifecycleActionHandling,
+        Utc::now()
+            + chrono::Duration::from_std(lifecycle_action_offset)
+                .unwrap_or_else(|_| chrono::Duration::zero()),
+    )
+    .await;
+
     let mut poll_interval = new_skip_interval(std::time::Duration::from_secs(
         settings.poll_interval_seconds.max(1) as u64,
     ));
@@ -4056,6 +4119,14 @@ pub async fn start_background_acquisition_poller(
         tokio::time::interval(std::time::Duration::from_hours(24));
     let mut rss_sync_interval = tokio::time::interval(std::time::Duration::from_mins(1));
     let mut pending_release_interval = tokio::time::interval(std::time::Duration::from_mins(1));
+    let mut maintenance_evaluation_interval = tokio::time::interval_at(
+        tokio::time::Instant::now() + maintenance_evaluation_offset,
+        maintenance_evaluation_cadence,
+    );
+    let mut lifecycle_action_interval = tokio::time::interval_at(
+        tokio::time::Instant::now() + lifecycle_action_offset,
+        lifecycle_action_cadence,
+    );
 
     // Consume immediate intervals.
     poll_interval.tick().await;
@@ -4203,6 +4274,38 @@ pub async fn start_background_acquisition_poller(
                     if let Err(error) = app.refresh_enabled_direct_nab_caps_snapshots(&actor).await {
                         warn!(error = %error, "periodic direct indexer caps refresh failed");
                         metrics::counter!("scryer_task_errors_total", "task" => "direct_indexer_caps").increment(1);
+                    }
+                }).await;
+            }
+            _ = maintenance_evaluation_interval.tick() => {
+                let app = app.clone();
+                let cadence = maintenance_evaluation_cadence;
+                run_task("maintenance_rule_evaluation", async move {
+                    app.set_job_next_run_at(
+                        JobKey::MaintenanceRuleEvaluation,
+                        Utc::now()
+                            + chrono::Duration::from_std(cadence)
+                                .unwrap_or_else(|_| chrono::Duration::hours(8)),
+                    ).await;
+                    if let Err(e) = app.run_scheduled_job_now(JobKey::MaintenanceRuleEvaluation, JobTriggerSource::ScheduledInterval).await {
+                        warn!(error = %e, "scheduled maintenance rule evaluation failed");
+                        metrics::counter!("scryer_task_errors_total", "task" => "maintenance_rule_evaluation").increment(1);
+                    }
+                }).await;
+            }
+            _ = lifecycle_action_interval.tick() => {
+                let app = app.clone();
+                let cadence = lifecycle_action_cadence;
+                run_task("lifecycle_action_handling", async move {
+                    app.set_job_next_run_at(
+                        JobKey::LifecycleActionHandling,
+                        Utc::now()
+                            + chrono::Duration::from_std(cadence)
+                                .unwrap_or_else(|_| chrono::Duration::hours(12)),
+                    ).await;
+                    if let Err(e) = app.run_scheduled_job_now(JobKey::LifecycleActionHandling, JobTriggerSource::ScheduledInterval).await {
+                        warn!(error = %e, "scheduled maintenance action handling failed");
+                        metrics::counter!("scryer_task_errors_total", "task" => "lifecycle_action_handling").increment(1);
                     }
                 }).await;
             }

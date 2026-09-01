@@ -3739,6 +3739,411 @@ pub struct RuleSet {
     pub managed_tag_filter: Option<Vec<String>>,
 }
 
+/// How far a maintenance rule set is allowed to act (RFC 137 section 7).
+///
+/// Only [`Self::Disabled`] is reachable in the foundation wave: nothing
+/// evaluates stored maintenance rules yet, so a rule that claimed to be running
+/// in shadow or observe mode would be advertising a capability that does not
+/// exist. The other two variants are declared here because the storage column
+/// is written now and must not need a migration when the evaluator lands.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MaintenanceEvaluationMode {
+    #[default]
+    Disabled,
+    /// Evaluate and record candidates; never act.
+    Shadow,
+    /// Evaluate, record, and surface candidates for manual approval.
+    Observe,
+}
+
+impl MaintenanceEvaluationMode {
+    pub const fn as_storage_str(self) -> &'static str {
+        match self {
+            Self::Disabled => "disabled",
+            Self::Shadow => "shadow",
+            Self::Observe => "observe",
+        }
+    }
+
+    pub fn parse_storage(value: &str) -> Option<Self> {
+        match value {
+            "disabled" => Some(Self::Disabled),
+            "shadow" => Some(Self::Shadow),
+            "observe" => Some(Self::Observe),
+            _ => None,
+        }
+    }
+}
+
+/// Granularity a maintenance rule set is scoped to.
+///
+/// Season- and episode-scoped rule sets are an RFC concept but have no
+/// persistence or evaluation path yet, so this wave stores only `Title`. The
+/// column is a string so widening the enum stays a code change.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MaintenanceRuleSubjectKind {
+    #[default]
+    Title,
+}
+
+impl MaintenanceRuleSubjectKind {
+    pub const fn as_storage_str(self) -> &'static str {
+        match self {
+            Self::Title => "title",
+        }
+    }
+
+    pub fn parse_storage(value: &str) -> Option<Self> {
+        match value {
+            "title" => Some(Self::Title),
+            _ => None,
+        }
+    }
+}
+
+/// A user-authored maintenance rule set: identity, scope, and evaluation state.
+///
+/// The matcher and the action it authorizes live on
+/// [`MaintenanceRuleRevision`], never here, so changing what a rule *does*
+/// always produces a new revision.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MaintenanceRuleSet {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub enabled: bool,
+    pub evaluation_mode: MaintenanceEvaluationMode,
+    /// How far this rule's effects are armed, independent of its mode. The
+    /// action handler requires both this and the instance effect gates.
+    pub effect_arming: MaintenanceEffectArming,
+    /// Libraries this rule is confined to. Empty means every library.
+    pub library_ids: Vec<String>,
+    pub subject_kind: MaintenanceRuleSubjectKind,
+    /// Revision number of the matcher currently in force.
+    pub current_revision_number: i64,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// One immutable revision of a maintenance rule set's matcher and action
+/// (RFC 137 section 7.1).
+///
+/// Revisions are append-only: editing the matcher writes revision N+1 and
+/// repoints the rule set, so a candidate can always be attributed to the exact
+/// source and action that produced it.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MaintenanceRuleRevision {
+    pub id: String,
+    pub rule_set_id: String,
+    pub revision_number: i64,
+    /// Rego source with the package declaration already rewritten to the
+    /// system-assigned rule ID.
+    pub rego_source: String,
+    /// Serialized `MaintenanceActionSpec`. Stored as JSON because the closed
+    /// action catalog lives in the application layer; callers deserialize it at
+    /// that boundary rather than passing the raw text around.
+    pub action_spec_json: String,
+    pub grace_days: i64,
+    pub matcher_content_hash: String,
+    pub created_by: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Lifecycle state of one maintenance candidate (RFC 137 section 8).
+///
+/// The whole enum is pinned here, storage strings included, even though the
+/// dark evaluator only ever writes [`Self::Observing`], [`Self::Canceled`], and
+/// [`Self::Excluded`]. The executor wave writes the rest; declaring them now is
+/// what keeps that wave from needing a migration to widen a column it already
+/// shipped.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MaintenanceCandidateState {
+    /// Matching, grace clock running. The only state a first match creates.
+    #[default]
+    Observing,
+    /// Grace elapsed and effect arming permits action; awaiting the handler.
+    PendingAction,
+    /// Eligible to execute now.
+    Due,
+    /// An action lease is held for this candidate.
+    Executing,
+    /// The action completed.
+    Succeeded,
+    /// The action failed terminally.
+    Failed,
+    /// The subject stopped matching, or its revision was superseded.
+    Canceled,
+    /// An exclusion covers the subject.
+    Excluded,
+    /// A safety precondition refused the action.
+    Blocked,
+}
+
+impl MaintenanceCandidateState {
+    pub const fn as_storage_str(self) -> &'static str {
+        match self {
+            Self::Observing => "observing",
+            Self::PendingAction => "pending_action",
+            Self::Due => "due",
+            Self::Executing => "executing",
+            Self::Succeeded => "succeeded",
+            Self::Failed => "failed",
+            Self::Canceled => "canceled",
+            Self::Excluded => "excluded",
+            Self::Blocked => "blocked",
+        }
+    }
+
+    pub fn parse_storage(value: &str) -> Option<Self> {
+        match value {
+            "observing" => Some(Self::Observing),
+            "pending_action" => Some(Self::PendingAction),
+            "due" => Some(Self::Due),
+            "executing" => Some(Self::Executing),
+            "succeeded" => Some(Self::Succeeded),
+            "failed" => Some(Self::Failed),
+            "canceled" => Some(Self::Canceled),
+            "excluded" => Some(Self::Excluded),
+            "blocked" => Some(Self::Blocked),
+            _ => None,
+        }
+    }
+
+    /// A terminal candidate is finished: nothing re-opens it, and a later match
+    /// starts a new candidate with the next match generation instead. The set
+    /// is duplicated as a literal list in the `lifecycle_candidates` partial
+    /// unique index, which is what enforces one active candidate per
+    /// (rule, title); [`MAINTENANCE_TERMINAL_CANDIDATE_STATES`] is the storage
+    /// form of the same set.
+    pub const fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            Self::Succeeded | Self::Failed | Self::Canceled | Self::Excluded
+        )
+    }
+}
+
+/// Storage strings of every terminal candidate state, in the order the
+/// migration's partial unique index lists them.
+pub const MAINTENANCE_TERMINAL_CANDIDATE_STATES: [&str; 4] =
+    ["succeeded", "failed", "canceled", "excluded"];
+
+/// Durable membership of one subject in one maintenance rule set
+/// (RFC 137 section 8).
+///
+/// `first_matched_at` is the grace clock's origin and is never rewritten while
+/// the candidate is active: a repeat match advances `last_matched_at` only.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LifecycleCandidate {
+    pub id: String,
+    pub rule_set_id: String,
+    /// Revision in force when the candidate was created. A candidate whose
+    /// revision no longer matches the rule set's current revision is superseded.
+    pub revision_number: i64,
+    pub matcher_content_hash: String,
+    pub title_id: String,
+    pub library_id: String,
+    pub facet: String,
+    pub subject_kind: String,
+    /// Increments per (rule, title) each time a fresh candidate is created, so
+    /// a cancel-then-rematch is distinguishable from a continuing membership.
+    pub match_generation: i64,
+    pub state: MaintenanceCandidateState,
+    pub state_reason: String,
+    pub reason_codes: Vec<String>,
+    /// Action the revision authorizes, as its stored catalog wire name. The
+    /// closed action enum lives in the application layer, so the domain row
+    /// carries the string the revision's spec serialized to.
+    pub action_kind: String,
+    pub grace_days: i64,
+    pub first_matched_at: DateTime<Utc>,
+    pub last_matched_at: DateTime<Utc>,
+    /// `first_matched_at + grace_days`, materialized so due selection is a
+    /// column comparison rather than arithmetic over two columns.
+    pub due_at: DateTime<Utc>,
+    pub last_evaluated_at: DateTime<Utc>,
+    /// Set while the latest evaluation could not decide (unknown fact or a
+    /// per-title evaluation error), cleared by the next confirmed match.
+    pub held_since: Option<DateTime<Utc>>,
+    /// Failed execution attempts for the current match generation. Bounded by
+    /// the action handler; reset implicitly because a new match starts a new
+    /// candidate row.
+    pub action_attempts: i64,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// A subject a maintenance rule must never act on (RFC 137 section 11).
+///
+/// `rule_set_id` is `None` for a global exclusion, which covers the subject for
+/// every rule. Exclusions are honored from the first shadow evaluation.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MaintenanceRuleExclusion {
+    pub id: String,
+    /// `None` means the exclusion is global.
+    pub rule_set_id: Option<String>,
+    pub title_id: String,
+    pub reason: String,
+    pub created_by: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Status of one recorded evaluation run.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MaintenanceEvaluationRunStatus {
+    /// Started and not yet finished. A row left in this state is the trace of
+    /// a run that was interrupted.
+    #[default]
+    Running,
+    Succeeded,
+    Failed,
+}
+
+impl MaintenanceEvaluationRunStatus {
+    pub const fn as_storage_str(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Succeeded => "succeeded",
+            Self::Failed => "failed",
+        }
+    }
+
+    pub fn parse_storage(value: &str) -> Option<Self> {
+        match value {
+            "running" => Some(Self::Running),
+            "succeeded" => Some(Self::Succeeded),
+            "failed" => Some(Self::Failed),
+            _ => None,
+        }
+    }
+}
+
+/// One rule set's pass through one evaluation job run (RFC 137 section 11).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MaintenanceEvaluationRun {
+    pub id: String,
+    pub rule_set_id: String,
+    pub revision_number: i64,
+    pub matcher_content_hash: String,
+    pub started_at: DateTime<Utc>,
+    pub finished_at: Option<DateTime<Utc>>,
+    pub status: MaintenanceEvaluationRunStatus,
+    pub evaluated_count: i64,
+    pub matched_count: i64,
+    pub no_match_count: i64,
+    pub unknown_count: i64,
+    pub error_count: i64,
+    pub canceled_candidates: i64,
+    pub superseded_candidates: i64,
+    pub duration_ms: Option<i64>,
+    pub error: Option<String>,
+}
+
+/// How far a maintenance rule set's effects are armed (RFC 137 sections 8 and
+/// 17 D2/D3). Arming is per rule and independent of the instance-wide effect
+/// gates: an action executes only when both permit it.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MaintenanceEffectArming {
+    /// Evaluate and track candidates; never act.
+    #[default]
+    None,
+    /// Low- and medium-risk actions may execute.
+    Reversible,
+    /// High-risk actions may additionally execute.
+    Destructive,
+}
+
+impl MaintenanceEffectArming {
+    pub const fn as_storage_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Reversible => "reversible",
+            Self::Destructive => "destructive",
+        }
+    }
+
+    /// An unknown stored value must read back as [`Self::None`], never as a
+    /// higher level: a build that cannot interpret an arming level must not act
+    /// on it.
+    pub fn parse_storage(value: &str) -> Option<Self> {
+        match value {
+            "none" => Some(Self::None),
+            "reversible" => Some(Self::Reversible),
+            "destructive" => Some(Self::Destructive),
+            _ => None,
+        }
+    }
+}
+
+/// Outcome of one action-handler attempt on one candidate.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LifecycleActionRunStatus {
+    /// Started and not yet finished; a row left here traces an interruption.
+    #[default]
+    Running,
+    Succeeded,
+    /// The postcondition already held, so no mutation was performed.
+    AlreadySatisfied,
+    Failed,
+    /// A safety precondition refused the attempt; `hold_reason` says which.
+    Held,
+}
+
+impl LifecycleActionRunStatus {
+    pub const fn as_storage_str(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Succeeded => "succeeded",
+            Self::AlreadySatisfied => "already_satisfied",
+            Self::Failed => "failed",
+            Self::Held => "held",
+        }
+    }
+
+    pub fn parse_storage(value: &str) -> Option<Self> {
+        match value {
+            "running" => Some(Self::Running),
+            "succeeded" => Some(Self::Succeeded),
+            "already_satisfied" => Some(Self::AlreadySatisfied),
+            "failed" => Some(Self::Failed),
+            "held" => Some(Self::Held),
+            _ => None,
+        }
+    }
+}
+
+/// One recorded action-handler attempt, holds included, so the executed (or
+/// refused) history of a candidate is append-only evidence (RFC 137 section 8).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LifecycleActionRun {
+    pub id: String,
+    pub candidate_id: String,
+    pub rule_set_id: String,
+    pub revision_number: i64,
+    pub title_id: String,
+    /// Catalog wire name of the action, as stored on the candidate.
+    pub action_kind: String,
+    pub match_generation: i64,
+    /// Stable across retries of the same candidate generation and action;
+    /// `attempt` distinguishes retries.
+    pub idempotency_key: String,
+    pub attempt: i64,
+    pub status: LifecycleActionRunStatus,
+    pub hold_reason: Option<String>,
+    pub error: Option<String>,
+    /// Versioned JSON evidence (preview fingerprints, profile ids, …).
+    pub detail: String,
+    pub started_at: DateTime<Utc>,
+    pub finished_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum UserAccountKind {

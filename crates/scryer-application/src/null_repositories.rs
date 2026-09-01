@@ -10,6 +10,7 @@ use scryer_domain::{
 };
 
 use scryer_domain::RuleSet;
+use scryer_domain::{MaintenanceRuleRevision, MaintenanceRuleSet};
 
 use crate::contracts::{
     ClientJobLocator, DownloadClientBindingRecord, DownloadRecord, ObservationResolution,
@@ -53,26 +54,26 @@ use crate::{
     IndexerSearchLearningKey, IndexerSearchLearningRecord, IndexerSearchLearningRepository,
     IndexerStatsTracker, JobKey, JobRunRecord, JobRunRepository, LibraryProbeRepository,
     LibraryProbeSignature, LibraryRepository, LibraryRootDraft, LibraryScanUnmatchedItem,
-    LibraryScanUnmatchedItemRepository, MediaFileRepository, MediaRequestCounts, MediaRequestQuery,
-    MediaRequestRepository, MediaRequestResolution, NewBlocklistEntry, NewMediaRequest,
-    NotificationChannelRepository, NotificationSubscriptionRepository,
-    OAuthAuthorizationCodeRecord, OAuthConnectedAppRecord, OAuthRefreshGrantRecord,
-    OAuthRefreshRotationOutcome, OAuthRefreshTokenRecord, OAuthRepository, PendingRelease,
-    PendingReleaseRepository, PendingReleasesPageQuery, PendingStagedNzb, PluginDescriptorLoader,
-    PluginInstallationRepository, PostProcessingScriptRepository, ReleaseDecision,
-    RuleSetRepository, SchedulerAdmission, SchedulerBatchDecision, SchedulerBatchRequest,
-    SchedulerFeedback, SchedulerLease, SchedulerSnapshot, SchedulerSnapshotFilter,
-    ScopeIndexerCoverageRepository, SeedingProfileRepository, SettingsRepository, StagedNzbRef,
-    StagedNzbStore, SystemInfoProvider, TitleEpisodeProgressSummary, TitleImageBlob,
-    TitleImageKind, TitleImageProcessor, TitleImageRepository, TitleImageSourceResult,
-    TitleImageSyncTask, TitleImageVariantSpec, TitleMediaFile, TitleMediaSizeSummary,
-    TitleMovieMediaSummary, TitleQualitySummary, UiSettings, UiSettingsUpdate, UpstreamScheduler,
-    UserExternalAccountRepository, UserUiSettingsRepository, VerifiedExternalIdentity,
-    WebauthnChallengeRecord, WebauthnCredentialRecord, WebauthnRepository, WorkflowOperationInfo,
-    WorkflowOperationRepository, ports::CatalogDiscoveryCandidatesRecord, ports::DatastoreInfo,
-    ports::LogicalBackupExporter, ports::TotpRepository, types::TotpCredentialRecord,
-    types::TotpEnrollmentChallengeRecord, types::TotpFailedAttemptRecord,
-    types::TotpRecoveryCodeRecord,
+    LibraryScanUnmatchedItemRepository, MaintenanceRuleSetRepository, MediaFileRepository,
+    MediaRequestCounts, MediaRequestQuery, MediaRequestRepository, MediaRequestResolution,
+    NewBlocklistEntry, NewMediaRequest, NotificationChannelRepository,
+    NotificationSubscriptionRepository, OAuthAuthorizationCodeRecord, OAuthConnectedAppRecord,
+    OAuthRefreshGrantRecord, OAuthRefreshRotationOutcome, OAuthRefreshTokenRecord, OAuthRepository,
+    PendingRelease, PendingReleaseRepository, PendingReleasesPageQuery, PendingStagedNzb,
+    PluginDescriptorLoader, PluginInstallationRepository, PostProcessingScriptRepository,
+    ReleaseDecision, RuleSetRepository, SchedulerAdmission, SchedulerBatchDecision,
+    SchedulerBatchRequest, SchedulerFeedback, SchedulerLease, SchedulerSnapshot,
+    SchedulerSnapshotFilter, ScopeIndexerCoverageRepository, SeedingProfileRepository,
+    SettingsRepository, StagedNzbRef, StagedNzbStore, SystemInfoProvider,
+    TitleEpisodeProgressSummary, TitleImageBlob, TitleImageKind, TitleImageProcessor,
+    TitleImageRepository, TitleImageSourceResult, TitleImageSyncTask, TitleImageVariantSpec,
+    TitleMediaFile, TitleMediaSizeSummary, TitleMovieMediaSummary, TitleQualitySummary, UiSettings,
+    UiSettingsUpdate, UpstreamScheduler, UserExternalAccountRepository, UserUiSettingsRepository,
+    VerifiedExternalIdentity, WebauthnChallengeRecord, WebauthnCredentialRecord,
+    WebauthnRepository, WorkflowOperationInfo, WorkflowOperationRepository,
+    ports::CatalogDiscoveryCandidatesRecord, ports::DatastoreInfo, ports::LogicalBackupExporter,
+    ports::TotpRepository, types::TotpCredentialRecord, types::TotpEnrollmentChallengeRecord,
+    types::TotpFailedAttemptRecord, types::TotpRecoveryCodeRecord,
 };
 
 #[derive(Default)]
@@ -1303,6 +1304,272 @@ impl RuleSetRepository for NullRuleSetRepository {
         Ok(())
     }
     async fn list_rule_sets_by_managed_key_prefix(&self, _prefix: &str) -> AppResult<Vec<RuleSet>> {
+        Ok(vec![])
+    }
+}
+
+#[derive(Default)]
+pub struct NullMaintenanceRuleSetRepository;
+
+#[async_trait]
+impl MaintenanceRuleSetRepository for NullMaintenanceRuleSetRepository {
+    async fn list_rule_sets(&self) -> AppResult<Vec<MaintenanceRuleSet>> {
+        Ok(vec![])
+    }
+    async fn get_rule_set(&self, _id: &str) -> AppResult<Option<MaintenanceRuleSet>> {
+        Ok(None)
+    }
+    async fn create_rule_set(
+        &self,
+        _rule_set: &MaintenanceRuleSet,
+        _revision: &MaintenanceRuleRevision,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "maintenance rule repository is not configured".to_string(),
+        ))
+    }
+    async fn add_revision(
+        &self,
+        _revision: &MaintenanceRuleRevision,
+        _updated_at: DateTime<Utc>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "maintenance rule repository is not configured".to_string(),
+        ))
+    }
+    async fn get_revision(
+        &self,
+        _rule_set_id: &str,
+        _revision_number: i64,
+    ) -> AppResult<Option<MaintenanceRuleRevision>> {
+        Ok(None)
+    }
+    async fn list_revisions(&self, _rule_set_id: &str) -> AppResult<Vec<MaintenanceRuleRevision>> {
+        Ok(vec![])
+    }
+    async fn update_rule_set_metadata(
+        &self,
+        _id: &str,
+        _name: &str,
+        _description: &str,
+        _library_ids: &[String],
+        _updated_at: DateTime<Utc>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "maintenance rule repository is not configured".to_string(),
+        ))
+    }
+    async fn delete_rule_set(&self, _id: &str) -> AppResult<()> {
+        Err(AppError::Repository(
+            "maintenance rule repository is not configured".to_string(),
+        ))
+    }
+    async fn update_rule_set_evaluation_mode(
+        &self,
+        _id: &str,
+        _mode: scryer_domain::MaintenanceEvaluationMode,
+        _enabled: bool,
+        _updated_at: DateTime<Utc>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "maintenance rule repository is not configured".to_string(),
+        ))
+    }
+    async fn update_rule_set_arming(
+        &self,
+        _id: &str,
+        _arming: scryer_domain::MaintenanceEffectArming,
+        _updated_at: DateTime<Utc>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "maintenance rule repository is not configured".to_string(),
+        ))
+    }
+}
+
+/// Reads answer empty and writes refuse: an assembly with no maintenance
+/// evaluation store has no candidates, so the evaluator finds nothing to
+/// reconcile rather than silently dropping rows it believed it wrote.
+#[derive(Default)]
+pub struct NullMaintenanceEvaluationRepository;
+
+const MAINTENANCE_EVALUATION_NOT_CONFIGURED: &str =
+    "maintenance evaluation repository is not configured";
+
+#[async_trait]
+impl crate::ports::MaintenanceCandidateRepository for NullMaintenanceEvaluationRepository {
+    async fn get_active_candidate(
+        &self,
+        _rule_set_id: &str,
+        _title_id: &str,
+    ) -> AppResult<Option<scryer_domain::LifecycleCandidate>> {
+        Ok(None)
+    }
+    async fn list_candidates(
+        &self,
+        _query: &crate::ports::MaintenanceCandidateQuery,
+    ) -> AppResult<Vec<scryer_domain::LifecycleCandidate>> {
+        Ok(vec![])
+    }
+    async fn max_match_generation(&self, _rule_set_id: &str, _title_id: &str) -> AppResult<i64> {
+        Ok(0)
+    }
+    async fn create_candidate(
+        &self,
+        _candidate: &scryer_domain::LifecycleCandidate,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            MAINTENANCE_EVALUATION_NOT_CONFIGURED.to_string(),
+        ))
+    }
+    async fn record_candidate_match(
+        &self,
+        _id: &str,
+        _last_matched_at: DateTime<Utc>,
+        _reason_codes: &[String],
+        _updated_at: DateTime<Utc>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            MAINTENANCE_EVALUATION_NOT_CONFIGURED.to_string(),
+        ))
+    }
+    async fn hold_candidate(
+        &self,
+        _id: &str,
+        _held_since: DateTime<Utc>,
+        _updated_at: DateTime<Utc>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            MAINTENANCE_EVALUATION_NOT_CONFIGURED.to_string(),
+        ))
+    }
+    async fn transition_candidate_state(
+        &self,
+        _id: &str,
+        _state: scryer_domain::MaintenanceCandidateState,
+        _state_reason: &str,
+        _updated_at: DateTime<Utc>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            MAINTENANCE_EVALUATION_NOT_CONFIGURED.to_string(),
+        ))
+    }
+    async fn cancel_active_candidates_for_rule(
+        &self,
+        _rule_set_id: &str,
+        _state_reason: &str,
+        _updated_at: DateTime<Utc>,
+    ) -> AppResult<u64> {
+        Ok(0)
+    }
+    async fn count_candidates_by_state(
+        &self,
+        _rule_set_id: &str,
+    ) -> AppResult<Vec<(scryer_domain::MaintenanceCandidateState, i64)>> {
+        Ok(vec![])
+    }
+    async fn list_due_candidates(
+        &self,
+        _rule_set_id: &str,
+        _due_before: DateTime<Utc>,
+        _limit: usize,
+    ) -> AppResult<Vec<scryer_domain::LifecycleCandidate>> {
+        Ok(vec![])
+    }
+    async fn lease_candidate_for_execution(
+        &self,
+        _id: &str,
+        _stale_before: DateTime<Utc>,
+        _updated_at: DateTime<Utc>,
+    ) -> AppResult<bool> {
+        Ok(false)
+    }
+    async fn record_candidate_attempts(
+        &self,
+        _id: &str,
+        _action_attempts: i64,
+        _updated_at: DateTime<Utc>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            MAINTENANCE_EVALUATION_NOT_CONFIGURED.to_string(),
+        ))
+    }
+}
+
+#[async_trait]
+impl crate::ports::LifecycleActionRunRepository for NullMaintenanceEvaluationRepository {
+    async fn start_action_run(&self, _run: &scryer_domain::LifecycleActionRun) -> AppResult<()> {
+        Err(AppError::Repository(
+            MAINTENANCE_EVALUATION_NOT_CONFIGURED.to_string(),
+        ))
+    }
+    async fn finish_action_run(&self, _run: &scryer_domain::LifecycleActionRun) -> AppResult<()> {
+        Err(AppError::Repository(
+            MAINTENANCE_EVALUATION_NOT_CONFIGURED.to_string(),
+        ))
+    }
+    async fn list_action_runs(
+        &self,
+        _rule_set_id: Option<&str>,
+        _candidate_id: Option<&str>,
+        _limit: Option<usize>,
+    ) -> AppResult<Vec<scryer_domain::LifecycleActionRun>> {
+        Ok(vec![])
+    }
+}
+
+#[async_trait]
+impl crate::ports::MaintenanceExclusionRepository for NullMaintenanceEvaluationRepository {
+    async fn list_exclusions(
+        &self,
+        _rule_set_id: Option<&str>,
+    ) -> AppResult<Vec<scryer_domain::MaintenanceRuleExclusion>> {
+        Ok(vec![])
+    }
+    async fn get_exclusion(
+        &self,
+        _id: &str,
+    ) -> AppResult<Option<scryer_domain::MaintenanceRuleExclusion>> {
+        Ok(None)
+    }
+    async fn create_exclusion(
+        &self,
+        _exclusion: &scryer_domain::MaintenanceRuleExclusion,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            MAINTENANCE_EVALUATION_NOT_CONFIGURED.to_string(),
+        ))
+    }
+    async fn delete_exclusion(&self, _id: &str) -> AppResult<()> {
+        Err(AppError::Repository(
+            MAINTENANCE_EVALUATION_NOT_CONFIGURED.to_string(),
+        ))
+    }
+}
+
+#[async_trait]
+impl crate::ports::MaintenanceEvaluationRunRepository for NullMaintenanceEvaluationRepository {
+    async fn start_evaluation_run(
+        &self,
+        _run: &scryer_domain::MaintenanceEvaluationRun,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            MAINTENANCE_EVALUATION_NOT_CONFIGURED.to_string(),
+        ))
+    }
+    async fn finish_evaluation_run(
+        &self,
+        _run: &scryer_domain::MaintenanceEvaluationRun,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            MAINTENANCE_EVALUATION_NOT_CONFIGURED.to_string(),
+        ))
+    }
+    async fn list_evaluation_runs(
+        &self,
+        _rule_set_id: Option<&str>,
+        _limit: Option<usize>,
+    ) -> AppResult<Vec<scryer_domain::MaintenanceEvaluationRun>> {
         Ok(vec![])
     }
 }
@@ -2572,6 +2839,13 @@ impl MediaRequestRepository for NullMediaRequestRepository {
     ) -> AppResult<MediaRequestCounts> {
         Ok(MediaRequestCounts::default())
     }
+
+    async fn requester_user_ids_by_title_ids(
+        &self,
+        _title_ids: &[String],
+    ) -> AppResult<std::collections::HashMap<String, Vec<String>>> {
+        Ok(std::collections::HashMap::new())
+    }
 }
 
 #[derive(Default)]
@@ -3141,6 +3415,24 @@ impl ExternalIdentityVerifier for NullExternalIdentityVerifier {
         Err(AppError::Repository(
             "external identity verification is not configured".into(),
         ))
+    }
+}
+
+// ── Maintenance safety probes (RFC 137 §9.10, WP-G) ─────────────────────────
+
+/// Playback probe for an assembly with no media-server integration.
+///
+/// Returns an empty snapshot, which the fold reads as `Clear`: nothing can be
+/// playing on servers Scryer does not know about. This is deliberately *not*
+/// `Unreachable` — "no connection configured" is a known answer, while "a
+/// configured connection did not respond" is not.
+#[derive(Default)]
+pub struct NullMediaServerPlaybackProbe;
+
+#[async_trait]
+impl crate::ports::MediaServerPlaybackProbe for NullMediaServerPlaybackProbe {
+    async fn active_playback(&self) -> AppResult<crate::ports::PlaybackActivitySnapshot> {
+        Ok(crate::ports::PlaybackActivitySnapshot::empty(Utc::now()))
     }
 }
 

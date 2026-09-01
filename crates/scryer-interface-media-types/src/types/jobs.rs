@@ -40,6 +40,10 @@ pub enum JobKeyValue {
     DiscoverySync,
     /// Title-image cache refresh.
     TitleImageCacheRefresh,
+    /// Scheduled maintenance rule evaluation.
+    MaintenanceRuleEvaluation,
+    /// Scheduled maintenance lifecycle action handling.
+    LifecycleActionHandling,
     /// Title deletion.
     TitleDeletion,
     /// Title rename.

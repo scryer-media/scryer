@@ -37,6 +37,7 @@ mod configuration;
 mod discovery;
 mod identity;
 mod library;
+mod maintenance_rules;
 mod runtime;
 mod scalars;
 
@@ -45,6 +46,7 @@ pub use configuration::*;
 pub use discovery::*;
 pub use identity::*;
 pub use library::*;
+pub use maintenance_rules::*;
 pub use runtime::*;
 pub use scalars::parse_iso_date;
 

@@ -2979,6 +2979,215 @@ impl AcquisitionQueries {
             .collect())
     }
 
+    // ── Maintenance Rule Sets ────────────────────────────────────────────
+
+    /// List maintenance rule sets; requires catalog-settings management permission.
+    async fn maintenance_rule_sets(&self, ctx: &Context<'_>) -> GqlResult<Vec<MaintenanceRuleSet>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+
+        // Details, not bare rows: the payload carries the action and grace
+        // period of the revision in force so a list view never has to fetch
+        // each rule set again to render them.
+        let details = app
+            .list_maintenance_rule_set_details(&actor)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(details
+            .iter()
+            .map(crate::mappers::from_maintenance_rule_set)
+            .collect())
+    }
+
+    /// Return one maintenance rule set with the revision currently in force, or null when no such rule set exists.
+    async fn maintenance_rule_set(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Maintenance rule-set ID to load.")] id: ID,
+    ) -> GqlResult<Option<MaintenanceRuleSetDetail>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+
+        let detail = app
+            .get_maintenance_rule_set(&actor, id.as_ref())
+            .await
+            .map_err(to_gql_error)?;
+        Ok(detail.map(crate::mappers::from_maintenance_rule_set_detail))
+    }
+
+    /// List every stored revision of one maintenance rule set, newest first.
+    async fn maintenance_rule_revisions(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Maintenance rule-set ID whose revisions are returned.")] rule_set_id: ID,
+    ) -> GqlResult<Vec<MaintenanceRuleRevision>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+
+        let revisions = app
+            .list_maintenance_rule_revisions(&actor, rule_set_id.as_ref())
+            .await
+            .map_err(to_gql_error)?;
+        Ok(revisions
+            .into_iter()
+            .map(crate::mappers::from_maintenance_rule_revision)
+            .collect())
+    }
+
+    /// List the static maintenance action catalog the rule builder chooses from.
+    async fn maintenance_action_descriptors(
+        &self,
+        ctx: &Context<'_>,
+    ) -> GqlResult<Vec<MaintenanceActionDescriptor>> {
+        // The catalog is static, so no service call enforces the permission the
+        // rest of this surface requires; the gate has to happen here.
+        require_app_permission(ctx, AppPermission::ManageCatalogSettings).await?;
+        Ok(crate::mappers::maintenance_action_descriptors())
+    }
+
+    /// List lifecycle candidates the maintenance evaluator has recorded; requires catalog-settings management permission.
+    ///
+    /// Two independent things hide rows, and they are not the same thing. A
+    /// rule in shadow mode is dark by definition, so its candidates are
+    /// returned only when `includeShadow` is true. Separately, the instance
+    /// result-display gate hides everything while it is off.
+    ///
+    /// `includeShadow` overrides the gate as well as the mode filter, on
+    /// purpose: an operator deciding whether to arm result display has to be
+    /// able to see what shadow evaluation actually found first, and reaching
+    /// this query already requires catalog-settings management.
+    async fn maintenance_candidates(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Return candidates of this rule set only.")] rule_set_id: Option<ID>,
+        #[graphql(desc = "Return candidates in these lifecycle states only.")] states: Option<
+            Vec<MaintenanceCandidateState>,
+        >,
+        #[graphql(desc = "Return candidates whose subject belongs to this library only.")]
+        library_id: Option<ID>,
+        #[graphql(desc = "Include candidates produced by rules running in shadow mode.")]
+        include_shadow: Option<bool>,
+        #[graphql(desc = "Maximum number of candidates to return.")] limit: Option<i32>,
+    ) -> GqlResult<Vec<MaintenanceCandidate>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+
+        let candidates = app
+            .list_maintenance_candidates(
+                &actor,
+                scryer_application::maintenance_rules::MaintenanceCandidateFilter {
+                    rule_set_id: rule_set_id.map(String::from),
+                    states: states
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(crate::mappers::maintenance_candidate_state_into_application)
+                        .collect(),
+                    library_id: library_id.map(String::from),
+                    include_shadow: include_shadow.unwrap_or(false),
+                    limit: limit.filter(|limit| *limit > 0).map(|limit| limit as usize),
+                },
+            )
+            .await
+            .map_err(to_gql_error)?;
+        Ok(candidates
+            .into_iter()
+            .map(crate::mappers::from_maintenance_candidate)
+            .collect())
+    }
+
+    /// List recorded maintenance evaluation runs, newest first.
+    ///
+    /// Runs carry counts and timing rather than subjects, so the result-display
+    /// gate does not hide them: they are how an operator sees that dark
+    /// evaluation is working at all.
+    async fn maintenance_evaluation_runs(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Return runs of this rule set only.")] rule_set_id: Option<ID>,
+        #[graphql(desc = "Maximum number of runs to return.")] limit: Option<i32>,
+    ) -> GqlResult<Vec<MaintenanceEvaluationRun>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+
+        let runs = app
+            .list_maintenance_evaluation_runs(
+                &actor,
+                rule_set_id.as_ref().map(|id| id.as_str()),
+                limit.filter(|limit| *limit > 0).map(|limit| limit as usize),
+            )
+            .await
+            .map_err(to_gql_error)?;
+        Ok(runs
+            .into_iter()
+            .map(crate::mappers::from_maintenance_evaluation_run)
+            .collect())
+    }
+
+    /// Read the five instance-wide maintenance gates; requires system-settings management permission.
+    async fn maintenance_instance_gates(
+        &self,
+        ctx: &Context<'_>,
+    ) -> GqlResult<MaintenanceInstanceGates> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+
+        let gates = app
+            .maintenance_instance_gates(&actor)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(crate::mappers::from_maintenance_instance_gates(gates))
+    }
+
+    /// List maintenance exclusions, newest first.
+    ///
+    /// Narrowing by rule returns that rule's own exclusions together with every
+    /// global one, because both are what actually stop it acting.
+    async fn maintenance_exclusions(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Return the exclusions that apply to this rule set.")] rule_set_id: Option<
+            ID,
+        >,
+    ) -> GqlResult<Vec<MaintenanceExclusion>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+
+        let exclusions = app
+            .list_maintenance_exclusions(&actor, rule_set_id.as_ref().map(|id| id.as_str()))
+            .await
+            .map_err(to_gql_error)?;
+        Ok(exclusions
+            .into_iter()
+            .map(crate::mappers::from_maintenance_exclusion)
+            .collect())
+    }
+
+    /// List recorded maintenance action-handler attempts, newest first.
+    async fn maintenance_action_runs(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Return only attempts for this rule set.")] rule_set_id: Option<ID>,
+        #[graphql(desc = "Return only attempts for this candidate.")] candidate_id: Option<ID>,
+        #[graphql(desc = "Maximum rows to return; defaults to fifty.")] limit: Option<i32>,
+    ) -> GqlResult<Vec<MaintenanceActionRun>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+
+        let runs = app
+            .list_maintenance_action_runs(
+                &actor,
+                rule_set_id.as_ref().map(|id| id.as_str()),
+                candidate_id.as_ref().map(|id| id.as_str()),
+                limit.and_then(|limit| usize::try_from(limit).ok()),
+            )
+            .await
+            .map_err(to_gql_error)?;
+        Ok(runs
+            .into_iter()
+            .filter_map(crate::mappers::from_maintenance_action_run)
+            .collect())
+    }
+
     // ── Post-Processing Scripts ──────────────────────────────────────────
 
     /// List post-processing scripts visible to the caller.

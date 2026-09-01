@@ -558,6 +558,56 @@ impl MediaRequestRepository for MockMediaRequestRepo {
         Ok(counts)
     }
 
+    /// Mirrors the SQL store's contract: a title is a key only when a request
+    /// created it, and each list is submitter-first, deduped, in request order.
+    async fn requester_user_ids_by_title_ids(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<HashMap<String, Vec<String>>> {
+        let wanted: HashSet<&String> = title_ids.iter().collect();
+        let mut requests: Vec<MediaRequest> = self
+            .requests
+            .lock()
+            .await
+            .iter()
+            .filter(|request| {
+                request
+                    .created_title_id
+                    .as_ref()
+                    .is_some_and(|title_id| wanted.contains(title_id))
+            })
+            .cloned()
+            .collect();
+        requests.sort_by(|left, right| {
+            left.created_at
+                .cmp(&right.created_at)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+
+        let mut by_title: HashMap<String, Vec<String>> = HashMap::new();
+        for request in requests {
+            let title_id = request
+                .created_title_id
+                .clone()
+                .expect("filtered to requests with a created title");
+            let entry = by_title.entry(title_id).or_default();
+            let mut requesters = request.requesters.clone();
+            requesters.sort_by(|left, right| {
+                left.requested_at
+                    .cmp(&right.requested_at)
+                    .then_with(|| left.user_id.cmp(&right.user_id))
+            });
+            for user_id in std::iter::once(request.created_by_user_id.clone())
+                .chain(requesters.into_iter().map(|requester| requester.user_id))
+            {
+                if !entry.contains(&user_id) {
+                    entry.push(user_id);
+                }
+            }
+        }
+        Ok(by_title)
+    }
+
     async fn list(&self, query: MediaRequestQuery) -> AppResult<Vec<MediaRequest>> {
         let requests = self.requests.lock().await;
         Ok(requests

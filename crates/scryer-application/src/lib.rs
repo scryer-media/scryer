@@ -61,6 +61,7 @@ mod library_scan_progress;
 mod library_scan_titles;
 #[path = "library/scan/unmatched.rs"]
 mod library_scan_unmatched;
+pub mod maintenance_rules;
 mod media;
 mod media_requests;
 mod media_servers;
@@ -404,8 +405,9 @@ pub use indexer_errors::{
 pub use jobs::definitions::{
     JobCategory, JobDefinition, JobKey, JobRun, JobRunRecord, JobRunStatus, JobRunTracker,
     JobScheduleInfo, JobScheduleKind, JobSection, JobTriggerSource, LibraryProbeSignature,
+    MAINTENANCE_RULE_EVALUATION_INTERVAL_SECONDS,
 };
-pub use library::user_delete::{DeletePreview, DeleteTitlesPreview};
+pub use library::user_delete::{DeletePreview, DeleteTitlesPreview, PolicyDeleteAuthorization};
 pub use library_scan::{
     AnimeEpisodeMapping, AnimeMapping, AnimeMovie, BulkArtworkUrlResult, BulkMetadataResult,
     DiscoveryCollectionCompletionInput, DiscoveryCollectionCompletionResult,
@@ -439,7 +441,8 @@ pub use null_repositories::{
     NullImportArtifactRepository, NullImportRepository, NullIndexerProxyConfigRepository,
     NullIndexerSearchLearningRepository, NullIndexerStatsTracker, NullJobRunRepository,
     NullLibraryProbeRepository, NullLibraryRepository, NullLibraryScanUnmatchedItemRepository,
-    NullLogicalBackupExporter, NullMediaFileRepository, NullMediaRequestRepository,
+    NullLogicalBackupExporter, NullMaintenanceEvaluationRepository,
+    NullMaintenanceRuleSetRepository, NullMediaFileRepository, NullMediaRequestRepository,
     NullMediaServerConnectionRepository, NullNotificationChannelRepository,
     NullNotificationSubscriptionRepository, NullOAuthRepository, NullPendingReleaseRepository,
     NullPluginDescriptorLoader, NullPluginHttpTrustConfigRuntime, NullPluginInstallationRepository,
@@ -448,6 +451,8 @@ pub use null_repositories::{
     NullSystemInfoProvider, NullTitleImageProcessor, NullTitleImageRepository,
     NullUpstreamScheduler, NullWorkflowOperationRepository,
 };
+// ── Maintenance safety probes (RFC 137 §9.10, WP-G) ─────────────────────────
+pub use null_repositories::NullMediaServerPlaybackProbe;
 pub use ports::{
     AcquisitionScopeStateRepository, AcquisitionStateRepository, ArchiveExtractorClient,
     ArchiveExtractorPluginProvider, BlocklistRepository, BuiltinDownloadClientConnectionTester,
@@ -471,14 +476,17 @@ pub use ports::{
     IndexerSearchLearningKey, IndexerSearchLearningRecord, IndexerSearchLearningRepository,
     IndexerSearchRunWrite, IndexerStatsTracker, IndexerSystemBackoff, JellyfinServerUser,
     JobRunRepository, LibraryProbeRepository, LibraryRepository,
-    LibraryScanUnmatchedItemRepository, LogicalBackupExporter, MediaAnalyzer, MediaFileRepository,
-    MediaRequestQuery, MediaRequestRepository, MediaServerConnectionRepository, MediaServerUser,
-    MediaServerUserGroup, MediaServerUserGroupStatus, NOTIFICATION_REQUEST_SCHEMA_VERSION,
-    NewMediaRequest, NormalizedIndexerSearchCandidate, NotificationActorPayload,
-    NotificationAppPayload, NotificationApplicationUpdatePayload, NotificationChannelRepository,
-    NotificationClient, NotificationDownloadPayload, NotificationEpisodePayload,
-    NotificationExternalIdsPayload, NotificationFilePayload, NotificationHealthPayload,
-    NotificationImportPayload, NotificationManualInteractionPayload, NotificationMediaFilePayload,
+    LibraryScanUnmatchedItemRepository, LifecycleActionRunRepository, LogicalBackupExporter,
+    MaintenanceCandidateQuery, MaintenanceCandidateRepository, MaintenanceEvaluationRepository,
+    MaintenanceEvaluationRunRepository, MaintenanceExclusionRepository,
+    MaintenanceRuleSetRepository, MediaAnalyzer, MediaFileRepository, MediaRequestQuery,
+    MediaRequestRepository, MediaServerConnectionRepository, MediaServerUser, MediaServerUserGroup,
+    MediaServerUserGroupStatus, NOTIFICATION_REQUEST_SCHEMA_VERSION, NewMediaRequest,
+    NormalizedIndexerSearchCandidate, NotificationActorPayload, NotificationAppPayload,
+    NotificationApplicationUpdatePayload, NotificationChannelRepository, NotificationClient,
+    NotificationDownloadPayload, NotificationEpisodePayload, NotificationExternalIdsPayload,
+    NotificationFilePayload, NotificationHealthPayload, NotificationImportPayload,
+    NotificationManualInteractionPayload, NotificationMediaFilePayload,
     NotificationMediaUpdatePayload, NotificationMediaUpdateTypePayload, NotificationPayload,
     NotificationPluginProvider, NotificationReleasePayload, NotificationSeverityPayload,
     NotificationSubscriptionRepository, NotificationTitlePayload, OAuthRepository,
@@ -492,6 +500,10 @@ pub use ports::{
     TitleImageRepository, TitleRepository, TotpRepository, UserExternalAccountRepository,
     UserRepository, VerifiedExternalIdentity, WebauthnRepository, WorkflowOperationInfo,
     WorkflowOperationRepository,
+};
+pub use ports::{
+    ConnectionPlaybackActivity, MediaServerPlaybackProbe, PlaybackActivitySnapshot,
+    PlaybackProbeStatus,
 };
 pub use quality::release_parser::{
     AudioCodec, ExternalIdSource, ParsedEpisodeMetadata, ParsedEpisodeReleaseType,
@@ -540,17 +552,19 @@ pub use settings::keys::{
     HISTORY_KEEP_FOREVER_KEY, HISTORY_RETENTION_DAYS_KEY, IMAGE_CACHE_MAX_BYTES_ENV,
     IMAGE_CACHE_MAX_SIZE_MB_KEY, IMPORT_MODE_KEY, INDEXER_ROUTING_SETTINGS_KEY,
     LEGACY_NZBGET_CATEGORY_SETTING_KEY, LEGACY_NZBGET_CLIENT_ROUTING_SETTINGS_KEY,
-    METADATA_LANGUAGE_KEY, MFA_REQUIRE_CONFIG_STEP_UP_KEY, MFA_REQUIRE_PASSWORD_LOGIN_KEY,
-    MINIMUM_SEEDERS_FLOOR_DEFAULT, MINIMUM_SEEDERS_FLOOR_DEFAULT_JSON,
-    MINIMUM_SEEDERS_FLOOR_SETTING_KEY, MOVIES_PATH_KEY, MOVIES_ROOT_FOLDERS_KEY,
-    NFO_WRITE_ON_IMPORT_ANIME_KEY, NFO_WRITE_ON_IMPORT_MOVIE_KEY, NFO_WRITE_ON_IMPORT_SERIES_KEY,
-    NZBGET_OLDER_PRIORITY_SETTING_KEY, NZBGET_RECENT_PRIORITY_SETTING_KEY, PASSWORD_MIN_LENGTH_KEY,
-    PASSWORD_MIN_LENGTH_MIN, PLEXMATCH_WRITE_ON_IMPORT_ANIME_KEY,
-    PLEXMATCH_WRITE_ON_IMPORT_SERIES_KEY, PLUGIN_AUTO_UPDATE_ENABLED_KEY,
-    PLUGIN_HTTP_CA_BUNDLE_PEM_KEY, POST_PROCESSING_SCRIPT_ANIME_KEY,
-    POST_PROCESSING_SCRIPT_MOVIE_KEY, POST_PROCESSING_SCRIPT_SERIES_KEY,
-    POST_PROCESSING_TIMEOUT_KEY, RECYCLE_BIN_ENABLED_KEY, RECYCLE_BIN_PATH_KEY,
-    RECYCLE_BIN_RETENTION_DAYS_KEY, RENAME_COLLISION_POLICY_ANIME_GLOBAL_KEY,
+    MAINTENANCE_GATE_DESTRUCTIVE_EFFECTS_KEY, MAINTENANCE_GATE_EVALUATION_KEY,
+    MAINTENANCE_GATE_PRESENTATION_EFFECTS_KEY, MAINTENANCE_GATE_RESULT_DISPLAY_KEY,
+    MAINTENANCE_GATE_REVERSIBLE_EFFECTS_KEY, METADATA_LANGUAGE_KEY, MFA_REQUIRE_CONFIG_STEP_UP_KEY,
+    MFA_REQUIRE_PASSWORD_LOGIN_KEY, MINIMUM_SEEDERS_FLOOR_DEFAULT,
+    MINIMUM_SEEDERS_FLOOR_DEFAULT_JSON, MINIMUM_SEEDERS_FLOOR_SETTING_KEY, MOVIES_PATH_KEY,
+    MOVIES_ROOT_FOLDERS_KEY, NFO_WRITE_ON_IMPORT_ANIME_KEY, NFO_WRITE_ON_IMPORT_MOVIE_KEY,
+    NFO_WRITE_ON_IMPORT_SERIES_KEY, NZBGET_OLDER_PRIORITY_SETTING_KEY,
+    NZBGET_RECENT_PRIORITY_SETTING_KEY, PASSWORD_MIN_LENGTH_KEY, PASSWORD_MIN_LENGTH_MIN,
+    PLEXMATCH_WRITE_ON_IMPORT_ANIME_KEY, PLEXMATCH_WRITE_ON_IMPORT_SERIES_KEY,
+    PLUGIN_AUTO_UPDATE_ENABLED_KEY, PLUGIN_HTTP_CA_BUNDLE_PEM_KEY,
+    POST_PROCESSING_SCRIPT_ANIME_KEY, POST_PROCESSING_SCRIPT_MOVIE_KEY,
+    POST_PROCESSING_SCRIPT_SERIES_KEY, POST_PROCESSING_TIMEOUT_KEY, RECYCLE_BIN_ENABLED_KEY,
+    RECYCLE_BIN_PATH_KEY, RECYCLE_BIN_RETENTION_DAYS_KEY, RENAME_COLLISION_POLICY_ANIME_GLOBAL_KEY,
     RENAME_COLLISION_POLICY_GLOBAL_KEY, RENAME_COLLISION_POLICY_KEY,
     RENAME_COLLISION_POLICY_MOVIE_GLOBAL_KEY, RENAME_COLLISION_POLICY_SERIES_GLOBAL_KEY,
     RENAME_ENABLED_KEY, RENAME_MISSING_METADATA_POLICY_ANIME_GLOBAL_KEY,

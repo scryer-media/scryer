@@ -21,6 +21,7 @@ import {
   UploadCloud,
   User,
   Users,
+  Wrench,
   X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -88,6 +89,9 @@ const SettingsProfileContainer = lazy(async () => ({
 }));
 const SettingsRulesContainer = lazy(async () => ({
   default: (await import("@/components/containers/settings/settings-rules-container")).SettingsRulesContainer,
+}));
+const SettingsMaintenanceRulesContainer = lazy(async () => ({
+  default: (await import("@/components/containers/settings/settings-maintenance-rules-container")).SettingsMaintenanceRulesContainer,
 }));
 const SettingsPluginsContainer = lazy(async () => ({
   default: (await import("@/components/containers/settings/settings-plugins-container")).SettingsPluginsContainer,
@@ -405,6 +409,8 @@ export const SettingsContainer = memo(function SettingsContainer({
                     ? t("settings.downloadClients")
                     : settingsSection === "rules"
                       ? t("settings.rules")
+                      : settingsSection === "maintenanceRules"
+                        ? t("settings.maintenanceRules")
                       : settingsSection === "plugins"
                         ? t("settings.plugins")
                         : settingsSection === "notifications"
@@ -455,6 +461,7 @@ export const SettingsContainer = memo(function SettingsContainer({
   );
   const usesAutomationHeader =
     settingsSection === "rules" ||
+    settingsSection === "maintenanceRules" ||
     settingsSection === "subtitles" ||
     settingsSection === "post-processing" ||
     settingsSection === "acquisition";
@@ -469,6 +476,8 @@ export const SettingsContainer = memo(function SettingsContainer({
     switch (settingsSection) {
       case "rules":
         return SlidersHorizontal;
+      case "maintenanceRules":
+        return Wrench;
       case "post-processing":
         return FolderCog;
       case "subtitles":
@@ -591,6 +600,7 @@ export const SettingsContainer = memo(function SettingsContainer({
                   ? "max-w-none"
                   : "max-w-[1280px]"
               : settingsSection === "rules" ||
+                  settingsSection === "maintenanceRules" ||
                   settingsSection === "post-processing"
                 ? "max-w-none"
                 : settingsSection === "users"
@@ -734,6 +744,8 @@ export const SettingsContainer = memo(function SettingsContainer({
             />
           ) : settingsSection === "rules" ? (
             <SettingsRulesContainer />
+          ) : settingsSection === "maintenanceRules" ? (
+            <SettingsMaintenanceRulesContainer />
           ) : settingsSection === "plugins" ? (
             <SettingsPluginsContainer />
           ) : settingsSection === "notifications" ? (

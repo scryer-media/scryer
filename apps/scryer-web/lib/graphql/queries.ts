@@ -3339,6 +3339,172 @@ export const ruleSetsQuery = `query RuleSets {
   }
 }`;
 
+// ── Maintenance Rules ─────────────────────────────────────────────────
+
+export const MAINTENANCE_RULE_SET_FIELDS = `
+    id
+    name
+    description
+    enabled
+    evaluationMode
+    libraryIds
+    subjectKind
+    currentRevisionNumber
+    graceDays
+    actionSpec {
+      kind
+      schemaVersion
+      targetQualityProfileId
+    }
+    createdAt
+    updatedAt`;
+
+const maintenanceRuleRevisionFieldSelection = `
+    id
+    ruleSetId
+    revisionNumber
+    regoSource
+    graceDays
+    matcherContentHash
+    createdBy
+    createdAt`;
+
+/// The list is the only rule-set document that reads `effectArming`: the field
+/// is not on the shared selection because every mutation payload also embeds
+/// that selection, and arming is refetched from the list after a mutation
+/// rather than read back off it.
+export const maintenanceRuleSetsQuery = `query MaintenanceRuleSets {
+  maintenanceRuleSets {${MAINTENANCE_RULE_SET_FIELDS}
+    effectArming
+  }
+}`;
+
+/// Detail payload shared by the rule-set query and every mutation that returns
+/// a rule set with its current revision and action.
+export const MAINTENANCE_RULE_SET_DETAIL_FIELDS = `
+    ruleSet {${MAINTENANCE_RULE_SET_FIELDS}
+    }
+    revision {${maintenanceRuleRevisionFieldSelection}
+    }
+    actionSpec {
+      kind
+      schemaVersion
+      targetQualityProfileId
+    }`;
+
+export const maintenanceRuleSetQuery = `query MaintenanceRuleSet($id: ID!) {
+  maintenanceRuleSet(id: $id) {${MAINTENANCE_RULE_SET_DETAIL_FIELDS}
+  }
+}`;
+
+export const maintenanceRuleRevisionsQuery = `query MaintenanceRuleRevisions($ruleSetId: ID!) {
+  maintenanceRuleRevisions(ruleSetId: $ruleSetId) {${maintenanceRuleRevisionFieldSelection}
+  }
+}`;
+
+export const maintenanceActionDescriptorsQuery = `query MaintenanceActionDescriptors {
+  maintenanceActionDescriptors {
+    kind
+    supportedSubjects
+    riskClass
+    effectClasses
+    timingMode
+    allowedRepeatModes
+    requiresTargetQualityProfile
+  }
+}`;
+
+/// Candidates. This admin surface always passes `includeShadow: true`: with the
+/// result-display gate closed the server otherwise returns nothing, and an
+/// operator deciding whether to open that gate has to see what shadow
+/// evaluation actually found first.
+export const maintenanceCandidatesQuery = `query MaintenanceCandidates($ruleSetId: ID, $states: [MaintenanceCandidateState!], $libraryId: ID, $includeShadow: Boolean, $limit: Int) {
+  maintenanceCandidates(ruleSetId: $ruleSetId, states: $states, libraryId: $libraryId, includeShadow: $includeShadow, limit: $limit) {
+    id
+    ruleSetId
+    ruleName
+    revisionNumber
+    titleId
+    titleName
+    libraryId
+    facet
+    state
+    stateReason
+    reasonCodes
+    actionKind
+    graceDays
+    matchGeneration
+    firstMatchedAt
+    lastMatchedAt
+    dueAt
+    heldSince
+    updatedAt
+  }
+}`;
+
+export const maintenanceEvaluationRunsQuery = `query MaintenanceEvaluationRuns($ruleSetId: ID, $limit: Int) {
+  maintenanceEvaluationRuns(ruleSetId: $ruleSetId, limit: $limit) {
+    id
+    ruleSetId
+    revisionNumber
+    status
+    startedAt
+    finishedAt
+    evaluatedCount
+    matchedCount
+    noMatchCount
+    unknownCount
+    errorCount
+    durationMs
+    error
+  }
+}`;
+
+export const maintenanceActionRunsQuery = `query MaintenanceActionRuns($ruleSetId: ID, $candidateId: ID, $limit: Int) {
+  maintenanceActionRuns(ruleSetId: $ruleSetId, candidateId: $candidateId, limit: $limit) {
+    id
+    ruleSetId
+    candidateId
+    titleId
+    titleName
+    actionKind
+    matchGeneration
+    attempt
+    status
+    holdReason
+    error
+    startedAt
+    finishedAt
+  }
+}`;
+
+/// Reading the gates requires system-settings management. A reader without it
+/// gets a GraphQL error rather than a partial answer, so the caller catches it
+/// and renders the panel read-locked instead of failing the whole section.
+export const maintenanceInstanceGatesQuery = `query MaintenanceInstanceGates {
+  maintenanceInstanceGates {
+    evaluationEnabled
+    resultDisplayEnabled
+    presentationEffectsEnabled
+    reversibleEffectsEnabled
+    destructiveEffectsEnabled
+  }
+}`;
+
+export const MAINTENANCE_EXCLUSION_FIELDS = `
+    id
+    ruleSetId
+    titleId
+    titleName
+    reason
+    createdBy
+    createdAt`;
+
+export const maintenanceExclusionsQuery = `query MaintenanceExclusions($ruleSetId: ID) {
+  maintenanceExclusions(ruleSetId: $ruleSetId) {${MAINTENANCE_EXCLUSION_FIELDS}
+  }
+}`;
+
 // ── Community Rule Packs ──────────────────────────────────────────────
 
 export const rulePackRegistryQuery = `query RulePackRegistry {

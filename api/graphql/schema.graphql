@@ -1788,6 +1788,38 @@ input CreateLibraryRootInput {
 }
 
 """
+Creates a maintenance rule set together with its first matcher revision.
+"""
+input CreateMaintenanceRuleSetInput {
+	"""
+	Rule-set name.
+	"""
+	name: String!
+	"""
+	Optional description.
+	"""
+	description: String
+	"""
+	Matcher source as written in the editor. The package declaration is
+	applied by the server.
+	"""
+	regoSource: String!
+	"""
+	Action the first revision authorizes.
+	"""
+	action: MaintenanceActionInput!
+	"""
+	Days a subject must match continuously before the action becomes due;
+	defaults to zero.
+	"""
+	graceDays: Int
+	"""
+	Libraries to confine the rule to. Omitted or empty means every library.
+	"""
+	libraryIds: [String!]
+}
+
+"""
 Configuration and credentials for a new media-server connection.
 """
 input CreateMediaServerConnectionInput {
@@ -2566,6 +2598,26 @@ Identity returned after deleting a library.
 type DeleteLibraryPayload {
 	"""
 	Deleted library identity.
+	"""
+	id: ID!
+}
+
+"""
+Identifier returned after removing a maintenance exclusion.
+"""
+type DeleteMaintenanceExclusionPayload {
+	"""
+	Removed exclusion ID.
+	"""
+	id: ID!
+}
+
+"""
+Identifier returned after deleting a maintenance rule set.
+"""
+type DeleteMaintenanceRuleSetPayload {
+	"""
+	Deleted rule-set ID.
 	"""
 	id: ID!
 }
@@ -5233,6 +5285,24 @@ enum EpisodeTypeValue {
 }
 
 """
+Excludes one subject from maintenance rules.
+"""
+input ExcludeMaintenanceSubjectInput {
+	"""
+	Title to exclude.
+	"""
+	titleId: ID!
+	"""
+	Rule to confine the exclusion to. Omitted means every rule.
+	"""
+	ruleSetId: ID
+	"""
+	Why the subject is being excluded.
+	"""
+	reason: String
+}
+
+"""
 Candidate selections, mappings, and secret overrides for an external import.
 """
 input ExecuteExternalImportInput {
@@ -7736,6 +7806,14 @@ enum JobKeyValue {
 	"""
 	TITLE_IMAGE_CACHE_REFRESH
 	"""
+	Scheduled maintenance rule evaluation.
+	"""
+	MAINTENANCE_RULE_EVALUATION
+	"""
+	Scheduled maintenance lifecycle action handling.
+	"""
+	LIFECYCLE_ACTION_HANDLING
+	"""
 	Title deletion.
 	"""
 	TITLE_DELETION
@@ -8791,6 +8869,748 @@ input LoginWithPlexInput {
 Signed 64-bit integer scalar for counts, sizes, sequences, and other values that exceed GraphQL `Int` range.
 """
 scalar Long
+
+"""
+Static registry entry describing one maintenance action to the rule builder.
+"""
+type MaintenanceActionDescriptor {
+	"""
+	Catalog action this descriptor describes.
+	"""
+	kind: MaintenanceActionKind!
+	"""
+	Subjects the action may be configured against.
+	"""
+	supportedSubjects: [MaintenanceActionSubject!]!
+	"""
+	Risk class governing the controls the action requires.
+	"""
+	riskClass: MaintenanceRiskClass!
+	"""
+	Effect classes the action declares for conflict arbitration.
+	"""
+	effectClasses: [String!]!
+	"""
+	When a due action becomes eligible to execute.
+	"""
+	timingMode: String!
+	"""
+	Repeat semantics the registry allows for the action.
+	"""
+	allowedRepeatModes: [String!]!
+	"""
+	Whether configuring the action requires a target quality profile.
+	"""
+	requiresTargetQualityProfile: Boolean!
+}
+
+"""
+Selects one catalog action and its parameters.
+"""
+input MaintenanceActionInput {
+	"""
+	Catalog action to authorize.
+	"""
+	kind: MaintenanceActionKind!
+	"""
+	Target quality profile. Required by the quality-profile action and
+	rejected for every other kind.
+	"""
+	targetQualityProfileId: String
+}
+
+"""
+The closed catalog of actions a maintenance rule revision can authorize.
+"""
+enum MaintenanceActionKind {
+	"""
+	Track membership only, and mutate no media.
+	"""
+	DO_NOTHING
+	"""
+	Unmonitor the matched scope and keep its files.
+	"""
+	UNMONITOR_SCOPE_KEEP_FILES
+	"""
+	Delete the title and its files.
+	"""
+	DELETE_TITLE_AND_FILES
+	"""
+	Unmonitor the title and delete its files while preserving the title.
+	"""
+	UNMONITOR_TITLE_DELETE_ALL_FILES
+	"""
+	Unmonitor the show and its seasons, and delete existing episode files.
+	"""
+	UNMONITOR_SHOW_DELETE_EXISTING_FILES
+	"""
+	Unmonitor the season or episode scope and delete its files.
+	"""
+	UNMONITOR_SCOPE_DELETE_FILES
+	"""
+	Unmonitor the season and delete its files, then delete the show when a
+	fresh parent check proves it is empty.
+	"""
+	UNMONITOR_SEASON_DELETE_FILES_THEN_DELETE_SHOW_IF_EMPTY
+	"""
+	Unmonitor the season, then unmonitor the show when a fresh parent check
+	proves it is empty.
+	"""
+	UNMONITOR_SEASON_THEN_UNMONITOR_SHOW_IF_EMPTY
+	"""
+	Change the quality profile and search only when the current profile
+	differs from the target.
+	"""
+	CHANGE_QUALITY_PROFILE_AND_SEARCH_IF_CHANGED
+}
+
+"""
+One recorded action-handler attempt on one candidate, holds included.
+"""
+type MaintenanceActionRun {
+	"""
+	Action-run ID.
+	"""
+	id: ID!
+	"""
+	Rule set the attempt belongs to.
+	"""
+	ruleSetId: ID!
+	"""
+	Candidate the attempt acted on.
+	"""
+	candidateId: ID!
+	"""
+	Title the attempt acted on.
+	"""
+	titleId: ID!
+	"""
+	Display name of the title, or its stored ID when the title is gone.
+	"""
+	titleName: String!
+	"""
+	Action the attempt performed or refused.
+	"""
+	actionKind: MaintenanceActionKind!
+	"""
+	Match generation of the candidate at attempt time.
+	"""
+	matchGeneration: Int!
+	"""
+	Attempt number for this candidate generation, starting at one.
+	"""
+	attempt: Int!
+	"""
+	Outcome: running, succeeded, already_satisfied, failed, or held.
+	"""
+	status: String!
+	"""
+	Why a held attempt was refused; null otherwise.
+	"""
+	holdReason: String
+	"""
+	Error text of a failed attempt; null otherwise.
+	"""
+	error: String
+	"""
+	UTC start time of the attempt.
+	"""
+	startedAt: DateTime!
+	"""
+	UTC finish time; null while the attempt is running.
+	"""
+	finishedAt: DateTime
+}
+
+"""
+The closed, schema-versioned action configuration a rule revision stores.
+"""
+type MaintenanceActionSpec {
+	"""
+	Catalog action the revision authorizes.
+	"""
+	kind: MaintenanceActionKind!
+	"""
+	Schema version the stored parameters were validated against.
+	"""
+	schemaVersion: Int!
+	"""
+	Target quality profile, set only for the quality-profile action and null
+	for every other kind.
+	"""
+	targetQualityProfileId: String
+}
+
+"""
+A media subject a maintenance action can be configured against.
+"""
+enum MaintenanceActionSubject {
+	"""
+	A movie title.
+	"""
+	MOVIE
+	"""
+	A show title.
+	"""
+	SHOW
+	"""
+	One season of a show.
+	"""
+	SEASON
+	"""
+	One episode of a show.
+	"""
+	EPISODE
+}
+
+"""
+One subject's durable membership in one maintenance rule set.
+
+Nothing here has acted on the subject: a candidate records that a rule
+matched it and how long the grace period still has to run.
+"""
+type MaintenanceCandidate {
+	"""
+	Candidate ID.
+	"""
+	id: ID!
+	"""
+	Rule set that produced the candidate.
+	"""
+	ruleSetId: ID!
+	"""
+	Name of that rule set.
+	"""
+	ruleName: String!
+	"""
+	Rule revision in force when the candidate was opened.
+	"""
+	revisionNumber: Int!
+	"""
+	Subject title ID.
+	"""
+	titleId: ID!
+	"""
+	Subject title name, or the stored title ID when the title is gone.
+	"""
+	titleName: String!
+	"""
+	Library the subject belonged to when the candidate was opened.
+	"""
+	libraryId: String!
+	"""
+	Media facet of the subject.
+	"""
+	facet: String!
+	"""
+	Current lifecycle state.
+	"""
+	state: MaintenanceCandidateState!
+	"""
+	Why the candidate is in that state.
+	"""
+	stateReason: String!
+	"""
+	Reason codes the matcher emitted on the most recent match.
+	"""
+	reasonCodes: [String!]!
+	"""
+	Action the rule revision authorizes. Nothing executes it in this release.
+	"""
+	actionKind: MaintenanceActionKind!
+	"""
+	Days the subject must match continuously before the action is due.
+	"""
+	graceDays: Int!
+	"""
+	Increments each time a fresh candidate is opened for this subject, so a
+	cancel-then-rematch is distinguishable from a continuing membership.
+	"""
+	matchGeneration: Int!
+	"""
+	When the subject started matching. Never reset while the candidate lives.
+	"""
+	firstMatchedAt: DateTime!
+	"""
+	When the subject most recently matched.
+	"""
+	lastMatchedAt: DateTime!
+	"""
+	When the grace period elapses, equal to `firstMatchedAt` for a zero-day
+	grace period.
+	"""
+	dueAt: DateTime!
+	"""
+	Set while the latest evaluation could not decide, and null otherwise.
+	"""
+	heldSince: DateTime
+	"""
+	UTC last-update time.
+	"""
+	updatedAt: DateTime!
+}
+
+"""
+Lifecycle state of one maintenance candidate.
+
+The whole state machine is exposed now, but the dark evaluator only ever
+produces `OBSERVING`, `CANCELED`, and `EXCLUDED`; the rest are written by
+the action executor, which is not part of this release.
+"""
+enum MaintenanceCandidateState {
+	"""
+	Matching, with the grace clock running.
+	"""
+	OBSERVING
+	"""
+	Grace elapsed and effect arming permits the action; awaiting the handler.
+	"""
+	PENDING_ACTION
+	"""
+	Eligible to execute now.
+	"""
+	DUE
+	"""
+	An action lease is held for this candidate.
+	"""
+	EXECUTING
+	"""
+	The action completed.
+	"""
+	SUCCEEDED
+	"""
+	The action failed terminally.
+	"""
+	FAILED
+	"""
+	The subject stopped matching, or its rule revision was superseded.
+	"""
+	CANCELED
+	"""
+	An exclusion covers the subject.
+	"""
+	EXCLUDED
+	"""
+	A safety precondition refused the action.
+	"""
+	BLOCKED
+}
+
+"""
+How far a rule set's effects are armed. Arming is per rule and independent
+of the instance effect gates; an action executes only when both permit it.
+"""
+enum MaintenanceEffectArming {
+	"""
+	Evaluate and track candidates, never act.
+	"""
+	NONE
+	"""
+	Low- and medium-risk actions may execute.
+	"""
+	REVERSIBLE
+	"""
+	High-risk actions may additionally execute. Requires acknowledging the
+	rule's current candidate count when set.
+	"""
+	DESTRUCTIVE
+}
+
+"""
+How a maintenance rule set is evaluated.
+"""
+enum MaintenanceEvaluationMode {
+	"""
+	Stored but never evaluated. The only mode this release accepts.
+	"""
+	DISABLED
+	"""
+	Evaluate and record candidates, never act.
+	"""
+	SHADOW
+	"""
+	Evaluate, record, and surface candidates for manual approval.
+	"""
+	OBSERVE
+}
+
+"""
+One rule set's pass through one evaluation run.
+"""
+type MaintenanceEvaluationRun {
+	"""
+	Evaluation-run ID.
+	"""
+	id: ID!
+	"""
+	Rule set that was evaluated.
+	"""
+	ruleSetId: ID!
+	"""
+	Rule revision that was evaluated.
+	"""
+	revisionNumber: Int!
+	"""
+	One of running, succeeded, or failed. A run left running is the trace of
+	an interrupted pass.
+	"""
+	status: String!
+	"""
+	When the pass started.
+	"""
+	startedAt: DateTime!
+	"""
+	When the pass finished, or null while it is still running.
+	"""
+	finishedAt: DateTime
+	"""
+	Subjects the matcher was run against.
+	"""
+	evaluatedCount: Int!
+	"""
+	Subjects the matcher matched.
+	"""
+	matchedCount: Int!
+	"""
+	Subjects the matcher did not match.
+	"""
+	noMatchCount: Int!
+	"""
+	Subjects the matcher could not decide, which are held.
+	"""
+	unknownCount: Int!
+	"""
+	Subjects whose evaluation failed, which are also held.
+	"""
+	errorCount: Int!
+	"""
+	How long the pass took, or null while it is still running.
+	"""
+	durationMs: Int
+	"""
+	Why the pass failed, or null when it did not.
+	"""
+	error: String
+}
+
+"""
+Outcome of asking for an immediate evaluation pass.
+"""
+type MaintenanceEvaluationTriggerPayload {
+	"""
+	Whether a pass was started. False when a gate, a disabled rule, or a
+	run already in progress stopped it.
+	"""
+	started: Boolean!
+	"""
+	What happened, suitable for showing to an operator.
+	"""
+	message: String
+}
+
+"""
+A subject a maintenance rule must never act on.
+"""
+type MaintenanceExclusion {
+	"""
+	Exclusion ID.
+	"""
+	id: ID!
+	"""
+	Rule the exclusion is confined to, or null when it is global.
+	"""
+	ruleSetId: ID
+	"""
+	Excluded title ID.
+	"""
+	titleId: ID!
+	"""
+	Excluded title name, or the stored title ID when the title is gone.
+	"""
+	titleName: String!
+	"""
+	Why the subject was excluded; empty when the author gave no reason.
+	"""
+	reason: String!
+	"""
+	ID of the user who added the exclusion, or null when unattributed.
+	"""
+	createdBy: ID
+	"""
+	UTC creation time.
+	"""
+	createdAt: DateTime!
+}
+
+"""
+The five independent instance-wide maintenance gates. Every one of them
+defaults off, and only the first two do anything in this release.
+"""
+type MaintenanceInstanceGates {
+	"""
+	Whether the scheduled evaluator may run at all.
+	"""
+	evaluationEnabled: Boolean!
+	"""
+	Whether candidate results are returned to clients.
+	"""
+	resultDisplayEnabled: Boolean!
+	"""
+	Reserved for provider collection projection and lifecycle notifications.
+	"""
+	presentationEffectsEnabled: Boolean!
+	"""
+	Reserved for low and medium risk actions.
+	"""
+	reversibleEffectsEnabled: Boolean!
+	"""
+	Reserved for high risk actions.
+	"""
+	destructiveEffectsEnabled: Boolean!
+}
+
+"""
+What a matcher decided for one subject.
+"""
+enum MaintenanceOutcome {
+	"""
+	The rule matched the subject.
+	"""
+	MATCH
+	"""
+	The rule did not match the subject.
+	"""
+	NO_MATCH
+	"""
+	A fact the rule needs could not be observed, so the rule is held.
+	"""
+	UNKNOWN
+}
+
+"""
+Outcome of running one matcher against a bounded title selection. Preview
+persists nothing.
+"""
+type MaintenancePreviewPayload {
+	"""
+	Stored rule set the preview ran, or the throwaway ID an unsaved draft
+	compiled under.
+	"""
+	ruleSetId: String!
+	"""
+	Hash of the exact source that produced these outcomes.
+	"""
+	matcherContentHash: String!
+	"""
+	UTC time the preview evaluated the selection.
+	"""
+	evaluatedAt: DateTime!
+	"""
+	One entry per evaluated title, in selection order.
+	"""
+	titles: [MaintenancePreviewTitle!]!
+}
+
+"""
+One title's preview outcome. `outcome` is null exactly when `error` is set:
+a rule that failed produced no decision, and a failure is never rendered as
+a no-match.
+"""
+type MaintenancePreviewTitle {
+	"""
+	Evaluated title ID.
+	"""
+	titleId: ID!
+	"""
+	Evaluated title name.
+	"""
+	titleName: String!
+	"""
+	Media facet of the evaluated title.
+	"""
+	facet: String!
+	"""
+	Library containing the evaluated title.
+	"""
+	libraryId: String!
+	"""
+	Decision the matcher reached, or null when evaluation failed.
+	"""
+	outcome: MaintenanceOutcome
+	"""
+	Reason codes the matcher emitted; empty when it emitted none.
+	"""
+	reasonCodes: [String!]!
+	"""
+	Why evaluation failed for this title, or null when it succeeded.
+	"""
+	error: String
+}
+
+"""
+How destructive a maintenance action is, and therefore the minimum control
+its execution requires.
+"""
+enum MaintenanceRiskClass {
+	"""
+	Mutates no managed media or catalog state.
+	"""
+	NONE
+	"""
+	Reversible Scryer state, a notification, or a bounded refresh.
+	"""
+	LOW
+	"""
+	Changes acquisition intent, starts external work, or reorganizes files.
+	"""
+	MEDIUM
+	"""
+	Deletes, blocklists, or can otherwise make media unavailable.
+	"""
+	HIGH
+}
+
+"""
+One immutable revision of a maintenance rule set's matcher and action.
+"""
+type MaintenanceRuleRevision {
+	"""
+	Revision ID.
+	"""
+	id: ID!
+	"""
+	ID of the rule set this revision belongs to.
+	"""
+	ruleSetId: ID!
+	"""
+	Revision number, starting at one and incremented on every matcher edit.
+	"""
+	revisionNumber: Int!
+	"""
+	Rego source as the editor should show it, with the package declaration
+	and the rego.v1 import stripped.
+	"""
+	regoSource: String!
+	"""
+	Days a subject must match continuously before the action becomes due.
+	"""
+	graceDays: Int!
+	"""
+	Hash of the exact stored source, used to attribute a decision to the
+	revision that produced it.
+	"""
+	matcherContentHash: String!
+	"""
+	ID of the user who wrote the revision, or null when unattributed.
+	"""
+	createdBy: ID
+	"""
+	UTC creation time.
+	"""
+	createdAt: DateTime!
+}
+
+"""
+A maintenance rule set: identity, scope, and evaluation state. The matcher
+and the action it authorizes live on the revision, never here.
+"""
+type MaintenanceRuleSet {
+	"""
+	Rule-set ID.
+	"""
+	id: ID!
+	"""
+	Rule-set name.
+	"""
+	name: String!
+	"""
+	Rule-set description; empty when the author supplied none.
+	"""
+	description: String!
+	"""
+	Whether the rule set is enabled. Always false while maintenance rules
+	ship dark.
+	"""
+	enabled: Boolean!
+	"""
+	Evaluation mode currently stored for the rule set.
+	"""
+	evaluationMode: MaintenanceEvaluationMode!
+	"""
+	How far this rule's effects are armed, independent of its mode.
+	"""
+	effectArming: MaintenanceEffectArming!
+	"""
+	Libraries the rule is confined to. Empty means every library.
+	"""
+	libraryIds: [String!]!
+	"""
+	Granularity the rule is scoped to.
+	"""
+	subjectKind: MaintenanceRuleSubjectKind!
+	"""
+	Revision number of the matcher currently in force.
+	"""
+	currentRevisionNumber: Int!
+	"""
+	Grace period of the revision currently in force, in days.
+	"""
+	graceDays: Int!
+	"""
+	Action the revision currently in force authorizes.
+	"""
+	actionSpec: MaintenanceActionSpec!
+	"""
+	UTC creation time.
+	"""
+	createdAt: DateTime!
+	"""
+	UTC last-update time.
+	"""
+	updatedAt: DateTime!
+}
+
+"""
+A rule set together with the revision currently in force.
+"""
+type MaintenanceRuleSetDetail {
+	"""
+	The rule set itself.
+	"""
+	ruleSet: MaintenanceRuleSet!
+	"""
+	The revision currently in force.
+	"""
+	revision: MaintenanceRuleRevision!
+	"""
+	The action that revision authorizes, already decoded.
+	"""
+	actionSpec: MaintenanceActionSpec!
+}
+
+"""
+Granularity a maintenance rule set is scoped to.
+"""
+enum MaintenanceRuleSubjectKind {
+	"""
+	The rule evaluates whole titles, both movies and shows.
+	"""
+	TITLE
+}
+
+"""
+Result of validating maintenance rule source without saving it.
+"""
+type MaintenanceRuleValidationPayload {
+	"""
+	Whether the source is valid.
+	"""
+	valid: Boolean!
+	"""
+	Validation errors; empty when valid.
+	"""
+	errors: [String!]!
+}
 
 """
 Maps a persisted manual-import candidate to an episode, series-movie link, or title-level movie target.
@@ -11634,6 +12454,131 @@ type MutationRoot {
 		input: ValidateRuleSetInput!
 	): RuleValidationResultPayload!
 	"""
+	Create a maintenance rule set together with its first matcher revision.
+	"""
+	createMaintenanceRuleSet(
+		"""
+		Rule name, matcher source, action, and optional description, grace period, and library scope.
+		"""
+		input: CreateMaintenanceRuleSetInput!
+	): MaintenanceRuleSetDetail!
+	"""
+	Replace a rule set's matcher, action, and grace period by appending a revision.
+	"""
+	updateMaintenanceRuleMatcher(
+		"""
+		Rule-set identity, replacement matcher source and action, and optional grace period.
+		"""
+		input: UpdateMaintenanceRuleMatcherInput!
+	): MaintenanceRuleSetDetail!
+	"""
+	Rename and re-scope a rule set without touching its matcher, so no revision is created.
+	"""
+	updateMaintenanceRuleMetadata(
+		"""
+		Rule-set identity, replacement name, and optional description and library scope.
+		"""
+		input: UpdateMaintenanceRuleMetadataInput!
+	): MaintenanceRuleSet!
+	"""
+	Delete a maintenance rule set and every revision it owns.
+	"""
+	deleteMaintenanceRuleSet(
+		"""
+		Maintenance rule-set identity to delete.
+		"""
+		id: ID!
+	): DeleteMaintenanceRuleSetPayload!
+	"""
+	Compile and check maintenance rule source without saving it.
+	"""
+	validateMaintenanceRule(
+		"""
+		Matcher source to validate.
+		"""
+		input: ValidateMaintenanceRuleInput!
+	): MaintenanceRuleValidationPayload!
+	"""
+	Evaluate one matcher against a bounded title selection without saving anything.
+	"""
+	previewMaintenanceRule(
+		"""
+		Either a stored rule set or an unsaved matcher, plus either the titles or the library to evaluate.
+		"""
+		input: PreviewMaintenanceRuleInput!
+	): MaintenancePreviewPayload!
+	"""
+	Move a maintenance rule set between evaluation modes.
+	
+	Creation always produces a disabled rule, so arming one is always this
+	deliberate second step. A rule moved back to disabled keeps the
+	candidates it already opened: flipping a rule off must not destroy the
+	membership and grace clocks it established.
+	"""
+	setMaintenanceRuleMode(
+		"""
+		Rule-set identity and the evaluation mode to store.
+		"""
+		input: SetMaintenanceRuleModeInput!
+	): MaintenanceRuleSet!
+	"""
+	Set how far one rule set's effects are armed. Destructive arming requires acknowledging the rule's current candidate count.
+	"""
+	setMaintenanceRuleArming(
+		"""
+		Rule-set identity, the arming level, and the acknowledged candidate count for destructive arming.
+		"""
+		input: SetMaintenanceRuleArmingInput!
+	): MaintenanceRuleSet!
+	"""
+	Run the maintenance action handler immediately instead of waiting for its schedule.
+	"""
+	runMaintenanceActionHandlerNow: MaintenanceEvaluationTriggerPayload!
+	"""
+	Arm or disarm the instance-wide maintenance gates. Omitted fields keep their stored value.
+	"""
+	setMaintenanceInstanceGates(
+		"""
+		The gates to change; omit a field to leave that gate alone.
+		"""
+		input: SetMaintenanceInstanceGatesInput!
+	): MaintenanceInstanceGates!
+	"""
+	Exclude a subject from one maintenance rule, or from every rule when no rule is named.
+	
+	The exclusion takes effect at the next evaluation, which is also where an
+	existing candidate for the subject moves to the excluded state.
+	"""
+	excludeMaintenanceSubject(
+		"""
+		Subject to exclude, the optional rule to confine it to, and a reason.
+		"""
+		input: ExcludeMaintenanceSubjectInput!
+	): MaintenanceExclusion!
+	"""
+	Remove a maintenance exclusion.
+	"""
+	removeMaintenanceExclusion(
+		"""
+		Exclusion identity to remove.
+		"""
+		id: ID!
+	): DeleteMaintenanceExclusionPayload!
+	"""
+	Run maintenance evaluation now.
+	
+	Without a rule, this starts the ordinary scheduled job so the run shows
+	up in the system-jobs surface, and returns as soon as it is accepted.
+	Scoped to one rule it runs inline instead, because the job seam carries
+	no parameters; that path is bounded by the rule's own library scope.
+	"""
+	runMaintenanceEvaluationNow(
+		"""
+		Evaluate only this rule set; omit to evaluate every enabled rule.
+		"""
+		ruleSetId: ID
+	): MaintenanceEvaluationTriggerPayload!
+	"""
 	Refresh the configured plugin registry catalogs and return the available plugins.
 	"""
 	refreshPluginCatalog: [RegistryPluginPayload!]!
@@ -13389,6 +14334,45 @@ input PreviewExternalImportInput {
 }
 
 """
+Runs one matcher against a bounded title selection without saving anything.
+
+Supply either `ruleSetId` to preview a stored rule set, or `regoSource` with
+`action` to preview an unsaved draft, never both. Select titles with either
+`titleIds` or `libraryId`, never both.
+"""
+input PreviewMaintenanceRuleInput {
+	"""
+	Stored rule set to preview at its current revision.
+	"""
+	ruleSetId: ID
+	"""
+	Unsaved matcher source to preview, as written in the editor.
+	"""
+	regoSource: String
+	"""
+	Action for the unsaved draft; required with `regoSource`.
+	"""
+	action: MaintenanceActionInput
+	"""
+	Grace period for the unsaved draft; defaults to zero.
+	"""
+	graceDays: Int
+	"""
+	Evaluate exactly these titles.
+	"""
+	titleIds: [ID!]
+	"""
+	Evaluate the first titles of this library.
+	"""
+	libraryId: ID
+	"""
+	How many titles to evaluate for a library selection; defaults to twenty
+	and is clamped to the preview cap.
+	"""
+	limit: Int
+}
+
+"""
 Provider catalog family used when describing configurable providers.
 """
 enum ProviderCatalogFamilyValue {
@@ -14858,6 +15842,117 @@ type QueryRoot {
 	List rule sets visible to the caller.
 	"""
 	ruleSets: [RuleSetPayload!]!
+	"""
+	List maintenance rule sets; requires catalog-settings management permission.
+	"""
+	maintenanceRuleSets: [MaintenanceRuleSet!]!
+	"""
+	Return one maintenance rule set with the revision currently in force, or null when no such rule set exists.
+	"""
+	maintenanceRuleSet(
+		"""
+		Maintenance rule-set ID to load.
+		"""
+		id: ID!
+	): MaintenanceRuleSetDetail
+	"""
+	List every stored revision of one maintenance rule set, newest first.
+	"""
+	maintenanceRuleRevisions(
+		"""
+		Maintenance rule-set ID whose revisions are returned.
+		"""
+		ruleSetId: ID!
+	): [MaintenanceRuleRevision!]!
+	"""
+	List the static maintenance action catalog the rule builder chooses from.
+	"""
+	maintenanceActionDescriptors: [MaintenanceActionDescriptor!]!
+	"""
+	List lifecycle candidates the maintenance evaluator has recorded; requires catalog-settings management permission.
+	
+	Two independent things hide rows, and they are not the same thing. A
+	rule in shadow mode is dark by definition, so its candidates are
+	returned only when `includeShadow` is true. Separately, the instance
+	result-display gate hides everything while it is off.
+	
+	`includeShadow` overrides the gate as well as the mode filter, on
+	purpose: an operator deciding whether to arm result display has to be
+	able to see what shadow evaluation actually found first, and reaching
+	this query already requires catalog-settings management.
+	"""
+	maintenanceCandidates(
+		"""
+		Return candidates of this rule set only.
+		"""
+		ruleSetId: ID,
+		"""
+		Return candidates in these lifecycle states only.
+		"""
+		states: [MaintenanceCandidateState!],
+		"""
+		Return candidates whose subject belongs to this library only.
+		"""
+		libraryId: ID,
+		"""
+		Include candidates produced by rules running in shadow mode.
+		"""
+		includeShadow: Boolean,
+		"""
+		Maximum number of candidates to return.
+		"""
+		limit: Int
+	): [MaintenanceCandidate!]!
+	"""
+	List recorded maintenance evaluation runs, newest first.
+	
+	Runs carry counts and timing rather than subjects, so the result-display
+	gate does not hide them: they are how an operator sees that dark
+	evaluation is working at all.
+	"""
+	maintenanceEvaluationRuns(
+		"""
+		Return runs of this rule set only.
+		"""
+		ruleSetId: ID,
+		"""
+		Maximum number of runs to return.
+		"""
+		limit: Int
+	): [MaintenanceEvaluationRun!]!
+	"""
+	Read the five instance-wide maintenance gates; requires system-settings management permission.
+	"""
+	maintenanceInstanceGates: MaintenanceInstanceGates!
+	"""
+	List maintenance exclusions, newest first.
+	
+	Narrowing by rule returns that rule's own exclusions together with every
+	global one, because both are what actually stop it acting.
+	"""
+	maintenanceExclusions(
+		"""
+		Return the exclusions that apply to this rule set.
+		"""
+		ruleSetId: ID
+	): [MaintenanceExclusion!]!
+	"""
+	List recorded maintenance action-handler attempts, newest first.
+	"""
+	maintenanceActionRuns(
+		"""
+		Return only attempts for this rule set.
+		"""
+		ruleSetId: ID,
+		"""
+		Return only attempts for this candidate.
+		"""
+		candidateId: ID,
+		"""
+		Maximum rows to return; defaults to fifty.
+		"""
+		limit: Int
+	): [MaintenanceActionRun!]!
 	"""
 	List post-processing scripts visible to the caller.
 	"""
@@ -16710,6 +17805,67 @@ input SetIndexerSeedingProfileInput {
 	Seeding profile identity to assign, or null to clear the assignment.
 	"""
 	seedingProfileId: ID
+}
+
+"""
+Arms or disarms the instance-wide maintenance gates. An omitted field leaves
+that gate exactly as stored.
+"""
+input SetMaintenanceInstanceGatesInput {
+	"""
+	Whether the scheduled evaluator may run.
+	"""
+	evaluationEnabled: Boolean
+	"""
+	Whether candidate results are returned to clients.
+	"""
+	resultDisplayEnabled: Boolean
+	"""
+	Reserved for provider collection projection and lifecycle notifications.
+	"""
+	presentationEffectsEnabled: Boolean
+	"""
+	Reserved for low and medium risk actions.
+	"""
+	reversibleEffectsEnabled: Boolean
+	"""
+	Reserved for high risk actions.
+	"""
+	destructiveEffectsEnabled: Boolean
+}
+
+"""
+Sets how far one rule set's effects are armed.
+"""
+input SetMaintenanceRuleArmingInput {
+	"""
+	Rule-set ID.
+	"""
+	id: ID!
+	"""
+	Arming level to store. `DESTRUCTIVE` requires acknowledging the rule's
+	current candidate count and applies only to high-risk actions.
+	"""
+	arming: MaintenanceEffectArming!
+	"""
+	The candidate count the operator saw and acknowledged; required for
+	`DESTRUCTIVE` and must equal the rule's current non-terminal count.
+	"""
+	acknowledgedCandidateCount: Int
+}
+
+"""
+Moves a rule set between evaluation modes.
+"""
+input SetMaintenanceRuleModeInput {
+	"""
+	Rule-set ID.
+	"""
+	id: ID!
+	"""
+	Mode to store. Anything other than `DISABLED` also enables the rule.
+	"""
+	mode: MaintenanceEvaluationMode!
 }
 
 """
@@ -19634,6 +20790,51 @@ input UpdateLibraryRootInput {
 }
 
 """
+Replaces the matcher of an existing rule set, appending a revision.
+"""
+input UpdateMaintenanceRuleMatcherInput {
+	"""
+	Rule-set ID.
+	"""
+	id: ID!
+	"""
+	Replacement matcher source as written in the editor.
+	"""
+	regoSource: String!
+	"""
+	Action the new revision authorizes.
+	"""
+	action: MaintenanceActionInput!
+	"""
+	Days a subject must match continuously before the action becomes due;
+	defaults to zero.
+	"""
+	graceDays: Int
+}
+
+"""
+Renames and re-scopes a rule set without touching its matcher.
+"""
+input UpdateMaintenanceRuleMetadataInput {
+	"""
+	Rule-set ID.
+	"""
+	id: ID!
+	"""
+	Replacement name.
+	"""
+	name: String!
+	"""
+	Replacement description; omitted clears it.
+	"""
+	description: String
+	"""
+	Replacement library scope. Omitted or empty means every library.
+	"""
+	libraryIds: [String!]
+}
+
+"""
 Replacement preferences for the caller's media request.
 """
 input UpdateMediaRequestInput {
@@ -20374,6 +21575,16 @@ input ValidateExternalImportConnectionInput {
 	Base URL and API key to validate.
 	"""
 	connection: ExternalImportConnectionInput!
+}
+
+"""
+Validates maintenance rule source without saving it.
+"""
+input ValidateMaintenanceRuleInput {
+	"""
+	Matcher source to validate, as written in the editor.
+	"""
+	regoSource: String!
 }
 
 """

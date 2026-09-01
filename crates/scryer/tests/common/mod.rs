@@ -38,8 +38,9 @@ use scryer_infrastructure_acquisition::{
 };
 use scryer_infrastructure_configuration::{
     customization::{
-        plugin_store::PluginStore, post_processing_script_store::PostProcessingScriptStore,
-        rule_set_store::RuleSetStore,
+        maintenance_evaluation_store::MaintenanceEvaluationStore,
+        maintenance_rule_set_store::MaintenanceRuleSetStore, plugin_store::PluginStore,
+        post_processing_script_store::PostProcessingScriptStore, rule_set_store::RuleSetStore,
     },
     settings::{quality_profile_store::QualityProfileStore, settings_store::SettingsStore},
 };
@@ -878,6 +879,8 @@ impl TestContext {
         let title_image_store = TitleImageStore::new(datastore.clone());
         let image_proxy_store = ImageProxyStore::new(datastore.clone());
         let rule_set_store = RuleSetStore::new(datastore.clone());
+        let maintenance_rule_set_store = MaintenanceRuleSetStore::new(datastore.clone());
+        let maintenance_evaluation_store = MaintenanceEvaluationStore::new(datastore.clone());
         let post_processing_script_store = PostProcessingScriptStore::new(datastore.clone());
         let plugin_store = PluginStore::new(datastore.clone());
         let oauth_store = OAuthStore::new(datastore.clone());
@@ -929,6 +932,8 @@ impl TestContext {
         .with_totp_store(Arc::new(totp_store))
         .with_oauth_store(Arc::new(oauth_store))
         .with_rule_set_store(Arc::new(rule_set_store))
+        .with_maintenance_rule_set_store(Arc::new(maintenance_rule_set_store))
+        .with_maintenance_evaluation_store(Arc::new(maintenance_evaluation_store))
         .with_post_processing_script_store(Arc::new(post_processing_script_store))
         .with_plugin_installation_store(Arc::new(plugin_store.clone()))
         .with_acquisition_state(acquisition_store)

@@ -1,6 +1,9 @@
 import {
   BACKUP_INFO_FIELDS,
   JOB_RUN_FIELDS,
+  MAINTENANCE_EXCLUSION_FIELDS,
+  MAINTENANCE_RULE_SET_DETAIL_FIELDS,
+  MAINTENANCE_RULE_SET_FIELDS,
   MEDIA_SERVER_CONNECTION_FIELDS,
   PROVIDER_CONFIG_VALUE_FIELDS,
   RELEASE_SEARCH_RESULT_FIELDS,
@@ -2122,6 +2125,113 @@ export const validateRuleSetMutation = `mutation ValidateRuleSet($input: Validat
   validateRuleSet(input: $input) {
     valid
     errors
+  }
+}`;
+
+// ── Maintenance Rules ─────────────────────────────────────────────────
+//
+// Maintenance rule sets are saved disabled and nothing evaluates or executes
+// them yet. Preview is the only mutation here that runs a matcher, and it is
+// read-only: it reports what a rule would select, and changes nothing.
+
+export const createMaintenanceRuleSetMutation = `mutation CreateMaintenanceRuleSet($input: CreateMaintenanceRuleSetInput!) {
+  createMaintenanceRuleSet(input: $input) {${MAINTENANCE_RULE_SET_DETAIL_FIELDS}
+  }
+}`;
+
+export const updateMaintenanceRuleMatcherMutation = `mutation UpdateMaintenanceRuleMatcher($input: UpdateMaintenanceRuleMatcherInput!) {
+  updateMaintenanceRuleMatcher(input: $input) {${MAINTENANCE_RULE_SET_DETAIL_FIELDS}
+  }
+}`;
+
+export const updateMaintenanceRuleMetadataMutation = `mutation UpdateMaintenanceRuleMetadata($input: UpdateMaintenanceRuleMetadataInput!) {
+  updateMaintenanceRuleMetadata(input: $input) {${MAINTENANCE_RULE_SET_FIELDS}
+  }
+}`;
+
+export const deleteMaintenanceRuleSetMutation = `mutation DeleteMaintenanceRuleSet($id: ID!) {
+  deleteMaintenanceRuleSet(id: $id) {
+    id
+  }
+}`;
+
+export const validateMaintenanceRuleMutation = `mutation ValidateMaintenanceRule($input: ValidateMaintenanceRuleInput!) {
+  validateMaintenanceRule(input: $input) {
+    valid
+    errors
+  }
+}`;
+
+export const previewMaintenanceRuleMutation = `mutation PreviewMaintenanceRule($input: PreviewMaintenanceRuleInput!) {
+  previewMaintenanceRule(input: $input) {
+    ruleSetId
+    matcherContentHash
+    evaluatedAt
+    titles {
+      titleId
+      titleName
+      facet
+      libraryId
+      outcome
+      reasonCodes
+      error
+    }
+  }
+}`;
+
+/// Mode and arming both return the whole rule set, but the caller refetches the
+/// list afterwards rather than patching state from the payload, so these
+/// selections stay at the identity the caller needs to correlate the response.
+export const setMaintenanceRuleModeMutation = `mutation SetMaintenanceRuleMode($input: SetMaintenanceRuleModeInput!) {
+  setMaintenanceRuleMode(input: $input) {
+    id
+    evaluationMode
+    enabled
+  }
+}`;
+
+/// Arming to `DESTRUCTIVE` must acknowledge the rule's current non-terminal
+/// candidate count. When it no longer matches, the server rejects the call with
+/// the real count in the message and the dialog re-asks against that number.
+export const setMaintenanceRuleArmingMutation = `mutation SetMaintenanceRuleArming($input: SetMaintenanceRuleArmingInput!) {
+  setMaintenanceRuleArming(input: $input) {
+    id
+    effectArming
+  }
+}`;
+
+export const setMaintenanceInstanceGatesMutation = `mutation SetMaintenanceInstanceGates($input: SetMaintenanceInstanceGatesInput!) {
+  setMaintenanceInstanceGates(input: $input) {
+    evaluationEnabled
+    resultDisplayEnabled
+    presentationEffectsEnabled
+    reversibleEffectsEnabled
+    destructiveEffectsEnabled
+  }
+}`;
+
+export const excludeMaintenanceSubjectMutation = `mutation ExcludeMaintenanceSubject($input: ExcludeMaintenanceSubjectInput!) {
+  excludeMaintenanceSubject(input: $input) {${MAINTENANCE_EXCLUSION_FIELDS}
+  }
+}`;
+
+export const removeMaintenanceExclusionMutation = `mutation RemoveMaintenanceExclusion($id: ID!) {
+  removeMaintenanceExclusion(id: $id) {
+    id
+  }
+}`;
+
+export const runMaintenanceEvaluationNowMutation = `mutation RunMaintenanceEvaluationNow($ruleSetId: ID) {
+  runMaintenanceEvaluationNow(ruleSetId: $ruleSetId) {
+    started
+    message
+  }
+}`;
+
+export const runMaintenanceActionHandlerNowMutation = `mutation RunMaintenanceActionHandlerNow {
+  runMaintenanceActionHandlerNow {
+    started
+    message
   }
 }`;
 

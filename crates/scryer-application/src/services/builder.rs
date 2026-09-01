@@ -237,6 +237,26 @@ impl AppServicesBuilder {
         self
     }
 
+    /// Not a required service: maintenance rules ship dark, and an assembly
+    /// that never configures the store simply has no rules to read.
+    pub fn with_maintenance_rule_set_store<T>(mut self, store: Arc<T>) -> Self
+    where
+        T: MaintenanceRuleSetRepository + Send + Sync + 'static,
+    {
+        self.services.customization.maintenance_rule_sets = store;
+        self
+    }
+
+    /// Not a required service either: without it the evaluator has nowhere to
+    /// record candidates, and the gate that would let it run is off anyway.
+    pub fn with_maintenance_evaluation_store<T>(mut self, store: Arc<T>) -> Self
+    where
+        T: crate::ports::MaintenanceEvaluationRepository + Send + Sync + 'static,
+    {
+        self.services.customization.maintenance_evaluation = store;
+        self
+    }
+
     pub fn with_post_processing_script_store<T>(mut self, store: Arc<T>) -> Self
     where
         T: PostProcessingScriptRepository + Send + Sync + 'static,
@@ -574,6 +594,12 @@ impl AppServicesBuilder {
         with_archive_extractor_plugin_provider,
         integrations.archive_extractor_plugin_provider,
         Arc<dyn ArchiveExtractorPluginProvider>
+    );
+    // ── Maintenance safety probes (RFC 137 §9.10, WP-G) ─────────────────────
+    app_services_builder_setter!(
+        with_media_server_playback_probe,
+        integrations.media_server_playback_probe,
+        Arc<dyn crate::ports::MediaServerPlaybackProbe>
     );
     pub fn with_notification_provider(
         mut self,

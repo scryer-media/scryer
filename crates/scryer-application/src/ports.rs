@@ -13,7 +13,8 @@ use async_trait::async_trait;
 use scryer_domain::download_identity::DownloadId;
 use scryer_domain::{
     CanonicalMediaTag, ImportTransferPhase, ImportType, IndexerCapsSnapshot,
-    PersistedPluginWasmPayload, title_catalog_name_tie_key, title_catalog_sort_key_for_title,
+    MaintenanceRuleRevision, MaintenanceRuleSet, PersistedPluginWasmPayload,
+    title_catalog_name_tie_key, title_catalog_sort_key_for_title,
 };
 use scryer_plugin_sdk::{
     ArchivePluginFormat, ArchivePluginProcessRequest, ArchivePluginProcessResponse,
@@ -1720,6 +1721,24 @@ pub trait MediaRequestRepository: Send + Sync {
 
     async fn count_pending_by_facet(&self, library_ids: &[String])
     -> AppResult<MediaRequestCounts>;
+
+    /// Requester user ids for each of `title_ids`, keyed by title id.
+    ///
+    /// A title appears in the map exactly when at least one media request
+    /// created it, so key presence — not a non-empty list — is the answer to
+    /// "was this requested". Each entry lists the submitters of those requests
+    /// in request order, then everyone else who joined them in the order they
+    /// did, deduped keeping the first appearance. The order is stable across
+    /// calls: the facts document is compared between runs, so an order that
+    /// drifted would read as a changed fact.
+    ///
+    /// Batched on purpose: maintenance evaluation asks this for a whole chunk
+    /// of titles at once, and a per-title query would make the pass scale with
+    /// the library.
+    async fn requester_user_ids_by_title_ids(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<HashMap<String, Vec<String>>>;
 
     async fn count_quality_profile_references(
         &self,
@@ -5430,6 +5449,275 @@ pub trait RuleSetRepository: Send + Sync {
     async fn list_rule_sets_by_managed_key_prefix(&self, prefix: &str) -> AppResult<Vec<RuleSet>>;
 }
 
+/// Persistence for user-authored maintenance rules (RFC 137 section 11).
+///
+/// Rule sets and their matcher revisions are two tables but one unit of change:
+/// a rule set with no revision has no matcher and no action, so
+/// [`Self::create_rule_set`] and [`Self::add_revision`] must each write both
+/// rows in a single transaction.
+#[async_trait]
+pub trait MaintenanceRuleSetRepository: Send + Sync {
+    async fn list_rule_sets(&self) -> AppResult<Vec<MaintenanceRuleSet>>;
+
+    async fn get_rule_set(&self, id: &str) -> AppResult<Option<MaintenanceRuleSet>>;
+
+    /// Insert the rule set and its first revision atomically.
+    async fn create_rule_set(
+        &self,
+        rule_set: &MaintenanceRuleSet,
+        revision: &MaintenanceRuleRevision,
+    ) -> AppResult<()>;
+
+    /// Append `revision` and repoint the rule set at it, atomically. Existing
+    /// revisions are never rewritten.
+    async fn add_revision(
+        &self,
+        revision: &MaintenanceRuleRevision,
+        updated_at: DateTime<Utc>,
+    ) -> AppResult<()>;
+
+    async fn get_revision(
+        &self,
+        rule_set_id: &str,
+        revision_number: i64,
+    ) -> AppResult<Option<MaintenanceRuleRevision>>;
+
+    /// Newest revision first.
+    async fn list_revisions(&self, rule_set_id: &str) -> AppResult<Vec<MaintenanceRuleRevision>>;
+
+    /// Update the fields that carry no evaluation semantics. Never creates a
+    /// revision — the matcher, action, and grace period are untouched.
+    async fn update_rule_set_metadata(
+        &self,
+        id: &str,
+        name: &str,
+        description: &str,
+        library_ids: &[String],
+        updated_at: DateTime<Utc>,
+    ) -> AppResult<()>;
+
+    /// Removes the rule set; the FK cascade takes its revisions with it.
+    async fn delete_rule_set(&self, id: &str) -> AppResult<()>;
+
+    /// Move a rule set between evaluation modes. `enabled` is derived by the
+    /// caller from the mode so the two columns can never disagree; no revision
+    /// is created, because the matcher is untouched.
+    async fn update_rule_set_evaluation_mode(
+        &self,
+        id: &str,
+        mode: scryer_domain::MaintenanceEvaluationMode,
+        enabled: bool,
+        updated_at: DateTime<Utc>,
+    ) -> AppResult<()>;
+
+    async fn update_rule_set_arming(
+        &self,
+        id: &str,
+        arming: scryer_domain::MaintenanceEffectArming,
+        updated_at: DateTime<Utc>,
+    ) -> AppResult<()>;
+}
+
+/// Which candidates a read should return. Every field narrows; an empty
+/// `states` means every state.
+#[derive(Clone, Debug, Default)]
+pub struct MaintenanceCandidateQuery {
+    pub rule_set_id: Option<String>,
+    pub states: Vec<scryer_domain::MaintenanceCandidateState>,
+    pub library_id: Option<String>,
+    pub limit: Option<usize>,
+}
+
+/// Durable lifecycle candidates (RFC 137 section 8).
+///
+/// The store, not just the migration's partial unique index, is responsible for
+/// the one-active-candidate-per-(rule, title) invariant: a create is refused
+/// when an active candidate already exists.
+#[async_trait]
+pub trait MaintenanceCandidateRepository: Send + Sync {
+    /// The non-terminal candidate for this subject, if any.
+    async fn get_active_candidate(
+        &self,
+        rule_set_id: &str,
+        title_id: &str,
+    ) -> AppResult<Option<scryer_domain::LifecycleCandidate>>;
+
+    async fn list_candidates(
+        &self,
+        query: &MaintenanceCandidateQuery,
+    ) -> AppResult<Vec<scryer_domain::LifecycleCandidate>>;
+
+    /// Highest match generation ever recorded for this subject, terminal rows
+    /// included. Zero when the subject has never had a candidate.
+    async fn max_match_generation(&self, rule_set_id: &str, title_id: &str) -> AppResult<i64>;
+
+    async fn create_candidate(
+        &self,
+        candidate: &scryer_domain::LifecycleCandidate,
+    ) -> AppResult<()>;
+
+    /// Record a repeat match: advance `last_matched_at` and `last_evaluated_at`,
+    /// refresh the reason codes, and clear any hold. `first_matched_at` is
+    /// deliberately not a parameter — the grace clock never restarts on a
+    /// continuing membership (RFC 7.5).
+    async fn record_candidate_match(
+        &self,
+        id: &str,
+        last_matched_at: DateTime<Utc>,
+        reason_codes: &[String],
+        updated_at: DateTime<Utc>,
+    ) -> AppResult<()>;
+
+    /// Record an inconclusive evaluation: advance `last_evaluated_at` and stamp
+    /// `held_since` if it is not already set. Never advances the clock and
+    /// never cancels.
+    async fn hold_candidate(
+        &self,
+        id: &str,
+        held_since: DateTime<Utc>,
+        updated_at: DateTime<Utc>,
+    ) -> AppResult<()>;
+
+    async fn transition_candidate_state(
+        &self,
+        id: &str,
+        state: scryer_domain::MaintenanceCandidateState,
+        state_reason: &str,
+        updated_at: DateTime<Utc>,
+    ) -> AppResult<()>;
+
+    /// Cancel every active candidate of one rule set in a single write. Used
+    /// when a whole rule is superseded or retired; returns how many rows moved.
+    async fn cancel_active_candidates_for_rule(
+        &self,
+        rule_set_id: &str,
+        state_reason: &str,
+        updated_at: DateTime<Utc>,
+    ) -> AppResult<u64>;
+
+    /// Candidate counts per state for one rule set, states with no rows omitted.
+    async fn count_candidates_by_state(
+        &self,
+        rule_set_id: &str,
+    ) -> AppResult<Vec<(scryer_domain::MaintenanceCandidateState, i64)>>;
+
+    /// Candidates of one rule whose materialized `due_at` has passed and whose
+    /// state can still reach execution (observing, pending_action, due,
+    /// blocked). Ordered oldest due first.
+    async fn list_due_candidates(
+        &self,
+        rule_set_id: &str,
+        due_before: DateTime<Utc>,
+        limit: usize,
+    ) -> AppResult<Vec<scryer_domain::LifecycleCandidate>>;
+
+    /// Take the execution lease: a single conditional write moving the row to
+    /// `executing`, succeeding only from `due`, or from an `executing` row not
+    /// touched since `stale_before` (crash recovery). Returns whether this
+    /// caller won the lease.
+    async fn lease_candidate_for_execution(
+        &self,
+        id: &str,
+        stale_before: DateTime<Utc>,
+        updated_at: DateTime<Utc>,
+    ) -> AppResult<bool>;
+
+    /// Persist the bounded failed-attempt counter for the current generation.
+    async fn record_candidate_attempts(
+        &self,
+        id: &str,
+        action_attempts: i64,
+        updated_at: DateTime<Utc>,
+    ) -> AppResult<()>;
+}
+
+/// Append-only record of action-handler attempts (RFC 137 section 8).
+#[async_trait]
+pub trait LifecycleActionRunRepository: Send + Sync {
+    /// Insert the attempt as `running` before anything is mutated, so an
+    /// interrupted attempt leaves evidence.
+    async fn start_action_run(&self, run: &scryer_domain::LifecycleActionRun) -> AppResult<()>;
+
+    /// Write the attempt's terminal status, hold reason, error, and detail.
+    async fn finish_action_run(&self, run: &scryer_domain::LifecycleActionRun) -> AppResult<()>;
+
+    /// Newest first, optionally narrowed by rule set and/or candidate.
+    async fn list_action_runs(
+        &self,
+        rule_set_id: Option<&str>,
+        candidate_id: Option<&str>,
+        limit: Option<usize>,
+    ) -> AppResult<Vec<scryer_domain::LifecycleActionRun>>;
+}
+
+/// Subjects a maintenance rule must never act on (RFC 137 section 11).
+#[async_trait]
+pub trait MaintenanceExclusionRepository: Send + Sync {
+    /// Every exclusion, newest first, optionally narrowed to the ones that
+    /// apply to one rule: its own rows plus every global row.
+    async fn list_exclusions(
+        &self,
+        rule_set_id: Option<&str>,
+    ) -> AppResult<Vec<scryer_domain::MaintenanceRuleExclusion>>;
+
+    async fn get_exclusion(
+        &self,
+        id: &str,
+    ) -> AppResult<Option<scryer_domain::MaintenanceRuleExclusion>>;
+
+    async fn create_exclusion(
+        &self,
+        exclusion: &scryer_domain::MaintenanceRuleExclusion,
+    ) -> AppResult<()>;
+
+    async fn delete_exclusion(&self, id: &str) -> AppResult<()>;
+}
+
+/// Bounded per-rule records of what one evaluation pass did
+/// (RFC 137 section 11).
+#[async_trait]
+pub trait MaintenanceEvaluationRunRepository: Send + Sync {
+    /// Insert the run as `running`. Recorded before evaluation so an
+    /// interrupted pass leaves evidence rather than nothing.
+    async fn start_evaluation_run(
+        &self,
+        run: &scryer_domain::MaintenanceEvaluationRun,
+    ) -> AppResult<()>;
+
+    /// Write the terminal status, counts, timing, and error of a started run.
+    async fn finish_evaluation_run(
+        &self,
+        run: &scryer_domain::MaintenanceEvaluationRun,
+    ) -> AppResult<()>;
+
+    /// Newest first.
+    async fn list_evaluation_runs(
+        &self,
+        rule_set_id: Option<&str>,
+        limit: Option<usize>,
+    ) -> AppResult<Vec<scryer_domain::MaintenanceEvaluationRun>>;
+}
+
+/// The maintenance evaluation/execution tables land together, are written by
+/// the two maintenance job passes, and cascade from the same rule set, so they
+/// are wired as one service slot. The capability traits stay separate so a
+/// caller declares only what it uses.
+pub trait MaintenanceEvaluationRepository:
+    MaintenanceCandidateRepository
+    + MaintenanceExclusionRepository
+    + MaintenanceEvaluationRunRepository
+    + LifecycleActionRunRepository
+{
+}
+
+impl<T> MaintenanceEvaluationRepository for T where
+    T: MaintenanceCandidateRepository
+        + MaintenanceExclusionRepository
+        + MaintenanceEvaluationRunRepository
+        + LifecycleActionRunRepository
+{
+}
+
 #[async_trait]
 pub trait PostProcessingScriptRepository: Send + Sync {
     async fn list_scripts(&self) -> AppResult<Vec<scryer_domain::PostProcessingScript>>;
@@ -6977,4 +7265,68 @@ pub trait SubtitleDownloadRepository: Send + Sync {
         language: &str,
         reason: Option<&str>,
     ) -> AppResult<()>;
+}
+
+// ── Maintenance safety probes (RFC 137 §9.10, WP-G) ─────────────────────────
+//
+// Read-only observation ports the maintenance action executor consults before
+// it touches media. Nothing below writes, schedules, or executes anything.
+
+/// What one media-server connection reported when it was asked for its live
+/// playback sessions.
+///
+/// `Unreachable` is a first-class answer rather than an error: one server that
+/// is down, mis-credentialed, or returning garbage must not erase what the
+/// other connections truthfully reported. The fold in
+/// [`crate::maintenance_rules::safety`] is what turns an `Unreachable` into a
+/// fail-closed hold.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PlaybackProbeStatus {
+    /// The server answered and is streaming this many sessions right now.
+    ActiveSessions(u32),
+    /// The server answered and nothing is playing.
+    Idle,
+    /// The server could not be asked, or its answer could not be read. Carries
+    /// a terse, log-safe reason (never the credential).
+    Unreachable(String),
+}
+
+/// One enabled media-server connection's contribution to a playback snapshot.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConnectionPlaybackActivity {
+    pub connection_id: String,
+    pub provider: scryer_domain::MediaServerProvider,
+    pub status: PlaybackProbeStatus,
+}
+
+/// Live playback across every enabled media-server connection, as of one
+/// instant. An empty `connections` list means Scryer has no enabled connection
+/// to ask — not that playback was ruled out.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlaybackActivitySnapshot {
+    pub connections: Vec<ConnectionPlaybackActivity>,
+    pub observed_at: DateTime<Utc>,
+}
+
+impl PlaybackActivitySnapshot {
+    /// A snapshot with no connections observed at `observed_at`.
+    pub fn empty(observed_at: DateTime<Utc>) -> Self {
+        Self {
+            connections: Vec::new(),
+            observed_at,
+        }
+    }
+}
+
+/// Observes live playback across every enabled media-server connection.
+///
+/// Implemented once in infrastructure; the implementation fans out internally
+/// over the configured connections so callers never learn how many servers
+/// exist or how each provider is queried. The probe never fails as a whole for
+/// a per-connection problem — that becomes
+/// [`PlaybackProbeStatus::Unreachable`]. An `Err` means the connection list
+/// itself could not be read.
+#[async_trait]
+pub trait MediaServerPlaybackProbe: Send + Sync {
+    async fn active_playback(&self) -> AppResult<PlaybackActivitySnapshot>;
 }

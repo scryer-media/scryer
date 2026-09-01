@@ -145,6 +145,48 @@ impl AppUseCase {
         Ok(())
     }
 
+    /// Maintenance-policy variant of [`Self::delete_title`] with files on disk
+    /// (RFC 137 §9.6). The same fresh-manifest fingerprint check applies; the
+    /// human typed confirmation is replaced by the typed policy authorization,
+    /// and the actor recorded on the logical cleanup is the system actor the
+    /// action handler runs as. Only the maintenance action executor calls this.
+    pub(crate) async fn delete_title_by_policy(
+        &self,
+        actor: &User,
+        id: &str,
+        preview_fingerprint: &str,
+        authorization: &crate::PolicyDeleteAuthorization,
+    ) -> AppResult<()> {
+        let title = self
+            .services
+            .catalog
+            .titles
+            .get_by_id(id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("title {}", id)))?;
+        self.require_library_permission(
+            actor,
+            &title.library_id,
+            scryer_domain::LibraryPermission::ManageTitles,
+        )
+        .await?;
+
+        self.execute_delete_title_files_by_policy(id, preview_fingerprint, authorization)
+            .await?;
+
+        self.delete_title_logical_cleanup(
+            &title,
+            actor,
+            TitleLogicalDeleteOptions {
+                purge_recycle_bin_entries: true,
+                append_title_deleted_event: true,
+            },
+        )
+        .await?;
+
+        Ok(())
+    }
+
     pub async fn start_delete_titles_job(
         &self,
         actor: &User,

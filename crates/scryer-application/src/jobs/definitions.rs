@@ -10,6 +10,16 @@ use crate::{LibraryScanSession, LibraryScanStatus};
 
 const JOB_RUN_PUSH_INTERVAL: Duration = Duration::from_millis(500);
 
+/// Default cadence of the maintenance rule evaluator (RFC 137 section 10).
+/// The RFC adopts Maintainerr's familiar eight-hour rhythm as the native
+/// default; there is no clock-parity requirement, so this is a default rather
+/// than a contract.
+pub const MAINTENANCE_RULE_EVALUATION_INTERVAL_SECONDS: i64 = 8 * 3600;
+
+/// RFC 137 section 10: collection/action handling defaults to every twelve
+/// hours.
+pub const LIFECYCLE_ACTION_HANDLING_INTERVAL_SECONDS: i64 = 12 * 3600;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum JobCategory {
     Library,
@@ -162,6 +172,8 @@ pub enum JobKey {
     RecycleBinPurge,
     AcquisitionSearch,
     ApplicationUpgrade,
+    MaintenanceRuleEvaluation,
+    LifecycleActionHandling,
 }
 
 impl JobKey {
@@ -191,6 +203,8 @@ impl JobKey {
             Self::RecycleBinPurge => "recycle_bin_purge",
             Self::AcquisitionSearch => "acquisition_search",
             Self::ApplicationUpgrade => "application_upgrade",
+            Self::MaintenanceRuleEvaluation => "maintenance_rule_evaluation",
+            Self::LifecycleActionHandling => "lifecycle_action_handling",
         }
     }
 
@@ -220,6 +234,8 @@ impl JobKey {
             "recycle_bin_purge" => Some(Self::RecycleBinPurge),
             "acquisition_search" => Some(Self::AcquisitionSearch),
             "application_upgrade" => Some(Self::ApplicationUpgrade),
+            "maintenance_rule_evaluation" => Some(Self::MaintenanceRuleEvaluation),
+            "lifecycle_action_handling" => Some(Self::LifecycleActionHandling),
             _ => None,
         }
     }
@@ -250,6 +266,8 @@ impl JobKey {
             Self::RecycleBinPurge => "Recycle Bin Purge",
             Self::AcquisitionSearch => "Acquisition Search",
             Self::ApplicationUpgrade => "Application Upgrade",
+            Self::MaintenanceRuleEvaluation => "Maintenance Rule Evaluation",
+            Self::LifecycleActionHandling => "Maintenance Action Handling",
         }
     }
 
@@ -297,6 +315,12 @@ impl JobKey {
                 "Interactive acquisition search over the selected wanted/upgrade scopes."
             }
             Self::ApplicationUpgrade => "Download, verify, and apply a signed application upgrade.",
+            Self::MaintenanceRuleEvaluation => {
+                "Evaluate enabled maintenance rules and reconcile lifecycle candidates. Never executes an action."
+            }
+            Self::LifecycleActionHandling => {
+                "Execute due maintenance candidates of armed observe-mode rules, behind the instance effect gates and full safety rechecks."
+            }
         }
     }
 
@@ -323,9 +347,11 @@ impl JobKey {
             | Self::RecycleBinRestore
             | Self::RecycleBinPurge
             | Self::ApplicationUpgrade => JobCategory::System,
-            Self::Housekeeping | Self::PendingReleaseProcessing | Self::StagedNzbPrune => {
-                JobCategory::Maintenance
-            }
+            Self::Housekeeping
+            | Self::PendingReleaseProcessing
+            | Self::StagedNzbPrune
+            | Self::MaintenanceRuleEvaluation
+            | Self::LifecycleActionHandling => JobCategory::Maintenance,
         }
     }
 
@@ -347,7 +373,9 @@ impl JobKey {
             | Self::PluginRegistryRefresh
             | Self::Housekeeping
             | Self::HealthChecks
-            | Self::StagedNzbPrune => JobScheduleKind::Interval,
+            | Self::StagedNzbPrune
+            | Self::MaintenanceRuleEvaluation
+            | Self::LifecycleActionHandling => JobScheduleKind::Interval,
             Self::DiscoverySync => JobScheduleKind::StartupAndInterval,
             Self::AutoBackup => JobScheduleKind::DailyAtTime,
             Self::LibraryScanMovies
@@ -379,6 +407,8 @@ impl JobKey {
             Self::AutoBackup => "Daily at configured local time",
             Self::PendingReleaseProcessing => "Re-evaluated during RSS sync",
             Self::StagedNzbPrune => "Every hour",
+            Self::MaintenanceRuleEvaluation => "Every 8 hours",
+            Self::LifecycleActionHandling => "Every 12 hours",
             Self::DiscoverySync => "Dynamic discovery evaluator with daily backstop",
             Self::LibraryScanMovies
             | Self::LibraryScanSeries
@@ -405,6 +435,8 @@ impl JobKey {
             Self::Housekeeping => Some(24 * 3600),
             Self::HealthChecks => Some(6 * 3600),
             Self::StagedNzbPrune => Some(3600),
+            Self::MaintenanceRuleEvaluation => Some(MAINTENANCE_RULE_EVALUATION_INTERVAL_SECONDS),
+            Self::LifecycleActionHandling => Some(LIFECYCLE_ACTION_HANDLING_INTERVAL_SECONDS),
             Self::DiscoverySync => Some(24 * 3600),
             _ => None,
         }
@@ -449,7 +481,7 @@ impl JobKey {
     }
 }
 
-pub const ALL_JOB_KEYS: [JobKey; 16] = [
+pub const ALL_JOB_KEYS: [JobKey; 18] = [
     JobKey::LibraryScanMovies,
     JobKey::LibraryScanSeries,
     JobKey::LibraryScanAnime,
@@ -466,6 +498,8 @@ pub const ALL_JOB_KEYS: [JobKey; 16] = [
     JobKey::StagedNzbPrune,
     JobKey::DiscoverySync,
     JobKey::TitleImageCacheRefresh,
+    JobKey::MaintenanceRuleEvaluation,
+    JobKey::LifecycleActionHandling,
 ];
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -856,6 +890,41 @@ mod tests {
         assert_eq!(definition.schedule.kind, JobScheduleKind::Manual);
         assert_eq!(definition.schedule.description, "Manual only");
         assert!(definition.manual_trigger_allowed);
+    }
+
+    #[test]
+    fn maintenance_rule_evaluation_is_registered_as_a_recurring_maintenance_job() {
+        let definition = JobDefinition::from_key(JobKey::MaintenanceRuleEvaluation, None);
+
+        assert_eq!(
+            JobKey::MaintenanceRuleEvaluation.as_str(),
+            "maintenance_rule_evaluation"
+        );
+        assert_eq!(
+            JobKey::parse("maintenance_rule_evaluation"),
+            Some(JobKey::MaintenanceRuleEvaluation)
+        );
+        assert!(
+            ALL_JOB_KEYS.contains(&JobKey::MaintenanceRuleEvaluation),
+            "the evaluator has to appear in the system-jobs surface to be observable"
+        );
+        assert_eq!(definition.display_name, "Maintenance Rule Evaluation");
+        assert_eq!(definition.category, JobCategory::Maintenance);
+        assert_eq!(definition.schedule.kind, JobScheduleKind::Interval);
+        assert_eq!(definition.schedule.description, "Every 8 hours");
+        assert_eq!(
+            definition.schedule.interval_seconds,
+            Some(MAINTENANCE_RULE_EVALUATION_INTERVAL_SECONDS)
+        );
+        assert_eq!(
+            MAINTENANCE_RULE_EVALUATION_INTERVAL_SECONDS,
+            8 * 3600,
+            "RFC 137 section 10 pins the default cadence at eight hours"
+        );
+        assert!(
+            definition.manual_trigger_allowed,
+            "an operator must be able to run a dark evaluation on demand"
+        );
     }
 
     #[tokio::test]

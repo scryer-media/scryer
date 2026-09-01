@@ -22,6 +22,7 @@ import {
   Trash2,
   User,
   Users,
+  Wrench,
 } from "lucide-react";
 import type {
   ActivitySection,
@@ -392,6 +393,14 @@ export function buildRouteCommands({
           keywords: ["settings", "rules", "rego", "opa", "scoring", "custom"],
           icon: SlidersHorizontal,
           onSelect: buildNavigate(onNavigate, "settings", "rules"),
+        } satisfies RouteCommand, {
+          id: "settings-maintenance-rules",
+          label: `${automationGroupLabel} / ${t("settings.maintenanceRules")}`,
+          description: t("settings.maintenanceRules"),
+          groupLabel: automationGroupLabel,
+          keywords: ["settings", "maintenance", "rules", "rego", "cleanup", "prune"],
+          icon: Wrench,
+          onSelect: buildNavigate(onNavigate, "settings", "maintenanceRules"),
         } satisfies RouteCommand, {
           id: "settings-post-processing",
           label: `${automationGroupLabel} / ${t("settings.postProcessing")}`,

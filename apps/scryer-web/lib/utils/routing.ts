@@ -26,6 +26,7 @@ export const SETTINGS_SECTION_PATH: Record<SettingsSection, string> = {
   delayProfiles: "delay-profiles",
   acquisition: "acquisition",
   rules: "rules",
+  maintenanceRules: "maintenance-rules",
   plugins: "plugins",
   notifications: "notifications",
   "post-processing": "post-processing",
@@ -35,6 +36,7 @@ export const SETTINGS_SECTION_PATH: Record<SettingsSection, string> = {
 const AUTOMATION_SETTINGS_SECTION_PATH: Partial<Record<SettingsSection, string>> = {
   acquisition: "acquisition",
   rules: "rules",
+  maintenanceRules: "maintenance-rules",
   subtitles: "subtitles",
   "post-processing": "post-processing",
 };
@@ -248,6 +250,8 @@ const MEDIA_SETTINGS_SECTIONS = new Set<ContentSettingsSection>([
 const AUTOMATION_SETTINGS_BY_SEGMENT: Record<string, SettingsSection> = {
   acquisition: "acquisition",
   rules: "rules",
+  "maintenance-rules": "maintenanceRules",
+  maintenancerules: "maintenanceRules",
   subtitles: "subtitles",
   "post-processing": "post-processing",
   "post-procesing": "post-processing",
