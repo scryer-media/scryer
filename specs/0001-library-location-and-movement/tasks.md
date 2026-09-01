@@ -320,8 +320,32 @@ offers **Move with Scryer only** — `FILES_ALREADY_THERE` is refused by name
       adoption flow landed in the e2e repo (`e1a3805`, `ui-location-adoption`);
       root-change and consolidation flows are being authored; execution stays
       with the operator.
-- [ ] T096 Final acceptance: one full targeted-suite pass across touched crates +
+- [x] T096 Final acceptance: one full targeted-suite pass across touched crates +
       web lint; SC-001..SC-009 walked and evidenced.
+      *Suite pass (2026-09-01, worktree tip `8a08e2853`)*: clippy zero warnings
+      across the nine campaign-touched crates; `scryer-application`
+      `lib_tests::` 880 + `location::` 344; `scryer` `integration_graphql` all
+      335; `scryer-infrastructure-library` root tests 5; web `npm run lint`
+      clean and `npm test` 535/535.
+      *SC walk*: SC-001 folder correction leaves bytes untouched —
+      `ui-location-folder-match` digest assertions + folder-change lib tests.
+      SC-002 cross-fs mechanics + restart resume — EXDEV copy path, checkpoint
+      and crash-window resume tests; the 50 GB scale claim itself is
+      operator-gate evidence (T095), not unit-testable. SC-003 never
+      overwrite/delete — collision engine preserve+rename tests incl.
+      recycle-unavailable, consolidation dedup-via-recycle, FR-053
+      full-hash-proven adoption recycle. SC-004 preview matches execution —
+      stale-fingerprint refusals (incl. merge-state hashing) at the GraphQL
+      boundary; web forces a fresh preview on `plan_changed`. SC-005 bulk
+      classification 100% — classification counts follow draft downgrades
+      (`f5dc6a71b`), web `accountingCloses` re-checks the arithmetic,
+      `ui-location-bulk-mixed`. SC-006 corruption detected before source
+      removal — verify-engine byte-flip tests; depth recorded, location ops
+      forced full. SC-007 backfill — full-hash-backfill tests (yields, skips
+      active-operation files, resumes). SC-008 displaced takeover title
+      repairable — takeover tests + `ui-location-takeover`. SC-009
+      `rootFolderId` retired — `DIRECT_ROOT_WRITE_RETIRED` tests, `@deprecated`
+      schema field, preserved creation path pinned.
 
 ## Dependencies & Execution Order
 
