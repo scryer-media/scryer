@@ -32,7 +32,7 @@ both are execution steps this pass does not perform.
 | 7 US4 change root | **not built — gated** | — T060's coordination gate (the in-flight `feature/library-root-relocation` prototype) never opened; `LocationOperationType::RootChange` has no producer |
 | 8 US5 consolidate root | **not built** | — depends on Phase 7; `LocationOperationType::RootConsolidation` has no producer |
 | 9 US6/US7 transfer + merge | done | `c98adde09`…`477f278b9`, `9136c7992` |
-| 10 US8 + polish | T090 in flight, T091–T094 done | `0f0c16012`, `a302cfb57`, `bfd553f09` |
+| 10 US8 + polish | T090–T094 done | `0f0c16012`, `a302cfb57`, `bfd553f09`, `5f0450c47`, `d4ffd16cd` |
 
 ## Phase 1: Setup
 
@@ -258,16 +258,15 @@ never reached in production.
 
 ## Phase 10: User Story 8 + polish
 
-- [~] T090 Activity completeness: full state/counter/per-title contract, warnings,
+- [x] T090 Activity completeness: full state/counter/per-title contract, warnings,
       initiating user, dedup/rename asset listing split, depth stamp final form.
       (FR-091, US8.1/8.4)
-      **Partial.** States, counters, per-title expansion, warnings, initiating
-      user and the depth stamp landed in `082783251` / `6a89b7021`. The
-      **dedup/rename asset listing split is in flight**: `LocationOperationCounters`
-      still merges media files and companion assets into single `dedups` /
-      `renames` fields (`location/model.rs`), and the per-file listing that
-      answers "which ones" (`location/asset_listing.rs`) is uncommitted in the
-      worktree at the time of this pass. Check this box when that lands.
+      *Evidence*: states, counters, per-title expansion, warnings, initiating
+      user and the depth stamp in `082783251` / `6a89b7021`; the per-file
+      dedup/rename listing in `d4ffd16cd` — `locationOperationAssets(id)` reads
+      the confirmed plan plus checkpoints (`location/asset_listing.rs`),
+      done-vs-planned by the executor counters' settled rule, with the Activity
+      per-title asset section on top.
 - [x] T091 Cancel/resume hardening across all operation types: safe checkpoints,
       no repeated verified work, restart-mid-copy resume, stale-plan behavior.
       (FR-092, FR-089, SC-002)
