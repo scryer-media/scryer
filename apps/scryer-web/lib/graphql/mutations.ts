@@ -1,6 +1,7 @@
 import {
   BACKUP_INFO_FIELDS,
   JOB_RUN_FIELDS,
+  MAINTENANCE_EXCLUSION_FIELDS,
   MAINTENANCE_RULE_SET_DETAIL_FIELDS,
   MAINTENANCE_RULE_SET_FIELDS,
   MEDIA_SERVER_CONNECTION_FIELDS,
@@ -2175,6 +2176,62 @@ export const previewMaintenanceRuleMutation = `mutation PreviewMaintenanceRule($
       reasonCodes
       error
     }
+  }
+}`;
+
+/// Mode and arming both return the whole rule set, but the caller refetches the
+/// list afterwards rather than patching state from the payload, so these
+/// selections stay at the identity the caller needs to correlate the response.
+export const setMaintenanceRuleModeMutation = `mutation SetMaintenanceRuleMode($input: SetMaintenanceRuleModeInput!) {
+  setMaintenanceRuleMode(input: $input) {
+    id
+    evaluationMode
+    enabled
+  }
+}`;
+
+/// Arming to `DESTRUCTIVE` must acknowledge the rule's current non-terminal
+/// candidate count. When it no longer matches, the server rejects the call with
+/// the real count in the message and the dialog re-asks against that number.
+export const setMaintenanceRuleArmingMutation = `mutation SetMaintenanceRuleArming($input: SetMaintenanceRuleArmingInput!) {
+  setMaintenanceRuleArming(input: $input) {
+    id
+    effectArming
+  }
+}`;
+
+export const setMaintenanceInstanceGatesMutation = `mutation SetMaintenanceInstanceGates($input: SetMaintenanceInstanceGatesInput!) {
+  setMaintenanceInstanceGates(input: $input) {
+    evaluationEnabled
+    resultDisplayEnabled
+    presentationEffectsEnabled
+    reversibleEffectsEnabled
+    destructiveEffectsEnabled
+  }
+}`;
+
+export const excludeMaintenanceSubjectMutation = `mutation ExcludeMaintenanceSubject($input: ExcludeMaintenanceSubjectInput!) {
+  excludeMaintenanceSubject(input: $input) {${MAINTENANCE_EXCLUSION_FIELDS}
+  }
+}`;
+
+export const removeMaintenanceExclusionMutation = `mutation RemoveMaintenanceExclusion($id: ID!) {
+  removeMaintenanceExclusion(id: $id) {
+    id
+  }
+}`;
+
+export const runMaintenanceEvaluationNowMutation = `mutation RunMaintenanceEvaluationNow($ruleSetId: ID) {
+  runMaintenanceEvaluationNow(ruleSetId: $ruleSetId) {
+    started
+    message
+  }
+}`;
+
+export const runMaintenanceActionHandlerNowMutation = `mutation RunMaintenanceActionHandlerNow {
+  runMaintenanceActionHandlerNow {
+    started
+    message
   }
 }`;
 

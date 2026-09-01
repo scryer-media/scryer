@@ -1,5 +1,14 @@
 import * as React from "react";
-import { BookOpen, ChevronDown, Copy, Edit, Info, Plus, Trash2 } from "lucide-react";
+import {
+  AlertTriangle,
+  BookOpen,
+  ChevronDown,
+  Copy,
+  Edit,
+  Info,
+  Plus,
+  Trash2,
+} from "lucide-react";
 import { AddNewButton } from "@/components/common/add-new-button";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -23,6 +32,9 @@ import { useTranslate } from "@/lib/context/translate-context";
 import type {
   MaintenanceActionDescriptor,
   MaintenanceActionKind,
+  MaintenanceEffectArming,
+  MaintenanceEvaluationMode,
+  MaintenanceInstanceGates,
   MaintenancePreviewResult,
   MaintenancePreviewSource,
   MaintenancePreviewTitle,
@@ -34,8 +46,14 @@ import {
   MAINTENANCE_PREVIEW_LIMIT_MAX,
   actionKindLabelKey,
   actionRequiresTargetQualityProfile,
+  armingOptionsFor,
   descriptorForActionKind,
+  effectArmingBadgeTone,
+  effectArmingLabelKey,
+  evaluationModeHelpKey,
   evaluationModeLabelKey,
+  maintenanceStatusBanner,
+  maintenanceStatusBannerKeys,
   previewOutcomeBadgeTone,
   previewOutcomeLabelKey,
   riskClassBadgeTone,
@@ -46,6 +64,12 @@ import { selectorId } from "@/lib/utils/dom-ids";
 
 export type MaintenanceLibraryOption = { id: string; name: string };
 export type MaintenanceQualityProfileOption = { id: string; name: string };
+
+const EVALUATION_MODE_OPTIONS: MaintenanceEvaluationMode[] = [
+  "DISABLED",
+  "SHADOW",
+  "OBSERVE",
+];
 
 type SettingsMaintenanceRulesSectionProps = {
   isEditorOpen: boolean;
@@ -78,29 +102,64 @@ type SettingsMaintenanceRulesSectionProps = {
   previewing: boolean;
   previewResult: MaintenancePreviewResult | null;
   previewError: string | null;
+  /// Null when the gates query was refused, which on this page means the reader
+  /// is not a system administrator and cannot see the instance state at all.
+  gates: MaintenanceInstanceGates | null;
+  setRuleMode: (record: MaintenanceRuleSetRecord, mode: MaintenanceEvaluationMode) => void;
+  setRuleArming: (record: MaintenanceRuleSetRecord, arming: MaintenanceEffectArming) => void;
+  /// Panels rendered under the rules table. They are passed in rather than
+  /// rendered here so the container owns their queries and this view stays a
+  /// pure rendering of what it is handed.
+  operationsPanels: React.ReactNode;
 };
 
 type RefField = { field: string; type: string; descKey: string };
 type RefSectionDef = { titleKey: string; path: string; fields: RefField[] };
 const REF_SECTIONS = maintenanceInputContract.sections as RefSectionDef[];
 
-/// The one thing every reader of this page needs to know: authoring a rule here
-/// changes nothing yet. Rendered above the list so it cannot be scrolled past.
-function ShippingDarkNotice() {
+/// What this instance will actually do with these rules right now. This used to
+/// be a permanent "nothing runs yet" notice; the pipeline is live, so the line
+/// is derived from the instance gates and the rules' own modes instead, and it
+/// stays above the list where it cannot be scrolled past.
+function MaintenanceStatusBanner({
+  gates,
+  ruleSetRecords,
+}: {
+  gates: MaintenanceInstanceGates | null;
+  ruleSetRecords: MaintenanceRuleSetRecord[];
+}) {
   const t = useTranslate();
+  const { variant, tone } = maintenanceStatusBanner(gates, ruleSetRecords);
+  const { titleKey, bodyKey } = maintenanceStatusBannerKeys(variant);
+  const warning = tone === "warning";
+  const Icon = warning ? AlertTriangle : Info;
+
   return (
     <div
-      id="settings-maintenance-rules-dark-notice"
-      className="flex items-start gap-2.5 rounded border border-[var(--scry-info-border)] bg-[var(--scry-info-bg)] px-3 py-2.5 text-[var(--scry-info-text)]"
+      id="settings-maintenance-rules-status-notice"
+      data-maintenance-status={variant}
+      className={`flex items-start gap-2.5 rounded border px-3 py-2.5 ${
+        warning
+          ? "border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] text-[var(--scry-warning-text)]"
+          : "border-[var(--scry-info-border)] bg-[var(--scry-info-bg)] text-[var(--scry-info-text)]"
+      }`}
     >
-      <Info className="mt-0.5 h-4 w-4 shrink-0" />
+      <Icon className="mt-0.5 h-4 w-4 shrink-0" />
       <div className="space-y-1">
-        <p className="font-semibold">{t("settings.maintenanceRulesDarkTitle")}</p>
-        <p className="text-[13px] leading-5">
-          {t("settings.maintenanceRulesDarkBody")}
-        </p>
+        <p className="font-semibold">{t(titleKey)}</p>
+        <p className="text-[13px] leading-5">{t(bodyKey)}</p>
       </div>
     </div>
+  );
+}
+
+function ArmingBadge({ arming }: { arming: string }) {
+  const t = useTranslate();
+  const labelKey = effectArmingLabelKey(arming);
+  return (
+    <Badge tone={effectArmingBadgeTone(arming)}>
+      {labelKey ? t(labelKey) : arming}
+    </Badge>
   );
 }
 
@@ -485,6 +544,10 @@ export function SettingsMaintenanceRulesSection({
   validateDraft,
   validating,
   validationResult,
+  gates,
+  setRuleMode,
+  setRuleArming,
+  operationsPanels,
   ...previewProps
 }: SettingsMaintenanceRulesSectionProps) {
   const t = useTranslate();
@@ -506,7 +569,10 @@ export function SettingsMaintenanceRulesSection({
       <div className="mx-auto flex w-full max-w-[2176px] flex-col gap-4 xl:flex-row xl:items-start">
         <div className="min-w-0 flex-1">
           <div className="mx-auto w-full max-w-[1280px] space-y-4">
-            <ShippingDarkNotice />
+            <MaintenanceStatusBanner
+              gates={gates}
+              ruleSetRecords={ruleSetRecords}
+            />
 
             <div className="overflow-hidden rounded border border-border bg-card">
               <div className="flex items-center justify-between border-b border-border px-3 py-2">
@@ -525,8 +591,11 @@ export function SettingsMaintenanceRulesSection({
                       <TableHead className="text-center">
                         {t("settings.maintenanceRuleGraceDays")}
                       </TableHead>
-                      <TableHead className="text-center">
+                      <TableHead className="w-[190px]">
                         {t("settings.maintenanceRuleMode")}
+                      </TableHead>
+                      <TableHead className="w-[210px]">
+                        {t("settings.maintenanceRuleArming")}
                       </TableHead>
                       <TableHead className="text-center">
                         {t("settings.maintenanceRuleRevision")}
@@ -542,7 +611,11 @@ export function SettingsMaintenanceRulesSection({
                         actionDescriptors,
                         record.actionSpec.kind,
                       );
-                      const modeKey = evaluationModeLabelKey(record.evaluationMode);
+                      const modeHelpKey = evaluationModeHelpKey(record.evaluationMode);
+                      const armingOptions = armingOptionsFor(
+                        actionDescriptors,
+                        record.actionSpec.kind,
+                      );
                       return (
                         <TableRow
                           data-ui="settings-table-row"
@@ -575,10 +648,62 @@ export function SettingsMaintenanceRulesSection({
                           <TableCell className="text-center">
                             {record.graceDays}
                           </TableCell>
-                          <TableCell className="text-center">
-                            <Badge tone="neutral">
-                              {modeKey ? t(modeKey) : record.evaluationMode}
-                            </Badge>
+                          <TableCell>
+                            <div className="space-y-1">
+                              <SingleSelectField
+                                id={selectorId(
+                                  "settings-maintenance-rule-mode",
+                                  record.id,
+                                )}
+                                size="sm"
+                                value={record.evaluationMode}
+                                onValueChange={(value) =>
+                                  setRuleMode(
+                                    record,
+                                    value as MaintenanceEvaluationMode,
+                                  )
+                                }
+                                options={EVALUATION_MODE_OPTIONS.map((mode) => {
+                                  const key = evaluationModeLabelKey(mode);
+                                  return {
+                                    value: mode,
+                                    label: key ? t(key) : mode,
+                                  };
+                                })}
+                              />
+                              {modeHelpKey ? (
+                                <p className="text-xs text-muted-foreground">
+                                  {t(modeHelpKey)}
+                                </p>
+                              ) : null}
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <div className="space-y-1">
+                              <SingleSelectField
+                                id={selectorId(
+                                  "settings-maintenance-rule-arming",
+                                  record.id,
+                                )}
+                                size="sm"
+                                value={record.effectArming}
+                                onValueChange={(value) =>
+                                  setRuleArming(
+                                    record,
+                                    value as MaintenanceEffectArming,
+                                  )
+                                }
+                                options={armingOptions.map((arming) => {
+                                  const key = effectArmingLabelKey(arming);
+                                  return {
+                                    value: arming,
+                                    ariaLabel: arming,
+                                    label: key ? t(key) : arming,
+                                  };
+                                })}
+                              />
+                              <ArmingBadge arming={record.effectArming} />
+                            </div>
                           </TableCell>
                           <TableCell className="text-center">
                             {record.currentRevisionNumber}
@@ -626,7 +751,7 @@ export function SettingsMaintenanceRulesSection({
                     })}
                     {ruleSetRecords.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={8} className="text-muted-foreground">
+                        <TableCell colSpan={9} className="text-muted-foreground">
                           {t("settings.noMaintenanceRulesFound")}
                         </TableCell>
                       </TableRow>
@@ -634,6 +759,9 @@ export function SettingsMaintenanceRulesSection({
                   </TableBody>
                 </Table>
               </div>
+              <p className="border-t border-border px-3 py-2 text-xs text-muted-foreground">
+                {t("settings.maintenanceRuleArmingHelp")}
+              </p>
             </div>
 
             {isEditorOpen ? (
@@ -946,6 +1074,8 @@ export function SettingsMaintenanceRulesSection({
               libraries={libraries}
               {...previewProps}
             />
+
+            {operationsPanels}
           </div>
         </div>
         <div className="@container w-full space-y-4 xl:w-[44%] xl:max-w-[880px] xl:shrink-0">

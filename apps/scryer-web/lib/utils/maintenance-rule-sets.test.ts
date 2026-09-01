@@ -5,21 +5,47 @@ import maintenanceInputContract from "../contracts/maintenance-input-contract.js
 import en from "../i18n/locales/en.ts";
 import type {
   MaintenanceActionDescriptor,
+  MaintenanceCandidateState,
+  MaintenanceEffectArming,
+  MaintenanceInstanceGates,
   MaintenanceRuleSetDetail,
 } from "../types/maintenance-rule-sets.ts";
 import {
+  MAINTENANCE_FILTER_ALL,
+  MAINTENANCE_GATE_ORDER,
   MAINTENANCE_PREVIEW_LIMIT_DEFAULT,
   MAINTENANCE_PREVIEW_LIMIT_MAX,
   MAINTENANCE_STARTER_SOURCE,
   actionKindLabelKey,
   actionRequiresTargetQualityProfile,
+  armingOptionsFor,
+  candidateStateBadgeTone,
+  candidateStateLabelKey,
   clampMaintenancePreviewLimit,
   copyMaintenanceRuleDraft,
   createMaintenanceRuleSetInput,
+  destructiveArmingOfferable,
+  effectArmingBadgeTone,
+  effectArmingLabelKey,
+  evaluationModeHelpKey,
+  evaluationModeLabelKey,
+  excludeMaintenanceSubjectInput,
+  gateHelpKey,
+  gateLabelKey,
   initialMaintenanceRuleDraft,
+  isNonTerminalCandidateState,
+  maintenanceCountdown,
+  maintenanceFilterArgument,
   maintenancePreviewInput,
   maintenanceRuleDraftFromDetail,
+  maintenanceStatusBanner,
+  maintenanceStatusBannerKeys,
+  nonTerminalCandidateCount,
+  parseAcknowledgedCandidateCountMismatch,
   riskClassBadgeTone,
+  runStatusBadgeTone,
+  runStatusLabelKey,
+  setMaintenanceRuleArmingInput,
   titleScopedActionDescriptors,
   updateMaintenanceRuleMatcherInput,
   updateMaintenanceRuleMetadataInput,
@@ -71,6 +97,7 @@ const detail: MaintenanceRuleSetDetail = {
     description: "Unmonitored titles that still hold files.",
     enabled: false,
     evaluationMode: "DISABLED",
+    effectArming: "NONE",
     libraryIds: ["lib-movies", "lib-series"],
     subjectKind: "TITLE",
     currentRevisionNumber: 3,
@@ -288,6 +315,325 @@ test("the maintenance reference table documents the observation envelope", () =>
   assert.deepEqual(
     monitored?.fields.map((field) => field.field),
     ["status", "value", "observed_at", "reason"],
+  );
+});
+
+// ── Operating a rule ──────────────────────────────────────────────────
+
+const allGatesOff: MaintenanceInstanceGates = {
+  evaluationEnabled: false,
+  resultDisplayEnabled: false,
+  presentationEffectsEnabled: false,
+  reversibleEffectsEnabled: false,
+  destructiveEffectsEnabled: false,
+};
+
+const activeRule = { evaluationMode: "OBSERVE" } as const;
+const disabledRule = { evaluationMode: "DISABLED" } as const;
+
+test("a reader who cannot see the gates is told so rather than told nothing runs", () => {
+  const banner = maintenanceStatusBanner(null, [activeRule]);
+
+  assert.equal(banner.variant, "gatesUnknown");
+  assert.equal(banner.tone, "info");
+});
+
+test("the evaluation gate outranks every other reason the page might be quiet", () => {
+  assert.equal(
+    maintenanceStatusBanner(allGatesOff, [activeRule]).variant,
+    "evaluationDisabled",
+  );
+});
+
+test("evaluation on with nothing but disabled rules reads as no active rules", () => {
+  const gates = { ...allGatesOff, evaluationEnabled: true };
+
+  assert.equal(
+    maintenanceStatusBanner(gates, [disabledRule]).variant,
+    "noActiveRules",
+  );
+  assert.equal(maintenanceStatusBanner(gates, []).variant, "noActiveRules");
+});
+
+test("an evaluating instance with every effect gate shut says so plainly", () => {
+  const banner = maintenanceStatusBanner(
+    { ...allGatesOff, evaluationEnabled: true },
+    [activeRule],
+  );
+
+  assert.equal(banner.variant, "effectsDisabled");
+  assert.equal(banner.tone, "info");
+});
+
+test("the destructive gate is the only banner that raises its voice", () => {
+  const reversible = maintenanceStatusBanner(
+    { ...allGatesOff, evaluationEnabled: true, reversibleEffectsEnabled: true },
+    [activeRule],
+  );
+  const destructive = maintenanceStatusBanner(
+    {
+      ...allGatesOff,
+      evaluationEnabled: true,
+      reversibleEffectsEnabled: true,
+      destructiveEffectsEnabled: true,
+    },
+    [activeRule],
+  );
+
+  assert.equal(reversible.variant, "reversibleArmed");
+  assert.equal(reversible.tone, "info");
+  assert.equal(destructive.variant, "destructiveArmed");
+  assert.equal(destructive.tone, "warning");
+});
+
+test("every banner variant and gate has real copy in the default locale", () => {
+  const variants = [
+    "gatesUnknown",
+    "evaluationDisabled",
+    "noActiveRules",
+    "effectsDisabled",
+    "reversibleArmed",
+    "destructiveArmed",
+  ] as const;
+
+  for (const variant of variants) {
+    const { titleKey, bodyKey } = maintenanceStatusBannerKeys(variant);
+    assert.equal(typeof en[titleKey], "string", `${titleKey} is missing`);
+    assert.equal(typeof en[bodyKey], "string", `${bodyKey} is missing`);
+  }
+
+  assert.equal(MAINTENANCE_GATE_ORDER.length, 5);
+  for (const gate of MAINTENANCE_GATE_ORDER) {
+    assert.equal(typeof en[gateLabelKey(gate)], "string", `${gate} has no label`);
+    assert.equal(typeof en[gateHelpKey(gate)], "string", `${gate} has no help`);
+  }
+});
+
+test("destructive arming is only offered for an action that actually deletes", () => {
+  assert.equal(
+    destructiveArmingOfferable(descriptors, "DELETE_TITLE_AND_FILES"),
+    true,
+  );
+  assert.equal(
+    destructiveArmingOfferable(
+      descriptors,
+      "CHANGE_QUALITY_PROFILE_AND_SEARCH_IF_CHANGED",
+    ),
+    false,
+  );
+  assert.deepEqual(armingOptionsFor(descriptors, "DO_NOTHING"), [
+    "NONE",
+    "REVERSIBLE",
+  ]);
+  assert.deepEqual(armingOptionsFor(descriptors, "DELETE_TITLE_AND_FILES"), [
+    "NONE",
+    "REVERSIBLE",
+    "DESTRUCTIVE",
+  ]);
+  /// An action kind this build has no descriptor for never offers the
+  /// destructive rung.
+  assert.deepEqual(armingOptionsFor([], "DELETE_TITLE_AND_FILES"), [
+    "NONE",
+    "REVERSIBLE",
+  ]);
+});
+
+test("arming reads at a glance, with destructive the only destructive-toned rung", () => {
+  const armings: MaintenanceEffectArming[] = ["NONE", "REVERSIBLE", "DESTRUCTIVE"];
+
+  assert.equal(effectArmingBadgeTone("DESTRUCTIVE"), "negative");
+  assert.equal(effectArmingBadgeTone("REVERSIBLE"), "warning");
+  assert.equal(effectArmingBadgeTone("NONE"), "neutral");
+  for (const arming of armings) {
+    const key = effectArmingLabelKey(arming);
+    assert.ok(key, `${arming} has no label key`);
+    assert.equal(typeof en[key], "string", `${key} is not in the default locale`);
+  }
+  assert.equal(effectArmingLabelKey("SOME_FUTURE_ARMING"), null);
+});
+
+test("every evaluation mode carries a label and an explanation", () => {
+  for (const mode of ["DISABLED", "SHADOW", "OBSERVE"]) {
+    const labelKey = evaluationModeLabelKey(mode);
+    const helpKey = evaluationModeHelpKey(mode);
+    assert.ok(labelKey, `${mode} has no label key`);
+    assert.ok(helpKey, `${mode} has no help key`);
+    assert.equal(typeof en[labelKey], "string", `${labelKey} is missing`);
+    assert.equal(typeof en[helpKey], "string", `${helpKey} is missing`);
+  }
+  assert.equal(evaluationModeHelpKey("SOME_FUTURE_MODE"), null);
+});
+
+test("only a destructive arming carries an acknowledgement", () => {
+  assert.deepEqual(setMaintenanceRuleArmingInput("rule-1", "REVERSIBLE", 7), {
+    id: "rule-1",
+    arming: "REVERSIBLE",
+    acknowledgedCandidateCount: undefined,
+  });
+  assert.deepEqual(setMaintenanceRuleArmingInput("rule-1", "DESTRUCTIVE", 7), {
+    id: "rule-1",
+    arming: "DESTRUCTIVE",
+    acknowledgedCandidateCount: 7,
+  });
+});
+
+test("the count-mismatch message shape the dialog re-asks against is pinned", () => {
+  const message =
+    "destructive arming requires acknowledging the current candidate count (12)";
+
+  assert.equal(parseAcknowledgedCandidateCountMismatch(message), 12);
+  assert.equal(
+    parseAcknowledgedCandidateCountMismatch(`[GraphQL] ${message}`),
+    12,
+  );
+  assert.equal(parseAcknowledgedCandidateCountMismatch(message.toUpperCase()), 12);
+  assert.equal(parseAcknowledgedCandidateCountMismatch("rule not found"), null);
+});
+
+// ── Candidates ────────────────────────────────────────────────────────
+
+test("every candidate state has a label and a tone", () => {
+  const states: MaintenanceCandidateState[] = [
+    "OBSERVING",
+    "PENDING_ACTION",
+    "DUE",
+    "EXECUTING",
+    "SUCCEEDED",
+    "FAILED",
+    "CANCELED",
+    "EXCLUDED",
+    "BLOCKED",
+  ];
+
+  for (const state of states) {
+    const key = candidateStateLabelKey(state);
+    assert.ok(key, `${state} has no label key`);
+    assert.equal(typeof en[key], "string", `${key} is not in the default locale`);
+  }
+  assert.equal(candidateStateLabelKey("SOME_FUTURE_STATE"), null);
+
+  assert.equal(candidateStateBadgeTone("OBSERVING"), "neutral");
+  assert.equal(candidateStateBadgeTone("PENDING_ACTION"), "info");
+  assert.equal(candidateStateBadgeTone("DUE"), "info");
+  assert.equal(candidateStateBadgeTone("EXECUTING"), "info");
+  assert.equal(candidateStateBadgeTone("SUCCEEDED"), "positive");
+  assert.equal(candidateStateBadgeTone("FAILED"), "negative");
+  assert.equal(candidateStateBadgeTone("CANCELED"), "neutral");
+  assert.equal(candidateStateBadgeTone("EXCLUDED"), "neutral");
+  assert.equal(candidateStateBadgeTone("BLOCKED"), "warning");
+  assert.equal(candidateStateBadgeTone("SOME_FUTURE_STATE"), "neutral");
+});
+
+test("only the states an armed handler could still act on are acknowledged", () => {
+  const candidates = [
+    { state: "OBSERVING" as const },
+    { state: "PENDING_ACTION" as const },
+    { state: "DUE" as const },
+    { state: "EXECUTING" as const },
+    { state: "BLOCKED" as const },
+    { state: "SUCCEEDED" as const },
+    { state: "FAILED" as const },
+    { state: "CANCELED" as const },
+    { state: "EXCLUDED" as const },
+  ];
+
+  assert.equal(nonTerminalCandidateCount(candidates), 5);
+  assert.equal(isNonTerminalCandidateState("SUCCEEDED"), false);
+  assert.equal(isNonTerminalCandidateState("BLOCKED"), true);
+});
+
+test("the due countdown picks its unit by magnitude and names overdue as overdue", () => {
+  const now = Date.parse("2026-03-01T00:00:00Z");
+  const at = (offsetMs: number) => new Date(now + offsetMs).toISOString();
+
+  assert.deepEqual(maintenanceCountdown(at(3 * 24 * 60 * 60_000 + 1000), now), {
+    overdue: false,
+    labelKey: "settings.maintenanceCountdownInDays",
+    values: { count: 3 },
+  });
+  assert.deepEqual(maintenanceCountdown(at(5 * 60 * 60_000), now), {
+    overdue: false,
+    labelKey: "settings.maintenanceCountdownInHours",
+    values: { count: 5 },
+  });
+  assert.deepEqual(maintenanceCountdown(at(90_000), now), {
+    overdue: false,
+    labelKey: "settings.maintenanceCountdownInMinutes",
+    values: { count: 1 },
+  });
+  assert.deepEqual(maintenanceCountdown(at(-2 * 24 * 60 * 60_000), now), {
+    overdue: true,
+    labelKey: "settings.maintenanceCountdownOverdueDays",
+    values: { count: 2 },
+  });
+  assert.deepEqual(maintenanceCountdown(at(-30_000), now), {
+    overdue: true,
+    labelKey: "settings.maintenanceCountdownDueNow",
+    values: { count: 0 },
+  });
+  assert.equal(maintenanceCountdown("not a date", now), null);
+});
+
+test("every countdown phrasing exists in the default locale", () => {
+  const keys = [
+    "settings.maintenanceCountdownDueNow",
+    "settings.maintenanceCountdownInMinutes",
+    "settings.maintenanceCountdownInHours",
+    "settings.maintenanceCountdownInDays",
+    "settings.maintenanceCountdownOverdueMinutes",
+    "settings.maintenanceCountdownOverdueHours",
+    "settings.maintenanceCountdownOverdueDays",
+  ];
+
+  for (const key of keys) {
+    assert.equal(typeof en[key], "string", `${key} is not in the default locale`);
+  }
+});
+
+test("run statuses fall back to the raw value the API sent", () => {
+  for (const status of [
+    "running",
+    "succeeded",
+    "failed",
+    "held",
+    "already_satisfied",
+    "skipped",
+  ]) {
+    const key = runStatusLabelKey(status);
+    assert.ok(key, `${status} has no label key`);
+    assert.equal(typeof en[key], "string", `${key} is not in the default locale`);
+  }
+
+  assert.equal(runStatusLabelKey("SUCCEEDED"), "settings.maintenanceRunStatusSucceeded");
+  assert.equal(runStatusLabelKey("some_future_status"), null);
+  assert.equal(runStatusBadgeTone("failed"), "negative");
+  assert.equal(runStatusBadgeTone("already_satisfied"), "warning");
+  assert.equal(runStatusBadgeTone("some_future_status"), "neutral");
+});
+
+test("the all-filter sentinel never reaches the API as a rule or library id", () => {
+  assert.equal(MAINTENANCE_FILTER_ALL, "all");
+  assert.equal(maintenanceFilterArgument(MAINTENANCE_FILTER_ALL), undefined);
+  assert.equal(maintenanceFilterArgument(""), undefined);
+  assert.equal(maintenanceFilterArgument("rule-1"), "rule-1");
+});
+
+test("an exclusion drops the fields the API treats as absent rather than empty", () => {
+  assert.deepEqual(
+    excludeMaintenanceSubjectInput({
+      titleId: "title-1",
+      ruleSetId: "",
+      reason: "   ",
+    }),
+    { titleId: "title-1", ruleSetId: undefined, reason: undefined },
+  );
+  assert.deepEqual(
+    excludeMaintenanceSubjectInput({
+      titleId: "title-1",
+      ruleSetId: "rule-1",
+      reason: " keeping this one ",
+    }),
+    { titleId: "title-1", ruleSetId: "rule-1", reason: "keeping this one" },
   );
 });
 
