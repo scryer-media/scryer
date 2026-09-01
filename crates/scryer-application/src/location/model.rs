@@ -374,13 +374,17 @@ pub struct TitleCheckpoint {
 ///
 /// # Persistence coverage
 ///
-/// Migration 0206 has columns for the volume counters only (`title_total`,
+/// Every field here has a 0206 column: the volume counters (`title_total`,
 /// `title_completed_count`, `title_blocked_count`, `file_total`,
-/// `file_completed_count`, `bytes_total`, `bytes_completed`). The outcome
-/// counters below it — `merges`, `dedups`, `renames`, `no_ops`, `unresolved` —
-/// have no columns yet, so a store round-trip returns them as zero and callers
-/// derive them from the checkpoint rows (merged/skipped/blocked titles) and the
-/// collision engine's per-file results until a follow-up migration adds them.
+/// `file_completed_count`, `bytes_total`, `bytes_completed`) and the outcome
+/// counters (`merge_count`, `dedup_count`, `rename_count`, `no_op_count`,
+/// `unresolved_count`). The whole struct round-trips, so Activity reads the
+/// counters off the operation row rather than re-deriving them from checkpoints.
+///
+/// The runner recomputes all of them from the confirmed plan and the settled
+/// checkpoints on every progress write (see
+/// [`crate::location::executor::OperationWorkPlan`]), so they are a snapshot of
+/// durable facts rather than a running total a resume could double-count.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct LocationOperationCounters {
     pub titles_total: i64,

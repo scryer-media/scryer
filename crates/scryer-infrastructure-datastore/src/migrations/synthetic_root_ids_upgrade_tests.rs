@@ -289,8 +289,9 @@ async fn the_upgrade_creates_the_location_operation_tables() {
     .expect("operation row should insert");
     sqlx::query(
         "INSERT INTO location_operation_title_checkpoints
-             (operation_id, title_id, sequence, state, classification)
-         VALUES ('op-1', 'title-1', 0, 'verified', 'move')",
+             (operation_id, title_id, sequence, state, classification, note)
+         VALUES ('op-1', 'title-1', 0, 'verified', 'move',
+                 'one companion asset was renamed')",
     )
     .execute(&pool)
     .await
@@ -305,6 +306,16 @@ async fn the_upgrade_creates_the_location_operation_tables() {
     .execute(&pool)
     .await
     .expect("verification row should insert");
+    sqlx::query(
+        "INSERT INTO location_operation_verifications
+             (id, operation_id, title_id, source_path, destination_path,
+              requested_depth, applied_depth, outcome, detail)
+         VALUES ('ver-2', 'op-1', 'title-1', '/src/b.mkv', '/dst/b.mkv',
+                 'full', 'full', 'passed', 'verified (full)')",
+    )
+    .execute(&pool)
+    .await
+    .expect("verification row with a plain detail should insert");
     sqlx::query(
         "INSERT INTO location_operation_owned_entities
              (operation_id, entity_type, entity_id)
@@ -329,6 +340,76 @@ async fn the_upgrade_creates_the_location_operation_tables() {
         row.get::<String, _>("fallback_reason"),
         "read_back_unavailable"
     );
+
+    // A verification that neither fell back nor failed still has somewhere to
+    // put its note, separate from the fallback and failure columns (FR-043).
+    let plain = sqlx::query(
+        "SELECT fallback_reason, failure_reason, detail
+           FROM location_operation_verifications WHERE id = 'ver-2'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("verification should load");
+    assert_eq!(plain.get::<Option<String>, _>("fallback_reason"), None);
+    assert_eq!(plain.get::<Option<String>, _>("failure_reason"), None);
+    assert_eq!(
+        plain.get::<String, _>("detail"),
+        "verified (full)"
+    );
+
+    // Likewise a checkpoint's warning note, separate from blocked/failed.
+    let checkpoint = sqlx::query(
+        "SELECT blocked_reason, failure_reason, note
+           FROM location_operation_title_checkpoints WHERE title_id = 'title-1'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("checkpoint should load");
+    assert_eq!(checkpoint.get::<Option<String>, _>("blocked_reason"), None);
+    assert_eq!(checkpoint.get::<Option<String>, _>("failure_reason"), None);
+    assert_eq!(
+        checkpoint.get::<String, _>("note"),
+        "one companion asset was renamed"
+    );
+
+    // The FR-091 outcome counters default to zero and take real values.
+    let counters = sqlx::query(
+        "SELECT merge_count, dedup_count, rename_count, no_op_count, unresolved_count
+           FROM location_operations WHERE id = 'op-1'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("operation should load");
+    for column in [
+        "merge_count",
+        "dedup_count",
+        "rename_count",
+        "no_op_count",
+        "unresolved_count",
+    ] {
+        assert_eq!(
+            counters.get::<i64, _>(column),
+            0,
+            "{column} should default to zero"
+        );
+    }
+    sqlx::query(
+        "UPDATE location_operations
+            SET merge_count = 1, dedup_count = 2, rename_count = 3,
+                no_op_count = 4, unresolved_count = 5
+          WHERE id = 'op-1'",
+    )
+    .execute(&pool)
+    .await
+    .expect("counters should update");
+    let updated: i64 = sqlx::query_scalar(
+        "SELECT merge_count + dedup_count + rename_count + no_op_count + unresolved_count
+           FROM location_operations WHERE id = 'op-1'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("counters should load");
+    assert_eq!(updated, 15);
 }
 
 #[tokio::test]
@@ -569,6 +650,37 @@ async fn postgres_upgrade_rekeys_roots_and_creates_the_location_tables() {
             contested.is_err(),
             "a second live claim on the same root must be rejected by the registry"
         );
+
+        // The columns the amended 0206 added are on this engine too, with the
+        // same names — the store issues one statement for both engines.
+        sqlx::query(
+            "INSERT INTO location_operation_title_checkpoints
+                 (operation_id, title_id, state, note)
+             VALUES ('pg-op-1', 'pg-title-1', 'completed_with_warnings',
+                     'one companion asset was renamed')",
+        )
+        .execute(&pool)
+        .await
+        .expect("checkpoint row with a note should insert");
+        sqlx::query(
+            "INSERT INTO location_operation_verifications
+                 (id, operation_id, title_id, source_path, destination_path,
+                  requested_depth, applied_depth, outcome, detail)
+             VALUES ('pg-ver-1', 'pg-op-1', 'pg-title-1', '/src/a.mkv', '/dst/a.mkv',
+                     'full', 'full', 'verified', 'verified (full)')",
+        )
+        .execute(&pool)
+        .await
+        .expect("verification row with a detail should insert");
+        // `integer` columns on this engine, so the sum comes back as an i32.
+        let counters: i32 = sqlx::query_scalar(
+            "SELECT merge_count + dedup_count + rename_count + no_op_count + unresolved_count
+               FROM location_operations WHERE id = 'pg-op-1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("counters should load");
+        assert_eq!(counters, 0, "the outcome counters default to zero");
     }
     .await;
 

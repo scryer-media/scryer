@@ -1,7 +1,11 @@
 -- Location-operation persistence (plan D5/D7; FR-030..033, FR-043, FR-084, FR-089, FR-092).
 -- PostgreSQL half of 0206; see the SQLite file for the table-by-table rationale.
 -- Column names and semantics are identical; only the types differ (timestamptz
--- for instants, boolean for the flags SQLite stores as INTEGER).
+-- for instants, boolean for the flags SQLite stores as INTEGER). That parity is
+-- load-bearing: the store issues one statement per operation for both engines.
+-- Amended before release alongside the SQLite half with the FR-091 outcome
+-- counters (merge/dedup/rename/no_op/unresolved), the checkpoint `note`, and the
+-- verification `detail`; see that file for what each column means.
 
 CREATE TABLE location_operations (
     id text PRIMARY KEY NOT NULL,
@@ -24,6 +28,11 @@ CREATE TABLE location_operations (
     file_completed_count integer NOT NULL DEFAULT 0,
     bytes_total bigint NOT NULL DEFAULT 0,
     bytes_completed bigint NOT NULL DEFAULT 0,
+    merge_count integer NOT NULL DEFAULT 0,
+    dedup_count integer NOT NULL DEFAULT 0,
+    rename_count integer NOT NULL DEFAULT 0,
+    no_op_count integer NOT NULL DEFAULT 0,
+    unresolved_count integer NOT NULL DEFAULT 0,
     job_run_id text,
     workflow_operation_id text,
     cancel_requested boolean NOT NULL DEFAULT false,
@@ -64,6 +73,7 @@ CREATE TABLE location_operation_title_checkpoints (
     bytes_completed bigint NOT NULL DEFAULT 0,
     blocked_reason text,
     failure_reason text,
+    note text,
     checkpointed_at timestamptz,
     created_at timestamptz NOT NULL DEFAULT NOW(),
     updated_at timestamptz NOT NULL DEFAULT NOW(),
@@ -98,6 +108,7 @@ CREATE TABLE location_operation_verifications (
     sampled_signature_scheme text,
     sampled_signature_value text,
     failure_reason text,
+    detail text,
     verified_at timestamptz NOT NULL DEFAULT NOW(),
     created_at timestamptz NOT NULL DEFAULT NOW(),
     CONSTRAINT location_operation_verifications_operation_id_fkey

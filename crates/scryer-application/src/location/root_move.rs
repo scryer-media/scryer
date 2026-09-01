@@ -52,7 +52,9 @@ use crate::location::collisions::{
     CollisionDisposition, CollisionNaming, CollisionPlan, CollisionPlanRequest, ContentFacts,
     DestinationItem, FullHash, IncomingItem, PathCaseRule, RecycleAvailability, plan_collisions,
 };
-use crate::location::executor::{OperationWorkPlan, PlannedFile, PlannedTitle};
+use crate::location::executor::{
+    ClassifiedTitleBaseline, OperationWorkPlan, PlannedFile, PlannedTitle, TitleOutcomeCounts,
+};
 use crate::location::hardlinks::{HardlinkFact, hardlink_warnings};
 use crate::location::model::{
     LocationExecutionMode, LocationOperationType, TitleCheckpointPlacement, VerificationDepth,
@@ -131,6 +133,12 @@ pub struct RootMoveTitleExecution {
     /// Source files proven redundant against identical destination content, so
     /// they are recycled instead of copied (FR-073).
     pub deduplicated_sources: Vec<String>,
+    /// Destination paths whose file name the collision planner changed so
+    /// destination content keeps its own name (FR-074/075). Kept beside
+    /// `deduplicated_sources` because Activity counts both (FR-091), and
+    /// defaulted so a plan serialized before the field existed still loads.
+    #[serde(default)]
+    pub renamed_destinations: Vec<String>,
     /// Directories cleanup may remove — but only when they are actually empty
     /// (FR-031). Deepest first.
     pub prune_directories: Vec<String>,
@@ -168,6 +176,10 @@ impl RootMoveTitleExecution {
                     size_bytes: file.size_bytes,
                 })
                 .collect(),
+            outcomes: TitleOutcomeCounts {
+                dedups: self.deduplicated_sources.len() as i64,
+                renames: self.renamed_destinations.len() as i64,
+            },
         }
     }
 
@@ -183,6 +195,17 @@ impl RootMoveTitleExecution {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct RootMoveExecutionPlan {
     pub titles: Vec<RootMoveTitleExecution>,
+    /// Titles the selection classified as already at their destination. They
+    /// carry no instructions, so they are counted here rather than dropped
+    /// (FR-091). Defaulted so a plan serialized before the field existed loads.
+    #[serde(default)]
+    pub no_op_titles: i64,
+    /// Titles the selection could not resolve into work: an outstanding user
+    /// decision (FR-016/FR-086) or an incompatible destination (FR-017). A start
+    /// refuses a selection holding any of these (FR-016), so this is normally
+    /// zero on a running operation and non-zero only on a preview.
+    #[serde(default)]
+    pub unresolved_titles: i64,
 }
 
 impl RootMoveExecutionPlan {
@@ -194,6 +217,10 @@ impl RootMoveExecutionPlan {
                 .map(RootMoveTitleExecution::to_planned_title)
                 .collect(),
         )
+        .with_baseline(ClassifiedTitleBaseline {
+            no_ops: self.no_op_titles,
+            unresolved: self.unresolved_titles,
+        })
     }
 
     pub fn title(&self, title_id: &str) -> Option<&RootMoveTitleExecution> {
@@ -339,7 +366,16 @@ pub fn build_root_move_plan(request: &RootMovePlanRequest) -> PlannedRootMove {
     builder.free_space(request.free_space.clone());
     builder.verification_depth(request.verification_depth);
 
-    let mut execution = RootMoveExecutionPlan::default();
+    // The classification counts are the operation's starting truth for the two
+    // counters no instruction set can carry: a no-op and an unresolved title
+    // produce no work, so without this they would vanish between the preview and
+    // Activity (FR-091).
+    let mut execution = RootMoveExecutionPlan {
+        no_op_titles: request.classification.no_op,
+        unresolved_titles: request.classification.needs_resolution
+            + request.classification.incompatible,
+        ..RootMoveExecutionPlan::default()
+    };
     let mut plan_warnings: Vec<String> = Vec::new();
 
     for (index, draft) in request.titles.iter().enumerate() {
@@ -437,6 +473,7 @@ fn plan_title(
                 same_volume: draft.same_volume,
                 files: Vec::new(),
                 deduplicated_sources: Vec::new(),
+                renamed_destinations: Vec::new(),
                 prune_directories: Vec::new(),
                 warnings: Vec::new(),
             };
@@ -501,6 +538,7 @@ fn plan_title(
 
     let mut files = Vec::new();
     let mut deduplicated_sources = Vec::new();
+    let mut renamed_destinations = Vec::new();
     for file in &draft.files {
         let item_id = collision_item_id(file);
         let decision = collisions
@@ -562,6 +600,7 @@ fn plan_title(
                 continue;
             }
             Some(disposition) if disposition.is_rename() => {
+                renamed_destinations.push(destination_display.clone());
                 items.push(
                     PlanItem::new(PlanItemKind::Rename)
                         .with_title(draft.title_id.clone())
@@ -633,6 +672,7 @@ fn plan_title(
         same_volume: draft.same_volume,
         files,
         deduplicated_sources,
+        renamed_destinations,
         prune_directories: prune_directories_for(draft),
         warnings: warnings.clone(),
     };
@@ -927,13 +967,26 @@ mod tests {
         let mut no_op = draft(TitleLocationClass::NoOp);
         no_op.title_id = "settled".to_string();
 
-        let planned = build_root_move_plan(&request(vec![blocked, no_op]));
+        let mut plan_request = request(vec![blocked, no_op]);
+        plan_request.classification = ClassificationCounts {
+            no_op: 1,
+            needs_resolution: 1,
+            ..ClassificationCounts::default()
+        };
+        let planned = build_root_move_plan(&plan_request);
 
         assert_eq!(planned.plan.counts.for_kind(PlanItemKind::Blocked), 1);
         assert_eq!(planned.plan.counts.for_kind(PlanItemKind::NoOp), 1);
         assert!(planned.plan.blocks_start());
         // Neither contributes executable work.
         assert!(planned.execution.titles.is_empty());
+        // But both are still counted, or Activity would report a selection
+        // smaller than the one the user submitted (FR-091).
+        assert_eq!(planned.execution.no_op_titles, 1);
+        assert_eq!(planned.execution.unresolved_titles, 1);
+        let baseline = planned.work_plan().baseline;
+        assert_eq!(baseline.no_ops, 1);
+        assert_eq!(baseline.unresolved, 1);
 
         let confirmation = PlanConfirmationRequest {
             fingerprint: planned.plan.fingerprint.clone(),
@@ -993,6 +1046,14 @@ mod tests {
         assert_eq!(planned.plan.counts.for_kind(PlanItemKind::Rename), 1);
         assert!(execution.deduplicated_sources.is_empty());
         assert_ne!(execution.files[0].destination_path, "/b/Some Movie/movie.mkv");
+        // The rename reaches the runner as an outcome to count (FR-091).
+        assert_eq!(
+            execution.renamed_destinations,
+            vec![execution.files[0].destination_path.clone()]
+        );
+        let work = planned.work_plan();
+        assert_eq!(work.titles[0].outcomes.renames, 1);
+        assert_eq!(work.titles[0].outcomes.dedups, 0);
     }
 
     /// D4, unlocked by FR-047: once the backfill job has hashed both sides, the
@@ -1027,6 +1088,10 @@ mod tests {
             execution.deduplicated_sources,
             vec!["/a/Some Movie/movie.mkv".to_string()]
         );
+        assert!(execution.renamed_destinations.is_empty());
+        let work = planned.work_plan();
+        assert_eq!(work.titles[0].outcomes.dedups, 1);
+        assert_eq!(work.titles[0].outcomes.renames, 0);
     }
 
     /// A stale hash proves nothing. The row is queued for backfill, and until it

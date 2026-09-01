@@ -172,6 +172,13 @@ impl AppUseCase {
                     .map(|title| title.files.len() as i64)
                     .sum(),
                 bytes_total: planned.planned.execution.moved_bytes() as i64,
+                // The two counters the instruction set cannot carry: titles the
+                // preview called no-ops or could not resolve produce no work,
+                // but Activity still reports them (FR-091). The runner
+                // recomputes the row from the same plan on its first progress
+                // write, so these never drift from what it will report.
+                no_ops: planned.planned.execution.no_op_titles,
+                unresolved: planned.planned.execution.unresolved_titles,
                 ..LocationOperationCounters::default()
             },
             detail: None,

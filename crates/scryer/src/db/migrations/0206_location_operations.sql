@@ -14,6 +14,12 @@
 -- outlive a catalog entity that is later deleted. FR-084 already stops an entity
 -- being deleted while an operation owns it. The `actor` reference follows the
 -- `workflow_operations` precedent (ON DELETE SET NULL).
+--
+-- Amended before release (this migration has never shipped, so C1 permits
+-- editing it in place rather than adding a follow-up number): the outcome
+-- counters FR-091 enumerates, a checkpoint `note`, and a verification `detail`.
+-- Before the amendment the outcome counters had nowhere to live and the two
+-- notes squatted in `failure_reason`.
 
 CREATE TABLE location_operations (
     id TEXT PRIMARY KEY NOT NULL,
@@ -46,6 +52,20 @@ CREATE TABLE location_operations (
     file_completed_count INTEGER NOT NULL DEFAULT 0,
     bytes_total INTEGER NOT NULL DEFAULT 0,
     bytes_completed INTEGER NOT NULL DEFAULT 0,
+    -- Outcome counters Activity shows next to the volume counters above
+    -- (FR-091, US8 scenario 1). Every one of them is derived from decisions the
+    -- confirmed plan already made, so a resumed run recomputes the same values
+    -- rather than incrementing a running total it cannot trust.
+    --   merge_count      titles merged into an existing destination title (US7)
+    --   dedup_count      files/assets recycled as proven duplicates (FR-073)
+    --   rename_count     files/assets renamed to avoid a collision (FR-074/075)
+    --   no_op_count      titles that needed no change
+    --   unresolved_count items still needing a user decision (FR-016, FR-086)
+    merge_count INTEGER NOT NULL DEFAULT 0,
+    dedup_count INTEGER NOT NULL DEFAULT 0,
+    rename_count INTEGER NOT NULL DEFAULT 0,
+    no_op_count INTEGER NOT NULL DEFAULT 0,
+    unresolved_count INTEGER NOT NULL DEFAULT 0,
     -- The Activity/job row this operation runs under, when it has one.
     job_run_id TEXT,
     workflow_operation_id TEXT,
@@ -92,8 +112,14 @@ CREATE TABLE location_operation_title_checkpoints (
     file_completed_count INTEGER NOT NULL DEFAULT 0,
     bytes_total INTEGER NOT NULL DEFAULT 0,
     bytes_completed INTEGER NOT NULL DEFAULT 0,
+    -- The three explanations a checkpoint can carry, each in its own column so
+    -- Activity never has to guess which one it is reading: why the title could
+    -- not enter the operation, why it failed, and — for a title that finished
+    -- with warnings (dedup, collision rename, preserve-instead-of-recycle) —
+    -- what the user still has to see.
     blocked_reason TEXT,
     failure_reason TEXT,
+    note TEXT,
     checkpointed_at TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -135,6 +161,11 @@ CREATE TABLE location_operation_verifications (
     sampled_signature_scheme TEXT,
     sampled_signature_value TEXT,
     failure_reason TEXT,
+    -- The note for a record that neither fell back nor failed: how a verified
+    -- destination was proven, in the words Activity shows per file (FR-043).
+    -- Distinct from `fallback_reason` and `failure_reason` so the three cases
+    -- stay separable after the fact.
+    detail TEXT,
     verified_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (operation_id) REFERENCES location_operations(id) ON DELETE CASCADE

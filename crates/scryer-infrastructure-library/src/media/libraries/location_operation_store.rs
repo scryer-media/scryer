@@ -9,13 +9,16 @@
 //!
 //! - A checkpoint row is written when its title *starts*, so `created_at` is the
 //!   title's start instant and `checkpointed_at` is the instant it settled.
-//! - 0206 has no generic per-row note column. A checkpoint's detail is stored in
-//!   `blocked_reason` for a blocked title and in `failure_reason` otherwise; a
-//!   verification's detail is stored in `fallback_reason` when the quick floor
-//!   was a fallback and in `failure_reason` otherwise. Reads accept either.
-//! - The operation row has columns for the volume counters only. `merges`,
-//!   `dedups`, `renames`, `no_ops`, and `unresolved` are not persisted and read
-//!   back as zero (see `LocationOperationCounters`).
+//! - One explanation, one column. A checkpoint's detail goes to `blocked_reason`
+//!   for a blocked title, to `failure_reason` for a failed one, and to `note`
+//!   otherwise (the completed-with-warnings case). A verification's detail goes
+//!   to `fallback_reason` when the quick floor was a fallback, to
+//!   `failure_reason` when the outcome refuses source removal, and to `detail`
+//!   otherwise. Reads take whichever column is populated, so a row written with
+//!   any of them NULL still reads back.
+//! - The operation row carries the FR-091 outcome counters (`merge_count`,
+//!   `dedup_count`, `rename_count`, `no_op_count`, `unresolved_count`) next to
+//!   the volume counters, so `LocationOperationCounters` round-trips whole.
 //! - `move_crc` is TEXT: the CRC is a `u64` and would not survive a signed
 //!   64-bit integer column, so it is stored as its decimal string.
 
@@ -42,6 +45,7 @@ const OPERATION_COLUMNS: &str = "id, operation_type, execution_mode, state, init
     plan_fingerprint, verification_depth, verification_fallback_count,
     title_total, title_completed_count, title_blocked_count,
     file_total, file_completed_count, bytes_total, bytes_completed,
+    merge_count, dedup_count, rename_count, no_op_count, unresolved_count,
     job_run_id, workflow_operation_id, cancel_requested, cancel_requested_at,
     failure_reason, confirmed_at, started_at, completed_at, created_at, updated_at";
 
@@ -49,11 +53,11 @@ const CHECKPOINT_COLUMNS: &str = "operation_id, title_id, sequence, state, class
     source_library_id, source_root_id, source_folder_path,
     destination_library_id, destination_root_id, destination_folder_path,
     merged_into_title_id, file_total, file_completed_count, bytes_total, bytes_completed,
-    blocked_reason, failure_reason, checkpointed_at, created_at, updated_at";
+    blocked_reason, failure_reason, note, checkpointed_at, created_at, updated_at";
 
 const VERIFICATION_COLUMNS: &str = "id, operation_id, title_id, media_file_id, source_path,
     destination_path, size_bytes, requested_depth, applied_depth, fell_back, fallback_reason,
-    outcome, move_crc, move_crc_algorithm, full_blake3, failure_reason, verified_at";
+    outcome, move_crc, move_crc_algorithm, full_blake3, failure_reason, detail, verified_at";
 
 /// States an operation can no longer be cancelled or resumed from.
 const TERMINAL_STATES: &str = "'completed', 'completed_with_warnings', 'canceled', 'failed'";
@@ -85,10 +89,11 @@ impl LocationOperationRepository for LocationOperationStore {
               plan_fingerprint, plan_json, verification_depth, verification_fallback_count,
               title_total, title_completed_count, title_blocked_count,
               file_total, file_completed_count, bytes_total, bytes_completed,
+              merge_count, dedup_count, rename_count, no_op_count, unresolved_count,
               job_run_id, workflow_operation_id, cancel_requested, cancel_requested_at,
               failure_reason, confirmed_at, started_at, completed_at, created_at, updated_at)
              VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {},
-                     {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+                     {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
             vec![
                 SqlArg::Text(operation.id.clone()),
                 SqlArg::Text(operation.operation_type.as_str().to_string()),
@@ -110,6 +115,11 @@ impl LocationOperationRepository for LocationOperationStore {
                 SqlArg::I64(operation.counters.files_processed),
                 SqlArg::I64(operation.counters.bytes_total),
                 SqlArg::I64(operation.counters.bytes_processed),
+                SqlArg::I64(operation.counters.merges),
+                SqlArg::I64(operation.counters.dedups),
+                SqlArg::I64(operation.counters.renames),
+                SqlArg::I64(operation.counters.no_ops),
+                SqlArg::I64(operation.counters.unresolved),
                 SqlArg::OptText(operation.job_run_id.clone()),
                 SqlArg::OptText(operation.workflow_operation_id.clone()),
                 SqlArg::Bool(operation.cancel_requested),
@@ -193,6 +203,11 @@ impl LocationOperationRepository for LocationOperationStore {
                  file_completed_count = {{}},
                  bytes_total = {{}},
                  bytes_completed = {{}},
+                 merge_count = {{}},
+                 dedup_count = {{}},
+                 rename_count = {{}},
+                 no_op_count = {{}},
+                 unresolved_count = {{}},
                  verification_fallback_count = {{}},
                  {detail_clause},
                  started_at = COALESCE(started_at, {{}}),
@@ -214,6 +229,11 @@ impl LocationOperationRepository for LocationOperationStore {
                 SqlArg::I64(progress.counters.files_processed),
                 SqlArg::I64(progress.counters.bytes_total),
                 SqlArg::I64(progress.counters.bytes_processed),
+                SqlArg::I64(progress.counters.merges),
+                SqlArg::I64(progress.counters.dedups),
+                SqlArg::I64(progress.counters.renames),
+                SqlArg::I64(progress.counters.no_ops),
+                SqlArg::I64(progress.counters.unresolved),
                 SqlArg::I64(progress.verification_fallback_count),
                 SqlArg::OptText(progress.detail.clone()),
                 SqlArg::OptTimestamp(progress.started_at),
@@ -272,9 +292,13 @@ impl LocationOperationRepository for LocationOperationStore {
         &self,
         checkpoint: &TitleCheckpoint,
     ) -> AppResult<()> {
-        let blocked = matches!(checkpoint.state, TitleCheckpointState::Blocked);
-        let blocked_reason = blocked.then(|| checkpoint.detail.clone()).flatten();
-        let other_reason = (!blocked).then(|| checkpoint.detail.clone()).flatten();
+        // One explanation, one column: why the title could not start, why it
+        // failed, or what a finished-with-warnings title still has to say.
+        let (blocked_reason, failure_reason, note) = match checkpoint.state {
+            TitleCheckpointState::Blocked => (checkpoint.detail.clone(), None, None),
+            TitleCheckpointState::Failed => (None, checkpoint.detail.clone(), None),
+            _ => (None, None, checkpoint.detail.clone()),
+        };
         let started_at = checkpoint.started_at.unwrap_or(checkpoint.updated_at);
 
         SqlRuntime::execute_write(
@@ -285,8 +309,8 @@ impl LocationOperationRepository for LocationOperationStore {
               source_library_id, source_root_id, source_folder_path,
               destination_library_id, destination_root_id, destination_folder_path,
               merged_into_title_id, file_total, file_completed_count, bytes_total, bytes_completed,
-              blocked_reason, failure_reason, checkpointed_at, created_at, updated_at)
-             VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})
+              blocked_reason, failure_reason, note, checkpointed_at, created_at, updated_at)
+             VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})
              ON CONFLICT(operation_id, title_id) DO UPDATE SET
                 sequence = excluded.sequence,
                 state = excluded.state,
@@ -304,6 +328,7 @@ impl LocationOperationRepository for LocationOperationStore {
                 bytes_completed = excluded.bytes_completed,
                 blocked_reason = excluded.blocked_reason,
                 failure_reason = excluded.failure_reason,
+                note = excluded.note,
                 checkpointed_at = excluded.checkpointed_at,
                 updated_at = excluded.updated_at",
             vec![
@@ -328,7 +353,8 @@ impl LocationOperationRepository for LocationOperationStore {
                 SqlArg::I64(checkpoint.bytes_total),
                 SqlArg::I64(checkpoint.bytes_verified),
                 SqlArg::OptText(blocked_reason),
-                SqlArg::OptText(other_reason),
+                SqlArg::OptText(failure_reason),
+                SqlArg::OptText(note),
                 SqlArg::OptTimestamp(checkpoint.completed_at),
                 SqlArg::Timestamp(started_at),
                 SqlArg::Timestamp(checkpoint.updated_at),
@@ -363,8 +389,15 @@ impl LocationOperationRepository for LocationOperationStore {
         record: &FileVerificationRecord,
     ) -> AppResult<()> {
         let fell_back = record.depth.fell_back;
-        let fallback_reason = fell_back.then(|| record.detail.clone()).flatten();
-        let failure_reason = (!fell_back).then(|| record.detail.clone()).flatten();
+        // One explanation, one column: why the quick floor was used, why the
+        // destination was not accepted, or how a clean verification was proven.
+        let (fallback_reason, failure_reason, detail) = if fell_back {
+            (record.detail.clone(), None, None)
+        } else if record.outcome.permits_source_removal() {
+            (None, None, record.detail.clone())
+        } else {
+            (None, record.detail.clone(), None)
+        };
         let hashes = record.hashes.as_ref();
 
         SqlRuntime::execute_write(
@@ -373,8 +406,9 @@ impl LocationOperationRepository for LocationOperationStore {
             "INSERT INTO location_operation_verifications
              (id, operation_id, title_id, media_file_id, source_path, destination_path,
               size_bytes, requested_depth, applied_depth, fell_back, fallback_reason,
-              outcome, move_crc, move_crc_algorithm, full_blake3, failure_reason, verified_at)
-             VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})
+              outcome, move_crc, move_crc_algorithm, full_blake3, failure_reason, detail,
+              verified_at)
+             VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})
              ON CONFLICT(operation_id, destination_path) DO UPDATE SET
                 title_id = excluded.title_id,
                 media_file_id = excluded.media_file_id,
@@ -389,6 +423,7 @@ impl LocationOperationRepository for LocationOperationStore {
                 move_crc_algorithm = excluded.move_crc_algorithm,
                 full_blake3 = excluded.full_blake3,
                 failure_reason = excluded.failure_reason,
+                detail = excluded.detail,
                 verified_at = excluded.verified_at",
             vec![
                 SqlArg::Text(uuid::Uuid::new_v4().to_string()),
@@ -407,6 +442,7 @@ impl LocationOperationRepository for LocationOperationStore {
                 SqlArg::OptText(hashes.map(|hashes| hashes.crc_algorithm.as_str().to_string())),
                 SqlArg::OptText(hashes.map(|hashes| hashes.full_blake3.clone())),
                 SqlArg::OptText(failure_reason),
+                SqlArg::OptText(detail),
                 SqlArg::Timestamp(record.verified_at),
             ],
         )
@@ -694,13 +730,11 @@ fn row_to_operation(row: &SqlRow) -> AppResult<LocationOperation> {
             files_processed: row.i64("file_completed_count")?,
             bytes_total: row.i64("bytes_total")?,
             bytes_processed: row.i64("bytes_completed")?,
-            // Not persisted by 0206; callers derive them from checkpoints and
-            // collision results.
-            merges: 0,
-            dedups: 0,
-            renames: 0,
-            no_ops: 0,
-            unresolved: 0,
+            merges: row.i64("merge_count")?,
+            dedups: row.i64("dedup_count")?,
+            renames: row.i64("rename_count")?,
+            no_ops: row.i64("no_op_count")?,
+            unresolved: row.i64("unresolved_count")?,
         },
         detail: row.opt_text("failure_reason")?,
         job_run_id: row.opt_text("job_run_id")?,
@@ -730,8 +764,12 @@ fn row_to_checkpoint(row: &SqlRow) -> AppResult<TitleCheckpoint> {
         })?),
         None => None,
     };
-    let blocked_reason = row.opt_text("blocked_reason")?;
-    let failure_reason = row.opt_text("failure_reason")?;
+    // Whichever of the three explanation columns this row actually carries; a
+    // checkpoint may carry none of them.
+    let detail = row
+        .opt_text("blocked_reason")?
+        .or(row.opt_text("failure_reason")?)
+        .or(row.opt_text("note")?);
 
     Ok(TitleCheckpoint {
         operation_id: row.text("operation_id")?,
@@ -752,7 +790,7 @@ fn row_to_checkpoint(row: &SqlRow) -> AppResult<TitleCheckpoint> {
         files_verified: row.i64("file_completed_count")?,
         bytes_total: row.i64("bytes_total")?,
         bytes_verified: row.i64("bytes_completed")?,
-        detail: blocked_reason.or(failure_reason),
+        detail,
         started_at: Some(row.timestamp("created_at")?),
         updated_at: row.timestamp("updated_at")?,
         completed_at: row.opt_timestamp("checkpointed_at")?,
@@ -804,9 +842,11 @@ fn row_to_verification(row: &SqlRow) -> AppResult<FileVerificationRecord> {
             fell_back,
         },
         outcome,
+        // Whichever of the three explanation columns this row actually carries.
         detail: row
             .opt_text("fallback_reason")?
-            .or(row.opt_text("failure_reason")?),
+            .or(row.opt_text("failure_reason")?)
+            .or(row.opt_text("detail")?),
         verified_at: row.timestamp("verified_at")?,
     })
 }
@@ -863,7 +903,11 @@ mod tests {
                 files_processed: 3,
                 bytes_total: 900,
                 bytes_processed: 300,
-                ..LocationOperationCounters::default()
+                merges: 1,
+                dedups: 2,
+                renames: 3,
+                no_ops: 4,
+                unresolved: 5,
             },
             detail: Some("one title is blocked".to_string()),
             job_run_id: Some("job-1".to_string()),
@@ -898,6 +942,13 @@ mod tests {
             .expect("the read should succeed")
             .expect("the operation should exist");
         assert_eq!(loaded, operation);
+        // Named explicitly: the outcome counters are the half of FR-091 that
+        // used to read back as zero because 0206 had no columns for them.
+        assert_eq!(loaded.counters.merges, 1);
+        assert_eq!(loaded.counters.dedups, 2);
+        assert_eq!(loaded.counters.renames, 3);
+        assert_eq!(loaded.counters.no_ops, 4);
+        assert_eq!(loaded.counters.unresolved, 5);
         assert_eq!(
             store
                 .get_location_operation_plan_json("op-1")
@@ -974,11 +1025,16 @@ mod tests {
                 counters: LocationOperationCounters {
                     titles_total: 2,
                     titles_processed: 2,
+                    titles_blocked: 0,
                     files_total: 5,
                     files_processed: 5,
                     bytes_total: 500,
                     bytes_processed: 500,
-                    ..LocationOperationCounters::default()
+                    merges: 1,
+                    dedups: 2,
+                    renames: 3,
+                    no_ops: 4,
+                    unresolved: 0,
                 },
                 verification_fallback_count: 1,
                 detail: Some("one file fell back to the quick floor".to_string()),
@@ -1002,6 +1058,16 @@ mod tests {
             Some(first_start + chrono::Duration::seconds(90))
         );
         assert_eq!(loaded.counters.bytes_processed, 500);
+        // A progress write owns the outcome counters too: the runner recomputes
+        // them from the plan, so the row is replaced, never accumulated.
+        assert_eq!(loaded.counters.merges, 1);
+        assert_eq!(loaded.counters.dedups, 2);
+        assert_eq!(loaded.counters.renames, 3);
+        assert_eq!(loaded.counters.no_ops, 4);
+        assert_eq!(
+            loaded.counters.unresolved, 0,
+            "a counter that dropped to zero is written, not left at its old value"
+        );
         assert_eq!(loaded.verification_fallback_count, 1);
         assert_eq!(
             loaded.detail.as_deref(),
@@ -1172,6 +1238,153 @@ mod tests {
             .await
             .expect("the read should succeed");
         assert_eq!(loaded[0].detail.as_deref(), Some("an import is running"));
+        assert_eq!(
+            checkpoint_columns(&store, "title-1").await,
+            (Some("an import is running".to_string()), None, None),
+            "a blocked title's reason belongs in blocked_reason and nowhere else"
+        );
+    }
+
+    /// `(blocked_reason, failure_reason, note)` exactly as 0206 holds them.
+    async fn checkpoint_columns(
+        store: &LocationOperationStore,
+        title_id: &str,
+    ) -> (Option<String>, Option<String>, Option<String>) {
+        let row = SqlRuntime::fetch_optional(
+            store.datastore.read_exec(),
+            "SELECT blocked_reason, failure_reason, note
+               FROM location_operation_title_checkpoints WHERE title_id = {}",
+            &[SqlArg::Text(title_id.to_string())],
+        )
+        .await
+        .expect("the read should succeed")
+        .expect("the checkpoint should exist");
+        (
+            row.opt_text("blocked_reason").expect("column"),
+            row.opt_text("failure_reason").expect("column"),
+            row.opt_text("note").expect("column"),
+        )
+    }
+
+    #[tokio::test]
+    async fn each_checkpoint_explanation_lands_in_its_own_column() {
+        let store = test_store().await;
+        store
+            .create_location_operation(&operation("op-1", LocationOperationState::Moving), None)
+            .await
+            .expect("the operation should persist");
+
+        let now = timestamp();
+        let checkpoint = |title_id: &str, state, detail: &str| TitleCheckpoint {
+            operation_id: "op-1".to_string(),
+            title_id: title_id.to_string(),
+            sequence: 1,
+            state,
+            classification: None,
+            placement: TitleCheckpointPlacement::default(),
+            files_total: 0,
+            files_verified: 0,
+            bytes_total: 0,
+            bytes_verified: 0,
+            detail: Some(detail.to_string()),
+            started_at: Some(now),
+            updated_at: now,
+            completed_at: Some(now),
+        };
+
+        for (title_id, state, detail) in [
+            (
+                "warned",
+                TitleCheckpointState::CompletedWithWarnings,
+                "one companion asset was renamed",
+            ),
+            (
+                "failed",
+                TitleCheckpointState::Failed,
+                "the destination filesystem is full",
+            ),
+        ] {
+            store
+                .upsert_location_title_checkpoint(&checkpoint(title_id, state, detail))
+                .await
+                .expect("the checkpoint should persist");
+        }
+
+        assert_eq!(
+            checkpoint_columns(&store, "warned").await,
+            (
+                None,
+                None,
+                Some("one companion asset was renamed".to_string())
+            ),
+            "a warning note is not a failure and must not squat in failure_reason"
+        );
+        assert_eq!(
+            checkpoint_columns(&store, "failed").await,
+            (
+                None,
+                Some("the destination filesystem is full".to_string()),
+                None
+            )
+        );
+
+        // Whichever column holds it, the model reads one detail back.
+        let loaded = store
+            .list_location_title_checkpoints("op-1")
+            .await
+            .expect("the read should succeed");
+        let details: Vec<Option<&str>> = loaded
+            .iter()
+            .map(|checkpoint| checkpoint.detail.as_deref())
+            .collect();
+        assert_eq!(
+            details,
+            vec![
+                Some("the destination filesystem is full"),
+                Some("one companion asset was renamed"),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_checkpoint_that_settles_clean_leaves_every_explanation_null() {
+        let store = test_store().await;
+        store
+            .create_location_operation(&operation("op-1", LocationOperationState::Moving), None)
+            .await
+            .expect("the operation should persist");
+
+        let now = timestamp();
+        store
+            .upsert_location_title_checkpoint(&TitleCheckpoint {
+                operation_id: "op-1".to_string(),
+                title_id: "title-1".to_string(),
+                sequence: 1,
+                state: TitleCheckpointState::Completed,
+                classification: None,
+                placement: TitleCheckpointPlacement::default(),
+                files_total: 1,
+                files_verified: 1,
+                bytes_total: 100,
+                bytes_verified: 100,
+                detail: None,
+                started_at: Some(now),
+                updated_at: now,
+                completed_at: Some(now),
+            })
+            .await
+            .expect("the checkpoint should persist");
+
+        assert_eq!(checkpoint_columns(&store, "title-1").await, (None, None, None));
+        assert_eq!(
+            store
+                .list_location_title_checkpoints("op-1")
+                .await
+                .expect("the read should succeed")[0]
+                .detail,
+            None,
+            "the read stays tolerant of three NULL explanation columns"
+        );
     }
 
     fn verification(destination: &str, outcome: FileVerificationOutcome) -> FileVerificationRecord {
@@ -1254,6 +1467,90 @@ mod tests {
         assert_eq!(
             loaded[0].detail.as_deref(),
             Some("a cache-bypassed read-back could not run")
+        );
+        assert_eq!(
+            verification_columns(&store, "/archive/Arrival.mkv").await,
+            (
+                Some("a cache-bypassed read-back could not run".to_string()),
+                None,
+                None
+            ),
+            "a fallback reason stays in the column named for it"
+        );
+    }
+
+    /// `(fallback_reason, failure_reason, detail)` exactly as 0206 holds them.
+    async fn verification_columns(
+        store: &LocationOperationStore,
+        destination: &str,
+    ) -> (Option<String>, Option<String>, Option<String>) {
+        let row = SqlRuntime::fetch_optional(
+            store.datastore.read_exec(),
+            "SELECT fallback_reason, failure_reason, detail
+               FROM location_operation_verifications WHERE destination_path = {}",
+            &[SqlArg::Text(destination.to_string())],
+        )
+        .await
+        .expect("the read should succeed")
+        .expect("the verification should exist");
+        (
+            row.opt_text("fallback_reason").expect("column"),
+            row.opt_text("failure_reason").expect("column"),
+            row.opt_text("detail").expect("column"),
+        )
+    }
+
+    #[tokio::test]
+    async fn each_verification_explanation_lands_in_its_own_column() {
+        let store = test_store().await;
+        store
+            .create_location_operation(&operation("op-1", LocationOperationState::Moving), None)
+            .await
+            .expect("the operation should persist");
+
+        // A destination proven at the depth that was asked for: its note is
+        // neither a fallback nor a failure (FR-043).
+        let mut proven = verification("/archive/proven.mkv", FileVerificationOutcome::Verified);
+        proven.detail = Some("verified (full) against the streaming CRC".to_string());
+        // A destination that did not match: a failure, and only a failure.
+        let mut mismatched =
+            verification("/archive/mismatch.mkv", FileVerificationOutcome::Mismatch);
+        mismatched.detail = Some("the read-back CRC did not match".to_string());
+        for record in [&proven, &mismatched] {
+            store
+                .record_location_file_verification(record)
+                .await
+                .expect("the verification should persist");
+        }
+
+        assert_eq!(
+            verification_columns(&store, "/archive/proven.mkv").await,
+            (
+                None,
+                None,
+                Some("verified (full) against the streaming CRC".to_string())
+            ),
+            "a clean verification's note must not squat in failure_reason"
+        );
+        assert_eq!(
+            verification_columns(&store, "/archive/mismatch.mkv").await,
+            (None, Some("the read-back CRC did not match".to_string()), None)
+        );
+
+        let details: Vec<Option<String>> = store
+            .list_location_file_verifications("op-1", None)
+            .await
+            .expect("the read should succeed")
+            .into_iter()
+            .map(|record| record.detail)
+            .collect();
+        assert_eq!(
+            details,
+            vec![
+                Some("the read-back CRC did not match".to_string()),
+                Some("verified (full) against the streaming CRC".to_string()),
+            ],
+            "whichever column holds it, one detail reads back"
         );
     }
 

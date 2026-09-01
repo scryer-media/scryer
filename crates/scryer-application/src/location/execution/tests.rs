@@ -212,9 +212,11 @@ fn single_title_plan(
                 size_bytes,
             }],
             deduplicated_sources: Vec::new(),
+            renamed_destinations: Vec::new(),
             prune_directories: vec![path_to_stored_string(&source_folder)],
             warnings: Vec::new(),
         }],
+        ..RootMoveExecutionPlan::default()
     }
 }
 
@@ -671,9 +673,11 @@ async fn catalog_only_titles_complete_without_touching_the_filesystem() {
             same_volume: None,
             files: Vec::new(),
             deduplicated_sources: Vec::new(),
+            renamed_destinations: Vec::new(),
             prune_directories: Vec::new(),
             warnings: Vec::new(),
         }],
+        ..RootMoveExecutionPlan::default()
     };
 
     let store = InMemoryLocationOperationStore::new();

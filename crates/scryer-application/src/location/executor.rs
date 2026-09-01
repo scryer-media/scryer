@@ -106,6 +106,22 @@ impl PlannedFile {
     }
 }
 
+/// What the confirmed plan already decided this title's outcome would be, for
+/// the FR-091 counters Activity shows.
+///
+/// These are plan facts, not run facts: the collision engine decided at preview
+/// time which files are proven duplicates and which have to be renamed, and the
+/// title either carries out those decisions or does not finish at all. Counting
+/// them off the plan is what lets a resumed run report the same totals as the
+/// run it resumed, without a per-file counter table.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TitleOutcomeCounts {
+    /// Files or companion assets recycled as proven duplicates (FR-073).
+    pub dedups: i64,
+    /// Files or companion assets renamed to avoid a collision (FR-074/075).
+    pub renames: i64,
+}
+
 /// One title of planned work. Titles are the ordering, cancel, and resume
 /// granularity of the whole subsystem (FR-031, FR-092).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -116,6 +132,9 @@ pub struct PlannedTitle {
     pub classification: Option<TitleLocationClass>,
     pub placement: TitleCheckpointPlacement,
     pub files: Vec<PlannedFile>,
+    /// Dedup and rename decisions this title carries out, counted only once the
+    /// title actually finishes.
+    pub outcomes: TitleOutcomeCounts,
 }
 
 impl PlannedTitle {
@@ -126,18 +145,46 @@ impl PlannedTitle {
     }
 }
 
+/// Counts the selection's classification fixed before the operation started, and
+/// which no amount of running changes (FR-015, FR-091).
+///
+/// Titles classified as no-ops or as needing a decision never reach
+/// [`OperationWorkPlan::titles`] — there is nothing for the runner to do with
+/// them — but Activity still has to report them, so the plan carries their
+/// counts rather than losing them at the plan boundary.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ClassifiedTitleBaseline {
+    /// Titles the preview classified as already at their destination.
+    pub no_ops: i64,
+    /// Titles the preview could not resolve into work: an outstanding user
+    /// decision (FR-016, FR-086) or an incompatible destination (FR-017).
+    pub unresolved: i64,
+}
+
 /// The confirmed plan as the runner walks it: the workflow-specific planner
 /// (T031 and friends) reduces its own plan to this.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct OperationWorkPlan {
     pub titles: Vec<PlannedTitle>,
+    /// What classification decided before any title was queued.
+    pub baseline: ClassifiedTitleBaseline,
 }
 
 impl OperationWorkPlan {
     pub fn new(titles: Vec<PlannedTitle>) -> Self {
         let mut titles = titles;
         titles.sort_by_key(|title| title.sequence);
-        Self { titles }
+        Self {
+            titles,
+            baseline: ClassifiedTitleBaseline::default(),
+        }
+    }
+
+    /// Carry the selection's classification counts into the run, so the no-op
+    /// and unresolved titles the plan dropped still reach Activity.
+    pub fn with_baseline(mut self, baseline: ClassifiedTitleBaseline) -> Self {
+        self.baseline = baseline;
+        self
     }
 
     pub fn files_total(&self) -> i64 {
@@ -985,17 +1032,44 @@ impl RunProgress {
         }
     }
 
+    /// The FR-091 counters, recomputed from the confirmed plan and the settled
+    /// checkpoints every time they are written.
+    ///
+    /// Recomputed rather than incremented on purpose: a resume rebuilds
+    /// `settled` from the persisted checkpoints, so the same title never
+    /// contributes twice however many times the operation is interrupted.
+    /// Outcome counts are taken only from titles that actually *finished* —
+    /// a plan's dedup and rename decisions are not outcomes until the title
+    /// carrying them settles.
     fn counters(&self, plan: &OperationWorkPlan) -> LocationOperationCounters {
         let titles_blocked = self
             .settled
             .values()
             .filter(|state| matches!(state, TitleCheckpointState::Blocked))
             .count() as i64;
-        let no_ops = self
+        let skipped = self
             .settled
             .values()
             .filter(|state| matches!(state, TitleCheckpointState::Skipped))
             .count() as i64;
+
+        let mut merges = 0_i64;
+        let mut dedups = 0_i64;
+        let mut renames = 0_i64;
+        for title in &plan.titles {
+            if !matches!(
+                self.settled.get(&title.title_id),
+                Some(TitleCheckpointState::Completed)
+                    | Some(TitleCheckpointState::CompletedWithWarnings)
+            ) {
+                continue;
+            }
+            if title.placement.merged_into_title_id.is_some() {
+                merges += 1;
+            }
+            dedups += title.outcomes.dedups;
+            renames += title.outcomes.renames;
+        }
 
         LocationOperationCounters {
             titles_total: plan.titles.len() as i64,
@@ -1005,11 +1079,15 @@ impl RunProgress {
             files_processed: self.files_done.values().sum(),
             bytes_total: plan.bytes_total(),
             bytes_processed: self.bytes_done.values().sum(),
-            merges: 0,
-            dedups: 0,
-            renames: 0,
-            no_ops,
-            unresolved: titles_blocked,
+            merges,
+            dedups,
+            renames,
+            // A title the preview called a no-op and one the runner skipped are
+            // the same fact to the user: nothing had to change.
+            no_ops: plan.baseline.no_ops + skipped,
+            // Likewise a title classification could not resolve and one the
+            // runner could not admit both still need the user.
+            unresolved: plan.baseline.unresolved + titles_blocked,
         }
     }
 }
@@ -1548,6 +1626,7 @@ mod tests {
                     size_bytes: 100,
                 })
                 .collect(),
+            outcomes: TitleOutcomeCounts::default(),
         }
     }
 
@@ -1556,6 +1635,27 @@ mod tests {
             planned_title("title-1", 1, 2),
             planned_title("title-2", 2, 1),
         ])
+    }
+
+    /// The same two titles, but carrying the outcome facts a real plan would:
+    /// title-1 merges into a destination title and dedups a file, title-2
+    /// renames one around a collision.
+    fn two_title_plan_with_outcomes() -> OperationWorkPlan {
+        let mut first = planned_title("title-1", 1, 2);
+        first.placement.merged_into_title_id = Some("title-99".to_string());
+        first.outcomes = TitleOutcomeCounts {
+            dedups: 1,
+            renames: 0,
+        };
+        let mut second = planned_title("title-2", 2, 1);
+        second.outcomes = TitleOutcomeCounts {
+            dedups: 0,
+            renames: 2,
+        };
+        OperationWorkPlan::new(vec![first, second]).with_baseline(ClassifiedTitleBaseline {
+            no_ops: 3,
+            unresolved: 0,
+        })
     }
 
     fn verified_record(title_id: &str, destination: &str) -> FileVerificationRecord {
@@ -1857,6 +1957,147 @@ mod tests {
             TitleCheckpointState::Blocked
         );
         assert_eq!(mover.moved(), vec!["/destination/title-2/0.mkv".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn the_outcome_counters_report_what_the_plan_decided_once_titles_settle() {
+        let store = FakeStore::with_operation(operation());
+        let mover = FakeMover::default();
+        let admission = ScriptedAdmission::new(&[]);
+        let reconciler = RecordingReconciler::default();
+        let plan = two_title_plan_with_outcomes();
+
+        let outcome = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
+            .run("op-1", &plan)
+            .await
+            .expect("the run should succeed");
+
+        assert_eq!(outcome.counters.merges, 1, "one title merged (US7)");
+        assert_eq!(outcome.counters.dedups, 1);
+        assert_eq!(outcome.counters.renames, 2);
+        assert_eq!(
+            outcome.counters.no_ops, 3,
+            "the titles classification called no-ops are still reported"
+        );
+        assert_eq!(outcome.counters.unresolved, 0);
+
+        // The same counts reach the persisted row, which is what Activity reads.
+        let persisted = store
+            .inner
+            .lock()
+            .expect("lock")
+            .operations
+            .get("op-1")
+            .expect("the operation should exist")
+            .counters;
+        assert_eq!(persisted.merges, 1);
+        assert_eq!(persisted.dedups, 1);
+        assert_eq!(persisted.renames, 2);
+        assert_eq!(persisted.no_ops, 3);
+    }
+
+    #[tokio::test]
+    async fn a_title_that_never_finishes_contributes_no_outcome_counts() {
+        // A dedup or rename the plan decided is not an outcome until the title
+        // carrying it settles; a blocked title contributes to `unresolved`
+        // instead.
+        let store = FakeStore::with_operation(operation());
+        let mover = FakeMover::default();
+        let admission = ScriptedAdmission::new(&[(
+            "title-2",
+            TitleAdmission::Blocked("an import is running for this title".to_string()),
+        )]);
+        let reconciler = RecordingReconciler::default();
+        let plan = two_title_plan_with_outcomes();
+
+        let outcome = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
+            .run("op-1", &plan)
+            .await
+            .expect("the run should finish");
+
+        assert_eq!(outcome.counters.merges, 1);
+        assert_eq!(outcome.counters.dedups, 1);
+        assert_eq!(
+            outcome.counters.renames, 0,
+            "the blocked title's renames never happened"
+        );
+        assert_eq!(outcome.counters.unresolved, 1);
+    }
+
+    #[tokio::test]
+    async fn a_resume_reports_the_outcome_counters_once_not_twice() {
+        let mut resumed = operation();
+        resumed.state = LocationOperationState::Moving;
+        let store = FakeStore::with_operation(resumed);
+        let plan = two_title_plan_with_outcomes();
+
+        let now = Utc::now();
+        store.seed_checkpoint(TitleCheckpoint {
+            operation_id: "op-1".to_string(),
+            title_id: "title-1".to_string(),
+            sequence: 1,
+            state: TitleCheckpointState::Completed,
+            classification: Some(TitleLocationClass::RootMove),
+            placement: TitleCheckpointPlacement::default(),
+            files_total: 2,
+            files_verified: 2,
+            bytes_total: 200,
+            bytes_verified: 200,
+            detail: None,
+            started_at: Some(now),
+            updated_at: now,
+            completed_at: Some(now),
+        });
+        store.seed_verification(verified_record("title-1", "/destination/title-1/0.mkv"));
+        store.seed_verification(verified_record("title-1", "/destination/title-1/1.mkv"));
+
+        let mover = FakeMover::default();
+        let admission = ScriptedAdmission::new(&[]);
+        let reconciler = RecordingReconciler::default();
+        let outcome = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
+            .run("op-1", &plan)
+            .await
+            .expect("the resume should succeed");
+
+        assert_eq!(
+            outcome.counters.dedups, 1,
+            "the title that settled in the earlier run is counted exactly once"
+        );
+        assert_eq!(outcome.counters.merges, 1);
+        assert_eq!(outcome.counters.renames, 2);
+    }
+
+    #[tokio::test]
+    async fn a_completed_with_warnings_title_writes_its_note_to_the_checkpoint() {
+        let store = FakeStore::with_operation(operation());
+        let mover = FakeMover::default();
+        let admission = ScriptedAdmission::new(&[]);
+        let reconciler = RecordingReconciler {
+            warnings: [(
+                "title-1".to_string(),
+                "one companion asset was renamed".to_string(),
+            )]
+            .into_iter()
+            .collect(),
+            ..RecordingReconciler::default()
+        };
+        let plan = two_title_plan();
+
+        let outcome = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
+            .run("op-1", &plan)
+            .await
+            .expect("the run should finish");
+
+        assert_eq!(outcome.state, LocationOperationState::CompletedWithWarnings);
+        let checkpoint = store
+            .checkpoint("op-1", "title-1")
+            .expect("the warned title should have a checkpoint");
+        assert_eq!(checkpoint.state, TitleCheckpointState::CompletedWithWarnings);
+        assert_eq!(
+            checkpoint.detail.as_deref(),
+            Some("one companion asset was renamed"),
+            "the warning note travels on the checkpoint, not on a failure column"
+        );
     }
 
     #[tokio::test]
