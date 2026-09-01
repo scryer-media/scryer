@@ -9,6 +9,9 @@ use super::*;
 use std::sync::Mutex;
 
 use crate::location::executor::{LocationOperationRunner, OperationRunOutcome};
+use crate::location::media_server_refresh::{
+    LocationMediaServerRefresh, MediaServerRefreshRequest, notify_media_servers_for_operation,
+};
 use crate::location::model::{
     LocationExecutionMode, LocationOperationState, LocationOperationType, TitleCheckpointState,
 };
@@ -1599,4 +1602,158 @@ async fn planned_source_paths_lists_every_source() {
     );
 
     assert_eq!(planned_source_paths(&plan).len(), 1);
+}
+
+// ── FR-088: media-server refresh on completion ──────────────────────────────
+
+/// Records what the location subsystem asked the media servers to re-read.
+#[derive(Default)]
+struct RecordingMediaServerRefresh {
+    requests: Mutex<Vec<MediaServerRefreshRequest>>,
+}
+
+impl RecordingMediaServerRefresh {
+    fn requests(&self) -> Vec<MediaServerRefreshRequest> {
+        self.requests.lock().expect("lock").clone()
+    }
+}
+
+#[async_trait]
+impl LocationMediaServerRefresh for RecordingMediaServerRefresh {
+    async fn refresh_media_servers(&self, request: MediaServerRefreshRequest) -> AppResult<()> {
+        self.requests.lock().expect("lock").push(request);
+        Ok(())
+    }
+}
+
+/// FR-088, the whole story: a real move runs to completion over real files, and
+/// the media servers are asked to re-read exactly the destination folder the
+/// content landed in — not the source, not the library.
+#[tokio::test]
+async fn a_completed_move_asks_media_servers_to_re_read_the_destination_folder() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let source_root = temp.path().join("a");
+    let destination_root = temp.path().join("b");
+    let plan = single_title_plan(&source_root, &destination_root, "movie.mkv", 11);
+    write_file(&plan.titles[0].files[0].source(), b"hello world");
+
+    let store = InMemoryLocationOperationStore::new();
+    store.insert_operation(queued_operation(
+        "op-refresh",
+        LocationOperationType::RootMove,
+        LocationExecutionMode::MoveWithScryer,
+        VerificationDepth::Full,
+    ));
+    let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
+    let recycler = RecordingRecycler::default();
+    let mover = RootMoveFileMover::without_permissions();
+    let admission = RootMoveAdmission::new(&plan, &catalog);
+    let reconciler = RootMoveReconciler::new(&plan, &catalog, &store, &recycler);
+
+    let outcome = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
+        .run("op-refresh", &plan.to_work_plan())
+        .await
+        .expect("run");
+    assert_eq!(outcome.state, LocationOperationState::Completed);
+
+    let refresh = RecordingMediaServerRefresh::default();
+    notify_media_servers_for_operation(&store, &refresh, "op-refresh", outcome.state).await;
+
+    let requests = refresh.requests();
+    assert_eq!(requests.len(), 1, "one notification per finished operation");
+    assert_eq!(requests[0].operation_id, "op-refresh");
+    assert_eq!(
+        requests[0].folders,
+        vec![
+            plan.titles[0]
+                .destination_folder_path
+                .clone()
+                .expect("planned destination folder")
+        ],
+        "the notification names the folder the content landed in"
+    );
+}
+
+/// The other half: a cancel that lands before the first title settles moved
+/// nothing, so no media server is told anything. The gate is per title, from the
+/// checkpoints — not "was the operation canceled?" — which is what keeps a
+/// cancel that *had* already finished titles from going silent about them.
+#[tokio::test]
+async fn a_canceled_move_that_placed_nothing_notifies_no_media_server() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let source_root = temp.path().join("a");
+    let destination_root = temp.path().join("b");
+    let plan = single_title_plan(&source_root, &destination_root, "movie.mkv", 11);
+    write_file(&plan.titles[0].files[0].source(), b"hello world");
+
+    let store = InMemoryLocationOperationStore::new();
+    store.insert_operation(queued_operation(
+        "op-canceled",
+        LocationOperationType::RootMove,
+        LocationExecutionMode::MoveWithScryer,
+        VerificationDepth::Full,
+    ));
+    store
+        .request_location_operation_cancel("op-canceled")
+        .await
+        .expect("cancel recorded");
+
+    let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
+    let recycler = RecordingRecycler::default();
+    let mover = RootMoveFileMover::without_permissions();
+    let admission = RootMoveAdmission::new(&plan, &catalog);
+    let reconciler = RootMoveReconciler::new(&plan, &catalog, &store, &recycler);
+
+    let outcome = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
+        .run("op-canceled", &plan.to_work_plan())
+        .await
+        .expect("a canceled run still returns an outcome");
+    assert_eq!(outcome.state, LocationOperationState::Canceled);
+    assert!(
+        !plan.titles[0].files[0].destination().exists(),
+        "nothing was placed, so there is nothing for a media server to find"
+    );
+
+    let refresh = RecordingMediaServerRefresh::default();
+    notify_media_servers_for_operation(&store, &refresh, "op-canceled", outcome.state).await;
+    assert!(refresh.requests().is_empty());
+}
+
+/// A run that stopped short of terminal keeps quiet: its checkpoints are durable
+/// and the terminal run that eventually follows covers them, so notifying here
+/// would only duplicate that.
+#[tokio::test]
+async fn a_run_that_has_not_reached_a_terminal_state_notifies_nothing() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let source_root = temp.path().join("a");
+    let destination_root = temp.path().join("b");
+    let plan = single_title_plan(&source_root, &destination_root, "movie.mkv", 11);
+    write_file(&plan.titles[0].files[0].source(), b"hello world");
+
+    let store = InMemoryLocationOperationStore::new();
+    store.insert_operation(queued_operation(
+        "op-running",
+        LocationOperationType::RootMove,
+        LocationExecutionMode::MoveWithScryer,
+        VerificationDepth::Full,
+    ));
+    let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
+    let recycler = RecordingRecycler::default();
+    let mover = RootMoveFileMover::without_permissions();
+    let admission = RootMoveAdmission::new(&plan, &catalog);
+    let reconciler = RootMoveReconciler::new(&plan, &catalog, &store, &recycler);
+    LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
+        .run("op-running", &plan.to_work_plan())
+        .await
+        .expect("run");
+
+    let refresh = RecordingMediaServerRefresh::default();
+    notify_media_servers_for_operation(
+        &store,
+        &refresh,
+        "op-running",
+        LocationOperationState::Moving,
+    )
+    .await;
+    assert!(refresh.requests().is_empty());
 }

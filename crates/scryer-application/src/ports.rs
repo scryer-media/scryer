@@ -2660,6 +2660,27 @@ pub trait ExternalIdentityVerifier: Send + Sync {
         self.scan_media_server_catalog(connection).await
     }
 
+    /// Ask one connected media server to re-read specific folders (FR-088).
+    ///
+    /// `paths` are already expressed in the *server's* filesystem namespace —
+    /// the caller applies the connection's path mappings before getting here,
+    /// because only the caller knows which side of the mapping it holds.
+    ///
+    /// This is deliberately a targeted refresh and never a full library scan: a
+    /// completed location operation knows exactly which folders changed, and a
+    /// whole-library scan on every move is the behaviour FR-088 exists to
+    /// avoid. Implementations that cannot express "just this folder" for a
+    /// provider skip that path rather than widening it.
+    async fn refresh_media_server_paths(
+        &self,
+        _connection: &scryer_domain::MediaServerConnection,
+        _paths: &[String],
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "media server targeted refresh is not configured".into(),
+        ))
+    }
+
     async fn verify_plex(
         &self,
         connection_id: &str,

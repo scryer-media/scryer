@@ -27,6 +27,7 @@
 //! | [`adoption`] | "Files are already there": destination accounting against stored catalog proof (FR-050–053). |
 //! | [`ownership_guard`] | Persisted + in-process (title, root) ownership for the duration of an operation (FR-084). |
 //! | [`backfill`] | The throttled, resumable full-hash convergence job (FR-047). |
+//! | [`media_server_refresh`] | Targeted media-server refresh for the folders a finished operation changed (FR-088). |
 
 pub mod adoption;
 pub mod backfill;
@@ -37,6 +38,7 @@ pub mod executor;
 pub mod folder_match;
 pub mod hardlinks;
 pub mod identity;
+pub mod media_server_refresh;
 pub mod merge;
 pub mod model;
 pub mod operations;

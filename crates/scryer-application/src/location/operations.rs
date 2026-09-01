@@ -71,6 +71,9 @@ use crate::location::execution::{
     RootMoveCatalog, RootMoveFileMover, RootMoveReconciler, RecycleBinSourceRecycler,
     TitlePlacementSnapshot,
 };
+use crate::location::media_server_refresh::{
+    LocationMediaServerRefresh, MediaServerRefreshRequest, notify_media_servers_for_operation,
+};
 use crate::location::merge::engine::{MergePlan, plan_merge};
 use crate::location::merge::summary::PostMergeWork;
 use crate::location::executor::{LocationOperationRunner, OperationRunOutcome};
@@ -496,6 +499,19 @@ impl AppUseCase {
         if let Some(job_run_id) = job_run_id {
             self.close_location_operation_job_run_for(&job_run_id, &outcome)
                 .await;
+        }
+        // FR-088, last: the operation has settled and its Activity row is
+        // closed, so nothing below can change either. A run that stopped short
+        // of terminal notifies nothing — its checkpoints are durable and the
+        // terminal run that follows covers them.
+        if let Ok(outcome) = outcome.as_ref() {
+            notify_media_servers_for_operation(
+                self.services.library.location_operations.as_ref(),
+                &AppUseCaseMediaServerRefresh { app: self.clone() },
+                operation_id,
+                outcome.state,
+            )
+            .await;
         }
         outcome
     }
@@ -2335,6 +2351,29 @@ impl AppUseCasePostMergeWork {
         for scope_key in scope_keys {
             self.app.prune_scope_key_coverage(&scope_key, None).await;
         }
+    }
+}
+
+// ── FR-088 ───────────────────────────────────────────────────────────────────
+
+/// The production [`LocationMediaServerRefresh`]: hands the changed folders to
+/// the media-server subsystem, which owns the connections and their path
+/// mappings.
+///
+/// Thin on purpose — the decision about *which* folders is
+/// [`crate::location::media_server_refresh`]'s and the decision about *which
+/// servers* is [`crate::media_servers`]'s, and neither belongs in the operation
+/// runner.
+struct AppUseCaseMediaServerRefresh {
+    app: AppUseCase,
+}
+
+#[async_trait::async_trait]
+impl LocationMediaServerRefresh for AppUseCaseMediaServerRefresh {
+    async fn refresh_media_servers(&self, request: MediaServerRefreshRequest) -> AppResult<()> {
+        self.app
+            .refresh_media_server_folders(&request.operation_id, &request.folders)
+            .await
     }
 }
 
