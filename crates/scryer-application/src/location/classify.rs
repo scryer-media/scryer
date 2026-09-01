@@ -143,6 +143,11 @@ pub mod reason_codes {
     /// More than one destination title shares a metadata identity with this
     /// title; the user picks one before the job starts (FR-055, FR-016).
     pub const AMBIGUOUS_DESTINATION_IDENTITY: &str = "ambiguous_destination_identity";
+    /// Exactly one destination title shares a metadata identity, so this is a
+    /// merge rather than a transfer (FR-055). The merge engine (US7) is not
+    /// built yet, so the title is blocked instead of being merged silently or
+    /// transferred into a second copy of itself.
+    pub const MERGE_NOT_YET_SUPPORTED: &str = "merge_not_yet_supported";
 }
 
 /// The destination a selection was previewed against.
@@ -470,8 +475,10 @@ impl SelectionClassification {
 /// 2. **No-op** — already at the destination, so nothing can go wrong and
 ///    nothing needs resolving.
 /// 3. **Blocked** — an active download or import, another operation's ownership,
-///    an ambiguous destination-title identity (FR-055), or a caller-supplied
-///    unresolved decision (FR-086, FR-084, FR-016). This sits *above* the
+///    an ambiguous destination-title identity (FR-055), a unique destination
+///    identity (a merge, which US7 owns and this phase refuses rather than
+///    guesses), or a caller-supplied unresolved decision (FR-086, FR-084,
+///    FR-016). This sits *above* the
 ///    fileless fast path on purpose: a fileless title with an in-flight import
 ///    is exactly the case where files are about to land in the old root, and a
 ///    fileless title with an ambiguous destination identity is still a merge
@@ -601,6 +608,24 @@ pub fn classify_title(
             destination_root_id,
             outcome.reason_code(),
             outcome.blocked_reason(&facts.title_name),
+        );
+    }
+    // FR-055: exactly one destination title shares a canonical identity, so
+    // this title merges (US7) rather than transfers (FR-056). The merge engine
+    // is a later phase, and the two wrong answers here are both silent: folding
+    // the records together with no rules, or transferring the title in beside
+    // its own twin. Blocking is the third option and the only honest one (C3).
+    if let Some(outcome) = facts.destination_identity.as_ref()
+        && let Some(merge_target) = outcome.merge_target()
+    {
+        return classified(
+            TitleLocationClass::NeedsResolution,
+            destination_root_id,
+            Some(reason_codes::MERGE_NOT_YET_SUPPORTED),
+            Some(format!(
+                "\"{}\" merges into an existing title ({merge_target}) in the destination library; merging lands in a later phase",
+                facts.title_name
+            )),
         );
     }
     if let Some(detail) = facts.unresolved.as_deref() {
@@ -1127,15 +1152,33 @@ mod tests {
 
         let result = classify_selection(&titles, &destination, Some(&destination_library));
 
-        assert_eq!(result.counts.cross_library_transfer, 2);
-        assert!(!result.blocks_start());
+        // FR-055 splits these two apart: a shared identity is a merge, and a
+        // shared name is not. Only the merge is held back, and only because the
+        // merge engine is a later phase (US7) — the transfer beside it runs.
+        assert_eq!(result.counts.cross_library_transfer, 1);
+        assert_eq!(result.counts.needs_resolution, 1);
+        assert!(result.blocks_start());
 
         let merging = result.classification_of("merging").expect("title present");
-        assert_eq!(merging.merge_target_title_id(), Some("real"));
+        assert_eq!(merging.class, TitleLocationClass::NeedsResolution);
+        assert_eq!(
+            merging.reason_code.as_deref(),
+            Some(reason_codes::MERGE_NOT_YET_SUPPORTED)
+        );
+        assert_eq!(
+            merging.merge_target_title_id(),
+            Some("real"),
+            "the merge target rides along on the classification for the merge engine to read"
+        );
 
         let same_name = result
             .classification_of("same-name")
             .expect("title present");
+        assert_eq!(
+            same_name.class,
+            TitleLocationClass::CrossLibraryTransfer,
+            "FR-055: a same name is never enough to merge, so this transfers"
+        );
         assert_eq!(
             same_name.merge_target_title_id(),
             None,

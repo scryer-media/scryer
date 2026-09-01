@@ -702,6 +702,26 @@ impl TitleRepository for MockTitleRepo {
         Ok(title.clone())
     }
 
+    /// FR-056: the transfer repoints the existing row, so everything keyed on
+    /// the title id stays exactly where it is. The mock mirrors the store's
+    /// behaviour rather than the store's SQL: the row's library and root change,
+    /// and nothing else about the title does.
+    async fn transfer_to_library(
+        &self,
+        id: &str,
+        library_id: &str,
+        root_folder_id: &str,
+    ) -> AppResult<()> {
+        let mut list = self.store.lock().await;
+        let title = list
+            .iter_mut()
+            .find(|entry| entry.id == id)
+            .ok_or_else(|| AppError::NotFound(format!("title {id}")))?;
+        title.library_id = library_id.to_string();
+        title.root_folder_id = root_folder_id.to_string();
+        Ok(())
+    }
+
     async fn update_monitored(&self, id: &str, monitored: bool) -> AppResult<Title> {
         let mut list = self.store.lock().await;
         let title = list

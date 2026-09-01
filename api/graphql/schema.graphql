@@ -8914,6 +8914,30 @@ type LocationClassifiedTitlePayload {
 	Whether this title stops the operation from starting.
 	"""
 	blocksStart: Boolean!
+	"""
+	What destination-title detection concluded, or null when the title stays
+	in its own library and no detection was run.
+	"""
+	destinationIdentityMatch: LocationDestinationIdentityMatchValue
+	"""
+	The existing destination title this title merges into, or null for a
+	transfer into a title the destination library does not have yet.
+	"""
+	mergeTargetTitleId: ID
+	"""
+	A destination title carrying the same name but no shared identity, or
+	null when there is none. It is never merged into automatically.
+	"""
+	sameNamedDestinationTitleId: ID
+	"""
+	Name of that same-named destination title, when there is one.
+	"""
+	sameNamedDestinationTitleName: String
+	"""
+	The destination titles the user is choosing between, for an ambiguous
+	identity. Empty for every other outcome.
+	"""
+	ambiguousDestinationTitleIds: [ID!]!
 }
 
 """
@@ -8928,6 +8952,30 @@ enum LocationConfirmationRequirementValue {
 	A root-wide operation that also requires the typed phrase.
 	"""
 	TYPED
+}
+
+"""
+What destination-title detection concluded for a title crossing into another
+library. Matching is by stable metadata identity, never by title text.
+"""
+enum LocationDestinationIdentityMatchValue {
+	"""
+	Exactly one destination title shares the identity, so this is a merge.
+	"""
+	UNIQUE
+	"""
+	No destination title shares the identity, so this is a plain transfer.
+	"""
+	NONE
+	"""
+	Several destination titles share an identity and the user must choose.
+	"""
+	AMBIGUOUS
+	"""
+	A destination title has the same name but shares no identity. It is never
+	merged into automatically.
+	"""
+	SAME_NAME_NO_IDENTITY
 }
 
 """

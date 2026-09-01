@@ -10,6 +10,8 @@ use async_graphql::ID;
 use scryer_application::location::classify::{
     DestinationRequest, SelectionClassification, TitleClassification, TitleLocationClass,
 };
+use scryer_application::location::identity::DestinationIdentityOutcome;
+use scryer_application::location::merge::DestinationIdentityMatch;
 use scryer_application::location::model::{
     LocationExecutionMode, LocationOperation, LocationOperationCounters, LocationOperationState,
     LocationOperationType, TitleCheckpoint, TitleCheckpointState, VerificationDepth,
@@ -22,7 +24,8 @@ use scryer_application::location::preview::{
 
 use crate::types::{
     CancelLocationOperationPayload, LocationClassificationGroupPayload,
-    LocationClassifiedTitlePayload, LocationConfirmationRequirementValue, LocationDestinationInput,
+    LocationClassifiedTitlePayload, LocationConfirmationRequirementValue,
+    LocationDestinationIdentityMatchValue, LocationDestinationInput,
     LocationExecutionModeValue, LocationFreeSpaceEstimatePayload, LocationOperationCountersPayload,
     LocationOperationPayload, LocationOperationPreviewPayload, LocationOperationStateValue,
     LocationOperationTypeValue, LocationPlanConfirmationPayload, LocationPlanCountsPayload,
@@ -220,6 +223,7 @@ fn from_plan_counts(counts: &PlanCounts) -> LocationPlanCountsPayload {
 }
 
 fn from_classified_title(title: &TitleClassification) -> LocationClassifiedTitlePayload {
+    let identity = title.destination_identity.as_ref();
     LocationClassifiedTitlePayload {
         title_id: ID::from(title.title_id.clone()),
         class: from_title_location_class(title.class),
@@ -231,6 +235,35 @@ fn from_classified_title(title: &TitleClassification) -> LocationClassifiedTitle
         reason_code: title.reason_code.clone(),
         reason: title.reason.clone(),
         blocks_start: title.blocks_start(),
+        destination_identity_match: identity
+            .map(|outcome| from_destination_identity_match(outcome.match_kind)),
+        merge_target_title_id: title
+            .merge_target_title_id()
+            .map(|id| ID::from(id.to_string())),
+        same_named_destination_title_id: title
+            .same_named_destination_title_id()
+            .map(|id| ID::from(id.to_string())),
+        same_named_destination_title_name: identity
+            .and_then(|outcome| outcome.same_name_title_name.clone()),
+        ambiguous_destination_title_ids: identity
+            .map(DestinationIdentityOutcome::ambiguous_title_ids)
+            .unwrap_or_default()
+            .into_iter()
+            .map(ID::from)
+            .collect(),
+    }
+}
+
+fn from_destination_identity_match(
+    value: DestinationIdentityMatch,
+) -> LocationDestinationIdentityMatchValue {
+    match value {
+        DestinationIdentityMatch::Unique => LocationDestinationIdentityMatchValue::Unique,
+        DestinationIdentityMatch::None => LocationDestinationIdentityMatchValue::None,
+        DestinationIdentityMatch::Ambiguous => LocationDestinationIdentityMatchValue::Ambiguous,
+        DestinationIdentityMatch::SameNameNoIdentity => {
+            LocationDestinationIdentityMatchValue::SameNameNoIdentity
+        }
     }
 }
 

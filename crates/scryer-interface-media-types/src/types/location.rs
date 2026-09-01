@@ -85,6 +85,22 @@ pub enum TitleLocationClassValue {
     NeedsResolution,
 }
 
+/// What destination-title detection concluded for a title crossing into another
+/// library. Matching is by stable metadata identity, never by title text.
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+pub enum LocationDestinationIdentityMatchValue {
+    /// Exactly one destination title shares the identity, so this is a merge.
+    Unique,
+    /// No destination title shares the identity, so this is a plain transfer.
+    None,
+    /// Several destination titles share an identity and the user must choose.
+    Ambiguous,
+    /// A destination title has the same name but shares no identity. It is never
+    /// merged into automatically.
+    SameNameNoIdentity,
+}
+
 /// Every kind of change a location plan can contain.
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
 #[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
@@ -232,6 +248,20 @@ pub struct LocationClassifiedTitlePayload {
     pub reason: Option<String>,
     /// Whether this title stops the operation from starting.
     pub blocks_start: bool,
+    /// What destination-title detection concluded, or null when the title stays
+    /// in its own library and no detection was run.
+    pub destination_identity_match: Option<LocationDestinationIdentityMatchValue>,
+    /// The existing destination title this title merges into, or null for a
+    /// transfer into a title the destination library does not have yet.
+    pub merge_target_title_id: Option<ID>,
+    /// A destination title carrying the same name but no shared identity, or
+    /// null when there is none. It is never merged into automatically.
+    pub same_named_destination_title_id: Option<ID>,
+    /// Name of that same-named destination title, when there is one.
+    pub same_named_destination_title_name: Option<String>,
+    /// The destination titles the user is choosing between, for an ambiguous
+    /// identity. Empty for every other outcome.
+    pub ambiguous_destination_title_ids: Vec<ID>,
 }
 
 #[derive(SimpleObject, Clone)]

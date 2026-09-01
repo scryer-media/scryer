@@ -56,6 +56,11 @@ const PREVIEW_QUERY: &str = r#"
               reasonCode
               reason
               blocksStart
+              destinationIdentityMatch
+              mergeTargetTitleId
+              sameNamedDestinationTitleId
+              sameNamedDestinationTitleName
+              ambiguousDestinationTitleIds
             }
           }
         }

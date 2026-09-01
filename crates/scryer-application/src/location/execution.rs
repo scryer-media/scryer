@@ -145,6 +145,27 @@ pub trait RootMoveCatalog: Send + Sync {
     /// Update the title's root reference (FR-078 synthetic id).
     async fn set_title_root(&self, title_id: &str, root_folder_id: &str) -> AppResult<()>;
 
+    /// Transfer the title into another library, together with the root it lands
+    /// on, in **one** transaction (FR-056).
+    ///
+    /// The two halves cannot be written separately: a title whose `library_id`
+    /// says library B while its `root_folder_id` names a root of library A is a
+    /// catalog state nothing else in Scryer knows how to read, and an
+    /// interruption between two statements would leave exactly that. The root
+    /// move's own flip is three ordered statements precisely because each of
+    /// them is individually valid; this one is not, so it is atomic instead.
+    ///
+    /// Implementations must also carry the title's library projections across —
+    /// `title_external_ids.library_id` above all, since that column is what
+    /// destination-title detection reads (FR-055). A title transferred without
+    /// it would keep answering identity lookups from the library it left.
+    async fn set_title_library_and_root(
+        &self,
+        title_id: &str,
+        library_id: &str,
+        root_folder_id: &str,
+    ) -> AppResult<()>;
+
     /// Persist the hashes the copy pass produced onto the moved media file
     /// (FR-041, migration 0205).
     ///
@@ -480,9 +501,22 @@ impl TitleReconciler for RootMoveReconciler<'_> {
                 .await?;
         }
 
-        self.catalog
-            .set_title_root(&title.title_id, &planned.destination_root_id)
-            .await?;
+        // FR-056: the transfer's catalog flip is library + root together, after
+        // the completeness gate the runner already applied. A same-library root
+        // move keeps its narrower write, so nothing about US2 changes.
+        if planned.crosses_libraries() {
+            self.catalog
+                .set_title_library_and_root(
+                    &title.title_id,
+                    &planned.destination_library_id,
+                    &planned.destination_root_id,
+                )
+                .await?;
+        } else {
+            self.catalog
+                .set_title_root(&title.title_id, &planned.destination_root_id)
+                .await?;
+        }
 
         let _ = operation;
         for warning in &planned.warnings {
@@ -662,8 +696,14 @@ impl TitleAdmissionCheck for RootMoveAdmission<'_> {
             ));
         };
 
-        // The catalog inputs the plan was built from.
-        if placement.library_id != planned.source_library_id {
+        // The catalog inputs the plan was built from. A transfer that already
+        // flipped this title's library is this operation's own footprint, not a
+        // foreign change (FR-089) — the same reasoning the root check below
+        // uses, and what lets a run interrupted after a title's checkpoint
+        // re-enter that title and converge.
+        if placement.library_id != planned.source_library_id
+            && placement.library_id != planned.destination_library_id
+        {
             return Ok(stale(
                 PlanInputChange::CatalogInput,
                 format!(

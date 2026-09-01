@@ -56,6 +56,7 @@ use crate::location::executor::{
     ClassifiedTitleBaseline, OperationWorkPlan, PlannedFile, PlannedTitle, TitleOutcomeCounts,
 };
 use crate::location::hardlinks::{HardlinkFact, hardlink_warnings};
+use crate::location::identity::DestinationIdentityOutcome;
 use crate::location::model::{
     LocationExecutionMode, LocationOperationType, TitleCheckpointPlacement, VerificationDepth,
 };
@@ -82,6 +83,14 @@ pub mod plan_reasons {
     /// The destination folder already exists and its contents were planned
     /// against (FR-072–075).
     pub const DESTINATION_FOLDER_EXISTS: &str = "destination_folder_exists";
+    /// The title changes library: its catalog ownership moves, and settings it
+    /// inherited from the source library are replaced by the destination
+    /// library's (FR-056).
+    pub const LIBRARY_TRANSFER: &str = "library_transfer";
+    /// A destination title carries the same name but shares no metadata
+    /// identity. It is never merged into (FR-055); the preview says it exists so
+    /// two same-named titles in one library are not a surprise.
+    pub const SAME_NAMED_DESTINATION_TITLE: &str = "same_named_destination_title";
 }
 
 /// One file of planned work, in the serialized form a resumed run reads back.
@@ -147,6 +156,14 @@ pub struct RootMoveTitleExecution {
 }
 
 impl RootMoveTitleExecution {
+    /// Whether the catalog flip for this title also changes its library, which
+    /// is the difference between a root move and a cross-library transfer
+    /// (FR-056). Derived rather than stored so it can never disagree with the
+    /// placement the checkpoint records.
+    pub fn crosses_libraries(&self) -> bool {
+        self.destination_library_id != self.source_library_id
+    }
+
     pub fn placement(&self) -> TitleCheckpointPlacement {
         TitleCheckpointPlacement {
             source_library_id: Some(self.source_library_id.clone()),
@@ -288,9 +305,19 @@ pub struct RootMoveTitleDraft {
     pub recycle: RecycleAvailability,
     /// The explanation for a blocked or unresolved title (FR-016/FR-017).
     pub blocked_reason: Option<String>,
+    /// What destination-title detection concluded (FR-055), when the caller ran
+    /// it. `None` for a same-library root move, where there is no destination
+    /// library to detect against.
+    pub destination_identity: Option<DestinationIdentityOutcome>,
 }
 
 impl RootMoveTitleDraft {
+    /// Whether this title changes library, which is what makes it a transfer
+    /// (FR-056) rather than a root move.
+    pub fn crosses_libraries(&self) -> bool {
+        self.destination_library_id != self.source_library_id
+    }
+
     /// The destination folder name differs from the source folder name, so the
     /// naming policy repaired it (FR-013, US2.2).
     pub fn repairs_folder_name(&self) -> bool {
@@ -348,7 +375,7 @@ impl PlannedRootMove {
 /// order and carries ascending sequences starting at zero.
 pub fn build_root_move_plan(request: &RootMovePlanRequest) -> PlannedRootMove {
     let header = LocationPlanHeader::new(
-        LocationOperationType::RootMove,
+        operation_type_for(&request.titles),
         execution_mode_for(&request.titles),
     )
     .with_source(
@@ -391,6 +418,21 @@ pub fn build_root_move_plan(request: &RootMovePlanRequest) -> PlannedRootMove {
         plan: builder.build(),
         execution,
         warnings: plan_warnings,
+    }
+}
+
+/// The operation type Activity and the resume path see (FR-091).
+///
+/// The two share one planner and one runner, so this is a label rather than a
+/// branch — but it is a label the user reads, and a selection that changes
+/// library is a cross-library transfer, not a root move. A mixed selection
+/// (US6.3: libraries A, B, C into A) contains transfers, so the operation is
+/// one; nothing about a title's own class changes because of it.
+fn operation_type_for(titles: &[RootMoveTitleDraft]) -> LocationOperationType {
+    if titles.iter().any(RootMoveTitleDraft::crosses_libraries) {
+        LocationOperationType::CrossLibraryTransfer
+    } else {
+        LocationOperationType::RootMove
     }
 }
 
@@ -446,11 +488,23 @@ fn plan_title(
                 PlanItem::new(PlanItemKind::CatalogChange)
                     .with_title(draft.title_id.clone())
                     .with_reason_code(plan_reasons::CATALOG_ONLY_REASSIGNMENT)
-                    .with_detail(format!(
-                        "\"{}\" has no tracked files, so only its root reference changes",
-                        draft.title_name
-                    )),
+                    .with_detail(if draft.crosses_libraries() {
+                        format!(
+                            "\"{}\" has no tracked files, so only its library and root references change",
+                            draft.title_name
+                        )
+                    } else {
+                        format!(
+                            "\"{}\" has no tracked files, so only its root reference changes",
+                            draft.title_name
+                        )
+                    }),
             );
+            // A fileless title still changes library, and the same-name warning
+            // still applies to it (FR-055/FR-056).
+            items.extend(transfer_items(draft));
+            let transfer_warnings = transfer_warnings(draft);
+            warnings.extend(transfer_warnings.iter().cloned());
             let execution = RootMoveTitleExecution {
                 title_id: draft.title_id.clone(),
                 title_name: draft.title_name.clone(),
@@ -475,7 +529,7 @@ fn plan_title(
                 deduplicated_sources: Vec::new(),
                 renamed_destinations: Vec::new(),
                 prune_directories: Vec::new(),
-                warnings: Vec::new(),
+                warnings: transfer_warnings,
             };
             return (Some(execution), items, warnings);
         }
@@ -493,6 +547,14 @@ fn plan_title(
         );
         return (None, items, warnings);
     };
+
+    // FR-056: a transfer is a root move that also changes catalog ownership.
+    // The preview states the library change in its own right, because the
+    // consequences the user cannot see on disk — destination-library defaults
+    // replacing the source library's, the destination naming policy calculating
+    // the folder — all follow from it.
+    items.extend(transfer_items(draft));
+    warnings.extend(transfer_warnings(draft));
 
     // The folder itself: a move, and a rename when the naming policy calculated
     // a different name than the source carries today (FR-013, US2.2).
@@ -680,6 +742,76 @@ fn plan_title(
     (Some(execution), items, warnings)
 }
 
+/// The plan items a cross-library transfer adds on top of the move itself
+/// (FR-056, FR-055).
+///
+/// Two things the user cannot see on disk:
+///
+/// 1. **The library changes.** Everything the title held explicitly — its
+///    reserved `scryer:*` settings, its tags, its monitored state, its history,
+///    its requests, its media rows — travels with it, because the title keeps
+///    its identity. What does *not* travel is behavior it never held: a quality
+///    profile, a naming policy, or a monitoring default it was only inheriting
+///    from the source library resolves against the destination library from the
+///    moment the flip lands. That is FR-056's "inherited source-library behavior
+///    is replaced by destination defaults", and it is a consequence of the flip
+///    rather than a step the executor performs.
+/// 2. **A same-named title may already be there.** FR-055 forbids merging on
+///    title text, so the transfer proceeds — but silently landing a second
+///    "The Gift" in one library is exactly the surprise C3 exists to prevent.
+fn transfer_items(draft: &RootMoveTitleDraft) -> Vec<PlanItem> {
+    if !draft.crosses_libraries() {
+        return Vec::new();
+    }
+
+    let mut items = vec![
+        PlanItem::new(PlanItemKind::CatalogChange)
+            .with_title(draft.title_id.clone())
+            .with_reason_code(plan_reasons::LIBRARY_TRANSFER)
+            .with_detail(format!(
+                "\"{}\" moves from library {} to library {}; its own settings, tags, monitoring, history, and requests travel with it, and anything it inherited from {} is replaced by the destination library's defaults",
+                draft.title_name,
+                draft.source_library_id,
+                draft.destination_library_id,
+                draft.source_library_id
+            )),
+    ];
+
+    if let Some(warning) = same_named_destination_warning(draft) {
+        items.push(
+            PlanItem::new(PlanItemKind::Warning)
+                .with_title(draft.title_id.clone())
+                .with_reason_code(plan_reasons::SAME_NAMED_DESTINATION_TITLE)
+                .with_detail(warning),
+        );
+    }
+
+    items
+}
+
+/// The warnings a transfer repeats in the completion summary, so the preview and
+/// the outcome say the same thing.
+fn transfer_warnings(draft: &RootMoveTitleDraft) -> Vec<String> {
+    if !draft.crosses_libraries() {
+        return Vec::new();
+    }
+    same_named_destination_warning(draft).into_iter().collect()
+}
+
+/// FR-055's same-name-without-identity statement, phrased once.
+fn same_named_destination_warning(draft: &RootMoveTitleDraft) -> Option<String> {
+    let outcome = draft.destination_identity.as_ref()?;
+    let title_id = outcome.same_name_title_id.as_deref()?;
+    let name = outcome
+        .same_name_title_name
+        .as_deref()
+        .unwrap_or(&draft.title_name);
+    Some(format!(
+        "the destination library already holds a title called \"{name}\" ({title_id}); it shares no metadata identity with \"{}\", so the two are not merged and both will exist there",
+        draft.title_name
+    ))
+}
+
 /// Directories cleanup is allowed to consider, deepest first, with the title's
 /// own folder last. Cleanup still removes a directory only when it is empty
 /// (FR-031); this list is the *permission*, not the instruction.
@@ -820,6 +952,7 @@ mod tests {
             destination_entries: Vec::new(),
             recycle: RecycleAvailability::Available,
             blocked_reason: None,
+            destination_identity: None,
         }
     }
 

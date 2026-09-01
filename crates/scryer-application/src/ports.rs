@@ -1293,6 +1293,34 @@ pub trait TitleRepository: Send + Sync {
     ) -> AppResult<Title>;
     async fn delete(&self, id: &str) -> AppResult<()>;
     async fn set_folder_path(&self, id: &str, folder_path: &str) -> AppResult<()>;
+    /// Move a title into another library and onto a root in that library, in one
+    /// transaction, carrying its library projections with it (FR-056).
+    ///
+    /// The title keeps its id, so everything keyed on it — settings and tags on
+    /// the row, monitored state, history, requests, media files, episodes —
+    /// is preserved with no rewrite. What must be written alongside `library_id`
+    /// is every projection of it, `title_external_ids.library_id` above all:
+    /// that column is the key destination-title detection matches on (FR-055),
+    /// and a title that kept its old value there would keep answering identity
+    /// lookups for the library it left.
+    ///
+    /// The facet is deliberately untouched. Series↔anime conversion is its own
+    /// feature (FR-057), and this call must not perform half of it.
+    ///
+    /// Defaults to an error rather than a silent no-op: a repository that cannot
+    /// perform the transfer must fail the title, never report a move it did not
+    /// make (C4).
+    async fn transfer_to_library(
+        &self,
+        id: &str,
+        library_id: &str,
+        root_folder_id: &str,
+    ) -> AppResult<()> {
+        let _ = (library_id, root_folder_id);
+        Err(AppError::Repository(format!(
+            "this title repository cannot transfer title {id} between libraries"
+        )))
+    }
     async fn clear_folder_path(&self, id: &str) -> AppResult<()>;
     async fn clear_metadata_language_for_all(&self) -> AppResult<u64>;
     async fn list_page_after_id(

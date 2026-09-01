@@ -1710,6 +1710,57 @@ impl TitleRepository for TitleStore {
         .await
     }
 
+    async fn transfer_to_library(
+        &self,
+        id: &str,
+        library_id: &str,
+        root_folder_id: &str,
+    ) -> AppResult<()> {
+        let id = id.to_string();
+        let library_id = library_id.trim().to_string();
+        let root_folder_id = root_folder_id.trim().to_string();
+        if library_id.is_empty() || root_folder_id.is_empty() {
+            return Err(AppError::Validation(
+                "a transfer needs both a destination library and a destination root".to_string(),
+            ));
+        }
+        SqlRuntime::run_in_transaction(&self.datastore, "transfer_title_to_library", move |tx| {
+            let id = id.clone();
+            let library_id = library_id.clone();
+            let root_folder_id = root_folder_id.clone();
+            Box::pin(async move {
+                let library = SqlRuntime::fetch_optional(
+                    SqlExec::Tx(tx),
+                    "SELECT id FROM libraries WHERE id = {}",
+                    &[SqlArg::Text(library_id.clone())],
+                )
+                .await?;
+                if library.is_none() {
+                    return Err(AppError::Validation(format!(
+                        "library {library_id} does not exist"
+                    )));
+                }
+
+                // Facet compatibility is the classifier's rule (FR-017) and is
+                // settled before a plan can be confirmed; this write must not
+                // second-guess it, because the series-anime crossover FR-057
+                // converts is a legitimate transfer whose facet change is its
+                // own feature. The facet is carried across unchanged.
+                let mut title = load_title_canonical_tx_or_not_found(tx, &id, true).await?;
+                title.library_id = library_id;
+                title.root_folder_id = root_folder_id;
+                // `persist_title_tx` rewrites the search and external-id
+                // projections from the row it is given, so
+                // `title_external_ids.library_id` follows the title in the same
+                // transaction rather than being left pointing at the library it
+                // left (FR-055's match key).
+                persist_title_tx(tx, &title, HydrationStateWrite::Preserve).await?;
+                Ok(())
+            })
+        })
+        .await
+    }
+
     async fn clear_folder_path(&self, id: &str) -> AppResult<()> {
         let id = id.to_string();
         SqlRuntime::run_in_transaction(&self.datastore, "clear_title_folder_path", move |tx| {

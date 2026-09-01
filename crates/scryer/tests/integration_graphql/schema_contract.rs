@@ -591,11 +591,16 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
         mutation_field_count, 202,
         "mutation fields: {mutation_field_names:?}"
     );
+    // Cross-library transfer (T082, FR-055/FR-056) surfaces destination-title
+    // detection on the existing classified-title payload: five additive fields
+    // and one new enum for the match outcome (unique, none, ambiguous,
+    // same-name-without-identity), so ENUM 123->124 and public types 655->656.
+    // No new object, input, query, or mutation.
     assert_eq!(subscription_field_count, 14);
-    assert_eq!(public_types.len(), 655);
+    assert_eq!(public_types.len(), 656);
     assert_eq!(kind_count("OBJECT"), 341);
     assert_eq!(kind_count("INPUT_OBJECT"), 179);
-    assert_eq!(kind_count("ENUM"), 123);
+    assert_eq!(kind_count("ENUM"), 124);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
     assert!(query_field_names.contains(&"backupSettings"));

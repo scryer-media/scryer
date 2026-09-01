@@ -14,6 +14,7 @@ use tokio::sync::{Mutex, Notify};
 use tokio::time::{Duration, Instant, sleep, timeout};
 
 mod acquisition_recovery;
+mod cross_library_transfer;
 mod discovery_sync;
 mod downloads;
 mod folder_match;

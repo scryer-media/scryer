@@ -72,6 +72,10 @@ use crate::location::execution::{
 };
 use crate::location::executor::{LocationOperationRunner, OperationRunOutcome};
 use crate::location::hardlinks::detect_hardlinks;
+use crate::location::identity::{
+    DestinationIdentityOutcome, DestinationTitleCandidate, IdentityRedirects, SourceTitleIdentity,
+    detect_destination_titles,
+};
 use crate::location::model::{
     LocationExecutionMode, LocationOperation, LocationOperationCounters, LocationOperationState,
     LocationOperationType, VerificationDepth,
@@ -184,7 +188,10 @@ impl AppUseCase {
         let now = chrono::Utc::now();
         let operation = LocationOperation {
             id: operation_id,
-            operation_type: LocationOperationType::RootMove,
+            // The planner decides this: a selection that changes library is a
+            // cross-library transfer in Activity, even though both types walk
+            // the same runner (FR-091).
+            operation_type: plan.header.operation_type,
             mode: plan.header.mode,
             state: LocationOperationState::Queued,
             initiated_by_user_id: Some(actor.id.clone()),
@@ -342,9 +349,15 @@ impl AppUseCase {
                 "this operation has already finished, so there is nothing to resume",
             ));
         }
-        if operation.operation_type != LocationOperationType::RootMove {
-            // Other operation types resume through their own phases; this one
-            // must not run them under root-move rules.
+        // A cross-library transfer is a root move that also flips catalog
+        // ownership (FR-056): it is planned by the same planner, persisted as
+        // the same `RootMoveExecutionPlan`, and walked by the same runner, so it
+        // resumes here. Every *other* type resumes through its own phase and
+        // must not be run under root-move rules.
+        if !matches!(
+            operation.operation_type,
+            LocationOperationType::RootMove | LocationOperationType::CrossLibraryTransfer
+        ) {
             return Ok(LocationResumeDecision::not_resumable(format!(
                 "a {} operation does not resume through the root-move runner",
                 operation.operation_type.as_str()
@@ -1160,6 +1173,14 @@ impl AppUseCase {
                 .collect(),
         };
 
+        // FR-055: what the destination library already holds, for the titles
+        // that are crossing into it. Costs nothing for a same-library root
+        // move — the usual US2 case — and one read of the destination library
+        // for a transfer, however many titles are selected.
+        let destination_identities = self
+            .detect_destination_titles_for(&titles, &destination_library.id)
+            .await?;
+
         // Classification facts, including the FR-086 blockers.
         let mut facts = Vec::with_capacity(titles.len());
         let mut media_files_by_title: BTreeMap<String, Vec<crate::TitleMediaFile>> = BTreeMap::new();
@@ -1204,6 +1225,9 @@ impl AppUseCase {
             }
             if let Some(operation_id) = owner {
                 fact = fact.with_owned_by_operation(operation_id);
+            }
+            if let Some(outcome) = destination_identities.get(&title.id) {
+                fact = fact.with_destination_identity(outcome.clone());
             }
             facts.push(fact);
             media_files_by_title.insert(title.id.clone(), media_files);
@@ -1269,6 +1293,7 @@ impl AppUseCase {
                 destination_entries: Vec::new(),
                 recycle: RecycleAvailability::Available,
                 blocked_reason: classified.reason.clone(),
+                destination_identity: classified.destination_identity.clone(),
             };
 
             if !classified.class.moves_files() {
@@ -1413,6 +1438,78 @@ impl AppUseCase {
             planned,
             classification,
         })
+    }
+
+    /// Destination-title detection for the selected titles that are crossing
+    /// into `destination_library_id` (FR-055).
+    ///
+    /// # One read, not one per title
+    ///
+    /// The destination library's titles are read **once** and answered against
+    /// for every crossing title, which is what
+    /// [`detect_destination_titles`] is shaped for. Asking
+    /// `find_by_external_id_in_library_and_facet` per identity would be one
+    /// query per `(title, identity)` pair and would still not see the
+    /// same-name-without-identity case, which needs the destination's title
+    /// text. A selection with no crossing title pays nothing at all: the usual
+    /// US2 root move never reaches the read.
+    ///
+    /// The candidate read is deliberately unfiltered by facet. The
+    /// series-anime crossover is a legitimate transfer (FR-057) and a movie-kind
+    /// title may live in an episodic library (FR-061), so filtering the
+    /// candidates by the source facet would hide exactly the matches that
+    /// matter. `detect_destination_titles` applies the compatibility rule
+    /// itself, on facts it can see.
+    ///
+    /// # Redirects
+    ///
+    /// No redirect edges are supplied. Scryer keeps no redirect ledger: SMG
+    /// publishes `from_id → to_id` pairs on a metadata fetch and hydration
+    /// rewrites the stored id in place, so the edges exist only for as long as
+    /// the fetch that carried them. A preview must not reach the metadata
+    /// gateway — it would make an interactive, cached, re-derived-on-confirm
+    /// operation depend on a network round-trip — so detection compares the
+    /// stored ids on both sides. The consequence is bounded and one-directional:
+    /// when a redirect was published and only one side has been hydrated since,
+    /// a merge that *could* have been offered is not, and the title transfers
+    /// instead. That is a missed merge, never a wrong one.
+    async fn detect_destination_titles_for(
+        &self,
+        titles: &[Title],
+        destination_library_id: &str,
+    ) -> AppResult<BTreeMap<String, DestinationIdentityOutcome>> {
+        let sources: Vec<SourceTitleIdentity> = titles
+            .iter()
+            .filter(|title| title.library_id != destination_library_id)
+            .map(|title| {
+                SourceTitleIdentity::new(title.id.clone(), title.facet.clone())
+                    .with_name(title.name.clone())
+                    .with_external_ids(&title.external_ids)
+            })
+            .collect();
+        if sources.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+
+        let candidates: Vec<DestinationTitleCandidate> = self
+            .services
+            .catalog
+            .titles
+            .list_for_libraries(None, &[destination_library_id.to_string()], None)
+            .await?
+            .into_iter()
+            .map(|title| {
+                DestinationTitleCandidate::new(title.id, title.facet)
+                    .with_name(title.name)
+                    .with_external_ids(&title.external_ids)
+            })
+            .collect();
+
+        Ok(detect_destination_titles(
+            &sources,
+            &candidates,
+            &IdentityRedirects::new(),
+        ))
     }
 
     /// The destination library's active folder-naming policy (FR-013).
@@ -1728,6 +1825,20 @@ impl RootMoveCatalog for AppUseCaseRootMoveCatalog {
             .update_metadata(title_id, None, None, None, Some(root_folder_id.to_string()))
             .await
             .map(|_| ())
+    }
+
+    async fn set_title_library_and_root(
+        &self,
+        title_id: &str,
+        library_id: &str,
+        root_folder_id: &str,
+    ) -> AppResult<()> {
+        self.app
+            .services
+            .catalog
+            .titles
+            .transfer_to_library(title_id, library_id, root_folder_id)
+            .await
     }
 }
 

@@ -96,6 +96,23 @@ impl RootMoveCatalog for FakeCatalog {
         Ok(())
     }
 
+    async fn set_title_library_and_root(
+        &self,
+        title_id: &str,
+        library_id: &str,
+        root_folder_id: &str,
+    ) -> AppResult<()> {
+        let mut state = self.state.lock().expect("lock");
+        state
+            .writes
+            .push(format!("library:{title_id}={library_id}/{root_folder_id}"));
+        if let Some(placement) = state.placements.get_mut(title_id) {
+            placement.library_id = library_id.to_string();
+            placement.root_folder_id = root_folder_id.to_string();
+        }
+        Ok(())
+    }
+
     async fn set_media_file_content_hashes(
         &self,
         media_file_id: &str,
@@ -220,6 +237,20 @@ fn single_title_plan(
     }
 }
 
+/// The same plan as a cross-library transfer: the destination library differs,
+/// so the catalog flip is library + root rather than root alone (FR-056).
+fn single_title_transfer_plan(
+    source_root: &Path,
+    destination_root: &Path,
+    file_name: &str,
+    size_bytes: u64,
+) -> RootMoveExecutionPlan {
+    let mut plan = single_title_plan(source_root, destination_root, file_name, size_bytes);
+    plan.titles[0].class = crate::location::classify::TitleLocationClass::CrossLibraryTransfer;
+    plan.titles[0].destination_library_id = "lib-2".to_string();
+    plan
+}
+
 fn placement_for(plan: &RootMoveExecutionPlan) -> TitlePlacementSnapshot {
     let title = &plan.titles[0];
     TitlePlacementSnapshot {
@@ -285,6 +316,106 @@ async fn same_filesystem_moves_rename_and_skip_verification() {
     assert!(recycler.recycled().is_empty());
     // The empty source folder was removed (FR-031).
     assert!(!source_root.join("Movie").exists());
+}
+
+/// FR-056: a transfer's catalog flip writes the destination library and the
+/// destination root **together**, and never through the root-only write. A title
+/// left in library A on a root of library B is a state nothing else can read, so
+/// the two halves cannot be separate statements.
+#[tokio::test]
+async fn a_cross_library_transfer_flips_library_and_root_in_one_write() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let source_root = temp.path().join("a");
+    let destination_root = temp.path().join("b");
+    let plan = single_title_transfer_plan(&source_root, &destination_root, "movie.mkv", 11);
+    write_file(&plan.titles[0].files[0].source(), b"hello world");
+
+    let store = InMemoryLocationOperationStore::new();
+    store.insert_operation(queued_operation(
+        "op-transfer",
+        LocationOperationType::CrossLibraryTransfer,
+        LocationExecutionMode::MoveWithScryer,
+        VerificationDepth::Full,
+    ));
+    let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
+    let recycler = RecordingRecycler::default();
+    let mover = RootMoveFileMover::without_permissions();
+    let admission = RootMoveAdmission::new(&plan, &catalog);
+    let reconciler = RootMoveReconciler::new(&plan, &catalog, &store, &recycler);
+
+    let outcome = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
+        .run("op-transfer", &plan.to_work_plan())
+        .await
+        .expect("run");
+    assert_eq!(outcome.state, LocationOperationState::Completed);
+
+    let writes = catalog.writes();
+    assert!(
+        writes.contains(&"library:title-1=lib-2/root-b".to_string()),
+        "the transfer flips library and root together: {writes:?}"
+    );
+    assert!(
+        !writes.iter().any(|write| write.starts_with("root:")),
+        "a transfer must not take the root-only write path: {writes:?}"
+    );
+    let placement = catalog.placement("title-1").expect("placement");
+    assert_eq!(placement.library_id, "lib-2");
+    assert_eq!(placement.root_folder_id, "root-b");
+}
+
+/// FR-089 on the transfer path: a title whose library this operation already
+/// flipped is the operation's own footprint, not a foreign change. Without this
+/// a run interrupted after a title's flip would refuse to re-enter it and the
+/// resume could never converge.
+#[tokio::test]
+async fn a_transfer_that_already_flipped_its_library_is_admitted_on_resume() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let source_root = temp.path().join("a");
+    let destination_root = temp.path().join("b");
+    let plan = single_title_transfer_plan(&source_root, &destination_root, "movie.mkv", 11);
+    write_file(&plan.titles[0].files[0].source(), b"hello world");
+
+    let operation = queued_operation(
+        "op-transfer",
+        LocationOperationType::CrossLibraryTransfer,
+        LocationExecutionMode::MoveWithScryer,
+        VerificationDepth::Full,
+    );
+    let planned_title = plan.titles[0].to_planned_title();
+    let none: BTreeSet<String> = BTreeSet::new();
+
+    let mut placement = placement_for(&plan);
+    placement.library_id = "lib-2".to_string();
+    placement.root_folder_id = "root-b".to_string();
+    let catalog = FakeCatalog::with_title("title-1", placement);
+    let admission = RootMoveAdmission::new(&plan, &catalog);
+    let verdict = admission
+        .admit_title(TitleAdmissionContext {
+            operation: &operation,
+            title: &planned_title,
+            verified_destinations: &none,
+        })
+        .await
+        .expect("admission");
+    assert_eq!(verdict, TitleAdmission::Proceed);
+
+    // A library this operation never named is still a stale input.
+    let mut foreign = placement_for(&plan);
+    foreign.library_id = "lib-9".to_string();
+    let foreign_catalog = FakeCatalog::with_title("title-1", foreign);
+    let foreign_admission = RootMoveAdmission::new(&plan, &foreign_catalog);
+    let verdict = foreign_admission
+        .admit_title(TitleAdmissionContext {
+            operation: &operation,
+            title: &planned_title,
+            verified_destinations: &none,
+        })
+        .await
+        .expect("admission");
+    assert!(
+        matches!(verdict, TitleAdmission::Stale(_)),
+        "unexpected verdict: {verdict:?}"
+    );
 }
 
 /// FR-032/FR-041: a same-filesystem rename copies no bytes, so there are no
