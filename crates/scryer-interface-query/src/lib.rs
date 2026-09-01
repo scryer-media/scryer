@@ -3045,6 +3045,123 @@ impl AcquisitionQueries {
         Ok(crate::mappers::maintenance_action_descriptors())
     }
 
+    /// List lifecycle candidates the maintenance evaluator has recorded; requires catalog-settings management permission.
+    ///
+    /// Two independent things hide rows, and they are not the same thing. A
+    /// rule in shadow mode is dark by definition, so its candidates are
+    /// returned only when `includeShadow` is true. Separately, the instance
+    /// result-display gate hides everything while it is off.
+    ///
+    /// `includeShadow` overrides the gate as well as the mode filter, on
+    /// purpose: an operator deciding whether to arm result display has to be
+    /// able to see what shadow evaluation actually found first, and reaching
+    /// this query already requires catalog-settings management.
+    async fn maintenance_candidates(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Return candidates of this rule set only.")] rule_set_id: Option<ID>,
+        #[graphql(desc = "Return candidates in these lifecycle states only.")] states: Option<
+            Vec<MaintenanceCandidateState>,
+        >,
+        #[graphql(desc = "Return candidates whose subject belongs to this library only.")]
+        library_id: Option<ID>,
+        #[graphql(desc = "Include candidates produced by rules running in shadow mode.")]
+        include_shadow: Option<bool>,
+        #[graphql(desc = "Maximum number of candidates to return.")] limit: Option<i32>,
+    ) -> GqlResult<Vec<MaintenanceCandidate>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+
+        let candidates = app
+            .list_maintenance_candidates(
+                &actor,
+                scryer_application::maintenance_rules::MaintenanceCandidateFilter {
+                    rule_set_id: rule_set_id.map(String::from),
+                    states: states
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(crate::mappers::maintenance_candidate_state_into_application)
+                        .collect(),
+                    library_id: library_id.map(String::from),
+                    include_shadow: include_shadow.unwrap_or(false),
+                    limit: limit.filter(|limit| *limit > 0).map(|limit| limit as usize),
+                },
+            )
+            .await
+            .map_err(to_gql_error)?;
+        Ok(candidates
+            .into_iter()
+            .map(crate::mappers::from_maintenance_candidate)
+            .collect())
+    }
+
+    /// List recorded maintenance evaluation runs, newest first.
+    ///
+    /// Runs carry counts and timing rather than subjects, so the result-display
+    /// gate does not hide them: they are how an operator sees that dark
+    /// evaluation is working at all.
+    async fn maintenance_evaluation_runs(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Return runs of this rule set only.")] rule_set_id: Option<ID>,
+        #[graphql(desc = "Maximum number of runs to return.")] limit: Option<i32>,
+    ) -> GqlResult<Vec<MaintenanceEvaluationRun>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+
+        let runs = app
+            .list_maintenance_evaluation_runs(
+                &actor,
+                rule_set_id.as_ref().map(|id| id.as_str()),
+                limit.filter(|limit| *limit > 0).map(|limit| limit as usize),
+            )
+            .await
+            .map_err(to_gql_error)?;
+        Ok(runs
+            .into_iter()
+            .map(crate::mappers::from_maintenance_evaluation_run)
+            .collect())
+    }
+
+    /// Read the five instance-wide maintenance gates; requires system-settings management permission.
+    async fn maintenance_instance_gates(
+        &self,
+        ctx: &Context<'_>,
+    ) -> GqlResult<MaintenanceInstanceGates> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+
+        let gates = app
+            .maintenance_instance_gates(&actor)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(crate::mappers::from_maintenance_instance_gates(gates))
+    }
+
+    /// List maintenance exclusions, newest first.
+    ///
+    /// Narrowing by rule returns that rule's own exclusions together with every
+    /// global one, because both are what actually stop it acting.
+    async fn maintenance_exclusions(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Return the exclusions that apply to this rule set.")] rule_set_id: Option<
+            ID,
+        >,
+    ) -> GqlResult<Vec<MaintenanceExclusion>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+
+        let exclusions = app
+            .list_maintenance_exclusions(&actor, rule_set_id.as_ref().map(|id| id.as_str()))
+            .await
+            .map_err(to_gql_error)?;
+        Ok(exclusions
+            .into_iter()
+            .map(crate::mappers::from_maintenance_exclusion)
+            .collect())
+    }
+
     // ── Post-Processing Scripts ──────────────────────────────────────────
 
     /// List post-processing scripts visible to the caller.

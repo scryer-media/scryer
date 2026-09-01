@@ -157,7 +157,7 @@ impl AppUseCase {
         let rule_sets = self.list_maintenance_rule_sets(actor).await?;
         let mut details = Vec::with_capacity(rule_sets.len());
         for rule_set in rule_sets {
-            details.push(self.load_detail(rule_set).await?);
+            details.push(self.load_maintenance_rule_detail(rule_set).await?);
         }
         Ok(details)
     }
@@ -178,7 +178,7 @@ impl AppUseCase {
         else {
             return Ok(None);
         };
-        self.load_detail(rule_set).await.map(Some)
+        self.load_maintenance_rule_detail(rule_set).await.map(Some)
     }
 
     pub async fn list_maintenance_rule_revisions(
@@ -256,7 +256,7 @@ impl AppUseCase {
         self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
             .await?;
 
-        let mut rule_set = self.require_rule_set(rule_set_id).await?;
+        let mut rule_set = self.require_maintenance_rule_set(rule_set_id).await?;
         let prepared = prepare_matcher(
             &rule_set.id,
             &draft.rego_source,
@@ -303,7 +303,7 @@ impl AppUseCase {
         self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
             .await?;
 
-        let mut rule_set = self.require_rule_set(rule_set_id).await?;
+        let mut rule_set = self.require_maintenance_rule_set(rule_set_id).await?;
         let name = require_non_empty(&name, "name")?;
         let now = Utc::now();
 
@@ -330,7 +330,7 @@ impl AppUseCase {
     ) -> AppResult<()> {
         self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
             .await?;
-        self.require_rule_set(rule_set_id).await?;
+        self.require_maintenance_rule_set(rule_set_id).await?;
         self.services
             .customization
             .maintenance_rule_sets
@@ -366,7 +366,7 @@ impl AppUseCase {
 
         let policy = self.resolve_preview_policy(request.matcher).await?;
         let titles = self.select_preview_titles(&request.selection).await?;
-        let libraries = self.preview_library_refs().await?;
+        let libraries = self.maintenance_library_refs().await?;
 
         let title_ids: Vec<String> = titles.iter().map(|title| title.id.clone()).collect();
         // One batched load for the whole selection; a per-title query here
@@ -447,7 +447,10 @@ impl AppUseCase {
         })
     }
 
-    async fn require_rule_set(&self, id: &str) -> AppResult<MaintenanceRuleSet> {
+    pub(crate) async fn require_maintenance_rule_set(
+        &self,
+        id: &str,
+    ) -> AppResult<MaintenanceRuleSet> {
         self.services
             .customization
             .maintenance_rule_sets
@@ -456,7 +459,7 @@ impl AppUseCase {
             .ok_or_else(|| AppError::NotFound(format!("maintenance rule set {id} not found")))
     }
 
-    async fn load_detail(
+    pub(crate) async fn load_maintenance_rule_detail(
         &self,
         rule_set: MaintenanceRuleSet,
     ) -> AppResult<MaintenanceRuleSetDetail> {
@@ -486,8 +489,8 @@ impl AppUseCase {
     ) -> AppResult<MaintenancePolicy> {
         match matcher {
             MaintenancePreviewMatcher::Stored { rule_set_id } => {
-                let rule_set = self.require_rule_set(&rule_set_id).await?;
-                let detail = self.load_detail(rule_set).await?;
+                let rule_set = self.require_maintenance_rule_set(&rule_set_id).await?;
+                let detail = self.load_maintenance_rule_detail(rule_set).await?;
                 Ok(MaintenancePolicy {
                     id: detail.rule_set.id,
                     name: detail.rule_set.name,
@@ -541,7 +544,10 @@ impl AppUseCase {
         }
     }
 
-    async fn preview_library_refs(&self) -> AppResult<HashMap<String, MaintenanceLibraryRef>> {
+    /// Every library, resolved once per preview or evaluation pass.
+    pub(crate) async fn maintenance_library_refs(
+        &self,
+    ) -> AppResult<HashMap<String, MaintenanceLibraryRef>> {
         Ok(self
             .services
             .catalog

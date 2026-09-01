@@ -245,4 +245,130 @@ impl MaintenanceRuleMutations {
 
         Ok(crate::mappers::from_maintenance_preview_result(result))
     }
+
+    /// Move a maintenance rule set between evaluation modes.
+    ///
+    /// Creation always produces a disabled rule, so arming one is always this
+    /// deliberate second step. A rule moved back to disabled keeps the
+    /// candidates it already opened: flipping a rule off must not destroy the
+    /// membership and grace clocks it established.
+    async fn set_maintenance_rule_mode(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Rule-set identity and the evaluation mode to store.")]
+        input: SetMaintenanceRuleModeInput,
+    ) -> GqlResult<MaintenanceRuleSet> {
+        let app = app_from_ctx(ctx)?;
+        let actor =
+            require_config_app_permission(ctx, AppPermission::ManageCatalogSettings).await?;
+
+        let detail = app
+            .set_maintenance_rule_evaluation_mode(
+                &actor,
+                input.id.as_ref(),
+                crate::mappers::maintenance_evaluation_mode_into_application(input.mode),
+            )
+            .await
+            .map_err(to_gql_error)?;
+
+        Ok(crate::mappers::from_maintenance_rule_set(&detail))
+    }
+
+    /// Arm or disarm the instance-wide maintenance gates. Omitted fields keep their stored value.
+    async fn set_maintenance_instance_gates(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "The gates to change; omit a field to leave that gate alone.")]
+        input: SetMaintenanceInstanceGatesInput,
+    ) -> GqlResult<MaintenanceInstanceGates> {
+        let app = app_from_ctx(ctx)?;
+        let actor = require_config_app_permission(ctx, AppPermission::ManageSystemSettings).await?;
+
+        let gates = app
+            .set_maintenance_instance_gates(
+                &actor,
+                scryer_application::maintenance_rules::MaintenanceGatesUpdate {
+                    evaluation_enabled: input.evaluation_enabled,
+                    result_display_enabled: input.result_display_enabled,
+                    presentation_effects_enabled: input.presentation_effects_enabled,
+                    reversible_effects_enabled: input.reversible_effects_enabled,
+                    destructive_effects_enabled: input.destructive_effects_enabled,
+                },
+            )
+            .await
+            .map_err(to_gql_error)?;
+
+        Ok(crate::mappers::from_maintenance_instance_gates(gates))
+    }
+
+    /// Exclude a subject from one maintenance rule, or from every rule when no rule is named.
+    ///
+    /// The exclusion takes effect at the next evaluation, which is also where an
+    /// existing candidate for the subject moves to the excluded state.
+    async fn exclude_maintenance_subject(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Subject to exclude, the optional rule to confine it to, and a reason.")]
+        input: ExcludeMaintenanceSubjectInput,
+    ) -> GqlResult<MaintenanceExclusion> {
+        let app = app_from_ctx(ctx)?;
+        let actor =
+            require_config_app_permission(ctx, AppPermission::ManageCatalogSettings).await?;
+
+        let exclusion = app
+            .exclude_maintenance_subject(
+                &actor,
+                input.title_id.as_ref(),
+                input.rule_set_id.map(String::from),
+                input.reason,
+            )
+            .await
+            .map_err(to_gql_error)?;
+
+        Ok(crate::mappers::from_maintenance_exclusion(exclusion))
+    }
+
+    /// Remove a maintenance exclusion.
+    async fn remove_maintenance_exclusion(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Exclusion identity to remove.")] id: ID,
+    ) -> GqlResult<DeleteMaintenanceExclusionPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor =
+            require_config_app_permission(ctx, AppPermission::ManageCatalogSettings).await?;
+
+        let removed = app
+            .remove_maintenance_exclusion(&actor, id.as_ref())
+            .await
+            .map_err(to_gql_error)?;
+
+        Ok(DeleteMaintenanceExclusionPayload {
+            id: ID::from(removed),
+        })
+    }
+
+    /// Run maintenance evaluation now.
+    ///
+    /// Without a rule, this starts the ordinary scheduled job so the run shows
+    /// up in the system-jobs surface, and returns as soon as it is accepted.
+    /// Scoped to one rule it runs inline instead, because the job seam carries
+    /// no parameters; that path is bounded by the rule's own library scope.
+    async fn run_maintenance_evaluation_now(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Evaluate only this rule set; omit to evaluate every enabled rule.")]
+        rule_set_id: Option<ID>,
+    ) -> GqlResult<MaintenanceEvaluationTriggerPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor =
+            require_config_app_permission(ctx, AppPermission::ManageCatalogSettings).await?;
+
+        let trigger = app
+            .run_maintenance_evaluation_now(&actor, rule_set_id.map(String::from))
+            .await
+            .map_err(to_gql_error)?;
+
+        Ok(crate::mappers::from_maintenance_evaluation_trigger(trigger))
+    }
 }

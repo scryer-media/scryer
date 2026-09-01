@@ -986,3 +986,517 @@ async fn maintenance_rule_surface_denies_an_actor_without_catalog_settings() {
             .is_empty()
     );
 }
+
+// ===========================================================================
+// 6. Scheduled dark evaluation (RFC 137 tracks C1/C2)
+// ===========================================================================
+
+const CANDIDATE_FIELDS: &str = r#"
+    id
+    ruleSetId
+    ruleName
+    revisionNumber
+    titleId
+    titleName
+    libraryId
+    facet
+    state
+    stateReason
+    reasonCodes
+    actionKind
+    graceDays
+    matchGeneration
+    firstMatchedAt
+    lastMatchedAt
+    dueAt
+    heldSince
+    updatedAt
+"#;
+
+fn candidates_query() -> String {
+    format!(
+        "query($ruleSetId: ID, $includeShadow: Boolean, $states: [MaintenanceCandidateState!]) {{
+            maintenanceCandidates(
+                ruleSetId: $ruleSetId
+                includeShadow: $includeShadow
+                states: $states
+            ) {{{CANDIDATE_FIELDS}}}
+        }}"
+    )
+}
+
+const GATES_FIELDS: &str = r#"
+    evaluationEnabled
+    resultDisplayEnabled
+    presentationEffectsEnabled
+    reversibleEffectsEnabled
+    destructiveEffectsEnabled
+"#;
+
+fn gates_query() -> String {
+    format!("query {{ maintenanceInstanceGates {{{GATES_FIELDS}}} }}")
+}
+
+fn set_gates_mutation() -> String {
+    format!(
+        "mutation($input: SetMaintenanceInstanceGatesInput!) {{
+            setMaintenanceInstanceGates(input: $input) {{{GATES_FIELDS}}}
+        }}"
+    )
+}
+
+const SET_MODE_MUTATION: &str = r#"mutation($input: SetMaintenanceRuleModeInput!) {
+    setMaintenanceRuleMode(input: $input) {
+        id
+        enabled
+        evaluationMode
+        currentRevisionNumber
+    }
+}"#;
+
+const RUN_NOW_MUTATION: &str = r#"mutation($ruleSetId: ID) {
+    runMaintenanceEvaluationNow(ruleSetId: $ruleSetId) { started message }
+}"#;
+
+const EXCLUSION_FIELDS: &str = r#"
+    id
+    ruleSetId
+    titleId
+    titleName
+    reason
+    createdBy
+    createdAt
+"#;
+
+fn exclude_mutation() -> String {
+    format!(
+        "mutation($input: ExcludeMaintenanceSubjectInput!) {{
+            excludeMaintenanceSubject(input: $input) {{{EXCLUSION_FIELDS}}}
+        }}"
+    )
+}
+
+fn exclusions_query() -> String {
+    format!(
+        "query($ruleSetId: ID) {{
+            maintenanceExclusions(ruleSetId: $ruleSetId) {{{EXCLUSION_FIELDS}}}
+        }}"
+    )
+}
+
+const REMOVE_EXCLUSION_MUTATION: &str = r#"mutation($id: ID!) {
+    removeMaintenanceExclusion(id: $id) { id }
+}"#;
+
+const EVALUATION_RUNS_QUERY: &str = r#"query($ruleSetId: ID) {
+    maintenanceEvaluationRuns(ruleSetId: $ruleSetId, limit: 10) {
+        id
+        ruleSetId
+        revisionNumber
+        status
+        startedAt
+        finishedAt
+        evaluatedCount
+        matchedCount
+        noMatchCount
+        unknownCount
+        errorCount
+        durationMs
+        error
+    }
+}"#;
+
+/// Register the five gate definitions the way service bootstrap does. The test
+/// harness builds its stores directly rather than running bootstrap, and a
+/// settings write against an unregistered key is refused by the store.
+async fn seed_maintenance_gate_definitions(ctx: &TestContext) {
+    let seeds = [
+        "maintenance.gate.evaluation",
+        "maintenance.gate.result_display",
+        "maintenance.gate.presentation_effects",
+        "maintenance.gate.reversible_effects",
+        "maintenance.gate.destructive_effects",
+    ]
+    .into_iter()
+    .map(
+        |key_name| scryer_infrastructure_sql::types::SettingDefinitionSeed {
+            category: "general".into(),
+            scope: "system".into(),
+            key_name: key_name.into(),
+            data_type: "boolean".into(),
+            default_value_json: "false".into(),
+            is_sensitive: false,
+            validation_json: None,
+        },
+    )
+    .collect();
+
+    ctx.settings_store
+        .batch_ensure_setting_definitions(seeds)
+        .await
+        .expect("seed maintenance gate definitions");
+}
+
+/// Arm one rule and the instance evaluation gate: both are always deliberate,
+/// separate steps, which is the whole point of the dark-activation design.
+async fn arm_rule_and_gate(ctx: &TestContext, rule_set_id: &str) {
+    seed_maintenance_gate_definitions(ctx).await;
+    let armed = gql(
+        ctx,
+        SET_MODE_MUTATION,
+        json!({ "input": { "id": rule_set_id, "mode": "SHADOW" } }),
+    )
+    .await;
+    assert_no_errors(&armed);
+    assert_eq!(armed["data"]["setMaintenanceRuleMode"]["enabled"], true);
+    assert_eq!(
+        armed["data"]["setMaintenanceRuleMode"]["evaluationMode"],
+        "SHADOW"
+    );
+
+    let gates = gql(
+        ctx,
+        &set_gates_mutation(),
+        json!({ "input": { "evaluationEnabled": true } }),
+    )
+    .await;
+    assert_no_errors(&gates);
+    assert_eq!(
+        gates["data"]["setMaintenanceInstanceGates"]["evaluationEnabled"],
+        true
+    );
+}
+
+#[tokio::test]
+async fn maintenance_evaluation_is_dark_until_both_the_rule_and_the_gate_are_armed() {
+    let ctx = TestContext::new().await;
+    seed_title(&ctx, "title-dark-1", "Monitored Movie", true).await;
+    let detail = create_rule(&ctx, "Stale movies", MONITORED_MATCHER, delete_action()).await;
+    let rule_set_id = detail["ruleSet"]["id"]
+        .as_str()
+        .expect("rule id")
+        .to_string();
+    seed_maintenance_gate_definitions(&ctx).await;
+
+    // Gate off: the run is refused and says so rather than silently doing
+    // nothing.
+    let gated = gql(&ctx, RUN_NOW_MUTATION, json!({ "ruleSetId": rule_set_id })).await;
+    assert_no_errors(&gated);
+    assert_eq!(
+        gated["data"]["runMaintenanceEvaluationNow"]["started"],
+        false
+    );
+    assert!(
+        gated["data"]["runMaintenanceEvaluationNow"]["message"]
+            .as_str()
+            .expect("message")
+            .contains("gate is off")
+    );
+
+    // Gate on, rule still disabled: still nothing.
+    let gates = gql(
+        &ctx,
+        &set_gates_mutation(),
+        json!({ "input": { "evaluationEnabled": true } }),
+    )
+    .await;
+    assert_no_errors(&gates);
+    let disabled = gql(&ctx, RUN_NOW_MUTATION, json!({ "ruleSetId": rule_set_id })).await;
+    assert_no_errors(&disabled);
+    assert_eq!(
+        disabled["data"]["runMaintenanceEvaluationNow"]["started"],
+        false
+    );
+
+    let candidates = gql(&ctx, &candidates_query(), json!({ "includeShadow": true })).await;
+    assert_no_errors(&candidates);
+    assert!(
+        candidates["data"]["maintenanceCandidates"]
+            .as_array()
+            .expect("candidates")
+            .is_empty(),
+        "nothing may be recorded while either switch is off"
+    );
+}
+
+#[tokio::test]
+async fn an_armed_rule_records_a_candidate_that_shadow_hides_by_default() {
+    let ctx = TestContext::new().await;
+    seed_title(&ctx, "title-shadow-1", "Monitored Movie", true).await;
+    seed_title(&ctx, "title-shadow-2", "Unmonitored Movie", false).await;
+    let detail = create_rule(&ctx, "Stale movies", MONITORED_MATCHER, delete_action()).await;
+    let rule_set_id = detail["ruleSet"]["id"]
+        .as_str()
+        .expect("rule id")
+        .to_string();
+    arm_rule_and_gate(&ctx, &rule_set_id).await;
+
+    let started = gql(&ctx, RUN_NOW_MUTATION, json!({ "ruleSetId": rule_set_id })).await;
+    assert_no_errors(&started);
+    assert_eq!(
+        started["data"]["runMaintenanceEvaluationNow"]["started"],
+        true
+    );
+
+    // Shadow is dark by default even for a caller that may manage catalog
+    // settings.
+    let hidden = gql(&ctx, &candidates_query(), json!({})).await;
+    assert_no_errors(&hidden);
+    assert!(
+        hidden["data"]["maintenanceCandidates"]
+            .as_array()
+            .expect("candidates")
+            .is_empty()
+    );
+
+    let shown = gql(
+        &ctx,
+        &candidates_query(),
+        json!({ "ruleSetId": rule_set_id, "includeShadow": true }),
+    )
+    .await;
+    assert_no_errors(&shown);
+    let candidates = shown["data"]["maintenanceCandidates"]
+        .as_array()
+        .expect("candidates");
+    assert_eq!(candidates.len(), 1, "{shown}");
+    let candidate = &candidates[0];
+    assert_eq!(candidate["titleId"], "title-shadow-1");
+    assert_eq!(candidate["titleName"], "Monitored Movie");
+    assert_eq!(candidate["ruleName"], "Stale movies");
+    assert_eq!(candidate["state"], "OBSERVING");
+    assert_eq!(candidate["stateReason"], "first_match");
+    assert_eq!(candidate["actionKind"], "DELETE_TITLE_AND_FILES");
+    assert_eq!(candidate["matchGeneration"], 1);
+    assert_eq!(candidate["revisionNumber"], 1);
+    assert_eq!(candidate["graceDays"], 0);
+    assert_eq!(candidate["heldSince"], Value::Null);
+    assert_eq!(
+        candidate["dueAt"], candidate["firstMatchedAt"],
+        "a zero-day grace period is due the moment it matches"
+    );
+    assert_eq!(candidate["libraryId"], movie_library_id());
+
+    // Re-running is idempotent: the same candidate is reused, not duplicated.
+    let again = gql(&ctx, RUN_NOW_MUTATION, json!({ "ruleSetId": rule_set_id })).await;
+    assert_no_errors(&again);
+    let after = gql(
+        &ctx,
+        &candidates_query(),
+        json!({ "ruleSetId": rule_set_id, "includeShadow": true }),
+    )
+    .await;
+    assert_no_errors(&after);
+    let after_candidates = after["data"]["maintenanceCandidates"]
+        .as_array()
+        .expect("candidates");
+    assert_eq!(after_candidates.len(), 1);
+    assert_eq!(after_candidates[0]["id"], candidate["id"]);
+    assert_eq!(
+        after_candidates[0]["firstMatchedAt"], candidate["firstMatchedAt"],
+        "a repeat match must never restart the grace clock"
+    );
+
+    // Filtering by state reaches the same row through the pinned enum.
+    let by_state = gql(
+        &ctx,
+        &candidates_query(),
+        json!({ "includeShadow": true, "states": ["OBSERVING"] }),
+    )
+    .await;
+    assert_no_errors(&by_state);
+    assert_eq!(
+        by_state["data"]["maintenanceCandidates"]
+            .as_array()
+            .expect("candidates")
+            .len(),
+        1
+    );
+
+    let runs = gql(
+        &ctx,
+        EVALUATION_RUNS_QUERY,
+        json!({ "ruleSetId": rule_set_id }),
+    )
+    .await;
+    assert_no_errors(&runs);
+    let run_rows = runs["data"]["maintenanceEvaluationRuns"]
+        .as_array()
+        .expect("runs");
+    assert_eq!(run_rows.len(), 2, "one row per rule per pass");
+    let newest = &run_rows[0];
+    assert_eq!(newest["ruleSetId"], rule_set_id.as_str());
+    assert_eq!(newest["status"], "succeeded");
+    assert_eq!(newest["evaluatedCount"], 2);
+    assert_eq!(newest["matchedCount"], 1);
+    assert_eq!(newest["noMatchCount"], 1);
+    assert_eq!(newest["unknownCount"], 0);
+    assert_eq!(newest["errorCount"], 0);
+    assert_eq!(newest["error"], Value::Null);
+    assert_ne!(newest["finishedAt"], Value::Null);
+}
+
+#[tokio::test]
+async fn an_exclusion_round_trips_and_closes_the_candidate_it_covers() {
+    let ctx = TestContext::new().await;
+    seed_title(&ctx, "title-excl-1", "Hands Off", true).await;
+    let detail = create_rule(&ctx, "Stale movies", MONITORED_MATCHER, delete_action()).await;
+    let rule_set_id = detail["ruleSet"]["id"]
+        .as_str()
+        .expect("rule id")
+        .to_string();
+    arm_rule_and_gate(&ctx, &rule_set_id).await;
+    gql(&ctx, RUN_NOW_MUTATION, json!({ "ruleSetId": rule_set_id })).await;
+
+    let excluded = gql(
+        &ctx,
+        &exclude_mutation(),
+        json!({
+            "input": {
+                "titleId": "title-excl-1",
+                "reason": "operator pinned",
+            }
+        }),
+    )
+    .await;
+    assert_no_errors(&excluded);
+    let exclusion = &excluded["data"]["excludeMaintenanceSubject"];
+    assert_eq!(exclusion["titleId"], "title-excl-1");
+    assert_eq!(exclusion["titleName"], "Hands Off");
+    assert_eq!(exclusion["reason"], "operator pinned");
+    assert_eq!(
+        exclusion["ruleSetId"],
+        Value::Null,
+        "an exclusion with no rule is global"
+    );
+    let exclusion_id = exclusion["id"].as_str().expect("exclusion id").to_string();
+
+    // A global exclusion is part of what applies to every rule.
+    let listed = gql(
+        &ctx,
+        &exclusions_query(),
+        json!({ "ruleSetId": rule_set_id }),
+    )
+    .await;
+    assert_no_errors(&listed);
+    assert_eq!(
+        listed["data"]["maintenanceExclusions"]
+            .as_array()
+            .expect("exclusions")
+            .len(),
+        1
+    );
+
+    gql(&ctx, RUN_NOW_MUTATION, json!({ "ruleSetId": rule_set_id })).await;
+    let candidates = gql(
+        &ctx,
+        &candidates_query(),
+        json!({ "ruleSetId": rule_set_id, "includeShadow": true }),
+    )
+    .await;
+    assert_no_errors(&candidates);
+    let rows = candidates["data"]["maintenanceCandidates"]
+        .as_array()
+        .expect("candidates");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["state"], "EXCLUDED");
+    assert_eq!(rows[0]["stateReason"], "excluded");
+
+    let removed = gql(
+        &ctx,
+        REMOVE_EXCLUSION_MUTATION,
+        json!({ "id": exclusion_id }),
+    )
+    .await;
+    assert_no_errors(&removed);
+    assert_eq!(
+        removed["data"]["removeMaintenanceExclusion"]["id"],
+        exclusion_id.as_str()
+    );
+    let after = gql(&ctx, &exclusions_query(), json!({})).await;
+    assert_no_errors(&after);
+    assert!(
+        after["data"]["maintenanceExclusions"]
+            .as_array()
+            .expect("exclusions")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn the_instance_gates_round_trip_and_default_to_off() {
+    let ctx = TestContext::new().await;
+    seed_maintenance_gate_definitions(&ctx).await;
+
+    let initial = gql(&ctx, &gates_query(), json!({})).await;
+    assert_no_errors(&initial);
+    let gates = &initial["data"]["maintenanceInstanceGates"];
+    for field in [
+        "evaluationEnabled",
+        "resultDisplayEnabled",
+        "presentationEffectsEnabled",
+        "reversibleEffectsEnabled",
+        "destructiveEffectsEnabled",
+    ] {
+        assert_eq!(gates[field], false, "{field} must ship disarmed");
+    }
+
+    let armed = gql(
+        &ctx,
+        &set_gates_mutation(),
+        json!({ "input": { "evaluationEnabled": true, "destructiveEffectsEnabled": true } }),
+    )
+    .await;
+    assert_no_errors(&armed);
+
+    // An omitted field leaves that gate exactly as stored.
+    let partial = gql(
+        &ctx,
+        &set_gates_mutation(),
+        json!({ "input": { "resultDisplayEnabled": true } }),
+    )
+    .await;
+    assert_no_errors(&partial);
+    let updated = &partial["data"]["setMaintenanceInstanceGates"];
+    assert_eq!(updated["evaluationEnabled"], true);
+    assert_eq!(updated["destructiveEffectsEnabled"], true);
+    assert_eq!(updated["resultDisplayEnabled"], true);
+    assert_eq!(updated["presentationEffectsEnabled"], false);
+
+    let reread = gql(&ctx, &gates_query(), json!({})).await;
+    assert_no_errors(&reread);
+    assert_eq!(
+        reread["data"]["maintenanceInstanceGates"],
+        partial["data"]["setMaintenanceInstanceGates"]
+    );
+}
+
+#[tokio::test]
+async fn the_evaluation_surface_is_permission_gated() {
+    let ctx = TestContext::new().await;
+    let denied = create_unprivileged_user(&ctx, "maintenance-evaluation-denied").await;
+
+    for (query, variables) in [
+        (candidates_query(), json!({ "includeShadow": true })),
+        (exclusions_query(), json!({})),
+        (gates_query(), json!({})),
+    ] {
+        let body = gql_as(&ctx, &query, variables, &denied).await;
+        assert_error_contains(&body, "unauthorized");
+    }
+
+    let runs = gql_as(&ctx, EVALUATION_RUNS_QUERY, json!({}), &denied).await;
+    assert_error_contains(&runs, "unauthorized");
+
+    let triggered = gql_as(&ctx, RUN_NOW_MUTATION, json!({}), &denied).await;
+    assert_error_contains(&triggered, "unauthorized");
+
+    let excluded = gql_as(
+        &ctx,
+        &exclude_mutation(),
+        json!({ "input": { "titleId": "title-1" } }),
+        &denied,
+    )
+    .await;
+    assert_error_contains(&excluded, "unauthorized");
+}

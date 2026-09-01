@@ -35,6 +35,16 @@ pub fn maintenance_evaluation_mode_value(
     }
 }
 
+pub fn maintenance_evaluation_mode_into_application(
+    mode: MaintenanceEvaluationMode,
+) -> scryer_domain::MaintenanceEvaluationMode {
+    match mode {
+        MaintenanceEvaluationMode::Disabled => scryer_domain::MaintenanceEvaluationMode::Disabled,
+        MaintenanceEvaluationMode::Shadow => scryer_domain::MaintenanceEvaluationMode::Shadow,
+        MaintenanceEvaluationMode::Observe => scryer_domain::MaintenanceEvaluationMode::Observe,
+    }
+}
+
 pub fn maintenance_rule_subject_kind_value(
     kind: scryer_domain::MaintenanceRuleSubjectKind,
 ) -> MaintenanceRuleSubjectKind {
@@ -267,6 +277,134 @@ pub fn from_maintenance_preview_result(result: AppPreviewResult) -> MaintenanceP
                 error: title.error,
             })
             .collect(),
+    }
+}
+
+// ── Scheduled evaluation (RFC 137 tracks C1/C2) ─────────────────────────────
+
+pub fn maintenance_candidate_state_value(
+    state: scryer_domain::MaintenanceCandidateState,
+) -> MaintenanceCandidateState {
+    match state {
+        scryer_domain::MaintenanceCandidateState::Observing => MaintenanceCandidateState::Observing,
+        scryer_domain::MaintenanceCandidateState::PendingAction => {
+            MaintenanceCandidateState::PendingAction
+        }
+        scryer_domain::MaintenanceCandidateState::Due => MaintenanceCandidateState::Due,
+        scryer_domain::MaintenanceCandidateState::Executing => MaintenanceCandidateState::Executing,
+        scryer_domain::MaintenanceCandidateState::Succeeded => MaintenanceCandidateState::Succeeded,
+        scryer_domain::MaintenanceCandidateState::Failed => MaintenanceCandidateState::Failed,
+        scryer_domain::MaintenanceCandidateState::Canceled => MaintenanceCandidateState::Canceled,
+        scryer_domain::MaintenanceCandidateState::Excluded => MaintenanceCandidateState::Excluded,
+        scryer_domain::MaintenanceCandidateState::Blocked => MaintenanceCandidateState::Blocked,
+    }
+}
+
+pub fn maintenance_candidate_state_into_application(
+    state: MaintenanceCandidateState,
+) -> scryer_domain::MaintenanceCandidateState {
+    match state {
+        MaintenanceCandidateState::Observing => scryer_domain::MaintenanceCandidateState::Observing,
+        MaintenanceCandidateState::PendingAction => {
+            scryer_domain::MaintenanceCandidateState::PendingAction
+        }
+        MaintenanceCandidateState::Due => scryer_domain::MaintenanceCandidateState::Due,
+        MaintenanceCandidateState::Executing => scryer_domain::MaintenanceCandidateState::Executing,
+        MaintenanceCandidateState::Succeeded => scryer_domain::MaintenanceCandidateState::Succeeded,
+        MaintenanceCandidateState::Failed => scryer_domain::MaintenanceCandidateState::Failed,
+        MaintenanceCandidateState::Canceled => scryer_domain::MaintenanceCandidateState::Canceled,
+        MaintenanceCandidateState::Excluded => scryer_domain::MaintenanceCandidateState::Excluded,
+        MaintenanceCandidateState::Blocked => scryer_domain::MaintenanceCandidateState::Blocked,
+    }
+}
+
+/// A candidate stores its action by the catalog's wire name. A name this build
+/// does not know was written by a newer one; it projects as `DO_NOTHING`, the
+/// only kind that authorizes nothing, rather than guessing at a destructive
+/// action whose semantics this build does not have.
+pub fn from_maintenance_candidate(
+    view: scryer_application::maintenance_rules::MaintenanceCandidateView,
+) -> MaintenanceCandidate {
+    let candidate = view.candidate;
+    MaintenanceCandidate {
+        id: ID::from(candidate.id),
+        rule_set_id: ID::from(candidate.rule_set_id),
+        rule_name: view.rule_name,
+        revision_number: to_graphql_int(candidate.revision_number),
+        title_id: ID::from(candidate.title_id),
+        title_name: view.title_name,
+        library_id: candidate.library_id,
+        facet: candidate.facet,
+        state: maintenance_candidate_state_value(candidate.state),
+        state_reason: candidate.state_reason,
+        reason_codes: candidate.reason_codes,
+        action_kind: maintenance_action_kind_value(
+            AppActionKind::parse_wire_str(&candidate.action_kind)
+                .unwrap_or(AppActionKind::DoNothing),
+        ),
+        grace_days: to_graphql_int(candidate.grace_days),
+        match_generation: to_graphql_int(candidate.match_generation),
+        first_matched_at: candidate.first_matched_at,
+        last_matched_at: candidate.last_matched_at,
+        due_at: candidate.due_at,
+        held_since: candidate.held_since,
+        updated_at: candidate.updated_at,
+    }
+}
+
+pub fn from_maintenance_evaluation_run(
+    run: scryer_domain::MaintenanceEvaluationRun,
+) -> MaintenanceEvaluationRun {
+    MaintenanceEvaluationRun {
+        id: ID::from(run.id),
+        rule_set_id: ID::from(run.rule_set_id),
+        revision_number: to_graphql_int(run.revision_number),
+        status: run.status.as_storage_str().to_string(),
+        started_at: run.started_at,
+        finished_at: run.finished_at,
+        evaluated_count: to_graphql_int(run.evaluated_count),
+        matched_count: to_graphql_int(run.matched_count),
+        no_match_count: to_graphql_int(run.no_match_count),
+        unknown_count: to_graphql_int(run.unknown_count),
+        error_count: to_graphql_int(run.error_count),
+        duration_ms: run.duration_ms.map(to_graphql_int),
+        error: run.error,
+    }
+}
+
+pub fn from_maintenance_instance_gates(
+    gates: scryer_application::maintenance_rules::MaintenanceGates,
+) -> MaintenanceInstanceGates {
+    MaintenanceInstanceGates {
+        evaluation_enabled: gates.evaluation_enabled,
+        result_display_enabled: gates.result_display_enabled,
+        presentation_effects_enabled: gates.presentation_effects_enabled,
+        reversible_effects_enabled: gates.reversible_effects_enabled,
+        destructive_effects_enabled: gates.destructive_effects_enabled,
+    }
+}
+
+pub fn from_maintenance_exclusion(
+    view: scryer_application::maintenance_rules::MaintenanceExclusionView,
+) -> MaintenanceExclusion {
+    let exclusion = view.exclusion;
+    MaintenanceExclusion {
+        id: ID::from(exclusion.id),
+        rule_set_id: exclusion.rule_set_id.map(ID::from),
+        title_id: ID::from(exclusion.title_id),
+        title_name: view.title_name,
+        reason: exclusion.reason,
+        created_by: exclusion.created_by.map(ID::from),
+        created_at: exclusion.created_at,
+    }
+}
+
+pub fn from_maintenance_evaluation_trigger(
+    trigger: scryer_application::maintenance_rules::MaintenanceEvaluationTrigger,
+) -> MaintenanceEvaluationTriggerPayload {
+    MaintenanceEvaluationTriggerPayload {
+        started: trigger.started,
+        message: trigger.message,
     }
 }
 

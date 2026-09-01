@@ -50,6 +50,34 @@ pub enum MaintenanceActionKind {
     ChangeQualityProfileAndSearchIfChanged,
 }
 
+/// Lifecycle state of one maintenance candidate.
+///
+/// The whole state machine is exposed now, but the dark evaluator only ever
+/// produces `OBSERVING`, `CANCELED`, and `EXCLUDED`; the rest are written by
+/// the action executor, which is not part of this release.
+#[derive(Enum, Copy, Clone, Debug, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+pub enum MaintenanceCandidateState {
+    /// Matching, with the grace clock running.
+    Observing,
+    /// Grace elapsed and effect arming permits the action; awaiting the handler.
+    PendingAction,
+    /// Eligible to execute now.
+    Due,
+    /// An action lease is held for this candidate.
+    Executing,
+    /// The action completed.
+    Succeeded,
+    /// The action failed terminally.
+    Failed,
+    /// The subject stopped matching, or its rule revision was superseded.
+    Canceled,
+    /// An exclusion covers the subject.
+    Excluded,
+    /// A safety precondition refused the action.
+    Blocked,
+}
+
 /// A media subject a maintenance action can be configured against.
 #[derive(Enum, Copy, Clone, Debug, Eq, PartialEq)]
 #[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
@@ -241,6 +269,138 @@ pub struct MaintenancePreviewPayload {
     pub titles: Vec<MaintenancePreviewTitle>,
 }
 
+/// One subject's durable membership in one maintenance rule set.
+///
+/// Nothing here has acted on the subject: a candidate records that a rule
+/// matched it and how long the grace period still has to run.
+#[derive(SimpleObject, Clone)]
+pub struct MaintenanceCandidate {
+    /// Candidate ID.
+    pub id: ID,
+    /// Rule set that produced the candidate.
+    pub rule_set_id: ID,
+    /// Name of that rule set.
+    pub rule_name: String,
+    /// Rule revision in force when the candidate was opened.
+    pub revision_number: i32,
+    /// Subject title ID.
+    pub title_id: ID,
+    /// Subject title name, or the stored title ID when the title is gone.
+    pub title_name: String,
+    /// Library the subject belonged to when the candidate was opened.
+    pub library_id: String,
+    /// Media facet of the subject.
+    pub facet: String,
+    /// Current lifecycle state.
+    pub state: MaintenanceCandidateState,
+    /// Why the candidate is in that state.
+    pub state_reason: String,
+    /// Reason codes the matcher emitted on the most recent match.
+    pub reason_codes: Vec<String>,
+    /// Action the rule revision authorizes. Nothing executes it in this release.
+    pub action_kind: MaintenanceActionKind,
+    /// Days the subject must match continuously before the action is due.
+    pub grace_days: i32,
+    /// Increments each time a fresh candidate is opened for this subject, so a
+    /// cancel-then-rematch is distinguishable from a continuing membership.
+    pub match_generation: i32,
+    /// When the subject started matching. Never reset while the candidate lives.
+    pub first_matched_at: DateTime<Utc>,
+    /// When the subject most recently matched.
+    pub last_matched_at: DateTime<Utc>,
+    /// When the grace period elapses, equal to `firstMatchedAt` for a zero-day
+    /// grace period.
+    pub due_at: DateTime<Utc>,
+    /// Set while the latest evaluation could not decide, and null otherwise.
+    pub held_since: Option<DateTime<Utc>>,
+    /// UTC last-update time.
+    pub updated_at: DateTime<Utc>,
+}
+
+/// One rule set's pass through one evaluation run.
+#[derive(SimpleObject, Clone)]
+pub struct MaintenanceEvaluationRun {
+    /// Evaluation-run ID.
+    pub id: ID,
+    /// Rule set that was evaluated.
+    pub rule_set_id: ID,
+    /// Rule revision that was evaluated.
+    pub revision_number: i32,
+    /// One of running, succeeded, or failed. A run left running is the trace of
+    /// an interrupted pass.
+    pub status: String,
+    /// When the pass started.
+    pub started_at: DateTime<Utc>,
+    /// When the pass finished, or null while it is still running.
+    pub finished_at: Option<DateTime<Utc>>,
+    /// Subjects the matcher was run against.
+    pub evaluated_count: i32,
+    /// Subjects the matcher matched.
+    pub matched_count: i32,
+    /// Subjects the matcher did not match.
+    pub no_match_count: i32,
+    /// Subjects the matcher could not decide, which are held.
+    pub unknown_count: i32,
+    /// Subjects whose evaluation failed, which are also held.
+    pub error_count: i32,
+    /// How long the pass took, or null while it is still running.
+    pub duration_ms: Option<i32>,
+    /// Why the pass failed, or null when it did not.
+    pub error: Option<String>,
+}
+
+/// The five independent instance-wide maintenance gates. Every one of them
+/// defaults off, and only the first two do anything in this release.
+#[derive(SimpleObject, Clone, Copy)]
+pub struct MaintenanceInstanceGates {
+    /// Whether the scheduled evaluator may run at all.
+    pub evaluation_enabled: bool,
+    /// Whether candidate results are returned to clients.
+    pub result_display_enabled: bool,
+    /// Reserved for provider collection projection and lifecycle notifications.
+    pub presentation_effects_enabled: bool,
+    /// Reserved for low and medium risk actions.
+    pub reversible_effects_enabled: bool,
+    /// Reserved for high risk actions.
+    pub destructive_effects_enabled: bool,
+}
+
+/// A subject a maintenance rule must never act on.
+#[derive(SimpleObject, Clone)]
+pub struct MaintenanceExclusion {
+    /// Exclusion ID.
+    pub id: ID,
+    /// Rule the exclusion is confined to, or null when it is global.
+    pub rule_set_id: Option<ID>,
+    /// Excluded title ID.
+    pub title_id: ID,
+    /// Excluded title name, or the stored title ID when the title is gone.
+    pub title_name: String,
+    /// Why the subject was excluded; empty when the author gave no reason.
+    pub reason: String,
+    /// ID of the user who added the exclusion, or null when unattributed.
+    pub created_by: Option<ID>,
+    /// UTC creation time.
+    pub created_at: DateTime<Utc>,
+}
+
+/// Identifier returned after removing a maintenance exclusion.
+#[derive(SimpleObject, Clone)]
+pub struct DeleteMaintenanceExclusionPayload {
+    /// Removed exclusion ID.
+    pub id: ID,
+}
+
+/// Outcome of asking for an immediate evaluation pass.
+#[derive(SimpleObject, Clone)]
+pub struct MaintenanceEvaluationTriggerPayload {
+    /// Whether a pass was started. False when a gate, a disabled rule, or a
+    /// run already in progress stopped it.
+    pub started: bool,
+    /// What happened, suitable for showing to an operator.
+    pub message: Option<String>,
+}
+
 // ── Inputs ─────────────────────────────────────────────────────────────────
 
 /// Selects one catalog action and its parameters.
@@ -297,6 +457,42 @@ pub struct UpdateMaintenanceRuleMetadataInput {
     pub description: Option<String>,
     /// Replacement library scope. Omitted or empty means every library.
     pub library_ids: Option<Vec<String>>,
+}
+
+/// Moves a rule set between evaluation modes.
+#[derive(InputObject)]
+pub struct SetMaintenanceRuleModeInput {
+    /// Rule-set ID.
+    pub id: ID,
+    /// Mode to store. Anything other than `DISABLED` also enables the rule.
+    pub mode: MaintenanceEvaluationMode,
+}
+
+/// Arms or disarms the instance-wide maintenance gates. An omitted field leaves
+/// that gate exactly as stored.
+#[derive(InputObject)]
+pub struct SetMaintenanceInstanceGatesInput {
+    /// Whether the scheduled evaluator may run.
+    pub evaluation_enabled: Option<bool>,
+    /// Whether candidate results are returned to clients.
+    pub result_display_enabled: Option<bool>,
+    /// Reserved for provider collection projection and lifecycle notifications.
+    pub presentation_effects_enabled: Option<bool>,
+    /// Reserved for low and medium risk actions.
+    pub reversible_effects_enabled: Option<bool>,
+    /// Reserved for high risk actions.
+    pub destructive_effects_enabled: Option<bool>,
+}
+
+/// Excludes one subject from maintenance rules.
+#[derive(InputObject)]
+pub struct ExcludeMaintenanceSubjectInput {
+    /// Title to exclude.
+    pub title_id: ID,
+    /// Rule to confine the exclusion to. Omitted means every rule.
+    pub rule_set_id: Option<ID>,
+    /// Why the subject is being excluded.
+    pub reason: Option<String>,
 }
 
 /// Validates maintenance rule source without saving it.

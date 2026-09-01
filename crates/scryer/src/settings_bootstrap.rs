@@ -9,8 +9,10 @@ use scryer_application::{
     FILE_CHMOD_KEY, FOLDER_CHMOD_KEY, FOLDER_TEMPLATE_KEY, FORM_LOGIN_ENABLED_KEY,
     HISTORY_KEEP_FOREVER_KEY, HISTORY_RETENTION_DAYS_KEY, IMAGE_CACHE_MAX_SIZE_MB_KEY,
     IMPORT_MODE_KEY, INDEXER_ROUTING_SETTINGS_KEY, LEGACY_NZBGET_CATEGORY_SETTING_KEY,
-    LEGACY_NZBGET_CLIENT_ROUTING_SETTINGS_KEY, METADATA_LANGUAGE_KEY,
-    MFA_REQUIRE_CONFIG_STEP_UP_KEY, MFA_REQUIRE_PASSWORD_LOGIN_KEY,
+    LEGACY_NZBGET_CLIENT_ROUTING_SETTINGS_KEY, MAINTENANCE_GATE_DESTRUCTIVE_EFFECTS_KEY,
+    MAINTENANCE_GATE_EVALUATION_KEY, MAINTENANCE_GATE_PRESENTATION_EFFECTS_KEY,
+    MAINTENANCE_GATE_RESULT_DISPLAY_KEY, MAINTENANCE_GATE_REVERSIBLE_EFFECTS_KEY,
+    METADATA_LANGUAGE_KEY, MFA_REQUIRE_CONFIG_STEP_UP_KEY, MFA_REQUIRE_PASSWORD_LOGIN_KEY,
     MINIMUM_SEEDERS_FLOOR_DEFAULT_JSON, MINIMUM_SEEDERS_FLOOR_SETTING_KEY, MOVIES_ROOT_FOLDERS_KEY,
     NZBGET_OLDER_PRIORITY_SETTING_KEY, NZBGET_RECENT_PRIORITY_SETTING_KEY, PASSWORD_MIN_LENGTH_KEY,
     POST_PROCESSING_SCRIPT_ANIME_KEY, POST_PROCESSING_SCRIPT_MOVIE_KEY,
@@ -1142,6 +1144,49 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
             key_name: TITLE_IMAGE_ARTWORK_URL_REFRESH_STATE_KEY,
             data_type: "string",
             default_value_json: "\"none\"",
+            is_sensitive: false,
+        },
+        // The five maintenance gates (RFC 137 section 10). Every default is
+        // false, and they are seeded separately rather than as one blob so a
+        // partial write can never arm a gate the operator did not ask for.
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_GENERAL,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: MAINTENANCE_GATE_EVALUATION_KEY,
+            data_type: "boolean",
+            default_value_json: "false",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_GENERAL,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: MAINTENANCE_GATE_RESULT_DISPLAY_KEY,
+            data_type: "boolean",
+            default_value_json: "false",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_GENERAL,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: MAINTENANCE_GATE_PRESENTATION_EFFECTS_KEY,
+            data_type: "boolean",
+            default_value_json: "false",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_GENERAL,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: MAINTENANCE_GATE_REVERSIBLE_EFFECTS_KEY,
+            data_type: "boolean",
+            default_value_json: "false",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_GENERAL,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: MAINTENANCE_GATE_DESTRUCTIVE_EFFECTS_KEY,
+            data_type: "boolean",
+            default_value_json: "false",
             is_sensitive: false,
         },
     ]
@@ -2290,6 +2335,31 @@ mod tests {
                 && seed.default_value_json == "\"none\""
                 && !seed.is_sensitive
         }));
+    }
+
+    /// Every maintenance gate ships disarmed. This is the one seed list where a
+    /// wrong default is not a cosmetic bug: a `true` here would arm an
+    /// instance-wide capability on upgrade without anyone asking for it.
+    #[test]
+    fn every_maintenance_gate_is_seeded_and_defaults_to_off() {
+        for key_name in [
+            MAINTENANCE_GATE_EVALUATION_KEY,
+            MAINTENANCE_GATE_RESULT_DISPLAY_KEY,
+            MAINTENANCE_GATE_PRESENTATION_EFFECTS_KEY,
+            MAINTENANCE_GATE_REVERSIBLE_EFFECTS_KEY,
+            MAINTENANCE_GATE_DESTRUCTIVE_EFFECTS_KEY,
+        ] {
+            assert!(
+                service_setting_seeds().iter().any(|seed| {
+                    seed.scope == SETTINGS_SCOPE_SYSTEM
+                        && seed.key_name == key_name
+                        && seed.data_type == "boolean"
+                        && seed.default_value_json == "false"
+                        && !seed.is_sensitive
+                }),
+                "{key_name} must be registered and default to false"
+            );
+        }
     }
 
     #[test]

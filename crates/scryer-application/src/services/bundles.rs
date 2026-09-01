@@ -90,6 +90,9 @@ pub struct AppIntegrationServices {
     pub(crate) subtitle_plugin_provider: RuntimeFeature<Arc<dyn SubtitlePluginProvider>>,
     pub(crate) archive_extractor_plugin_provider:
         RuntimeFeature<Arc<dyn ArchiveExtractorPluginProvider>>,
+    /// Live playback observation across the media-server connections above
+    /// (RFC 137 §9.10, WP-G). Read-only; consulted by maintenance safety.
+    pub(crate) media_server_playback_probe: Arc<dyn crate::ports::MediaServerPlaybackProbe>,
 }
 
 #[derive(Clone)]
@@ -131,6 +134,7 @@ pub struct AppConfigServices {
 pub struct AppCustomizationServices {
     pub(crate) rule_sets: Arc<dyn RuleSetRepository>,
     pub(crate) maintenance_rule_sets: Arc<dyn MaintenanceRuleSetRepository>,
+    pub(crate) maintenance_evaluation: Arc<dyn crate::ports::MaintenanceEvaluationRepository>,
     pub(crate) pp_scripts: Arc<dyn PostProcessingScriptRepository>,
     pub(crate) plugin_installations: Arc<dyn PluginInstallationRepository>,
     pub(crate) plugin_descriptor_loader: Arc<dyn PluginDescriptorLoader>,
@@ -331,6 +335,9 @@ impl AppServices {
                 download_client_plugin_provider: RuntimeFeature::Disabled,
                 subtitle_plugin_provider: RuntimeFeature::Disabled,
                 archive_extractor_plugin_provider: RuntimeFeature::Disabled,
+                media_server_playback_probe: Arc::new(
+                    null_repositories::NullMediaServerPlaybackProbe,
+                ),
             },
             workflow: AppWorkflowServices {
                 imports: Arc::new(NullImportRepository),
@@ -372,6 +379,9 @@ impl AppServices {
                 rule_sets: Arc::new(NullRuleSetRepository),
                 maintenance_rule_sets: Arc::new(
                     null_repositories::NullMaintenanceRuleSetRepository,
+                ),
+                maintenance_evaluation: Arc::new(
+                    null_repositories::NullMaintenanceEvaluationRepository,
                 ),
                 pp_scripts: Arc::new(NullPostProcessingScriptRepository),
                 plugin_installations: Arc::new(NullPluginInstallationRepository),

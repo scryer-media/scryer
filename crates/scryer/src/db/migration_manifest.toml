@@ -1673,6 +1673,23 @@ file = "postgres/migrations/0204_maintenance_rule_sets.sql"
 engine = "postgres"
 scope = "all"
 
+[[migration]]
+version = 205
+description = "maintenance evaluation runs, lifecycle candidates, and rule exclusions"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0205_maintenance_evaluation_candidates.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0205_maintenance_evaluation_candidates.sql"
+engine = "postgres"
+scope = "all"
+
 [[baseline]]
 through_version = 140
 file = "baselines/0140_baseline.sql"

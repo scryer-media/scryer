@@ -39,9 +39,25 @@ const NEEDS_UPGRADE_HISTORY_MATCHER: &str = "package whatever\n\
      }\n";
 
 #[derive(Default)]
-struct InMemoryMaintenanceRuleRepo {
+pub(super) struct InMemoryMaintenanceRuleRepo {
     rule_sets: Mutex<Vec<MaintenanceRuleSet>>,
     revisions: Mutex<Vec<MaintenanceRuleRevision>>,
+}
+
+impl InMemoryMaintenanceRuleRepo {
+    /// Rewrite the revision currently in force without appending a new one.
+    ///
+    /// Production never does this — revisions are immutable — but a test that
+    /// wants to change what a rule *decides* without also triggering the
+    /// supersede path has no other way to isolate the two behaviours.
+    pub(super) async fn replace_revision_in_place(&self, revision: MaintenanceRuleRevision) {
+        let mut revisions = self.revisions.lock().await;
+        revisions.retain(|stored| {
+            !(stored.rule_set_id == revision.rule_set_id
+                && stored.revision_number == revision.revision_number)
+        });
+        revisions.push(revision);
+    }
 }
 
 #[async_trait]
@@ -144,6 +160,24 @@ impl MaintenanceRuleSetRepository for InMemoryMaintenanceRuleRepo {
             .lock()
             .await
             .retain(|revision| revision.rule_set_id != id);
+        Ok(())
+    }
+
+    async fn update_rule_set_evaluation_mode(
+        &self,
+        id: &str,
+        mode: MaintenanceEvaluationMode,
+        enabled: bool,
+        updated_at: DateTime<Utc>,
+    ) -> AppResult<()> {
+        let mut rule_sets = self.rule_sets.lock().await;
+        let rule_set = rule_sets
+            .iter_mut()
+            .find(|rule_set| rule_set.id == id)
+            .ok_or_else(|| AppError::NotFound(id.to_string()))?;
+        rule_set.evaluation_mode = mode;
+        rule_set.enabled = enabled;
+        rule_set.updated_at = updated_at;
         Ok(())
     }
 }

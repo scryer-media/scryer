@@ -1608,6 +1608,39 @@ impl AppUseCase {
                     serde_json::to_string(&CountSummary { count }).ok(),
                 ))
             }
+            JobKey::MaintenanceRuleEvaluation => {
+                let report = self.run_maintenance_rule_evaluation_job().await?;
+                let summary_json = serde_json::to_string(&report).ok();
+                if !report.gate_enabled {
+                    return Ok(JobExecutionOutcome::new(
+                        Some(
+                            "Maintenance evaluation is disabled by the instance gate; nothing was evaluated"
+                                .to_string(),
+                        ),
+                        summary_json,
+                    ));
+                }
+                let summary_text = format!(
+                    "Evaluated {} rule(s) over {} title(s): {} candidate(s) opened, {} canceled, {} superseded, {} held",
+                    report.rules_evaluated,
+                    report.titles_evaluated,
+                    report.candidates_created,
+                    report.candidates_canceled,
+                    report.candidates_superseded,
+                    report.candidates_held,
+                );
+                if report.rules_failed > 0 {
+                    Ok(JobExecutionOutcome::warning(
+                        Some(format!(
+                            "{summary_text}; {} rule(s) failed and their candidates were held",
+                            report.rules_failed
+                        )),
+                        summary_json,
+                    ))
+                } else {
+                    Ok(JobExecutionOutcome::new(Some(summary_text), summary_json))
+                }
+            }
             JobKey::DiscoverySync => self.run_discovery_sync_job(run.trigger_source).await,
             JobKey::TitleImageCacheRefresh => {
                 let summary = self.run_title_image_cache_refresh().await?;
@@ -3086,7 +3119,9 @@ impl AppUseCase {
             .await
     }
 
-    async fn discovery_scheduler_seed(&self) -> AppResult<String> {
+    /// Stable per-instance seed for schedule jitter. Named for its first
+    /// consumer; every scheduled job that wants a deterministic offset uses it.
+    pub(crate) async fn discovery_scheduler_seed(&self) -> AppResult<String> {
         if let Some(existing) = self
             .read_setting_string_value(SCHEDULER_INSTANCE_ID_KEY, None)
             .await?

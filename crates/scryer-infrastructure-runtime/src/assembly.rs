@@ -23,6 +23,7 @@ use crate::discovery::store::DiscoveryStore;
 use crate::external_identity::HttpExternalIdentityVerifier;
 use crate::indexers::scope_indexer_coverage_store::ScopeIndexerCoverageStore;
 use crate::media::images::image_proxy_store::ImageProxyStore;
+use crate::media_server_playback::HttpMediaServerPlaybackProbe;
 use crate::postgres::{
     PostgresLogicalBackupExporter, PostgresServices, restore_backup_bundle_into_postgres_pool,
     restore_prepared_backup_directory_into_postgres_pool,
@@ -34,11 +35,11 @@ use crate::{
     ExternalImportMonitorStore, ExternalImportSetupSecretDraftStore, FileSystemStagedNzbStore,
     HousekeepingStore, ImportStore, InMemoryIndexerStatsTracker, IndexerConfigStore,
     IndexerErrorStore, IndexerProxyConfigStore, IndexerSearchLearningStore, LibraryProbeStore,
-    LibraryScanUnmatchedStore, MaintenanceRuleSetStore, MediaFileStore, MediaRequestStore,
-    MediaServerConnectionStore, MetadataGatewayClient, MigrationMode, NotificationStore,
-    OAuthStore, PendingReleaseStore, PluginStore, PostProcessingScriptStore, QualityProfileStore,
-    ReleaseStore, RuleSetStore, SeedingProfileStore, SettingsStore, ShowStore, SmgEnrollmentConfig,
-    SqliteLogicalBackupExporter, SqliteServices, SubtitleDownloadStore,
+    LibraryScanUnmatchedStore, MaintenanceEvaluationStore, MaintenanceRuleSetStore, MediaFileStore,
+    MediaRequestStore, MediaServerConnectionStore, MetadataGatewayClient, MigrationMode,
+    NotificationStore, OAuthStore, PendingReleaseStore, PluginStore, PostProcessingScriptStore,
+    QualityProfileStore, ReleaseStore, RuleSetStore, SeedingProfileStore, SettingsStore, ShowStore,
+    SmgEnrollmentConfig, SqliteLogicalBackupExporter, SqliteServices, SubtitleDownloadStore,
     SubtitleProviderConfigStore, TitleImageStore, TitleStore, TotpStore, WantedStore,
     WebauthnStore, WorkflowOperationStore,
 };
@@ -1018,6 +1019,13 @@ impl DatastoreAssembly {
         Arc::new(MaintenanceRuleSetStore::new(self.datastore()))
     }
 
+    /// Built on demand for the same reason: the evaluator ships behind an
+    /// instance gate that defaults off, so its store is not part of the eager
+    /// per-engine store set either.
+    pub fn maintenance_evaluation_store(&self) -> Arc<MaintenanceEvaluationStore> {
+        Arc::new(MaintenanceEvaluationStore::new(self.datastore()))
+    }
+
     pub fn settings_store(&self) -> Arc<SettingsStore> {
         match &self.stores {
             DatastoreStores::Sqlite { settings_store, .. } => settings_store.clone(),
@@ -1450,6 +1458,10 @@ impl DatastoreAssembly {
                 .with_seeding_profiles(self.seeding_profiles())
                 .with_external_identity_verifier(Arc::new(HttpExternalIdentityVerifier::new()))
                 .with_media_server_connection_store(media_server_connection_store.clone())
+                // Maintenance safety: live playback observation (RFC 137 §9.10, WP-G).
+                .with_media_server_playback_probe(Arc::new(HttpMediaServerPlaybackProbe::new(
+                    media_server_connection_store.clone(),
+                )))
                 .with_webauthn_store(webauthn)
                 .with_totp_store(totp)
                 .with_media_files(media_file_store.clone())
@@ -1465,6 +1477,7 @@ impl DatastoreAssembly {
                 .with_subtitle_downloads(subtitle_download_store.clone())
                 .with_rule_set_store(rule_set_store.clone())
                 .with_maintenance_rule_set_store(self.maintenance_rule_set_store())
+                .with_maintenance_evaluation_store(self.maintenance_evaluation_store())
                 .with_post_processing_script_store(post_processing_script_store.clone())
                 .with_plugin_installation_store(plugin_store.clone())
                 .with_acquisition_state(acquisition_store.clone())
@@ -1558,6 +1571,10 @@ impl DatastoreAssembly {
                 .with_seeding_profiles(self.seeding_profiles())
                 .with_external_identity_verifier(Arc::new(HttpExternalIdentityVerifier::new()))
                 .with_media_server_connection_store(media_server_connection_store.clone())
+                // Maintenance safety: live playback observation (RFC 137 §9.10, WP-G).
+                .with_media_server_playback_probe(Arc::new(HttpMediaServerPlaybackProbe::new(
+                    media_server_connection_store.clone(),
+                )))
                 .with_webauthn_store(webauthn)
                 .with_totp_store(totp)
                 .with_media_files(media_file_store.clone())
@@ -1573,6 +1590,7 @@ impl DatastoreAssembly {
                 .with_subtitle_downloads(subtitle_download_store.clone())
                 .with_rule_set_store(rule_set_store.clone())
                 .with_maintenance_rule_set_store(self.maintenance_rule_set_store())
+                .with_maintenance_evaluation_store(self.maintenance_evaluation_store())
                 .with_post_processing_script_store(post_processing_script_store.clone())
                 .with_plugin_installation_store(plugin_store.clone())
                 .with_acquisition_state(acquisition_store.clone())

@@ -1364,6 +1364,156 @@ impl MaintenanceRuleSetRepository for NullMaintenanceRuleSetRepository {
             "maintenance rule repository is not configured".to_string(),
         ))
     }
+    async fn update_rule_set_evaluation_mode(
+        &self,
+        _id: &str,
+        _mode: scryer_domain::MaintenanceEvaluationMode,
+        _enabled: bool,
+        _updated_at: DateTime<Utc>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "maintenance rule repository is not configured".to_string(),
+        ))
+    }
+}
+
+/// Reads answer empty and writes refuse: an assembly with no maintenance
+/// evaluation store has no candidates, so the evaluator finds nothing to
+/// reconcile rather than silently dropping rows it believed it wrote.
+#[derive(Default)]
+pub struct NullMaintenanceEvaluationRepository;
+
+const MAINTENANCE_EVALUATION_NOT_CONFIGURED: &str =
+    "maintenance evaluation repository is not configured";
+
+#[async_trait]
+impl crate::ports::MaintenanceCandidateRepository for NullMaintenanceEvaluationRepository {
+    async fn get_active_candidate(
+        &self,
+        _rule_set_id: &str,
+        _title_id: &str,
+    ) -> AppResult<Option<scryer_domain::LifecycleCandidate>> {
+        Ok(None)
+    }
+    async fn list_candidates(
+        &self,
+        _query: &crate::ports::MaintenanceCandidateQuery,
+    ) -> AppResult<Vec<scryer_domain::LifecycleCandidate>> {
+        Ok(vec![])
+    }
+    async fn max_match_generation(&self, _rule_set_id: &str, _title_id: &str) -> AppResult<i64> {
+        Ok(0)
+    }
+    async fn create_candidate(
+        &self,
+        _candidate: &scryer_domain::LifecycleCandidate,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            MAINTENANCE_EVALUATION_NOT_CONFIGURED.to_string(),
+        ))
+    }
+    async fn record_candidate_match(
+        &self,
+        _id: &str,
+        _last_matched_at: DateTime<Utc>,
+        _reason_codes: &[String],
+        _updated_at: DateTime<Utc>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            MAINTENANCE_EVALUATION_NOT_CONFIGURED.to_string(),
+        ))
+    }
+    async fn hold_candidate(
+        &self,
+        _id: &str,
+        _held_since: DateTime<Utc>,
+        _updated_at: DateTime<Utc>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            MAINTENANCE_EVALUATION_NOT_CONFIGURED.to_string(),
+        ))
+    }
+    async fn transition_candidate_state(
+        &self,
+        _id: &str,
+        _state: scryer_domain::MaintenanceCandidateState,
+        _state_reason: &str,
+        _updated_at: DateTime<Utc>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            MAINTENANCE_EVALUATION_NOT_CONFIGURED.to_string(),
+        ))
+    }
+    async fn cancel_active_candidates_for_rule(
+        &self,
+        _rule_set_id: &str,
+        _state_reason: &str,
+        _updated_at: DateTime<Utc>,
+    ) -> AppResult<u64> {
+        Ok(0)
+    }
+    async fn count_candidates_by_state(
+        &self,
+        _rule_set_id: &str,
+    ) -> AppResult<Vec<(scryer_domain::MaintenanceCandidateState, i64)>> {
+        Ok(vec![])
+    }
+}
+
+#[async_trait]
+impl crate::ports::MaintenanceExclusionRepository for NullMaintenanceEvaluationRepository {
+    async fn list_exclusions(
+        &self,
+        _rule_set_id: Option<&str>,
+    ) -> AppResult<Vec<scryer_domain::MaintenanceRuleExclusion>> {
+        Ok(vec![])
+    }
+    async fn get_exclusion(
+        &self,
+        _id: &str,
+    ) -> AppResult<Option<scryer_domain::MaintenanceRuleExclusion>> {
+        Ok(None)
+    }
+    async fn create_exclusion(
+        &self,
+        _exclusion: &scryer_domain::MaintenanceRuleExclusion,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            MAINTENANCE_EVALUATION_NOT_CONFIGURED.to_string(),
+        ))
+    }
+    async fn delete_exclusion(&self, _id: &str) -> AppResult<()> {
+        Err(AppError::Repository(
+            MAINTENANCE_EVALUATION_NOT_CONFIGURED.to_string(),
+        ))
+    }
+}
+
+#[async_trait]
+impl crate::ports::MaintenanceEvaluationRunRepository for NullMaintenanceEvaluationRepository {
+    async fn start_evaluation_run(
+        &self,
+        _run: &scryer_domain::MaintenanceEvaluationRun,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            MAINTENANCE_EVALUATION_NOT_CONFIGURED.to_string(),
+        ))
+    }
+    async fn finish_evaluation_run(
+        &self,
+        _run: &scryer_domain::MaintenanceEvaluationRun,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            MAINTENANCE_EVALUATION_NOT_CONFIGURED.to_string(),
+        ))
+    }
+    async fn list_evaluation_runs(
+        &self,
+        _rule_set_id: Option<&str>,
+        _limit: Option<usize>,
+    ) -> AppResult<Vec<scryer_domain::MaintenanceEvaluationRun>> {
+        Ok(vec![])
+    }
 }
 
 #[derive(Default)]
@@ -3200,6 +3350,24 @@ impl ExternalIdentityVerifier for NullExternalIdentityVerifier {
         Err(AppError::Repository(
             "external identity verification is not configured".into(),
         ))
+    }
+}
+
+// ── Maintenance safety probes (RFC 137 §9.10, WP-G) ─────────────────────────
+
+/// Playback probe for an assembly with no media-server integration.
+///
+/// Returns an empty snapshot, which the fold reads as `Clear`: nothing can be
+/// playing on servers Scryer does not know about. This is deliberately *not*
+/// `Unreachable` — "no connection configured" is a known answer, while "a
+/// configured connection did not respond" is not.
+#[derive(Default)]
+pub struct NullMediaServerPlaybackProbe;
+
+#[async_trait]
+impl crate::ports::MediaServerPlaybackProbe for NullMediaServerPlaybackProbe {
+    async fn active_playback(&self) -> AppResult<crate::ports::PlaybackActivitySnapshot> {
+        Ok(crate::ports::PlaybackActivitySnapshot::empty(Utc::now()))
     }
 }
 

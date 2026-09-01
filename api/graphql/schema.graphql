@@ -2603,6 +2603,16 @@ type DeleteLibraryPayload {
 }
 
 """
+Identifier returned after removing a maintenance exclusion.
+"""
+type DeleteMaintenanceExclusionPayload {
+	"""
+	Removed exclusion ID.
+	"""
+	id: ID!
+}
+
+"""
 Identifier returned after deleting a maintenance rule set.
 """
 type DeleteMaintenanceRuleSetPayload {
@@ -5275,6 +5285,24 @@ enum EpisodeTypeValue {
 }
 
 """
+Excludes one subject from maintenance rules.
+"""
+input ExcludeMaintenanceSubjectInput {
+	"""
+	Title to exclude.
+	"""
+	titleId: ID!
+	"""
+	Rule to confine the exclusion to. Omitted means every rule.
+	"""
+	ruleSetId: ID
+	"""
+	Why the subject is being excluded.
+	"""
+	reason: String
+}
+
+"""
 Candidate selections, mappings, and secret overrides for an external import.
 """
 input ExecuteExternalImportInput {
@@ -7778,6 +7806,10 @@ enum JobKeyValue {
 	"""
 	TITLE_IMAGE_CACHE_REFRESH
 	"""
+	Scheduled maintenance rule evaluation.
+	"""
+	MAINTENANCE_RULE_EVALUATION
+	"""
 	Title deletion.
 	"""
 	TITLE_DELETION
@@ -8970,6 +9002,139 @@ enum MaintenanceActionSubject {
 }
 
 """
+One subject's durable membership in one maintenance rule set.
+
+Nothing here has acted on the subject: a candidate records that a rule
+matched it and how long the grace period still has to run.
+"""
+type MaintenanceCandidate {
+	"""
+	Candidate ID.
+	"""
+	id: ID!
+	"""
+	Rule set that produced the candidate.
+	"""
+	ruleSetId: ID!
+	"""
+	Name of that rule set.
+	"""
+	ruleName: String!
+	"""
+	Rule revision in force when the candidate was opened.
+	"""
+	revisionNumber: Int!
+	"""
+	Subject title ID.
+	"""
+	titleId: ID!
+	"""
+	Subject title name, or the stored title ID when the title is gone.
+	"""
+	titleName: String!
+	"""
+	Library the subject belonged to when the candidate was opened.
+	"""
+	libraryId: String!
+	"""
+	Media facet of the subject.
+	"""
+	facet: String!
+	"""
+	Current lifecycle state.
+	"""
+	state: MaintenanceCandidateState!
+	"""
+	Why the candidate is in that state.
+	"""
+	stateReason: String!
+	"""
+	Reason codes the matcher emitted on the most recent match.
+	"""
+	reasonCodes: [String!]!
+	"""
+	Action the rule revision authorizes. Nothing executes it in this release.
+	"""
+	actionKind: MaintenanceActionKind!
+	"""
+	Days the subject must match continuously before the action is due.
+	"""
+	graceDays: Int!
+	"""
+	Increments each time a fresh candidate is opened for this subject, so a
+	cancel-then-rematch is distinguishable from a continuing membership.
+	"""
+	matchGeneration: Int!
+	"""
+	When the subject started matching. Never reset while the candidate lives.
+	"""
+	firstMatchedAt: DateTime!
+	"""
+	When the subject most recently matched.
+	"""
+	lastMatchedAt: DateTime!
+	"""
+	When the grace period elapses, equal to `firstMatchedAt` for a zero-day
+	grace period.
+	"""
+	dueAt: DateTime!
+	"""
+	Set while the latest evaluation could not decide, and null otherwise.
+	"""
+	heldSince: DateTime
+	"""
+	UTC last-update time.
+	"""
+	updatedAt: DateTime!
+}
+
+"""
+Lifecycle state of one maintenance candidate.
+
+The whole state machine is exposed now, but the dark evaluator only ever
+produces `OBSERVING`, `CANCELED`, and `EXCLUDED`; the rest are written by
+the action executor, which is not part of this release.
+"""
+enum MaintenanceCandidateState {
+	"""
+	Matching, with the grace clock running.
+	"""
+	OBSERVING
+	"""
+	Grace elapsed and effect arming permits the action; awaiting the handler.
+	"""
+	PENDING_ACTION
+	"""
+	Eligible to execute now.
+	"""
+	DUE
+	"""
+	An action lease is held for this candidate.
+	"""
+	EXECUTING
+	"""
+	The action completed.
+	"""
+	SUCCEEDED
+	"""
+	The action failed terminally.
+	"""
+	FAILED
+	"""
+	The subject stopped matching, or its rule revision was superseded.
+	"""
+	CANCELED
+	"""
+	An exclusion covers the subject.
+	"""
+	EXCLUDED
+	"""
+	A safety precondition refused the action.
+	"""
+	BLOCKED
+}
+
+"""
 How a maintenance rule set is evaluated.
 """
 enum MaintenanceEvaluationMode {
@@ -8985,6 +9150,141 @@ enum MaintenanceEvaluationMode {
 	Evaluate, record, and surface candidates for manual approval.
 	"""
 	OBSERVE
+}
+
+"""
+One rule set's pass through one evaluation run.
+"""
+type MaintenanceEvaluationRun {
+	"""
+	Evaluation-run ID.
+	"""
+	id: ID!
+	"""
+	Rule set that was evaluated.
+	"""
+	ruleSetId: ID!
+	"""
+	Rule revision that was evaluated.
+	"""
+	revisionNumber: Int!
+	"""
+	One of running, succeeded, or failed. A run left running is the trace of
+	an interrupted pass.
+	"""
+	status: String!
+	"""
+	When the pass started.
+	"""
+	startedAt: DateTime!
+	"""
+	When the pass finished, or null while it is still running.
+	"""
+	finishedAt: DateTime
+	"""
+	Subjects the matcher was run against.
+	"""
+	evaluatedCount: Int!
+	"""
+	Subjects the matcher matched.
+	"""
+	matchedCount: Int!
+	"""
+	Subjects the matcher did not match.
+	"""
+	noMatchCount: Int!
+	"""
+	Subjects the matcher could not decide, which are held.
+	"""
+	unknownCount: Int!
+	"""
+	Subjects whose evaluation failed, which are also held.
+	"""
+	errorCount: Int!
+	"""
+	How long the pass took, or null while it is still running.
+	"""
+	durationMs: Int
+	"""
+	Why the pass failed, or null when it did not.
+	"""
+	error: String
+}
+
+"""
+Outcome of asking for an immediate evaluation pass.
+"""
+type MaintenanceEvaluationTriggerPayload {
+	"""
+	Whether a pass was started. False when a gate, a disabled rule, or a
+	run already in progress stopped it.
+	"""
+	started: Boolean!
+	"""
+	What happened, suitable for showing to an operator.
+	"""
+	message: String
+}
+
+"""
+A subject a maintenance rule must never act on.
+"""
+type MaintenanceExclusion {
+	"""
+	Exclusion ID.
+	"""
+	id: ID!
+	"""
+	Rule the exclusion is confined to, or null when it is global.
+	"""
+	ruleSetId: ID
+	"""
+	Excluded title ID.
+	"""
+	titleId: ID!
+	"""
+	Excluded title name, or the stored title ID when the title is gone.
+	"""
+	titleName: String!
+	"""
+	Why the subject was excluded; empty when the author gave no reason.
+	"""
+	reason: String!
+	"""
+	ID of the user who added the exclusion, or null when unattributed.
+	"""
+	createdBy: ID
+	"""
+	UTC creation time.
+	"""
+	createdAt: DateTime!
+}
+
+"""
+The five independent instance-wide maintenance gates. Every one of them
+defaults off, and only the first two do anything in this release.
+"""
+type MaintenanceInstanceGates {
+	"""
+	Whether the scheduled evaluator may run at all.
+	"""
+	evaluationEnabled: Boolean!
+	"""
+	Whether candidate results are returned to clients.
+	"""
+	resultDisplayEnabled: Boolean!
+	"""
+	Reserved for provider collection projection and lifecycle notifications.
+	"""
+	presentationEffectsEnabled: Boolean!
+	"""
+	Reserved for low and medium risk actions.
+	"""
+	reversibleEffectsEnabled: Boolean!
+	"""
+	Reserved for high risk actions.
+	"""
+	destructiveEffectsEnabled: Boolean!
 }
 
 """
@@ -12121,6 +12421,64 @@ type MutationRoot {
 		"""
 		input: PreviewMaintenanceRuleInput!
 	): MaintenancePreviewPayload!
+	"""
+	Move a maintenance rule set between evaluation modes.
+	
+	Creation always produces a disabled rule, so arming one is always this
+	deliberate second step. A rule moved back to disabled keeps the
+	candidates it already opened: flipping a rule off must not destroy the
+	membership and grace clocks it established.
+	"""
+	setMaintenanceRuleMode(
+		"""
+		Rule-set identity and the evaluation mode to store.
+		"""
+		input: SetMaintenanceRuleModeInput!
+	): MaintenanceRuleSet!
+	"""
+	Arm or disarm the instance-wide maintenance gates. Omitted fields keep their stored value.
+	"""
+	setMaintenanceInstanceGates(
+		"""
+		The gates to change; omit a field to leave that gate alone.
+		"""
+		input: SetMaintenanceInstanceGatesInput!
+	): MaintenanceInstanceGates!
+	"""
+	Exclude a subject from one maintenance rule, or from every rule when no rule is named.
+	
+	The exclusion takes effect at the next evaluation, which is also where an
+	existing candidate for the subject moves to the excluded state.
+	"""
+	excludeMaintenanceSubject(
+		"""
+		Subject to exclude, the optional rule to confine it to, and a reason.
+		"""
+		input: ExcludeMaintenanceSubjectInput!
+	): MaintenanceExclusion!
+	"""
+	Remove a maintenance exclusion.
+	"""
+	removeMaintenanceExclusion(
+		"""
+		Exclusion identity to remove.
+		"""
+		id: ID!
+	): DeleteMaintenanceExclusionPayload!
+	"""
+	Run maintenance evaluation now.
+	
+	Without a rule, this starts the ordinary scheduled job so the run shows
+	up in the system-jobs surface, and returns as soon as it is accepted.
+	Scoped to one rule it runs inline instead, because the job seam carries
+	no parameters; that path is bounded by the rule's own library scope.
+	"""
+	runMaintenanceEvaluationNow(
+		"""
+		Evaluate only this rule set; omit to evaluate every enabled rule.
+		"""
+		ruleSetId: ID
+	): MaintenanceEvaluationTriggerPayload!
 	"""
 	Refresh the configured plugin registry catalogs and return the available plugins.
 	"""
@@ -15412,6 +15770,74 @@ type QueryRoot {
 	"""
 	maintenanceActionDescriptors: [MaintenanceActionDescriptor!]!
 	"""
+	List lifecycle candidates the maintenance evaluator has recorded; requires catalog-settings management permission.
+	
+	Two independent things hide rows, and they are not the same thing. A
+	rule in shadow mode is dark by definition, so its candidates are
+	returned only when `includeShadow` is true. Separately, the instance
+	result-display gate hides everything while it is off.
+	
+	`includeShadow` overrides the gate as well as the mode filter, on
+	purpose: an operator deciding whether to arm result display has to be
+	able to see what shadow evaluation actually found first, and reaching
+	this query already requires catalog-settings management.
+	"""
+	maintenanceCandidates(
+		"""
+		Return candidates of this rule set only.
+		"""
+		ruleSetId: ID,
+		"""
+		Return candidates in these lifecycle states only.
+		"""
+		states: [MaintenanceCandidateState!],
+		"""
+		Return candidates whose subject belongs to this library only.
+		"""
+		libraryId: ID,
+		"""
+		Include candidates produced by rules running in shadow mode.
+		"""
+		includeShadow: Boolean,
+		"""
+		Maximum number of candidates to return.
+		"""
+		limit: Int
+	): [MaintenanceCandidate!]!
+	"""
+	List recorded maintenance evaluation runs, newest first.
+	
+	Runs carry counts and timing rather than subjects, so the result-display
+	gate does not hide them: they are how an operator sees that dark
+	evaluation is working at all.
+	"""
+	maintenanceEvaluationRuns(
+		"""
+		Return runs of this rule set only.
+		"""
+		ruleSetId: ID,
+		"""
+		Maximum number of runs to return.
+		"""
+		limit: Int
+	): [MaintenanceEvaluationRun!]!
+	"""
+	Read the five instance-wide maintenance gates; requires system-settings management permission.
+	"""
+	maintenanceInstanceGates: MaintenanceInstanceGates!
+	"""
+	List maintenance exclusions, newest first.
+	
+	Narrowing by rule returns that rule's own exclusions together with every
+	global one, because both are what actually stop it acting.
+	"""
+	maintenanceExclusions(
+		"""
+		Return the exclusions that apply to this rule set.
+		"""
+		ruleSetId: ID
+	): [MaintenanceExclusion!]!
+	"""
 	List post-processing scripts visible to the caller.
 	"""
 	postProcessingScripts: [PostProcessingScriptPayload!]!
@@ -17263,6 +17689,47 @@ input SetIndexerSeedingProfileInput {
 	Seeding profile identity to assign, or null to clear the assignment.
 	"""
 	seedingProfileId: ID
+}
+
+"""
+Arms or disarms the instance-wide maintenance gates. An omitted field leaves
+that gate exactly as stored.
+"""
+input SetMaintenanceInstanceGatesInput {
+	"""
+	Whether the scheduled evaluator may run.
+	"""
+	evaluationEnabled: Boolean
+	"""
+	Whether candidate results are returned to clients.
+	"""
+	resultDisplayEnabled: Boolean
+	"""
+	Reserved for provider collection projection and lifecycle notifications.
+	"""
+	presentationEffectsEnabled: Boolean
+	"""
+	Reserved for low and medium risk actions.
+	"""
+	reversibleEffectsEnabled: Boolean
+	"""
+	Reserved for high risk actions.
+	"""
+	destructiveEffectsEnabled: Boolean
+}
+
+"""
+Moves a rule set between evaluation modes.
+"""
+input SetMaintenanceRuleModeInput {
+	"""
+	Rule-set ID.
+	"""
+	id: ID!
+	"""
+	Mode to store. Anything other than `DISABLED` also enables the rule.
+	"""
+	mode: MaintenanceEvaluationMode!
 }
 
 """

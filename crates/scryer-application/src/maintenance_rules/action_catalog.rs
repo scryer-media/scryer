@@ -75,6 +75,39 @@ impl MaintenanceActionKind {
     pub fn supports_subject(self, subject: MaintenanceSubjectKind) -> bool {
         self.descriptor().supports_subject(subject)
     }
+
+    /// The pinned wire name, identical to what serde serializes. A candidate
+    /// row stores the action by this name rather than by a second encoding, so
+    /// `action_kind_wire_names_are_pinned` covers both at once.
+    pub const fn as_wire_str(self) -> &'static str {
+        match self {
+            Self::DoNothing => "do_nothing",
+            Self::UnmonitorScopeKeepFiles => "unmonitor_scope_keep_files",
+            Self::DeleteTitleAndFiles => "delete_title_and_files",
+            Self::UnmonitorTitleDeleteAllFiles => "unmonitor_title_delete_all_files",
+            Self::UnmonitorShowDeleteExistingFiles => "unmonitor_show_delete_existing_files",
+            Self::UnmonitorScopeDeleteFiles => "unmonitor_scope_delete_files",
+            Self::UnmonitorSeasonDeleteFilesThenDeleteShowIfEmpty => {
+                "unmonitor_season_delete_files_then_delete_show_if_empty"
+            }
+            Self::UnmonitorSeasonThenUnmonitorShowIfEmpty => {
+                "unmonitor_season_then_unmonitor_show_if_empty"
+            }
+            Self::ChangeQualityProfileAndSearchIfChanged => {
+                "change_quality_profile_and_search_if_changed"
+            }
+        }
+    }
+
+    /// Read a stored candidate's action back through the closed catalog. An
+    /// unrecognized name is `None`: a row written by a newer build never
+    /// collapses onto a fallback action here.
+    pub fn parse_wire_str(value: &str) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|kind| kind.as_wire_str() == value)
+    }
 }
 
 /// The media subject a rule and its action are scoped to.
@@ -710,7 +743,12 @@ mod tests {
                 serde_json::from_str::<MaintenanceActionKind>(&format!("\"{wire}\"")).unwrap(),
                 kind
             );
+            // A candidate row stores this string directly, so the hand-written
+            // projection has to be the same name serde produces.
+            assert_eq!(kind.as_wire_str(), wire);
+            assert_eq!(MaintenanceActionKind::parse_wire_str(wire), Some(kind));
         }
+        assert_eq!(MaintenanceActionKind::parse_wire_str("not_an_action"), None);
     }
 
     #[test]

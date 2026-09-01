@@ -180,6 +180,31 @@ impl MaintenanceRuleSetRepository for MaintenanceRuleSetStore {
         )
         .await
     }
+
+    async fn update_rule_set_evaluation_mode(
+        &self,
+        id: &str,
+        mode: MaintenanceEvaluationMode,
+        enabled: bool,
+        updated_at: DateTime<Utc>,
+    ) -> AppResult<()> {
+        // Both columns move in one statement: a row that is enabled while its
+        // mode says disabled has no reading the evaluator could act on.
+        execute_write(
+            &self.datastore,
+            "update_maintenance_rule_set_evaluation_mode",
+            "UPDATE maintenance_rule_sets
+                SET evaluation_mode = {}, enabled = {}, updated_at = {}
+              WHERE id = {}",
+            vec![
+                SqlArg::Text(mode.as_storage_str().to_string()),
+                SqlArg::Bool(enabled),
+                SqlArg::Timestamp(updated_at),
+                SqlArg::Text(id.to_string()),
+            ],
+        )
+        .await
+    }
 }
 
 const RULE_SET_COLUMNS: &str = "id, name, description, enabled, evaluation_mode, subject_kind,

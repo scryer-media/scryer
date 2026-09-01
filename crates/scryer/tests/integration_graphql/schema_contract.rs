@@ -565,19 +565,26 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // metadata edit, delete, validate, preview), with nine payload objects, six
     // inputs, and six enums: query 134->138, mutation 197->203, OBJECT 319->328,
     // INPUT_OBJECT 173->179, ENUM 112->118, public types 616->637.
+    // The maintenance dark evaluator adds four query roots (candidates,
+    // evaluation runs, instance gates, exclusions) and five mutation roots
+    // (rule mode, instance gates, exclude, remove exclusion, run now), with six
+    // payload objects, three inputs, and one candidate-state enum:
+    // query 138->142, mutation 203->208, OBJECT 328->334, INPUT_OBJECT
+    // 179->182, ENUM 118->119, public types 637->647. MAINTENANCE_RULE_EVALUATION
+    // joins the existing job key enum, so it adds no type.
     assert_eq!(
-        query_field_count, 138,
+        query_field_count, 142,
         "query fields: {query_field_names:?}"
     );
     assert_eq!(
-        mutation_field_count, 203,
+        mutation_field_count, 208,
         "mutation fields: {mutation_field_names:?}"
     );
     assert_eq!(subscription_field_count, 14);
-    assert_eq!(public_types.len(), 637);
-    assert_eq!(kind_count("OBJECT"), 328);
-    assert_eq!(kind_count("INPUT_OBJECT"), 179);
-    assert_eq!(kind_count("ENUM"), 118);
+    assert_eq!(public_types.len(), 647);
+    assert_eq!(kind_count("OBJECT"), 334);
+    assert_eq!(kind_count("INPUT_OBJECT"), 182);
+    assert_eq!(kind_count("ENUM"), 119);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
     assert!(query_field_names.contains(&"backupSettings"));
@@ -673,6 +680,25 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     assert!(!public_type_names.contains(&"TriggerSeasonWantedSearchInput"));
     assert!(!public_type_names.contains(&"TriggerWantedSearchInput"));
     assert!(!public_type_names.contains(&"ResetWantedItemPayload"));
+
+    // The maintenance dark-evaluator contract a later web wave is built
+    // against; these names are pinned, not incidental.
+    assert!(query_field_names.contains(&"maintenanceCandidates"));
+    assert!(query_field_names.contains(&"maintenanceEvaluationRuns"));
+    assert!(query_field_names.contains(&"maintenanceInstanceGates"));
+    assert!(query_field_names.contains(&"maintenanceExclusions"));
+    assert!(mutation_field_names.contains(&"setMaintenanceRuleMode"));
+    assert!(mutation_field_names.contains(&"setMaintenanceInstanceGates"));
+    assert!(mutation_field_names.contains(&"excludeMaintenanceSubject"));
+    assert!(mutation_field_names.contains(&"removeMaintenanceExclusion"));
+    assert!(mutation_field_names.contains(&"runMaintenanceEvaluationNow"));
+    assert!(public_type_names.contains(&"MaintenanceCandidate"));
+    assert!(public_type_names.contains(&"MaintenanceCandidateState"));
+    assert!(public_type_names.contains(&"MaintenanceEvaluationRun"));
+    assert!(public_type_names.contains(&"MaintenanceInstanceGates"));
+    assert!(public_type_names.contains(&"MaintenanceExclusion"));
+    assert!(public_type_names.contains(&"DeleteMaintenanceExclusionPayload"));
+    assert!(public_type_names.contains(&"MaintenanceEvaluationTriggerPayload"));
 
     // 0.17.0 API surface trim (root wave): dead root fields and their
     // exclusive snapshot payload types are gone.
