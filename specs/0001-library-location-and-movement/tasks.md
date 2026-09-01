@@ -177,32 +177,32 @@ only), C8 (targeted tests per work package; web lint before handoff), and C9
 
 ## Phase 9: User Stories 6+7 — cross-library transfer and merge (P2/P3)
 
-- [ ] T080 Identity detection: canonical metadata identities + redirects; unique →
+- [x] T080 Identity detection: canonical metadata identities + redirects; unique →
       merge preview; none → transfer; ambiguous → resolution-required;
       same-name-no-identity → never auto-merge. (FR-055)
-- [ ] T081 **Inventory deliverable**: enumerate every table/record type bearing
+- [x] T081 **Inventory deliverable**: enumerate every table/record type bearing
       title ids or episode ids (history, requests, import records, acquisition
       history, blocklists, tracked downloads, grab-planner data, events, …) with a
       per-table merge disposition (union / map / destination-wins / drop) checked
       into `specs/0001-library-location-and-movement/` as an appendix. (D8, FR-064,
       FR-066)
-- [ ] T082 Transfer-without-match: settings/tags carryover, destination inheritance,
+- [x] T082 Transfer-without-match: settings/tags carryover, destination inheritance,
       root + folder naming assignment, source removal after verify. (FR-056)
-- [ ] T083 Facet conversion series↔anime: automatic facet change, invalid/reset/
+- [x] T083 Facet conversion series↔anime: automatic facet change, invalid/reset/
       meaning-change settings surfaced, folder-name-only recalculation with
       files-keep-names statement. (FR-057–058)
-- [ ] T084 Series-movie link + media-kind dispositions; collection preservation/
+- [x] T084 Series-movie link + media-kind dispositions; collection preservation/
       remap notes in preview. (FR-060–062)
-- [ ] T085 Merge engine in `location/merge.rs`: full identity map first
+- [x] T085 Merge engine in `location/merge.rs`: full identity map first
       (episodes/specials/links), block on unmapped episode-scoped records,
       transactional unions per table group at title checkpoint, destination-wins
       settings, additive unions, source-only mapped retention. (FR-063–067, D8)
-- [ ] T086 Media-role resolution per logical slot incl. multi-episode split roles;
+- [x] T086 Media-role resolution per logical slot incl. multi-episode split roles;
       preview shows every role change; no silent primary demotion. (FR-068–070)
-- [ ] T087 [P] Web: cross-library destinations, incompatibility explanations,
+- [x] T087 [P] Web: cross-library destinations, incompatibility explanations,
       merge preview summary (wins/carries/unions/drops), conflict resolver; i18n;
       lint. (FR-017, FR-071)
-- [ ] T088 Story tests: US6 scenarios 1–5, US7 scenarios 1–5; mixed A/B/C→A bulk
+- [x] T088 Story tests: US6 scenarios 1–5, US7 scenarios 1–5; mixed A/B/C→A bulk
       classification (SC-005); merge preview-vs-outcome parity (SC-004).
 
 ## Phase 10: User Story 8 + polish
