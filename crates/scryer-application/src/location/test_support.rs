@@ -36,6 +36,9 @@ struct State {
     cancel_checks: usize,
     /// One-shot fault: the `nth` cancel check fails instead of answering.
     crash_on_cancel_check: Option<usize>,
+    /// The cancel check at which a user's cancel lands, for a test that needs
+    /// the request to arrive at a known title boundary.
+    cancel_at_cancel_check: Option<usize>,
 }
 
 /// An in-memory [`LocationOperationRepository`].
@@ -100,6 +103,18 @@ impl InMemoryLocationOperationStore {
     /// still held (FR-033, FR-084).
     pub(crate) fn crash_on_cancel_check(&self, nth: usize) {
         self.state.lock().expect("lock").crash_on_cancel_check = Some(nth);
+    }
+
+    /// Lands a user's cancel on the `nth` cancel check the runner makes.
+    ///
+    /// A cancel arrives from another task while the runner is working, so a
+    /// test that calls `cancel_location_operation` after starting a move is
+    /// racing the runner. Arming the boundary instead makes the stop
+    /// deterministic without changing what the runner sees: the flag it reads
+    /// at a title checkpoint is set, exactly as a persisted cancel request
+    /// would leave it (FR-092).
+    pub(crate) fn cancel_at_cancel_check(&self, nth: usize) {
+        self.state.lock().expect("lock").cancel_at_cancel_check = Some(nth);
     }
 }
 
@@ -182,6 +197,22 @@ impl LocationOperationRepository for InMemoryLocationOperationStore {
         Ok(())
     }
 
+    async fn set_location_operation_job_run(
+        &self,
+        operation_id: &str,
+        job_run_id: &str,
+    ) -> AppResult<()> {
+        let mut state = self.state.lock().expect("lock");
+        let Some(operation) = state.operations.get_mut(operation_id) else {
+            return Err(crate::AppError::NotFound(format!(
+                "location operation {operation_id}"
+            )));
+        };
+        operation.job_run_id = Some(job_run_id.to_string());
+        operation.updated_at = chrono::Utc::now();
+        Ok(())
+    }
+
     async fn request_location_operation_cancel(&self, operation_id: &str) -> AppResult<bool> {
         let mut state = self.state.lock().expect("lock");
         let terminal = state
@@ -206,6 +237,14 @@ impl LocationOperationRepository for InMemoryLocationOperationStore {
             return Err(crate::AppError::Repository(
                 "the store went away mid-operation".to_string(),
             ));
+        }
+        if state.cancel_at_cancel_check == Some(state.cancel_checks) {
+            state.cancel_at_cancel_check = None;
+            state.cancel_requested.insert(operation_id.to_string());
+            if let Some(operation) = state.operations.get_mut(operation_id) {
+                operation.cancel_requested = true;
+                operation.cancel_requested_at = Some(chrono::Utc::now());
+            }
         }
         Ok(state.cancel_requested.contains(operation_id))
     }

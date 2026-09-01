@@ -694,6 +694,14 @@ mod tests {
             unimplemented!("guard tests only read ownership")
         }
 
+        async fn set_location_operation_job_run(
+            &self,
+            _operation_id: &str,
+            _job_run_id: &str,
+        ) -> AppResult<()> {
+            unimplemented!("guard tests only read ownership")
+        }
+
         async fn request_location_operation_cancel(&self, _operation_id: &str) -> AppResult<bool> {
             unimplemented!("guard tests only read ownership")
         }

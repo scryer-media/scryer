@@ -29,6 +29,9 @@ struct RootMoveFixture {
     app: AppUseCase,
     user: User,
     operations: Arc<InMemoryLocationOperationStore>,
+    /// Activity's side of the operation: the runs the move opens and closes
+    /// (FR-091).
+    job_runs: Arc<RecordingJobRunRepo>,
     temp: tempfile::TempDir,
     root_a_id: String,
     root_b_id: String,
@@ -46,9 +49,15 @@ impl RootMoveFixture {
             bootstrap_movie_scan_app(&root_a, Vec::new(), Arc::new(EmptySearchMetadataGateway))
                 .await;
         let operations = Arc::new(InMemoryLocationOperationStore::new());
+        let job_runs = Arc::new(RecordingJobRunRepo::default());
         let app = app.with_test_overrides({
             let operations = operations.clone();
-            move |services| services.with_location_operation_repository(operations)
+            let job_runs = job_runs.clone();
+            move |services| {
+                services
+                    .with_location_operation_repository(operations)
+                    .with_job_runs(job_runs)
+            }
         });
 
         let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
@@ -80,6 +89,7 @@ impl RootMoveFixture {
             app,
             user,
             operations,
+            job_runs,
             temp,
         }
     }
@@ -256,6 +266,36 @@ impl RootMoveFixture {
 
     fn verifications(&self) -> Vec<crate::location::model::FileVerificationRecord> {
         self.operations.verifications()
+    }
+
+    /// Every Activity run this fixture recorded, in the order they were opened.
+    async fn recorded_job_runs(&self) -> Vec<crate::JobRunRecord> {
+        self.job_runs.runs.lock().await.clone()
+    }
+
+    async fn job_run(&self, run_id: &str) -> crate::JobRunRecord {
+        self.recorded_job_runs()
+            .await
+            .into_iter()
+            .find(|run| run.id == run_id)
+            .expect("the job run the operation names was recorded")
+    }
+
+    /// The runner closes the Activity run just after it writes the operation's
+    /// terminal state, so a test that watched the operation settle has to give
+    /// Activity the same beat the UI does.
+    async fn settled_job_run(&self, run_id: &str) -> crate::JobRunRecord {
+        timeout(Duration::from_secs(10), async {
+            loop {
+                let run = self.job_run(run_id).await;
+                if run.status.is_terminal() {
+                    return run;
+                }
+                sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the job run reached a terminal status")
     }
 }
 
@@ -987,4 +1027,319 @@ async fn the_backfill_job_skips_files_owned_by_an_in_flight_operation() {
         .expect("backfill after the operation");
     assert_eq!(after.skipped_owned, 0);
     assert_eq!(after.hashed, 2);
+}
+
+// ── Activity (FR-091) ────────────────────────────────────────────────────────
+
+/// T036: a confirmed move is visible in Activity from the moment it is
+/// accepted. The operation names a `location_operation` run, that run is open
+/// while the move is working, and it closes as completed with a summary once
+/// the move finishes.
+#[tokio::test]
+async fn a_started_move_opens_an_activity_job_run_and_closes_it_when_the_move_finishes() {
+    let fixture = RootMoveFixture::new().await;
+    let title = fixture
+        .seed_title(
+            "Activity Subject",
+            2019,
+            &fixture.root_a_id,
+            &fixture.root_a(),
+            "Activity Subject (2019)",
+            &[("Activity.Subject.2019.mkv", 1024)],
+        )
+        .await;
+
+    let preview = fixture.preview(&[&title.id]).await;
+    let accepted = fixture
+        .app
+        .start_root_move(
+            &fixture.user,
+            StartRootMoveRequest {
+                title_ids: vec![title.id.clone()],
+                destination: DestinationRequest::to_root(fixture.root_b_id.clone()),
+                confirmation: PlanConfirmationRequest {
+                    fingerprint: preview.plan.fingerprint.clone(),
+                    typed_confirmation: None,
+                },
+            },
+        )
+        .await
+        .expect("start root move");
+
+    // The payload the mutation returns already names the run, so a client can
+    // follow the move without a second round trip.
+    let run_id = accepted
+        .operation
+        .job_run_id
+        .clone()
+        .expect("an accepted operation names its Activity run");
+    let opened = fixture.job_run(&run_id).await;
+    assert_eq!(opened.job_key, crate::JobKey::LocationOperation);
+    assert_eq!(opened.trigger_source, crate::JobTriggerSource::Manual);
+    assert_eq!(opened.actor_user_id.as_deref(), Some(fixture.user.id.as_str()));
+    assert_eq!(
+        opened.operation_type,
+        format!("location_operation:{}", accepted.operation.id)
+    );
+
+    // The persisted row carries the same id, which is what a reader that never
+    // saw the mutation payload goes by.
+    let persisted = fixture
+        .app
+        .location_operation(&accepted.operation.id)
+        .await
+        .expect("read operation")
+        .expect("operation row");
+    assert_eq!(persisted.job_run_id.as_deref(), Some(run_id.as_str()));
+    assert_eq!(
+        persisted.workflow_operation_id, None,
+        "location operations report through Activity, not the workflow ledger"
+    );
+
+    let settled = fixture.settle(&accepted.operation.id).await;
+    assert_eq!(settled.state, LocationOperationState::Completed);
+
+    let closed = fixture.settled_job_run(&run_id).await;
+    assert_eq!(closed.status, crate::JobRunStatus::Completed);
+    assert!(closed.completed_at.is_some());
+    assert_eq!(closed.error_text, None);
+    let summary = closed.summary_text.clone().expect("a closed run summarizes");
+    assert!(
+        summary.contains("1 of 1 title(s)"),
+        "the summary reports what moved, got {summary}"
+    );
+
+    assert_eq!(
+        fixture.recorded_job_runs().await.len(),
+        1,
+        "one execution, one run"
+    );
+}
+
+/// T036 + FR-092: a cancel is a safe stop, not a failure. The operation settles
+/// as canceled and its Activity run closes as a warning, with a summary that
+/// says finished titles were left alone and no error text at all.
+#[tokio::test]
+async fn a_canceled_move_closes_its_activity_run_as_a_warning_rather_than_a_failure() {
+    let fixture = RootMoveFixture::new().await;
+    let first = fixture
+        .seed_title(
+            "Canceled First",
+            2001,
+            &fixture.root_a_id,
+            &fixture.root_a(),
+            "Canceled First (2001)",
+            &[("Canceled.First.2001.mkv", 512)],
+        )
+        .await;
+    let second = fixture
+        .seed_title(
+            "Canceled Second",
+            2002,
+            &fixture.root_a_id,
+            &fixture.root_a(),
+            "Canceled Second (2002)",
+            &[("Canceled.Second.2002.mkv", 512)],
+        )
+        .await;
+
+    let preview = fixture.preview(&[&first.id, &second.id]).await;
+    // The cancel lands at the boundary after the first title settled, which is
+    // where a user's request would be read.
+    fixture.operations.cancel_at_cancel_check(2);
+    let accepted = fixture
+        .app
+        .start_root_move(
+            &fixture.user,
+            StartRootMoveRequest {
+                title_ids: vec![first.id.clone(), second.id.clone()],
+                destination: DestinationRequest::to_root(fixture.root_b_id.clone()),
+                confirmation: PlanConfirmationRequest {
+                    fingerprint: preview.plan.fingerprint.clone(),
+                    typed_confirmation: None,
+                },
+            },
+        )
+        .await
+        .expect("start root move");
+    let run_id = accepted
+        .operation
+        .job_run_id
+        .clone()
+        .expect("an accepted operation names its Activity run");
+
+    let settled = fixture.settle(&accepted.operation.id).await;
+    assert_eq!(settled.state, LocationOperationState::Canceled);
+
+    let closed = fixture.settled_job_run(&run_id).await;
+    assert_eq!(
+        closed.status,
+        crate::JobRunStatus::Warning,
+        "a user-requested stop is not a job failure"
+    );
+    assert_eq!(closed.error_text, None);
+    let summary = closed.summary_text.clone().expect("a closed run summarizes");
+    assert!(
+        summary.contains("Canceled at a title checkpoint"),
+        "the summary explains the stop, got {summary}"
+    );
+
+    // The safe stop is real: the first title moved, the second never did.
+    assert_eq!(
+        fixture.title(&first.id).await.root_folder_id,
+        fixture.root_b_id
+    );
+    assert_eq!(
+        fixture.title(&second.id).await.root_folder_id,
+        fixture.root_a_id
+    );
+}
+
+/// T036 + FR-033: an execution that dies fails its own run, and the resume that
+/// picks the operation back up reports through a *fresh* run. The operation
+/// points at the latest attempt, so Activity shows one row per attempt instead
+/// of rewriting a finished one.
+#[tokio::test]
+async fn a_resumed_operation_reports_through_a_fresh_activity_run() {
+    let fixture = RootMoveFixture::new().await;
+    let first = fixture
+        .seed_title(
+            "Resumed First",
+            2003,
+            &fixture.root_a_id,
+            &fixture.root_a(),
+            "Resumed First (2003)",
+            &[("Resumed.First.2003.mkv", 512)],
+        )
+        .await;
+    let second = fixture
+        .seed_title(
+            "Resumed Second",
+            2004,
+            &fixture.root_a_id,
+            &fixture.root_a(),
+            "Resumed Second (2004)",
+            &[("Resumed.Second.2004.mkv", 512)],
+        )
+        .await;
+
+    let preview = fixture.preview(&[&first.id, &second.id]).await;
+    // The store dies at the boundary after the first title settled: the row
+    // stays non-terminal, which is what a killed process leaves behind.
+    fixture.operations.crash_on_cancel_check(2);
+    let accepted = fixture
+        .app
+        .start_root_move(
+            &fixture.user,
+            StartRootMoveRequest {
+                title_ids: vec![first.id.clone(), second.id.clone()],
+                destination: DestinationRequest::to_root(fixture.root_b_id.clone()),
+                confirmation: PlanConfirmationRequest {
+                    fingerprint: preview.plan.fingerprint.clone(),
+                    typed_confirmation: None,
+                },
+            },
+        )
+        .await
+        .expect("start root move");
+    let operation_id = accepted.operation.id.clone();
+    let first_run_id = accepted
+        .operation
+        .job_run_id
+        .clone()
+        .expect("an accepted operation names its Activity run");
+
+    // The crashed execution closes its own run as failed, while the operation
+    // itself stays resumable.
+    let crashed_run = fixture.settled_job_run(&first_run_id).await;
+    assert_eq!(crashed_run.status, crate::JobRunStatus::Failed);
+    assert!(
+        crashed_run.error_text.is_some(),
+        "a run that died says why"
+    );
+    let interrupted = fixture
+        .app
+        .location_operation(&operation_id)
+        .await
+        .expect("read operation")
+        .expect("operation row");
+    assert!(
+        interrupted.state.is_active(),
+        "a crash never writes a terminal state, got {:?}",
+        interrupted.state
+    );
+
+    let resumed_plan = fixture
+        .app
+        .resume_location_operation(&operation_id)
+        .await
+        .expect("resume")
+        .expect("an interrupted root move is resumable");
+
+    let repointed = fixture
+        .app
+        .location_operation(&operation_id)
+        .await
+        .expect("read operation")
+        .expect("operation row");
+    let second_run_id = repointed
+        .job_run_id
+        .clone()
+        .expect("a resumed operation names a run");
+    assert_ne!(
+        second_run_id, first_run_id,
+        "the resumed attempt gets its own run rather than reopening a settled one"
+    );
+
+    let reopened = fixture.job_run(&second_run_id).await;
+    assert_eq!(reopened.job_key, crate::JobKey::LocationOperation);
+    assert_eq!(reopened.status, crate::JobRunStatus::Running);
+    assert_eq!(
+        reopened.trigger_source,
+        crate::JobTriggerSource::SystemInternal,
+        "a resume continues work Scryer already owns"
+    );
+    assert_eq!(
+        reopened.actor_user_id.as_deref(),
+        Some(fixture.user.id.as_str()),
+        "the run still belongs to the user who confirmed the move"
+    );
+
+    let outcome = fixture
+        .app
+        .run_root_move(&operation_id, &resumed_plan)
+        .await
+        .expect("resumed run");
+    assert_eq!(outcome.state, LocationOperationState::Completed);
+
+    let closed = fixture.settled_job_run(&second_run_id).await;
+    assert_eq!(closed.status, crate::JobRunStatus::Completed);
+    assert_eq!(
+        fixture.job_run(&first_run_id).await.status,
+        crate::JobRunStatus::Failed,
+        "the earlier attempt's row is left exactly as it settled"
+    );
+    assert_eq!(fixture.recorded_job_runs().await.len(), 2);
+}
+
+/// T036: the generic job trigger still refuses to start a location operation.
+/// Activity shows these runs, but only the location mutation may open one —
+/// otherwise a second runner could pick up an operation another one owns.
+#[tokio::test]
+async fn the_generic_job_trigger_still_refuses_to_start_a_location_operation() {
+    assert!(
+        !crate::JobKey::LocationOperation.manual_trigger_allowed(),
+        "a location operation is started from its own mutation"
+    );
+
+    let fixture = RootMoveFixture::new().await;
+    let error = fixture
+        .app
+        .trigger_job(&fixture.user, crate::JobKey::LocationOperation)
+        .await
+        .expect_err("the generic path refuses");
+    assert!(
+        matches!(error, crate::AppError::Validation(_)),
+        "refusing a manual trigger is a validation error, got {error:?}"
+    );
 }

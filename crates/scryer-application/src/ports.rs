@@ -4314,6 +4314,19 @@ pub trait LocationOperationRepository: Send + Sync {
         progress: &LocationOperationProgress,
     ) -> AppResult<()>;
 
+    /// Points the operation at the Activity job run for its *current* execution
+    /// (FR-091).
+    ///
+    /// A start writes the column through
+    /// [`LocationOperationRepository::create_location_operation`]; only a resume
+    /// needs this, because every resumed attempt gets its own run and the
+    /// operation names the latest one.
+    async fn set_location_operation_job_run(
+        &self,
+        operation_id: &str,
+        job_run_id: &str,
+    ) -> AppResult<()>;
+
     /// Records a cancel request (FR-092). Returns false when the operation is
     /// already terminal, so a late cancel cannot resurrect a finished run.
     async fn request_location_operation_cancel(&self, operation_id: &str) -> AppResult<bool>;

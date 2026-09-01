@@ -253,6 +253,33 @@ impl LocationOperationRepository for LocationOperationStore {
         Ok(())
     }
 
+    async fn set_location_operation_job_run(
+        &self,
+        operation_id: &str,
+        job_run_id: &str,
+    ) -> AppResult<()> {
+        let updated = SqlRuntime::execute_write(
+            &self.datastore,
+            "set_location_operation_job_run",
+            "UPDATE location_operations
+             SET job_run_id = {}, updated_at = {}
+             WHERE id = {}",
+            vec![
+                SqlArg::Text(job_run_id.to_string()),
+                SqlArg::Timestamp(Utc::now()),
+                SqlArg::Text(operation_id.to_string()),
+            ],
+        )
+        .await?;
+
+        if updated == 0 {
+            return Err(AppError::NotFound(format!(
+                "location operation {operation_id}"
+            )));
+        }
+        Ok(())
+    }
+
     async fn request_location_operation_cancel(&self, operation_id: &str) -> AppResult<bool> {
         let sql = format!(
             "UPDATE location_operations
@@ -1131,6 +1158,37 @@ mod tests {
                 .await
                 .expect("the cancel should succeed"),
             "a finished operation cannot be cancelled"
+        );
+    }
+
+    /// FR-091: a resumed operation reports through a new Activity run, so the
+    /// row has to be repointable after it was created.
+    #[tokio::test]
+    async fn an_operation_can_be_repointed_at_the_run_for_its_latest_execution() {
+        let store = test_store().await;
+        store
+            .create_location_operation(&operation("op-1", LocationOperationState::Moving), None)
+            .await
+            .expect("the operation should persist");
+
+        store
+            .set_location_operation_job_run("op-1", "job-2")
+            .await
+            .expect("the repoint should succeed");
+
+        let stored = store
+            .get_location_operation("op-1")
+            .await
+            .expect("the read should succeed")
+            .expect("the operation should exist");
+        assert_eq!(stored.job_run_id.as_deref(), Some("job-2"));
+
+        assert!(
+            store
+                .set_location_operation_job_run("op-missing", "job-3")
+                .await
+                .is_err(),
+            "an operation that is not there cannot be repointed"
         );
     }
 

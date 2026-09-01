@@ -37,7 +37,12 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use scryer_domain::{LibraryPermission, MediaFacet, Title, User};
+use scryer_domain::{
+    DomainEventPayload, JobRunCompletedEventData, JobRunFailedEventData, JobRunStartedEventData,
+    LibraryPermission, MediaFacet, Title, User,
+};
+
+use crate::domain_events::{DomainEventActor, new_job_run_domain_event};
 
 use crate::location::classify::{
     DestinationLibraryFacts, DestinationRequest, SelectionClassification, TitleClassificationFacts,
@@ -148,9 +153,22 @@ impl AppUseCase {
             ));
         }
 
+        // Activity's job run is opened before the row it belongs to, so the
+        // accepted payload can name it and the client can follow the operation
+        // from the jobs list the moment the mutation returns (FR-091).
+        let operation_id = scryer_domain::Id::new().0;
+        let titles_total = planned.planned.execution.titles.len() as i64;
+        let job_run = self
+            .open_location_operation_job_run(
+                &operation_id,
+                titles_total,
+                LocationJobRunActor::Confirmed(actor),
+            )
+            .await?;
+
         let now = chrono::Utc::now();
         let operation = LocationOperation {
-            id: scryer_domain::Id::new().0,
+            id: operation_id,
             operation_type: LocationOperationType::RootMove,
             mode: plan.header.mode,
             state: LocationOperationState::Queued,
@@ -163,7 +181,7 @@ impl AppUseCase {
             verification_depth: plan.verification.depth,
             verification_fallback_count: 0,
             counters: LocationOperationCounters {
-                titles_total: planned.planned.execution.titles.len() as i64,
+                titles_total,
                 files_total: planned
                     .planned
                     .execution
@@ -182,10 +200,14 @@ impl AppUseCase {
                 ..LocationOperationCounters::default()
             },
             detail: None,
-            // Activity's job-run row is T034/T036's to add: the interface crates
-            // own the JobKey mapping, and this column is nullable for exactly
-            // that reason.
-            job_run_id: None,
+            // Activity reads the operation through this run (FR-091). The
+            // column stays nullable because an operation created before T036 —
+            // or one driven by an administrative path with no run — is still a
+            // valid row.
+            job_run_id: Some(job_run.id.clone()),
+            // Location operations are their own subsystem with their own
+            // persisted row and checkpoints; nothing reads them through the
+            // workflow-operation ledger, so this stays unset.
             workflow_operation_id: None,
             cancel_requested: false,
             cancel_requested_at: None,
@@ -196,13 +218,30 @@ impl AppUseCase {
             completed_at: None,
         };
 
-        let plan_json = serde_json::to_string(&planned.planned.execution)
-            .map_err(|error| AppError::Repository(error.to_string()))?;
-        self.services
-            .library
-            .location_operations
-            .create_location_operation(&operation, Some(&plan_json))
-            .await?;
+        let persisted = async {
+            let plan_json = serde_json::to_string(&planned.planned.execution)
+                .map_err(|error| AppError::Repository(error.to_string()))?;
+            self.services
+                .library
+                .location_operations
+                .create_location_operation(&operation, Some(&plan_json))
+                .await
+        }
+        .await;
+        if let Err(error) = persisted {
+            // The run was opened first so the payload could name it; an
+            // operation that never reached the database must not leave a
+            // running row in Activity forever.
+            self.close_location_operation_job_run(
+                &job_run,
+                crate::JobRunStatus::Failed,
+                "The location operation could not be started.".to_string(),
+                Some(error.to_string()),
+                None,
+            )
+            .await;
+            return Err(error);
+        }
 
         self.spawn_location_operation(operation.id.clone(), planned.planned.execution);
 
@@ -257,6 +296,14 @@ impl AppUseCase {
     /// Resume one persisted operation from its last verified checkpoint
     /// (FR-033). Returns `None` when the operation is unknown, terminal, or was
     /// stored without its plan.
+    ///
+    /// A resumable operation gets a *fresh* Activity job run before the plan is
+    /// handed back, and the operation row is repointed at it. Job runs are
+    /// per-execution everywhere else in Scryer — the boot reconciler fails every
+    /// non-terminal run it finds, so the run an interrupted operation started
+    /// under is already `failed` by the time a resume happens, and reopening it
+    /// would rewrite a settled Activity row. One run per attempt also keeps the
+    /// jobs list honest about how many times a move was picked back up.
     pub async fn resume_location_operation(
         &self,
         operation_id: &str,
@@ -286,6 +333,25 @@ impl AppUseCase {
                 "location operation {operation_id} has an unreadable plan: {error}"
             ))
         })?;
+
+        // The resumed attempt gets its own run, and the operation points at the
+        // latest one. A resume is a continuation of work the user already
+        // confirmed, so the run is attributed to that user but triggered by the
+        // system — the boot hook has no actor at all, and a resume mutation is
+        // asking Scryer to carry on rather than to start something new.
+        let job_run = self
+            .open_location_operation_job_run(
+                operation_id,
+                operation.counters.titles_total,
+                LocationJobRunActor::Resumed(operation.initiated_by_user_id.clone()),
+            )
+            .await?;
+        self.services
+            .library
+            .location_operations
+            .set_location_operation_job_run(operation_id, &job_run.id)
+            .await?;
+
         Ok(Some(plan))
     }
 
@@ -331,7 +397,32 @@ impl AppUseCase {
     ///
     /// Public so a test — and, later, a synchronous administrative path — can
     /// drive an operation without a background task.
+    ///
+    /// Whatever the run settles on is also what closes the operation's Activity
+    /// job run (FR-091). The run id is read once, before any work starts, so a
+    /// resume that repoints the operation partway through cannot make this call
+    /// finalize somebody else's row.
     pub async fn run_root_move(
+        &self,
+        operation_id: &str,
+        plan: &RootMoveExecutionPlan,
+    ) -> AppResult<OperationRunOutcome> {
+        let job_run_id = self
+            .location_operation(operation_id)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|operation| operation.job_run_id);
+
+        let outcome = self.execute_root_move(operation_id, plan).await;
+        if let Some(job_run_id) = job_run_id {
+            self.close_location_operation_job_run_for(&job_run_id, &outcome)
+                .await;
+        }
+        outcome
+    }
+
+    async fn execute_root_move(
         &self,
         operation_id: &str,
         plan: &RootMoveExecutionPlan,
@@ -375,6 +466,229 @@ impl AppUseCase {
                 );
             }
         });
+    }
+
+    // ── Activity job runs (FR-091) ───────────────────────────────────────────
+    //
+    // Location operations are started from their own mutation and never from
+    // the generic job trigger, so they open and close their own runs the way
+    // the title-rename and application-upgrade jobs do
+    // (`AppUseCase::start_rename_titles_job`,
+    // `AppUseCase::start_application_upgrade_job`). Everything Activity needs —
+    // the tracker entry, the started/completed/failed domain events — is
+    // written here rather than by the jobs engine, which never sees these runs.
+
+    /// Open the run one execution of a location operation reports through.
+    async fn open_location_operation_job_run(
+        &self,
+        operation_id: &str,
+        titles_total: i64,
+        actor: LocationJobRunActor<'_>,
+    ) -> AppResult<crate::JobRunRecord> {
+        let now = chrono::Utc::now();
+        let mut run = crate::JobRunRecord {
+            id: scryer_domain::Id::new().0,
+            job_key: crate::JobKey::LocationOperation,
+            operation_type: format!("location_operation:{operation_id}"),
+            status: crate::JobRunStatus::Running,
+            trigger_source: actor.trigger_source(),
+            actor_user_id: actor.actor_user_id(),
+            progress_json: serde_json::to_string(&serde_json::json!({
+                "status": crate::JobRunStatus::Running.as_str(),
+                "phase": "queued",
+                "operationId": operation_id,
+                "titlesTotal": titles_total,
+                "titlesProcessed": 0,
+            }))
+            .ok(),
+            summary_json: None,
+            summary_text: None,
+            error_text: None,
+            started_at: now,
+            completed_at: None,
+            created_at: now,
+            updated_at: now,
+        };
+        run = self.services.events.job_runs.create_job_run(&run).await?;
+
+        self.runtime
+            .jobs
+            .job_run_tracker
+            .upsert_active_run(crate::JobRun::from_record(&run, None))
+            .await;
+        let _ = self
+            .append_domain_event(new_job_run_domain_event(
+                actor.event_actor(),
+                run.id.clone(),
+                DomainEventPayload::JobRunStarted(JobRunStartedEventData {
+                    run_id: run.id.clone(),
+                    job_key: run.job_key.as_str().to_string(),
+                    operation_type: run.operation_type.clone(),
+                    trigger_source: run.trigger_source.as_str().to_string(),
+                }),
+            ))
+            .await;
+        Ok(run)
+    }
+
+    /// Close the run for an execution that has settled, translating the
+    /// operation's terminal state into the job vocabulary Activity speaks.
+    ///
+    /// A cancel is a *warning*, not a failure: the user asked the move to stop
+    /// and everything it had finished is intact, which is the same reading a
+    /// canceled library scan gets (`JobRun::from_record`). Only an error — or a
+    /// run that never returned an outcome at all — is a failure.
+    async fn close_location_operation_job_run_for(
+        &self,
+        job_run_id: &str,
+        outcome: &AppResult<OperationRunOutcome>,
+    ) {
+        let Some(run) = self.location_operation_job_run(job_run_id).await else {
+            return;
+        };
+
+        let (status, summary_text, error_text, counters) = match outcome {
+            Ok(outcome) => {
+                let summary = describe_location_operation_outcome(outcome);
+                match outcome.state {
+                    LocationOperationState::Completed => (
+                        crate::JobRunStatus::Completed,
+                        summary,
+                        None,
+                        Some(outcome.counters.clone()),
+                    ),
+                    LocationOperationState::CompletedWithWarnings => (
+                        crate::JobRunStatus::Warning,
+                        summary,
+                        None,
+                        Some(outcome.counters.clone()),
+                    ),
+                    LocationOperationState::Canceled => (
+                        crate::JobRunStatus::Warning,
+                        summary,
+                        None,
+                        Some(outcome.counters.clone()),
+                    ),
+                    LocationOperationState::Failed => (
+                        crate::JobRunStatus::Failed,
+                        summary,
+                        Some(outcome.detail.clone().unwrap_or_else(|| {
+                            "the location operation stopped on an error".to_string()
+                        })),
+                        Some(outcome.counters.clone()),
+                    ),
+                    // A non-terminal outcome means the runner handed the
+                    // operation back for someone else to continue; the run stays
+                    // open so the next execution reports on it.
+                    _ => return,
+                }
+            }
+            Err(error) => (
+                crate::JobRunStatus::Failed,
+                "The location operation stopped with an error.".to_string(),
+                Some(error.to_string()),
+                None,
+            ),
+        };
+
+        self.close_location_operation_job_run(
+            &run,
+            status,
+            summary_text,
+            error_text,
+            counters.as_ref(),
+        )
+        .await;
+    }
+
+    /// The persisted run, when the repository still has it. A missing run is
+    /// logged and skipped: a finished move must never fail because Activity
+    /// could not be updated.
+    async fn location_operation_job_run(&self, job_run_id: &str) -> Option<crate::JobRunRecord> {
+        match self.services.events.job_runs.get_job_run(job_run_id).await {
+            Ok(Some(run)) => Some(run),
+            Ok(None) => None,
+            Err(error) => {
+                tracing::warn!(
+                    job_run_id = %job_run_id,
+                    error = %error,
+                    "could not read the job run for a location operation"
+                );
+                None
+            }
+        }
+    }
+
+    /// Write a terminal status onto a location-operation run, mirror it into the
+    /// tracker, and announce it.
+    async fn close_location_operation_job_run(
+        &self,
+        run: &crate::JobRunRecord,
+        status: crate::JobRunStatus,
+        summary_text: String,
+        error_text: Option<String>,
+        counters: Option<&LocationOperationCounters>,
+    ) {
+        let mut run = run.clone();
+        if run.status.is_terminal() {
+            // Something already settled this run — the boot reconciler, or a
+            // second execution. Rewriting a finished Activity row would lose
+            // whichever outcome the user already saw.
+            return;
+        }
+
+        let now = chrono::Utc::now();
+        run.status = status;
+        run.progress_json = serde_json::to_string(&serde_json::json!({
+            "status": status.as_str(),
+            "phase": "completed",
+            "titlesTotal": counters.map(|counters| counters.titles_total).unwrap_or_default(),
+            "titlesProcessed": counters.map(|counters| counters.titles_processed).unwrap_or_default(),
+        }))
+        .ok();
+        run.summary_json = counters.and_then(|counters| serde_json::to_string(counters).ok());
+        run.summary_text = Some(summary_text.clone());
+        run.error_text = error_text.clone();
+        run.completed_at = Some(now);
+        run.updated_at = now;
+
+        let updated = match self.services.events.job_runs.update_job_run(&run).await {
+            Ok(updated) => updated,
+            Err(error) => {
+                tracing::warn!(
+                    job_run_id = %run.id,
+                    error = %error,
+                    "could not finalize the job run for a location operation"
+                );
+                return;
+            }
+        };
+        self.runtime
+            .jobs
+            .job_run_tracker
+            .upsert_active_run(crate::JobRun::from_record(&updated, None))
+            .await;
+
+        let payload = if status == crate::JobRunStatus::Failed {
+            DomainEventPayload::JobRunFailed(JobRunFailedEventData {
+                run_id: updated.id.clone(),
+                job_key: updated.job_key.as_str().to_string(),
+                error_text,
+            })
+        } else {
+            DomainEventPayload::JobRunCompleted(JobRunCompletedEventData {
+                run_id: updated.id.clone(),
+                job_key: updated.job_key.as_str().to_string(),
+                summary_text: Some(summary_text),
+            })
+        };
+        let _ = self
+            .append_domain_event(new_job_run_domain_event(
+                DomainEventActor::system(),
+                updated.id.clone(),
+                payload,
+            ))
+            .await;
     }
 
     /// Recycle-bin configuration per source root, so a redundant source copy
@@ -446,6 +760,78 @@ impl AppUseCase {
         }
         Ok(())
     }
+}
+
+// ── Activity job runs ────────────────────────────────────────────────────────
+
+/// Who a location-operation job run belongs to, and why it was opened.
+enum LocationJobRunActor<'a> {
+    /// A user confirmed a previewed plan: a manual trigger, attributed to them.
+    Confirmed(&'a User),
+    /// An execution picked back up. The user who confirmed the operation still
+    /// owns it, but Scryer — a resume mutation or the boot hook — is what
+    /// started this attempt, and the boot hook has no actor to speak of.
+    Resumed(Option<String>),
+}
+
+impl LocationJobRunActor<'_> {
+    fn trigger_source(&self) -> crate::JobTriggerSource {
+        match self {
+            Self::Confirmed(_) => crate::JobTriggerSource::Manual,
+            Self::Resumed(_) => crate::JobTriggerSource::SystemInternal,
+        }
+    }
+
+    fn actor_user_id(&self) -> Option<String> {
+        match self {
+            Self::Confirmed(actor) => Some(actor.id.clone()),
+            Self::Resumed(user_id) => user_id.clone(),
+        }
+    }
+
+    fn event_actor(&self) -> DomainEventActor {
+        match self {
+            Self::Confirmed(actor) => DomainEventActor::from(*actor),
+            Self::Resumed(_) => DomainEventActor::system(),
+        }
+    }
+}
+
+/// The one-line summary Activity shows for a settled location operation.
+fn describe_location_operation_outcome(outcome: &OperationRunOutcome) -> String {
+    let counters = &outcome.counters;
+    let mut summary = format!(
+        "Moved {} of {} title(s) and {} of {} file(s).",
+        counters.titles_processed,
+        counters.titles_total,
+        counters.files_processed,
+        counters.files_total
+    );
+    if counters.titles_blocked > 0 {
+        summary.push_str(&format!(" {} blocked.", counters.titles_blocked));
+    }
+    if counters.no_ops > 0 {
+        summary.push_str(&format!(" {} needed no change.", counters.no_ops));
+    }
+    if counters.unresolved > 0 {
+        summary.push_str(&format!(
+            " {} still need a decision.",
+            counters.unresolved
+        ));
+    }
+    match outcome.state {
+        LocationOperationState::Canceled => {
+            summary.push_str(" Canceled at a title checkpoint; finished titles are unchanged.");
+        }
+        LocationOperationState::Failed => {
+            if let Some(detail) = outcome.detail.as_deref() {
+                summary.push(' ');
+                summary.push_str(detail);
+            }
+        }
+        _ => {}
+    }
+    summary
 }
 
 // ── Planning ─────────────────────────────────────────────────────────────────

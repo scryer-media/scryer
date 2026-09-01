@@ -1280,6 +1280,18 @@ mod tests {
             Ok(())
         }
 
+        async fn set_location_operation_job_run(
+            &self,
+            operation_id: &str,
+            job_run_id: &str,
+        ) -> AppResult<()> {
+            let mut state = self.inner.lock().expect("lock");
+            if let Some(operation) = state.operations.get_mut(operation_id) {
+                operation.job_run_id = Some(job_run_id.to_string());
+            }
+            Ok(())
+        }
+
         async fn request_location_operation_cancel(&self, operation_id: &str) -> AppResult<bool> {
             let mut state = self.inner.lock().expect("lock");
             let terminal = state
