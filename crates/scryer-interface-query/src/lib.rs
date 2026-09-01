@@ -34,6 +34,7 @@ use scryer_interface_media::mappers::{
     from_application_upgrade_status, from_backup_info, from_catalog_discovery, from_collection,
     from_dashboard_activity_stats, from_delete_preview, from_delete_titles_preview,
     from_change_title_folder_preview, from_discovery_home, from_discovery_home_cards,
+    from_location_operation, from_root_move_preview, location_destination_into_application,
     from_discovery_home_filter_options,
     from_discovery_item, from_discovery_items_result, from_domain_event, from_download_queue_item,
     from_episode, from_external_import_monitor_warmup_progress, from_job_definition, from_job_run,
@@ -1525,6 +1526,64 @@ impl CatalogQueries {
             .await
             .map_err(to_gql_error)?;
         Ok(from_change_title_folder_preview(preview))
+    }
+
+    /// Preview moving selected titles to another library or root; nothing is moved.
+    ///
+    /// The returned fingerprint is what `startLocationOperation` confirms. A
+    /// changed filesystem, catalog, selection, or destination produces a
+    /// different fingerprint and voids the confirmation.
+    async fn location_operation_preview(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(
+            desc = "Titles to move and the destination library or root they would move to."
+        )]
+        input: LocationOperationPreviewInput,
+    ) -> GqlResult<LocationOperationPreviewPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let request = scryer_application::location::operations::RootMovePreviewRequest {
+            title_ids: input
+                .title_ids
+                .into_iter()
+                .map(|id| id.to_string())
+                .collect(),
+            destination: location_destination_into_application(input.destination),
+        };
+        let preview = app
+            .preview_root_move(&actor, request)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(from_root_move_preview(&preview))
+    }
+
+    /// Read one location operation with its per-title checkpoints.
+    async fn location_operation(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Location-operation identity.")] id: ID,
+    ) -> GqlResult<Option<LocationOperationPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let operation_id = id.to_string();
+        let Some(operation) = app
+            .location_operation(&operation_id)
+            .await
+            .map_err(to_gql_error)?
+        else {
+            return Ok(None);
+        };
+        // The same source-and-destination gate the operation was started under
+        // (FR-083); reading an operation is reading both libraries' state.
+        app.require_location_operation_permission(&actor, &operation)
+            .await
+            .map_err(to_gql_error)?;
+        let checkpoints = app
+            .location_operation_checkpoints(&operation_id)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(Some(from_location_operation(&operation, &checkpoints)))
     }
 
     /// Preview deleting all media files for one title without changing files.

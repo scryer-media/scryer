@@ -56,6 +56,8 @@ pub enum JobKeyValue {
     AcquisitionSearch,
     /// Application upgrade.
     ApplicationUpgrade,
+    /// Location operation: a root move, transfer, or other placement change.
+    LocationOperation,
 }
 
 /// Broad category assigned to a job.

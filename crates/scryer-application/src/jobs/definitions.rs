@@ -308,6 +308,9 @@ impl JobKey {
                 "Interactive acquisition search over the selected wanted/upgrade scopes."
             }
             Self::ApplicationUpgrade => "Download, verify, and apply a signed application upgrade.",
+            Self::LocationOperation => {
+                "Move title content and catalog placement between roots or libraries."
+            }
         }
     }
 
@@ -333,7 +336,8 @@ impl JobKey {
             | Self::MediaFileDeletion
             | Self::RecycleBinRestore
             | Self::RecycleBinPurge
-            | Self::ApplicationUpgrade => JobCategory::System,
+            | Self::ApplicationUpgrade
+            | Self::LocationOperation => JobCategory::System,
             Self::Housekeeping
             | Self::PendingReleaseProcessing
             | Self::StagedNzbPrune
@@ -376,7 +380,8 @@ impl JobKey {
             | Self::RecycleBinPurge
             | Self::PendingReleaseProcessing
             | Self::AcquisitionSearch
-            | Self::ApplicationUpgrade => JobScheduleKind::Manual,
+            | Self::ApplicationUpgrade
+            | Self::LocationOperation => JobScheduleKind::Manual,
         }
     }
 
@@ -406,7 +411,8 @@ impl JobKey {
             | Self::RecycleBinRestore
             | Self::RecycleBinPurge
             | Self::AcquisitionSearch
-            | Self::ApplicationUpgrade => "Manual only",
+            | Self::ApplicationUpgrade
+            | Self::LocationOperation => "Manual only",
         }
     }
 
@@ -452,6 +458,7 @@ impl JobKey {
                 | Self::RecycleBinPurge
                 | Self::AcquisitionSearch
                 | Self::ApplicationUpgrade
+                | Self::LocationOperation
         )
     }
 

@@ -570,19 +570,32 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // enum landed without updating these numbers — so the totals below absorb
     // that drift as well: query 134->136, mutation 197->199, OBJECT 319->324,
     // INPUT_OBJECT 173->176, ENUM 112->116, public types 616->628.
+    // Root-move location operations add the locationOperationPreview and
+    // locationOperation query roots and the startLocationOperation /
+    // cancelLocationOperation / resumeLocationOperation mutation roots, with
+    // seventeen payload objects (preview, plan counts, per-kind count, plan
+    // section, plan item, selection classification, classification group,
+    // classified title, free-space estimate, verification statement, plan
+    // confirmation, operation, operation counters, title checkpoint, start,
+    // cancel, resume), three inputs (destination, preview, start), and seven
+    // enums (operation type, execution mode, operation state, title class, plan
+    // item kind, checkpoint state, confirmation requirement): query 136->138,
+    // mutation 199->202, OBJECT 324->341, INPUT_OBJECT 176->179, ENUM 116->123,
+    // public types 628->655. The LOCATION_OPERATION job key joins the existing
+    // JobKeyValue enum, so it adds no type.
     assert_eq!(
-        query_field_count, 136,
+        query_field_count, 138,
         "query fields: {query_field_names:?}"
     );
     assert_eq!(
-        mutation_field_count, 199,
+        mutation_field_count, 202,
         "mutation fields: {mutation_field_names:?}"
     );
     assert_eq!(subscription_field_count, 14);
-    assert_eq!(public_types.len(), 628);
-    assert_eq!(kind_count("OBJECT"), 324);
-    assert_eq!(kind_count("INPUT_OBJECT"), 176);
-    assert_eq!(kind_count("ENUM"), 116);
+    assert_eq!(public_types.len(), 655);
+    assert_eq!(kind_count("OBJECT"), 341);
+    assert_eq!(kind_count("INPUT_OBJECT"), 179);
+    assert_eq!(kind_count("ENUM"), 123);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
     assert!(query_field_names.contains(&"backupSettings"));
@@ -600,6 +613,16 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     assert!(public_type_names.contains(&"ChangeTitleFolderPreviewPayload"));
     assert!(public_type_names.contains(&"ChangeTitleFolderPayload"));
     assert!(public_type_names.contains(&"DisplacedTitleRepairPayload"));
+    assert!(query_field_names.contains(&"locationOperationPreview"));
+    assert!(query_field_names.contains(&"locationOperation"));
+    assert!(mutation_field_names.contains(&"startLocationOperation"));
+    assert!(mutation_field_names.contains(&"cancelLocationOperation"));
+    assert!(mutation_field_names.contains(&"resumeLocationOperation"));
+    assert!(public_type_names.contains(&"LocationOperationPreviewPayload"));
+    assert!(public_type_names.contains(&"LocationOperationPayload"));
+    assert!(public_type_names.contains(&"LocationTitleCheckpointPayload"));
+    assert!(public_type_names.contains(&"StartLocationOperationInput"));
+    assert!(public_type_names.contains(&"TitleLocationClassValue"));
     assert!(mutation_field_names.contains(&"cancelActiveImport"));
     assert!(mutation_field_names.contains(&"startApplicationUpgrade"));
     assert!(mutation_field_names.contains(&"accountSecurityPasswordVerify"));

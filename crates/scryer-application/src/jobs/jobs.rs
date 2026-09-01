@@ -1650,6 +1650,9 @@ impl AppUseCase {
                 "application upgrade jobs must be started from the application upgrade mutation"
                     .into(),
             )),
+            JobKey::LocationOperation => Err(AppError::Validation(
+                "location operations must be started from the location operation mutation".into(),
+            )),
         }
     }
 

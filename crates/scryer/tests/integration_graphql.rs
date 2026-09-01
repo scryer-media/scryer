@@ -24,6 +24,8 @@ mod external_import_secret_drafts;
 mod folder_match;
 #[path = "integration_graphql/library_scan.rs"]
 mod library_scan;
+#[path = "integration_graphql/location_operations.rs"]
+mod location_operations;
 #[path = "integration_graphql/media_rename.rs"]
 mod media_rename;
 #[path = "integration_graphql/metadata_search.rs"]
