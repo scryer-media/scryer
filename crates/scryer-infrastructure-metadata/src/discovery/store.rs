@@ -1233,16 +1233,24 @@ impl DiscoveryRepository for DiscoveryStore {
                         }
                     }
 
+                    // Runs already kept for pointers count against the per-kind
+                    // budget exactly once: each is tallied here and skipped in
+                    // the budget loop below, so the total successful runs kept
+                    // per kind never depends on candidate ordering.
                     let mut retained_successful_by_kind = HashMap::<String, usize>::new();
                     for candidate in &candidates {
                         if keep_ids.contains(&candidate.id)
                             && discovery_run_status_is_successful(&candidate.status)
                         {
-                            retained_successful_by_kind.insert(candidate.kind.clone(), 1);
+                            *retained_successful_by_kind
+                                .entry(candidate.kind.clone())
+                                .or_default() += 1;
                         }
                     }
                     for candidate in &candidates {
-                        if discovery_run_status_is_successful(&candidate.status) {
+                        if discovery_run_status_is_successful(&candidate.status)
+                            && !keep_ids.contains(&candidate.id)
+                        {
                             let retained = retained_successful_by_kind
                                 .entry(candidate.kind.clone())
                                 .or_default();
