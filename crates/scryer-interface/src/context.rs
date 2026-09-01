@@ -17,6 +17,10 @@ pub use scryer_interface_core::{
 };
 
 pub type ApiSchema = Schema<QueryRoot, MutationRoot, SubscriptionRoot>;
+/// Recursion-depth ceiling for executable documents, shared by the schema's
+/// global limit and the transport-level authentication classifier so the two
+/// can never disagree. First-party clients nest at most 5 levels deep, so 32
+/// leaves ample headroom for API consumers.
 pub const GRAPHQL_RECURSIVE_DEPTH_LIMIT: usize = 32;
 
 pub fn export_schema_sdl() -> String {

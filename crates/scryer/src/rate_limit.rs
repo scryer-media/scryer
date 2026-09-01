@@ -28,6 +28,7 @@ pub(crate) struct ScryerRateLimiter {
 
 struct RateLimitBuckets {
     bypass: Vec<IpMatcher>,
+    trusted_proxies: Vec<IpMatcher>,
     login: Bucket,
     auth_start: Bucket,
     auth_peer: Bucket,
@@ -83,7 +84,10 @@ pub(crate) enum HttpRateLimitClass {
 pub(crate) struct RateLimitKey {
     value: String,
     peer_value: String,
-    peer_ip: IpAddr,
+    /// Securely resolved client address eligible for an operator-configured
+    /// bypass. `None` means provenance was malformed or incomplete and the
+    /// request must remain metered.
+    bypass_ip: Option<IpAddr>,
 }
 
 impl RateLimitKey {
@@ -97,6 +101,8 @@ impl RateLimitKey {
         peer_ip: IpAddr,
         user_id: Option<&str>,
     ) -> Self {
+        let client_ip = client_ip.to_canonical();
+        let peer_ip = peer_ip.to_canonical();
         let value = match user_id {
             Some(user_id) => format!("user:{user_id}:ip:{client_ip}"),
             None => format!("ip:{client_ip}"),
@@ -108,8 +114,13 @@ impl RateLimitKey {
         Self {
             value,
             peer_value,
-            peer_ip,
+            bypass_ip: Some(client_ip),
         }
+    }
+
+    pub(crate) fn with_bypass_ip(mut self, bypass_ip: Option<IpAddr>) -> Self {
+        self.bypass_ip = bypass_ip.map(|ip| ip.to_canonical());
+        self
     }
 }
 
@@ -133,6 +144,9 @@ impl ScryerRateLimiter {
                     std::env::var("SCRYER_RATE_LIMIT_BYPASS_IPS")
                         .unwrap_or_default()
                         .as_str(),
+                ),
+                trusted_proxies: parse_ip_matchers_from_env_with_warnings(
+                    "SCRYER_RATE_LIMIT_TRUSTED_PROXY_IPS",
                 ),
                 login: Bucket::from_env(
                     "SCRYER_LOGIN_RATE_LIMIT_ATTEMPTS",
@@ -203,6 +217,7 @@ impl ScryerRateLimiter {
         Self {
             inner: Arc::new(RateLimitBuckets {
                 bypass: Vec::new(),
+                trusted_proxies: Vec::new(),
                 login: Bucket::for_test(login_requests),
                 auth_start: Bucket::for_test(auth_start_requests),
                 auth_peer: Bucket::for_test(auth_peer_requests),
@@ -215,6 +230,28 @@ impl ScryerRateLimiter {
                 oauth: Bucket::for_test(1_000),
             }),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_network_test(trusted_proxy_specs: &[&str], bypass_specs: &[&str]) -> Self {
+        let mut limiter = Self::for_authentication_test(1, 1, 1, 10);
+        let buckets = Arc::get_mut(&mut limiter.inner).expect("fresh limiter is unshared");
+        buckets.bypass = bypass_specs
+            .iter()
+            .map(|spec| parse_ip_matcher(spec).expect("valid bypass spec"))
+            .collect();
+        buckets.trusted_proxies = trusted_proxy_specs
+            .iter()
+            .map(|spec| parse_ip_matcher(spec).expect("valid trusted proxy spec"))
+            .collect();
+        limiter
+    }
+
+    pub(crate) fn is_trusted_proxy(&self, ip: IpAddr) -> bool {
+        self.inner
+            .trusted_proxies
+            .iter()
+            .any(|matcher| matcher.matches(ip))
     }
 
     pub(crate) fn check_graphql(
@@ -305,10 +342,15 @@ impl ScryerRateLimiter {
     }
 
     fn is_bypassed(&self, key: &RateLimitKey) -> bool {
-        self.inner
-            .bypass
-            .iter()
-            .any(|matcher| matcher.matches(key.peer_ip))
+        // Only operator-approved addresses bypass rate limiting; local
+        // clients are metered like any other unless explicitly listed in
+        // SCRYER_RATE_LIMIT_BYPASS_IPS.
+        key.bypass_ip.is_some_and(|candidate| {
+            self.inner
+                .bypass
+                .iter()
+                .any(|matcher| matcher.matches(candidate))
+        })
     }
 }
 
@@ -933,6 +975,26 @@ fn parse_ip_matchers(raw: &str) -> Vec<IpMatcher> {
         .collect()
 }
 
+fn parse_ip_matchers_from_env_with_warnings(name: &str) -> Vec<IpMatcher> {
+    std::env::var(name)
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .filter_map(|value| match parse_ip_matcher(value) {
+            Some(matcher) => Some(matcher),
+            None => {
+                tracing::warn!(
+                    environment_variable = name,
+                    value,
+                    "ignoring invalid trusted proxy address or CIDR"
+                );
+                None
+            }
+        })
+        .collect()
+}
+
 fn parse_ip_matcher(raw: &str) -> Option<IpMatcher> {
     let Some((ip, prefix)) = raw.split_once('/') else {
         return raw.parse::<IpAddr>().ok().map(IpMatcher::Exact);
@@ -948,8 +1010,9 @@ fn parse_ip_matcher(raw: &str) -> Option<IpMatcher> {
 
 impl IpMatcher {
     fn matches(self, ip: IpAddr) -> bool {
+        let ip = ip.to_canonical();
         match self {
-            Self::Exact(exact) => exact == ip,
+            Self::Exact(exact) => exact.to_canonical() == ip,
             Self::Cidr(base, prefix) => cidr_contains(base, prefix, ip),
         }
     }
@@ -1002,6 +1065,73 @@ mod tests {
         let matcher = parse_ip_matcher("fd00::/8").expect("valid cidr");
         assert!(matcher.matches(IpAddr::V6("fd00::1".parse::<Ipv6Addr>().unwrap())));
         assert!(!matcher.matches(IpAddr::V6("fe80::1".parse::<Ipv6Addr>().unwrap())));
+    }
+
+    #[test]
+    fn ipv4_matchers_accept_ipv4_mapped_ipv6_addresses() {
+        let mapped = "::ffff:192.168.1.42"
+            .parse::<IpAddr>()
+            .expect("valid mapped IPv6 address");
+        let exact = parse_ip_matcher("192.168.1.42").expect("valid exact address");
+        let cidr = parse_ip_matcher("192.168.1.0/24").expect("valid CIDR");
+
+        assert!(exact.matches(mapped));
+        assert!(cidr.matches(mapped));
+
+        let limiter = ScryerRateLimiter::for_network_test(&[], &["192.168.1.42"]);
+        let key = RateLimitKey::new(mapped, None);
+        for _ in 0..3 {
+            limiter
+                .check_graphql(GraphqlRateLimitClass::Login, &key)
+                .expect("mapped form of an approved IPv4 address should bypass");
+        }
+    }
+
+    #[test]
+    fn bypass_uses_only_the_securely_resolved_client() {
+        let limiter = ScryerRateLimiter::for_network_test(&[], &["192.168.1.0/24"]);
+        let approved = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 50));
+        let direct = RateLimitKey::for_client_and_peer(approved, approved, None);
+        for _ in 0..3 {
+            limiter
+                .check_graphql(GraphqlRateLimitClass::Login, &direct)
+                .expect("the approved resolved client should bypass rate limiting");
+        }
+
+        let unlisted = IpAddr::V4(Ipv4Addr::new(192, 168, 2, 50));
+        let unlisted_local = RateLimitKey::for_client_and_peer(unlisted, unlisted, None);
+        limiter
+            .check_graphql(GraphqlRateLimitClass::Login, &unlisted_local)
+            .expect("first metered attempt should pass");
+        assert!(
+            limiter
+                .check_graphql(GraphqlRateLimitClass::Login, &unlisted_local)
+                .is_err(),
+            "unlisted local clients must stay rate limited"
+        );
+
+        let malformed =
+            RateLimitKey::for_client_and_peer(approved, approved, None).with_bypass_ip(None);
+        limiter
+            .check_graphql(GraphqlRateLimitClass::Login, &malformed)
+            .expect("first metered attempt should pass");
+        assert!(
+            limiter
+                .check_graphql(GraphqlRateLimitClass::Login, &malformed)
+                .is_err(),
+            "missing secure provenance must never bypass"
+        );
+    }
+
+    #[test]
+    fn trusted_proxy_matchers_support_exact_and_cidr_addresses() {
+        let limiter =
+            ScryerRateLimiter::for_network_test(&["192.168.1.10", "10.0.0.0/24", "fd00::/8"], &[]);
+        assert!(limiter.is_trusted_proxy(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 10))));
+        assert!(limiter.is_trusted_proxy(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 42))));
+        assert!(limiter.is_trusted_proxy(IpAddr::V6("fd00::42".parse().unwrap())));
+        assert!(!limiter.is_trusted_proxy(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 11))));
+        assert!(!limiter.is_trusted_proxy(IpAddr::V6("fe80::42".parse().unwrap())));
     }
 
     #[test]

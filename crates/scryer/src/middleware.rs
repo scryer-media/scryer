@@ -52,7 +52,8 @@ const X_FORWARDED_PROTO: &str = "x-forwarded-proto";
 // Sized for `installUploadedPlugin`: real plugin components are multi-MB and
 // travel inline as base64, so this must stay well above the artifact ceiling.
 pub(crate) const GRAPHQL_MAX_MESSAGE_BYTES: usize = 64 * 1024 * 1024;
-const GRAPHQL_MAX_BATCH_OPERATIONS: usize = 10;
+const GRAPHQL_MAX_BATCH_OPERATIONS: usize = 200;
+const GRAPHQL_MAX_AUTH_BATCH_OPERATIONS: usize = 10;
 const GRAPHQL_POST_EXECUTION_TIMEOUT_CODE: &str = "GRAPHQL_EXECUTION_TIMEOUT";
 const AUTHENTICATION_REQUIRED_CODE: &str = "AUTHENTICATION_REQUIRED";
 const MFA_STEP_UP_REQUIRED_CODE: &str = "MFA_STEP_UP_REQUIRED";
@@ -1016,8 +1017,7 @@ pub(crate) async fn graphql_ws_handler(
     let schema = state.schema.clone();
     let app = state.app.clone();
     let rate_limiter = state.rate_limiter.clone();
-    let client_ip = request_client_ip(&headers, Some(remote_addr)).unwrap_or(remote_addr.ip());
-    let peer_ip = remote_addr.ip();
+    let rate_limit_provenance = rate_limit_provenance(&headers, remote_addr, &rate_limiter);
     let auth_runtime = state.auth_runtime.clone();
     let auth_snapshot = auth_runtime.snapshot();
     let auth_enabled = auth_snapshot.effective_form_login_enabled;
@@ -1114,8 +1114,7 @@ pub(crate) async fn graphql_ws_handler(
                 oauth_session,
                 rate_limit_user_id,
                 rate_limiter,
-                client_ip,
-                peer_ip,
+                rate_limit_provenance,
             });
             GraphQLWebSocket::new(stream, executor, protocol)
                 .with_data(initial_data)
@@ -1185,8 +1184,7 @@ struct ContextualGraphqlExecutor {
     oauth_session: Arc<StdRwLock<Option<OAuthActorSession>>>,
     rate_limit_user_id: Arc<StdRwLock<Option<String>>>,
     rate_limiter: ScryerRateLimiter,
-    client_ip: IpAddr,
-    peer_ip: IpAddr,
+    rate_limit_provenance: RateLimitProvenance,
 }
 
 struct ContextualGraphqlExecutorConfig {
@@ -1196,8 +1194,7 @@ struct ContextualGraphqlExecutorConfig {
     oauth_session: Arc<StdRwLock<Option<OAuthActorSession>>>,
     rate_limit_user_id: Arc<StdRwLock<Option<String>>>,
     rate_limiter: ScryerRateLimiter,
-    client_ip: IpAddr,
-    peer_ip: IpAddr,
+    rate_limit_provenance: RateLimitProvenance,
 }
 
 impl ContextualGraphqlExecutor {
@@ -1209,8 +1206,7 @@ impl ContextualGraphqlExecutor {
             oauth_session: config.oauth_session,
             rate_limit_user_id: config.rate_limit_user_id,
             rate_limiter: config.rate_limiter,
-            client_ip: config.client_ip,
-            peer_ip: config.peer_ip,
+            rate_limit_provenance: config.rate_limit_provenance,
         }
     }
 
@@ -1254,9 +1250,10 @@ fn check_graphql_request_rate_limits(
     request: &GraphQLRequest,
     authentication: &AuthenticationRequestAnalysis,
 ) -> Result<(), RateLimitDecision> {
-    if let Some(class) = graphql_request_rate_limit_class(request, authentication) {
-        rate_limiter.check_graphql(class, rate_limit_key)?;
-    }
+    rate_limiter.check_graphql(
+        graphql_request_rate_limit_class(request, authentication),
+        rate_limit_key,
+    )?;
     if let Some(principal) = authentication.principal.as_ref() {
         rate_limiter.check_login_principal(rate_limit_key, principal)?;
     }
@@ -1266,16 +1263,13 @@ fn check_graphql_request_rate_limits(
 fn graphql_request_rate_limit_class(
     request: &GraphQLRequest,
     authentication: &AuthenticationRequestAnalysis,
-) -> Option<GraphqlRateLimitClass> {
-    if authentication.rejected {
-        authentication.class
-    } else {
-        Some(
-            authentication
-                .class
-                .unwrap_or_else(|| classify_graphql_request(request)),
-        )
-    }
+) -> GraphqlRateLimitClass {
+    // A rejection that never identified an authentication field is not an
+    // authentication concern: the request is metered under its ordinary class
+    // and the executor produces the real (e.g. parse) error.
+    authentication
+        .class
+        .unwrap_or_else(|| classify_graphql_request(request))
 }
 
 impl Executor for ContextualGraphqlExecutor {
@@ -1290,11 +1284,9 @@ impl Executor for ContextualGraphqlExecutor {
             .read()
             .expect("rate limit user lock must not be poisoned")
             .clone();
-        let rate_limit_key = RateLimitKey::for_client_and_peer(
-            self.client_ip,
-            self.peer_ip,
-            rate_limit_user_id.as_deref(),
-        );
+        let rate_limit_key = self
+            .rate_limit_provenance
+            .key(rate_limit_user_id.as_deref());
         async move {
             let authentication = analyze_authentication_request(&request);
             if let Err(decision) = check_graphql_request_rate_limits(
@@ -1305,7 +1297,7 @@ impl Executor for ContextualGraphqlExecutor {
             ) {
                 return rate_limited_graphql_single_response(&decision);
             }
-            if authentication.rejected {
+            if authentication.rejected && authentication.class.is_some() {
                 return authentication_mutation_single_field_response();
             }
             if validate_ws_oauth_session(&app, &oauth_session)
@@ -1333,11 +1325,9 @@ impl Executor for ContextualGraphqlExecutor {
             .expect("rate limit user lock must not be poisoned")
             .clone();
         let authentication = analyze_authentication_request(&request);
-        let rate_limit_key = RateLimitKey::for_client_and_peer(
-            self.client_ip,
-            self.peer_ip,
-            rate_limit_user_id.as_deref(),
-        );
+        let rate_limit_key = self
+            .rate_limit_provenance
+            .key(rate_limit_user_id.as_deref());
         if let Err(decision) = check_graphql_request_rate_limits(
             &self.rate_limiter,
             &rate_limit_key,
@@ -1348,7 +1338,7 @@ impl Executor for ContextualGraphqlExecutor {
                 rate_limited_graphql_single_response(&decision)
             }));
         }
-        if authentication.rejected {
+        if authentication.rejected && authentication.class.is_some() {
             return Box::pin(stream::once(async {
                 authentication_mutation_single_field_response()
             }));
@@ -1524,17 +1514,27 @@ pub(crate) async fn graphql_handler(
     body: async_graphql_axum::GraphQLBatchRequest,
 ) -> Response {
     let batch = body.into_inner();
+    // The general cap runs before per-operation analysis so an oversized
+    // batch never costs up to its own length in query parses.
     if batch.iter().count() > GRAPHQL_MAX_BATCH_OPERATIONS {
-        return graphql_batch_limit_response();
+        return graphql_batch_limit_response(GRAPHQL_MAX_BATCH_OPERATIONS);
     }
     let client_ip = request_client_ip(&headers, Some(remote_addr)).unwrap_or(remote_addr.ip());
-    let peer_ip = remote_addr.ip();
+    let rate_limit_provenance = rate_limit_provenance(&headers, remote_addr, &state.rate_limiter);
     let rate_limit_class = classify_graphql(&batch);
     let authentication_requests = batch
         .iter()
         .map(analyze_authentication_request)
         .collect::<Vec<_>>();
-    let rate_limit_key = RateLimitKey::for_client_and_peer(client_ip, peer_ip, None);
+    let has_authentication_request = authentication_requests
+        .iter()
+        .any(|analysis| analysis.class.is_some());
+    // Batches carrying authentication operations get a much tighter cap,
+    // still before any quota is spent.
+    if has_authentication_request && batch.iter().count() > GRAPHQL_MAX_AUTH_BATCH_OPERATIONS {
+        return graphql_batch_limit_response(GRAPHQL_MAX_AUTH_BATCH_OPERATIONS);
+    }
+    let rate_limit_key = rate_limit_provenance.key(None);
     for (request, authentication) in batch.iter().zip(&authentication_requests) {
         if let Err(decision) = check_graphql_request_rate_limits(
             &state.rate_limiter,
@@ -1547,13 +1547,10 @@ pub(crate) async fn graphql_handler(
     }
     if authentication_requests
         .iter()
-        .any(|analysis| analysis.rejected)
+        .any(|analysis| analysis.rejected && analysis.class.is_some())
     {
         return authentication_mutation_single_field_http_response();
     }
-    let has_authentication_request = authentication_requests
-        .iter()
-        .any(|analysis| analysis.class.is_some());
 
     let api_key_bearer = authorization_token_from_headers(&headers)
         .ok()
@@ -1581,11 +1578,8 @@ pub(crate) async fn graphql_handler(
             "Scryer web client proof is required for unauthenticated access",
         );
     }
-    let rate_limit_key = RateLimitKey::for_client_and_peer(
-        client_ip,
-        peer_ip,
-        actor.as_ref().map(|actor| actor.user.id.as_str()),
-    );
+    let rate_limit_key =
+        rate_limit_provenance.key(actor.as_ref().map(|actor| actor.user.id.as_str()));
     let request_span = context_span(graphql_request_log_context(
         &batch,
         actor.as_ref(),
@@ -1599,7 +1593,7 @@ pub(crate) async fn graphql_handler(
         && !has_authentication_request
         && let Err(decision) = state.rate_limiter.check_graphql(
             rate_limit_class,
-            &RateLimitKey::for_client_and_peer(client_ip, peer_ip, Some(&actor.user.id)),
+            &rate_limit_provenance.key(Some(&actor.user.id)),
         )
     {
         return rate_limited_graphql_http_response(&decision);
@@ -1889,12 +1883,12 @@ fn graphql_execution_timeout_response() -> async_graphql::BatchResponse {
     async_graphql::BatchResponse::Single(GraphQLResponse::from_errors(vec![error]))
 }
 
-fn graphql_batch_limit_response() -> Response {
+fn graphql_batch_limit_response(max_operations: usize) -> Response {
     let mut extensions = ErrorExtensionValues::default();
     extensions.set("code", "GRAPHQL_BATCH_LIMIT_EXCEEDED");
-    extensions.set("maxOperations", GRAPHQL_MAX_BATCH_OPERATIONS);
+    extensions.set("maxOperations", max_operations);
     let mut error = ServerError::new(
-        format!("GraphQL batches may contain at most {GRAPHQL_MAX_BATCH_OPERATIONS} operations"),
+        format!("GraphQL batches may contain at most {max_operations} operations"),
         None,
     );
     error.extensions = Some(extensions);
@@ -2640,6 +2634,73 @@ fn request_client_ip(headers: &HeaderMap, remote_addr: Option<SocketAddr>) -> Op
     Some(peer_ip)
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RateLimitProvenance {
+    client_ip: IpAddr,
+    bypass_ip: Option<IpAddr>,
+}
+
+impl RateLimitProvenance {
+    fn direct(peer_ip: IpAddr) -> Self {
+        let peer_ip = peer_ip.to_canonical();
+        Self {
+            client_ip: peer_ip,
+            bypass_ip: Some(peer_ip),
+        }
+    }
+
+    fn fail_closed(peer_ip: IpAddr) -> Self {
+        let peer_ip = peer_ip.to_canonical();
+        Self {
+            client_ip: peer_ip,
+            bypass_ip: None,
+        }
+    }
+
+    fn key(self, user_id: Option<&str>) -> RateLimitKey {
+        RateLimitKey::for_client_and_peer(self.client_ip, self.client_ip, user_id)
+            .with_bypass_ip(self.bypass_ip)
+    }
+}
+
+/// Resolve a rate-limit identity from one explicitly trusted forwarding chain.
+///
+/// Forwarding headers from every unconfigured socket peer are ignored. For a
+/// configured proxy, only X-Forwarded-For participates: trusted hops are peeled
+/// from the right, leaving the nearest untrusted hop as the effective client.
+/// Missing, malformed, or entirely trusted chains stay metered on the socket
+/// peer and are never eligible for an operator-configured bypass.
+fn rate_limit_provenance(
+    headers: &HeaderMap,
+    remote_addr: SocketAddr,
+    rate_limiter: &ScryerRateLimiter,
+) -> RateLimitProvenance {
+    let peer_ip = remote_addr.ip().to_canonical();
+    if !rate_limiter.is_trusted_proxy(peer_ip) {
+        return RateLimitProvenance::direct(peer_ip);
+    }
+
+    let mut chain = Vec::new();
+    if collect_rate_limit_x_forwarded_for_ips(headers, &mut chain).is_err() || chain.is_empty() {
+        return RateLimitProvenance::fail_closed(peer_ip);
+    }
+    chain.push(peer_ip);
+    while chain
+        .last()
+        .is_some_and(|hop| rate_limiter.is_trusted_proxy(*hop))
+    {
+        chain.pop();
+    }
+    let Some(client_ip) = chain.last().copied() else {
+        return RateLimitProvenance::fail_closed(peer_ip);
+    };
+
+    RateLimitProvenance {
+        client_ip,
+        bypass_ip: Some(client_ip),
+    }
+}
+
 fn default_persist_session_for_request(
     headers: &HeaderMap,
     remote_addr: Option<SocketAddr>,
@@ -2726,6 +2787,25 @@ fn collect_x_forwarded_for_ips(headers: &HeaderMap, ips: &mut Vec<IpAddr>) -> Re
     Ok(())
 }
 
+fn collect_rate_limit_x_forwarded_for_ips(
+    headers: &HeaderMap,
+    ips: &mut Vec<IpAddr>,
+) -> Result<(), ()> {
+    for value in headers.get_all("x-forwarded-for") {
+        let value = value.to_str().map_err(|_| ())?;
+        for token in value.split(',') {
+            let token = token.trim();
+            let ip = token
+                .parse::<IpAddr>()
+                .ok()
+                .or_else(|| token.parse::<SocketAddr>().ok().map(|addr| addr.ip()))
+                .ok_or(())?;
+            ips.push(ip.to_canonical());
+        }
+    }
+    Ok(())
+}
+
 fn collect_x_real_ip_ips(headers: &HeaderMap, ips: &mut Vec<IpAddr>) -> Result<(), ()> {
     for value in headers.get_all("x-real-ip") {
         let value = value.to_str().map_err(|_| ())?;
@@ -2801,9 +2881,8 @@ pub(crate) async fn rate_limit_http_api(
         return next.run(request).await;
     };
 
-    let client_ip =
-        request_client_ip(request.headers(), Some(remote_addr)).unwrap_or(remote_addr.ip());
-    let key = RateLimitKey::for_client_and_peer(client_ip, remote_addr.ip(), None);
+    let key =
+        rate_limit_provenance(request.headers(), remote_addr, &auth_state.rate_limiter).key(None);
     match auth_state.rate_limiter.check_http(rate_limit_class, &key) {
         Ok(()) => next.run(request).await,
         Err(decision) => {
@@ -4803,27 +4882,240 @@ mod tests {
     }
 
     #[test]
+    fn direct_clients_cannot_forge_rate_limit_provenance() {
+        let limiter = ScryerRateLimiter::for_network_test(&[], &["192.168.1.50"]);
+        let peer = SocketAddr::from((Ipv4Addr::new(192, 168, 1, 60), 3000));
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", HeaderValue::from_static("192.168.1.50"));
+        headers.insert("x-real-ip", HeaderValue::from_static("192.168.1.50"));
+        headers.insert(
+            header::FORWARDED,
+            HeaderValue::from_static("for=192.168.1.50"),
+        );
+
+        assert_eq!(
+            rate_limit_provenance(&headers, peer, &limiter),
+            RateLimitProvenance::direct(peer.ip())
+        );
+        let key = rate_limit_provenance(&headers, peer, &limiter).key(None);
+        limiter
+            .check_graphql(GraphqlRateLimitClass::Login, &key)
+            .expect("first direct attempt should remain metered");
+        assert!(
+            limiter
+                .check_graphql(GraphqlRateLimitClass::Login, &key)
+                .is_err(),
+            "a forged bypass address must not disable rate limiting"
+        );
+    }
+
+    #[test]
+    fn trusted_proxy_chain_selects_the_nearest_untrusted_client() {
+        let limiter = ScryerRateLimiter::for_network_test(&["127.0.0.1", "10.0.0.0/24"], &[]);
+        let proxy = SocketAddr::from((Ipv4Addr::LOCALHOST, 3000));
+        let mut headers = HeaderMap::new();
+        headers.append(
+            "x-forwarded-for",
+            HeaderValue::from_static("198.51.100.99, 203.0.113.7"),
+        );
+        headers.append("x-forwarded-for", HeaderValue::from_static("10.0.0.5"));
+
+        let first_client = rate_limit_provenance(&headers, proxy, &limiter);
+        assert_eq!(
+            first_client,
+            RateLimitProvenance {
+                client_ip: IpAddr::V4(Ipv4Addr::new(203, 0, 113, 7)),
+                bypass_ip: Some(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 7))),
+            }
+        );
+
+        headers.insert(
+            "x-forwarded-for",
+            HeaderValue::from_static("198.51.100.8, 10.0.0.5"),
+        );
+        let second_client = rate_limit_provenance(&headers, proxy, &limiter);
+        assert_eq!(
+            second_client.client_ip,
+            IpAddr::V4(Ipv4Addr::new(198, 51, 100, 8)),
+            "distinct proxied clients must not share the proxy bucket"
+        );
+        limiter
+            .check_graphql(GraphqlRateLimitClass::Login, &first_client.key(None))
+            .expect("first proxied client should receive its own quota");
+        limiter
+            .check_graphql(GraphqlRateLimitClass::Login, &second_client.key(None))
+            .expect("second proxied client should not share the proxy bucket");
+    }
+
+    #[test]
+    fn proxied_bypass_uses_the_resolved_client_without_approving_the_proxy() {
+        let limiter = ScryerRateLimiter::for_network_test(&["127.0.0.1"], &["203.0.113.7"]);
+        let proxy = SocketAddr::from((Ipv4Addr::LOCALHOST, 3000));
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", HeaderValue::from_static("203.0.113.7"));
+        let key = rate_limit_provenance(&headers, proxy, &limiter).key(None);
+        for _ in 0..3 {
+            limiter
+                .check_graphql(GraphqlRateLimitClass::Login, &key)
+                .expect("approved proxied client should bypass without approving the proxy");
+        }
+
+        let metered_limiter = ScryerRateLimiter::for_network_test(&["127.0.0.1"], &["203.0.113.7"]);
+        headers.insert("x-forwarded-for", HeaderValue::from_static("203.0.113.8"));
+        let metered_key = rate_limit_provenance(&headers, proxy, &metered_limiter).key(None);
+        metered_limiter
+            .check_graphql(GraphqlRateLimitClass::Login, &metered_key)
+            .expect("first unapproved proxied attempt should remain metered");
+        assert!(
+            metered_limiter
+                .check_graphql(GraphqlRateLimitClass::Login, &metered_key)
+                .is_err(),
+            "unapproved proxied clients must stay rate limited"
+        );
+    }
+
+    #[test]
+    fn rate_limit_provenance_ignores_secondary_forwarding_headers() {
+        let limiter = ScryerRateLimiter::for_network_test(&["127.0.0.1"], &[]);
+        let proxy = SocketAddr::from((Ipv4Addr::LOCALHOST, 3000));
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", HeaderValue::from_static("203.0.113.7"));
+        headers.insert("x-real-ip", HeaderValue::from_static("198.51.100.9"));
+        headers.insert(
+            header::FORWARDED,
+            HeaderValue::from_static("for=198.51.100.10"),
+        );
+
+        assert_eq!(
+            rate_limit_provenance(&headers, proxy, &limiter).client_ip,
+            IpAddr::V4(Ipv4Addr::new(203, 0, 113, 7))
+        );
+
+        headers.remove("x-forwarded-for");
+        assert_eq!(
+            rate_limit_provenance(&headers, proxy, &limiter),
+            RateLimitProvenance::fail_closed(proxy.ip()),
+            "alternate header families must not become rate-limit identity"
+        );
+    }
+
+    #[test]
+    fn malformed_missing_and_entirely_trusted_proxy_chains_fail_closed() {
+        let limiter =
+            ScryerRateLimiter::for_network_test(&["127.0.0.1", "10.0.0.0/24"], &["127.0.0.1"]);
+        let proxy = SocketAddr::from((Ipv4Addr::LOCALHOST, 3000));
+
+        assert_eq!(
+            rate_limit_provenance(&HeaderMap::new(), proxy, &limiter),
+            RateLimitProvenance::fail_closed(proxy.ip())
+        );
+
+        for raw in [
+            "203.0.113.7, unknown",
+            "203.0.113.7, [10.0.0.5]garbage",
+            "10.0.0.5",
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                "x-forwarded-for",
+                HeaderValue::from_str(raw).expect("valid header value"),
+            );
+            let provenance = rate_limit_provenance(&headers, proxy, &limiter);
+            assert_eq!(provenance, RateLimitProvenance::fail_closed(proxy.ip()));
+            let key = provenance.key(None);
+            let metering_limiter =
+                ScryerRateLimiter::for_network_test(&["127.0.0.1", "10.0.0.0/24"], &["127.0.0.1"]);
+            metering_limiter
+                .check_graphql(GraphqlRateLimitClass::Login, &key)
+                .expect("first fail-closed attempt should remain metered");
+            assert!(
+                metering_limiter
+                    .check_graphql(GraphqlRateLimitClass::Login, &key)
+                    .is_err(),
+                "failed provenance must never inherit the proxy's bypass"
+            );
+        }
+    }
+
+    #[test]
+    fn trusted_ipv6_proxy_chain_resolves_ipv6_client() {
+        let limiter = ScryerRateLimiter::for_network_test(&["::1", "fd00::/8"], &[]);
+        let proxy = SocketAddr::from((Ipv6Addr::LOCALHOST, 3000));
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-forwarded-for",
+            HeaderValue::from_static("2001:db8::7, [fd00::5]:443"),
+        );
+
+        assert_eq!(
+            rate_limit_provenance(&headers, proxy, &limiter).client_ip,
+            "2001:db8::7".parse::<IpAddr>().expect("valid IPv6")
+        );
+    }
+
+    #[test]
+    fn ipv4_mapped_proxy_peer_matches_ipv4_trust_configuration() {
+        let limiter = ScryerRateLimiter::for_network_test(&["192.168.1.10"], &[]);
+        let mapped_proxy = "::ffff:192.168.1.10"
+            .parse::<Ipv6Addr>()
+            .expect("valid mapped proxy address");
+        let proxy = SocketAddr::from((mapped_proxy, 3000));
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", HeaderValue::from_static("203.0.113.7"));
+
+        assert_eq!(
+            rate_limit_provenance(&headers, proxy, &limiter),
+            RateLimitProvenance {
+                client_ip: IpAddr::V4(Ipv4Addr::new(203, 0, 113, 7)),
+                bypass_ip: Some(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 7))),
+            }
+        );
+    }
+
+    #[test]
+    fn ipv4_mapped_xff_proxy_hop_peels_against_ipv4_cidr() {
+        let limiter = ScryerRateLimiter::for_network_test(&["127.0.0.1", "10.0.0.0/24"], &[]);
+        let proxy = SocketAddr::from((Ipv4Addr::LOCALHOST, 3000));
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-forwarded-for",
+            HeaderValue::from_static("203.0.113.7, ::ffff:10.0.0.5"),
+        );
+
+        assert_eq!(
+            rate_limit_provenance(&headers, proxy, &limiter).client_ip,
+            IpAddr::V4(Ipv4Addr::new(203, 0, 113, 7))
+        );
+    }
+
+    #[test]
     fn http_and_websocket_share_positive_authentication_classification() {
         for (query, expected_class, expected_rejected) in [
             (
                 "mutation { login(input: { username: \"alice\", password: \"password\" }) { token } }",
-                Some(GraphqlRateLimitClass::Login),
+                GraphqlRateLimitClass::Login,
                 false,
             ),
             (
                 "mutation { webauthnAuthenticateStart(username: \"alice\") { challengeId } }",
-                Some(GraphqlRateLimitClass::AuthStart),
+                GraphqlRateLimitClass::AuthStart,
                 false,
             ),
             (
                 "mutation { login(input: { username: \"alice\", password: \"password\" }) { token } updateSecuritySettings(input: {}) { formLoginEnabled } }",
-                Some(GraphqlRateLimitClass::Login),
+                GraphqlRateLimitClass::Login,
                 true,
             ),
-            ("mutation { updateSecuritySettings(input: {", None, true),
+            // Generic rejections carry no authentication class; they meter
+            // under their ordinary bucket and fall through to the executor.
+            (
+                "mutation { updateSecuritySettings(input: {",
+                GraphqlRateLimitClass::Mutation,
+                true,
+            ),
             (
                 "mutation { ...A } fragment A on Mutation { ...A }",
-                None,
+                GraphqlRateLimitClass::Mutation,
                 true,
             ),
         ] {
@@ -4955,7 +5247,7 @@ mod tests {
         let operation = serde_json::json!({
             "query": "mutation { login(input: { username: \"alice\", password: \"password\" }) { token } }"
         });
-        let body = serde_json::to_vec(&vec![operation; GRAPHQL_MAX_BATCH_OPERATIONS + 1])
+        let body = serde_json::to_vec(&vec![operation; GRAPHQL_MAX_AUTH_BATCH_OPERATIONS + 1])
             .expect("serialize oversized batch");
         let remote_addr = SocketAddr::from((Ipv4Addr::new(203, 0, 113, 30), 3000));
         let mut request = Request::builder()
@@ -4988,6 +5280,73 @@ mod tests {
                 .check_graphql(GraphqlRateLimitClass::Login, &key)
                 .is_ok(),
             "oversized batch must not consume authentication quota"
+        );
+    }
+
+    #[tokio::test]
+    async fn general_batches_use_the_looser_cap_than_authentication_batches() {
+        let context = common::TestContext::new().await;
+        let state = AuthState {
+            app: context.app.clone(),
+            schema: context.schema.clone(),
+            auth_runtime: context.auth_runtime.clone(),
+            rate_limiter: ScryerRateLimiter::for_authentication_test(1, 1, 1, 10),
+            ws_origin_policy: WebSocketOriginPolicy::default(),
+            authless_web_client_proof: AuthlessWebClientProofState::new(),
+        };
+        let router = Router::new()
+            .route("/graphql", post(graphql_handler))
+            .with_state(state);
+        let remote_addr = SocketAddr::from((Ipv4Addr::new(203, 0, 113, 31), 3000));
+        let operation = serde_json::json!({ "query": "query { __typename }" });
+        let send = |body: Vec<u8>| {
+            let mut request = Request::builder()
+                .method(Method::POST)
+                .uri("/graphql")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body))
+                .expect("GraphQL request");
+            request.extensions_mut().insert(ConnectInfo(remote_addr));
+            request
+        };
+
+        // Above the auth cap but within the general cap: not rejected.
+        let body = serde_json::to_vec(&vec![
+            operation.clone();
+            GRAPHQL_MAX_AUTH_BATCH_OPERATIONS + 1
+        ])
+        .expect("serialize mid-size batch");
+        let response = router
+            .clone()
+            .oneshot(send(body))
+            .await
+            .expect("GraphQL response");
+        let status = response.status();
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("GraphQL response body");
+        let body_text = String::from_utf8_lossy(&body);
+        assert!(
+            !body_text.contains("GRAPHQL_BATCH_LIMIT_EXCEEDED"),
+            "non-authentication batches must pass the auth cap: {status} {body_text}"
+        );
+
+        // Above the general cap: rejected for any batch.
+        let body = serde_json::to_vec(&vec![operation; GRAPHQL_MAX_BATCH_OPERATIONS + 1])
+            .expect("serialize oversized batch");
+        let response = router.oneshot(send(body)).await.expect("GraphQL response");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("GraphQL response body");
+        let body_text = String::from_utf8_lossy(&body);
+        assert!(
+            body_text.contains("GRAPHQL_BATCH_LIMIT_EXCEEDED"),
+            "batches beyond the general cap must be rejected: {body_text}"
+        );
+        assert!(
+            body_text.contains(&format!("\"maxOperations\":{GRAPHQL_MAX_BATCH_OPERATIONS}")),
+            "the general cap should be reported: {body_text}"
         );
     }
 
