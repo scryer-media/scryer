@@ -6,6 +6,7 @@ import { ChangeTitleFolderCard } from "@/components/common/change-title-folder-c
 import { FixTitleMatchSettingsCard } from "@/components/common/fix-title-match-settings-card";
 import { MediaRenamePlanPanel } from "@/components/common/media-rename-plan-panel";
 import { TitleOptionsSettingsGrid } from "@/components/common/title-options-settings-grid";
+import { MoveTitlesDialog } from "@/components/dialogs/move-titles-dialog";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { mediaRenamePreviewQuery } from "@/lib/graphql/queries";
 import { renameTitlesMutation } from "@/lib/graphql/mutations";
@@ -56,6 +57,19 @@ export function TitleSettingsPanel({
   const [renamePlan, setRenamePlan] = React.useState<MediaRenamePlan | null>(null);
   const [renamePreviewing, setRenamePreviewing] = React.useState(false);
   const [renameApplying, setRenameApplying] = React.useState(false);
+  // Root chosen in the destination control; opening the move workflow instead
+  // of writing the title's root in place (FR-011).
+  const [moveRootId, setMoveRootId] = React.useState<string | null>(null);
+  const moveLibraries = React.useMemo(
+    () => [
+      {
+        id: title.libraryId,
+        name: title.libraryName?.trim() || title.libraryId,
+        roots: rootFolders,
+      },
+    ],
+    [rootFolders, title.libraryId, title.libraryName],
+  );
 
   React.useEffect(() => {
     if (!renameEnabled) {
@@ -131,6 +145,29 @@ export function TitleSettingsPanel({
         onUpdateTitleOptions={onUpdateTitleOptions}
         onTitleChanged={onTitleChanged}
         idPrefix="series-overview-settings"
+        currentLibraryName={title.libraryName ?? null}
+        onRequestMove={setMoveRootId}
+      />
+
+      <MoveTitlesDialog
+        open={moveRootId !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setMoveRootId(null);
+          }
+        }}
+        titles={[
+          {
+            id: title.id,
+            name: title.name,
+            libraryId: title.libraryId,
+            libraryName: title.libraryName ?? null,
+            rootFolderId: title.rootFolderId ?? null,
+            rootFolderPath: title.rootFolderPath ?? null,
+          },
+        ]}
+        libraries={moveLibraries}
+        initialRootId={moveRootId}
       />
 
       {onOpenFixMatch ? (

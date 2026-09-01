@@ -1,10 +1,12 @@
 
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { useClient, useMutation } from "urql";
+import { useSearchParams } from "react-router";
 
 import { AssignTrackedDownloadTitleDialog } from "@/components/dialogs/assign-tracked-download-title-dialog";
 import { ManualImportDialog } from "@/components/dialogs/manual-import-dialog";
 import { ActivityView } from "@/components/views/activity-view";
+import { LocationOperationPanel } from "@/components/views/activity/location-operation-panel";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import {
@@ -118,6 +120,13 @@ export const ActivityContainer = memo(function ActivityContainer({
   const setGlobalStatus = useGlobalStatus();
   const t = useTranslate();
   const client = useClient();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const locationOperationId = searchParams.get("operation")?.trim() || null;
+  const clearLocationOperation = useCallback(() => {
+    const next = new URLSearchParams(searchParams.toString());
+    next.delete("operation");
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
   const [, executeQueueManualImport] = useMutation(queueManualImportMutation);
   const [, executeBeginManualImportSelection] = useMutation(
     beginManualImportSelectionMutation,
@@ -723,6 +732,16 @@ export const ActivityContainer = memo(function ActivityContainer({
 
   return (
     <>
+      {/* A location operation is reached by id (`?operation=`): it has no
+          jobRunId yet, so nothing lists it. The confirm flow links here. */}
+      {locationOperationId ? (
+        <div className="mb-4">
+          <LocationOperationPanel
+            operationId={locationOperationId}
+            onDismiss={clearLocationOperation}
+          />
+        </div>
+      ) : null}
       <ActivityView
         state={{
           queueItems: visibleItems,

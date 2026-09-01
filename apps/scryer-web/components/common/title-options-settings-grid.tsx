@@ -55,6 +55,17 @@ type Props = {
   onUpdateTitleOptions: (options: TitleOptionUpdates) => Promise<void>;
   onTitleChanged?: () => Promise<void> | void;
   idPrefix: string;
+  /**
+   * Destination library shown beside the destination root (FR-010). Phase 4
+   * moves stay inside one library, so the control is present but pinned.
+   */
+  currentLibraryName?: string | null;
+  /**
+   * When set, the root control becomes a **destination** control: changing it
+   * opens the move workflow instead of rewriting the title's root in place
+   * (FR-011, and the replace-on-write retirement in FR-077).
+   */
+  onRequestMove?: (rootFolderId: string) => void;
 };
 
 export function TitleOptionsSettingsGrid({
@@ -65,6 +76,8 @@ export function TitleOptionsSettingsGrid({
   onUpdateTitleOptions,
   onTitleChanged,
   idPrefix,
+  currentLibraryName,
+  onRequestMove,
 }: Props) {
   const t = useTranslate();
   const client = useClient();
@@ -193,16 +206,50 @@ export function TitleOptionsSettingsGrid({
         ) : null}
       </div>
 
+      {/* FR-010: the destination library sits beside the destination root.
+          Cross-library transfer is a later story, so the control names the
+          title's own library and explains why it cannot change yet (FR-017). */}
+      {onRequestMove ? (
+        <div className="min-w-0">
+          <label className="mb-1 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+            <Database aria-hidden="true" className="size-3.5" />
+            {t("move.destinationLibrary")}
+          </label>
+          <Select value="__current__" disabled>
+            <SelectTrigger
+              id={`${idPrefix}-destination-library`}
+              className="h-9 w-full text-sm"
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__current__">
+                {currentLibraryName?.trim() || t("move.destinationLibrary")}
+              </SelectItem>
+            </SelectContent>
+          </Select>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {t("move.destinationCrossLibraryUnavailable")}
+          </p>
+        </div>
+      ) : null}
+
       <div className="min-w-0">
         <label className="mb-1 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
           <Folder aria-hidden="true" className="size-3.5" />
-          {t("title.rootFolder")}
+          {onRequestMove ? t("move.destinationRoot") : t("title.rootFolder")}
         </label>
         <Select
           value={rootFolderSelectValue}
-          onValueChange={(rootFolderId) =>
-            void saveTitleOptions({ rootFolderId })
-          }
+          onValueChange={(rootFolderId) => {
+            if (onRequestMove) {
+              // Changing the destination opens the move workflow; it never
+              // rewrites the title's root in place (FR-011).
+              onRequestMove(rootFolderId);
+              return;
+            }
+            void saveTitleOptions({ rootFolderId });
+          }}
           disabled={saving || sortedRootFolders.length === 0}
         >
           <SelectTrigger
@@ -223,6 +270,11 @@ export function TitleOptionsSettingsGrid({
             ))}
           </SelectContent>
         </Select>
+        {onRequestMove ? (
+          <p className="mt-1 text-xs text-muted-foreground">
+            {t("move.destinationRootHelp")}
+          </p>
+        ) : null}
       </div>
 
       {title.facet !== "MOVIE" ? (

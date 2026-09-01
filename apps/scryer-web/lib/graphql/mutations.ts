@@ -1,6 +1,7 @@
 import {
   BACKUP_INFO_FIELDS,
   JOB_RUN_FIELDS,
+  LOCATION_OPERATION_FIELDS,
   MEDIA_SERVER_CONNECTION_FIELDS,
   PROVIDER_CONFIG_VALUE_FIELDS,
   RELEASE_SEARCH_RESULT_FIELDS,
@@ -2613,5 +2614,28 @@ export const setMinimumSeedersFloorMutation = `mutation SetMinimumSeedersFloor($
   setMinimumSeedersFloor(input: $input) {
     seedingProfileId
     minimumSeedersFloor
+  }
+}`;
+
+export const startLocationOperationMutation = `mutation StartLocationOperation($input: StartLocationOperationInput!) {
+  startLocationOperation(input: $input) {
+    planFingerprint
+    operation {${LOCATION_OPERATION_FIELDS}
+    }
+  }
+}`;
+
+export const cancelLocationOperationMutation = `mutation CancelLocationOperation($id: ID!) {
+  cancelLocationOperation(id: $id) {
+    id
+    cancelRequested
+  }
+}`;
+
+export const resumeLocationOperationMutation = `mutation ResumeLocationOperation($id: ID!) {
+  resumeLocationOperation(id: $id) {
+    id
+    resumed
+    detail
   }
 }`;

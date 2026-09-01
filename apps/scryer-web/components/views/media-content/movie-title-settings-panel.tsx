@@ -4,6 +4,7 @@ import { useClient } from "urql";
 import { ChangeTitleFolderCard } from "@/components/common/change-title-folder-card";
 import { FixTitleMatchSettingsCard } from "@/components/common/fix-title-match-settings-card";
 import { TitleOptionsSettingsGrid } from "@/components/common/title-options-settings-grid";
+import { MoveTitlesDialog } from "@/components/dialogs/move-titles-dialog";
 import { DEFAULT_MOVIE_LIBRARY_PATH } from "@/lib/constants/settings";
 import { seriesOverviewSettingsInitQuery } from "@/lib/graphql/queries";
 import type { TitleOptionUpdates } from "@/lib/types/title-options";
@@ -38,6 +39,19 @@ export function MovieTitleSettingsPanel({
   );
   const rootFolders = React.useMemo(() => library?.roots ?? [], [library]);
   const libraryName = library?.name ?? null;
+  // Root chosen in the destination control; opening the move workflow instead
+  // of writing the title's root in place (FR-011).
+  const [moveRootId, setMoveRootId] = React.useState<string | null>(null);
+  const moveLibraries = React.useMemo(
+    () => [
+      {
+        id: title.libraryId,
+        name: libraryName?.trim() || title.libraryName?.trim() || title.libraryId,
+        roots: rootFolders,
+      },
+    ],
+    [libraryName, rootFolders, title.libraryId, title.libraryName],
+  );
 
   React.useEffect(() => {
     let cancelled = false;
@@ -85,6 +99,28 @@ export function MovieTitleSettingsPanel({
         onUpdateTitleOptions={onUpdateTitleOptions}
         onTitleChanged={onTitleChanged}
         idPrefix="title-overview-settings"
+        currentLibraryName={libraryName ?? title.libraryName ?? null}
+        onRequestMove={setMoveRootId}
+      />
+      <MoveTitlesDialog
+        open={moveRootId !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setMoveRootId(null);
+          }
+        }}
+        titles={[
+          {
+            id: title.id,
+            name: title.name,
+            libraryId: title.libraryId,
+            libraryName: libraryName ?? title.libraryName ?? null,
+            rootFolderId: title.rootFolderId ?? null,
+            rootFolderPath: title.rootFolderPath ?? null,
+          },
+        ]}
+        libraries={moveLibraries}
+        initialRootId={moveRootId}
       />
       <FixTitleMatchSettingsCard
         facet={title.facet}

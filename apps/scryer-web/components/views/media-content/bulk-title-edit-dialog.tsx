@@ -46,6 +46,16 @@ type BulkTitleEditDialogProps = {
   rootFolders: LibraryRootRecord[];
   busy: boolean;
   onSubmit: (changes: TitleOptionUpdates) => Promise<void> | void;
+  /**
+   * Destination library shown beside the destination root (FR-010). Null when
+   * the selection spans libraries, which is the FR-017 disabled case.
+   */
+  destinationLibraryName?: string | null;
+  /**
+   * When set, the root control is a **destination** control: changing it opens
+   * the move workflow rather than staging a root rewrite (FR-011).
+   */
+  onRequestMove?: (rootFolderId: string) => void;
 };
 
 function initialDraftState(): TitleEditDraft {
@@ -61,6 +71,8 @@ export function BulkTitleEditDialog({
   rootFolders,
   busy,
   onSubmit,
+  destinationLibraryName,
+  onRequestMove,
 }: BulkTitleEditDialogProps) {
   const t = useTranslate();
   const initialDraft = React.useMemo(
@@ -178,13 +190,52 @@ export function BulkTitleEditDialog({
             </Select>
           </EditableField>
 
-          <EditableField label={t("title.rootFolder")}>
+          {/* FR-010: the destination library sits beside the destination root.
+              Cross-library transfer is a later story, so a mixed-library or
+              other-library destination is refused with its reason (FR-017). */}
+          {onRequestMove ? (
+            <EditableField label={t("move.destinationLibrary")}>
+              <Select value="__current__" disabled>
+                <SelectTrigger
+                  id="bulk-title-edit-destination-library"
+                  className="h-9 w-full text-sm"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__current__">
+                    {destinationLibraryName?.trim() ||
+                      t("move.destinationMixedSourceLibraries")}
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                {destinationLibraryName
+                  ? t("move.destinationCrossLibraryUnavailable")
+                  : t("move.destinationMixedSourceLibraries")}
+              </p>
+            </EditableField>
+          ) : null}
+
+          <EditableField
+            label={
+              onRequestMove ? t("move.destinationRoot") : t("title.rootFolder")
+            }
+          >
             <Select
               value={draft.rootFolderId}
-              onValueChange={(value) =>
-                setDraft((previous) => ({ ...previous, rootFolderId: value }))
-              }
-              disabled={busy}
+              onValueChange={(value) => {
+                if (onRequestMove) {
+                  // Changing the destination opens the move workflow; the bulk
+                  // save never rewrites roots in place (FR-011).
+                  if (value !== UNCHANGED_VALUE) {
+                    onRequestMove(value);
+                  }
+                  return;
+                }
+                setDraft((previous) => ({ ...previous, rootFolderId: value }));
+              }}
+              disabled={busy || (Boolean(onRequestMove) && sortedRootFolders.length === 0)}
             >
               <SelectTrigger className="h-9 w-full font-[var(--font-code)] text-sm">
                 <SelectValue />
@@ -204,6 +255,11 @@ export function BulkTitleEditDialog({
                 ))}
               </SelectContent>
             </Select>
+            {onRequestMove ? (
+              <p className="text-xs text-muted-foreground">
+                {t("move.destinationRootHelp")}
+              </p>
+            ) : null}
           </EditableField>
 
           <EditableField label={t("search.addConfigMonitorType")}>

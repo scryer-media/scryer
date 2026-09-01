@@ -3998,3 +3998,151 @@ export const indexerDownloadClientMappingCatalogQuery = `query IndexerDownloadCl
     }
   }
 }`;
+
+const LOCATION_PLAN_ITEM_FIELDS = `
+      kind
+      titleId
+      mediaFileId
+      sourcePath
+      destinationPath
+      sizeBytes
+      sameVolume
+      reasonCode
+      detail`;
+
+export const locationOperationPreviewQuery = `query LocationOperationPreview($input: LocationOperationPreviewInput!) {
+  locationOperationPreview(input: $input) {
+    planFingerprint
+    operationType
+    mode
+    sourceLibraryId
+    destinationLibraryId
+    sourceRootId
+    destinationRootId
+    selection
+    counts {
+      itemsTotal
+      titlesTotal
+      filesTotal
+      bytesTotal
+      byKind {
+        kind
+        count
+      }
+    }
+    sections {
+      kind
+      itemsTotal
+      bytesTotal
+      complete
+      items {${LOCATION_PLAN_ITEM_FIELDS}
+      }
+    }
+    classification {
+      titlesTotal
+      blocksStart
+      groups {
+        class
+        count
+        titles {
+          titleId
+          class
+          destinationLibraryId
+          destinationRootId
+          reasonCode
+          reason
+        }
+      }
+    }
+    freeSpace {
+      destinationRequiredBytes
+      destinationTotalRequiredBytes
+      destinationAvailableBytes
+      recycleRequiredBytes
+      recycleAvailableBytes
+      sameVolumeMove
+      recycleOnOtherVolume
+      recycleSharesDestinationVolume
+      recyclingAvailable
+      probed
+      sufficient
+    }
+    verification {
+      depth
+      files
+      bytes
+      applies
+    }
+    confirmation {
+      requirement
+      typedPhrase
+      typedPrompt
+    }
+    warnings
+    blocksStart
+  }
+}`;
+
+export const LOCATION_OPERATION_FIELDS = `
+    id
+    operationType
+    mode
+    state
+    initiatedByUserId
+    sourceLibraryId
+    destinationLibraryId
+    sourceRootId
+    destinationRootId
+    planFingerprint
+    verificationDepth
+    verificationFallbackCount
+    counters {
+      titlesTotal
+      titlesProcessed
+      titlesBlocked
+      filesTotal
+      filesProcessed
+      bytesTotal
+      bytesProcessed
+      merges
+      dedups
+      renames
+      noOps
+      unresolved
+    }
+    detail
+    jobRunId
+    workflowOperationId
+    cancelRequested
+    cancelRequestedAt
+    confirmedAt
+    startedAt
+    createdAt
+    updatedAt
+    completedAt
+    titleCheckpoints {
+      titleId
+      sequence
+      state
+      classification
+      sourceLibraryId
+      sourceRootId
+      sourceFolderPath
+      destinationLibraryId
+      destinationRootId
+      destinationFolderPath
+      mergedIntoTitleId
+      filesTotal
+      filesVerified
+      bytesTotal
+      bytesVerified
+      detail
+      startedAt
+      updatedAt
+      completedAt
+    }`;
+
+export const locationOperationQuery = `query LocationOperation($id: ID!) {
+  locationOperation(id: $id) {${LOCATION_OPERATION_FIELDS}
+  }
+}`;
