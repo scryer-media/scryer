@@ -2176,9 +2176,7 @@ pub trait OAuthRepository: Send + Sync {
     async fn update_client_registration(
         &self,
         record: OAuthClientRegistrationRecord,
-        revoke_grants: bool,
         revoked_at: chrono::DateTime<chrono::Utc>,
-        revoke_reason: &str,
     ) -> AppResult<Option<OAuthClientRegistrationRecord>>;
     async fn delete_client_registration(
         &self,
@@ -2218,6 +2216,7 @@ pub trait OAuthRepository: Send + Sync {
         &self,
         id: &str,
     ) -> AppResult<Option<(OAuthRefreshTokenRecord, OAuthRefreshGrantRecord)>>;
+    async fn get_refresh_grant(&self, id: &str) -> AppResult<Option<OAuthRefreshGrantRecord>>;
     async fn rotate_refresh_token(
         &self,
         token_id: &str,
@@ -2661,6 +2660,19 @@ pub trait ExternalIdentityVerifier: Send + Sync {
         api_key: &str,
         search: Option<&str>,
     ) -> AppResult<Vec<JellyfinServerUser>>;
+    /// Verify one canonical Jellyfin user ID with the stored administrative
+    /// API key. Implementations must not follow redirects or expose the key.
+    async fn verify_jellyfin_user_with_api_key(
+        &self,
+        _connection_id: &str,
+        _base_url: &str,
+        _api_key: &str,
+        _canonical_user_id: &str,
+    ) -> AppResult<VerifiedExternalIdentity> {
+        Err(AppError::Repository(
+            "Jellyfin API-key identity verification is not configured".into(),
+        ))
+    }
     async fn resolve_emby_api_base(
         &self,
         _connection_id: &str,

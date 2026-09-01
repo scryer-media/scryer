@@ -122,9 +122,11 @@ async fn graphql_oauth_client_registration_lifecycle_enforces_admin_access_and_r
               oauthAuthorizationClient(
                 clientId: "{client_id}"
                 redirectUri: "{REDIRECT_URI}"
+                scope: "library jellyfin-link"
               ) {{
                 clientId
                 displayName
+                scope
               }}
             }}
             "#
@@ -140,6 +142,10 @@ async fn graphql_oauth_client_registration_lifecycle_enforces_admin_access_and_r
     assert_eq!(
         lookup["data"]["oauthAuthorizationClient"]["displayName"],
         "Example desktop client"
+    );
+    assert_eq!(
+        lookup["data"]["oauthAuthorizationClient"]["scope"],
+        "library jellyfin-link"
     );
 
     let ordinary_user = ctx
@@ -278,6 +284,41 @@ async fn graphql_oauth_client_registration_lifecycle_enforces_admin_access_and_r
         .validate_oauth_access_token(&client_id, &grant_id)
         .await
         .expect("refreshed OAuth access token is active");
+
+    let redirect_changed = schema_exec(
+        &ctx,
+        &format!(
+            r#"
+            mutation ChangeOAuthClientRedirectUris {{
+              updateOauthClientRegistration(
+                clientId: "{client_id}"
+                input: {{
+                  displayName: "Example desktop client"
+                  redirectUris: ["https://client.example.test/oauth/new-callback"]
+                  enabled: true
+                }}
+              ) {{ enabled }}
+            }}
+            "#
+        ),
+        Some(admin.clone()),
+    )
+    .await;
+    assert_no_errors(&redirect_changed);
+    assert!(
+        ctx.app
+            .validate_oauth_access_token(&client_id, &grant_id)
+            .await
+            .is_err(),
+        "changing a client's redirect allowlist must revoke its active grants"
+    );
+    assert!(
+        ctx.app
+            .refresh_oauth_token(&client_id, &refreshed.refresh_token, true)
+            .await
+            .is_err(),
+        "a redirect allowlist change must invalidate the refresh-token family"
+    );
 
     let disabled = schema_exec(
         &ctx,

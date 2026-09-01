@@ -9,7 +9,8 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use scryer_application::{
-    AppError, AppUseCase, JwtSessionScope, OAUTH_LIBRARY_SCOPE, OAuthAuthorizationSource,
+    AppError, AppUseCase, JwtSessionScope, OAUTH_JELLYFIN_LINK_SCOPE, OAUTH_LIBRARY_SCOPE,
+    OAuthAuthorizationSource,
 };
 use scryer_interface::context::AuthRuntimeStateHandle;
 
@@ -385,7 +386,7 @@ async fn oauth_metadata(State(state): State<OAuthRouteState>, headers: HeaderMap
         revocation_endpoint: absolute_oauth_url(&issuer, &state.base_path, "/oauth/revoke"),
         response_types_supported: vec!["code"],
         grant_types_supported: vec!["authorization_code", "refresh_token"],
-        scopes_supported: vec![OAUTH_LIBRARY_SCOPE],
+        scopes_supported: vec![OAUTH_LIBRARY_SCOPE, OAUTH_JELLYFIN_LINK_SCOPE],
         token_endpoint_auth_methods_supported: vec!["none"],
         revocation_endpoint_auth_methods_supported: vec!["none"],
         code_challenge_methods_supported: vec!["S256"],

@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use async_graphql::{Context, ID, Object, Result as GqlResult};
+use async_graphql::{Context, Error, ErrorExtensions, ID, Object, Result as GqlResult};
 use chrono::Utc;
 use scryer_application::{
     LoginFailureTimingClass, LoginVerificationMethod, LoginVerificationRequirement,
@@ -11,8 +11,8 @@ use scryer_interface_core::{
     LoginAttemptPrincipal, LoginErrorClassification, actor_from_ctx, app_from_ctx,
     auth_runtime_from_ctx, classify_login_error, default_persist_session_from_ctx,
     login_attempt_limiter_from_ctx, login_verification_required_gql_error,
-    persist_session_or_default, require_config_app_permission, to_gql_error,
-    to_login_gql_error_after_timing,
+    oauth_actor_session_from_ctx, persist_session_or_default, require_config_app_permission,
+    to_gql_error, to_login_gql_error_after_timing,
 };
 use scryer_interface_media::mappers::{from_linked_account, from_user_with_auth_factor_status};
 use scryer_interface_media::types::*;
@@ -423,6 +423,42 @@ impl UserMutations {
         .await
         .map(from_linked_account)
         .map_err(to_gql_error)
+    }
+
+    /// Links the current OAuth caller to the Jellyfin user bound to the
+    /// plugin's approved OAuth grant. Neither a Scryer user nor a connection
+    /// may be selected by the caller.
+    #[graphql(name = "linkCurrentOAuthJellyfinAccount")]
+    async fn link_current_oauth_jellyfin_account(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Canonical Jellyfin user GUID reported by the Jellyfin client.")]
+        jellyfin_user_id: String,
+    ) -> GqlResult<LinkedAccountPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let oauth = oauth_actor_session_from_ctx(ctx).ok_or_else(|| {
+            to_gql_error(scryer_application::AppError::Unauthorized(
+                "OAuth authentication is required for this operation".into(),
+            ))
+        })?;
+        app.link_current_oauth_jellyfin_account(
+            &actor,
+            &oauth.client_id,
+            &oauth.grant_id,
+            &jellyfin_user_id,
+        )
+        .await
+        .map(from_linked_account)
+        .map_err(|error| match error {
+            scryer_application::AppError::Validation(message)
+                if message == "Jellyfin account could not be linked" =>
+            {
+                Error::new("Jellyfin account could not be linked")
+                    .extend_with(|_, extensions| extensions.set("code", "REQUEST_CONFLICT"))
+            }
+            other => to_gql_error(other),
+        })
     }
 
     /// Links the authenticated actor to Emby using the selected connection mode and credentials.

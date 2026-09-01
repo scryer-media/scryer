@@ -5,6 +5,7 @@ use scryer_application::{
     OAuthRefreshGrantRecord, OAuthRefreshRotation, OAuthRefreshRotationOutcome,
     OAuthRefreshTokenRecord, OAuthRepository,
 };
+use sqlx::query;
 
 use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTx, StoreDatastore};
 
@@ -221,18 +222,40 @@ impl OAuthRepository for OAuthStore {
     async fn update_client_registration(
         &self,
         record: OAuthClientRegistrationRecord,
-        revoke_grants: bool,
         revoked_at: chrono::DateTime<chrono::Utc>,
-        revoke_reason: &str,
     ) -> AppResult<Option<OAuthClientRegistrationRecord>> {
-        let revoke_reason = revoke_reason.to_string();
         SqlRuntime::run_in_transaction(
             &self.datastore,
             "update_oauth_client_registration",
             move |tx| {
                 let record = record.clone();
-                let revoke_reason = revoke_reason.clone();
                 Box::pin(async move {
+                    if let Some(postgres) = tx.postgres() {
+                        let locked = query(
+                            "SELECT client_id FROM oauth_client_registrations WHERE client_id = $1 FOR UPDATE",
+                        )
+                        .bind(&record.client_id)
+                        .fetch_optional(&mut **postgres)
+                        .await
+                        .map_err(|error| AppError::Repository(error.to_string()))?;
+                        if locked.is_none() {
+                            return Ok(None);
+                        }
+                    }
+                    let Some(current) =
+                        load_client_registration(SqlExec::Tx(tx), &record.client_id).await?
+                    else {
+                        return Ok(None);
+                    };
+                    let redirect_uris_changed = current.redirect_uris != record.redirect_uris;
+                    let revoke_grants = !record.enabled || redirect_uris_changed;
+                    let revoke_reason = if !record.enabled {
+                        "client_disabled"
+                    } else if redirect_uris_changed {
+                        "client_redirect_uris_changed"
+                    } else {
+                        "client_updated"
+                    };
                     let rows = tx
                         .execute(
                             "UPDATE oauth_client_registrations
@@ -252,7 +275,7 @@ impl OAuthRepository for OAuthStore {
                     replace_client_redirect_uris_tx(tx, &record.client_id, &record.redirect_uris)
                         .await?;
                     if revoke_grants {
-                        revoke_client_grants_tx(tx, &record.client_id, revoked_at, &revoke_reason)
+                        revoke_client_grants_tx(tx, &record.client_id, revoked_at, revoke_reason)
                             .await?;
                     }
                     load_client_registration(SqlExec::Tx(tx), &record.client_id).await
@@ -318,8 +341,10 @@ impl OAuthRepository for OAuthStore {
             "create_oauth_authorization_code",
             "INSERT INTO oauth_authorization_codes
                 (id, code_hash, client_id, user_id, auth_session_version, redirect_uri, scope, code_challenge,
-                 code_challenge_method, authorization_source, created_at, expires_at, consumed_at)
-             VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+                 code_challenge_method, authorization_source, jellyfin_connection_id, jellyfin_external_url,
+                 jellyfin_base_url, jellyfin_api_key_hash,
+                 created_at, expires_at, consumed_at)
+             VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
             vec![
                 SqlArg::Text(record.id.clone()),
                 SqlArg::Text(record.code_hash.clone()),
@@ -331,6 +356,10 @@ impl OAuthRepository for OAuthStore {
                 SqlArg::Text(record.code_challenge.clone()),
                 SqlArg::Text(record.code_challenge_method.clone()),
                 SqlArg::Text(record.authorization_source.as_str().to_string()),
+                SqlArg::OptText(record.jellyfin_connection_id.clone()),
+                SqlArg::OptText(record.jellyfin_external_url.clone()),
+                SqlArg::OptText(record.jellyfin_base_url.clone()),
+                SqlArg::OptText(record.jellyfin_api_key_hash.clone()),
                 SqlArg::Timestamp(record.created_at),
                 SqlArg::Timestamp(record.expires_at),
                 SqlArg::OptTimestamp(record.consumed_at),
@@ -392,6 +421,10 @@ impl OAuthRepository for OAuthStore {
                                 AND auth_session_version = {}
                                 AND redirect_uri = {}
                                 AND scope = {}
+                                AND COALESCE(jellyfin_connection_id, '') = {}
+                                AND COALESCE(jellyfin_external_url, '') = {}
+                                AND COALESCE(jellyfin_base_url, '') = {}
+                                AND COALESCE(jellyfin_api_key_hash, '') = {}
                                 AND code_challenge = {}
                                 AND code_challenge_method = {}
                                 AND authorization_source = {}
@@ -406,6 +439,16 @@ impl OAuthRepository for OAuthStore {
                                 SqlArg::Text(code.auth_session_version.clone()),
                                 SqlArg::Text(code.redirect_uri.clone()),
                                 SqlArg::Text(code.scope.clone()),
+                                SqlArg::Text(
+                                    code.jellyfin_connection_id.clone().unwrap_or_default(),
+                                ),
+                                SqlArg::Text(
+                                    code.jellyfin_external_url.clone().unwrap_or_default(),
+                                ),
+                                SqlArg::Text(code.jellyfin_base_url.clone().unwrap_or_default()),
+                                SqlArg::Text(
+                                    code.jellyfin_api_key_hash.clone().unwrap_or_default(),
+                                ),
                                 SqlArg::Text(code.code_challenge.clone()),
                                 SqlArg::Text(code.code_challenge_method.clone()),
                                 SqlArg::Text(code.authorization_source.as_str().to_string()),
@@ -478,6 +521,20 @@ impl OAuthRepository for OAuthStore {
         id: &str,
     ) -> AppResult<Option<(OAuthRefreshTokenRecord, OAuthRefreshGrantRecord)>> {
         load_refresh_token_with_grant(self.datastore.read_exec(), id).await
+    }
+
+    async fn get_refresh_grant(&self, id: &str) -> AppResult<Option<OAuthRefreshGrantRecord>> {
+        let row = SqlRuntime::fetch_optional(
+            self.datastore.read_exec(),
+            "SELECT id, family_id, user_id, client_id, redirect_uri, scope, jellyfin_connection_id,
+                    jellyfin_external_url, jellyfin_base_url, jellyfin_api_key_hash, auth_session_version, authorization_source,
+                    created_at, updated_at, last_used_at, revoked_at, revoked_reason
+               FROM oauth_refresh_grants
+              WHERE id = {}",
+            &[SqlArg::Text(id.to_string())],
+        )
+        .await?;
+        row.as_ref().map(row_to_refresh_grant).transpose()
     }
 
     async fn rotate_refresh_token(
@@ -839,7 +896,9 @@ async fn load_authorization_code(
     let row = SqlRuntime::fetch_optional(
         exec,
         "SELECT id, code_hash, client_id, user_id, auth_session_version, redirect_uri, scope, code_challenge,
-                code_challenge_method, authorization_source, created_at, expires_at, consumed_at
+                code_challenge_method, authorization_source, jellyfin_connection_id, jellyfin_external_url,
+                jellyfin_base_url, jellyfin_api_key_hash,
+                created_at, expires_at, consumed_at
            FROM oauth_authorization_codes
           WHERE id = {}",
         &[SqlArg::Text(id.to_string())],
@@ -856,8 +915,9 @@ async fn load_refresh_token_with_grant(
         exec,
         "SELECT t.id AS token_id, t.grant_id, t.family_id AS token_family_id, t.token_hash,
                 t.created_at AS token_created_at, t.consumed_at, t.revoked_at AS token_revoked_at,
-                g.id AS grant_row_id, g.family_id AS grant_family_id, g.user_id, g.client_id,
-                g.scope, g.authorization_source,
+                g.id AS grant_row_id, g.family_id AS grant_family_id, g.user_id, g.client_id, g.redirect_uri,
+                g.scope, g.authorization_source, g.jellyfin_connection_id, g.jellyfin_external_url,
+                g.jellyfin_base_url, g.jellyfin_api_key_hash,
                 g.auth_session_version, g.created_at AS grant_created_at,
                 g.updated_at AS grant_updated_at, g.last_used_at,
                 g.revoked_at AS grant_revoked_at, g.revoked_reason
@@ -878,15 +938,21 @@ async fn insert_refresh_grant_tx(
 ) -> AppResult<()> {
     tx.execute(
         "INSERT INTO oauth_refresh_grants
-            (id, family_id, user_id, client_id, scope, auth_session_version,
+            (id, family_id, user_id, client_id, redirect_uri, scope, jellyfin_connection_id, jellyfin_external_url,
+             jellyfin_base_url, jellyfin_api_key_hash, auth_session_version,
              authorization_source, created_at, updated_at, last_used_at, revoked_at, revoked_reason)
-         VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+         VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
         &[
             SqlArg::Text(grant.id.clone()),
             SqlArg::Text(grant.family_id.clone()),
             SqlArg::Text(grant.user_id.clone()),
             SqlArg::Text(grant.client_id.clone()),
+            SqlArg::Text(grant.redirect_uri.clone()),
             SqlArg::Text(grant.scope.clone()),
+            SqlArg::OptText(grant.jellyfin_connection_id.clone()),
+            SqlArg::OptText(grant.jellyfin_external_url.clone()),
+            SqlArg::OptText(grant.jellyfin_base_url.clone()),
+            SqlArg::OptText(grant.jellyfin_api_key_hash.clone()),
             SqlArg::Text(grant.auth_session_version.clone()),
             SqlArg::Text(grant.authorization_source.as_str().to_string()),
             SqlArg::Timestamp(grant.created_at),
@@ -928,7 +994,8 @@ async fn load_refresh_grant_by_id_tx(
 ) -> AppResult<Option<OAuthRefreshGrantRecord>> {
     let row = SqlRuntime::fetch_optional(
         SqlExec::Tx(tx),
-        "SELECT id, family_id, user_id, client_id, scope, auth_session_version, created_at,
+        "SELECT id, family_id, user_id, client_id, redirect_uri, scope, jellyfin_connection_id, jellyfin_external_url,
+                jellyfin_base_url, jellyfin_api_key_hash, auth_session_version, created_at,
                 authorization_source, updated_at, last_used_at, revoked_at, revoked_reason
            FROM oauth_refresh_grants
           WHERE id = {}",
@@ -947,6 +1014,10 @@ fn row_to_authorization_code(row: &SqlRow) -> AppResult<OAuthAuthorizationCodeRe
         auth_session_version: row.text("auth_session_version")?,
         redirect_uri: row.text("redirect_uri")?,
         scope: row.text("scope")?,
+        jellyfin_connection_id: row.opt_text("jellyfin_connection_id")?,
+        jellyfin_external_url: row.opt_text("jellyfin_external_url")?,
+        jellyfin_base_url: row.opt_text("jellyfin_base_url")?,
+        jellyfin_api_key_hash: row.opt_text("jellyfin_api_key_hash")?,
         code_challenge: row.text("code_challenge")?,
         code_challenge_method: row.text("code_challenge_method")?,
         authorization_source: OAuthAuthorizationSource::parse(&row.text("authorization_source")?),
@@ -1013,7 +1084,12 @@ fn row_to_refresh_grant(row: &SqlRow) -> AppResult<OAuthRefreshGrantRecord> {
         family_id: row.text("family_id")?,
         user_id: row.text("user_id")?,
         client_id: row.text("client_id")?,
+        redirect_uri: row.text("redirect_uri")?,
         scope: row.text("scope")?,
+        jellyfin_connection_id: row.opt_text("jellyfin_connection_id")?,
+        jellyfin_external_url: row.opt_text("jellyfin_external_url")?,
+        jellyfin_base_url: row.opt_text("jellyfin_base_url")?,
+        jellyfin_api_key_hash: row.opt_text("jellyfin_api_key_hash")?,
         auth_session_version: row.text("auth_session_version")?,
         authorization_source: OAuthAuthorizationSource::parse(&row.text("authorization_source")?),
         created_at: row.timestamp("created_at")?,
@@ -1041,7 +1117,12 @@ fn row_to_refresh_token_with_grant(
         family_id: row.text("grant_family_id")?,
         user_id: row.text("user_id")?,
         client_id: row.text("client_id")?,
+        redirect_uri: row.text("redirect_uri")?,
         scope: row.text("scope")?,
+        jellyfin_connection_id: row.opt_text("jellyfin_connection_id")?,
+        jellyfin_external_url: row.opt_text("jellyfin_external_url")?,
+        jellyfin_base_url: row.opt_text("jellyfin_base_url")?,
+        jellyfin_api_key_hash: row.opt_text("jellyfin_api_key_hash")?,
         auth_session_version: row.text("auth_session_version")?,
         authorization_source: OAuthAuthorizationSource::parse(&row.text("authorization_source")?),
         created_at: row.timestamp("grant_created_at")?,

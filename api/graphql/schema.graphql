@@ -12214,6 +12214,10 @@ type OauthAuthorizationClientPayload {
 	Client name safe to display after callback validation.
 	"""
 	displayName: String!
+	"""
+	Server-validated, canonical requested OAuth scope set.
+	"""
+	scope: String!
 }
 
 """
@@ -14537,7 +14541,7 @@ type QueryRoot {
 	"""
 	oauthClientRegistrations: [OauthClientRegistrationPayload!]!
 	"""
-	Resolves the display name for an OAuth authorization request after validating its callback URL.
+	Resolves display information and canonical scope for an OAuth authorization request after validating its callback URL.
 	"""
 	oauthAuthorizationClient(
 		"""
@@ -14547,7 +14551,11 @@ type QueryRoot {
 		"""
 		Redirect URI from the authorization request.
 		"""
-		redirectUri: String!
+		redirectUri: String!,
+		"""
+		Requested OAuth scopes, validated and canonicalized before display.
+		"""
+		scope: String
 	): OauthAuthorizationClientPayload!
 	"""
 	Returns effective external-auth providers and connections, hiding login capability when form login is disabled.

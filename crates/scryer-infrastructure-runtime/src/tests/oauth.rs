@@ -138,6 +138,10 @@ async fn custom_client_grant_creation_requires_an_enabled_registration() {
         authorization_source: scryer_application::OAuthAuthorizationSource::Authenticated,
         redirect_uri: "https://example.test/oauth/callback".to_string(),
         scope: "library".to_string(),
+        jellyfin_connection_id: None,
+        jellyfin_external_url: None,
+        jellyfin_base_url: None,
+        jellyfin_api_key_hash: None,
         code_challenge: "challenge-disabled-client".to_string(),
         code_challenge_method: "S256".to_string(),
         created_at: now,
@@ -155,7 +159,12 @@ async fn custom_client_grant_creation_requires_an_enabled_registration() {
         user_id: user.id.clone(),
         authorization_source: scryer_application::OAuthAuthorizationSource::Authenticated,
         client_id: client_id.to_string(),
+        redirect_uri: "https://example.test/oauth/callback".to_string(),
         scope: "library".to_string(),
+        jellyfin_connection_id: None,
+        jellyfin_external_url: None,
+        jellyfin_base_url: None,
+        jellyfin_api_key_hash: None,
         auth_session_version: "1".to_string(),
         created_at: now,
         updated_at: now,
@@ -188,7 +197,12 @@ async fn custom_client_grant_creation_requires_an_enabled_registration() {
         user_id: user.id.clone(),
         authorization_source: scryer_application::OAuthAuthorizationSource::Authenticated,
         client_id: client_id.to_string(),
+        redirect_uri: "https://example.test/oauth/callback".to_string(),
         scope: "library".to_string(),
+        jellyfin_connection_id: None,
+        jellyfin_external_url: None,
+        jellyfin_base_url: None,
+        jellyfin_api_key_hash: None,
         auth_session_version: "1".to_string(),
         created_at: now,
         updated_at: now,
@@ -245,6 +259,62 @@ async fn custom_client_grant_creation_requires_an_enabled_registration() {
     let _ = std::fs::remove_file(db);
 }
 
+#[tokio::test]
+async fn refresh_grant_load_preserves_redirect_and_jellyfin_binding() {
+    let (services, db) = temp_services("scryer_oauth_jellyfin_binding").await;
+    let oauth = oauth_store(&services);
+    let user = UserRepository::list_all(&user_store(&services))
+        .await
+        .expect("users should load")
+        .into_iter()
+        .next()
+        .expect("default user should exist");
+    let now = Utc::now();
+    let grant = scryer_application::OAuthRefreshGrantRecord {
+        id: "grant-jellyfin-binding".to_string(),
+        family_id: "family-jellyfin-binding".to_string(),
+        user_id: user.id,
+        authorization_source: scryer_application::OAuthAuthorizationSource::Authenticated,
+        client_id: "oauth-client-jellyfin".to_string(),
+        redirect_uri: "https://jellyfin.example.test/Scryer/Auth/Callback".to_string(),
+        scope: "library jellyfin-link".to_string(),
+        jellyfin_connection_id: Some("jellyfin-primary".to_string()),
+        jellyfin_external_url: Some("https://jellyfin.example.test".to_string()),
+        jellyfin_base_url: Some("http://jellyfin.internal:8096".to_string()),
+        jellyfin_api_key_hash: Some("keyed-fingerprint".to_string()),
+        auth_session_version: "1".to_string(),
+        created_at: now,
+        updated_at: now,
+        last_used_at: None,
+        revoked_at: None,
+        revoked_reason: None,
+    };
+    let token = scryer_application::OAuthRefreshTokenRecord {
+        id: "token-jellyfin-binding".to_string(),
+        grant_id: grant.id.clone(),
+        family_id: grant.family_id.clone(),
+        token_hash: "hash-jellyfin-binding".to_string(),
+        created_at: now,
+        consumed_at: None,
+        revoked_at: None,
+    };
+    oauth
+        .create_refresh_grant(grant.clone(), token, false)
+        .await
+        .expect("grant should insert");
+    let loaded = oauth
+        .get_refresh_grant(&grant.id)
+        .await
+        .expect("grant should load")
+        .expect("grant should exist");
+    assert_eq!(loaded.redirect_uri, grant.redirect_uri);
+    assert_eq!(loaded.jellyfin_connection_id, grant.jellyfin_connection_id);
+    assert_eq!(loaded.jellyfin_external_url, grant.jellyfin_external_url);
+    assert_eq!(loaded.jellyfin_base_url, grant.jellyfin_base_url);
+    assert_eq!(loaded.jellyfin_api_key_hash, grant.jellyfin_api_key_hash);
+    let _ = std::fs::remove_file(db);
+}
+
 async fn create_grant_with_token(
     oauth: &OAuthStore,
     user_id: &str,
@@ -263,7 +333,12 @@ async fn create_grant_with_token(
         user_id: user_id.to_string(),
         authorization_source,
         client_id: "generic-native".to_string(),
+        redirect_uri: "http://127.0.0.1/oauth/callback".to_string(),
         scope: "library".to_string(),
+        jellyfin_connection_id: None,
+        jellyfin_external_url: None,
+        jellyfin_base_url: None,
+        jellyfin_api_key_hash: None,
         auth_session_version: "1".to_string(),
         created_at: now,
         updated_at: now,
