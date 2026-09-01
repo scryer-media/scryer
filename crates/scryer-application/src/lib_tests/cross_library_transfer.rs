@@ -954,7 +954,7 @@ async fn a_unique_identity_match_merges_into_the_destination_title() {
     assert!(
         paths
             .iter()
-            .all(|path| path.starts_with(fixture.destination_root().to_string_lossy().as_ref())),
+            .all(|path| path.starts_with(&*fixture.destination_root().to_string_lossy())),
         "nothing is left pointing at the source root: {paths:?}"
     );
 

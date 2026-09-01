@@ -578,7 +578,7 @@ pub fn classify_title(
     // for anything touching movie, so an incompatible pairing can never carry
     // one.
     let facet_conversion = crosses_libraries
-        .then(|| destination_library)
+        .then_some(destination_library)
         .flatten()
         .and_then(|library| {
             plan_facet_conversion(

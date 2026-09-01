@@ -372,8 +372,8 @@ async fn the_preview_states_current_and_destination_folders_with_file_count_and_
             .destination_path
             .as_deref()
             .expect("a move has a destination");
-        assert!(source.starts_with(fixture.root_a().to_string_lossy().as_ref()));
-        assert!(destination.starts_with(fixture.root_b().to_string_lossy().as_ref()));
+        assert!(source.starts_with(&*fixture.root_a().to_string_lossy()));
+        assert!(destination.starts_with(&*fixture.root_b().to_string_lossy()));
     }
 
     // Nothing has happened yet: a preview is a read.
@@ -532,7 +532,7 @@ async fn a_stale_folder_name_is_repaired_by_the_destination_naming_policy() {
             .all(|item| item
                 .destination_path
                 .as_deref()
-                .is_some_and(|path| path.starts_with(repaired.to_string_lossy().as_ref()))),
+                .is_some_and(|path| path.starts_with(&*repaired.to_string_lossy()))),
         "every previewed destination sits under the repaired folder"
     );
 
@@ -977,7 +977,7 @@ async fn an_operation_whose_root_is_not_available_is_left_interrupted_rather_tha
         panic!("an operation on an unavailable root must not be resumed");
     };
     assert!(
-        reason.contains(fixture.root_b().to_string_lossy().as_ref()),
+        reason.contains(&*fixture.root_b().to_string_lossy()),
         "the reason names the path that is missing: {reason}"
     );
 

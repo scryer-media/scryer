@@ -572,8 +572,8 @@ async fn correcting_a_series_match_rebuilds_episode_associations_from_the_new_fo
     assert_eq!(
         paths,
         vec![
-            right_episode_one.to_string_lossy().as_ref(),
-            right_episode_two.to_string_lossy().as_ref(),
+            &*right_episode_one.to_string_lossy(),
+            &*right_episode_two.to_string_lossy(),
         ],
         "episode associations should be rebuilt from the new folder"
     );
