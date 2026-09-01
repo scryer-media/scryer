@@ -1306,6 +1306,7 @@ fn plan_title(
                 .unwrap_or_else(|| "content that no title on this library owns".to_string());
             items.push(
                 PlanItem::new(PlanItemKind::Rename)
+                    .for_folder()
                     .with_title(draft.title_id.clone())
                     .with_paths(
                         Some(source_folder_display.clone()),
@@ -2223,6 +2224,88 @@ mod tests {
             "/media/keep/Series A (from Old Disk)/Season 01/S01E01.mkv"
         );
         assert_eq!(planned.plan.counts.for_kind(PlanItemKind::Rename), 1);
+        // The rename is the *folder*, and a folder is not a file. The count the
+        // user types a confirmation phrase against has to be the number of
+        // files that actually move.
+        assert_eq!(
+            planned.plan.counts.files_total, 1,
+            "one file moves; the folder rename beside it is not a second file"
+        );
+    }
+
+    /// The count the typed confirmation confirms is the number of files, and a
+    /// consolidation emits both kinds of `Rename`: one folder uniquing and one
+    /// media collision. Only the second is a file.
+    #[test]
+    fn the_file_count_counts_files_and_not_the_folder_rename_beside_them() {
+        let uniqued = draft(
+            "t1",
+            "/media/old/Alpha (2020)",
+            vec![tracked(
+                "/media/old/Alpha (2020)/Alpha.mkv",
+                50,
+                "/media/old/Alpha (2020)",
+            )],
+            ResolvedFolder {
+                title_id: "t1".to_string(),
+                destination_folder: Some(PathBuf::from("/media/keep/Alpha (2020) (from Old Disk)")),
+                placement: ConsolidationPlacement::FolderNameCollision {
+                    collided_name: "Alpha (2020)".to_string(),
+                    occupied_by_title_id: Some("other".to_string()),
+                },
+                renamed_to: Some("Alpha (2020) (from Old Disk)".to_string()),
+            },
+        );
+        let mut colliding = draft(
+            "t2",
+            "/media/old/Beta (2021)",
+            vec![tracked(
+                "/media/old/Beta (2021)/Beta.mkv",
+                60,
+                "/media/old/Beta (2021)",
+            )],
+            resolved_unused("t2", "/media/keep/Beta (2021)"),
+        );
+        // The destination folder already holds a file of the same name whose
+        // content differs, so FR-074 renames the incoming one.
+        colliding.destination_entries = vec![DestinationItem::media("Beta.mkv", 61)];
+
+        let planned = build_root_consolidation_plan(&request(vec![uniqued, colliding]));
+        assert_eq!(
+            planned.plan.counts.for_kind(PlanItemKind::Rename),
+            2,
+            "one folder uniquing and one media collision"
+        );
+        let file_renames = planned
+            .plan
+            .section(PlanItemKind::Rename)
+            .expect("the renames are previewed")
+            .items
+            .items
+            .iter()
+            .filter(|item| !item.folder_scoped)
+            .count();
+        assert_eq!(file_renames, 1);
+        assert_eq!(
+            planned.plan.counts.files_total,
+            2,
+            "two files move; the folder rename is not a third"
+        );
+        assert_eq!(
+            planned.plan.counts.files_total,
+            planned
+                .execution
+                .titles
+                .iter()
+                .map(|title| title.files.len() as i64)
+                .sum::<i64>(),
+            "the previewed file count is the number of files the runner will walk (SC-004)"
+        );
+        assert_eq!(
+            planned.plan.counts.bytes_total,
+            50 + 60,
+            "the collided file's bytes count once, not once per item describing it"
+        );
     }
 
     // ── FR-022 ───────────────────────────────────────────────────────────────

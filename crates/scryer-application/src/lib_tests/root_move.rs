@@ -104,6 +104,51 @@ impl RootMoveFixture {
         self.temp.path().join("root-b")
     }
 
+    fn root_c(&self) -> PathBuf {
+        self.temp.path().join("root-c")
+    }
+
+    fn library_id(&self) -> String {
+        scryer_domain::default_library_id_for_facet(&MediaFacet::Movie)
+    }
+
+    /// A third configured root, so a selection can genuinely span more than one
+    /// source root. `update` re-keys root identity by normalized path, so the
+    /// two existing roots keep their ids (FR-078).
+    async fn add_third_root(&self) -> String {
+        let root_c = self.root_c();
+        std::fs::create_dir_all(&root_c).expect("create root c");
+        let library = self
+            .app
+            .services
+            .catalog
+            .libraries
+            .update(
+                &self.library_id(),
+                "Movies".to_string(),
+                "movies".to_string(),
+                vec![
+                    LibraryRootDraft {
+                        path: self.root_a().to_string_lossy().to_string(),
+                        is_default: true,
+                    },
+                    LibraryRootDraft {
+                        path: self.root_b().to_string_lossy().to_string(),
+                        is_default: false,
+                    },
+                    LibraryRootDraft {
+                        path: root_c.to_string_lossy().to_string(),
+                        is_default: false,
+                    },
+                ],
+            )
+            .await
+            .expect("configure a third root");
+        assert_eq!(library.roots[0].id, self.root_a_id);
+        assert_eq!(library.roots[1].id, self.root_b_id);
+        library.roots[2].id.clone()
+    }
+
     /// A monitored movie owning `folder_name` under `root`, with `files`
     /// (name, size) written into that folder. The first entry gets the tracked
     /// media-file row; the rest are companion assets the folder walk picks up
@@ -1147,6 +1192,152 @@ async fn an_operation_whose_stored_plan_cannot_be_read_declines_with_a_reason() 
     assert!(
         fixture.recorded_job_runs().await.is_empty(),
         "a refused resume opens no Activity run"
+    );
+}
+
+/// FR-084 for the case the operation row cannot describe: a selection spanning
+/// **several** source roots.
+///
+/// `LocationOperation::source_root_id` holds one id, and `plan_root_move` sets
+/// it to `None` the moment the selection is not unanimous — which is precisely
+/// the case where more than one root is being read from and pruned. Claiming
+/// only the operation row's ids would leave every one of those roots open to a
+/// scan, an import, a root reconfiguration, or a second location operation
+/// while their content is in flight. The claim set is the union of the
+/// operation row's roots and every root the instruction set names per title.
+#[tokio::test]
+async fn a_bulk_move_spanning_two_source_roots_owns_every_root_it_reads_from() {
+    let fixture = RootMoveFixture::new().await;
+    let root_c = fixture.add_third_root().await;
+
+    let on_a = fixture
+        .seed_title(
+            "First Disk",
+            2011,
+            &fixture.root_a_id,
+            &fixture.root_a(),
+            "First Disk (2011)",
+            &[("First.Disk.2011.mkv", 256)],
+        )
+        .await;
+    let on_c = fixture
+        .seed_title(
+            "Third Disk",
+            2012,
+            &root_c,
+            &fixture.root_c(),
+            "Third Disk (2012)",
+            &[("Third.Disk.2012.mkv", 256)],
+        )
+        .await;
+
+    let preview = fixture.preview(&[&on_a.id, &on_c.id]).await;
+    assert!(
+        preview.plan.header.source_root_id.is_none(),
+        "a selection spanning two roots has no single source root to name — which \
+         is exactly why the operation row is not enough"
+    );
+
+    let operation_id = "operation-bulk-two-source-roots";
+    let operation = LocationOperation {
+        source_root_id: preview.plan.header.source_root_id.clone(),
+        destination_root_id: preview.plan.header.destination_root_id.clone(),
+        ..queued_operation(
+            operation_id,
+            LocationOperationType::RootMove,
+            LocationExecutionMode::MoveWithScryer,
+            preview.plan.verification.depth,
+        )
+    };
+
+    let entities = crate::location::executor::owned_entities(
+        &operation,
+        &preview.execution.to_work_plan(),
+    );
+    for root_id in [&fixture.root_a_id, &root_c, &fixture.root_b_id] {
+        assert!(
+            entities.contains(&crate::location::ownership_guard::OwnedEntity::Root(
+                root_id.clone()
+            )),
+            "root {root_id} is not owned for the operation's duration (FR-084)"
+        );
+    }
+
+    // Drive the real claim: the run takes ownership and then dies at the first
+    // title boundary, which is the interrupted row a second actor would find.
+    let plan_json = serde_json::to_string(&preview.execution).expect("serialize plan");
+    fixture
+        .app
+        .services
+        .library
+        .location_operations
+        .create_location_operation(&operation, Some(&plan_json))
+        .await
+        .expect("persist the operation");
+    fixture
+        .operations
+        .crash_on_cancel_check(title_boundary_cancel_check(1, 1));
+    assert!(
+        fixture
+            .app
+            .run_root_move(operation_id, &preview.execution)
+            .await
+            .is_err(),
+        "the injected store failure aborts the run"
+    );
+
+    // Either source root refuses another location operation, and so does the
+    // destination.
+    for root_id in [&fixture.root_a_id, &root_c, &fixture.root_b_id] {
+        let outcome = fixture
+            .app
+            .services
+            .library
+            .location_operations
+            .claim_location_operation_ownership(
+                "operation-second-actor",
+                &[crate::location::ownership_guard::OwnedEntity::Root(
+                    root_id.clone(),
+                )],
+            )
+            .await
+            .expect("ask for the root");
+        let crate::ports::LocationOwnershipOutcome::Conflict(conflicts) = outcome else {
+            panic!("root {root_id} must be refused to a second operation (FR-084)");
+        };
+        assert_eq!(conflicts[0].operation_id, operation_id);
+    }
+
+    // A root nobody selected is untouched: there is no global lock.
+    assert!(matches!(
+        fixture
+            .app
+            .services
+            .library
+            .location_operations
+            .claim_location_operation_ownership(
+                "operation-elsewhere",
+                &[crate::location::ownership_guard::OwnedEntity::Root(
+                    "root-nobody-selected".to_string()
+                )],
+            )
+            .await
+            .expect("ask for an unrelated root"),
+        crate::ports::LocationOwnershipOutcome::Claimed
+    ));
+
+    // And the same holds for the entry points that are not themselves location
+    // operations: retiring any of these roots is refused while they are held.
+    let repointed = fixture
+        .app
+        .update_library(&fixture.user, &fixture.library_id(), None, Some(Vec::new()), None)
+        .await;
+    let Err(crate::AppError::Validation(message)) = repointed else {
+        panic!("retiring a held root must be refused: {repointed:?}");
+    };
+    assert!(
+        message.contains(operation_id),
+        "the refusal names the operation holding the ground: {message}"
     );
 }
 

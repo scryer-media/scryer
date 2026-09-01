@@ -137,8 +137,7 @@ impl PlanItemKind {
         matches!(self, Self::Blocked)
     }
 
-    /// Whether one item of this kind is one file's worth of work, which is what
-    /// [`PlanCounts::files_total`] counts.
+    /// Whether an item of this kind *can* be one file's worth of work.
     ///
     /// Paths alone are not the test. A root change opens its plan with a
     /// root-level statement carrying the old and new *root* paths (FR-021), and
@@ -148,7 +147,12 @@ impl PlanItemKind {
     /// `NoOp`, `Blocked`, `CatalogChange`) is not a file at all, and unmanaged
     /// content is content the operation deliberately does *not* touch, counted
     /// in its own section (FR-027).
-    pub fn describes_a_file(&self) -> bool {
+    ///
+    /// `Rename` is the kind this question cannot answer on its own: a collision
+    /// rename acts on one file, while a naming-policy repair (FR-013) or a
+    /// consolidation uniquing (FR-025) renames a whole *folder*. The item, not
+    /// the kind, settles that — see [`PlanItem::describes_a_file`].
+    pub fn may_describe_a_file(&self) -> bool {
         matches!(self, Self::Move | Self::Rename | Self::Dedup | Self::RoleChange)
     }
 }
@@ -173,6 +177,19 @@ pub struct PlanItem {
     pub reason_code: Option<String>,
     /// Human-readable explanation, required for blocking and warning kinds (C3).
     pub detail: Option<String>,
+    /// This item acts on a *directory*, not on a file.
+    ///
+    /// Only [`PlanItemKind::Rename`] is ambiguous: a collision rename gives one
+    /// incoming file a new name (FR-074/075) and is one file's worth of work,
+    /// while a naming-policy repair (FR-013) or a consolidation uniquing
+    /// (FR-025) renames the title's folder and moves no additional bytes.
+    /// Counting the second as a file told the user a two-file consolidation
+    /// touched three, and that count is what the typed confirmation confirms.
+    ///
+    /// Defaulted so a plan serialized before the field existed still reads back
+    /// as file-scoped, which is what every pre-existing item was.
+    #[serde(default)]
+    pub folder_scoped: bool,
 }
 
 impl PlanItem {
@@ -188,7 +205,23 @@ impl PlanItem {
             same_volume: None,
             reason_code: None,
             detail: None,
+            folder_scoped: false,
         }
+    }
+
+    /// Mark this item as acting on a directory rather than on a file, so
+    /// [`PlanCounts::files_total`] does not count it (see [`Self::folder_scoped`]).
+    pub fn for_folder(mut self) -> Self {
+        self.folder_scoped = true;
+        self
+    }
+
+    /// Whether this item is one file's worth of work, which is what
+    /// [`PlanCounts::files_total`] counts.
+    pub fn describes_a_file(&self) -> bool {
+        self.kind.may_describe_a_file()
+            && !self.folder_scoped
+            && (self.media_file_id.is_some() || self.source_path.is_some())
     }
 
     pub fn with_title(mut self, title_id: impl Into<String>) -> Self {
@@ -667,10 +700,26 @@ pub fn build_plan_fingerprint(
     PlanFingerprint(blake3_identity_hex(HashDomain::LocationPlan, payload))
 }
 
+/// `files_total` counts **files**, not items that mention one.
+///
+/// Two things make that a set rather than a tally. A collided file is described
+/// twice — once by the `Rename` that gives it its new name (FR-074/075) and
+/// once by the `Move` that carries it there — and a folder rename (FR-013's
+/// naming repair, FR-025's uniquing) describes no file at all. Counting items
+/// told the user a two-file consolidation touched three, and that number is
+/// what the typed confirmation confirms (FR-029, SC-004).
+///
+/// A file is identified by its source path, falling back to its media-file id
+/// for the tracked file whose path a planner did not carry.
+///
+/// `bytes_total` follows the same rule: both items describing a collided file
+/// carry that file's size (each section states its own bytes), so the plan
+/// total adds a file's bytes only the first time its key is seen. Items that
+/// describe no file keep contributing directly, as before.
 fn build_counts(items: &[PlanItem]) -> PlanCounts {
     let mut by_kind: BTreeMap<String, i64> = BTreeMap::new();
     let mut titles: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
-    let mut files_total = 0_i64;
+    let mut files: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
     let mut bytes_total = 0_i64;
 
     for item in items {
@@ -678,18 +727,26 @@ fn build_counts(items: &[PlanItem]) -> PlanCounts {
         if let Some(title_id) = item.title_id.as_deref() {
             titles.insert(title_id);
         }
-        if item.kind.describes_a_file()
-            && (item.media_file_id.is_some() || item.source_path.is_some())
-        {
-            files_total += 1;
+        let file_key = if item.describes_a_file() {
+            item.source_path
+                .as_deref()
+                .or(item.media_file_id.as_deref())
+        } else {
+            None
+        };
+        let bytes_already_counted = match file_key {
+            Some(key) => !files.insert(key),
+            None => false,
+        };
+        if !bytes_already_counted {
+            bytes_total = bytes_total.saturating_add(item.size_bytes as i64);
         }
-        bytes_total = bytes_total.saturating_add(item.size_bytes as i64);
     }
 
     PlanCounts {
         items_total: items.len() as i64,
         titles_total: titles.len() as i64,
-        files_total,
+        files_total: files.len() as i64,
         bytes_total,
         by_kind,
     }

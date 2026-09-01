@@ -13093,7 +13093,7 @@ type MutationRoot {
 		input: UpdateRecycleBinSettingsInput!
 	): RecycleBinSettingsPayload!
 	"""
-	Saves the verification depth applied to copies after checking the system-settings permission.
+	Saves the verification depth applied to download-client completed-download copies, after checking the system-settings permission. Location operations always verify in full and ignore it.
 	"""
 	updateVerificationSettings(
 		"""
@@ -16957,7 +16957,7 @@ type QueryRoot {
 	"""
 	recycleBinSettings: RecycleBinSettingsPayload!
 	"""
-	Returns the verification depth applied to copies performed by location operations and download-client copies.
+	Returns the verification depth applied to download-client completed-download copies. Location operations always verify in full and ignore it.
 	"""
 	verificationSettings: VerificationSettingsPayload!
 	"""
@@ -22834,8 +22834,10 @@ input UpdateTitleInput {
 }
 
 """
-Verification depth applied to copies performed by location operations and by
-download-client completed-download copies.
+Verification depth applied to download-client completed-download copies.
+Location operations (library moves, root changes, consolidations) always
+verify in full and ignore this preference: they move the only copy of the
+content, so the stronger guarantee is a floor rather than a choice.
 """
 input UpdateVerificationSettingsInput {
 	"""
@@ -22973,8 +22975,10 @@ enum VerificationDepthValue {
 }
 
 """
-Verification depth applied to copies performed by location operations and by
-download-client completed-download copies.
+Verification depth applied to download-client completed-download copies.
+Location operations (library moves, root changes, consolidations) always
+verify in full and ignore this preference: they move the only copy of the
+content, so the stronger guarantee is a floor rather than a choice.
 """
 type VerificationSettingsPayload {
 	"""

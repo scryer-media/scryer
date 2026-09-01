@@ -1265,6 +1265,170 @@ async fn a_merge_that_committed_before_the_crash_settles_idempotently_on_resume(
     );
 }
 
+/// FR-084 for the row a merge rewrites but no instruction set moves: the
+/// **destination** title.
+///
+/// A merging transfer plans against a snapshot of the destination title — its
+/// media rows, its episodes, its folder — and Groups 1–5 rewrite that row. Left
+/// unclaimed it could be deleted, renamed, or moved out from under the merge
+/// between confirmation and commit. The operation's own claim on it is not a
+/// conflict: the store's Group 3 remap collapses the source claim onto the
+/// destination one when the same operation holds both, the way OQ7 excludes the
+/// current operation from the resumable-operation check — so the operation
+/// still completes, which is the second half of this test.
+#[tokio::test]
+async fn a_merging_transfer_owns_the_destination_title_and_still_completes() {
+    let fixture = TransferFixture::new().await;
+    let destination = fixture
+        .seed_destination_title_with_files(
+            "Held Merge Target",
+            2019,
+            "Held Merge Target (2019)",
+            vec![external_id("tmdb", "5150")],
+            &[("Held.Merge.Target.2019.Extra.mkv", b"destination extra")],
+        )
+        .await;
+    let bystander = fixture
+        .seed_destination_title("Untouched Neighbour", 2003, vec![external_id("tmdb", "606")])
+        .await;
+    let title = fixture
+        .seed_source_title_with_files(
+            "Held Merge Target",
+            2019,
+            "Held Merge Target 2019",
+            vec![external_id("tmdb", "5150")],
+            &[("Held.Merge.Target.2019.mkv", b"the incoming feature")],
+        )
+        .await;
+
+    let preview = fixture.preview(&[&title.id]).await;
+    let operation_id = "operation-merge-owns-its-target";
+    let operation = LocationOperation {
+        source_root_id: Some(fixture.source_root_id.clone()),
+        destination_root_id: Some(fixture.destination_root_id.clone()),
+        ..queued_operation(
+            operation_id,
+            LocationOperationType::CrossLibraryTransfer,
+            LocationExecutionMode::MoveWithScryer,
+            preview.plan.verification.depth,
+        )
+    };
+
+    let entities =
+        crate::location::executor::owned_entities(&operation, &preview.execution.to_work_plan());
+    assert!(
+        entities.contains(&crate::location::ownership_guard::OwnedEntity::Title(
+            destination.id.clone()
+        )),
+        "the merge target is not owned for the operation's duration (FR-084)"
+    );
+    assert!(
+        !entities.contains(&crate::location::ownership_guard::OwnedEntity::Title(
+            bystander.id.clone()
+        )),
+        "a destination title nobody merges into must stay open: there is no global lock"
+    );
+
+    let plan_json = serde_json::to_string(&preview.execution).expect("serialize plan");
+    fixture
+        .app
+        .services
+        .library
+        .location_operations
+        .create_location_operation(&operation, Some(&plan_json))
+        .await
+        .expect("persist the operation");
+
+    // The run claims its entities and dies at the first title boundary, before
+    // the merge transaction: the window a second actor would find.
+    fixture
+        .operations
+        .crash_on_cancel_check(title_boundary_cancel_check(1, 1));
+    assert!(
+        fixture
+            .app
+            .run_root_move(operation_id, &preview.execution)
+            .await
+            .is_err(),
+        "the injected store failure aborts the run"
+    );
+
+    // Deleting the merge target is refused while the merge is in flight.
+    let deleted = fixture
+        .app
+        .delete_title(&fixture.user, &destination.id, false, None)
+        .await;
+    let Err(crate::AppError::Validation(message)) = deleted else {
+        panic!("deleting a merge target under a running operation must be refused: {deleted:?}");
+    };
+    assert!(
+        message.contains(operation_id) && message.contains(&destination.id),
+        "the refusal names the operation and the title it holds: {message}"
+    );
+
+    // So is moving it: another location operation cannot take the row.
+    let outcome = fixture
+        .app
+        .services
+        .library
+        .location_operations
+        .claim_location_operation_ownership(
+            "operation-second-actor",
+            &[crate::location::ownership_guard::OwnedEntity::Title(
+                destination.id.clone(),
+            )],
+        )
+        .await
+        .expect("ask for the merge target");
+    let crate::ports::LocationOwnershipOutcome::Conflict(conflicts) = outcome else {
+        panic!("the merge target must be refused to a second operation (FR-084)");
+    };
+    assert_eq!(conflicts[0].operation_id, operation_id);
+
+    // The neighbouring destination title is untouched by any of it.
+    fixture
+        .app
+        .delete_title(&fixture.user, &bystander.id, false, None)
+        .await
+        .expect("an unrelated destination title is not blocked");
+
+    // ── And the operation still finishes, holding both sides ────────────────
+    let resumed_plan = fixture
+        .app
+        .resume_location_operation(operation_id)
+        .await
+        .expect("resume")
+        .plan()
+        .expect("an interrupted merge resumes through the same runner");
+    let resumed = fixture
+        .app
+        .run_root_move(operation_id, &resumed_plan)
+        .await
+        .expect("resumed run");
+    assert!(
+        matches!(
+            resumed.state,
+            LocationOperationState::Completed | LocationOperationState::CompletedWithWarnings
+        ),
+        "unexpected terminal state: {:?} ({:?})",
+        resumed.state,
+        resumed.detail
+    );
+    assert_eq!(resumed.counters.merges, 1);
+    assert_eq!(fixture.merges.executed().len(), 1);
+    assert_eq!(
+        fixture.operations.open_claim_count(),
+        0,
+        "a finished operation owns nothing, on either side of the merge (FR-084)"
+    );
+    // And the guard lets go with it.
+    fixture
+        .app
+        .delete_title(&fixture.user, &destination.id, false, None)
+        .await
+        .expect("the merge target is free once the operation settles");
+}
+
 /// FR-055 / FR-016: several destination titles claim identities this title
 /// holds, so the user decides which one it is before anything starts.
 #[tokio::test]

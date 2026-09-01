@@ -206,9 +206,22 @@ pub struct OperationWorkPlan {
     /// What classification decided before any title was queued.
     pub baseline: ClassifiedTitleBaseline,
     /// Titles the operation must own even though they carry no instructions
-    /// (FR-084). A root change is the case: it owns every title assigned to the
-    /// root, and a catalog-only or blocked title produces no work to walk.
+    /// (FR-084). Two cases: a root change owns every title assigned to the root
+    /// (a catalog-only or blocked title produces no work to walk), and any
+    /// workflow that merges owns the *destination* title it merges into — that
+    /// row is rewritten by Groups 1–5 and must not be deleted, renamed, or moved
+    /// out from under the merge.
     pub additional_owned_titles: Vec<String>,
+    /// Roots the operation must own beyond the operation row's own
+    /// `source_root_id`/`destination_root_id` (FR-084).
+    ///
+    /// The operation row carries a single source root, and it is `None` the
+    /// moment a selection spans more than one — which is exactly the bulk move
+    /// and cross-library transfer case where *several* source roots are being
+    /// read from and pruned. Every root any planned title leaves or arrives on
+    /// is listed here, so a root reconfiguration or a scan of any of them is
+    /// refused for the operation's duration.
+    pub additional_owned_roots: Vec<String>,
 }
 
 impl OperationWorkPlan {
@@ -219,6 +232,7 @@ impl OperationWorkPlan {
             titles,
             baseline: ClassifiedTitleBaseline::default(),
             additional_owned_titles: Vec::new(),
+            additional_owned_roots: Vec::new(),
         }
     }
 
@@ -226,6 +240,13 @@ impl OperationWorkPlan {
     /// the plan (FR-084).
     pub fn with_additional_owned_titles(mut self, title_ids: Vec<String>) -> Self {
         self.additional_owned_titles = title_ids;
+        self
+    }
+
+    /// Claim these roots for the operation's duration alongside the operation
+    /// row's own source and destination roots (FR-084).
+    pub fn with_additional_owned_roots(mut self, root_ids: Vec<String>) -> Self {
+        self.additional_owned_roots = root_ids;
         self
     }
 
@@ -1383,7 +1404,17 @@ fn operation_state_for(state: TitleCheckpointState) -> LocationOperationState {
 }
 
 /// Every entity the operation owns for its duration (FR-084, D7): each title in
-/// the plan plus the roots on either side.
+/// the plan, each title the plan names without instructions (root-scoped
+/// assignments and merge targets), and every root either side of the work.
+///
+/// # Why the operation row's two root ids are not enough
+///
+/// `LocationOperation::source_root_id` is `None` whenever the selection spans
+/// more than one root — the one case where several source roots are genuinely
+/// being read from and pruned. Claiming only the operation row's ids would
+/// leave every one of them open to a scan or a root reconfiguration mid-move.
+/// [`OperationWorkPlan::additional_owned_roots`] carries the per-title roots the
+/// instruction set actually names, so the claim set is the union.
 pub fn owned_entities(operation: &LocationOperation, plan: &OperationWorkPlan) -> Vec<OwnedEntity> {
     let mut entities: Vec<OwnedEntity> = plan
         .titles
@@ -1401,6 +1432,7 @@ pub fn owned_entities(operation: &LocationOperation, plan: &OperationWorkPlan) -
     ]
     .into_iter()
     .flatten()
+    .chain(plan.additional_owned_roots.iter())
     {
         entities.push(OwnedEntity::Root(root_id.clone()));
     }

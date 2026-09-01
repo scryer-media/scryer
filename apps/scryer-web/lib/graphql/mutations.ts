@@ -2011,6 +2011,12 @@ export const updateRecycleBinSettingsMutation = `mutation UpdateRecycleBinSettin
   }
 }`;
 
+export const updateVerificationSettingsMutation = `mutation UpdateVerificationSettings($input: UpdateVerificationSettingsInput!) {
+  updateVerificationSettings(input: $input) {
+    depth
+  }
+}`;
+
 export const updatePluginAutoUpdateSettingsMutation = `mutation UpdatePluginAutoUpdateSettings($input: UpdatePluginAutoUpdateSettingsInput!) {
   updatePluginAutoUpdateSettings(input: $input) {
     enabled

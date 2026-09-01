@@ -967,6 +967,32 @@ async fn graphql_location_operation_surface_requires_library_management_permissi
     let denied = schema_exec(&ctx, &start_mutation, Some(location_outsider())).await;
     assert_graphql_field_denied(&denied, "startLocationOperation");
 
+    // The two root-scoped previews are the same surface (FR-020): both plan
+    // against a library the outsider does not manage.
+    let root_change_query = format!(
+        r#"query {{
+            locationRootChangePreview(input: {{
+              libraryId: "{library_id}",
+              rootId: "{source_root_id}",
+              destinationPath: "/somewhere/else"
+            }}) {{ plan {{ planFingerprint }} }}
+        }}"#
+    );
+    let denied = schema_exec(&ctx, &root_change_query, Some(location_outsider())).await;
+    assert_graphql_field_denied(&denied, "locationRootChangePreview");
+
+    let consolidation_query = format!(
+        r#"query {{
+            locationRootConsolidationPreview(input: {{
+              libraryId: "{library_id}",
+              sourceRootId: "{source_root_id}",
+              destinationRootId: "{destination_root_id}"
+            }}) {{ plan {{ planFingerprint }} }}
+        }}"#
+    );
+    let denied = schema_exec(&ctx, &consolidation_query, Some(location_outsider())).await;
+    assert_graphql_field_denied(&denied, "locationRootConsolidationPreview");
+
     // FR-083 governs reading an operation too: it names both libraries.
     let operation_query =
         format!(r#"query {{ locationOperation(id: "{operation_id}") {{ id }} }}"#);
@@ -2160,6 +2186,15 @@ async fn graphql_a_root_consolidation_preview_carries_the_seven_groups_and_the_d
     assert_eq!(classification["catalogOnly"], 0);
     assert_eq!(classification["blocked"], 0);
 
+    // The count the typed confirmation confirms is a count of *files*. Two
+    // titles move one file each; the folder uniquing beside them is a `RENAME`
+    // item that moves no file of its own.
+    assert_eq!(plan["counts"]["titlesTotal"], 2, "{preview}");
+    assert_eq!(
+        plan["counts"]["filesTotal"], 2,
+        "two files move; the folder rename is not a third: {preview}"
+    );
+
     // US5.4: the changed folder name is previewed, by name, as a rename item.
     let uniqued = items_with_reason(plan, "RENAME", "folder_name_uniqued");
     assert_eq!(uniqued.len(), 1, "{preview}");
@@ -2235,8 +2270,9 @@ async fn graphql_a_root_consolidation_preview_carries_the_seven_groups_and_the_d
 
 /// The mirror of the consolidation's CHK003 refusal, for the other branch of
 /// FR-020: a root change's destination has to be empty or absent, so the files
-/// can never already be there. The interface refuses the mode rather than
-/// letting the planner stamp one the executor does not honour.
+/// can never already be there. The *planner* refuses the mode by name, so the
+/// client gets a routable code it can translate rather than an interface
+/// sentence it cannot.
 #[tokio::test]
 async fn graphql_a_root_change_refuses_the_files_already_there_mode() {
     let ctx = TestContext::new().await;
@@ -2259,7 +2295,11 @@ async fn graphql_a_root_change_refuses_the_files_already_there_mode() {
     )
     .await;
     assert!(body["errors"].is_array(), "{body}");
-    assert_eq!(error_code(&body), Some("VALIDATION_ERROR"), "{body}");
+    assert_eq!(
+        refusal_code(&body),
+        Some("root_change_mode_not_supported"),
+        "{body}"
+    );
 
     // And the same guard on the confirmation, so a client cannot preview one
     // workflow and start the other.
@@ -2279,7 +2319,11 @@ async fn graphql_a_root_change_refuses_the_files_already_there_mode() {
     )
     .await;
     assert!(refused["errors"].is_array(), "{refused}");
-    assert_eq!(error_code(&refused), Some("VALIDATION_ERROR"), "{refused}");
+    assert_eq!(
+        refusal_code(&refused),
+        Some("root_change_mode_not_supported"),
+        "{refused}"
+    );
 }
 
 /// CHK003: a consolidation is a managed move between two configured roots.

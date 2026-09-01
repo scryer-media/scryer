@@ -365,8 +365,9 @@ impl AppUseCase {
                 &destination_root_path,
             )
             .await?;
-        check_consolidation_paths(&facts).map_err(|refusal| {
-            AppError::Validation(format!("{} [{}]", refusal.detail, refusal.code))
+        check_consolidation_paths(&facts).map_err(|refusal| AppError::LocationRootRefused {
+            message: refusal.detail,
+            code: refusal.code,
         })?;
         let destination_root = destination_root.expect("admissibility proved the destination root");
 

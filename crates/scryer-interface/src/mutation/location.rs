@@ -18,14 +18,13 @@ use crate::context::{actor_from_ctx, app_from_ctx, to_gql_error};
 use crate::mappers::{
     from_canceled_location_operation, from_resumed_location_operation,
     from_started_location_operation, location_destination_into_application,
-    location_execution_mode_into_application, root_scoped_execution_mode_into_application,
+    location_execution_mode_into_application,
 };
 use crate::types::{
     CancelLocationOperationPayload, LocationDestinationInput, LocationRootChangeTargetInput,
     LocationRootConsolidationTargetInput, ResumeLocationOperationPayload,
     StartLocationOperationInput, StartLocationOperationPayload,
 };
-use scryer_interface_core::to_location_root_gql_error;
 
 /// The one destination form a start confirms.
 ///
@@ -133,14 +132,11 @@ impl LocationMutations {
                 }
                 .map_err(to_gql_error)
             }
-            StartLocationTarget::RootChange(target) => {
-                // The same guard the preview applies: a root change's
-                // destination must be empty or absent, so the files can never
-                // already be there, and the planner would otherwise stamp a
-                // mode the executor does not honour.
-                let mode = root_scoped_execution_mode_into_application(input.mode)
-                    .map_err(to_gql_error)?;
-                app.start_root_change(
+            // Both root-scoped planners refuse an unsupported mode themselves,
+            // by name, so the mode travels through the shared mapper and the
+            // refusal reaches the client as a routable code.
+            StartLocationTarget::RootChange(target) => app
+                .start_root_change(
                     &actor,
                     StartRootChangeRequest {
                         library_id: target.library_id.to_string(),
@@ -151,8 +147,7 @@ impl LocationMutations {
                     },
                 )
                 .await
-                .map_err(to_location_root_gql_error)
-            }
+                .map_err(to_gql_error),
             StartLocationTarget::RootConsolidation(target) => app
                 .start_root_consolidation(
                     &actor,
@@ -165,7 +160,7 @@ impl LocationMutations {
                     },
                 )
                 .await
-                .map_err(to_location_root_gql_error),
+                .map_err(to_gql_error),
         }?;
         // A just-accepted operation has no checkpoints yet; they are written as
         // each title enters the run.

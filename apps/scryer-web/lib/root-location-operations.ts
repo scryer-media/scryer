@@ -162,6 +162,7 @@ export type LocationRootRefusalCode =
   | "root_change_destination_not_empty"
   | "root_change_destination_parent_missing"
   | "root_change_destination_is_configured_root"
+  | "root_change_mode_not_supported"
   | "root_consolidation_path_not_absolute"
   | "root_consolidation_same_root"
   | "root_consolidation_paths_overlap"
@@ -179,6 +180,7 @@ const ROOT_REFUSAL_CODES: readonly string[] = [
   "root_change_destination_not_empty",
   "root_change_destination_parent_missing",
   "root_change_destination_is_configured_root",
+  "root_change_mode_not_supported",
   "root_consolidation_path_not_absolute",
   "root_consolidation_same_root",
   "root_consolidation_paths_overlap",

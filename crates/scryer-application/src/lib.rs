@@ -671,6 +671,22 @@ pub enum AppError {
         code: crate::location::preview::PlanConfirmationError,
     },
 
+    /// A root-scoped workflow (US4 change root, US5 consolidate root) refused
+    /// its request before any plan was built: the destination is not admissible,
+    /// the source root cannot be read, the two paths overlap, or the request
+    /// belongs to the *other* half of FR-020's one control.
+    ///
+    /// The code is application vocabulary (`root_change::refusal_codes`,
+    /// `consolidation::refusal_codes`) and travels typed rather than as a
+    /// bracketed suffix on a sentence, so the API promotes it to
+    /// `extensions.refusalCode` without parsing prose and the web client can
+    /// cross-route FR-020's two halves on it.
+    #[error("validation: {message}")]
+    LocationRootRefused {
+        message: String,
+        code: &'static str,
+    },
+
     /// A direct `rootFolderId` write on a title that already has tracked files.
     /// Retired by FR-077: relocating a title with content on disk is the move
     /// workflow's job, so the refusal carries its own code and the title it

@@ -228,35 +228,14 @@ pub fn location_execution_mode_into_application(
     }
 }
 
-/// The execution mode a root-scoped request may ask for.
-///
-/// Both root-scoped workflows support exactly one requestable mode. A
-/// consolidation refuses `FILES_ALREADY_THERE` in the application layer, by
-/// name, because its destination is a configured root whose content already
-/// belongs to other titles. A root change never gets that far: its destination
-/// must be empty or not exist at all, so content cannot already be there, and
-/// the planner would otherwise stamp a mode on the plan header that the
-/// executor does not honour. Refusing it here keeps the two halves of FR-020's
-/// single control answering the same way.
-///
-/// `CATALOG_ONLY` is not requestable anywhere: it is the server's own
-/// conclusion about a root with no files on it (FR-076).
-pub fn root_scoped_execution_mode_into_application(
-    input: Option<LocationExecutionModeInput>,
-) -> Result<LocationExecutionMode, scryer_application::AppError> {
-    match input {
-        Some(LocationExecutionModeInput::FilesAlreadyThere) => {
-            Err(scryer_application::AppError::Validation(
-                "a root-scoped operation always moves the files; \"files are already there\" \
-                 adopts content at a destination folder and is not offered here"
-                    .to_string(),
-            ))
-        }
-        Some(LocationExecutionModeInput::MoveWithScryer) | None => {
-            Ok(LocationExecutionMode::MoveWithScryer)
-        }
-    }
-}
+// The root-scoped workflows once had a second mapper here that refused
+// `FILES_ALREADY_THERE` with an untranslatable interface sentence. Both
+// planners now refuse it by name — `root_change::refusal_codes::
+// MODE_NOT_SUPPORTED` and `consolidation::refusal_codes::MODE_NOT_SUPPORTED` —
+// so the request travels through the shared mapper above and the refusal is
+// application vocabulary the client can route and translate. `CATALOG_ONLY`
+// stays unrequestable everywhere: it is the server's own conclusion about a
+// root with no files on it (FR-076).
 
 pub fn location_destination_into_application(
     input: LocationDestinationInput,

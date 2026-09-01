@@ -25,7 +25,6 @@ use scryer_interface_core::{
     actor_from_ctx, actor_has_any_library_permission, actor_has_app_permission, app_from_ctx,
     application_upgrade_assessment_from_ctx, current_user_from_ctx, mfa_verification_from_ctx,
     require_app_permission, require_config_app_permission, to_gql_error,
-    to_location_root_gql_error,
 };
 use scryer_interface_media::mappers;
 use scryer_interface_media::mappers::{
@@ -38,7 +37,6 @@ use scryer_interface_media::mappers::{
     from_location_operation, from_location_operation_asset_listing, from_root_change_preview,
     from_root_consolidation_preview, from_root_move_preview,
     location_destination_into_application, location_execution_mode_into_application,
-    root_scoped_execution_mode_into_application,
     from_discovery_home_filter_options,
     from_discovery_item, from_discovery_items_result, from_domain_event, from_download_queue_item,
     from_episode, from_external_import_monitor_warmup_progress, from_job_definition, from_job_run,
@@ -1596,13 +1594,16 @@ impl CatalogQueries {
             library_id: input.library_id.to_string(),
             root_id: input.root_id.to_string(),
             destination_path: input.destination_path,
-            mode: root_scoped_execution_mode_into_application(input.mode)
-                .map_err(to_gql_error)?,
+            // The planner refuses an unsupported mode itself, by name
+            // (`root_change_mode_not_supported`), so the request travels
+            // through the shared mapper and the refusal is a routable code
+            // rather than an interface sentence the client cannot translate.
+            mode: location_execution_mode_into_application(input.mode),
         };
         let preview = app
             .preview_root_change(&actor, request)
             .await
-            .map_err(to_location_root_gql_error)?;
+            .map_err(to_gql_error)?;
         Ok(from_root_change_preview(&preview))
     }
 
@@ -1630,16 +1631,13 @@ impl CatalogQueries {
             scryer_application::location::consolidation_execution::RootConsolidationPreviewRequest {
                 library_id: input.library_id.to_string(),
                 source_root_id: input.source_root_id.to_string(),
-                // Not the root-change guard: the consolidation planner refuses
-                // an unsupported mode itself, by name, and a routable code beats
-                // an interface sentence the client cannot translate.
                 destination_root_id: input.destination_root_id.to_string(),
                 mode: location_execution_mode_into_application(input.mode),
             };
         let preview = app
             .preview_root_consolidation(&actor, request)
             .await
-            .map_err(to_location_root_gql_error)?;
+            .map_err(to_gql_error)?;
         Ok(from_root_consolidation_preview(&preview))
     }
 

@@ -308,10 +308,16 @@ impl AppUseCase {
         // again when the operation is admitted, because the destination is an
         // unmanaged path that anything could write to in between.
         let facts = self
-            .root_change_path_facts(&request.root_id, &source_root, &destination_root)
+            .root_change_path_facts(
+                &request.root_id,
+                &source_root,
+                &destination_root,
+                request.mode,
+            )
             .await?;
-        check_root_change_paths(&facts).map_err(|refusal| {
-            AppError::Validation(format!("{} [{}]", refusal.detail, refusal.code))
+        check_root_change_paths(&facts).map_err(|refusal| AppError::LocationRootRefused {
+            message: refusal.detail,
+            code: refusal.code,
         })?;
 
         // FR-023: every title assigned to the root, in a stable order. Not a
@@ -475,6 +481,7 @@ impl AppUseCase {
         root_id: &str,
         source_root: &Path,
         destination_root: &Path,
+        mode: LocationExecutionMode,
     ) -> AppResult<RootChangePathFacts> {
         let source_metadata = tokio::fs::symlink_metadata(source_root).await;
         let source_root_is_symlink = source_metadata
@@ -524,6 +531,7 @@ impl AppUseCase {
             destination,
             configured_roots,
             root_id: root_id.to_string(),
+            mode,
         })
     }
 

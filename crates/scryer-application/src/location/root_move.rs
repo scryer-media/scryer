@@ -341,7 +341,7 @@ pub struct RootMoveExecutionPlan {
 impl RootMoveExecutionPlan {
     /// The runner's work plan, in confirmed order.
     pub fn to_work_plan(&self) -> OperationWorkPlan {
-        let mut work_plan = OperationWorkPlan::new(
+        let work_plan = OperationWorkPlan::new(
             self.titles
                 .iter()
                 .map(RootMoveTitleExecution::to_planned_title)
@@ -351,16 +351,57 @@ impl RootMoveExecutionPlan {
             no_ops: self.no_op_titles,
             unresolved: self.unresolved_titles,
         });
-        // FR-084 for a root change: the operation owns *every* title assigned
-        // to the root, not only the ones that produce instructions. A
-        // catalog-only title has no files and a blocked title has no execution
-        // at all, and both would otherwise stay open to a scan or an import
-        // that moved them out from under an operation whose whole subject is
-        // the root they sit on.
-        if let Some(tail) = self.root_change.as_ref() {
-            work_plan = work_plan.with_additional_owned_titles(tail.assigned_title_ids.clone());
-        }
+        // FR-084, the titles no instruction set names.
+        //
+        // 1. A root change (and a consolidation, which shares the tail) owns
+        //    *every* title assigned to the root, not only the ones that produce
+        //    instructions. A catalog-only title has no files and a blocked
+        //    title has no execution at all, and both would otherwise stay open
+        //    to a scan or an import that moved them out from under an operation
+        //    whose whole subject is the root they sit on.
+        // 2. Every merge target. The destination title a transfer or a
+        //    consolidation merges into is rewritten by the merge engine's
+        //    Groups 1–5 — its media rows, its episodes, its links — and the
+        //    plan was built against the snapshot it had then. Deleting,
+        //    renaming, or moving it while the operation runs would leave the
+        //    merge writing into a row that no longer means what it meant. The
+        //    operation's *own* claim on that row is not a conflict: the store's
+        //    Group 3 remap collapses the source claim onto the destination one
+        //    when the same operation holds both, exactly the way OQ7 excludes
+        //    the current operation from the resumable-operation check.
+        let mut owned_titles = self
+            .root_change
+            .as_ref()
+            .map(|tail| tail.assigned_title_ids.clone())
+            .unwrap_or_default();
+        owned_titles.extend(
+            self.titles
+                .iter()
+                .filter_map(|title| title.merge_target_title_id.clone()),
+        );
+        owned_titles.sort();
+        owned_titles.dedup();
+
+        // FR-084, the roots the operation row cannot name. A bulk move or a
+        // cross-library transfer whose selection spans several source roots
+        // stores `source_root_id = NULL` on the operation, so the roots being
+        // read from and pruned are only ever named per title.
+        let mut owned_roots = self
+            .titles
+            .iter()
+            .flat_map(|title| {
+                [
+                    title.source_root_id.clone(),
+                    title.destination_root_id.clone(),
+                ]
+            })
+            .collect::<Vec<_>>();
+        owned_roots.sort();
+        owned_roots.dedup();
+
         work_plan
+            .with_additional_owned_titles(owned_titles)
+            .with_additional_owned_roots(owned_roots)
     }
 
     pub fn title(&self, title_id: &str) -> Option<&RootMoveTitleExecution> {
@@ -781,6 +822,7 @@ fn plan_title(
     if draft.repairs_folder_name() {
         items.push(
             PlanItem::new(PlanItemKind::Rename)
+                .for_folder()
                 .with_title(draft.title_id.clone())
                 .with_paths(
                     source_folder_display.clone(),
@@ -1033,6 +1075,7 @@ fn plan_adopted_title(
     if draft.repairs_folder_name() {
         items.push(
             PlanItem::new(PlanItemKind::Rename)
+                .for_folder()
                 .with_title(draft.title_id.clone())
                 .with_paths(
                     source_folder_display.clone(),

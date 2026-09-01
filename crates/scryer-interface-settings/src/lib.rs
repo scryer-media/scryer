@@ -633,7 +633,7 @@ impl SettingsQueries {
         Ok(from_recycle_bin_settings(settings))
     }
 
-    /// Returns the verification depth applied to copies performed by location operations and download-client copies.
+    /// Returns the verification depth applied to download-client completed-download copies. Location operations always verify in full and ignore it.
     async fn verification_settings(
         &self,
         ctx: &Context<'_>,

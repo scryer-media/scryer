@@ -736,6 +736,11 @@ pub mod refusal_codes {
     /// FR-020's other branch: the destination is already a configured root, so
     /// the user is asking for **consolidation** (US5), not a root change.
     pub const DESTINATION_IS_CONFIGURED_ROOT: &str = "root_change_destination_is_configured_root";
+    /// The request named an execution mode a root change does not offer. The
+    /// mirror of `consolidation::refusal_codes::MODE_NOT_SUPPORTED`: US4 is a
+    /// managed move onto an empty destination, so "files are already there" —
+    /// which adopts content the user placed by hand — has nothing to adopt.
+    pub const MODE_NOT_SUPPORTED: &str = "root_change_mode_not_supported";
 }
 
 /// A refusal, with the code the client routes on and the sentence it shows.
@@ -792,6 +797,10 @@ pub struct RootChangePathFacts {
     /// The root being changed, so its own current path is not read as a
     /// conflict with itself.
     pub root_id: String,
+    /// The execution mode the request named. Checked here rather than in the
+    /// interface so the refusal is application vocabulary the client can
+    /// translate, exactly as [`crate::location::consolidation`] does.
+    pub mode: LocationExecutionMode,
 }
 
 /// FR-020's admissibility rules, ported from the absorbed relocation prototype
@@ -803,6 +812,19 @@ pub struct RootChangePathFacts {
 /// admitted — because the destination is an unmanaged path that anything could
 /// have written to between the two.
 pub fn check_root_change_paths(facts: &RootChangePathFacts) -> Result<(), RootChangeRefusal> {
+    // Symmetric with `check_consolidation_paths`: FR-020 offers one control with
+    // two destinations, and neither of them adopts. `plan_root_change` would
+    // otherwise pass the mode straight into the plan header and label the
+    // operation `FILES_ALREADY_THERE` while the executor performed a managed
+    // move.
+    if facts.mode == LocationExecutionMode::FilesAlreadyThere {
+        return Err(RootChangeRefusal::new(
+            refusal_codes::MODE_NOT_SUPPORTED,
+            "a root change moves the files onto a new, empty path; \"files are already there\" \
+             adopts content at a destination folder and is not offered here",
+        ));
+    }
+
     for path in [&facts.source_root, &facts.destination_root] {
         if !path.is_absolute() {
             return Err(RootChangeRefusal::new(

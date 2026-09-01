@@ -138,8 +138,12 @@ pub struct UpdateRecycleBinSettings {
     pub enabled: bool,
 }
 
-/// How thoroughly location operations and download-client copies prove a
-/// destination copy before the source may be touched (FR-042).
+/// How thoroughly a download-client completed-download copy is proven before
+/// its source may be touched (FR-042).
+///
+/// Location operations do not read it: `LOCATION_OPERATION_VERIFICATION_DEPTH`
+/// forces full depth for every library move, root change, and consolidation,
+/// because those relocate the user's only copy.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VerificationSettings {
     pub depth: crate::location::model::VerificationDepth,

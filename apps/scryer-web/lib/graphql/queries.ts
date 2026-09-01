@@ -3316,6 +3316,16 @@ export const recycleBinSettingsQuery = `query RecycleBinSettings {
   }
 }`;
 
+/**
+ * The verification depth applied to download-client import copies. Location
+ * operations force full depth and ignore this.
+ */
+export const verificationSettingsQuery = `query VerificationSettings {
+  verificationSettings {
+    depth
+  }
+}`;
+
 export const pluginAutoUpdateSettingsQuery = `query PluginAutoUpdateSettings {
   pluginAutoUpdateSettings {
     enabled

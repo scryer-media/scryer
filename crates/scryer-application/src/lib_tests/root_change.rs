@@ -779,10 +779,15 @@ async fn a_destination_that_is_already_a_configured_root_is_refused_as_consolida
         )
         .await
         .expect_err("folding one root into another is not a root change");
-    let message = error.to_string();
+    // The code travels typed, beside the sentence, so the client routes on it
+    // without parsing prose.
+    let AppError::LocationRootRefused { message, code } = &error else {
+        panic!("the refusal has to carry a code the client can route on: {error:?}");
+    };
+    assert_eq!(*code, refusal_codes::DESTINATION_IS_CONFIGURED_ROOT);
     assert!(
-        message.contains(refusal_codes::DESTINATION_IS_CONFIGURED_ROOT),
-        "the refusal has to carry a code the client can route on: {message}"
+        !message.contains('['),
+        "and the code is not smuggled into the sentence: {message}"
     );
     assert!(
         message.contains("consolidation"),
@@ -808,8 +813,12 @@ async fn a_destination_that_already_holds_content_is_refused() {
         .await
         .expect_err("a non-empty destination is not a root-change destination");
     assert!(
-        error.to_string().contains(refusal_codes::DESTINATION_NOT_EMPTY),
-        "got {error}"
+        matches!(
+            &error,
+            AppError::LocationRootRefused { code, .. }
+                if *code == refusal_codes::DESTINATION_NOT_EMPTY
+        ),
+        "got {error:?}"
     );
 }
 

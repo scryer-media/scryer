@@ -1,12 +1,16 @@
 import * as React from "react";
 import { SettingsOverviewSection } from "@/components/views/settings/settings-overview-section";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
-import { generalSettingsQuery } from "@/lib/graphql/queries";
+import {
+  generalSettingsQuery,
+  verificationSettingsQuery,
+} from "@/lib/graphql/queries";
 import {
   clearTitleImageCacheMutation,
   rehydrateAllMetadataMutation,
   setMyUiSettingsMutation,
   updateGeneralSettingsMutation,
+  updateVerificationSettingsMutation,
 } from "@/lib/graphql/mutations";
 import { useClient } from "urql";
 import { useTranslate } from "@/lib/context/translate-context";
@@ -21,6 +25,7 @@ import type {
   GeneralSettingsUpdate,
   UiDateTimeFormat,
   UiSettings,
+  VerificationDepth,
 } from "@/lib/types/settings";
 
 const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
@@ -65,6 +70,11 @@ export function SettingsOverviewContainer({
   const [generalLoading, setGeneralLoading] = React.useState(true);
   const [generalSaving, setGeneralSaving] = React.useState(false);
   const [imageCacheClearing, setImageCacheClearing] = React.useState(false);
+  // FR-040–FR-047: the import-copy verification depth. Its own query and
+  // mutation, so it loads and saves independently of the general settings blob.
+  const [verificationDepth, setVerificationDepth] = React.useState<VerificationDepth>("FULL");
+  const [verificationLoading, setVerificationLoading] = React.useState(true);
+  const [verificationSaving, setVerificationSaving] = React.useState(false);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -90,6 +100,63 @@ export function SettingsOverviewContainer({
       cancelled = true;
     };
   }, [client]);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data, error } = await client
+          .query<{ verificationSettings: { depth: VerificationDepth } }>(
+            verificationSettingsQuery,
+            {},
+          )
+          .toPromise();
+        if (error) throw error;
+        if (cancelled) return;
+        setVerificationDepth(data?.verificationSettings.depth ?? "FULL");
+      } catch {
+        // The default is the safe one: a failed read must never make the
+        // control claim the weaker guarantee is in force.
+        if (!cancelled) setVerificationDepth("FULL");
+      } finally {
+        if (!cancelled) setVerificationLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [client]);
+
+  const handleVerificationDepthChange = React.useCallback(
+    async (depth: VerificationDepth) => {
+      if (verificationLoading || verificationSaving || depth === verificationDepth) {
+        return;
+      }
+      const previous = verificationDepth;
+      setVerificationDepth(depth);
+      setVerificationSaving(true);
+      try {
+        const { data, error } = await client
+          .mutation<{ updateVerificationSettings: { depth: VerificationDepth } }>(
+            updateVerificationSettingsMutation,
+            { input: { depth } },
+          )
+          .toPromise();
+        if (error) throw error;
+        setVerificationDepth(data?.updateVerificationSettings.depth ?? depth);
+        setGlobalStatus(t("settings.verificationDepthSaved"));
+      } catch (error) {
+        setVerificationDepth(previous);
+        setGlobalStatus(
+          error instanceof Error ? error.message : t("status.failedToUpdate"),
+        );
+      } finally {
+        setVerificationSaving(false);
+      }
+    },
+    [client, setGlobalStatus, t, verificationDepth, verificationLoading, verificationSaving],
+  );
 
   const handleLanguageSelect = React.useCallback((code: string) => {
     if (code === uiLanguage) return;
@@ -239,6 +306,10 @@ export function SettingsOverviewContainer({
         imageCacheClearing={imageCacheClearing}
         onGeneralSettingsCommit={handleSaveGeneralSettings}
         onClearImageCache={handleClearImageCache}
+        verificationDepth={verificationDepth}
+        verificationLoading={verificationLoading}
+        verificationSaving={verificationSaving}
+        onVerificationDepthChange={handleVerificationDepthChange}
       />
       <ConfirmDialog
         open={pendingLanguage !== null}

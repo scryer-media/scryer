@@ -298,9 +298,9 @@ gradually fills in full-file hashes for content that was already in your library
   only** and defaults to **full**. If completed downloads land on a slow network
   mount and a full read-back after every import is too expensive, switch it to
   quick check. Library and root moves ignore the preference and always verify
-  fully. In this release the preference is available through the API
-  (`verificationSettings` / `updateVerificationSettings`) and is not yet exposed
-  in the web settings UI.
+  fully. The preference lives in **Settings → General**, under *Import copy
+  verification*, and is also available through the API
+  (`verificationSettings` / `updateVerificationSettings`).
 
 ## API and integration compatibility
 

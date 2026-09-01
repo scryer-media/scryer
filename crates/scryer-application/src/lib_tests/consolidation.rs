@@ -1329,10 +1329,15 @@ async fn a_destination_that_is_not_a_configured_root_is_refused_as_a_root_change
         )
         .await
         .expect_err("a destination that is not a root is not a consolidation");
-    let message = error.to_string();
+    // The code travels typed, beside the sentence, so the client routes on it
+    // without parsing prose.
+    let AppError::LocationRootRefused { message, code } = &error else {
+        panic!("the refusal has to carry a code the client can route on: {error:?}");
+    };
+    assert_eq!(*code, refusal_codes::DESTINATION_NOT_A_CONFIGURED_ROOT);
     assert!(
-        message.contains(refusal_codes::DESTINATION_NOT_A_CONFIGURED_ROOT),
-        "the refusal has to carry a code the client can route on: {message}"
+        !message.contains('['),
+        "and the code is not smuggled into the sentence: {message}"
     );
     assert!(
         message.contains("root change"),
@@ -1357,8 +1362,12 @@ async fn files_already_there_is_refused_as_a_consolidation_mode() {
         .await
         .expect_err("adoption is not a consolidation mode");
     assert!(
-        error.to_string().contains(refusal_codes::MODE_NOT_SUPPORTED),
-        "got {error}"
+        matches!(
+            &error,
+            AppError::LocationRootRefused { code, .. }
+                if *code == refusal_codes::MODE_NOT_SUPPORTED
+        ),
+        "got {error:?}"
     );
 }
 
@@ -1444,6 +1453,161 @@ async fn a_blocked_title_is_named_and_stops_the_consolidation_until_it_is_repair
             .any(|title| title.title_id == moving.id)
     );
     assert!(fixture.source().join("Free (2020)").exists());
+}
+
+/// FR-084 for the operation that has content on **both** sides: a
+/// consolidation owns the source root, the destination root, every title
+/// assigned to the source root (including the fileless ones FR-076 never gives
+/// instructions to), and every destination title it merges into.
+///
+/// The destination root's other titles are deliberately *not* claimed. A
+/// consolidation reads their folder names to avoid collisions (FR-025); it
+/// never writes to them, and freezing a whole destination root's catalog for
+/// the duration would be the global lock FR-084 exists to avoid.
+#[tokio::test]
+async fn a_consolidation_owns_both_roots_and_every_title_the_plan_touches() {
+    let fixture = ConsolidationFixture::new(false).await;
+    let merge_target = fixture
+        .seed_destination_title(
+            "Shared Identity",
+            2016,
+            "Shared Identity (2016)",
+            &[("Shared.Identity.2016.mkv", b"the destination copy")],
+            vec![external_id("tmdb", "808080")],
+        )
+        .await;
+    let bystander = fixture
+        .seed_destination_title(
+            "Destination Neighbour",
+            2004,
+            "Destination Neighbour (2004)",
+            &[("Destination.Neighbour.mkv", b"nobody touches this")],
+            Vec::new(),
+        )
+        .await;
+    let merging = fixture
+        .seed_source_title(
+            "Shared Identity",
+            2016,
+            "Shared Identity (2016)",
+            &[("Shared.Identity.2016.720p.mkv", b"the incoming copy")],
+            Vec::new(),
+        )
+        .await;
+    let merging = fixture
+        .share_identity(&merging.id, vec![external_id("tmdb", "808080")])
+        .await;
+    let plain = fixture
+        .seed_source_title(
+            "Plain Mover",
+            2013,
+            "Plain Mover (2013)",
+            &[("Plain.Mover.mkv", b"just moves")],
+            Vec::new(),
+        )
+        .await;
+    let fileless = fixture.seed_fileless_source_title("No Files Here", 2007).await;
+
+    let preview = fixture.preview().await;
+    let operation_id = "operation-consolidation-owns-both-sides";
+    let operation = LocationOperation {
+        source_root_id: preview.plan.header.source_root_id.clone(),
+        destination_root_id: preview.plan.header.destination_root_id.clone(),
+        ..queued_operation(
+            operation_id,
+            LocationOperationType::RootConsolidation,
+            LocationExecutionMode::MoveWithScryer,
+            preview.plan.verification.depth,
+        )
+    };
+    let entities =
+        crate::location::executor::owned_entities(&operation, &preview.execution.to_work_plan());
+
+    for root_id in [&fixture.source_root_id, &fixture.destination_root_id] {
+        assert!(
+            entities.contains(&crate::location::ownership_guard::OwnedEntity::Root(
+                root_id.clone()
+            )),
+            "root {root_id} is not owned for the operation's duration (FR-084)"
+        );
+    }
+    for title_id in [&merging.id, &plain.id, &fileless.id, &merge_target.id] {
+        assert!(
+            entities.contains(&crate::location::ownership_guard::OwnedEntity::Title(
+                title_id.clone()
+            )),
+            "title {title_id} is not owned for the operation's duration (FR-084)"
+        );
+    }
+    assert!(
+        !entities.contains(&crate::location::ownership_guard::OwnedEntity::Title(
+            bystander.id.clone()
+        )),
+        "a destination title the plan only reads a folder name from must stay open"
+    );
+
+    // Drive the real claim, then stop at the first title boundary.
+    let plan_json = serde_json::to_string(&preview.execution).expect("serialize plan");
+    fixture
+        .app
+        .services
+        .library
+        .location_operations
+        .create_location_operation(&operation, Some(&plan_json))
+        .await
+        .expect("persist the operation");
+    fixture
+        .operations
+        .crash_on_cancel_check(title_boundary_cancel_check(1, 1));
+    assert!(
+        fixture
+            .app
+            .run_root_move(operation_id, &preview.execution)
+            .await
+            .is_err(),
+        "the injected store failure aborts the run"
+    );
+
+    // Work on either root, or on any owned title, is refused.
+    for entity in [
+        crate::location::ownership_guard::OwnedEntity::Root(fixture.source_root_id.clone()),
+        crate::location::ownership_guard::OwnedEntity::Root(fixture.destination_root_id.clone()),
+        crate::location::ownership_guard::OwnedEntity::Title(merge_target.id.clone()),
+        crate::location::ownership_guard::OwnedEntity::Title(fileless.id.clone()),
+    ] {
+        let outcome = fixture
+            .app
+            .services
+            .library
+            .location_operations
+            .claim_location_operation_ownership(
+                "operation-second-actor",
+                std::slice::from_ref(&entity),
+            )
+            .await
+            .expect("ask for the entity");
+        let crate::ports::LocationOwnershipOutcome::Conflict(conflicts) = outcome else {
+            panic!("{entity:?} must be refused to a second operation (FR-084)");
+        };
+        assert_eq!(conflicts[0].operation_id, operation_id);
+    }
+
+    // Root reconfiguration underneath the operation is refused too.
+    let repointed = fixture
+        .app
+        .update_library(&fixture.user, &fixture.library_id, None, Some(Vec::new()), None)
+        .await;
+    let Err(AppError::Validation(message)) = repointed else {
+        panic!("retiring a held root must be refused: {repointed:?}");
+    };
+    assert!(message.contains(operation_id), "got {message}");
+
+    // The bystander is untouched by any of it.
+    fixture
+        .app
+        .delete_title(&fixture.user, &bystander.id, false, None)
+        .await
+        .expect("a destination title the plan never writes to is not blocked");
 }
 
 /// FR-029: a root-wide operation requires the stronger typed confirmation, and
