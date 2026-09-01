@@ -1020,6 +1020,269 @@ async fn an_operation_whose_root_is_not_available_is_left_interrupted_rather_tha
     );
 }
 
+/// FR-033 across operation types: only the two types the root-move runner
+/// walks (`root_move`, `cross_library_transfer`) resume through it. The other
+/// four are planned types with no producer today — nothing writes such a row —
+/// but a row that arrived from a later build, or from a workflow added after
+/// this one, must not be walked under root-move rules just because the runner
+/// is the only one there is. It declines, naming the type.
+#[tokio::test]
+async fn an_operation_type_the_root_move_runner_does_not_walk_declines_resume() {
+    let fixture = RootMoveFixture::new().await;
+
+    for (index, operation_type) in [
+        LocationOperationType::FolderReassignment,
+        LocationOperationType::RootChange,
+        LocationOperationType::RootConsolidation,
+        LocationOperationType::Adoption,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let operation_id = format!("operation-foreign-type-{index}");
+        let operation = queued_operation(
+            &operation_id,
+            operation_type,
+            LocationExecutionMode::MoveWithScryer,
+            VerificationDepth::Full,
+        );
+        fixture
+            .app
+            .services
+            .library
+            .location_operations
+            .create_location_operation(&operation, None)
+            .await
+            .expect("persist the operation");
+
+        let decision = fixture
+            .app
+            .resume_location_operation(&operation_id)
+            .await
+            .expect("a type this runner does not walk is a decline, not an error");
+        let crate::location::operations::LocationResumeDecision::NotResumable(reason) = decision
+        else {
+            panic!(
+                "a {} operation must not be resumed here",
+                operation_type.as_str()
+            );
+        };
+        assert!(
+            reason.contains(operation_type.as_str()),
+            "the reason names the type: {reason}"
+        );
+    }
+
+    // And the boot hook makes the same call for every one of them.
+    assert_eq!(
+        fixture
+            .app
+            .resume_interrupted_location_operations()
+            .await
+            .expect("boot resume"),
+        0
+    );
+}
+
+/// FR-033, the other unreadable-plan case: the plan is *there* but this build
+/// cannot deserialize it — a row written by a later version, or one that lost
+/// its shape. That is the same situation for the user as an operation stored
+/// without a plan at all, so it declines with a reason instead of raising a
+/// repository error at whoever pressed "resume", and the boot hook leaves the
+/// row interrupted rather than reporting a failure to read it.
+#[tokio::test]
+async fn an_operation_whose_stored_plan_cannot_be_read_declines_with_a_reason() {
+    let fixture = RootMoveFixture::new().await;
+    let operation_id = "operation-unreadable-plan";
+    let operation = queued_operation(
+        operation_id,
+        LocationOperationType::RootMove,
+        LocationExecutionMode::MoveWithScryer,
+        VerificationDepth::Full,
+    );
+    fixture
+        .app
+        .services
+        .library
+        .location_operations
+        .create_location_operation(&operation, Some("{\"titles\":\"not a list of titles\"}"))
+        .await
+        .expect("persist an operation whose stored plan this build cannot read");
+
+    let decision = fixture
+        .app
+        .resume_location_operation(operation_id)
+        .await
+        .expect("an unreadable plan is a decline, not an error");
+    let crate::location::operations::LocationResumeDecision::NotResumable(reason) = decision else {
+        panic!("an operation whose plan cannot be read must not be resumed");
+    };
+    assert!(
+        reason.contains("stored plan cannot be read"),
+        "the reason says what is wrong: {reason}"
+    );
+
+    // The boot hook makes the same call, so it resumes nothing and fails
+    // nothing.
+    assert_eq!(
+        fixture
+            .app
+            .resume_interrupted_location_operations()
+            .await
+            .expect("boot resume"),
+        0
+    );
+    let untouched = fixture
+        .app
+        .location_operation(operation_id)
+        .await
+        .expect("read operation")
+        .expect("operation row");
+    assert!(
+        untouched.state.is_active(),
+        "the operation stays interrupted, got {:?}",
+        untouched.state
+    );
+    assert!(
+        fixture.recorded_job_runs().await.is_empty(),
+        "a refused resume opens no Activity run"
+    );
+}
+
+/// FR-084 across a restart: the runner writes its terminal state and only then
+/// releases its claims, so a process that dies between those two writes — or a
+/// release that fails on its own — leaves a *finished* operation still owning
+/// titles and roots. Nothing resumes a terminal operation, so nothing else
+/// would ever let go, and those claims would refuse scans, imports, and renames
+/// for the life of the installation. The boot hook releases them, and leaves
+/// the claims of operations that are still interrupted alone — a resume is
+/// about to re-claim exactly those.
+#[tokio::test]
+async fn a_finished_operations_leftover_ownership_claims_are_released_at_boot() {
+    let fixture = RootMoveFixture::new().await;
+    let title = fixture
+        .seed_title(
+            "Orphaned Claim",
+            2018,
+            &fixture.root_a_id,
+            &fixture.root_a(),
+            "Orphaned Claim (2018)",
+            &[("Orphaned.Claim.2018.mkv", 400)],
+        )
+        .await;
+
+    // The row that window leaves behind: terminal, with its claims still open.
+    let settled_id = "operation-settled-with-claims";
+    let mut settled = queued_operation(
+        settled_id,
+        LocationOperationType::RootMove,
+        LocationExecutionMode::MoveWithScryer,
+        VerificationDepth::Full,
+    );
+    settled.state = LocationOperationState::Completed;
+    fixture
+        .app
+        .services
+        .library
+        .location_operations
+        .create_location_operation(&settled, None)
+        .await
+        .expect("persist the settled operation");
+    let settled_entities = vec![
+        crate::location::ownership_guard::OwnedEntity::Title(title.id.clone()),
+        crate::location::ownership_guard::OwnedEntity::Root(fixture.root_a_id.clone()),
+    ];
+    assert!(matches!(
+        fixture
+            .app
+            .services
+            .library
+            .location_operations
+            .claim_location_operation_ownership(settled_id, &settled_entities)
+            .await
+            .expect("claim for the settled operation"),
+        crate::ports::LocationOwnershipOutcome::Claimed
+    ));
+
+    // And an operation that really is still interrupted, whose claim must
+    // survive the same pass.
+    let interrupted_id = "operation-still-interrupted";
+    let mut interrupted = queued_operation(
+        interrupted_id,
+        LocationOperationType::RootMove,
+        LocationExecutionMode::MoveWithScryer,
+        VerificationDepth::Full,
+    );
+    interrupted.state = LocationOperationState::Moving;
+    fixture
+        .app
+        .services
+        .library
+        .location_operations
+        .create_location_operation(&interrupted, None)
+        .await
+        .expect("persist the interrupted operation");
+    assert!(matches!(
+        fixture
+            .app
+            .services
+            .library
+            .location_operations
+            .claim_location_operation_ownership(
+                interrupted_id,
+                &[crate::location::ownership_guard::OwnedEntity::Root(
+                    fixture.root_b_id.clone()
+                )],
+            )
+            .await
+            .expect("claim for the interrupted operation"),
+        crate::ports::LocationOwnershipOutcome::Claimed
+    ));
+    assert_eq!(fixture.operations.open_claim_count(), 3);
+
+    // The interrupted operation has no stored plan, so nothing is resumed — the
+    // claim release is not a side effect of a resume.
+    assert_eq!(
+        fixture
+            .app
+            .resume_interrupted_location_operations()
+            .await
+            .expect("boot resume"),
+        0
+    );
+
+    assert_eq!(
+        fixture
+            .app
+            .services
+            .library
+            .location_operations
+            .location_ownership_holder(&crate::location::ownership_guard::OwnedEntity::Title(
+                title.id.clone()
+            ))
+            .await
+            .expect("read the title's holder"),
+        None,
+        "a finished operation owns no title after boot (FR-084)"
+    );
+    assert_eq!(
+        fixture
+            .app
+            .services
+            .library
+            .location_operations
+            .location_ownership_holder(&crate::location::ownership_guard::OwnedEntity::Root(
+                fixture.root_b_id.clone()
+            ))
+            .await
+            .expect("read the root's holder")
+            .as_deref(),
+        Some(interrupted_id),
+        "an operation that is still interrupted keeps the claims its resume will re-take"
+    );
+    assert_eq!(fixture.operations.open_claim_count(), 1);
+}
+
 // ── US9.1–9.2 end-to-end, and SC-007 against a live operation ───────────────
 
 /// US9.1: with no preference set, the plan, the persisted operation, and every

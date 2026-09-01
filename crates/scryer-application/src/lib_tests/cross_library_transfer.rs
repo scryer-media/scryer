@@ -1207,6 +1207,11 @@ async fn a_merge_that_committed_before_the_crash_settles_idempotently_on_resume(
         .checkpoint(operation_id, &title.id)
         .expect("the interrupted title has a checkpoint");
     assert!(!checkpoint.state.is_settled());
+    // The file was proven before the crash. Held so the resumed run can be
+    // asserted against the exact records, not just their count: re-verifying
+    // would rewrite them in place (FR-092).
+    let proven = fixture.operations.verifications();
+    assert_eq!(proven.len(), 1);
 
     // ── Resume ──────────────────────────────────────────────────────────────
     fixture.operations.clear_checkpoint_faults();
@@ -1236,6 +1241,11 @@ async fn a_merge_that_committed_before_the_crash_settles_idempotently_on_resume(
         fixture.merges.executed().len(),
         1,
         "the merge is never executed a second time"
+    );
+    assert_eq!(
+        fixture.operations.verifications(),
+        proven,
+        "the merged title's file is never copied or verified a second time (FR-092)"
     );
     assert_eq!(outcome.counters.merges, 1);
     let settled = fixture
@@ -1447,6 +1457,239 @@ async fn an_interrupted_transfer_resumes_and_converges_on_the_destination_librar
         checkpoint.placement.merged_into_title_id, None,
         "a transfer without a destination match merges into nothing"
     );
+}
+
+/// FR-089/FR-033, the narrower transfer window: the catalog flip committed and
+/// the *cleanup* never ran, so the source folder is still on disk with the
+/// title already pointing at the destination library.
+///
+/// Admission has to read that flipped library as this operation's own footprint
+/// rather than as a foreign change — otherwise the resume would stop the title
+/// as stale and leave the source folder behind forever — and the resumed run
+/// has to finish the cleanup without re-copying or re-verifying anything.
+#[tokio::test]
+async fn a_transfer_whose_flip_committed_before_the_crash_cleans_up_on_resume() {
+    let fixture = TransferFixture::new().await;
+    let title = fixture
+        .seed_source_title(
+            "Half Finished Transfer",
+            2013,
+            "Half Finished Transfer (2013)",
+            "Half.Finished.Transfer.2013.mkv",
+            1200,
+            Vec::new(),
+            Vec::new(),
+        )
+        .await;
+    let source_folder = fixture.source_root().join("Half Finished Transfer (2013)");
+
+    let preview = fixture.preview(&[&title.id]).await;
+    let operation_id = "operation-transfer-cleanup-resume";
+    let operation = queued_operation(
+        operation_id,
+        LocationOperationType::CrossLibraryTransfer,
+        LocationExecutionMode::MoveWithScryer,
+        preview.plan.verification.depth,
+    );
+    let plan_json = serde_json::to_string(&preview.execution).expect("serialize plan");
+    fixture
+        .app
+        .services
+        .library
+        .location_operations
+        .create_location_operation(&operation, Some(&plan_json))
+        .await
+        .expect("persist the operation");
+
+    // The store dies the moment the checkpoint would advance past
+    // `reconciling` — after the catalog flip, before the cleanup.
+    fixture
+        .operations
+        .fail_checkpoint_writes_from(TitleCheckpointState::CleaningUp);
+    let crashed = fixture
+        .app
+        .run_root_move(operation_id, &preview.execution)
+        .await;
+    assert!(
+        crashed.is_err(),
+        "the injected store failure aborts the run"
+    );
+
+    let flipped = fixture.title(&title.id).await;
+    assert_eq!(flipped.library_id, fixture.destination_library_id);
+    assert_eq!(flipped.root_folder_id, fixture.destination_root_id);
+    assert!(
+        source_folder.exists(),
+        "the cleanup never ran, so the source folder is still there"
+    );
+    let proven = fixture.operations.verifications();
+    assert_eq!(proven.len(), 1, "the file was proven before the crash");
+    let checkpoint = fixture
+        .operations
+        .checkpoint(operation_id, &title.id)
+        .expect("the interrupted title has a checkpoint");
+    assert!(!checkpoint.state.is_settled());
+
+    // ── Resume ──────────────────────────────────────────────────────────────
+    fixture.operations.clear_checkpoint_faults();
+    let resumed_plan = fixture
+        .app
+        .resume_location_operation(operation_id)
+        .await
+        .expect("resume")
+        .plan()
+        .expect("a transfer whose flip committed is still resumable");
+    let outcome = fixture
+        .app
+        .run_root_move(operation_id, &resumed_plan)
+        .await
+        .expect("resumed run");
+
+    assert!(
+        matches!(
+            outcome.state,
+            LocationOperationState::Completed | LocationOperationState::CompletedWithWarnings
+        ),
+        "unexpected terminal state: {:?} ({:?})",
+        outcome.state,
+        outcome.detail
+    );
+    assert_eq!(
+        fixture.operations.verifications(),
+        proven,
+        "the file proven before the crash is never verified a second time (FR-092)"
+    );
+    assert!(
+        !source_folder.exists(),
+        "the resumed run finished the cleanup the crash interrupted"
+    );
+    assert!(
+        fixture
+            .destination_root()
+            .join("Half Finished Transfer (2013)")
+            .join("Half.Finished.Transfer.2013.mkv")
+            .exists()
+    );
+    let settled = fixture
+        .operations
+        .checkpoint(operation_id, &title.id)
+        .expect("checkpoint");
+    assert!(settled.state.is_settled());
+    assert_eq!(
+        fixture.operations.open_claim_count(),
+        0,
+        "a finished operation owns nothing (FR-084)"
+    );
+}
+
+/// FR-084 is why FR-089's staleness rule never has to answer "what if the
+/// source library was deleted, or the destination root was taken out of its
+/// library, while the operation was interrupted?": it cannot happen. An
+/// interrupted operation still holds its claims across a restart, and both
+/// entry points that would move that ground refuse while it does.
+#[tokio::test]
+async fn an_interrupted_transfer_refuses_library_and_root_reconfiguration_underneath_it() {
+    let fixture = TransferFixture::new().await;
+    let title = fixture
+        .seed_source_title(
+            "Ground Under Foot",
+            2014,
+            "Ground Under Foot (2014)",
+            "Ground.Under.Foot.2014.mkv",
+            900,
+            Vec::new(),
+            Vec::new(),
+        )
+        .await;
+
+    let preview = fixture.preview(&[&title.id]).await;
+    let operation_id = "operation-transfer-guarded-ground";
+    // The row `start_root_move` writes: the roots on both sides are named, and
+    // they are what the runner claims (FR-084).
+    let operation = LocationOperation {
+        source_library_id: Some(fixture.source_library_id.clone()),
+        destination_library_id: Some(fixture.destination_library_id.clone()),
+        source_root_id: Some(fixture.source_root_id.clone()),
+        destination_root_id: Some(fixture.destination_root_id.clone()),
+        ..queued_operation(
+            operation_id,
+            LocationOperationType::CrossLibraryTransfer,
+            LocationExecutionMode::MoveWithScryer,
+            preview.plan.verification.depth,
+        )
+    };
+    let plan_json = serde_json::to_string(&preview.execution).expect("serialize plan");
+    fixture
+        .app
+        .services
+        .library
+        .location_operations
+        .create_location_operation(&operation, Some(&plan_json))
+        .await
+        .expect("persist the operation");
+
+    // The run claims its titles and roots and then dies at the very first title
+    // boundary, before touching anything: the interrupted row a restart finds,
+    // with its claims still open.
+    fixture
+        .operations
+        .crash_on_cancel_check(title_boundary_cancel_check(1, 1));
+    assert!(
+        fixture
+            .app
+            .run_root_move(operation_id, &preview.execution)
+            .await
+            .is_err(),
+        "the injected store failure aborts the run"
+    );
+    assert!(fixture.operations.open_claim_count() > 0);
+
+    // Deleting the destination library would retire the root this operation is
+    // moving into.
+    let deleted = fixture
+        .app
+        .delete_library(&fixture.user, &fixture.destination_library_id)
+        .await;
+    let Err(crate::AppError::Validation(message)) = deleted else {
+        panic!("deleting a library under an interrupted operation must be refused: {deleted:?}");
+    };
+    assert!(
+        message.contains(operation_id),
+        "the refusal names the operation holding the ground: {message}"
+    );
+
+    // Retiring the source library's roots would do the same on the other side.
+    let repointed = fixture
+        .app
+        .update_library(
+            &fixture.user,
+            &fixture.source_library_id,
+            None,
+            Some(Vec::new()),
+            None,
+        )
+        .await;
+    let Err(crate::AppError::Validation(message)) = repointed else {
+        panic!("retiring a root under an interrupted operation must be refused: {repointed:?}");
+    };
+    assert!(
+        message.contains(operation_id),
+        "the refusal names the operation holding the ground: {message}"
+    );
+
+    // A name-only edit is harmless and still goes through, so the guard is not
+    // simply freezing the library.
+    fixture
+        .app
+        .update_library(
+            &fixture.user,
+            &fixture.source_library_id,
+            Some("Renamed While Interrupted".to_string()),
+            None,
+            None,
+        )
+        .await
+        .expect("a name-only edit touches no root");
 }
 
 // ── US6.2 / FR-057 / FR-058 / FR-060 / FR-062 ────────────────────────────────

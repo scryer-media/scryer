@@ -327,7 +327,8 @@ impl AppUseCase {
     ///
     /// Reports [`LocationResumeDecision::NotResumable`] — never an error, and
     /// never a silent nothing — when the operation is unknown, terminal, stored
-    /// without its plan, or sitting on a volume that is not mounted right now.
+    /// without a plan this build can read, or sitting on a volume that is not
+    /// mounted right now.
     /// The one case that *is* an error is a second resume of an operation whose
     /// runner is still alive: that is a caller mistake with a real consequence
     /// (two runners over one set of checkpoints), so it is refused rather than
@@ -390,11 +391,27 @@ impl AppUseCase {
                 "this operation was stored without its plan, so there is nothing to resume",
             ));
         };
-        let plan: RootMoveExecutionPlan = serde_json::from_str(&plan_json).map_err(|error| {
-            AppError::Repository(format!(
-                "location operation {operation_id} has an unreadable plan: {error}"
-            ))
-        })?;
+        // A stored plan this build cannot read is the same situation for the
+        // user as one that was never stored at all: there is nothing to carry
+        // on from. Raising a repository error at somebody who pressed "resume"
+        // would say "something broke" about a row that is merely unreadable
+        // *here* — and the boot hook, which logs errors and moves on, would
+        // report it as a failure to read rather than as a move left for the
+        // user. The row stays interrupted either way, so a build that can read
+        // the plan still resumes it.
+        let plan: RootMoveExecutionPlan = match serde_json::from_str(&plan_json) {
+            Ok(plan) => plan,
+            Err(error) => {
+                tracing::warn!(
+                    operation_id = %operation_id,
+                    error = %error,
+                    "an interrupted location operation's stored plan could not be read; it stays interrupted"
+                );
+                return Ok(LocationResumeDecision::not_resumable(
+                    "this operation's stored plan cannot be read, so there is nothing to resume",
+                ));
+            }
+        };
 
         // FR-033 is about picking work back up, not about deciding it is over.
         // A root whose volume has not mounted yet — the ordinary shape of a
@@ -427,12 +444,81 @@ impl AppUseCase {
         Ok(LocationResumeDecision::Resume(Box::new(plan)))
     }
 
+    /// Boot hook, first half: let go of ownership claims whose operation has
+    /// already settled (FR-084).
+    ///
+    /// [`crate::location::executor::LocationOperationRunner::run`] writes the
+    /// terminal state and *then* releases ownership, so a process that dies
+    /// between those two writes — or a release that fails on its own — leaves a
+    /// finished operation still owning its titles and roots. Nothing else ever
+    /// lets go of them: a terminal operation is not resumable, so the stale
+    /// claims would refuse scans, imports, renames, and every later location
+    /// operation over those entities for the life of the installation. A claim
+    /// whose operation row is gone entirely is released for the same reason.
+    ///
+    /// Non-terminal operations keep their claims: those are the ones a resume
+    /// is about to re-claim, and re-claiming is idempotent for the same
+    /// operation.
+    ///
+    /// Returns how many operations were released.
+    async fn release_settled_location_ownership_claims(&self) -> AppResult<usize> {
+        let claims = self.location_ownership_open_claims().await?;
+        if claims.is_empty() {
+            return Ok(0);
+        }
+        let mut operation_ids: Vec<String> =
+            claims.into_iter().map(|claim| claim.operation_id).collect();
+        operation_ids.sort();
+        operation_ids.dedup();
+
+        let mut released = 0usize;
+        for operation_id in operation_ids {
+            let settled = match self.location_operation(&operation_id).await? {
+                Some(operation) => operation.state.is_terminal(),
+                None => true,
+            };
+            if !settled {
+                continue;
+            }
+            let entities = self
+                .services
+                .library
+                .location_operations
+                .release_location_operation_ownership(&operation_id)
+                .await?;
+            self.runtime
+                .library
+                .location_ownership
+                .release_operation(&operation_id);
+            if entities > 0 {
+                tracing::info!(
+                    operation_id = %operation_id,
+                    entities,
+                    "released ownership claims left behind by a location operation that had already finished"
+                );
+                released += 1;
+            }
+        }
+        Ok(released)
+    }
+
     /// Boot hook: pick every interrupted location operation back up (FR-033).
     ///
     /// Returns how many were resumed. Operations whose plan cannot be read are
     /// left alone and logged rather than failed here, because a startup path
     /// must not decide on its own that a user's half-finished move is over.
     pub async fn resume_interrupted_location_operations(&self) -> AppResult<usize> {
+        // Before anything is picked back up: claims held by operations that
+        // already finished are nobody's, and no later path releases them
+        // (FR-084). A failure here is logged rather than propagated — it must
+        // not stop the resumes this hook exists for.
+        if let Err(error) = self.release_settled_location_ownership_claims().await {
+            tracing::warn!(
+                error = %error,
+                "could not release the ownership claims left behind by finished location operations"
+            );
+        }
+
         let operations = LocationOperationRunner::resumable_operations(
             self.services.library.location_operations.as_ref(),
         )
