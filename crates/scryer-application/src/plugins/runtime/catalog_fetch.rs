@@ -448,9 +448,20 @@ fn catalog_resolution_is_first_party(resolved: &CatalogPluginResolution) -> bool
     resolved.source_kind == PluginSourceKind::Downloaded
         && resolved.effective_support_tier == PluginSupportTier::Official
 }
+// Capability-aware clients read the modern redirect, published alongside the
+// legacy `catalog-v3.redirect.json` ladder. The legacy ladder's rungs are
+// per-stratum projections bounded by shipped tolerances (positional slots, see
+// `fetch_verified_catalog_v3`); the modern redirect points at the unfiltered
+// master catalog and may grow rungs for future runtimes. The legacy URLs stay
+// below as last-resort candidates so a binary that boots before the first
+// publish of the modern redirect still gets a catalog — a degraded projection
+// instead of an outage.
 const DEFAULT_CATALOG_URL: &str =
+    "https://cdn.scryer.media/scryer/catalog/v3/catalog-v3.modern.redirect.json";
+const FALLBACK_CATALOG_URL: &str = "https://github.com/scryer-media/scryer-plugins/releases/download/catalog%2Fv3/catalog-v3.modern.redirect.json";
+const LEGACY_DEFAULT_CATALOG_URL: &str =
     "https://cdn.scryer.media/scryer/catalog/v3/catalog-v3.redirect.json";
-const FALLBACK_CATALOG_URL: &str = "https://github.com/scryer-media/scryer-plugins/releases/download/catalog%2Fv3/catalog-v3.redirect.json";
+const LEGACY_FALLBACK_CATALOG_URL: &str = "https://github.com/scryer-media/scryer-plugins/releases/download/catalog%2Fv3/catalog-v3.redirect.json";
 const CATALOG_URL_ENV: &str = "SCRYER_PLUGIN_CATALOG_URL";
 const CENTRAL_CATALOG_SOURCE_KEY: &str = "__central_catalog";
 const LEGACY_CENTRAL_CATALOG_SOURCE_KEY: &str = "__central_catalog_v2";
@@ -784,14 +795,14 @@ mod tests {
         unsafe { std::env::remove_var(CATALOG_URL_ENV) };
         assert_eq!(
             plugin_catalog_url(),
-            "https://cdn.scryer.media/scryer/catalog/v3/catalog-v3.redirect.json"
+            "https://cdn.scryer.media/scryer/catalog/v3/catalog-v3.modern.redirect.json"
         );
 
         // SAFETY: this test serializes access to the process environment with ENV_LOCK.
         unsafe { std::env::set_var(CATALOG_URL_ENV, "   ") };
         assert_eq!(
             plugin_catalog_url(),
-            "https://cdn.scryer.media/scryer/catalog/v3/catalog-v3.redirect.json"
+            "https://cdn.scryer.media/scryer/catalog/v3/catalog-v3.modern.redirect.json"
         );
 
         // SAFETY: this test serializes access to the process environment with ENV_LOCK.
@@ -1077,7 +1088,19 @@ impl AppUseCase {
     async fn fetch_verified_catalog_redirect(&self) -> AppResult<(CatalogV3Redirect, String)> {
         let primary_url = plugin_catalog_url();
         let fallback_url = fallback_plugin_catalog_url().to_string();
-        let candidate_urls = vec![primary_url, fallback_url];
+        // The legacy ladder is a working catalog for this client too — its
+        // last rung is a projection this binary parses and partially runs — so
+        // it backstops the modern redirect the same way the GitHub mirror
+        // backstops the CDN. This matters exactly once per deployment order:
+        // if this binary ships before the first plugin publish that creates
+        // the modern redirect, the modern URLs 404 and the legacy ladder keeps
+        // the catalog alive instead of blanking it.
+        let candidate_urls = vec![
+            primary_url,
+            fallback_url,
+            LEGACY_DEFAULT_CATALOG_URL.to_string(),
+            LEGACY_FALLBACK_CATALOG_URL.to_string(),
+        ];
         let mut last_error = None;
         for url in candidate_urls {
             match fetch_verified_catalog_redirect_candidate(&url, "plugin catalog redirect").await {
@@ -1104,7 +1127,7 @@ impl AppUseCase {
         // A catalog-v3 redirect is an ordered ladder of projections of one
         // catalog, oldest-tolerating first, newest last. Shipped clients pick a
         // fixed rung by position — pre-0.18.12 took the first, 0.18.12 through
-        // 0.19.5 took the last — which is why those two bands could never be
+        // 0.19.6 took the last — which is why those two bands could never be
         // served different content once their tolerances diverged: the ladder
         // has exactly two addressable positions.
         //
