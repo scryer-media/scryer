@@ -8,7 +8,7 @@ use super::*;
 
 use std::sync::Mutex;
 
-use crate::location::executor::LocationOperationRunner;
+use crate::location::executor::{LocationOperationRunner, OperationRunOutcome};
 use crate::location::model::{
     LocationExecutionMode, LocationOperationState, LocationOperationType, TitleCheckpointState,
 };
@@ -1059,6 +1059,209 @@ async fn removing_a_verified_source_is_always_reported() {
         .await
         .expect("dispose");
     assert_eq!(disposal, SourceDisposal::AlreadyAbsent);
+}
+
+// ── US9 depth, through the runner with the real copier ──────────────────────
+
+/// Bigger than two sample windows, so the quick check's head and tail windows
+/// are a real subset of the file rather than the whole of it.
+const THREE_SAMPLE_WINDOWS: usize = crate::fs_integrity::IMPORT_CONTENT_PROOF_SAMPLE_BYTES * 3;
+
+/// A cross-filesystem mover that copies with the real copier and, when asked,
+/// flips one byte at the destination between the write and the read-back — the
+/// injection SC-006 describes, at a caller-chosen offset so the same fixture can
+/// aim inside or outside the quick check's sampled windows.
+struct CopyThenCorrupt {
+    copier: VerifiedCopier,
+    corrupt_at: Option<usize>,
+}
+
+#[async_trait]
+impl TitleFileMover for CopyThenCorrupt {
+    async fn move_file(&self, request: FileMoveRequest<'_>) -> AppResult<VerifiedFile> {
+        let destination = request.file.destination_path.clone();
+        if let Some(parent) = destination.parent() {
+            tokio::fs::create_dir_all(parent).await.expect("mkdir");
+        }
+        let hashes = self
+            .copier
+            .copy(
+                &request.file.source_path,
+                &destination,
+                DestinationClaim::ClaimHere,
+            )
+            .await?;
+
+        if let Some(offset) = self.corrupt_at {
+            let mut bytes = std::fs::read(&destination).expect("read back");
+            bytes[offset] ^= 0b0000_0001;
+            std::fs::write(&destination, &bytes).expect("corrupt");
+        }
+
+        let assessment = self
+            .copier
+            .verify(
+                &request.file.source_path,
+                &destination,
+                &hashes,
+                request.depth,
+            )
+            .await?;
+        Ok(VerifiedFile {
+            source_path: request.file.source_path.clone(),
+            destination_path: destination,
+            hashes: Some(hashes),
+            depth: assessment.depth,
+            outcome: assessment.outcome,
+            detail: assessment.detail,
+        })
+    }
+}
+
+/// Writes a byte pattern so a flipped bit is a real content difference rather
+/// than a coincidence of repeated bytes.
+fn write_pattern_file(path: &Path, len: usize) {
+    let data: Vec<u8> = (0..len).map(|index| (index % 251) as u8).collect();
+    write_file(path, &data);
+}
+
+/// Stages a one-title cross-filesystem move of a `THREE_SAMPLE_WINDOWS`-byte
+/// file and runs it at `depth` with `corrupt_at` applied after the copy.
+async fn run_copy_at_depth(
+    temp: &Path,
+    depth: VerificationDepth,
+    corrupt_at: Option<usize>,
+) -> (
+    OperationRunOutcome,
+    RootMoveExecutionPlan,
+    InMemoryLocationOperationStore,
+    FakeCatalog,
+    RecordingRecycler,
+) {
+    let source_root = temp.join("a");
+    let destination_root = temp.join("b");
+    let mut plan = single_title_plan(
+        &source_root,
+        &destination_root,
+        "movie.mkv",
+        THREE_SAMPLE_WINDOWS as u64,
+    );
+    plan.titles[0].same_volume = Some(false);
+    write_pattern_file(&plan.titles[0].files[0].source(), THREE_SAMPLE_WINDOWS);
+
+    let store = InMemoryLocationOperationStore::new();
+    store.insert_operation(queued_operation(
+        "op-1",
+        LocationOperationType::RootMove,
+        LocationExecutionMode::MoveWithScryer,
+        depth,
+    ));
+    let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
+    let recycler = RecordingRecycler::default();
+    let mover = CopyThenCorrupt {
+        copier: VerifiedCopier::new(),
+        corrupt_at,
+    };
+    let admission = RootMoveAdmission::new(&plan, &catalog);
+    let reconciler = RootMoveReconciler::new(&plan, &catalog, &store, &recycler);
+
+    let outcome = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
+        .run("op-1", &plan.to_work_plan())
+        .await
+        .expect("run");
+
+    (outcome, plan, store, catalog, recycler)
+}
+
+/// US9.2 through the runner: the operator's quick preference reaches the copy,
+/// the per-file record is stamped `quick` without a fallback flag, and the
+/// weaker proof still unblocks recycling the source (FR-042/043/044).
+#[tokio::test]
+async fn a_quick_depth_copy_records_the_reduced_guarantee_and_still_settles() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let (outcome, plan, store, catalog, recycler) =
+        run_copy_at_depth(temp.path(), VerificationDepth::Quick, None).await;
+
+    assert_eq!(outcome.state, LocationOperationState::Completed);
+    let records = store.verifications();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].depth.applied, VerificationDepth::Quick);
+    assert_eq!(records[0].depth.requested, VerificationDepth::Quick);
+    assert!(
+        !records[0].depth.fell_back,
+        "quick was the preference, not a floor the run dropped to"
+    );
+    assert_eq!(
+        store
+            .operation("op-1")
+            .expect("operation")
+            .verification_fallback_count,
+        0
+    );
+    // The copy still streams both hashes, so a quick-verified move leaves the
+    // backfill queue just like a full one (FR-041).
+    let hashes = records[0].hashes.as_ref().expect("a copy streams hashes");
+    assert_eq!(hashes.size_bytes, THREE_SAMPLE_WINDOWS as u64);
+    assert!(!hashes.full_blake3.is_empty());
+
+    assert!(records[0].outcome.permits_source_removal());
+    assert_eq!(recycler.recycled().len(), 1);
+    assert_eq!(catalog.writes().len(), 3, "catalog flipped after verification");
+    assert!(!plan.titles[0].files[0].source().exists());
+}
+
+/// SC-006's quick-check half: a byte flipped inside the sampled head window is
+/// caught even at the reduced depth, and a failed check refuses source removal
+/// exactly as it does at full depth (FR-044).
+#[tokio::test]
+async fn corruption_inside_the_sampled_window_blocks_source_removal_at_quick_depth() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let (outcome, plan, store, catalog, recycler) =
+        run_copy_at_depth(temp.path(), VerificationDepth::Quick, Some(7)).await;
+
+    assert_eq!(outcome.state, LocationOperationState::Failed);
+    let records = store.verifications();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].depth.applied, VerificationDepth::Quick);
+    assert!(!records[0].outcome.permits_source_removal());
+
+    assert!(plan.titles[0].files[0].source().exists());
+    assert!(recycler.recycled().is_empty());
+    assert!(catalog.writes().is_empty());
+    assert_eq!(
+        catalog
+            .placement("title-1")
+            .expect("title still known")
+            .root_folder_id,
+        "root-a"
+    );
+}
+
+/// The reduced guarantee stated as a limit, at the runner level this time: the
+/// same corruption the quick check misses in the unsampled middle is caught at
+/// full depth. This is why full is the default (FR-042).
+#[tokio::test]
+async fn corruption_in_the_unsampled_middle_needs_full_depth() {
+    let middle = crate::fs_integrity::IMPORT_CONTENT_PROOF_SAMPLE_BYTES + 17;
+
+    let quick_temp = tempfile::tempdir().expect("temp dir");
+    let (quick, _, quick_store, _, quick_recycler) =
+        run_copy_at_depth(quick_temp.path(), VerificationDepth::Quick, Some(middle)).await;
+    assert_eq!(
+        quick.state,
+        LocationOperationState::Completed,
+        "quick deliberately does not read the middle of the file"
+    );
+    assert!(quick_store.verifications()[0].outcome.permits_source_removal());
+    assert_eq!(quick_recycler.recycled().len(), 1);
+
+    let full_temp = tempfile::tempdir().expect("temp dir");
+    let (full, full_plan, full_store, _, full_recycler) =
+        run_copy_at_depth(full_temp.path(), VerificationDepth::Full, Some(middle)).await;
+    assert_eq!(full.state, LocationOperationState::Failed);
+    assert!(!full_store.verifications()[0].outcome.permits_source_removal());
+    assert!(full_recycler.recycled().is_empty());
+    assert!(full_plan.titles[0].files[0].source().exists());
 }
 
 #[tokio::test]

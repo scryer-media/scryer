@@ -25,6 +25,7 @@ mod library_scan;
 mod media_requests;
 mod metadata_search;
 mod queueing;
+mod root_move;
 mod routing_settings;
 mod search_cutoff;
 mod security_auth;

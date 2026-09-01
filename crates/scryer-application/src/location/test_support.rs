@@ -32,6 +32,10 @@ struct State {
     verifications: BTreeMap<(String, String), FileVerificationRecord>,
     ownership: BTreeMap<(String, String), String>,
     cancel_requested: BTreeSet<String>,
+    /// Cancel checks the runner has made against this store so far.
+    cancel_checks: usize,
+    /// One-shot fault: the `nth` cancel check fails instead of answering.
+    crash_on_cancel_check: Option<usize>,
 }
 
 /// An in-memory [`LocationOperationRepository`].
@@ -83,6 +87,19 @@ impl InMemoryLocationOperationStore {
 
     pub(crate) fn open_claim_count(&self) -> usize {
         self.state.lock().expect("lock").ownership.len()
+    }
+
+    /// Arms a one-shot store failure on the `nth` cancel check the runner makes.
+    ///
+    /// This is how a test simulates a process that dies mid-operation. The
+    /// runner reads the cancel flag once per unprocessed title, at the title
+    /// boundary, so arming `2` stops a two-title run after the first title has
+    /// settled. The error propagates out of `run` before any terminal state is
+    /// written, which is precisely the row a crash leaves behind: non-terminal,
+    /// with checkpoints for the titles that did settle and ownership claims
+    /// still held (FR-033, FR-084).
+    pub(crate) fn crash_on_cancel_check(&self, nth: usize) {
+        self.state.lock().expect("lock").crash_on_cancel_check = Some(nth);
     }
 }
 
@@ -182,12 +199,15 @@ impl LocationOperationRepository for InMemoryLocationOperationStore {
     }
 
     async fn location_operation_cancel_requested(&self, operation_id: &str) -> AppResult<bool> {
-        Ok(self
-            .state
-            .lock()
-            .expect("lock")
-            .cancel_requested
-            .contains(operation_id))
+        let mut state = self.state.lock().expect("lock");
+        state.cancel_checks += 1;
+        if state.crash_on_cancel_check == Some(state.cancel_checks) {
+            state.crash_on_cancel_check = None;
+            return Err(crate::AppError::Repository(
+                "the store went away mid-operation".to_string(),
+            ));
+        }
+        Ok(state.cancel_requested.contains(operation_id))
     }
 
     async fn upsert_location_title_checkpoint(
