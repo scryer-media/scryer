@@ -11,10 +11,7 @@ runtime = [
     "runtime-media-analysis",
     "runtime-plugin-trust",
 ]
-runtime-archives = [
-    "dep:par2-rs",
-    "dep:zstd",
-]
+runtime-archives = ["dep:zstd"]
 runtime-backups = ["dep:zstd"]
 runtime-media-analysis = [
     "dep:chardetng",
@@ -65,7 +62,6 @@ brotli = { version = "8", optional = true }
 tar = "0.4"
 flate2 = "1"
 zstd = { version = "0.13", default-features = false, optional = true }
-par2-rs = { version = "0.7.1", optional = true }
 tempfile = "3"
 chardetng = { version = "1", optional = true }
 encoding_rs = { version = "0.8", optional = true }

@@ -3665,15 +3665,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "memmap2"
-version = "0.9.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d1219ed1b7f229ee7104d281dd01d6802fe28bb6e95d292942c4daacdeb798c0"
-dependencies = [
- "libc",
-]
-
-[[package]]
 name = "metrics"
 version = "0.24.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4301,25 +4292,6 @@ checksum = "30d5b2194ed13191c1999ae0704b7839fb18384fa22e49b57eeaa97d79ce40da"
 dependencies = [
  "libc",
  "winapi",
-]
-
-[[package]]
-name = "par2-rs"
-version = "0.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ddbf8171058b0256cc12f93bb162da0bf12331eb0afa995f30892c6aa7b2a678"
-dependencies = [
- "aws-lc-sys",
- "bytes",
- "cap-std",
- "crc-fast",
- "libc",
- "md-5",
- "memmap2",
- "rayon",
- "reedsolomon-rs",
- "thiserror 2.0.20",
- "tracing",
 ]
 
 [[package]]
@@ -5205,16 +5177,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "reedsolomon-rs"
-version = "0.4.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a9884b16620acba60129b537d7853b864293fbcd17080749f81a8662f3e72061"
-dependencies = [
- "memmap2",
- "rayon",
-]
-
-[[package]]
 name = "ref-cast"
 version = "1.0.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5723,7 +5685,6 @@ dependencies = [
  "jsonwebtoken 11.0.0",
  "libc",
  "metrics",
- "par2-rs",
  "quick-xml",
  "rand_core 0.10.1",
  "regex",
