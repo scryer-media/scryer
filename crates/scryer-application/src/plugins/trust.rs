@@ -1,6 +1,6 @@
 use std::{
     collections::BTreeMap,
-    sync::{Arc, Mutex, OnceLock},
+    sync::{Arc, OnceLock, RwLock},
     time::{Duration, Instant},
 };
 
@@ -27,8 +27,8 @@ use sigstore_protobuf_specs::dev::sigstore::{
     common::v1::HashAlgorithm as ProtoHashAlgorithm,
     rekor::v1::{InclusionProof as ProtoInclusionProof, TransparencyLogEntry},
 };
-use tokio::sync::Semaphore;
-use tracing::warn;
+use tokio::sync::{Mutex as AsyncMutex, Semaphore};
+use tracing::{info, warn};
 use webpki::{EndEntityCert, KeyUsage};
 use x509_cert::{
     Certificate,
@@ -68,8 +68,16 @@ const OID_SIGNING_CERTIFICATE_V2: &[u8] = &[
 ];
 const OID_ECDSA_WITH_SHA256: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02];
 const OID_RSA_WITH_SHA256: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0b];
-const SIGSTORE_TRUST_REFRESH_AFTER: Duration = Duration::from_secs(6 * 60 * 60);
-const SIGSTORE_TRUST_MAX_STALENESS: Duration = Duration::from_secs(24 * 60 * 60);
+const SIGSTORE_TRUST_REFRESH_TIMEOUT: Duration = Duration::from_secs(120);
+const SIGSTORE_TRUST_SOURCE: &str = "https://tuf-repo-cdn.sigstore.dev/trusted_root.json";
+const EMBEDDED_SIGSTORE_TRUST_ROOT: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../scryer-plugins/builtins/sigstore-trusted-root.json"
+));
+const EMBEDDED_SIGSTORE_TRUST_ROOT_PROVENANCE: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../scryer-plugins/builtins/sigstore-trusted-root.provenance.json"
+));
 
 struct TimedVerificationKey {
     key: CosignVerificationKey,
@@ -109,8 +117,19 @@ struct SigstoreTrustMaterial {
 }
 
 struct CachedSigstoreTrustMaterial {
-    loaded_at: Instant,
     material: Arc<SigstoreTrustMaterial>,
+    digest: String,
+    source: String,
+    refreshed_at: Option<Instant>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SigstoreTrustRootProvenance {
+    schema_version: u32,
+    sha256: String,
+    source: String,
+    target: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -194,8 +213,8 @@ pub(super) struct RekorPayload {
     pub(super) log_id: String,
 }
 
-static SIGSTORE_TRUST_MATERIAL: OnceLock<Mutex<Option<CachedSigstoreTrustMaterial>>> =
-    OnceLock::new();
+static SIGSTORE_TRUST_MATERIAL: OnceLock<RwLock<CachedSigstoreTrustMaterial>> = OnceLock::new();
+static SIGSTORE_TRUST_REFRESH: OnceLock<AsyncMutex<()>> = OnceLock::new();
 static VERIFY_LIMIT: OnceLock<Semaphore> = OnceLock::new();
 
 pub async fn verify_signed_blob(
@@ -203,13 +222,14 @@ pub async fn verify_signed_blob(
     bundle_raw: Vec<u8>,
     required_signer: RequiredSigner,
 ) -> AppResult<()> {
+    let trust_material = current_sigstore_trust_material()?;
     let permit = VERIFY_LIMIT
         .get_or_init(|| Semaphore::new(2))
         .acquire()
         .await
         .map_err(|_| AppError::Repository("plugin verification worker is closed".to_string()))?;
     let result = tokio::task::spawn_blocking(move || {
-        verify_signed_blob_blocking(&raw, &bundle_raw, &required_signer)
+        verify_signed_blob_blocking(&raw, &bundle_raw, &required_signer, &trust_material)
     })
     .await
     .map_err(|error| {
@@ -223,6 +243,7 @@ fn verify_signed_blob_blocking(
     raw: &[u8],
     bundle_raw: &[u8],
     required_signer: &RequiredSigner,
+    trust_material: &SigstoreTrustMaterial,
 ) -> AppResult<()> {
     let bundle_text = std::str::from_utf8(bundle_raw)
         .map_err(|error| AppError::Validation(format!("invalid Sigstore bundle UTF-8: {error}")))?;
@@ -238,11 +259,10 @@ fn verify_signed_blob_blocking(
         ));
     }
 
-    let trust_material = cached_sigstore_trust_material()?;
     if is_legacy {
-        verify_legacy_signed_blob(raw, bundle_text, required_signer, &trust_material)
+        verify_legacy_signed_blob(raw, bundle_text, required_signer, trust_material)
     } else {
-        verify_v03_signed_blob(raw, bundle_text, required_signer, &trust_material)
+        verify_v03_signed_blob(raw, bundle_text, required_signer, trust_material)
     }
 }
 
@@ -1667,47 +1687,84 @@ fn lower_hex(bytes: &[u8]) -> String {
     hex
 }
 
-fn cached_sigstore_trust_material() -> AppResult<Arc<SigstoreTrustMaterial>> {
-    let cache = SIGSTORE_TRUST_MATERIAL.get_or_init(|| Mutex::new(None));
-    let mut guard = cache.lock().map_err(|_| {
-        AppError::Repository("sigstore trust-root cache lock is poisoned".to_string())
-    })?;
-    if let Some(cached) = guard.as_ref()
-        && cached.loaded_at.elapsed() < SIGSTORE_TRUST_REFRESH_AFTER
-    {
-        return Ok(cached.material.clone());
+fn sigstore_trust_material_cache() -> AppResult<&'static RwLock<CachedSigstoreTrustMaterial>> {
+    if let Some(cache) = SIGSTORE_TRUST_MATERIAL.get() {
+        return Ok(cache);
     }
 
-    match load_sigstore_trust_material_blocking() {
-        Ok(material) => {
-            let material = Arc::new(material);
-            *guard = Some(CachedSigstoreTrustMaterial {
-                loaded_at: Instant::now(),
-                material: material.clone(),
-            });
-            Ok(material)
-        }
-        Err(error) => {
-            if let Some(cached) = guard.as_ref()
-                && cached.loaded_at.elapsed() <= SIGSTORE_TRUST_MAX_STALENESS
-            {
-                warn!(%error, "using last-known-good Sigstore trust material after refresh failure");
-                return Ok(cached.material.clone());
-            }
-            Err(error)
-        }
-    }
+    let embedded = load_embedded_sigstore_trust_material()?;
+    let _ = SIGSTORE_TRUST_MATERIAL.set(RwLock::new(embedded));
+    SIGSTORE_TRUST_MATERIAL.get().ok_or_else(|| {
+        AppError::Repository("failed to initialize Sigstore trust material".to_string())
+    })
 }
 
-fn load_sigstore_trust_material_blocking() -> AppResult<SigstoreTrustMaterial> {
+fn current_sigstore_trust_material() -> AppResult<Arc<SigstoreTrustMaterial>> {
+    sigstore_trust_material_cache()?
+        .read()
+        .map(|cached| cached.material.clone())
+        .map_err(|_| AppError::Repository("Sigstore trust-root cache lock is poisoned".to_string()))
+}
+
+fn load_embedded_sigstore_trust_material() -> AppResult<CachedSigstoreTrustMaterial> {
+    let cached = load_sigstore_trust_material_from_snapshot(
+        EMBEDDED_SIGSTORE_TRUST_ROOT,
+        EMBEDDED_SIGSTORE_TRUST_ROOT_PROVENANCE,
+    )?;
+    info!(digest = %cached.digest, source = %cached.source, "loaded embedded Sigstore trust material");
+    Ok(cached)
+}
+
+fn load_sigstore_trust_material_from_snapshot(
+    root: &[u8],
+    provenance_json: &[u8],
+) -> AppResult<CachedSigstoreTrustMaterial> {
+    let provenance: SigstoreTrustRootProvenance =
+        serde_json::from_slice(provenance_json).map_err(|error| {
+            AppError::Repository(format!(
+                "failed to parse embedded Sigstore trust-root provenance: {error}"
+            ))
+        })?;
+    if provenance.schema_version != 1
+        || provenance.target != "trusted_root.json"
+        || provenance.source.trim().is_empty()
+    {
+        return Err(AppError::Repository(
+            "embedded Sigstore trust-root provenance has an invalid schema, source, or target"
+                .to_string(),
+        ));
+    }
+
+    let digest = lower_hex(&Sha256::digest(root));
+    if !digest.eq_ignore_ascii_case(&provenance.sha256) {
+        return Err(AppError::Repository(format!(
+            "embedded Sigstore trust-root digest mismatch: expected {}, got {digest}",
+            provenance.sha256
+        )));
+    }
+    let material = Arc::new(parse_trusted_root_document(root)?);
+    let source = format!(
+        "{}/{}",
+        provenance.source.trim_end_matches('/'),
+        provenance.target
+    );
+    Ok(CachedSigstoreTrustMaterial {
+        material,
+        digest,
+        source,
+        refreshed_at: None,
+    })
+}
+
+async fn retrieve_sigstore_trust_material() -> AppResult<CachedSigstoreTrustMaterial> {
     scryer_outbound_http::install_default_rustls_provider();
     let cache_dir = tempfile::tempdir().map_err(|error| {
         AppError::Repository(format!(
             "failed to create temporary Sigstore trust-root cache: {error}"
         ))
     })?;
-    let _trust_root = tokio::runtime::Handle::current()
-        .block_on(SigstoreTrustRoot::new(Some(cache_dir.path())))
+    let _trust_root = SigstoreTrustRoot::new(Some(cache_dir.path()))
+        .await
         .map_err(|error| {
             AppError::Repository(format!("failed to load Sigstore trust root: {error}"))
         })?;
@@ -1717,7 +1774,14 @@ fn load_sigstore_trust_material_blocking() -> AppResult<SigstoreTrustMaterial> {
                 "failed to read TUF-verified Sigstore trusted_root.json: {error}"
             ))
         })?;
-    parse_trusted_root_document(&trusted_root_json)
+    let digest = lower_hex(&Sha256::digest(&trusted_root_json));
+    let material = Arc::new(parse_trusted_root_document(&trusted_root_json)?);
+    Ok(CachedSigstoreTrustMaterial {
+        material,
+        digest,
+        source: SIGSTORE_TRUST_SOURCE.to_string(),
+        refreshed_at: Some(Instant::now()),
+    })
 }
 
 fn parse_trusted_root_document(raw: &[u8]) -> AppResult<SigstoreTrustMaterial> {
@@ -1903,12 +1967,74 @@ fn decode_trusted_root_base64(value: &str, label: &str) -> AppResult<Vec<u8>> {
 }
 
 pub async fn prime_sigstore_trust_roots() -> AppResult<()> {
-    tokio::task::spawn_blocking(cached_sigstore_trust_material)
-        .await
-        .map_err(|error| {
-            AppError::Repository(format!("sigstore trust-root priming panicked: {error}"))
+    let cache = sigstore_trust_material_cache()?;
+    let requested_at = Instant::now();
+    let refresh_guard = SIGSTORE_TRUST_REFRESH
+        .get_or_init(|| AsyncMutex::new(()))
+        .lock()
+        .await;
+
+    if cache
+        .read()
+        .map_err(|_| {
+            AppError::Repository("Sigstore trust-root cache lock is poisoned".to_string())
         })?
-        .map(|_| ())
+        .refreshed_at
+        .is_some_and(|refreshed_at| refreshed_at >= requested_at)
+    {
+        drop(refresh_guard);
+        return Ok(());
+    }
+
+    let started_at = Instant::now();
+    let refresh_result = tokio::time::timeout(
+        SIGSTORE_TRUST_REFRESH_TIMEOUT,
+        retrieve_sigstore_trust_material(),
+    )
+    .await;
+    let duration_ms = started_at.elapsed().as_millis();
+    let refreshed = match refresh_result {
+        Ok(Ok(refreshed)) => refreshed,
+        Ok(Err(error)) => {
+            let current = cache.read().map_err(|_| {
+                AppError::Repository("Sigstore trust-root cache lock is poisoned".to_string())
+            })?;
+            warn!(
+                error = %error,
+                retained_digest = %current.digest,
+                retained_source = %current.source,
+                duration_ms,
+                outcome = "failure",
+                "failed to refresh Sigstore trust material; retaining current snapshot"
+            );
+            return Err(error);
+        }
+        Err(_) => {
+            let error = AppError::Repository(format!(
+                "Sigstore trust-root refresh timed out after {} seconds",
+                SIGSTORE_TRUST_REFRESH_TIMEOUT.as_secs()
+            ));
+            let current = cache.read().map_err(|_| {
+                AppError::Repository("Sigstore trust-root cache lock is poisoned".to_string())
+            })?;
+            warn!(
+                retained_digest = %current.digest,
+                retained_source = %current.source,
+                duration_ms,
+                outcome = "timeout",
+                "Sigstore trust-material refresh timed out; retaining current snapshot"
+            );
+            return Err(error);
+        }
+    };
+    let digest = refreshed.digest.clone();
+    let source = refreshed.source.clone();
+    *cache.write().map_err(|_| {
+        AppError::Repository("Sigstore trust-root cache lock is poisoned".to_string())
+    })? = refreshed;
+    drop(refresh_guard);
+    info!(%digest, %source, duration_ms, outcome = "success", "refreshed Sigstore trust material");
+    Ok(())
 }
 
 #[derive(Debug, Default)]
@@ -2334,8 +2460,8 @@ mod tests {
         assert!(error.to_string().contains("checkpoint"));
     }
 
-    #[tokio::test]
-    async fn cosign_v2_and_v3_bundle_profiles_verify_the_same_release() {
+    #[test]
+    fn cosign_v2_and_v3_bundle_profiles_verify_the_same_release() {
         let raw =
             include_bytes!("../../test-fixtures/sigstore/scryer-upgrade-manifest-v0.19.3.json");
         let legacy_bundle_raw = include_bytes!(
@@ -2345,10 +2471,8 @@ mod tests {
             std::str::from_utf8(legacy_bundle_raw).expect("legacy bundle is UTF-8");
         let legacy_bundle: SignedArtifactBundle =
             serde_json::from_str(legacy_bundle_text).expect("parse legacy bundle fixture");
-        let mut trust_material = tokio::task::spawn_blocking(load_sigstore_trust_material_blocking)
-            .await
-            .expect("trust-root loader must not panic")
-            .expect("load Sigstore trust material");
+        let mut trust_material = parse_trusted_root_document(EMBEDDED_SIGSTORE_TRUST_ROOT)
+            .expect("load embedded Sigstore trust material");
 
         verify_legacy_signed_blob(
             raw,
@@ -2535,16 +2659,45 @@ mod tests {
         assert!(error.to_string().contains("OIDC issuer mismatch"));
     }
 
-    #[tokio::test]
-    async fn trust_root_client_loads_without_sigstores_tls_feature() {
-        prime_sigstore_trust_roots()
-            .await
-            .expect("application-configured AWS-LC Rustls client should load Sigstore trust roots");
-
-        let material = cached_sigstore_trust_material().unwrap();
+    #[test]
+    fn embedded_trust_root_matches_its_receipt_and_loads_offline() {
+        let cached = load_embedded_sigstore_trust_material()
+            .expect("embedded Sigstore trust root should match its receipt and parse");
+        let material = cached.material;
         assert!(!material.rekor_keys.is_empty());
         assert!(!material.ctfe_keys.is_empty());
         assert!(!material.fulcio_chains.is_empty());
         assert!(!material.tsa_chains.is_empty());
+        assert_eq!(cached.source, SIGSTORE_TRUST_SOURCE);
+    }
+
+    #[test]
+    fn embedded_trust_root_rejects_digest_mismatch_and_malformed_content() {
+        let mut tampered = EMBEDDED_SIGSTORE_TRUST_ROOT.to_vec();
+        tampered[0] ^= 1;
+        let error = load_sigstore_trust_material_from_snapshot(
+            &tampered,
+            EMBEDDED_SIGSTORE_TRUST_ROOT_PROVENANCE,
+        )
+        .err()
+        .expect("tampered embedded trust root must fail closed");
+        assert!(error.to_string().contains("digest mismatch"));
+
+        let malformed = b"not a trusted root";
+        let receipt = serde_json::to_vec(&serde_json::json!({
+            "schemaVersion": 1,
+            "source": "https://tuf-repo-cdn.sigstore.dev",
+            "target": "trusted_root.json",
+            "sha256": lower_hex(&Sha256::digest(malformed)),
+        }))
+        .unwrap();
+        let error = load_sigstore_trust_material_from_snapshot(malformed, &receipt)
+            .err()
+            .expect("malformed embedded trust root must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("failed to parse Sigstore trusted_root.json")
+        );
     }
 }

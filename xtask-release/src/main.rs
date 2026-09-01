@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, anyhow, bail};
 use base64::Engine;
-use chrono::{NaiveDate, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use const_oid::db::rfc5280::ID_KP_CODE_SIGNING;
 use flate2::read::GzDecoder;
@@ -37,7 +37,7 @@ use toml_edit::{DocumentMut, value};
 use webpki::{EndEntityCert, KeyUsage};
 use x509_cert::{
     Certificate,
-    der::{DecodePem, Encode},
+    der::{Decode, DecodePem, Encode},
     ext::{
         Extension,
         pkix::{SubjectAltName, name::GeneralName},
@@ -124,6 +124,11 @@ const OFFICIAL_PLUGIN_CATALOG_V3_REDIRECT_BUNDLE_URL: &str =
     "https://cdn.scryer.media/scryer/catalog/v3/catalog-v3.redirect.bundle.json";
 const BUILTIN_ASSET_DIR: &str = "crates/scryer-plugins/builtins";
 const BUILTIN_VERSION_MANIFEST: &str = "crates/scryer-plugins/builtin-versions.json";
+const SIGSTORE_TRUST_ROOT_FILENAME: &str = "sigstore-trusted-root.json";
+const SIGSTORE_TRUST_ROOT_PROVENANCE_FILENAME: &str = "sigstore-trusted-root.provenance.json";
+const SIGSTORE_TRUST_ROOT_SOURCE: &str = "https://tuf-repo-cdn.sigstore.dev";
+const SIGSTORE_TRUST_ROOT_TARGET: &str = "trusted_root.json";
+const SIGSTORE_TRUST_ROOT_TIMEOUT: Duration = Duration::from_secs(120);
 const OFFICIAL_PLUGIN_REPO: &str = "scryer-media/scryer-plugins";
 const OFFICIAL_PLUGIN_V3_RELEASE_WORKFLOW: &str = ".github/workflows/release-plugin-v3.yml";
 const SIGSTORE_GITHUB_WORKFLOW_NAME_OID: &str = "1.3.6.1.4.1.57264.1.4";
@@ -191,8 +196,7 @@ struct BuiltinPluginSpec {
 /// One built-in's pin: the version *and* the content.
 ///
 /// The digest is TOFU'd from the signed catalog at sync time and asserted on
-/// every materialization thereafter (here and in
-/// `scripts/materialize-builtins.py`). The signature chain proves who built
+/// every materialization thereafter. The signature chain proves who built
 /// the bytes; this proves they are the bytes the repo reviewed — a catalog
 /// that re-points the same version at new artifacts fails the build instead
 /// of materializing silently. `cargo xtask builtins sync` refreshes both
@@ -1961,12 +1965,53 @@ fn builtin_cache_matches_catalog_wasm_blake3(
         })
 }
 
+fn validate_sigstore_trust_root_receipt(root_bytes: &[u8], receipt_bytes: &[u8]) -> Result<()> {
+    let receipt: SigstoreTrustRootProvenance = serde_json::from_slice(receipt_bytes)
+        .context("failed to parse Sigstore trust-root provenance receipt")?;
+    if receipt.schema_version != 1 {
+        bail!(
+            "unsupported Sigstore trust-root provenance schema {}",
+            receipt.schema_version
+        );
+    }
+    if receipt.source != SIGSTORE_TRUST_ROOT_SOURCE {
+        bail!(
+            "unexpected Sigstore trust-root provenance source '{}'",
+            receipt.source
+        );
+    }
+    if receipt.target != SIGSTORE_TRUST_ROOT_TARGET {
+        bail!(
+            "unexpected Sigstore trust-root provenance target '{}'",
+            receipt.target
+        );
+    }
+    let actual_sha256 = sha256_hex(root_bytes);
+    if receipt.sha256 != actual_sha256 {
+        bail!(
+            "Sigstore trust-root provenance digest mismatch: expected {}, got {actual_sha256}",
+            receipt.sha256
+        );
+    }
+    validate_runtime_sigstore_trust_root_document(root_bytes)
+}
+
+fn validate_cached_sigstore_trust_root(cache_dir: &Path) -> Result<()> {
+    let root_path = cache_dir.join(SIGSTORE_TRUST_ROOT_FILENAME);
+    let receipt_path = cache_dir.join(SIGSTORE_TRUST_ROOT_PROVENANCE_FILENAME);
+    let root_bytes = fs::read(&root_path)
+        .with_context(|| format!("failed to read cached {}", root_path.display()))?;
+    let receipt_bytes = fs::read(&receipt_path)
+        .with_context(|| format!("failed to read cached {}", receipt_path.display()))?;
+    validate_sigstore_trust_root_receipt(&root_bytes, &receipt_bytes)
+}
+
 fn restore_builtin_artifacts_from_cache(
     ctx: &TaskContext,
     cache_dir: &Path,
     expected_digests: &BTreeMap<String, String>,
 ) -> Result<()> {
-    let builtins = builtin_plugin_paths(ctx);
+    let builtins = builtin_materialized_paths(ctx);
     if !builtin_cache_complete(cache_dir, &builtins) {
         bail!(
             "cached builtin artifacts are missing or incomplete under {}",
@@ -1979,12 +2024,21 @@ fn restore_builtin_artifacts_from_cache(
             cache_dir.display()
         );
     }
+    validate_cached_sigstore_trust_root(cache_dir).with_context(|| {
+        format!(
+            "cached Sigstore trust material under {} is invalid",
+            cache_dir.display()
+        )
+    })?;
 
     for output_wasm in builtins {
         let file_name = output_wasm
             .file_name()
             .ok_or_else(|| anyhow!("missing builtin file name for {}", output_wasm.display()))?;
         let cached = cache_dir.join(file_name);
+        if let Some(parent) = output_wasm.parent() {
+            fs::create_dir_all(parent)?;
+        }
         fs::copy(&cached, &output_wasm).with_context(|| {
             format!(
                 "failed to restore cached builtin {} to {}",
@@ -2370,13 +2424,103 @@ struct BuiltinRefresh {
     catalog_wasm_blake3: BTreeMap<String, String>,
 }
 
-fn builtin_asset_paths(ctx: &TaskContext, spec: &BuiltinPluginSpec) -> BuiltinAssetPaths {
-    let dir = ctx.path(BUILTIN_ASSET_DIR);
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SigstoreTrustRootProvenance {
+    schema_version: u32,
+    source: String,
+    target: String,
+    sha256: String,
+    retrieved_at: String,
+    sigstore_version: String,
+    source_commit: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    github_repository: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    github_workflow_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    github_run_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MaterializedTrustedRootDocument {
+    media_type: String,
+    certificate_authorities: Vec<MaterializedCertificateAuthority>,
+    timestamp_authorities: Vec<MaterializedCertificateAuthority>,
+    tlogs: Vec<MaterializedTrustedLog>,
+    ctlogs: Vec<MaterializedTrustedLog>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MaterializedCertificateAuthority {
+    cert_chain: MaterializedCertificateChain,
+    valid_for: MaterializedTimeRange,
+}
+
+#[derive(Debug, Deserialize)]
+struct MaterializedCertificateChain {
+    certificates: Vec<MaterializedCertificate>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MaterializedCertificate {
+    raw_bytes: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MaterializedTrustedLog {
+    log_id: MaterializedLogId,
+    public_key: MaterializedPublicKey,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MaterializedLogId {
+    key_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MaterializedPublicKey {
+    raw_bytes: String,
+    valid_for: MaterializedTimeRange,
+}
+
+#[derive(Debug, Deserialize)]
+struct MaterializedTimeRange {
+    start: String,
+    #[serde(default)]
+    end: Option<String>,
+}
+
+struct VerifiedDownload {
+    bytes: Vec<u8>,
+    signature_bundle: Vec<u8>,
+}
+
+struct BuiltinPluginMaterialization {
+    version: String,
+    wasm_digest: String,
+    catalog_url: String,
+    catalog_redirect_bundle_sha256: String,
+    catalog_bundle_sha256: String,
+    provenance: serde_json::Value,
+}
+
+fn builtin_asset_paths_in(dir: &Path, spec: &BuiltinPluginSpec) -> BuiltinAssetPaths {
     BuiltinAssetPaths {
         wasm: dir.join(format!("{}.wasm.zst", spec.artifact_stem)),
         descriptor_json: dir.join(format!("{}.descriptor.json", spec.artifact_stem)),
         description: dir.join(format!("{}.description.txt", spec.artifact_stem)),
     }
+}
+
+fn builtin_asset_paths(ctx: &TaskContext, spec: &BuiltinPluginSpec) -> BuiltinAssetPaths {
+    builtin_asset_paths_in(&ctx.path(BUILTIN_ASSET_DIR), spec)
 }
 
 fn builtin_plugin_paths(ctx: &TaskContext) -> Vec<PathBuf> {
@@ -2387,6 +2531,291 @@ fn builtin_plugin_paths(ctx: &TaskContext) -> Vec<PathBuf> {
             [paths.wasm, paths.descriptor_json, paths.description]
         })
         .collect()
+}
+
+fn builtin_materialized_paths(ctx: &TaskContext) -> Vec<PathBuf> {
+    let output_dir = ctx.path(BUILTIN_ASSET_DIR);
+    let mut paths = builtin_plugin_paths(ctx);
+    let (trust_root, trust_provenance) = sigstore_trust_root_paths(ctx);
+    paths.extend([
+        trust_root,
+        trust_provenance,
+        output_dir.join("provenance.json"),
+    ]);
+    paths.extend([
+        output_dir.join("provenance/catalog-v3.redirect.bundle.json"),
+        output_dir.join("provenance/catalog-v3.bundle.sigstore"),
+    ]);
+    paths.extend(BUILTIN_PLUGINS.iter().map(|spec| {
+        output_dir.join(format!(
+            "provenance/{}.wasm.zst.sigstore",
+            spec.artifact_stem
+        ))
+    }));
+    paths
+}
+
+fn sigstore_trust_root_paths_in(dir: &Path) -> (PathBuf, PathBuf) {
+    (
+        dir.join(SIGSTORE_TRUST_ROOT_FILENAME),
+        dir.join(SIGSTORE_TRUST_ROOT_PROVENANCE_FILENAME),
+    )
+}
+
+fn sigstore_trust_root_paths(ctx: &TaskContext) -> (PathBuf, PathBuf) {
+    sigstore_trust_root_paths_in(&ctx.path(BUILTIN_ASSET_DIR))
+}
+
+fn decode_materialized_trust_base64(value: &str, label: &str) -> Result<Vec<u8>> {
+    base64::engine::general_purpose::STANDARD
+        .decode(value)
+        .with_context(|| format!("failed to decode Sigstore {label}"))
+}
+
+fn validate_materialized_time_range(range: &MaterializedTimeRange, label: &str) -> Result<()> {
+    let start = DateTime::parse_from_rfc3339(&range.start)
+        .with_context(|| format!("invalid Sigstore {label} validity start"))?;
+    if let Some(end) = range.end.as_deref() {
+        let end = DateTime::parse_from_rfc3339(end)
+            .with_context(|| format!("invalid Sigstore {label} validity end"))?;
+        if end < start {
+            bail!("Sigstore {label} validity ends before it starts");
+        }
+    }
+    Ok(())
+}
+
+fn validate_materialized_trusted_logs(logs: &[MaterializedTrustedLog], label: &str) -> Result<()> {
+    if logs.is_empty() {
+        bail!("Sigstore {label} trust root is empty");
+    }
+    let mut key_ids = BTreeSet::new();
+    for log in logs {
+        let key_id =
+            decode_materialized_trust_base64(&log.log_id.key_id, &format!("{label} log ID"))?;
+        if key_id.is_empty() {
+            bail!("Sigstore {label} log ID is empty");
+        }
+        if !key_ids.insert(key_id) {
+            bail!("Sigstore trust root contains a duplicate {label} log ID");
+        }
+        let key_der = decode_materialized_trust_base64(
+            &log.public_key.raw_bytes,
+            &format!("{label} public key"),
+        )?;
+        CosignVerificationKey::try_from_der(&key_der)
+            .with_context(|| format!("failed to parse Sigstore {label} public key"))?;
+        validate_materialized_time_range(
+            &log.public_key.valid_for,
+            &format!("{label} public key"),
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_materialized_certificate_authorities(
+    authorities: &[MaterializedCertificateAuthority],
+    label: &str,
+) -> Result<()> {
+    if authorities.is_empty() {
+        bail!("Sigstore {label} trust root is empty");
+    }
+    for (authority_index, authority) in authorities.iter().enumerate() {
+        validate_materialized_time_range(
+            &authority.valid_for,
+            &format!("{label} authority {authority_index}"),
+        )?;
+        let mut certificate_ders = Vec::new();
+        for (certificate_index, certificate) in authority.cert_chain.certificates.iter().enumerate()
+        {
+            let der = decode_materialized_trust_base64(
+                &certificate.raw_bytes,
+                &format!("{label} authority {authority_index} certificate {certificate_index}"),
+            )?;
+            Certificate::from_der(&der).with_context(|| {
+                format!(
+                    "failed to parse Sigstore {label} authority {authority_index} certificate {certificate_index}"
+                )
+            })?;
+            certificate_ders.push(der);
+        }
+        let anchor_der = certificate_ders.last().ok_or_else(|| {
+            anyhow!("Sigstore {label} authority {authority_index} has an empty certificate chain")
+        })?;
+        webpki::anchor_from_trusted_cert(&CertificateDer::from(anchor_der.as_slice()))
+            .with_context(|| {
+                format!("failed to parse Sigstore {label} authority {authority_index} anchor")
+            })?;
+    }
+    Ok(())
+}
+
+fn validate_runtime_sigstore_trust_root_document(raw: &[u8]) -> Result<()> {
+    let root: MaterializedTrustedRootDocument = serde_json::from_slice(raw)
+        .context("failed to parse materialized Sigstore trusted_root.json")?;
+    if !root
+        .media_type
+        .starts_with("application/vnd.dev.sigstore.trustedroot")
+    {
+        bail!(
+            "unsupported Sigstore trusted-root media type '{}'",
+            root.media_type
+        );
+    }
+    validate_materialized_trusted_logs(&root.tlogs, "Rekor")?;
+    validate_materialized_trusted_logs(&root.ctlogs, "CT")?;
+    validate_materialized_certificate_authorities(&root.certificate_authorities, "Fulcio")?;
+    validate_materialized_certificate_authorities(
+        &root.timestamp_authorities,
+        "timestamp-authority",
+    )?;
+    Ok(())
+}
+
+fn resolved_cargo_package_version(ctx: &TaskContext, package_name: &str) -> Result<String> {
+    let lock_path = ctx.path("Cargo.lock");
+    let lock: TomlValue = toml::from_str(
+        &fs::read_to_string(&lock_path)
+            .with_context(|| format!("failed to read {}", lock_path.display()))?,
+    )
+    .with_context(|| format!("failed to parse {}", lock_path.display()))?;
+    let versions = lock
+        .get("package")
+        .and_then(TomlValue::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|package| package.get("name").and_then(TomlValue::as_str) == Some(package_name))
+        .filter_map(|package| package.get("version").and_then(TomlValue::as_str))
+        .map(str::to_string)
+        .collect::<BTreeSet<_>>();
+    if versions.len() != 1 {
+        bail!(
+            "expected exactly one resolved {package_name} version in {}, found {:?}",
+            lock_path.display(),
+            versions
+        );
+    }
+    Ok(versions.into_iter().next().expect("one version checked"))
+}
+
+fn install_xtask_sigstore_trust_material(trust_root: &SigstoreTrustRoot) -> Result<()> {
+    let rekor_keys = trust_root
+        .rekor_keys()
+        .map_err(|error| anyhow!("failed to load Sigstore Rekor public keys: {error}"))?;
+    let rekor_keys = Arc::new(parse_rekor_verification_keys(rekor_keys)?);
+    if let Some(existing) = REKOR_VERIFICATION_KEYS.get() {
+        existing.as_ref().map_err(|error| anyhow!(error.clone()))?;
+    } else {
+        REKOR_VERIFICATION_KEYS
+            .set(Ok(rekor_keys))
+            .map_err(|_| anyhow!("failed to initialize Sigstore Rekor keys"))?;
+    }
+
+    let fulcio_certs = trust_root
+        .fulcio_certs()
+        .map_err(|error| anyhow!("failed to load Sigstore Fulcio certificates: {error}"))?;
+    let anchors = fulcio_certs
+        .iter()
+        .map(|cert| {
+            webpki::anchor_from_trusted_cert(cert)
+                .map(|anchor| anchor.to_owned())
+                .map_err(|error| anyhow!(error.to_string()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if anchors.is_empty() {
+        bail!("Sigstore Fulcio trust root is empty");
+    }
+    if let Some(existing) = FULCIO_TRUST_ANCHORS.get() {
+        existing.as_ref().map_err(|error| anyhow!(error.clone()))?;
+    } else {
+        FULCIO_TRUST_ANCHORS
+            .set(Ok(Arc::new(anchors)))
+            .map_err(|_| anyhow!("failed to initialize Sigstore Fulcio anchors"))?;
+    }
+    Ok(())
+}
+
+fn write_materialized_file(path: &Path, bytes: &[u8]) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow!("materialized path has no parent: {}", path.display()))?;
+    fs::create_dir_all(parent)?;
+    let temporary = path.with_extension(format!(
+        "{}.tmp-{}",
+        path.extension().and_then(OsStr::to_str).unwrap_or("file"),
+        std::process::id()
+    ));
+    fs::write(&temporary, bytes)
+        .with_context(|| format!("failed to write {}", temporary.display()))?;
+    if path.exists() {
+        fs::remove_file(path).with_context(|| format!("failed to replace {}", path.display()))?;
+    }
+    fs::rename(&temporary, path)
+        .with_context(|| format!("failed to activate {}", path.display()))?;
+    Ok(())
+}
+
+fn materialize_sigstore_trust_root(ctx: &TaskContext, output_dir: &Path) -> Result<()> {
+    step("Materializing TUF-verified Sigstore trust root");
+    let checkout = tempfile::tempdir().context("failed to create Sigstore TUF checkout")?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("failed to build Sigstore trust-root runtime")?;
+    let trust_root = runtime
+        .block_on(async {
+            tokio::time::timeout(
+                SIGSTORE_TRUST_ROOT_TIMEOUT,
+                SigstoreTrustRoot::new(Some(checkout.path())),
+            )
+            .await
+        })
+        .map_err(|_| {
+            anyhow!(
+                "timed out after {} seconds loading the Sigstore trust root",
+                SIGSTORE_TRUST_ROOT_TIMEOUT.as_secs()
+            )
+        })?
+        .map_err(|error| anyhow!("failed to load Sigstore trust root: {error}"))?;
+    let root_bytes = fs::read(checkout.path().join(SIGSTORE_TRUST_ROOT_TARGET))
+        .context("failed to read TUF-verified Sigstore trusted_root.json")?;
+    validate_runtime_sigstore_trust_root_document(&root_bytes)?;
+    install_xtask_sigstore_trust_material(&trust_root)?;
+
+    let sha256 = Sha256::digest(&root_bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let provenance = SigstoreTrustRootProvenance {
+        schema_version: 1,
+        source: SIGSTORE_TRUST_ROOT_SOURCE.to_string(),
+        target: SIGSTORE_TRUST_ROOT_TARGET.to_string(),
+        sha256: sha256.clone(),
+        retrieved_at: Utc::now().to_rfc3339(),
+        sigstore_version: format!(
+            "sigstore-rs {}",
+            resolved_cargo_package_version(ctx, "sigstore")?
+        ),
+        source_commit: current_head_commit(ctx)?,
+        github_repository: std::env::var("GITHUB_REPOSITORY").ok(),
+        github_workflow_ref: std::env::var("GITHUB_WORKFLOW_REF").ok(),
+        github_run_id: std::env::var("GITHUB_RUN_ID").ok(),
+    };
+    let provenance_bytes = canonical_pretty_json(&provenance)?.into_bytes();
+    let parsed: SigstoreTrustRootProvenance = serde_json::from_slice(&provenance_bytes)
+        .context("failed to validate Sigstore trust-root provenance")?;
+    if parsed.sha256 != sha256 {
+        bail!("Sigstore trust-root provenance digest mismatch");
+    }
+
+    let (root_path, provenance_path) = sigstore_trust_root_paths_in(output_dir);
+    write_materialized_file(&root_path, &root_bytes)?;
+    if let Err(error) = write_materialized_file(&provenance_path, &provenance_bytes) {
+        let _ = fs::remove_file(&root_path);
+        return Err(error);
+    }
+    ok(format!("Materialized Sigstore trust root sha256:{sha256}"));
+    Ok(())
 }
 
 fn fetch_url_bytes(url: &str) -> Result<Vec<u8>> {
@@ -2469,51 +2898,16 @@ fn rekor_integrated_time(integrated_time: i64) -> Result<UnixTime> {
 
 fn cached_rekor_verification_keys() -> Result<Arc<RekorVerificationKeys>> {
     REKOR_VERIFICATION_KEYS
-        .get_or_init(|| {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(|error| format!("failed to build Tokio runtime: {error}"))?;
-            let trust_root = runtime
-                .block_on(SigstoreTrustRoot::new(None))
-                .map_err(|error| format!("failed to load Sigstore trust root: {error}"))?;
-            let rekor_keys = trust_root
-                .rekor_keys()
-                .map_err(|error| format!("failed to load Sigstore Rekor public keys: {error}"))?;
-            parse_rekor_verification_keys(rekor_keys)
-                .map(Arc::new)
-                .map_err(|error| error.to_string())
-        })
+        .get()
+        .ok_or_else(|| anyhow!("Sigstore trust root was not materialized before verification"))?
         .clone()
         .map_err(anyhow::Error::msg)
 }
 
 fn cached_fulcio_trust_anchors() -> Result<Arc<FulcioTrustAnchors>> {
     FULCIO_TRUST_ANCHORS
-        .get_or_init(|| {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(|error| format!("failed to build Tokio runtime: {error}"))?;
-            let trust_root = runtime
-                .block_on(SigstoreTrustRoot::new(None))
-                .map_err(|error| format!("failed to load Sigstore trust root: {error}"))?;
-            let fulcio_certs = trust_root
-                .fulcio_certs()
-                .map_err(|error| format!("failed to load Sigstore Fulcio certificates: {error}"))?;
-            let anchors = fulcio_certs
-                .iter()
-                .map(|cert| {
-                    webpki::anchor_from_trusted_cert(cert)
-                        .map(|anchor| anchor.to_owned())
-                        .map_err(|error| error.to_string())
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            if anchors.is_empty() {
-                return Err("Sigstore Fulcio trust root is empty".to_string());
-            }
-            Ok(Arc::new(anchors))
-        })
+        .get()
+        .ok_or_else(|| anyhow!("Sigstore trust root was not materialized before verification"))?
         .clone()
         .map_err(anyhow::Error::msg)
 }
@@ -2739,12 +3133,15 @@ fn fetch_verified_bytes(
     required_signer: &RequiredSigner,
     url: &str,
     bundle_url: &str,
-) -> Result<Vec<u8>> {
+) -> Result<VerifiedDownload> {
     let blob_bytes = fetch_url_bytes(url)?;
     let bundle_bytes = fetch_url_bytes(bundle_url)?;
-    let bundle_bytes = decode_possibly_zstd_bytes(bundle_url, bundle_bytes)?;
-    verify_signed_blob(&blob_bytes, &bundle_bytes, required_signer)?;
-    Ok(blob_bytes)
+    let decoded_bundle = decode_possibly_zstd_bytes(bundle_url, bundle_bytes.clone())?;
+    verify_signed_blob(&blob_bytes, &decoded_bundle, required_signer)?;
+    Ok(VerifiedDownload {
+        bytes: blob_bytes,
+        signature_bundle: bundle_bytes,
+    })
 }
 
 fn blake3_hex(bytes: &[u8]) -> String {
@@ -2926,30 +3323,31 @@ fn release_builtin_descriptor_loader(ctx: &TaskContext) -> Result<WasmPluginDesc
 
 fn sync_builtin_plugin(
     ctx: &TaskContext,
+    output_dir: &Path,
     spec: &BuiltinPluginSpec,
     scryer_version: &Version,
     requested_version: Option<&str>,
-) -> Result<(String, String)> {
+) -> Result<BuiltinPluginMaterialization> {
     let catalog_signer = official_plugin_v3_signer();
-    let redirect_bytes = fetch_verified_bytes(
+    let redirect_download = fetch_verified_bytes(
         ctx,
         &catalog_signer,
         OFFICIAL_PLUGIN_CATALOG_V3_REDIRECT_URL,
         OFFICIAL_PLUGIN_CATALOG_V3_REDIRECT_BUNDLE_URL,
     )?;
-    let redirect: CatalogV3Redirect = serde_json::from_slice(&redirect_bytes)
+    let redirect: CatalogV3Redirect = serde_json::from_slice(&redirect_download.bytes)
         .context("failed to parse official plugin catalog-v3 redirect")?;
     let catalog_artifact = redirect
         .artifacts
         .last()
         .ok_or_else(|| anyhow!("official plugin catalog-v3 redirect has no artifacts"))?;
-    let catalog_artifact_bytes = fetch_verified_bytes(
+    let catalog_download = fetch_verified_bytes(
         ctx,
         &catalog_signer,
         &catalog_artifact.url,
         &catalog_artifact.signature_url,
     )?;
-    let catalog_bytes = decode_possibly_zstd_bytes(&catalog_artifact.url, catalog_artifact_bytes)?;
+    let catalog_bytes = decode_possibly_zstd_bytes(&catalog_artifact.url, catalog_download.bytes)?;
     let catalog: CatalogV3 = serde_json::from_slice(&catalog_bytes)
         .context("failed to parse official plugin catalog-v3")?;
     let entry = catalog
@@ -3000,7 +3398,7 @@ fn sync_builtin_plugin(
             })?
     };
     let artifact = baseline_catalog_v3_zstd_artifact(spec.plugin_id, release)?;
-    let compressed_wasm = fetch_verified_bytes(
+    let artifact_download = fetch_verified_bytes(
         ctx,
         &entry.required_signer,
         &artifact.url,
@@ -3009,9 +3407,9 @@ fn sync_builtin_plugin(
     require_blake3_bytes(
         "compressed builtin artifact",
         required_blake3_digest("compressed builtin artifact", &artifact.digests)?,
-        &compressed_wasm,
+        &artifact_download.bytes,
     )?;
-    let wasm_bytes = zstd::decode_all(compressed_wasm.as_slice()).with_context(|| {
+    let wasm_bytes = zstd::decode_all(artifact_download.bytes.as_slice()).with_context(|| {
         format!(
             "failed to decompress builtin artifact for {}",
             spec.plugin_id
@@ -3045,15 +3443,16 @@ fn sync_builtin_plugin(
     descriptor.sdk_version = scryer_plugin_sdk::SDK_VERSION.to_string();
     descriptor.sdk_constraint = scryer_plugin_sdk::current_sdk_constraint();
 
-    let paths = builtin_asset_paths(ctx, spec);
+    let paths = builtin_asset_paths_in(output_dir, spec);
     for path in [&paths.wasm, &paths.descriptor_json, &paths.description] {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
     }
-    fs::write(&paths.wasm, &compressed_wasm)
+    fs::write(&paths.wasm, &artifact_download.bytes)
         .with_context(|| format!("failed to write {}", paths.wasm.display()))?;
-    fs::write(&paths.descriptor_json, canonical_pretty_json(&descriptor)?)
+    let descriptor_json = canonical_pretty_json(&descriptor)?;
+    fs::write(&paths.descriptor_json, descriptor_json.as_bytes())
         .with_context(|| format!("failed to write {}", paths.descriptor_json.display()))?;
     fs::write(
         &paths.description,
@@ -3065,31 +3464,72 @@ fn sync_builtin_plugin(
         "synced builtin {} {} from official catalog-v3",
         spec.plugin_id, release.version
     ));
-    Ok((release.version.clone(), wasm_digest.to_string()))
+    let provenance_dir = output_dir.join("provenance");
+    fs::create_dir_all(&provenance_dir)?;
+    write_materialized_file(
+        &provenance_dir.join("catalog-v3.redirect.bundle.json"),
+        &redirect_download.signature_bundle,
+    )?;
+    write_materialized_file(
+        &provenance_dir.join("catalog-v3.bundle.sigstore"),
+        &catalog_download.signature_bundle,
+    )?;
+    write_materialized_file(
+        &provenance_dir.join(format!("{}.wasm.zst.sigstore", spec.artifact_stem)),
+        &artifact_download.signature_bundle,
+    )?;
+
+    Ok(BuiltinPluginMaterialization {
+        version: release.version.clone(),
+        wasm_digest: wasm_digest.to_string(),
+        catalog_url: catalog_artifact.url.clone(),
+        catalog_redirect_bundle_sha256: sha256_hex(&redirect_download.signature_bundle),
+        catalog_bundle_sha256: sha256_hex(&catalog_download.signature_bundle),
+        provenance: serde_json::json!({
+            "version": release.version,
+            "artifact_url": artifact.url,
+            "signature_url": artifact.signature_url,
+            "compressed_blake3": required_blake3_digest(
+                "compressed builtin artifact",
+                &artifact.digests,
+            )?.trim_start_matches("blake3:"),
+            "wasm_blake3": wasm_digest.trim_start_matches("blake3:"),
+            "descriptor_sha256": sha256_hex(descriptor_json.as_bytes()),
+            "signature_bundle_sha256": sha256_hex(&artifact_download.signature_bundle),
+        }),
+    })
 }
 
-fn remove_stale_builtin_assets(ctx: &TaskContext) -> Result<()> {
-    let keep = builtin_plugin_paths(ctx)
-        .into_iter()
-        .collect::<std::collections::HashSet<_>>();
-    let dir = ctx.path(BUILTIN_ASSET_DIR);
-    if !dir.is_dir() {
-        return Ok(());
+fn publish_materialized_builtin_dir(staging_dir: &Path, output_dir: &Path) -> Result<()> {
+    let parent = output_dir
+        .parent()
+        .ok_or_else(|| anyhow!("builtins output has no parent: {}", output_dir.display()))?;
+    fs::create_dir_all(parent)?;
+    let previous_dir = staging_dir
+        .parent()
+        .ok_or_else(|| anyhow!("builtins staging path has no parent"))?
+        .join("previous");
+    let had_previous = output_dir.exists();
+    if had_previous {
+        fs::rename(output_dir, &previous_dir).with_context(|| {
+            format!(
+                "failed to stage previous builtins directory {}",
+                output_dir.display()
+            )
+        })?;
     }
-    for entry in fs::read_dir(&dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
+    if let Err(activate_error) = fs::rename(staging_dir, output_dir) {
+        if had_previous && let Err(restore_error) = fs::rename(&previous_dir, output_dir) {
+            bail!(
+                "failed to activate materialized builtins ({activate_error}) and failed to restore the previous directory ({restore_error})"
+            );
         }
-        let managed = path
-            .extension()
-            .and_then(OsStr::to_str)
-            .is_some_and(|ext| matches!(ext, "zst" | "json" | "txt"));
-        if managed && !keep.contains(&path) {
-            fs::remove_file(&path)
-                .with_context(|| format!("failed to remove stale builtin {}", path.display()))?;
-        }
+        return Err(activate_error).with_context(|| {
+            format!(
+                "failed to activate materialized builtins at {}",
+                output_dir.display()
+            )
+        });
     }
     Ok(())
 }
@@ -3105,8 +3545,22 @@ fn refresh_builtin_plugins(
     } else {
         "Syncing embedded plugin builtins from the official catalog"
     });
+    let output_dir = ctx.path(BUILTIN_ASSET_DIR);
+    let output_parent = output_dir
+        .parent()
+        .ok_or_else(|| anyhow!("builtins output has no parent: {}", output_dir.display()))?;
+    fs::create_dir_all(output_parent)?;
+    let staging = tempfile::Builder::new()
+        .prefix(".builtins-materializing-")
+        .tempdir_in(output_parent)
+        .context("failed to create builtins materialization directory")?;
+    let staging_dir = staging.path().join("builtins");
+    fs::create_dir_all(&staging_dir)?;
+    materialize_sigstore_trust_root(ctx, &staging_dir)?;
     let mut catalog_wasm_blake3 = BTreeMap::new();
     let mut selected_versions = BTreeMap::new();
+    let mut plugin_provenance = serde_json::Map::new();
+    let mut catalog_provenance: Option<(String, String, String)> = None;
     for spec in BUILTIN_PLUGINS {
         let pin = pinned_versions
             .map(|manifest| {
@@ -3118,13 +3572,28 @@ fn refresh_builtin_plugins(
                 })
             })
             .transpose()?;
-        let (version, wasm_digest) = sync_builtin_plugin(
+        let materialized = sync_builtin_plugin(
             ctx,
+            &staging_dir,
             spec,
             scryer_version,
             pin.map(|pin| pin.version.as_str()),
         )
         .with_context(|| format!("failed to sync builtin {}", spec.plugin_id))?;
+        let version = materialized.version;
+        let wasm_digest = materialized.wasm_digest;
+        let candidate_catalog = (
+            materialized.catalog_url,
+            materialized.catalog_redirect_bundle_sha256,
+            materialized.catalog_bundle_sha256,
+        );
+        if let Some(catalog) = catalog_provenance.as_ref()
+            && catalog != &candidate_catalog
+        {
+            bail!("built-in plugins were resolved from inconsistent catalog material");
+        }
+        catalog_provenance = Some(candidate_catalog);
+        plugin_provenance.insert(spec.plugin_id.to_string(), materialized.provenance);
         // The version pin names a release; the digest pin names its bytes. A
         // catalog that re-points the pinned version at different content is a
         // hard failure, never a silent re-materialization — the only way past
@@ -3153,7 +3622,32 @@ fn refresh_builtin_plugins(
         );
         catalog_wasm_blake3.insert(spec.plugin_id.to_string(), wasm_digest);
     }
-    remove_stale_builtin_assets(ctx)?;
+    let (catalog_url, catalog_redirect_sha256, catalog_sha256) =
+        catalog_provenance.ok_or_else(|| anyhow!("no built-in plugins were materialized"))?;
+    let provenance = serde_json::json!({
+        "schemaVersion": 1,
+        "host": {
+            "scryer_version": scryer_version.to_string(),
+            "sdk_version": scryer_plugin_sdk::SDK_VERSION,
+            "sdk_constraint": scryer_plugin_sdk::current_sdk_constraint(),
+        },
+        "catalog_redirect_url": OFFICIAL_PLUGIN_CATALOG_V3_REDIRECT_URL,
+        "catalog_url": catalog_url,
+        "verified_bundles": {
+            "catalog_redirect_sha256": catalog_redirect_sha256,
+            "catalog_sha256": catalog_sha256,
+        },
+        "signer": {
+            "repository": OFFICIAL_PLUGIN_REPO,
+            "workflow": OFFICIAL_PLUGIN_V3_RELEASE_WORKFLOW,
+        },
+        "plugins": plugin_provenance,
+    });
+    write_materialized_file(
+        &staging_dir.join("provenance.json"),
+        canonical_pretty_json(&provenance)?.as_bytes(),
+    )?;
+    publish_materialized_builtin_dir(&staging_dir, &output_dir)?;
     if update_manifest {
         write_builtin_version_manifest(ctx, selected_versions)?;
     }
@@ -3163,7 +3657,7 @@ fn refresh_builtin_plugins(
         "Pinned embedded plugin builtins materialized"
     });
     Ok(BuiltinRefresh {
-        paths: builtin_plugin_paths(ctx),
+        paths: builtin_materialized_paths(ctx),
         catalog_wasm_blake3,
     })
 }
@@ -3466,7 +3960,7 @@ fn run_release(ctx: &TaskContext, args: ReleaseArgs) -> Result<()> {
                         ctx,
                         dir,
                         &cache.catalog_builtin_wasm_blake3,
-                    )
+                    ) && validate_cached_sigstore_trust_root(dir).is_ok()
                 });
                 let expected = ReleaseDryRunExpectations {
                     git_commit: &git_commit,
@@ -5464,6 +5958,82 @@ mod tests {
         ));
     }
 
+    fn test_materialized_trust_root(ctx: &TaskContext) -> Vec<u8> {
+        fs::read(
+            ctx.path(BUILTIN_ASSET_DIR)
+                .join(SIGSTORE_TRUST_ROOT_FILENAME),
+        )
+        .expect("read materialized Sigstore trust root")
+    }
+
+    fn test_trust_root_receipt(root_bytes: &[u8]) -> Vec<u8> {
+        serde_json::to_vec(&SigstoreTrustRootProvenance {
+            schema_version: 1,
+            source: SIGSTORE_TRUST_ROOT_SOURCE.to_string(),
+            target: SIGSTORE_TRUST_ROOT_TARGET.to_string(),
+            sha256: sha256_hex(root_bytes),
+            retrieved_at: Utc::now().to_rfc3339(),
+            sigstore_version: "sigstore-rs test".to_string(),
+            source_commit: "0".repeat(40),
+            github_repository: None,
+            github_workflow_ref: None,
+            github_run_id: None,
+        })
+        .expect("serialize trust-root receipt")
+    }
+
+    #[test]
+    fn materialized_trust_root_matches_runtime_requirements() {
+        let ctx = TaskContext::new();
+        validate_runtime_sigstore_trust_root_document(&test_materialized_trust_root(&ctx))
+            .expect("materialized root should satisfy runtime requirements");
+    }
+
+    #[test]
+    fn materialized_trust_root_rejects_missing_ct_and_timestamp_material() {
+        let ctx = TaskContext::new();
+        let root = test_materialized_trust_root(&ctx);
+        for field in ["ctlogs", "timestampAuthorities"] {
+            let mut document: serde_json::Value = serde_json::from_slice(&root).unwrap();
+            document[field] = serde_json::Value::Array(Vec::new());
+            let error = validate_runtime_sigstore_trust_root_document(
+                &serde_json::to_vec(&document).unwrap(),
+            )
+            .unwrap_err();
+            assert!(
+                error.to_string().contains("trust root is empty"),
+                "unexpected error for {field}: {error:#}"
+            );
+        }
+    }
+
+    #[test]
+    fn cached_trust_root_rejects_receipt_digest_mismatch() {
+        let ctx = TaskContext::new();
+        let root = test_materialized_trust_root(&ctx);
+        let valid_receipt = test_trust_root_receipt(&root);
+        validate_sigstore_trust_root_receipt(&root, &valid_receipt)
+            .expect("matching trust-root receipt should validate");
+        let mut receipt: serde_json::Value = serde_json::from_slice(&valid_receipt).unwrap();
+        receipt["sha256"] = serde_json::Value::String("0".repeat(64));
+
+        let error =
+            validate_sigstore_trust_root_receipt(&root, &serde_json::to_vec(&receipt).unwrap())
+                .unwrap_err();
+        assert!(
+            error.to_string().contains("provenance digest mismatch"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    #[test]
+    fn sigstore_provenance_uses_the_resolved_lockfile_version() {
+        let ctx = TaskContext::new();
+        let version = resolved_cargo_package_version(&ctx, "sigstore")
+            .expect("resolve sigstore from Cargo.lock");
+        Version::parse(&version).expect("resolved sigstore version should be semver");
+    }
+
     #[test]
     fn release_hygiene_flags_local_absolute_paths() {
         let violations = scan_release_hygiene_content(
@@ -5579,5 +6149,28 @@ mod tests {
         );
 
         assert!(violations.is_empty());
+    }
+
+    #[test]
+    fn materialized_builtin_directory_replaces_the_previous_set_atomically() {
+        let tempdir = tempfile::tempdir().expect("create tempdir");
+        let output_dir = tempdir.path().join("builtins");
+        fs::create_dir_all(&output_dir).expect("create previous output");
+        fs::write(output_dir.join("old"), b"old").expect("write previous output");
+
+        let staging_parent = tempdir.path().join("staging");
+        let staging_dir = staging_parent.join("builtins");
+        fs::create_dir_all(&staging_dir).expect("create staged output");
+        fs::write(staging_dir.join("new"), b"new").expect("write staged output");
+
+        publish_materialized_builtin_dir(&staging_dir, &output_dir)
+            .expect("publish staged builtins");
+
+        assert_eq!(fs::read(output_dir.join("new")).unwrap(), b"new");
+        assert!(!output_dir.join("old").exists());
+        assert_eq!(
+            fs::read(staging_parent.join("previous/old")).unwrap(),
+            b"old"
+        );
     }
 }

@@ -160,8 +160,8 @@ fn spawn_sigstore_trust_root_prime_task(app_use_case: AppUseCase) {
         loop {
             match app_use_case.prime_plugin_trust_roots_internal().await {
                 Ok(()) => {
-                    tracing::info!("sigstore trust roots primed");
-                    break;
+                    tracing::info!("sigstore trust roots refreshed; next refresh in 6 hours");
+                    tokio::time::sleep(Duration::from_secs(6 * 60 * 60)).await;
                 }
                 Err(error) => {
                     tracing::warn!(
