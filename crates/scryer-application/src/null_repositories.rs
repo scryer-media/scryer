@@ -3492,6 +3492,7 @@ pub mod test_nulls {
             _: Option<u32>,
             _: Option<u32>,
             _: Option<u32>,
+            _: Option<i32>,
             _: Vec<scryer_domain::TaggedAlias>,
             _: Option<crate::IndexerSearchLearningContext>,
             _: tokio_util::sync::CancellationToken,

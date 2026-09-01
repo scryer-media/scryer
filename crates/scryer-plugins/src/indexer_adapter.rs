@@ -4,8 +4,8 @@ use scryer_application::{
     IndexerErrorRecorder, IndexerResponseAttributes, IndexerRoutingPlan, IndexerSearchCompletion,
     IndexerSearchIncompleteReason as HostIncompleteReason, IndexerSearchPlanCapability,
     IndexerSearchPlanRequest, IndexerSearchPlanSummary, IndexerSearchResponse, IndexerSearchResult,
-    IndexerSearchStrategyEvent, IndexerSearchStrategyEventSink, SearchMode, is_valid_magnet_uri,
-    normalize_release_password,
+    IndexerSearchStrategyEvent, IndexerSearchStrategyEventSink, ResolvedDownloadArtifact,
+    SearchMode, extract_magnet_info_hash, is_valid_magnet_uri, normalize_release_password,
 };
 use scryer_domain::{IndexerConfig, IndexerProxyConfig, TaggedAlias};
 use scryer_plugin_sdk::command::{
@@ -13,8 +13,9 @@ use scryer_plugin_sdk::command::{
 };
 use scryer_plugin_sdk::{
     IndexerSearchIncompleteReason as PluginIncompleteReason, IndexerSearchPluginError, PluginError,
-    PluginErrorDetails, PluginResult, PluginSearchPlanRequest, PluginSearchPlanSummary,
-    PluginSearchStrategyEvent, PluginSearchStrategyRequest, ProviderDescriptor,
+    PluginErrorCode, PluginErrorDetails, PluginResult, PluginSearchPlanRequest,
+    PluginSearchPlanSummary, PluginSearchStrategyEvent, PluginSearchStrategyRequest,
+    ProviderDescriptor,
 };
 use std::{collections::BTreeMap, sync::Arc};
 use tokio_util::sync::CancellationToken;
@@ -462,6 +463,73 @@ fn decode_command_result<T>(result: PluginResult<T>, context: &str) -> AppResult
     }
 }
 
+/// The `grab` action's payload: the URL the provider finally resolved, plus the
+/// artifact bytes it fetched behind its own authentication. Magnets carry no
+/// body. Fields the provider does not know are simply absent.
+#[derive(serde::Deserialize)]
+struct IndexerGrabPayload {
+    url: String,
+    #[serde(default)]
+    body: Vec<u8>,
+    #[serde(default)]
+    file_name: Option<String>,
+    #[serde(default)]
+    content_type: Option<String>,
+    #[serde(default)]
+    info_hash_hint: Option<String>,
+}
+
+/// Turn one `grab` action result into a router artifact.
+///
+/// An `Unsupported` plugin error is the provider saying it has no grab flow, so
+/// it yields `None` and the router keeps its own direct/solver fallback. Every
+/// other plugin error is a real transport or authentication failure and must
+/// propagate: silently falling back would fetch the tracker's login page and
+/// hand it to a download client as a torrent.
+fn decode_grab_result(
+    result: PluginResult<PluginActionResponse>,
+) -> AppResult<Option<ResolvedDownloadArtifact>> {
+    let payload = match result {
+        PluginResult::Ok(response) => response.payload,
+        PluginResult::Err(error) if error.code == PluginErrorCode::Unsupported => return Ok(None),
+        PluginResult::Err(PluginError {
+            code,
+            public_message,
+            ..
+        }) => {
+            return Err(AppError::Repository(format!(
+                "indexer download resolution: plugin error {code:?}: {public_message}"
+            )));
+        }
+    };
+    let payload: IndexerGrabPayload = serde_json::from_value(payload).map_err(|error| {
+        AppError::Repository(format!(
+            "indexer download resolution returned an invalid grab payload: {error}"
+        ))
+    })?;
+    let url = payload.url.trim().to_string();
+    if is_valid_magnet_uri(&url) {
+        let info_hash_hint = extract_magnet_info_hash(&url)
+            .and_then(|hash| normalize_indexer_info_hash(Some(&hash)).or(Some(hash)));
+        return Ok(Some(ResolvedDownloadArtifact::Magnet {
+            uri: url,
+            info_hash_hint,
+        }));
+    }
+    if payload.body.is_empty() {
+        return Err(AppError::Repository(
+            "indexer download resolution returned an empty grab payload".to_string(),
+        ));
+    }
+
+    Ok(Some(ResolvedDownloadArtifact::TorrentFile {
+        bytes: payload.body,
+        file_name: payload.file_name,
+        content_type: payload.content_type,
+        info_hash_hint: payload.info_hash_hint,
+    }))
+}
+
 fn decode_search_result(
     result: PluginResult<PluginSearchResponse>,
     attested: bool,
@@ -868,6 +936,10 @@ fn resolve_connection_url(
         .map(str::to_string)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the search context is derived from the full request envelope"
+)]
 fn build_search_context(
     query: &str,
     ids: &std::collections::HashMap<String, String>,
@@ -876,7 +948,10 @@ fn build_search_context(
     season: Option<u32>,
     episode: Option<u32>,
     absolute_episode: Option<u32>,
+    year: Option<i32>,
 ) -> PluginSearchContext {
+    // The year never participates in request-shape classification: it is a
+    // qualifier on the subject, not evidence that a search was asked for.
     let is_recent_request = matches!(mode, SearchMode::Auto)
         && query.trim().is_empty()
         && ids.is_empty()
@@ -888,6 +963,18 @@ fn build_search_context(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(|value| value.to_ascii_lowercase());
+
+    // A release year only describes a whole-title movie subject. A
+    // season/episode-scoped search has no single release year, and a series
+    // year is not one — so anything else is dropped here rather than sent to a
+    // plugin as a qualifier the host cannot vouch for. The facet is absent on
+    // the generic fallback form, which is still the same movie subject.
+    let subject_year = year.filter(|_| {
+        season.is_none()
+            && episode.is_none()
+            && absolute_episode.is_none()
+            && matches!(normalized_facet.as_deref(), None | Some("movie"))
+    });
 
     let subject_kind = match normalized_facet.as_deref() {
         Some("movie") => PluginSearchSubjectKind::Movie,
@@ -932,6 +1019,7 @@ fn build_search_context(
         },
         subject_kind,
         query_kind,
+        year: subject_year,
         ..PluginSearchContext::default()
     }
 }
@@ -956,6 +1044,7 @@ fn generic_search_fallback_request(
         fallback.season,
         fallback.episode,
         fallback.absolute_episode,
+        request.context.as_ref().and_then(|context| context.year),
     ));
     fallback
 }
@@ -1362,6 +1451,7 @@ impl IndexerClient for WasmIndexerClient {
                         strategy.season,
                         strategy.episode,
                         strategy.absolute_episode,
+                        strategy.year,
                     );
                     PluginSearchStrategyRequest {
                         strategy_id: strategy.strategy_id,
@@ -1410,6 +1500,7 @@ impl IndexerClient for WasmIndexerClient {
         season: Option<u32>,
         episode: Option<u32>,
         absolute_episode: Option<u32>,
+        year: Option<i32>,
         tagged_aliases: Vec<TaggedAlias>,
         _learning_context: Option<scryer_application::IndexerSearchLearningContext>,
         cancel_token: CancellationToken,
@@ -1425,6 +1516,7 @@ impl IndexerClient for WasmIndexerClient {
             season,
             episode,
             absolute_episode,
+            year,
         );
         let request = PluginSearchRequest {
             query,
@@ -1492,6 +1584,7 @@ impl IndexerClient for WasmIndexerClient {
         season: Option<u32>,
         episode: Option<u32>,
         absolute_episode: Option<u32>,
+        year: Option<i32>,
         tagged_aliases: Vec<TaggedAlias>,
         learning_context: Option<scryer_application::IndexerSearchLearningContext>,
         cancel_token: CancellationToken,
@@ -1511,6 +1604,7 @@ impl IndexerClient for WasmIndexerClient {
                 season,
                 episode,
                 absolute_episode,
+                year,
                 tagged_aliases,
                 learning_context,
                 cancel_token,
@@ -1524,11 +1618,114 @@ impl IndexerClient for WasmIndexerClient {
         }
         Ok(response)
     }
+
+    async fn resolve_download(
+        &self,
+        download_url: &str,
+    ) -> AppResult<Option<ResolvedDownloadArtifact>> {
+        let request = PluginActionRequest {
+            action: "grab".to_string(),
+            payload: serde_json::json!({ "url": download_url }),
+        };
+        let result = self
+            .invoke_component(PluginIndexerCommand::Action(request), "indexer_grab", None)
+            .await?;
+        let context = "indexer grab component";
+        let PluginIndexerCommandResult::Action(result) = result else {
+            return Err(AppError::Repository(format!(
+                "{context} returned the wrong result for indexer_grab"
+            )));
+        };
+        decode_grab_result(result)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn grab_magnet_payload_resolves_without_torrent_bytes() {
+        let uri = "magnet:?xt=urn:btih:ABCDEF0123456789ABCDEF0123456789ABCDEF01";
+        let artifact = decode_grab_result(PluginResult::Ok(PluginActionResponse {
+            payload: serde_json::json!({
+                "url": uri,
+                "body": [],
+            }),
+        }))
+        .expect("magnet payload should decode")
+        .expect("grab should resolve a magnet artifact");
+
+        assert!(matches!(
+            artifact,
+            ResolvedDownloadArtifact::Magnet { uri: resolved_uri, info_hash_hint: Some(info_hash) }
+                if resolved_uri == uri
+                    && info_hash == "abcdef0123456789abcdef0123456789abcdef01"
+        ));
+    }
+
+    #[test]
+    fn grab_torrent_payload_carries_bytes_and_hints() {
+        let artifact = decode_grab_result(PluginResult::Ok(PluginActionResponse {
+            payload: serde_json::json!({
+                "url": "https://tracker.example/download/1",
+                "method": "GET",
+                "headers": {"cookie": "session=one"},
+                "body": [1, 2, 3],
+                "file_name": "release.torrent",
+            }),
+        }))
+        .expect("torrent payload should decode")
+        .expect("grab should resolve a torrent artifact");
+
+        assert!(matches!(
+            artifact,
+            ResolvedDownloadArtifact::TorrentFile { bytes, file_name: Some(name), .. }
+                if bytes == vec![1, 2, 3] && name == "release.torrent"
+        ));
+    }
+
+    #[test]
+    fn grab_unsupported_keeps_router_fallback_available() {
+        let resolved = decode_grab_result(PluginResult::Err(PluginError {
+            code: PluginErrorCode::Unsupported,
+            public_message: "grab is not implemented".to_string(),
+            debug_message: None,
+            retry_after_seconds: None,
+            details: None,
+        }))
+        .expect("unsupported grab is an optional capability");
+
+        assert!(resolved.is_none());
+    }
+
+    #[test]
+    fn grab_transport_or_auth_failure_propagates() {
+        let error = decode_grab_result(PluginResult::Err(PluginError {
+            code: PluginErrorCode::AuthFailed,
+            public_message: "login expired".to_string(),
+            debug_message: None,
+            retry_after_seconds: None,
+            details: None,
+        }))
+        .expect_err("real grab failures must not silently fall back");
+
+        assert!(error.to_string().contains("AuthFailed"));
+        assert!(error.to_string().contains("login expired"));
+    }
+
+    #[test]
+    fn grab_without_bytes_or_magnet_is_rejected() {
+        let error = decode_grab_result(PluginResult::Ok(PluginActionResponse {
+            payload: serde_json::json!({
+                "url": "https://tracker.example/login",
+                "body": [],
+            }),
+        }))
+        .expect_err("an empty non-magnet grab must never reach a download client");
+
+        assert!(error.to_string().contains("empty grab payload"));
+    }
 
     #[test]
     fn partial_search_preserves_typed_reason_and_retry_delay() {
@@ -1588,6 +1785,7 @@ mod tests {
             Some(1),
             Some(2),
             None,
+            None,
         );
 
         assert_eq!(context.request_kind, PluginSearchRequestKind::Search);
@@ -1606,12 +1804,126 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
 
         assert_eq!(context.request_kind, PluginSearchRequestKind::Recent);
         assert_eq!(context.search_origin, PluginSearchOrigin::Rss);
         assert_eq!(context.subject_kind, PluginSearchSubjectKind::Title);
         assert_eq!(context.query_kind, PluginSearchQueryKind::Fallback);
+    }
+
+    #[test]
+    fn carries_known_year_on_movie_search_context() {
+        let context = build_search_context(
+            "Amber Circuit 2026",
+            &std::collections::HashMap::new(),
+            Some("movie"),
+            SearchMode::Interactive,
+            None,
+            None,
+            None,
+            Some(2026),
+        );
+
+        assert_eq!(context.subject_kind, PluginSearchSubjectKind::Movie);
+        assert_eq!(context.year, Some(2026));
+        // The year is a qualifier, not evidence of an id search.
+        assert_eq!(context.query_kind, PluginSearchQueryKind::Title);
+    }
+
+    #[test]
+    fn omits_year_on_movie_search_without_a_known_year() {
+        let context = build_search_context(
+            "Amber Circuit",
+            &std::collections::HashMap::new(),
+            Some("movie"),
+            SearchMode::Interactive,
+            None,
+            None,
+            None,
+            None,
+        );
+
+        assert_eq!(context.subject_kind, PluginSearchSubjectKind::Movie);
+        assert_eq!(context.year, None);
+    }
+
+    #[test]
+    fn drops_series_year_on_episode_search_context() {
+        let context = build_search_context(
+            "Example Show S01E02",
+            &std::collections::HashMap::new(),
+            Some("series"),
+            SearchMode::Auto,
+            Some(1),
+            Some(2),
+            None,
+            // A series year is not the release year of the searched episode.
+            Some(2013),
+        );
+
+        assert_eq!(context.subject_kind, PluginSearchSubjectKind::Episode);
+        assert_eq!(context.year, None);
+    }
+
+    #[test]
+    fn drops_series_year_on_title_scoped_series_search_context() {
+        let context = build_search_context(
+            "Example Show",
+            &std::collections::HashMap::new(),
+            Some("series"),
+            SearchMode::Auto,
+            None,
+            None,
+            None,
+            Some(2013),
+        );
+
+        assert_eq!(context.subject_kind, PluginSearchSubjectKind::Title);
+        assert_eq!(context.year, None);
+    }
+
+    #[test]
+    fn generic_fallback_keeps_the_movie_year() {
+        let request = PluginSearchRequest {
+            query: "Amber Circuit 2026".to_string(),
+            ids: std::collections::HashMap::from([(
+                "imdb_id".to_string(),
+                "tt12004567".to_string(),
+            )]),
+            facet: Some("movie".to_string()),
+            category: Some("movie".to_string()),
+            limit: 1000,
+            context: Some(build_search_context(
+                "Amber Circuit 2026",
+                &std::collections::HashMap::from([(
+                    "imdb_id".to_string(),
+                    "tt12004567".to_string(),
+                )]),
+                Some("movie"),
+                SearchMode::Interactive,
+                None,
+                None,
+                None,
+                Some(2026),
+            )),
+            ..PluginSearchRequest::default()
+        };
+
+        let fallback = generic_search_fallback_request(&request, SearchMode::Interactive);
+
+        assert!(fallback.ids.is_empty());
+        assert_eq!(fallback.facet, None);
+        assert_eq!(
+            fallback
+                .context
+                .as_ref()
+                .expect("fallback context")
+                .year,
+            Some(2026),
+            "the facet-less fallback is the same movie subject"
+        );
     }
 
     #[test]

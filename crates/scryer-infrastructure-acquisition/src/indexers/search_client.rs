@@ -173,6 +173,10 @@ struct StrategyTierContext {
     per_indexer_categories: Option<Vec<String>>,
     mode: SearchMode,
     operation: IndexerErrorOperation,
+    /// The request's known release year. Constant across the tier, like the
+    /// categories and aliases, so it rides the context rather than each
+    /// strategy.
+    year: Option<i32>,
     tagged_aliases: Vec<scryer_domain::TaggedAlias>,
     cancel_token: CancellationToken,
     deadline_at: Option<tokio::time::Instant>,
@@ -301,6 +305,7 @@ fn prepare_search_strategies(
                 "season": season,
                 "episode": episode,
                 "absolute_episode": absolute_episode,
+                "year": context.year,
                 "tagged_aliases": sorted_aliases,
             }),
         );
@@ -325,6 +330,7 @@ fn prepare_search_strategies(
             season,
             episode,
             absolute_episode,
+            year: context.year,
             tagged_aliases: context.tagged_aliases.clone(),
         };
         by_identity.insert(strategy_id.clone(), prepared.len());
@@ -2328,6 +2334,9 @@ impl MultiIndexerSearchClient {
             season,
             episode,
             absolute_episode,
+            // Direct callers search without a resolved subject, so there is no
+            // year they can vouch for; the trait surface carries it instead.
+            None,
             tagged_aliases,
             None,
             CancellationToken::new(),
@@ -2695,6 +2704,7 @@ impl MultiIndexerSearchClient {
                     per_indexer_categories: _,
                     mode,
                     operation,
+                    year: _,
                     tagged_aliases: _,
                     cancel_token,
                     deadline_at,
@@ -2768,6 +2778,7 @@ impl MultiIndexerSearchClient {
                                         strategy.season,
                                         strategy.episode,
                                         strategy.absolute_episode,
+                                        strategy.year,
                                         strategy.tagged_aliases,
                                         None,
                                         request_cancel_token,
@@ -3224,6 +3235,7 @@ impl IndexerClient for MultiIndexerSearchClient {
         season: Option<u32>,
         episode: Option<u32>,
         absolute_episode: Option<u32>,
+        year: Option<i32>,
         tagged_aliases: Vec<scryer_domain::TaggedAlias>,
         learning_context: Option<IndexerSearchLearningContext>,
         cancel_token: CancellationToken,
@@ -3242,6 +3254,7 @@ impl IndexerClient for MultiIndexerSearchClient {
             season,
             episode,
             absolute_episode,
+            year,
             tagged_aliases,
             learning_context,
             cancel_token,
@@ -3264,6 +3277,7 @@ impl IndexerClient for MultiIndexerSearchClient {
         season: Option<u32>,
         episode: Option<u32>,
         absolute_episode: Option<u32>,
+        year: Option<i32>,
         tagged_aliases: Vec<scryer_domain::TaggedAlias>,
         learning_context: Option<IndexerSearchLearningContext>,
         cancel_token: CancellationToken,
@@ -4027,6 +4041,8 @@ impl IndexerClient for MultiIndexerSearchClient {
                                         season,
                                         episode,
                                         absolute_episode,
+                                        // An RSS poll has no subject, so no year.
+                                        None,
                                         tagged_aliases,
                                         None,
                                         request_cancel_token,
@@ -4375,6 +4391,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                         per_indexer_categories: rss_category_request.clone(),
                         mode,
                         operation,
+                        year,
                         tagged_aliases: tagged_aliases_for_indexer.clone(),
                         cancel_token: task_cancel_token.child_token(),
                         deadline_at,
@@ -4709,6 +4726,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                             per_indexer_categories: rss_category_request,
                             mode,
                             operation,
+                            year,
                             tagged_aliases: tagged_aliases_for_indexer.clone(),
                             cancel_token: task_cancel_token.child_token(),
                             deadline_at,
@@ -6403,6 +6421,7 @@ mod tests {
             _season: Option<u32>,
             _episode: Option<u32>,
             _absolute_episode: Option<u32>,
+            _year: Option<i32>,
             _tagged_aliases: Vec<scryer_domain::TaggedAlias>,
             _learning_context: Option<IndexerSearchLearningContext>,
             _cancel_token: CancellationToken,
@@ -6431,6 +6450,7 @@ mod tests {
             _season: Option<u32>,
             _episode: Option<u32>,
             _absolute_episode: Option<u32>,
+            _year: Option<i32>,
             _tagged_aliases: Vec<scryer_domain::TaggedAlias>,
             _learning_context: Option<IndexerSearchLearningContext>,
             _cancel_token: CancellationToken,
@@ -6805,6 +6825,7 @@ mod tests {
             season: Option<u32>,
             episode: Option<u32>,
             absolute_episode: Option<u32>,
+            _year: Option<i32>,
             _tagged_aliases: Vec<scryer_domain::TaggedAlias>,
             _learning_context: Option<IndexerSearchLearningContext>,
             _cancel_token: CancellationToken,
@@ -6871,6 +6892,7 @@ mod tests {
             _season: Option<u32>,
             _episode: Option<u32>,
             _absolute_episode: Option<u32>,
+            _year: Option<i32>,
             _tagged_aliases: Vec<scryer_domain::TaggedAlias>,
             _learning_context: Option<IndexerSearchLearningContext>,
             _cancel_token: CancellationToken,
@@ -7017,6 +7039,7 @@ mod tests {
             _season: Option<u32>,
             _episode: Option<u32>,
             _absolute_episode: Option<u32>,
+            _year: Option<i32>,
             _tagged_aliases: Vec<scryer_domain::TaggedAlias>,
             _learning_context: Option<IndexerSearchLearningContext>,
             cancel_token: CancellationToken,
@@ -7123,6 +7146,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
                 vec![],
                 first_context,
                 CancellationToken::new(),
@@ -7142,6 +7166,7 @@ mod tests {
                 None,
                 mode,
                 operation,
+                None,
                 None,
                 None,
                 None,
@@ -7203,6 +7228,7 @@ mod tests {
                 None,
                 SearchMode::Interactive,
                 IndexerErrorOperation::InteractiveSearch,
+                None,
                 None,
                 None,
                 None,
@@ -7287,6 +7313,7 @@ mod tests {
                 season: None,
                 episode: None,
                 absolute_episode: None,
+                year: None,
                 tagged_aliases: Vec::new(),
             },
             title_guard_mode: TitleGuardMode::SkipTitleMatch,
@@ -7307,6 +7334,7 @@ mod tests {
                 per_indexer_categories: None,
                 mode: SearchMode::Auto,
                 operation: IndexerErrorOperation::AutomaticSearch,
+                year: None,
                 tagged_aliases: Vec::new(),
                 cancel_token: CancellationToken::new(),
                 deadline_at: None,
@@ -7320,6 +7348,84 @@ mod tests {
             collected.push(outcome.expect("plan controller does not use join tasks"));
         }
         collected
+    }
+
+    fn year_tier_context(year: Option<i32>) -> StrategyTierContext {
+        StrategyTierContext {
+            client: Arc::new(ProtocolPlanIndexerClient {
+                mode: PlanFailureMode::MissingEvent,
+            }),
+            search_limit: Arc::new(Semaphore::new(1)),
+            rate_limiter: IndexerRateLimiter::new(),
+            indexer_id: "indexer-1".into(),
+            search_timeout: std::time::Duration::from_secs(5),
+            rate_limit_seconds: None,
+            category: None,
+            per_indexer_categories: None,
+            mode: SearchMode::Interactive,
+            operation: IndexerErrorOperation::InteractiveSearch,
+            year,
+            tagged_aliases: Vec::new(),
+            cancel_token: CancellationToken::new(),
+            deadline_at: None,
+        }
+    }
+
+    fn freetext_strategy(query: &str) -> SearchStrategy {
+        SearchStrategy {
+            request_query: query.to_string(),
+            request_facet: "movie".into(),
+            ids: HashMap::new(),
+            season: None,
+            episode: None,
+            absolute_episode: None,
+            generic_query_only: false,
+            omit_request_facet: false,
+            label: "freetext".into(),
+        }
+    }
+
+    #[test]
+    fn prepared_strategies_carry_the_tier_year() {
+        let prepared = prepare_search_strategies(
+            &year_tier_context(Some(2026)),
+            vec![freetext_strategy("Amber Circuit 2026")],
+        );
+
+        assert_eq!(prepared.len(), 1);
+        assert_eq!(prepared[0].request.year, Some(2026));
+        // The year is a qualifier on the subject, not an id: it must not turn a
+        // freetext strategy into an id-backed one.
+        assert!(prepared[0].request.ids.is_empty());
+        assert_eq!(prepared[0].title_guard_mode, TitleGuardMode::ExactTitleMatch);
+    }
+
+    #[test]
+    fn prepared_strategies_omit_an_unknown_year() {
+        let prepared = prepare_search_strategies(
+            &year_tier_context(None),
+            vec![freetext_strategy("Example Show S01")],
+        );
+
+        assert_eq!(prepared.len(), 1);
+        assert_eq!(prepared[0].request.year, None);
+    }
+
+    #[test]
+    fn year_separates_otherwise_identical_strategy_identities() {
+        let with_year = prepare_search_strategies(
+            &year_tier_context(Some(2026)),
+            vec![freetext_strategy("Amber Circuit")],
+        );
+        let without_year = prepare_search_strategies(
+            &year_tier_context(None),
+            vec![freetext_strategy("Amber Circuit")],
+        );
+
+        assert_ne!(
+            with_year[0].strategy_id, without_year[0].strategy_id,
+            "a year-qualified request is a different effective request"
+        );
     }
 
     #[tokio::test]
@@ -11193,6 +11299,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             vec![],
             Some(context),
             CancellationToken::new(),
@@ -11247,6 +11354,7 @@ mod tests {
             None,
             SearchMode::Auto,
             IndexerErrorOperation::AutomaticSearch,
+            None,
             None,
             None,
             None,
@@ -11306,6 +11414,7 @@ mod tests {
             IndexerErrorOperation::AutomaticSearch,
             Some(1),
             Some(12),
+            None,
             None,
             vec![],
             Some(context),

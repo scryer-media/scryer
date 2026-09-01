@@ -2147,6 +2147,9 @@ pub struct IndexerSearchStrategyRequest {
     pub season: Option<u32>,
     pub episode: Option<u32>,
     pub absolute_episode: Option<u32>,
+    /// The subject's known release year, or `None` when the search has no
+    /// year the host can vouch for.
+    pub year: Option<i32>,
     pub tagged_aliases: Vec<TaggedAlias>,
 }
 
