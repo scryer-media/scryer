@@ -1752,9 +1752,44 @@ const ko: LocaleDictionary = {
   "move.sameNameWarning":
     "{{library}}에는 이미 “{{title}}”이라는 타이틀이 있습니다. Scryer는 이름으로 병합하지 않으므로, 이 이관 후에는 같은 이름의 타이틀이 두 개 남습니다.",
   "move.ambiguousDestinationHelp":
-    "대상 라이브러리의 여러 타이틀이 이 타이틀과 같은 식별 정보를 공유합니다. 이동을 시작하기 전에 어느 것인지 확정하세요.",
-  "move.mergeNotSupported":
-    "대상 라이브러리에 이 타이틀이 이미 “{{title}}”(으)로 있습니다. 기존 타이틀로 병합하는 기능은 아직 제공되지 않습니다.",
+    "대상 라이브러리의 여러 타이틀이 이 타이틀과 같은 식별 정보를 공유하며, Scryer는 그중 하나를 임의로 고르지 않습니다. 먼저 대상 라이브러리에서 식별 정보를 정리한 뒤 이 타이틀을 다시 이동하세요.",
+  "move.ambiguousCandidateShared": "{{identities}} 공유",
+  "move.mergeStatement":
+    "“{{title}}”(으)로 병합됩니다. 두 타이틀이 하나가 되어 이 타이틀의 식별 정보는 흡수되고 “{{title}}”의 설정이 우선합니다.",
+  "move.mergeSummaryHeading": "이 병합이 하는 일",
+  "move.mergeNoDetails": "이 병합에서 그 밖에 옮겨지는 항목은 없습니다.",
+  "move.mergeBlockedHeading":
+    "이 병합을 실행할 수 없습니다: 다음 레코드를 옮길 수 없습니다.",
+  "move.mergeDispositionsHeading": "옮겨지는 데이터",
+  "move.mergeRowCount": "{{count}}개 행",
+  "move.mergeDisposition.UNION": "대상의 항목과 함께 유지",
+  "move.mergeDisposition.MAP": "대상으로 다시 연결",
+  "move.mergeDisposition.DESTINATION_WINS": "대상의 값 유지",
+  "move.mergeDisposition.DROP": "옮기지 않음",
+  "move.mergeRoleChangesHeading":
+    "미디어 파일 역할 (파일 {{demotions}}개가 기본 역할을 잃음)",
+  "move.mergeRoleChangesHeadingPlain": "미디어 파일 역할",
+  "move.mergeRoleChangeLine": "{{previous}} → {{next}}",
+  "move.mergeRole.PRIMARY": "기본",
+  "move.mergeRole.ADDITIONAL": "추가",
+  "move.mergeRoleDemotion":
+    "이 파일은 더 이상 해당 에피소드의 기본 파일이 아니며, 기본 파일과 함께 보관됩니다.",
+  "move.mergeRoleReason.DESTINATION_PRIMARY_RETAINED":
+    "대상에 이미 이 에피소드의 기본 파일이 있으며, 이동은 기본 파일을 강등하지 않습니다.",
+  "move.mergeRoleReason.SOURCE_PRIMARY_ALREADY_CLAIMED":
+    "이동 중인 다른 파일이 해당 대상 에피소드의 기본 역할을 이미 차지했습니다.",
+  "move.mergeRoleReason.COLLAPSED_SOURCE_EPISODES":
+    "원본 에피소드 두 개가 대상 에피소드 하나로 합쳐졌습니다.",
+  "move.mergeTagConflictsHeading": "값이 서로 다른 설정",
+  "move.mergeTagConflictLine":
+    "{{setting}}: “{{destination}}”을(를) 유지하고 “{{source}}”을(를) 버립니다.",
+  "move.mergeValueNone": "없음",
+  "move.mergeDestinationWinsHeading": "대상이 유지하는 설정",
+  "move.mergeDroppedHeading": "옮기지 않음",
+  "move.mergeFreeFormTags": "대상 타이틀에 추가된 태그: {{tags}}.",
+  "move.mergeRequestRepoint":
+    "미디어 요청 {{count}}건이 이 타이틀을 따라 대상 라이브러리로 이동합니다.",
+  "move.mergeNotesHeading": "참고",
   "move.operationTransferNote": "이 타이틀들은 다른 라이브러리로 이동하고 있습니다.",
   "move.modeHeading": "파일을 어떻게 옮길까요?",
   "move.mode.MOVE_WITH_SCRYER": "Scryer로 이동",
@@ -1801,6 +1836,7 @@ const ko: LocaleDictionary = {
   "move.operationMissing": "해당 작업은 더 이상 존재하지 않습니다.",
   "move.operationDismiss": "닫기",
   "move.operationProgress": "타이틀 {{titles}} · 파일 {{files}} · {{bytes}}",
+  "move.counterMerges": "병합됨",
   "move.counterDedups": "중복 제거",
   "move.counterRenames": "이름 변경",
   "move.counterNoOps": "변경 없음",
@@ -1811,6 +1847,7 @@ const ko: LocaleDictionary = {
   "move.checkpointClass": "분류",
   "move.checkpointFrom": "출발",
   "move.checkpointTo": "도착",
+  "move.checkpointMergedInto": "병합 대상",
   "move.checkpointVerified": "검증됨",
   "move.checkpointVerifiedValue": "파일 {{files}} · {{bytes}}",
   "move.checkpointDetail": "세부 정보",

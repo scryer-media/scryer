@@ -1796,9 +1796,44 @@ const ja: LocaleDictionary = {
   "move.sameNameWarning":
     "{{library}} には「{{title}}」という名前のタイトルがすでにあります。Scryer が名前で統合することはないため、この移管後は同じ名前のタイトルが 2 つ残ります。",
   "move.ambiguousDestinationHelp":
-    "移動先ライブラリの複数のタイトルがこのタイトルと同じ識別情報を持っています。この移動を開始する前に、どれに当たるかを解決してください。",
-  "move.mergeNotSupported":
-    "移動先ライブラリには、このタイトルが「{{title}}」としてすでに存在します。既存のタイトルへの統合はまだ利用できません。",
+    "移動先ライブラリの複数のタイトルがこのタイトルと同じ識別情報を持っており、Scryer が推測して選ぶことはありません。先に移動先ライブラリで識別情報を整理してから、このタイトルを再度移動してください。",
+  "move.ambiguousCandidateShared": "{{identities}} を共有",
+  "move.mergeStatement":
+    "「{{title}}」に統合されます。2 つが 1 つのタイトルになり、このタイトルの識別情報は吸収され、「{{title}}」の設定が優先されます。",
+  "move.mergeSummaryHeading": "この統合で行われること",
+  "move.mergeNoDetails": "この統合で引き継がれるものは他にありません。",
+  "move.mergeBlockedHeading":
+    "この統合は実行できません: 次のレコードを引き継げません。",
+  "move.mergeDispositionsHeading": "引き継がれるデータ",
+  "move.mergeRowCount": "{{count}} 行",
+  "move.mergeDisposition.UNION": "移動先のものと並べて保持",
+  "move.mergeDisposition.MAP": "移動先へ付け替え",
+  "move.mergeDisposition.DESTINATION_WINS": "移動先の値を保持",
+  "move.mergeDisposition.DROP": "引き継がない",
+  "move.mergeRoleChangesHeading":
+    "メディアファイルの役割（{{demotions}} 個のファイルがプライマリでなくなります）",
+  "move.mergeRoleChangesHeadingPlain": "メディアファイルの役割",
+  "move.mergeRoleChangeLine": "{{previous}} → {{next}}",
+  "move.mergeRole.PRIMARY": "プライマリ",
+  "move.mergeRole.ADDITIONAL": "追加",
+  "move.mergeRoleDemotion":
+    "このファイルはエピソードのプライマリではなくなり、プライマリと並べて保持されます。",
+  "move.mergeRoleReason.DESTINATION_PRIMARY_RETAINED":
+    "移動先にはこのエピソードのプライマリが既にあり、移動がプライマリを降格させることはありません。",
+  "move.mergeRoleReason.SOURCE_PRIMARY_ALREADY_CLAIMED":
+    "移動中の別のファイルが、その移動先エピソードのプライマリを既に取得しています。",
+  "move.mergeRoleReason.COLLAPSED_SOURCE_EPISODES":
+    "2 つの移動元エピソードが 1 つの移動先エピソードにまとまりました。",
+  "move.mergeTagConflictsHeading": "値が食い違った設定",
+  "move.mergeTagConflictLine":
+    "{{setting}}: 「{{destination}}」を保持し、「{{source}}」を破棄します。",
+  "move.mergeValueNone": "なし",
+  "move.mergeDestinationWinsHeading": "移動先が保持する設定",
+  "move.mergeDroppedHeading": "引き継がない",
+  "move.mergeFreeFormTags": "移動先タイトルに追加されるタグ: {{tags}}。",
+  "move.mergeRequestRepoint":
+    "{{count}} 件のメディアリクエストがこのタイトルとともに移動先ライブラリへ移ります。",
+  "move.mergeNotesHeading": "備考",
   "move.operationTransferNote": "これらのタイトルは別のライブラリへ移動しています。",
   "move.modeHeading": "ファイルをどのように移しますか？",
   "move.mode.MOVE_WITH_SCRYER": "Scryer で移動",
@@ -1845,6 +1880,7 @@ const ja: LocaleDictionary = {
   "move.operationMissing": "その操作はもう存在しません。",
   "move.operationDismiss": "閉じる",
   "move.operationProgress": "タイトル {{titles}} · ファイル {{files}} · {{bytes}}",
+  "move.counterMerges": "統合済み",
   "move.counterDedups": "重複排除",
   "move.counterRenames": "名前変更",
   "move.counterNoOps": "変更なし",
@@ -1855,6 +1891,7 @@ const ja: LocaleDictionary = {
   "move.checkpointClass": "分類",
   "move.checkpointFrom": "移動元",
   "move.checkpointTo": "移動先",
+  "move.checkpointMergedInto": "統合先",
   "move.checkpointVerified": "検証済み",
   "move.checkpointVerifiedValue": "{{files}} ファイル · {{bytes}}",
   "move.checkpointDetail": "詳細",

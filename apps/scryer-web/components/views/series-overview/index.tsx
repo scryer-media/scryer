@@ -63,7 +63,7 @@ import { TitleRatingsStrip } from "../title-ratings-strip";
 import { TitleSettingsPanel } from "./title-settings-panel";
 import { SeasonSection, SeriesMovieTimelineSection } from "./season-section";
 import type { TitleOptionUpdates } from "@/lib/types/title-options";
-import type { LibraryRootRecord } from "@/lib/types/titles";
+import type { LibraryRecord, LibraryRootRecord } from "@/lib/types/titles";
 import { localizedTitleStatus } from "../overview-localization";
 import type { ExternalSubtitleRecord } from "@/lib/types/subtitles";
 import {
@@ -146,6 +146,12 @@ type Props = {
   defaultRootFolder?: string;
   renameEnabled?: boolean;
   rootFolders?: LibraryRootRecord[];
+  /**
+   * Every library the settings panel's move workflow may offer as a
+   * destination. Empty falls back to the title's own library and its roots,
+   * which is a same-library move and never a cross-library transfer.
+   */
+  libraries?: LibraryRecord[];
   onUpdateTitleOptions?: (options: TitleOptionUpdates) => Promise<void>;
   completedDownloads?: DownloadQueueItem[];
   onOpenManualImport?: (item: DownloadQueueItem) => void;
@@ -204,6 +210,7 @@ function SeriesOverviewViewImpl({
   defaultRootFolder,
   renameEnabled,
   rootFolders,
+  libraries,
   onUpdateTitleOptions,
   completedDownloads,
   onOpenManualImport,
@@ -1088,6 +1095,7 @@ function SeriesOverviewViewImpl({
                 defaultRootFolder={defaultRootFolder}
                 renameEnabled={renameEnabled !== false}
                 rootFolders={rootFolders ?? []}
+                libraries={libraries ?? []}
                 onUpdateTitleOptions={onUpdateTitleOptions}
                 onTitleChanged={onTitleChanged}
                 onOpenFixMatch={onOpenFixMatch}

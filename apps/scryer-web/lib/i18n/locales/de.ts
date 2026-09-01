@@ -1824,9 +1824,45 @@ const de: LocaleDictionary = {
   "move.sameNameWarning":
     "In {{library}} gibt es bereits einen Titel namens „{{title}}“. Scryer führt niemals anhand des Namens zusammen, daher bleiben nach dieser Übertragung zwei Titel mit diesem Namen bestehen.",
   "move.ambiguousDestinationHelp":
-    "Mehrere Titel in der Zielbibliothek teilen die Identität dieses Titels. Kläre vor dem Start dieses Verschiebens, um welchen es sich handelt.",
-  "move.mergeNotSupported":
-    "Die Zielbibliothek enthält diesen Titel bereits als „{{title}}“. Das Zusammenführen mit einem vorhandenen Titel ist noch nicht verfügbar.",
+    "Mehrere Titel in der Zielbibliothek teilen die Identität dieses Titels, und Scryer rät nicht zwischen ihnen. Kläre die Identität zuerst in der Zielbibliothek und verschiebe diesen Titel dann erneut.",
+  "move.ambiguousCandidateShared": "Teilt {{identities}}",
+  "move.mergeStatement":
+    "Wird mit „{{title}}“ zusammengeführt. Aus beiden wird ein Titel: Die Identität dieses Titels geht darin auf, und die Einstellungen von „{{title}}“ setzen sich durch.",
+  "move.mergeSummaryHeading": "Was diese Zusammenführung bewirkt",
+  "move.mergeNoDetails": "Diese Zusammenführung überträgt nichts weiter.",
+  "move.mergeBlockedHeading":
+    "Diese Zusammenführung kann nicht laufen: Diese Datensätze lassen sich nicht übertragen.",
+  "move.mergeDispositionsHeading": "Übertragene Daten",
+  "move.mergeRowCount": "{{count}} Zeile(n)",
+  "move.mergeDisposition.UNION":
+    "Neben den vorhandenen der Zielbibliothek behalten",
+  "move.mergeDisposition.MAP": "Auf das Ziel umgehängt",
+  "move.mergeDisposition.DESTINATION_WINS": "Wert des Ziels bleibt",
+  "move.mergeDisposition.DROP": "Nicht übertragen",
+  "move.mergeRoleChangesHeading":
+    "Rollen der Mediendateien ({{demotions}} Datei(en) verlieren die Hauptrolle)",
+  "move.mergeRoleChangesHeadingPlain": "Rollen der Mediendateien",
+  "move.mergeRoleChangeLine": "{{previous}} → {{next}}",
+  "move.mergeRole.PRIMARY": "Hauptdatei",
+  "move.mergeRole.ADDITIONAL": "zusätzlich",
+  "move.mergeRoleDemotion":
+    "Diese Datei ist nicht mehr die Hauptdatei ihrer Episode; sie wird neben der Hauptdatei behalten.",
+  "move.mergeRoleReason.DESTINATION_PRIMARY_RETAINED":
+    "Das Ziel hatte bereits eine Hauptdatei für diese Episode, und ein Verschieben stuft nie eine herab.",
+  "move.mergeRoleReason.SOURCE_PRIMARY_ALREADY_CLAIMED":
+    "Eine andere verschobene Datei hat die Hauptrolle für diese Zielepisode bereits belegt.",
+  "move.mergeRoleReason.COLLAPSED_SOURCE_EPISODES":
+    "Zwei Quellepisoden wurden auf eine Zielepisode zusammengelegt.",
+  "move.mergeTagConflictsHeading": "Einstellungen, die sich widersprachen",
+  "move.mergeTagConflictLine":
+    "{{setting}}: behält „{{destination}}“, verwirft „{{source}}“.",
+  "move.mergeValueNone": "nichts",
+  "move.mergeDestinationWinsHeading": "Einstellungen, die das Ziel behält",
+  "move.mergeDroppedHeading": "Nicht übertragen",
+  "move.mergeFreeFormTags": "Zum Zieltitel hinzugefügte Tags: {{tags}}.",
+  "move.mergeRequestRepoint":
+    "{{count}} Medienanfrage(n) folgen diesem Titel in die Zielbibliothek.",
+  "move.mergeNotesHeading": "Hinweise",
   "move.operationTransferNote": "Diese Titel werden in eine andere Bibliothek verschoben.",
   "move.modeHeading": "Wie sollen die Dateien dorthin gelangen?",
   "move.mode.MOVE_WITH_SCRYER": "Mit Scryer verschieben",
@@ -1873,6 +1909,7 @@ const de: LocaleDictionary = {
   "move.operationMissing": "Diesen Vorgang gibt es nicht mehr.",
   "move.operationDismiss": "Schließen",
   "move.operationProgress": "Titel {{titles}} · Dateien {{files}} · {{bytes}}",
+  "move.counterMerges": "Zusammengeführt",
   "move.counterDedups": "Dedupliziert",
   "move.counterRenames": "Umbenannt",
   "move.counterNoOps": "Ohne Änderung",
@@ -1883,6 +1920,7 @@ const de: LocaleDictionary = {
   "move.checkpointClass": "Eingestuft als",
   "move.checkpointFrom": "Von",
   "move.checkpointTo": "Nach",
+  "move.checkpointMergedInto": "Zusammengeführt mit",
   "move.checkpointVerified": "Geprüft",
   "move.checkpointVerifiedValue": "{{files}} Dateien · {{bytes}}",
   "move.checkpointDetail": "Detail",

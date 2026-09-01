@@ -1850,9 +1850,45 @@ const es: LocaleDictionary = {
   "move.sameNameWarning":
     "{{library}} ya tiene un título llamado «{{title}}». Scryer nunca fusiona por nombre, así que esta transferencia deja dos títulos con ese nombre.",
   "move.ambiguousDestinationHelp":
-    "Varios títulos de la biblioteca de destino comparten la identidad de este título. Resuelve cuál es antes de iniciar este movimiento.",
-  "move.mergeNotSupported":
-    "La biblioteca de destino ya tiene este título como «{{title}}». Fusionar con un título existente aún no está disponible.",
+    "Varios títulos de la biblioteca de destino comparten la identidad de este título y Scryer no adivinará entre ellos. Resuelve primero la identidad en la biblioteca de destino y vuelve a mover este título.",
+  "move.ambiguousCandidateShared": "Comparte {{identities}}",
+  "move.mergeStatement":
+    "Se fusiona con «{{title}}». Los dos pasan a ser un solo título: la identidad de este título se absorbe y prevalecen los ajustes de «{{title}}».",
+  "move.mergeSummaryHeading": "Qué hace esta fusión",
+  "move.mergeNoDetails": "Esta fusión no traslada nada más.",
+  "move.mergeBlockedHeading":
+    "Esta fusión no puede ejecutarse: estos registros no se pueden trasladar.",
+  "move.mergeDispositionsHeading": "Datos trasladados",
+  "move.mergeRowCount": "{{count}} fila(s)",
+  "move.mergeDisposition.UNION": "Se conservan junto a los del destino",
+  "move.mergeDisposition.MAP": "Reasignados al destino",
+  "move.mergeDisposition.DESTINATION_WINS": "Se conserva el valor del destino",
+  "move.mergeDisposition.DROP": "No se traslada",
+  "move.mergeRoleChangesHeading":
+    "Roles de los archivos ({{demotions}} archivo(s) dejan de ser principales)",
+  "move.mergeRoleChangesHeadingPlain": "Roles de los archivos",
+  "move.mergeRoleChangeLine": "{{previous}} → {{next}}",
+  "move.mergeRole.PRIMARY": "principal",
+  "move.mergeRole.ADDITIONAL": "adicional",
+  "move.mergeRoleDemotion":
+    "Este archivo ya no es el principal de su episodio; se conserva junto al que sí lo es.",
+  "move.mergeRoleReason.DESTINATION_PRIMARY_RETAINED":
+    "El destino ya tenía un archivo principal para este episodio y un movimiento nunca degrada uno.",
+  "move.mergeRoleReason.SOURCE_PRIMARY_ALREADY_CLAIMED":
+    "Otro archivo en movimiento ya reclamó el rol principal para ese episodio de destino.",
+  "move.mergeRoleReason.COLLAPSED_SOURCE_EPISODES":
+    "Dos episodios de origen se fusionaron en un único episodio de destino.",
+  "move.mergeTagConflictsHeading": "Ajustes que no coincidían",
+  "move.mergeTagConflictLine":
+    "{{setting}}: conserva «{{destination}}» y descarta «{{source}}».",
+  "move.mergeValueNone": "nada",
+  "move.mergeDestinationWinsHeading": "Ajustes que conserva el destino",
+  "move.mergeDroppedHeading": "No se traslada",
+  "move.mergeFreeFormTags":
+    "Etiquetas añadidas al título de destino: {{tags}}.",
+  "move.mergeRequestRepoint":
+    "{{count}} solicitud(es) de medios acompañan a este título a la biblioteca de destino.",
+  "move.mergeNotesHeading": "Notas",
   "move.operationTransferNote": "Estos títulos se están moviendo a otra biblioteca.",
   "move.modeHeading": "¿Cómo deben llegar los archivos?",
   "move.mode.MOVE_WITH_SCRYER": "Mover con Scryer",
@@ -1899,6 +1935,7 @@ const es: LocaleDictionary = {
   "move.operationMissing": "Esa operación ya no existe.",
   "move.operationDismiss": "Cerrar",
   "move.operationProgress": "Títulos {{titles}} · Archivos {{files}} · {{bytes}}",
+  "move.counterMerges": "Fusionados",
   "move.counterDedups": "Deduplicados",
   "move.counterRenames": "Renombrados",
   "move.counterNoOps": "Sin cambios",
@@ -1909,6 +1946,7 @@ const es: LocaleDictionary = {
   "move.checkpointClass": "Clasificado como",
   "move.checkpointFrom": "Desde",
   "move.checkpointTo": "Hasta",
+  "move.checkpointMergedInto": "Fusionado con",
   "move.checkpointVerified": "Verificado",
   "move.checkpointVerifiedValue": "{{files}} archivos · {{bytes}}",
   "move.checkpointDetail": "Detalle",

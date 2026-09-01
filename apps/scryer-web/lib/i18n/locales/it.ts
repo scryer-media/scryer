@@ -1832,9 +1832,48 @@ const it: LocaleDictionary = {
   "move.sameNameWarning":
     "{{library}} ha già un titolo chiamato «{{title}}». Scryer non unisce mai in base al nome, quindi questo trasferimento lascerà due titoli con quel nome.",
   "move.ambiguousDestinationHelp":
-    "Più titoli nella libreria di destinazione condividono l'identità di questo titolo. Stabilisci quale sia prima di avviare questo spostamento.",
-  "move.mergeNotSupported":
-    "La libreria di destinazione contiene già questo titolo come «{{title}}». L'unione con un titolo esistente non è ancora disponibile.",
+    "Più titoli nella libreria di destinazione condividono l'identità di questo titolo e Scryer non tira a indovinare. Risolvi prima l'identità nella libreria di destinazione, poi sposta di nuovo questo titolo.",
+  "move.ambiguousCandidateShared": "Condivide {{identities}}",
+  "move.mergeStatement":
+    "Viene unito a «{{title}}». I due diventano un solo titolo: l'identità di questo titolo viene assorbita e prevalgono le impostazioni di «{{title}}».",
+  "move.mergeSummaryHeading": "Cosa fa questa unione",
+  "move.mergeNoDetails": "Questa unione non riporta nient'altro.",
+  "move.mergeBlockedHeading":
+    "Questa unione non può essere eseguita: questi record non possono essere riportati.",
+  "move.mergeDispositionsHeading": "Dati riportati",
+  "move.mergeRowCount": "{{count}} riga/righe",
+  "move.mergeDisposition.UNION":
+    "Mantenuti accanto a quelli della destinazione",
+  "move.mergeDisposition.MAP": "Ricollegati alla destinazione",
+  "move.mergeDisposition.DESTINATION_WINS":
+    "Resta il valore della destinazione",
+  "move.mergeDisposition.DROP": "Non riportato",
+  "move.mergeRoleChangesHeading":
+    "Ruoli dei file ({{demotions}} file perdono il ruolo principale)",
+  "move.mergeRoleChangesHeadingPlain": "Ruoli dei file",
+  "move.mergeRoleChangeLine": "{{previous}} → {{next}}",
+  "move.mergeRole.PRIMARY": "principale",
+  "move.mergeRole.ADDITIONAL": "aggiuntivo",
+  "move.mergeRoleDemotion":
+    "Questo file non è più il principale del suo episodio; viene mantenuto accanto a quello che lo è.",
+  "move.mergeRoleReason.DESTINATION_PRIMARY_RETAINED":
+    "La destinazione aveva già un file principale per questo episodio e uno spostamento non ne retrocede mai uno.",
+  "move.mergeRoleReason.SOURCE_PRIMARY_ALREADY_CLAIMED":
+    "Un altro file in spostamento ha già preso il ruolo principale per quell'episodio di destinazione.",
+  "move.mergeRoleReason.COLLAPSED_SOURCE_EPISODES":
+    "Due episodi di origine sono confluiti in un unico episodio di destinazione.",
+  "move.mergeTagConflictsHeading": "Impostazioni in disaccordo",
+  "move.mergeTagConflictLine":
+    "{{setting}}: mantiene «{{destination}}», scarta «{{source}}».",
+  "move.mergeValueNone": "niente",
+  "move.mergeDestinationWinsHeading":
+    "Impostazioni che la destinazione mantiene",
+  "move.mergeDroppedHeading": "Non riportato",
+  "move.mergeFreeFormTags":
+    "Tag aggiunti al titolo di destinazione: {{tags}}.",
+  "move.mergeRequestRepoint":
+    "{{count}} richiesta/e di media seguono questo titolo nella libreria di destinazione.",
+  "move.mergeNotesHeading": "Note",
   "move.operationTransferNote": "Questi titoli si stanno spostando in un'altra libreria.",
   "move.modeHeading": "Come devono arrivare i file?",
   "move.mode.MOVE_WITH_SCRYER": "Sposta con Scryer",
@@ -1881,6 +1920,7 @@ const it: LocaleDictionary = {
   "move.operationMissing": "Quell'operazione non esiste più.",
   "move.operationDismiss": "Chiudi",
   "move.operationProgress": "Titoli {{titles}} · File {{files}} · {{bytes}}",
+  "move.counterMerges": "Uniti",
   "move.counterDedups": "Deduplicati",
   "move.counterRenames": "Rinominati",
   "move.counterNoOps": "Nessuna modifica",
@@ -1891,6 +1931,7 @@ const it: LocaleDictionary = {
   "move.checkpointClass": "Classificato come",
   "move.checkpointFrom": "Da",
   "move.checkpointTo": "A",
+  "move.checkpointMergedInto": "Unito a",
   "move.checkpointVerified": "Verificato",
   "move.checkpointVerifiedValue": "{{files}} file · {{bytes}}",
   "move.checkpointDetail": "Dettaglio",

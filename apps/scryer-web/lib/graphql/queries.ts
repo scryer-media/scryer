@@ -4059,6 +4059,11 @@ export const locationOperationPreviewQuery = `query LocationOperationPreview($in
           sameNamedDestinationTitleId
           sameNamedDestinationTitleName
           ambiguousDestinationTitleIds
+          ambiguousDestinationCandidates {
+            titleId
+            titleName
+            sharedIdentities
+          }
         }
       }
     }
@@ -4088,6 +4093,59 @@ export const locationOperationPreviewQuery = `query LocationOperationPreview($in
     }
     warnings
     blocksStart
+    merges {
+      sourceTitleId
+      destinationTitleId
+      sourceLibraryId
+      destinationLibraryId
+      blocked
+      blockedRecords {
+        table
+        reason
+        sourceId
+        detail
+      }
+      destinationWins {
+        setting
+        destinationValue
+        sourceValue
+      }
+      dispositions {
+        table
+        disposition
+        sourceRowCount
+        note
+      }
+      roleChanges {
+        fileId
+        sourceEpisodeId
+        destinationEpisodeId
+        previousRole
+        newRole
+        reason
+        detail
+      }
+      reservedTagConflicts {
+        prefix
+        setting
+        destinationValue
+        sourceValue
+      }
+      freeFormTagsAdded
+      mediaRequestRepoints {
+        requestId
+        previousLibraryId
+        destinationLibraryId
+      }
+      dropped {
+        table
+        sourceRowCount
+        decision
+        reason
+      }
+      postMergeWork
+      notes
+    }
   }
 }`;
 

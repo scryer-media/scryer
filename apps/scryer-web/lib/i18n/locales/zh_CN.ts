@@ -1681,9 +1681,43 @@ const zh_CN: LocaleDictionary = {
   "move.sameNameWarning":
     "{{library}} 中已有名为“{{title}}”的标题。Scryer 从不按名称合并，因此本次转移后会保留两个同名标题。",
   "move.ambiguousDestinationHelp":
-    "目标库中有多个标题与此标题具有相同的标识。请在开始本次移动前确定是哪一个。",
-  "move.mergeNotSupported":
-    "目标库中已有此标题，名为“{{title}}”。暂不支持合并到已有标题。",
+    "目标库中有多个标题与此标题具有相同的标识，Scryer 不会替你猜测。请先在目标库中理清标识，然后再移动此标题。",
+  "move.ambiguousCandidateShared": "共享 {{identities}}",
+  "move.mergeStatement":
+    "将合并到“{{title}}”。两者合为一个标题：此标题的标识被并入，并以“{{title}}”的设置为准。",
+  "move.mergeSummaryHeading": "这次合并会做什么",
+  "move.mergeNoDetails": "这次合并不会带走其他内容。",
+  "move.mergeBlockedHeading": "此合并无法执行：以下记录无法迁移。",
+  "move.mergeDispositionsHeading": "迁移的数据",
+  "move.mergeRowCount": "{{count}} 行",
+  "move.mergeDisposition.UNION": "与目标原有的一并保留",
+  "move.mergeDisposition.MAP": "重新指向目标",
+  "move.mergeDisposition.DESTINATION_WINS": "保留目标的值",
+  "move.mergeDisposition.DROP": "不迁移",
+  "move.mergeRoleChangesHeading":
+    "媒体文件角色（{{demotions}} 个文件不再是主文件）",
+  "move.mergeRoleChangesHeadingPlain": "媒体文件角色",
+  "move.mergeRoleChangeLine": "{{previous}} → {{next}}",
+  "move.mergeRole.PRIMARY": "主文件",
+  "move.mergeRole.ADDITIONAL": "附加",
+  "move.mergeRoleDemotion":
+    "此文件不再是该剧集的主文件，将与主文件一并保留。",
+  "move.mergeRoleReason.DESTINATION_PRIMARY_RETAINED":
+    "目标已有该剧集的主文件，移动操作绝不会降级主文件。",
+  "move.mergeRoleReason.SOURCE_PRIMARY_ALREADY_CLAIMED":
+    "另一个移动中的文件已占用该目标剧集的主文件角色。",
+  "move.mergeRoleReason.COLLAPSED_SOURCE_EPISODES":
+    "两个源剧集合并到了同一个目标剧集。",
+  "move.mergeTagConflictsHeading": "取值冲突的设置",
+  "move.mergeTagConflictLine":
+    "{{setting}}：保留“{{destination}}”，舍弃“{{source}}”。",
+  "move.mergeValueNone": "无",
+  "move.mergeDestinationWinsHeading": "目标保留的设置",
+  "move.mergeDroppedHeading": "不迁移",
+  "move.mergeFreeFormTags": "添加到目标标题的标签：{{tags}}。",
+  "move.mergeRequestRepoint":
+    "{{count}} 个媒体请求将随此标题转入目标库。",
+  "move.mergeNotesHeading": "备注",
   "move.operationTransferNote": "这些标题正在移动到其他库。",
   "move.modeHeading": "文件应如何到达那里？",
   "move.mode.MOVE_WITH_SCRYER": "由 Scryer 移动",
@@ -1730,6 +1764,7 @@ const zh_CN: LocaleDictionary = {
   "move.operationMissing": "该操作已不存在。",
   "move.operationDismiss": "关闭",
   "move.operationProgress": "标题 {{titles}} · 文件 {{files}} · {{bytes}}",
+  "move.counterMerges": "已合并",
   "move.counterDedups": "已去重",
   "move.counterRenames": "已重命名",
   "move.counterNoOps": "无变化",
@@ -1740,6 +1775,7 @@ const zh_CN: LocaleDictionary = {
   "move.checkpointClass": "分类为",
   "move.checkpointFrom": "从",
   "move.checkpointTo": "到",
+  "move.checkpointMergedInto": "合并到",
   "move.checkpointVerified": "已校验",
   "move.checkpointVerifiedValue": "{{files}} 个文件 · {{bytes}}",
   "move.checkpointDetail": "详情",

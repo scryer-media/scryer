@@ -6,6 +6,7 @@ import {
   CircleCheck,
   HardDrive,
   Loader2,
+  Merge,
   ShieldCheck,
   TriangleAlert,
   X,
@@ -44,7 +45,11 @@ import {
   isAmbiguousDestinationBlock,
   isCrossLibraryDestination,
   isSameNameWarning,
-  mergeBlockedTarget,
+  mergeDispositionLabelKey,
+  mergePreviewsBySourceTitle,
+  mergeRoleChangeReasonKey,
+  mergeRoleLabelKey,
+  mergeSummaryPresentation,
   offersModeSelection,
   orderedClassificationGroups,
   orderedPlanKindCounts,
@@ -63,6 +68,7 @@ import {
   type LocationClassifiedTitle,
   type LocationOperationPreview,
   type LocationPlanItem,
+  type MergeSummaryPresentation,
   type TitleLocationClass,
 } from "@/lib/location-operations";
 import { formatByteCount } from "@/lib/utils/activity-utils";
@@ -294,6 +300,12 @@ export function MoveTitlesDialog({
   );
   const sections = React.useMemo(
     () => orderedPlanSections(preview?.sections ?? []),
+    [preview],
+  );
+  // FR-071: the plan carries one summary per merging title, so a merging row
+  // can state exactly what the engine would do rather than a generic warning.
+  const mergesByTitle = React.useMemo(
+    () => mergePreviewsBySourceTitle(preview),
     [preview],
   );
 
@@ -760,6 +772,13 @@ export function MoveTitlesDialog({
                     }
                     files={filesByTitle}
                     destinationLibraryName={libraryName}
+                    mergeSummary={(entry) =>
+                      mergeSummaryPresentation(
+                        entry,
+                        mergesByTitle.get(entry.titleId) ?? null,
+                        { resolveTitleName: titleName },
+                      )
+                    }
                     onDeselect={deselect}
                     deselectDisabled={starting}
                     t={t}
@@ -1002,6 +1021,9 @@ type ClassificationGroupProps = {
   placement: (entry: LocationClassifiedTitle) => ClassifiedTitlePlacement;
   files: Map<string, { files: number; bytes: number }>;
   destinationLibraryName: (libraryId: string) => string | null;
+  mergeSummary: (
+    entry: LocationClassifiedTitle,
+  ) => MergeSummaryPresentation | null;
   onDeselect: (titleId: string) => void;
   deselectDisabled: boolean;
   t: (key: string, values?: Record<string, string | number>) => string;
@@ -1016,6 +1038,7 @@ function ClassificationGroup({
   placement,
   files,
   destinationLibraryName,
+  mergeSummary,
   onDeselect,
   deselectDisabled,
   t,
@@ -1090,6 +1113,7 @@ function ClassificationGroup({
                   destinationLibraryName={destinationLibraryName}
                   t={t}
                 />
+                <MergeNote summary={mergeSummary(entry)} t={t} />
                 <SameNameWarning
                   entry={entry}
                   destinationLibraryName={destinationLibraryName}
@@ -1178,10 +1202,249 @@ function SameNameWarning({
 }
 
 /**
- * The identity outcomes that stop a transfer from starting, presented beside
- * the Deselect the blocked list already offers. Neither offers a resolution
- * picker yet: choosing between ambiguous destination titles, and merging into
- * a unique one, both land with the merge wiring.
+ * FR-071: a merging row says, in words, that the two titles become one.
+ *
+ * This is the destructive-adjacent case in the whole workflow — the moving
+ * title's identity is absorbed and the destination's settings win — so the
+ * statement is always visible, and everything the engine would actually do
+ * (per-table counts, every role change, the settings that disagreed, what is
+ * dropped, and the backend's own notes) sits one disclosure below it.
+ */
+function MergeNote({
+  summary,
+  t,
+}: {
+  summary: MergeSummaryPresentation | null;
+  t: (key: string, values?: Record<string, string | number>) => string;
+}) {
+  if (!summary) {
+    return null;
+  }
+  const titleId = summary.statement.sourceTitleId;
+  const destination =
+    summary.statement.destinationTitleName ??
+    summary.statement.destinationTitleId;
+  return (
+    <div className="space-y-1">
+      <p
+        id={`move-titles-merge-statement-${titleId}`}
+        className="flex items-start gap-1 text-[var(--scry-warning-text)]"
+      >
+        <Merge aria-hidden="true" className="mt-0.5 h-3 w-3 shrink-0" />
+        <span>{t("move.mergeStatement", { title: destination })}</span>
+      </p>
+
+      {summary.blocked ? (
+        <div
+          id={`move-titles-merge-blocked-${titleId}`}
+          className="space-y-0.5 text-[var(--scry-danger-text)]"
+        >
+          <p>{t("move.mergeBlockedHeading")}</p>
+          {summary.blockedRecords.map((record) => (
+            <p key={`${record.table}-${record.sourceId}`} className="ml-3">
+              {record.detail}
+            </p>
+          ))}
+        </div>
+      ) : null}
+
+      {summary.empty ? (
+        <p
+          id={`move-titles-merge-empty-${titleId}`}
+          className="text-muted-foreground"
+        >
+          {t("move.mergeNoDetails")}
+        </p>
+      ) : (
+        <details
+          id={`move-titles-merge-summary-${titleId}`}
+          className="rounded-lg border border-border bg-muted/10 px-2 py-1"
+        >
+          <summary className="cursor-pointer text-foreground">
+            {t("move.mergeSummaryHeading")}
+          </summary>
+          <div className="mt-1 space-y-1.5">
+            {summary.dispositions.length > 0 ? (
+              <div id={`move-titles-merge-dispositions-${titleId}`}>
+                <p className="text-foreground">
+                  {t("move.mergeDispositionsHeading")}
+                </p>
+                <ul className="ml-4 list-disc">
+                  {summary.dispositions.map((line) => (
+                    <li key={`${line.disposition}-${line.table}`}>
+                      <span className="font-[var(--font-code)] break-all">
+                        {line.table}
+                      </span>
+                      {" — "}
+                      {t(mergeDispositionLabelKey(line.disposition))}
+                      {" · "}
+                      {t("move.mergeRowCount", { count: line.sourceRowCount })}
+                      {line.note ? (
+                        <span className="block text-muted-foreground">
+                          {line.note}
+                        </span>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+
+            {/* FR-070: every role change is named, and a demotion says so. */}
+            {summary.roleChanges.length > 0 ? (
+              <div id={`move-titles-merge-role-changes-${titleId}`}>
+                <p className="text-foreground">
+                  {summary.demotionCount > 0
+                    ? t("move.mergeRoleChangesHeading", {
+                        demotions: summary.demotionCount,
+                      })
+                    : t("move.mergeRoleChangesHeadingPlain")}
+                </p>
+                <ul className="ml-4 list-disc">
+                  {summary.roleChanges.map((change) => (
+                    <li
+                      key={change.fileId}
+                      id={`move-titles-merge-role-change-${titleId}-${change.fileId}`}
+                      className={
+                        change.demotion
+                          ? "text-[var(--scry-warning-text)]"
+                          : undefined
+                      }
+                    >
+                      {t("move.mergeRoleChangeLine", {
+                        previous: t(mergeRoleLabelKey(change.previousRole)),
+                        next: t(mergeRoleLabelKey(change.newRole)),
+                      })}
+                      {change.demotion ? (
+                        <span className="block">
+                          {t("move.mergeRoleDemotion")}
+                        </span>
+                      ) : null}
+                      <span className="block text-muted-foreground">
+                        {t(mergeRoleChangeReasonKey(change.reason))}
+                      </span>
+                      {change.detail ? (
+                        <span className="block text-muted-foreground">
+                          {change.detail}
+                        </span>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+
+            {/* OQ9: the setting, the value kept, and the value dropped. */}
+            {summary.tagConflicts.length > 0 ? (
+              <div id={`move-titles-merge-tag-conflicts-${titleId}`}>
+                <p className="text-foreground">
+                  {t("move.mergeTagConflictsHeading")}
+                </p>
+                <ul className="ml-4 list-disc">
+                  {summary.tagConflicts.map((conflict) => (
+                    <li
+                      key={conflict.prefix}
+                      id={`move-titles-merge-tag-conflict-${titleId}-${conflict.prefix}`}
+                    >
+                      {t("move.mergeTagConflictLine", {
+                        setting: conflict.setting,
+                        destination:
+                          conflict.destinationValue ??
+                          t("move.mergeValueNone"),
+                        source: conflict.sourceValue ?? t("move.mergeValueNone"),
+                      })}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+
+            {summary.destinationWins.length > 0 ? (
+              <div id={`move-titles-merge-destination-wins-${titleId}`}>
+                <p className="text-foreground">
+                  {t("move.mergeDestinationWinsHeading")}
+                </p>
+                <ul className="ml-4 list-disc">
+                  {summary.destinationWins.map((entry) => (
+                    <li key={entry.setting}>
+                      {t("move.mergeTagConflictLine", {
+                        setting: entry.setting,
+                        destination:
+                          entry.destinationValue ?? t("move.mergeValueNone"),
+                        source: entry.sourceValue ?? t("move.mergeValueNone"),
+                      })}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+
+            {summary.dropped.length > 0 ? (
+              <div id={`move-titles-merge-dropped-${titleId}`}>
+                <p className="text-foreground">
+                  {t("move.mergeDroppedHeading")}
+                </p>
+                <ul className="ml-4 list-disc">
+                  {summary.dropped.map((entry) => (
+                    <li
+                      key={entry.table}
+                      id={`move-titles-merge-dropped-${titleId}-${entry.table}`}
+                    >
+                      <span className="font-[var(--font-code)] break-all">
+                        {entry.table}
+                      </span>
+                      {" — "}
+                      {t("move.mergeRowCount", { count: entry.sourceRowCount })}
+                      <span className="block text-muted-foreground">
+                        {entry.reason}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+
+            {summary.freeFormTagsAdded.length > 0 ? (
+              <p id={`move-titles-merge-free-form-tags-${titleId}`}>
+                {t("move.mergeFreeFormTags", {
+                  tags: summary.freeFormTagsAdded.join(", "),
+                })}
+              </p>
+            ) : null}
+
+            {summary.mediaRequestRepointCount > 0 ? (
+              <p id={`move-titles-merge-request-repoint-${titleId}`}>
+                {t("move.mergeRequestRepoint", {
+                  count: summary.mediaRequestRepointCount,
+                })}
+              </p>
+            ) : null}
+
+            {summary.notes.length > 0 ? (
+              <div id={`move-titles-merge-notes-${titleId}`}>
+                <p className="text-foreground">{t("move.mergeNotesHeading")}</p>
+                <ul className="ml-4 list-disc">
+                  {summary.notes.map((note) => (
+                    <li key={note}>{note}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+          </div>
+        </details>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The one identity outcome that still stops a transfer from starting: several
+ * destination titles share this title's identity and Scryer will not guess.
+ *
+ * The candidates are named here with the identities they share, which is what
+ * makes them tellable apart — but there is no input for picking one yet, so the
+ * row's only affordance stays the Deselect the blocked list already offers and
+ * the prose says to resolve the identity in the destination library first.
  */
 function BlockedIdentityDetail({
   entry,
@@ -1192,19 +1455,6 @@ function BlockedIdentityDetail({
   titleName: (titleId: string) => string | null;
   t: (key: string, values?: Record<string, string | number>) => string;
 }) {
-  const mergeTarget = mergeBlockedTarget(entry);
-  if (mergeTarget !== null) {
-    return (
-      <p
-        id={`move-titles-merge-blocked-${entry.titleId}`}
-        className="text-xs text-[var(--scry-danger-text)]"
-      >
-        {t("move.mergeNotSupported", {
-          title: titleName(mergeTarget) ?? mergeTarget,
-        })}
-      </p>
-    );
-  }
   if (!isAmbiguousDestinationBlock(entry)) {
     return null;
   }
@@ -1234,6 +1484,16 @@ function BlockedIdentityDetail({
                   {candidate.titleId}
                 </span>
               )}
+              {candidate.sharedIdentities.length > 0 ? (
+                <span
+                  id={`move-titles-ambiguous-shared-${entry.titleId}-${candidate.titleId}`}
+                  className="block font-[var(--font-code)] break-all opacity-80"
+                >
+                  {t("move.ambiguousCandidateShared", {
+                    identities: candidate.sharedIdentities.join(", "),
+                  })}
+                </span>
+              ) : null}
             </li>
           ))}
         </ul>

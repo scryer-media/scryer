@@ -4765,9 +4765,46 @@ const ru: LocaleDictionary = {
   "move.sameNameWarning":
     "В библиотеке {{library}} уже есть тайтл с названием «{{title}}». Scryer никогда не объединяет по названию, поэтому после переноса останутся два тайтла с этим названием.",
   "move.ambiguousDestinationHelp":
-    "Несколько тайтлов в библиотеке назначения имеют ту же идентификацию, что и этот. Определите, какой из них нужен, прежде чем запускать перемещение.",
-  "move.mergeNotSupported":
-    "В библиотеке назначения этот тайтл уже есть как «{{title}}». Объединение с существующим тайтлом пока недоступно.",
+    "Несколько тайтлов в библиотеке назначения имеют ту же идентификацию, что и этот, и Scryer не будет угадывать между ними. Сначала разберитесь с идентификацией в библиотеке назначения, затем переместите этот тайтл снова.",
+  "move.ambiguousCandidateShared": "Общее: {{identities}}",
+  "move.mergeStatement":
+    "Объединяется с «{{title}}». Два тайтла становятся одним: идентификация этого тайтла поглощается, а настройки «{{title}}» имеют приоритет.",
+  "move.mergeSummaryHeading": "Что делает это объединение",
+  "move.mergeNoDetails": "Это объединение больше ничего не переносит.",
+  "move.mergeBlockedHeading":
+    "Объединение невозможно: эти записи нельзя перенести.",
+  "move.mergeDispositionsHeading": "Переносимые данные",
+  "move.mergeRowCount": "строк: {{count}}",
+  "move.mergeDisposition.UNION": "Сохраняются рядом с записями назначения",
+  "move.mergeDisposition.MAP": "Переназначены на тайтл назначения",
+  "move.mergeDisposition.DESTINATION_WINS": "Сохраняется значение назначения",
+  "move.mergeDisposition.DROP": "Не переносится",
+  "move.mergeRoleChangesHeading":
+    "Роли медиафайлов (файлов, теряющих роль основного: {{demotions}})",
+  "move.mergeRoleChangesHeadingPlain": "Роли медиафайлов",
+  "move.mergeRoleChangeLine": "{{previous}} → {{next}}",
+  "move.mergeRole.PRIMARY": "основной",
+  "move.mergeRole.ADDITIONAL": "дополнительный",
+  "move.mergeRoleDemotion":
+    "Этот файл больше не основной для своей серии; он сохраняется рядом с основным.",
+  "move.mergeRoleReason.DESTINATION_PRIMARY_RETAINED":
+    "В библиотеке назначения уже был основной файл для этой серии, а перемещение никогда его не понижает.",
+  "move.mergeRoleReason.SOURCE_PRIMARY_ALREADY_CLAIMED":
+    "Другой перемещаемый файл уже занял роль основного для этой серии назначения.",
+  "move.mergeRoleReason.COLLAPSED_SOURCE_EPISODES":
+    "Две исходные серии свелись к одной серии назначения.",
+  "move.mergeTagConflictsHeading": "Настройки с расхождениями",
+  "move.mergeTagConflictLine":
+    "{{setting}}: сохраняется «{{destination}}», отбрасывается «{{source}}».",
+  "move.mergeValueNone": "ничего",
+  "move.mergeDestinationWinsHeading":
+    "Настройки, которые сохраняет тайтл назначения",
+  "move.mergeDroppedHeading": "Не переносится",
+  "move.mergeFreeFormTags":
+    "Теги, добавленные к тайтлу назначения: {{tags}}.",
+  "move.mergeRequestRepoint":
+    "Запросов медиа, следующих за этим тайтлом в библиотеку назначения: {{count}}.",
+  "move.mergeNotesHeading": "Примечания",
   "move.operationTransferNote": "Эти тайтлы перемещаются в другую библиотеку.",
   "move.modeHeading": "Как файлы должны туда попасть?",
   "move.mode.MOVE_WITH_SCRYER": "Переместить через Scryer",
@@ -4814,6 +4851,7 @@ const ru: LocaleDictionary = {
   "move.operationMissing": "Такой операции больше нет.",
   "move.operationDismiss": "Закрыть",
   "move.operationProgress": "Тайтлы {{titles}} · Файлы {{files}} · {{bytes}}",
+  "move.counterMerges": "Объединено",
   "move.counterDedups": "Дедуплицировано",
   "move.counterRenames": "Переименовано",
   "move.counterNoOps": "Без изменений",
@@ -4824,6 +4862,7 @@ const ru: LocaleDictionary = {
   "move.checkpointClass": "Классифицировано как",
   "move.checkpointFrom": "Откуда",
   "move.checkpointTo": "Куда",
+  "move.checkpointMergedInto": "Объединён с",
   "move.checkpointVerified": "Проверено",
   "move.checkpointVerifiedValue": "{{files}} файлов · {{bytes}}",
   "move.checkpointDetail": "Подробности",

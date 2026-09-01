@@ -3428,9 +3428,44 @@ const en: LocaleDictionary = {
   "move.sameNameWarning":
     "{{library}} already has a title named “{{title}}”. Scryer never merges by name, so this transfer leaves two titles with that name.",
   "move.ambiguousDestinationHelp":
-    "Several titles in the destination library share this title's identity. Resolve which one it is before starting this move.",
-  "move.mergeNotSupported":
-    "The destination library already has this title as “{{title}}”. Merging into an existing title is not available yet.",
+    "Several titles in the destination library share this title's identity, and Scryer will not guess between them. Resolve the identity in the destination library first, then move this title again.",
+  "move.ambiguousCandidateShared": "Shares {{identities}}",
+  "move.mergeStatement":
+    "Merges into “{{title}}”. The two become one title: this title's identity is absorbed and “{{title}}”'s settings win.",
+  "move.mergeSummaryHeading": "What this merge does",
+  "move.mergeNoDetails": "This merge carries nothing else over.",
+  "move.mergeBlockedHeading":
+    "This merge cannot run: these records cannot be carried over.",
+  "move.mergeDispositionsHeading": "Data carried over",
+  "move.mergeRowCount": "{{count}} row(s)",
+  "move.mergeDisposition.UNION": "Kept alongside the destination's own",
+  "move.mergeDisposition.MAP": "Re-pointed to the destination",
+  "move.mergeDisposition.DESTINATION_WINS": "Destination's value kept",
+  "move.mergeDisposition.DROP": "Not carried over",
+  "move.mergeRoleChangesHeading":
+    "Media file roles ({{demotions}} file(s) lose primary)",
+  "move.mergeRoleChangesHeadingPlain": "Media file roles",
+  "move.mergeRoleChangeLine": "{{previous}} → {{next}}",
+  "move.mergeRole.PRIMARY": "primary",
+  "move.mergeRole.ADDITIONAL": "additional",
+  "move.mergeRoleDemotion":
+    "This file is no longer the primary for its episode; it is kept alongside the one that is.",
+  "move.mergeRoleReason.DESTINATION_PRIMARY_RETAINED":
+    "The destination already had a primary for this episode, and a move never demotes one.",
+  "move.mergeRoleReason.SOURCE_PRIMARY_ALREADY_CLAIMED":
+    "Another moving file already claimed primary for that destination episode.",
+  "move.mergeRoleReason.COLLAPSED_SOURCE_EPISODES":
+    "Two source episodes collapsed onto one destination episode.",
+  "move.mergeTagConflictsHeading": "Settings that disagreed",
+  "move.mergeTagConflictLine":
+    "{{setting}}: keeps “{{destination}}”, drops “{{source}}”.",
+  "move.mergeValueNone": "nothing",
+  "move.mergeDestinationWinsHeading": "Settings the destination keeps",
+  "move.mergeDroppedHeading": "Not carried over",
+  "move.mergeFreeFormTags": "Tags added to the destination title: {{tags}}.",
+  "move.mergeRequestRepoint":
+    "{{count}} media request(s) follow this title into the destination library.",
+  "move.mergeNotesHeading": "Notes",
   "move.operationTransferNote": "These titles are moving into another library.",
   "move.modeHeading": "How should the files get there?",
   "move.mode.MOVE_WITH_SCRYER": "Move with Scryer",
@@ -3477,6 +3512,7 @@ const en: LocaleDictionary = {
   "move.operationMissing": "That operation no longer exists.",
   "move.operationDismiss": "Close",
   "move.operationProgress": "Titles {{titles}} · Files {{files}} · {{bytes}}",
+  "move.counterMerges": "Merged",
   "move.counterDedups": "Deduplicated",
   "move.counterRenames": "Renamed",
   "move.counterNoOps": "No-ops",
@@ -3487,6 +3523,7 @@ const en: LocaleDictionary = {
   "move.checkpointClass": "Classified as",
   "move.checkpointFrom": "From",
   "move.checkpointTo": "To",
+  "move.checkpointMergedInto": "Merged into",
   "move.checkpointVerified": "Verified",
   "move.checkpointVerifiedValue": "{{files}} files · {{bytes}}",
   "move.checkpointDetail": "Detail",

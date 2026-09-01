@@ -13,7 +13,7 @@ import { renameTitlesMutation } from "@/lib/graphql/mutations";
 import { useTranslate } from "@/lib/context/translate-context";
 import type { TitleDetail } from "@/components/containers/series-overview-container";
 import type { TitleOptionUpdates } from "@/lib/types/title-options";
-import type { LibraryRootRecord } from "@/lib/types/titles";
+import type { LibraryRecord, LibraryRootRecord } from "@/lib/types/titles";
 
 type MediaRenamePlanItem = {
   collectionId: string | null;
@@ -38,6 +38,7 @@ export function TitleSettingsPanel({
   defaultRootFolder,
   renameEnabled,
   rootFolders,
+  libraries,
   onUpdateTitleOptions,
   onOpenFixMatch,
   onTitleChanged,
@@ -47,6 +48,12 @@ export function TitleSettingsPanel({
   defaultRootFolder: string;
   renameEnabled: boolean;
   rootFolders: LibraryRootRecord[];
+  /**
+   * Every library the move workflow may offer as a destination. Threaded from
+   * the container, which already reads the full list; an empty list falls back
+   * to the title's own library so the panel still works standalone.
+   */
+  libraries?: LibraryRecord[];
   onUpdateTitleOptions: (options: TitleOptionUpdates) => Promise<void>;
   onOpenFixMatch?: () => void;
   onTitleChanged?: () => Promise<void> | void;
@@ -60,15 +67,29 @@ export function TitleSettingsPanel({
   // Root chosen in the destination control; opening the move workflow instead
   // of writing the title's root in place (FR-011).
   const [moveRootId, setMoveRootId] = React.useState<string | null>(null);
+  // Every library, not just the title's own: a destination in another library
+  // is a cross-library transfer (FR-055/FR-056), and the move dialog owns the
+  // rules for which destinations are pickable.
   const moveLibraries = React.useMemo(
-    () => [
-      {
-        id: title.libraryId,
-        name: title.libraryName?.trim() || title.libraryId,
-        roots: rootFolders,
-      },
-    ],
-    [rootFolders, title.libraryId, title.libraryName],
+    () =>
+      libraries && libraries.length > 0
+        ? libraries.map((entry) => ({
+            id: entry.id,
+            name:
+              entry.name?.trim() ||
+              (entry.id === title.libraryId
+                ? title.libraryName?.trim() || entry.id
+                : entry.id),
+            roots: entry.roots,
+          }))
+        : [
+            {
+              id: title.libraryId,
+              name: title.libraryName?.trim() || title.libraryId,
+              roots: rootFolders,
+            },
+          ],
+    [libraries, rootFolders, title.libraryId, title.libraryName],
   );
 
   React.useEffect(() => {

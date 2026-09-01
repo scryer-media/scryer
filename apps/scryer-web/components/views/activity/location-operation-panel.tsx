@@ -330,7 +330,12 @@ export function LocationOperationPanel({ operationId, onDismiss }: Props) {
           </p>
         </div>
 
-        <dl className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+        <dl className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+          <Counter
+            counterKey="merges"
+            label={t("move.counterMerges")}
+            value={toCount(counters.merges)}
+          />
           <Counter
             counterKey="dedups"
             label={t("move.counterDedups")}
@@ -508,6 +513,16 @@ function CheckpointRow({
               {checkpoint.destinationFolderPath ?? "—"}
             </dd>
           </div>
+          {/* A merged title has no destination folder of its own: it became
+              part of another title, and that is the fact to state (FR-071). */}
+          {checkpoint.mergedIntoTitleId ? (
+            <div id={`location-operation-checkpoint-merged-${checkpoint.titleId}`}>
+              <dt className="inline">{t("move.checkpointMergedInto")}: </dt>
+              <dd className="inline font-[var(--font-code)] break-all">
+                {checkpoint.mergedIntoTitleId}
+              </dd>
+            </div>
+          ) : null}
           <div>
             <dt className="inline">{t("move.checkpointVerified")}: </dt>
             <dd className="inline">
