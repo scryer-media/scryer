@@ -166,65 +166,85 @@ both are execution steps this pass does not perform.
 
 ## Phase 6: User Story 3 — files are already there (P2)
 
-**Not built (2026-09-01).** `location/adoption.rs` carries the accounting and
-match-strength value types only ("Matcher lands in T050"); nothing constructs
-`LocationOperationType::Adoption`, no executor branch handles
-`LocationExecutionMode::FilesAlreadyThere`, and the web move dialog renders the
-mode disabled with "Not available yet"
-(`apps/scryer-web/components/dialogs/move-titles-dialog.tsx:580`).
+**Built (2026-09-01).** Matcher, verifier, preview accounting, and executor
+branch landed in `cf9f92bcd`; the web mode radio is enabled with the accounting
+panel in `18ec0b542`; a vanished source folder blocks the title instead of
+failing the preview (`f5dc6a71b`); refused titles get
+the deselect control the copy promises (`09bb114c9`).
 
-- [ ] T050 Adoption matcher in `location/adoption.rs`: stored identity + size +
+- [x] T050 Adoption matcher in `location/adoption.rs`: stored identity + size +
       sampled proof (+ persisted full BLAKE3 where present); accounted-for /
-      missing / additional / ambiguous accounting. (FR-050–051)
-- [ ] T051 Adoption preview + blocked-confirmation rules; stale-source-mount
+      missing / additional / ambiguous accounting. (FR-050–051) — `cf9f92bcd`;
+      matching is exclusion-first, tiers FullHash > SampledProof > IdentityOnly.
+- [x] T051 Adoption preview + blocked-confirmation rules; stale-source-mount
       allowance; user-owned source cleanup with provable-redundancy recycle
-      exception. (FR-052–053)
-- [ ] T052 [P] Web: adoption mode in the move workflow; accounting UI; i18n; lint.
-- [ ] T053 Story tests: US3 scenarios 1–4, incl. rejection when tracked media is
-      unaccounted for.
+      exception. (FR-052–053) — `cf9f92bcd`; unaccounted media are Blocked plan
+      items and the shared confirm refuses; FR-053 recycle requires a
+      full-hash-proven verification record.
+- [x] T052 [P] Web: adoption mode in the move workflow; accounting UI; i18n;
+      lint. — `18ec0b542`, `09bb114c9`.
+- [x] T053 Story tests: US3 scenarios 1–4, incl. rejection when tracked media is
+      unaccounted for. — `cf9f92bcd` (`lib_tests`), plus the vanished-source
+      regression test in `f5dc6a71b`; e2e flow `ui-location-adoption` landed in
+      the e2e repo (`e1a3805`).
 
 ## Phase 7: User Story 4 — change root (P2, absorbs prototype)
 
-**Not built (2026-09-01) — deliberately gated.** T060's precondition (the
-in-flight `feature/library-root-relocation` prototype landing, plan.md "Prior &
-In-Flight Work") never came due, so nothing in this phase was started rather than
-building a second root-change path against the plan's explicit stance.
-`LocationOperationType::RootChange` exists in the model with no producer.
+**Built (2026-09-01).** The gating prototype never landed; the phase was built
+fresh against the spec (planner `17cd37374`, executor + `OperationEpilogue` +
+traveling recycle bin `627b93377`, GraphQL + web `b51f30973`), with the
+prototype's uncommitted worktree used read-only as reference. Its divergences
+were catalogued and the spec won every one — notably the `RELOCATE` phrase was
+dropped for the shared `MOVE` typed confirmation (Clarifications 2026-09-01).
 
-- [ ] T060 Coordinate landing of `feature/library-root-relocation`; diff landed
-      state; map `LibraryRootRelocationPreview`/job onto the shared operation model
-      (one root-change operation type, shared preview payload, shared executor);
-      keep typed confirmation (`RELOCATION_CONFIRMATION` pattern) via T017 hook.
-      (FR-020–021, FR-029)
-- [ ] T061 Every-title accounting + blocked-title repair gate; no exclusions;
-      default/role retention over synthetic ids. (FR-021–023)
-- [ ] T062 Unmanaged-content classification (managed / companion / unknown) and
-      retirement block; empty-dir-only cleanup. (FR-027–028)
-- [ ] T063 Recycle/retirement ordering: retire root config only after recycling
+- [x] T060 Root-change path onto the shared operation model: one root-change
+      operation type, shared preview payload, shared executor; typed
+      confirmation via T017 hook (shared `MOVE`, not the prototype's
+      `RELOCATION_CONFIRMATION`). (FR-020–021, FR-029) — `17cd37374`,
+      `627b93377`, `b51f30973`; the prototype-landing precondition dissolved.
+- [x] T061 Every-title accounting + blocked-title repair gate; no exclusions;
+      default/role retention over synthetic ids. (FR-021–023) — `17cd37374`;
+      same root id on both sides via `LibraryRepository::set_root_path`
+      (`627b93377`).
+- [x] T062 Unmanaged-content classification (managed / companion / unknown) and
+      retirement block; empty-dir-only cleanup. (FR-027–028) — `17cd37374`;
+      classification fails closed on an unreadable entry.
+- [x] T063 Recycle/retirement ordering: retire root config only after recycling
       completes; resume treats in-retirement root as allowlisted
-      (`recycle_bin.rs` allowlist interaction). (FR-087)
-- [ ] T064 [P] Web: **Change root** action on root rows; adoption variant; typed
-      confirmation UI; i18n; lint.
-- [ ] T065 Story tests: US4 scenarios 1–5 incl. cross-filesystem root move and
-      restart resume.
+      (`recycle_bin.rs` allowlist interaction). (FR-087) — `627b93377`; the
+      recycle bin travels with the root (rename, EXDEV copy fallback, merge on
+      resume) per Clarifications 2026-09-01.
+- [x] T064 [P] Web: **Change root** action on root rows; typed confirmation UI;
+      i18n; lint. — `b51f30973`; the adoption variant is deliberately refused
+      on this branch (a root change's destination must be empty, so files can
+      never already be there).
+- [x] T065 Story tests: US4 scenarios 1–5 incl. cross-filesystem root move and
+      restart resume. — `17cd37374` / `627b93377` (`lib_tests::root_move`),
+      GraphQL round trip in `b51f30973`; e2e flow in flight in the e2e repo.
 
 ## Phase 8: User Story 5 — consolidate root (P2)
 
-**Not built (2026-09-01).** Consolidation is the second half of the root-scoped
-workflow gated in Phase 7. `LocationOperationType::RootConsolidation` exists in
-the model with no producer; the typed-confirmation requirement (FR-029) it shares
-with root change is modelled and unit-tested (`location/model.rs:558-559`) but
-never reached in production.
+**Built (2026-09-01).** Planner and executor landed in `85fe8bbb1`
+(`ConsolidationTail` rides inside the root-change epilogue, so both FR-020
+branches share one settle point); GraphQL + web in `b51f30973`. Consolidation
+offers **Move with Scryer only** — `FILES_ALREADY_THERE` is refused by name
+(`root_consolidation_mode_not_supported`); see the CHK003 note.
 
-- [ ] T070 Consolidation planner: seven-way preview classification (FR-024);
-      unrelated-title name-collision uniquing (FR-025); layout preservation
-      vs destination naming (FR-026); default-root transfer rule (FR-022).
-- [ ] T071 Consolidation executor over collisions/dedup engine; merge handoff for
-      overlapping titles (stub until Phase 9 lands, blocking those titles with
-      needs-resolution until then).
-- [ ] T072 [P] Web: **Consolidate root** action + preview groups; i18n; lint.
-- [ ] T073 Story tests: US5 scenarios 1–4; dedup-via-recycle and
-      recycle-unavailable preserve+rename (SC-003).
+- [x] T070 Consolidation planner: seven-way preview classification (FR-024);
+      unrelated-title name-collision uniquing (FR-025, suffixed by the source
+      root's last path segment); layout preservation vs destination naming
+      (FR-026); default-root transfer rule (FR-022). — `85fe8bbb1`.
+- [x] T071 Consolidation executor over collisions/dedup engine; merge handoff
+      for overlapping titles. — `85fe8bbb1`; Phase 9's merge engine had already
+      landed, so the handoff is real (`merge_target_title_id`), not the stub
+      this task anticipated.
+- [x] T072 [P] Web: **Consolidate root** action + preview groups; i18n; lint. —
+      `b51f30973`; one FR-020 control with the refusal pair cross-routing
+      between the two branches.
+- [x] T073 Story tests: US5 scenarios 1–4; dedup-via-recycle and
+      recycle-unavailable preserve+rename (SC-003). — `85fe8bbb1`
+      (`lib_tests::consolidation`), GraphQL round trip in `b51f30973`; e2e flow
+      in flight in the e2e repo.
 
 ## Phase 9: User Stories 6+7 — cross-library transfer and merge (P2/P3)
 
@@ -295,8 +315,11 @@ never reached in production.
       re-run — 32 checked with citations, 8 gap-noted, six spec-edit candidates
       raised for operator decision.
 - [ ] T095 [P] E2E flows for the release gate (folder correction; root move;
-      adoption; consolidation w/ dedup; cross-library merge; cancel/resume) —
-      handed to the operator to execute.
+      adoption; root change; consolidation w/ dedup; cross-library merge;
+      cancel/resume) — handed to the operator to execute. *Progress*: the
+      adoption flow landed in the e2e repo (`e1a3805`, `ui-location-adoption`);
+      root-change and consolidation flows are being authored; execution stays
+      with the operator.
 - [ ] T096 Final acceptance: one full targeted-suite pass across touched crates +
       web lint; SC-001..SC-009 walked and evidenced.
 

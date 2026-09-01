@@ -2,13 +2,14 @@
 
 **Feature Branch**: `feature/library-location-spec`
 **Created**: 2026-08-30
-**Status**: Partially implemented (2026-09-01) — US1, US2, US6, US7, US8, US9
-shipped on `feature/library-location-movement`; US3 (adoption), US4 (change
-root) and US5 (consolidate root) are specified but **not built**. US4 remains
-gated on the in-flight relocation prototype (plan.md "Prior & In-Flight Work",
-tasks.md T060); US5 depends on it. Not complete — do not read an unqualified
-requirement below as shipped behavior without checking
-[tasks.md](./tasks.md) and [checklists/requirements.md](./checklists/requirements.md).
+**Status**: Implemented (2026-09-01) — all nine user stories built on
+`feature/library-location-movement`. US3 (adoption), US4 (change root) and US5
+(consolidate root) landed `cf9f92bcd`..`b51f30973`; the relocation-prototype
+gate on US4 dissolved and the phase was built fresh against this spec. Final
+acceptance (tasks.md T096) and the operator-run e2e gate (T095) are still
+pending; known deltas are recorded in
+[checklists/requirements.md](./checklists/requirements.md) and the tasks-file
+phase notes.
 **Input**: Operator product plan (2026-08-30) + plan review amendments + operator decisions recorded in the Clarifications section below.
 
 ## Summary
@@ -728,6 +729,15 @@ convergence, throttling, and skip rules.
   intended design): after recycling completes and before the configuration
   flips, the in-root bin relocates to the destination path, and restores of
   entries recycled before the flip re-anchor onto the new root path.
+- Q: Does US5 consolidation offer both execution modes (CHK003 found the spec
+  silent) → A: **Move with Scryer only**, implementation-decided and accepted:
+  a consolidation's destination is a configured root whose content already
+  belongs to other titles, so "files are already there" has no coherent
+  meaning there and is refused by name
+  (`root_consolidation_mode_not_supported`). A root change refuses it too —
+  its destination must be empty or absent, so files can never already be
+  there. Adoption of externally-moved content remains the title-scoped US3
+  workflow.
 
 ### Session 2026-08-30 (operator decisions)
 

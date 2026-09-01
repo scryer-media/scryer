@@ -8,19 +8,20 @@
   actually ships this feature line, trim to that release's scope, and delete this
   comment.
 
-  Written 2026-09-01 against `feature/library-location-movement` at `bfd553f09`.
-  It describes the shipped half of spec 0001 only. "Not in this release" at the
-  bottom names the specified-but-unbuilt workflows — keep that section honest, or
-  drop it and say nothing about them, but do not describe them as available.
+  Written 2026-09-01 against `feature/library-location-movement`; updated the
+  same day at `b51f30973`, when US3 (adoption), US4 (change root), and US5
+  (consolidate root) landed. It now describes the whole of spec 0001.
 -->
 
 ## Highlights
 
 Scryer now treats *where* a title lives as its own deliberate operation rather
 than a metadata edit. Correcting a wrong folder match, moving titles to another
-root, and moving titles into another library are three separate workflows, each
-with a full preview you confirm before anything happens, verified copies, and a
-resumable job you can watch, cancel, and resume from Activity.
+root, adopting files you already moved yourself, changing or consolidating a
+library root, and moving titles into another library are each their own
+workflow, each with a full preview you confirm before anything happens,
+verified copies, and a resumable job you can watch, cancel, and resume from
+Activity.
 
 Every copy Scryer performs — including cross-device copies from your download
 client — is now checksummed as it is written and verified before the source is
@@ -75,6 +76,68 @@ gradually fills in full-file hashes for content that was already in your library
 - The plan is fingerprinted. If the filesystem, catalog, selection, or
   destination changes between preview and confirm, the confirmation is refused
   and you are asked to review a fresh plan.
+
+### Tell Scryer the files are already there
+
+- **The move workflow's "Files are already there" mode is live.** If you already
+  moved a title's files yourself — Finder, rsync, a download client writing
+  straight to the destination — pick the same destination in the move dialog
+  and choose this mode. Scryer proves the files instead of copying them: a file
+  with a stored full hash is read back completely and re-verified; otherwise
+  its size and head-and-tail content are checked against what the catalog
+  knows, and the result records which proof applied.
+- **Nothing is adopted on faith.** Every tracked file must be accounted for at
+  the destination. A title with tracked media that cannot be matched is named
+  and blocked, and the preview lets you drop it from the selection rather than
+  guessing. Disagreeing content excludes a match; mere absence of a hash does
+  not.
+- A source that has since vanished — an unplugged drive, an already-deleted
+  folder — does not fail the preview or block the adoption of titles whose
+  files are present at the destination.
+- Leftover source files are yours: Scryer only recycles a source copy it has
+  **proven** redundant by full hash, and otherwise leaves the source alone.
+
+### Change a root's path, moving everything on it
+
+- **Every saved library root has a "Change root" action.** Give it a new path
+  and Scryer moves the entire root: the root keeps its identity, its
+  library-default status, and every title assignment — only the path changes.
+  Connected clients, requests, and settings that reference the root never
+  notice.
+- The preview is a complete accounting: **every title on the root is listed as
+  moving, catalog-only, or blocked — there is no way to leave one behind.** A
+  blocked title stops the operation until it is repaired.
+- Everything found under the root is classified as tracked media, companion
+  files, or unexplained content. **Unexplained content is never moved and never
+  deleted**; it is listed by name in the preview and it keeps the old location
+  standing — only empty directories are ever removed automatically.
+- A recycle bin living inside the root travels with it: recycled entries remain
+  restorable after the move, onto the new path.
+- The old path's configuration is retired only after every title has settled,
+  verification has passed, and recycling has finished.
+
+### Consolidate one root into another
+
+- **The same "Change root" action can fold a root into another root of the same
+  library.** Point it at a configured root instead of a new path (either way —
+  if you type a path that turns out to be a configured root, or pick a root
+  that turns out not to be one, the dialog switches branches for you).
+- The preview classifies every title seven ways before you confirm: moving into
+  unused folders, merging with a destination title, folder-name collisions,
+  media-name collisions, proven-identical files eligible for dedup,
+  companion-name collisions, and untracked source entries — all seven shown,
+  zeros included.
+- **Two unrelated titles with the same folder name are never merged.** The
+  incoming folder gets a readable unique name derived from its source root, and
+  every changed folder name is shown in the preview by name. Titles that truly
+  are the same canonical title go through the full merge engine, with the same
+  destination-wins rules as a cross-library merge.
+- If the source root was the library default, **the destination root becomes
+  the default** — the preview says so out loud, since it changes where new
+  content lands.
+- The source root's configuration is retired at the end; unexplained content
+  keeps the old path standing (still configured) without blocking the
+  consolidation itself.
 
 ### Copies are verified — moves always fully, imports at your chosen depth
 
@@ -243,10 +306,17 @@ gradually fills in full-file hashes for content that was already in your library
 
 New GraphQL surface: `locationOperationPreview`, `startLocationOperation`,
 `cancelLocationOperation`, `resumeLocationOperation`, and a `locationOperation`
-query for Activity; `changeTitleFolderPreview` and `applyTitleFolderChange`
-(including the swap and take-over variants); `verificationSettings` and
-`updateVerificationSettings`. Regenerate typed clients against the included
-schema.
+query for Activity, with `locationOperationAssets` for the per-file listing of
+a finished operation; `locationRootChangePreview` and
+`locationRootConsolidationPreview` for the two root-scoped workflows (both
+confirm through `startLocationOperation`, whose input gained `rootChange` and
+`rootConsolidation` target forms — `titleIds` and `destination` are now
+nullable, which is backwards-compatible for existing callers); a refused
+root-scoped request carries `extensions.code = "LOCATION_ROOT_REFUSED"` with a
+machine-readable `extensions.refusalCode`; `changeTitleFolderPreview` and
+`applyTitleFolderChange` (including the swap and take-over variants);
+`verificationSettings` and `updateVerificationSettings`. Regenerate typed
+clients against the included schema.
 
 **Client migration note — `TitleOptionsInput.rootFolderId`:**
 
@@ -268,16 +338,3 @@ schema.
 > `rootFolderId`, and re-adding a title on the root it already sits on, are
 > unaffected.
 
-## Not in this release
-
-Three workflows from this feature line are designed but not yet available. Say
-this plainly or say nothing — do not imply they work.
-
-- **"Files are already there"** (adopting content you moved yourself with Finder,
-  rsync, or another host). The option appears in the move dialog and is
-  explicitly marked *Not available yet*; **Move with Scryer** is the only mode
-  that runs.
-- **Change root** — replacing a root's path with a new one and relocating
-  everything assigned to it.
-- **Consolidate root** — folding one root's contents into another root in the
-  same library.

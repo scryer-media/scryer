@@ -26,6 +26,25 @@ wording or coverage defects in the spec, one (CHK022) is unverifiable from the
 repo, one (CHK006) records an unspecified scheduling decision the implementation
 had to make.
 
+### Addendum: 2026-09-01, later the same day (US3/US4/US5 landed)
+
+The re-run above was walked while US3, US4, and US5 were unbuilt. All three have
+since landed (see the coverage table, updated in place with the new evidence).
+Two of the eight gap notes moved:
+
+- **CHK003** — the spec question ("does US5 offer both modes?") is now answered:
+  a Clarifications entry (Session 2026-09-01) records that consolidation offers
+  **Move with Scryer only** and refuses adoption by name
+  (`root_consolidation_mode_not_supported`, pinned by
+  `graphql_a_consolidation_refuses_the_files_already_there_mode`). The box stays
+  unchecked as a record that the original spec text was silent; the gap is
+  closed by clarification, not by rewording US5.
+- **CHK025 (related US8.4 note)** — the per-file asset listing landed
+  (`d4ffd16cd`, `locationOperationAssets`) and T090 is checked; the persisted
+  counters still merge media and asset dedups/renames, which the listing, not
+  the counters, now disambiguates. The scenario-coverage defect in the main
+  note (FR-069 multi-episode split) is unchanged.
+
 ### Implementation coverage at this re-run
 
 Recorded here because several items below cite it. The checklist itself remains a
@@ -35,12 +54,12 @@ spec-quality instrument.
 |---|---|---|
 | US1 folder-match correction | shipped | `d044283f8`, `d67be5e3f`, `098788cf8` |
 | US2 root move (same library) | shipped | `6b6e22b45`, `5243362a1`, `082783251`, `c42fcea57` |
-| US3 adoption ("Files are already there") | **not built** | `location/adoption.rs` is accounting value types only ("Matcher lands in T050"); no `FilesAlreadyThere` branch exists in the executor; the web mode radio is disabled with "Not available yet" (`components/dialogs/move-titles-dialog.tsx:580`) |
-| US4 change root | **not built** — gated on the external relocation prototype | tasks T060; `LocationOperationType::RootChange` has no producer |
-| US5 consolidate root | **not built** | `LocationOperationType::RootConsolidation` has no producer |
+| US3 adoption ("Files are already there") | shipped *(addendum)* | `cf9f92bcd` (matcher/verifier/executor branch), `18ec0b542` (web mode + accounting), `f5dc6a71b`, `09bb114c9` |
+| US4 change root | shipped *(addendum)* | `17cd37374` (planner), `627b93377` (executor, epilogue seam, traveling bin), `b51f30973` (GraphQL + web) |
+| US5 consolidate root | shipped *(addendum)* | `85fe8bbb1` (planner + executor, real merge handoff), `b51f30973` (GraphQL + web) |
 | US6 cross-library transfer | shipped | `8d0b7020b`, `7ff14ca81`, `1c1a05cd9` |
 | US7 merge | shipped | `fbfa942f9`, `3b117cc1b`, `913c72d97`, `477f278b9` |
-| US8 monitor / cancel / resume | shipped, one gap | `6a89b7021`, `28bff508a`, `bfd553f09`; asset-listing split still open (see CHK025 note and T090) |
+| US8 monitor / cancel / resume | shipped | `6a89b7021`, `28bff508a`, `bfd553f09`; the asset-listing split landed after the re-run (`d4ffd16cd`, see the addendum and the CHK025 note) |
 | US9 verification depth + backfill | shipped | `0874f57d5`, `911513e48`, `d5a6882ad`, `c42fcea57` |
 
 Open product calls recorded against the items they touch: US6.3 mixed-source
