@@ -165,13 +165,8 @@ impl SubtitleComponentRuntime {
         command_host: CommandHost,
         memory_max_bytes: Option<usize>,
         timeout: Duration,
-    ) -> Result<
-        (
-            Store<SubtitleComponentCtx>,
-            contract_v1_0::SubtitleProvider,
-        ),
-        wasmtime::Error,
-    > {
+    ) -> Result<(Store<SubtitleComponentCtx>, contract_v1_0::SubtitleProvider), wasmtime::Error>
+    {
         let mut store = Store::new(
             self.component.engine(),
             SubtitleComponentCtx {
@@ -808,7 +803,9 @@ pub(crate) mod tests {
         }
     }
 
-    fn search_result(response: PluginCommandResponse) -> PluginResult<SubtitlePluginSearchResponse> {
+    fn search_result(
+        response: PluginCommandResponse,
+    ) -> PluginResult<SubtitlePluginSearchResponse> {
         let PluginCommandResult::Subtitle(PluginSubtitleCommandResult::Search(result)) =
             response.response
         else {

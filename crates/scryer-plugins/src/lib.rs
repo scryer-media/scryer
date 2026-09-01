@@ -13,6 +13,7 @@ mod runtime_features;
 mod seeding_trust;
 mod socket_host;
 mod subtitle_adapter;
+mod subtitle_sync_adapter;
 mod types;
 mod wasmtime_host;
 

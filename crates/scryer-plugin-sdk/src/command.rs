@@ -18,7 +18,8 @@ use crate::{
     PluginSearchResponse, SubtitlePluginDownloadRequest, SubtitlePluginDownloadResponse,
     SubtitlePluginGenerateRequest, SubtitlePluginGenerateResponse, SubtitlePluginSearchRequest,
     SubtitlePluginSearchResponse, SubtitlePluginValidateConfigRequest,
-    SubtitlePluginValidateConfigResponse,
+    SubtitlePluginValidateConfigResponse, SubtitleSyncPluginProcessRequest,
+    SubtitleSyncPluginProcessResponse,
 };
 
 /// WebAssembly custom section which opts an artifact into the native command ABI.
@@ -181,6 +182,23 @@ pub enum PluginSubtitleCommand {
     Search(SubtitlePluginSearchRequest),
     Download(SubtitlePluginDownloadRequest),
     Generate(SubtitlePluginGenerateRequest),
+    /// Subtitle-*sync* alignment, probing and window decoding.
+    ///
+    /// Alignment was never part of this envelope: it rode its own
+    /// [`SubtitleSyncPluginProcessRequest`] over the Preview 1 stdin/stdout
+    /// transport, which is gone. The payload here is that request type
+    /// **verbatim** — the same `Align` / `Probe` / `DecodeWindow` operations,
+    /// the same nested request and response structs — so a migrating sync
+    /// plugin keeps its types and its dispatch `match` and only changes how
+    /// the bytes arrive, exactly as every other family did.
+    ///
+    /// It is a subtitle operation rather than a family of its own because a
+    /// sync plugin already ships a `ProviderDescriptor::Subtitle` (with
+    /// `SubtitleCapabilities::mode == Sync`), and the
+    /// `scryer:subtitle/subtitle-provider@1.0.0` world's payload is opaque
+    /// UTF-8 JSON. Adding the operation here therefore needs no WIT revision,
+    /// no new world, and no new component host.
+    Sync(SubtitleSyncPluginProcessRequest),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -190,6 +208,10 @@ pub enum PluginSubtitleCommandResult {
     Search(PluginResult<SubtitlePluginSearchResponse>),
     Download(PluginResult<SubtitlePluginDownloadResponse>),
     Generate(PluginResult<SubtitlePluginGenerateResponse>),
+    /// The answer to [`PluginSubtitleCommand::Sync`], wrapped in the same
+    /// [`PluginResult`] every other operation uses so a catalog-only provider
+    /// asked to align can refuse in-band rather than by trapping.
+    Sync(PluginResult<SubtitleSyncPluginProcessResponse>),
 }
 
 #[cfg(test)]
@@ -257,5 +279,112 @@ mod tests {
         };
         assert_eq!(request.limit, 25);
         assert_eq!(request.scope.categories, vec!["Movies", "TV / Anime"]);
+    }
+
+    /// The whole point of the sync variant: the payload is the Preview 1
+    /// request type verbatim, so an align job survives the envelope unchanged.
+    #[test]
+    fn a_subtitle_sync_align_command_round_trips_verbatim() {
+        let request = PluginCommandRequest::new(PluginCommand::Subtitle(
+            PluginSubtitleCommand::Sync(SubtitleSyncPluginProcessRequest {
+                operation: crate::SubtitleSyncPluginOperation::Align {
+                    request: Box::new(crate::SubtitleSyncCommandAlignRequest {
+                        input: crate::SubtitleSyncCommandInputFile {
+                            path: "/input/movie.mkv".into(),
+                        },
+                        subtitle: crate::SubtitleSyncCommandSubtitleFile {
+                            path: "/subtitle/original.srt".into(),
+                            format: "srt".to_string(),
+                            file_name: Some("original.srt".to_string()),
+                            encoding_hint: None,
+                        },
+                        reference_subtitle: None,
+                        output: crate::SubtitleSyncCommandOutputTarget {
+                            path: "/output/rewritten.srt".into(),
+                            format: "srt".to_string(),
+                        },
+                        scratch_dir: "/scratch".into(),
+                        media_metadata: None,
+                        subtitle_spans: Vec::new(),
+                        max_offset_seconds: 60,
+                        sync_options: None,
+                        selector: None,
+                        expected_codec: None,
+                    }),
+                },
+            }),
+        ));
+        let value = serde_json::to_value(&request).expect("serialize request");
+        assert_eq!(value["command"]["family"], "subtitle");
+        assert_eq!(value["command"]["command"]["operation"], "sync");
+        assert_eq!(
+            value["command"]["command"]["request"]["operation"]["kind"],
+            "align"
+        );
+
+        let decoded: PluginCommandRequest =
+            serde_json::from_value(value).expect("deserialize request");
+        let PluginCommand::Subtitle(PluginSubtitleCommand::Sync(request)) = decoded.command else {
+            panic!("expected a subtitle sync command");
+        };
+        let crate::SubtitleSyncPluginOperation::Align { request } = request.operation else {
+            panic!("expected an align operation");
+        };
+        assert_eq!(request.max_offset_seconds, 60);
+        assert_eq!(
+            request.output.path,
+            std::path::Path::new("/output/rewritten.srt")
+        );
+    }
+
+    /// The result half, including the in-band refusal a catalog-only provider
+    /// answers with when it is handed an align it cannot serve.
+    #[test]
+    fn a_subtitle_sync_result_round_trips_both_arms() {
+        let ok = PluginCommandResponse::new(PluginCommandResult::Subtitle(
+            PluginSubtitleCommandResult::Sync(crate::PluginResult::Ok(
+                SubtitleSyncPluginProcessResponse {
+                    response: crate::SubtitleSyncPluginResponse::Probe {
+                        response: crate::SubtitleSyncProbeResponse {
+                            codec: None,
+                            supported: false,
+                            backend: "fixture".to_string(),
+                            confidence: 0.0,
+                            sample_rate_hz: None,
+                            notes: Vec::new(),
+                        },
+                    },
+                },
+            )),
+        ));
+        let json = serde_json::to_string(&ok).expect("serialize response");
+        let decoded: PluginCommandResponse =
+            serde_json::from_str(&json).expect("deserialize response");
+        assert!(matches!(
+            decoded.response,
+            PluginCommandResult::Subtitle(PluginSubtitleCommandResult::Sync(
+                crate::PluginResult::Ok(_)
+            ))
+        ));
+
+        let refused = PluginCommandResponse::new(PluginCommandResult::Subtitle(
+            PluginSubtitleCommandResult::Sync(crate::PluginResult::Err(crate::PluginError {
+                code: crate::PluginErrorCode::Unsupported,
+                public_message: "this provider does not align subtitles".to_string(),
+                debug_message: None,
+                retry_after_seconds: None,
+                details: None,
+            })),
+        ));
+        let json = serde_json::to_string(&refused).expect("serialize refusal");
+        let decoded: PluginCommandResponse =
+            serde_json::from_str(&json).expect("deserialize refusal");
+        let PluginCommandResult::Subtitle(PluginSubtitleCommandResult::Sync(
+            crate::PluginResult::Err(error),
+        )) = decoded.response
+        else {
+            panic!("expected an in-band sync refusal");
+        };
+        assert_eq!(error.code, crate::PluginErrorCode::Unsupported);
     }
 }
