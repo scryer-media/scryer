@@ -2,7 +2,13 @@
 
 **Feature Branch**: `feature/library-location-spec`
 **Created**: 2026-08-30
-**Status**: Draft
+**Status**: Partially implemented (2026-09-01) — US1, US2, US6, US7, US8, US9
+shipped on `feature/library-location-movement`; US3 (adoption), US4 (change
+root) and US5 (consolidate root) are specified but **not built**. US4 remains
+gated on the in-flight relocation prototype (plan.md "Prior & In-Flight Work",
+tasks.md T060); US5 depends on it. Not complete — do not read an unqualified
+requirement below as shipped behavior without checking
+[tasks.md](./tasks.md) and [checklists/requirements.md](./checklists/requirements.md).
 **Input**: Operator product plan (2026-08-30) + plan review amendments + operator decisions recorded in the Clarifications section below.
 
 ## Summary
