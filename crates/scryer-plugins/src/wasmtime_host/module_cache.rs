@@ -23,6 +23,7 @@ pub(crate) enum ModuleFlavor {
     ArchiveComponent,
     SubtitleComponent,
     DownloadClientComponent,
+    NotificationComponent,
 }
 
 impl ModuleFlavor {
@@ -34,6 +35,7 @@ impl ModuleFlavor {
             Self::ArchiveComponent => "archive_component",
             Self::SubtitleComponent => "subtitle_component",
             Self::DownloadClientComponent => "download_client_component",
+            Self::NotificationComponent => "notification_component",
         }
     }
 }
@@ -162,6 +164,10 @@ pub(crate) fn download_client_component(wasm: &[u8]) -> Result<Arc<Component>, S
     component_for(ModuleFlavor::DownloadClientComponent, wasm)
 }
 
+pub(crate) fn notification_component(wasm: &[u8]) -> Result<Arc<Component>, String> {
+    component_for(ModuleFlavor::NotificationComponent, wasm)
+}
+
 fn component_for(flavor: ModuleFlavor, wasm: &[u8]) -> Result<Arc<Component>, String> {
     match artifact_for(flavor, wasm)? {
         CachedArtifact::Component(component) => Ok(component),
@@ -184,6 +190,7 @@ pub(crate) fn reset_failed_modules(wasm: &[u8]) {
         ModuleFlavor::ArchiveComponent,
         ModuleFlavor::SubtitleComponent,
         ModuleFlavor::DownloadClientComponent,
+        ModuleFlavor::NotificationComponent,
     ] {
         let key = ModuleKey {
             flavor,
@@ -351,7 +358,8 @@ fn compile_registered(
         | ModuleFlavor::IndexerComponent
         | ModuleFlavor::ArchiveComponent
         | ModuleFlavor::SubtitleComponent
-        | ModuleFlavor::DownloadClientComponent => engine::shared_async_engine(),
+        | ModuleFlavor::DownloadClientComponent
+        | ModuleFlavor::NotificationComponent => engine::shared_async_engine(),
     };
     let (cache_hits_before, cache_misses_before) = engine::cache_statistics();
     let result = match key.flavor {
@@ -362,7 +370,8 @@ fn compile_registered(
         ModuleFlavor::IndexerComponent
         | ModuleFlavor::ArchiveComponent
         | ModuleFlavor::SubtitleComponent
-        | ModuleFlavor::DownloadClientComponent => Component::from_binary(engine, wasm)
+        | ModuleFlavor::DownloadClientComponent
+        | ModuleFlavor::NotificationComponent => Component::from_binary(engine, wasm)
             .map(Arc::new)
             .map(CachedArtifact::Component)
             .map_err(|error| format!("failed to compile plugin component: {error:#}")),

@@ -1,0 +1,75 @@
+package scryer:notification@1.0.0;
+
+/// The notification-channel contract.
+///
+/// Both payloads are UTF-8 JSON, matching the indexer, archive, subtitle and
+/// download-client worlds: `describe` returns a `PluginDescriptor` document, and
+/// `process` exchanges a `scryer_plugin_sdk::command::PluginCommandRequest` for a
+/// `PluginCommandResponse` — the *same* envelope the wasip1 command ABI already
+/// carries on stdin/stdout, carrying `PluginCommand::Notification` and its
+/// `send` and `action` operations. A guest migrating from the command ABI keeps
+/// its request and response types and its dispatch `match`; only the transport
+/// changes. Keeping the payload an opaque byte string is what lets the SDK add
+/// notification event types and payload fields — and it has added many — without
+/// a WIT revision and without re-generated bindings for the other families.
+///
+/// Host services arrive through the shared `scryer:host/services@1.0.0` import
+/// rather than a notification-specific interface, so config, plugin state, HTTP,
+/// and host-owned archive extraction reach a channel by exactly the bytes the
+/// core-module ABI uses. See that package for the encoding and for why
+/// capability availability is expressed in-band.
+///
+/// # Sockets and host processes ride the same door
+///
+/// This is the one family that holds authority beyond HTTP, and it reaches it
+/// through *this* import rather than through a second one.
+///
+/// An SMTP notifier needs a raw TCP stream it can drive itself — connect, write
+/// `EHLO`, read the greeting, `STARTTLS`, keep going on the upgraded stream —
+/// and a first-party script notifier needs to spawn one allowlisted executable
+/// on the host. Both arrive as `PluginHostRequest` variants the SDK already
+/// defines: `SocketOpen`, `SocketRead`, `SocketWrite`, `SocketStartTls`,
+/// `SocketClose` and `ProcessExec`. Nothing about that is visible in this WIT,
+/// and that is the design: the SDK owns the capability set, so the family that
+/// needs sockets imports the same one function every other family imports.
+///
+/// Deliberately NOT `wasi:sockets`. A p2 socket capability is ambient within
+/// whatever network the host grants — the guest picks the address. Scryer's
+/// grant is not ambient: every connection is checked against the resolved
+/// `socket_permissions` on the plugin's own descriptor (host pattern, port set,
+/// and TLS mode, with `${config_key}` patterns resolved from the channel's
+/// configuration), the socket table is bounded, and reads are bounded per call
+/// and in total. Handing a guest `wasi:sockets` would replace that per-channel
+/// grant with a host-wide one. Process execution has no p2 equivalent at all
+/// and is additionally gated to first-party plugins by the loader, which is why
+/// a community notifier that declares `requires_host_process` still gets an
+/// empty allowlist and a `permission_denied` on every `ProcessExec`.
+///
+/// A host that was not configured with these services — every other family's
+/// host, and a notification host built for describe — answers `Unsupported`
+/// in-band exactly as it does for any other unconfigured service. Denial by
+/// descriptor permission is different and says so: it comes back as a typed
+/// plugin error carrying the socket layer's own `permission_denied` code, not
+/// as an absent capability.
+///
+/// # Preopens and WASI
+///
+/// WASI Preview 2 is imported implicitly: the host links the full p2 surface
+/// (`wasmtime_wasi::p2::add_to_linker_async`), so a guest sees clocks, random,
+/// and its captured stdio through `wasi:*` without those imports appearing in
+/// this world. Notification channels receive NO filesystem preopens on any
+/// operation — neither the legacy reactor nor the wasip1 command host has ever
+/// handed this family a preopened directory, so a component sees precisely the
+/// authority a migrating guest already had.
+world notification {
+  import scryer:host/services@1.0.0;
+
+  enum invocation-error {
+    failed,
+    cancelled,
+    invalid-response,
+  }
+
+  export describe: func() -> list<u8>;
+  export process: func(request: list<u8>) -> result<list<u8>, invocation-error>;
+}

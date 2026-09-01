@@ -54,7 +54,8 @@ impl ArchiveExtractorClient for WasmArchiveExtractorClient {
             | PluginRuntimeBacking::WasmtimeCommand
             | PluginRuntimeBacking::WasmtimeIndexerComponent
             | PluginRuntimeBacking::WasmtimeSubtitleComponent
-            | PluginRuntimeBacking::WasmtimeDownloadClientComponent => {
+            | PluginRuntimeBacking::WasmtimeDownloadClientComponent
+            | PluginRuntimeBacking::WasmtimeNotificationComponent => {
                 return Err(AppError::Repository(
                     "archive extractor plugin requires the WASI component runtime backing"
                         .to_string(),

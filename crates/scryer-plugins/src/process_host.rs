@@ -9,7 +9,11 @@ use std::time::{Duration, Instant};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 
-use crate::types::{PluginDescriptor, ProviderDescriptor};
+use scryer_plugin_sdk::host::{PluginProcessExecRequest, PluginProcessExecResponse};
+
+use crate::types::{
+    PluginDescriptor, PluginError, PluginErrorCode, PluginResult, ProviderDescriptor,
+};
 
 pub(crate) const PROCESS_HOST_NAMESPACE: &str = "extism:host/user";
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(20);
@@ -49,14 +53,60 @@ impl ProcessHost {
         if function != "scryer_process_exec" {
             return Err(format!("unsupported process host function: {function}"));
         }
+        let outcome = match decode_input(input) {
+            Ok(request) => self.execute(request)?,
+            Err(error) => Err(error),
+        };
+        Ok(encode_response(outcome))
+    }
+
+    /// Spawn one allowlisted command on behalf of a host-call guest.
+    ///
+    /// Both transports land on the same [`ProcessHostState::execute`], so the
+    /// allowlist check, the environment sanitizing, the stdin cap and the
+    /// timeout are enforced once. The outer `Err` is a poisoned host lock — a
+    /// host fault, not an answer — and matches what the legacy registration
+    /// turns into a guest trap.
+    pub(crate) fn exec(
+        &self,
+        request: PluginProcessExecRequest,
+    ) -> Result<PluginResult<PluginProcessExecResponse>, String> {
+        let legacy = ProcessExecRequest {
+            command: request.command,
+            args: request.args,
+            env: request.env,
+            working_directory: request.cwd,
+            // Re-encoding rather than shortcutting past `decode_stdin` is
+            // deliberate: the 64 KiB stdin cap lives there, so the host-call
+            // door cannot enforce a different one by accident.
+            stdin_base64: Some(STANDARD.encode(request.stdin)),
+            timeout_ms: request.timeout_ms,
+        };
+        Ok(match self.execute(legacy)? {
+            Ok(response) => PluginResult::Ok(PluginProcessExecResponse {
+                // `PluginProcessExecResponse` has no `timed_out` field and no
+                // optional status, so a killed run — the timeout, or a signal —
+                // reports -1 with its captured output intact. That preserves
+                // the decision a guest makes (a non-zero status is a failed
+                // run) rather than discarding stdout and stderr to signal the
+                // kill some other way.
+                exit_code: response.status_code.unwrap_or(-1),
+                stdout: decode_output(&response.stdout_base64),
+                stderr: decode_output(&response.stderr_base64),
+            }),
+            Err(error) => PluginResult::Err(process_plugin_error(&error)),
+        })
+    }
+
+    fn execute(
+        &self,
+        request: ProcessExecRequest,
+    ) -> Result<Result<ProcessExecResponse, ProcessError>, String> {
         let state = self
             .state
             .lock()
             .map_err(|error| format!("process state lock poisoned: {error}"))?;
-        let request = decode_input(input);
-        Ok(encode_response(
-            request.and_then(|request| state.execute(request)),
-        ))
+        Ok(state.execute(request))
     }
 
     /// Number of commands this host is allowed to spawn. A `disabled()` host (what
@@ -415,6 +465,39 @@ fn join_reader(
             )
         })?;
     Ok(STANDARD.encode(bytes))
+}
+
+/// Base64 the host produced itself, so a decode failure is a host bug rather
+/// than something a guest can provoke; an empty payload is the safe reading.
+fn decode_output(encoded: &str) -> Vec<u8> {
+    STANDARD.decode(encoded.as_bytes()).unwrap_or_default()
+}
+
+/// Project a legacy process failure onto the SDK's error shape.
+///
+/// `PluginError` has no room for the process layer's own code, so the JSON
+/// document the legacy transport returns verbatim is carried in
+/// `debug_message`: a guest that wants the exact `permission_denied` /
+/// `spawn_failed` / `io_failed` / `protocol_error` discriminant parses it back
+/// out, and one that only needs to branch reads `code`.
+fn process_plugin_error(error: &ProcessError) -> PluginError {
+    let code = match &error.code {
+        // A denied command is a policy decision about this plugin, not a
+        // missing capability: retrying cannot change it, and it is not the
+        // "service is not configured" answer a disabled host gives.
+        ProcessErrorCode::PermissionDenied | ProcessErrorCode::ProtocolError => {
+            PluginErrorCode::Permanent
+        }
+        ProcessErrorCode::SpawnFailed | ProcessErrorCode::IoFailed => PluginErrorCode::Temporary,
+        ProcessErrorCode::Unsupported => PluginErrorCode::Unsupported,
+    };
+    PluginError {
+        code,
+        public_message: error.message.clone(),
+        debug_message: Some(serde_json::to_string(error).unwrap_or_else(|_| error.message.clone())),
+        retry_after_seconds: Some(0),
+        details: None,
+    }
 }
 
 fn process_error(code: ProcessErrorCode, message: impl Into<String>) -> ProcessError {

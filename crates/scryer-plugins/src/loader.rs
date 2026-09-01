@@ -25,7 +25,7 @@ use crate::indexer_adapter::WasmIndexerClient;
 use crate::legacy_runtime::{LegacyPlugin, LegacyPluginSpec, validate_legacy_module};
 use crate::notification_adapter::WasmNotificationClient;
 use crate::process_host::ProcessHost;
-use crate::runtime_backing::PluginRuntimeBacking;
+use crate::runtime_backing::{PluginInstanceSpec, PluginRuntimeBacking};
 use crate::socket_host::SocketHost;
 use crate::subtitle_adapter::WasmSubtitleClient;
 use crate::subtitle_sync_adapter::WasmSubtitleSyncClient;
@@ -137,6 +137,9 @@ fn module_flavor_for_artifact(
             PluginRuntimeBacking::WasmtimeSubtitleComponent => ModuleFlavor::SubtitleComponent,
             PluginRuntimeBacking::WasmtimeDownloadClientComponent => {
                 ModuleFlavor::DownloadClientComponent
+            }
+            PluginRuntimeBacking::WasmtimeNotificationComponent => {
+                ModuleFlavor::NotificationComponent
             }
         },
     )
@@ -2062,6 +2065,27 @@ fn socket_host_for_notification(loaded: &LoadedPlugin, config_json: &str) -> Soc
     }
 }
 
+/// Re-project the notification channel's single spec for a component
+/// invocation.
+///
+/// The channel's config, allowed hosts, timeout, preopens and — critically —
+/// the `CommandHost` carrying its socket and process grants are all decided once
+/// in `create_notification_client`. The component path reads them back out of
+/// that spec rather than making a second set of decisions.
+///
+/// `preopens` is copied rather than cleared even though this family has never
+/// had any: the point of re-projection is that the two transports cannot
+/// disagree, and hard-coding `Vec::new()` here would be a second decision.
+fn notification_component_spec(spec: &LegacyPluginSpec) -> PluginInstanceSpec {
+    PluginInstanceSpec {
+        wasm: Arc::clone(&spec.wasm),
+        preopens: spec.preopens.clone(),
+        timeout: spec.timeout,
+        memory_max_bytes: spec.memory_max_bytes,
+        command_host: spec.command_host.clone(),
+    }
+}
+
 fn allowed_host_pattern_is_valid(host: &str) -> bool {
     let host = host.trim();
     if host.is_empty()
@@ -3352,6 +3376,9 @@ fn load_from_bytes(wasm_bytes: &[u8]) -> Result<(PluginDescriptor, Vec<u8>), Str
             PluginRuntimeBacking::WasmtimeDownloadClientComponent => {
                 crate::wasmtime_host::validate_download_client_component(&bytes)?;
             }
+            PluginRuntimeBacking::WasmtimeNotificationComponent => {
+                crate::wasmtime_host::validate_notification_component(&bytes)?;
+            }
         }
         let descriptor = embedded.descriptor;
         debug!(
@@ -3364,8 +3391,8 @@ fn load_from_bytes(wasm_bytes: &[u8]) -> Result<(PluginDescriptor, Vec<u8>), Str
     }
 
     if crate::wasmtime_host::component_host::is_component_binary(&bytes)? {
-        // An archive, subtitle or download-client component can still
-        // self-describe through its world's `describe` export, so a missing
+        // An archive, subtitle, download-client or notification component can
+        // still self-describe through its world's `describe` export, so a missing
         // custom section is not fatal for it. The worlds are told apart by
         // their imports, so the wrong one fails to link rather than returning a
         // foreign descriptor.
@@ -3383,6 +3410,11 @@ fn load_from_bytes(wasm_bytes: &[u8]) -> Result<(PluginDescriptor, Vec<u8>), Str
             (
                 "download_client_component",
                 crate::wasmtime_host::download_client_component_describe
+                    as fn(&[u8]) -> Result<PluginDescriptor, String>,
+            ),
+            (
+                "notification_component",
+                crate::wasmtime_host::notification_component_describe
                     as fn(&[u8]) -> Result<PluginDescriptor, String>,
             ),
         ] {
@@ -3603,6 +3635,32 @@ impl WasmNotificationPluginProvider {
             }
         };
 
+        // Classify from the artifact, not the descriptor: a notification
+        // descriptor is identical whether the artifact is a legacy reactor or a
+        // `scryer:notification/notification@1.0.0` component.
+        let backing = match PluginRuntimeBacking::for_artifact(&loaded.descriptor, &wasm_bytes) {
+            Ok(backing) => backing,
+            Err(error) => {
+                warn!(
+                    channel = config.name.as_str(),
+                    provider_type = config.channel_type.as_str(),
+                    error = %error,
+                    "notification channel has an invalid runtime marker"
+                );
+                return None;
+            }
+        };
+
+        // ONE construction for both transports. The socket and process grants,
+        // the allowed hosts, the timeout, the config map and the
+        // archive-provider `CommandHost` are decided here, once; the component
+        // path re-projects this same spec rather than making a second set of
+        // decisions that could drift. In particular `socket_host` and
+        // `process_host` reach *both* the legacy pointer-ABI registrations
+        // (through the spec) and the shared host-call service layer (through the
+        // `CommandHost`), and because both are `Arc` clones over shared state, a
+        // component channel and a reactor channel see the same resolved
+        // permission set and the same socket handle table.
         let mut spec = LegacyPluginSpec::new(wasm_bytes, loaded.descriptor.id.clone());
         spec.allowed_hosts =
             allowed_hosts_for_descriptor(&loaded.descriptor, None, Some(&config.config_json));
@@ -3610,7 +3668,7 @@ impl WasmNotificationPluginProvider {
         let socket_host = socket_host_for_notification(loaded, &config.config_json);
         let process_host = process_host_for_notification(loaded, &config.config_json);
         spec.socket_host = socket_host.clone();
-        spec.process_host = process_host;
+        spec.process_host = process_host.clone();
 
         // Inject config_json key-value pairs
         match parse_config_json_entries(&config.config_json) {
@@ -3628,14 +3686,34 @@ impl WasmNotificationPluginProvider {
             }
         }
 
-        spec.command_host = crate::wasmtime_host::command_host::CommandHost::with_archive_provider(
+        spec.command_host = crate::wasmtime_host::command_host::CommandHost::for_notification(
             loaded.descriptor.id.clone(),
             spec.config.clone(),
             spec.allowed_hosts.clone(),
             spec.timeout,
             None,
             archive_provider,
+            socket_host.clone(),
+            process_host,
         );
+
+        if backing == PluginRuntimeBacking::WasmtimeNotificationComponent {
+            let client = WasmNotificationClient::new_component(
+                notification_component_spec(&spec),
+                loaded.descriptor.clone(),
+                config.name.clone(),
+                Some(socket_host),
+            );
+            return Some(Arc::new(client));
+        }
+        if backing != PluginRuntimeBacking::LegacyReactor {
+            warn!(
+                channel = config.name.as_str(),
+                provider_type = config.channel_type.as_str(),
+                "notification channel selected a runtime that is not valid for this descriptor family"
+            );
+            return None;
+        }
 
         match LegacyPlugin::instantiate(spec) {
             Ok(plugin) => {

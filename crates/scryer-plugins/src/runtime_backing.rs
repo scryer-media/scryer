@@ -75,6 +75,8 @@ pub(crate) enum PluginRuntimeBacking {
     WasmtimeSubtitleComponent,
     /// Versioned WASI Preview 2 component ABI for download clients.
     WasmtimeDownloadClientComponent,
+    /// Versioned WASI Preview 2 component ABI for notification channels.
+    WasmtimeNotificationComponent,
 }
 
 impl PluginRuntimeBacking {
@@ -114,19 +116,20 @@ impl PluginRuntimeBacking {
                 // The component funnel is per-family by descriptor, not one
                 // catch-all: each family has its own world, so accepting an
                 // artifact here is the same statement as "a host exists for
-                // that world". Notifications join this arm as their world
-                // lands.
+                // that world". With notifications landing, every
+                // `ProviderDescriptor` variant now names one — so this `match`
+                // has no fallback arm on purpose, and a family added to the SDK
+                // fails to compile here until its world exists rather than
+                // silently reporting "components are not supported for you".
                 scryer_plugin_sdk::ProviderDescriptor::Subtitle(_) => {
                     Ok(Self::WasmtimeSubtitleComponent)
                 }
                 scryer_plugin_sdk::ProviderDescriptor::DownloadClient(_) => {
                     Ok(Self::WasmtimeDownloadClientComponent)
                 }
-                _ => Err(
-                    "WASI component artifacts are currently supported only for indexers, \
-                     archive extractors, subtitle providers, and download clients"
-                        .into(),
-                ),
+                scryer_plugin_sdk::ProviderDescriptor::Notification(_) => {
+                    Ok(Self::WasmtimeNotificationComponent)
+                }
             };
         }
         // Hard cut: the archive extractor has no core-module form any more.
@@ -231,6 +234,68 @@ mod tests {
         );
     }
 
+    fn notification_descriptor() -> PluginDescriptor {
+        PluginDescriptor {
+            id: "notification".to_string(),
+            name: "Notification".to_string(),
+            version: "1.0.0".to_string(),
+            sdk_version: scryer_plugin_sdk::SDK_VERSION.to_string(),
+            sdk_constraint: scryer_plugin_sdk::current_sdk_constraint(),
+            socket_permissions: Vec::new(),
+            provider: scryer_plugin_sdk::ProviderDescriptor::Notification(
+                scryer_plugin_sdk::NotificationDescriptor {
+                    provider_type: "fixture-notification".to_string(),
+                    provider_aliases: Vec::new(),
+                    config_fields: Vec::new(),
+                    default_base_url: None,
+                    allowed_hosts: Vec::new(),
+                    capabilities: scryer_plugin_sdk::NotificationCapabilities::default(),
+                },
+            ),
+        }
+    }
+
+    /// The component funnel accepts notifications: a component artifact with a
+    /// notification descriptor selects the notification component host rather
+    /// than being refused as an unsupported family.
+    #[test]
+    fn component_notification_artifacts_select_the_notification_component_backing() {
+        let component = wat::parse_str("(component)").expect("component WAT must parse");
+
+        assert_eq!(
+            PluginRuntimeBacking::for_artifact(&notification_descriptor(), &component)
+                .expect("a notification component must select a runtime"),
+            PluginRuntimeBacking::WasmtimeNotificationComponent
+        );
+    }
+
+    /// The component path is additive for this family too: an unmarked
+    /// core-module notifier still routes to the legacy reactor — which is what
+    /// keeps its `scryer_socket_*` and `scryer_process_exec` registrations
+    /// working until H4 — and a command-marked one still routes to the command
+    /// runtime.
+    #[test]
+    fn non_component_notification_artifacts_keep_their_existing_backings() {
+        let descriptor = notification_descriptor();
+
+        assert_eq!(
+            PluginRuntimeBacking::for_artifact(
+                &descriptor,
+                &command_abi::test_support::unmarked_wasm()
+            )
+            .expect("a legacy notification artifact must select a runtime"),
+            PluginRuntimeBacking::LegacyReactor
+        );
+        assert_eq!(
+            PluginRuntimeBacking::for_artifact(
+                &descriptor,
+                &command_abi::test_support::command_marked_wasm()
+            )
+            .expect("a marked notification artifact must select a runtime"),
+            PluginRuntimeBacking::WasmtimeCommand
+        );
+    }
+
     fn subtitle_descriptor(mode: SubtitleProviderMode) -> PluginDescriptor {
         PluginDescriptor {
             id: "subtitles".to_string(),
@@ -301,7 +366,8 @@ mod tests {
     #[test]
     fn a_command_model_sync_subtitle_still_selects_the_sync_backing() {
         let mut descriptor = subtitle_descriptor(SubtitleProviderMode::Sync);
-        if let scryer_plugin_sdk::ProviderDescriptor::Subtitle(subtitle) = &mut descriptor.provider {
+        if let scryer_plugin_sdk::ProviderDescriptor::Subtitle(subtitle) = &mut descriptor.provider
+        {
             subtitle.capabilities.sync = Some(scryer_plugin_sdk::SubtitleSyncCapabilities {
                 command_model: true,
                 ..Default::default()

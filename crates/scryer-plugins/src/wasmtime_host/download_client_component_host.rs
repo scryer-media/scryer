@@ -28,13 +28,15 @@ use scryer_plugin_sdk::PluginDescriptor;
 use scryer_plugin_sdk::command::{PluginCommandRequest, PluginCommandResponse};
 use wasmtime::component::{Component, HasSelf, Linker, ResourceTable};
 use wasmtime::{Engine, Store};
-use wasmtime_wasi::p2::pipe::MemoryOutputPipe;
 use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 
 use crate::runtime_backing::PluginInstanceSpec;
 use crate::wasmtime_host::command_host::CommandHost;
+use crate::wasmtime_host::family_component_host::{
+    DESCRIBE_TIMEOUT, HostCallError, HostCallFailure, stderr_suffix, tail_of,
+};
 use crate::wasmtime_host::sandbox::{self, HostLimits, PreparedComponentSandbox};
-use crate::wasmtime_host::{engine, error, module_cache};
+use crate::wasmtime_host::{engine, error, family_component_host, module_cache};
 
 mod contract_v1_0 {
     wasmtime::component::bindgen!({
@@ -54,12 +56,6 @@ mod contract_v1_0 {
 
 use self::contract_v1_0::InvocationError;
 use self::contract_v1_0::scryer::host::services::{Host as ServicesHost, HostError};
-
-/// Describe runs reuse the 10s describe budget of every other backing.
-const DESCRIBE_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// Amount of guest stderr forwarded to tracing / attached to error messages.
-const STDERR_TAIL_BYTES: usize = 8 * 1024;
 
 /// Identifying context for one download-client component invocation.
 pub(crate) struct DownloadClientComponentInvocation<'a> {
@@ -100,29 +96,20 @@ impl ServicesHost for DownloadClientComponentCtx {
     /// core-module `scryer_host_call` shim does. A `CommandHost` is a cheap
     /// `Arc` clone, so the move costs nothing and the state map stays shared.
     async fn host_call(&mut self, request: Vec<u8>) -> Result<Vec<u8>, HostError> {
-        let command_host = self.command_host.clone();
-        let joined = tokio::task::spawn_blocking(move || command_host.call_bytes(&request)).await;
-        match joined {
-            Ok(Ok(response)) => Ok(response),
-            Ok(Err(error)) => {
-                // A rejected or undecodable request is the guest's fault and is
-                // recoverable by sending a different one; everything else is
-                // the transport failing.
-                let kind = if error.contains("encoded host request exceeds")
-                    || error.contains("invalid postcard host request")
-                {
-                    HostError::InvalidRequest
-                } else {
-                    HostError::Failed
-                };
+        match family_component_host::dispatch_host_call(&self.command_host, request).await {
+            Ok(response) => Ok(response),
+            Err(HostCallError::Service { failure, error }) => {
                 tracing::debug!(
                     target: "scryer_plugins::download_client",
                     error = error.as_str(),
                     "download client component host-call failed",
                 );
-                Err(kind)
+                Err(match failure {
+                    HostCallFailure::InvalidRequest => HostError::InvalidRequest,
+                    HostCallFailure::Failed => HostError::Failed,
+                })
             }
-            Err(error) => {
+            Err(HostCallError::Task(error)) => {
                 tracing::debug!(
                     target: "scryer_plugins::download_client",
                     error = %error,
@@ -483,21 +470,6 @@ fn finish_error(
             stderr_tail,
         },
     )
-}
-
-fn stderr_suffix(stderr_tail: &str) -> String {
-    if stderr_tail.is_empty() {
-        String::new()
-    } else {
-        format!("; guest stderr: {stderr_tail}")
-    }
-}
-
-/// Size-capped, lossy tail of a captured output pipe.
-fn tail_of(pipe: &MemoryOutputPipe) -> String {
-    let bytes = pipe.contents();
-    let start = bytes.len().saturating_sub(STDERR_TAIL_BYTES);
-    String::from_utf8_lossy(&bytes[start..]).into_owned()
 }
 
 #[cfg(test)]

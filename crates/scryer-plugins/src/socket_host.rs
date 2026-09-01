@@ -9,10 +9,11 @@ use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 
 use crate::types::{
-    PluginDescriptor, SocketCloseRequest, SocketCloseResponse, SocketError, SocketErrorCode,
-    SocketOpenRequest, SocketOpenResponse, SocketReadRequest, SocketReadResponse, SocketResponse,
-    SocketStartTlsRequest, SocketStartTlsResponse, SocketTlsMode, SocketWriteRequest,
-    SocketWriteResponse, allowed_host_pattern_is_valid, socket_host_pattern_config_key,
+    PluginDescriptor, PluginError, PluginErrorCode, SocketCloseRequest, SocketCloseResponse,
+    SocketError, SocketErrorCode, SocketOpenRequest, SocketOpenResponse, SocketReadRequest,
+    SocketReadResponse, SocketResponse, SocketStartTlsRequest, SocketStartTlsResponse,
+    SocketTlsMode, SocketWriteRequest, SocketWriteResponse, allowed_host_pattern_is_valid,
+    socket_host_pattern_config_key,
 };
 
 pub(crate) const SOCKET_HOST_NAMESPACE: &str = "extism:host/user";
@@ -56,35 +57,111 @@ impl SocketHost {
         )
     }
 
+    /// Open a socket, subject to the descriptor's resolved permissions.
+    ///
+    /// This and its four siblings are the *only* implementations. The legacy
+    /// pointer ABI ([`Self::call`]) decodes JSON into these, and the shared
+    /// host-call service layer hands them the SDK request types directly, so
+    /// neither transport can grow its own notion of what a socket grant means.
+    pub(crate) fn open(
+        &self,
+        request: SocketOpenRequest,
+    ) -> Result<SocketOpenResponse, SocketCallError> {
+        self.with_state(|state| state.open(request))
+    }
+
+    pub(crate) fn read(
+        &self,
+        request: SocketReadRequest,
+    ) -> Result<SocketReadResponse, SocketCallError> {
+        self.with_state(|state| state.read(request))
+    }
+
+    pub(crate) fn write(
+        &self,
+        request: SocketWriteRequest,
+    ) -> Result<SocketWriteResponse, SocketCallError> {
+        self.with_state(|state| state.write(request))
+    }
+
+    pub(crate) fn starttls(
+        &self,
+        request: SocketStartTlsRequest,
+    ) -> Result<SocketStartTlsResponse, SocketCallError> {
+        self.with_state(|state| state.starttls(request))
+    }
+
+    pub(crate) fn close(
+        &self,
+        request: SocketCloseRequest,
+    ) -> Result<SocketCloseResponse, SocketCallError> {
+        self.with_state(|state| Ok(state.close(request)))
+    }
+
+    fn with_state<T>(
+        &self,
+        call: impl FnOnce(&mut SocketHostState) -> Result<T, SocketError>,
+    ) -> Result<T, SocketCallError> {
+        let mut state = self.state.lock().map_err(|error| {
+            SocketCallError::Poisoned(format!("socket state lock poisoned: {error}"))
+        })?;
+        call(&mut state).map_err(SocketCallError::Socket)
+    }
+
     pub(crate) fn call(&self, function: &str, input: String) -> Result<String, String> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|error| format!("socket state lock poisoned: {error}"))?;
         let output = match function {
-            "scryer_socket_open" => {
-                let request = decode_input(input);
-                encode_response(request.and_then(|request| state.open(request)))
-            }
-            "scryer_socket_read" => {
-                let request = decode_input(input);
-                encode_response(request.and_then(|request| state.read(request)))
-            }
+            "scryer_socket_open" => self.legacy_call(input, |host, request| host.open(request))?,
+            "scryer_socket_read" => self.legacy_call(input, |host, request| host.read(request))?,
             "scryer_socket_write" => {
-                let request = decode_input(input);
-                encode_response(request.and_then(|request| state.write(request)))
+                self.legacy_call(input, |host, request| host.write(request))?
             }
             "scryer_socket_starttls" => {
-                let request = decode_input(input);
-                encode_response(request.and_then(|request| state.starttls(request)))
+                self.legacy_call(input, |host, request| host.starttls(request))?
             }
             "scryer_socket_close" => {
-                let request = decode_input(input);
-                encode_response(request.map(|request| state.close(request)))
+                self.legacy_call(input, |host, request| host.close(request))?
             }
             other => return Err(format!("unsupported socket host function: {other}")),
         };
         Ok(output)
+    }
+
+    /// One legacy pointer-ABI function: JSON in, `SocketResponse` JSON out.
+    ///
+    /// A poisoned lock stays an `Err(String)` here — the legacy registration
+    /// turns that into a guest trap — while a `SocketError` stays an in-band
+    /// `{"ok":false,...}` document, exactly as before.
+    fn legacy_call<Request, Response>(
+        &self,
+        input: String,
+        call: impl FnOnce(&Self, Request) -> Result<Response, SocketCallError>,
+    ) -> Result<String, String>
+    where
+        Request: for<'de> serde::Deserialize<'de>,
+        Response: serde::Serialize,
+    {
+        let request = match decode_input(input) {
+            Ok(request) => request,
+            Err(error) => return Ok(encode_response(Err::<Response, _>(error))),
+        };
+        match call(self, request) {
+            Ok(response) => Ok(encode_response(Ok(response))),
+            Err(SocketCallError::Socket(error)) => Ok(encode_response(Err::<Response, _>(error))),
+            Err(SocketCallError::Poisoned(message)) => Err(message),
+        }
+    }
+
+    /// Number of sockets this host currently holds open.
+    ///
+    /// Exists so a test can assert that a transport released the channel's
+    /// handles after an invocation, which is not otherwise observable.
+    #[cfg(test)]
+    pub(crate) fn open_socket_count(&self) -> usize {
+        self.state
+            .lock()
+            .expect("socket host state lock")
+            .sockets
+            .len()
     }
 
     pub(crate) fn cleanup(&self) {
@@ -92,6 +169,18 @@ impl SocketHost {
             state.cleanup();
         }
     }
+}
+
+/// How a typed socket call failed.
+///
+/// The distinction matters because the two transports treat the two cases
+/// differently and always have: a `SocketError` is an in-band answer the guest
+/// can act on, while a poisoned lock is a host fault that traps the legacy guest
+/// and becomes a temporary service failure on the host-call door.
+#[derive(Debug)]
+pub(crate) enum SocketCallError {
+    Poisoned(String),
+    Socket(SocketError),
 }
 
 #[derive(Debug)]
@@ -560,6 +649,41 @@ where
         })
         .unwrap_or_else(|_| "{\"ok\":false}".to_string())
     })
+}
+
+/// Project a socket failure onto the SDK's error shape for the host-call door.
+///
+/// `PluginError` has no room for a `SocketErrorCode` — `PluginErrorDetails` is a
+/// closed, indexer-only enum — so the `{"code":...,"message":...}` document the
+/// legacy transport returns verbatim is carried in `debug_message`. A guest that
+/// needs the exact discriminant (an SMTP client distinguishing
+/// `tls_verification_failed` from `starttls_failed`, say) parses it back out;
+/// one that only needs to branch reads `code`. `public_message` stays the socket
+/// layer's own message, unchanged from what the legacy envelope carries.
+pub(crate) fn socket_plugin_error(error: &SocketError) -> PluginError {
+    let code = match error.code {
+        // A denial is a decision about this plugin's descriptor permissions,
+        // and retrying cannot change it. It is deliberately NOT `Unsupported`:
+        // that code means "this host has no such service", which is the
+        // different answer a non-notification host gives.
+        SocketErrorCode::PermissionDenied
+        | SocketErrorCode::TlsVerificationFailed
+        | SocketErrorCode::StartTlsFailed
+        | SocketErrorCode::ProtocolError => PluginErrorCode::Permanent,
+        SocketErrorCode::AuthFailed => PluginErrorCode::AuthFailed,
+        SocketErrorCode::DnsFailed => PluginErrorCode::UpstreamUnavailable,
+        SocketErrorCode::ConnectTimeout
+        | SocketErrorCode::IoFailed
+        | SocketErrorCode::RemoteClosed => PluginErrorCode::Temporary,
+        SocketErrorCode::Unsupported => PluginErrorCode::Unsupported,
+    };
+    PluginError {
+        code,
+        public_message: error.message.clone(),
+        debug_message: Some(serde_json::to_string(error).unwrap_or_else(|_| error.message.clone())),
+        retry_after_seconds: Some(0),
+        details: None,
+    }
 }
 
 fn socket_error(code: SocketErrorCode, message: impl Into<String>) -> SocketError {

@@ -6,8 +6,10 @@
 //! stdin/stdout command protocol for wasip1 command guests ([`invoke`]), the
 //! WASI Preview 2 component hosts for indexers ([`component_host`]), archive
 //! extractors ([`archive_component_host`]), subtitle providers
-//! ([`subtitle_component_host`]) and download clients
-//! ([`download_client_component_host`]), and trap→`AppError` mapping
+//! ([`subtitle_component_host`]), download clients
+//! ([`download_client_component_host`]) and notification channels
+//! ([`notification_component_host`]) — the last three sharing what
+//! [`family_component_host`] holds — and trap→`AppError` mapping
 //! ([`error`]). Everything else in the archive pipeline (path sandboxing,
 //! native PAR2, providers, SDK shapes) is owned above this layer.
 
@@ -19,8 +21,10 @@ mod describe;
 pub(crate) mod download_client_component_host;
 pub(crate) mod engine;
 mod error;
+mod family_component_host;
 mod invoke;
 pub(crate) mod module_cache;
+pub(crate) mod notification_component_host;
 mod sandbox;
 pub(crate) mod subtitle_component_host;
 
@@ -38,6 +42,10 @@ pub(crate) use download_client_component_host::{
 };
 pub(crate) use invoke::{
     CommandInvocation, SubtitleSyncInvocation, process_command, process_subtitle_sync,
+};
+pub(crate) use notification_component_host::{
+    NotificationComponentInvocation, notification_component_describe,
+    process_notification_component, validate_notification_component,
 };
 pub(crate) use subtitle_component_host::{
     SubtitleComponentInvocation, process_subtitle_component, subtitle_component_describe,

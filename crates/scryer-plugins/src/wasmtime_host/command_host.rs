@@ -25,6 +25,8 @@ use wasmtime::{Caller, Linker, Memory};
 use crate::plugin_http_host::{
     IndexerErrorCaptureContext, IndexerProxyPolicy, PluginHttpHost, PluginHttpRequest,
 };
+use crate::process_host::ProcessHost;
+use crate::socket_host::{SocketCallError, SocketHost, socket_plugin_error};
 use crate::wasmtime_host::sandbox::HostCtx;
 
 const MAX_RESPONSE_HANDLES: usize = 32;
@@ -62,6 +64,19 @@ struct CommandHostServices {
     timeout: Duration,
     archive_provider: Option<Arc<dyn ArchiveExtractorPluginProvider>>,
     runtime: Option<tokio::runtime::Handle>,
+    /// Raw sockets, held only by notification hosts.
+    ///
+    /// `None` — every other family — is not the same as a [`SocketHost`] with
+    /// an empty permission set. `None` means this host has no socket service at
+    /// all and answers `Unsupported`, exactly as it does for an uninstalled
+    /// archive extractor; a present-but-empty host means the service exists and
+    /// denied *this* request against the plugin's descriptor permissions. A
+    /// guest can act on the difference, so the layer keeps it.
+    sockets: Option<SocketHost>,
+    /// Host process execution, held only by notification hosts, and gated a
+    /// second time by the loader to first-party plugins. Same `None` reading as
+    /// `sockets`.
+    processes: Option<ProcessHost>,
 }
 
 #[derive(Default)]
@@ -113,6 +128,56 @@ impl CommandHost {
                 timeout,
                 archive_provider,
                 runtime: tokio::runtime::Handle::try_current().ok(),
+                sockets: None,
+                processes: None,
+            })),
+            request_deadline: None,
+        }
+    }
+
+    /// Build the host services for a notification channel.
+    ///
+    /// Notifications are the one family that holds authority beyond HTTP: an
+    /// SMTP notifier drives a raw TCP stream itself, and a first-party script
+    /// notifier spawns an allowlisted executable. This constructor exists
+    /// rather than two more `None` arguments on
+    /// [`Self::with_archive_provider`] for the same reason [`Self::for_indexer`]
+    /// does — every other caller would pass `None` — and so that "who can open a
+    /// socket" is a question with exactly one answer in the source: whoever
+    /// calls this.
+    ///
+    /// Both hosts are handed in already resolved. The loader decides what the
+    /// descriptor's `socket_permissions` and process allowlist come to for this
+    /// channel, and hands the *same* [`SocketHost`] and [`ProcessHost`] values
+    /// to the legacy pointer-ABI registrations, so a channel that migrates its
+    /// transport cannot also change its authority. Because both are cheap `Arc`
+    /// clones over shared state, the socket handle table is literally the same
+    /// table on both transports.
+    pub(crate) fn for_notification(
+        plugin_id: String,
+        config: BTreeMap<String, String>,
+        allowed_hosts: Vec<String>,
+        timeout: Duration,
+        max_http_response_bytes: Option<u64>,
+        archive_provider: Option<Arc<dyn ArchiveExtractorPluginProvider>>,
+        socket_host: SocketHost,
+        process_host: ProcessHost,
+    ) -> Self {
+        Self {
+            state: Arc::new(Mutex::new(CommandHostState {
+                next_handle: 1,
+                responses: HashMap::new(),
+            })),
+            services: Some(Arc::new(CommandHostServices {
+                plugin_id,
+                config,
+                state: Mutex::new(CommandState::default()),
+                http: PluginHttpHost::new(allowed_hosts, None, None, max_http_response_bytes),
+                timeout,
+                archive_provider,
+                runtime: tokio::runtime::Handle::try_current().ok(),
+                sockets: Some(socket_host),
+                processes: Some(process_host),
             })),
             request_deadline: None,
         }
@@ -155,6 +220,8 @@ impl CommandHost {
                 timeout,
                 archive_provider,
                 runtime: tokio::runtime::Handle::try_current().ok(),
+                sockets: None,
+                processes: None,
             })),
             request_deadline: None,
         }
@@ -248,6 +315,14 @@ impl CommandHost {
         Ok(handle)
     }
 
+    /// Service one decoded host request against this host's configured services.
+    ///
+    /// The `match` is exhaustive on purpose — there is no catch-all arm. Every
+    /// `PluginHostRequest` variant the SDK defines now has a service arm, so a
+    /// new capability arriving in the SDK fails to compile here rather than
+    /// silently reporting `Unsupported` for a service the host may well have.
+    /// Fail-closed still holds for the services themselves: an arm whose
+    /// service is absent answers `Unsupported` in-band.
     fn service_request(&self, request: PluginHostRequest) -> PluginHostResponse {
         let Some(services) = &self.services else {
             return unsupported_response(request);
@@ -331,7 +406,39 @@ impl CommandHost {
                 extract_archive(services, request)
                     .map_or_else(ArchiveExtractFailure::into_plugin_result, PluginResult::Ok),
             ),
-            request => unsupported_response(request),
+            // The socket family. Each arm hands the request straight to the
+            // `SocketHost` typed entry point the legacy `scryer_socket_*`
+            // registrations also call, so the permission check, the handle
+            // table, the 64 KiB per-call read/write bounds and the 2 MiB total
+            // read bound are the same objects and the same code on both
+            // transports. Those bounds sit far below the host-call envelope's
+            // own caps, so no second limit is introduced here.
+            PluginHostRequest::SocketOpen(request) => PluginHostResponse::SocketOpen(
+                socket_result(services.sockets.as_ref().map(|host| host.open(request))),
+            ),
+            PluginHostRequest::SocketRead(request) => PluginHostResponse::SocketRead(
+                socket_result(services.sockets.as_ref().map(|host| host.read(request))),
+            ),
+            PluginHostRequest::SocketWrite(request) => PluginHostResponse::SocketWrite(
+                socket_result(services.sockets.as_ref().map(|host| host.write(request))),
+            ),
+            PluginHostRequest::SocketStartTls(request) => PluginHostResponse::SocketStartTls(
+                socket_result(services.sockets.as_ref().map(|host| host.starttls(request))),
+            ),
+            PluginHostRequest::SocketClose(request) => PluginHostResponse::SocketClose(
+                socket_result(services.sockets.as_ref().map(|host| host.close(request))),
+            ),
+            PluginHostRequest::ProcessExec(request) => PluginHostResponse::ProcessExec(
+                match services.processes.as_ref().map(|host| host.exec(request)) {
+                    // No process service on this host at all.
+                    None => unsupported(),
+                    Some(Ok(result)) => result,
+                    // A poisoned host lock is a host fault, not an answer about
+                    // the command, so it reports the way every other service
+                    // failure in this layer does.
+                    Some(Err(message)) => service_error(message),
+                },
+            ),
         }
     }
 
@@ -385,6 +492,23 @@ fn unsupported_error() -> PluginError {
 
 fn unsupported<T>() -> PluginResult<T> {
     PluginResult::Err(unsupported_error())
+}
+
+/// Fold one typed socket call into the host-call response envelope.
+///
+/// Three outcomes, three different statements to the guest: `None` — this host
+/// has no socket service — is the fail-closed `Unsupported` every unconfigured
+/// service in this layer gives; a [`SocketError`] is the socket layer's own
+/// answer, projected onto `PluginError` by [`socket_plugin_error`] with its
+/// original code preserved in `debug_message`; and a poisoned lock is a host
+/// fault reported as a temporary service failure.
+fn socket_result<T>(outcome: Option<Result<T, SocketCallError>>) -> PluginResult<T> {
+    match outcome {
+        None => unsupported(),
+        Some(Ok(value)) => PluginResult::Ok(value),
+        Some(Err(SocketCallError::Socket(error))) => PluginResult::Err(socket_plugin_error(&error)),
+        Some(Err(SocketCallError::Poisoned(message))) => service_error(message),
+    }
 }
 
 fn service_error<T>(message: String) -> PluginResult<T> {
@@ -1066,7 +1190,10 @@ mod tests {
             .iter()
             .map(|file| file.relative_path.as_str())
             .collect::<Vec<_>>();
-        assert_eq!(paths, vec!["Show.S01E17.eng.srt", "nested/Show.S01E17.spa.srt"]);
+        assert_eq!(
+            paths,
+            vec!["Show.S01E17.eng.srt", "nested/Show.S01E17.spa.srt"]
+        );
         assert_eq!(response.files[0].content, b"hello");
         assert_eq!(response.files[1].content, b"hola");
     }
@@ -1172,6 +1299,424 @@ mod tests {
                 ..
             }))
         ));
+    }
+
+    // ------------------------------------------------------------------
+    // Socket and process service arms.
+    //
+    // These are the arms that carry authority no other family holds, so the
+    // assertions are about *parity with the legacy pointer ABI*, not merely
+    // about the arms answering: the same denial, the same message, the same
+    // handle table.
+    // ------------------------------------------------------------------
+
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+
+    use crate::process_host::ProcessHost;
+    use crate::socket_host::SocketHost;
+    use scryer_plugin_sdk::host::PluginProcessExecRequest;
+    use scryer_plugin_sdk::{
+        NotificationCapabilities, NotificationDescriptor, PluginDescriptor, ProviderDescriptor,
+        SocketCloseRequest, SocketOpenRequest, SocketPermission, SocketReadRequest, SocketTlsMode,
+        SocketWriteRequest,
+    };
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    const SOCKET_PROBE: &[u8] = b"EHLO scryer\r\n";
+    const SOCKET_REPLY: &[u8] = b"250 OK\r\n";
+
+    fn notification_descriptor(
+        socket_permissions: Vec<SocketPermission>,
+        requires_host_process: bool,
+    ) -> PluginDescriptor {
+        PluginDescriptor {
+            id: "socket-host-test".to_string(),
+            name: "Socket Host Test".to_string(),
+            version: "1.0.0".to_string(),
+            sdk_version: scryer_plugin_sdk::SDK_VERSION.to_string(),
+            sdk_constraint: scryer_plugin_sdk::current_sdk_constraint(),
+            socket_permissions,
+            provider: ProviderDescriptor::Notification(NotificationDescriptor {
+                provider_type: "socket-host-test".to_string(),
+                provider_aliases: Vec::new(),
+                config_fields: Vec::new(),
+                default_base_url: None,
+                allowed_hosts: Vec::new(),
+                capabilities: NotificationCapabilities {
+                    requires_host_process,
+                    ..Default::default()
+                },
+            }),
+        }
+    }
+
+    fn loopback_permission(port: u16) -> SocketPermission {
+        SocketPermission {
+            host_pattern: "127.0.0.1".to_string(),
+            ports: vec![port],
+            tls_modes: vec![SocketTlsMode::Plain],
+        }
+    }
+
+    fn echo_listener() -> (u16, std::thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("loopback listener must bind");
+        let port = listener
+            .local_addr()
+            .expect("listener must report its address")
+            .port();
+        let handle = std::thread::spawn(move || {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            let mut probe = vec![0_u8; SOCKET_PROBE.len()];
+            let _ = stream.read_exact(&mut probe);
+            let _ = stream.write_all(SOCKET_REPLY);
+            let _ = stream.flush();
+            std::thread::sleep(Duration::from_millis(250));
+        });
+        (port, handle)
+    }
+
+    fn notification_host(descriptor: &PluginDescriptor, config_json: Option<&str>) -> CommandHost {
+        CommandHost::for_notification(
+            descriptor.id.clone(),
+            BTreeMap::new(),
+            Vec::new(),
+            Duration::from_secs(5),
+            None,
+            None,
+            SocketHost::from_descriptor(descriptor, config_json),
+            ProcessHost::from_descriptor(descriptor, config_json),
+        )
+    }
+
+    fn open_request(port: u16) -> PluginHostRequest {
+        PluginHostRequest::SocketOpen(SocketOpenRequest {
+            host: "127.0.0.1".to_string(),
+            port,
+            tls_mode: SocketTlsMode::Plain,
+            connect_timeout_ms: Some(5_000),
+            read_timeout_ms: Some(5_000),
+            write_timeout_ms: Some(5_000),
+        })
+    }
+
+    /// The whole socket lifecycle through the one host-call door: open a real
+    /// loopback listener, write to it, read its answer back, close.
+    #[test]
+    fn socket_service_arms_drive_a_real_loopback_connection() {
+        let (port, listener) = echo_listener();
+        let descriptor = notification_descriptor(vec![loopback_permission(port)], false);
+        let host = notification_host(&descriptor, None);
+
+        let PluginHostResponse::SocketOpen(PluginResult::Ok(opened)) =
+            host.service_request(open_request(port))
+        else {
+            panic!("a granted socket must open");
+        };
+
+        let PluginHostResponse::SocketWrite(PluginResult::Ok(written)) =
+            host.service_request(PluginHostRequest::SocketWrite(SocketWriteRequest {
+                handle: opened.handle,
+                data_base64: BASE64.encode(SOCKET_PROBE),
+            }))
+        else {
+            panic!("an open socket must accept a bounded write");
+        };
+        assert_eq!(written.bytes_written, SOCKET_PROBE.len());
+
+        let PluginHostResponse::SocketRead(PluginResult::Ok(read)) =
+            host.service_request(PluginHostRequest::SocketRead(SocketReadRequest {
+                handle: opened.handle,
+                max_bytes: 64,
+            }))
+        else {
+            panic!("an open socket must read the listener reply back");
+        };
+        assert_eq!(read.data_base64, BASE64.encode(SOCKET_REPLY));
+        assert!(!read.eof);
+
+        let PluginHostResponse::SocketClose(PluginResult::Ok(closed)) =
+            host.service_request(PluginHostRequest::SocketClose(SocketCloseRequest {
+                handle: opened.handle,
+            }))
+        else {
+            panic!("an open socket must close");
+        };
+        assert!(closed.closed);
+        listener.join().ok();
+    }
+
+    /// The parity assertion. A descriptor with no socket permissions produces
+    /// the *same denial* on the host-call door as on the legacy pointer ABI —
+    /// same message, and the legacy `SocketErrorCode` carried through in
+    /// `debug_message` because `PluginError` has nowhere else to put it.
+    #[test]
+    fn a_descriptor_without_socket_permissions_is_denied_exactly_as_the_legacy_abi_denies_it() {
+        let descriptor = notification_descriptor(Vec::new(), false);
+        let socket_host = SocketHost::from_descriptor(&descriptor, None);
+        let host = CommandHost::for_notification(
+            descriptor.id.clone(),
+            BTreeMap::new(),
+            Vec::new(),
+            Duration::from_secs(5),
+            None,
+            None,
+            socket_host.clone(),
+            ProcessHost::disabled(),
+        );
+
+        let legacy = socket_host
+            .call(
+                "scryer_socket_open",
+                serde_json::json!({
+                    "host": "127.0.0.1",
+                    "port": 25,
+                    "tls_mode": "plain",
+                })
+                .to_string(),
+            )
+            .expect("the legacy registration encodes a response");
+        let legacy: serde_json::Value =
+            serde_json::from_str(&legacy).expect("the legacy response is JSON");
+
+        let PluginHostResponse::SocketOpen(PluginResult::Err(error)) =
+            host.service_request(open_request(25))
+        else {
+            panic!("an ungranted socket must be denied");
+        };
+
+        assert_eq!(
+            legacy["error"]["code"],
+            serde_json::json!("permission_denied")
+        );
+        assert_eq!(
+            error.public_message,
+            legacy["error"]["message"].as_str().unwrap(),
+            "the host-call door must report the socket layer's own message verbatim",
+        );
+        assert_eq!(
+            error.code,
+            PluginErrorCode::Permanent,
+            "a permission denial is not an absent capability",
+        );
+        assert!(
+            error
+                .debug_message
+                .as_deref()
+                .is_some_and(|debug| debug.contains("permission_denied")),
+            "{:?}",
+            error.debug_message,
+        );
+    }
+
+    /// A denial and an absent service are different answers, and a guest can
+    /// tell them apart: `Unsupported` means no host here has sockets at all.
+    #[test]
+    fn a_host_without_the_socket_service_reports_unsupported() {
+        let host = CommandHost::with_archive_provider(
+            "no-sockets".to_string(),
+            BTreeMap::new(),
+            Vec::new(),
+            Duration::from_secs(5),
+            None,
+            None,
+        );
+
+        for request in [
+            open_request(25),
+            PluginHostRequest::SocketRead(SocketReadRequest {
+                handle: 1,
+                max_bytes: 16,
+            }),
+            PluginHostRequest::SocketWrite(SocketWriteRequest {
+                handle: 1,
+                data_base64: String::new(),
+            }),
+            PluginHostRequest::SocketStartTls(scryer_plugin_sdk::SocketStartTlsRequest {
+                handle: 1,
+                host: "127.0.0.1".to_string(),
+            }),
+            PluginHostRequest::SocketClose(SocketCloseRequest { handle: 1 }),
+        ] {
+            let code = match host.service_request(request) {
+                PluginHostResponse::SocketOpen(PluginResult::Err(error))
+                | PluginHostResponse::SocketRead(PluginResult::Err(error))
+                | PluginHostResponse::SocketWrite(PluginResult::Err(error))
+                | PluginHostResponse::SocketStartTls(PluginResult::Err(error))
+                | PluginHostResponse::SocketClose(PluginResult::Err(error)) => error.code,
+                other => panic!("a host with no socket service must refuse: {other:?}"),
+            };
+            assert_eq!(code, PluginErrorCode::Unsupported);
+        }
+    }
+
+    #[test]
+    fn a_disabled_host_reports_unsupported_for_sockets_and_processes() {
+        let host = CommandHost::disabled();
+
+        assert!(matches!(
+            host.service_request(open_request(25)),
+            PluginHostResponse::SocketOpen(PluginResult::Err(PluginError {
+                code: PluginErrorCode::Unsupported,
+                ..
+            }))
+        ));
+        assert!(matches!(
+            host.service_request(PluginHostRequest::ProcessExec(PluginProcessExecRequest {
+                command: "/bin/echo".to_string(),
+                args: Vec::new(),
+                env: BTreeMap::new(),
+                cwd: None,
+                stdin: Vec::new(),
+                timeout_ms: None,
+            })),
+            PluginHostResponse::ProcessExec(PluginResult::Err(PluginError {
+                code: PluginErrorCode::Unsupported,
+                ..
+            }))
+        ));
+    }
+
+    /// STARTTLS is refused for a socket that was not opened in STARTTLS mode,
+    /// through the host-call door exactly as through the legacy one — the check
+    /// lives in the socket host, not in either transport.
+    #[test]
+    fn starttls_on_a_plain_socket_is_refused() {
+        let (port, listener) = echo_listener();
+        let descriptor = notification_descriptor(vec![loopback_permission(port)], false);
+        let host = notification_host(&descriptor, None);
+
+        let PluginHostResponse::SocketOpen(PluginResult::Ok(opened)) =
+            host.service_request(open_request(port))
+        else {
+            panic!("a granted socket must open");
+        };
+        let PluginHostResponse::SocketStartTls(PluginResult::Err(error)) = host.service_request(
+            PluginHostRequest::SocketStartTls(scryer_plugin_sdk::SocketStartTlsRequest {
+                handle: opened.handle,
+                host: "127.0.0.1".to_string(),
+            }),
+        ) else {
+            panic!("STARTTLS on a plain-mode socket must be refused");
+        };
+        assert_eq!(error.code, PluginErrorCode::Permanent);
+        drop(listener);
+    }
+
+    /// The process arm spawns through the same allowlist the legacy
+    /// registration uses, and projects the legacy response onto the SDK shape.
+    #[test]
+    fn the_process_arm_runs_an_allowlisted_command() {
+        let descriptor = notification_descriptor(Vec::new(), true);
+        let host = notification_host(&descriptor, Some(r#"{"path":"/bin/echo"}"#));
+
+        let PluginHostResponse::ProcessExec(PluginResult::Ok(response)) =
+            host.service_request(PluginHostRequest::ProcessExec(PluginProcessExecRequest {
+                command: "/bin/echo".to_string(),
+                args: vec!["scryer".to_string()],
+                env: BTreeMap::new(),
+                cwd: None,
+                stdin: Vec::new(),
+                timeout_ms: Some(5_000),
+            }))
+        else {
+            panic!("an allowlisted command must run");
+        };
+        assert_eq!(response.exit_code, 0);
+        assert_eq!(response.stdout, b"scryer\n".to_vec());
+        assert!(response.stderr.is_empty());
+    }
+
+    /// A command outside the descriptor's allowlist is denied with the legacy
+    /// `permission_denied` code carried through, and never spawns.
+    #[test]
+    fn the_process_arm_denies_a_command_outside_the_allowlist() {
+        let descriptor = notification_descriptor(Vec::new(), true);
+        let host = notification_host(&descriptor, Some(r#"{"path":"/bin/echo"}"#));
+
+        let PluginHostResponse::ProcessExec(PluginResult::Err(error)) =
+            host.service_request(PluginHostRequest::ProcessExec(PluginProcessExecRequest {
+                command: "/bin/sh".to_string(),
+                args: vec!["-c".to_string(), "echo pwned".to_string()],
+                env: BTreeMap::new(),
+                cwd: None,
+                stdin: Vec::new(),
+                timeout_ms: Some(5_000),
+            }))
+        else {
+            panic!("a command outside the allowlist must be denied");
+        };
+        assert_eq!(error.code, PluginErrorCode::Permanent);
+        assert!(
+            error
+                .debug_message
+                .as_deref()
+                .is_some_and(|debug| debug.contains("permission_denied")),
+            "{:?}",
+            error.debug_message,
+        );
+    }
+
+    /// A notification plugin that never declared `requires_host_process` — and
+    /// every non-first-party one, which the loader hands `ProcessHost::disabled`
+    /// — has an empty allowlist, so the arm exists and denies rather than
+    /// reporting the service missing.
+    #[test]
+    fn a_notification_host_without_a_process_allowlist_denies_rather_than_reporting_unsupported() {
+        let descriptor = notification_descriptor(Vec::new(), false);
+        let host = notification_host(&descriptor, Some(r#"{"path":"/bin/echo"}"#));
+
+        let PluginHostResponse::ProcessExec(PluginResult::Err(error)) =
+            host.service_request(PluginHostRequest::ProcessExec(PluginProcessExecRequest {
+                command: "/bin/echo".to_string(),
+                args: Vec::new(),
+                env: BTreeMap::new(),
+                cwd: None,
+                stdin: Vec::new(),
+                timeout_ms: Some(5_000),
+            }))
+        else {
+            panic!("an empty allowlist must deny");
+        };
+        assert_eq!(error.code, PluginErrorCode::Permanent);
+    }
+
+    /// The socket layer's own read bound survives the trip through the
+    /// host-call envelope: a guest asking for more than the per-call maximum is
+    /// clamped by the socket host, not by anything this layer adds.
+    #[test]
+    fn socket_reads_stay_inside_the_socket_layers_own_bounds() {
+        let (port, listener) = echo_listener();
+        let descriptor = notification_descriptor(vec![loopback_permission(port)], false);
+        let host = notification_host(&descriptor, None);
+
+        let PluginHostResponse::SocketOpen(PluginResult::Ok(opened)) =
+            host.service_request(open_request(port))
+        else {
+            panic!("a granted socket must open");
+        };
+        host.service_request(PluginHostRequest::SocketWrite(SocketWriteRequest {
+            handle: opened.handle,
+            data_base64: BASE64.encode(SOCKET_PROBE),
+        }));
+        let PluginHostResponse::SocketRead(PluginResult::Ok(read)) =
+            host.service_request(PluginHostRequest::SocketRead(SocketReadRequest {
+                handle: opened.handle,
+                // Far beyond the socket host's 64 KiB per-call cap.
+                max_bytes: MAX_HOST_REQUEST_BYTES,
+            }))
+        else {
+            panic!("an oversized max_bytes must be clamped, not refused");
+        };
+        assert_eq!(
+            BASE64
+                .decode(read.data_base64.as_bytes())
+                .expect("the host encodes its own base64"),
+            SOCKET_REPLY,
+        );
+        listener.join().ok();
     }
 
     #[test]
