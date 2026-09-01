@@ -86,6 +86,72 @@ impl MediaRequestRepository for MediaRequestStore {
         .await
     }
 
+    /// Two reads rather than a UNION: the submitter and the additional
+    /// requesters live in different tables with different orderings, and
+    /// merging them in Rust keeps the SQL dialect-neutral instead of relying on
+    /// SQLite and Postgres agreeing on how a UNION orders mixed timestamp
+    /// columns.
+    async fn requester_user_ids_by_title_ids(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<std::collections::HashMap<String, Vec<String>>> {
+        let mut by_title: std::collections::HashMap<String, Vec<String>> =
+            std::collections::HashMap::new();
+        if title_ids.is_empty() {
+            return Ok(by_title);
+        }
+
+        let placeholders = std::iter::repeat_n("{}", title_ids.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let args: Vec<SqlArg> = title_ids.iter().cloned().map(SqlArg::Text).collect();
+
+        // The submitter comes first for every request, so a title with a
+        // request is a key here even when it has no extra requester rows.
+        let submitters = SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            &format!(
+                "SELECT created_title_id, created_by_user_id
+                   FROM media_requests
+                  WHERE created_title_id IN ({placeholders})
+                  ORDER BY created_at ASC, id ASC"
+            ),
+            &args,
+        )
+        .await?;
+        for row in &submitters {
+            by_title
+                .entry(row.text("created_title_id")?)
+                .or_default()
+                .push(row.text("created_by_user_id")?);
+        }
+
+        let requesters = SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            &format!(
+                "SELECT mr.created_title_id AS created_title_id, mrr.user_id
+                   FROM media_request_requesters mrr
+                   JOIN media_requests mr ON mr.id = mrr.request_id
+                  WHERE mr.created_title_id IN ({placeholders})
+                  ORDER BY mrr.requested_at ASC, mrr.user_id ASC"
+            ),
+            &args,
+        )
+        .await?;
+        for row in &requesters {
+            by_title
+                .entry(row.text("created_title_id")?)
+                .or_default()
+                .push(row.text("user_id")?);
+        }
+
+        for user_ids in by_title.values_mut() {
+            let mut seen = std::collections::HashSet::new();
+            user_ids.retain(|user_id| seen.insert(user_id.clone()));
+        }
+        Ok(by_title)
+    }
+
     async fn get(&self, request_id: &str) -> AppResult<Option<MediaRequest>> {
         let row = SqlRuntime::fetch_optional(
             self.datastore.read_exec(),

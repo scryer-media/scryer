@@ -98,6 +98,31 @@
           "descKey": "settings.refMaintFactsAddedAt"
         },
         {
+          "field": "added_by_user_id",
+          "type": "object",
+          "descKey": "settings.refMaintFactsAddedByUserId"
+        },
+        {
+          "field": "added_by_username",
+          "type": "object",
+          "descKey": "settings.refMaintFactsAddedByUsername"
+        },
+        {
+          "field": "requested",
+          "type": "object",
+          "descKey": "settings.refMaintFactsRequested"
+        },
+        {
+          "field": "requested_by_user_ids",
+          "type": "object",
+          "descKey": "settings.refMaintFactsRequestedByUserIds"
+        },
+        {
+          "field": "requested_by_usernames",
+          "type": "object",
+          "descKey": "settings.refMaintFactsRequestedByUsernames"
+        },
+        {
           "field": "first_imported_at",
           "type": "object",
           "descKey": "settings.refMaintFactsFirstImportedAt"
@@ -240,6 +265,136 @@
           "field": "value",
           "type": "string",
           "descKey": "settings.refMaintFactsAddedAtValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsAddedByUserId",
+      "path": "input.facts.added_by_user_id",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refMaintFactsAddedByUserIdValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsAddedByUsername",
+      "path": "input.facts.added_by_username",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refMaintFactsAddedByUsernameValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsRequested",
+      "path": "input.facts.requested",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "bool",
+          "descKey": "settings.refMaintFactsRequestedValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsRequestedByUserIds",
+      "path": "input.facts.requested_by_user_ids",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string[]",
+          "descKey": "settings.refMaintFactsRequestedByUserIdsValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsRequestedByUsernames",
+      "path": "input.facts.requested_by_usernames",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string[]",
+          "descKey": "settings.refMaintFactsRequestedByUsernamesValue"
         },
         {
           "field": "observed_at",

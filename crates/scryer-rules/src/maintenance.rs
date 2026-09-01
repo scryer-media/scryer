@@ -48,6 +48,11 @@ const MAX_REASON_CODE_LEN: usize = 120;
 /// unsupported, forbidden, or the lookup failed. An unknown fact is never
 /// coerced to `false`, `0`, or `""`; rules that need certainty must test
 /// `status` explicitly.
+///
+/// `Absent` may also carry a `reason`, using the same stable code vocabulary as
+/// `Unknown`. It answers a different question — *why is there no value*, not
+/// *why could Scryer not look* — and is optional, so an absence with nothing
+/// useful to say still serializes without the field.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum Observation<T: Serialize> {
@@ -59,6 +64,8 @@ pub enum Observation<T: Serialize> {
     Absent {
         #[serde(skip_serializing_if = "Option::is_none")]
         observed_at: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
     },
     Unknown {
         reason: String,
@@ -84,13 +91,26 @@ impl<T: Serialize> Observation<T> {
 
     /// Confirmed absence: the source answered, and there is no value.
     pub fn absent() -> Self {
-        Self::Absent { observed_at: None }
+        Self::Absent {
+            observed_at: None,
+            reason: None,
+        }
     }
 
     /// Confirmed absence, with the time the source answered.
     pub fn absent_at(observed_at: impl Into<String>) -> Self {
         Self::Absent {
             observed_at: Some(observed_at.into()),
+            reason: None,
+        }
+    }
+
+    /// Confirmed absence, carrying the stable machine code that explains why
+    /// there is no value. Still an absence: the source answered.
+    pub fn absent_because(reason: impl Into<String>) -> Self {
+        Self::Absent {
+            observed_at: None,
+            reason: Some(reason.into()),
         }
     }
 
@@ -156,6 +176,16 @@ pub struct MaintenanceFactsDoc {
     pub quality_profile_id: Observation<String>,
     /// RFC3339 timestamps.
     pub added_at: Observation<String>,
+    /// Provenance: who put the title in the library, and whether a media
+    /// request is what created it. These are facts, not a classification —
+    /// there is deliberately no derived `origin` field, because "managed",
+    /// "requested", and "scan-discovered" are conclusions a rule composes for
+    /// itself out of these five observations.
+    pub added_by_user_id: Observation<String>,
+    pub added_by_username: Observation<String>,
+    pub requested: Observation<bool>,
+    pub requested_by_user_ids: Observation<Vec<String>>,
+    pub requested_by_usernames: Observation<Vec<String>>,
     pub first_imported_at: Observation<String>,
     pub last_upgraded_at: Observation<String>,
     pub has_file: Observation<bool>,
@@ -526,6 +556,11 @@ pub(crate) fn synthetic_maintenance_input() -> MaintenanceInput {
             tags: Observation::known(vec!["keep".to_string()]),
             quality_profile_id: Observation::known("profile-1".to_string()),
             added_at: Observation::known("2024-01-01T00:00:00Z".to_string()),
+            added_by_user_id: Observation::known("user-1".to_string()),
+            added_by_username: Observation::known("operator".to_string()),
+            requested: Observation::known(true),
+            requested_by_user_ids: Observation::known(vec!["user-1".to_string()]),
+            requested_by_usernames: Observation::known(vec!["operator".to_string()]),
             first_imported_at: Observation::known("2024-01-02T00:00:00Z".to_string()),
             last_upgraded_at: Observation::known("2024-02-01T00:00:00Z".to_string()),
             has_file: Observation::known(true),

@@ -21,7 +21,9 @@ use scryer_rules::maintenance::{
 use scryer_rules::runtime::content_hash;
 use scryer_rules::validation::{ValidationResult, validate_maintenance_rule};
 
-use crate::maintenance_rules::facts::{MaintenanceLibraryRef, build_title_input};
+use crate::maintenance_rules::facts::{
+    MaintenanceLibraryRef, MaintenanceTitlePeople, build_title_input,
+};
 use crate::maintenance_rules::{
     MaintenanceActionSpec, MaintenanceSubjectKind as ActionSubjectKind,
 };
@@ -387,6 +389,10 @@ impl AppUseCase {
                     .push(file);
             }
         }
+        // Preview must see exactly what the evaluator sees, so the same two
+        // batched people lookups run here, once for the whole selection.
+        let requesters_by_title = self.maintenance_requesters_for_titles(&titles).await?;
+        let usernames = self.maintenance_usernames_by_id().await?;
 
         let matcher_content_hash = content_hash(&policy.rego_source);
         let rule_set_id = policy.id.clone();
@@ -408,7 +414,11 @@ impl AppUseCase {
                 .get(&title.id)
                 .map(Vec::as_slice)
                 .unwrap_or_default();
-            let input = build_title_input(evaluated_at, &title, &library, files);
+            let people = MaintenanceTitlePeople {
+                requester_user_ids: requesters_by_title.get(&title.id).map(Vec::as_slice),
+                usernames: &usernames,
+            };
+            let input = build_title_input(evaluated_at, &title, &library, files, people);
 
             let evaluation = evaluator
                 .evaluate(&input)

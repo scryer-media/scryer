@@ -1722,6 +1722,24 @@ pub trait MediaRequestRepository: Send + Sync {
     async fn count_pending_by_facet(&self, library_ids: &[String])
     -> AppResult<MediaRequestCounts>;
 
+    /// Requester user ids for each of `title_ids`, keyed by title id.
+    ///
+    /// A title appears in the map exactly when at least one media request
+    /// created it, so key presence — not a non-empty list — is the answer to
+    /// "was this requested". Each entry lists the submitters of those requests
+    /// in request order, then everyone else who joined them in the order they
+    /// did, deduped keeping the first appearance. The order is stable across
+    /// calls: the facts document is compared between runs, so an order that
+    /// drifted would read as a changed fact.
+    ///
+    /// Batched on purpose: maintenance evaluation asks this for a whole chunk
+    /// of titles at once, and a per-title query would make the pass scale with
+    /// the library.
+    async fn requester_user_ids_by_title_ids(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<HashMap<String, Vec<String>>>;
+
     async fn count_quality_profile_references(
         &self,
         profile_id: &str,

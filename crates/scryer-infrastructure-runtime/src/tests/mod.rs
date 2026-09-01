@@ -40,6 +40,7 @@ mod imports_download_submissions;
 mod library_scan_unmatched;
 mod maintenance_candidates;
 mod maintenance_rule_sets;
+mod media_request_requesters;
 mod migrations;
 mod oauth;
 mod permissions_users_shows;

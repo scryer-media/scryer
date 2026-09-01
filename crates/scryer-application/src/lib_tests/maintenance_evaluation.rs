@@ -1088,6 +1088,127 @@ async fn candidates_are_only_visible_through_the_gate_or_an_explicit_shadow_requ
     assert!(still_hidden.is_empty());
 }
 
+// ── Provenance facts ────────────────────────────────────────────────────────
+
+/// Matches a title a media request created, on behalf of two people, that an
+/// operator named `admin` added. Reads every provenance fact at once so the
+/// batched request lookup, the username resolution, and the contract entries
+/// that let those paths validate at all are all proven by one evaluation.
+const REQUESTED_MATCHER: &str = "package whatever\n\
+     import rego.v1\n\n\
+     match if {\n\
+     \tinput.facts.requested.status == \"known\"\n\
+     \tinput.facts.requested.value\n\
+     \tcount(input.facts.requested_by_user_ids.value) == 2\n\
+     \tinput.facts.added_by_username.value == \"admin\"\n\
+     }\n";
+
+/// [`evaluation_app`] with the media-request repository swapped in and the
+/// acting user present in the user store, so the provenance facts resolve
+/// against something real instead of an empty roster.
+async fn provenance_app() -> (EvaluationFixture, Arc<MockMediaRequestRepo>) {
+    let users = Arc::new(MockUserRepo::default());
+    let (app, user) = bootstrap_with_user_repo(users.clone());
+    UserRepository::create(users.as_ref(), user.clone())
+        .await
+        .expect("seed the acting user");
+
+    let rules = Arc::new(InMemoryMaintenanceRuleRepo::default());
+    let evaluation = Arc::new(InMemoryMaintenanceEvaluationRepo::default());
+    let media_requests = Arc::new(MockMediaRequestRepo::default());
+    let app = app.with_test_overrides(|services| {
+        services
+            .with_maintenance_rule_set_store(rules.clone())
+            .with_maintenance_evaluation_store(evaluation.clone())
+            .with_media_files(Arc::new(MockMediaFileRepo::default()))
+            .with_media_requests(media_requests.clone())
+    });
+
+    (
+        EvaluationFixture {
+            app,
+            user,
+            rules,
+            evaluation,
+        },
+        media_requests,
+    )
+}
+
+/// An approved request that created `title_id`, submitted by `submitter` and
+/// seconded by `seconder`.
+fn approved_request(title_id: &str, submitter: &str, seconder: &str) -> MediaRequest {
+    let now = Utc::now();
+    MediaRequest {
+        id: Id::new().0,
+        library_id: "library-1".to_string(),
+        facet: MediaFacet::Movie,
+        status: scryer_domain::MediaRequestStatus::Approved,
+        identity_fingerprint: format!("fingerprint-{title_id}"),
+        title: "Requested Movie".to_string(),
+        sort_title: None,
+        slug: None,
+        poster_url: None,
+        year: None,
+        overview: None,
+        runtime_minutes: None,
+        language: None,
+        content_status: None,
+        requested_quality_profile_id: None,
+        requested_quality_profile_name: None,
+        requested_monitor_type: None,
+        resolved_by_user_id: None,
+        resolved_at: Some(now),
+        created_title_id: Some(title_id.to_string()),
+        approved_quality_profile_id: None,
+        approved_quality_profile_name: None,
+        external_ids: Vec::new(),
+        requesters: vec![
+            MediaRequestRequester {
+                user_id: submitter.to_string(),
+                username: "admin".to_string(),
+                avatar_url: None,
+                requested_at: now,
+            },
+            MediaRequestRequester {
+                user_id: seconder.to_string(),
+                username: "casey".to_string(),
+                avatar_url: None,
+                requested_at: now + chrono::Duration::seconds(30),
+            },
+        ],
+        created_by_user_id: submitter.to_string(),
+        created_at: now,
+        updated_at: now,
+    }
+}
+
+#[tokio::test]
+async fn a_rule_can_match_on_who_requested_a_title() {
+    let (fixture, media_requests) = provenance_app().await;
+    let requested = seed_title(&fixture.app, &fixture.user, "Requested Movie", true).await;
+    let scanned = seed_title(&fixture.app, &fixture.user, "Scanned Movie", true).await;
+
+    media_requests.requests.lock().await.push(approved_request(
+        &requested.id,
+        &fixture.user.id,
+        "user-casey",
+    ));
+
+    fixture.armed_rule(REQUESTED_MATCHER, 7).await;
+    fixture.open_evaluation_gate().await;
+    let report = fixture.evaluate().await;
+
+    assert_eq!(report.titles_evaluated, 2);
+    assert_eq!(report.candidates_created, 1);
+    let candidate = fixture.only_candidate().await;
+    assert_eq!(
+        candidate.title_id, requested.id,
+        "only the requested title should match; {} must not",
+        scanned.id
+    );
+}
+
 /// Replace the revision currently in force without bumping the revision number,
 /// so a test can change what a rule decides without also triggering the
 /// supersede path.

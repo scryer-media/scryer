@@ -40,7 +40,7 @@ use crate::maintenance_rules::action_catalog::{
 };
 use crate::maintenance_rules::evaluation::MaintenanceEvaluationTrigger;
 use crate::maintenance_rules::facts::{
-    MaintenanceLibraryRef, QUALITY_PROFILE_TAG_PREFIX, build_title_input,
+    MaintenanceLibraryRef, MaintenanceTitlePeople, QUALITY_PROFILE_TAG_PREFIX, build_title_input,
 };
 use crate::maintenance_rules::safety::{MaintenanceActivityCheck, MaintenancePlaybackHold};
 use crate::maintenance_rules::service::MaintenanceRuleSetDetail;
@@ -760,7 +760,25 @@ impl AppUseCase {
             .get(&title.id)
             .map(Vec::as_slice)
             .unwrap_or_default();
-        let input = build_title_input(Utc::now(), &title, &library, files);
+        // A people lookup that fails holds, like every other unresolvable
+        // signal on this path: re-evaluating on a fact snapshot Scryer could
+        // not fully assemble is how an action fires on evidence it never had.
+        let requesters_by_title = match self
+            .maintenance_requesters_for_titles(std::slice::from_ref(&title))
+            .await
+        {
+            Ok(requesters) => requesters,
+            Err(_) => return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION),
+        };
+        let usernames = match self.maintenance_usernames_by_id().await {
+            Ok(usernames) => usernames,
+            Err(_) => return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION),
+        };
+        let people = MaintenanceTitlePeople {
+            requester_user_ids: requesters_by_title.get(&title.id).map(Vec::as_slice),
+            usernames: &usernames,
+        };
+        let input = build_title_input(Utc::now(), &title, &library, files, people);
         let outcome = engine
             .evaluator()
             .evaluate(&input)

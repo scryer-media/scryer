@@ -38,7 +38,9 @@ use serde::Serialize;
 use tracing::warn;
 
 use crate::jobs::{JobKey, JobTriggerSource};
-use crate::maintenance_rules::facts::{MaintenanceLibraryRef, build_title_input};
+use crate::maintenance_rules::facts::{
+    MaintenanceLibraryRef, MaintenanceTitlePeople, build_title_input,
+};
 use crate::maintenance_rules::service::MaintenanceRuleSetDetail;
 use crate::ports::MaintenanceCandidateQuery;
 use crate::settings::keys::{
@@ -788,21 +790,31 @@ impl AppUseCase {
 
         let excluded = self.maintenance_excluded_title_ids(&rule_set.id).await?;
         let titles = self.maintenance_scoped_titles(rule_set).await?;
+        // Users are read once for the whole rule, not per chunk: the roster is
+        // small and bounded, and one snapshot keeps every subject in the run
+        // resolving names against the same view, exactly like the clock.
+        let usernames = self.maintenance_usernames_by_id().await?;
 
         let mut counts = RuleCounts::default();
         for chunk in titles.chunks(MAINTENANCE_EVALUATION_TITLE_CHUNK) {
             let files_by_title = self.maintenance_files_for_titles(chunk).await?;
+            let requesters_by_title = self.maintenance_requesters_for_titles(chunk).await?;
             for title in chunk {
                 let files = files_by_title
                     .get(&title.id)
                     .map(Vec::as_slice)
                     .unwrap_or_default();
+                let people = MaintenanceTitlePeople {
+                    requester_user_ids: requesters_by_title.get(&title.id).map(Vec::as_slice),
+                    usernames: &usernames,
+                };
                 if let Err(error) = self
                     .reconcile_maintenance_title(
                         detail,
                         &mut evaluator,
                         title,
                         files,
+                        people,
                         libraries,
                         &excluded,
                         evaluation_time,
@@ -835,6 +847,7 @@ impl AppUseCase {
         evaluator: &mut MaintenanceRulesEvaluator,
         title: &Title,
         files: &[crate::types::TitleMediaFile],
+        people: MaintenanceTitlePeople<'_>,
         libraries: &HashMap<String, MaintenanceLibraryRef>,
         excluded: &HashSet<String>,
         evaluation_time: DateTime<Utc>,
@@ -891,7 +904,7 @@ impl AppUseCase {
                 id: title.library_id.clone(),
                 name: String::new(),
             });
-        let input = build_title_input(evaluation_time, title, &library, files);
+        let input = build_title_input(evaluation_time, title, &library, files, people);
         let evaluation = evaluator.evaluate(&input);
         counts.evaluated += 1;
 
@@ -1059,5 +1072,39 @@ impl AppUseCase {
                 .push(file);
         }
         Ok(files_by_title)
+    }
+
+    /// One batched media-request load per chunk, keyed by title. A title is a
+    /// key only when a request created it, which is what the `requested` fact
+    /// reads.
+    pub(crate) async fn maintenance_requesters_for_titles(
+        &self,
+        titles: &[Title],
+    ) -> AppResult<HashMap<String, Vec<String>>> {
+        let title_ids: Vec<String> = titles.iter().map(|title| title.id.clone()).collect();
+        if title_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        self.services
+            .catalog
+            .media_requests
+            .requester_user_ids_by_title_ids(&title_ids)
+            .await
+    }
+
+    /// Username by user id, read once per evaluation run.
+    ///
+    /// A user that no longer exists is simply missing from the map, which the
+    /// facts builder turns into an unknown name rather than a wrong one.
+    pub(crate) async fn maintenance_usernames_by_id(&self) -> AppResult<HashMap<String, String>> {
+        Ok(self
+            .services
+            .identity
+            .users
+            .list_all()
+            .await?
+            .into_iter()
+            .map(|user| (user.id, user.username))
+            .collect())
     }
 }
