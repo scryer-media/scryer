@@ -66,6 +66,7 @@ pub fn solver_provider_name(provider: scryer_domain::IndexerProxyProviderType) -
         scryer_domain::IndexerProxyProviderType::Byparr => "Byparr",
         scryer_domain::IndexerProxyProviderType::Trawl => "Trawl",
         scryer_domain::IndexerProxyProviderType::Http => "HTTP proxy",
+        scryer_domain::IndexerProxyProviderType::Socks4 => "SOCKS4 proxy",
         scryer_domain::IndexerProxyProviderType::Socks5 => "SOCKS5 proxy",
     }
 }
@@ -74,10 +75,10 @@ pub fn solver_error_message(
     provider: scryer_domain::IndexerProxyProviderType,
     kind: SolverErrorKind,
 ) -> &'static str {
-    use scryer_domain::IndexerProxyProviderType::{Byparr, Http, Socks5, Trawl};
+    use scryer_domain::IndexerProxyProviderType::{Byparr, Http, Socks4, Socks5, Trawl};
 
     match (provider, kind) {
-        (Http | Socks5, _) => TRANSPORT_PROXY_NOT_A_SOLVER_MESSAGE,
+        (Http | Socks4 | Socks5, _) => TRANSPORT_PROXY_NOT_A_SOLVER_MESSAGE,
         (Byparr, SolverErrorKind::Unreachable) => BYPARR_UNREACHABLE_MESSAGE,
         (Byparr, SolverErrorKind::Timeout) => BYPARR_TIMEOUT_MESSAGE,
         (Byparr, SolverErrorKind::Unavailable) => BYPARR_UNAVAILABLE_MESSAGE,
@@ -139,6 +140,7 @@ pub fn solver_solve_request(
         // harmless reading if a caller ever gets here by mistake.
         scryer_domain::IndexerProxyProviderType::Byparr
         | scryer_domain::IndexerProxyProviderType::Http
+        | scryer_domain::IndexerProxyProviderType::Socks4
         | scryer_domain::IndexerProxyProviderType::Socks5 => request_timeout_seconds,
         scryer_domain::IndexerProxyProviderType::Trawl => {
             request_timeout_seconds.saturating_mul(1_000)

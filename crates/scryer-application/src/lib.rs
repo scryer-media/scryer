@@ -40,6 +40,7 @@ mod image_proxy;
 mod import;
 mod indexer_category;
 mod indexer_errors;
+pub mod indexer_transport_proxy;
 pub use indexer_category::{
     CATEGORY_MISMATCH_CODE, IndexerCategoryFamily, NZB_HEAD_PROBE_BYTES, enforce_nzb_category_gate,
     indexer_category_contradicts_facet, indexer_category_family, nzb_head_category,

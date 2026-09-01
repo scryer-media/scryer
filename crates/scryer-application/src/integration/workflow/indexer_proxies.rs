@@ -317,8 +317,8 @@ fn normalize_indexer_proxy_base_url(raw: &str) -> AppResult<String> {
 #[derive(Debug)]
 struct NormalizedProxyEndpoint {
     base_url: String,
-    /// `Some(true)` when the operator wrote `socks5h://`. `None` when the
-    /// scheme says nothing about DNS.
+    /// `Some(true)` when the operator wrote `socks5h://` or `socks4a://`.
+    /// `None` when the scheme says nothing about DNS.
     scheme_remote_dns: Option<bool>,
 }
 
@@ -367,18 +367,25 @@ fn normalize_indexer_proxy_endpoint(
             base_url: trimmed.to_string(),
             scheme_remote_dns: None,
         }),
-        (Provider::Socks5, "socks5") => Ok(NormalizedProxyEndpoint {
-            base_url: trimmed.to_string(),
-            scheme_remote_dns: None,
-        }),
-        // `socks5h` is the same proxy with proxy-side name resolution. Store
-        // the canonical `socks5` URL and carry the difference in `remote_dns`
-        // so there is one place that answers "where is DNS resolved?".
-        (Provider::Socks5, "socks5h") => {
+        (Provider::Socks4, "socks4") | (Provider::Socks5, "socks5") => {
+            Ok(NormalizedProxyEndpoint {
+                base_url: trimmed.to_string(),
+                scheme_remote_dns: None,
+            })
+        }
+        // `socks5h` / `socks4a` are the same proxy with proxy-side name
+        // resolution. Store the canonical local-DNS URL and carry the
+        // difference in `remote_dns` so there is one place that answers "where
+        // is DNS resolved?".
+        (Provider::Socks4, "socks4a") | (Provider::Socks5, "socks5h") => {
+            let canonical_scheme = match provider_type {
+                Provider::Socks4 => "socks4",
+                _ => "socks5",
+            };
             let mut canonical = parsed.clone();
-            canonical
-                .set_scheme("socks5")
-                .map_err(|_| AppError::Validation("invalid socks5h proxy base URL".to_string()))?;
+            canonical.set_scheme(canonical_scheme).map_err(|_| {
+                AppError::Validation(format!("invalid {} proxy base URL", parsed.scheme()))
+            })?;
             Ok(NormalizedProxyEndpoint {
                 base_url: canonical.as_str().trim_end_matches('/').to_string(),
                 scheme_remote_dns: Some(true),
@@ -386,6 +393,9 @@ fn normalize_indexer_proxy_endpoint(
         }
         (Provider::Http, _) => Err(AppError::Validation(
             "HTTP proxy base URL must use http or https".into(),
+        )),
+        (Provider::Socks4, _) => Err(AppError::Validation(
+            "SOCKS4 proxy base URL must use socks4 or socks4a".into(),
         )),
         (Provider::Socks5, _) => Err(AppError::Validation(
             "SOCKS5 proxy base URL must use socks5 or socks5h".into(),
@@ -430,6 +440,17 @@ fn validate_proxy_credentials(
             "challenge-solver proxies do not accept a username or password".into(),
         ));
     }
+    // SOCKS4 authentication is not wired in our HTTP client (reqwest builds its
+    // SOCKS4 connector without `with_auth`, so a username would be silently
+    // dropped on the wire). Rejecting is honest; accepting would promise an
+    // authenticated hop that never happens.
+    if provider_type == scryer_domain::IndexerProxyProviderType::Socks4
+        && (username.is_some() || password.is_some())
+    {
+        return Err(AppError::Validation(
+            "SOCKS4 proxies do not carry credentials; use SOCKS5 for an authenticated proxy".into(),
+        ));
+    }
     if password.is_some() && username.is_none() {
         return Err(AppError::Validation(
             "indexer proxy password requires a username".into(),
@@ -447,13 +468,25 @@ fn resolve_remote_dns(
 ) -> AppResult<bool> {
     if scheme_remote_dns == Some(true) && requested == Some(false) {
         return Err(AppError::Validation(
-            "socks5h:// resolves names at the proxy; use socks5:// to resolve them locally".into(),
+            "socks5h:// and socks4a:// resolve names at the proxy; use socks5:// or socks4:// to resolve them locally"
+                .into(),
         ));
     }
     let resolved = requested.or(scheme_remote_dns).unwrap_or(false);
-    if resolved && provider_type != scryer_domain::IndexerProxyProviderType::Socks5 {
+    // SOCKS is the only family where Scryer chooses: reqwest expresses
+    // proxy-side resolution as `socks5h` / `socks4a`. An HTTP CONNECT proxy
+    // always receives the destination as a name and resolves it itself, so
+    // there is no flag to set, and a solver fetches the page entirely on its
+    // own side.
+    if resolved
+        && !matches!(
+            provider_type,
+            scryer_domain::IndexerProxyProviderType::Socks4
+                | scryer_domain::IndexerProxyProviderType::Socks5
+        )
+    {
         return Err(AppError::Validation(
-            "remote DNS applies only to SOCKS5 proxies".into(),
+            "remote DNS applies only to SOCKS proxies".into(),
         ));
     }
     Ok(resolved)
@@ -649,6 +682,7 @@ pub const TRANSPORT_PROXY_DOWNSTREAM_MESSAGE: &str =
 fn transport_proxy_name(provider_type: scryer_domain::IndexerProxyProviderType) -> &'static str {
     match provider_type {
         scryer_domain::IndexerProxyProviderType::Http => "HTTP proxy",
+        scryer_domain::IndexerProxyProviderType::Socks4 => "SOCKS4 proxy",
         scryer_domain::IndexerProxyProviderType::Socks5 => "SOCKS5 proxy",
         scryer_domain::IndexerProxyProviderType::Byparr
         | scryer_domain::IndexerProxyProviderType::Trawl => "challenge solver",
@@ -753,31 +787,9 @@ async fn probe_transport_proxy_health(
     ))
 }
 
-/// The proxy URL as the HTTP client should see it. `remote_dns` is stored as a
-/// flag but reqwest expresses it as the `socks5h` scheme.
-///
-/// WP2 needs this same mapping on the egress path; it lives here for now
-/// because the health probe is the only caller.
-fn effective_transport_proxy_url(config: &scryer_domain::IndexerProxyConfig) -> String {
-    let base_url = config.base_url.trim();
-    match config.remote_dns {
-        true => base_url
-            .strip_prefix("socks5://")
-            .map(|rest| format!("socks5h://{rest}"))
-            .unwrap_or_else(|| base_url.to_string()),
-        false => base_url.to_string(),
-    }
-}
-
-fn transport_proxy_credentials(
-    config: &scryer_domain::IndexerProxyConfig,
-) -> Option<scryer_outbound_http::TransportProxyCredentials<'_>> {
-    let username = config.username_encrypted.as_deref()?;
-    Some(scryer_outbound_http::TransportProxyCredentials {
-        username,
-        password: config.password_encrypted.as_deref().unwrap_or(""),
-    })
-}
+use crate::indexer_transport_proxy::{
+    transport_proxy_credentials, transport_proxy_egress_url as effective_transport_proxy_url,
+};
 
 #[cfg(test)]
 mod indexer_proxy_tests {
@@ -842,11 +854,52 @@ mod indexer_proxy_tests {
     }
 
     #[test]
-    fn remote_dns_is_only_meaningful_for_socks5() {
+    fn remote_dns_is_only_meaningful_for_socks() {
         assert!(!resolve_remote_dns(Provider::Http, Some(false), None).expect("off is fine"));
+        // An HTTP CONNECT proxy always forwards a hostname; there is no flag to
+        // set, so asking for one is a configuration error rather than a no-op.
         assert!(resolve_remote_dns(Provider::Http, Some(true), None).is_err());
         assert!(resolve_remote_dns(Provider::Trawl, Some(true), None).is_err());
         assert!(resolve_remote_dns(Provider::Socks5, Some(true), None).expect("socks5 allows it"));
+        // reqwest speaks socks4a, so SOCKS4 gets proxy-side DNS as well.
+        assert!(resolve_remote_dns(Provider::Socks4, Some(true), None).expect("socks4a"));
+    }
+
+    #[test]
+    fn socks4_endpoints_round_trip_like_socks5() {
+        assert_eq!(
+            normalize_indexer_proxy_endpoint(Provider::Socks4, "socks4://gateway:1080")
+                .expect("socks4 proxy")
+                .base_url,
+            "socks4://gateway:1080"
+        );
+        let endpoint = normalize_indexer_proxy_endpoint(Provider::Socks4, "socks4a://gateway:1080")
+            .expect("socks4a is accepted");
+        assert_eq!(endpoint.base_url, "socks4://gateway:1080");
+        assert_eq!(endpoint.scheme_remote_dns, Some(true));
+        assert!(
+            normalize_indexer_proxy_endpoint(Provider::Socks4, "socks5://gateway:1080").is_err()
+        );
+        assert!(
+            normalize_indexer_proxy_endpoint(Provider::Socks5, "socks4://gateway:1080").is_err()
+        );
+    }
+
+    /// reqwest builds its SOCKS4 connector without `with_auth`, so a username
+    /// would be dropped on the wire. Rejecting is honest; silently accepting
+    /// would promise an authenticated hop that never happens.
+    #[test]
+    fn socks4_rejects_credentials_it_cannot_send() {
+        assert!(validate_proxy_credentials(Provider::Socks4, None, None).is_ok());
+        let error = validate_proxy_credentials(Provider::Socks4, Some("operator"), None)
+            .expect_err("socks4 cannot carry a username");
+        assert!(error.to_string().contains("SOCKS4"), "{error}");
+        assert!(
+            validate_proxy_credentials(Provider::Socks5, Some("operator"), Some("s3cret")).is_ok()
+        );
+        assert!(
+            validate_proxy_credentials(Provider::Http, Some("operator"), Some("s3cret")).is_ok()
+        );
     }
 
     #[test]

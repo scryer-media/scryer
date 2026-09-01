@@ -1560,27 +1560,106 @@ pub struct TransportProxyCredentials<'a> {
 /// supplies the SOCKS default port (1080) when the URL omits one, and the
 /// `socks5h` scheme is what makes the proxy resolve the destination hostname.
 ///
-/// This is the WP1 seam: the indexer-proxy health probe is currently its only
-/// caller and builds a client per call. WP2 owns the real egress path and is
-/// expected to grow a cached factory around this same construction, so keep
-/// the client options here in step with `reqwest_client_builder`.
+/// Every caller of this family goes through `transport_proxy_egress_url` for
+/// the `remote_dns` → `socks5h`/`socks4a` mapping, so the mapping is not forked
+/// across the health probe and the egress paths.
 pub fn indexer_transport_proxy_reqwest_client(
     proxy_url: &str,
     credentials: Option<TransportProxyCredentials<'_>>,
     timeout: Duration,
 ) -> Result<Client, reqwest::Error> {
-    let mut proxy = reqwest::Proxy::all(proxy_url)?;
-    if let Some(credentials) = credentials {
-        proxy = proxy.basic_auth(credentials.username, credentials.password);
-    }
     reqwest_client_builder()
         .timeout(timeout)
         .redirect(reqwest::redirect::Policy::limited(
             DEFAULT_TRUSTED_REDIRECT_HOPS,
         ))
         .user_agent(INDEXER_PROXY_USER_AGENT)
-        .proxy(proxy)
+        .proxy(transport_proxy(proxy_url, credentials)?)
         .build()
+}
+
+/// Async transport-proxied client that also trusts the operator-uploaded
+/// private roots. A CONNECT tunnel or a SOCKS hop still terminates TLS at the
+/// destination, so an indexer behind a private CA needs the same bundle the
+/// direct plugin client gets.
+pub fn indexer_transport_proxy_reqwest_client_with_extra_ca(
+    proxy_url: &str,
+    credentials: Option<TransportProxyCredentials<'_>>,
+    timeout: Duration,
+    extra_ca_bundle_pem: &str,
+) -> Result<Client, String> {
+    let proxy = transport_proxy(proxy_url, credentials)
+        .map_err(|error| format!("failed to build indexer transport proxy: {error}"))?;
+    let mut builder = reqwest_client_builder()
+        .timeout(timeout)
+        .redirect(reqwest::redirect::Policy::limited(
+            DEFAULT_TRUSTED_REDIRECT_HOPS,
+        ))
+        .user_agent(INDEXER_PROXY_USER_AGENT)
+        .proxy(proxy);
+    if !extra_ca_bundle_pem.trim().is_empty() {
+        builder = builder.tls_certs_merge(uploaded_root_certificates(extra_ca_bundle_pem)?);
+    }
+    builder
+        .build()
+        .map_err(|error| format!("failed to build indexer transport proxy client: {error}"))
+}
+
+/// Blocking twin of `indexer_transport_proxy_reqwest_client_with_extra_ca`.
+/// The plugin HTTP host is a blocking worker, so its transport-proxied egress
+/// needs a `reqwest::blocking::Client` rather than an async one.
+pub fn blocking_indexer_transport_proxy_reqwest_client(
+    proxy_url: &str,
+    credentials: Option<TransportProxyCredentials<'_>>,
+    timeout: Duration,
+    extra_ca_bundle_pem: &str,
+) -> Result<BlockingClient, String> {
+    let proxy = transport_proxy(proxy_url, credentials)
+        .map_err(|error| format!("failed to build indexer transport proxy: {error}"))?;
+    let mut builder = blocking_reqwest_client_builder()
+        .timeout(timeout)
+        .redirect(reqwest::redirect::Policy::limited(
+            DEFAULT_TRUSTED_REDIRECT_HOPS,
+        ))
+        .user_agent(INDEXER_PROXY_USER_AGENT)
+        .proxy(proxy);
+    if !extra_ca_bundle_pem.trim().is_empty() {
+        builder = builder.tls_certs_merge(uploaded_root_certificates(extra_ca_bundle_pem)?);
+    }
+    builder
+        .build()
+        .map_err(|error| format!("failed to build indexer transport proxy client: {error}"))
+}
+
+fn transport_proxy(
+    proxy_url: &str,
+    credentials: Option<TransportProxyCredentials<'_>>,
+) -> Result<reqwest::Proxy, reqwest::Error> {
+    let mut proxy = reqwest::Proxy::all(proxy_url)?;
+    if let Some(credentials) = credentials {
+        proxy = proxy.basic_auth(credentials.username, credentials.password);
+    }
+    Ok(proxy)
+}
+
+/// The stored proxy endpoint as reqwest must see it.
+///
+/// `remote_dns` is persisted as one boolean, but reqwest expresses proxy-side
+/// name resolution through the scheme: `socks5` → `socks5h` and `socks4` →
+/// `socks4a`. HTTP CONNECT proxies always forward the destination host as a
+/// name, so the flag has no scheme to map onto there and the URL is returned
+/// unchanged. This is the single place that mapping happens.
+pub fn transport_proxy_egress_url(base_url: &str, remote_dns: bool) -> String {
+    let base_url = base_url.trim();
+    if !remote_dns {
+        return base_url.to_string();
+    }
+    for (local, remote) in [("socks5://", "socks5h://"), ("socks4://", "socks4a://")] {
+        if let Some(rest) = base_url.strip_prefix(local) {
+            return format!("{remote}{rest}");
+        }
+    }
+    base_url.to_string()
 }
 
 pub fn external_arr_reqwest_client() -> Client {
@@ -2460,6 +2539,187 @@ mod tests {
 
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
+
+    #[test]
+    fn transport_proxy_egress_url_maps_remote_dns_onto_the_scheme() {
+        // Local resolution: the stored URL is what reqwest gets.
+        assert_eq!(
+            transport_proxy_egress_url("socks5://gateway:1080", false),
+            "socks5://gateway:1080"
+        );
+        assert_eq!(
+            transport_proxy_egress_url("socks4://gateway:1080", false),
+            "socks4://gateway:1080"
+        );
+        // Proxy-side resolution is a scheme in reqwest, a flag in the store.
+        assert_eq!(
+            transport_proxy_egress_url("socks5://gateway:1080", true),
+            "socks5h://gateway:1080"
+        );
+        assert_eq!(
+            transport_proxy_egress_url("socks4://gateway:1080", true),
+            "socks4a://gateway:1080"
+        );
+        // HTTP CONNECT always forwards a hostname; the flag has no scheme to
+        // map onto, and the URL is returned untouched rather than mangled.
+        assert_eq!(
+            transport_proxy_egress_url("http://gateway:3128", true),
+            "http://gateway:3128"
+        );
+        assert_eq!(
+            transport_proxy_egress_url("  https://gateway:3128  ", false),
+            "https://gateway:3128"
+        );
+    }
+
+    #[test]
+    fn transport_proxy_client_accepts_every_supported_scheme() {
+        for proxy_url in [
+            "http://gateway:3128",
+            "https://gateway:3128",
+            "socks4://gateway:1080",
+            "socks4a://gateway:1080",
+            "socks5://gateway:1080",
+            "socks5h://gateway:1080",
+        ] {
+            indexer_transport_proxy_reqwest_client(proxy_url, None, Duration::from_secs(5))
+                .unwrap_or_else(|error| panic!("{proxy_url} should build a client: {error}"));
+            blocking_indexer_transport_proxy_reqwest_client(
+                proxy_url,
+                None,
+                Duration::from_secs(5),
+                "",
+            )
+            .unwrap_or_else(|error| panic!("{proxy_url} should build a blocking client: {error}"));
+        }
+    }
+
+    /// `Proxy::all` is lazy: it accepts any parseable URL and only rejects an
+    /// unsupported scheme when it tries to dial. Scheme validation therefore
+    /// belongs to the configuration workflow (`normalize_indexer_proxy_endpoint`),
+    /// not to this factory — pinned here so nobody assumes otherwise.
+    #[test]
+    fn transport_proxy_client_does_not_validate_the_proxy_scheme() {
+        assert!(
+            indexer_transport_proxy_reqwest_client(
+                "ftp://gateway:2121",
+                None,
+                Duration::from_secs(5),
+            )
+            .is_ok()
+        );
+        assert!(
+            indexer_transport_proxy_reqwest_client("not a url", None, Duration::from_secs(5),)
+                .is_err(),
+            "an unparseable proxy URL is still rejected"
+        );
+    }
+
+    /// Minimal in-process HTTP proxy: accepts absolute-form requests, records
+    /// what it was asked to fetch, and answers without contacting the origin.
+    async fn spawn_recording_http_proxy() -> (String, Arc<Mutex<Vec<String>>>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("proxy double should bind");
+        let address = listener.local_addr().expect("proxy double should be bound");
+        let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let recorder = Arc::clone(&seen);
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let recorder = Arc::clone(&recorder);
+                tokio::spawn(async move {
+                    let mut buffer = vec![0u8; 4096];
+                    let mut received = Vec::new();
+                    loop {
+                        let Ok(read) = stream.read(&mut buffer).await else {
+                            return;
+                        };
+                        if read == 0 {
+                            break;
+                        }
+                        received.extend_from_slice(&buffer[..read]);
+                        if received.windows(4).any(|window| window == b"\r\n\r\n") {
+                            break;
+                        }
+                    }
+                    let request = String::from_utf8_lossy(&received).to_string();
+                    if let Some(line) = request.lines().next() {
+                        recorder
+                            .lock()
+                            .expect("proxy recorder lock")
+                            .push(line.to_string());
+                    }
+                    let _ = stream
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\nContent-Length: 7\r\nContent-Type: text/plain\r\n\r\nproxied",
+                        )
+                        .await;
+                    let _ = stream.flush().await;
+                });
+            }
+        });
+        (format!("http://{address}"), seen)
+    }
+
+    #[tokio::test]
+    async fn transport_proxy_client_egresses_through_the_proxy_with_basic_auth() {
+        let (proxy_url, seen) = spawn_recording_http_proxy().await;
+        let client = indexer_transport_proxy_reqwest_client(
+            &proxy_url,
+            Some(TransportProxyCredentials {
+                username: "operator",
+                password: "s3cret",
+            }),
+            Duration::from_secs(5),
+        )
+        .expect("proxied client should build");
+
+        let response = client
+            .get("http://indexer.invalid/api?t=caps")
+            .send()
+            .await
+            .expect("the proxy double answers");
+        assert_eq!(response.status().as_u16(), 200);
+        assert_eq!(response.text().await.expect("body"), "proxied");
+
+        let seen = seen.lock().expect("proxy recorder lock").clone();
+        assert_eq!(seen.len(), 1, "expected exactly one proxied request");
+        // Absolute-form request line proves the hop went through the proxy
+        // rather than straight at the (nonexistent) origin.
+        assert!(
+            seen[0].contains("http://indexer.invalid/api?t=caps"),
+            "unexpected proxied request line: {}",
+            seen[0]
+        );
+    }
+
+    #[tokio::test]
+    async fn transport_proxy_client_honors_its_request_timeout() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("silent proxy should bind");
+        let address = listener.local_addr().expect("silent proxy should be bound");
+        tokio::spawn(async move {
+            // Accept and never answer: the client's own timeout must fire.
+            let mut held = Vec::new();
+            while let Ok((stream, _)) = listener.accept().await {
+                held.push(stream);
+            }
+        });
+        let client = indexer_transport_proxy_reqwest_client(
+            &format!("http://{address}"),
+            None,
+            Duration::from_millis(250),
+        )
+        .expect("proxied client should build");
+
+        let error = client
+            .get("http://indexer.invalid/api")
+            .send()
+            .await
+            .expect_err("a silent proxy must time the request out");
+        assert!(error.is_timeout(), "unexpected error: {error}");
+    }
 
     #[test]
     fn indexer_timeout_policy_is_fixed_for_direct_and_proxied_requests() {

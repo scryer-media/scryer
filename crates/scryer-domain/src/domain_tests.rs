@@ -370,6 +370,7 @@ fn indexer_proxy_provider_types_round_trip() {
         IndexerProxyProviderType::Byparr,
         IndexerProxyProviderType::Trawl,
         IndexerProxyProviderType::Http,
+        IndexerProxyProviderType::Socks4,
         IndexerProxyProviderType::Socks5,
     ] {
         assert_eq!(
@@ -385,9 +386,15 @@ fn indexer_proxy_provider_types_round_trip() {
         IndexerProxyProviderType::parse(" SOCKS5 "),
         Some(IndexerProxyProviderType::Socks5)
     );
+    assert_eq!(
+        IndexerProxyProviderType::parse(" Socks4 "),
+        Some(IndexerProxyProviderType::Socks4)
+    );
     assert_eq!(IndexerProxyProviderType::parse("unknown"), None);
     // `socks5h` is not its own provider: it is Socks5 plus remote DNS.
     assert_eq!(IndexerProxyProviderType::parse("socks5h"), None);
+    // `socks4a` is likewise Socks4 plus remote DNS, not a fifth provider.
+    assert_eq!(IndexerProxyProviderType::parse("socks4a"), None);
 }
 
 #[test]
@@ -402,6 +409,10 @@ fn indexer_proxy_provider_types_split_solver_from_transport() {
     );
     assert_eq!(
         IndexerProxyProviderType::Http.kind(),
+        IndexerProxyKind::Transport
+    );
+    assert_eq!(
+        IndexerProxyProviderType::Socks4.kind(),
         IndexerProxyKind::Transport
     );
     assert_eq!(

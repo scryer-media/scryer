@@ -11,7 +11,8 @@ use reqwest::{Method, StatusCode};
 use scryer_application::{
     CapturedIndexerHttpHeader, CapturedIndexerHttpResponse, IndexerErrorOperation,
     IndexerErrorRecorder, challenge_solver as solver, classify_indexer_http_response,
-    indexer_response_content_type, unknown_indexer_error,
+    indexer_response_content_type, indexer_transport_proxy as transport_proxy,
+    unknown_indexer_error,
 };
 
 const DEFAULT_MAX_HTTP_RESPONSE_BYTES: u64 = 50 * 1024 * 1024;
@@ -90,11 +91,27 @@ struct PluginHttpWorkerRuntime {
     extra_ca_bundle_pem: String,
     request_clients: HashMap<PluginHttpRequestClientKey, CachedPluginHttpClient>,
     proxy_client: Option<Client>,
+    transport_proxy_client: Option<CachedTransportProxyClient>,
 }
 
 struct CachedPluginHttpClient {
     client: Client,
     created_at: Instant,
+}
+
+/// A transport-proxied egress client plus the proxy revision it was built for.
+///
+/// Invalidation rule: the cached client is dropped when
+/// `indexer_transport_proxy::transport_proxy_revision` changes — that is
+/// `(proxy config id, updated_at)` — or when the operator trust bundle changes
+/// (`sync_trust_bundle` clears it alongside the pinned clients). Proxy *health*
+/// writes deliberately do not bump `updated_at`, so a flapping proxy does not
+/// rebuild a client on every request, while an endpoint, credential,
+/// `remote_dns` or reassignment edit does. Only ever one entry: a plugin HTTP
+/// host serves one indexer, which has at most one assigned proxy.
+struct CachedTransportProxyClient {
+    revision: String,
+    client: Client,
 }
 
 impl CachedPluginHttpClient {
@@ -170,6 +187,7 @@ impl PluginHttpWorkerRuntime {
             // trust bundle also drops every old client off the async runtime.
             self.request_clients.clear();
             self.proxy_client = None;
+            self.transport_proxy_client = None;
         }
         Ok(extra_ca_bundle_pem)
     }
@@ -214,6 +232,35 @@ impl PluginHttpWorkerRuntime {
             scryer_outbound_http::blocking_indexer_proxy_reqwest_client(&extra_ca_bundle_pem)
                 .map_err(|error| error.to_string())?;
         self.proxy_client = Some(client.clone());
+        Ok(client)
+    }
+
+    /// The egress client for a transport proxy: every request this plugin makes
+    /// for the assigned indexer is carried through it.
+    fn transport_proxy_client(
+        &mut self,
+        runtime: &PluginHttpRuntime,
+        config: &scryer_domain::IndexerProxyConfig,
+    ) -> HostResult<Client> {
+        let extra_ca_bundle_pem = self.sync_trust_bundle(runtime)?;
+        let revision = transport_proxy::transport_proxy_revision(config);
+        if let Some(cached) = &self.transport_proxy_client
+            && cached.revision == revision
+        {
+            return Ok(cached.client.clone());
+        }
+
+        let client = transport_proxy::blocking_transport_proxied_reqwest_client(
+            config,
+            &extra_ca_bundle_pem,
+        )
+        .inspect_err(|message| {
+            transport_proxy::record_transport_proxy_failure(config, message);
+        })?;
+        self.transport_proxy_client = Some(CachedTransportProxyClient {
+            revision,
+            client: client.clone(),
+        });
         Ok(client)
     }
 }
@@ -473,13 +520,38 @@ impl PluginHttpHost {
 
         enforce_allowed_hosts(allowed_hosts.as_deref(), &request.url)?;
 
-        // The allowlist is the primary boundary; the guarded, DNS-pinned client
-        // is the second layer that keeps a declared host from reaching
-        // link-local / cloud-metadata space.
-        let request_client = worker_runtime
-            .lock()
-            .map_err(|error| format!("plugin HTTP worker runtime lock poisoned: {error}"))?
-            .pinned_request_client(&runtime, &request.url)?;
+        // A transport proxy carries bytes and solves nothing: the only change
+        // it makes to this path is which client dials. Everything downstream —
+        // header capture, set-cookie handling, captured responses, the response
+        // size cap — is the direct path's, unchanged.
+        let transport_policy = indexer_proxy_policy
+            .as_ref()
+            .filter(|policy| policy.config.kind() == scryer_domain::IndexerProxyKind::Transport);
+
+        let request_client = if let Some(policy) = transport_policy {
+            if !policy.config.is_enabled {
+                return Err("Indexer proxy is disabled for this indexer.".to_string());
+            }
+            // The DNS-pinning guard cannot apply here: the socket is opened to
+            // the proxy, and with `remote_dns` the destination name is resolved
+            // at the proxy and may not resolve locally at all. The allowlist
+            // above remains the primary boundary, and the operator has
+            // explicitly routed this indexer through a proxy they configured.
+            scryer_outbound_http::validate_operator_http_url(&request.url, "plugin HTTP")
+                .map_err(|error| error.to_string())?;
+            worker_runtime
+                .lock()
+                .map_err(|error| format!("plugin HTTP worker runtime lock poisoned: {error}"))?
+                .transport_proxy_client(&runtime, &policy.config)?
+        } else {
+            // The allowlist is the primary boundary; the guarded, DNS-pinned
+            // client is the second layer that keeps a declared host from
+            // reaching link-local / cloud-metadata space.
+            worker_runtime
+                .lock()
+                .map_err(|error| format!("plugin HTTP worker runtime lock poisoned: {error}"))?
+                .pinned_request_client(&runtime, &request.url)?
+        };
         let started_at = Instant::now();
         let request_is_get = request
             .method
@@ -488,9 +560,10 @@ impl PluginHttpHost {
             .eq_ignore_ascii_case("GET");
         // Reuse a previously solved clearance session for this proxy + origin so
         // repeat requests skip the solver entirely until the session goes stale.
+        // Transport proxies have no clearance to merge.
         let session_headers = indexer_proxy_policy
             .as_ref()
-            .filter(|_| request_is_get)
+            .filter(|policy| request_is_get && policy.config.is_challenge_solver())
             .map(|policy| {
                 solver::SolvedSessionCache::shared()
                     .session_headers(&policy.config.id, &request.url)
@@ -503,7 +576,11 @@ impl PluginHttpHost {
             Some(timeout),
             &session_headers,
             destination_cooldown_key.as_ref(),
+            transport_policy.map(|policy| &policy.config),
         )?;
+        if let Some(policy) = transport_policy {
+            transport_proxy::record_transport_proxy_success(&policy.config);
+        }
         let status = response.status();
         let status_code = status.as_u16();
         let headers = response_headers(&response);
@@ -533,7 +610,9 @@ impl PluginHttpHost {
             return Ok(direct_body);
         }
 
-        if let Some(policy) = indexer_proxy_policy.as_ref()
+        if let Some(policy) = indexer_proxy_policy
+            .as_ref()
+            .filter(|policy| policy.config.is_challenge_solver())
             && solver::looks_like_challenge_response(status_code, &headers, &direct_body)
         {
             let method = request.method.as_deref().unwrap_or("GET");
@@ -852,6 +931,10 @@ fn execute_request_with_extra_headers(
     timeout: Option<Duration>,
     extra_headers: &[(String, String)],
     destination_cooldown_key: Option<&scryer_outbound_http::DestinationKey>,
+    // `Some` only when `client` dials through a transport proxy. It changes
+    // nothing about the request; it only lets a connector failure be reported
+    // as "the proxy is unreachable" rather than "the indexer is down".
+    transport_proxy_config: Option<&scryer_domain::IndexerProxyConfig>,
 ) -> HostResult<reqwest::blocking::Response> {
     let method = Method::from_bytes(
         request
@@ -911,6 +994,21 @@ fn execute_request_with_extra_headers(
     .map_err(|error| match error {
         scryer_outbound_http::BlockingOutboundHttpError::Request(error) if error.is_timeout() => {
             "timeout".to_string()
+        }
+        scryer_outbound_http::BlockingOutboundHttpError::Request(error) => {
+            match transport_proxy_config
+                .and_then(|config| transport_proxy::transport_proxy_connect_failure(config, &error))
+            {
+                Some(message) => {
+                    // Recorded here because the blocking worker cannot reach a
+                    // repository; the async pass that owns one flushes it.
+                    if let Some(config) = transport_proxy_config {
+                        transport_proxy::record_transport_proxy_failure(config, &message);
+                    }
+                    message
+                }
+                None => scryer_outbound_http::BlockingOutboundHttpError::Request(error).to_string(),
+            }
         }
         other => other.to_string(),
     })
@@ -1184,6 +1282,8 @@ fn execute_challenge_solver_request(
             original_timeout,
             &retry_headers,
             destination_cooldown_key,
+            // The solver replay is a direct hop, by construction.
+            None,
         )?;
         let status = retry.status();
         let headers = response_headers(&retry);
@@ -1237,6 +1337,191 @@ fn execute_challenge_solver_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Minimal in-process HTTP proxy built from raw tokio.
+    ///
+    /// It accepts the absolute-form request line a CONNECT-style HTTP proxy
+    /// receives for cleartext destinations, records it, and answers itself. If
+    /// the plugin host ever egressed directly instead, nothing would arrive
+    /// here and the assertion on the recorded request lines would fail.
+    struct RecordingHttpProxy {
+        url: String,
+        seen: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl RecordingHttpProxy {
+        async fn start(body: &'static str) -> Self {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("proxy double should bind");
+            let address = listener.local_addr().expect("proxy double should be bound");
+            let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+            let recorder = Arc::clone(&seen);
+            tokio::spawn(async move {
+                while let Ok((mut stream, _)) = listener.accept().await {
+                    let recorder = Arc::clone(&recorder);
+                    tokio::spawn(async move {
+                        let mut buffer = vec![0u8; 8192];
+                        let mut received = Vec::new();
+                        loop {
+                            let Ok(read) = stream.read(&mut buffer).await else {
+                                return;
+                            };
+                            if read == 0 {
+                                break;
+                            }
+                            received.extend_from_slice(&buffer[..read]);
+                            if received.windows(4).any(|window| window == b"\r\n\r\n") {
+                                break;
+                            }
+                        }
+                        let request = String::from_utf8_lossy(&received).to_string();
+                        if let Some(line) = request.lines().next() {
+                            recorder
+                                .lock()
+                                .expect("proxy recorder lock")
+                                .push(line.to_string());
+                        }
+                        let response = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/rss+xml\r\n\r\n{body}",
+                            body.len()
+                        );
+                        let _ = stream.write_all(response.as_bytes()).await;
+                        let _ = stream.flush().await;
+                    });
+                }
+            });
+            Self {
+                url: format!("http://{address}"),
+                seen,
+            }
+        }
+
+        fn request_lines(&self) -> Vec<String> {
+            self.seen.lock().expect("proxy recorder lock").clone()
+        }
+    }
+
+    fn transport_proxy_policy(
+        provider_type: scryer_domain::IndexerProxyProviderType,
+        base_url: String,
+    ) -> IndexerProxyPolicy {
+        let now = chrono::Utc::now();
+        IndexerProxyPolicy {
+            indexer_id: "indexer-1".into(),
+            indexer_name: "Indexer".into(),
+            config: scryer_domain::IndexerProxyConfig {
+                id: "transport-1".into(),
+                name: "House VPN".into(),
+                provider_type,
+                protocol: None,
+                username_encrypted: None,
+                password_encrypted: None,
+                remote_dns: false,
+                base_url,
+                request_timeout_seconds: 30,
+                is_enabled: true,
+                last_health_status: None,
+                last_error_message: None,
+                last_error_at: None,
+                created_at: now,
+                updated_at: now,
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn a_transport_proxy_carries_every_plugin_request_for_its_indexer() {
+        let proxy = RecordingHttpProxy::start("<rss>through the proxy</rss>").await;
+        let policy = transport_proxy_policy(
+            scryer_domain::IndexerProxyProviderType::Http,
+            proxy.url.clone(),
+        );
+
+        let body = tokio::task::spawn_blocking(move || {
+            let host = PluginHttpHost::new(
+                vec!["indexer.example".to_string()],
+                Some(policy),
+                None,
+                Some(64 * 1024),
+            );
+            host.request(
+                "newznab",
+                PluginHttpRequest {
+                    // Deliberately a host that does not resolve: reaching it at
+                    // all proves the hop went through the proxy.
+                    url: "http://indexer.example/api?t=search".to_string(),
+                    method: Some("GET".to_string()),
+                    headers: BTreeMap::new(),
+                },
+                None,
+                Duration::from_secs(5),
+            )
+        })
+        .await
+        .expect("blocking task should join")
+        .expect("the proxied request should succeed");
+
+        assert_eq!(body, b"<rss>through the proxy</rss>");
+        let seen = proxy.request_lines();
+        assert_eq!(
+            seen.len(),
+            1,
+            "expected exactly one proxied request: {seen:?}"
+        );
+        assert!(
+            seen[0].contains("http://indexer.example/api?t=search"),
+            "expected an absolute-form proxied request line, got {}",
+            seen[0]
+        );
+    }
+
+    /// A transport proxy never reaches the solver: no solve POST, no clearance
+    /// merge, and a challenge-looking response is handed to the guest as-is.
+    #[tokio::test]
+    async fn a_transport_proxy_never_takes_the_solver_path() {
+        let proxy = RecordingHttpProxy::start("<html>Just a moment...</html>").await;
+        let policy = transport_proxy_policy(
+            scryer_domain::IndexerProxyProviderType::Socks5,
+            // Never dialled: the request below must fail at the SOCKS hop
+            // rather than fall through to a solve POST.
+            "socks5://127.0.0.1:1".to_string(),
+        );
+        let proxy_url = proxy.url.clone();
+
+        let error = tokio::task::spawn_blocking(move || {
+            let host = PluginHttpHost::new(
+                vec!["indexer.example".to_string()],
+                Some(policy),
+                None,
+                Some(64 * 1024),
+            );
+            host.request(
+                "newznab",
+                PluginHttpRequest {
+                    url: "http://indexer.example/api?t=search".to_string(),
+                    method: Some("GET".to_string()),
+                    headers: BTreeMap::new(),
+                },
+                None,
+                Duration::from_secs(5),
+            )
+        })
+        .await
+        .expect("blocking task should join")
+        .expect_err("an unreachable SOCKS proxy must fail the request");
+
+        assert!(
+            error.starts_with("proxy House VPN unreachable:"),
+            "the failure must name the proxy, got: {error}"
+        );
+        assert!(
+            proxy.request_lines().is_empty(),
+            "nothing may be sent to {proxy_url}: a transport proxy has no solve endpoint"
+        );
+    }
 
     #[derive(Default)]
     struct RecordingIndexerErrorRecorder {

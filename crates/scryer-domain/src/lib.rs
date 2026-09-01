@@ -1017,6 +1017,7 @@ pub enum IndexerProxyProviderType {
     Byparr,
     Trawl,
     Http,
+    Socks4,
     Socks5,
 }
 
@@ -1026,6 +1027,7 @@ impl IndexerProxyProviderType {
             Self::Byparr => "byparr",
             Self::Trawl => "trawl",
             Self::Http => "http",
+            Self::Socks4 => "socks4",
             Self::Socks5 => "socks5",
         }
     }
@@ -1035,6 +1037,7 @@ impl IndexerProxyProviderType {
             "byparr" => Some(Self::Byparr),
             "trawl" => Some(Self::Trawl),
             "http" => Some(Self::Http),
+            "socks4" => Some(Self::Socks4),
             "socks5" => Some(Self::Socks5),
             _ => None,
         }
@@ -1043,7 +1046,7 @@ impl IndexerProxyProviderType {
     pub fn kind(self) -> IndexerProxyKind {
         match self {
             Self::Byparr | Self::Trawl => IndexerProxyKind::ChallengeSolver,
-            Self::Http | Self::Socks5 => IndexerProxyKind::Transport,
+            Self::Http | Self::Socks4 | Self::Socks5 => IndexerProxyKind::Transport,
         }
     }
 
@@ -1134,6 +1137,14 @@ pub struct IndexerProxyConfig {
 impl IndexerProxyConfig {
     pub fn kind(&self) -> IndexerProxyKind {
         self.provider_type.kind()
+    }
+
+    pub fn is_challenge_solver(&self) -> bool {
+        self.provider_type.is_challenge_solver()
+    }
+
+    pub fn is_transport(&self) -> bool {
+        self.provider_type.is_transport()
     }
 }
 
