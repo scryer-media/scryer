@@ -1532,6 +1532,21 @@ impl AppUseCase {
 
         let classification =
             classify_selection(&facts, &request.destination, Some(&destination_facts));
+        // The counts the plan reports. Draft building below can downgrade a
+        // classified title to needs-resolution (a vanished source folder, a
+        // destination root with no path), and the counts must follow the drafts
+        // or the preview would claim a moving title it produced no work for.
+        let mut classification_counts = classification.counts;
+        let mut downgrade_to_needs_resolution =
+            |counts: &mut crate::location::classify::ClassificationCounts,
+             was: TitleLocationClass| {
+                match was {
+                    TitleLocationClass::RootMove => counts.root_move -= 1,
+                    TitleLocationClass::CrossLibraryTransfer => counts.cross_library_transfer -= 1,
+                    _ => {}
+                }
+                counts.needs_resolution += 1;
+            };
 
         // The destination titles this selection merges into, read once. Their
         // folders are where the merging titles' files land (FR-063: the
@@ -1612,6 +1627,7 @@ impl AppUseCase {
             }
 
             let Some(destination_root_path) = destination_root_path else {
+                downgrade_to_needs_resolution(&mut classification_counts, draft.class);
                 draft.class = TitleLocationClass::NeedsResolution;
                 draft.blocked_reason = Some(format!(
                     "destination root {} has no configured path",
@@ -1719,8 +1735,26 @@ impl AppUseCase {
                 .get(&title.id)
                 .cloned()
                 .unwrap_or_default();
+            // A source folder that cannot be walked - vanished, unreadable - is
+            // that title's problem, not the preview's: erroring here would hide
+            // the whole plan behind an opaque failure, and the vanished-folder
+            // case is exactly the user who should be offered "Files are already
+            // there" (US3). Degrade to a blocked title the preview can name.
             let (files, directories) =
-                collect_source_files(source_folder_path.as_deref(), &media_files).await?;
+                match collect_source_files(source_folder_path.as_deref(), &media_files).await {
+                    Ok(walked) => walked,
+                    Err(error) => {
+                        downgrade_to_needs_resolution(&mut classification_counts, draft.class);
+                        draft.class = TitleLocationClass::NeedsResolution;
+                        draft.blocked_reason = Some(format!(
+                            "the source folder for \"{}\" could not be read ({}); if its files \
+                             were moved by hand, use \"Files are already there\"",
+                            title.name, error
+                        ));
+                        drafts.push(draft);
+                        continue;
+                    }
+                };
             draft.files = files;
             draft.source_directories = directories;
 
@@ -1835,7 +1869,7 @@ impl AppUseCase {
             selection,
             titles: drafts,
             mode,
-            classification: classification.counts,
+            classification: classification_counts,
             verification_depth: depth,
             free_space,
             case_rule,

@@ -1808,3 +1808,44 @@ async fn the_generic_job_trigger_still_refuses_to_start_a_location_operation() {
         "refusing a manual trigger is a validation error, got {error:?}"
     );
 }
+
+/// A source folder that vanished from disk blocks its title instead of erroring
+/// the whole preview. That state is exactly the "Files are already there" user
+/// (US3): they moved the folder by hand, and the dialog's first preview is the
+/// managed one - an opaque failure here would be their first impression of
+/// adoption.
+#[tokio::test]
+async fn a_vanished_source_folder_blocks_the_title_instead_of_failing_the_preview() {
+    let fixture = RootMoveFixture::new().await;
+    let title = fixture
+        .seed_title(
+            "Gone By Hand",
+            2024,
+            &fixture.root_a_id,
+            &fixture.root_a(),
+            "Gone By Hand (2024)",
+            &[("Gone.By.Hand.2024.1080p.mkv", 4096)],
+        )
+        .await;
+
+    std::fs::remove_dir_all(fixture.root_a().join("Gone By Hand (2024)"))
+        .expect("remove the source folder the way a user's mv would");
+
+    let preview = fixture.preview(&[&title.id]).await;
+
+    assert_eq!(preview.plan.classification.needs_resolution, 1);
+    assert!(preview.plan.blocks_start());
+    let blocked = preview
+        .plan
+        .sections
+        .iter()
+        .filter(|section| section.kind == PlanItemKind::Blocked)
+        .flat_map(|section| section.items.items.iter())
+        .next()
+        .expect("the vanished folder is a named blocked item, not an error");
+    let detail = blocked.detail.as_deref().unwrap_or_default();
+    assert!(
+        detail.contains("Files are already there"),
+        "the refusal points at the adoption mode: {detail}"
+    );
+}
