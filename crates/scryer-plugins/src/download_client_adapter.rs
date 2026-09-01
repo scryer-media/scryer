@@ -27,27 +27,18 @@ use scryer_plugin_sdk::{
 };
 use tracing::{debug, warn};
 
-use crate::blocking::run_blocking_plugin_call;
-use crate::legacy_runtime::LegacyPlugin;
 use crate::runtime_backing::PluginInstanceSpec;
 use crate::seeding_trust::apply_seeding_trust_floor;
 use crate::types::{
     DownloadControlAction, DownloadInputKind, DownloadIsolationMode, DownloadItemState,
-    EXPORT_DOWNLOAD_ADD, EXPORT_DOWNLOAD_CONTROL, EXPORT_DOWNLOAD_LIST_COMPLETED,
-    EXPORT_DOWNLOAD_LIST_HISTORY, EXPORT_DOWNLOAD_LIST_QUEUE,
-    EXPORT_DOWNLOAD_LIST_RECENT_COMPLETED, EXPORT_DOWNLOAD_MARK_IMPORTED, EXPORT_DOWNLOAD_STATUS,
     PluginCompletedDownload, PluginDescriptor, PluginDownloadClientAddRequest,
     PluginDownloadClientAddResponse, PluginDownloadClientControlRequest,
-    PluginDownloadClientMarkImportedRequest, PluginDownloadClientStatus, PluginDownloadIsolation,
-    PluginDownloadItem, PluginDownloadListRecentCompletedRequest, PluginDownloadRelease,
-    PluginDownloadRouting, PluginDownloadSource, PluginDownloadTitle, PluginTorrentOptions,
-    PluginTorrentQueuePlacement, decode_plugin_result,
+    PluginDownloadClientMarkImportedRequest, PluginDownloadIsolation, PluginDownloadItem,
+    PluginDownloadListRecentCompletedRequest, PluginDownloadRelease, PluginDownloadRouting,
+    PluginDownloadSource, PluginDownloadTitle, PluginTorrentOptions, PluginTorrentQueuePlacement,
 };
 use crate::wasmtime_host::command_host::CommandHost;
-use crate::wasmtime_host::{
-    CommandInvocation, DownloadClientComponentInvocation, process_command,
-    process_download_client_component,
-};
+use crate::wasmtime_host::{DownloadClientComponentInvocation, process_download_client_component};
 
 // Keep plugin work below the outer download-feedback gate while leaving enough
 // room for large client responses on slower hosts.
@@ -63,14 +54,8 @@ pub(crate) const DOWNLOAD_CLIENT_PLUGIN_TIMEOUT: std::time::Duration =
 /// services, the same absence of filesystem authority. Everything a client
 /// observes across invocations, the [`CommandHost`] state map included, is
 /// therefore the same object on both.
-enum DownloadClientRuntime {
-    Legacy(Arc<Mutex<LegacyPlugin>>),
-    Command(Arc<NativeDownloadClient>),
-    Component(Arc<NativeDownloadClient>),
-}
-
 pub struct WasmDownloadClient {
-    runtime: DownloadClientRuntime,
+    runtime: Arc<ComponentDownloadClient>,
     descriptor: PluginDescriptor,
     client_name: String,
     client_id: String,
@@ -141,15 +126,14 @@ impl SeedingObservationCache {
     }
 }
 
-/// State for a native (non-reactor) download client, shared by the command ABI
-/// and the component world. See [`DownloadClientRuntime`].
-struct NativeDownloadClient {
+/// State for one `scryer:download-client/download-client@1.0.0` client.
+struct ComponentDownloadClient {
     wasm: Arc<Vec<u8>>,
     command_host: CommandHost,
     invocation_lock: tokio::sync::Mutex<()>,
 }
 
-impl NativeDownloadClient {
+impl ComponentDownloadClient {
     fn new(wasm: Vec<u8>, command_host: CommandHost) -> Arc<Self> {
         Arc::new(Self {
             wasm: Arc::new(wasm),
@@ -160,42 +144,7 @@ impl NativeDownloadClient {
 }
 
 impl WasmDownloadClient {
-    pub fn new(
-        plugin: LegacyPlugin,
-        descriptor: PluginDescriptor,
-        client_id: String,
-        client_name: String,
-    ) -> Self {
-        Self {
-            runtime: DownloadClientRuntime::Legacy(Arc::new(Mutex::new(plugin))),
-            descriptor,
-            client_name,
-            client_id,
-            seeding_observations: SeedingObservationCache::default(),
-        }
-    }
-
-    pub fn new_command(
-        wasm: Vec<u8>,
-        descriptor: PluginDescriptor,
-        client_id: String,
-        client_name: String,
-        command_host: CommandHost,
-    ) -> Self {
-        Self {
-            runtime: DownloadClientRuntime::Command(NativeDownloadClient::new(wasm, command_host)),
-            descriptor,
-            client_name,
-            client_id,
-            seeding_observations: SeedingObservationCache::default(),
-        }
-    }
-
     /// A `scryer:download-client/download-client@1.0.0` component client.
-    ///
-    /// Deliberately takes the same arguments as [`Self::new_command`] and is
-    /// built from the same `CommandHost` in the loader: a client that migrates
-    /// its transport must not also change its configuration or its authority.
     pub fn new_component(
         wasm: Vec<u8>,
         descriptor: PluginDescriptor,
@@ -204,10 +153,7 @@ impl WasmDownloadClient {
         command_host: CommandHost,
     ) -> Self {
         Self {
-            runtime: DownloadClientRuntime::Component(NativeDownloadClient::new(
-                wasm,
-                command_host,
-            )),
+            runtime: ComponentDownloadClient::new(wasm, command_host),
             descriptor,
             client_name,
             client_id,
@@ -215,36 +161,10 @@ impl WasmDownloadClient {
         }
     }
 
-    fn legacy_plugin(&self) -> AppResult<Arc<Mutex<LegacyPlugin>>> {
-        match &self.runtime {
-            DownloadClientRuntime::Legacy(plugin) => Ok(Arc::clone(plugin)),
-            DownloadClientRuntime::Command(_) | DownloadClientRuntime::Component(_) => {
-                Err(AppError::Repository(
-                    "command download client cannot use a legacy export".to_string(),
-                ))
-            }
-        }
-    }
-
-    /// The native client behind a non-reactor runtime, or `None` on a legacy
-    /// artifact. Both native transports answer the whole `PluginDownloadClient`
-    /// command set, so every capability gated on "not the legacy reactor" is
-    /// gated on this.
-    fn native_client(&self) -> Option<&Arc<NativeDownloadClient>> {
-        match &self.runtime {
-            DownloadClientRuntime::Command(client) | DownloadClientRuntime::Component(client) => {
-                Some(client)
-            }
-            DownloadClientRuntime::Legacy(_) => None,
-        }
-    }
-
     fn supports_category_scoped_feedback(&self) -> bool {
-        self.native_client().is_some()
-            && self
-                .descriptor
-                .download_client()
-                .is_some_and(|provider| provider.capabilities.category_scoped_feedback)
+        self.descriptor
+            .download_client()
+            .is_some_and(|provider| provider.capabilities.category_scoped_feedback)
     }
 
     fn plugin_feedback_scope(scope: &DownloadClientFeedbackScope) -> PluginFeedbackScope {
@@ -257,15 +177,11 @@ impl WasmDownloadClient {
         &self,
         command: PluginDownloadClientCommand,
         operation: &'static str,
-    ) -> AppResult<Option<PluginDownloadClientCommandResult>> {
-        let Some(client) = self.native_client() else {
-            return Ok(None);
-        };
-        // One invocation at a time, on the component path as much as on the
-        // command path. Both share a single `CommandHost` state map — where a
-        // client keeps the session cookie it re-uses between calls — so
-        // serializing is part of what a migrating guest already observes, not
-        // an artifact of the older transport.
+    ) -> AppResult<PluginDownloadClientCommandResult> {
+        let client = &self.runtime;
+        // One invocation at a time: the component is instance-per-request, but
+        // the client's `CommandHost` state map — where it keeps the session
+        // cookie it re-uses between calls — is not.
         let _guard = client.invocation_lock.lock().await;
         let spec = PluginInstanceSpec {
             wasm: Arc::clone(&client.wasm),
@@ -277,34 +193,18 @@ impl WasmDownloadClient {
             command_host: client.command_host.clone(),
         };
         let request = PluginCommandRequest::new(PluginCommand::DownloadClient(command));
-        let response = match &self.runtime {
-            DownloadClientRuntime::Component(_) => {
-                process_download_client_component(
-                    &spec,
-                    &request,
-                    DownloadClientComponentInvocation {
-                        plugin_id: &self.descriptor.id,
-                        plugin_version: &self.descriptor.version,
-                        operation,
-                    },
-                )
-                .await?
-            }
-            DownloadClientRuntime::Command(_) | DownloadClientRuntime::Legacy(_) => {
-                process_command(
-                    &spec,
-                    &request,
-                    CommandInvocation {
-                        plugin_id: &self.descriptor.id,
-                        plugin_version: &self.descriptor.version,
-                        operation,
-                    },
-                )
-                .await?
-            }
-        };
+        let response = process_download_client_component(
+            &spec,
+            &request,
+            DownloadClientComponentInvocation {
+                plugin_id: &self.descriptor.id,
+                plugin_version: &self.descriptor.version,
+                operation,
+            },
+        )
+        .await?;
         match response.response {
-            PluginCommandResult::DownloadClient(result) => Ok(Some(result)),
+            PluginCommandResult::DownloadClient(result) => Ok(result),
             _ => Err(AppError::Repository(format!(
                 "command plugin {} returned a response for another plugin family",
                 self.descriptor.id
@@ -360,18 +260,6 @@ fn decode_download_add_result<T>(result: PluginResult<T>, context: &str) -> AppR
         PluginResult::Ok(value) => Ok(value),
         PluginResult::Err(error) => Err(map_download_add_plugin_error(error, context)),
     }
-}
-
-fn decode_legacy_download_add_result<T>(output: &str, context: &str) -> AppResult<T>
-where
-    T: serde::de::DeserializeOwned,
-{
-    let envelope: PluginResult<T> = serde_json::from_str(output).map_err(|error| {
-        AppError::Repository(format!(
-            "{context}: plugin returned invalid result envelope: {error}"
-        ))
-    })?;
-    decode_download_add_result(envelope, context)
 }
 
 fn plugin_error_message(error: &PluginError, context: &str) -> String {
@@ -758,10 +646,6 @@ fn map_history_item_from_completed(
     }
 }
 
-fn plugin_call_error(operation: &str, error: AppError) -> AppError {
-    AppError::Repository(format!("plugin {operation} failed: {error}"))
-}
-
 fn build_isolation_entries(value: Option<&str>) -> Vec<PluginDownloadIsolation> {
     let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
         return Vec::new();
@@ -1104,49 +988,15 @@ impl DownloadClient for WasmDownloadClient {
             },
         );
 
-        if let Some(result) = self
-            .invoke_command(
-                PluginDownloadClientCommand::Add(plugin_request.clone()),
-                "add",
-            )
-            .await?
-        {
-            let PluginDownloadClientCommandResult::Add(result) = result else {
-                return Err(AppError::Repository(
-                    "download-client command returned the wrong result for add".to_string(),
-                ));
-            };
-            let response = decode_download_add_result(result, "download add")?;
-            return Ok(map_add_response_to_grab_result(
-                response,
-                request,
-                self.descriptor.provider_type(),
+        let result = self
+            .invoke_command(PluginDownloadClientCommand::Add(plugin_request), "add")
+            .await?;
+        let PluginDownloadClientCommandResult::Add(result) = result else {
+            return Err(AppError::Repository(
+                "download-client command returned the wrong result for add".to_string(),
             ));
-        }
-
-        let input = serde_json::to_string(&plugin_request).map_err(|e| {
-            AppError::Repository(format!("failed to serialize plugin request: {e}"))
-        })?;
-
-        let plugin = self.legacy_plugin()?;
-        let output = run_blocking_plugin_call(
-            DOWNLOAD_CLIENT_PLUGIN_TIMEOUT,
-            "download client plugin",
-            move || {
-                let mut guard = plugin
-                    .lock()
-                    .map_err(|e| AppError::Repository(format!("plugin mutex poisoned: {e}")))?;
-                guard
-                    .call_string(EXPORT_DOWNLOAD_ADD, &input)
-                    .map_err(|e| plugin_call_error(&format!("{EXPORT_DOWNLOAD_ADD}()"), e))
-            },
-        )
-        .await
-        .map_err(AppError::into_download_submit_unavailable)?;
-
-        let response: PluginDownloadClientAddResponse =
-            decode_legacy_download_add_result(&output, EXPORT_DOWNLOAD_ADD)
-                .map_err(AppError::into_download_submit_unavailable)?;
+        };
+        let response = decode_download_add_result(result, "download add")?;
         Ok(map_add_response_to_grab_result(
             response,
             request,
@@ -1155,49 +1005,16 @@ impl DownloadClient for WasmDownloadClient {
     }
 
     async fn list_queue(&self) -> AppResult<Vec<DownloadQueueItem>> {
-        if let Some(result) = self
+        let result = self
             .invoke_command(PluginDownloadClientCommand::ListQueue, "list_queue")
-            .await?
-        {
-            let PluginDownloadClientCommandResult::ListQueue(result) = result else {
-                return Err(AppError::Repository(
-                    "download-client command returned the wrong result for list_queue".to_string(),
-                ));
-            };
-            let mut items: Vec<PluginDownloadItem> =
-                decode_command_result(result, "download list_queue")?;
-            apply_seeding_trust_floor(&self.descriptor, &mut items);
-            self.seeding_observations.record(&items);
-            return Ok(items
-                .into_iter()
-                .filter(retain_queue_item)
-                .map(|item| {
-                    map_queue_item(
-                        item,
-                        &self.client_id,
-                        &self.client_name,
-                        self.descriptor.provider_type(),
-                    )
-                })
-                .collect());
-        }
-        let plugin = self.legacy_plugin()?;
-        let output = run_blocking_plugin_call(
-            DOWNLOAD_CLIENT_PLUGIN_TIMEOUT,
-            "download client plugin",
-            move || {
-                let mut guard = plugin
-                    .lock()
-                    .map_err(|e| AppError::Repository(format!("plugin mutex poisoned: {e}")))?;
-                guard
-                    .call_unit(EXPORT_DOWNLOAD_LIST_QUEUE)
-                    .map_err(|e| plugin_call_error(&format!("{EXPORT_DOWNLOAD_LIST_QUEUE}()"), e))
-            },
-        )
-        .await?;
-
+            .await?;
+        let PluginDownloadClientCommandResult::ListQueue(result) = result else {
+            return Err(AppError::Repository(
+                "download-client command returned the wrong result for list_queue".to_string(),
+            ));
+        };
         let mut items: Vec<PluginDownloadItem> =
-            decode_plugin_result(&output, EXPORT_DOWNLOAD_LIST_QUEUE)?;
+            decode_command_result(result, "download list_queue")?;
         apply_seeding_trust_floor(&self.descriptor, &mut items);
         self.seeding_observations.record(&items);
 
@@ -1222,17 +1039,14 @@ impl DownloadClient for WasmDownloadClient {
         if feedback_scope_is_empty(scope) || !self.supports_category_scoped_feedback() {
             return self.list_queue().await;
         }
-        let Some(result) = self
+        let result = self
             .invoke_command(
                 PluginDownloadClientCommand::ListQueueScoped(PluginDownloadScopedListRequest {
                     scope: Self::plugin_feedback_scope(scope),
                 }),
                 "list_queue_scoped",
             )
-            .await?
-        else {
-            return self.list_queue().await;
-        };
+            .await?;
         let PluginDownloadClientCommandResult::ListQueueScoped(result) = result else {
             return Err(AppError::Repository(
                 "download-client command returned the wrong result for list_queue_scoped"
@@ -1270,100 +1084,27 @@ impl DownloadClient for WasmDownloadClient {
     }
 
     async fn list_history(&self) -> AppResult<Vec<DownloadQueueItem>> {
-        if let Some(result) = self
+        let result = self
             .invoke_command(PluginDownloadClientCommand::ListHistory, "list_history")
-            .await?
-        {
-            let PluginDownloadClientCommandResult::ListHistory(result) = result else {
-                return Err(AppError::Repository(
-                    "download-client command returned the wrong result for list_history"
-                        .to_string(),
-                ));
-            };
-            let mut items = decode_command_result(result, "download list_history")?
-                .into_iter()
-                .map(|item| {
-                    map_history_item_from_completed(
-                        item,
-                        &self.client_id,
-                        &self.client_name,
-                        self.descriptor.provider_type(),
-                    )
-                })
-                .collect::<Vec<_>>();
-            self.seeding_observations.apply(&mut items);
-            return Ok(items);
-        }
-        let plugin = self.legacy_plugin()?;
-        let output = run_blocking_plugin_call(
-            DOWNLOAD_CLIENT_PLUGIN_TIMEOUT,
-            "download client plugin",
-            move || {
-                let mut guard = plugin
-                    .lock()
-                    .map_err(|e| AppError::Repository(format!("plugin mutex poisoned: {e}")))?;
-                guard
-                    .call_unit(EXPORT_DOWNLOAD_LIST_HISTORY)
-                    .map_err(|e| plugin_call_error(&format!("{EXPORT_DOWNLOAD_LIST_HISTORY}()"), e))
-            },
-        )
-        .await?;
-
-        match decode_plugin_result::<Vec<PluginDownloadItem>>(&output, EXPORT_DOWNLOAD_LIST_HISTORY)
-        {
-            Ok(mut items) => {
-                apply_seeding_trust_floor(&self.descriptor, &mut items);
-                Ok(items
-                    .into_iter()
-                    .filter(|item| {
-                        matches!(
-                            item.state,
-                            DownloadItemState::Completed
-                                | DownloadItemState::Seeding
-                                | DownloadItemState::Failed
-                                | DownloadItemState::Error
-                        )
-                    })
-                    .map(|item| {
-                        map_queue_item(
-                            item,
-                            &self.client_id,
-                            &self.client_name,
-                            self.descriptor.provider_type(),
-                        )
-                    })
-                    .collect())
-            }
-            Err(primary_error) => {
-                let items: Vec<PluginCompletedDownload> =
-                    decode_plugin_result(&output, EXPORT_DOWNLOAD_LIST_HISTORY).map_err(
-                        |fallback_error| {
-                            AppError::Repository(format!(
-                                "{primary_error}; legacy completed-download history decode also failed: {fallback_error}"
-                            ))
-                        },
-                    )?;
-                debug!(
-                    client_id = %self.client_id,
-                    client_name = %self.client_name,
-                    provider_type = self.descriptor.provider_type(),
-                    "download history used legacy completed-download envelope fallback"
-                );
-                let mut items = items
-                    .into_iter()
-                    .map(|item| {
-                        map_history_item_from_completed(
-                            item,
-                            &self.client_id,
-                            &self.client_name,
-                            self.descriptor.provider_type(),
-                        )
-                    })
-                    .collect::<Vec<_>>();
-                self.seeding_observations.apply(&mut items);
-                Ok(items)
-            }
-        }
+            .await?;
+        let PluginDownloadClientCommandResult::ListHistory(result) = result else {
+            return Err(AppError::Repository(
+                "download-client command returned the wrong result for list_history".to_string(),
+            ));
+        };
+        let mut items = decode_command_result(result, "download list_history")?
+            .into_iter()
+            .map(|item| {
+                map_history_item_from_completed(
+                    item,
+                    &self.client_id,
+                    &self.client_name,
+                    self.descriptor.provider_type(),
+                )
+            })
+            .collect::<Vec<_>>();
+        self.seeding_observations.apply(&mut items);
+        Ok(items)
     }
 
     async fn list_history_with_feedback_scope(
@@ -1373,17 +1114,14 @@ impl DownloadClient for WasmDownloadClient {
         if feedback_scope_is_empty(scope) || !self.supports_category_scoped_feedback() {
             return self.list_history().await;
         }
-        let Some(result) = self
+        let result = self
             .invoke_command(
                 PluginDownloadClientCommand::ListHistoryScoped(PluginDownloadScopedListRequest {
                     scope: Self::plugin_feedback_scope(scope),
                 }),
                 "list_history_scoped",
             )
-            .await?
-        else {
-            return self.list_history().await;
-        };
+            .await?;
         let PluginDownloadClientCommandResult::ListHistoryScoped(result) = result else {
             return Err(AppError::Repository(
                 "download-client command returned the wrong result for list_history_scoped"
@@ -1448,44 +1186,15 @@ impl DownloadClient for WasmDownloadClient {
     }
 
     async fn list_completed_downloads(&self) -> AppResult<Vec<CompletedDownload>> {
-        if let Some(result) = self
+        let result = self
             .invoke_command(PluginDownloadClientCommand::ListCompleted, "list_completed")
-            .await?
-        {
-            let PluginDownloadClientCommandResult::ListCompleted(result) = result else {
-                return Err(AppError::Repository(
-                    "download-client command returned the wrong result for list_completed"
-                        .to_string(),
-                ));
-            };
-            return Ok(decode_command_result(result, "download list_completed")?
-                .into_iter()
-                .map(|item| {
-                    map_completed_download(item, &self.client_id, self.descriptor.provider_type())
-                })
-                .collect());
-        }
-        let plugin = self.legacy_plugin()?;
-        let output = run_blocking_plugin_call(
-            DOWNLOAD_CLIENT_PLUGIN_TIMEOUT,
-            "download client plugin",
-            move || {
-                let mut guard = plugin
-                    .lock()
-                    .map_err(|e| AppError::Repository(format!("plugin mutex poisoned: {e}")))?;
-                guard
-                    .call_unit(EXPORT_DOWNLOAD_LIST_COMPLETED)
-                    .map_err(|e| {
-                        plugin_call_error(&format!("{EXPORT_DOWNLOAD_LIST_COMPLETED}()"), e)
-                    })
-            },
-        )
-        .await?;
-
-        let items: Vec<PluginCompletedDownload> =
-            decode_plugin_result(&output, EXPORT_DOWNLOAD_LIST_COMPLETED)?;
-
-        Ok(items
+            .await?;
+        let PluginDownloadClientCommandResult::ListCompleted(result) = result else {
+            return Err(AppError::Repository(
+                "download-client command returned the wrong result for list_completed".to_string(),
+            ));
+        };
+        Ok(decode_command_result(result, "download list_completed")?
             .into_iter()
             .map(|item| {
                 map_completed_download(item, &self.client_id, self.descriptor.provider_type())
@@ -1500,17 +1209,14 @@ impl DownloadClient for WasmDownloadClient {
         if feedback_scope_is_empty(scope) || !self.supports_category_scoped_feedback() {
             return self.list_completed_downloads().await;
         }
-        let Some(result) = self
+        let result = self
             .invoke_command(
                 PluginDownloadClientCommand::ListCompletedScoped(PluginDownloadScopedListRequest {
                     scope: Self::plugin_feedback_scope(scope),
                 }),
                 "list_completed_scoped",
             )
-            .await?
-        else {
-            return self.list_completed_downloads().await;
-        };
+            .await?;
         let PluginDownloadClientCommandResult::ListCompletedScoped(result) = result else {
             return Err(AppError::Repository(
                 "download-client command returned the wrong result for list_completed_scoped"
@@ -1540,42 +1246,34 @@ impl DownloadClient for WasmDownloadClient {
         {
             return Ok(None);
         }
-        if let Some(result) = self
+        let result = self
             .invoke_command(
                 PluginDownloadClientCommand::GetCompleted(PluginDownloadGetCompletedRequest {
                     client_item_id: download_client_item_id.to_string(),
                 }),
                 "get_completed",
             )
-            .await?
-        {
-            let PluginDownloadClientCommandResult::GetCompleted(result) = result else {
-                return Err(AppError::Repository(
-                    "download-client command returned the wrong result for get_completed"
-                        .to_string(),
-                ));
-            };
-            let completed = decode_command_result(result, "download get_completed")?;
-            let Some(completed) = completed else {
-                return Ok(None);
-            };
-            if completed.client_item_id != download_client_item_id {
-                return Err(AppError::Repository(format!(
-                    "download-client command returned completed item '{}' for requested item '{}'",
-                    completed.client_item_id, download_client_item_id
-                )));
-            }
-            return Ok(Some(map_completed_download(
-                completed,
-                &self.client_id,
-                self.descriptor.provider_type(),
+            .await?;
+        let PluginDownloadClientCommandResult::GetCompleted(result) = result else {
+            return Err(AppError::Repository(
+                "download-client command returned the wrong result for get_completed".to_string(),
+            ));
+        };
+        let completed = decode_command_result(result, "download get_completed")?;
+        let Some(completed) = completed else {
+            return Ok(None);
+        };
+        if completed.client_item_id != download_client_item_id {
+            return Err(AppError::Repository(format!(
+                "download-client command returned completed item '{}' for requested item '{}'",
+                completed.client_item_id, download_client_item_id
             )));
         }
-        Ok(self
-            .list_completed_downloads()
-            .await?
-            .into_iter()
-            .find(|download| download.download_client_item_id == download_client_item_id))
+        Ok(Some(map_completed_download(
+            completed,
+            &self.client_id,
+            self.descriptor.provider_type(),
+        )))
     }
 
     async fn list_recent_completed_downloads(
@@ -1586,92 +1284,28 @@ impl DownloadClient for WasmDownloadClient {
             return Ok(Vec::new());
         }
 
-        if let Some(result) = self
+        let result = self
             .invoke_command(
                 PluginDownloadClientCommand::ListRecentCompleted(
                     PluginDownloadListRecentCompletedRequest { limit },
                 ),
                 "list_recent_completed",
             )
-            .await?
-        {
-            let PluginDownloadClientCommandResult::ListRecentCompleted(result) = result else {
-                return Err(AppError::Repository(
-                    "download-client command returned the wrong result for list_recent_completed"
-                        .to_string(),
-                ));
-            };
-            return Ok(
-                decode_command_result(result, "download list_recent_completed")?
-                    .into_iter()
-                    .map(|item| {
-                        map_completed_download(
-                            item,
-                            &self.client_id,
-                            self.descriptor.provider_type(),
-                        )
-                    })
-                    .collect(),
-            );
-        }
-
-        let input = serde_json::to_string(&PluginDownloadListRecentCompletedRequest { limit })
-            .map_err(|e| {
-                AppError::Repository(format!("failed to serialize plugin request: {e}"))
-            })?;
-        let plugin = self.legacy_plugin()?;
-        let (output, export_name) = run_blocking_plugin_call(
-            DOWNLOAD_CLIENT_PLUGIN_TIMEOUT,
-            "download client plugin",
-            move || {
-                let mut guard = plugin
-                    .lock()
-                    .map_err(|e| AppError::Repository(format!("plugin mutex poisoned: {e}")))?;
-                if guard.function_exists(EXPORT_DOWNLOAD_LIST_RECENT_COMPLETED) {
-                    let output = guard
-                        .call_string(EXPORT_DOWNLOAD_LIST_RECENT_COMPLETED, &input)
-                        .map_err(|e| {
-                            plugin_call_error(
-                                &format!("{EXPORT_DOWNLOAD_LIST_RECENT_COMPLETED}()"),
-                                e,
-                            )
-                        })?;
-                    Ok((output, EXPORT_DOWNLOAD_LIST_RECENT_COMPLETED))
-                } else {
-                    let output = guard
-                        .call_unit(EXPORT_DOWNLOAD_LIST_COMPLETED)
-                        .map_err(|e| {
-                            plugin_call_error(&format!("{EXPORT_DOWNLOAD_LIST_COMPLETED}()"), e)
-                        })?;
-                    Ok((output, EXPORT_DOWNLOAD_LIST_COMPLETED))
-                }
-            },
+            .await?;
+        let PluginDownloadClientCommandResult::ListRecentCompleted(result) = result else {
+            return Err(AppError::Repository(
+                "download-client command returned the wrong result for list_recent_completed"
+                    .to_string(),
+            ));
+        };
+        Ok(
+            decode_command_result(result, "download list_recent_completed")?
+                .into_iter()
+                .map(|item| {
+                    map_completed_download(item, &self.client_id, self.descriptor.provider_type())
+                })
+                .collect(),
         )
-        .await?;
-
-        let mut items: Vec<PluginCompletedDownload> = decode_plugin_result(&output, export_name)?;
-        if export_name == EXPORT_DOWNLOAD_LIST_COMPLETED {
-            debug!(
-                provider = %self.descriptor.id,
-                limit,
-                "plugin client used full completed-download fallback for recent completed downloads"
-            );
-            items.sort_by_key(|item| std::cmp::Reverse(item.completed_at.clone()));
-        } else {
-            debug!(
-                provider = %self.descriptor.id,
-                limit,
-                "plugin client used bounded recent completed-download export"
-            );
-        }
-        items.truncate(limit);
-
-        Ok(items
-            .into_iter()
-            .map(|item| {
-                map_completed_download(item, &self.client_id, self.descriptor.provider_type())
-            })
-            .collect())
     }
 
     async fn list_recent_completed_downloads_with_feedback_scope(
@@ -1685,7 +1319,7 @@ impl DownloadClient for WasmDownloadClient {
         if feedback_scope_is_empty(scope) || !self.supports_category_scoped_feedback() {
             return self.list_recent_completed_downloads(limit).await;
         }
-        let Some(result) = self
+        let result = self
             .invoke_command(
                 PluginDownloadClientCommand::ListRecentCompletedScoped(
                     PluginDownloadScopedRecentCompletedRequest {
@@ -1695,10 +1329,7 @@ impl DownloadClient for WasmDownloadClient {
                 ),
                 "list_recent_completed_scoped",
             )
-            .await?
-        else {
-            return self.list_recent_completed_downloads(limit).await;
-        };
+            .await?;
         let PluginDownloadClientCommandResult::ListRecentCompletedScoped(result) = result else {
             return Err(AppError::Repository(
                 "download-client command returned the wrong result for list_recent_completed_scoped"
@@ -1723,38 +1354,15 @@ impl DownloadClient for WasmDownloadClient {
             remove_data: false,
             is_history: false,
         };
-        if let Some(result) = self
-            .invoke_command(
-                PluginDownloadClientCommand::Control(request.clone()),
-                "control",
-            )
-            .await?
-        {
-            let PluginDownloadClientCommandResult::Control(result) = result else {
-                return Err(AppError::Repository(
-                    "download-client command returned the wrong result for control".to_string(),
-                ));
-            };
-            return decode_command_result(result, "download control");
-        }
-        let input = serde_json::to_string(&request).map_err(|e| {
-            AppError::Repository(format!("failed to serialize control request: {e}"))
-        })?;
-        let plugin = self.legacy_plugin()?;
-        run_blocking_plugin_call(
-            DOWNLOAD_CLIENT_PLUGIN_TIMEOUT,
-            "download client plugin",
-            move || {
-                let mut guard = plugin
-                    .lock()
-                    .map_err(|e| AppError::Repository(format!("plugin mutex poisoned: {e}")))?;
-                let output = guard
-                    .call_string(EXPORT_DOWNLOAD_CONTROL, &input)
-                    .map_err(|e| plugin_call_error(&format!("{EXPORT_DOWNLOAD_CONTROL}()"), e))?;
-                decode_plugin_result::<()>(&output, EXPORT_DOWNLOAD_CONTROL)
-            },
-        )
-        .await
+        let result = self
+            .invoke_command(PluginDownloadClientCommand::Control(request), "control")
+            .await?;
+        let PluginDownloadClientCommandResult::Control(result) = result else {
+            return Err(AppError::Repository(
+                "download-client command returned the wrong result for control".to_string(),
+            ));
+        };
+        decode_command_result(result, "download control")
     }
 
     async fn resume_queue_item(&self, id: &str) -> AppResult<()> {
@@ -1764,38 +1372,15 @@ impl DownloadClient for WasmDownloadClient {
             remove_data: false,
             is_history: false,
         };
-        if let Some(result) = self
-            .invoke_command(
-                PluginDownloadClientCommand::Control(request.clone()),
-                "control",
-            )
-            .await?
-        {
-            let PluginDownloadClientCommandResult::Control(result) = result else {
-                return Err(AppError::Repository(
-                    "download-client command returned the wrong result for control".to_string(),
-                ));
-            };
-            return decode_command_result(result, "download control");
-        }
-        let input = serde_json::to_string(&request).map_err(|e| {
-            AppError::Repository(format!("failed to serialize control request: {e}"))
-        })?;
-        let plugin = self.legacy_plugin()?;
-        run_blocking_plugin_call(
-            DOWNLOAD_CLIENT_PLUGIN_TIMEOUT,
-            "download client plugin",
-            move || {
-                let mut guard = plugin
-                    .lock()
-                    .map_err(|e| AppError::Repository(format!("plugin mutex poisoned: {e}")))?;
-                let output = guard
-                    .call_string(EXPORT_DOWNLOAD_CONTROL, &input)
-                    .map_err(|e| plugin_call_error(&format!("{EXPORT_DOWNLOAD_CONTROL}()"), e))?;
-                decode_plugin_result::<()>(&output, EXPORT_DOWNLOAD_CONTROL)
-            },
-        )
-        .await
+        let result = self
+            .invoke_command(PluginDownloadClientCommand::Control(request), "control")
+            .await?;
+        let PluginDownloadClientCommandResult::Control(result) = result else {
+            return Err(AppError::Repository(
+                "download-client command returned the wrong result for control".to_string(),
+            ));
+        };
+        decode_command_result(result, "download control")
     }
 
     /// Remove the item, asking for its data only if the client can actually
@@ -1819,38 +1404,15 @@ impl DownloadClient for WasmDownloadClient {
                 "download client cannot delete downloaded data; removing the entry only and leaving the payload in place"
             );
         }
-        if let Some(result) = self
-            .invoke_command(
-                PluginDownloadClientCommand::Control(request.clone()),
-                "control",
-            )
-            .await?
-        {
-            let PluginDownloadClientCommandResult::Control(result) = result else {
-                return Err(AppError::Repository(
-                    "download-client command returned the wrong result for control".to_string(),
-                ));
-            };
-            return decode_command_result(result, "download control");
-        }
-        let input = serde_json::to_string(&request).map_err(|e| {
-            AppError::Repository(format!("failed to serialize control request: {e}"))
-        })?;
-        let plugin = self.legacy_plugin()?;
-        run_blocking_plugin_call(
-            DOWNLOAD_CLIENT_PLUGIN_TIMEOUT,
-            "download client plugin",
-            move || {
-                let mut guard = plugin
-                    .lock()
-                    .map_err(|e| AppError::Repository(format!("plugin mutex poisoned: {e}")))?;
-                let output = guard
-                    .call_string(EXPORT_DOWNLOAD_CONTROL, &input)
-                    .map_err(|e| plugin_call_error(&format!("{EXPORT_DOWNLOAD_CONTROL}()"), e))?;
-                decode_plugin_result::<()>(&output, EXPORT_DOWNLOAD_CONTROL)
-            },
-        )
-        .await
+        let result = self
+            .invoke_command(PluginDownloadClientCommand::Control(request), "control")
+            .await?;
+        let PluginDownloadClientCommandResult::Control(result) = result else {
+            return Err(AppError::Repository(
+                "download-client command returned the wrong result for control".to_string(),
+            ));
+        };
+        decode_command_result(result, "download control")
     }
 
     async fn mark_imported(&self, request: &DownloadClientMarkImportedRequest) -> AppResult<()> {
@@ -1864,52 +1426,28 @@ impl DownloadClient for WasmDownloadClient {
             imported_path: request.imported_path.clone(),
             download_path: request.download_path.clone(),
         };
-        if let Some(result) = self
+        let result = self
             .invoke_command(
-                PluginDownloadClientCommand::MarkImported(command_request.clone()),
+                PluginDownloadClientCommand::MarkImported(command_request),
                 "mark_imported",
             )
-            .await?
-        {
-            let PluginDownloadClientCommandResult::MarkImported(result) = result else {
-                return Err(AppError::Repository(
-                    "download-client command returned the wrong result for mark_imported"
-                        .to_string(),
-                ));
-            };
-            return decode_command_result(result, "download mark_imported");
-        }
-        let input = serde_json::to_string(&command_request).map_err(|e| {
-            AppError::Repository(format!("failed to serialize mark_imported request: {e}"))
-        })?;
-        let plugin = self.legacy_plugin()?;
-        run_blocking_plugin_call(
-            DOWNLOAD_CLIENT_PLUGIN_TIMEOUT,
-            "download client plugin",
-            move || {
-                let mut guard = plugin
-                    .lock()
-                    .map_err(|e| AppError::Repository(format!("plugin mutex poisoned: {e}")))?;
-                let output = guard
-                    .call_string(EXPORT_DOWNLOAD_MARK_IMPORTED, &input)
-                    .map_err(|e| {
-                        plugin_call_error(&format!("{EXPORT_DOWNLOAD_MARK_IMPORTED}()"), e)
-                    })?;
-                decode_plugin_result::<()>(&output, EXPORT_DOWNLOAD_MARK_IMPORTED)
-            },
-        )
-        .await
+            .await?;
+        let PluginDownloadClientCommandResult::MarkImported(result) = result else {
+            return Err(AppError::Repository(
+                "download-client command returned the wrong result for mark_imported".to_string(),
+            ));
+        };
+        decode_command_result(result, "download mark_imported")
     }
 
     async fn mark_imported_non_destructive(
         &self,
         request: &DownloadClientMarkImportedRequest,
     ) -> AppResult<()> {
-        let supported = self.native_client().is_some()
-            && self
-                .descriptor
-                .download_client()
-                .is_some_and(|provider| provider.capabilities.mark_imported_non_destructive);
+        let supported = self
+            .descriptor
+            .download_client()
+            .is_some_and(|provider| provider.capabilities.mark_imported_non_destructive);
         if !supported {
             return Ok(());
         }
@@ -1929,13 +1467,7 @@ impl DownloadClient for WasmDownloadClient {
                 PluginDownloadClientCommand::MarkImportedNonDestructive(command_request),
                 "mark_imported_non_destructive",
             )
-            .await?
-            .ok_or_else(|| {
-                AppError::Repository(
-                    "download-client command interface unavailable for non-destructive import mark"
-                        .to_string(),
-                )
-            })?;
+            .await?;
         let PluginDownloadClientCommandResult::MarkImportedNonDestructive(result) = result else {
             return Err(AppError::Repository(
                 "download-client command returned the wrong result for non-destructive import mark"
@@ -1946,43 +1478,15 @@ impl DownloadClient for WasmDownloadClient {
     }
 
     async fn get_client_status(&self) -> AppResult<DownloadClientStatus> {
-        if let Some(result) = self
+        let result = self
             .invoke_command(PluginDownloadClientCommand::Status, "status")
-            .await?
-        {
-            let PluginDownloadClientCommandResult::Status(result) = result else {
-                return Err(AppError::Repository(
-                    "download-client command returned the wrong result for status".to_string(),
-                ));
-            };
-            let status = decode_command_result(result, "download status")?;
-            return Ok(DownloadClientStatus {
-                version: status.version,
-                is_localhost: status.is_localhost,
-                remote_output_roots: status.remote_output_roots,
-                removes_completed_downloads: status.removes_completed_downloads,
-                sorting_mode: status.sorting_mode,
-                warnings: status.warnings,
-            });
-        }
-        let plugin = self.legacy_plugin()?;
-        let output = run_blocking_plugin_call(
-            DOWNLOAD_CLIENT_PLUGIN_TIMEOUT,
-            "download client plugin",
-            move || {
-                let mut guard = plugin
-                    .lock()
-                    .map_err(|e| AppError::Repository(format!("plugin mutex poisoned: {e}")))?;
-                guard
-                    .call_unit(EXPORT_DOWNLOAD_STATUS)
-                    .map_err(|e| plugin_call_error(&format!("{EXPORT_DOWNLOAD_STATUS}()"), e))
-            },
-        )
-        .await?;
-
-        let status: PluginDownloadClientStatus =
-            decode_plugin_result(&output, EXPORT_DOWNLOAD_STATUS)?;
-
+            .await?;
+        let PluginDownloadClientCommandResult::Status(result) = result else {
+            return Err(AppError::Repository(
+                "download-client command returned the wrong result for status".to_string(),
+            ));
+        };
+        let status = decode_command_result(result, "download status")?;
         Ok(DownloadClientStatus {
             version: status.version,
             is_localhost: status.is_localhost,
@@ -1994,42 +1498,18 @@ impl DownloadClient for WasmDownloadClient {
     }
 
     async fn test_connection(&self) -> AppResult<String> {
-        if let Some(result) = self
+        let result = self
             .invoke_command(
                 PluginDownloadClientCommand::TestConnection,
                 "test_connection",
             )
-            .await?
-        {
-            let PluginDownloadClientCommandResult::TestConnection(result) = result else {
-                return Err(AppError::Repository(
-                    "download-client command returned the wrong result for test_connection"
-                        .to_string(),
-                ));
-            };
-            return decode_command_result(result, "download test_connection");
-        }
-        let plugin = self.legacy_plugin()?;
-        let output = run_blocking_plugin_call(
-            DOWNLOAD_CLIENT_PLUGIN_TIMEOUT,
-            "download client plugin",
-            move || {
-                let mut guard = plugin
-                    .lock()
-                    .map_err(|e| AppError::Repository(format!("plugin mutex poisoned: {e}")))?;
-                guard
-                    .call_unit(crate::types::EXPORT_DOWNLOAD_TEST_CONNECTION)
-                    .map_err(|e| {
-                        plugin_call_error(
-                            &format!("{}()", crate::types::EXPORT_DOWNLOAD_TEST_CONNECTION),
-                            e,
-                        )
-                    })
-            },
-        )
-        .await?;
-
-        decode_plugin_result(&output, crate::types::EXPORT_DOWNLOAD_TEST_CONNECTION)
+            .await?;
+        let PluginDownloadClientCommandResult::TestConnection(result) = result else {
+            return Err(AppError::Repository(
+                "download-client command returned the wrong result for test_connection".to_string(),
+            ));
+        };
+        decode_command_result(result, "download test_connection")
     }
 }
 
@@ -2493,23 +1973,18 @@ mod tests {
     }
 
     #[test]
-    fn legacy_add_permanent_plugin_error_is_rejected() {
-        let output = serde_json::to_string(&PluginResult::<PluginDownloadClientAddResponse>::Err(
-            PluginError {
+    fn add_permanent_plugin_error_is_rejected() {
+        let error = decode_download_add_result::<PluginDownloadClientAddResponse>(
+            PluginResult::Err(PluginError {
                 details: None,
                 code: PluginErrorCode::Permanent,
                 public_message: "download source is invalid".to_string(),
                 debug_message: None,
                 retry_after_seconds: None,
-            },
-        ))
-        .unwrap();
-
-        let error = decode_legacy_download_add_result::<PluginDownloadClientAddResponse>(
-            &output,
-            EXPORT_DOWNLOAD_ADD,
+            }),
+            "download add",
         )
-        .expect_err("permanent legacy plugin error should reject the submission");
+        .expect_err("a permanent plugin error should reject the submission");
 
         assert!(!error.is_retryable_download_submit_failure());
         assert!(matches!(error, AppError::DownloadSubmitRejected(_)));
@@ -3070,7 +2545,6 @@ mod tests {
 #[cfg(test)]
 mod component_routing_tests {
     use super::*;
-    use crate::legacy_runtime::LegacyPluginSpec;
     use crate::wasmtime_host::download_client_component_host::tests::{
         FIXTURE_STATE_VALUE, fixture_component,
     };
@@ -3152,48 +2626,5 @@ mod component_routing_tests {
             .expect("second exchange must succeed");
 
         assert_eq!(message, format!("host-call:{FIXTURE_STATE_VALUE}"));
-    }
-
-    /// The component path is additive: a core-module artifact still builds a
-    /// legacy reactor and never reaches the component host.
-    #[test]
-    fn a_core_module_artifact_still_selects_the_legacy_runtime() {
-        let core_module = wat::parse_str("(module (memory (export \"memory\") 1))")
-            .expect("core module WAT must parse");
-        let spec = LegacyPluginSpec::new(core_module, "fixture-download-client".to_string());
-        let plugin = LegacyPlugin::instantiate(spec).expect("legacy reactor must instantiate");
-
-        let client = WasmDownloadClient::new(
-            plugin,
-            descriptor(),
-            "config-1".to_string(),
-            "Fixture".to_string(),
-        );
-
-        assert!(
-            client.native_client().is_none(),
-            "a non-component download client must keep the legacy path"
-        );
-        client
-            .legacy_plugin()
-            .expect("the legacy reactor must be reachable");
-    }
-
-    /// A command-ABI client keeps routing to the command runtime, not to the
-    /// component host: both are "native", and only the runtime arm tells them
-    /// apart.
-    #[test]
-    fn a_command_client_keeps_the_command_runtime() {
-        let client = WasmDownloadClient::new_command(
-            Vec::new(),
-            descriptor(),
-            "config-1".to_string(),
-            "Fixture".to_string(),
-            command_host(),
-        );
-
-        assert!(matches!(client.runtime, DownloadClientRuntime::Command(_)));
-        assert!(client.native_client().is_some());
-        assert!(client.legacy_plugin().is_err());
     }
 }

@@ -2,8 +2,8 @@
 //!
 //! A process-wide engine with epoch cancellation and the full wasm feature
 //! surface ([`engine`]), per-invocation sandboxes with a memory cap
-//! ([`sandbox`]), the frozen crypto/CRC cores ([`crypto_host`]), the
-//! stdin/stdout command protocol for wasip1 command guests ([`invoke`]), the
+//! ([`sandbox`]), the frozen crypto/CRC cores ([`crypto_host`]), the shared
+//! host-call service layer every family world imports ([`command_host`]), the
 //! WASI Preview 2 component hosts for indexers ([`component_host`]), archive
 //! extractors ([`archive_component_host`]), subtitle providers
 //! ([`subtitle_component_host`]), download clients
@@ -17,31 +17,23 @@ pub(crate) mod archive_component_host;
 pub(crate) mod command_host;
 pub(crate) mod component_host;
 mod crypto_host;
-mod describe;
 pub(crate) mod download_client_component_host;
 pub(crate) mod engine;
 mod error;
 mod family_component_host;
-mod invoke;
 pub(crate) mod module_cache;
 pub(crate) mod notification_component_host;
 mod sandbox;
 pub(crate) mod subtitle_component_host;
 
 pub(crate) use archive_component_host::{
-    ARCHIVE_CORE_MODULE_REJECTED, ArchiveInvocation, archive_component_describe,
-    process_archive_component, validate_archive_component,
+    ArchiveInvocation, archive_component_describe, process_archive_component,
+    validate_archive_component,
 };
 pub(crate) use component_host::validate_indexer_component;
-pub(crate) use describe::{
-    command_model_describe, validate_command_module, validate_subtitle_sync_module,
-};
 pub(crate) use download_client_component_host::{
     DownloadClientComponentInvocation, download_client_component_describe,
     process_download_client_component, validate_download_client_component,
-};
-pub(crate) use invoke::{
-    CommandInvocation, SubtitleSyncInvocation, process_command, process_subtitle_sync,
 };
 pub(crate) use notification_component_host::{
     NotificationComponentInvocation, notification_component_describe,

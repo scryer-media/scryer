@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
@@ -17,17 +17,14 @@ use scryer_application::{
     parse_release_metadata,
 };
 use scryer_domain::{PluginHostBindingId, SubtitleProviderConfig};
+use scryer_plugin_sdk::PluginResult;
 use scryer_plugin_sdk::command::{
     PluginCommand, PluginCommandRequest, PluginCommandResult, PluginSubtitleCommand,
     PluginSubtitleCommandResult,
 };
-use scryer_plugin_sdk::PluginResult;
 
-use crate::blocking::run_blocking_plugin_call;
-use crate::legacy_runtime::{LegacyPlugin, LegacyPluginSpec};
 use crate::loader::{allowed_hosts_for_descriptor, parse_config_json_entries};
 use crate::runtime_backing::{PluginInstanceSpec, PluginRuntimeBacking, PreopenSpec};
-use crate::wasmtime_host::{SubtitleComponentInvocation, process_subtitle_component};
 use crate::types::{
     EXPORT_SUBTITLE_DOWNLOAD, EXPORT_SUBTITLE_GENERATE, EXPORT_SUBTITLE_SEARCH,
     EXPORT_VALIDATE_CONFIG, PluginDescriptor, SubtitleMatchHint, SubtitleMatchHintKind,
@@ -35,29 +32,21 @@ use crate::types::{
     SubtitlePluginGenerateRequest, SubtitlePluginGenerateResponse, SubtitlePluginSearchRequest,
     SubtitlePluginSearchResponse, SubtitlePluginValidateConfigRequest,
     SubtitlePluginValidateConfigResponse, SubtitleProviderMode, SubtitleQueryMediaKind,
-    SubtitleValidateConfigStatus, decode_plugin_result, host_binding_to_domain,
+    SubtitleValidateConfigStatus, host_binding_to_domain,
 };
 use crate::wasmtime_host::command_host::CommandHost;
+use crate::wasmtime_host::{SubtitleComponentInvocation, process_subtitle_component};
 
 const GENERATOR_MAX_INPUT_SIZE_BYTES: i64 = 512 * 1024 * 1024;
 const GENERATOR_MAX_DURATION_SECONDS: i64 = 4 * 60 * 60;
 const GUEST_INPUT_ROOT: &str = "/input";
 const SUBTITLE_PLUGIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
-/// Which runtime serves this provider's operations.
-///
-/// The two arms carry different state because their models differ: a legacy
-/// reactor is instantiated once and re-entered under a mutex, while a component
-/// is instance-per-request and so retains only the spec it will instantiate
-/// from. Everything else about the client — config, host bindings, the archive
-/// provider threaded into the [`CommandHost`] — is shared.
-enum SubtitleRuntime {
-    Legacy(Arc<Mutex<LegacyPlugin>>),
-    Component(PluginInstanceSpec),
-}
-
 pub struct WasmSubtitleClient {
-    runtime: SubtitleRuntime,
+    /// The spec every catalog invocation is instantiated from. Components are
+    /// instance-per-request, so the client retains the spec rather than an
+    /// instance.
+    spec: PluginInstanceSpec,
     wasm_bytes: Arc<Vec<u8>>,
     descriptor: PluginDescriptor,
     provider_name: String,
@@ -86,28 +75,15 @@ impl WasmSubtitleClient {
             archive_provider.clone(),
         )?;
         // Classify from the artifact, not the descriptor: a subtitle descriptor
-        // is identical whether the artifact is a legacy reactor or a
-        // `scryer:subtitle/subtitle-provider@1.0.0` component.
-        let backing = PluginRuntimeBacking::for_artifact(&descriptor, &wasm_bytes)
+        // is identical whether the artifact is a stale pre-component build or a
+        // `scryer:subtitle/subtitle-provider@1.0.0` component, and the upgrade
+        // diagnostic belongs at provider construction rather than at first
+        // search.
+        PluginRuntimeBacking::for_artifact(&descriptor, &wasm_bytes)
             .map_err(AppError::Repository)?;
-        let runtime = if backing == PluginRuntimeBacking::WasmtimeSubtitleComponent {
-            SubtitleRuntime::Component(component_instance_spec(&spec))
-        } else {
-            // Every non-component backing keeps its existing path: the legacy
-            // reactor is instantiated eagerly so a broken artifact fails at
-            // provider construction rather than at first search.
-            SubtitleRuntime::Legacy(Arc::new(Mutex::new(
-                LegacyPlugin::instantiate(spec).map_err(|error| {
-                    AppError::Repository(format!(
-                        "failed to compile subtitle provider plugin for {}: {error}",
-                        config.name
-                    ))
-                })?,
-            )))
-        };
 
         Ok(Self {
-            runtime,
+            spec,
             wasm_bytes: Arc::new(wasm_bytes),
             descriptor,
             provider_name: config.provider_type,
@@ -142,27 +118,6 @@ impl WasmSubtitleClient {
         }
     }
 
-    /// The component spec for this provider, or `None` on a legacy artifact.
-    fn component_spec(&self) -> Option<&PluginInstanceSpec> {
-        match &self.runtime {
-            SubtitleRuntime::Component(spec) => Some(spec),
-            SubtitleRuntime::Legacy(_) => None,
-        }
-    }
-
-    /// The instantiated legacy reactor. Reached only after `component_spec()`
-    /// has returned `None`, so the `else` is unreachable in practice and exists
-    /// to keep the two runtimes from sharing a panic.
-    fn legacy_plugin(&self) -> AppResult<Arc<Mutex<LegacyPlugin>>> {
-        match &self.runtime {
-            SubtitleRuntime::Legacy(plugin) => Ok(Arc::clone(plugin)),
-            SubtitleRuntime::Component(_) => Err(AppError::Repository(format!(
-                "subtitle provider plugin {} is a component and has no legacy exports",
-                self.descriptor.id
-            ))),
-        }
-    }
-
     /// Run one `PluginSubtitleCommand` through the component world and return
     /// its family-matched result.
     async fn invoke_component(
@@ -191,24 +146,7 @@ impl WasmSubtitleClient {
     }
 }
 
-/// Reuse the legacy spec's sandbox decisions for a component invocation.
-///
-/// The provider's config, allowed hosts, timeout, preopens and — critically —
-/// the [`CommandHost`] carrying the archive provider are all decided once in
-/// [`build_subtitle_spec`]. The component path re-projects that same spec
-/// rather than making a second set of decisions that could drift.
-fn component_instance_spec(spec: &LegacyPluginSpec) -> PluginInstanceSpec {
-    PluginInstanceSpec {
-        wasm: Arc::clone(&spec.wasm),
-        preopens: spec.preopens.clone(),
-        timeout: spec.timeout,
-        memory_max_bytes: spec.memory_max_bytes,
-        command_host: spec.command_host.clone(),
-    }
-}
-
-/// Unwrap a `PluginResult` from a component subtitle operation, mirroring what
-/// `decode_plugin_result` does for the legacy JSON envelope.
+/// Unwrap a `PluginResult` from a component subtitle operation.
 fn decode_component_result<T>(result: PluginResult<T>, context: &str) -> AppResult<T> {
     match result {
         PluginResult::Ok(value) => Ok(value),
@@ -256,37 +194,14 @@ impl SubtitleProviderClient for WasmSubtitleClient {
             include_ai_translated: query.include_ai_translated,
             include_machine_translated: query.include_machine_translated,
         };
-        let response: SubtitlePluginSearchResponse = if let Some(spec) = self.component_spec() {
-            let result = self
-                .invoke_component(spec, PluginSubtitleCommand::Search(request), "Search")
-                .await?;
-            let PluginSubtitleCommandResult::Search(result) = result else {
-                return Err(wrong_operation_error(&self.descriptor.id, "search"));
-            };
-            decode_component_result(result, EXPORT_SUBTITLE_SEARCH)?
-        } else {
-            let input = serde_json::to_string(&request).map_err(|error| {
-                AppError::Repository(format!(
-                    "failed to serialize subtitle search request: {error}"
-                ))
-            })?;
-
-            let plugin = self.legacy_plugin()?;
-            let output =
-                run_blocking_plugin_call(SUBTITLE_PLUGIN_TIMEOUT, "subtitle plugin", move || {
-                    let mut guard = plugin.lock().map_err(|error| {
-                        AppError::Repository(format!("plugin mutex poisoned: {error}"))
-                    })?;
-                    guard
-                        .call_string(EXPORT_SUBTITLE_SEARCH, &input)
-                        .map_err(|error| {
-                            plugin_call_error(&format!("{EXPORT_SUBTITLE_SEARCH}()"), error)
-                        })
-                })
-                .await?;
-
-            decode_plugin_result(&output, EXPORT_SUBTITLE_SEARCH)?
+        let result = self
+            .invoke_component(&self.spec, PluginSubtitleCommand::Search(request), "Search")
+            .await?;
+        let PluginSubtitleCommandResult::Search(result) = result else {
+            return Err(wrong_operation_error(&self.descriptor.id, "search"));
         };
+        let response: SubtitlePluginSearchResponse =
+            decode_component_result(result, EXPORT_SUBTITLE_SEARCH)?;
 
         let mut results = response
             .results
@@ -306,37 +221,18 @@ impl SubtitleProviderClient for WasmSubtitleClient {
             provider_file_id: provider_file_id.to_string(),
         };
 
-        let response: SubtitlePluginDownloadResponse = if let Some(spec) = self.component_spec() {
-            let result = self
-                .invoke_component(spec, PluginSubtitleCommand::Download(request), "Download")
-                .await?;
-            let PluginSubtitleCommandResult::Download(result) = result else {
-                return Err(wrong_operation_error(&self.descriptor.id, "download"));
-            };
-            decode_component_result(result, EXPORT_SUBTITLE_DOWNLOAD)?
-        } else {
-            let input = serde_json::to_string(&request).map_err(|error| {
-                AppError::Repository(format!(
-                    "failed to serialize subtitle download request: {error}"
-                ))
-            })?;
-
-            let plugin = self.legacy_plugin()?;
-            let output =
-                run_blocking_plugin_call(SUBTITLE_PLUGIN_TIMEOUT, "subtitle plugin", move || {
-                    let mut guard = plugin.lock().map_err(|error| {
-                        AppError::Repository(format!("plugin mutex poisoned: {error}"))
-                    })?;
-                    guard
-                        .call_string(EXPORT_SUBTITLE_DOWNLOAD, &input)
-                        .map_err(|error| {
-                            plugin_call_error(&format!("{EXPORT_SUBTITLE_DOWNLOAD}()"), error)
-                        })
-                })
-                .await?;
-
-            decode_plugin_result(&output, EXPORT_SUBTITLE_DOWNLOAD)?
+        let result = self
+            .invoke_component(
+                &self.spec,
+                PluginSubtitleCommand::Download(request),
+                "Download",
+            )
+            .await?;
+        let PluginSubtitleCommandResult::Download(result) = result else {
+            return Err(wrong_operation_error(&self.descriptor.id, "download"));
         };
+        let response: SubtitlePluginDownloadResponse =
+            decode_component_result(result, EXPORT_SUBTITLE_DOWNLOAD)?;
 
         Ok(SubtitleFile {
             content: BASE64.decode(response.content_base64).map_err(|error| {
@@ -359,43 +255,21 @@ impl SubtitleProviderClient for WasmSubtitleClient {
             config_instance_name: Some(self.config_name.clone()),
         };
 
-        let response: SubtitlePluginValidateConfigResponse = if let Some(spec) =
-            self.component_spec()
-        {
-            let result = self
-                .invoke_component(
-                    spec,
-                    PluginSubtitleCommand::ValidateConfig(request),
-                    "ValidateConfig",
-                )
-                .await?;
-            let PluginSubtitleCommandResult::ValidateConfig(result) = result else {
-                return Err(wrong_operation_error(&self.descriptor.id, "validate config"));
-            };
-            decode_component_result(result, EXPORT_VALIDATE_CONFIG)?
-        } else {
-            let input = serde_json::to_string(&request).map_err(|error| {
-                AppError::Repository(format!(
-                    "failed to serialize subtitle validate request: {error}"
-                ))
-            })?;
-
-            let plugin = self.legacy_plugin()?;
-            let output =
-                run_blocking_plugin_call(SUBTITLE_PLUGIN_TIMEOUT, "subtitle plugin", move || {
-                    let mut guard = plugin.lock().map_err(|error| {
-                        AppError::Repository(format!("plugin mutex poisoned: {error}"))
-                    })?;
-                    guard
-                        .call_string(EXPORT_VALIDATE_CONFIG, &input)
-                        .map_err(|error| {
-                            plugin_call_error(&format!("{EXPORT_VALIDATE_CONFIG}()"), error)
-                        })
-                })
-                .await?;
-
-            decode_plugin_result(&output, EXPORT_VALIDATE_CONFIG)?
+        let result = self
+            .invoke_component(
+                &self.spec,
+                PluginSubtitleCommand::ValidateConfig(request),
+                "ValidateConfig",
+            )
+            .await?;
+        let PluginSubtitleCommandResult::ValidateConfig(result) = result else {
+            return Err(wrong_operation_error(
+                &self.descriptor.id,
+                "validate config",
+            ));
         };
+        let response: SubtitlePluginValidateConfigResponse =
+            decode_component_result(result, EXPORT_VALIDATE_CONFIG)?;
 
         Ok(SubtitleProviderValidationResult {
             status: subtitle_validate_status_string(response.status),
@@ -460,49 +334,21 @@ impl SubtitleProviderClient for WasmSubtitleClient {
         };
 
         // A generator invocation is the one subtitle operation with filesystem
-        // authority, and it is instance-per-request on both runtimes: the spec
-        // built above carries the read-only input preopen, so the component
-        // path re-projects *this* spec rather than the client's ambient one.
-        let response: SubtitlePluginGenerateResponse = if self.component_spec().is_some() {
-            let spec = component_instance_spec(&spec);
-            let result = self
-                .invoke_component(
-                    &spec,
-                    PluginSubtitleCommand::Generate(generate_request),
-                    "Generate",
-                )
-                .await?;
-            let PluginSubtitleCommandResult::Generate(result) = result else {
-                return Err(wrong_operation_error(&self.descriptor.id, "generate"));
-            };
-            decode_component_result(result, EXPORT_SUBTITLE_GENERATE)?
-        } else {
-            let input = serde_json::to_string(&generate_request).map_err(|error| {
-                AppError::Repository(format!(
-                    "failed to serialize subtitle generate request: {error}"
-                ))
-            })?;
-
-            let output = run_blocking_plugin_call(
-                SUBTITLE_PLUGIN_TIMEOUT,
-                "subtitle generator plugin",
-                move || {
-                    let mut plugin = LegacyPlugin::instantiate(spec).map_err(|error| {
-                        AppError::Repository(format!(
-                            "failed to compile subtitle generator plugin: {error}"
-                        ))
-                    })?;
-                    plugin
-                        .call_string(EXPORT_SUBTITLE_GENERATE, &input)
-                        .map_err(|error| {
-                            plugin_call_error(&format!("{EXPORT_SUBTITLE_GENERATE}()"), error)
-                        })
-                },
+        // authority: the spec built above carries the read-only input preopen,
+        // so this invocation uses *that* spec rather than the client's ambient
+        // one.
+        let result = self
+            .invoke_component(
+                &spec,
+                PluginSubtitleCommand::Generate(generate_request),
+                "Generate",
             )
             .await?;
-
-            decode_plugin_result(&output, EXPORT_SUBTITLE_GENERATE)?
+        let PluginSubtitleCommandResult::Generate(result) = result else {
+            return Err(wrong_operation_error(&self.descriptor.id, "generate"));
         };
+        let response: SubtitlePluginGenerateResponse =
+            decode_component_result(result, EXPORT_SUBTITLE_GENERATE)?;
 
         Ok(SubtitleFile {
             content: BASE64.decode(response.content_base64).map_err(|error| {
@@ -528,15 +374,15 @@ fn build_subtitle_spec(
     host_bindings: &HashMap<PluginHostBindingId, String>,
     allowed_path: Option<(&Path, &str)>,
     archive_provider: Option<Arc<dyn ArchiveExtractorPluginProvider>>,
-) -> AppResult<LegacyPluginSpec> {
-    let mut spec = LegacyPluginSpec::new(wasm_bytes.to_vec(), descriptor.id.clone());
-    spec.allowed_hosts = allowed_hosts_for_descriptor(descriptor, None, Some(config_json));
-    spec.timeout = std::time::Duration::from_secs(30);
+) -> AppResult<PluginInstanceSpec> {
+    let allowed_hosts = allowed_hosts_for_descriptor(descriptor, None, Some(config_json));
+    let timeout = SUBTITLE_PLUGIN_TIMEOUT;
 
+    let mut config = std::collections::BTreeMap::new();
     match parse_config_json_entries(config_json) {
         Ok(entries) => {
             for (key, value) in entries {
-                spec.config.insert(key, value);
+                config.insert(key, value);
             }
         }
         Err(error) => {
@@ -550,25 +396,29 @@ fn build_subtitle_spec(
         if let Some(binding) = field.host_binding
             && let Some(value) = host_bindings.get(&host_binding_to_domain(binding))
         {
-            spec.config.insert(field.key.clone(), value.clone());
+            config.insert(field.key.clone(), value.clone());
         }
     }
 
+    let mut preopens = Vec::new();
     if let Some((host_path, guest_root)) = allowed_path {
-        spec.preopens
-            .push(PreopenSpec::read_only(host_path.to_path_buf(), guest_root));
+        preopens.push(PreopenSpec::read_only(host_path.to_path_buf(), guest_root));
     }
 
-    spec.command_host = CommandHost::with_archive_provider(
-        descriptor.id.clone(),
-        spec.config.clone(),
-        spec.allowed_hosts.clone(),
-        spec.timeout,
-        spec.memory_max_bytes.map(|value| value as u64),
-        archive_provider,
-    );
-
-    Ok(spec)
+    Ok(PluginInstanceSpec {
+        wasm: Arc::new(wasm_bytes.to_vec()),
+        preopens,
+        timeout,
+        memory_max_bytes: None,
+        command_host: CommandHost::with_archive_provider(
+            descriptor.id.clone(),
+            config,
+            allowed_hosts,
+            timeout,
+            None,
+            archive_provider,
+        ),
+    })
 }
 
 fn missing_host_bindings(
@@ -601,10 +451,6 @@ fn subtitle_validate_status_string(status: SubtitleValidateConfigStatus) -> Stri
         SubtitleValidateConfigStatus::MissingHostBinding => "missing_host_binding",
     }
     .to_string()
-}
-
-fn plugin_call_error(operation: &str, error: AppError) -> AppError {
-    AppError::Repository(format!("subtitle plugin {operation} failed: {error}"))
 }
 
 fn map_media_kind(kind: SubtitleMediaKind) -> SubtitleQueryMediaKind {
@@ -1116,14 +962,16 @@ mod component_routing_tests {
             sdk_version: crate::types::SDK_VERSION.to_string(),
             sdk_constraint: crate::types::current_sdk_constraint(),
             socket_permissions: Vec::new(),
-            provider: crate::types::ProviderDescriptor::Subtitle(crate::types::SubtitleDescriptor {
-                provider_type: "fixture-subtitles".to_string(),
-                provider_aliases: Vec::new(),
-                config_fields: Vec::new(),
-                default_base_url: None,
-                allowed_hosts: Vec::new(),
-                capabilities: crate::types::SubtitleCapabilities::default(),
-            }),
+            provider: crate::types::ProviderDescriptor::Subtitle(
+                crate::types::SubtitleDescriptor {
+                    provider_type: "fixture-subtitles".to_string(),
+                    provider_aliases: Vec::new(),
+                    config_fields: Vec::new(),
+                    default_base_url: None,
+                    allowed_hosts: Vec::new(),
+                    capabilities: crate::types::SubtitleCapabilities::default(),
+                },
+            ),
         }
     }
 
@@ -1156,39 +1004,42 @@ mod component_routing_tests {
         .expect("subtitle client must build")
     }
 
-    /// A component artifact routes to the new component host, and the
-    /// descriptor-scoped `CommandHost` — config included — is threaded into the
-    /// spec the component will be instantiated from.
+    /// A component artifact builds a client whose spec carries the
+    /// descriptor-scoped `CommandHost` and this family's sandbox decisions.
     #[test]
-    fn a_component_artifact_selects_the_component_runtime() {
+    fn a_component_artifact_builds_a_component_spec() {
         let client = client_for(fixture_component());
 
-        let spec = client
-            .component_spec()
-            .expect("a subtitle component must route to the component host");
         assert!(
-            spec.preopens.is_empty(),
+            client.spec.preopens.is_empty(),
             "catalog operations need no filesystem authority"
         );
-        assert_eq!(spec.timeout, SUBTITLE_PLUGIN_TIMEOUT);
+        assert_eq!(client.spec.timeout, SUBTITLE_PLUGIN_TIMEOUT);
     }
 
-    /// The component path is additive: an ordinary core-module subtitle
-    /// artifact still instantiates a legacy reactor at construction time and
-    /// never reaches the component host.
+    /// The hard cut: a pre-component subtitle artifact is refused at provider
+    /// construction with the upgrade instruction, not silently accepted and
+    /// then failed at first search.
     #[test]
-    fn a_core_module_artifact_still_selects_the_legacy_runtime() {
+    fn a_core_module_artifact_is_rejected_with_an_upgrade_diagnostic() {
         let core_module =
             wat::parse_str("(module (memory (export \"memory\") 1))").expect("core module WAT");
 
-        let client = client_for(core_module);
+        let Err(error) = WasmSubtitleClient::new_with_archive_provider(
+            core_module,
+            subtitle_descriptor(),
+            provider_config(),
+            HashMap::new(),
+            None,
+        ) else {
+            panic!("a pre-component subtitle artifact must be refused");
+        };
 
+        let message = error.to_string();
+        assert!(message.contains("wasm32-wasip2"), "{message}");
         assert!(
-            client.component_spec().is_none(),
-            "a non-component subtitle artifact must keep the legacy path"
+            message.contains("scryer:subtitle/subtitle-provider@1.0.0"),
+            "{message}"
         );
-        client
-            .legacy_plugin()
-            .expect("the legacy reactor must have been instantiated eagerly");
     }
 }

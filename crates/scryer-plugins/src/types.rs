@@ -248,25 +248,3 @@ pub(crate) fn tagged_alias_to_sdk(alias: scryer_domain::TaggedAlias) -> TaggedAl
         language: alias.language,
     }
 }
-
-pub(crate) fn decode_plugin_result<T>(
-    output: &str,
-    context: &str,
-) -> scryer_application::AppResult<T>
-where
-    T: serde::de::DeserializeOwned,
-{
-    let envelope: PluginResult<T> = serde_json::from_str(output).map_err(|error| {
-        scryer_application::AppError::Repository(format!(
-            "{context}: plugin returned invalid result envelope: {error}"
-        ))
-    })?;
-
-    match envelope {
-        PluginResult::Ok(value) => Ok(value),
-        PluginResult::Err(error) => Err(scryer_application::AppError::Repository(format!(
-            "{context}: plugin error {:?}: {}",
-            error.code, error.public_message
-        ))),
-    }
-}

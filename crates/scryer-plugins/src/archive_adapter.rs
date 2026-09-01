@@ -20,21 +20,21 @@ pub struct WasmArchiveExtractorClient {
     wasm_bytes: Arc<Vec<u8>>,
     plugin_id: String,
     plugin_version: String,
-    backing: PluginRuntimeBacking,
 }
 
 impl WasmArchiveExtractorClient {
     pub fn new(wasm_bytes: Vec<u8>, descriptor: PluginDescriptor) -> AppResult<Self> {
         // Classify from the artifact, not the descriptor: a descriptor alone
         // cannot tell a component from the removed core-module build, and the
-        // upgrade diagnostic belongs here rather than at first extraction.
-        let backing = PluginRuntimeBacking::for_artifact(&descriptor, &wasm_bytes)
+        // upgrade diagnostic belongs here rather than at first extraction. An
+        // archive descriptor can only select the archive component host, so the
+        // selection itself is not retained — only the refusal matters.
+        PluginRuntimeBacking::for_artifact(&descriptor, &wasm_bytes)
             .map_err(AppError::Repository)?;
         Ok(Self {
             wasm_bytes: Arc::new(wasm_bytes),
             plugin_id: descriptor.id,
             plugin_version: descriptor.version,
-            backing,
         })
     }
 }
@@ -45,24 +45,6 @@ impl ArchiveExtractorClient for WasmArchiveExtractorClient {
         &self,
         request: ArchivePluginProcessRequest,
     ) -> AppResult<ArchivePluginProcessResponse> {
-        // The archive kind runs exclusively on the WASI Preview 2 component
-        // host: the crypto interface belongs to it and to nothing else.
-        match self.backing {
-            PluginRuntimeBacking::WasmtimeArchiveComponent => {}
-            PluginRuntimeBacking::LegacyReactor
-            | PluginRuntimeBacking::WasmtimeSubtitleSync
-            | PluginRuntimeBacking::WasmtimeCommand
-            | PluginRuntimeBacking::WasmtimeIndexerComponent
-            | PluginRuntimeBacking::WasmtimeSubtitleComponent
-            | PluginRuntimeBacking::WasmtimeDownloadClientComponent
-            | PluginRuntimeBacking::WasmtimeNotificationComponent => {
-                return Err(AppError::Repository(
-                    "archive extractor plugin requires the WASI component runtime backing"
-                        .to_string(),
-                ));
-            }
-        }
-
         let prepared = PreparedArchiveRequest::new(request)?;
         let input = serde_json::to_string(&prepared.request).map_err(|error| {
             AppError::Repository(format!(

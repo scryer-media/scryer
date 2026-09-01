@@ -22,20 +22,13 @@ use crate::archive_adapter::WasmArchiveExtractorClient;
 use crate::download_client_adapter::WasmDownloadClient;
 use crate::embedded_descriptor::embedded_descriptor_from_wasm;
 use crate::indexer_adapter::WasmIndexerClient;
-use crate::legacy_runtime::{LegacyPlugin, LegacyPluginSpec, validate_legacy_module};
 use crate::notification_adapter::WasmNotificationClient;
 use crate::process_host::ProcessHost;
 use crate::runtime_backing::{PluginInstanceSpec, PluginRuntimeBacking};
 use crate::socket_host::SocketHost;
 use crate::subtitle_adapter::WasmSubtitleClient;
-use crate::subtitle_sync_adapter::WasmSubtitleSyncClient;
 use crate::types::{
-    ArchivePluginFormat, ConfigFieldRole, ConfigFieldValueSource, EXPORT_DESCRIBE,
-    EXPORT_DOWNLOAD_ADD, EXPORT_DOWNLOAD_CONTROL, EXPORT_DOWNLOAD_LIST_COMPLETED,
-    EXPORT_DOWNLOAD_LIST_HISTORY, EXPORT_DOWNLOAD_LIST_QUEUE, EXPORT_DOWNLOAD_MARK_IMPORTED,
-    EXPORT_DOWNLOAD_STATUS, EXPORT_DOWNLOAD_TEST_CONNECTION, EXPORT_INDEXER_SEARCH,
-    EXPORT_NOTIFICATION_SEND, EXPORT_SUBSYNC_ALIGN, EXPORT_SUBTITLE_DOWNLOAD,
-    EXPORT_SUBTITLE_GENERATE, EXPORT_SUBTITLE_SEARCH, EXPORT_VALIDATE_CONFIG, PluginDescriptor,
+    ArchivePluginFormat, ConfigFieldRole, ConfigFieldValueSource, PluginDescriptor,
     PluginHostBindingId as SdkHostBinding, PluginKind, ProviderDescriptor, SDK_VERSION,
     SubtitleProviderMode, config_fields_to_domain, indexer_capabilities_to_domain,
     plugin_descriptor_sdk_constraint, validate_plugin_descriptor_sdk_contract,
@@ -128,19 +121,11 @@ fn module_flavor_for_artifact(
 ) -> Result<ModuleFlavor, String> {
     Ok(
         match PluginRuntimeBacking::for_artifact(descriptor, wasm)? {
-            PluginRuntimeBacking::LegacyReactor => ModuleFlavor::LegacyReactor,
-            PluginRuntimeBacking::WasmtimeSubtitleSync | PluginRuntimeBacking::WasmtimeCommand => {
-                ModuleFlavor::Command
-            }
-            PluginRuntimeBacking::WasmtimeIndexerComponent => ModuleFlavor::IndexerComponent,
-            PluginRuntimeBacking::WasmtimeArchiveComponent => ModuleFlavor::ArchiveComponent,
-            PluginRuntimeBacking::WasmtimeSubtitleComponent => ModuleFlavor::SubtitleComponent,
-            PluginRuntimeBacking::WasmtimeDownloadClientComponent => {
-                ModuleFlavor::DownloadClientComponent
-            }
-            PluginRuntimeBacking::WasmtimeNotificationComponent => {
-                ModuleFlavor::NotificationComponent
-            }
+            PluginRuntimeBacking::Indexer => ModuleFlavor::Indexer,
+            PluginRuntimeBacking::Archive => ModuleFlavor::Archive,
+            PluginRuntimeBacking::Subtitle => ModuleFlavor::Subtitle,
+            PluginRuntimeBacking::DownloadClient => ModuleFlavor::DownloadClient,
+            PluginRuntimeBacking::Notification => ModuleFlavor::Notification,
         },
     )
 }
@@ -902,7 +887,7 @@ impl IndexerPluginProvider for WasmIndexerPluginProvider {
         };
 
         let built = match backing {
-            PluginRuntimeBacking::WasmtimeIndexerComponent => {
+            PluginRuntimeBacking::Indexer => {
                 WasmIndexerClient::new_component_with_indexer_error_recorder(
                     wasm_bytes,
                     loaded.descriptor.clone(),
@@ -910,28 +895,6 @@ impl IndexerPluginProvider for WasmIndexerPluginProvider {
                     config.clone(),
                     indexer_proxy_config.cloned(),
                     Arc::clone(&self.indexer_error_recorder),
-                )
-            }
-            PluginRuntimeBacking::WasmtimeCommand => {
-                WasmIndexerClient::new_command_with_indexer_error_recorder(
-                    wasm_bytes,
-                    loaded.descriptor.clone(),
-                    config.name.clone(),
-                    config.clone(),
-                    indexer_proxy_config.cloned(),
-                    Arc::clone(&self.indexer_error_recorder),
-                    self.archive_provider.clone(),
-                )
-            }
-            PluginRuntimeBacking::LegacyReactor => {
-                WasmIndexerClient::new_with_indexer_error_recorder(
-                    wasm_bytes,
-                    loaded.descriptor.clone(),
-                    config.name.clone(),
-                    config.clone(),
-                    indexer_proxy_config.cloned(),
-                    Arc::clone(&self.indexer_error_recorder),
-                    self.archive_provider.clone(),
                 )
             }
             other => Err(AppError::Repository(format!(
@@ -956,22 +919,19 @@ impl IndexerPluginProvider for WasmIndexerPluginProvider {
 
 /// Pick the runtime for one indexer artifact, or explain why it is unusable.
 ///
-/// Indexers accept exactly two runtimes: the command ABI when the artifact
-/// carries the marker, and the legacy reactor otherwise. Anything else means the
-/// descriptor and the artifact disagree about what this plugin is, and running
-/// it would be a guess — the loader drops the indexer instead. Keeping the
-/// decision here (rather than inline) is what makes the legacy fallback a
-/// tested property rather than an incidental `else`.
+/// Indexers accept exactly one runtime: the `scryer:indexer` component world. A
+/// pre-component artifact is refused here with the upgrade diagnostic, and any
+/// other component family means the descriptor and the artifact disagree about
+/// what this plugin is — running it would be a guess, so the loader drops the
+/// indexer instead. Keeping the decision here (rather than inline) is what makes
+/// the refusal a tested property rather than an incidental `else`.
 fn indexer_runtime_backing(
     descriptor: &PluginDescriptor,
     wasm: &[u8],
 ) -> Result<PluginRuntimeBacking, String> {
-    let backing = PluginRuntimeBacking::for_artifact(descriptor, wasm)
-        .map_err(|error| format!("invalid runtime marker: {error}"))?;
+    let backing = PluginRuntimeBacking::for_artifact(descriptor, wasm)?;
     match backing {
-        PluginRuntimeBacking::WasmtimeCommand
-        | PluginRuntimeBacking::WasmtimeIndexerComponent
-        | PluginRuntimeBacking::LegacyReactor => Ok(backing),
+        PluginRuntimeBacking::Indexer => Ok(backing),
         other => Err(format!(
             "runtime {other:?} is not valid for an indexer descriptor"
         )),
@@ -1424,67 +1384,7 @@ impl WasmDownloadClientPluginProvider {
                 return None;
             }
         };
-        // The wasip1 command ABI and the `scryer:download-client` component
-        // world are the same client with a different transport, so they are
-        // configured *here*, once. Splitting them into two branches is exactly
-        // how base_url, allowed hosts, the timeout and the archive-provider
-        // CommandHost would drift apart between the runtime a client migrates
-        // from and the one it migrates to.
-        let native_backing = match backing {
-            PluginRuntimeBacking::WasmtimeCommand => Some(false),
-            PluginRuntimeBacking::WasmtimeDownloadClientComponent => Some(true),
-            _ => None,
-        };
-        if let Some(is_component) = native_backing {
-            let mut command_config = std::collections::BTreeMap::new();
-            if let Some(base_url) = &computed_base_url {
-                command_config.insert("base_url".to_string(), base_url.to_string());
-            }
-            match parse_config_json_entries(&config.config_json) {
-                Ok(map) => command_config.extend(map),
-                Err(error) => {
-                    warn!(
-                        client = config.name.as_str(),
-                        error = %error,
-                        "failed to parse command download client config_json"
-                    );
-                    return None;
-                }
-            }
-            let allowed_hosts = allowed_hosts_for_descriptor(
-                &loaded.descriptor,
-                computed_base_url.as_deref(),
-                Some(&config.config_json),
-            );
-            let command_host =
-                crate::wasmtime_host::command_host::CommandHost::with_archive_provider(
-                    loaded.descriptor.id.clone(),
-                    command_config,
-                    allowed_hosts,
-                    crate::download_client_adapter::DOWNLOAD_CLIENT_PLUGIN_TIMEOUT,
-                    None,
-                    archive_provider,
-                );
-            let client = if is_component {
-                WasmDownloadClient::new_component(
-                    wasm_bytes,
-                    loaded.descriptor.clone(),
-                    config.id.clone(),
-                    config.name.clone(),
-                    command_host,
-                )
-            } else {
-                WasmDownloadClient::new_command(
-                    wasm_bytes,
-                    loaded.descriptor.clone(),
-                    config.id.clone(),
-                    config.name.clone(),
-                    command_host,
-                )
-            };
-            return Some(Arc::new(client));
-        }
-        if backing != PluginRuntimeBacking::LegacyReactor {
+        if backing != PluginRuntimeBacking::DownloadClient {
             warn!(
                 client = config.name.as_str(),
                 provider_type = config.client_type.as_str(),
@@ -1492,63 +1392,42 @@ impl WasmDownloadClientPluginProvider {
             );
             return None;
         }
-        let mut spec = LegacyPluginSpec::new(wasm_bytes, loaded.descriptor.id.clone());
-        spec.allowed_hosts = allowed_hosts_for_descriptor(
-            &loaded.descriptor,
-            computed_base_url.as_deref(),
-            Some(&config.config_json),
-        );
-        spec.timeout = crate::download_client_adapter::DOWNLOAD_CLIENT_PLUGIN_TIMEOUT;
 
-        if let Some(ref base_url) = computed_base_url {
-            spec.config
-                .insert("base_url".to_string(), base_url.to_string());
+        let mut command_config = std::collections::BTreeMap::new();
+        if let Some(base_url) = &computed_base_url {
+            command_config.insert("base_url".to_string(), base_url.to_string());
         }
-
         match parse_config_json_entries(&config.config_json) {
-            Ok(map) => {
-                for (k, v) in map {
-                    spec.config.insert(k, v);
-                }
-            }
+            Ok(map) => command_config.extend(map),
             Err(error) => {
                 warn!(
                     client = config.name.as_str(),
                     error = %error,
                     "failed to parse download client config_json"
                 );
+                return None;
             }
         }
-
-        spec.command_host = crate::wasmtime_host::command_host::CommandHost::with_archive_provider(
+        let allowed_hosts = allowed_hosts_for_descriptor(
+            &loaded.descriptor,
+            computed_base_url.as_deref(),
+            Some(&config.config_json),
+        );
+        let command_host = crate::wasmtime_host::command_host::CommandHost::with_archive_provider(
             loaded.descriptor.id.clone(),
-            spec.config.clone(),
-            spec.allowed_hosts.clone(),
-            spec.timeout,
+            command_config,
+            allowed_hosts,
+            crate::download_client_adapter::DOWNLOAD_CLIENT_PLUGIN_TIMEOUT,
             None,
             archive_provider,
         );
-
-        match LegacyPlugin::instantiate(spec) {
-            Ok(plugin) => {
-                let client = WasmDownloadClient::new(
-                    plugin,
-                    loaded.descriptor.clone(),
-                    config.id.clone(),
-                    config.name.clone(),
-                );
-                Some(Arc::new(client))
-            }
-            Err(e) => {
-                warn!(
-                    client = config.name.as_str(),
-                    provider_type = config.client_type.as_str(),
-                    error = %e,
-                    "failed to instantiate WASM download client plugin"
-                );
-                None
-            }
-        }
+        Some(Arc::new(WasmDownloadClient::new_component(
+            wasm_bytes,
+            loaded.descriptor.clone(),
+            config.id.clone(),
+            config.name.clone(),
+            command_host,
+        )))
     }
 }
 
@@ -2065,27 +1944,6 @@ fn socket_host_for_notification(loaded: &LoadedPlugin, config_json: &str) -> Soc
     }
 }
 
-/// Re-project the notification channel's single spec for a component
-/// invocation.
-///
-/// The channel's config, allowed hosts, timeout, preopens and — critically —
-/// the `CommandHost` carrying its socket and process grants are all decided once
-/// in `create_notification_client`. The component path reads them back out of
-/// that spec rather than making a second set of decisions.
-///
-/// `preopens` is copied rather than cleared even though this family has never
-/// had any: the point of re-projection is that the two transports cannot
-/// disagree, and hard-coding `Vec::new()` here would be a second decision.
-fn notification_component_spec(spec: &LegacyPluginSpec) -> PluginInstanceSpec {
-    PluginInstanceSpec {
-        wasm: Arc::clone(&spec.wasm),
-        preopens: spec.preopens.clone(),
-        timeout: spec.timeout,
-        memory_max_bytes: spec.memory_max_bytes,
-        command_host: spec.command_host.clone(),
-    }
-}
-
 fn allowed_host_pattern_is_valid(host: &str) -> bool {
     let host = host.trim();
     if host.is_empty()
@@ -2379,25 +2237,24 @@ impl WasmSubtitlePluginProvider {
         resolve_loaded_plugin(&self.plugins, &self.aliases, provider_type)
     }
 
+    /// Subtitle-*sync* alignment has no host.
+    ///
+    /// It was never a `PluginSubtitleCommand`: alignment rode its own
+    /// `SubtitleSyncPluginProcessRequest` on the wasip1 stdin/stdout transport,
+    /// and that transport is gone. The `scryer:subtitle/subtitle-provider@1.0.0`
+    /// world carries `validate-config` / `search` / `download` / `generate` and
+    /// nothing else, so there is no component to route an align job to and this
+    /// says so rather than pretending a provider can align.
     fn subtitle_sync_client_from_loaded(
         loaded: &LoadedPlugin,
     ) -> Option<Arc<dyn SubtitleSyncClient>> {
-        let wasm_bytes = loaded.materialize_wasm().ok()?;
-        if PluginRuntimeBacking::for_descriptor(&loaded.descriptor)
-            == PluginRuntimeBacking::WasmtimeSubtitleSync
-        {
-            let client = WasmSubtitleSyncClient::new(wasm_bytes, loaded.descriptor.clone());
-            return Some(Arc::new(client));
-        }
-
-        let mut spec = LegacyPluginSpec::new(wasm_bytes.clone(), loaded.descriptor.id.clone());
-        spec.timeout = std::time::Duration::from_secs(10);
-        let mut plugin = LegacyPlugin::instantiate(spec).ok()?;
-        if !plugin.function_exists(EXPORT_SUBSYNC_ALIGN) {
-            return None;
-        }
-        let client = WasmSubtitleSyncClient::new(wasm_bytes, loaded.descriptor.clone());
-        Some(Arc::new(client))
+        warn!(
+            plugin_id = loaded.descriptor.id.as_str(),
+            provider_type = loaded.descriptor.provider_type(),
+            "subtitle sync alignment is unavailable: the subtitle-provider component world \
+             carries no align operation, and the wasip1 subtitle-sync transport has been removed"
+        );
+        None
     }
 }
 
@@ -3283,62 +3140,21 @@ fn host_from_url(url: &str) -> Option<String> {
         .and_then(|parsed| parsed.host_str().map(ToOwned::to_owned))
 }
 
-fn required_exports_for_descriptor(descriptor: &PluginDescriptor) -> Vec<&'static str> {
-    let mut exports = vec![EXPORT_DESCRIBE];
-    match &descriptor.provider {
-        ProviderDescriptor::Indexer(_) => {
-            exports.push(EXPORT_INDEXER_SEARCH);
-        }
-        ProviderDescriptor::DownloadClient(_) => {
-            exports.extend([
-                EXPORT_DOWNLOAD_ADD,
-                EXPORT_DOWNLOAD_LIST_QUEUE,
-                EXPORT_DOWNLOAD_LIST_HISTORY,
-                EXPORT_DOWNLOAD_LIST_COMPLETED,
-                EXPORT_DOWNLOAD_CONTROL,
-                EXPORT_DOWNLOAD_MARK_IMPORTED,
-                EXPORT_DOWNLOAD_STATUS,
-                EXPORT_DOWNLOAD_TEST_CONNECTION,
-            ]);
-        }
-        ProviderDescriptor::Notification(_) => {
-            exports.push(EXPORT_NOTIFICATION_SEND);
-        }
-        ProviderDescriptor::ArchiveExtractor(_) => {}
-        ProviderDescriptor::Subtitle(subtitle) => {
-            exports.push(EXPORT_VALIDATE_CONFIG);
-            match subtitle.capabilities.mode {
-                SubtitleProviderMode::Catalog => {
-                    exports.extend([EXPORT_SUBTITLE_SEARCH, EXPORT_SUBTITLE_DOWNLOAD]);
-                }
-                SubtitleProviderMode::Generator => {
-                    exports.push(EXPORT_SUBTITLE_GENERATE);
-                }
-                SubtitleProviderMode::Sync => {}
-            }
-        }
-    }
-    exports
-}
-
-fn validate_required_exports(
-    plugin: &mut LegacyPlugin,
-    descriptor: &PluginDescriptor,
-) -> Result<(), String> {
-    let missing = required_exports_for_descriptor(descriptor)
-        .into_iter()
-        .filter(|export| !plugin.function_exists(export))
-        .collect::<Vec<_>>();
-
-    if missing.is_empty() {
-        Ok(())
-    } else {
-        Err(format!(
-            "{} ({}) is missing required export(s): {}",
-            descriptor.id,
-            descriptor.plugin_type(),
-            missing.join(", ")
-        ))
+/// The `descriptor_source` label for one loaded descriptor.
+///
+/// The five component worlds are structurally identical — `describe` /
+/// `process` over `list<u8>` — so a component built for one family can link and
+/// answer against another family's host. The *descriptor* is what discriminates,
+/// so the label is derived from it rather than from which `describe` attempt
+/// happened to return first; deriving it from the loop position mislabelled the
+/// family in the load log.
+fn descriptor_source_label(descriptor: &PluginDescriptor) -> &'static str {
+    match descriptor.provider {
+        ProviderDescriptor::Indexer(_) => "indexer_component",
+        ProviderDescriptor::ArchiveExtractor(_) => "archive_component",
+        ProviderDescriptor::Subtitle(_) => "subtitle_component",
+        ProviderDescriptor::DownloadClient(_) => "download_client_component",
+        ProviderDescriptor::Notification(_) => "notification_component",
     }
 }
 
@@ -3348,35 +3164,23 @@ fn load_from_bytes(wasm_bytes: &[u8]) -> Result<(PluginDescriptor, Vec<u8>), Str
     let bytes = wasm_bytes.to_vec();
 
     if let Some(embedded) = embedded_descriptor_from_wasm(&bytes)? {
+        // `for_artifact` refuses a pre-component artifact here with the
+        // upgrade diagnostic, so a stale install fails at load with an
+        // actionable message rather than being silently skipped.
         match PluginRuntimeBacking::for_artifact(&embedded.descriptor, &bytes)? {
-            PluginRuntimeBacking::LegacyReactor => {
-                validate_legacy_module(
-                    &bytes,
-                    &required_exports_for_descriptor(&embedded.descriptor),
-                )?;
-            }
-            PluginRuntimeBacking::WasmtimeArchiveComponent => {
+            PluginRuntimeBacking::Archive => {
                 crate::wasmtime_host::validate_archive_component(&bytes)?;
             }
-            PluginRuntimeBacking::WasmtimeSubtitleSync => {
-                crate::wasmtime_host::validate_subtitle_sync_module(&bytes)?;
-            }
-            PluginRuntimeBacking::WasmtimeCommand => {
-                crate::wasmtime_host::validate_command_module(
-                    &bytes,
-                    embedded.descriptor.plugin_type(),
-                )?;
-            }
-            PluginRuntimeBacking::WasmtimeIndexerComponent => {
+            PluginRuntimeBacking::Indexer => {
                 crate::wasmtime_host::validate_indexer_component(&bytes)?;
             }
-            PluginRuntimeBacking::WasmtimeSubtitleComponent => {
+            PluginRuntimeBacking::Subtitle => {
                 crate::wasmtime_host::validate_subtitle_component(&bytes)?;
             }
-            PluginRuntimeBacking::WasmtimeDownloadClientComponent => {
+            PluginRuntimeBacking::DownloadClient => {
                 crate::wasmtime_host::validate_download_client_component(&bytes)?;
             }
-            PluginRuntimeBacking::WasmtimeNotificationComponent => {
+            PluginRuntimeBacking::Notification => {
                 crate::wasmtime_host::validate_notification_component(&bytes)?;
             }
         }
@@ -3390,99 +3194,39 @@ fn load_from_bytes(wasm_bytes: &[u8]) -> Result<(PluginDescriptor, Vec<u8>), Str
         return Ok((descriptor, bytes));
     }
 
-    if crate::wasmtime_host::component_host::is_component_binary(&bytes)? {
-        // An archive, subtitle, download-client or notification component can
-        // still self-describe through its world's `describe` export, so a missing
-        // custom section is not fatal for it. The worlds are told apart by
-        // their imports, so the wrong one fails to link rather than returning a
-        // foreign descriptor.
-        for (source, describe) in [
-            (
-                "archive_component",
-                crate::wasmtime_host::archive_component_describe
-                    as fn(&[u8]) -> Result<PluginDescriptor, String>,
-            ),
-            (
-                "subtitle_component",
-                crate::wasmtime_host::subtitle_component_describe
-                    as fn(&[u8]) -> Result<PluginDescriptor, String>,
-            ),
-            (
-                "download_client_component",
-                crate::wasmtime_host::download_client_component_describe
-                    as fn(&[u8]) -> Result<PluginDescriptor, String>,
-            ),
-            (
-                "notification_component",
-                crate::wasmtime_host::notification_component_describe
-                    as fn(&[u8]) -> Result<PluginDescriptor, String>,
-            ),
-        ] {
-            if let Ok(descriptor) = describe(&bytes) {
-                debug!(
-                    descriptor_source = source,
-                    descriptor_load_ms = started_at.elapsed().as_millis() as u64,
-                    plugin_id = descriptor.id.as_str(),
-                    "loaded plugin descriptor"
-                );
-                return Ok((descriptor, bytes));
-            }
-        }
+    if !crate::wasmtime_host::component_host::is_component_binary(&bytes)? {
+        // No embedded descriptor and not a component: nothing here can run it,
+        // and the family cannot be named because the descriptor is what would
+        // have named it. Say what to do anyway.
         return Err(
-            "WASI Preview 2 indexer components must embed a top-level plugin descriptor"
+            "plugins must be WASI Preview 2 components; this artifact is a legacy core \
+             wasm module. Upgrade the plugin to a build that targets wasm32-wasip2."
                 .to_string(),
         );
     }
 
-    // Command-model artifacts (wasip1 command: `_start` + `memory`, no
-    // `scryer_describe` export) self-describe via argv ["describe"] on the
-    // wasmtime backing.
-    // For these the required-export contract is `_start` + `memory` (checked in
-    // the classifier), not legacy reactor exports. Legacy fleet plugins fall
-    // through to the unchanged describe path below.
-    if let Some(result) = crate::wasmtime_host::command_model_describe(&bytes) {
-        let descriptor = result?;
-        debug!(
-            descriptor_source = "command",
-            descriptor_load_ms = started_at.elapsed().as_millis() as u64,
-            plugin_id = descriptor.id.as_str(),
-            "loaded plugin descriptor"
-        );
-        return Ok((descriptor, bytes));
+    // A component with no embedded descriptor can still self-describe through
+    // its world's `describe` export. The worlds are structurally identical, so
+    // an attempt against the wrong host can succeed — the returned descriptor,
+    // not the attempt order, is what identifies the family.
+    for describe in [
+        crate::wasmtime_host::archive_component_describe
+            as fn(&[u8]) -> Result<PluginDescriptor, String>,
+        crate::wasmtime_host::subtitle_component_describe,
+        crate::wasmtime_host::download_client_component_describe,
+        crate::wasmtime_host::notification_component_describe,
+    ] {
+        if let Ok(descriptor) = describe(&bytes) {
+            debug!(
+                descriptor_source = descriptor_source_label(&descriptor),
+                descriptor_load_ms = started_at.elapsed().as_millis() as u64,
+                plugin_id = descriptor.id.as_str(),
+                "loaded plugin descriptor"
+            );
+            return Ok((descriptor, bytes));
+        }
     }
-
-    // Descriptor extraction for legacy fleet plugins still calls the
-    // Extism-PDK reactor export, but the host is now Scryer's native Wasmtime
-    // compatibility runner instead of the Extism crate.
-    let mut spec = LegacyPluginSpec::new(bytes.clone(), "descriptor");
-    spec.timeout = std::time::Duration::from_secs(10);
-    let mut plugin =
-        LegacyPlugin::instantiate(spec).map_err(|e| format!("failed to instantiate WASM: {e}"))?;
-
-    let output = plugin
-        .call_string(EXPORT_DESCRIBE, "")
-        .map_err(|e| format!("{EXPORT_DESCRIBE}() failed: {e}"))?;
-
-    let descriptor: PluginDescriptor = serde_json::from_str(&output)
-        .map_err(|e| format!("describe() returned invalid JSON: {e}"))?;
-
-    if matches!(descriptor.provider, ProviderDescriptor::ArchiveExtractor(_)) {
-        return Err(format!(
-            "{} (archive_extractor) must use the wasip1 command-model archive ABI",
-            descriptor.id
-        ));
-    }
-
-    validate_required_exports(&mut plugin, &descriptor)?;
-
-    debug!(
-        descriptor_source = "legacy_reactor",
-        descriptor_load_ms = started_at.elapsed().as_millis() as u64,
-        plugin_id = descriptor.id.as_str(),
-        "loaded plugin descriptor"
-    );
-
-    Ok((descriptor, bytes))
+    Err("WASI Preview 2 indexer components must embed a top-level plugin descriptor".to_string())
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -3651,32 +3395,30 @@ impl WasmNotificationPluginProvider {
             }
         };
 
-        // ONE construction for both transports. The socket and process grants,
-        // the allowed hosts, the timeout, the config map and the
-        // archive-provider `CommandHost` are decided here, once; the component
-        // path re-projects this same spec rather than making a second set of
-        // decisions that could drift. In particular `socket_host` and
-        // `process_host` reach *both* the legacy pointer-ABI registrations
-        // (through the spec) and the shared host-call service layer (through the
-        // `CommandHost`), and because both are `Arc` clones over shared state, a
-        // component channel and a reactor channel see the same resolved
-        // permission set and the same socket handle table.
-        let mut spec = LegacyPluginSpec::new(wasm_bytes, loaded.descriptor.id.clone());
-        spec.allowed_hosts =
+        if backing != PluginRuntimeBacking::Notification {
+            warn!(
+                channel = config.name.as_str(),
+                provider_type = config.channel_type.as_str(),
+                "notification channel selected a runtime that is not valid for this descriptor family"
+            );
+            return None;
+        }
+
+        // ONE construction. The socket and process grants, the allowed hosts,
+        // the timeout, the config map and the archive-provider `CommandHost`
+        // are decided here, once; `socket_host` reaches both the service layer
+        // (through the `CommandHost`) and the adapter's per-send cleanup, and
+        // because it is an `Arc` clone over shared state, both see the same
+        // resolved permission set and the same socket handle table.
+        let allowed_hosts =
             allowed_hosts_for_descriptor(&loaded.descriptor, None, Some(&config.config_json));
-        spec.timeout = std::time::Duration::from_secs(30);
+        let timeout = crate::notification_adapter::NOTIFICATION_PLUGIN_TIMEOUT;
         let socket_host = socket_host_for_notification(loaded, &config.config_json);
         let process_host = process_host_for_notification(loaded, &config.config_json);
-        spec.socket_host = socket_host.clone();
-        spec.process_host = process_host.clone();
 
-        // Inject config_json key-value pairs
+        let mut channel_config = std::collections::BTreeMap::new();
         match parse_config_json_entries(&config.config_json) {
-            Ok(map) => {
-                for (k, v) in map {
-                    spec.config.insert(k, v);
-                }
-            }
+            Ok(map) => channel_config.extend(map),
             Err(error) => {
                 warn!(
                     channel = config.name.as_str(),
@@ -3686,54 +3428,30 @@ impl WasmNotificationPluginProvider {
             }
         }
 
-        spec.command_host = crate::wasmtime_host::command_host::CommandHost::for_notification(
+        let command_host = crate::wasmtime_host::command_host::CommandHost::for_notification(
             loaded.descriptor.id.clone(),
-            spec.config.clone(),
-            spec.allowed_hosts.clone(),
-            spec.timeout,
+            channel_config,
+            allowed_hosts,
+            timeout,
             None,
             archive_provider,
             socket_host.clone(),
             process_host,
         );
 
-        if backing == PluginRuntimeBacking::WasmtimeNotificationComponent {
-            let client = WasmNotificationClient::new_component(
-                notification_component_spec(&spec),
-                loaded.descriptor.clone(),
-                config.name.clone(),
-                Some(socket_host),
-            );
-            return Some(Arc::new(client));
-        }
-        if backing != PluginRuntimeBacking::LegacyReactor {
-            warn!(
-                channel = config.name.as_str(),
-                provider_type = config.channel_type.as_str(),
-                "notification channel selected a runtime that is not valid for this descriptor family"
-            );
-            return None;
-        }
-
-        match LegacyPlugin::instantiate(spec) {
-            Ok(plugin) => {
-                let client = WasmNotificationClient::new(
-                    plugin,
-                    loaded.descriptor.clone(),
-                    config.name.clone(),
-                    Some(socket_host),
-                );
-                Some(Arc::new(client))
-            }
-            Err(e) => {
-                warn!(
-                    channel = config.name.as_str(),
-                    error = %e,
-                    "failed to instantiate WASM notification plugin"
-                );
-                None
-            }
-        }
+        Some(Arc::new(WasmNotificationClient::new_component(
+            PluginInstanceSpec {
+                wasm: Arc::new(wasm_bytes),
+                // This family has never been granted filesystem authority.
+                preopens: Vec::new(),
+                timeout,
+                memory_max_bytes: None,
+                command_host,
+            },
+            loaded.descriptor.clone(),
+            config.name.clone(),
+            Some(socket_host),
+        )))
     }
 }
 
@@ -4334,6 +4052,10 @@ mod tests {
         }
     }
 
+    /// The embedded descriptor short-circuits guest describe execution: the
+    /// fixture component self-describes as something else through its own
+    /// `describe` export, so the loaded descriptor can only have come from the
+    /// custom section.
     #[test]
     fn embedded_descriptor_avoids_guest_descriptor_execution() {
         fn encode_u32_leb(mut value: u32, output: &mut Vec<u8>) {
@@ -4350,14 +4072,9 @@ mod tests {
             }
         }
 
-        let mut wasm = wat::parse_str(
-            r#"(module
-                (memory (export "memory") 1)
-                (func (export "scryer_describe") (result i32) unreachable)
-                (func (export "scryer_indexer_search") (result i32) unreachable))"#,
-        )
-        .unwrap();
-        let descriptor_json = serde_json::to_vec(&descriptor("indexer")).unwrap();
+        let mut wasm = crate::wasmtime_host::subtitle_component_host::tests::fixture_component();
+        let embedded = descriptor("subtitle_provider");
+        let descriptor_json = serde_json::to_vec(&embedded).unwrap();
         let section_name = crate::embedded_descriptor::PLUGIN_DESCRIPTOR_CUSTOM_SECTION_V1;
         let mut section = Vec::new();
         encode_u32_leb(section_name.len() as u32, &mut section);
@@ -4371,9 +4088,27 @@ mod tests {
 
         assert_eq!(
             serde_json::to_value(loaded_descriptor).unwrap(),
-            serde_json::to_value(descriptor("indexer")).unwrap()
+            serde_json::to_value(embedded).unwrap()
         );
         assert_eq!(loaded_wasm, wasm);
+    }
+
+    /// The hard cut at the loader's own door: a pre-component artifact — even
+    /// one carrying a valid embedded descriptor — is refused with the upgrade
+    /// instruction rather than being loaded and failed later.
+    #[test]
+    fn a_core_module_artifact_is_refused_with_an_upgrade_diagnostic() {
+        let core_module = wat::parse_str(
+            r#"(module
+                (memory (export "memory") 1)
+                (func (export "scryer_describe") (result i32) unreachable))"#,
+        )
+        .unwrap();
+
+        let error = load_from_bytes(&core_module).expect_err("a core module must not load");
+
+        assert!(error.contains("wasm32-wasip2"), "got: {error}");
+        assert!(error.contains("Upgrade the plugin"), "got: {error}");
     }
 
     fn runtime_plugin_load(
@@ -4909,16 +4644,6 @@ mod tests {
     }
 
     #[test]
-    fn archive_extractor_descriptor_is_not_extism_archive_process_contract() {
-        let descriptor = descriptor("archive_extractor");
-        let exports = required_exports_for_descriptor(&descriptor);
-
-        assert!(exports.contains(&EXPORT_DESCRIBE));
-        assert!(!exports.contains(&"scryer_archive_process"));
-        assert!(!exports.contains(&"host_crc32"));
-    }
-
-    #[test]
     fn archive_extractor_provider_routes_by_declared_format_capability() {
         let provider = WasmArchiveExtractorPluginProvider::empty().with_runtime_plugin(
             runtime_plugin_load("archive_extractor", "archive-tools", &[]),
@@ -5186,54 +4911,33 @@ mod tests {
         );
     }
 
+    /// Indexers accept exactly one runtime, and the two ways an artifact can
+    /// fail to reach it are different messages: a pre-component artifact gets
+    /// the upgrade instruction, while an artifact whose descriptor belongs to
+    /// another family gets the runtime-mismatch message.
     #[test]
-    fn indexer_runtime_backing_selects_command_only_for_marked_artifacts() {
+    fn indexer_runtime_backing_accepts_only_the_indexer_component() {
         let indexer = descriptor("indexer");
+        let component = wat::parse_str("(component)").expect("component WAT must parse");
+        let core_module = wat::parse_str("(module (memory (export \"memory\") 1))")
+            .expect("core module WAT must parse");
 
         assert_eq!(
-            indexer_runtime_backing(
-                &indexer,
-                &crate::command_abi::test_support::command_marked_wasm()
-            )
-            .expect("marked artifact is usable"),
-            PluginRuntimeBacking::WasmtimeCommand
+            indexer_runtime_backing(&indexer, &component).expect("an indexer component is usable"),
+            PluginRuntimeBacking::Indexer
         );
-        assert_eq!(
-            indexer_runtime_backing(&indexer, &crate::command_abi::test_support::unmarked_wasm())
-                .expect("unmarked artifact is usable"),
-            PluginRuntimeBacking::LegacyReactor
+
+        let error = indexer_runtime_backing(&indexer, &core_module)
+            .expect_err("a pre-component indexer artifact is not usable");
+        assert!(error.contains("wasm32-wasip2"), "got: {error}");
+        assert!(
+            error.contains("scryer:indexer/indexer-plugin@1.1.0"),
+            "got: {error}"
         );
-    }
 
-    #[test]
-    fn indexer_runtime_backing_rejects_unusable_artifacts() {
-        let indexer = descriptor("indexer");
-
-        // A marker Scryer cannot read must not silently degrade to legacy: the
-        // artifact is claiming a contract this build does not implement.
-        let malformed = crate::command_abi::test_support::append_marker(
-            crate::command_abi::test_support::unmarked_wasm(),
-            &[1],
-        );
-        let error = indexer_runtime_backing(&indexer, &malformed)
-            .expect_err("a malformed marker is not usable");
-        assert!(error.contains("invalid runtime marker"), "got: {error}");
-
-        // An artifact whose descriptor puts it on a non-indexer runtime is a
-        // descriptor/artifact mismatch, not something to run anyway. The
-        // archive kind is component-only now, so the mismatch has to be built
-        // from a component for that branch to be the one that fires.
         let archive = descriptor("archive_extractor");
-        let archive_component = wat::parse_str("(component)").expect("component WAT must parse");
-        let error = indexer_runtime_backing(&archive, &archive_component)
+        let error = indexer_runtime_backing(&archive, &component)
             .expect_err("an archive runtime is not valid for an indexer");
         assert!(error.contains("not valid for an indexer"), "got: {error}");
-
-        // A pre-component archive artifact is refused outright, with the
-        // upgrade instruction rather than a runtime-mismatch message.
-        let error =
-            indexer_runtime_backing(&archive, &crate::command_abi::test_support::unmarked_wasm())
-                .expect_err("a core-module archive artifact is not usable at all");
-        assert!(error.contains("wasm32-wasip2"), "got: {error}");
     }
 }

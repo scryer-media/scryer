@@ -42,16 +42,6 @@ const DESCRIBE_TIMEOUT: Duration = Duration::from_secs(10);
 /// Amount of guest stderr forwarded to tracing / attached to error messages.
 const STDERR_TAIL_BYTES: usize = 8 * 1024;
 
-/// The operator-facing diagnostic for a pre-component archive artifact.
-///
-/// This is the hard cut's whole user experience: an installed archive plugin
-/// built against the removed core-module ABI must say what to do, not merely
-/// fail to instantiate.
-pub(crate) const ARCHIVE_CORE_MODULE_REJECTED: &str =
-    "archive extractor plugins must be WASI Preview 2 components \
-     (world scryer:archive/archive-extractor@1.0.0); this artifact is a legacy core wasm module. \
-     Upgrade the plugin to a build that targets wasm32-wasip2.";
-
 /// Identifying context for one archive component invocation.
 pub(crate) struct ArchiveInvocation<'a> {
     pub(crate) plugin_id: &'a str,

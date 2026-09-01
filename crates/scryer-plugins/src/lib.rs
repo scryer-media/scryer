@@ -1,11 +1,8 @@
 mod archive_adapter;
-mod blocking;
 pub mod builtins;
-mod command_abi;
 mod download_client_adapter;
 mod embedded_descriptor;
 mod indexer_adapter;
-mod legacy_runtime;
 mod loader;
 pub mod newznab_profiles;
 mod notification_adapter;
@@ -16,7 +13,6 @@ mod runtime_features;
 mod seeding_trust;
 mod socket_host;
 mod subtitle_adapter;
-mod subtitle_sync_adapter;
 mod types;
 mod wasmtime_host;
 

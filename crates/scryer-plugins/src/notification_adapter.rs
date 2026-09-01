@@ -1,7 +1,4 @@
-use std::{
-    collections::BTreeMap,
-    sync::{Arc, Mutex},
-};
+use std::collections::BTreeMap;
 
 use async_trait::async_trait;
 use scryer_application::{
@@ -16,8 +13,6 @@ use scryer_plugin_sdk::command::{
 };
 use tracing::warn;
 
-use crate::blocking::run_blocking_plugin_call;
-use crate::legacy_runtime::LegacyPlugin;
 use crate::runtime_backing::PluginInstanceSpec;
 use crate::socket_host::SocketHost;
 use crate::types::{
@@ -27,69 +22,34 @@ use crate::types::{
     PluginNotificationFile, PluginNotificationHealth, PluginNotificationImport,
     PluginNotificationManualInteraction, PluginNotificationMediaFile,
     PluginNotificationMediaRequest, PluginNotificationMediaUpdate, PluginNotificationRequest,
-    PluginNotificationResponse, PluginNotificationTitle, decode_plugin_result,
+    PluginNotificationResponse, PluginNotificationTitle,
 };
 use crate::wasmtime_host::{NotificationComponentInvocation, process_notification_component};
 
-const NOTIFICATION_PLUGIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+pub(crate) const NOTIFICATION_PLUGIN_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(30);
 
-/// Which runtime serves this channel's operations.
+/// A `scryer:notification/notification@1.0.0` component channel.
 ///
-/// The legacy reactor is instantiated once and re-entered under a mutex; the
-/// component is instance-per-request and so retains only the spec it will
-/// instantiate from. What the two arms deliberately do *not* differ in is
-/// authority: both are built from the same [`crate::legacy_runtime::LegacyPluginSpec`],
-/// so the config, the allowed hosts, the timeout and — the part that matters for
-/// this family — the same `SocketHost` and `ProcessHost` reach the guest either
-/// way. See `create_notification_client` in the loader, where that single
-/// construction lives.
-enum NotificationRuntime {
-    Legacy(Arc<Mutex<LegacyPlugin>>),
-    Component(NotificationComponent),
-}
-
-/// State for a `scryer:notification/notification@1.0.0` component channel.
-struct NotificationComponent {
+/// One runtime, one construction: the config, the allowed hosts, the timeout
+/// and — the part that matters for this family — the `SocketHost` and
+/// `ProcessHost` are all decided in `create_notification_client` in the loader
+/// and reach the guest through the spec's `CommandHost`.
+pub struct WasmNotificationClient {
     spec: PluginInstanceSpec,
     /// One invocation at a time.
     ///
     /// The component is instance-per-request, but the channel's socket handle
     /// table is not: it lives in the `CommandHost` and is torn down by
     /// `SocketHost::cleanup` after every send. Two concurrent sends would
-    /// therefore close each other's sockets. The legacy reactor serializes for
-    /// its own reason (one instance, one mutex); this keeps the observable
-    /// behaviour the same.
+    /// therefore close each other's sockets.
     invocation_lock: tokio::sync::Mutex<()>,
-}
-
-pub struct WasmNotificationClient {
-    runtime: NotificationRuntime,
     descriptor: PluginDescriptor,
     channel_name: String,
     socket_host: Option<SocketHost>,
 }
 
 impl WasmNotificationClient {
-    pub fn new(
-        plugin: LegacyPlugin,
-        descriptor: PluginDescriptor,
-        channel_name: String,
-        socket_host: Option<SocketHost>,
-    ) -> Self {
-        Self {
-            runtime: NotificationRuntime::Legacy(Arc::new(Mutex::new(plugin))),
-            descriptor,
-            channel_name,
-            socket_host,
-        }
-    }
-
-    /// A `scryer:notification/notification@1.0.0` component channel.
-    ///
-    /// Deliberately takes the same `socket_host` the legacy constructor does,
-    /// and a spec re-projected from the same `LegacyPluginSpec`: a channel that
-    /// migrates its transport must not also change its authority or its
-    /// per-send socket cleanup.
     pub fn new_component(
         spec: PluginInstanceSpec,
         descriptor: PluginDescriptor,
@@ -97,49 +57,27 @@ impl WasmNotificationClient {
         socket_host: Option<SocketHost>,
     ) -> Self {
         Self {
-            runtime: NotificationRuntime::Component(NotificationComponent {
-                spec,
-                invocation_lock: tokio::sync::Mutex::new(()),
-            }),
+            spec,
+            invocation_lock: tokio::sync::Mutex::new(()),
             descriptor,
             channel_name,
             socket_host,
         }
     }
 
-    /// The component state behind this channel, or `None` on a legacy artifact.
-    fn component(&self) -> Option<&NotificationComponent> {
-        match &self.runtime {
-            NotificationRuntime::Component(component) => Some(component),
-            NotificationRuntime::Legacy(_) => None,
-        }
-    }
-
-    fn legacy_plugin(&self) -> AppResult<Arc<Mutex<LegacyPlugin>>> {
-        match &self.runtime {
-            NotificationRuntime::Legacy(plugin) => Ok(Arc::clone(plugin)),
-            NotificationRuntime::Component(_) => Err(AppError::Repository(format!(
-                "notification plugin {} is a component and has no legacy exports",
-                self.descriptor.id
-            ))),
-        }
-    }
-
     /// Run one `PluginNotificationCommand` through the component world.
     ///
-    /// The socket table is released after every invocation exactly as the
-    /// legacy path releases it after every export call — the component's own
+    /// The socket table is released after every invocation: the component's own
     /// `Store` is gone by then, but the handles are the channel's, not the
     /// store's.
     async fn invoke_component(
         &self,
-        component: &NotificationComponent,
         command: PluginNotificationCommand,
         operation: &'static str,
     ) -> AppResult<PluginNotificationCommandResult> {
-        let _guard = component.invocation_lock.lock().await;
+        let _guard = self.invocation_lock.lock().await;
         let response = process_notification_component(
-            &component.spec,
+            &self.spec,
             &PluginCommandRequest::new(PluginCommand::Notification(command)),
             NotificationComponentInvocation {
                 plugin_id: &self.descriptor.id,
@@ -166,74 +104,28 @@ impl WasmNotificationClient {
         action: &str,
         query: BTreeMap<String, String>,
     ) -> AppResult<Option<serde_json::Value>> {
-        if let Some(component) = self.component() {
-            let result = self
-                .invoke_component(
-                    component,
-                    PluginNotificationCommand::Action(PluginActionRequest {
-                        action: action.to_string(),
-                        payload: serde_json::json!({ "query": query }),
-                    }),
-                    "notification_action",
-                )
-                .await?;
-            let PluginNotificationCommandResult::Action(result) = result else {
-                return Err(AppError::Repository(format!(
-                    "notification plugin {} answered an action command with another operation",
-                    self.descriptor.id
-                )));
-            };
-            return match result {
-                PluginResult::Ok(response) => Ok(Some(response.payload)),
-                PluginResult::Err(error) => Err(AppError::Repository(format!(
-                    "notification {EXPORT_NOTIFICATION_ACTION} failed: plugin error {:?}: {}",
-                    error.code, error.public_message
-                ))),
-            };
+        let result = self
+            .invoke_component(
+                PluginNotificationCommand::Action(PluginActionRequest {
+                    action: action.to_string(),
+                    payload: serde_json::json!({ "query": query }),
+                }),
+                "notification_action",
+            )
+            .await?;
+        let PluginNotificationCommandResult::Action(result) = result else {
+            return Err(AppError::Repository(format!(
+                "notification plugin {} answered an action command with another operation",
+                self.descriptor.id
+            )));
+        };
+        match result {
+            PluginResult::Ok(response) => Ok(Some(response.payload)),
+            PluginResult::Err(error) => Err(AppError::Repository(format!(
+                "notification {EXPORT_NOTIFICATION_ACTION} failed: plugin error {:?}: {}",
+                error.code, error.public_message
+            ))),
         }
-
-        let request = serde_json::json!({
-            "action": action,
-            "query": query,
-        });
-        let input = serde_json::to_string(&request).map_err(|e| {
-            AppError::Repository(format!(
-                "failed to serialize notification action request: {e}"
-            ))
-        })?;
-
-        let plugin = self.legacy_plugin()?;
-        let socket_host = self.socket_host.clone();
-        let output = run_blocking_plugin_call(
-            NOTIFICATION_PLUGIN_TIMEOUT,
-            "notification plugin",
-            move || {
-                let mut guard = plugin
-                    .lock()
-                    .map_err(|e| AppError::Repository(format!("plugin mutex poisoned: {e}")))?;
-                if !guard.function_exists(EXPORT_NOTIFICATION_ACTION) {
-                    if let Some(socket_host) = socket_host {
-                        socket_host.cleanup();
-                    }
-                    return Ok(None);
-                }
-
-                let output = guard.call_string(EXPORT_NOTIFICATION_ACTION, &input);
-                if let Some(socket_host) = socket_host {
-                    socket_host.cleanup();
-                }
-                output.map(Some).map_err(|e| {
-                    AppError::Repository(format!(
-                        "plugin {EXPORT_NOTIFICATION_ACTION}() failed: {e}"
-                    ))
-                })
-            },
-        )
-        .await?;
-
-        output
-            .map(|output| decode_plugin_result(&output, EXPORT_NOTIFICATION_ACTION))
-            .transpose()
     }
 }
 
@@ -424,59 +316,26 @@ impl NotificationClient for WasmNotificationClient {
         let plugin_name = self.descriptor.name.clone();
         let channel_name = self.channel_name.clone();
 
-        // Both transports carry the identical `PluginNotificationRequest`
-        // document; only the envelope around it differs, which is the whole
-        // point of the world. Everything past this `if` — the warning log, the
-        // failure projection — is therefore shared.
-        let response: PluginNotificationResponse = if let Some(component) = self.component() {
-            let result = self
-                .invoke_component(
-                    component,
-                    PluginNotificationCommand::Send(request),
-                    "notification_send",
-                )
-                .await?;
-            let PluginNotificationCommandResult::Send(result) = result else {
-                return Err(AppError::Repository(format!(
-                    "notification plugin {} answered a send command with another operation",
-                    self.descriptor.id
-                )));
-            };
-            match result {
-                PluginResult::Ok(response) => response,
-                PluginResult::Err(error) => {
-                    return Err(AppError::Repository(format!(
-                        "notification {EXPORT_NOTIFICATION_SEND} failed: plugin error {:?}: {}",
-                        error.code, error.public_message
-                    )));
-                }
-            }
-        } else {
-            let input = serde_json::to_string(&request).map_err(|e| {
-                AppError::Repository(format!("failed to serialize notification request: {e}"))
-            })?;
-            let plugin = self.legacy_plugin()?;
-            let socket_host = self.socket_host.clone();
-            let output = run_blocking_plugin_call(
-                NOTIFICATION_PLUGIN_TIMEOUT,
-                "notification plugin",
-                move || {
-                    let mut guard = plugin
-                        .lock()
-                        .map_err(|e| AppError::Repository(format!("plugin mutex poisoned: {e}")))?;
-                    let output = guard.call_string(EXPORT_NOTIFICATION_SEND, &input);
-                    if let Some(socket_host) = socket_host {
-                        socket_host.cleanup();
-                    }
-                    output.map_err(|e| {
-                        AppError::Repository(format!(
-                            "plugin {EXPORT_NOTIFICATION_SEND}() failed: {e}"
-                        ))
-                    })
-                },
+        let result = self
+            .invoke_component(
+                PluginNotificationCommand::Send(request),
+                "notification_send",
             )
             .await?;
-            decode_plugin_result(&output, EXPORT_NOTIFICATION_SEND)?
+        let PluginNotificationCommandResult::Send(result) = result else {
+            return Err(AppError::Repository(format!(
+                "notification plugin {} answered a send command with another operation",
+                self.descriptor.id
+            )));
+        };
+        let response: PluginNotificationResponse = match result {
+            PluginResult::Ok(response) => response,
+            PluginResult::Err(error) => {
+                return Err(AppError::Repository(format!(
+                    "notification {EXPORT_NOTIFICATION_SEND} failed: plugin error {:?}: {}",
+                    error.code, error.public_message
+                )));
+            }
         };
 
         for warning_message in &response.warnings {
@@ -591,7 +450,6 @@ fn map_event_type(event_type: DomainNotificationEventType) -> NotificationEventT
 #[cfg(test)]
 mod component_routing_tests {
     use super::*;
-    use crate::legacy_runtime::LegacyPluginSpec;
     use crate::process_host::ProcessHost;
     use crate::wasmtime_host::command_host::CommandHost;
     use crate::wasmtime_host::notification_component_host::tests::{
@@ -600,8 +458,8 @@ mod component_routing_tests {
     use scryer_application::{NotificationAppPayload, NotificationPayload};
 
     /// The channel a component notifier is built from, wired exactly as the
-    /// loader wires it: one `SocketHost` reaching both the `CommandHost` service
-    /// arms and (on a reactor) the legacy registrations.
+    /// loader wires it: one `SocketHost` reaching the `CommandHost` service
+    /// arms.
     fn component_channel(
         descriptor: &PluginDescriptor,
         port: u16,
@@ -618,7 +476,7 @@ mod component_routing_tests {
             ProcessHost::disabled(),
         );
         let spec = PluginInstanceSpec {
-            wasm: Arc::new(socket_fixture_component(descriptor, port)),
+            wasm: std::sync::Arc::new(socket_fixture_component(descriptor, port)),
             preopens: Vec::new(),
             timeout: NOTIFICATION_PLUGIN_TIMEOUT,
             memory_max_bytes: None,
@@ -682,9 +540,8 @@ mod component_routing_tests {
         listener.join().ok();
     }
 
-    /// The per-send socket teardown the reactor path has always done happens on
-    /// the component path too: the channel's handle table is empty once the
-    /// send returns, even though the guest never closed its socket.
+    /// The per-send socket teardown: the channel's handle table is empty once
+    /// the send returns, even though the guest never closed its socket.
     #[tokio::test(flavor = "multi_thread")]
     async fn a_component_send_releases_the_channels_sockets() {
         let (port, listener) = echo_listener();
@@ -702,40 +559,5 @@ mod component_routing_tests {
             0,
             "a completed send must leave no socket open on the channel",
         );
-    }
-
-    /// The component path is additive: a core-module artifact still builds a
-    /// legacy reactor and never reaches the component host.
-    #[test]
-    fn a_core_module_artifact_still_selects_the_legacy_runtime() {
-        let core_module = wat::parse_str("(module (memory (export \"memory\") 1))")
-            .expect("core module WAT must parse");
-        let spec = LegacyPluginSpec::new(core_module, "fixture-notification".to_string());
-        let plugin = LegacyPlugin::instantiate(spec).expect("legacy reactor must instantiate");
-
-        let client = WasmNotificationClient::new(
-            plugin,
-            notification_descriptor(Vec::new()),
-            "Fixture Channel".to_string(),
-            None,
-        );
-
-        assert!(
-            client.component().is_none(),
-            "a non-component notifier must keep the legacy path"
-        );
-        client
-            .legacy_plugin()
-            .expect("the legacy reactor must be reachable");
-    }
-
-    /// And symmetrically: a component channel has no legacy exports to reach.
-    #[test]
-    fn a_component_channel_has_no_legacy_exports() {
-        let descriptor = notification_descriptor(Vec::new());
-        let (client, _socket_host) = component_channel(&descriptor, 1);
-
-        assert!(client.component().is_some());
-        assert!(client.legacy_plugin().is_err());
     }
 }

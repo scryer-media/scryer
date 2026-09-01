@@ -15,7 +15,6 @@ use crate::types::{
     PluginDescriptor, PluginError, PluginErrorCode, PluginResult, ProviderDescriptor,
 };
 
-pub(crate) const PROCESS_HOST_NAMESPACE: &str = "extism:host/user";
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(20);
 const MAX_TIMEOUT: Duration = Duration::from_secs(30);
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
@@ -49,29 +48,17 @@ impl ProcessHost {
         }
     }
 
-    pub(crate) fn call(&self, function: &str, input: String) -> Result<String, String> {
-        if function != "scryer_process_exec" {
-            return Err(format!("unsupported process host function: {function}"));
-        }
-        let outcome = match decode_input(input) {
-            Ok(request) => self.execute(request)?,
-            Err(error) => Err(error),
-        };
-        Ok(encode_response(outcome))
-    }
-
     /// Spawn one allowlisted command on behalf of a host-call guest.
     ///
-    /// Both transports land on the same [`ProcessHostState::execute`], so the
-    /// allowlist check, the environment sanitizing, the stdin cap and the
-    /// timeout are enforced once. The outer `Err` is a poisoned host lock — a
-    /// host fault, not an answer — and matches what the legacy registration
-    /// turns into a guest trap.
+    /// Every caller lands on [`ProcessHostState::execute`], so the allowlist
+    /// check, the environment sanitizing, the stdin cap and the timeout are
+    /// enforced once. The outer `Err` is a poisoned host lock — a host fault,
+    /// not an answer about the command.
     pub(crate) fn exec(
         &self,
         request: PluginProcessExecRequest,
     ) -> Result<PluginResult<PluginProcessExecResponse>, String> {
-        let legacy = ProcessExecRequest {
+        let inner = ProcessExecRequest {
             command: request.command,
             args: request.args,
             env: request.env,
@@ -82,7 +69,7 @@ impl ProcessHost {
             stdin_base64: Some(STANDARD.encode(request.stdin)),
             timeout_ms: request.timeout_ms,
         };
-        Ok(match self.execute(legacy)? {
+        Ok(match self.execute(inner)? {
             Ok(response) => PluginResult::Ok(PluginProcessExecResponse {
                 // `PluginProcessExecResponse` has no `timed_out` field and no
                 // optional status, so a killed run — the timeout, or a signal —
@@ -262,26 +249,6 @@ enum ProcessErrorCode {
 struct ProcessError {
     code: ProcessErrorCode,
     message: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(bound(deserialize = "T: Deserialize<'de>"))]
-struct ProcessResponse<T> {
-    ok: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    value: Option<T>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    error: Option<ProcessError>,
-}
-
-impl<T> ProcessResponse<T> {
-    fn ok(value: T) -> Self {
-        Self {
-            ok: true,
-            value: Some(value),
-            error: None,
-        }
-    }
 }
 
 fn resolve_allowed_commands(
@@ -473,10 +440,10 @@ fn decode_output(encoded: &str) -> Vec<u8> {
     STANDARD.decode(encoded.as_bytes()).unwrap_or_default()
 }
 
-/// Project a legacy process failure onto the SDK's error shape.
+/// Project a process failure onto the SDK's error shape.
 ///
-/// `PluginError` has no room for the process layer's own code, so the JSON
-/// document the legacy transport returns verbatim is carried in
+/// `PluginError` has no room for the process layer's own code, so a JSON
+/// document carrying it is placed in
 /// `debug_message`: a guest that wants the exact `permission_denied` /
 /// `spawn_failed` / `io_failed` / `protocol_error` discriminant parses it back
 /// out, and one that only needs to branch reads `code`.
@@ -505,41 +472,6 @@ fn process_error(code: ProcessErrorCode, message: impl Into<String>) -> ProcessE
         code,
         message: message.into(),
     }
-}
-
-fn decode_input(input: String) -> Result<ProcessExecRequest, ProcessError> {
-    serde_json::from_str(&input).map_err(|error| {
-        process_error(
-            ProcessErrorCode::ProtocolError,
-            format!("failed to decode process host request: {error}"),
-        )
-    })
-}
-
-fn encode_response<T>(result: Result<T, ProcessError>) -> String
-where
-    T: Serialize,
-{
-    let response = match result {
-        Ok(value) => ProcessResponse::ok(value),
-        Err(error) => ProcessResponse {
-            ok: false,
-            value: None,
-            error: Some(error),
-        },
-    };
-
-    serde_json::to_string(&response).unwrap_or_else(|error| {
-        serde_json::to_string(&ProcessResponse::<()> {
-            ok: false,
-            value: None,
-            error: Some(process_error(
-                ProcessErrorCode::ProtocolError,
-                format!("failed to encode process host response: {error}"),
-            )),
-        })
-        .unwrap_or_else(|_| "{\"ok\":false}".to_string())
-    })
 }
 
 #[cfg(test)]
@@ -591,15 +523,29 @@ mod tests {
     fn disabled_process_host_denies_exec() {
         let host = ProcessHost::disabled();
         assert_eq!(host.allowed_command_count(), 0);
-        let request = serde_json::json!({ "command": "/usr/bin/env" }).to_string();
-        let response = host
-            .call("scryer_process_exec", request)
-            .expect("call should encode a response");
-        let value: serde_json::Value = serde_json::from_str(&response).expect("valid json");
-        assert_eq!(value["ok"], serde_json::json!(false));
-        assert_eq!(
-            value["error"]["code"],
-            serde_json::json!("permission_denied")
+
+        let result = host
+            .exec(PluginProcessExecRequest {
+                command: "/usr/bin/env".to_string(),
+                args: Vec::new(),
+                env: BTreeMap::new(),
+                cwd: None,
+                stdin: Vec::new(),
+                timeout_ms: None,
+            })
+            .expect("a denial is an answer, not a host fault");
+
+        let PluginResult::Err(error) = result else {
+            panic!("a disabled process host must deny every exec");
+        };
+        assert_eq!(error.code, PluginErrorCode::Permanent);
+        assert!(
+            error
+                .debug_message
+                .as_deref()
+                .is_some_and(|debug| debug.contains("permission_denied")),
+            "{:?}",
+            error.debug_message
         );
     }
 

@@ -11,12 +11,11 @@ use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use crate::types::{
     PluginDescriptor, PluginError, PluginErrorCode, SocketCloseRequest, SocketCloseResponse,
     SocketError, SocketErrorCode, SocketOpenRequest, SocketOpenResponse, SocketReadRequest,
-    SocketReadResponse, SocketResponse, SocketStartTlsRequest, SocketStartTlsResponse,
-    SocketTlsMode, SocketWriteRequest, SocketWriteResponse, allowed_host_pattern_is_valid,
+    SocketReadResponse, SocketStartTlsRequest, SocketStartTlsResponse, SocketTlsMode,
+    SocketWriteRequest, SocketWriteResponse, allowed_host_pattern_is_valid,
     socket_host_pattern_config_key,
 };
 
-pub(crate) const SOCKET_HOST_NAMESPACE: &str = "extism:host/user";
 const MAX_OPEN_SOCKETS: usize = 4;
 const MAX_READ_BYTES: usize = 64 * 1024;
 const MAX_WRITE_BYTES: usize = 64 * 1024;
@@ -59,10 +58,9 @@ impl SocketHost {
 
     /// Open a socket, subject to the descriptor's resolved permissions.
     ///
-    /// This and its four siblings are the *only* implementations. The legacy
-    /// pointer ABI ([`Self::call`]) decodes JSON into these, and the shared
+    /// This and its four siblings are the *only* implementations. The shared
     /// host-call service layer hands them the SDK request types directly, so
-    /// neither transport can grow its own notion of what a socket grant means.
+    /// nothing above can grow its own notion of what a socket grant means.
     pub(crate) fn open(
         &self,
         request: SocketOpenRequest,
@@ -108,49 +106,6 @@ impl SocketHost {
         call(&mut state).map_err(SocketCallError::Socket)
     }
 
-    pub(crate) fn call(&self, function: &str, input: String) -> Result<String, String> {
-        let output = match function {
-            "scryer_socket_open" => self.legacy_call(input, |host, request| host.open(request))?,
-            "scryer_socket_read" => self.legacy_call(input, |host, request| host.read(request))?,
-            "scryer_socket_write" => {
-                self.legacy_call(input, |host, request| host.write(request))?
-            }
-            "scryer_socket_starttls" => {
-                self.legacy_call(input, |host, request| host.starttls(request))?
-            }
-            "scryer_socket_close" => {
-                self.legacy_call(input, |host, request| host.close(request))?
-            }
-            other => return Err(format!("unsupported socket host function: {other}")),
-        };
-        Ok(output)
-    }
-
-    /// One legacy pointer-ABI function: JSON in, `SocketResponse` JSON out.
-    ///
-    /// A poisoned lock stays an `Err(String)` here — the legacy registration
-    /// turns that into a guest trap — while a `SocketError` stays an in-band
-    /// `{"ok":false,...}` document, exactly as before.
-    fn legacy_call<Request, Response>(
-        &self,
-        input: String,
-        call: impl FnOnce(&Self, Request) -> Result<Response, SocketCallError>,
-    ) -> Result<String, String>
-    where
-        Request: for<'de> serde::Deserialize<'de>,
-        Response: serde::Serialize,
-    {
-        let request = match decode_input(input) {
-            Ok(request) => request,
-            Err(error) => return Ok(encode_response(Err::<Response, _>(error))),
-        };
-        match call(self, request) {
-            Ok(response) => Ok(encode_response(Ok(response))),
-            Err(SocketCallError::Socket(error)) => Ok(encode_response(Err::<Response, _>(error))),
-            Err(SocketCallError::Poisoned(message)) => Err(message),
-        }
-    }
-
     /// Number of sockets this host currently holds open.
     ///
     /// Exists so a test can assert that a transport released the channel's
@@ -173,10 +128,9 @@ impl SocketHost {
 
 /// How a typed socket call failed.
 ///
-/// The distinction matters because the two transports treat the two cases
-/// differently and always have: a `SocketError` is an in-band answer the guest
-/// can act on, while a poisoned lock is a host fault that traps the legacy guest
-/// and becomes a temporary service failure on the host-call door.
+/// The distinction matters because the host-call door treats the two cases
+/// differently: a `SocketError` is an in-band answer the guest can act on, while
+/// a poisoned lock is a host fault and becomes a temporary service failure.
 #[derive(Debug)]
 pub(crate) enum SocketCallError {
     Poisoned(String),
@@ -613,49 +567,11 @@ fn tls_config() -> Result<Arc<ClientConfig>, SocketError> {
     ))
 }
 
-fn decode_input<T>(input: String) -> Result<T, SocketError>
-where
-    T: for<'de> serde::Deserialize<'de>,
-{
-    serde_json::from_str(&input).map_err(|error| {
-        socket_error(
-            SocketErrorCode::ProtocolError,
-            format!("failed to decode socket host request: {error}"),
-        )
-    })
-}
-
-fn encode_response<T>(result: Result<T, SocketError>) -> String
-where
-    T: serde::Serialize,
-{
-    let response = match result {
-        Ok(value) => SocketResponse::ok(value),
-        Err(error) => SocketResponse {
-            ok: false,
-            value: None,
-            error: Some(error),
-        },
-    };
-
-    serde_json::to_string(&response).unwrap_or_else(|error| {
-        serde_json::to_string(&SocketResponse::<()> {
-            ok: false,
-            value: None,
-            error: Some(socket_error(
-                SocketErrorCode::ProtocolError,
-                format!("failed to encode socket host response: {error}"),
-            )),
-        })
-        .unwrap_or_else(|_| "{\"ok\":false}".to_string())
-    })
-}
-
 /// Project a socket failure onto the SDK's error shape for the host-call door.
 ///
 /// `PluginError` has no room for a `SocketErrorCode` — `PluginErrorDetails` is a
-/// closed, indexer-only enum — so the `{"code":...,"message":...}` document the
-/// legacy transport returns verbatim is carried in `debug_message`. A guest that
+/// closed, indexer-only enum — so a `{"code":...,"message":...}` document is
+/// carried in `debug_message` instead. A guest that
 /// needs the exact discriminant (an SMTP client distinguishing
 /// `tls_verification_failed` from `starttls_failed`, say) parses it back out;
 /// one that only needs to branch reads `code`. `public_message` stays the socket
@@ -726,15 +642,17 @@ mod tests {
             write_timeout_ms: Some(1),
         };
 
-        let response = host
-            .call(
-                "scryer_socket_open",
-                serde_json::to_string(&request).unwrap(),
-            )
-            .unwrap();
+        let error = host
+            .open(request)
+            .expect_err("a disabled socket host grants nothing");
 
-        assert!(response.contains("\"ok\":false"), "{response}");
-        assert!(response.contains("permission_denied"), "{response}");
+        let SocketCallError::Socket(error) = error else {
+            panic!("a permission denial is a socket answer, not a host fault");
+        };
+        assert!(
+            matches!(error.code, SocketErrorCode::PermissionDenied),
+            "{error:?}"
+        );
     }
 
     #[test]
