@@ -254,6 +254,9 @@ pub struct LocationClassifiedTitlePayload {
     /// The existing destination title this title merges into, or null for a
     /// transfer into a title the destination library does not have yet.
     pub merge_target_title_id: Option<ID>,
+    /// Name of that destination title, so the preview can say "merges into “X”"
+    /// rather than printing an id. Null whenever `mergeTargetTitleId` is.
+    pub merge_target_title_name: Option<String>,
     /// A destination title carrying the same name but no shared identity, or
     /// null when there is none. It is never merged into automatically.
     pub same_named_destination_title_id: Option<ID>,
@@ -629,6 +632,9 @@ pub struct LocationMergePreviewPayload {
     pub source_title_id: ID,
     /// The title that survives.
     pub destination_title_id: ID,
+    /// Name of the surviving title, read with the rest of its catalog row when
+    /// the merge was planned. Null only when that row could not name it.
+    pub destination_title_name: Option<String>,
     /// Library the merging title comes from.
     pub source_library_id: Option<ID>,
     /// Library the surviving title lives in.

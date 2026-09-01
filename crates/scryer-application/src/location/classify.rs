@@ -456,6 +456,17 @@ impl TitleClassification {
             .and_then(DestinationIdentityOutcome::merge_target)
     }
 
+    /// The name of the destination title this title merges into (US7, D8).
+    ///
+    /// The id alone reads out as an opaque string in the preview; the name is
+    /// what "merges into X" is supposed to say. Detection already resolved it,
+    /// so nothing is read a second time to produce it.
+    pub fn merge_target_title_name(&self) -> Option<&str> {
+        self.destination_identity
+            .as_ref()
+            .and_then(DestinationIdentityOutcome::merge_target_title_name)
+    }
+
     /// A destination title with the same name and no shared identity. It is
     /// never merged into (FR-055); the preview says it exists so the user is not
     /// surprised by two same-named titles in one library.
@@ -1329,6 +1340,12 @@ mod tests {
             Some("real"),
             "the merge target rides along on the classification for the merge engine to read"
         );
+        assert_eq!(
+            merging.merge_target_title_name(),
+            Some("Amélie"),
+            "the surviving title's own name rides along too — not the merging \
+             title's, which is spelled differently"
+        );
 
         let same_name = result
             .classification_of("same-name")
@@ -1342,6 +1359,11 @@ mod tests {
             same_name.merge_target_title_id(),
             None,
             "FR-055: a same name is never enough to merge"
+        );
+        assert_eq!(
+            same_name.merge_target_title_name(),
+            None,
+            "no merge target means no merge target name"
         );
         assert_eq!(same_name.same_named_destination_title_id(), Some("twin"));
     }

@@ -266,6 +266,13 @@ impl PostMergeWork {
 pub struct MergePreviewSummary {
     pub source_title_id: String,
     pub destination_title_id: String,
+    /// The surviving title's name, as the catalog spells it (FR-071).
+    ///
+    /// Carried so every consumer can say "merges into “X”" without holding a
+    /// title lookup of its own. `None` only for a summary built before the Group
+    /// 0 snapshot could name the destination — the id is always there.
+    #[serde(default)]
+    pub destination_title_name: Option<String>,
     pub source_library_id: Option<String>,
     pub destination_library_id: Option<String>,
 

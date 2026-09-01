@@ -949,6 +949,57 @@ test("a unique identity merges and says so, naming the surviving title", () => {
   assert.notEqual(presentation.transfer, null);
 });
 
+test("the merge statement takes the surviving title's name from the payload", () => {
+  // The local resolver only knows the titles the user selected, and the title
+  // that survives a cross-library merge is not one of them. So a name on the
+  // payload always beats one the resolver guesses at.
+  const named = mergingEntry({ mergeTargetTitleName: "Amélie (Restored)" });
+  assert.equal(
+    mergeStatement(named, {
+      resolveTitleName: () => "the source title's own name",
+    })?.destinationTitleName,
+    "Amélie (Restored)",
+  );
+
+  // The classified row is the first source; the merge summary is the second,
+  // for a row that classified before its summary arrived and vice versa.
+  assert.equal(
+    mergeStatement(mergingEntry(), {
+      merge: mergePreview({ destinationTitleName: "Amélie (Restored)" }),
+    })?.destinationTitleName,
+    "Amélie (Restored)",
+  );
+  assert.equal(
+    mergeStatement(named, {
+      merge: mergePreview({ destinationTitleName: "a stale summary name" }),
+    })?.destinationTitleName,
+    "Amélie (Restored)",
+  );
+
+  // A blank name is not a name: it falls through rather than rendering an
+  // empty pair of quotation marks.
+  assert.equal(
+    mergeStatement(mergingEntry({ mergeTargetTitleName: "   " }), {
+      merge: mergePreview({ destinationTitleName: "" }),
+      resolveTitleName: () => "Resolved Locally",
+    })?.destinationTitleName,
+    "Resolved Locally",
+  );
+
+  // With no name anywhere the statement still stands; naming it by id is the
+  // renderer's fallback, not a name this helper invents.
+  assert.equal(mergeStatement(mergingEntry())?.destinationTitleName, null);
+});
+
+test("a merge summary carries the payload's destination name into its statement", () => {
+  const summary = mergeSummaryPresentation(
+    mergingEntry({ mergeTargetTitleName: "Amélie (Restored)" }),
+    mergePreview({ destinationTitleName: "Amélie (Restored)" }),
+  );
+  assert.equal(summary?.statement.destinationTitleName, "Amélie (Restored)");
+  assert.equal(summary?.statement.destinationTitleId, "destination-title");
+});
+
 test("merge summaries are indexed by the title that merges away", () => {
   const plan = preview({
     merges: [

@@ -257,6 +257,12 @@ fn from_classified_title(title: &TitleClassification) -> LocationClassifiedTitle
         merge_target_title_id: title
             .merge_target_title_id()
             .map(|id| ID::from(id.to_string())),
+        // US7: detection already named the title that survives, so the merge
+        // statement reads "merges into “X”" instead of quoting an id. Sourced
+        // from the same outcome as the id beside it — the two can never disagree.
+        merge_target_title_name: title
+            .merge_target_title_name()
+            .map(ToString::to_string),
         same_named_destination_title_id: title
             .same_named_destination_title_id()
             .map(|id| ID::from(id.to_string())),
@@ -449,6 +455,7 @@ fn from_merge_summary(summary: &MergePreviewSummary) -> LocationMergePreviewPayl
     LocationMergePreviewPayload {
         source_title_id: ID::from(summary.source_title_id.clone()),
         destination_title_id: ID::from(summary.destination_title_id.clone()),
+        destination_title_name: summary.destination_title_name.clone(),
         source_library_id: summary.source_library_id.clone().map(ID::from),
         destination_library_id: summary.destination_library_id.clone().map(ID::from),
         blocked: summary.is_blocked(),

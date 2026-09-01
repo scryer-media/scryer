@@ -221,6 +221,9 @@ pub const INVENTORY_DEVIATIONS: &[(&str, &str)] = &[
 pub struct MergeCatalogSnapshot {
     pub source_title_id: String,
     pub destination_title_id: String,
+    /// The surviving title's name, read with the rest of its row in Group 0 so
+    /// the FR-071 summary can name it instead of printing its id.
+    pub destination_title_name: Option<String>,
     pub source_library_id: Option<String>,
     pub destination_library_id: Option<String>,
 
@@ -384,6 +387,7 @@ pub fn plan_merge(snapshot: &MergeCatalogSnapshot) -> MergePlan {
     let mut summary = MergePreviewSummary {
         source_title_id: snapshot.source_title_id.clone(),
         destination_title_id: snapshot.destination_title_id.clone(),
+        destination_title_name: snapshot.destination_title_name.clone(),
         source_library_id: snapshot.source_library_id.clone(),
         destination_library_id: snapshot.destination_library_id.clone(),
         destination_wins: destination_wins_entries(snapshot),
@@ -812,6 +816,7 @@ mod tests {
         MergeCatalogSnapshot {
             source_title_id: "source".to_string(),
             destination_title_id: "destination".to_string(),
+            destination_title_name: Some("The Surviving Title".to_string()),
             source_library_id: Some("library-a".to_string()),
             destination_library_id: Some("library-b".to_string()),
             source_episodes: vec![episode("s-e1", "1", "1")],
@@ -848,6 +853,12 @@ mod tests {
         assert!(!plan.is_blocked());
         let map = plan.require_identity_map().expect("the map exists");
         assert_eq!(map.episode("s-e1"), Some("d-e1"));
+        // FR-071: the summary names the surviving title, so no consumer has to
+        // resolve the destination id back into something a user can read.
+        assert_eq!(
+            plan.summary.destination_title_name.as_deref(),
+            Some("The Surviving Title")
+        );
         // FR-070: the demotion is in the plan and in the summary.
         assert_eq!(plan.role_plan.demotion_count(), 1);
         assert_eq!(plan.summary.role_changes.len(), 1);

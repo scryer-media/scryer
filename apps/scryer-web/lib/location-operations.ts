@@ -113,6 +113,12 @@ export type LocationClassifiedTitle = {
   destinationIdentityMatch?: LocationDestinationIdentityMatch | null;
   /** Existing destination title this one merges into, when detection is UNIQUE. */
   mergeTargetTitleId?: string | null;
+  /**
+   * Name of that destination title. The dialog's own name resolver only knows
+   * the selected *source* titles, so for a cross-library merge this is the only
+   * thing that can name the title that survives.
+   */
+  mergeTargetTitleName?: string | null;
   /** Destination title sharing the name but no identity — never auto-merged. */
   sameNamedDestinationTitleId?: string | null;
   /** Name of that same-named destination title. */
@@ -284,6 +290,8 @@ export type LocationMergeBlockedRecord = {
 export type LocationMergePreview = {
   sourceTitleId: string;
   destinationTitleId: string;
+  /** Name of the surviving title, as the catalog spells it. */
+  destinationTitleName?: string | null;
   sourceLibraryId?: string | null;
   destinationLibraryId?: string | null;
   blocked: boolean;
@@ -697,10 +705,23 @@ export function mergeStatement(
   return {
     sourceTitleId: entry.titleId,
     destinationTitleId,
+    // The payload's own names come first: the destination title is usually in
+    // another library, and the local resolver only knows the titles the user
+    // selected. The resolver stays as the last fallback so a payload that
+    // predates these fields still names a destination it happens to know.
     destinationTitleName:
-      context.resolveTitleName?.(destinationTitleId) ?? null,
+      titleName(entry.mergeTargetTitleName) ??
+      titleName(context.merge?.destinationTitleName) ??
+      titleName(context.resolveTitleName?.(destinationTitleId)) ??
+      null,
     blocked: context.merge?.blocked ?? false,
   };
+}
+
+/** A displayable title name, or null for absent/blank. */
+function titleName(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
 }
 
 /** The destination library a cross-library transfer states it lands in (FR-016). */

@@ -110,9 +110,18 @@ impl TitleMergeRepository for TitleMergeStore {
     ) -> AppResult<MergeCatalogSnapshot> {
         let exec = || self.datastore.read_exec();
 
-        let (source_library_id, source_tags) = load_title_shape(exec(), source_title_id).await?;
-        let (destination_library_id, destination_tags) =
-            load_title_shape(exec(), destination_title_id).await?;
+        let source_shape = load_title_shape(exec(), source_title_id).await?;
+        let destination_shape = load_title_shape(exec(), destination_title_id).await?;
+        let TitleShape {
+            library_id: source_library_id,
+            tags: source_tags,
+            ..
+        } = source_shape;
+        let TitleShape {
+            library_id: destination_library_id,
+            tags: destination_tags,
+            name: destination_title_name,
+        } = destination_shape;
 
         let source_episodes = load_episodes(exec(), source_title_id).await?;
         let destination_episodes = load_episodes(exec(), destination_title_id).await?;
@@ -175,6 +184,7 @@ impl TitleMergeRepository for TitleMergeStore {
         Ok(MergeCatalogSnapshot {
             source_title_id: source_title_id.to_string(),
             destination_title_id: destination_title_id.to_string(),
+            destination_title_name,
             source_library_id,
             destination_library_id,
             source_episodes,
@@ -298,18 +308,30 @@ const EPISODE_REFERENCE_QUERIES: &[(&str, &str)] = &[
     ),
 ];
 
-async fn load_title_shape(
-    exec: SqlExec<'_, '_>,
-    title_id: &str,
-) -> AppResult<(Option<String>, Vec<String>)> {
+/// The one `titles` row Group 0 needs from each side of a merge.
+struct TitleShape {
+    library_id: Option<String>,
+    /// The catalog's spelling of the title, for the FR-071 summary.
+    name: Option<String>,
+    tags: Vec<String>,
+}
+
+async fn load_title_shape(exec: SqlExec<'_, '_>, title_id: &str) -> AppResult<TitleShape> {
     let row = SqlRuntime::fetch_optional(
         exec,
-        "SELECT library_id, tags FROM titles WHERE id = {}",
+        "SELECT library_id, name, tags FROM titles WHERE id = {}",
         &[SqlArg::Text(title_id.to_string())],
     )
     .await?
     .ok_or_else(|| AppError::NotFound(format!("title {title_id} not found")))?;
-    Ok((row.opt_text("library_id")?, parse_tags(&row.text("tags")?)))
+    Ok(TitleShape {
+        library_id: row.opt_text("library_id")?,
+        name: row
+            .opt_text("name")?
+            .map(|name| name.trim().to_string())
+            .filter(|name| !name.is_empty()),
+        tags: parse_tags(&row.text("tags")?),
+    })
 }
 
 fn parse_tags(raw: &str) -> Vec<String> {

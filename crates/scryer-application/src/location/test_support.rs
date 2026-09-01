@@ -579,6 +579,7 @@ impl crate::location::merge::engine::TitleMergeRepository for InMemoryTitleMerge
         Ok(crate::location::merge::engine::MergeCatalogSnapshot {
             source_title_id: source_title_id.to_string(),
             destination_title_id: destination_title_id.to_string(),
+            destination_title_name: Some(destination.name.clone()),
             source_library_id: Some(source.library_id.clone()),
             destination_library_id: Some(destination.library_id.clone()),
             source_tags: source.tags.clone(),

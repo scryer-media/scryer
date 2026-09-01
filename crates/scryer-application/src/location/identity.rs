@@ -349,6 +349,20 @@ impl DestinationIdentityOutcome {
         }
     }
 
+    /// The *name* of the destination title this source title merges into.
+    ///
+    /// Detection already carried it: the `Unique` outcome's candidate list holds
+    /// the matched title with the name it is displayed under. Read from the
+    /// candidate whose id is the matched id rather than from `candidates[0]`, so
+    /// the name can never drift from the id beside it.
+    pub fn merge_target_title_name(&self) -> Option<&str> {
+        let matched = self.merge_target()?;
+        self.candidates
+            .iter()
+            .find(|candidate| candidate.title_id == matched)
+            .map(|candidate| candidate.title_name.as_str())
+    }
+
     /// Whether this title enters the merge path (US7) rather than the
     /// transfer-without-match path (FR-056).
     pub fn is_merge_candidate(&self) -> bool {

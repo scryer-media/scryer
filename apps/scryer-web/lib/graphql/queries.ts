@@ -4056,6 +4056,7 @@ export const locationOperationPreviewQuery = `query LocationOperationPreview($in
           reason
           destinationIdentityMatch
           mergeTargetTitleId
+          mergeTargetTitleName
           sameNamedDestinationTitleId
           sameNamedDestinationTitleName
           ambiguousDestinationTitleIds
@@ -4096,6 +4097,7 @@ export const locationOperationPreviewQuery = `query LocationOperationPreview($in
     merges {
       sourceTitleId
       destinationTitleId
+      destinationTitleName
       sourceLibraryId
       destinationLibraryId
       blocked

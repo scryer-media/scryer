@@ -8946,6 +8946,11 @@ type LocationClassifiedTitlePayload {
 	"""
 	mergeTargetTitleId: ID
 	"""
+	Name of that destination title, so the preview can say "merges into “X”"
+	rather than printing an id. Null whenever `mergeTargetTitleId` is.
+	"""
+	mergeTargetTitleName: String
+	"""
 	A destination title carrying the same name but no shared identity, or
 	null when there is none. It is never merged into automatically.
 	"""
@@ -9376,6 +9381,11 @@ type LocationMergePreviewPayload {
 	The title that survives.
 	"""
 	destinationTitleId: ID!
+	"""
+	Name of the surviving title, read with the rest of its catalog row when
+	the merge was planned. Null only when that row could not name it.
+	"""
+	destinationTitleName: String
 	"""
 	Library the merging title comes from.
 	"""

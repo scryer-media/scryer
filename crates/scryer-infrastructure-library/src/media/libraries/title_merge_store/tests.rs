@@ -287,6 +287,12 @@ async fn a_two_season_series_merges_files_history_and_tags_into_the_destination(
 
     let plan = plan_for(&store).await;
     assert!(!plan.is_blocked(), "blocked: {:?}", plan.blocked());
+    // FR-071: Group 0 reads the surviving title's name along with the rest of
+    // its row, so the preview can name it instead of quoting its id.
+    assert_eq!(
+        plan.summary.destination_title_name.as_deref(),
+        Some("Title title-destination")
+    );
     let map = plan.require_identity_map().expect("a complete map");
     assert_eq!(map.episode("s-e1"), Some("d-e1"));
     assert_eq!(map.episode("s-e2"), Some("d-e2"));

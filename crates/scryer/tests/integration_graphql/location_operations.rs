@@ -58,6 +58,7 @@ const PREVIEW_QUERY: &str = r#"
               blocksStart
               destinationIdentityMatch
               mergeTargetTitleId
+              mergeTargetTitleName
               sameNamedDestinationTitleId
               sameNamedDestinationTitleName
               ambiguousDestinationTitleIds
@@ -78,6 +79,7 @@ const PREVIEW_QUERY: &str = r#"
         merges {
           sourceTitleId
           destinationTitleId
+          destinationTitleName
           sourceLibraryId
           destinationLibraryId
           blocked
@@ -915,9 +917,12 @@ async fn graphql_location_operation_preview_surfaces_the_merge_summary() {
     let (destination_library_id, destination_root_id) =
         create_second_movie_library(&ctx, archive_root.path()).await;
 
+    // Deliberately *not* the source's name: the merge target is found by
+    // canonical identity, and a name that only rides through correctly can be
+    // told apart from one copied off the merging title.
     let destination = title_in_library(
         &ctx,
-        "Twin Film",
+        "Twin Film (Restored)",
         &destination_library_id,
         &destination_root_id,
         vec![ExternalId {
@@ -966,6 +971,12 @@ async fn graphql_location_operation_preview_surfaces_the_merge_summary() {
     let transfers = group(preview, "CROSS_LIBRARY_TRANSFER");
     assert_eq!(transfers["count"], 1);
     assert_eq!(transfers["titles"][0]["mergeTargetTitleId"], destination.id);
+    // US7: the id is not what the sentence says — the surviving title's name is.
+    assert_eq!(
+        transfers["titles"][0]["mergeTargetTitleName"],
+        "Twin Film (Restored)",
+        "the merge target rides the payload by name, not only by id: {transfers}"
+    );
     assert_eq!(transfers["titles"][0]["destinationIdentityMatch"], "UNIQUE");
     assert_eq!(
         transfers["titles"][0]["ambiguousDestinationCandidates"],
@@ -979,6 +990,9 @@ async fn graphql_location_operation_preview_surfaces_the_merge_summary() {
     let merge = &merges[0];
     assert_eq!(merge["sourceTitleId"], source.id);
     assert_eq!(merge["destinationTitleId"], destination.id);
+    // FR-071: the summary names the surviving title, read with its catalog row
+    // in Group 0 rather than looked up again by the client.
+    assert_eq!(merge["destinationTitleName"], "Twin Film (Restored)");
     assert_eq!(merge["destinationLibraryId"], destination_library_id);
     assert_eq!(merge["blocked"], false);
     assert_eq!(merge["blockedRecords"], json!([]));
