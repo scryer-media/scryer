@@ -7,6 +7,7 @@ import {
   Edit,
   Info,
   Plus,
+  Sparkles,
   Trash2,
 } from "lucide-react";
 import { AddNewButton } from "@/components/common/add-new-button";
@@ -28,6 +29,11 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import maintenanceInputContract from "@/lib/contracts/maintenance-input-contract.json";
+import {
+  MAINTENANCE_RULE_TEMPLATES,
+  maintenanceTemplateFacetLabelKey,
+  type MaintenanceRuleTemplate,
+} from "@/lib/constants/maintenance-rule-templates";
 import { useTranslate } from "@/lib/context/translate-context";
 import type {
   MaintenanceActionDescriptor,
@@ -80,6 +86,9 @@ type SettingsMaintenanceRulesSectionProps = {
   mutatingRuleSetId: string | null;
   resetRuleSetDraft: () => void;
   startCreateRuleSet: () => void;
+  /// Load a starter template into the create-rule editor. Nothing is created
+  /// here: the container prefills the draft and the operator still saves it.
+  applyTemplate: (template: MaintenanceRuleTemplate) => void;
   ruleSetRecords: MaintenanceRuleSetRecord[];
   actionDescriptors: MaintenanceActionDescriptor[];
   libraries: MaintenanceLibraryOption[];
@@ -276,6 +285,108 @@ function MaintenanceContextReference() {
           {REF_SECTIONS.map((section) => (
             <RefFieldTable key={section.path} section={section} />
           ))}
+        </CardContent>
+      ) : null}
+    </Card>
+  );
+}
+
+/// One starter template as a card. Everything on it is static: the gallery is
+/// not gated on any backend flag, so it renders the same on an instance that
+/// has never run an evaluation as on one that runs them nightly.
+function MaintenanceTemplateCard({
+  template,
+  onApply,
+}: {
+  template: MaintenanceRuleTemplate;
+  onApply: (template: MaintenanceRuleTemplate) => void;
+}) {
+  const t = useTranslate();
+  return (
+    <button
+      id={selectorId("settings-maintenance-template", template.id)}
+      type="button"
+      data-maintenance-template-destructive={template.destructive ? "true" : "false"}
+      className="group flex flex-col rounded-lg border border-border bg-card/50 p-3 text-left transition-colors hover:border-primary/40 hover:bg-card"
+      onClick={() => onApply(template)}
+      title={t("settings.maintenanceTemplateApply")}
+    >
+      <p className="text-sm font-medium text-foreground group-hover:text-primary">
+        {t(template.titleKey)}
+      </p>
+      <p className="mt-1 text-xs leading-5 text-muted-foreground">
+        {t(template.descriptionKey)}
+      </p>
+      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+        <Badge tone="neutral" className="text-[10px]">
+          <ActionLabel kind={template.actionKind} />
+        </Badge>
+        {template.destructive ? (
+          <Badge tone="negative" className="text-[10px]">
+            {t("settings.maintenanceTemplateDestructiveBadge")}
+          </Badge>
+        ) : null}
+        {template.requiresTargetQualityProfile ? (
+          <Badge tone="warning" className="text-[10px]">
+            {t("settings.maintenanceTemplateNeedsProfileBadge")}
+          </Badge>
+        ) : null}
+        <Badge tone="neutral" className="text-[10px]">
+          {template.graceDays > 0
+            ? t("settings.maintenanceTemplateGraceBadge", {
+                count: template.graceDays,
+              })
+            : t("settings.maintenanceTemplateNoGraceBadge")}
+        </Badge>
+        {template.subjectFacets.map((facet) => (
+          <Badge key={facet} tone="info" className="text-[10px]">
+            {t(maintenanceTemplateFacetLabelKey(facet))}
+          </Badge>
+        ))}
+      </div>
+    </button>
+  );
+}
+
+function MaintenanceTemplateGallery({
+  onApply,
+}: {
+  onApply: (template: MaintenanceRuleTemplate) => void;
+}) {
+  const t = useTranslate();
+  const [open, setOpen] = React.useState(false);
+
+  return (
+    <Card>
+      <CardHeader
+        className="cursor-pointer select-none"
+        onClick={() => setOpen((prev) => !prev)}
+      >
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Sparkles className="h-4 w-4" />
+          {t("settings.maintenanceTemplateGallery")}
+          <ChevronDown
+            className={`ml-auto h-4 w-4 transition-transform ${open ? "rotate-180" : ""}`}
+          />
+        </CardTitle>
+        <p className="text-xs text-muted-foreground">
+          {t("settings.maintenanceTemplateGalleryDescription")}
+        </p>
+      </CardHeader>
+      {open ? (
+        <CardContent id="settings-maintenance-template-gallery" className="@container">
+          <div className="grid grid-cols-1 gap-2 @[560px]:grid-cols-2 @[900px]:grid-cols-3">
+            {MAINTENANCE_RULE_TEMPLATES.map((template) => (
+              <MaintenanceTemplateCard
+                key={template.id}
+                template={template}
+                onApply={(applied) => {
+                  onApply(applied);
+                  setOpen(false);
+                }}
+              />
+            ))}
+          </div>
         </CardContent>
       ) : null}
     </Card>
@@ -534,6 +645,7 @@ export function SettingsMaintenanceRulesSection({
   mutatingRuleSetId,
   resetRuleSetDraft,
   startCreateRuleSet,
+  applyTemplate,
   ruleSetRecords,
   actionDescriptors,
   libraries,
@@ -1056,6 +1168,8 @@ export function SettingsMaintenanceRulesSection({
                 </CardContent>
               </Card>
             ) : null}
+
+            <MaintenanceTemplateGallery onApply={applyTemplate} />
 
             <div className="flex justify-center">
               <AddNewButton

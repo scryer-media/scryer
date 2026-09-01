@@ -16,6 +16,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SingleSelectField } from "@/components/ui/select";
+import type { MaintenanceRuleTemplate } from "@/lib/constants/maintenance-rule-templates";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { useTranslate } from "@/lib/context/translate-context";
 import type {
@@ -115,6 +116,7 @@ type PendingEditorAction =
   | { type: "create" }
   | { type: "copy"; record: MaintenanceRuleSetRecord }
   | { type: "edit"; record: MaintenanceRuleSetRecord }
+  | { type: "template"; template: MaintenanceRuleTemplate }
   | { type: "close" }
   | null;
 
@@ -270,6 +272,34 @@ export function SettingsMaintenanceRulesContainer() {
     [fetchRuleSetDetail],
   );
 
+  /// Load a starter template into the create-rule editor. A template prefills
+  /// every field the editor owns — name, description, matcher, action, target
+  /// profile, grace period — and then stops: it never creates a rule, and the
+  /// draft it leaves behind is dirty, so the operator has to read it and press
+  /// create themselves. `libraryIds` stays empty because which libraries a rule
+  /// covers is an instance-specific decision no template can make.
+  const openTemplateEditor = useCallback(
+    (template: MaintenanceRuleTemplate) => {
+      const next: MaintenanceRuleSetDraft = {
+        ...initialMaintenanceRuleDraft(),
+        name: template.name,
+        description: t(template.descriptionKey),
+        regoSource: template.regoSource,
+        actionKind: template.actionKind,
+        targetQualityProfileId: template.targetQualityProfileId ?? "",
+        graceDays: template.graceDays,
+      };
+      setEditingRuleSetId(null);
+      setRuleSetDraft(next);
+      /// Baseline stays at the empty draft on purpose: a freshly applied
+      /// template counts as unsaved work, so navigating away from it asks.
+      setRuleSetDraftBaseline(initialMaintenanceRuleDraft());
+      setValidationResult(null);
+      setIsEditorOpen(true);
+    },
+    [t],
+  );
+
   const requestCreateEditor = useCallback(() => {
     if (!isEditorOpen || !isDraftDirty) {
       openCreateEditor();
@@ -298,6 +328,17 @@ export function SettingsMaintenanceRulesContainer() {
       setPendingEditorAction({ type: "copy", record });
     },
     [isDraftDirty, isEditorOpen, openCopyEditor],
+  );
+
+  const requestApplyTemplate = useCallback(
+    (template: MaintenanceRuleTemplate) => {
+      if (!isEditorOpen || !isDraftDirty) {
+        openTemplateEditor(template);
+        return;
+      }
+      setPendingEditorAction({ type: "template", template });
+    },
+    [isDraftDirty, isEditorOpen, openTemplateEditor],
   );
 
   const requestCloseEditor = useCallback(() => {
@@ -498,6 +539,8 @@ export function SettingsMaintenanceRulesContainer() {
       openCopyEditor(pendingEditorAction.record);
     } else if (pendingEditorAction.type === "edit") {
       openEditEditor(pendingEditorAction.record);
+    } else if (pendingEditorAction.type === "template") {
+      openTemplateEditor(pendingEditorAction.template);
     } else {
       closeEditor();
     }
@@ -507,6 +550,7 @@ export function SettingsMaintenanceRulesContainer() {
     openCopyEditor,
     openCreateEditor,
     openEditEditor,
+    openTemplateEditor,
     pendingEditorAction,
   ]);
 
@@ -1034,6 +1078,7 @@ export function SettingsMaintenanceRulesContainer() {
         mutatingRuleSetId={mutatingRuleSetId}
         resetRuleSetDraft={requestCloseEditor}
         startCreateRuleSet={requestCreateEditor}
+        applyTemplate={requestApplyTemplate}
         ruleSetRecords={ruleSetRecords}
         actionDescriptors={actionDescriptors}
         libraries={libraries}
@@ -1290,9 +1335,11 @@ export function SettingsMaintenanceRulesContainer() {
           pendingEditorAction?.type === "create" ||
           pendingEditorAction?.type === "copy"
             ? t("settings.maintenanceRuleCreateNew")
-            : pendingEditorAction?.type === "edit"
-              ? t("label.edit")
-              : t("label.yes")
+            : pendingEditorAction?.type === "template"
+              ? t("settings.maintenanceTemplateApply")
+              : pendingEditorAction?.type === "edit"
+                ? t("label.edit")
+                : t("label.yes")
         }
         cancelLabel={t("label.cancel")}
         isBusy={mutatingRuleSetId !== null}
