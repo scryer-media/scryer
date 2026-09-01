@@ -964,6 +964,17 @@ impl AppUseCase {
             Ok(None) => return SafetyDecision::Cancel(execution_reason::TITLE_MISSING),
             Err(_) => return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION),
         };
+        // The rule's library scope is re-checked against the *fresh* rule and the
+        // *fresh* title, for the same reason its arming is: scope is the blast
+        // radius an operator acknowledged, and it can be narrowed — or the title
+        // moved — between the candidate being opened and this pass. Acting
+        // anyway is acting outside the acknowledged scope. An empty scope is
+        // instance-wide, which covers every library by definition.
+        if !fresh.library_ids.is_empty() && !fresh.library_ids.contains(&title.library_id) {
+            return SafetyDecision::Cancel(
+                crate::maintenance_rules::evaluation::candidate_reason::OUT_OF_SCOPE,
+            );
+        }
         let files_by_title = match self
             .maintenance_files_for_titles(std::slice::from_ref(&title))
             .await

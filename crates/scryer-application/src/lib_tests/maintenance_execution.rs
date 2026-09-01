@@ -782,6 +782,63 @@ async fn a_subject_that_stopped_matching_cancels_instead_of_acting() {
     );
 }
 
+/// Scope is part of what an operator acknowledged when they armed the rule, so
+/// the handler re-reads it with everything else it re-reads. Without this check
+/// a rule narrowed after its candidates were opened still acts on the subjects
+/// its scope no longer covers, and the narrowing is invisible to the executor.
+#[tokio::test]
+async fn a_candidate_outside_the_fresh_rule_scope_cancels_instead_of_acting() {
+    let fixture = execution_app(None);
+    let rule_id = fixture
+        .observed_rule(unmonitor_draft(MONITORED_MATCHER))
+        .await;
+    fixture.open_gates(true, false).await;
+    fixture
+        .arm(&rule_id, MaintenanceEffectArming::Reversible, None)
+        .await;
+    seed_title(&fixture.app, &fixture.user, "Out Of Scope", true).await;
+    fixture.evaluate().await;
+
+    // Narrowed at the store, with the arming deliberately left in place: going
+    // through the service would disarm the rule, and this test would then prove
+    // nothing about the executor's own scope check.
+    fixture
+        .rules
+        .re_scope_without_disarming(&rule_id, vec!["library-elsewhere".to_string()])
+        .await;
+
+    let report = fixture.handle().await;
+    assert_eq!(report.canceled, 1, "{report:?}");
+    assert_eq!(report.executed, 0, "{report:?}");
+
+    let candidate = fixture.only_candidate().await;
+    assert_eq!(candidate.state, MaintenanceCandidateState::Canceled);
+    assert_eq!(
+        candidate.state_reason,
+        crate::maintenance_rules::candidate_reason::OUT_OF_SCOPE
+    );
+}
+
+/// An empty scope means instance-wide, which covers every library, so the same
+/// check must not turn a rule with no scope into a rule that reaches nothing.
+#[tokio::test]
+async fn an_empty_rule_scope_still_reaches_every_library() {
+    let fixture = execution_app(None);
+    let rule_id = fixture
+        .observed_rule(unmonitor_draft(MONITORED_MATCHER))
+        .await;
+    fixture.open_gates(true, false).await;
+    fixture
+        .arm(&rule_id, MaintenanceEffectArming::Reversible, None)
+        .await;
+    seed_title(&fixture.app, &fixture.user, "In Scope", true).await;
+    fixture.evaluate().await;
+
+    let report = fixture.handle().await;
+    assert_eq!(report.executed, 1, "{report:?}");
+    assert_eq!(report.canceled, 0, "{report:?}");
+}
+
 #[tokio::test]
 async fn a_destructive_rule_needs_both_the_gate_and_destructive_arming() {
     let fixture = execution_app(None);

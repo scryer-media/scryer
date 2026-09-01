@@ -89,6 +89,9 @@ pub mod candidate_reason {
     pub const REVISION_SUPERSEDED: &str = "revision_superseded";
     /// A global or per-rule exclusion now covers the subject.
     pub const EXCLUDED: &str = "excluded";
+    /// The rule's library scope no longer covers the subject — either the scope
+    /// was re-pointed at other libraries, or the subject left the catalog.
+    pub const OUT_OF_SCOPE: &str = "out_of_scope";
 }
 
 // ── Instance gates ──────────────────────────────────────────────────────────
@@ -807,6 +810,7 @@ impl AppUseCase {
 
         let excluded = self.maintenance_excluded_title_ids(&rule_set.id).await?;
         let titles = self.maintenance_scoped_titles(rule_set).await?;
+        let in_scope: HashSet<String> = titles.iter().map(|title| title.id.clone()).collect();
         // Users are read once for the whole rule, not per chunk: the roster is
         // small and bounded, and one snapshot keeps every subject in the run
         // resolving names against the same view, exactly like the clock.
@@ -864,7 +868,68 @@ impl AppUseCase {
             }
         }
 
+        self.cancel_out_of_scope_maintenance_candidates(
+            &rule_set.id,
+            &in_scope,
+            evaluation_time,
+            &mut counts,
+        )
+        .await?;
+
         Ok(counts)
+    }
+
+    /// Close the rule's live candidates whose subject is no longer in its
+    /// selection.
+    ///
+    /// Reconciliation above only ever visits titles the rule is *currently*
+    /// scoped to, so a candidate whose title fell out of that selection — the
+    /// rule was re-scoped away from its library, or the title left the catalog
+    /// — is never looked at again: it stays live forever, keeps inflating the
+    /// count destructive arming makes an operator acknowledge, and (before the
+    /// executor's own scope recheck) was still executable. This is the sweep
+    /// that closes it, with a reason that says why.
+    ///
+    /// The read is bounded by [`EVALUATOR_WRITABLE_STATES`], so a leased
+    /// (`executing`) candidate is not even listed, and each cancel is the same
+    /// compare-and-set every other evaluator write uses: a row another writer
+    /// moved in the meantime is left alone and re-examined next pass. Out-of-
+    /// scope cancels are counted with the rule's other cancels — that is what
+    /// they are.
+    async fn cancel_out_of_scope_maintenance_candidates(
+        &self,
+        rule_set_id: &str,
+        in_scope: &HashSet<String>,
+        evaluation_time: DateTime<Utc>,
+        counts: &mut RuleCounts,
+    ) -> AppResult<()> {
+        let candidates = &self.services.customization.maintenance_evaluation;
+        let live = candidates
+            .list_candidates(&MaintenanceCandidateQuery {
+                rule_set_id: Some(rule_set_id.to_string()),
+                states: EVALUATOR_WRITABLE_STATES.to_vec(),
+                ..Default::default()
+            })
+            .await?;
+
+        for candidate in live {
+            if in_scope.contains(&candidate.title_id) {
+                continue;
+            }
+            if candidates
+                .transition_candidate_state(
+                    &candidate.id,
+                    MaintenanceCandidateState::Canceled,
+                    candidate_reason::OUT_OF_SCOPE,
+                    EVALUATOR_WRITABLE_STATES,
+                    evaluation_time,
+                )
+                .await?
+            {
+                counts.canceled += 1;
+            }
+        }
+        Ok(())
     }
 
     /// Reconcile one subject. Every branch is RFC 7.5 stated literally.

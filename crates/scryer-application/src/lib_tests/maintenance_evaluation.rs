@@ -1040,6 +1040,91 @@ async fn an_exclusion_blocks_creation_and_closes_an_existing_candidate() {
     );
 }
 
+/// Reconciliation only ever visits titles the rule is *currently* scoped to, so
+/// without a sweep a candidate the scope moved away from is never looked at
+/// again: it stays live forever and keeps counting toward the number
+/// destructive arming makes an operator acknowledge.
+#[tokio::test]
+async fn a_candidate_the_scope_no_longer_covers_is_canceled_by_the_next_pass() {
+    let fixture = evaluation_app();
+    let title = seed_title(&fixture.app, &fixture.user, "Monitored", true).await;
+    let rule_set_id = fixture.armed_rule(MONITORED_MATCHER, 7).await;
+    fixture.open_evaluation_gate().await;
+    fixture.evaluate().await;
+    let opened = fixture.only_candidate().await;
+    assert_eq!(opened.state, MaintenanceCandidateState::Observing);
+    assert_eq!(opened.title_id, title.id);
+
+    // Narrow the rule onto a library the subject is not in.
+    fixture
+        .app
+        .update_maintenance_rule_metadata(
+            &fixture.user,
+            &rule_set_id,
+            "Stale movies".to_string(),
+            String::new(),
+            vec!["library-elsewhere".to_string()],
+        )
+        .await
+        .expect("re-scope the rule");
+
+    let report = fixture.evaluate().await;
+    assert_eq!(
+        report.titles_evaluated, 0,
+        "the narrowed scope selects no subjects at all, which is the whole problem"
+    );
+    assert_eq!(
+        report.candidates_canceled, 1,
+        "an out-of-scope cancel is counted with the rule's other cancels: {report:?}"
+    );
+
+    let closed = fixture.only_candidate().await;
+    assert_eq!(closed.state, MaintenanceCandidateState::Canceled);
+    assert_eq!(closed.state_reason, candidate_reason::OUT_OF_SCOPE);
+}
+
+/// The sweep writes through the same compare-and-set every other evaluator
+/// write uses, so a candidate the action handler holds a lease on is left
+/// entirely alone and picked up on a later pass.
+#[tokio::test]
+async fn an_out_of_scope_candidate_under_an_execution_lease_is_left_alone() {
+    let fixture = evaluation_app();
+    seed_title(&fixture.app, &fixture.user, "Monitored", true).await;
+    let rule_set_id = fixture.armed_rule(MONITORED_MATCHER, 7).await;
+    fixture.open_evaluation_gate().await;
+    fixture.evaluate().await;
+    let opened = fixture.only_candidate().await;
+
+    fixture
+        .evaluation
+        .strand_as_executing(&opened.id, Utc::now())
+        .await;
+    fixture
+        .app
+        .update_maintenance_rule_metadata(
+            &fixture.user,
+            &rule_set_id,
+            "Stale movies".to_string(),
+            String::new(),
+            vec!["library-elsewhere".to_string()],
+        )
+        .await
+        .expect("re-scope the rule");
+
+    let report = fixture.evaluate().await;
+    assert_eq!(
+        report.candidates_canceled, 0,
+        "a leased candidate belongs to the handler for the length of its lease: {report:?}"
+    );
+
+    let after = fixture.only_candidate().await;
+    assert_eq!(
+        after.state,
+        MaintenanceCandidateState::Executing,
+        "the evaluator must not cancel a row out from under the executor"
+    );
+}
+
 #[tokio::test]
 async fn a_disabled_rule_is_skipped_and_its_candidates_are_left_alone() {
     let fixture = evaluation_app();

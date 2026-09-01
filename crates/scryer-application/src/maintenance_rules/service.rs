@@ -43,6 +43,16 @@ pub const MAINTENANCE_PREVIEW_MAX_TITLES: usize = 50;
 /// Selection size used when the caller does not ask for one.
 pub const MAINTENANCE_PREVIEW_DEFAULT_TITLES: usize = 20;
 
+/// Upper bound on a rule's grace period, in days — ten years.
+///
+/// The grace period is materialized into a candidate's `due_at` as
+/// `first_matched_at + Duration::days(grace_days)`, and `chrono` *panics* rather
+/// than saturating once that addition leaves the representable range. A rule
+/// authored with a nonsense grace period would therefore not be a slow rule; it
+/// would take down the evaluation pass. Ten years is far past any real retention
+/// policy and nowhere near the overflow.
+pub const MAINTENANCE_MAX_GRACE_DAYS: i64 = 3650;
+
 // ── Request models ──────────────────────────────────────────────────────────
 
 /// A new rule set plus its first matcher revision.
@@ -323,6 +333,21 @@ impl AppUseCase {
 
     /// Renames and re-scopes without touching the matcher, action, or grace
     /// period, so no revision is created.
+    ///
+    /// A *scope* change disarms the rule ([`MaintenanceEffectArming::None`]),
+    /// atomically with the metadata write. Library scope is the rule's blast
+    /// radius: an operator armed one matcher plus action over one set of
+    /// libraries after acknowledging what that would reach, so widening the
+    /// scope would put libraries nobody acknowledged inside an armed rule, and
+    /// narrowing it changes the acknowledged set just as materially. A scope
+    /// change therefore invalidates the acknowledgement exactly like a new
+    /// revision does, and arming has to be granted again on the new terms.
+    ///
+    /// A name or description edit changes neither what the rule matches, what it
+    /// does, nor where it reaches, so it leaves arming alone. The comparison is
+    /// set-based: reordering the same libraries is not a scope change.
+    ///
+    /// [`MaintenanceEffectArming::None`]: scryer_domain::MaintenanceEffectArming::None
     pub async fn update_maintenance_rule_metadata(
         &self,
         actor: &User,
@@ -337,23 +362,47 @@ impl AppUseCase {
         let mut rule_set = self.require_maintenance_rule_set(rule_set_id).await?;
         let name = require_non_empty(&name, "name")?;
         let now = Utc::now();
+        let scope_changed = library_scope_changed(&rule_set.library_ids, &library_ids);
 
         self.services
             .customization
             .maintenance_rule_sets
-            .update_rule_set_metadata(&rule_set.id, &name, &description, &library_ids, now)
+            .update_rule_set_metadata(
+                &rule_set.id,
+                &name,
+                &description,
+                &library_ids,
+                scope_changed,
+                now,
+            )
             .await?;
 
         rule_set.name = name;
         rule_set.description = description;
         rule_set.library_ids = library_ids;
+        if scope_changed {
+            // Mirrors what the store wrote in the same statement, so the rule
+            // this returns can never claim an arming the store just cleared.
+            rule_set.effect_arming = scryer_domain::MaintenanceEffectArming::None;
+        }
         rule_set.updated_at = now;
         Ok(rule_set)
     }
 
-    /// Hard delete is safe only because nothing references a maintenance rule
-    /// yet. Once candidates exist, deleting a rule set would orphan their
-    /// attribution — that path becomes archive-gated instead.
+    /// Delete a rule set that never did anything, and refuse one that did.
+    ///
+    /// The rule set's tables cascade: deleting the row takes its revisions, its
+    /// candidates, *and* its action runs with it. For a rule that has executed,
+    /// those action runs are the only record that the deletion, unmonitor, or
+    /// profile change ever happened and who authorized it — so deleting the rule
+    /// would erase the evidence of what it did. That is refused outright rather
+    /// than archived, because there is no state in which erasing an executed
+    /// action's audit trail is the right answer to "I am done with this rule":
+    /// disabling the rule stops it just as completely and keeps the history.
+    ///
+    /// Non-terminal candidates are refused for the adjacent reason: they are
+    /// live membership the rule is still the authorization for, and cascading
+    /// them away silently drops subjects an operator can currently see.
     pub async fn delete_maintenance_rule_set(
         &self,
         actor: &User,
@@ -361,7 +410,37 @@ impl AppUseCase {
     ) -> AppResult<()> {
         self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
             .await?;
-        self.require_maintenance_rule_set(rule_set_id).await?;
+        let rule_set = self.require_maintenance_rule_set(rule_set_id).await?;
+
+        // Bounded existence reads: one row is enough to answer both questions.
+        let has_history = !self
+            .services
+            .customization
+            .maintenance_evaluation
+            .list_action_runs(Some(&rule_set.id), None, Some(1))
+            .await?
+            .is_empty();
+        if has_history {
+            return Err(AppError::Validation(format!(
+                "\"{}\" has already run actions on your library, and deleting it would erase the \
+                 record of what it did. Set its mode to disabled instead: the rule stops \
+                 immediately and its history is kept.",
+                rule_set.name
+            )));
+        }
+
+        let active_candidates = self
+            .count_active_maintenance_candidates(&rule_set.id)
+            .await?;
+        if active_candidates > 0 {
+            return Err(AppError::Validation(format!(
+                "\"{}\" is currently tracking {active_candidates} title(s), and deleting it would \
+                 drop them without a trace. Set its mode to disabled instead, or clear the \
+                 candidates first.",
+                rule_set.name
+            )));
+        }
+
         self.services
             .customization
             .maintenance_rule_sets
@@ -695,6 +774,11 @@ fn prepare_matcher(
             "grace period must be zero or more days".to_string(),
         ));
     }
+    if grace_days > MAINTENANCE_MAX_GRACE_DAYS {
+        return Err(AppError::Validation(format!(
+            "grace period must be at most {MAINTENANCE_MAX_GRACE_DAYS} days (ten years)"
+        )));
+    }
     validate_title_scope_action(action_spec)?;
 
     let rewritten = rewrite_package_declaration(rego_source, rule_id);
@@ -757,6 +841,18 @@ fn require_dormant_evaluation_mode(mode: Option<MaintenanceEvaluationMode>) -> A
             "shadow and observe evaluation are not yet available; maintenance rules can only be saved as disabled".to_string(),
         )),
     }
+}
+
+/// Whether two library scopes describe different sets of libraries.
+///
+/// Compared as sets, not as sequences: the stored order is an artifact of how a
+/// client serialized the list, and re-saving the same libraries in a different
+/// order is not a change to what the rule can reach.
+fn library_scope_changed(stored: &[String], replacement: &[String]) -> bool {
+    let stored: std::collections::BTreeSet<&str> = stored.iter().map(String::as_str).collect();
+    let replacement: std::collections::BTreeSet<&str> =
+        replacement.iter().map(String::as_str).collect();
+    stored != replacement
 }
 
 fn require_non_empty(value: &str, field: &str) -> AppResult<String> {

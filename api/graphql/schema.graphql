@@ -9070,8 +9070,11 @@ enum MaintenanceActionSubject {
 """
 One subject's durable membership in one maintenance rule set.
 
-Nothing here has acted on the subject: a candidate records that a rule
-matched it and how long the grace period still has to run.
+A candidate records that a rule matched the subject, how long its grace
+period still has to run, and, once the handler has acted, what happened.
+`state` is the authority on which of those a given row is: opening a
+candidate never acts on anything, and only `EXECUTING`, `SUCCEEDED`, and
+`FAILED` mean an action was attempted.
 """
 type MaintenanceCandidate {
 	"""
@@ -9119,7 +9122,9 @@ type MaintenanceCandidate {
 	"""
 	reasonCodes: [String!]!
 	"""
-	Action the rule revision authorizes. Nothing executes it in this release.
+	Action the rule revision authorizes, and the one the handler will run if
+	this candidate becomes due while the rule is in `OBSERVE` mode, armed for
+	the action's risk class, and its instance effect gate is on.
 	"""
 	actionKind: MaintenanceActionKind!
 	"""
@@ -9157,9 +9162,12 @@ type MaintenanceCandidate {
 """
 Lifecycle state of one maintenance candidate.
 
-The whole state machine is exposed now, but the dark evaluator only ever
-produces `OBSERVING`, `CANCELED`, and `EXCLUDED`; the rest are written by
-the action executor, which is not part of this release.
+Two writers move a candidate through these states. The scheduled evaluator
+opens and closes membership, writing only `OBSERVING`, `CANCELED`, and
+`EXCLUDED`. The action handler owns the rest: it leases a due candidate into
+`EXECUTING` and writes the outcome, and it only ever selects candidates of a
+rule that is in `OBSERVE` mode, is armed, and whose matching instance effect
+gate is on.
 """
 enum MaintenanceCandidateState {
 	"""
@@ -9225,7 +9233,8 @@ How a maintenance rule set is evaluated.
 """
 enum MaintenanceEvaluationMode {
 	"""
-	Stored but never evaluated. The only mode this release accepts.
+	Stored but never evaluated. A disabled rule opens no candidates and runs
+	no actions, and it is the mode every new rule set is created in.
 	"""
 	DISABLED
 	"""
@@ -9348,11 +9357,20 @@ type MaintenanceExclusion {
 
 """
 The five independent instance-wide maintenance gates. Every one of them
-defaults off, and only the first two do anything in this release.
+defaults off, an unconfigured instance therefore evaluates nothing and acts
+on nothing, and each gate is read at the start of every scheduled pass so a
+change takes effect on the next run without a restart.
+
+A gate is only ever the instance half of a permission. Executing an action
+additionally requires the individual rule to be in `OBSERVE` mode and armed
+for that action's risk class, so opening a gate cannot by itself start
+anything.
 """
 type MaintenanceInstanceGates {
 	"""
-	Whether the scheduled evaluator may run at all.
+	Whether the scheduled evaluator may run at all. While this is off no rule
+	is evaluated, no candidate is opened or closed, and no evaluation run is
+	recorded.
 	"""
 	evaluationEnabled: Boolean!
 	"""
@@ -9361,14 +9379,21 @@ type MaintenanceInstanceGates {
 	resultDisplayEnabled: Boolean!
 	"""
 	Reserved for provider collection projection and lifecycle notifications.
+	Nothing reads it yet.
 	"""
 	presentationEffectsEnabled: Boolean!
 	"""
-	Reserved for low and medium risk actions.
+	Whether low and medium risk actions may execute, such as unmonitoring a
+	title or changing its quality profile. A rule armed as `REVERSIBLE` or
+	`DESTRUCTIVE` starts running those actions on its due candidates while
+	this is on.
 	"""
 	reversibleEffectsEnabled: Boolean!
 	"""
-	Reserved for high risk actions.
+	Whether high risk actions may execute, meaning the ones that delete media
+	files. Turning this on lets every rule already armed as `DESTRUCTIVE`
+	begin deleting its due candidates on the next handler pass, without any
+	further confirmation.
 	"""
 	destructiveEffectsEnabled: Boolean!
 }
@@ -9532,8 +9557,9 @@ type MaintenanceRuleSet {
 	"""
 	description: String!
 	"""
-	Whether the rule set is enabled. Always false while maintenance rules
-	ship dark.
+	Whether the rule set is enabled. Derived from `evaluationMode` rather
+	than set independently: false for `DISABLED`, true for `SHADOW` and
+	`OBSERVE`.
 	"""
 	enabled: Boolean!
 	"""
@@ -12486,6 +12512,11 @@ type MutationRoot {
 	): MaintenanceRuleSet!
 	"""
 	Delete a maintenance rule set and every revision it owns.
+	
+	Refused for a rule that has already run actions, because the delete
+	cascades and would take the record of what it did with it, and for one
+	that is still tracking subjects. Set the rule's mode to `DISABLED`
+	instead: it stops just as completely and keeps its history.
 	"""
 	deleteMaintenanceRuleSet(
 		"""
@@ -17826,14 +17857,18 @@ input SetMaintenanceInstanceGatesInput {
 	resultDisplayEnabled: Boolean
 	"""
 	Reserved for provider collection projection and lifecycle notifications.
+	Nothing reads it yet.
 	"""
 	presentationEffectsEnabled: Boolean
 	"""
-	Reserved for low and medium risk actions.
+	Whether low and medium risk actions may execute for rules that are armed
+	and in `OBSERVE` mode.
 	"""
 	reversibleEffectsEnabled: Boolean
 	"""
-	Reserved for high risk actions.
+	Whether high risk actions may execute. Setting this to true lets every
+	rule already armed as `DESTRUCTIVE` begin deleting media files on the
+	next handler pass.
 	"""
 	destructiveEffectsEnabled: Boolean
 }

@@ -5507,12 +5507,21 @@ pub trait MaintenanceRuleSetRepository: Send + Sync {
 
     /// Update the fields that carry no evaluation semantics. Never creates a
     /// revision — the matcher, action, and grace period are untouched.
+    ///
+    /// `disarm` resets `effect_arming` to
+    /// [`scryer_domain::MaintenanceEffectArming::None`] in the *same* write. The
+    /// caller sets it when the library scope actually changed: scope is the
+    /// rule's blast radius, so a re-scoped rule is no longer the rule an
+    /// operator acknowledged, exactly as a new revision is not. Writing the two
+    /// separately would leave an instant in which the new scope is in force
+    /// under the old scope's arming.
     async fn update_rule_set_metadata(
         &self,
         id: &str,
         name: &str,
         description: &str,
         library_ids: &[String],
+        disarm: bool,
         updated_at: DateTime<Utc>,
     ) -> AppResult<()>;
 

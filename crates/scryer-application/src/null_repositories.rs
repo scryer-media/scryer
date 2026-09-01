@@ -1353,6 +1353,7 @@ impl MaintenanceRuleSetRepository for NullMaintenanceRuleSetRepository {
         _name: &str,
         _description: &str,
         _library_ids: &[String],
+        _disarm: bool,
         _updated_at: DateTime<Utc>,
     ) -> AppResult<()> {
         Err(AppError::Repository(

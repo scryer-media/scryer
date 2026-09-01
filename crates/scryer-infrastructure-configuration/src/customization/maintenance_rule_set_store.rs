@@ -156,21 +156,36 @@ impl MaintenanceRuleSetRepository for MaintenanceRuleSetStore {
         name: &str,
         description: &str,
         library_ids: &[String],
+        disarm: bool,
         updated_at: DateTime<Utc>,
     ) -> AppResult<()> {
-        let args = vec![
+        let mut args = vec![
             SqlArg::Text(name.to_string()),
             SqlArg::Text(description.to_string()),
             SqlArg::Text(canonical_json_text(&library_ids)?),
-            SqlArg::Timestamp(updated_at),
-            SqlArg::Text(id.to_string()),
         ];
+        // The disarm rides in the same UPDATE as the scope that invalidated it,
+        // exactly as `add_revision` carries its own: there must be no instant at
+        // which a re-scoped rule is in force under the previous scope's arming.
+        let sql = if disarm {
+            args.push(SqlArg::Text(
+                MaintenanceEffectArming::None.as_storage_str().to_string(),
+            ));
+            "UPDATE maintenance_rule_sets
+                SET name = {}, description = {}, library_ids = {}, effect_arming = {},
+                    updated_at = {}
+              WHERE id = {}"
+        } else {
+            "UPDATE maintenance_rule_sets
+                SET name = {}, description = {}, library_ids = {}, updated_at = {}
+              WHERE id = {}"
+        };
+        args.push(SqlArg::Timestamp(updated_at));
+        args.push(SqlArg::Text(id.to_string()));
         execute_write(
             &self.datastore,
             "update_maintenance_rule_set_metadata",
-            "UPDATE maintenance_rule_sets
-                SET name = {}, description = {}, library_ids = {}, updated_at = {}
-              WHERE id = {}",
+            sql,
             args,
         )
         .await

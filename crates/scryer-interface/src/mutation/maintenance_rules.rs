@@ -184,6 +184,11 @@ impl MaintenanceRuleMutations {
     }
 
     /// Delete a maintenance rule set and every revision it owns.
+    ///
+    /// Refused for a rule that has already run actions, because the delete
+    /// cascades and would take the record of what it did with it, and for one
+    /// that is still tracking subjects. Set the rule's mode to `DISABLED`
+    /// instead: it stops just as completely and keeps its history.
     async fn delete_maintenance_rule_set(
         &self,
         ctx: &Context<'_>,

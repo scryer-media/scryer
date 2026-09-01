@@ -65,8 +65,16 @@ pub const JELLYFIN_SIGNAL_MAX_ITEMS: usize = 20_000;
 /// the query string stays a sane length.
 const JELLYFIN_SERIES_BATCH: usize = 100;
 
-const JELLYFIN_ITEM_FIELDS: &str =
-    "ProviderIds,UserData,ParentIndexNumber,IndexNumber,SeriesId,SeriesName,ParentId,Path";
+/// The `Fields` list is deliberately short: it may name only real members of
+/// Jellyfin's `ItemFields` enum, and a value that is not one is not "extra data"
+/// — some server versions reject the whole request over it.
+///
+/// Everything else this adapter reads off an item row (`Id`, `Type`, `SeriesId`,
+/// `SeriesName`, `IndexNumber`, `ParentIndexNumber`) is an unconditional
+/// `BaseItemDto` property that arrives whether or not it is requested, and the
+/// user-data block is governed by `EnableUserData=true` rather than by a field
+/// name. So the list carries only the three that genuinely have to be asked for.
+const JELLYFIN_ITEM_FIELDS: &str = "ProviderIds,ParentId,Path";
 
 /// External id sources Scryer joins on, mapped from Jellyfin's `ProviderIds`
 /// keys. Jellyfin's capitalization has drifted across versions, so the match is
@@ -200,6 +208,7 @@ impl HttpMediaServerSignalSource {
             };
             match self.fetch_json(url, api_key).await {
                 Ok(body) => {
+                    let mut matched = 0_usize;
                     for entry in body
                         .get("Items")
                         .and_then(Value::as_array)
@@ -209,7 +218,20 @@ impl HttpMediaServerSignalSource {
                         let Some(id) = string_field(&entry, "Id") else {
                             continue;
                         };
+                        if chunk.contains(&id) {
+                            matched += 1;
+                        }
                         resolved.insert(id, external_ids(&entry));
+                    }
+                    // A 200 with nothing usable in it is indistinguishable from
+                    // success at every later step: the episodes simply stay
+                    // unmapped, and the sweep reports a clean read. It is also
+                    // exactly what a wrong query shape produces, so say so.
+                    if matched == 0 {
+                        warn!(
+                            unresolved = chunk.len(),
+                            "a Jellyfin series lookup batch resolved none of the requested series ids; those episodes stay unmapped"
+                        );
                     }
                 }
                 Err(error) => {
@@ -415,11 +437,20 @@ fn played_items_url(base: &Url, external_user_id: &str, start_index: usize) -> A
     Ok(url)
 }
 
+/// Look up series rows by id.
+///
+/// `Recursive=true` is not optional even though the query names exact ids: a
+/// non-recursive `Users/{id}/Items` query is scoped to the *user root's direct
+/// children*, which on a real server are the top-level library folders, not the
+/// series inside them. Without it a server can answer with an empty `Items`
+/// array and every episode stays unmapped — the exact silent failure the played
+/// items query already sends `Recursive=true` to avoid.
 fn series_lookup_url(base: &Url, external_user_id: &str, ids: &[String]) -> AppResult<Url> {
     let mut url = base
         .join(&format!("Users/{external_user_id}/Items"))
         .map_err(|_| AppError::Validation("media server base URL is invalid".into()))?;
     url.query_pairs_mut()
+        .append_pair("Recursive", "true")
         .append_pair("Ids", &ids.join(","))
         .append_pair("Fields", "ProviderIds")
         .append_pair("Limit", &ids.len().to_string());
@@ -568,8 +599,39 @@ mod tests {
         ] {
             assert!(query.contains(expected), "missing {expected} in {query}");
         }
-        assert!(query.contains("ProviderIds"));
-        assert!(query.contains("UserData"));
+        // `Fields` may only name real `ItemFields` members, so it is asserted
+        // exactly rather than by substring: an item property that arrives
+        // unconditionally must not creep back into the list.
+        assert!(
+            query.contains("Fields=ProviderIds%2CParentId%2CPath"),
+            "unexpected Fields list in {query}"
+        );
+        // The user-data block is requested by its own switch, not by a field.
+        assert!(query.contains("EnableUserData=true"), "{query}");
+    }
+
+    /// The series lookup names exact ids, but still has to be recursive: a
+    /// non-recursive user-items query only sees the user root's direct children,
+    /// which is how every episode silently stays unmapped.
+    #[test]
+    fn the_series_lookup_url_is_recursive_and_batched() {
+        let base = jellyfin_base("http://jellyfin.example/media").expect("base");
+        let url = series_lookup_url(
+            &base,
+            "user-123",
+            &["jf-series-1".to_string(), "jf-series-2".to_string()],
+        )
+        .expect("url");
+        assert_eq!(url.path(), "/media/Users/user-123/Items");
+        let query = url.query().expect("query");
+        for expected in [
+            "Recursive=true",
+            "Ids=jf-series-1%2Cjf-series-2",
+            "Fields=ProviderIds",
+            "Limit=2",
+        ] {
+            assert!(query.contains(expected), "missing {expected} in {query}");
+        }
     }
 
     #[tokio::test]
@@ -644,10 +706,13 @@ mod tests {
             .mount(&server)
             .await;
 
-        // The series lookup is the only request carrying `Ids`.
+        // The series lookup is the only request carrying `Ids`, and it must be
+        // recursive or a real server answers out of the user root's direct
+        // children — which never contain a series.
         Mock::given(method("GET"))
             .and(path("/Users/user-123/Items"))
             .and(query_param("Ids", "jf-series-1"))
+            .and(query_param("Recursive", "true"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "Items": [{
                     "Id": "jf-series-1",
@@ -676,8 +741,63 @@ mod tests {
             episode.series_external_ids.get("tvdb").map(String::as_str),
             Some("999")
         );
+        // The episode's own coordinates came off the item row, which is why the
+        // `Fields` list does not have to ask for them: the fixture returns
+        // `SeriesId`, `IndexNumber`, and `ParentIndexNumber` as a real server
+        // does, and the trimmed request still reads them.
         assert_eq!(episode.season_number, Some(2));
         assert_eq!(episode.episode_number, Some(5));
+        assert_eq!(
+            episode.series_provider_item_id.as_deref(),
+            Some("jf-series-1")
+        );
+        // `EnableUserData=true`, not a `UserData` field name, is what fills this.
+        assert_eq!(episode.play_count, 1);
+        assert!(episode.played);
+    }
+
+    /// A series lookup that resolves nothing is not fatal: the read still
+    /// succeeds and the episodes stay honestly unmapped rather than being given
+    /// ids nobody returned.
+    #[tokio::test]
+    async fn a_series_lookup_that_resolves_nothing_leaves_episodes_unmapped() {
+        use wiremock::matchers::{method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/Users/user-123/Items"))
+            .and(query_param("StartIndex", "0"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "Items": [episode_item()],
+                "TotalRecordCount": 1
+            })))
+            .mount(&server)
+            .await;
+
+        // What a non-recursive query against a real user root looks like: a 200
+        // that resolved none of the requested ids.
+        Mock::given(method("GET"))
+            .and(path("/Users/user-123/Items"))
+            .and(query_param("Ids", "jf-series-1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "Items": [] })))
+            .mount(&server)
+            .await;
+
+        let mut connection = connection_fixture();
+        connection.base_url = server.uri();
+
+        let items = HttpMediaServerSignalSource::new()
+            .fetch_played_items(&connection, "user-123")
+            .await
+            .expect("an unresolved series batch is not fatal");
+
+        assert_eq!(items.len(), 1);
+        assert!(
+            items[0].series_external_ids.is_empty(),
+            "an unresolved series must not be given invented ids"
+        );
     }
 
     /// A page the server refuses fails the participant rather than reporting a
