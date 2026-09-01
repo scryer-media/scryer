@@ -1149,6 +1149,7 @@ impl AppUseCase {
             season,
             episode,
             absolute_episode,
+            year,
             tagged_aliases,
             search_subject_kind,
             cancel_token,
@@ -1351,6 +1352,7 @@ impl AppUseCase {
                     season,
                     episode,
                     absolute_episode,
+                    year,
                     tagged_aliases,
                     learning_context,
                     query_cancel_token,
@@ -1658,6 +1660,13 @@ impl AppUseCase {
             season: subject.season,
             episode: subject.episode,
             absolute_episode: subject.absolute_episode,
+            // `title` here is the *search* title — for a series-movie link it is
+            // the derived movie record, whose facet and year both come from the
+            // movie. Reading the year and the facet gate off the same record is
+            // what keeps a series year from ever being sent as a release year.
+            year: (title.facet == MediaFacet::Movie)
+                .then_some(title.year)
+                .flatten(),
             tagged_aliases: &tagged_aliases,
             search_subject_kind: subject.subject_kind,
             parse_context: &subject.title_evidence.parse_context,
@@ -2102,6 +2111,10 @@ pub(crate) struct ReleaseSearchRequest<'a> {
     pub(crate) season: Option<u32>,
     pub(crate) episode: Option<u32>,
     pub(crate) absolute_episode: Option<u32>,
+    /// Movie release year, when the searched title is a movie that has one.
+    /// Series years never travel here: a season/episode search has no single
+    /// release year, so passing the series year would be a guess.
+    pub(crate) year: Option<i32>,
     pub(crate) tagged_aliases: &'a [TaggedAlias],
     pub(crate) search_subject_kind: ReleaseSearchSubjectKind,
     pub(crate) parse_context: &'a ReleaseParseContext,

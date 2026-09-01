@@ -192,6 +192,7 @@ impl AppUseCase {
                 None,
                 None,
                 None,
+                None, // a connection probe has no subject, so no year
                 vec![],
                 None,
                 tokio_util::sync::CancellationToken::new(),
@@ -755,6 +756,7 @@ mod tests {
             _season: Option<u32>,
             _episode: Option<u32>,
             _absolute_episode: Option<u32>,
+            _year: Option<i32>,
             _tagged_aliases: Vec<scryer_domain::TaggedAlias>,
             _learning_context: Option<crate::IndexerSearchLearningContext>,
             _cancel_token: tokio_util::sync::CancellationToken,

@@ -749,6 +749,7 @@ impl AppUseCase {
                 None,
                 None,
                 None,
+                None, // an RSS poll has no subject, so no year
                 vec![],
                 None,
                 tokio_util::sync::CancellationToken::new(),

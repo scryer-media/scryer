@@ -1420,6 +1420,10 @@ fn resolve_connection_url(
         .map(str::to_string)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the search context is derived from the full request envelope"
+)]
 fn build_search_context(
     query: &str,
     ids: &std::collections::HashMap<String, String>,
@@ -1428,7 +1432,10 @@ fn build_search_context(
     season: Option<u32>,
     episode: Option<u32>,
     absolute_episode: Option<u32>,
+    year: Option<i32>,
 ) -> PluginSearchContext {
+    // The year never participates in request-shape classification: it is a
+    // qualifier on the subject, not evidence that a search was asked for.
     let is_recent_request = matches!(mode, SearchMode::Auto)
         && query.trim().is_empty()
         && ids.is_empty()
@@ -1440,6 +1447,18 @@ fn build_search_context(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(|value| value.to_ascii_lowercase());
+
+    // A release year only describes a whole-title movie subject. A
+    // season/episode-scoped search has no single release year, and a series
+    // year is not one — so anything else is dropped here rather than sent to a
+    // plugin as a qualifier the host cannot vouch for. The facet is absent on
+    // the generic fallback form, which is still the same movie subject.
+    let subject_year = year.filter(|_| {
+        season.is_none()
+            && episode.is_none()
+            && absolute_episode.is_none()
+            && matches!(normalized_facet.as_deref(), None | Some("movie"))
+    });
 
     let subject_kind = match normalized_facet.as_deref() {
         Some("movie") => PluginSearchSubjectKind::Movie,
@@ -1484,6 +1503,7 @@ fn build_search_context(
         },
         subject_kind,
         query_kind,
+        year: subject_year,
         ..PluginSearchContext::default()
     }
 }
@@ -1508,6 +1528,7 @@ fn generic_search_fallback_request(
         fallback.season,
         fallback.episode,
         fallback.absolute_episode,
+        request.context.as_ref().and_then(|context| context.year),
     ));
     fallback
 }
@@ -1914,6 +1935,7 @@ impl IndexerClient for WasmIndexerClient {
                         strategy.season,
                         strategy.episode,
                         strategy.absolute_episode,
+                        strategy.year,
                     );
                     PluginSearchStrategyRequest {
                         strategy_id: strategy.strategy_id,
@@ -1962,6 +1984,7 @@ impl IndexerClient for WasmIndexerClient {
         season: Option<u32>,
         episode: Option<u32>,
         absolute_episode: Option<u32>,
+        year: Option<i32>,
         tagged_aliases: Vec<TaggedAlias>,
         _learning_context: Option<scryer_application::IndexerSearchLearningContext>,
         cancel_token: CancellationToken,
@@ -1977,6 +2000,7 @@ impl IndexerClient for WasmIndexerClient {
             season,
             episode,
             absolute_episode,
+            year,
         );
         let request = PluginSearchRequest {
             query,
@@ -2044,6 +2068,7 @@ impl IndexerClient for WasmIndexerClient {
         season: Option<u32>,
         episode: Option<u32>,
         absolute_episode: Option<u32>,
+        year: Option<i32>,
         tagged_aliases: Vec<TaggedAlias>,
         learning_context: Option<scryer_application::IndexerSearchLearningContext>,
         cancel_token: CancellationToken,
@@ -2063,6 +2088,7 @@ impl IndexerClient for WasmIndexerClient {
                 season,
                 episode,
                 absolute_episode,
+                year,
                 tagged_aliases,
                 learning_context,
                 cancel_token,
@@ -2257,6 +2283,7 @@ mod tests {
             Some(1),
             Some(2),
             None,
+            None,
         );
 
         assert_eq!(context.request_kind, PluginSearchRequestKind::Search);
@@ -2275,12 +2302,126 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
 
         assert_eq!(context.request_kind, PluginSearchRequestKind::Recent);
         assert_eq!(context.search_origin, PluginSearchOrigin::Rss);
         assert_eq!(context.subject_kind, PluginSearchSubjectKind::Title);
         assert_eq!(context.query_kind, PluginSearchQueryKind::Fallback);
+    }
+
+    #[test]
+    fn carries_known_year_on_movie_search_context() {
+        let context = build_search_context(
+            "Amber Circuit 2026",
+            &std::collections::HashMap::new(),
+            Some("movie"),
+            SearchMode::Interactive,
+            None,
+            None,
+            None,
+            Some(2026),
+        );
+
+        assert_eq!(context.subject_kind, PluginSearchSubjectKind::Movie);
+        assert_eq!(context.year, Some(2026));
+        // The year is a qualifier, not evidence of an id search.
+        assert_eq!(context.query_kind, PluginSearchQueryKind::Title);
+    }
+
+    #[test]
+    fn omits_year_on_movie_search_without_a_known_year() {
+        let context = build_search_context(
+            "Amber Circuit",
+            &std::collections::HashMap::new(),
+            Some("movie"),
+            SearchMode::Interactive,
+            None,
+            None,
+            None,
+            None,
+        );
+
+        assert_eq!(context.subject_kind, PluginSearchSubjectKind::Movie);
+        assert_eq!(context.year, None);
+    }
+
+    #[test]
+    fn drops_series_year_on_episode_search_context() {
+        let context = build_search_context(
+            "Example Show S01E02",
+            &std::collections::HashMap::new(),
+            Some("series"),
+            SearchMode::Auto,
+            Some(1),
+            Some(2),
+            None,
+            // A series year is not the release year of the searched episode.
+            Some(2013),
+        );
+
+        assert_eq!(context.subject_kind, PluginSearchSubjectKind::Episode);
+        assert_eq!(context.year, None);
+    }
+
+    #[test]
+    fn drops_series_year_on_title_scoped_series_search_context() {
+        let context = build_search_context(
+            "Example Show",
+            &std::collections::HashMap::new(),
+            Some("series"),
+            SearchMode::Auto,
+            None,
+            None,
+            None,
+            Some(2013),
+        );
+
+        assert_eq!(context.subject_kind, PluginSearchSubjectKind::Title);
+        assert_eq!(context.year, None);
+    }
+
+    #[test]
+    fn generic_fallback_keeps_the_movie_year() {
+        let request = PluginSearchRequest {
+            query: "Amber Circuit 2026".to_string(),
+            ids: std::collections::HashMap::from([(
+                "imdb_id".to_string(),
+                "tt12004567".to_string(),
+            )]),
+            facet: Some("movie".to_string()),
+            category: Some("movie".to_string()),
+            limit: 1000,
+            context: Some(build_search_context(
+                "Amber Circuit 2026",
+                &std::collections::HashMap::from([(
+                    "imdb_id".to_string(),
+                    "tt12004567".to_string(),
+                )]),
+                Some("movie"),
+                SearchMode::Interactive,
+                None,
+                None,
+                None,
+                Some(2026),
+            )),
+            ..PluginSearchRequest::default()
+        };
+
+        let fallback = generic_search_fallback_request(&request, SearchMode::Interactive);
+
+        assert!(fallback.ids.is_empty());
+        assert_eq!(fallback.facet, None);
+        assert_eq!(
+            fallback
+                .context
+                .as_ref()
+                .expect("fallback context")
+                .year,
+            Some(2026),
+            "the facet-less fallback is the same movie subject"
+        );
     }
 
     #[test]
