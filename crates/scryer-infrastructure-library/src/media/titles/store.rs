@@ -1715,10 +1715,13 @@ impl TitleRepository for TitleStore {
         id: &str,
         library_id: &str,
         root_folder_id: &str,
+        facet: Option<MediaFacet>,
+        drop_tag_prefixes: &[String],
     ) -> AppResult<()> {
         let id = id.to_string();
         let library_id = library_id.trim().to_string();
         let root_folder_id = root_folder_id.trim().to_string();
+        let drop_tag_prefixes = drop_tag_prefixes.to_vec();
         if library_id.is_empty() || root_folder_id.is_empty() {
             return Err(AppError::Validation(
                 "a transfer needs both a destination library and a destination root".to_string(),
@@ -1728,6 +1731,8 @@ impl TitleRepository for TitleStore {
             let id = id.clone();
             let library_id = library_id.clone();
             let root_folder_id = root_folder_id.clone();
+            let facet = facet.clone();
+            let drop_tag_prefixes = drop_tag_prefixes.clone();
             Box::pin(async move {
                 let library = SqlRuntime::fetch_optional(
                     SqlExec::Tx(tx),
@@ -1743,17 +1748,30 @@ impl TitleRepository for TitleStore {
 
                 // Facet compatibility is the classifier's rule (FR-017) and is
                 // settled before a plan can be confirmed; this write must not
-                // second-guess it, because the series-anime crossover FR-057
-                // converts is a legitimate transfer whose facet change is its
-                // own feature. The facet is carried across unchanged.
+                // second-guess it. What it does write, when the caller asks for
+                // it, is the series↔anime conversion (FR-057) — in this same
+                // transaction, because a row whose facet and library facet
+                // disagree is rejected by every later root resolution.
                 let mut title = load_title_canonical_tx_or_not_found(tx, &id, true).await?;
                 title.library_id = library_id;
                 title.root_folder_id = root_folder_id;
+                if let Some(facet) = facet {
+                    title.facet = facet;
+                    // Values hydrated under the facet being left. The caller
+                    // supplies the list; the store only applies it.
+                    if !drop_tag_prefixes.is_empty() {
+                        title.tags.retain(|tag| {
+                            !drop_tag_prefixes
+                                .iter()
+                                .any(|prefix| tag.starts_with(prefix.as_str()))
+                        });
+                    }
+                }
                 // `persist_title_tx` rewrites the search and external-id
                 // projections from the row it is given, so
-                // `title_external_ids.library_id` follows the title in the same
-                // transaction rather than being left pointing at the library it
-                // left (FR-055's match key).
+                // `title_external_ids.library_id` *and* `.facet` follow the
+                // title in the same transaction rather than being left pointing
+                // at the library and facet it left (FR-055's match key).
                 persist_title_tx(tx, &title, HydrationStateWrite::Preserve).await?;
                 Ok(())
             })

@@ -711,6 +711,8 @@ impl TitleRepository for MockTitleRepo {
         id: &str,
         library_id: &str,
         root_folder_id: &str,
+        facet: Option<MediaFacet>,
+        drop_tag_prefixes: &[String],
     ) -> AppResult<()> {
         let mut list = self.store.lock().await;
         let title = list
@@ -719,6 +721,14 @@ impl TitleRepository for MockTitleRepo {
             .ok_or_else(|| AppError::NotFound(format!("title {id}")))?;
         title.library_id = library_id.to_string();
         title.root_folder_id = root_folder_id.to_string();
+        // FR-057: the facet converts in the same write, and the values derived
+        // under the old facet go with it.
+        if let Some(facet) = facet {
+            title.facet = facet;
+            title
+                .tags
+                .retain(|tag| !drop_tag_prefixes.iter().any(|prefix| tag.starts_with(prefix)));
+        }
         Ok(())
     }
 

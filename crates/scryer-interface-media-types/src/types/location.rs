@@ -7,7 +7,7 @@
 //! guessing: an unprobed free-space estimate reports unknown, and a plan that
 //! moves nothing states a verification depth that applies to no files.
 
-use super::{Long, VerificationDepthValue};
+use super::{Long, MediaFacetValue, VerificationDepthValue};
 use async_graphql::{Enum, ID, InputObject, SimpleObject};
 use chrono::{DateTime, Utc};
 
@@ -262,6 +262,55 @@ pub struct LocationClassifiedTitlePayload {
     /// The destination titles the user is choosing between, for an ambiguous
     /// identity. Empty for every other outcome.
     pub ambiguous_destination_title_ids: Vec<ID>,
+    /// The series↔anime facet conversion this destination performs, or null when
+    /// the destination library's facet is the title's own (FR-057).
+    pub facet_conversion: Option<LocationFacetConversionPayload>,
+}
+
+/// What a facet conversion does to one title-level setting (FR-057).
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+pub enum LocationFacetSettingDispositionValue {
+    /// The value stays on the title, but nothing reads it under the new facet.
+    BecomesInvalid,
+    /// The value does not survive the conversion.
+    Resets,
+    /// The value is still read, and decides something different than it did.
+    ChangesMeaning,
+}
+
+#[derive(SimpleObject, Clone)]
+/// One title-level setting the facet conversion affects, named individually so
+/// the client lists them rather than showing a blanket sentence (FR-057).
+pub struct LocationFacetConvertedSettingPayload {
+    /// Stable machine key for the setting, for grouping and translation.
+    pub setting: String,
+    /// Human-readable name of the setting.
+    pub label: String,
+    /// The value the title carries today, or null when it carries none
+    /// explicitly and the conversion changes which default applies.
+    pub value: Option<String>,
+    /// Whether the setting becomes invalid, resets, or changes meaning.
+    pub disposition: LocationFacetSettingDispositionValue,
+    /// The sentence explaining the consequence.
+    pub detail: String,
+}
+
+#[derive(SimpleObject, Clone)]
+/// The series↔anime conversion a cross-library transfer performs, with every
+/// setting it affects (FR-057) and the folder-only scope of the rename
+/// (FR-058).
+pub struct LocationFacetConversionPayload {
+    /// The facet the title carries today.
+    pub from_facet: MediaFacetValue,
+    /// The facet it carries after the transfer.
+    pub to_facet: MediaFacetValue,
+    /// Every affected setting, in a stable order. Empty when the conversion
+    /// touches nothing the title has set.
+    pub settings: Vec<LocationFacetConvertedSettingPayload>,
+    /// FR-058, as the sentence the preview shows: the conversion recalculates
+    /// the folder name only.
+    pub files_keep_their_names: String,
 }
 
 #[derive(SimpleObject, Clone)]

@@ -8938,6 +8938,11 @@ type LocationClassifiedTitlePayload {
 	identity. Empty for every other outcome.
 	"""
 	ambiguousDestinationTitleIds: [ID!]!
+	"""
+	The series↔anime facet conversion this destination performs, or null when
+	the destination library's facet is the title's own (FR-057).
+	"""
+	facetConversion: LocationFacetConversionPayload
 }
 
 """
@@ -9010,6 +9015,78 @@ enum LocationExecutionModeValue {
 	No filesystem work at all: fileless titles and folder-match correction.
 	"""
 	CATALOG_ONLY
+}
+
+"""
+The series↔anime conversion a cross-library transfer performs, with every
+setting it affects (FR-057) and the folder-only scope of the rename
+(FR-058).
+"""
+type LocationFacetConversionPayload {
+	"""
+	The facet the title carries today.
+	"""
+	fromFacet: MediaFacetValue!
+	"""
+	The facet it carries after the transfer.
+	"""
+	toFacet: MediaFacetValue!
+	"""
+	Every affected setting, in a stable order. Empty when the conversion
+	touches nothing the title has set.
+	"""
+	settings: [LocationFacetConvertedSettingPayload!]!
+	"""
+	FR-058, as the sentence the preview shows: the conversion recalculates
+	the folder name only.
+	"""
+	filesKeepTheirNames: String!
+}
+
+"""
+One title-level setting the facet conversion affects, named individually so
+the client lists them rather than showing a blanket sentence (FR-057).
+"""
+type LocationFacetConvertedSettingPayload {
+	"""
+	Stable machine key for the setting, for grouping and translation.
+	"""
+	setting: String!
+	"""
+	Human-readable name of the setting.
+	"""
+	label: String!
+	"""
+	The value the title carries today, or null when it carries none
+	explicitly and the conversion changes which default applies.
+	"""
+	value: String
+	"""
+	Whether the setting becomes invalid, resets, or changes meaning.
+	"""
+	disposition: LocationFacetSettingDispositionValue!
+	"""
+	The sentence explaining the consequence.
+	"""
+	detail: String!
+}
+
+"""
+What a facet conversion does to one title-level setting (FR-057).
+"""
+enum LocationFacetSettingDispositionValue {
+	"""
+	The value stays on the title, but nothing reads it under the new facet.
+	"""
+	BECOMES_INVALID
+	"""
+	The value does not survive the conversion.
+	"""
+	RESETS
+	"""
+	The value is still read, and decides something different than it did.
+	"""
+	CHANGES_MEANING
 }
 
 """

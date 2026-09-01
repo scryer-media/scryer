@@ -21,18 +21,23 @@ use scryer_application::location::preview::{
     ConfirmationRequirement, FreeSpaceEstimate, LocationPlan, PlanConfirmation, PlanCounts,
     PlanFingerprint, PlanItem, PlanItemKind, PlanSection, VerificationStatement,
 };
+use scryer_application::location::transfer_effects::{
+    FILES_KEEP_THEIR_NAMES, FacetConversion, SettingDisposition,
+};
 
 use crate::types::{
     CancelLocationOperationPayload, LocationClassificationGroupPayload,
     LocationClassifiedTitlePayload, LocationConfirmationRequirementValue,
     LocationDestinationIdentityMatchValue, LocationDestinationInput,
-    LocationExecutionModeValue, LocationFreeSpaceEstimatePayload, LocationOperationCountersPayload,
+    LocationExecutionModeValue, LocationFacetConversionPayload,
+    LocationFacetConvertedSettingPayload, LocationFacetSettingDispositionValue,
+    LocationFreeSpaceEstimatePayload, LocationOperationCountersPayload,
     LocationOperationPayload, LocationOperationPreviewPayload, LocationOperationStateValue,
     LocationOperationTypeValue, LocationPlanConfirmationPayload, LocationPlanCountsPayload,
     LocationPlanItemKindValue, LocationPlanItemPayload, LocationPlanKindCountPayload,
     LocationPlanSectionPayload, LocationSelectionClassificationPayload,
     LocationTitleCheckpointPayload, LocationTitleCheckpointStateValue,
-    LocationVerificationStatementPayload, Long, ResumeLocationOperationPayload,
+    LocationVerificationStatementPayload, Long, MediaFacetValue, ResumeLocationOperationPayload,
     StartLocationOperationPayload, TitleLocationClassValue, VerificationDepthValue,
 };
 
@@ -251,6 +256,45 @@ fn from_classified_title(title: &TitleClassification) -> LocationClassifiedTitle
             .into_iter()
             .map(ID::from)
             .collect(),
+        facet_conversion: title
+            .facet_conversion
+            .as_ref()
+            .map(from_facet_conversion),
+    }
+}
+
+/// FR-057/FR-058: the conversion, its affected settings, and the sentence that
+/// says file names are not part of it.
+fn from_facet_conversion(conversion: &FacetConversion) -> LocationFacetConversionPayload {
+    LocationFacetConversionPayload {
+        from_facet: MediaFacetValue::from_domain(conversion.from.clone()),
+        to_facet: MediaFacetValue::from_domain(conversion.to.clone()),
+        settings: conversion
+            .settings
+            .iter()
+            .map(|setting| LocationFacetConvertedSettingPayload {
+                setting: setting.setting.clone(),
+                label: setting.label.clone(),
+                value: setting.value.clone(),
+                disposition: from_setting_disposition(setting.disposition),
+                detail: setting.detail.clone(),
+            })
+            .collect(),
+        files_keep_their_names: FILES_KEEP_THEIR_NAMES.to_string(),
+    }
+}
+
+fn from_setting_disposition(
+    value: SettingDisposition,
+) -> LocationFacetSettingDispositionValue {
+    match value {
+        SettingDisposition::BecomesInvalid => {
+            LocationFacetSettingDispositionValue::BecomesInvalid
+        }
+        SettingDisposition::Resets => LocationFacetSettingDispositionValue::Resets,
+        SettingDisposition::ChangesMeaning => {
+            LocationFacetSettingDispositionValue::ChangesMeaning
+        }
     }
 }
 

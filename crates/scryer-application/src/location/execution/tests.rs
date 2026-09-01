@@ -101,11 +101,23 @@ impl RootMoveCatalog for FakeCatalog {
         title_id: &str,
         library_id: &str,
         root_folder_id: &str,
+        converted_facet: Option<&scryer_domain::MediaFacet>,
+        drop_tag_prefixes: &[String],
     ) -> AppResult<()> {
         let mut state = self.state.lock().expect("lock");
+        // One write string, facet included, so a test can assert that the facet
+        // conversion landed in the same call as the library and root (FR-057).
+        let facet = converted_facet
+            .map(|facet| format!("+facet:{}", facet.as_str()))
+            .unwrap_or_default();
+        let dropped = if drop_tag_prefixes.is_empty() {
+            String::new()
+        } else {
+            format!("+drop:{}", drop_tag_prefixes.join(","))
+        };
         state
             .writes
-            .push(format!("library:{title_id}={library_id}/{root_folder_id}"));
+            .push(format!("library:{title_id}={library_id}/{root_folder_id}{facet}{dropped}"));
         if let Some(placement) = state.placements.get_mut(title_id) {
             placement.library_id = library_id.to_string();
             placement.root_folder_id = root_folder_id.to_string();
@@ -232,6 +244,8 @@ fn single_title_plan(
             renamed_destinations: Vec::new(),
             prune_directories: vec![path_to_stored_string(&source_folder)],
             warnings: Vec::new(),
+            converted_facet: None,
+            dropped_tag_prefixes: Vec::new(),
         }],
         ..RootMoveExecutionPlan::default()
     }
@@ -969,6 +983,8 @@ async fn catalog_only_titles_complete_without_touching_the_filesystem() {
             renamed_destinations: Vec::new(),
             prune_directories: Vec::new(),
             warnings: Vec::new(),
+            converted_facet: None,
+            dropped_tag_prefixes: Vec::new(),
         }],
         ..RootMoveExecutionPlan::default()
     };

@@ -89,6 +89,7 @@ use crate::location::root_move::{
     PlannedRootMove, RootMoveExecutionPlan, RootMovePlanRequest, RootMoveTitleDraft, SourceFile,
     build_root_move_plan,
 };
+use crate::location::transfer_effects::{TitleAssociationFacts, converts_facet};
 use crate::location::verify::{VerifiedCopier, same_filesystem};
 use crate::services::AppUseCase;
 use crate::stored_paths::{path_to_stored_string, stored_path_to_path_buf};
@@ -1181,6 +1182,14 @@ impl AppUseCase {
             .detect_destination_titles_for(&titles, &destination_library.id)
             .await?;
 
+        // FR-060–FR-062: what each crossing title is linked to and what it
+        // contains, so the preview can state a disposition instead of leaving
+        // the user to wonder. Read only for titles that actually cross a library
+        // boundary — a same-library root move changes none of it.
+        let association_facts = self
+            .transfer_association_facts(&titles, &destination_library)
+            .await?;
+
         // Classification facts, including the FR-086 blockers.
         let mut facts = Vec::with_capacity(titles.len());
         let mut media_files_by_title: BTreeMap<String, Vec<crate::TitleMediaFile>> = BTreeMap::new();
@@ -1210,6 +1219,13 @@ impl AppUseCase {
             )
             .with_name(title.name.clone())
             .with_library_name(library_name)
+            .with_tags(title.tags.clone())
+            .with_associations(
+                association_facts
+                    .get(&title.id)
+                    .copied()
+                    .unwrap_or_default(),
+            )
             .with_monitored(title.monitored)
             .with_tracked_files(media_files.len() as i64)
             .with_folder_path(
@@ -1294,6 +1310,8 @@ impl AppUseCase {
                 recycle: RecycleAvailability::Available,
                 blocked_reason: classified.reason.clone(),
                 destination_identity: classified.destination_identity.clone(),
+                facet_conversion: classified.facet_conversion.clone(),
+                associations: classified.associations,
             };
 
             if !classified.class.moves_files() {
@@ -1510,6 +1528,89 @@ impl AppUseCase {
             &candidates,
             &IdentityRedirects::new(),
         ))
+    }
+
+    /// Series-movie links, collections, and episodes for the titles that cross
+    /// a library boundary (FR-060–FR-062).
+    ///
+    /// # Why these three and nothing else
+    ///
+    /// The schema decides the scope. `series_movie_links.series_title_id`,
+    /// `collections.title_id`, and `episodes.title_id`/`collection_id` are keyed
+    /// on ids the transfer does not reissue, and none of the three tables has a
+    /// library or root column — so a transfer preserves all of it with no
+    /// rewrite at all. What the preview needs is therefore a *count*, to say how
+    /// much rides along, not a mapping.
+    ///
+    /// The movie entity at the far end of a link is shared metadata
+    /// (`movie_entities` has no owning title and no library), so a linked movie
+    /// cannot be orphaned by moving the series that references it — which is why
+    /// FR-060's disposition is "move together" rather than a user choice.
+    ///
+    /// Reads are scoped to crossing episodic titles, and the episode count only
+    /// to titles whose facet actually converts, because that is the only case
+    /// where the collection statement is emitted.
+    async fn transfer_association_facts(
+        &self,
+        titles: &[Title],
+        destination_library: &scryer_domain::Library,
+    ) -> AppResult<BTreeMap<String, TitleAssociationFacts>> {
+        let crossing: Vec<String> = titles
+            .iter()
+            .filter(|title| {
+                title.library_id != destination_library.id && title.facet != MediaFacet::Movie
+            })
+            .map(|title| title.id.clone())
+            .collect();
+        if crossing.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+
+        let mut facts: BTreeMap<String, TitleAssociationFacts> = crossing
+            .iter()
+            .map(|title_id| (title_id.clone(), TitleAssociationFacts::default()))
+            .collect();
+
+        let collections = self
+            .services
+            .catalog
+            .shows
+            .list_collections_for_titles(&crossing)
+            .await?;
+        for (title_id, rows) in collections {
+            if let Some(entry) = facts.get_mut(&title_id) {
+                entry.collections = rows.len() as i64;
+            }
+        }
+
+        for link in self
+            .services
+            .catalog
+            .shows
+            .list_series_movie_links_for_titles(&crossing)
+            .await?
+        {
+            if let Some(entry) = facts.get_mut(&link.series_title_id) {
+                entry.series_movie_links += 1;
+            }
+        }
+
+        for title in titles
+            .iter()
+            .filter(|title| converts_facet(&title.facet, &destination_library.facet))
+        {
+            if let Some(entry) = facts.get_mut(&title.id) {
+                entry.episodes = self
+                    .services
+                    .catalog
+                    .shows
+                    .list_episodes_for_title(&title.id)
+                    .await?
+                    .len() as i64;
+            }
+        }
+
+        Ok(facts)
     }
 
     /// The destination library's active folder-naming policy (FR-013).
@@ -1832,12 +1933,20 @@ impl RootMoveCatalog for AppUseCaseRootMoveCatalog {
         title_id: &str,
         library_id: &str,
         root_folder_id: &str,
+        converted_facet: Option<&MediaFacet>,
+        drop_tag_prefixes: &[String],
     ) -> AppResult<()> {
         self.app
             .services
             .catalog
             .titles
-            .transfer_to_library(title_id, library_id, root_folder_id)
+            .transfer_to_library(
+                title_id,
+                library_id,
+                root_folder_id,
+                converted_facet.cloned(),
+                drop_tag_prefixes,
+            )
             .await
     }
 }

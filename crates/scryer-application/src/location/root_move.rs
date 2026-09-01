@@ -44,6 +44,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use scryer_domain::MediaFacet;
+
 use crate::location::classify::{
     ClassificationCounts, DestinationLibraryFacts, DestinationRequest, SelectionClassification,
     TitleClassificationFacts, TitleLocationClass, classify_selection,
@@ -57,6 +59,10 @@ use crate::location::executor::{
 };
 use crate::location::hardlinks::{HardlinkFact, hardlink_warnings};
 use crate::location::identity::DestinationIdentityOutcome;
+use crate::location::transfer_effects::{
+    FacetConversion, SettingDisposition, TitleAssociationFacts, collection_statement,
+    series_movie_link_statement,
+};
 use crate::location::model::{
     LocationExecutionMode, LocationOperationType, TitleCheckpointPlacement, VerificationDepth,
 };
@@ -91,6 +97,23 @@ pub mod plan_reasons {
     /// identity. It is never merged into (FR-055); the preview says it exists so
     /// two same-named titles in one library are not a surprise.
     pub const SAME_NAMED_DESTINATION_TITLE: &str = "same_named_destination_title";
+    /// The destination library's facet differs across the series↔anime
+    /// boundary, so the transfer converts the title's facet and recalculates the
+    /// folder name — files keep theirs (FR-057, FR-058).
+    pub const FACET_CONVERSION: &str = "facet_conversion";
+    /// One title-level setting the facet conversion stops anything from reading
+    /// (FR-057).
+    pub const FACET_SETTING_INVALID: &str = "facet_setting_becomes_invalid";
+    /// One title-level setting the facet conversion removes (FR-057).
+    pub const FACET_SETTING_RESET: &str = "facet_setting_resets";
+    /// One title-level setting the facet conversion leaves in place with a
+    /// different consequence (FR-057).
+    pub const FACET_SETTING_MEANING_CHANGE: &str = "facet_setting_changes_meaning";
+    /// The title's series-movie links and their disposition (FR-060).
+    pub const SERIES_MOVIE_LINKS: &str = "series_movie_links";
+    /// What a transfer does to the title's collections, when it does anything
+    /// worth stating (FR-062).
+    pub const COLLECTION_PRESERVATION: &str = "collection_preservation";
 }
 
 /// One file of planned work, in the serialized form a resumed run reads back.
@@ -153,6 +176,21 @@ pub struct RootMoveTitleExecution {
     pub prune_directories: Vec<String>,
     /// Warnings the preview showed and the completion summary repeats.
     pub warnings: Vec<String>,
+    /// The facet the title carries *after* this transfer, when the destination
+    /// library's facet differs across the series↔anime boundary (FR-057).
+    /// `None` leaves the facet alone, which is every same-facet move.
+    ///
+    /// Carried on the instruction set rather than re-derived at execution time:
+    /// the flip is what the user confirmed, and a resumed run must perform the
+    /// conversion the preview described even if the destination library were
+    /// edited in between. Defaulted so a plan serialized before FR-057 landed
+    /// still reads back.
+    #[serde(default)]
+    pub converted_facet: Option<MediaFacet>,
+    /// Reserved tag prefixes the facet conversion strips at the same write
+    /// (`REMATCH_DERIVED_TAG_PREFIXES` precedent, FR-057).
+    #[serde(default)]
+    pub dropped_tag_prefixes: Vec<String>,
 }
 
 impl RootMoveTitleExecution {
@@ -309,6 +347,12 @@ pub struct RootMoveTitleDraft {
     /// it. `None` for a same-library root move, where there is no destination
     /// library to detect against.
     pub destination_identity: Option<DestinationIdentityOutcome>,
+    /// The series↔anime conversion this destination performs, with the settings
+    /// it affects (FR-057). `None` for every same-facet move.
+    pub facet_conversion: Option<FacetConversion>,
+    /// Link, collection, and episode counts behind the FR-060–FR-062
+    /// statements.
+    pub associations: TitleAssociationFacts,
 }
 
 impl RootMoveTitleDraft {
@@ -530,6 +574,11 @@ fn plan_title(
                 renamed_destinations: Vec::new(),
                 prune_directories: Vec::new(),
                 warnings: transfer_warnings,
+                // FR-076 does not exempt a fileless title from FR-057: it has no
+                // bytes to move, and its facet still has to match the library
+                // it lands in.
+                converted_facet: converted_facet(draft),
+                dropped_tag_prefixes: dropped_tag_prefixes(draft),
             };
             return (Some(execution), items, warnings);
         }
@@ -737,6 +786,8 @@ fn plan_title(
         renamed_destinations,
         prune_directories: prune_directories_for(draft),
         warnings: warnings.clone(),
+        converted_facet: converted_facet(draft),
+        dropped_tag_prefixes: dropped_tag_prefixes(draft),
     };
 
     (Some(execution), items, warnings)
@@ -786,6 +837,84 @@ fn transfer_items(draft: &RootMoveTitleDraft) -> Vec<PlanItem> {
         );
     }
 
+    items.extend(facet_conversion_items(draft));
+    items.extend(association_items(draft));
+
+    items
+}
+
+/// FR-057/FR-058: the conversion itself, then one line per affected setting.
+///
+/// The per-setting lines are deliberately individual items rather than one
+/// sentence with a list in it. FR-057 asks the preview to "show every setting
+/// that becomes invalid, resets, or changes meaning" — a count of four with a
+/// comma-joined string cannot be grouped, translated, or counted by Activity,
+/// and the reason code is what tells the UI which of the three happened.
+fn facet_conversion_items(draft: &RootMoveTitleDraft) -> Vec<PlanItem> {
+    let Some(conversion) = draft.facet_conversion.as_ref() else {
+        return Vec::new();
+    };
+
+    let mut items = vec![
+        PlanItem::new(PlanItemKind::CatalogChange)
+            .with_title(draft.title_id.clone())
+            .with_reason_code(plan_reasons::FACET_CONVERSION)
+            .with_detail(conversion.headline(&draft.title_name)),
+    ];
+
+    for setting in &conversion.settings {
+        let reason_code = match setting.disposition {
+            SettingDisposition::BecomesInvalid => plan_reasons::FACET_SETTING_INVALID,
+            SettingDisposition::Resets => plan_reasons::FACET_SETTING_RESET,
+            SettingDisposition::ChangesMeaning => plan_reasons::FACET_SETTING_MEANING_CHANGE,
+        };
+        items.push(
+            PlanItem::new(PlanItemKind::CatalogChange)
+                .with_title(draft.title_id.clone())
+                .with_reason_code(reason_code)
+                .with_detail(setting.detail.clone()),
+        );
+    }
+
+    items
+}
+
+/// FR-060 and FR-062: the dispositions for what the title is linked to and what
+/// it contains.
+///
+/// Both are statements of preservation, and both are emitted only when the
+/// title actually has the association in question — a transfer of a title with
+/// no links and no seasons says nothing about links or seasons (C3: nothing
+/// silent, but also no noise).
+fn association_items(draft: &RootMoveTitleDraft) -> Vec<PlanItem> {
+    let mut items = Vec::new();
+
+    if let Some(statement) = series_movie_link_statement(
+        &draft.title_name,
+        draft.associations,
+        &draft.destination_library_id,
+    ) {
+        items.push(
+            PlanItem::new(PlanItemKind::CatalogChange)
+                .with_title(draft.title_id.clone())
+                .with_reason_code(plan_reasons::SERIES_MOVIE_LINKS)
+                .with_detail(statement),
+        );
+    }
+
+    if let Some(statement) = collection_statement(
+        &draft.title_name,
+        draft.associations,
+        draft.facet_conversion.as_ref(),
+    ) {
+        items.push(
+            PlanItem::new(PlanItemKind::CatalogChange)
+                .with_title(draft.title_id.clone())
+                .with_reason_code(plan_reasons::COLLECTION_PRESERVATION)
+                .with_detail(statement),
+        );
+    }
+
     items
 }
 
@@ -796,6 +925,23 @@ fn transfer_warnings(draft: &RootMoveTitleDraft) -> Vec<String> {
         return Vec::new();
     }
     same_named_destination_warning(draft).into_iter().collect()
+}
+
+/// The facet the catalog flip writes, or `None` to leave it alone.
+fn converted_facet(draft: &RootMoveTitleDraft) -> Option<MediaFacet> {
+    draft
+        .facet_conversion
+        .as_ref()
+        .map(|conversion| conversion.to.clone())
+}
+
+/// The reserved tag prefixes the same write strips.
+fn dropped_tag_prefixes(draft: &RootMoveTitleDraft) -> Vec<String> {
+    draft
+        .facet_conversion
+        .as_ref()
+        .map(|conversion| conversion.dropped_tag_prefixes.clone())
+        .unwrap_or_default()
 }
 
 /// FR-055's same-name-without-identity statement, phrased once.
@@ -953,6 +1099,8 @@ mod tests {
             recycle: RecycleAvailability::Available,
             blocked_reason: None,
             destination_identity: None,
+            facet_conversion: None,
+            associations: TitleAssociationFacts::default(),
         }
     }
 
@@ -1302,6 +1450,180 @@ mod tests {
         assert_eq!(source_paths(&restored).len(), 1);
     }
 
+    // ── FR-057 / FR-058 / FR-060 / FR-062 ───────────────────────────────────
+
+    /// A transfer draft crossing into another library, with whatever facet
+    /// conversion and associations the case under test needs.
+    fn transfer_draft(
+        conversion: Option<FacetConversion>,
+        associations: TitleAssociationFacts,
+    ) -> RootMoveTitleDraft {
+        let mut draft = draft(TitleLocationClass::CrossLibraryTransfer);
+        draft.title_name = "Some Show".to_string();
+        draft.destination_library_id = "lib-2".to_string();
+        draft.facet_conversion = conversion;
+        draft.associations = associations;
+        draft
+    }
+
+    fn details_for<'a>(planned: &'a PlannedRootMove, reason_code: &str) -> Vec<&'a str> {
+        planned
+            .plan
+            .section(PlanItemKind::CatalogChange)
+            .map(|section| {
+                section
+                    .items
+                    .items
+                    .iter()
+                    .filter(|item| item.reason_code.as_deref() == Some(reason_code))
+                    .filter_map(|item| item.detail.as_deref())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// FR-057: the conversion is stated once, and every affected setting gets
+    /// its own item carrying the reason code for what happened to it.
+    #[test]
+    fn a_facet_conversion_states_itself_and_every_setting_it_affects() {
+        let conversion = crate::location::transfer_effects::plan_facet_conversion(
+            &MediaFacet::Anime,
+            &MediaFacet::Series,
+            &[
+                "scryer:filler-policy:skip_filler".to_string(),
+                "scryer:recap-policy:skip_recap".to_string(),
+                "scryer:mal-score:8.4".to_string(),
+                "scryer:season-folder:enabled".to_string(),
+            ],
+            TitleAssociationFacts::default(),
+        )
+        .expect("anime → series converts");
+
+        let planned = build_root_move_plan(&request(vec![transfer_draft(
+            Some(conversion),
+            TitleAssociationFacts::default(),
+        )]));
+
+        let headline = details_for(&planned, plan_reasons::FACET_CONVERSION);
+        assert_eq!(headline.len(), 1, "the conversion is stated exactly once");
+        assert!(
+            headline[0]
+                .contains(crate::location::transfer_effects::FILES_KEEP_THEIR_NAMES),
+            "FR-058's statement rides the conversion item: {}",
+            headline[0]
+        );
+
+        let invalid = details_for(&planned, plan_reasons::FACET_SETTING_INVALID);
+        assert_eq!(
+            invalid.len(),
+            2,
+            "filler and recap handling each get their own line: {invalid:?}"
+        );
+        assert!(invalid.iter().any(|detail| detail.contains("filler")));
+        assert!(invalid.iter().any(|detail| detail.contains("recap")));
+
+        let reset = details_for(&planned, plan_reasons::FACET_SETTING_RESET);
+        assert_eq!(reset.len(), 1, "the derived MAL score resets: {reset:?}");
+
+        let execution = planned.execution.title("title-1").expect("title planned");
+        assert_eq!(
+            execution.converted_facet,
+            Some(MediaFacet::Series),
+            "the instruction set carries the post-conversion facet to the flip"
+        );
+        assert!(
+            execution
+                .dropped_tag_prefixes
+                .contains(&"scryer:mal-score:".to_string())
+        );
+    }
+
+    /// A same-facet transfer says nothing about facets: SC-004's "the preview
+    /// never invents a change" applies to prose as much as to file work.
+    #[test]
+    fn a_same_facet_transfer_states_no_conversion() {
+        let planned = build_root_move_plan(&request(vec![transfer_draft(
+            None,
+            TitleAssociationFacts::default(),
+        )]));
+
+        assert!(details_for(&planned, plan_reasons::FACET_CONVERSION).is_empty());
+        assert!(details_for(&planned, plan_reasons::COLLECTION_PRESERVATION).is_empty());
+        let execution = planned.execution.title("title-1").expect("title planned");
+        assert_eq!(execution.converted_facet, None);
+        assert!(execution.dropped_tag_prefixes.is_empty());
+    }
+
+    /// FR-060: a title with series-movie links gets an explicit disposition, and
+    /// a title with none is not told about links it does not have.
+    #[test]
+    fn series_movie_links_get_a_stated_disposition() {
+        let planned = build_root_move_plan(&request(vec![transfer_draft(
+            None,
+            TitleAssociationFacts::new(2, 0, 0),
+        )]));
+
+        let stated = details_for(&planned, plan_reasons::SERIES_MOVIE_LINKS);
+        assert_eq!(stated.len(), 1);
+        assert!(stated[0].contains("2 series-movie links"));
+        assert!(
+            stated[0].contains("lib-2"),
+            "the disposition names where they go: {}",
+            stated[0]
+        );
+
+        let without = build_root_move_plan(&request(vec![transfer_draft(
+            None,
+            TitleAssociationFacts::default(),
+        )]));
+        assert!(details_for(&without, plan_reasons::SERIES_MOVIE_LINKS).is_empty());
+    }
+
+    /// FR-062: the collection note appears when the facet converts and the title
+    /// has seasons, and nowhere else.
+    #[test]
+    fn collections_are_noted_when_a_conversion_changes_how_they_are_treated() {
+        let conversion = crate::location::transfer_effects::plan_facet_conversion(
+            &MediaFacet::Series,
+            &MediaFacet::Anime,
+            &[],
+            TitleAssociationFacts::new(0, 3, 40),
+        )
+        .expect("series → anime converts");
+
+        let planned = build_root_move_plan(&request(vec![transfer_draft(
+            Some(conversion),
+            TitleAssociationFacts::new(0, 3, 40),
+        )]));
+
+        let noted = details_for(&planned, plan_reasons::COLLECTION_PRESERVATION);
+        assert_eq!(noted.len(), 1);
+        assert!(noted[0].contains("3 of its seasons"));
+        assert!(noted[0].contains("40 of its episodes"));
+    }
+
+    /// A fileless title still converts: FR-076 removes the filesystem work, not
+    /// the catalog invariant that a title's facet matches its library's.
+    #[test]
+    fn a_catalog_only_transfer_still_carries_the_conversion() {
+        let conversion = crate::location::transfer_effects::plan_facet_conversion(
+            &MediaFacet::Series,
+            &MediaFacet::Anime,
+            &[],
+            TitleAssociationFacts::default(),
+        )
+        .expect("converts");
+        let mut draft = transfer_draft(Some(conversion), TitleAssociationFacts::default());
+        draft.class = TitleLocationClass::CatalogOnly;
+        draft.files = Vec::new();
+
+        let planned = build_root_move_plan(&request(vec![draft]));
+
+        let execution = planned.execution.title("title-1").expect("title planned");
+        assert_eq!(execution.converted_facet, Some(MediaFacet::Anime));
+        assert_eq!(details_for(&planned, plan_reasons::FACET_CONVERSION).len(), 1);
+    }
+
     /// A root move is not root-wide, so it takes the simple confirmation
     /// (FR-029 applies to root changes and consolidations only).
     #[test]
@@ -1332,6 +1654,8 @@ mod tests {
                 reason_code: None,
                 reason: None,
                 destination_identity: None,
+                facet_conversion: None,
+                associations: TitleAssociationFacts::default(),
             }],
             counts: ClassificationCounts {
                 root_move: 1,

@@ -19,6 +19,9 @@ use serde::{Deserialize, Serialize};
 use scryer_domain::MediaFacet;
 
 use crate::location::identity::DestinationIdentityOutcome;
+use crate::location::transfer_effects::{
+    FacetConversion, TitleAssociationFacts, plan_facet_conversion,
+};
 
 /// The single class a selected title falls into for a requested destination.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -249,6 +252,15 @@ pub struct TitleClassificationFacts {
     /// default so plans persisted before FR-055 landed still deserialize.
     #[serde(default)]
     pub destination_identity: Option<DestinationIdentityOutcome>,
+    /// The title's tags, reserved `scryer:*` namespace included. Read only to
+    /// enumerate what a series↔anime facet conversion invalidates, resets, or
+    /// gives a new meaning (FR-057).
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// Series-movie links, collections, and episodes this title owns, for the
+    /// FR-060–FR-062 dispositions the preview states.
+    #[serde(default)]
+    pub associations: TitleAssociationFacts,
 }
 
 impl TitleClassificationFacts {
@@ -276,6 +288,8 @@ impl TitleClassificationFacts {
             owned_by_operation: None,
             unresolved: None,
             destination_identity: None,
+            tags: Vec::new(),
+            associations: TitleAssociationFacts::default(),
         }
     }
 
@@ -327,6 +341,20 @@ impl TitleClassificationFacts {
     /// the preview and the merge engine read the same merge target.
     pub fn with_destination_identity(mut self, outcome: DestinationIdentityOutcome) -> Self {
         self.destination_identity = Some(outcome);
+        self
+    }
+
+    /// The title's tags, so a facet conversion can name the settings it affects
+    /// (FR-057).
+    pub fn with_tags(mut self, tags: Vec<String>) -> Self {
+        self.tags = tags;
+        self
+    }
+
+    /// The link, collection, and episode counts behind the FR-060–FR-062
+    /// dispositions.
+    pub fn with_associations(mut self, associations: TitleAssociationFacts) -> Self {
+        self.associations = associations;
         self
     }
 
@@ -383,6 +411,19 @@ pub struct TitleClassification {
     /// back as "detection was not run".
     #[serde(default)]
     pub destination_identity: Option<DestinationIdentityOutcome>,
+    /// The series↔anime conversion this destination performs, with every
+    /// setting it invalidates, resets, or gives a new meaning (FR-057).
+    /// `None` when the destination library's facet is the title's own.
+    ///
+    /// Carried on the classification rather than derived twice, so the preview
+    /// items, the execution plan's catalog write, and the GraphQL payload are
+    /// the same list by construction.
+    #[serde(default)]
+    pub facet_conversion: Option<FacetConversion>,
+    /// The link/collection/episode counts the FR-060–FR-062 statements are
+    /// drawn from, carried so a caller does not have to read them again.
+    #[serde(default)]
+    pub associations: TitleAssociationFacts,
 }
 
 impl TitleClassification {
@@ -404,6 +445,11 @@ impl TitleClassification {
         self.destination_identity
             .as_ref()
             .and_then(|outcome| outcome.same_name_title_id.as_deref())
+    }
+
+    /// Whether this destination converts the title's facet (FR-057).
+    pub fn converts_facet(&self) -> bool {
+        self.facet_conversion.is_some()
     }
 
     pub fn to_classified_title(&self) -> ClassifiedTitle {
@@ -496,6 +542,23 @@ pub fn classify_title(
         .unwrap_or_else(|| facts.library_id.clone());
     let crosses_libraries = destination_library_id != facts.library_id;
 
+    // FR-057: the conversion is a property of the pair of facets, so it is
+    // settled here — before any class branch — and rides every class the title
+    // can land in. `plan_facet_conversion` returns `None` for a same facet and
+    // for anything touching movie, so an incompatible pairing can never carry
+    // one.
+    let facet_conversion = crosses_libraries
+        .then(|| destination_library)
+        .flatten()
+        .and_then(|library| {
+            plan_facet_conversion(
+                &facts.facet,
+                &library.facet,
+                &facts.tags,
+                facts.associations,
+            )
+        });
+
     let classified = |class: TitleLocationClass,
                       root_id: String,
                       reason_code: Option<&str>,
@@ -510,6 +573,8 @@ pub fn classify_title(
         reason_code: reason_code.map(str::to_string),
         reason,
         destination_identity: facts.destination_identity.clone(),
+        facet_conversion: facet_conversion.clone(),
+        associations: facts.associations,
     };
 
     // 1. Incompatible: FR-017's explanation names the source library and facet.
@@ -1102,6 +1167,95 @@ mod tests {
     /// FR-055: a unique match crosses libraries as a transfer that carries its
     /// merge target, and a same-name-only match crosses as a plain transfer that
     /// still records the same-named title.
+    #[test]
+    fn a_series_into_an_anime_library_carries_the_facet_conversion() {
+        use crate::location::transfer_effects::{SettingDisposition, TitleAssociationFacts};
+
+        let facts = TitleClassificationFacts::new("show", MediaFacet::Series, "lib-a", "root-a")
+            .with_name("Some Show")
+            .with_tracked_files(6)
+            .with_tags(vec![
+                "scryer:filler-policy:skip_filler".to_string(),
+                "scryer:season-folder:enabled".to_string(),
+            ])
+            .with_associations(TitleAssociationFacts::new(0, 2, 24));
+        let destination_library = DestinationLibraryFacts {
+            library_id: "lib-b".to_string(),
+            library_name: "Anime".to_string(),
+            facet: MediaFacet::Anime,
+            root_ids: vec!["root-b".to_string()],
+        };
+
+        let classification = classify_title(
+            &facts,
+            &DestinationRequest::to_library_root("lib-b", "root-b"),
+            Some(&destination_library),
+        );
+
+        assert_eq!(classification.class, TitleLocationClass::CrossLibraryTransfer);
+        assert!(classification.converts_facet());
+        let conversion = classification
+            .facet_conversion
+            .as_ref()
+            .expect("the conversion rides the classification");
+        assert_eq!(conversion.from, MediaFacet::Series);
+        assert_eq!(conversion.to, MediaFacet::Anime);
+        assert_eq!(
+            conversion
+                .settings
+                .iter()
+                .find(|setting| setting.setting == "filler_policy")
+                .map(|setting| setting.disposition),
+            Some(SettingDisposition::ChangesMeaning)
+        );
+        assert_eq!(classification.associations.collections, 2);
+    }
+
+    #[test]
+    fn a_same_facet_destination_carries_no_conversion() {
+        let facts = TitleClassificationFacts::new("show", MediaFacet::Series, "lib-a", "root-a")
+            .with_tracked_files(6)
+            .with_tags(vec!["scryer:filler-policy:skip_filler".to_string()]);
+        let destination_library = DestinationLibraryFacts {
+            library_id: "lib-b".to_string(),
+            library_name: "Series B".to_string(),
+            facet: MediaFacet::Series,
+            root_ids: vec!["root-b".to_string()],
+        };
+
+        let classification = classify_title(
+            &facts,
+            &DestinationRequest::to_library_root("lib-b", "root-b"),
+            Some(&destination_library),
+        );
+
+        assert_eq!(classification.class, TitleLocationClass::CrossLibraryTransfer);
+        assert!(!classification.converts_facet());
+    }
+
+    /// FR-017 stands: a refused pairing is refused, and it never carries a
+    /// conversion the executor could act on.
+    #[test]
+    fn an_incompatible_pairing_carries_no_conversion() {
+        let facts = TitleClassificationFacts::new("film", MediaFacet::Movie, "lib-a", "root-a")
+            .with_tracked_files(1);
+        let destination_library = DestinationLibraryFacts {
+            library_id: "lib-b".to_string(),
+            library_name: "Series".to_string(),
+            facet: MediaFacet::Series,
+            root_ids: vec!["root-b".to_string()],
+        };
+
+        let classification = classify_title(
+            &facts,
+            &DestinationRequest::to_library_root("lib-b", "root-b"),
+            Some(&destination_library),
+        );
+
+        assert_eq!(classification.class, TitleLocationClass::Incompatible);
+        assert!(classification.facet_conversion.is_none());
+    }
+
     #[test]
     fn identity_outcomes_ride_along_on_cross_library_transfers() {
         use crate::location::identity::{

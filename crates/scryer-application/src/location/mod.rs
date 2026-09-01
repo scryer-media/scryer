@@ -22,6 +22,7 @@
 //! | [`collisions`] | Destination-wins naming, disambiguation, sidecar grouping, BLAKE3 dedup (FR-072–075). |
 //! | [`hardlinks`] | Link-count detection and the seeding/disk warnings previews surface (FR-085). |
 //! | [`identity`] | Destination-title detection by stable metadata identity and redirects (FR-055). |
+//! | [`transfer_effects`] | Series↔anime facet conversion and the link/kind/collection dispositions a transfer states (FR-057–058, FR-060–062). |
 //! | [`merge`] | Identity mapping and per-table dispositions when a destination title already exists (FR-063–067). |
 //! | [`adoption`] | "Files are already there": destination accounting against stored catalog proof (FR-050–053). |
 //! | [`ownership_guard`] | Persisted + in-process (title, root) ownership for the duration of an operation (FR-084). |
@@ -44,4 +45,5 @@ pub mod preview;
 pub mod root_move;
 #[cfg(test)]
 pub(crate) mod test_support;
+pub mod transfer_effects;
 pub mod verify;

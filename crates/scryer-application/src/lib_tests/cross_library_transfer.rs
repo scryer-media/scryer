@@ -43,11 +43,104 @@ struct TransferFixture {
     temp: tempfile::TempDir,
     source_library_id: String,
     source_root_id: String,
+    source_facet: MediaFacet,
+    source_root_path: PathBuf,
     destination_library_id: String,
     destination_root_id: String,
+    destination_facet: MediaFacet,
+    destination_root_path: PathBuf,
 }
 
 impl TransferFixture {
+    /// Two libraries with the given facets, each on its own real root. A movie
+    /// source reuses the bootstrapped default library the way US6.1 does; an
+    /// episodic source gets a library of its own, because a title's facet and
+    /// its library's facet are one invariant and the default movie library
+    /// cannot hold a series.
+    async fn with_facets(source_facet: MediaFacet, destination_facet: MediaFacet) -> Self {
+        let mut fixture = Self::new().await;
+        if source_facet == MediaFacet::Movie && destination_facet == MediaFacet::Movie {
+            return fixture;
+        }
+
+        if source_facet != MediaFacet::Movie {
+            // Its own directory: a root path belongs to exactly one library, and
+            // the bootstrapped movie library already claimed `library-a`.
+            let root = fixture
+                .temp
+                .path()
+                .join(format!("library-a-{}", source_facet.as_str()));
+            std::fs::create_dir_all(&root).expect("create the episodic source root");
+            let source_library = fixture
+                .app
+                .create_library(
+                    &fixture.user,
+                    source_facet.clone(),
+                    format!("Source {}", source_facet.as_str()),
+                    vec![LibraryRootDraft {
+                        path: root.to_string_lossy().to_string(),
+                        is_default: true,
+                    }],
+                    None,
+                )
+                .await
+                .expect("create the episodic source library");
+            fixture.source_root_path = root;
+            fixture.source_root_id = source_library.roots[0].id.clone();
+            fixture.source_library_id = source_library.id.clone();
+        }
+        fixture.source_facet = source_facet;
+
+        if destination_facet != MediaFacet::Movie {
+            let root = fixture
+                .temp
+                .path()
+                .join(format!("library-b-{}", destination_facet.as_str()));
+            std::fs::create_dir_all(&root).expect("create the episodic destination root");
+            let destination_library = fixture
+                .app
+                .create_library(
+                    &fixture.user,
+                    destination_facet.clone(),
+                    format!("Destination {}", destination_facet.as_str()),
+                    vec![LibraryRootDraft {
+                        path: root.to_string_lossy().to_string(),
+                        is_default: true,
+                    }],
+                    None,
+                )
+                .await
+                .expect("create the episodic destination library");
+            fixture.destination_root_path = root;
+            fixture.destination_root_id = destination_library.roots[0].id.clone();
+            fixture.destination_library_id = destination_library.id.clone();
+        }
+        fixture.destination_facet = destination_facet;
+
+        fixture
+    }
+
+    /// Give one facet its own title-folder template, so "the destination
+    /// library's naming policy calculated the folder" is observable as a
+    /// different folder name rather than only as an assertion about which
+    /// function was called (FR-058).
+    async fn set_folder_template(&self, facet: &MediaFacet, template: &str) {
+        self.app
+            .services
+            .config
+            .settings
+            .upsert_setting_json(
+                crate::SETTINGS_SCOPE_SYSTEM,
+                crate::FOLDER_TEMPLATE_KEY,
+                Some(facet.as_str().to_string()),
+                serde_json::to_string(template).expect("serialize template"),
+                "test",
+                None,
+            )
+            .await
+            .expect("set the folder template for the facet");
+    }
+
     async fn new() -> Self {
         let temp = tempfile::tempdir().expect("transfer tempdir");
         let source_root = temp.path().join("library-a");
@@ -94,8 +187,12 @@ impl TransferFixture {
         Self {
             source_root_id: source_library.roots[0].id.clone(),
             source_library_id,
+            source_facet: MediaFacet::Movie,
+            source_root_path: source_root,
             destination_root_id: destination_library.roots[0].id.clone(),
             destination_library_id: destination_library.id.clone(),
+            destination_facet: MediaFacet::Movie,
+            destination_root_path: destination_root,
             app,
             user,
             operations,
@@ -104,11 +201,11 @@ impl TransferFixture {
     }
 
     fn source_root(&self) -> PathBuf {
-        self.temp.path().join("library-a")
+        self.source_root_path.clone()
     }
 
     fn destination_root(&self) -> PathBuf {
-        self.temp.path().join("library-b")
+        self.destination_root_path.clone()
     }
 
     /// A monitored movie in the source library owning `folder_name` under the
@@ -191,13 +288,20 @@ impl TransferFixture {
         library_id: &str,
         root_id: &str,
     ) -> Title {
+        // The facet follows the library the title is created in: the catalog
+        // refuses a title whose facet does not match its library's.
+        let facet = if library_id == self.destination_library_id {
+            self.destination_facet.clone()
+        } else {
+            self.source_facet.clone()
+        };
         let title = self
             .app
             .add_title_with_outcome_in_library(
                 &self.user,
                 NewTitle {
                     name: name.to_string(),
-                    facet: MediaFacet::Movie,
+                    facet,
                     monitored: true,
                     year: Some(year),
                     tags,
@@ -775,5 +879,441 @@ async fn an_interrupted_transfer_resumes_and_converges_on_the_destination_librar
     assert_eq!(
         checkpoint.placement.merged_into_title_id, None,
         "a transfer without a destination match merges into nothing"
+    );
+}
+
+// ── US6.2 / FR-057 / FR-058 / FR-060 / FR-062 ────────────────────────────────
+
+/// Seed a season with two episodes on `title`, so a transfer has collection
+/// structure to preserve and a season folder to reason about.
+async fn seed_season(fixture: &TransferFixture, title: &Title, season: i32) -> Collection {
+    let collection = fixture
+        .app
+        .services
+        .catalog
+        .shows
+        .create_collection(Collection {
+            id: scryer_domain::Id::new().0,
+            title_id: title.id.clone(),
+            collection_type: CollectionType::Season,
+            collection_index: season.to_string(),
+            label: Some(format!("Season {season}")),
+            ordered_path: None,
+            narrative_order: Some(season.to_string()),
+            first_episode_number: None,
+            last_episode_number: None,
+            monitored: true,
+            created_at: Utc::now(),
+        })
+        .await
+        .expect("seed season collection");
+
+    for episode_number in 1..=2 {
+        fixture
+            .app
+            .services
+            .catalog
+            .shows
+            .create_episode(Episode {
+                id: scryer_domain::Id::new().0,
+                title_id: title.id.clone(),
+                collection_id: Some(collection.id.clone()),
+                episode_type: EpisodeType::Standard,
+                episode_number: Some(episode_number.to_string()),
+                season_number: Some(season.to_string()),
+                episode_label: None,
+                title: Some(format!("S{season}E{episode_number}")),
+                air_date: None,
+                duration_seconds: None,
+                has_multi_audio: false,
+                has_subtitle: false,
+                is_filler: false,
+                is_recap: false,
+                absolute_number: None,
+                overview: None,
+                tvdb_id: None,
+                image_url: None,
+                monitored: true,
+                created_at: Utc::now(),
+            })
+            .await
+            .expect("seed episode");
+    }
+
+    collection
+}
+
+/// Every catalog-change detail in a preview carrying `reason_code`.
+fn details_for(
+    preview: &crate::location::operations::RootMovePreview,
+    reason_code: &str,
+) -> Vec<String> {
+    items_of(preview, PlanItemKind::CatalogChange)
+        .into_iter()
+        .filter(|item| item.reason_code.as_deref() == Some(reason_code))
+        .filter_map(|item| item.detail.clone())
+        .collect()
+}
+
+/// US6.2 end to end: a series moving into an anime library converts its facet,
+/// the preview names every setting the conversion invalidates or resets and says
+/// files keep their names, the destination naming policy calculates the folder
+/// under the *post-conversion* facet, and the anime-derived tags are gone while
+/// the user's own settings survive (FR-057, FR-058).
+#[tokio::test]
+async fn a_series_into_an_anime_library_converts_its_facet_and_enumerates_the_consequences() {
+    let fixture = TransferFixture::with_facets(MediaFacet::Series, MediaFacet::Anime).await;
+    // The two facets get different templates, so the folder the title lands in
+    // proves which facet's policy was asked (FR-058).
+    fixture
+        .set_folder_template(&MediaFacet::Series, "{title} ({year})")
+        .await;
+    fixture
+        .set_folder_template(&MediaFacet::Anime, "[anime] {title} ({year})")
+        .await;
+
+    let title = fixture
+        .seed_source_title(
+            "Converted Show",
+            2015,
+            "Converted Show (2015)",
+            "Converted.Show.S01E01.mkv",
+            2048,
+            vec![
+                // A user-set anime policy that was inert on a series title.
+                "scryer:filler-policy:skip_filler".to_string(),
+                // A quality profile, which no facet gates.
+                "scryer:quality-profile:1080p".to_string(),
+                // Metadata-derived under a facet the title is leaving behind.
+                "scryer:mal-score:8.4".to_string(),
+                "favourites".to_string(),
+            ],
+            Vec::new(),
+        )
+        .await;
+    assert_eq!(title.facet, MediaFacet::Series);
+    let season = seed_season(&fixture, &title, 1).await;
+
+    let preview = fixture.preview(&[&title.id]).await;
+    assert_eq!(preview.classification.counts.cross_library_transfer, 1);
+    assert!(!preview.classification.blocks_start());
+
+    // The conversion is stated, folder-only scope included.
+    let headline = details_for(&preview, plan_reasons::FACET_CONVERSION);
+    assert_eq!(headline.len(), 1, "stated once: {headline:?}");
+    assert!(headline[0].contains("series"), "{}", headline[0]);
+    assert!(headline[0].contains("anime"), "{}", headline[0]);
+    assert!(
+        headline[0].contains("files keep their names"),
+        "FR-058's statement is required: {}",
+        headline[0]
+    );
+
+    // Every affected setting is its own named line.
+    let meaning_changes = details_for(&preview, plan_reasons::FACET_SETTING_MEANING_CHANGE);
+    assert!(
+        meaning_changes
+            .iter()
+            .any(|detail| detail.contains("filler handling")),
+        "the inert filler policy starts taking effect: {meaning_changes:?}"
+    );
+    assert!(
+        meaning_changes
+            .iter()
+            .any(|detail| detail.contains("season-folder layout")),
+        "the season-folder default is resolved per facet: {meaning_changes:?}"
+    );
+    let resets = details_for(&preview, plan_reasons::FACET_SETTING_RESET);
+    assert!(
+        resets
+            .iter()
+            .any(|detail| detail.contains("MyAnimeList score")),
+        "the derived score resets: {resets:?}"
+    );
+
+    // FR-062: the title has seasons, and the conversion changes how they are
+    // treated, so the preview says what happens to them.
+    let collections = details_for(&preview, plan_reasons::COLLECTION_PRESERVATION);
+    assert_eq!(collections.len(), 1, "{collections:?}");
+    assert!(collections[0].contains("1 of its seasons"));
+    assert!(collections[0].contains("2 of its episodes"));
+
+    // Typed, for the client (FR-057 on the GraphQL surface).
+    let classified = classified_titles(&preview);
+    let conversion = classified[0]
+        .facet_conversion
+        .as_ref()
+        .expect("the classification carries the conversion");
+    assert_eq!(conversion.from, MediaFacet::Series);
+    assert_eq!(conversion.to, MediaFacet::Anime);
+    assert!(
+        conversion
+            .settings
+            .iter()
+            .any(|setting| setting.setting == "filler_policy")
+    );
+
+    let operation = fixture.start_and_settle(&[&title.id]).await;
+    assert_eq!(operation.state, LocationOperationState::Completed);
+
+    let transferred = fixture.title(&title.id).await;
+    assert_eq!(transferred.id, title.id, "the title keeps its identity");
+    assert_eq!(transferred.library_id, fixture.destination_library_id);
+    assert_eq!(
+        transferred.facet,
+        MediaFacet::Anime,
+        "FR-057: the facet converted with the library, not after it"
+    );
+    assert!(
+        transferred
+            .tags
+            .contains(&"scryer:quality-profile:1080p".to_string()),
+        "settings no facet gates are untouched: {:?}",
+        transferred.tags
+    );
+    assert!(
+        transferred
+            .tags
+            .contains(&"scryer:filler-policy:skip_filler".to_string()),
+        "a setting that merely becomes effective is not rewritten: {:?}",
+        transferred.tags
+    );
+    assert!(
+        transferred.tags.contains(&"favourites".to_string()),
+        "user tags survive: {:?}",
+        transferred.tags
+    );
+    assert!(
+        !transferred
+            .tags
+            .iter()
+            .any(|tag| tag.starts_with("scryer:mal-score:")),
+        "metadata-derived anime values do not survive the conversion: {:?}",
+        transferred.tags
+    );
+
+    // FR-058: the folder came from the anime policy — the post-conversion facet
+    // — and the file inside it kept its name.
+    let destination_folder = fixture
+        .destination_root()
+        .join("[anime] Converted Show (2015)");
+    assert_eq!(
+        transferred.folder_path.as_deref(),
+        Some(destination_folder.to_string_lossy().as_ref()),
+        "the destination folder is calculated from the facet the title converts to"
+    );
+    assert!(
+        destination_folder
+            .join("Converted.Show.S01E01.mkv")
+            .exists(),
+        "files keep their names"
+    );
+
+    // FR-062: collection structure rode the title row untouched.
+    let episodes = fixture
+        .app
+        .services
+        .catalog
+        .shows
+        .list_episodes_for_title(&title.id)
+        .await
+        .expect("list episodes");
+    assert_eq!(episodes.len(), 2);
+    assert!(
+        episodes
+            .iter()
+            .all(|episode| episode.collection_id.as_deref() == Some(season.id.as_str())),
+        "every episode still belongs to the season it belonged to"
+    );
+    let seasons = fixture
+        .app
+        .services
+        .catalog
+        .shows
+        .list_collections_for_title(&title.id)
+        .await
+        .expect("list collections");
+    assert_eq!(seasons.len(), 1);
+    assert_eq!(seasons[0].id, season.id, "the season row is the same row");
+}
+
+/// The reverse crossing: anime → series. The same four anime-gated settings that
+/// start applying in one direction stop applying in the other, and the preview
+/// says "invalid", not "resets" — the values stay on the title so a transfer
+/// back restores the behaviour (FR-057).
+#[tokio::test]
+async fn an_anime_into_a_series_library_invalidates_the_settings_only_anime_reads() {
+    let fixture = TransferFixture::with_facets(MediaFacet::Anime, MediaFacet::Series).await;
+    let title = fixture
+        .seed_source_title(
+            "Reverse Show",
+            2018,
+            "Reverse Show (2018)",
+            "Reverse.Show.S01E01.mkv",
+            1024,
+            vec![
+                "scryer:filler-policy:skip_filler".to_string(),
+                "scryer:recap-policy:skip_recap".to_string(),
+                "scryer:monitor-specials:true".to_string(),
+                "scryer:inter-season-movies:true".to_string(),
+                "scryer:anime-status:finished".to_string(),
+            ],
+            Vec::new(),
+        )
+        .await;
+    assert_eq!(title.facet, MediaFacet::Anime);
+
+    let preview = fixture.preview(&[&title.id]).await;
+    let invalid = details_for(&preview, plan_reasons::FACET_SETTING_INVALID);
+    for label in [
+        "filler handling",
+        "recap handling",
+        "specials monitoring",
+        "inter-season movie inclusion",
+    ] {
+        assert!(
+            invalid.iter().any(|detail| detail.contains(label)),
+            "{label} is named individually: {invalid:?}"
+        );
+    }
+
+    let operation = fixture.start_and_settle(&[&title.id]).await;
+    assert_eq!(operation.state, LocationOperationState::Completed);
+
+    let transferred = fixture.title(&title.id).await;
+    assert_eq!(transferred.facet, MediaFacet::Series);
+    assert_eq!(transferred.library_id, fixture.destination_library_id);
+    assert!(
+        transferred
+            .tags
+            .contains(&"scryer:filler-policy:skip_filler".to_string()),
+        "an invalidated setting is kept, not deleted: {:?}",
+        transferred.tags
+    );
+    assert!(
+        !transferred
+            .tags
+            .iter()
+            .any(|tag| tag.starts_with("scryer:anime-status:")),
+        "the derived anime status does not survive: {:?}",
+        transferred.tags
+    );
+}
+
+/// FR-060: a series with series-movie links transfers with an explicit
+/// disposition in the preview, and the links themselves come through intact —
+/// they are keyed on the title id, which the transfer does not reissue, and the
+/// movie entity at the far end belongs to no library at all.
+#[tokio::test]
+async fn series_movie_links_travel_with_the_series_and_the_preview_says_so() {
+    let fixture = TransferFixture::with_facets(MediaFacet::Anime, MediaFacet::Series).await;
+    let title = fixture
+        .seed_source_title(
+            "Linked Show",
+            2016,
+            "Linked Show (2016)",
+            "Linked.Show.S01E01.mkv",
+            1024,
+            vec!["scryer:monitor-type:allepisodes".to_string()],
+            Vec::new(),
+        )
+        .await;
+    let link = fixture
+        .app
+        .services
+        .catalog
+        .shows
+        .upsert_series_movie_link(test_series_movie_link(
+            &title.id,
+            "Linked Show: The Movie",
+            Some(2018),
+            Some("tt7777777"),
+            None,
+        ))
+        .await
+        .expect("seed a series-movie link");
+
+    let preview = fixture.preview(&[&title.id]).await;
+    let stated = details_for(&preview, plan_reasons::SERIES_MOVIE_LINKS);
+    assert_eq!(stated.len(), 1, "one disposition, not a silent omission");
+    assert!(stated[0].contains("1 series-movie link"), "{}", stated[0]);
+    assert!(
+        stated[0].contains(&fixture.destination_library_id),
+        "the disposition names where the link ends up: {}",
+        stated[0]
+    );
+    // FR-060 is also why the monitoring mode is a meaning change here: only an
+    // anime title's monitor type decides link monitoring.
+    let meaning_changes = details_for(&preview, plan_reasons::FACET_SETTING_MEANING_CHANGE);
+    assert!(
+        meaning_changes
+            .iter()
+            .any(|detail| detail.contains("monitoring mode")),
+        "{meaning_changes:?}"
+    );
+
+    let operation = fixture.start_and_settle(&[&title.id]).await;
+    assert_eq!(operation.state, LocationOperationState::Completed);
+
+    let links = fixture
+        .app
+        .services
+        .catalog
+        .shows
+        .list_series_movie_links_for_title(&title.id)
+        .await
+        .expect("list links after the transfer");
+    assert_eq!(links.len(), 1, "the link is not orphaned");
+    assert_eq!(links[0].id, link.id, "it is the same link row");
+    assert_eq!(links[0].series_title_id, title.id);
+    assert_eq!(
+        links[0].movie.id, link.movie.id,
+        "the shared movie entity is untouched: no library owns it"
+    );
+    assert_eq!(links[0].monitored, link.monitored);
+}
+
+/// FR-017 is unchanged by FR-060–FR-062: the carve-outs those rules describe are
+/// title-level dispositions inside an episodic transfer, never a licence to move
+/// a movie into a series library.
+#[tokio::test]
+async fn a_movie_into_a_series_library_is_still_refused() {
+    let fixture = TransferFixture::with_facets(MediaFacet::Movie, MediaFacet::Series).await;
+    let title = fixture
+        .seed_source_title(
+            "Just A Movie",
+            2020,
+            "Just A Movie (2020)",
+            "Just.A.Movie.2020.mkv",
+            1024,
+            Vec::new(),
+            Vec::new(),
+        )
+        .await;
+
+    let preview = fixture.preview(&[&title.id]).await;
+    assert_eq!(preview.classification.counts.incompatible, 1);
+    assert_eq!(preview.classification.counts.cross_library_transfer, 0);
+    assert!(preview.classification.blocks_start());
+
+    let classified = classified_titles(&preview);
+    assert_eq!(classified[0].class, TitleLocationClass::Incompatible);
+    assert_eq!(
+        classified[0].reason_code.as_deref(),
+        Some(reason_codes::INCOMPATIBLE_FACET)
+    );
+    assert!(
+        classified[0].facet_conversion.is_none(),
+        "an incompatible pairing never carries a conversion"
+    );
+    assert!(
+        details_for(&preview, plan_reasons::FACET_CONVERSION).is_empty(),
+        "and never claims one in the preview"
+    );
+
+    assert_eq!(
+        fixture.title(&title.id).await.library_id,
+        fixture.source_library_id,
+        "nothing moved"
     );
 }

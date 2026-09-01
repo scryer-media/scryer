@@ -1304,8 +1304,15 @@ pub trait TitleRepository: Send + Sync {
     /// and a title that kept its old value there would keep answering identity
     /// lookups for the library it left.
     ///
-    /// The facet is deliberately untouched. Series↔anime conversion is its own
-    /// feature (FR-057), and this call must not perform half of it.
+    /// `facet` is the series↔anime conversion (FR-057), and it belongs to this
+    /// call rather than to a second one: a title's facet and its library's facet
+    /// are one invariant — `AppUseCase::title_root_folder_path` refuses a title
+    /// whose facet does not match its library — so a transfer that wrote the
+    /// library without the facet would leave a row every later path lookup
+    /// rejects. `None` leaves the facet alone, which is every same-facet move.
+    /// `drop_tag_prefixes` names the reserved `scryer:*` prefixes whose values
+    /// were derived under the old facet and must not survive the conversion; the
+    /// caller decides that policy, not the store.
     ///
     /// Defaults to an error rather than a silent no-op: a repository that cannot
     /// perform the transfer must fail the title, never report a move it did not
@@ -1315,8 +1322,10 @@ pub trait TitleRepository: Send + Sync {
         id: &str,
         library_id: &str,
         root_folder_id: &str,
+        facet: Option<MediaFacet>,
+        drop_tag_prefixes: &[String],
     ) -> AppResult<()> {
-        let _ = (library_id, root_folder_id);
+        let _ = (library_id, root_folder_id, facet, drop_tag_prefixes);
         Err(AppError::Repository(format!(
             "this title repository cannot transfer title {id} between libraries"
         )))

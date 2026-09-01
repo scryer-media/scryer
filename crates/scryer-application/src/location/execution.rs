@@ -32,6 +32,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use scryer_domain::MediaFacet;
 
 use crate::location::executor::{
     FileMoveRequest, PlannedTitle, TitleAdmission, TitleAdmissionCheck, TitleAdmissionContext,
@@ -159,11 +160,23 @@ pub trait RootMoveCatalog: Send + Sync {
     /// `title_external_ids.library_id` above all, since that column is what
     /// destination-title detection reads (FR-055). A title transferred without
     /// it would keep answering identity lookups from the library it left.
+    ///
+    /// `converted_facet` is the third half of the same indivisible write
+    /// (FR-057). A title's facet and its library's facet are one invariant, not
+    /// two values that may briefly disagree: `title_root_folder_path` refuses a
+    /// title whose facet does not match its library
+    /// (`crate::catalog::workflow::roots`), so a series that reached an anime
+    /// library without its facet would fail every subsequent path lookup. It
+    /// belongs to this call for exactly the reason the root does.
+    /// `drop_tag_prefixes` are the reserved prefixes whose values were derived
+    /// under the old facet and must not survive it.
     async fn set_title_library_and_root(
         &self,
         title_id: &str,
         library_id: &str,
         root_folder_id: &str,
+        converted_facet: Option<&MediaFacet>,
+        drop_tag_prefixes: &[String],
     ) -> AppResult<()>;
 
     /// Persist the hashes the copy pass produced onto the moved media file
@@ -501,15 +514,18 @@ impl TitleReconciler for RootMoveReconciler<'_> {
                 .await?;
         }
 
-        // FR-056: the transfer's catalog flip is library + root together, after
-        // the completeness gate the runner already applied. A same-library root
-        // move keeps its narrower write, so nothing about US2 changes.
+        // FR-056/FR-057: the transfer's catalog flip is library + root + facet
+        // together, after the completeness gate the runner already applied. A
+        // same-library root move keeps its narrower write, so nothing about US2
+        // changes.
         if planned.crosses_libraries() {
             self.catalog
                 .set_title_library_and_root(
                     &title.title_id,
                     &planned.destination_library_id,
                     &planned.destination_root_id,
+                    planned.converted_facet.as_ref(),
+                    &planned.dropped_tag_prefixes,
                 )
                 .await?;
         } else {

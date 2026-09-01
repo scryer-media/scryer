@@ -596,11 +596,17 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // and one new enum for the match outcome (unique, none, ambiguous,
     // same-name-without-identity), so ENUM 123->124 and public types 655->656.
     // No new object, input, query, or mutation.
+    // Series↔anime facet conversion (T083, FR-057/FR-058) adds one field on the
+    // same classified-title payload plus the conversion payload, its per-setting
+    // payload, and the setting-disposition enum (becomes invalid, resets,
+    // changes meaning): OBJECT 341->343, ENUM 124->125, public types 656->659.
+    // The FR-060/FR-062 link and collection dispositions ride the existing plan
+    // items behind new reason codes, so they add no type.
     assert_eq!(subscription_field_count, 14);
-    assert_eq!(public_types.len(), 656);
-    assert_eq!(kind_count("OBJECT"), 341);
+    assert_eq!(public_types.len(), 659);
+    assert_eq!(kind_count("OBJECT"), 343);
     assert_eq!(kind_count("INPUT_OBJECT"), 179);
-    assert_eq!(kind_count("ENUM"), 124);
+    assert_eq!(kind_count("ENUM"), 125);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
     assert!(query_field_names.contains(&"backupSettings"));
