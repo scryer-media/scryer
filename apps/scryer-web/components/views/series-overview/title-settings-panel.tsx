@@ -2,6 +2,7 @@ import * as React from "react";
 import { useClient } from "urql";
 import { Eye, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { ChangeTitleFolderCard } from "@/components/common/change-title-folder-card";
 import { FixTitleMatchSettingsCard } from "@/components/common/fix-title-match-settings-card";
 import { MediaRenamePlanPanel } from "@/components/common/media-rename-plan-panel";
 import { TitleOptionsSettingsGrid } from "@/components/common/title-options-settings-grid";
@@ -139,6 +140,20 @@ export function TitleSettingsPanel({
           onOpen={onOpenFixMatch}
         />
       ) : null}
+
+      <ChangeTitleFolderCard
+        title={{
+          id: title.id,
+          name: title.name,
+          libraryId: title.libraryId,
+          libraryName: title.libraryName ?? null,
+          rootFolderId: title.rootFolderId ?? null,
+          rootFolderPath: title.rootFolderPath ?? null,
+        }}
+        roots={rootFolders}
+        idPrefix="series-overview-settings"
+        onTitleChanged={onTitleChanged}
+      />
 
       {renameEnabled ? (
         <div className={`${onOpenFixMatch ? "mt-3" : "mt-5"} rounded-lg border border-border/70 bg-muted/20 px-3 py-3`}>

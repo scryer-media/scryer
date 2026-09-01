@@ -766,6 +766,71 @@ const ko: LocaleDictionary = {
   "title.fixMatchApply": "일치 적용",
   "title.fixMatchSearchFailed": "메타데이터를 검색하지 못했습니다.",
   "title.fixMatchApplyFailed": "제목 일치를 수정하지 못했습니다.",
+  "title.changeFolderHeading": "폴더 변경",
+  "title.changeFolderDescription":
+    "이 제목이 소유한 기존 폴더를 수정합니다. 파일은 이동되지 않습니다.",
+  "title.changeFolderAction": "폴더 변경",
+  "title.changeFolderDialogTitle": "폴더 변경",
+  "title.changeFolderDialogDescription":
+    "{{name}}에 해당하는 폴더를 선택하세요. Scryer가 소유권을 다시 지정하고 폴더를 다시 검사합니다. 파일은 이동되지 않습니다.",
+  "title.changeFolderLibrary": "라이브러리",
+  "title.changeFolderCurrentFolder": "현재 폴더",
+  "title.changeFolderCurrentFolderUnknown": "폴더를 선택하면 표시됩니다",
+  "title.changeFolderCurrentRoot": "현재 루트",
+  "title.changeFolderCurrentRootUnknown": "알 수 없음",
+  "title.changeFolderRootLabel": "루트",
+  "title.changeFolderRootScopeHelp":
+    "이 제목이 속한 라이브러리의 루트 안에 있는 폴더만 선택할 수 있습니다.",
+  "title.changeFolderNoRoots":
+    "이 제목의 라이브러리에는 탐색할 루트가 없습니다.",
+  "title.changeFolderBrowseLoading": "폴더를 불러오는 중…",
+  "title.changeFolderBrowseEmpty": "여기에는 하위 폴더가 없습니다.",
+  "title.changeFolderBrowseFailed": "폴더 목록을 가져오지 못했습니다.",
+  "title.changeFolderUp": "한 단계 위로",
+  "title.changeFolderOpen": "열기",
+  "title.changeFolderSelectPrompt": "변경 내용을 미리 보려면 폴더를 선택하세요.",
+  "title.changeFolderPreviewLoading": "선택한 폴더를 확인하는 중…",
+  "title.changeFolderPreviewFailed": "폴더 변경 미리보기에 실패했습니다.",
+  "title.changeFolderSelectedFolder": "선택한 폴더",
+  "title.changeFolderOwnershipUnowned": "이 폴더를 소유한 제목이 없습니다.",
+  "title.changeFolderOwnershipThisTitle":
+    "이 제목이 이미 이 폴더를 소유하고 있습니다.",
+  "title.changeFolderOwnershipAnother": "{{name}}이(가) 이 폴더를 소유합니다.",
+  "title.changeFolderNoOpHelp":
+    "아무것도 제출되지 않습니다. 다른 폴더를 선택하거나 이 창을 닫으세요.",
+  "title.changeFolderTrackedMediaCurrent": "현재 폴더의 추적 미디어: {{count}}",
+  "title.changeFolderTrackedMediaSelected":
+    "선택한 폴더의 추적 미디어: {{count}}",
+  "title.changeFolderNoFilesMoved":
+    "파일은 이동되지 않습니다. 폴더 일치와 그로부터 파생된 미디어 연결만 변경됩니다.",
+  "title.changeFolderConflictHeading": "이 폴더는 이미 다른 제목에 속해 있습니다",
+  "title.changeFolderChooseResolution":
+    "계속하려면 '폴더 교환' 또는 '폴더 가져오기'를 선택하세요.",
+  "title.changeFolderSwapAction": "폴더 교환",
+  "title.changeFolderSwapExplanation":
+    "{{owner}}이(가) 이 제목의 현재 폴더를 가져가고, 이 제목은 {{folder}}을(를) 가져갑니다. 두 제목 모두 다시 검사됩니다.",
+  "title.changeFolderTakeOverAction": "폴더 가져오기",
+  "title.changeFolderTakeOverExplanation":
+    "이 제목이 {{folder}}을(를) 가져갑니다. {{owner}}은(는) 폴더가 없어져 일치하지 않는 상태가 되며 보류 중인 가져오기에서 복구해야 합니다.",
+  "title.changeFolderConfirm": "폴더 변경",
+  "title.changeFolderApplying": "폴더를 변경하는 중…",
+  "title.changeFolderApplyFailed": "폴더 일치를 변경하지 못했습니다.",
+  "title.changeFolderOutcomeAssigned":
+    "{{name}}이(가) 이제 {{folder}}을(를) 소유합니다.",
+  "title.changeFolderOutcomeSwapped":
+    "{{name}}과(와) {{other}}이(가) 폴더를 교환했습니다.",
+  "title.changeFolderOutcomeAlreadyOwned":
+    "{{name}}이(가) 이미 해당 폴더를 소유하고 있어 변경된 사항이 없습니다.",
+  "title.changeFolderDetachedMedia":
+    "미디어 연결 {{count}}건이 해제되었습니다.",
+  "title.changeFolderScanSummary":
+    "검사: 검사 {{scanned}} • 일치 {{matched}} • 가져옴 {{imported}} • 미일치 {{unmatched}}",
+  "title.changeFolderDisplacedNote":
+    "{{name}}이(가) {{folder}}을(를) 잃고 이제 일치하지 않는 상태입니다. 보류 중인 가져오기에서 복구하세요. '사용자가 폴더 소유권을 변경함' 사유로 표시됩니다.",
+  "pendingImports.reason.folder_ownership_changed_by_user":
+    "사용자가 폴더 소유권을 변경함",
+  "pendingImports.folderOwnershipChangedHelp":
+    "이 폴더가 다른 제목에 할당되어 이 제목에는 폴더가 없습니다. 제목을 열고 폴더 변경으로 올바른 폴더를 지정하거나, 무시를 사용해 이 항목을 숨기세요.",
   "pendingImports.title": "보류 중인 수입품",
   "pendingImports.description":
     "올바른 메타데이터 일치를 선택하여 {{facet}}에 대한 일치하지 않는 디스크 항목을 해결하세요.",

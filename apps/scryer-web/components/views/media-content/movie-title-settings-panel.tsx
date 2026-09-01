@@ -1,6 +1,7 @@
 import * as React from "react";
 import { useClient } from "urql";
 
+import { ChangeTitleFolderCard } from "@/components/common/change-title-folder-card";
 import { FixTitleMatchSettingsCard } from "@/components/common/fix-title-match-settings-card";
 import { TitleOptionsSettingsGrid } from "@/components/common/title-options-settings-grid";
 import { DEFAULT_MOVIE_LIBRARY_PATH } from "@/lib/constants/settings";
@@ -31,10 +32,12 @@ export function MovieTitleSettingsPanel({
   const [defaultRootFolder, setDefaultRootFolder] = React.useState(
     DEFAULT_MOVIE_LIBRARY_PATH,
   );
-  const rootFolders = React.useMemo(
-    () => libraries.find((library) => library.id === title.libraryId)?.roots ?? [],
+  const library = React.useMemo(
+    () => libraries.find((entry) => entry.id === title.libraryId) ?? null,
     [libraries, title.libraryId],
   );
+  const rootFolders = React.useMemo(() => library?.roots ?? [], [library]);
+  const libraryName = library?.name ?? null;
 
   React.useEffect(() => {
     let cancelled = false;
@@ -87,6 +90,19 @@ export function MovieTitleSettingsPanel({
         facet={title.facet}
         idPrefix="title-overview-settings"
         onOpen={onOpenFixMatch}
+      />
+      <ChangeTitleFolderCard
+        title={{
+          id: title.id,
+          name: title.name,
+          libraryId: title.libraryId,
+          libraryName: libraryName ?? title.libraryName ?? null,
+          rootFolderId: title.rootFolderId ?? null,
+          rootFolderPath: title.rootFolderPath ?? null,
+        }}
+        roots={rootFolders}
+        idPrefix="title-overview-settings"
+        onTitleChanged={onTitleChanged}
       />
     </div>
   );

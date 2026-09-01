@@ -791,6 +791,75 @@ const pt_BR: LocaleDictionary = {
   "title.fixMatchApply": "Aplicar correspondência",
   "title.fixMatchSearchFailed": "Falha ao pesquisar metadados.",
   "title.fixMatchApplyFailed": "Falha ao corrigir a correspondência do título.",
+  "title.changeFolderHeading": "Alterar pasta",
+  "title.changeFolderDescription":
+    "Corrija qual pasta existente pertence a este título. Nenhum arquivo é movido.",
+  "title.changeFolderAction": "Alterar pasta",
+  "title.changeFolderDialogTitle": "Alterar pasta",
+  "title.changeFolderDialogDescription":
+    "Escolha a pasta que pertence a {{name}}. O Scryer reatribui a propriedade e verifica a pasta novamente; nenhum arquivo é movido.",
+  "title.changeFolderLibrary": "Biblioteca",
+  "title.changeFolderCurrentFolder": "Pasta atual",
+  "title.changeFolderCurrentFolderUnknown":
+    "Exibida assim que você selecionar uma pasta",
+  "title.changeFolderCurrentRoot": "Raiz atual",
+  "title.changeFolderCurrentRootUnknown": "Desconhecida",
+  "title.changeFolderRootLabel": "Raiz",
+  "title.changeFolderRootScopeHelp":
+    "Somente pastas dentro das raízes da biblioteca deste título podem ser selecionadas.",
+  "title.changeFolderNoRoots":
+    "A biblioteca deste título não tem raízes para navegar.",
+  "title.changeFolderBrowseLoading": "Carregando pastas…",
+  "title.changeFolderBrowseEmpty": "Nenhuma subpasta aqui.",
+  "title.changeFolderBrowseFailed": "Falha ao listar as pastas.",
+  "title.changeFolderUp": "Subir um nível",
+  "title.changeFolderOpen": "Abrir",
+  "title.changeFolderSelectPrompt":
+    "Selecione uma pasta para visualizar a alteração.",
+  "title.changeFolderPreviewLoading": "Verificando a pasta selecionada…",
+  "title.changeFolderPreviewFailed":
+    "Falha ao pré-visualizar a alteração de pasta.",
+  "title.changeFolderSelectedFolder": "Pasta selecionada",
+  "title.changeFolderOwnershipUnowned": "Nenhum título possui esta pasta.",
+  "title.changeFolderOwnershipThisTitle": "Este título já possui esta pasta.",
+  "title.changeFolderOwnershipAnother": "{{name}} possui esta pasta.",
+  "title.changeFolderNoOpHelp":
+    "Nada será enviado. Escolha outra pasta ou feche esta janela.",
+  "title.changeFolderTrackedMediaCurrent":
+    "Mídias rastreadas na pasta atual: {{count}}",
+  "title.changeFolderTrackedMediaSelected":
+    "Mídias rastreadas na pasta selecionada: {{count}}",
+  "title.changeFolderNoFilesMoved":
+    "Nenhum arquivo será movido. Apenas a correspondência de pasta e as associações de mídia derivadas dela mudam.",
+  "title.changeFolderConflictHeading":
+    "Esta pasta já pertence a outro título",
+  "title.changeFolderChooseResolution":
+    "Escolha «Trocar pastas» ou «Assumir a pasta» para continuar.",
+  "title.changeFolderSwapAction": "Trocar pastas",
+  "title.changeFolderSwapExplanation":
+    "{{owner}} fica com a pasta atual deste título e este título fica com {{folder}}. Os dois títulos são verificados novamente.",
+  "title.changeFolderTakeOverAction": "Assumir a pasta",
+  "title.changeFolderTakeOverExplanation":
+    "Este título fica com {{folder}}. {{owner}} fica sem pasta, passa a não ter correspondência e precisa de reparo em Importações pendentes.",
+  "title.changeFolderConfirm": "Alterar pasta",
+  "title.changeFolderApplying": "Alterando a pasta…",
+  "title.changeFolderApplyFailed":
+    "Falha ao alterar a correspondência de pasta.",
+  "title.changeFolderOutcomeAssigned": "{{name}} agora possui {{folder}}.",
+  "title.changeFolderOutcomeSwapped":
+    "{{name}} e {{other}} trocaram de pastas.",
+  "title.changeFolderOutcomeAlreadyOwned":
+    "{{name}} já possuía essa pasta; nada foi alterado.",
+  "title.changeFolderDetachedMedia":
+    "{{count}} associações de mídia foram desvinculadas.",
+  "title.changeFolderScanSummary":
+    "Verificação: {{scanned}} verificados • {{matched}} correspondentes • {{imported}} importados • {{unmatched}} sem correspondência",
+  "title.changeFolderDisplacedNote":
+    "{{name}} perdeu {{folder}} e agora está sem correspondência. Repare-o em Importações pendentes, onde aparece com o motivo «Propriedade da pasta alterada pelo usuário».",
+  "pendingImports.reason.folder_ownership_changed_by_user":
+    "Propriedade da pasta alterada pelo usuário",
+  "pendingImports.folderOwnershipChangedHelp":
+    "Esta pasta foi atribuída a outro título, então este título não tem mais nenhuma. Abra o título e use Alterar pasta para apontá-lo para a pasta correta, ou use Ignorar para ocultar este item.",
   "pendingImports.title": "Importações pendentes",
   "pendingImports.description":
     "Resolva itens incomparáveis ​​no disco para {{facet}} selecionando a correspondência correta de metadados.",

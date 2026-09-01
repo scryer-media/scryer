@@ -737,6 +737,64 @@ const zh_CN: LocaleDictionary = {
   "title.fixMatchApply": "应用匹配",
   "title.fixMatchSearchFailed": "无法搜索元数据。",
   "title.fixMatchApplyFailed": "无法修复标题匹配。",
+  "title.changeFolderHeading": "更改文件夹",
+  "title.changeFolderDescription":
+    "更正该标题所拥有的现有文件夹。不会移动任何文件。",
+  "title.changeFolderAction": "更改文件夹",
+  "title.changeFolderDialogTitle": "更改文件夹",
+  "title.changeFolderDialogDescription":
+    "选择属于 {{name}} 的文件夹。Scryer 会重新分配归属并重新扫描该文件夹；不会移动任何文件。",
+  "title.changeFolderLibrary": "库",
+  "title.changeFolderCurrentFolder": "当前文件夹",
+  "title.changeFolderCurrentFolderUnknown": "选择文件夹后显示",
+  "title.changeFolderCurrentRoot": "当前根目录",
+  "title.changeFolderCurrentRootUnknown": "未知",
+  "title.changeFolderRootLabel": "根目录",
+  "title.changeFolderRootScopeHelp":
+    "只能选择该标题所属库的根目录内的文件夹。",
+  "title.changeFolderNoRoots": "该标题所属的库没有可浏览的根目录。",
+  "title.changeFolderBrowseLoading": "正在加载文件夹…",
+  "title.changeFolderBrowseEmpty": "此处没有子文件夹。",
+  "title.changeFolderBrowseFailed": "无法列出文件夹。",
+  "title.changeFolderUp": "返回上一级",
+  "title.changeFolderOpen": "打开",
+  "title.changeFolderSelectPrompt": "选择一个文件夹以预览此更改。",
+  "title.changeFolderPreviewLoading": "正在检查所选文件夹…",
+  "title.changeFolderPreviewFailed": "无法预览文件夹更改。",
+  "title.changeFolderSelectedFolder": "所选文件夹",
+  "title.changeFolderOwnershipUnowned": "没有标题拥有此文件夹。",
+  "title.changeFolderOwnershipThisTitle": "该标题已拥有此文件夹。",
+  "title.changeFolderOwnershipAnother": "{{name}} 拥有此文件夹。",
+  "title.changeFolderNoOpHelp":
+    "不会提交任何内容。请选择其他文件夹或关闭此对话框。",
+  "title.changeFolderTrackedMediaCurrent": "当前文件夹中的受管媒体：{{count}}",
+  "title.changeFolderTrackedMediaSelected": "所选文件夹中的受管媒体：{{count}}",
+  "title.changeFolderNoFilesMoved":
+    "不会移动任何文件。仅更改文件夹匹配以及由此派生的媒体关联。",
+  "title.changeFolderConflictHeading": "此文件夹已属于另一个标题",
+  "title.changeFolderChooseResolution": "请选择“交换文件夹”或“接管文件夹”以继续。",
+  "title.changeFolderSwapAction": "交换文件夹",
+  "title.changeFolderSwapExplanation":
+    "{{owner}} 取得该标题的当前文件夹，该标题取得 {{folder}}。两个标题都会被重新扫描。",
+  "title.changeFolderTakeOverAction": "接管文件夹",
+  "title.changeFolderTakeOverExplanation":
+    "该标题将取得 {{folder}}。{{owner}} 将失去文件夹、变为未匹配状态，并需要在待处理的导入中修复。",
+  "title.changeFolderConfirm": "更改文件夹",
+  "title.changeFolderApplying": "正在更改文件夹…",
+  "title.changeFolderApplyFailed": "无法更改文件夹匹配。",
+  "title.changeFolderOutcomeAssigned": "{{name}} 现在拥有 {{folder}}。",
+  "title.changeFolderOutcomeSwapped": "{{name}} 与 {{other}} 已交换文件夹。",
+  "title.changeFolderOutcomeAlreadyOwned":
+    "{{name}} 已经拥有该文件夹，未做任何更改。",
+  "title.changeFolderDetachedMedia": "已解除 {{count}} 项媒体关联。",
+  "title.changeFolderScanSummary":
+    "扫描：已扫描 {{scanned}} • 已匹配 {{matched}} • 已导入 {{imported}} • 未匹配 {{unmatched}}",
+  "title.changeFolderDisplacedNote":
+    "{{name}} 失去了 {{folder}}，现在处于未匹配状态。请在待处理的导入中修复，它会以“文件夹归属已由用户更改”作为原因显示。",
+  "pendingImports.reason.folder_ownership_changed_by_user":
+    "文件夹归属已由用户更改",
+  "pendingImports.folderOwnershipChangedHelp":
+    "此文件夹已分配给另一个标题，因此该标题不再拥有文件夹。请打开该标题并使用“更改文件夹”指向正确的文件夹，或使用“忽略”隐藏此项目。",
   "pendingImports.title": "待处理的进口",
   "pendingImports.description":
     "通过选择正确的元数据匹配来解决 {{facet}} 不匹配的磁盘项目。",

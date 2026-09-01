@@ -776,6 +776,77 @@ const ja: LocaleDictionary = {
   "title.fixMatchApply": "一致を適用",
   "title.fixMatchSearchFailed": "メタデータの検索に失敗しました。",
   "title.fixMatchApplyFailed": "タイトルマッチの修正に失敗しました。",
+  "title.changeFolderHeading": "フォルダーを変更",
+  "title.changeFolderDescription":
+    "このタイトルが所有する既存のフォルダーを修正します。ファイルは移動されません。",
+  "title.changeFolderAction": "フォルダーを変更",
+  "title.changeFolderDialogTitle": "フォルダーを変更",
+  "title.changeFolderDialogDescription":
+    "{{name}} に属するフォルダーを選択してください。Scryer は所有権を割り当て直してフォルダーを再スキャンします。ファイルは移動されません。",
+  "title.changeFolderLibrary": "ライブラリ",
+  "title.changeFolderCurrentFolder": "現在のフォルダー",
+  "title.changeFolderCurrentFolderUnknown": "フォルダーを選択すると表示されます",
+  "title.changeFolderCurrentRoot": "現在のルート",
+  "title.changeFolderCurrentRootUnknown": "不明",
+  "title.changeFolderRootLabel": "ルート",
+  "title.changeFolderRootScopeHelp":
+    "選択できるのは、このタイトルのライブラリのルート内にあるフォルダーだけです。",
+  "title.changeFolderNoRoots":
+    "このタイトルのライブラリには参照できるルートがありません。",
+  "title.changeFolderBrowseLoading": "フォルダーを読み込んでいます…",
+  "title.changeFolderBrowseEmpty": "ここにサブフォルダーはありません。",
+  "title.changeFolderBrowseFailed": "フォルダーの一覧を取得できませんでした。",
+  "title.changeFolderUp": "1つ上の階層へ",
+  "title.changeFolderOpen": "開く",
+  "title.changeFolderSelectPrompt":
+    "変更をプレビューするフォルダーを選択してください。",
+  "title.changeFolderPreviewLoading": "選択したフォルダーを確認しています…",
+  "title.changeFolderPreviewFailed":
+    "フォルダー変更のプレビューに失敗しました。",
+  "title.changeFolderSelectedFolder": "選択したフォルダー",
+  "title.changeFolderOwnershipUnowned":
+    "このフォルダーを所有しているタイトルはありません。",
+  "title.changeFolderOwnershipThisTitle":
+    "このタイトルはすでにこのフォルダーを所有しています。",
+  "title.changeFolderOwnershipAnother":
+    "{{name}} がこのフォルダーを所有しています。",
+  "title.changeFolderNoOpHelp":
+    "何も送信されません。別のフォルダーを選ぶか、このダイアログを閉じてください。",
+  "title.changeFolderTrackedMediaCurrent":
+    "現在のフォルダー内の管理対象メディア: {{count}}",
+  "title.changeFolderTrackedMediaSelected":
+    "選択したフォルダー内の管理対象メディア: {{count}}",
+  "title.changeFolderNoFilesMoved":
+    "ファイルは移動されません。変更されるのはフォルダーの一致と、そこから導かれるメディアの関連付けだけです。",
+  "title.changeFolderConflictHeading":
+    "このフォルダーはすでに別のタイトルに属しています",
+  "title.changeFolderChooseResolution":
+    "続行するには「フォルダーを交換」または「フォルダーを引き継ぐ」を選択してください。",
+  "title.changeFolderSwapAction": "フォルダーを交換",
+  "title.changeFolderSwapExplanation":
+    "{{owner}} がこのタイトルの現在のフォルダーを取得し、このタイトルが {{folder}} を取得します。両方のタイトルが再スキャンされます。",
+  "title.changeFolderTakeOverAction": "フォルダーを引き継ぐ",
+  "title.changeFolderTakeOverExplanation":
+    "このタイトルが {{folder}} を取得します。{{owner}} はフォルダーを失って未一致となり、保留中のインポートでの修復が必要になります。",
+  "title.changeFolderConfirm": "フォルダーを変更",
+  "title.changeFolderApplying": "フォルダーを変更しています…",
+  "title.changeFolderApplyFailed": "フォルダーの一致を変更できませんでした。",
+  "title.changeFolderOutcomeAssigned":
+    "{{name}} は現在 {{folder}} を所有しています。",
+  "title.changeFolderOutcomeSwapped":
+    "{{name}} と {{other}} がフォルダーを交換しました。",
+  "title.changeFolderOutcomeAlreadyOwned":
+    "{{name}} はすでにそのフォルダーを所有していたため、変更はありません。",
+  "title.changeFolderDetachedMedia":
+    "{{count}} 件のメディアの関連付けが解除されました。",
+  "title.changeFolderScanSummary":
+    "スキャン: {{scanned}} 件走査 • {{matched}} 件一致 • {{imported}} 件取り込み • {{unmatched}} 件未一致",
+  "title.changeFolderDisplacedNote":
+    "{{name}} は {{folder}} を失い、現在は未一致です。保留中のインポートで修復してください。理由は「フォルダーの所有権がユーザーによって変更されました」と表示されます。",
+  "pendingImports.reason.folder_ownership_changed_by_user":
+    "フォルダーの所有権がユーザーによって変更されました",
+  "pendingImports.folderOwnershipChangedHelp":
+    "このフォルダーは別のタイトルに割り当てられたため、このタイトルにはフォルダーがありません。タイトルを開いて「フォルダーを変更」で正しいフォルダーを指定するか、「無視」でこの項目を非表示にしてください。",
   "pendingImports.title": "保留中のインポート",
   "pendingImports.description":
     "正しいメタデータの一致を選択して、{{facet}} の不一致のディスク上の項目を解決します。",

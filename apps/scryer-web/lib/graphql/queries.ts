@@ -1068,6 +1068,37 @@ export const deleteTitlePreviewQuery = `query DeleteTitlePreview($titleId: ID!) 
   }
 }`;
 
+// Folder-match correction: describes what claiming a candidate folder would do.
+// Read-only — nothing is changed and no file is ever moved.
+export const changeTitleFolderPreviewQuery = `query ChangeTitleFolderPreview($input: ChangeTitleFolderPreviewInput!) {
+  changeTitleFolderPreview(input: $input) {
+    title {
+      id
+      name
+      folderPath
+    }
+    facet
+    libraryId
+    libraryName
+    currentRootId
+    currentRootPath
+    selectedFolderPath
+    selectedRootId
+    selectedRootPath
+    ownership
+    currentOwner {
+      id
+      name
+      folderPath
+    }
+    currentFolderTrackedMediaCount
+    selectedFolderTrackedMediaCount
+    filesWillMove
+    noOp
+    availableResolutions
+  }
+}`;
+
 export const deleteTitlesPreviewQuery = `query DeleteTitlesPreview($input: DeleteTitlesPreviewInput!) {
   deleteTitlesPreview(input: $input) {
     preview {${DELETE_PREVIEW_FIELDS}

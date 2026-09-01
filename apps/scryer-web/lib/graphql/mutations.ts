@@ -1614,6 +1614,46 @@ export const fixTitleMatchMutation = `mutation FixTitleMatch($input: FixTitleMat
   }
 }`;
 
+// Folder-match correction. Ownership of a folder another title holds is never
+// taken silently: the caller must send SWAP or TAKE_OVER for that case.
+export const applyTitleFolderChangeMutation = `mutation ApplyTitleFolderChange($input: ApplyTitleFolderChangeInput!) {
+  applyTitleFolderChange(input: $input) {
+    outcome
+    title {
+      id
+      name
+      folderPath
+    }
+    previousFolderPath
+    detachedMediaFileCount
+    scan {
+      scanned
+      matched
+      imported
+      skipped
+      unmatched
+    }
+    swappedTitle {
+      id
+      name
+      folderPath
+    }
+    swappedTitleScan {
+      scanned
+      matched
+      imported
+      skipped
+      unmatched
+    }
+    displacedTitle {
+      id
+      name
+      previousFolderPath
+      repairReasonCode
+    }
+  }
+}`;
+
 export const setPrimaryMovieFileMutation = `mutation SetPrimaryMovieFile($input: SetPrimaryMovieFileInput!) {
   setPrimaryMovieFile(input: $input) {
     id

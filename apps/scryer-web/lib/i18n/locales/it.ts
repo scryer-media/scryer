@@ -786,6 +786,76 @@ const it: LocaleDictionary = {
   "title.fixMatchSearchFailed": "Impossibile cercare i metadati.",
   "title.fixMatchApplyFailed":
     "Impossibile correggere la corrispondenza del titolo.",
+  "title.changeFolderHeading": "Cambia cartella",
+  "title.changeFolderDescription":
+    "Correggi quale cartella esistente appartiene a questo titolo. Nessun file viene spostato.",
+  "title.changeFolderAction": "Cambia cartella",
+  "title.changeFolderDialogTitle": "Cambia cartella",
+  "title.changeFolderDialogDescription":
+    "Scegli la cartella che appartiene a {{name}}. Scryer riassegna la proprietà e riesegue la scansione della cartella; nessun file viene spostato.",
+  "title.changeFolderLibrary": "Libreria",
+  "title.changeFolderCurrentFolder": "Cartella attuale",
+  "title.changeFolderCurrentFolderUnknown":
+    "Mostrata dopo aver selezionato una cartella",
+  "title.changeFolderCurrentRoot": "Radice attuale",
+  "title.changeFolderCurrentRootUnknown": "Sconosciuta",
+  "title.changeFolderRootLabel": "Radice",
+  "title.changeFolderRootScopeHelp":
+    "È possibile selezionare solo cartelle all'interno delle radici della libreria di questo titolo.",
+  "title.changeFolderNoRoots":
+    "La libreria di questo titolo non ha radici da esplorare.",
+  "title.changeFolderBrowseLoading": "Caricamento delle cartelle…",
+  "title.changeFolderBrowseEmpty": "Nessuna sottocartella qui.",
+  "title.changeFolderBrowseFailed": "Impossibile elencare le cartelle.",
+  "title.changeFolderUp": "Sali di un livello",
+  "title.changeFolderOpen": "Apri",
+  "title.changeFolderSelectPrompt":
+    "Seleziona una cartella per vedere l'anteprima della modifica.",
+  "title.changeFolderPreviewLoading": "Verifica della cartella selezionata…",
+  "title.changeFolderPreviewFailed":
+    "Impossibile generare l'anteprima del cambio di cartella.",
+  "title.changeFolderSelectedFolder": "Cartella selezionata",
+  "title.changeFolderOwnershipUnowned": "Nessun titolo possiede questa cartella.",
+  "title.changeFolderOwnershipThisTitle":
+    "Questo titolo possiede già questa cartella.",
+  "title.changeFolderOwnershipAnother": "{{name}} possiede questa cartella.",
+  "title.changeFolderNoOpHelp":
+    "Non verrà inviato nulla. Scegli un'altra cartella o chiudi questa finestra.",
+  "title.changeFolderTrackedMediaCurrent":
+    "Media tracciati nella cartella attuale: {{count}}",
+  "title.changeFolderTrackedMediaSelected":
+    "Media tracciati nella cartella selezionata: {{count}}",
+  "title.changeFolderNoFilesMoved":
+    "Nessun file verrà spostato. Cambiano solo la corrispondenza della cartella e le associazioni dei media che ne derivano.",
+  "title.changeFolderConflictHeading":
+    "Questa cartella appartiene già a un altro titolo",
+  "title.changeFolderChooseResolution":
+    "Scegli «Scambia cartelle» o «Prendi la cartella» per continuare.",
+  "title.changeFolderSwapAction": "Scambia cartelle",
+  "title.changeFolderSwapExplanation":
+    "{{owner}} prende la cartella attuale di questo titolo e questo titolo prende {{folder}}. Entrambi i titoli vengono riscansionati.",
+  "title.changeFolderTakeOverAction": "Prendi la cartella",
+  "title.changeFolderTakeOverExplanation":
+    "Questo titolo prende {{folder}}. {{owner}} resta senza cartella, diventa non corrispondente e deve essere riparato in Importazioni in sospeso.",
+  "title.changeFolderConfirm": "Cambia cartella",
+  "title.changeFolderApplying": "Cambio della cartella…",
+  "title.changeFolderApplyFailed":
+    "Impossibile cambiare la corrispondenza della cartella.",
+  "title.changeFolderOutcomeAssigned": "{{name}} ora possiede {{folder}}.",
+  "title.changeFolderOutcomeSwapped":
+    "{{name}} e {{other}} si sono scambiati le cartelle.",
+  "title.changeFolderOutcomeAlreadyOwned":
+    "{{name}} possedeva già quella cartella; nulla è cambiato.",
+  "title.changeFolderDetachedMedia":
+    "{{count}} associazioni di media sono state staccate.",
+  "title.changeFolderScanSummary":
+    "Scansione: {{scanned}} analizzati • {{matched}} corrispondenti • {{imported}} importati • {{unmatched}} senza corrispondenza",
+  "title.changeFolderDisplacedNote":
+    "{{name}} ha perso {{folder}} e ora è senza corrispondenza. Riparalo in Importazioni in sospeso, dove compare con il motivo «Proprietà della cartella modificata dall'utente».",
+  "pendingImports.reason.folder_ownership_changed_by_user":
+    "Proprietà della cartella modificata dall'utente",
+  "pendingImports.folderOwnershipChangedHelp":
+    "Questa cartella è stata assegnata a un altro titolo, quindi questo titolo non ne ha più una. Apri il titolo e usa Cambia cartella per assegnargli quella giusta, oppure usa Ignora per nascondere questo elemento.",
   "pendingImports.title": "Importazioni in sospeso",
   "pendingImports.description":
     "Risolvi gli elementi su disco senza corrispondenza per {{facet}} selezionando la corrispondenza dei metadati corretta.",

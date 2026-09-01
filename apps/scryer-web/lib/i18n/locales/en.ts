@@ -1284,6 +1284,64 @@ const en: LocaleDictionary = {
   "title.fixMatchSearchFailed": "Failed to search metadata.",
   "title.fixMatchApplyFailed": "Failed to fix title match.",
 
+  "title.changeFolderHeading": "Change folder",
+  "title.changeFolderDescription":
+    "Correct which existing folder this title owns. No files are moved.",
+  "title.changeFolderAction": "Change Folder",
+  "title.changeFolderDialogTitle": "Change folder",
+  "title.changeFolderDialogDescription":
+    "Pick the folder that belongs to {{name}}. Scryer reassigns ownership and rescans the folder; no files are moved.",
+  "title.changeFolderLibrary": "Library",
+  "title.changeFolderCurrentFolder": "Current folder",
+  "title.changeFolderCurrentFolderUnknown": "Shown once you select a folder",
+  "title.changeFolderCurrentRoot": "Current root",
+  "title.changeFolderCurrentRootUnknown": "Unknown",
+  "title.changeFolderRootLabel": "Root",
+  "title.changeFolderRootScopeHelp":
+    "Only folders inside this title's library roots can be selected.",
+  "title.changeFolderNoRoots": "This title's library has no roots to browse.",
+  "title.changeFolderBrowseLoading": "Loading folders…",
+  "title.changeFolderBrowseEmpty": "No subfolders here.",
+  "title.changeFolderBrowseFailed": "Failed to list folders.",
+  "title.changeFolderUp": "Up one level",
+  "title.changeFolderOpen": "Open",
+  "title.changeFolderSelectPrompt": "Select a folder to preview the change.",
+  "title.changeFolderPreviewLoading": "Checking the selected folder…",
+  "title.changeFolderPreviewFailed": "Failed to preview the folder change.",
+  "title.changeFolderSelectedFolder": "Selected folder",
+  "title.changeFolderOwnershipUnowned": "No title owns this folder.",
+  "title.changeFolderOwnershipThisTitle": "This title already owns this folder.",
+  "title.changeFolderOwnershipAnother": "{{name}} owns this folder.",
+  "title.changeFolderNoOpHelp":
+    "Nothing will be submitted. Pick a different folder or close this dialog.",
+  "title.changeFolderTrackedMediaCurrent":
+    "Tracked media in the current folder: {{count}}",
+  "title.changeFolderTrackedMediaSelected":
+    "Tracked media in the selected folder: {{count}}",
+  "title.changeFolderNoFilesMoved":
+    "No files will be moved. Only the folder match and the media associations derived from it change.",
+  "title.changeFolderConflictHeading": "This folder already belongs to another title",
+  "title.changeFolderChooseResolution":
+    "Choose Swap folders or Take over folder to continue.",
+  "title.changeFolderSwapAction": "Swap folders",
+  "title.changeFolderSwapExplanation":
+    "{{owner}} takes this title's current folder and this title takes {{folder}}. Both titles are rescanned.",
+  "title.changeFolderTakeOverAction": "Take over folder",
+  "title.changeFolderTakeOverExplanation":
+    "This title takes {{folder}}. {{owner}} is left without a folder, becomes unmatched, and needs repair in Pending Imports.",
+  "title.changeFolderConfirm": "Change folder",
+  "title.changeFolderApplying": "Changing folder…",
+  "title.changeFolderApplyFailed": "Failed to change the folder match.",
+  "title.changeFolderOutcomeAssigned": "{{name}} now owns {{folder}}.",
+  "title.changeFolderOutcomeSwapped": "{{name}} and {{other}} traded folders.",
+  "title.changeFolderOutcomeAlreadyOwned":
+    "{{name}} already owned that folder; nothing changed.",
+  "title.changeFolderDetachedMedia": "{{count}} media associations were detached.",
+  "title.changeFolderScanSummary":
+    "Scan: {{scanned}} scanned • {{matched}} matched • {{imported}} imported • {{unmatched}} unmatched",
+  "title.changeFolderDisplacedNote":
+    "{{name}} lost {{folder}} and is now unmatched. Repair it in Pending Imports, where it appears with the reason \"Folder ownership changed by user\".",
+
   "pendingImports.title": "Pending Imports",
   "pendingImports.description":
     "Resolve unmatched on-disk items for {{facet}} by selecting the correct metadata match.",
@@ -1312,6 +1370,10 @@ const en: LocaleDictionary = {
   "pendingImports.library": "Library:",
   "pendingImports.knownTitle": "Known title:",
   "pendingImports.reason.title_already_owns_another_folder": "Title already owns another folder",
+  "pendingImports.reason.folder_ownership_changed_by_user":
+    "Folder ownership changed by user",
+  "pendingImports.folderOwnershipChangedHelp":
+    "This folder was given to another title, so this title no longer has one. Open the title and use Change folder to point it at the right folder, or use Ignore to hide this item.",
   "pendingImports.ownershipConflictHelp":
     "This title's media lives in a different folder, and a title owns exactly one folder. Move this file into the title's folder (or delete this duplicate folder) and rescan; use Ignore to hide it. If this is a different film that only shares the name (a remake or the original), rescanning after the 0.18.13 update matches it on its own.",
   "pendingImports.bindEpisodes": "Bind Episodes",

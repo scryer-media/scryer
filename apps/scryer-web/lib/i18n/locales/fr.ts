@@ -797,6 +797,76 @@ const fr: LocaleDictionary = {
   "title.fixMatchSearchFailed": "Échec de la recherche des métadonnées.",
   "title.fixMatchApplyFailed":
     "Échec de la correction de la correspondance du titre.",
+  "title.changeFolderHeading": "Changer de dossier",
+  "title.changeFolderDescription":
+    "Corrigez quel dossier existant appartient à ce titre. Aucun fichier n'est déplacé.",
+  "title.changeFolderAction": "Changer de dossier",
+  "title.changeFolderDialogTitle": "Changer de dossier",
+  "title.changeFolderDialogDescription":
+    "Choisissez le dossier qui appartient à {{name}}. Scryer réattribue la propriété et réanalyse le dossier ; aucun fichier n'est déplacé.",
+  "title.changeFolderLibrary": "Bibliothèque",
+  "title.changeFolderCurrentFolder": "Dossier actuel",
+  "title.changeFolderCurrentFolderUnknown":
+    "Affiché dès que vous sélectionnez un dossier",
+  "title.changeFolderCurrentRoot": "Racine actuelle",
+  "title.changeFolderCurrentRootUnknown": "Inconnue",
+  "title.changeFolderRootLabel": "Racine",
+  "title.changeFolderRootScopeHelp":
+    "Seuls les dossiers situés dans les racines de la bibliothèque de ce titre peuvent être sélectionnés.",
+  "title.changeFolderNoRoots":
+    "La bibliothèque de ce titre n'a aucune racine à parcourir.",
+  "title.changeFolderBrowseLoading": "Chargement des dossiers…",
+  "title.changeFolderBrowseEmpty": "Aucun sous-dossier ici.",
+  "title.changeFolderBrowseFailed": "Impossible de lister les dossiers.",
+  "title.changeFolderUp": "Remonter d'un niveau",
+  "title.changeFolderOpen": "Ouvrir",
+  "title.changeFolderSelectPrompt":
+    "Sélectionnez un dossier pour prévisualiser le changement.",
+  "title.changeFolderPreviewLoading": "Vérification du dossier sélectionné…",
+  "title.changeFolderPreviewFailed":
+    "Impossible de prévisualiser le changement de dossier.",
+  "title.changeFolderSelectedFolder": "Dossier sélectionné",
+  "title.changeFolderOwnershipUnowned": "Aucun titre ne possède ce dossier.",
+  "title.changeFolderOwnershipThisTitle":
+    "Ce titre possède déjà ce dossier.",
+  "title.changeFolderOwnershipAnother": "{{name}} possède ce dossier.",
+  "title.changeFolderNoOpHelp":
+    "Rien ne sera soumis. Choisissez un autre dossier ou fermez cette fenêtre.",
+  "title.changeFolderTrackedMediaCurrent":
+    "Médias suivis dans le dossier actuel : {{count}}",
+  "title.changeFolderTrackedMediaSelected":
+    "Médias suivis dans le dossier sélectionné : {{count}}",
+  "title.changeFolderNoFilesMoved":
+    "Aucun fichier ne sera déplacé. Seules la correspondance de dossier et les associations de médias qui en découlent changent.",
+  "title.changeFolderConflictHeading":
+    "Ce dossier appartient déjà à un autre titre",
+  "title.changeFolderChooseResolution":
+    "Choisissez « Échanger les dossiers » ou « Reprendre le dossier » pour continuer.",
+  "title.changeFolderSwapAction": "Échanger les dossiers",
+  "title.changeFolderSwapExplanation":
+    "{{owner}} prend le dossier actuel de ce titre et ce titre prend {{folder}}. Les deux titres sont réanalysés.",
+  "title.changeFolderTakeOverAction": "Reprendre le dossier",
+  "title.changeFolderTakeOverExplanation":
+    "Ce titre prend {{folder}}. {{owner}} se retrouve sans dossier, devient non associé et doit être réparé dans Importations en attente.",
+  "title.changeFolderConfirm": "Changer de dossier",
+  "title.changeFolderApplying": "Changement de dossier…",
+  "title.changeFolderApplyFailed":
+    "Impossible de changer la correspondance de dossier.",
+  "title.changeFolderOutcomeAssigned": "{{name}} possède désormais {{folder}}.",
+  "title.changeFolderOutcomeSwapped":
+    "{{name}} et {{other}} ont échangé leurs dossiers.",
+  "title.changeFolderOutcomeAlreadyOwned":
+    "{{name}} possédait déjà ce dossier ; rien n'a changé.",
+  "title.changeFolderDetachedMedia":
+    "{{count}} associations de médias ont été détachées.",
+  "title.changeFolderScanSummary":
+    "Analyse : {{scanned}} analysés • {{matched}} associés • {{imported}} importés • {{unmatched}} sans correspondance",
+  "title.changeFolderDisplacedNote":
+    "{{name}} a perdu {{folder}} et n'est plus associé. Réparez-le dans Importations en attente, où il apparaît avec le motif « Propriété du dossier modifiée par l'utilisateur ».",
+  "pendingImports.reason.folder_ownership_changed_by_user":
+    "Propriété du dossier modifiée par l'utilisateur",
+  "pendingImports.folderOwnershipChangedHelp":
+    "Ce dossier a été attribué à un autre titre, ce titre n'en a donc plus. Ouvrez le titre et utilisez Changer de dossier pour le pointer vers le bon dossier, ou utilisez Ignorer pour masquer cet élément.",
   "pendingImports.title": "Importations en attente",
   "pendingImports.description":
     "Résolvez les éléments sur disque sans correspondance pour {{facet}} en sélectionnant la correspondance de métadonnées correcte.",

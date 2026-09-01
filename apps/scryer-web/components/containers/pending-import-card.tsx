@@ -96,7 +96,11 @@ export const PendingImportCard = React.memo(function PendingImportCard({
   onClearActiveItem,
 }: PendingImportCardProps) {
   const t = useTranslate();
-  const isOwnershipConflict = item.reason === "title_already_owns_another_folder";
+  // Both codes describe a folder-ownership problem rather than a metadata one,
+  // so neither is repaired by searching or binding metadata.
+  const isFolderOwnershipChange = item.reason === "folder_ownership_changed_by_user";
+  const isOwnershipConflict =
+    item.reason === "title_already_owns_another_folder" || isFolderOwnershipChange;
   const canSearchOrBind =
     !isOwnershipConflict && !(item.titleId && item.facet === "MOVIE");
 
@@ -161,7 +165,9 @@ export const PendingImportCard = React.memo(function PendingImportCard({
             className="rounded-lg border border-border/80 bg-background/60 p-3 text-sm text-muted-foreground"
             data-ui="pending-import-ownership-conflict-help"
           >
-            {t("pendingImports.ownershipConflictHelp")}
+            {isFolderOwnershipChange
+              ? t("pendingImports.folderOwnershipChangedHelp")
+              : t("pendingImports.ownershipConflictHelp")}
           </p>
         ) : null}
         {isActive && canSearchOrBind ? (

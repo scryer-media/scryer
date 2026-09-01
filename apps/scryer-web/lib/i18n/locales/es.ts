@@ -797,6 +797,76 @@ const es: LocaleDictionary = {
   "title.fixMatchSearchFailed": "No se pudo buscar metadatos.",
   "title.fixMatchApplyFailed":
     "No se pudo arreglar la coincidencia del título.",
+  "title.changeFolderHeading": "Cambiar carpeta",
+  "title.changeFolderDescription":
+    "Corrija qué carpeta existente pertenece a este título. No se mueve ningún archivo.",
+  "title.changeFolderAction": "Cambiar carpeta",
+  "title.changeFolderDialogTitle": "Cambiar carpeta",
+  "title.changeFolderDialogDescription":
+    "Elija la carpeta que pertenece a {{name}}. Scryer reasigna la propiedad y vuelve a escanear la carpeta; no se mueve ningún archivo.",
+  "title.changeFolderLibrary": "Biblioteca",
+  "title.changeFolderCurrentFolder": "Carpeta actual",
+  "title.changeFolderCurrentFolderUnknown":
+    "Se muestra al seleccionar una carpeta",
+  "title.changeFolderCurrentRoot": "Raíz actual",
+  "title.changeFolderCurrentRootUnknown": "Desconocida",
+  "title.changeFolderRootLabel": "Raíz",
+  "title.changeFolderRootScopeHelp":
+    "Solo se pueden seleccionar carpetas dentro de las raíces de la biblioteca de este título.",
+  "title.changeFolderNoRoots":
+    "La biblioteca de este título no tiene raíces que explorar.",
+  "title.changeFolderBrowseLoading": "Cargando carpetas…",
+  "title.changeFolderBrowseEmpty": "Aquí no hay subcarpetas.",
+  "title.changeFolderBrowseFailed": "No se pudieron listar las carpetas.",
+  "title.changeFolderUp": "Subir un nivel",
+  "title.changeFolderOpen": "Abrir",
+  "title.changeFolderSelectPrompt":
+    "Seleccione una carpeta para ver una vista previa del cambio.",
+  "title.changeFolderPreviewLoading": "Comprobando la carpeta seleccionada…",
+  "title.changeFolderPreviewFailed":
+    "No se pudo previsualizar el cambio de carpeta.",
+  "title.changeFolderSelectedFolder": "Carpeta seleccionada",
+  "title.changeFolderOwnershipUnowned": "Ningún título posee esta carpeta.",
+  "title.changeFolderOwnershipThisTitle":
+    "Este título ya posee esta carpeta.",
+  "title.changeFolderOwnershipAnother": "{{name}} posee esta carpeta.",
+  "title.changeFolderNoOpHelp":
+    "No se enviará nada. Elija otra carpeta o cierre este diálogo.",
+  "title.changeFolderTrackedMediaCurrent":
+    "Medios registrados en la carpeta actual: {{count}}",
+  "title.changeFolderTrackedMediaSelected":
+    "Medios registrados en la carpeta seleccionada: {{count}}",
+  "title.changeFolderNoFilesMoved":
+    "No se moverá ningún archivo. Solo cambian la coincidencia de carpeta y las asociaciones de medios derivadas de ella.",
+  "title.changeFolderConflictHeading":
+    "Esta carpeta ya pertenece a otro título",
+  "title.changeFolderChooseResolution":
+    "Elija «Intercambiar carpetas» o «Tomar la carpeta» para continuar.",
+  "title.changeFolderSwapAction": "Intercambiar carpetas",
+  "title.changeFolderSwapExplanation":
+    "{{owner}} se queda con la carpeta actual de este título y este título se queda con {{folder}}. Ambos títulos se vuelven a escanear.",
+  "title.changeFolderTakeOverAction": "Tomar la carpeta",
+  "title.changeFolderTakeOverExplanation":
+    "Este título se queda con {{folder}}. {{owner}} queda sin carpeta, pasa a estar sin coincidencia y necesita reparación en Importaciones pendientes.",
+  "title.changeFolderConfirm": "Cambiar carpeta",
+  "title.changeFolderApplying": "Cambiando la carpeta…",
+  "title.changeFolderApplyFailed":
+    "No se pudo cambiar la coincidencia de carpeta.",
+  "title.changeFolderOutcomeAssigned": "{{name}} ahora posee {{folder}}.",
+  "title.changeFolderOutcomeSwapped":
+    "{{name}} y {{other}} intercambiaron sus carpetas.",
+  "title.changeFolderOutcomeAlreadyOwned":
+    "{{name}} ya poseía esa carpeta; no se cambió nada.",
+  "title.changeFolderDetachedMedia":
+    "Se desvincularon {{count}} asociaciones de medios.",
+  "title.changeFolderScanSummary":
+    "Escaneo: {{scanned}} escaneados • {{matched}} coincidentes • {{imported}} importados • {{unmatched}} sin coincidencia",
+  "title.changeFolderDisplacedNote":
+    "{{name}} perdió {{folder}} y ahora está sin coincidencia. Repárelo en Importaciones pendientes, donde aparece con el motivo «Propiedad de la carpeta cambiada por el usuario».",
+  "pendingImports.reason.folder_ownership_changed_by_user":
+    "Propiedad de la carpeta cambiada por el usuario",
+  "pendingImports.folderOwnershipChangedHelp":
+    "Esta carpeta se asignó a otro título, por lo que este título ya no tiene ninguna. Abra el título y use Cambiar carpeta para apuntarlo a la carpeta correcta, o use Ignorar para ocultar este elemento.",
   "pendingImports.title": "Importaciones pendientes",
   "pendingImports.description":
     "Resuelva los elementos en disco no coincidentes para {{facet}} seleccionando la coincidencia de metadatos correcta.",

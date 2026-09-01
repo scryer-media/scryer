@@ -788,6 +788,76 @@ const de: LocaleDictionary = {
   "title.fixMatchSearchFailed": "Metadaten konnten nicht durchsucht werden.",
   "title.fixMatchApplyFailed":
     "Titelübereinstimmung konnte nicht behoben werden.",
+  "title.changeFolderHeading": "Ordner ändern",
+  "title.changeFolderDescription":
+    "Korrigieren Sie, welchen vorhandenen Ordner dieser Titel besitzt. Es werden keine Dateien verschoben.",
+  "title.changeFolderAction": "Ordner ändern",
+  "title.changeFolderDialogTitle": "Ordner ändern",
+  "title.changeFolderDialogDescription":
+    "Wählen Sie den Ordner, der zu {{name}} gehört. Scryer weist die Zuordnung neu zu und scannt den Ordner erneut; es werden keine Dateien verschoben.",
+  "title.changeFolderLibrary": "Bibliothek",
+  "title.changeFolderCurrentFolder": "Aktueller Ordner",
+  "title.changeFolderCurrentFolderUnknown":
+    "Wird angezeigt, sobald Sie einen Ordner auswählen",
+  "title.changeFolderCurrentRoot": "Aktuelles Stammverzeichnis",
+  "title.changeFolderCurrentRootUnknown": "Unbekannt",
+  "title.changeFolderRootLabel": "Stammverzeichnis",
+  "title.changeFolderRootScopeHelp":
+    "Es können nur Ordner innerhalb der Stammverzeichnisse der Bibliothek dieses Titels ausgewählt werden.",
+  "title.changeFolderNoRoots":
+    "Die Bibliothek dieses Titels hat keine Stammverzeichnisse zum Durchsuchen.",
+  "title.changeFolderBrowseLoading": "Ordner werden geladen…",
+  "title.changeFolderBrowseEmpty": "Hier gibt es keine Unterordner.",
+  "title.changeFolderBrowseFailed": "Ordner konnten nicht aufgelistet werden.",
+  "title.changeFolderUp": "Eine Ebene höher",
+  "title.changeFolderOpen": "Öffnen",
+  "title.changeFolderSelectPrompt":
+    "Wählen Sie einen Ordner aus, um die Änderung in der Vorschau zu sehen.",
+  "title.changeFolderPreviewLoading": "Ausgewählter Ordner wird geprüft…",
+  "title.changeFolderPreviewFailed":
+    "Vorschau der Ordneränderung fehlgeschlagen.",
+  "title.changeFolderSelectedFolder": "Ausgewählter Ordner",
+  "title.changeFolderOwnershipUnowned": "Kein Titel besitzt diesen Ordner.",
+  "title.changeFolderOwnershipThisTitle":
+    "Dieser Titel besitzt diesen Ordner bereits.",
+  "title.changeFolderOwnershipAnother": "{{name}} besitzt diesen Ordner.",
+  "title.changeFolderNoOpHelp":
+    "Es wird nichts übermittelt. Wählen Sie einen anderen Ordner oder schließen Sie diesen Dialog.",
+  "title.changeFolderTrackedMediaCurrent":
+    "Erfasste Medien im aktuellen Ordner: {{count}}",
+  "title.changeFolderTrackedMediaSelected":
+    "Erfasste Medien im ausgewählten Ordner: {{count}}",
+  "title.changeFolderNoFilesMoved":
+    "Es werden keine Dateien verschoben. Nur die Ordnerzuordnung und die daraus abgeleiteten Medienverknüpfungen ändern sich.",
+  "title.changeFolderConflictHeading":
+    "Dieser Ordner gehört bereits zu einem anderen Titel",
+  "title.changeFolderChooseResolution":
+    "Wählen Sie „Ordner tauschen“ oder „Ordner übernehmen“, um fortzufahren.",
+  "title.changeFolderSwapAction": "Ordner tauschen",
+  "title.changeFolderSwapExplanation":
+    "{{owner}} übernimmt den aktuellen Ordner dieses Titels und dieser Titel übernimmt {{folder}}. Beide Titel werden erneut gescannt.",
+  "title.changeFolderTakeOverAction": "Ordner übernehmen",
+  "title.changeFolderTakeOverExplanation":
+    "Dieser Titel übernimmt {{folder}}. {{owner}} bleibt ohne Ordner zurück, gilt als nicht zugeordnet und muss unter „Ausstehende Importe“ repariert werden.",
+  "title.changeFolderConfirm": "Ordner ändern",
+  "title.changeFolderApplying": "Ordner wird geändert…",
+  "title.changeFolderApplyFailed":
+    "Die Ordnerzuordnung konnte nicht geändert werden.",
+  "title.changeFolderOutcomeAssigned": "{{name}} besitzt jetzt {{folder}}.",
+  "title.changeFolderOutcomeSwapped":
+    "{{name}} und {{other}} haben ihre Ordner getauscht.",
+  "title.changeFolderOutcomeAlreadyOwned":
+    "{{name}} besaß diesen Ordner bereits; nichts wurde geändert.",
+  "title.changeFolderDetachedMedia":
+    "{{count}} Medienverknüpfungen wurden gelöst.",
+  "title.changeFolderScanSummary":
+    "Scan: {{scanned}} gescannt • {{matched}} zugeordnet • {{imported}} importiert • {{unmatched}} ohne Zuordnung",
+  "title.changeFolderDisplacedNote":
+    "{{name}} hat {{folder}} verloren und ist jetzt nicht zugeordnet. Reparieren Sie den Titel unter „Ausstehende Importe“, wo er mit dem Grund „Ordnerzuordnung vom Benutzer geändert“ erscheint.",
+  "pendingImports.reason.folder_ownership_changed_by_user":
+    "Ordnerzuordnung vom Benutzer geändert",
+  "pendingImports.folderOwnershipChangedHelp":
+    "Dieser Ordner wurde einem anderen Titel zugewiesen, daher hat dieser Titel keinen Ordner mehr. Öffnen Sie den Titel und weisen Sie ihm über „Ordner ändern“ den richtigen Ordner zu, oder blenden Sie diesen Eintrag mit „Ignorieren“ aus.",
   "pendingImports.title": "Ausstehende Importe",
   "pendingImports.description":
     "Lösen Sie nicht übereinstimmende Elemente auf der Festplatte für {{facet}} auf, indem Sie die richtige Metadatenübereinstimmung auswählen.",

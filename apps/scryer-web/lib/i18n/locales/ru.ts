@@ -1306,6 +1306,75 @@ const ru: LocaleDictionary = {
     "title.fixMatchSearchFailed": "Не удалось выполнить поиск метаданных.",
     "title.fixMatchApplyFailed": "Не удалось исправить соответствие материала.",
 
+    "title.changeFolderHeading": "Изменить папку",
+    "title.changeFolderDescription":
+        "Исправьте, какой существующей папкой владеет этот материал. Файлы не перемещаются.",
+    "title.changeFolderAction": "Изменить папку",
+    "title.changeFolderDialogTitle": "Изменить папку",
+    "title.changeFolderDialogDescription":
+        "Выберите папку, которая относится к «{{name}}». Scryer переназначит владение и повторно просканирует папку; файлы не перемещаются.",
+    "title.changeFolderLibrary": "Библиотека",
+    "title.changeFolderCurrentFolder": "Текущая папка",
+    "title.changeFolderCurrentFolderUnknown":
+        "Отобразится после выбора папки",
+    "title.changeFolderCurrentRoot": "Текущий корневой каталог",
+    "title.changeFolderCurrentRootUnknown": "Неизвестно",
+    "title.changeFolderRootLabel": "Корневой каталог",
+    "title.changeFolderRootScopeHelp":
+        "Выбрать можно только папки внутри корневых каталогов библиотеки этого материала.",
+    "title.changeFolderNoRoots":
+        "В библиотеке этого материала нет корневых каталогов для просмотра.",
+    "title.changeFolderBrowseLoading": "Загрузка папок…",
+    "title.changeFolderBrowseEmpty": "Здесь нет вложенных папок.",
+    "title.changeFolderBrowseFailed": "Не удалось получить список папок.",
+    "title.changeFolderUp": "На уровень выше",
+    "title.changeFolderOpen": "Открыть",
+    "title.changeFolderSelectPrompt":
+        "Выберите папку, чтобы увидеть предварительный просмотр изменения.",
+    "title.changeFolderPreviewLoading": "Проверка выбранной папки…",
+    "title.changeFolderPreviewFailed":
+        "Не удалось выполнить предварительный просмотр смены папки.",
+    "title.changeFolderSelectedFolder": "Выбранная папка",
+    "title.changeFolderOwnershipUnowned":
+        "Эта папка не принадлежит ни одному материалу.",
+    "title.changeFolderOwnershipThisTitle":
+        "Этот материал уже владеет данной папкой.",
+    "title.changeFolderOwnershipAnother": "Этой папкой владеет «{{name}}».",
+    "title.changeFolderNoOpHelp":
+        "Ничего не будет отправлено. Выберите другую папку или закройте это окно.",
+    "title.changeFolderTrackedMediaCurrent":
+        "Отслеживаемых медиафайлов в текущей папке: {{count}}",
+    "title.changeFolderTrackedMediaSelected":
+        "Отслеживаемых медиафайлов в выбранной папке: {{count}}",
+    "title.changeFolderNoFilesMoved":
+        "Файлы не будут перемещены. Изменятся только соответствие папки и производные от него связи медиафайлов.",
+    "title.changeFolderConflictHeading":
+        "Эта папка уже принадлежит другому материалу",
+    "title.changeFolderChooseResolution":
+        "Выберите «Обменять папки» или «Забрать папку», чтобы продолжить.",
+    "title.changeFolderSwapAction": "Обменять папки",
+    "title.changeFolderSwapExplanation":
+        "«{{owner}}» получает текущую папку этого материала, а этот материал получает {{folder}}. Оба материала будут просканированы повторно.",
+    "title.changeFolderTakeOverAction": "Забрать папку",
+    "title.changeFolderTakeOverExplanation":
+        "Этот материал получает {{folder}}. «{{owner}}» останется без папки, станет несопоставленным и потребует восстановления в разделе «Ожидающие импорта».",
+    "title.changeFolderConfirm": "Изменить папку",
+    "title.changeFolderApplying": "Изменение папки…",
+    "title.changeFolderApplyFailed":
+        "Не удалось изменить соответствие папки.",
+    "title.changeFolderOutcomeAssigned":
+        "«{{name}}» теперь владеет {{folder}}.",
+    "title.changeFolderOutcomeSwapped":
+        "«{{name}}» и «{{other}}» обменялись папками.",
+    "title.changeFolderOutcomeAlreadyOwned":
+        "«{{name}}» уже владел этой папкой; ничего не изменилось.",
+    "title.changeFolderDetachedMedia":
+        "Отсоединено связей медиафайлов: {{count}}.",
+    "title.changeFolderScanSummary":
+        "Сканирование: просмотрено {{scanned}} • сопоставлено {{matched}} • импортировано {{imported}} • без соответствия {{unmatched}}",
+    "title.changeFolderDisplacedNote":
+        "«{{name}}» потерял папку {{folder}} и теперь не сопоставлен. Восстановите его в разделе «Ожидающие импорта», где он отображается с причиной «Владение папкой изменено пользователем».",
+
     "pendingImports.title": "Ожидающие импорта",
     "pendingImports.description":
         "Устраните несопоставленные элементы на диске для категории {{facet}}, выбрав правильное соответствие в метаданных.",
@@ -1337,6 +1406,10 @@ const ru: LocaleDictionary = {
     "pendingImports.library": "Библиотека:",
     "pendingImports.knownTitle": "Известное название:",
     "pendingImports.reason.title_already_owns_another_folder": "Материал уже связан с другой папкой",
+    "pendingImports.reason.folder_ownership_changed_by_user":
+        "Владение папкой изменено пользователем",
+    "pendingImports.folderOwnershipChangedHelp":
+        "Эта папка была передана другому материалу, поэтому у текущего материала папки больше нет. Откройте материал и укажите правильную папку через «Изменить папку» либо скройте этот элемент с помощью «Игнорировать».",
     "pendingImports.ownershipConflictHelp":
         "Медиафайлы этого материала находятся в другой папке, а каждый материал может быть связан только с одной папкой. Переместите файл в папку материала (или удалите эту дублирующую папку) и повторно выполните сканирование. Используйте «Игнорировать», чтобы скрыть этот элемент. Если это другой фильм с таким же названием (например, ремейк или оригинальная версия), повторное сканирование после обновления до версии 0.18.13 сопоставит его автоматически.",
     "pendingImports.bindEpisodes": "Связать эпизоды",
