@@ -5,8 +5,9 @@
 //! ([`sandbox`]), the frozen crypto/CRC cores ([`crypto_host`]), the
 //! stdin/stdout command protocol for wasip1 command guests ([`invoke`]), the
 //! WASI Preview 2 component hosts for indexers ([`component_host`]), archive
-//! extractors ([`archive_component_host`]) and subtitle providers
-//! ([`subtitle_component_host`]), and trap→`AppError` mapping
+//! extractors ([`archive_component_host`]), subtitle providers
+//! ([`subtitle_component_host`]) and download clients
+//! ([`download_client_component_host`]), and trap→`AppError` mapping
 //! ([`error`]). Everything else in the archive pipeline (path sandboxing,
 //! native PAR2, providers, SDK shapes) is owned above this layer.
 
@@ -15,6 +16,7 @@ pub(crate) mod command_host;
 pub(crate) mod component_host;
 mod crypto_host;
 mod describe;
+pub(crate) mod download_client_component_host;
 pub(crate) mod engine;
 mod error;
 mod invoke;
@@ -29,6 +31,10 @@ pub(crate) use archive_component_host::{
 pub(crate) use component_host::validate_indexer_component;
 pub(crate) use describe::{
     command_model_describe, validate_command_module, validate_subtitle_sync_module,
+};
+pub(crate) use download_client_component_host::{
+    DownloadClientComponentInvocation, download_client_component_describe,
+    process_download_client_component, validate_download_client_component,
 };
 pub(crate) use invoke::{
     CommandInvocation, SubtitleSyncInvocation, process_command, process_subtitle_sync,

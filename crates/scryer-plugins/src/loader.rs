@@ -135,6 +135,9 @@ fn module_flavor_for_artifact(
             PluginRuntimeBacking::WasmtimeIndexerComponent => ModuleFlavor::IndexerComponent,
             PluginRuntimeBacking::WasmtimeArchiveComponent => ModuleFlavor::ArchiveComponent,
             PluginRuntimeBacking::WasmtimeSubtitleComponent => ModuleFlavor::SubtitleComponent,
+            PluginRuntimeBacking::WasmtimeDownloadClientComponent => {
+                ModuleFlavor::DownloadClientComponent
+            }
         },
     )
 }
@@ -1418,7 +1421,18 @@ impl WasmDownloadClientPluginProvider {
                 return None;
             }
         };
-        if backing == PluginRuntimeBacking::WasmtimeCommand {
+        // The wasip1 command ABI and the `scryer:download-client` component
+        // world are the same client with a different transport, so they are
+        // configured *here*, once. Splitting them into two branches is exactly
+        // how base_url, allowed hosts, the timeout and the archive-provider
+        // CommandHost would drift apart between the runtime a client migrates
+        // from and the one it migrates to.
+        let native_backing = match backing {
+            PluginRuntimeBacking::WasmtimeCommand => Some(false),
+            PluginRuntimeBacking::WasmtimeDownloadClientComponent => Some(true),
+            _ => None,
+        };
+        if let Some(is_component) = native_backing {
             let mut command_config = std::collections::BTreeMap::new();
             if let Some(base_url) = &computed_base_url {
                 command_config.insert("base_url".to_string(), base_url.to_string());
@@ -1439,11 +1453,7 @@ impl WasmDownloadClientPluginProvider {
                 computed_base_url.as_deref(),
                 Some(&config.config_json),
             );
-            return Some(Arc::new(WasmDownloadClient::new_command(
-                wasm_bytes,
-                loaded.descriptor.clone(),
-                config.id.clone(),
-                config.name.clone(),
+            let command_host =
                 crate::wasmtime_host::command_host::CommandHost::with_archive_provider(
                     loaded.descriptor.id.clone(),
                     command_config,
@@ -1451,8 +1461,25 @@ impl WasmDownloadClientPluginProvider {
                     crate::download_client_adapter::DOWNLOAD_CLIENT_PLUGIN_TIMEOUT,
                     None,
                     archive_provider,
-                ),
-            )));
+                );
+            let client = if is_component {
+                WasmDownloadClient::new_component(
+                    wasm_bytes,
+                    loaded.descriptor.clone(),
+                    config.id.clone(),
+                    config.name.clone(),
+                    command_host,
+                )
+            } else {
+                WasmDownloadClient::new_command(
+                    wasm_bytes,
+                    loaded.descriptor.clone(),
+                    config.id.clone(),
+                    config.name.clone(),
+                    command_host,
+                )
+            };
+            return Some(Arc::new(client));
         }
         if backing != PluginRuntimeBacking::LegacyReactor {
             warn!(
@@ -3322,6 +3349,9 @@ fn load_from_bytes(wasm_bytes: &[u8]) -> Result<(PluginDescriptor, Vec<u8>), Str
             PluginRuntimeBacking::WasmtimeSubtitleComponent => {
                 crate::wasmtime_host::validate_subtitle_component(&bytes)?;
             }
+            PluginRuntimeBacking::WasmtimeDownloadClientComponent => {
+                crate::wasmtime_host::validate_download_client_component(&bytes)?;
+            }
         }
         let descriptor = embedded.descriptor;
         debug!(
@@ -3334,10 +3364,11 @@ fn load_from_bytes(wasm_bytes: &[u8]) -> Result<(PluginDescriptor, Vec<u8>), Str
     }
 
     if crate::wasmtime_host::component_host::is_component_binary(&bytes)? {
-        // An archive or subtitle component can still self-describe through its
-        // world's `describe` export, so a missing custom section is not fatal
-        // for it. The two worlds are told apart by their imports, so the wrong
-        // one fails to link rather than returning a foreign descriptor.
+        // An archive, subtitle or download-client component can still
+        // self-describe through its world's `describe` export, so a missing
+        // custom section is not fatal for it. The worlds are told apart by
+        // their imports, so the wrong one fails to link rather than returning a
+        // foreign descriptor.
         for (source, describe) in [
             (
                 "archive_component",
@@ -3347,6 +3378,11 @@ fn load_from_bytes(wasm_bytes: &[u8]) -> Result<(PluginDescriptor, Vec<u8>), Str
             (
                 "subtitle_component",
                 crate::wasmtime_host::subtitle_component_describe
+                    as fn(&[u8]) -> Result<PluginDescriptor, String>,
+            ),
+            (
+                "download_client_component",
+                crate::wasmtime_host::download_client_component_describe
                     as fn(&[u8]) -> Result<PluginDescriptor, String>,
             ),
         ] {

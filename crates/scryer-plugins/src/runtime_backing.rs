@@ -73,6 +73,8 @@ pub(crate) enum PluginRuntimeBacking {
     WasmtimeIndexerComponent,
     /// Versioned WASI Preview 2 component ABI for subtitle providers.
     WasmtimeSubtitleComponent,
+    /// Versioned WASI Preview 2 component ABI for download clients.
+    WasmtimeDownloadClientComponent,
 }
 
 impl PluginRuntimeBacking {
@@ -112,14 +114,17 @@ impl PluginRuntimeBacking {
                 // The component funnel is per-family by descriptor, not one
                 // catch-all: each family has its own world, so accepting an
                 // artifact here is the same statement as "a host exists for
-                // that world". Download clients and notifications join this
-                // arm as their worlds land.
+                // that world". Notifications join this arm as their world
+                // lands.
                 scryer_plugin_sdk::ProviderDescriptor::Subtitle(_) => {
                     Ok(Self::WasmtimeSubtitleComponent)
                 }
+                scryer_plugin_sdk::ProviderDescriptor::DownloadClient(_) => {
+                    Ok(Self::WasmtimeDownloadClientComponent)
+                }
                 _ => Err(
                     "WASI component artifacts are currently supported only for indexers, \
-                     archive extractors, and subtitle providers"
+                     archive extractors, subtitle providers, and download clients"
                         .into(),
                 ),
             };
@@ -161,6 +166,69 @@ mod tests {
                 },
             ),
         }
+    }
+
+    fn download_client_descriptor() -> PluginDescriptor {
+        PluginDescriptor {
+            id: "download-client".to_string(),
+            name: "Download Client".to_string(),
+            version: "1.0.0".to_string(),
+            sdk_version: scryer_plugin_sdk::SDK_VERSION.to_string(),
+            sdk_constraint: scryer_plugin_sdk::current_sdk_constraint(),
+            socket_permissions: Vec::new(),
+            provider: scryer_plugin_sdk::ProviderDescriptor::DownloadClient(
+                scryer_plugin_sdk::DownloadClientDescriptor {
+                    provider_type: "fixture-download-client".to_string(),
+                    provider_aliases: Vec::new(),
+                    config_fields: Vec::new(),
+                    default_base_url: None,
+                    allowed_hosts: Vec::new(),
+                    accepted_inputs: Vec::new(),
+                    isolation_modes: Vec::new(),
+                    capabilities: scryer_plugin_sdk::DownloadClientCapabilities::default(),
+                },
+            ),
+        }
+    }
+
+    /// The component funnel accepts download clients: a component artifact with
+    /// a download-client descriptor selects the download-client component host
+    /// rather than being refused as an unsupported family.
+    #[test]
+    fn component_download_client_artifacts_select_the_download_client_component_backing() {
+        let component = wat::parse_str("(component)").expect("component WAT must parse");
+
+        assert_eq!(
+            PluginRuntimeBacking::for_artifact(&download_client_descriptor(), &component)
+                .expect("a download client component must select a runtime"),
+            PluginRuntimeBacking::WasmtimeDownloadClientComponent
+        );
+    }
+
+    /// The component path is additive for this family too: an unmarked
+    /// core-module download client still routes to the legacy reactor, and a
+    /// command-marked one still routes to the command runtime. H4 deletes those
+    /// paths; until then they must keep working.
+    #[test]
+    fn non_component_download_client_artifacts_keep_their_existing_backings() {
+        let descriptor = download_client_descriptor();
+
+        assert_eq!(
+            PluginRuntimeBacking::for_artifact(
+                &descriptor,
+                &command_abi::test_support::unmarked_wasm()
+            )
+            .expect("a legacy download client artifact must select a runtime"),
+            PluginRuntimeBacking::LegacyReactor
+        );
+        assert_eq!(
+            PluginRuntimeBacking::for_artifact(
+                &descriptor,
+                &command_abi::test_support::command_marked_wasm()
+            )
+            .expect("a marked download client artifact must select a runtime"),
+            PluginRuntimeBacking::WasmtimeCommand
+        );
     }
 
     fn subtitle_descriptor(mode: SubtitleProviderMode) -> PluginDescriptor {

@@ -1,0 +1,56 @@
+package scryer:download-client@1.0.0;
+
+/// The download-client contract.
+///
+/// Both payloads are UTF-8 JSON, matching the indexer, archive and subtitle
+/// worlds: `describe` returns a `PluginDescriptor` document, and `process`
+/// exchanges a `scryer_plugin_sdk::command::PluginCommandRequest` for a
+/// `PluginCommandResponse` — the *same* envelope the wasip1 command ABI already
+/// carries on stdin/stdout, carrying `PluginCommand::DownloadClient` and its
+/// `add`, `list-queue`, `list-history`, `list-completed`,
+/// `list-recent-completed` (each with its category-scoped twin),
+/// `get-completed`, `control`, `mark-imported`,
+/// `mark-imported-non-destructive`, `status` and `test-connection` operations.
+/// A guest migrating from the command ABI keeps its request and response types
+/// and its dispatch `match`; only the transport changes. Keeping the payload an
+/// opaque byte string is what lets the SDK add download-client operations —
+/// category-scoped feedback arrived exactly that way — without a WIT revision
+/// and without re-generated bindings for the other families.
+///
+/// Host services arrive through the shared `scryer:host/services@1.0.0` import
+/// rather than a download-client-specific interface, so config, plugin state,
+/// HTTP, and host-owned archive extraction reach a download client by exactly
+/// the bytes the core-module ABI uses. See that package for the encoding and
+/// for why capability availability is expressed in-band.
+///
+/// Plugin state is the one service this family leans on that catalog subtitle
+/// providers do not: a client that authenticates once and carries a session
+/// cookie across invocations keeps that cookie in `StateGet`/`StateSet`,
+/// because the guest instance itself does not survive a `process` call. The
+/// host backing shares one `CommandHost` — and therefore one state map — across
+/// every invocation of a configured client, which is what makes the cookie
+/// outlive the instance that stored it.
+///
+/// WASI Preview 2 is imported implicitly: the host links the full p2 surface
+/// (`wasmtime_wasi::p2::add_to_linker_async`), so a guest sees clocks, random,
+/// and its captured stdio through `wasi:*` without those imports appearing in
+/// this world. Download clients receive NO filesystem preopens on any
+/// operation. That is not a component-era restriction: neither the legacy
+/// reactor nor the wasip1 command host has ever handed this family a preopened
+/// directory, so a component sees precisely the authority a migrating guest
+/// already had. Sockets and process execution are absent for the same reason —
+/// those hosts are wired only for notification plugins — so a client that needs
+/// a transport reaches for HTTP through the shared services import, and one
+/// that needs to persist across invocations reaches for plugin state.
+world download-client {
+  import scryer:host/services@1.0.0;
+
+  enum invocation-error {
+    failed,
+    cancelled,
+    invalid-response,
+  }
+
+  export describe: func() -> list<u8>;
+  export process: func(request: list<u8>) -> result<list<u8>, invocation-error>;
+}

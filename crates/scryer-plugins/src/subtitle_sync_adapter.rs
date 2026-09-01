@@ -70,6 +70,10 @@ impl SubtitleSyncClient for WasmSubtitleSyncClient {
                 "subtitle sync plugin cannot use the subtitle provider component runtime backing"
                     .to_string(),
             )),
+            PluginRuntimeBacking::WasmtimeDownloadClientComponent => Err(AppError::Repository(
+                "subtitle sync plugin cannot use the download client component runtime backing"
+                    .to_string(),
+            )),
         }
     }
 }

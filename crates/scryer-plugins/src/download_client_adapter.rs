@@ -44,15 +44,33 @@ use crate::types::{
     PluginTorrentQueuePlacement, decode_plugin_result,
 };
 use crate::wasmtime_host::command_host::CommandHost;
-use crate::wasmtime_host::{CommandInvocation, process_command};
+use crate::wasmtime_host::{
+    CommandInvocation, DownloadClientComponentInvocation, process_command,
+    process_download_client_component,
+};
 
 // Keep plugin work below the outer download-feedback gate while leaving enough
 // room for large client responses on slower hosts.
 pub(crate) const DOWNLOAD_CLIENT_PLUGIN_TIMEOUT: std::time::Duration =
     scryer_outbound_http::DOWNLOAD_CLIENT_PLUGIN_TIMEOUT;
+/// Which runtime serves this client's operations.
+///
+/// The legacy reactor is instantiated once and re-entered under a mutex. The
+/// other two arms carry *identical* state — the artifact bytes and the
+/// client-scoped [`CommandHost`] — because the wasip1 command ABI and the
+/// `scryer:download-client/download-client@1.0.0` component world differ only
+/// in transport: the same `PluginCommandRequest` envelope, the same host
+/// services, the same absence of filesystem authority. Everything a client
+/// observes across invocations, the [`CommandHost`] state map included, is
+/// therefore the same object on both.
+enum DownloadClientRuntime {
+    Legacy(Arc<Mutex<LegacyPlugin>>),
+    Command(Arc<NativeDownloadClient>),
+    Component(Arc<NativeDownloadClient>),
+}
+
 pub struct WasmDownloadClient {
-    plugin: Option<Arc<Mutex<LegacyPlugin>>>,
-    command: Option<Arc<CommandDownloadClient>>,
+    runtime: DownloadClientRuntime,
     descriptor: PluginDescriptor,
     client_name: String,
     client_id: String,
@@ -123,10 +141,22 @@ impl SeedingObservationCache {
     }
 }
 
-struct CommandDownloadClient {
+/// State for a native (non-reactor) download client, shared by the command ABI
+/// and the component world. See [`DownloadClientRuntime`].
+struct NativeDownloadClient {
     wasm: Arc<Vec<u8>>,
     command_host: CommandHost,
     invocation_lock: tokio::sync::Mutex<()>,
+}
+
+impl NativeDownloadClient {
+    fn new(wasm: Vec<u8>, command_host: CommandHost) -> Arc<Self> {
+        Arc::new(Self {
+            wasm: Arc::new(wasm),
+            command_host,
+            invocation_lock: tokio::sync::Mutex::new(()),
+        })
+    }
 }
 
 impl WasmDownloadClient {
@@ -137,8 +167,7 @@ impl WasmDownloadClient {
         client_name: String,
     ) -> Self {
         Self {
-            plugin: Some(Arc::new(Mutex::new(plugin))),
-            command: None,
+            runtime: DownloadClientRuntime::Legacy(Arc::new(Mutex::new(plugin))),
             descriptor,
             client_name,
             client_id,
@@ -154,12 +183,31 @@ impl WasmDownloadClient {
         command_host: CommandHost,
     ) -> Self {
         Self {
-            plugin: None,
-            command: Some(Arc::new(CommandDownloadClient {
-                wasm: Arc::new(wasm),
+            runtime: DownloadClientRuntime::Command(NativeDownloadClient::new(wasm, command_host)),
+            descriptor,
+            client_name,
+            client_id,
+            seeding_observations: SeedingObservationCache::default(),
+        }
+    }
+
+    /// A `scryer:download-client/download-client@1.0.0` component client.
+    ///
+    /// Deliberately takes the same arguments as [`Self::new_command`] and is
+    /// built from the same `CommandHost` in the loader: a client that migrates
+    /// its transport must not also change its configuration or its authority.
+    pub fn new_component(
+        wasm: Vec<u8>,
+        descriptor: PluginDescriptor,
+        client_id: String,
+        client_name: String,
+        command_host: CommandHost,
+    ) -> Self {
+        Self {
+            runtime: DownloadClientRuntime::Component(NativeDownloadClient::new(
+                wasm,
                 command_host,
-                invocation_lock: tokio::sync::Mutex::new(()),
-            })),
+            )),
             descriptor,
             client_name,
             client_id,
@@ -168,13 +216,31 @@ impl WasmDownloadClient {
     }
 
     fn legacy_plugin(&self) -> AppResult<Arc<Mutex<LegacyPlugin>>> {
-        self.plugin.clone().ok_or_else(|| {
-            AppError::Repository("command download client cannot use a legacy export".to_string())
-        })
+        match &self.runtime {
+            DownloadClientRuntime::Legacy(plugin) => Ok(Arc::clone(plugin)),
+            DownloadClientRuntime::Command(_) | DownloadClientRuntime::Component(_) => {
+                Err(AppError::Repository(
+                    "command download client cannot use a legacy export".to_string(),
+                ))
+            }
+        }
+    }
+
+    /// The native client behind a non-reactor runtime, or `None` on a legacy
+    /// artifact. Both native transports answer the whole `PluginDownloadClient`
+    /// command set, so every capability gated on "not the legacy reactor" is
+    /// gated on this.
+    fn native_client(&self) -> Option<&Arc<NativeDownloadClient>> {
+        match &self.runtime {
+            DownloadClientRuntime::Command(client) | DownloadClientRuntime::Component(client) => {
+                Some(client)
+            }
+            DownloadClientRuntime::Legacy(_) => None,
+        }
     }
 
     fn supports_category_scoped_feedback(&self) -> bool {
-        self.command.is_some()
+        self.native_client().is_some()
             && self
                 .descriptor
                 .download_client()
@@ -192,27 +258,51 @@ impl WasmDownloadClient {
         command: PluginDownloadClientCommand,
         operation: &'static str,
     ) -> AppResult<Option<PluginDownloadClientCommandResult>> {
-        let Some(client) = self.command.as_ref() else {
+        let Some(client) = self.native_client() else {
             return Ok(None);
         };
+        // One invocation at a time, on the component path as much as on the
+        // command path. Both share a single `CommandHost` state map — where a
+        // client keeps the session cookie it re-uses between calls — so
+        // serializing is part of what a migrating guest already observes, not
+        // an artifact of the older transport.
         let _guard = client.invocation_lock.lock().await;
         let spec = PluginInstanceSpec {
             wasm: Arc::clone(&client.wasm),
+            // This family has never been granted filesystem authority on any
+            // runtime; see the world docs.
             preopens: Vec::new(),
             timeout: DOWNLOAD_CLIENT_PLUGIN_TIMEOUT,
             memory_max_bytes: None,
             command_host: client.command_host.clone(),
         };
-        let response = process_command(
-            &spec,
-            &PluginCommandRequest::new(PluginCommand::DownloadClient(command)),
-            CommandInvocation {
-                plugin_id: &self.descriptor.id,
-                plugin_version: &self.descriptor.version,
-                operation,
-            },
-        )
-        .await?;
+        let request = PluginCommandRequest::new(PluginCommand::DownloadClient(command));
+        let response = match &self.runtime {
+            DownloadClientRuntime::Component(_) => {
+                process_download_client_component(
+                    &spec,
+                    &request,
+                    DownloadClientComponentInvocation {
+                        plugin_id: &self.descriptor.id,
+                        plugin_version: &self.descriptor.version,
+                        operation,
+                    },
+                )
+                .await?
+            }
+            DownloadClientRuntime::Command(_) | DownloadClientRuntime::Legacy(_) => {
+                process_command(
+                    &spec,
+                    &request,
+                    CommandInvocation {
+                        plugin_id: &self.descriptor.id,
+                        plugin_version: &self.descriptor.version,
+                        operation,
+                    },
+                )
+                .await?
+            }
+        };
         match response.response {
             PluginCommandResult::DownloadClient(result) => Ok(Some(result)),
             _ => Err(AppError::Repository(format!(
@@ -1815,7 +1905,7 @@ impl DownloadClient for WasmDownloadClient {
         &self,
         request: &DownloadClientMarkImportedRequest,
     ) -> AppResult<()> {
-        let supported = self.command.is_some()
+        let supported = self.native_client().is_some()
             && self
                 .descriptor
                 .download_client()
@@ -2974,5 +3064,136 @@ mod tests {
 
             assert_eq!(completed.dest_dir, "/downloads/series/Show Season 1");
         }
+    }
+}
+
+#[cfg(test)]
+mod component_routing_tests {
+    use super::*;
+    use crate::legacy_runtime::LegacyPluginSpec;
+    use crate::wasmtime_host::download_client_component_host::tests::{
+        FIXTURE_STATE_VALUE, fixture_component,
+    };
+
+    fn descriptor() -> PluginDescriptor {
+        PluginDescriptor {
+            id: "fixture-download-client".to_string(),
+            name: "Fixture Download Client".to_string(),
+            version: "1.0.0".to_string(),
+            sdk_version: crate::types::SDK_VERSION.to_string(),
+            sdk_constraint: crate::types::current_sdk_constraint(),
+            socket_permissions: Vec::new(),
+            provider: crate::types::ProviderDescriptor::DownloadClient(
+                crate::types::DownloadClientDescriptor {
+                    provider_type: "fixture-download-client".to_string(),
+                    provider_aliases: Vec::new(),
+                    config_fields: Vec::new(),
+                    default_base_url: None,
+                    allowed_hosts: Vec::new(),
+                    accepted_inputs: Vec::new(),
+                    isolation_modes: Vec::new(),
+                    capabilities: crate::types::DownloadClientCapabilities::default(),
+                },
+            ),
+        }
+    }
+
+    fn command_host() -> CommandHost {
+        CommandHost::with_archive_provider(
+            "fixture-download-client".to_string(),
+            std::collections::BTreeMap::new(),
+            Vec::new(),
+            DOWNLOAD_CLIENT_PLUGIN_TIMEOUT,
+            None,
+            None,
+        )
+    }
+
+    fn component_client(wasm: Vec<u8>) -> WasmDownloadClient {
+        WasmDownloadClient::new_component(
+            wasm,
+            descriptor(),
+            "config-1".to_string(),
+            "Fixture".to_string(),
+            command_host(),
+        )
+    }
+
+    /// A component client answers a real `DownloadClient` trait call through
+    /// the component host, and the client-scoped `CommandHost` reaches the
+    /// guest: the value only exists in this client's host state.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_component_client_answers_through_the_component_host() {
+        let client = component_client(fixture_component());
+
+        let message = client
+            .test_connection()
+            .await
+            .expect("the component client must complete a test-connection exchange");
+
+        assert_eq!(message, format!("host-call:{FIXTURE_STATE_VALUE}"));
+    }
+
+    /// The client-scoped host survives between trait calls, so the session
+    /// value a client stores on one operation is readable on the next — the
+    /// cookie-persistence contract seen from the adapter rather than from the
+    /// host.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_component_clients_host_state_survives_between_operations() {
+        let client = component_client(fixture_component());
+
+        client
+            .test_connection()
+            .await
+            .expect("first exchange must succeed");
+        let message = client
+            .test_connection()
+            .await
+            .expect("second exchange must succeed");
+
+        assert_eq!(message, format!("host-call:{FIXTURE_STATE_VALUE}"));
+    }
+
+    /// The component path is additive: a core-module artifact still builds a
+    /// legacy reactor and never reaches the component host.
+    #[test]
+    fn a_core_module_artifact_still_selects_the_legacy_runtime() {
+        let core_module = wat::parse_str("(module (memory (export \"memory\") 1))")
+            .expect("core module WAT must parse");
+        let spec = LegacyPluginSpec::new(core_module, "fixture-download-client".to_string());
+        let plugin = LegacyPlugin::instantiate(spec).expect("legacy reactor must instantiate");
+
+        let client = WasmDownloadClient::new(
+            plugin,
+            descriptor(),
+            "config-1".to_string(),
+            "Fixture".to_string(),
+        );
+
+        assert!(
+            client.native_client().is_none(),
+            "a non-component download client must keep the legacy path"
+        );
+        client
+            .legacy_plugin()
+            .expect("the legacy reactor must be reachable");
+    }
+
+    /// A command-ABI client keeps routing to the command runtime, not to the
+    /// component host: both are "native", and only the runtime arm tells them
+    /// apart.
+    #[test]
+    fn a_command_client_keeps_the_command_runtime() {
+        let client = WasmDownloadClient::new_command(
+            Vec::new(),
+            descriptor(),
+            "config-1".to_string(),
+            "Fixture".to_string(),
+            command_host(),
+        );
+
+        assert!(matches!(client.runtime, DownloadClientRuntime::Command(_)));
+        assert!(client.native_client().is_some());
+        assert!(client.legacy_plugin().is_err());
     }
 }
