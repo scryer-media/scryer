@@ -8883,6 +8883,18 @@ type LocationClassifiedTitlePayload {
 	"""
 	class: TitleLocationClassValue!
 	"""
+	Library this title lives in today.
+	"""
+	sourceLibraryId: ID!
+	"""
+	Root this title lives on today.
+	"""
+	sourceRootId: ID!
+	"""
+	Folder this title owns today, or null when it owns none.
+	"""
+	sourceFolderPath: String
+	"""
 	Library this title would end up in.
 	"""
 	destinationLibraryId: ID!

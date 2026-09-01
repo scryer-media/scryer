@@ -401,6 +401,16 @@ pub fn to_gql_error(err: AppError) -> Error {
         AppError::Validation(message) => {
             coded_gql_error(format!("validation: {message}"), "VALIDATION_ERROR")
         }
+        // A refused location plan is a validation failure the client acts on:
+        // `stale_plan` means re-preview, `blocked_items` means unblock the
+        // selection. The reason travels as a code so the client never has to
+        // parse the sentence (FR-016, FR-081).
+        AppError::LocationPlanRefused { message, code } => {
+            Error::new(format!("validation: {message}")).extend_with(|_, extensions| {
+                extensions.set("code", "LOCATION_PLAN_REFUSED");
+                extensions.set("refusalCode", code.as_str());
+            })
+        }
         AppError::NoAutoEligibleRelease {
             candidate_count,
             reasons,
@@ -552,6 +562,7 @@ fn app_error_kind(err: &AppError) -> &'static str {
     match err {
         AppError::Unauthorized(_) => "Unauthorized",
         AppError::Validation(_) => "Validation",
+        AppError::LocationPlanRefused { .. } => "LocationPlanRefused",
         AppError::NoAutoEligibleRelease { .. } => "NoAutoEligibleRelease",
         AppError::PluginInstallInProgress(_) => "PluginInstallInProgress",
         AppError::NotFound(_) => "NotFound",

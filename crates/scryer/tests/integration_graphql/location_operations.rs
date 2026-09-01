@@ -45,7 +45,18 @@ const PREVIEW_QUERY: &str = r#"
           groups {
             class
             count
-            titles { titleId class destinationLibraryId destinationRootId reasonCode reason blocksStart }
+            titles {
+              titleId
+              class
+              sourceLibraryId
+              sourceRootId
+              sourceFolderPath
+              destinationLibraryId
+              destinationRootId
+              reasonCode
+              reason
+              blocksStart
+            }
           }
         }
         freeSpace {
@@ -348,6 +359,27 @@ async fn graphql_location_operation_preview_classifies_a_mixed_selection() {
     assert_eq!(catalog_only["titles"][0]["titleId"], fileless.id);
     assert_eq!(catalog_only["titles"][0]["reasonCode"], "no_tracked_files");
 
+    // FR-012 / US2.1: every classified title states where it lives now, not
+    // only where it would go — including the no-op and the fileless
+    // catalog-only title, neither of which contributes a plan item to read a
+    // source path off.
+    assert_eq!(root_move["titles"][0]["sourceLibraryId"], library_id);
+    assert_eq!(
+        root_move["titles"][0]["sourceFolderPath"],
+        moving_folder.to_string_lossy().to_string()
+    );
+    assert_eq!(no_op["titles"][0]["sourceRootId"], destination_root_id);
+    assert_eq!(
+        no_op["titles"][0]["sourceFolderPath"],
+        settled_folder.to_string_lossy().to_string()
+    );
+    // A title with no files owns no folder, so the current folder is null
+    // rather than invented.
+    assert!(
+        catalog_only["titles"][0]["sourceFolderPath"].is_null(),
+        "a fileless title has no current folder: {catalog_only}"
+    );
+
     for empty in ["CROSS_LIBRARY_TRANSFER", "INCOMPATIBLE", "NEEDS_RESOLUTION"] {
         let group = group(preview, empty);
         assert_eq!(group["count"], 0, "{empty} should be empty: {preview}");
@@ -422,10 +454,17 @@ async fn graphql_start_location_operation_refuses_a_stale_fingerprint() {
         }}),
     )
     .await;
-    let (message, _code) = first_graphql_error_message_and_code(&body);
+    let (message, code) = first_graphql_error_message_and_code(&body);
     assert!(
         message.contains("no longer matches"),
         "a stale confirmation should send the user back to a fresh preview, got {message}"
+    );
+    // FR-081: the refusal is machine-readable, so the client re-previews on
+    // `stale_plan` without parsing the sentence it also shows.
+    assert_eq!(code, "LOCATION_PLAN_REFUSED", "{body}");
+    assert_eq!(
+        body["errors"][0]["extensions"]["refusalCode"], "stale_plan",
+        "{body}"
     );
 
     // FR-081: nothing was started, so nothing landed on the destination root.

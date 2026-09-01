@@ -79,6 +79,12 @@ export type LocationConfirmationRequirement = "SIMPLE" | "TYPED";
 export type LocationClassifiedTitle = {
   titleId: string;
   class: TitleLocationClass;
+  /** Library the title lives in today (FR-012). */
+  sourceLibraryId: string;
+  /** Root the title lives on today (FR-012). */
+  sourceRootId: string;
+  /** Folder the title owns today, or null when it owns none (FR-012). */
+  sourceFolderPath: string | null;
   destinationLibraryId: string;
   destinationRootId: string;
   reasonCode: string | null;
@@ -353,6 +359,40 @@ export function blockingTitles(
     .flatMap((group) => group.titles);
 }
 
+/** Where one classified title lives now and where it would end up (FR-012). */
+export type ClassifiedTitlePlacement = {
+  /** Current folder, falling back to the current root when it owns none. */
+  source: string | null;
+  /** Calculated destination folder, falling back to the destination root. */
+  destination: string | null;
+};
+
+/**
+ * The current → destination statement FR-012 requires for *every* selected
+ * title, including the no-op and catalog-only ones that contribute no plan item.
+ *
+ * The classification payload carries the title's own placement, so it is the
+ * answer whenever it has one; the plan items are a fallback for the moving
+ * titles, and the root paths are the last resort for a title with no folder.
+ */
+export function classifiedTitlePlacement(
+  entry: LocationClassifiedTitle,
+  context: {
+    planFolders?: ReadonlyMap<
+      string,
+      { source: string | null; destination: string | null }
+    >;
+    rootPathById?: ReadonlyMap<string, string>;
+  } = {},
+): ClassifiedTitlePlacement {
+  const planned = context.planFolders?.get(entry.titleId);
+  const rootPath = (rootId: string) => context.rootPathById?.get(rootId) ?? null;
+  return {
+    source: entry.sourceFolderPath ?? planned?.source ?? rootPath(entry.sourceRootId),
+    destination: planned?.destination ?? rootPath(entry.destinationRootId),
+  };
+}
+
 /** True when this entry is blocked by an active download or import (FR-086). */
 export function isActiveWorkBlock(entry: LocationClassifiedTitle): boolean {
   return entry.reasonCode === "active_download_or_import";
@@ -506,9 +546,8 @@ const STALE_PLAN_MARKERS = [
 
 /**
  * Whether a failed `startLocationOperation` means "the plan moved under you".
- * The backend answers with a validation message rather than a code, so the
- * dialog also re-previews and compares fingerprints; this is the fast path that
- * keeps the user from ever seeing the raw sentence.
+ * Prefer {@link recognizeStartRefusal}: this reads the prose, which is the
+ * fallback for a server (or a transport) that did not carry the refusal code.
  */
 export function isStalePlanMessage(message: string | null | undefined): boolean {
   if (!message) {
@@ -530,6 +569,81 @@ export function isBlockedSelectionMessage(
     normalized.includes("blocked_items") ||
     normalized.includes("still need a decision")
   );
+}
+
+/**
+ * Why the server refused to start a confirmed plan. These are the application's
+ * own refusal codes, carried on the GraphQL error as
+ * `extensions.refusalCode` beside the `LOCATION_PLAN_REFUSED` error code.
+ */
+export type LocationRefusalCode =
+  | "stale_plan"
+  | "blocked_items"
+  | "typed_confirmation_required"
+  | "typed_confirmation_mismatch";
+
+const REFUSAL_CODES: readonly string[] = [
+  "stale_plan",
+  "blocked_items",
+  "typed_confirmation_required",
+  "typed_confirmation_mismatch",
+];
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** The refusal code the server attached, when it attached one. */
+export function startRefusalCodeFromError(
+  error: unknown,
+): LocationRefusalCode | null {
+  if (!isRecord(error) || !Array.isArray(error.graphQLErrors)) {
+    return null;
+  }
+  for (const graphQlError of error.graphQLErrors) {
+    if (!isRecord(graphQlError) || !isRecord(graphQlError.extensions)) {
+      continue;
+    }
+    const code = graphQlError.extensions.refusalCode;
+    if (typeof code === "string" && REFUSAL_CODES.includes(code)) {
+      return code as LocationRefusalCode;
+    }
+  }
+  return null;
+}
+
+/**
+ * Why a start was refused: the server's code when it sent one, and the message
+ * prose otherwise. The prose path exists because a refusal that loses its
+ * extensions is still a refusal the dialog must answer with a fresh preview
+ * rather than a raw sentence about fingerprints.
+ */
+export function recognizeStartRefusal(
+  error: unknown,
+  message?: string | null,
+): LocationRefusalCode | null {
+  const code = startRefusalCodeFromError(error);
+  if (code) {
+    return code;
+  }
+  if (isStalePlanMessage(message)) {
+    return "stale_plan";
+  }
+  if (isBlockedSelectionMessage(message)) {
+    return "blocked_items";
+  }
+  return null;
+}
+
+/**
+ * A refusal the dialog answers by re-previewing: the plan moved, or a title
+ * became blocked between preview and confirm. Either way the fix is a fresh
+ * plan (FR-016, FR-081). A typed-confirmation refusal is the user's to fix.
+ */
+export function refusalNeedsFreshPreview(
+  code: LocationRefusalCode | null,
+): boolean {
+  return code === "stale_plan" || code === "blocked_items";
 }
 
 /** Translation key for a classification group heading. */

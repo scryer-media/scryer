@@ -9,6 +9,7 @@ import {
   CLASSIFICATION_ORDER,
   checkpointNeedsAttention,
   classBlocksStart,
+  classifiedTitlePlacement,
   classMovesFiles,
   isActiveWorkBlock,
   isBlockedSelectionMessage,
@@ -21,13 +22,17 @@ import {
   orderedPlanKindCounts,
   orderedPlanSections,
   previewCanStart,
+  recognizeStartRefusal,
+  refusalNeedsFreshPreview,
   remainingSelection,
   shouldPollOperation,
+  startRefusalCodeFromError,
   toCount,
   typedConfirmationSatisfied,
   verificationStampText,
   destinationLibraryDisabledReasonKey,
   type LocationClassificationGroup,
+  type LocationClassifiedTitle,
   type LocationOperation,
   type LocationOperationCounters,
   type LocationOperationPreview,
@@ -75,6 +80,9 @@ test("all six classification groups render, empty ones included", () => {
           {
             titleId: "b",
             class: "NO_OP",
+            sourceLibraryId: "lib",
+            sourceRootId: "root-b",
+            sourceFolderPath: "/data/b/Settled",
             destinationLibraryId: "lib",
             destinationRootId: "root-b",
             reasonCode: "already_at_destination",
@@ -132,6 +140,9 @@ test("blocked titles collect from every blocking class, in order", () => {
             {
               titleId: "c",
               class: "INCOMPATIBLE",
+              sourceLibraryId: "lib",
+              sourceRootId: "root-a",
+              sourceFolderPath: "/data/a/C",
               destinationLibraryId: "lib",
               destinationRootId: "root",
               reasonCode: "incompatible_facet",
@@ -145,6 +156,9 @@ test("blocked titles collect from every blocking class, in order", () => {
             {
               titleId: "a",
               class: "NEEDS_RESOLUTION",
+              sourceLibraryId: "lib",
+              sourceRootId: "root-a",
+              sourceFolderPath: "/data/a/A",
               destinationLibraryId: "lib",
               destinationRootId: "root",
               reasonCode: "active_download_or_import",
@@ -500,6 +514,107 @@ test("a refused confirmation over blocked titles is recognised too", () => {
   assert.equal(isBlockedSelectionMessage("blocked_items"), true);
   assert.equal(isBlockedSelectionMessage("disk full"), false);
   assert.equal(isBlockedSelectionMessage(undefined), false);
+});
+
+test("the server's refusal code is preferred over the message prose", () => {
+  const refused = (refusalCode: string) => ({
+    graphQLErrors: [
+      {
+        message: "validation: something the client should not have to read",
+        extensions: { code: "LOCATION_PLAN_REFUSED", refusalCode },
+      },
+    ],
+  });
+
+  assert.equal(recognizeStartRefusal(refused("stale_plan"), null), "stale_plan");
+  assert.equal(
+    recognizeStartRefusal(refused("blocked_items"), null),
+    "blocked_items",
+  );
+  assert.equal(startRefusalCodeFromError(refused("stale_plan")), "stale_plan");
+  // An unknown code is not silently promoted into a refusal.
+  assert.equal(startRefusalCodeFromError(refused("something_new")), null);
+
+  // The prose stays the fallback for an error that carries no extensions.
+  assert.equal(
+    recognizeStartRefusal(
+      { graphQLErrors: [{ message: "validation: boom" }] },
+      "the preview no longer matches what is on disk or in the catalog",
+    ),
+    "stale_plan",
+  );
+  assert.equal(
+    recognizeStartRefusal(new Error("boom"), "blocked_items"),
+    "blocked_items",
+  );
+  assert.equal(recognizeStartRefusal(new Error("boom"), "disk full"), null);
+
+  // Only the two re-previewable refusals send the dialog back for a fresh plan.
+  assert.equal(refusalNeedsFreshPreview("stale_plan"), true);
+  assert.equal(refusalNeedsFreshPreview("blocked_items"), true);
+  assert.equal(refusalNeedsFreshPreview("typed_confirmation_mismatch"), false);
+  assert.equal(refusalNeedsFreshPreview(null), false);
+});
+
+test("every classified title states where it lives now (FR-012)", () => {
+  const rootPathById = new Map([
+    ["root-a", "/data/a"],
+    ["root-b", "/data/b"],
+  ]);
+  const planFolders = new Map([
+    ["moving", { source: "/data/a/stale-name", destination: "/data/b/Moving (2024)" }],
+  ]);
+  const entry = (
+    titleId: string,
+    overrides: Partial<LocationClassifiedTitle> = {},
+  ): LocationClassifiedTitle => ({
+    titleId,
+    class: "ROOT_MOVE",
+    sourceLibraryId: "lib",
+    sourceRootId: "root-a",
+    sourceFolderPath: `/data/a/${titleId}`,
+    destinationLibraryId: "lib",
+    destinationRootId: "root-b",
+    reasonCode: null,
+    reason: null,
+    ...overrides,
+  });
+
+  // The classification's own folder wins over the plan item's source path, so
+  // the row states where the title is, not where a sampled item started.
+  assert.deepEqual(
+    classifiedTitlePlacement(entry("moving"), { planFolders, rootPathById }),
+    { source: "/data/a/moving", destination: "/data/b/Moving (2024)" },
+  );
+
+  // A no-op contributes no plan item and still states current → destination.
+  assert.deepEqual(
+    classifiedTitlePlacement(
+      entry("settled", {
+        class: "NO_OP",
+        sourceRootId: "root-b",
+        sourceFolderPath: "/data/b/Settled",
+      }),
+      { planFolders, rootPathById },
+    ),
+    { source: "/data/b/Settled", destination: "/data/b" },
+  );
+
+  // A fileless catalog-only title owns no folder, so its root stands in for it
+  // rather than the row going blank.
+  assert.deepEqual(
+    classifiedTitlePlacement(
+      entry("fileless", { class: "CATALOG_ONLY", sourceFolderPath: null }),
+      { planFolders, rootPathById },
+    ),
+    { source: "/data/a", destination: "/data/b" },
+  );
+
+  // With nothing but the payload, the fields that exist are still reported.
+  assert.deepEqual(classifiedTitlePlacement(entry("bare")), {
+    source: "/data/a/bare",
+    destination: null,
+  });
 });
 
 test("a disabled destination names why it cannot accept the selection", () => {

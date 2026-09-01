@@ -216,6 +216,11 @@ pub struct TitleClassificationFacts {
     /// Whether the title owns a folder today. A title with tracked files but no
     /// folder match cannot have a destination folder calculated for it.
     pub has_folder_match: bool,
+    /// Stored path of the folder the title owns today, when it owns one. This
+    /// is the "current folder" half of FR-012's current → destination
+    /// statement, carried so every class — including the ones that plan no
+    /// filesystem work — can state where the title lives now.
+    pub folder_path: Option<String>,
     /// Tracked media files on disk. Zero is the FR-076 fast path.
     pub tracked_file_count: i64,
     /// An active download or import on this title (FR-086). The string is the
@@ -247,6 +252,7 @@ impl TitleClassificationFacts {
             library_name: String::new(),
             root_id: root_id.into(),
             has_folder_match: true,
+            folder_path: None,
             tracked_file_count: 0,
             active_work: None,
             owned_by_operation: None,
@@ -269,8 +275,11 @@ impl TitleClassificationFacts {
         self
     }
 
-    pub fn with_folder_match(mut self, has_folder_match: bool) -> Self {
-        self.has_folder_match = has_folder_match;
+    /// Record the folder the title owns today. `None` is a title with no folder
+    /// match, so this sets both halves at once and they can never disagree.
+    pub fn with_folder_path(mut self, folder_path: Option<String>) -> Self {
+        self.has_folder_match = folder_path.is_some();
+        self.folder_path = folder_path;
         self
     }
 
@@ -325,6 +334,13 @@ pub fn facets_are_compatible(source: &MediaFacet, destination: &MediaFacet) -> b
 pub struct TitleClassification {
     pub title_id: String,
     pub class: TitleLocationClass,
+    /// Library the title lives in today (FR-012).
+    pub source_library_id: String,
+    /// Root the title lives on today (FR-012).
+    pub source_root_id: String,
+    /// Stored path of the folder the title owns today, or `None` for a title
+    /// that owns no folder (FR-012).
+    pub source_folder_path: Option<String>,
     /// Library the title ends up in.
     pub destination_library_id: String,
     /// Root the title ends up on.
@@ -426,6 +442,9 @@ pub fn classify_title(
                       reason: Option<String>| TitleClassification {
         title_id: facts.title_id.clone(),
         class,
+        source_library_id: facts.library_id.clone(),
+        source_root_id: facts.root_id.clone(),
+        source_folder_path: facts.folder_path.clone(),
         destination_library_id: destination_library_id.clone(),
         destination_root_id: root_id,
         reason_code: reason_code.map(str::to_string),
@@ -700,6 +719,73 @@ mod tests {
             assert_eq!(title.destination_root_id, "root-b");
             assert_eq!(title.destination_library_id, "lib-movies");
         }
+    }
+
+    /// FR-012 / US2.1: the preview states current → destination for every
+    /// title, so the source placement rides on every class — including the
+    /// no-op and catalog-only ones that plan no filesystem work at all.
+    #[test]
+    fn every_class_carries_the_titles_current_placement() {
+        let titles = vec![
+            movie_facts("moving", "root-a")
+                .with_folder_path(Some("/media/a/Moving (2024)".to_string())),
+            movie_facts("staying", "root-b")
+                .with_folder_path(Some("/media/b/Staying (2024)".to_string())),
+            movie_facts("fileless", "root-a").with_tracked_files(0),
+            movie_facts("blocked", "root-a")
+                .with_folder_path(Some("/media/a/Blocked (2024)".to_string()))
+                .with_active_work("an import is still running"),
+        ];
+        let library = movies_library(&["root-a", "root-b"]);
+
+        let result = classify_selection(
+            &titles,
+            &DestinationRequest::to_root("root-b"),
+            Some(&library),
+        );
+
+        for (title_id, expected_root, expected_folder) in [
+            ("moving", "root-a", Some("/media/a/Moving (2024)")),
+            ("staying", "root-b", Some("/media/b/Staying (2024)")),
+            ("fileless", "root-a", None),
+            ("blocked", "root-a", Some("/media/a/Blocked (2024)")),
+        ] {
+            let classified = result.classification_of(title_id).expect("title present");
+            assert_eq!(classified.source_library_id, "lib-movies");
+            assert_eq!(classified.source_root_id, expected_root, "{title_id}");
+            assert_eq!(
+                classified.source_folder_path.as_deref(),
+                expected_folder,
+                "{title_id}"
+            );
+        }
+        // The classes those titles landed in are the point: two of them move
+        // nothing and still state where they live.
+        assert_eq!(result.counts.root_move, 1);
+        assert_eq!(result.counts.no_op, 1);
+        assert_eq!(result.counts.catalog_only, 1);
+        assert_eq!(result.counts.needs_resolution, 1);
+    }
+
+    /// A title with tracked files but no folder to move from is unresolvable,
+    /// and `with_folder_path(None)` is the one way to say so.
+    #[test]
+    fn tracked_files_without_a_folder_need_resolution() {
+        let facts = movie_facts("orphan", "root-a").with_folder_path(None);
+        let library = movies_library(&["root-a", "root-b"]);
+
+        let classification = classify_title(
+            &facts,
+            &DestinationRequest::to_root("root-b"),
+            Some(&library),
+        );
+
+        assert_eq!(classification.class, TitleLocationClass::NeedsResolution);
+        assert_eq!(
+            classification.reason_code.as_deref(),
+            Some(reason_codes::NO_FOLDER_MATCH)
+        );
+        assert!(classification.source_folder_path.is_none());
     }
 
     /// US2.4 / FR-076: a monitored title with no tracked files is catalog-only

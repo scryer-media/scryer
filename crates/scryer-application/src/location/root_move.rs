@@ -1191,6 +1191,9 @@ mod tests {
             titles: vec![crate::location::classify::TitleClassification {
                 title_id: "t1".to_string(),
                 class: TitleLocationClass::RootMove,
+                source_library_id: "lib".to_string(),
+                source_root_id: "other-root".to_string(),
+                source_folder_path: Some("/media/other-root/T1".to_string()),
                 destination_library_id: "lib".to_string(),
                 destination_root_id: "root".to_string(),
                 reason_code: None,

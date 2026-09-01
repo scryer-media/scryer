@@ -979,12 +979,13 @@ impl AppUseCase {
             .with_library_name(library_name)
             .with_monitored(title.monitored)
             .with_tracked_files(media_files.len() as i64)
-            .with_folder_match(
+            .with_folder_path(
                 title
                     .folder_path
                     .as_deref()
                     .map(str::trim)
-                    .is_some_and(|path| !path.is_empty()),
+                    .filter(|path| !path.is_empty())
+                    .map(str::to_string),
             );
             if let Some(detail) = self.active_work_blocking_a_move(title).await? {
                 fact = fact.with_active_work(detail);
@@ -1414,22 +1415,25 @@ async fn read_destination_entries(destination_folder: &Path) -> Vec<DestinationI
     items
 }
 
+/// A refused confirmation keeps its prose *and* its code: the client re-previews
+/// on a stale plan and unblocks a selection on a blocked one, and it should not
+/// have to read a sentence to tell the two apart (FR-016, FR-081).
 fn confirmation_error(error: PlanConfirmationError) -> AppError {
-    match error {
-        PlanConfirmationError::Stale => AppError::Validation(
+    let message = match error {
+        PlanConfirmationError::Stale => {
             "the preview no longer matches what is on disk or in the catalog; review a fresh preview before confirming"
-                .to_string(),
-        ),
-        PlanConfirmationError::Blocked => AppError::Validation(
+        }
+        PlanConfirmationError::Blocked => {
             "some selected titles still need a decision; resolve or remove them before starting"
-                .to_string(),
-        ),
+        }
         PlanConfirmationError::TypedConfirmationRequired => {
-            AppError::Validation("this operation requires typed confirmation".to_string())
+            "this operation requires typed confirmation"
         }
-        PlanConfirmationError::TypedConfirmationMismatch => {
-            AppError::Validation("the typed confirmation did not match".to_string())
-        }
+        PlanConfirmationError::TypedConfirmationMismatch => "the typed confirmation did not match",
+    };
+    AppError::LocationPlanRefused {
+        message: message.to_string(),
+        code: error,
     }
 }
 

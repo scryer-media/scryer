@@ -216,6 +216,12 @@ pub struct LocationClassifiedTitlePayload {
     pub title_id: ID,
     /// Class this title falls into for the requested destination.
     pub class: TitleLocationClassValue,
+    /// Library this title lives in today.
+    pub source_library_id: ID,
+    /// Root this title lives on today.
+    pub source_root_id: ID,
+    /// Folder this title owns today, or null when it owns none.
+    pub source_folder_path: Option<String>,
     /// Library this title would end up in.
     pub destination_library_id: ID,
     /// Root this title would end up on.

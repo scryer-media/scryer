@@ -223,6 +223,9 @@ fn from_classified_title(title: &TitleClassification) -> LocationClassifiedTitle
     LocationClassifiedTitlePayload {
         title_id: ID::from(title.title_id.clone()),
         class: from_title_location_class(title.class),
+        source_library_id: ID::from(title.source_library_id.clone()),
+        source_root_id: ID::from(title.source_root_id.clone()),
+        source_folder_path: title.source_folder_path.as_deref().map(display_path),
         destination_library_id: ID::from(title.destination_library_id.clone()),
         destination_root_id: ID::from(title.destination_root_id.clone()),
         reason_code: title.reason_code.clone(),

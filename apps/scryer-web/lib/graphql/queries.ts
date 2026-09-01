@@ -4047,6 +4047,9 @@ export const locationOperationPreviewQuery = `query LocationOperationPreview($in
         titles {
           titleId
           class
+          sourceLibraryId
+          sourceRootId
+          sourceFolderPath
           destinationLibraryId
           destinationRootId
           reasonCode

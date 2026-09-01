@@ -38,18 +38,20 @@ import {
   blockingTitles,
   classBlocksStart,
   classificationLabelKey,
+  classifiedTitlePlacement,
   destinationLibraryDisabledReasonKey,
-  isBlockedSelectionMessage,
-  isStalePlanMessage,
   offersModeSelection,
   orderedClassificationGroups,
   orderedPlanKindCounts,
   orderedPlanSections,
   planKindLabelKey,
   previewCanStart,
+  recognizeStartRefusal,
+  refusalNeedsFreshPreview,
   remainingSelection,
   toCount,
   typedConfirmationSatisfied,
+  type ClassifiedTitlePlacement,
   type LocationClassifiedTitle,
   type LocationOperationPreview,
   type LocationPlanItem,
@@ -287,9 +289,10 @@ export function MoveTitlesDialog({
     [preview],
   );
 
-  // Per-title source/destination folders come from the plan items; the current
-  // library and root come from the title rows, which is where FR-012's "current
-  // library/root/folder" actually lives.
+  // FR-012's "current library/root/folder" rides on the classification payload
+  // itself, so a no-op or catalog-only title states its placement too. These
+  // plan-item folders are the fallback for the moving titles, whose calculated
+  // destination folder only the plan knows.
   const foldersByTitle = React.useMemo(() => {
     const folders = new Map<string, { source: string | null; destination: string | null }>();
     for (const section of preview?.sections ?? []) {
@@ -386,7 +389,7 @@ export function MoveTitlesDialog({
       // A refused confirmation is nearly always "the plan moved under you", or
       // a title that became blocked between preview and confirm. Either way the
       // answer is a fresh plan, not a backend sentence about fingerprints.
-      if (isStalePlanMessage(message) || isBlockedSelectionMessage(message)) {
+      if (refusalNeedsFreshPreview(recognizeStartRefusal(error, message))) {
         setPlanChanged(true);
         setStartError(null);
         setPreviewNonce((current) => current + 1);
@@ -706,16 +709,17 @@ export function MoveTitlesDialog({
                     titleName={(titleId) =>
                       titleById.get(titleId)?.name ?? titleId
                     }
-                    currentLibraryName={(titleId) =>
-                      titleById.get(titleId)?.libraryName ?? null
+                    currentLibraryName={(entry) =>
+                      libraryById.get(entry.sourceLibraryId)?.name ??
+                      titleById.get(entry.titleId)?.libraryName ??
+                      null
                     }
-                    currentRootPath={(titleId) =>
-                      titleById.get(titleId)?.rootFolderPath ?? null
+                    placement={(entry) =>
+                      classifiedTitlePlacement(entry, {
+                        planFolders: foldersByTitle,
+                        rootPathById,
+                      })
                     }
-                    destinationRootPath={(entry) =>
-                      rootPathById.get(entry.destinationRootId) ?? null
-                    }
-                    folders={foldersByTitle}
                     files={filesByTitle}
                     onDeselect={deselect}
                     deselectDisabled={starting}
@@ -954,10 +958,8 @@ type ClassificationGroupProps = {
   count: number;
   entries: LocationClassifiedTitle[];
   titleName: (titleId: string) => string;
-  currentLibraryName: (titleId: string) => string | null;
-  currentRootPath: (titleId: string) => string | null;
-  destinationRootPath: (entry: LocationClassifiedTitle) => string | null;
-  folders: Map<string, { source: string | null; destination: string | null }>;
+  currentLibraryName: (entry: LocationClassifiedTitle) => string | null;
+  placement: (entry: LocationClassifiedTitle) => ClassifiedTitlePlacement;
   files: Map<string, { files: number; bytes: number }>;
   onDeselect: (titleId: string) => void;
   deselectDisabled: boolean;
@@ -970,9 +972,7 @@ function ClassificationGroup({
   entries,
   titleName,
   currentLibraryName,
-  currentRootPath,
-  destinationRootPath,
-  folders,
+  placement,
   files,
   onDeselect,
   deselectDisabled,
@@ -1002,7 +1002,7 @@ function ClassificationGroup({
         <ul className="mt-1 space-y-1">
           {entries.map((entry) => {
             const stats = files.get(entry.titleId);
-            const folder = folders.get(entry.titleId);
+            const where = placement(entry);
             return (
               <li key={entry.titleId} className="min-w-0 text-xs">
                 <span className="flex items-center justify-between gap-2">
@@ -1022,19 +1022,17 @@ function ClassificationGroup({
                   ) : null}
                 </span>
                 <span className="block text-muted-foreground">
-                  {currentLibraryName(entry.titleId) ?? "—"}
+                  {currentLibraryName(entry) ?? "—"}
                   {" · "}
                   <span className="font-[var(--font-code)] break-all">
-                    {folder?.source ?? currentRootPath(entry.titleId) ?? "—"}
+                    {where.source ?? "—"}
                   </span>
                   <ArrowRight
                     aria-hidden="true"
                     className="mx-1 inline h-3 w-3 align-[-1px]"
                   />
                   <span className="font-[var(--font-code)] break-all text-foreground">
-                    {folder?.destination ??
-                      destinationRootPath(entry) ??
-                      "—"}
+                    {where.destination ?? "—"}
                   </span>
                 </span>
                 {stats ? (
