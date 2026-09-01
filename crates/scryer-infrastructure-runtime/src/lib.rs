@@ -19,6 +19,11 @@ pub(crate) mod media_server_playback {
     pub(crate) use scryer_infrastructure_identity::media_server_playback::*;
 }
 
+/// Provider adapters for media-server watch signals (RFC 137 §7.3, WP-M).
+pub(crate) mod media_server_signals {
+    pub(crate) use scryer_infrastructure_identity::media_server_signals::*;
+}
+
 #[cfg(test)]
 pub(crate) mod media_server_connection_store {
     pub(crate) use scryer_infrastructure_library::media::servers::*;
@@ -127,6 +132,7 @@ pub(crate) use scryer_infrastructure_library::media::{
     search::media_file_store::MediaFileStore,
     servers::MediaServerConnectionStore,
     shows::store::ShowStore,
+    signals::MediaServerSignalStore,
     titles::store::TitleStore,
 };
 pub(crate) use scryer_infrastructure_metadata::metadata::gateway::client::{

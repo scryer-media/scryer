@@ -2320,6 +2320,19 @@ pub trait UserExternalAccountRepository: Send + Sync {
         connection_id: &str,
         username: &str,
     ) -> AppResult<Option<scryer_domain::UserExternalAccount>>;
+    /// Every verified link on one connection: the participant set for
+    /// media-server signal sync (RFC 137, "Participant sets and multi-user
+    /// identity").
+    ///
+    /// "Verified" is all three of active status, a recorded `verified_at`, and
+    /// a non-empty `external_user_id` — a pending or disabled link, or one
+    /// without a provider user id, cannot be read on the provider's behalf and
+    /// must not silently become a participant.
+    async fn list_verified_by_connection(
+        &self,
+        provider: scryer_domain::ExternalAccountProvider,
+        connection_id: &str,
+    ) -> AppResult<Vec<scryer_domain::UserExternalAccount>>;
     async fn update(
         &self,
         account: scryer_domain::UserExternalAccount,
@@ -7329,4 +7342,99 @@ impl PlaybackActivitySnapshot {
 #[async_trait]
 pub trait MediaServerPlaybackProbe: Send + Sync {
     async fn active_playback(&self) -> AppResult<PlaybackActivitySnapshot>;
+}
+
+// ── Media-server watch signals (RFC 137 section 7.3) ────────────────────────
+
+/// One played item exactly as a provider reported it, before any Scryer
+/// identity is attached.
+///
+/// This is the provider-neutral shape every adapter normalizes into: Jellyfin
+/// today, Emby and Plex next. It carries the provider's own ids and the
+/// external ids needed to map the item, and nothing else — no Scryer title id,
+/// because the adapter has no business resolving one, and no credential.
+///
+/// `external_ids` is keyed by lowercase source name (`tmdb`, `tvdb`, `imdb`)
+/// so mapping never has to know a provider's capitalization. For an episode,
+/// `series_external_ids` carries the *series'* ids: episode-level provider ids
+/// are unreliable across providers, so the series plus season/episode numbers
+/// is the join that actually holds.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProviderPlayedItem {
+    pub provider_item_id: String,
+    pub kind: scryer_domain::MediaServerSignalKind,
+    pub name: Option<String>,
+    pub external_ids: std::collections::BTreeMap<String, String>,
+    /// Series-scoped ids for an episode. Empty for a movie.
+    pub series_external_ids: std::collections::BTreeMap<String, String>,
+    pub series_provider_item_id: Option<String>,
+    pub season_number: Option<i64>,
+    pub episode_number: Option<i64>,
+    pub played: bool,
+    pub play_count: i64,
+    pub last_played_at: Option<DateTime<Utc>>,
+}
+
+/// Reads one participant's played items from one media-server connection.
+///
+/// Implemented once in infrastructure and dispatched on
+/// [`scryer_domain::MediaServerConnection::provider`], so adding Emby or Plex
+/// is a new arm rather than a new seam. The implementation owns paging,
+/// truncation, and every provider-specific quirk; callers see only normalized
+/// items.
+///
+/// An `Err` is this participant's failure alone. The sync job records it
+/// against the connection and moves to the next participant; it never aborts
+/// the sweep, because one unreadable account must not blank every other
+/// person's watch history.
+#[async_trait]
+pub trait MediaServerSignalSource: Send + Sync {
+    async fn fetch_played_items(
+        &self,
+        connection: &scryer_domain::MediaServerConnection,
+        external_user_id: &str,
+    ) -> AppResult<Vec<ProviderPlayedItem>>;
+}
+
+/// Durable storage for normalized media-server watch signals.
+#[async_trait]
+pub trait MediaServerSignalRepository: Send + Sync {
+    /// Atomically replace one participant's signal set: insert the new rows
+    /// with a fresh `sync_generation`, then delete that participant's rows from
+    /// older generations. An item absent from the latest sweep is thereby
+    /// no-longer-played rather than stale.
+    ///
+    /// Returns the number of rows the participant now has. An empty `signals`
+    /// is a meaningful write, not a no-op: it means this person has nothing
+    /// played any more, and every prior row for them is removed.
+    async fn replace_participant_signals(
+        &self,
+        connection_id: &str,
+        external_user_id: &str,
+        signals: &[scryer_domain::NewUserMediaSignal],
+    ) -> AppResult<u64>;
+
+    /// Movie-level signals for a batch of title ids (`kind = 'movie'` only),
+    /// grouped by title id. Titles with no signals are absent from the map
+    /// rather than mapped to an empty vector, so a caller cannot mistake
+    /// "nobody watched it" for "no signal source is configured".
+    async fn movie_signals_for_titles(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<HashMap<String, Vec<scryer_domain::UserMediaSignal>>>;
+
+    /// Episode-level signals (`kind = 'episode'`) grouped by the id of the
+    /// title that owns the episode, so a series' signals arrive in one bucket.
+    async fn episode_signals_for_titles(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<HashMap<String, Vec<scryer_domain::UserMediaSignal>>>;
+
+    async fn signal_sync_states(&self)
+    -> AppResult<Vec<scryer_domain::MediaServerSignalSyncState>>;
+
+    async fn upsert_signal_sync_state(
+        &self,
+        state: &scryer_domain::MediaServerSignalSyncState,
+    ) -> AppResult<()>;
 }

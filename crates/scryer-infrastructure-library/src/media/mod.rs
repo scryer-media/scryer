@@ -5,5 +5,6 @@ pub mod requests;
 pub mod search;
 pub mod servers;
 pub mod shows;
+pub mod signals;
 pub mod title_credits;
 pub mod titles;

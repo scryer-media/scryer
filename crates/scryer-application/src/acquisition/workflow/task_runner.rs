@@ -25,6 +25,12 @@ const MAINTENANCE_EVALUATION_JITTER_WINDOW: std::time::Duration =
 const LIFECYCLE_ACTION_HANDLING_JITTER_WINDOW: std::time::Duration =
     std::time::Duration::from_secs(30 * 60);
 
+/// Same rationale again for the media-server signal sweep (RFC 137 §7.3). The
+/// jitter matters more here than for the local passes: every instance in a
+/// fleet would otherwise hit the same Jellyfin server at the same moment.
+const MEDIA_SERVER_SIGNAL_SYNC_JITTER_WINDOW: std::time::Duration =
+    std::time::Duration::from_secs(30 * 60);
+
 #[derive(Debug, Clone, Copy)]
 struct BackgroundAcquisitionSettings {
     max_scopes_per_cycle: usize,
@@ -4107,6 +4113,29 @@ pub async fn start_background_acquisition_poller(
     )
     .await;
 
+    let media_server_signal_cadence = std::time::Duration::from_secs(
+        crate::jobs::MEDIA_SERVER_SIGNAL_SYNC_INTERVAL_SECONDS as u64,
+    );
+    let media_server_signal_offset = match app.discovery_scheduler_seed().await {
+        Ok(seed) => crate::scheduler::stable_jitter_offset(
+            &seed,
+            "media_server_signal_sync",
+            "global",
+            MEDIA_SERVER_SIGNAL_SYNC_JITTER_WINDOW,
+        ),
+        Err(error) => {
+            warn!(error = %error, "could not resolve the scheduler seed; media-server signal sync runs unjittered");
+            std::time::Duration::ZERO
+        }
+    };
+    app.set_job_next_run_at(
+        JobKey::MediaServerSignalSync,
+        Utc::now()
+            + chrono::Duration::from_std(media_server_signal_offset)
+                .unwrap_or_else(|_| chrono::Duration::zero()),
+    )
+    .await;
+
     let mut poll_interval = new_skip_interval(std::time::Duration::from_secs(
         settings.poll_interval_seconds.max(1) as u64,
     ));
@@ -4126,6 +4155,10 @@ pub async fn start_background_acquisition_poller(
     let mut lifecycle_action_interval = tokio::time::interval_at(
         tokio::time::Instant::now() + lifecycle_action_offset,
         lifecycle_action_cadence,
+    );
+    let mut media_server_signal_interval = tokio::time::interval_at(
+        tokio::time::Instant::now() + media_server_signal_offset,
+        media_server_signal_cadence,
     );
 
     // Consume immediate intervals.
@@ -4306,6 +4339,22 @@ pub async fn start_background_acquisition_poller(
                     if let Err(e) = app.run_scheduled_job_now(JobKey::LifecycleActionHandling, JobTriggerSource::ScheduledInterval).await {
                         warn!(error = %e, "scheduled maintenance action handling failed");
                         metrics::counter!("scryer_task_errors_total", "task" => "lifecycle_action_handling").increment(1);
+                    }
+                }).await;
+            }
+            _ = media_server_signal_interval.tick() => {
+                let app = app.clone();
+                let cadence = media_server_signal_cadence;
+                run_task("media_server_signal_sync", async move {
+                    app.set_job_next_run_at(
+                        JobKey::MediaServerSignalSync,
+                        Utc::now()
+                            + chrono::Duration::from_std(cadence)
+                                .unwrap_or_else(|_| chrono::Duration::hours(6)),
+                    ).await;
+                    if let Err(e) = app.run_scheduled_job_now(JobKey::MediaServerSignalSync, JobTriggerSource::ScheduledInterval).await {
+                        warn!(error = %e, "scheduled media-server signal sync failed");
+                        metrics::counter!("scryer_task_errors_total", "task" => "media_server_signal_sync").increment(1);
                     }
                 }).await;
             }

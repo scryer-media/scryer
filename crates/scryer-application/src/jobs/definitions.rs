@@ -20,6 +20,14 @@ pub const MAINTENANCE_RULE_EVALUATION_INTERVAL_SECONDS: i64 = 8 * 3600;
 /// hours.
 pub const LIFECYCLE_ACTION_HANDLING_INTERVAL_SECONDS: i64 = 12 * 3600;
 
+/// Cadence of the media-server watch-signal sweep (RFC 137 section 7.3).
+///
+/// Six hours is chosen against what the data is for, not against how fast it
+/// changes: signals feed grace-period maintenance decisions measured in days,
+/// so four sweeps a day is ample, and each sweep is a full read of every
+/// participant's played set rather than a delta.
+pub const MEDIA_SERVER_SIGNAL_SYNC_INTERVAL_SECONDS: i64 = 6 * 3600;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum JobCategory {
     Library,
@@ -174,6 +182,7 @@ pub enum JobKey {
     ApplicationUpgrade,
     MaintenanceRuleEvaluation,
     LifecycleActionHandling,
+    MediaServerSignalSync,
 }
 
 impl JobKey {
@@ -205,6 +214,7 @@ impl JobKey {
             Self::ApplicationUpgrade => "application_upgrade",
             Self::MaintenanceRuleEvaluation => "maintenance_rule_evaluation",
             Self::LifecycleActionHandling => "lifecycle_action_handling",
+            Self::MediaServerSignalSync => "media_server_signal_sync",
         }
     }
 
@@ -236,6 +246,7 @@ impl JobKey {
             "application_upgrade" => Some(Self::ApplicationUpgrade),
             "maintenance_rule_evaluation" => Some(Self::MaintenanceRuleEvaluation),
             "lifecycle_action_handling" => Some(Self::LifecycleActionHandling),
+            "media_server_signal_sync" => Some(Self::MediaServerSignalSync),
             _ => None,
         }
     }
@@ -268,6 +279,7 @@ impl JobKey {
             Self::ApplicationUpgrade => "Application Upgrade",
             Self::MaintenanceRuleEvaluation => "Maintenance Rule Evaluation",
             Self::LifecycleActionHandling => "Maintenance Action Handling",
+            Self::MediaServerSignalSync => "Media Server Signal Sync",
         }
     }
 
@@ -321,6 +333,9 @@ impl JobKey {
             Self::LifecycleActionHandling => {
                 "Execute due maintenance candidates of armed observe-mode rules, behind the instance effect gates and full safety rechecks."
             }
+            Self::MediaServerSignalSync => {
+                "Read played state for verified linked accounts on enabled media-server connections and store it as normalized watch signals."
+            }
         }
     }
 
@@ -351,7 +366,8 @@ impl JobKey {
             | Self::PendingReleaseProcessing
             | Self::StagedNzbPrune
             | Self::MaintenanceRuleEvaluation
-            | Self::LifecycleActionHandling => JobCategory::Maintenance,
+            | Self::LifecycleActionHandling
+            | Self::MediaServerSignalSync => JobCategory::Maintenance,
         }
     }
 
@@ -375,7 +391,8 @@ impl JobKey {
             | Self::HealthChecks
             | Self::StagedNzbPrune
             | Self::MaintenanceRuleEvaluation
-            | Self::LifecycleActionHandling => JobScheduleKind::Interval,
+            | Self::LifecycleActionHandling
+            | Self::MediaServerSignalSync => JobScheduleKind::Interval,
             Self::DiscoverySync => JobScheduleKind::StartupAndInterval,
             Self::AutoBackup => JobScheduleKind::DailyAtTime,
             Self::LibraryScanMovies
@@ -409,6 +426,7 @@ impl JobKey {
             Self::StagedNzbPrune => "Every hour",
             Self::MaintenanceRuleEvaluation => "Every 8 hours",
             Self::LifecycleActionHandling => "Every 12 hours",
+            Self::MediaServerSignalSync => "Every 6 hours",
             Self::DiscoverySync => "Dynamic discovery evaluator with daily backstop",
             Self::LibraryScanMovies
             | Self::LibraryScanSeries
@@ -437,6 +455,7 @@ impl JobKey {
             Self::StagedNzbPrune => Some(3600),
             Self::MaintenanceRuleEvaluation => Some(MAINTENANCE_RULE_EVALUATION_INTERVAL_SECONDS),
             Self::LifecycleActionHandling => Some(LIFECYCLE_ACTION_HANDLING_INTERVAL_SECONDS),
+            Self::MediaServerSignalSync => Some(MEDIA_SERVER_SIGNAL_SYNC_INTERVAL_SECONDS),
             Self::DiscoverySync => Some(24 * 3600),
             _ => None,
         }
@@ -481,7 +500,7 @@ impl JobKey {
     }
 }
 
-pub const ALL_JOB_KEYS: [JobKey; 18] = [
+pub const ALL_JOB_KEYS: [JobKey; 19] = [
     JobKey::LibraryScanMovies,
     JobKey::LibraryScanSeries,
     JobKey::LibraryScanAnime,
@@ -500,6 +519,7 @@ pub const ALL_JOB_KEYS: [JobKey; 18] = [
     JobKey::TitleImageCacheRefresh,
     JobKey::MaintenanceRuleEvaluation,
     JobKey::LifecycleActionHandling,
+    JobKey::MediaServerSignalSync,
 ];
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -924,6 +944,37 @@ mod tests {
         assert!(
             definition.manual_trigger_allowed,
             "an operator must be able to run a dark evaluation on demand"
+        );
+    }
+
+    #[test]
+    fn media_server_signal_sync_is_registered_as_a_recurring_maintenance_job() {
+        let definition = JobDefinition::from_key(JobKey::MediaServerSignalSync, None);
+
+        assert_eq!(
+            JobKey::MediaServerSignalSync.as_str(),
+            "media_server_signal_sync"
+        );
+        assert_eq!(
+            JobKey::parse("media_server_signal_sync"),
+            Some(JobKey::MediaServerSignalSync)
+        );
+        assert!(
+            ALL_JOB_KEYS.contains(&JobKey::MediaServerSignalSync),
+            "the sweep has to appear in the system-jobs surface to be observable"
+        );
+        assert_eq!(definition.display_name, "Media Server Signal Sync");
+        assert_eq!(definition.category, JobCategory::Maintenance);
+        assert_eq!(definition.schedule.kind, JobScheduleKind::Interval);
+        assert_eq!(definition.schedule.description, "Every 6 hours");
+        assert_eq!(
+            definition.schedule.interval_seconds,
+            Some(MEDIA_SERVER_SIGNAL_SYNC_INTERVAL_SECONDS)
+        );
+        assert_eq!(MEDIA_SERVER_SIGNAL_SYNC_INTERVAL_SECONDS, 6 * 3600);
+        assert!(
+            definition.manual_trigger_allowed,
+            "an operator must be able to refresh watch signals on demand"
         );
     }
 

@@ -488,6 +488,37 @@ impl UserExternalAccountRepository for UserStore {
         row.as_ref().map(row_to_external_account).transpose()
     }
 
+    async fn list_verified_by_connection(
+        &self,
+        provider: ExternalAccountProvider,
+        connection_id: &str,
+    ) -> AppResult<Vec<UserExternalAccount>> {
+        // The three conditions are the participant test, stated in SQL so a
+        // caller cannot forget one: active, actually verified, and carrying a
+        // provider user id we can address the provider's API with. The
+        // emptiness check is written as a trimmed comparison because a link
+        // repaired by hand can hold a blank string rather than NULL.
+        let rows = SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            "SELECT id, user_id, provider, connection_id, external_user_id, username,
+                    display_name, avatar_url, status, verified_at, last_login_at, created_at, updated_at
+               FROM user_external_accounts
+              WHERE provider = {}
+                AND connection_id = {}
+                AND status = 'active'
+                AND verified_at IS NOT NULL
+                AND external_user_id IS NOT NULL
+                AND TRIM(external_user_id) <> ''
+              ORDER BY username, id",
+            &[
+                SqlArg::Text(provider.as_str().to_string()),
+                SqlArg::Text(connection_id.to_string()),
+            ],
+        )
+        .await?;
+        rows.iter().map(row_to_external_account).collect()
+    }
+
     async fn update(&self, account: UserExternalAccount) -> AppResult<UserExternalAccount> {
         SqlRuntime::run_in_transaction(&self.datastore, "update_user_external_account", move |tx| {
             let account = account.clone();

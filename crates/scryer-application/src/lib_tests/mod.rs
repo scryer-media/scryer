@@ -25,6 +25,7 @@ mod maintenance_execution;
 mod maintenance_rules;
 mod maintenance_safety;
 mod media_requests;
+mod media_server_signals;
 mod metadata_search;
 mod queueing;
 mod routing_settings;

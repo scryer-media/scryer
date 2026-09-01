@@ -1230,6 +1230,30 @@ mod tests {
                 .collect())
         }
 
+        async fn list_verified_by_connection(
+            &self,
+            provider: ExternalAccountProvider,
+            connection_id: &str,
+        ) -> AppResult<Vec<UserExternalAccount>> {
+            Ok(self
+                .accounts
+                .lock()
+                .await
+                .iter()
+                .filter(|account| {
+                    account.provider == provider
+                        && account.connection_id == connection_id
+                        && account.status == ExternalAccountStatus::Active
+                        && account.verified_at.is_some()
+                        && account
+                            .external_user_id
+                            .as_deref()
+                            .is_some_and(|value| !value.trim().is_empty())
+                })
+                .cloned()
+                .collect())
+        }
+
         async fn get_by_id(&self, id: &str) -> AppResult<Option<UserExternalAccount>> {
             Ok(self
                 .accounts

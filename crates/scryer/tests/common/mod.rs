@@ -65,6 +65,7 @@ use scryer_infrastructure_library::media::{
     search::media_file_store::MediaFileStore,
     servers::MediaServerConnectionStore,
     shows::store::ShowStore,
+    signals::MediaServerSignalStore,
     titles::store::TitleStore,
 };
 use scryer_infrastructure_metadata::metadata::gateway::client::{
@@ -881,6 +882,7 @@ impl TestContext {
         let rule_set_store = RuleSetStore::new(datastore.clone());
         let maintenance_rule_set_store = MaintenanceRuleSetStore::new(datastore.clone());
         let maintenance_evaluation_store = MaintenanceEvaluationStore::new(datastore.clone());
+        let media_server_signal_store = MediaServerSignalStore::new(datastore.clone());
         let post_processing_script_store = PostProcessingScriptStore::new(datastore.clone());
         let plugin_store = PluginStore::new(datastore.clone());
         let oauth_store = OAuthStore::new(datastore.clone());
@@ -934,6 +936,7 @@ impl TestContext {
         .with_rule_set_store(Arc::new(rule_set_store))
         .with_maintenance_rule_set_store(Arc::new(maintenance_rule_set_store))
         .with_maintenance_evaluation_store(Arc::new(maintenance_evaluation_store))
+        .with_media_server_signal_store(Arc::new(media_server_signal_store))
         .with_post_processing_script_store(Arc::new(post_processing_script_store))
         .with_plugin_installation_store(Arc::new(plugin_store.clone()))
         .with_acquisition_state(acquisition_store)

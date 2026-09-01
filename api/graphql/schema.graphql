@@ -7814,6 +7814,10 @@ enum JobKeyValue {
 	"""
 	LIFECYCLE_ACTION_HANDLING
 	"""
+	Scheduled media-server watch-signal synchronization.
+	"""
+	MEDIA_SERVER_SIGNAL_SYNC
+	"""
 	Title deletion.
 	"""
 	TITLE_DELETION

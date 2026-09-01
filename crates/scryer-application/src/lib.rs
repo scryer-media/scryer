@@ -64,6 +64,7 @@ mod library_scan_unmatched;
 pub mod maintenance_rules;
 mod media;
 mod media_requests;
+pub mod media_server_signals;
 mod media_servers;
 mod notifications;
 mod null_repositories;
@@ -453,6 +454,8 @@ pub use null_repositories::{
 };
 // ── Maintenance safety probes (RFC 137 §9.10, WP-G) ─────────────────────────
 pub use null_repositories::NullMediaServerPlaybackProbe;
+// ── Media-server watch signals (RFC 137 §7.3, WP-M) ─────────────────────────
+pub use null_repositories::{NullMediaServerSignalRepository, NullMediaServerSignalSource};
 pub use ports::{
     AcquisitionScopeStateRepository, AcquisitionStateRepository, ArchiveExtractorClient,
     ArchiveExtractorPluginProvider, BlocklistRepository, BuiltinDownloadClientConnectionTester,
@@ -505,6 +508,7 @@ pub use ports::{
     ConnectionPlaybackActivity, MediaServerPlaybackProbe, PlaybackActivitySnapshot,
     PlaybackProbeStatus,
 };
+pub use ports::{MediaServerSignalRepository, MediaServerSignalSource, ProviderPlayedItem};
 pub use quality::release_parser::{
     AudioCodec, ExternalIdSource, ParsedEpisodeMetadata, ParsedEpisodeReleaseType,
     ParsedReleaseMetadata, ParsedSpecialKind, ReleaseParseAnalysis, ReleaseParseContext,

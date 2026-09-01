@@ -4359,6 +4359,108 @@ pub struct MediaServerPlaybackItem {
     pub last_seen_at: DateTime<Utc>,
 }
 
+// ── Media-server watch signals (RFC 137 section 7.3) ────────────────────────
+
+/// What a watch signal is about.
+///
+/// Deliberately only the two granularities the RFC records observations at.
+/// There is no `Show` variant: a series-level "watched" is an aggregate over
+/// its episodes, and storing it would create a second answer that the next
+/// sweep could contradict.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaServerSignalKind {
+    #[default]
+    Movie,
+    Episode,
+}
+
+impl MediaServerSignalKind {
+    pub const fn as_storage_str(self) -> &'static str {
+        match self {
+            Self::Movie => "movie",
+            Self::Episode => "episode",
+        }
+    }
+
+    pub fn parse_storage(value: &str) -> Option<Self> {
+        match value {
+            "movie" => Some(Self::Movie),
+            "episode" => Some(Self::Episode),
+            _ => None,
+        }
+    }
+}
+
+/// One normalized per-user, per-subject observation, as the sync job is about
+/// to write it (RFC 137 "Normalized observation model").
+///
+/// The identity fields the row is keyed by — `connection_id` and
+/// `external_user_id` — are not here: they are the arguments of the write, so a
+/// batch cannot accidentally mix two participants into one replace.
+///
+/// `scryer_title_id` and `scryer_episode_id` are `None` for an observation that
+/// mapping could not attribute to Scryer media. That row is still written:
+/// identity-mapping rule 4 retains unmatched observations rather than guessing
+/// a subject for them.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NewUserMediaSignal {
+    pub provider: MediaServerProvider,
+    /// Denormalized from the linked account at sync time. `None` when the
+    /// provider identity is not linked to a Scryer user.
+    pub scryer_user_id: Option<String>,
+    pub provider_item_id: String,
+    pub kind: MediaServerSignalKind,
+    pub scryer_title_id: Option<String>,
+    pub scryer_episode_id: Option<String>,
+    pub played: bool,
+    pub play_count: i64,
+    pub last_played_at: Option<DateTime<Utc>>,
+    pub observed_at: DateTime<Utc>,
+}
+
+/// A stored watch signal, as read back.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UserMediaSignal {
+    pub id: String,
+    pub connection_id: String,
+    pub provider: MediaServerProvider,
+    pub external_user_id: String,
+    pub scryer_user_id: Option<String>,
+    pub provider_item_id: String,
+    pub kind: MediaServerSignalKind,
+    pub scryer_title_id: Option<String>,
+    pub scryer_episode_id: Option<String>,
+    pub played: bool,
+    pub play_count: i64,
+    pub last_played_at: Option<DateTime<Utc>>,
+    pub observed_at: DateTime<Utc>,
+    /// Sweep that wrote this row. Rows from older generations for the same
+    /// participant are deleted by the next successful sweep, which is how an
+    /// item leaving the provider's played set stops being reported as played.
+    pub sync_generation: i64,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Per-connection signal-sync health.
+///
+/// `last_error` is the operator-facing reason the newest sweep failed; it is
+/// cleared on the next success. `enabled` is the connection's state as of that
+/// sweep, so "no signals" can be told apart from "connection turned off".
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MediaServerSignalSyncState {
+    pub connection_id: String,
+    pub provider: MediaServerProvider,
+    pub enabled: bool,
+    pub last_started_at: Option<DateTime<Utc>>,
+    pub last_success_at: Option<DateTime<Utc>>,
+    pub last_error: Option<String>,
+    pub participant_count: i64,
+    pub signal_count: i64,
+    pub updated_at: DateTime<Utc>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum ExternalAccountProvider {

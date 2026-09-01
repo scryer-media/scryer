@@ -601,6 +601,22 @@ impl AppServicesBuilder {
         integrations.media_server_playback_probe,
         Arc<dyn crate::ports::MediaServerPlaybackProbe>
     );
+    // ── Media-server watch signals (RFC 137 §7.3, WP-M) ─────────────────────
+    app_services_builder_setter!(
+        with_media_server_signal_source,
+        integrations.media_server_signal_source,
+        Arc<dyn crate::ports::MediaServerSignalSource>
+    );
+    /// Not a required service: an assembly without a signal store collects no
+    /// watch signals, and the sync job records that as a per-connection error
+    /// rather than a sweep that found nothing.
+    pub fn with_media_server_signal_store<T>(mut self, store: Arc<T>) -> Self
+    where
+        T: crate::ports::MediaServerSignalRepository + Send + Sync + 'static,
+    {
+        self.services.integrations.media_server_signals = store;
+        self
+    }
     pub fn with_notification_provider(
         mut self,
         value: Arc<dyn NotificationPluginProvider>,

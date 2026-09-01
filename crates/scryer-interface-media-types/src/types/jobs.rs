@@ -44,6 +44,8 @@ pub enum JobKeyValue {
     MaintenanceRuleEvaluation,
     /// Scheduled maintenance lifecycle action handling.
     LifecycleActionHandling,
+    /// Scheduled media-server watch-signal synchronization.
+    MediaServerSignalSync,
     /// Title deletion.
     TitleDeletion,
     /// Title rename.

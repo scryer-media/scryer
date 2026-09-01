@@ -3235,6 +3235,14 @@ impl UserExternalAccountRepository for NullUserExternalAccountRepository {
         Ok(None)
     }
 
+    async fn list_verified_by_connection(
+        &self,
+        _: scryer_domain::ExternalAccountProvider,
+        _: &str,
+    ) -> AppResult<Vec<scryer_domain::UserExternalAccount>> {
+        Ok(Vec::new())
+    }
+
     async fn update(
         &self,
         _: scryer_domain::UserExternalAccount,
@@ -3433,6 +3441,72 @@ pub struct NullMediaServerPlaybackProbe;
 impl crate::ports::MediaServerPlaybackProbe for NullMediaServerPlaybackProbe {
     async fn active_playback(&self) -> AppResult<crate::ports::PlaybackActivitySnapshot> {
         Ok(crate::ports::PlaybackActivitySnapshot::empty(Utc::now()))
+    }
+}
+
+/// No signal store configured: reads are empty and writes are refused.
+///
+/// Writes fail loudly rather than silently succeeding, because a sync sweep
+/// that "worked" against a store that kept nothing would leave the sync state
+/// claiming a success that produced no observations.
+#[derive(Default)]
+pub struct NullMediaServerSignalRepository;
+
+#[async_trait]
+impl crate::ports::MediaServerSignalRepository for NullMediaServerSignalRepository {
+    async fn replace_participant_signals(
+        &self,
+        _: &str,
+        _: &str,
+        _: &[scryer_domain::NewUserMediaSignal],
+    ) -> AppResult<u64> {
+        Err(AppError::Repository("not configured".into()))
+    }
+
+    async fn movie_signals_for_titles(
+        &self,
+        _: &[String],
+    ) -> AppResult<std::collections::HashMap<String, Vec<scryer_domain::UserMediaSignal>>> {
+        Ok(std::collections::HashMap::new())
+    }
+
+    async fn episode_signals_for_titles(
+        &self,
+        _: &[String],
+    ) -> AppResult<std::collections::HashMap<String, Vec<scryer_domain::UserMediaSignal>>> {
+        Ok(std::collections::HashMap::new())
+    }
+
+    async fn signal_sync_states(
+        &self,
+    ) -> AppResult<Vec<scryer_domain::MediaServerSignalSyncState>> {
+        Ok(Vec::new())
+    }
+
+    async fn upsert_signal_sync_state(
+        &self,
+        _: &scryer_domain::MediaServerSignalSyncState,
+    ) -> AppResult<()> {
+        Err(AppError::Repository("not configured".into()))
+    }
+}
+
+/// No signal adapter configured. Every fetch is an error rather than an empty
+/// list: "this participant has watched nothing" and "nobody asked the server"
+/// are different facts, and the second one must not be recorded as the first.
+#[derive(Default)]
+pub struct NullMediaServerSignalSource;
+
+#[async_trait]
+impl crate::ports::MediaServerSignalSource for NullMediaServerSignalSource {
+    async fn fetch_played_items(
+        &self,
+        _: &scryer_domain::MediaServerConnection,
+        _: &str,
+    ) -> AppResult<Vec<crate::ports::ProviderPlayedItem>> {
+        Err(AppError::Repository(
+            "media-server signal source is not configured".into(),
+        ))
     }
 }
 

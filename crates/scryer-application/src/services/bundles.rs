@@ -93,6 +93,11 @@ pub struct AppIntegrationServices {
     /// Live playback observation across the media-server connections above
     /// (RFC 137 §9.10, WP-G). Read-only; consulted by maintenance safety.
     pub(crate) media_server_playback_probe: Arc<dyn crate::ports::MediaServerPlaybackProbe>,
+    /// Per-participant played-item reads from the same connections
+    /// (RFC 137 §7.3, WP-M). Provider dispatch lives inside the adapter.
+    pub(crate) media_server_signal_source: Arc<dyn crate::ports::MediaServerSignalSource>,
+    /// Durable normalized watch signals produced by that adapter.
+    pub(crate) media_server_signals: Arc<dyn crate::ports::MediaServerSignalRepository>,
 }
 
 #[derive(Clone)]
@@ -338,6 +343,10 @@ impl AppServices {
                 media_server_playback_probe: Arc::new(
                     null_repositories::NullMediaServerPlaybackProbe,
                 ),
+                media_server_signal_source: Arc::new(
+                    null_repositories::NullMediaServerSignalSource,
+                ),
+                media_server_signals: Arc::new(null_repositories::NullMediaServerSignalRepository),
             },
             workflow: AppWorkflowServices {
                 imports: Arc::new(NullImportRepository),

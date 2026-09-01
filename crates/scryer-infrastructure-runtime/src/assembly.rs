@@ -24,6 +24,7 @@ use crate::external_identity::HttpExternalIdentityVerifier;
 use crate::indexers::scope_indexer_coverage_store::ScopeIndexerCoverageStore;
 use crate::media::images::image_proxy_store::ImageProxyStore;
 use crate::media_server_playback::HttpMediaServerPlaybackProbe;
+use crate::media_server_signals::HttpMediaServerSignalSource;
 use crate::postgres::{
     PostgresLogicalBackupExporter, PostgresServices, restore_backup_bundle_into_postgres_pool,
     restore_prepared_backup_directory_into_postgres_pool,
@@ -36,10 +37,11 @@ use crate::{
     HousekeepingStore, ImportStore, InMemoryIndexerStatsTracker, IndexerConfigStore,
     IndexerErrorStore, IndexerProxyConfigStore, IndexerSearchLearningStore, LibraryProbeStore,
     LibraryScanUnmatchedStore, MaintenanceEvaluationStore, MaintenanceRuleSetStore, MediaFileStore,
-    MediaRequestStore, MediaServerConnectionStore, MetadataGatewayClient, MigrationMode,
-    NotificationStore, OAuthStore, PendingReleaseStore, PluginStore, PostProcessingScriptStore,
-    QualityProfileStore, ReleaseStore, RuleSetStore, SeedingProfileStore, SettingsStore, ShowStore,
-    SmgEnrollmentConfig, SqliteLogicalBackupExporter, SqliteServices, SubtitleDownloadStore,
+    MediaRequestStore, MediaServerConnectionStore, MediaServerSignalStore, MetadataGatewayClient,
+    MigrationMode, NotificationStore, OAuthStore, PendingReleaseStore, PluginStore,
+    PostProcessingScriptStore, QualityProfileStore, ReleaseStore, RuleSetStore,
+    SeedingProfileStore, SettingsStore, ShowStore, SmgEnrollmentConfig,
+    SqliteLogicalBackupExporter, SqliteServices, SubtitleDownloadStore,
     SubtitleProviderConfigStore, TitleImageStore, TitleStore, TotpStore, WantedStore,
     WebauthnStore, WorkflowOperationStore,
 };
@@ -1026,6 +1028,13 @@ impl DatastoreAssembly {
         Arc::new(MaintenanceEvaluationStore::new(self.datastore()))
     }
 
+    /// Media-server watch signals (RFC 137 §7.3, WP-M). Built on demand: the
+    /// store is written only by the signal sync job, which does nothing at all
+    /// until a media-server connection with verified linked accounts exists.
+    pub fn media_server_signal_store(&self) -> Arc<MediaServerSignalStore> {
+        Arc::new(MediaServerSignalStore::new(self.datastore()))
+    }
+
     pub fn settings_store(&self) -> Arc<SettingsStore> {
         match &self.stores {
             DatastoreStores::Sqlite { settings_store, .. } => settings_store.clone(),
@@ -1462,6 +1471,9 @@ impl DatastoreAssembly {
                 .with_media_server_playback_probe(Arc::new(HttpMediaServerPlaybackProbe::new(
                     media_server_connection_store.clone(),
                 )))
+                // Media-server watch signals (RFC 137 §7.3, WP-M).
+                .with_media_server_signal_source(Arc::new(HttpMediaServerSignalSource::new()))
+                .with_media_server_signal_store(self.media_server_signal_store())
                 .with_webauthn_store(webauthn)
                 .with_totp_store(totp)
                 .with_media_files(media_file_store.clone())
@@ -1575,6 +1587,9 @@ impl DatastoreAssembly {
                 .with_media_server_playback_probe(Arc::new(HttpMediaServerPlaybackProbe::new(
                     media_server_connection_store.clone(),
                 )))
+                // Media-server watch signals (RFC 137 §7.3, WP-M).
+                .with_media_server_signal_source(Arc::new(HttpMediaServerSignalSource::new()))
+                .with_media_server_signal_store(self.media_server_signal_store())
                 .with_webauthn_store(webauthn)
                 .with_totp_store(totp)
                 .with_media_files(media_file_store.clone())

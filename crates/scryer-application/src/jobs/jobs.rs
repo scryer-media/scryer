@@ -1672,6 +1672,26 @@ impl AppUseCase {
                     Ok(JobExecutionOutcome::new(Some(summary_text), summary_json))
                 }
             }
+            JobKey::MediaServerSignalSync => {
+                let report = self.run_media_server_signal_sync_job().await?;
+                crate::media_server_signals::log_signal_sync_report(&report);
+                let summary_json = serde_json::to_string(&report).ok();
+                let summary_text = crate::media_server_signals::signal_sync_summary(&report);
+                // A failed connection or participant is a warning, not an
+                // error: the sweep still stored everything it could read, and
+                // the per-connection state row carries the reason.
+                if report.connections_failed > 0 || report.participants_failed > 0 {
+                    Ok(JobExecutionOutcome::warning(
+                        Some(format!(
+                            "{summary_text}; {} connection(s) and {} participant(s) failed",
+                            report.connections_failed, report.participants_failed
+                        )),
+                        summary_json,
+                    ))
+                } else {
+                    Ok(JobExecutionOutcome::new(Some(summary_text), summary_json))
+                }
+            }
             JobKey::DiscoverySync => self.run_discovery_sync_job(run.trigger_source).await,
             JobKey::TitleImageCacheRefresh => {
                 let summary = self.run_title_image_cache_refresh().await?;
