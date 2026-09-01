@@ -1,15 +1,16 @@
 import * as React from "react";
 import {
+  BookOpen,
   Check,
   CircleCheck,
   Clock,
-  Gem,
   History,
   Inbox,
   Loader2,
   Pencil,
   RefreshCw,
   ShieldX,
+  SlidersVertical,
   User,
   X,
   type LucideIcon,
@@ -57,10 +58,6 @@ import {
   mediaRequestStatusId,
 } from "@/lib/utils/dom-ids";
 import { selectPosterVariantUrl } from "@/lib/utils/poster-images";
-import {
-  formatExternalIdSourceLabel,
-  getRawRequestExternalIds,
-} from "@/lib/utils/request-external-ids";
 import { cn } from "@/lib/utils";
 
 type QualityProfileOption = {
@@ -111,12 +108,6 @@ type RequestsViewProps = {
   onUpdateRequest: (request: MediaRequestRecord, values: UpdateRequestValues) => void;
   onCancelRequest: (request: MediaRequestRecord) => void;
 };
-
-function requestExternalIdLabel(request: MediaRequestRecord): string {
-  return request.externalIds
-    .map((externalId) => `${externalId.source.toUpperCase()} ${externalId.value}`)
-    .join(" / ");
-}
 
 function requesterLabel(request: MediaRequestRecord): string {
   return request.requesters
@@ -491,14 +482,12 @@ export function RequestsView({
     const backgroundPosterUrl =
       selectPosterVariantUrl(request.posterUrl, "original") ?? posterUrl;
     const requesters = requesterLabel(request);
-    const externalIds = requestExternalIdLabel(request);
     const imdbId = requestExternalIdValue(request, "imdb");
     const tvdbId = requestExternalIdValue(request, "tvdb");
     const tmdbId = requestExternalIdValue(request, "tmdb");
     const malId = requestExternalIdValue(request, "mal");
     const anilistId = requestExternalIdValue(request, "anilist");
     const anidbId = requestExternalIdValue(request, "anidb");
-    const rawExternalIds = getRawRequestExternalIds(request.externalIds);
     const hasExternalLink =
       Boolean(imdbId) ||
       Boolean(tvdbId) ||
@@ -506,7 +495,6 @@ export function RequestsView({
       Boolean(malId) ||
       Boolean(anilistId) ||
       Boolean(anidbId);
-    const hasExternalIds = hasExternalLink || rawExternalIds.length > 0;
     const isResolving = actionRequestId === request.id;
     const actionsDisabled = loading || actionRequestId !== null;
     const approveDisabled = loading || actionRequestId !== null;
@@ -592,7 +580,6 @@ export function RequestsView({
                 </div>
                 <p className="mt-1 text-xs text-[var(--scry-muted3)]">
                   {request.year ?? t("label.yearUnknown")}
-                  {externalIds ? ` · ${externalIds}` : ""}
                 </p>
               </div>
               <div className="flex flex-wrap gap-2 xl:justify-end">
@@ -663,7 +650,7 @@ export function RequestsView({
                 {request.overview}
               </p>
             ) : null}
-            {hasExternalIds ? (
+            {hasExternalLink ? (
               <div className="flex flex-wrap items-center gap-2">
                 <ImdbExternalLink imdbId={imdbId} size="compact" />
                 {request.facet === "MOVIE" ? (
@@ -687,19 +674,6 @@ export function RequestsView({
                 <MalExternalLink malId={malId} size="compact" />
                 <AnilistExternalLink anilistId={anilistId} size="compact" />
                 <AnidbExternalLink anidbId={anidbId} size="compact" />
-                {rawExternalIds.map((externalId) => (
-                  <span
-                    key={`${externalId.source}:${externalId.value}`}
-                    className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--scry-border3)] bg-[rgba(6,10,22,0.68)] px-2.5 py-1 text-xs font-semibold text-[var(--scry-muted2)]"
-                  >
-                    <span className="text-[var(--scry-faint2)]">
-                      {formatExternalIdSourceLabel(externalId.source)}
-                    </span>
-                    <span className="font-[var(--font-code)] text-[var(--scry-ink2)]">
-                      {externalId.value}
-                    </span>
-                  </span>
-                ))}
               </div>
             ) : null}
             <div className="grid gap-2 text-xs text-[var(--scry-muted3)] sm:grid-cols-2 xl:grid-cols-4">
@@ -714,12 +688,15 @@ export function RequestsView({
                 </div>
               </div>
               <div className="rounded-[10px] border border-[var(--scry-border3)] bg-[var(--scry-inset)] px-3 py-2">
-                <div className="mb-1 text-[var(--scry-faint)]">Library</div>
+                <div className="mb-1 flex items-center gap-1.5 text-[var(--scry-faint)]">
+                  <BookOpen className="h-3.5 w-3.5" />
+                  Library
+                </div>
                 <div className="text-[var(--scry-ink2)]">{libraryLabel}</div>
               </div>
               <div className="rounded-[10px] border border-[var(--scry-border3)] bg-[var(--scry-inset)] px-3 py-2">
                 <div className="mb-1 flex items-center gap-1.5 text-[var(--scry-faint)]">
-                  <Gem className="h-3.5 w-3.5" />
+                  <SlidersVertical className="h-3.5 w-3.5" />
                   {t("requests.requestedQualityProfile")}
                 </div>
                 <div className="text-[var(--scry-ink2)]">{requestedProfile}</div>
