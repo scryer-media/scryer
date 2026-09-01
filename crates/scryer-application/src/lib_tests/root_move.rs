@@ -1022,8 +1022,10 @@ async fn an_operation_whose_root_is_not_available_is_left_interrupted_rather_tha
 
 /// FR-033 across operation types: only the types this runner walks resume
 /// through it — `root_move`, `cross_library_transfer`, `adoption` (since T051,
-/// the same plan proven instead of written), and `root_change` (since T060,
-/// the same plan with one root id on both sides plus an idempotent tail). The
+/// the same plan proven instead of written), `root_change` (since T060, the
+/// same plan with one root id on both sides plus an idempotent tail), and
+/// `root_consolidation` (since T071, two root ids in one library and the same
+/// tail, retiring the source root's configuration rather than flipping it). The
 /// rest are planned types with no producer today — nothing writes such a row —
 /// but a row that arrived from a later build, or from a workflow added after
 /// this one, must not be walked under root-move rules just because the runner
@@ -1034,7 +1036,6 @@ async fn an_operation_type_the_root_move_runner_does_not_walk_declines_resume() 
 
     for (index, operation_type) in [
         LocationOperationType::FolderReassignment,
-        LocationOperationType::RootConsolidation,
     ]
     .into_iter()
     .enumerate()

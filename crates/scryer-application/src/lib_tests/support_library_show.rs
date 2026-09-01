@@ -120,6 +120,22 @@ impl LibraryRepository for MockLibraryRepo {
         Ok(library)
     }
 
+    /// Replace-on-write of a library's root list, with the real store's
+    /// identity semantics.
+    ///
+    /// `update_library_tx` reads the stored root ids **before** it rewrites the
+    /// rows and re-keys them by normalized path, so a root whose path is
+    /// resubmitted lands back on the id it already had; only a genuinely new
+    /// path is allocated one (FR-078, `existing_root_ids_by_normalized_path_tx`).
+    /// A mock that allocated a fresh id for every submitted root would make
+    /// every `update` look like "delete every root, create new ones" — exactly
+    /// the identity change synthetic root ids exist to prevent, and exactly the
+    /// bug a story test over a consolidation (US5) has to be able to catch.
+    ///
+    /// The real store's second guard — refusing to remove a root any title still
+    /// references — is not reproduced here, because this double holds no titles.
+    /// The consolidation tail asks that question itself, before it calls
+    /// `update`, so the story tests still exercise the rule.
     async fn update(
         &self,
         library_id: &str,
@@ -132,10 +148,37 @@ impl LibraryRepository for MockLibraryRepo {
             .iter_mut()
             .find(|library| library.id == library_id)
             .ok_or_else(|| AppError::NotFound(format!("library {library_id}")))?;
+        let existing_root_ids: HashMap<String, String> = library
+            .roots
+            .iter()
+            .map(|root| {
+                (
+                    scryer_domain::normalize_library_root_path(&root.path),
+                    root.id.clone(),
+                )
+            })
+            .collect();
+        let now = Utc::now();
         library.name = name;
         library.slug = slug;
-        library.roots = mock_library_roots(library_id, roots);
-        library.updated_at = Utc::now();
+        library.roots = roots
+            .into_iter()
+            .map(|root| {
+                let id = existing_root_ids
+                    .get(&scryer_domain::normalize_library_root_path(&root.path))
+                    .cloned()
+                    .unwrap_or_else(|| Id::new().0);
+                scryer_domain::LibraryRoot {
+                    id,
+                    library_id: library_id.to_string(),
+                    path: root.path,
+                    is_default: root.is_default,
+                    created_at: now,
+                    updated_at: now,
+                }
+            })
+            .collect();
+        library.updated_at = now;
         Ok(library.clone())
     }
 

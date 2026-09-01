@@ -15,6 +15,8 @@
 //! | [`classify`] | Per-title classification of a requested destination (FR-015, FR-076). |
 //! | [`folder_match`] | Folder-match correction: preview, assign, swap, take over — catalog only, never a file operation (FR-001–008, FR-014). |
 //! | [`root_move`] | Title-scoped root-move planner: calculated destination folders, per-title plan items, execution instructions (FR-012–013, FR-076). |
+//! | [`consolidation`] | Root-scoped planner for folding one root into another root of the same library: FR-024's seven-way classification, FR-025 folder uniquing, FR-022 default transfer (US5). |
+//! | [`consolidation_execution`] | The root-consolidation use case: preview/start entry points, destination admissibility, and the tail that retires the source root's *configuration* (FR-020, FR-022, FR-028, FR-087). |
 //! | [`root_change`] | Root-scoped planner for replacing a root's path: every-title accounting, identity/default retention, unmanaged-content buckets, retirement ordering (FR-020–029, FR-087). |
 //! | [`root_change_execution`] | The root-change use case: preview/start entry points, destination admissibility, and the tail that retires the source location and flips the root's path (FR-020, FR-028, FR-087). |
 //! | [`execution`] | The root-move runner seams: mover, reconciler, admission check (FR-031–032, FR-044, FR-089). |
@@ -37,6 +39,8 @@ pub mod asset_listing;
 pub mod backfill;
 pub mod classify;
 pub mod collisions;
+pub mod consolidation;
+pub mod consolidation_execution;
 pub mod execution;
 pub mod executor;
 pub mod folder_match;

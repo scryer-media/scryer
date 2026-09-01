@@ -1244,17 +1244,34 @@ fn transfer_items(draft: &RootMoveTitleDraft) -> Vec<PlanItem> {
 /// FR-066: one `Blocked` item per record the merge engine could not map, so the
 /// preview names the table and the identity rather than only the count.
 fn blocked_merge_items(draft: &RootMoveTitleDraft) -> Vec<PlanItem> {
-    draft
-        .merge_summary
-        .iter()
+    blocked_merge_summary_items(
+        &draft.title_id,
+        &draft.title_name,
+        draft.merge_summary.as_ref(),
+    )
+}
+
+/// FR-066's per-record refusal items, for any planner that has a merge summary
+/// and a title to hang it on.
+///
+/// Public inside `location` because the consolidation planner (US5) merges too:
+/// a destination root can already hold a title that shares the incoming title's
+/// canonical identity. Emitting the same items from the same summary is what
+/// keeps one preview vocabulary across the workflows that can merge.
+pub(super) fn blocked_merge_summary_items(
+    title_id: &str,
+    title_name: &str,
+    summary: Option<&MergePreviewSummary>,
+) -> Vec<PlanItem> {
+    summary
+        .into_iter()
         .flat_map(|summary| summary.blocked.iter())
         .map(|record| {
             PlanItem::new(PlanItemKind::Blocked)
-                .with_title(draft.title_id.clone())
+                .with_title(title_id.to_string())
                 .with_reason_code(plan_reasons::MERGE_RECORDS_UNMAPPED)
                 .with_detail(format!(
-                    "\"{}\" cannot merge into an existing destination title: {}",
-                    draft.title_name,
+                    "\"{title_name}\" cannot merge into an existing destination title: {}",
                     record.summary_line()
                 ))
         })
@@ -1269,8 +1286,36 @@ fn blocked_merge_items(draft: &RootMoveTitleDraft) -> Vec<PlanItem> {
 /// vocabulary every other preview line uses, so Activity and the confirmation
 /// dialog do not need a second renderer for merges.
 fn merge_items(draft: &RootMoveTitleDraft) -> Vec<PlanItem> {
-    let Some(summary) = draft.merge_summary.as_ref() else {
+    merge_summary_items(
+        &draft.title_id,
+        &draft.title_name,
+        draft.merge_summary.as_ref(),
+    )
+}
+
+/// The two facts every merge item needs, so the body below reads the same
+/// whether it was called with a root-move draft or a consolidation one.
+struct MergeItemSubject<'a> {
+    title_id: &'a str,
+    title_name: &'a str,
+}
+
+/// FR-071's merge preview items — what the destination keeps, what conflicts,
+/// what role changes, what is dropped — for any planner holding a summary.
+///
+/// Shared with the consolidation planner for the reason
+/// [`blocked_merge_summary_items`] is.
+pub(super) fn merge_summary_items(
+    title_id: &str,
+    title_name: &str,
+    summary: Option<&MergePreviewSummary>,
+) -> Vec<PlanItem> {
+    let Some(summary) = summary else {
         return Vec::new();
+    };
+    let draft = MergeItemSubject {
+        title_id,
+        title_name,
     };
 
     // A blocked merge performs none of this; its records are listed by
@@ -1294,7 +1339,7 @@ fn merge_items(draft: &RootMoveTitleDraft) -> Vec<PlanItem> {
         };
         items.push(
             PlanItem::new(PlanItemKind::CatalogChange)
-                .with_title(draft.title_id.clone())
+                .with_title(draft.title_id)
                 .with_reason_code(plan_reasons::MERGE_DESTINATION_WINS)
                 .with_detail(detail),
         );
@@ -1307,7 +1352,7 @@ fn merge_items(draft: &RootMoveTitleDraft) -> Vec<PlanItem> {
             .unwrap_or_else(|| conflict.prefix.clone());
         items.push(
             PlanItem::new(PlanItemKind::Warning)
-                .with_title(draft.title_id.clone())
+                .with_title(draft.title_id)
                 .with_reason_code(plan_reasons::MERGE_RESERVED_TAG_CONFLICT)
                 .with_detail(match conflict.destination_value.as_deref() {
                     Some(destination) => format!(
@@ -1328,7 +1373,7 @@ fn merge_items(draft: &RootMoveTitleDraft) -> Vec<PlanItem> {
     for change in &summary.role_changes {
         items.push(
             PlanItem::new(PlanItemKind::RoleChange)
-                .with_title(draft.title_id.clone())
+                .with_title(draft.title_id)
                 .with_reason_code(plan_reasons::MERGE_ROLE_CHANGE)
                 .with_detail(change.describe()),
         );
@@ -1340,7 +1385,7 @@ fn merge_items(draft: &RootMoveTitleDraft) -> Vec<PlanItem> {
         }
         items.push(
             PlanItem::new(PlanItemKind::Warning)
-                .with_title(draft.title_id.clone())
+                .with_title(draft.title_id)
                 .with_reason_code(plan_reasons::MERGE_DROPPED_DATA)
                 .with_detail(format!(
                     "{} row(s) in {} are not carried over ({}): {}",

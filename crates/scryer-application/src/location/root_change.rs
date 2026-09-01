@@ -470,7 +470,12 @@ impl TitleAccounting {
         self.blocked > 0
     }
 
-    fn counts(&self) -> ClassificationCounts {
+    /// The shared classification counts this ledger lowers onto.
+    ///
+    /// Public because the consolidation planner reuses this whole ledger: US5
+    /// accounts for every assigned title by the same FR-023 rule, so it must
+    /// also report the same counts.
+    pub fn counts(&self) -> ClassificationCounts {
         ClassificationCounts {
             root_move: self.relocating,
             catalog_only: self.catalog_only,
@@ -648,6 +653,26 @@ pub struct RootChangeTail {
     pub retention: RootIdentityRetention,
     pub content: RootContentInventory,
     pub retirement: RootRetirementContract,
+    /// Set when this root-scoped operation is FR-020's **second** branch: a
+    /// consolidation into an existing root of the same library (US5).
+    ///
+    /// The two branches of one settings action share this whole tail — the same
+    /// travelling recycle bin, the same empty-directory prune, the same
+    /// "configuration last, after all recycling" ordering (FR-087). Only the
+    /// final step differs: a root change repoints its root at a new path, and a
+    /// consolidation removes the source root's configuration entirely. This
+    /// field's presence is what selects between them, which is why the epilogue
+    /// the runner is given needs no second wiring.
+    ///
+    /// When it is set, `root_id` is the **source** root (the one being retired),
+    /// `destination_root_path` is the destination root's configured path, and
+    /// `retention` describes the **destination** root — the one that keeps its
+    /// synthetic id and may gain the library default (FR-022, FR-078).
+    ///
+    /// Defaulted so a root change persisted before consolidation existed still
+    /// resumes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub consolidation: Option<crate::location::consolidation::ConsolidationTail>,
 }
 
 impl RootChangeTail {
@@ -681,6 +706,8 @@ impl PlannedRootChange {
             retention: self.retention.clone(),
             content: self.content.clone(),
             retirement: self.retirement.clone(),
+            // US4's branch: the root's path is flipped, not retired.
+            consolidation: None,
         }
     }
 }

@@ -37,6 +37,18 @@
 //! in the one component every workflow shares; running it here, on the terminal
 //! outcome, keeps the runner exactly as generic as it was.
 //!
+//! # The tail is shared with consolidation (US5)
+//!
+//! FR-020's **Change root** has two branches, and both end in the same
+//! sequence: move the recycle bin that lived under the source, prune the empty
+//! source directories, then — and only then, FR-087 — write the library's root
+//! configuration. Only that last write differs, and
+//! [`crate::location::root_change::RootChangeTail::consolidation`] selects it:
+//! absent, the root's path is flipped (US4); present, the source root is removed
+//! from the library's root list by
+//! [`AppUseCase::retire_consolidated_root_configuration`] (US5). The runner is
+//! given one epilogue either way.
+//!
 //! # Why every step of the tail is idempotent
 //!
 //! A restart can interrupt the tail as easily as it can interrupt a copy, and
@@ -540,20 +552,35 @@ impl AppUseCase {
         //    what the confirmed plan named.
         warnings.extend(self.retire_source_location(tail).await);
 
-        // 3. FR-021/FR-078: the path moves, the identity does not.
+        // 3. The last step, and the only one FR-020's two branches do not share
+        //    (see `RootChangeTail::consolidation`):
         //
-        // A failure here is the operation's failure. The bytes are at the
-        // destination and the catalog points at them, but the configured root
-        // still names the retired path — a state no later pass repairs on its
-        // own, and one that would be a lie to report as a completed move.
-        let assertions = self.flip_changed_root_path(tail).await.map_err(|error| {
+        //    - a **root change** repoints its root at the new path, keeping the
+        //      root's identity, role, and default status (FR-021, FR-078);
+        //    - a **consolidation** removes the source root's configuration
+        //      entirely, because its titles now live on a different, already
+        //      configured root (FR-020, FR-022).
+        //
+        // A failure here is the operation's failure either way. The bytes are at
+        // the destination and the catalog points at them, but the library's root
+        // configuration still describes the world before the operation — a state
+        // no later pass repairs on its own, and one that would be a lie to
+        // report as a completed move.
+        let configuration = match tail.consolidation.as_ref() {
+            Some(consolidation) => {
+                self.retire_consolidated_root_configuration(tail, consolidation)
+                    .await
+            }
+            None => self.flip_changed_root_path(tail).await,
+        };
+        let assertions = configuration.map_err(|error| {
             tracing::error!(
                 root_id = %tail.root_id,
                 error = %error,
-                "a root change moved its content but could not flip the root's configured path"
+                "a root-scoped operation moved its content but could not write the library's root configuration"
             );
             AppError::Repository(format!(
-                "the content moved to {} but the root's configured path could not be updated: {error}",
+                "the content moved to {} but the library's root configuration could not be updated: {error}",
                 tail.destination_root_path
             ))
         })?;
@@ -821,7 +848,7 @@ impl crate::location::executor::OperationEpilogue for RootChangeEpilogue<'_> {
 
 /// The source root's inventory, as [`crate::location::root_change::classify_root_content`]
 /// wants it: one entry per directory and one per file, beneath the root.
-async fn scan_root_entries(
+pub(super) async fn scan_root_entries(
     source_root: &Path,
     recycle_bin: Option<&Path>,
 ) -> AppResult<Vec<RootEntry>> {
@@ -887,7 +914,7 @@ async fn directory_is_empty(path: &Path) -> bool {
 /// `/mnt/media` and `/mnt/./media` are the same directory. Resolving what exists
 /// and normalizing what does not is what makes "these two overlap" and "this is
 /// already a configured root" answerable.
-async fn canonical_or_lexical(path: &Path) -> PathBuf {
+pub(super) async fn canonical_or_lexical(path: &Path) -> PathBuf {
     if let Ok(resolved) = tokio::fs::canonicalize(path).await {
         return resolved;
     }
@@ -1017,6 +1044,7 @@ pub(super) fn resumes_through_root_move_runner(
         operation_type,
         LocationOperationType::RootMove
             | LocationOperationType::RootChange
+            | LocationOperationType::RootConsolidation
             | LocationOperationType::CrossLibraryTransfer
             | LocationOperationType::Adoption
     )
