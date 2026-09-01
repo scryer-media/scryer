@@ -319,11 +319,22 @@ def materialize_sigstore_trust_root(
         SIGSTORE_TRUST_ROOT_TIMEOUT,
         "initialize",
     )
-    verified_target = Path.home() / ".sigstore/root/targets" / SIGSTORE_TUF_TARGET
-    if not verified_target.is_file():
+    tuf_host = urlparse(SIGSTORE_TUF_SOURCE).hostname
+    if not tuf_host:
+        fail(f"Sigstore TUF source has no host: {SIGSTORE_TUF_SOURCE}")
+    root_cache = Path.home() / ".sigstore/root"
+    verified_targets = (
+        root_cache / tuf_host / "targets" / SIGSTORE_TUF_TARGET,
+        root_cache / "targets" / SIGSTORE_TUF_TARGET,
+    )
+    verified_target = next(
+        (path for path in verified_targets if path.is_file()), None
+    )
+    if verified_target is None:
+        searched = ", ".join(str(path) for path in verified_targets)
         fail(
             "cosign initialize did not materialize the TUF-verified "
-            f"{SIGSTORE_TUF_TARGET} target"
+            f"{SIGSTORE_TUF_TARGET} target (searched: {searched})"
         )
     shutil.copyfile(verified_target, trust_root_path)
     root_bytes = trust_root_path.read_bytes()
