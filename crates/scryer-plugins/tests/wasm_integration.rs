@@ -127,6 +127,226 @@ async fn test_indexer_search() {
     assert!(r.source.contains("Test"));
 }
 
+/// This is intentionally opt-in: the component artifact is built in the plugin
+/// worktree, while this suite owns only the normal Scryer host path. When both
+/// are available it proves the artifact registers as a WASIp2 indexer component
+/// and reaches the assigned Trawl proxy through the ordinary indexer
+/// provider/client route, for search and for the indexer-owned grab.
+///
+/// Point `CARDIGANN_COMPONENT_WASM` at
+/// `indexers/cardigann-engine/target/variants/baseline/wasm32-wasip2/plugin-release/cardigann_engine.wasm`.
+#[tokio::test(flavor = "multi_thread")]
+async fn real_cardigann_component_wasm_searches_through_assigned_trawl_proxy() {
+    use scryer_application::PluginDescriptorLoader;
+    use wiremock::matchers::{body_json, header_regex, method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let Some(wasm_path) = std::env::var_os("CARDIGANN_COMPONENT_WASM") else {
+        return;
+    };
+    initialize_wasm_runtime_for_tests();
+    let wasm = std::fs::read(wasm_path).expect("CARDIGANN_COMPONENT_WASM must be readable");
+    let target = MockServer::start().await;
+    let proxy = MockServer::start().await;
+    let target_url = format!("{}/search?q=debian", target.uri());
+    let download_url = format!("{}/download/1", target.uri());
+    let result_html = "<table><tr class=result><td><a class=title href='/details/1'>Debian 13</a><a class=download href='/download/1'>DL</a></td><td class=size>2 GiB</td><td class=seeders>42</td></tr></table>";
+    let torrent_body = "d4:infod4:name4:testee";
+
+    // The tracker challenges anything without clearance, and serves the real
+    // page once the solver's cookie is present. That is the shape the component
+    // host expects: it solves, then replays against the origin so the guest sees
+    // raw tracker bytes rather than browser-rendered solver content.
+    Mock::given(method("GET"))
+        .and(path("/search"))
+        .and(query_param("q", "debian"))
+        .and(header_regex("cookie", "cf_clearance=ready"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/html")
+                .set_body_string(result_html),
+        )
+        .with_priority(1)
+        .mount(&target)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/download/1"))
+        .and(header_regex("cookie", "cf_clearance=ready"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "application/x-bittorrent")
+                .set_body_string(torrent_body),
+        )
+        .with_priority(1)
+        .mount(&target)
+        .await;
+    Mock::given(method("GET"))
+        .respond_with(
+            ResponseTemplate::new(403)
+                .insert_header("content-type", "text/html")
+                .set_body_string("<title>Just a moment...</title><div>cf-chl</div>"),
+        )
+        .with_priority(100)
+        .mount(&target)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1"))
+        .and(body_json(serde_json::json!({
+            "cmd": "request.get",
+            "url": target_url,
+            "maxTimeout": 60_000,
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "status": "ok",
+            "solution": {
+                "url": target_url,
+                "status": 200,
+                "headers": { "content-type": "text/html" },
+                "cookies": [{ "name": "cf_clearance", "value": "ready" }],
+                "userAgent": "Trawl test",
+                "response": result_html,
+            }
+        })))
+        .with_priority(1)
+        .mount(&proxy)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1"))
+        .and(body_json(serde_json::json!({
+            "cmd": "request.get",
+            "url": download_url,
+            "maxTimeout": 60_000,
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "status": "ok",
+            "solution": {
+                "url": download_url,
+                "status": 200,
+                "headers": { "content-type": "application/x-bittorrent" },
+                "cookies": [{ "name": "cf_clearance", "value": "ready" }],
+                "userAgent": "Trawl test",
+                "response": torrent_body,
+            }
+        })))
+        .with_priority(1)
+        .mount(&proxy)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("unexpected Trawl request"))
+        .with_priority(100)
+        .mount(&proxy)
+        .await;
+
+    let descriptor = scryer_plugins::WasmPluginDescriptorLoader
+        .load_descriptor_from_wasm_bytes(&wasm)
+        .expect("the component artifact must pass the normal descriptor loader");
+    let provider = scryer_plugins::WasmIndexerPluginProvider::empty().with_external_bytes(&wasm);
+    assert!(
+        provider
+            .available_provider_types()
+            .contains(&descriptor.provider_type().to_string()),
+        "the component artifact must register through the normal external indexer provider"
+    );
+    assert_eq!(descriptor.provider_type(), "cardigann");
+    let mut config = test_config("cardigann");
+    let definition_yaml = format!(
+        r#"
+id: fixture
+name: Fixture
+type: public
+links: ["{}/"]
+caps:
+  categorymappings:
+    - {{ id: 7, cat: Movies }}
+search:
+  paths:
+    - path: search
+      inputs: {{ q: "{{{{ .Keywords }}}}" }}
+  rows:
+    selector: tr.result
+  fields:
+    title: {{ selector: a.title }}
+    details: {{ selector: a.title, attribute: href }}
+    download: {{ selector: a.download, attribute: href }}
+    size: {{ selector: td.size }}
+    seeders: {{ selector: td.seeders }}
+"#,
+        target.uri(),
+    );
+    config.config_json = Some(
+        serde_json::json!({
+            "base_url": target.uri(),
+            "definition_yaml": definition_yaml,
+        })
+        .to_string(),
+    );
+    let now = Utc::now();
+    let proxy_config = scryer_domain::IndexerProxyConfig {
+        id: "trawl-cardigann".to_string(),
+        name: "Trawl".to_string(),
+        provider_type: scryer_domain::IndexerProxyProviderType::Trawl,
+        protocol: scryer_domain::ChallengeSolverProtocol::RequestSolutionV1,
+        base_url: proxy.uri(),
+        request_timeout_seconds: 60,
+        is_enabled: true,
+        last_health_status: None,
+        last_error_message: None,
+        last_error_at: None,
+        created_at: now,
+        updated_at: now,
+    };
+
+    let client = provider
+        .client_for_provider_with_proxy(&config, Some(&proxy_config))
+        .expect("normal provider path must build a component client");
+    let response = client
+        .search(
+            "debian".to_string(),
+            std::collections::HashMap::new(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            scryer_application::SearchMode::Interactive,
+            scryer_application::IndexerErrorOperation::InteractiveSearch,
+            None,
+            None,
+            None,
+            vec![],
+            None,
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await
+        .expect("proxied component search should complete");
+
+    assert_eq!(response.results.len(), 1);
+    let result = &response.results[0];
+    assert_eq!(result.title, "Debian 13");
+    assert_eq!(result.size_bytes, Some(2 * 1024 * 1024 * 1024));
+    assert_eq!(
+        result.download_url.as_deref(),
+        Some(format!("{}/download/1", target.uri()).as_str())
+    );
+    let artifact = client
+        .resolve_download(&download_url)
+        .await
+        .expect("proxied component grab should complete")
+        .expect("the component implements grab");
+    match artifact {
+        scryer_application::ResolvedDownloadArtifact::TorrentFile { bytes, .. } => {
+            assert_eq!(bytes, torrent_body.as_bytes());
+        }
+        other => panic!("expected torrent artifact, got {other:?}"),
+    }
+    // The tracker sees exactly one cleared request per operation and never an
+    // unproxied one. Only the search needed a solve: the grab reused the stored
+    // clearance session, so the proxy was asked once.
+    assert_eq!(target.received_requests().await.unwrap().len(), 2);
+    assert_eq!(proxy.received_requests().await.unwrap().len(), 1);
+}
+
 #[test]
 fn empty_dir_loads_no_plugins() {
     let tmp = tempfile::tempdir().unwrap();

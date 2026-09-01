@@ -6,8 +6,8 @@ use scryer_application::{
     IndexerErrorRecorder, IndexerResponseAttributes, IndexerRoutingPlan, IndexerSearchCompletion,
     IndexerSearchIncompleteReason as HostIncompleteReason, IndexerSearchPlanCapability,
     IndexerSearchPlanRequest, IndexerSearchPlanSummary, IndexerSearchResponse, IndexerSearchResult,
-    IndexerSearchStrategyEvent, IndexerSearchStrategyEventSink, SearchMode, is_valid_magnet_uri,
-    normalize_release_password,
+    IndexerSearchStrategyEvent, IndexerSearchStrategyEventSink, ResolvedDownloadArtifact,
+    SearchMode, extract_magnet_info_hash, is_valid_magnet_uri, normalize_release_password,
 };
 use scryer_domain::{IndexerConfig, IndexerProxyConfig, TaggedAlias};
 use scryer_plugin_sdk::command::{
@@ -16,8 +16,9 @@ use scryer_plugin_sdk::command::{
 };
 use scryer_plugin_sdk::{
     IndexerSearchIncompleteReason as PluginIncompleteReason, IndexerSearchPluginError, PluginError,
-    PluginErrorDetails, PluginResult, PluginSearchPlanRequest, PluginSearchPlanSummary,
-    PluginSearchStrategyEvent, PluginSearchStrategyRequest, ProviderDescriptor,
+    PluginErrorCode, PluginErrorDetails, PluginResult, PluginSearchPlanRequest,
+    PluginSearchPlanSummary, PluginSearchStrategyEvent, PluginSearchStrategyRequest,
+    ProviderDescriptor,
 };
 use std::{
     collections::BTreeMap,
@@ -929,6 +930,73 @@ fn decode_command_result<T>(result: PluginResult<T>, context: &str) -> AppResult
             "{context}: plugin error {code:?}: {public_message}"
         ))),
     }
+}
+
+/// The `grab` action's payload: the URL the provider finally resolved, plus the
+/// artifact bytes it fetched behind its own authentication. Magnets carry no
+/// body. Fields the provider does not know are simply absent.
+#[derive(serde::Deserialize)]
+struct IndexerGrabPayload {
+    url: String,
+    #[serde(default)]
+    body: Vec<u8>,
+    #[serde(default)]
+    file_name: Option<String>,
+    #[serde(default)]
+    content_type: Option<String>,
+    #[serde(default)]
+    info_hash_hint: Option<String>,
+}
+
+/// Turn one `grab` action result into a router artifact.
+///
+/// An `Unsupported` plugin error is the provider saying it has no grab flow, so
+/// it yields `None` and the router keeps its own direct/solver fallback. Every
+/// other plugin error is a real transport or authentication failure and must
+/// propagate: silently falling back would fetch the tracker's login page and
+/// hand it to a download client as a torrent.
+fn decode_grab_result(
+    result: PluginResult<PluginActionResponse>,
+) -> AppResult<Option<ResolvedDownloadArtifact>> {
+    let payload = match result {
+        PluginResult::Ok(response) => response.payload,
+        PluginResult::Err(error) if error.code == PluginErrorCode::Unsupported => return Ok(None),
+        PluginResult::Err(PluginError {
+            code,
+            public_message,
+            ..
+        }) => {
+            return Err(AppError::Repository(format!(
+                "indexer download resolution: plugin error {code:?}: {public_message}"
+            )));
+        }
+    };
+    let payload: IndexerGrabPayload = serde_json::from_value(payload).map_err(|error| {
+        AppError::Repository(format!(
+            "indexer download resolution returned an invalid grab payload: {error}"
+        ))
+    })?;
+    let url = payload.url.trim().to_string();
+    if is_valid_magnet_uri(&url) {
+        let info_hash_hint = extract_magnet_info_hash(&url)
+            .and_then(|hash| normalize_indexer_info_hash(Some(&hash)).or(Some(hash)));
+        return Ok(Some(ResolvedDownloadArtifact::Magnet {
+            uri: url,
+            info_hash_hint,
+        }));
+    }
+    if payload.body.is_empty() {
+        return Err(AppError::Repository(
+            "indexer download resolution returned an empty grab payload".to_string(),
+        ));
+    }
+
+    Ok(Some(ResolvedDownloadArtifact::TorrentFile {
+        bytes: payload.body,
+        file_name: payload.file_name,
+        content_type: payload.content_type,
+        info_hash_hint: payload.info_hash_hint,
+    }))
 }
 
 fn decode_search_result(
@@ -2008,11 +2076,128 @@ impl IndexerClient for WasmIndexerClient {
         }
         Ok(response)
     }
+
+    async fn resolve_download(
+        &self,
+        download_url: &str,
+    ) -> AppResult<Option<ResolvedDownloadArtifact>> {
+        let request = PluginActionRequest {
+            action: "grab".to_string(),
+            payload: serde_json::json!({ "url": download_url }),
+        };
+        // Component first, then the command runtime; a legacy-backed client has
+        // neither and simply leaves the router's own resolution in place.
+        let (result, context) = if self.component.is_some() {
+            (
+                self.invoke_component(PluginIndexerCommand::Action(request), "indexer_grab", None)
+                    .await?,
+                "indexer grab component",
+            )
+        } else {
+            (
+                self.invoke_command(PluginIndexerCommand::Action(request), "indexer_grab", None)
+                    .await?,
+                "indexer grab command",
+            )
+        };
+        let Some(result) = result else {
+            return Ok(None);
+        };
+        let PluginIndexerCommandResult::Action(result) = result else {
+            return Err(AppError::Repository(format!(
+                "{context} returned the wrong result for indexer_grab"
+            )));
+        };
+        decode_grab_result(result)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn grab_magnet_payload_resolves_without_torrent_bytes() {
+        let uri = "magnet:?xt=urn:btih:ABCDEF0123456789ABCDEF0123456789ABCDEF01";
+        let artifact = decode_grab_result(PluginResult::Ok(PluginActionResponse {
+            payload: serde_json::json!({
+                "url": uri,
+                "body": [],
+            }),
+        }))
+        .expect("magnet payload should decode")
+        .expect("grab should resolve a magnet artifact");
+
+        assert!(matches!(
+            artifact,
+            ResolvedDownloadArtifact::Magnet { uri: resolved_uri, info_hash_hint: Some(info_hash) }
+                if resolved_uri == uri
+                    && info_hash == "abcdef0123456789abcdef0123456789abcdef01"
+        ));
+    }
+
+    #[test]
+    fn grab_torrent_payload_carries_bytes_and_hints() {
+        let artifact = decode_grab_result(PluginResult::Ok(PluginActionResponse {
+            payload: serde_json::json!({
+                "url": "https://tracker.example/download/1",
+                "method": "GET",
+                "headers": {"cookie": "session=one"},
+                "body": [1, 2, 3],
+                "file_name": "release.torrent",
+            }),
+        }))
+        .expect("torrent payload should decode")
+        .expect("grab should resolve a torrent artifact");
+
+        assert!(matches!(
+            artifact,
+            ResolvedDownloadArtifact::TorrentFile { bytes, file_name: Some(name), .. }
+                if bytes == vec![1, 2, 3] && name == "release.torrent"
+        ));
+    }
+
+    #[test]
+    fn grab_unsupported_keeps_router_fallback_available() {
+        let resolved = decode_grab_result(PluginResult::Err(PluginError {
+            code: PluginErrorCode::Unsupported,
+            public_message: "grab is not implemented".to_string(),
+            debug_message: None,
+            retry_after_seconds: None,
+            details: None,
+        }))
+        .expect("unsupported grab is an optional capability");
+
+        assert!(resolved.is_none());
+    }
+
+    #[test]
+    fn grab_transport_or_auth_failure_propagates() {
+        let error = decode_grab_result(PluginResult::Err(PluginError {
+            code: PluginErrorCode::AuthFailed,
+            public_message: "login expired".to_string(),
+            debug_message: None,
+            retry_after_seconds: None,
+            details: None,
+        }))
+        .expect_err("real grab failures must not silently fall back");
+
+        assert!(error.to_string().contains("AuthFailed"));
+        assert!(error.to_string().contains("login expired"));
+    }
+
+    #[test]
+    fn grab_without_bytes_or_magnet_is_rejected() {
+        let error = decode_grab_result(PluginResult::Ok(PluginActionResponse {
+            payload: serde_json::json!({
+                "url": "https://tracker.example/login",
+                "body": [],
+            }),
+        }))
+        .expect_err("an empty non-magnet grab must never reach a download client");
+
+        assert!(error.to_string().contains("empty grab payload"));
+    }
 
     #[test]
     fn partial_search_preserves_typed_reason_and_retry_delay() {

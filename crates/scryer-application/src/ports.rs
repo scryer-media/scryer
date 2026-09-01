@@ -5742,6 +5742,17 @@ pub trait IndexerClient: Send + Sync {
     async fn prune_search_learning(&self, _indexer_id: &str) -> AppResult<()> {
         Ok(())
     }
+
+    /// Resolve an indexer-owned download URL when the provider needs to run its
+    /// own authenticated grab flow. `None` preserves the router's normal direct
+    /// or challenge-solver artifact resolution, so an indexer that has no such
+    /// flow needs no implementation at all.
+    async fn resolve_download(
+        &self,
+        _download_url: &str,
+    ) -> AppResult<Option<ResolvedDownloadArtifact>> {
+        Ok(None)
+    }
 }
 
 pub trait IndexerPluginProvider: Send + Sync {

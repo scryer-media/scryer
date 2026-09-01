@@ -1147,33 +1147,14 @@ async fn bootstrap_application(
             ),
         ));
     let download_client_category_snapshot_store = DownloadClientCategorySnapshotStore::default();
-    let download_client = Arc::new(
-        PrioritizedDownloadClientRouter::new(
-            download_client_configs.clone(),
-            settings_for_router.clone(),
-            staged_nzb_store.clone(),
-            staged_nzb_pipeline_limit.clone(),
-            Some(download_client_plugin_provider.clone()),
-        )
-        .with_indexer_config_repositories(
-            indexer_configs.clone(),
-            datastore.indexer_proxy_configs(),
-        )
-        .with_download_client_category_snapshot_store(
-            download_client_category_snapshot_store.clone(),
-        )
-        .with_seed_goal_resolution(datastore.seeding_profiles()),
-    );
     let indexer_stats = datastore.indexer_stats_tracker();
     let indexer_learning = datastore.indexer_search_learning_repository();
     let indexer_errors = datastore.indexer_errors();
     let indexer_error_recorder =
         Arc::new(BlockingIndexerErrorRecorder::new(indexer_errors.clone()));
-    let upstream_scheduler = datastore
-        .upstream_scheduler()
-        .await
-        .map_err(|e| format!("failed to initialize upstream scheduler: {e}"))?;
 
+    // The indexer plugin provider is built before the download router because
+    // the router consults it for indexer-owned grab resolution.
     let dynamic_provider = Arc::new(scryer_plugins::DynamicPluginProvider::new(
         scryer_plugins::build_indexer_plugin_provider_from_runtime_plugins(
             &indexer_runtime_plugins,
@@ -1187,6 +1168,29 @@ async fn bootstrap_application(
             indexer_errors.clone(),
         ),
     );
+
+    let download_client = Arc::new(
+        PrioritizedDownloadClientRouter::new(
+            download_client_configs.clone(),
+            settings_for_router.clone(),
+            staged_nzb_store.clone(),
+            staged_nzb_pipeline_limit.clone(),
+            Some(download_client_plugin_provider.clone()),
+        )
+        .with_indexer_config_repositories(
+            indexer_configs.clone(),
+            datastore.indexer_proxy_configs(),
+        )
+        .with_indexer_plugin_provider(plugin_provider.clone())
+        .with_download_client_category_snapshot_store(
+            download_client_category_snapshot_store.clone(),
+        )
+        .with_seed_goal_resolution(datastore.seeding_profiles()),
+    );
+    let upstream_scheduler = datastore
+        .upstream_scheduler()
+        .await
+        .map_err(|e| format!("failed to initialize upstream scheduler: {e}"))?;
     let subtitle_plugin_provider: Arc<dyn SubtitlePluginProvider> =
         Arc::new(scryer_plugins::DynamicSubtitlePluginProvider::new(
             scryer_plugins::build_subtitle_plugin_provider_from_runtime_plugins(

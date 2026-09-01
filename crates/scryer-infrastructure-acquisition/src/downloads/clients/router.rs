@@ -12,10 +12,10 @@ use scryer_application::{
     DownloadClientCategorySnapshotStore, DownloadClientConfigRepository,
     DownloadClientFeedbackScope, DownloadClientPluginProvider, DownloadClientRemotePathMapping,
     DownloadClientSnapshotOutcome, DownloadClientStatus, DownloadGrabResult, DownloadSourceKind,
-    IndexerConfigRepository, IndexerProxyConfigRepository, PersistedSeedGoals,
-    RateLimitCooldownAction, ResolvedDownloadArtifact, ResolvedSeedGoals, SeedGoalRequest,
-    SeedGoalResolver, SeedingProfileRepository, SettingsRepository, StagedNzbRef, StagedNzbStore,
-    accepted_inputs_for_client, apply_remote_path_mappings_to_completed_download,
+    IndexerConfigRepository, IndexerPluginProvider, IndexerProxyConfigRepository,
+    PersistedSeedGoals, RateLimitCooldownAction, ResolvedDownloadArtifact, ResolvedSeedGoals,
+    SeedGoalRequest, SeedGoalResolver, SeedingProfileRepository, SettingsRepository, StagedNzbRef,
+    StagedNzbStore, accepted_inputs_for_client, apply_remote_path_mappings_to_completed_download,
     apply_remote_path_mappings_to_status, extract_magnet_info_hash, is_valid_magnet_uri,
     normalize_torrent_info_hash, parse_download_client_remote_path_mappings,
 };
@@ -382,6 +382,7 @@ pub struct PrioritizedDownloadClientRouter {
     download_client_configs: Arc<dyn DownloadClientConfigRepository>,
     indexer_configs: Option<Arc<dyn IndexerConfigRepository>>,
     indexer_proxy_configs: Option<Arc<dyn IndexerProxyConfigRepository>>,
+    indexer_plugin_provider: Option<Arc<dyn IndexerPluginProvider>>,
     settings: Arc<dyn SettingsRepository>,
     staged_nzb_store: Arc<dyn StagedNzbStore>,
     staged_nzb_pipeline_limit: Arc<Semaphore>,
@@ -871,6 +872,7 @@ impl PrioritizedDownloadClientRouter {
             download_client_configs,
             indexer_configs: None,
             indexer_proxy_configs: None,
+            indexer_plugin_provider: None,
             settings,
             staged_nzb_store,
             staged_nzb_pipeline_limit,
@@ -890,6 +892,17 @@ impl PrioritizedDownloadClientRouter {
     ) -> Self {
         self.indexer_configs = Some(indexer_configs);
         self.indexer_proxy_configs = Some(indexer_proxy_configs);
+        self
+    }
+
+    /// Enable indexer-owned grab resolution ahead of the router's direct and
+    /// challenge-solver fallbacks. Indexers with no grab action return `None`
+    /// and leave those fallbacks unchanged.
+    pub fn with_indexer_plugin_provider(
+        mut self,
+        indexer_plugin_provider: Arc<dyn IndexerPluginProvider>,
+    ) -> Self {
+        self.indexer_plugin_provider = Some(indexer_plugin_provider);
         self
     }
 
@@ -1301,9 +1314,62 @@ impl PrioritizedDownloadClientRouter {
         {
             return Ok(request.clone());
         }
-        // No indexer, or an indexer without an assigned solver: fetch the
-        // artifact directly and classify it.
-        let Some((indexer, proxy_config_id)) = indexer.zip(has_proxy) else {
+        // Resolve the assigned solver's proxy first: both the origin guard and
+        // the indexer-owned grab below need it, and a misconfigured proxy must
+        // fail the same way whichever path ends up resolving the artifact.
+        let proxy_config = if let Some((indexer, proxy_config_id)) = indexer.zip(has_proxy) {
+            let Some(indexer_proxy_configs) = self.indexer_proxy_configs.as_ref() else {
+                return Err(AppError::download_submit_unavailable(format!(
+                    "indexer {} routing is unavailable: indexer proxy repository is not wired",
+                    indexer.id
+                )));
+            };
+            let proxy_config = indexer_proxy_configs
+                .get_by_id(proxy_config_id)
+                .await
+                .map_err(|error| {
+                    AppError::download_submit_unavailable(format!(
+                        "indexer {} routing is unavailable: failed to load proxy configuration: {error}",
+                        indexer.id
+                    ))
+                })?
+                .ok_or_else(|| {
+                    AppError::download_submit_unavailable(format!(
+                        "indexer {} routing is unavailable: proxy configuration {} was not found",
+                        indexer.id, proxy_config_id
+                    ))
+                })?;
+            if !proxy_config.is_enabled {
+                return Err(AppError::download_submit_unavailable(format!(
+                    "indexer {} routing is unavailable: assigned proxy {} is disabled",
+                    indexer.id, proxy_config_id
+                )));
+            }
+            if !Self::download_url_matches_indexer_origin(indexer, download_url) {
+                return Err(AppError::Validation(
+                    "Proxied download URL does not match the assigned indexer origin.".into(),
+                ));
+            }
+            Some(proxy_config)
+        } else {
+            None
+        };
+
+        // An indexer that owns an authenticated grab flow resolves the artifact
+        // itself: a private tracker will not serve the file to a bare fetch, and
+        // the plugin already holds that session. Providers without such a flow
+        // answer `None` and leave the paths below untouched.
+        if let (Some(indexer), Some(provider)) = (indexer, self.indexer_plugin_provider.as_ref())
+            && let Some(client) =
+                provider.client_for_provider_with_proxy(indexer, proxy_config.as_ref())
+            && let Some(artifact) = client.resolve_download(download_url).await?
+        {
+            return self.prepare_resolved_request(request, artifact);
+        }
+
+        let Some(proxy_config) = proxy_config else {
+            // No indexer, or an indexer without an assigned solver: fetch the
+            // artifact directly and classify it.
             let fetched = self
                 .fetch_download_artifact_direct(
                     "indexer",
@@ -1323,38 +1389,6 @@ impl PrioritizedDownloadClientRouter {
                 )?,
             );
         };
-        let Some(indexer_proxy_configs) = self.indexer_proxy_configs.as_ref() else {
-            return Err(AppError::download_submit_unavailable(format!(
-                "indexer {} routing is unavailable: indexer proxy repository is not wired",
-                indexer.id
-            )));
-        };
-        let proxy_config = indexer_proxy_configs
-            .get_by_id(proxy_config_id)
-            .await
-            .map_err(|error| {
-                AppError::download_submit_unavailable(format!(
-                    "indexer {} routing is unavailable: failed to load proxy configuration: {error}",
-                    indexer.id
-                ))
-            })?
-            .ok_or_else(|| {
-                AppError::download_submit_unavailable(format!(
-                    "indexer {} routing is unavailable: proxy configuration {} was not found",
-                    indexer.id, proxy_config_id
-                ))
-            })?;
-        if !proxy_config.is_enabled {
-            return Err(AppError::download_submit_unavailable(format!(
-                "indexer {} routing is unavailable: assigned proxy {} is disabled",
-                indexer.id, proxy_config_id
-            )));
-        }
-        if !Self::download_url_matches_indexer_origin(indexer, download_url) {
-            return Err(AppError::Validation(
-                "Proxied download URL does not match the assigned indexer origin.".into(),
-            ));
-        }
         let artifact_result = self
             .resolve_download_artifact_via_indexer_proxy(
                 &proxy_config,
@@ -6729,6 +6763,131 @@ mod tests {
             test_pipeline_limit(),
             None,
         )
+    }
+
+    struct ResolvingIndexerClient {
+        calls: Mutex<Vec<String>>,
+        artifact: Option<ResolvedDownloadArtifact>,
+    }
+
+    #[async_trait]
+    impl scryer_application::IndexerClient for ResolvingIndexerClient {
+        async fn search(
+            &self,
+            _query: String,
+            _ids: HashMap<String, String>,
+            _category: Option<String>,
+            _facet: Option<String>,
+            _id_search_facet: Option<String>,
+            _newznab_categories: Option<Vec<String>>,
+            _indexer_routing: Option<scryer_application::IndexerRoutingPlan>,
+            _mode: scryer_application::SearchMode,
+            _operation: scryer_application::IndexerErrorOperation,
+            _season: Option<u32>,
+            _episode: Option<u32>,
+            _absolute_episode: Option<u32>,
+            _tagged_aliases: Vec<scryer_domain::TaggedAlias>,
+            _learning_context: Option<scryer_application::IndexerSearchLearningContext>,
+            _cancel_token: tokio_util::sync::CancellationToken,
+        ) -> AppResult<scryer_application::IndexerSearchResponse> {
+            Err(AppError::Repository(
+                "search is not used in this test".to_string(),
+            ))
+        }
+
+        async fn resolve_download(
+            &self,
+            download_url: &str,
+        ) -> AppResult<Option<ResolvedDownloadArtifact>> {
+            self.calls.lock().unwrap().push(download_url.to_string());
+            Ok(self.artifact.clone())
+        }
+    }
+
+    struct ResolvingIndexerProvider {
+        client: Arc<dyn scryer_application::IndexerClient>,
+    }
+
+    impl IndexerPluginProvider for ResolvingIndexerProvider {
+        fn client_for_provider(
+            &self,
+            _config: &scryer_domain::IndexerConfig,
+        ) -> Option<Arc<dyn scryer_application::IndexerClient>> {
+            Some(Arc::clone(&self.client))
+        }
+
+        fn available_provider_types(&self) -> Vec<String> {
+            vec!["cardigann".to_string()]
+        }
+
+        fn scoring_policies(&self) -> Vec<scryer_rules::UserPolicy> {
+            vec![]
+        }
+    }
+
+    fn resolving_router(
+        artifact: Option<ResolvedDownloadArtifact>,
+    ) -> (PrioritizedDownloadClientRouter, Arc<ResolvingIndexerClient>) {
+        let client = Arc::new(ResolvingIndexerClient {
+            calls: Mutex::new(Vec::new()),
+            artifact,
+        });
+        let router =
+            no_client_router().with_indexer_plugin_provider(Arc::new(ResolvingIndexerProvider {
+                client: client.clone(),
+            }));
+        (router, client)
+    }
+
+    #[tokio::test]
+    async fn indexer_owned_download_resolution_runs_before_direct_fallback() {
+        let download_url = "https://indexer.example/download/1";
+        let (router, indexer_client) =
+            resolving_router(Some(ResolvedDownloadArtifact::TorrentFile {
+                bytes: b"torrent bytes".to_vec(),
+                file_name: Some("release.torrent".to_string()),
+                content_type: Some("application/x-bittorrent".to_string()),
+                info_hash_hint: Some("0123456789012345678901234567890123456789".to_string()),
+            }));
+
+        let prepared = router
+            .prepare_download_request(
+                &test_add_request(download_url, Some(DownloadSourceKind::TorrentFile)),
+                Some(&test_indexer_config("https://indexer.example")),
+            )
+            .await
+            .expect("indexer-owned resolution should avoid the direct fallback");
+
+        assert_eq!(
+            indexer_client.calls.lock().unwrap().as_slice(),
+            &[download_url.to_string()]
+        );
+        assert!(matches!(
+            prepared.resolved_download_artifact,
+            Some(ResolvedDownloadArtifact::TorrentFile { ref bytes, .. }) if bytes == b"torrent bytes"
+        ));
+        assert_eq!(prepared.source_kind, Some(DownloadSourceKind::TorrentFile));
+        assert!(prepared.source_hint.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_magnet_source_hint_never_reaches_the_indexer_grab_flow() {
+        let magnet = "magnet:?xt=urn:btih:0123456789012345678901234567890123456789";
+        let (router, indexer_client) = resolving_router(None);
+
+        let prepared = router
+            .prepare_download_request(
+                &test_add_request(magnet, Some(DownloadSourceKind::MagnetUri)),
+                Some(&test_indexer_config("https://indexer.example")),
+            )
+            .await
+            .expect("a magnet needs no resolution at all");
+
+        assert!(indexer_client.calls.lock().unwrap().is_empty());
+        assert!(matches!(
+            prepared.resolved_download_artifact,
+            Some(ResolvedDownloadArtifact::Magnet { .. })
+        ));
     }
 
     #[tokio::test]
