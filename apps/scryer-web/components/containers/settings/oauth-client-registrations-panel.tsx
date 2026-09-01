@@ -17,26 +17,29 @@ import {
   oauthClientRegistrationsQuery,
 } from "@/lib/graphql/queries";
 import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
+import {
+  automaticLinkingStatus,
+  canStartJellyfinPluginClientCreation,
+  createdJellyfinPluginClientForCallback,
+  isEligibleJellyfinPluginClient,
+  jellyfinPluginCallbackUrl,
+  jellyfinPluginClientCreateDecision,
+  normalizedPublicJellyfinBaseUrl,
+  prefillJellyfinPublicBaseUrl,
+  reconcileCreatedJellyfinPluginClient,
+  shouldApplyJellyfinPluginOAuthReload,
+  type JellyfinMediaServerConnection,
+  type OAuthClientRegistrationForJellyfin,
+} from "@/lib/utils/jellyfin-plugin-oauth-setup";
 
-type OAuthClientRegistration = {
-  clientId: string;
+type OAuthClientRegistration = OAuthClientRegistrationForJellyfin & {
   displayName: string;
-  redirectUris: string[];
-  enabled: boolean;
-  source: "MANAGED" | "CUSTOM";
 };
 
 type OAuthClientDraft = {
   displayName: string;
   redirectUris: string;
   enabled: boolean;
-};
-
-type JellyfinMediaServerConnection = {
-  enabled: boolean;
-  linkingEnabled: boolean;
-  apiKeyPresent: boolean;
-  externalUrl: string | null;
 };
 
 const EMPTY_DRAFT: OAuthClientDraft = {
@@ -46,77 +49,6 @@ const EMPTY_DRAFT: OAuthClientDraft = {
 };
 
 const JELLYFIN_PLUGIN_DISPLAY_NAME = "Jellyfin Scryer plugin";
-
-function normalizedPublicJellyfinBaseUrl(value: string): string | null {
-  try {
-    const url = new URL(value.trim());
-    if (
-      url.protocol !== "https:" ||
-      !url.hostname ||
-      url.username ||
-      url.password ||
-      url.search ||
-      url.hash
-    ) return null;
-    return url.toString().replace(/\/+$/, "");
-  } catch {
-    return null;
-  }
-}
-
-function eligibleJellyfinConnectionBaseUrls(
-  connections: JellyfinMediaServerConnection[],
-): string[] {
-  return connections.flatMap((connection) => {
-    const externalUrl = normalizedPublicJellyfinBaseUrl(connection.externalUrl ?? "");
-    return (
-      connection.enabled &&
-      connection.linkingEnabled &&
-      connection.apiKeyPresent &&
-      externalUrl
-    ) ? [externalUrl] : [];
-  });
-}
-
-function prefillJellyfinPublicBaseUrl(
-  connections: JellyfinMediaServerConnection[] | null,
-): string | null {
-  if (!connections) return null;
-  const eligibleBaseUrls = eligibleJellyfinConnectionBaseUrls(connections);
-  return eligibleBaseUrls.length === 1 ? eligibleBaseUrls[0] : null;
-}
-
-function automaticLinkingStatusForConnections(
-  publicBaseUrl: string,
-  connections: JellyfinMediaServerConnection[],
-): "not-ready" | "ambiguous" | "ready" {
-  const matchingConnectionCount = eligibleJellyfinConnectionBaseUrls(connections).filter(
-    (externalUrl) => externalUrl === publicBaseUrl,
-  ).length;
-  if (matchingConnectionCount === 1) return "ready";
-  return matchingConnectionCount > 1 ? "ambiguous" : "not-ready";
-}
-
-function automaticLinkingStatus(
-  publicBaseUrl: string | null,
-  connections: JellyfinMediaServerConnection[] | null,
-): "unavailable" | "enter-url" | "not-ready" | "ambiguous" | "ready" {
-  if (connections === null) return "unavailable";
-  if (!publicBaseUrl) return "enter-url";
-  return automaticLinkingStatusForConnections(publicBaseUrl, connections);
-}
-
-function isEligibleJellyfinPluginClient(
-  registeredClient: OAuthClientRegistration,
-  callbackUrl: string,
-): boolean {
-  return (
-    registeredClient.source === "CUSTOM" &&
-    registeredClient.enabled &&
-    registeredClient.redirectUris.length === 1 &&
-    registeredClient.redirectUris[0] === callbackUrl
-  );
-}
 
 const PANEL_CLASS =
   "overflow-hidden rounded-[14px] border border-[var(--scry-border)] bg-[var(--scry-surf)] shadow-[0_10px_24px_rgba(0,0,0,0.16)]";
@@ -179,7 +111,10 @@ export function OAuthClientRegistrationsPanel() {
           .toPromise(),
       ]);
       if (result.error) throw result.error;
-      if (reloadGeneration !== reloadGenerationRef.current) return;
+      if (!shouldApplyJellyfinPluginOAuthReload(
+        reloadGeneration,
+        reloadGenerationRef.current,
+      )) return;
       const nextClients = result.data?.oauthClientRegistrations ?? [];
       setClients(nextClients);
       setJellyfinConnections(
@@ -188,20 +123,21 @@ export function OAuthClientRegistrationsPanel() {
       setCreatedJellyfinClient((previousClient) => {
         const clientToReconcile = reconcileClient ?? previousClient;
         if (!clientToReconcile) return null;
-        const persistedClient = nextClients.find(
-          (registeredClient) => registeredClient.clientId === clientToReconcile.clientId,
-        );
-        return persistedClient && isEligibleJellyfinPluginClient(persistedClient, clientToReconcile.callbackUrl)
-          ? clientToReconcile
-          : null;
+        return reconcileCreatedJellyfinPluginClient(clientToReconcile, nextClients);
       });
     } catch (error) {
-      if (reloadGeneration !== reloadGenerationRef.current) return;
+      if (!shouldApplyJellyfinPluginOAuthReload(
+        reloadGeneration,
+        reloadGenerationRef.current,
+      )) return;
       toast.error(
         userFacingGraphQlErrorMessage(error, "Unable to load OAuth applications."),
       );
     } finally {
-      if (reloadGeneration === reloadGenerationRef.current) setLoading(false);
+      if (shouldApplyJellyfinPluginOAuthReload(
+        reloadGeneration,
+        reloadGenerationRef.current,
+      )) setLoading(false);
     }
   }, [client]);
 
@@ -216,11 +152,11 @@ export function OAuthClientRegistrationsPanel() {
   }, [jellyfinConnections, jellyfinPublicBaseUrl, jellyfinPublicBaseUrlTouched]);
 
   React.useEffect(() => {
-    const callbackUrl = normalizedPublicJellyfinBaseUrl(jellyfinPublicBaseUrl);
+    const callbackUrl = jellyfinPluginCallbackUrl(
+      normalizedPublicJellyfinBaseUrl(jellyfinPublicBaseUrl),
+    );
     setCreatedJellyfinClient((previousClient) =>
-      previousClient && callbackUrl && previousClient.callbackUrl === `${callbackUrl}/Scryer/Auth/Callback`
-        ? previousClient
-        : null,
+      createdJellyfinPluginClientForCallback(previousClient, callbackUrl),
     );
   }, [jellyfinPublicBaseUrl]);
 
@@ -300,17 +236,19 @@ export function OAuthClientRegistrationsPanel() {
       toast.error("Enter a valid public HTTPS Jellyfin base URL.");
       return;
     }
-    const callbackUrl = `${publicBaseUrl}/Scryer/Auth/Callback`;
-    if (jellyfinCreateKeyRef.current) return;
-    const existingClients = clients.filter((registeredClient) =>
-      isEligibleJellyfinPluginClient(registeredClient, callbackUrl),
-    );
-    if (existingClients.length > 1) {
+    const callbackUrl = jellyfinPluginCallbackUrl(publicBaseUrl)!;
+    if (!canStartJellyfinPluginClientCreation(jellyfinCreateKeyRef.current)) return;
+    const createDecision = jellyfinPluginClientCreateDecision(clients, callbackUrl);
+    if (createDecision === "ambiguous") {
       toast.error("Multiple custom OAuth clients use this exact Jellyfin callback. Remove duplicates before continuing.");
       return;
     }
-    if (existingClients.length === 1) {
-      setCreatedJellyfinClient({ clientId: existingClients[0].clientId, callbackUrl });
+    if (createDecision === "reuse") {
+      const existingClient = clients.find((registeredClient) =>
+        isEligibleJellyfinPluginClient(registeredClient, callbackUrl),
+      );
+      if (!existingClient) return;
+      setCreatedJellyfinClient({ clientId: existingClient.clientId, callbackUrl });
       toast.success("Jellyfin plugin OAuth client is already configured.");
       return;
     }
