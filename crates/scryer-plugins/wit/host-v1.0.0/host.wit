@@ -1,0 +1,51 @@
+package scryer:host@1.0.0;
+
+/// The single host-services import shared by every Scryer plugin-family world.
+///
+/// # Why one function
+///
+/// The SDK — not WIT — owns the capability set. `request` is a postcard-encoded
+/// `scryer_plugin_sdk::host::PluginHostRequest` and a successful `response` is a
+/// postcard-encoded `scryer_plugin_sdk::host::PluginHostResponse`, exactly the
+/// bytes the core-module host ABI (`scryer_host_call`) and the PDK's `call()`
+/// already exchange today. A new capability is therefore a new SDK enum variant
+/// plus a new arm in the host's service layer, with no WIT revision and no
+/// re-generated bindings for the families that do not use it.
+///
+/// That is the whole point of the shape: `scryer:subtitle`,
+/// `scryer:download-client`, `scryer:notification` and every family world that
+/// follows import *this* interface unchanged, and differ only in their own
+/// `describe`/`process` payloads.
+///
+/// # Capability availability is in-band
+///
+/// A host that has not been configured with a service — or a service that has
+/// no provider installed — does NOT surface that as `host-error`. It returns a
+/// well-formed `PluginHostResponse` whose `PluginResult` is
+/// `Err(PluginError { code: Unsupported, .. })`, matching the fail-closed
+/// `CommandHost` semantics the core-module guests already see. `host-error` is
+/// reserved for the transport itself failing, which a guest cannot recover from
+/// by asking for something else.
+interface services {
+  /// A transport-level failure of the host-call itself.
+  ///
+  /// Both variants mean the guest never reached the service layer, so no
+  /// `PluginHostResponse` exists to carry a typed `PluginError`.
+  enum host-error {
+    /// `request` was not a decodable `PluginHostRequest`, or exceeded the
+    /// host's encoded-request cap.
+    invalid-request,
+    /// The host could not run the service or encode its response.
+    failed,
+  }
+
+  /// Exchange one encoded `PluginHostRequest` for one encoded
+  /// `PluginHostResponse`.
+  ///
+  /// Synchronous in WIT on purpose: the host implements it as an async host
+  /// function, so a guest that has no async runtime of its own (the common
+  /// case, and every hand-built fixture) can still call it as an ordinary
+  /// import while the host awaits HTTP, archive extraction, and the rest
+  /// without blocking a runtime worker.
+  host-call: func(request: list<u8>) -> result<list<u8>, host-error>;
+}

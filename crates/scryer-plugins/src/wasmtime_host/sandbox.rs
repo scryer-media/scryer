@@ -1,18 +1,15 @@
-//! WASI preview1 sandbox and store limits for the archive host.
+//! WASI Preview 2 sandbox and store limits for the component hosts.
 //!
 //! Per invocation: a memory cap enforced by a tracking `ResourceLimiter`, and a
-//! WASI p1 context whose only authority is the spec's preopened directories plus
-//! a private rw scratch dir (`TMPDIR`). Stdio is host-owned (stdin carries the
-//! request, stdout the response, stderr is captured) — never inherited. No
-//! network, no env beyond `TMPDIR`.
+//! WASI context whose only authority is the spec's preopened directories plus a
+//! private rw scratch dir (`TMPDIR`). Stdio is host-owned and captured for
+//! diagnostics — never inherited. No network, no env beyond `TMPDIR`.
 
 use scryer_application::{AppError, AppResult};
-use wasmtime_wasi::p1::WasiP1Ctx;
 use wasmtime_wasi::p2::pipe::{MemoryInputPipe, MemoryOutputPipe};
-use wasmtime_wasi::{FsPerms, WasiCtxBuilder};
+use wasmtime_wasi::{FsPerms, WasiCtx, WasiCtxBuilder};
 
 use crate::runtime_backing::PreopenSpec;
-use crate::wasmtime_host::command_host::CommandHost;
 
 /// Provisional default memory cap for an archive instance: 1 GiB.
 ///
@@ -45,32 +42,6 @@ const DESCRIBE_ARG: &str = "describe";
 const STDOUT_CAPACITY_BYTES: usize = 64 * 1024 * 1024;
 /// stderr capacity (diagnostic only; the logged/attached portion is tailed).
 const STDERR_CAPACITY_BYTES: usize = 4 * 1024 * 1024;
-
-/// Store data for an archive invocation: the WASI context plus the memory
-/// limiter (`Store::limiter` borrows `&mut ctx.limits`).
-pub(crate) struct HostCtx {
-    pub(crate) wasi: WasiP1Ctx,
-    pub(crate) limits: HostLimits,
-    pub(crate) command_host: CommandHost,
-}
-
-impl HostCtx {
-    pub(crate) fn new(wasi: WasiP1Ctx, limits: HostLimits) -> Self {
-        Self::with_command_host(wasi, limits, CommandHost::disabled())
-    }
-
-    pub(crate) fn with_command_host(
-        wasi: WasiP1Ctx,
-        limits: HostLimits,
-        command_host: CommandHost,
-    ) -> Self {
-        Self {
-            wasi,
-            limits,
-            command_host,
-        }
-    }
-}
 
 /// Memory-cap limiter that also records the first denial, so the error mapper
 /// can attribute an OOM/limit trap to the resource limit rather than a generic
@@ -113,52 +84,27 @@ impl wasmtime::ResourceLimiter for HostLimits {
     }
 }
 
-/// A built WASI context together with the output pipes and scratch dir that must
-/// outlive the invocation. `stdout`/`stderr` are cheap clones sharing the guest
-/// buffers, so their contents can be read after the run.
-pub(crate) struct PreparedSandbox {
-    pub(crate) wasi: WasiP1Ctx,
+/// A built WASI Preview 2 context for one archive component invocation.
+///
+/// The component protocol carries the request and the response through the
+/// world's `process` export, so p2 stdio is diagnostics only: stdin is empty
+/// and stdout/stderr are captured for the failure message.
+pub(crate) struct PreparedComponentSandbox {
+    pub(crate) wasi: WasiCtx,
     pub(crate) stdout: MemoryOutputPipe,
     pub(crate) stderr: MemoryOutputPipe,
     /// Kept alive for the invocation; dropped (and removed) afterwards.
     pub(crate) _scratch: tempfile::TempDir,
 }
 
-/// A minimal WASI ctx (no filesystem/network) plus its captured output pipes.
-pub(crate) struct BareSandbox {
-    pub(crate) wasi: WasiP1Ctx,
-    pub(crate) stdout: MemoryOutputPipe,
-    pub(crate) stderr: MemoryOutputPipe,
-}
-
-/// WASI ctx for a describe invocation: empty stdin, argv
-/// `[argv0, "describe"]`, captured stdio, and NO filesystem or network authority
-/// — a describe call is a pure function of the artifact. The guest keys the
-/// describe branch off argv[1] (`std::env::args().nth(1)`), so argv[0] MUST be
-/// present ahead of the subcommand or the guest falls through to request mode.
-pub(crate) fn build_describe_sandbox() -> BareSandbox {
-    let stdout = MemoryOutputPipe::new(STDOUT_CAPACITY_BYTES);
-    let stderr = MemoryOutputPipe::new(STDERR_CAPACITY_BYTES);
-    let mut builder = WasiCtxBuilder::new();
-    builder
-        .allow_blocking_current_thread(false)
-        .stdin(MemoryInputPipe::new(Vec::<u8>::new()))
-        .stdout(stdout.clone())
-        .stderr(stderr.clone())
-        .args(&[GUEST_ARGV0, DESCRIBE_ARG]);
-    BareSandbox {
-        wasi: builder.build_p1(),
-        stdout,
-        stderr,
-    }
-}
-
-/// Build the WASI p1 sandbox for one invocation: request on stdin, captured
-/// stdout/stderr, the spec's preopens, and a private rw scratch at `TMPDIR`.
-pub(crate) fn build_sandbox(
+/// Build the WASI Preview 2 sandbox for one component invocation.
+///
+/// Directory authority is exactly the spec's preopens (read-only source,
+/// writable output) plus a private rw scratch dir exposed at `TMPDIR`. Nothing
+/// else is reachable — no network, no host env, no inherited stdio.
+pub(crate) fn build_component_sandbox(
     preopens: &[PreopenSpec],
-    request_bytes: Vec<u8>,
-) -> AppResult<PreparedSandbox> {
+) -> AppResult<PreparedComponentSandbox> {
     let scratch = tempfile::Builder::new()
         .prefix(".scryer-archive-scratch-")
         .tempdir()
@@ -168,14 +114,13 @@ pub(crate) fn build_sandbox(
             ))
         })?;
 
-    let stdin = MemoryInputPipe::new(request_bytes);
     let stdout = MemoryOutputPipe::new(STDOUT_CAPACITY_BYTES);
     let stderr = MemoryOutputPipe::new(STDERR_CAPACITY_BYTES);
 
     let mut builder = WasiCtxBuilder::new();
     builder
         .allow_blocking_current_thread(false)
-        .stdin(stdin)
+        .stdin(MemoryInputPipe::new(Vec::<u8>::new()))
         .stdout(stdout.clone())
         .stderr(stderr.clone())
         .args(&[GUEST_ARGV0])
@@ -198,7 +143,6 @@ pub(crate) fn build_sandbox(
             })?;
     }
 
-    // Per-invocation rw scratch, pointed at by TMPDIR for large-member spill.
     builder
         .preopened_dir(scratch.path(), SCRATCH_GUEST_PATH, FsPerms::ReadWrite)
         .map_err(|error| {
@@ -207,12 +151,27 @@ pub(crate) fn build_sandbox(
             ))
         })?;
 
-    Ok(PreparedSandbox {
-        wasi: builder.build_p1(),
+    Ok(PreparedComponentSandbox {
+        wasi: builder.build(),
         stdout,
         stderr,
         _scratch: scratch,
     })
+}
+
+/// A minimal WASI Preview 2 context for a describe invocation: no filesystem,
+/// no network, captured stdio. A describe call is a pure function of the
+/// artifact.
+pub(crate) fn build_component_describe_sandbox() -> (WasiCtx, MemoryOutputPipe) {
+    let stderr = MemoryOutputPipe::new(STDERR_CAPACITY_BYTES);
+    let mut builder = WasiCtxBuilder::new();
+    builder
+        .allow_blocking_current_thread(false)
+        .stdin(MemoryInputPipe::new(Vec::<u8>::new()))
+        .stdout(MemoryOutputPipe::new(STDOUT_CAPACITY_BYTES))
+        .stderr(stderr.clone())
+        .args(&[GUEST_ARGV0, DESCRIBE_ARG]);
+    (builder.build(), stderr)
 }
 
 #[cfg(test)]
@@ -236,11 +195,36 @@ mod tests {
         assert!(limits.memory_denied);
     }
 
+    /// The component sandbox grants exactly the spec's preopens plus a private
+    /// scratch dir. A rejected preopen is a hard error rather than a silently
+    /// unreachable directory.
     #[test]
-    fn build_sandbox_wires_request_and_scratch() {
-        let sandbox = build_sandbox(&[], b"{\"hello\":true}".to_vec()).expect("build sandbox");
-        // stdout/stderr start empty; scratch dir exists.
+    fn build_component_sandbox_accepts_the_archive_preopens() {
+        let source = tempfile::tempdir().expect("source dir");
+        let output = tempfile::tempdir().expect("output dir");
+        let preopens = vec![
+            PreopenSpec::read_only(source.path(), "/scryer/source"),
+            PreopenSpec::writable(output.path(), "/scryer/output"),
+        ];
+
+        let sandbox = build_component_sandbox(&preopens).expect("build component sandbox");
+
         assert!(sandbox.stdout.contents().is_empty());
+        assert!(sandbox.stderr.contents().is_empty());
         assert!(sandbox._scratch.path().is_dir());
+    }
+
+    #[test]
+    fn build_component_sandbox_rejects_a_missing_preopen() {
+        let missing = std::env::temp_dir().join("scryer-archive-component-missing-preopen");
+        let _ = std::fs::remove_dir_all(&missing);
+
+        let Err(error) =
+            build_component_sandbox(&[PreopenSpec::read_only(&missing, "/scryer/source")])
+        else {
+            panic!("a missing preopen must fail the invocation, not be skipped");
+        };
+
+        assert!(error.to_string().contains("failed to preopen"), "{error}");
     }
 }

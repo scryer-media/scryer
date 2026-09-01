@@ -14,7 +14,6 @@ use scryer_application::{
     indexer_response_content_type, unknown_indexer_error,
 };
 
-pub(crate) const HTTP_ENV_NAMESPACE: &str = "extism:host/env";
 const DEFAULT_MAX_HTTP_RESPONSE_BYTES: u64 = 50 * 1024 * 1024;
 const PLUGIN_HTTP_WORKER_RESPONSE_GRACE: Duration = Duration::from_secs(1);
 const PINNED_REQUEST_CLIENT_TTL: Duration = Duration::from_secs(5 * 60);
@@ -313,6 +312,18 @@ impl PluginHttpHost {
         }
     }
 
+    /// Arm the per-operation indexer HTTP error capture on THIS host.
+    ///
+    /// Reachable only from this module's own tests since the wasip1 command
+    /// indexer was removed: the surviving component indexer arms an equivalent
+    /// capture on `ComponentHost`, which projects it through the same
+    /// [`Self::record_captured_response`] / [`Self::record_transport_failure`]
+    /// recorders. The pair is kept here — rather than deleted along with its
+    /// tests — because `request()` still fills `final_response` on this host,
+    /// and removing only the setter would leave that capture silently inert
+    /// instead of removed. Unifying the two capture implementations is the
+    /// follow-up; this is not the change that should decide it.
+    #[allow(dead_code)]
     pub(crate) fn begin_indexer_error_capture(&self, context: IndexerErrorCaptureContext) {
         match self.state.lock() {
             Ok(mut state) => {
@@ -327,6 +338,8 @@ impl PluginHttpHost {
         }
     }
 
+    /// See [`Self::begin_indexer_error_capture`].
+    #[allow(dead_code)]
     pub(crate) fn finish_indexer_error_capture(&self, operation_failed: bool) {
         let capture = match self.state.lock() {
             Ok(mut state) => state.indexer_error_capture.take(),
@@ -633,6 +646,13 @@ impl PluginHttpHost {
             .map(|response| response.headers.clone()))
     }
 
+    /// The last 429 explanation this host recorded for `plugin_id`.
+    ///
+    /// Its only production caller was the command-ABI indexer's rate-limit
+    /// reprojection, removed with that runtime; the component indexer reads
+    /// rate limiting from its own host. Retained with the recording path that
+    /// still populates it.
+    #[allow(dead_code)]
     pub(crate) fn rate_limit_message(&self, plugin_id: &str) -> HostResult<Option<String>> {
         let host_state = self
             .state

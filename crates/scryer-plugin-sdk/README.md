@@ -34,73 +34,21 @@ messages, and generated JSON Schema. It does not run a plugin by itself.
 - SDK and host-version compatibility helpers.
 - A generated JSON Schema bundle for registry validation and non-Rust tooling.
 
-## Legacy Extism indexer example
+## Plugin runtime
 
-The following example documents the older SDK-only integration for maintainers
-of existing plugins. Do not use it as the starting point for a new plugin; use
-the PDK instead.
+Scryer loads plugins exclusively as WASI Preview 2 components built for
+`wasm32-wasip2`, one WIT world per plugin family, with host services reaching
+the guest through the shared `scryer:host/services@1.0.0` import. The older
+Extism and Preview 1 command integrations have been removed from the host: a
+legacy artifact is refused at load time with an upgrade diagnostic, and this
+crate no longer carries their guest-side transports.
 
-Create a Rust library that produces a WebAssembly `cdylib`:
-
-```toml
-[package]
-name = "my-scryer-indexer"
-version = "0.1.0"
-edition = "2024"
-
-[lib]
-crate-type = ["cdylib"]
-
-[dependencies]
-extism-pdk = "1.4"
-scryer-plugin-sdk = "3.7"
-serde_json = "1"
-```
-
-Export `scryer_describe` plus the operations advertised by the descriptor:
-
-```rust
-use extism_pdk::*;
-use scryer_plugin_sdk::*;
-
-#[plugin_fn]
-pub fn scryer_describe(_input: String) -> FnResult<String> {
-    let descriptor = PluginDescriptor {
-        id: "my-indexer".into(),
-        name: "My Indexer".into(),
-        version: env!("CARGO_PKG_VERSION").into(),
-        sdk_version: SDK_VERSION.into(),
-        sdk_constraint: current_sdk_constraint(),
-        socket_permissions: vec![],
-        provider: ProviderDescriptor::Indexer(IndexerDescriptor {
-            provider_type: "my-indexer".into(),
-            provider_aliases: vec![],
-            source_kind: IndexerSourceKind::Generic,
-            capabilities: IndexerCapabilities::default(),
-            scoring_policies: vec![],
-            config_fields: vec![],
-            allowed_hosts: vec![],
-            rate_limit_seconds: None,
-        }),
-    };
-
-    Ok(serde_json::to_string(&descriptor)?)
-}
-
-#[plugin_fn]
-pub fn scryer_indexer_search(input: String) -> FnResult<String> {
-    let _request: PluginSearchRequest = serde_json::from_str(&input)?;
-    let response = PluginSearchResponse::default();
-    Ok(serde_json::to_string(&PluginResult::Ok(response))?)
-}
-```
-
-Build it with:
-
-```console
-rustup target add wasm32-unknown-unknown
-cargo build --release --target wasm32-unknown-unknown
-```
+Do not depend on this crate's transport for a new plugin. Use
+[`scryer-plugin-pdk`](https://github.com/scryer-media/scryer-plugins/tree/main/pdk/scryer-plugin-pdk),
+whose family entry macros generate the component exports and install the
+host-call transport; this crate supplies the typed contracts those payloads
+carry. The first-party plugins repository linked below contains a working,
+conformance-tested example for every family.
 
 For real implementations, declare the capabilities and configuration fields
 you support, return typed results, and list every network destination the plugin

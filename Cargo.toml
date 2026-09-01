@@ -178,9 +178,6 @@ opt-level = 3
 [profile.release-lean.package.image]
 opt-level = 3
 
-[profile.release-lean.package.lzma-rs]
-opt-level = 3
-
 [profile.release-lean.package.miniz_oxide]
 opt-level = 3
 
@@ -264,9 +261,6 @@ opt-level = 3
 opt-level = 3
 
 [profile.rc.package.image]
-opt-level = 3
-
-[profile.rc.package.lzma-rs]
 opt-level = 3
 
 [profile.rc.package.miniz_oxide]

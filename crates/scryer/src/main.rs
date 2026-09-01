@@ -1139,12 +1139,26 @@ async fn bootstrap_application(
         .filter(|plugin| plugin.descriptor.plugin_type() == "notification")
         .cloned()
         .collect::<Vec<_>>();
+    // Built first because every other plugin family's command host takes it:
+    // the host-owned `ArchiveExtract` service delegates to whatever extractor
+    // is installed, so the extractor provider has to exist before the families
+    // that borrow it.
+    let dynamic_archive_extractor_plugin_provider =
+        Arc::new(scryer_plugins::DynamicArchiveExtractorPluginProvider::new(
+            scryer_plugins::build_archive_extractor_plugin_provider_from_runtime_plugins(
+                &archive_extractor_runtime_plugins,
+                &disabled_builtin_plugins,
+            ),
+        ));
+    let archive_extractor_plugin_provider: Arc<dyn ArchiveExtractorPluginProvider> =
+        dynamic_archive_extractor_plugin_provider.clone();
     let download_client_plugin_provider: Arc<dyn DownloadClientPluginProvider> =
         Arc::new(scryer_plugins::DynamicDownloadClientPluginProvider::new(
             scryer_plugins::build_download_client_plugin_provider_from_runtime_plugins(
                 &download_client_runtime_plugins,
                 &disabled_builtin_plugins,
-            ),
+            )
+            .with_archive_extractor_provider(dynamic_archive_extractor_plugin_provider.clone()),
         ));
     let download_client_category_snapshot_store = DownloadClientCategorySnapshotStore::default();
     let download_client = Arc::new(
@@ -1179,7 +1193,8 @@ async fn bootstrap_application(
             &indexer_runtime_plugins,
             &disabled_builtin_plugins,
         )
-        .with_indexer_error_recorder(indexer_error_recorder),
+        .with_indexer_error_recorder(indexer_error_recorder)
+        .with_archive_extractor_provider(dynamic_archive_extractor_plugin_provider.clone()),
     ));
     let plugin_provider: Arc<dyn IndexerPluginProvider> = Arc::new(
         NativeProwlarrIndexerProvider::new_with_indexer_error_repository(
@@ -1192,14 +1207,8 @@ async fn bootstrap_application(
             scryer_plugins::build_subtitle_plugin_provider_from_runtime_plugins(
                 &subtitle_runtime_plugins,
                 &disabled_builtin_plugins,
-            ),
-        ));
-    let archive_extractor_plugin_provider: Arc<dyn ArchiveExtractorPluginProvider> =
-        Arc::new(scryer_plugins::DynamicArchiveExtractorPluginProvider::new(
-            scryer_plugins::build_archive_extractor_plugin_provider_from_runtime_plugins(
-                &archive_extractor_runtime_plugins,
-                &disabled_builtin_plugins,
-            ),
+            )
+            .with_archive_extractor_provider(dynamic_archive_extractor_plugin_provider.clone()),
         ));
 
     let indexer_client = MultiIndexerSearchClient::new(
@@ -1311,7 +1320,8 @@ async fn bootstrap_application(
         scryer_plugins::build_notification_plugin_provider_from_runtime_plugins(
             &notification_runtime_plugins,
             &disabled_builtin_plugins,
-        ),
+        )
+        .with_archive_extractor_provider(dynamic_archive_extractor_plugin_provider.clone()),
     );
     let services = datastore
         .app_services_builder(indexer_client, download_client)

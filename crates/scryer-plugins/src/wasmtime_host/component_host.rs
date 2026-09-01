@@ -49,9 +49,11 @@ pub(crate) const COMPONENT_STRATEGY_EVENT_CAPACITY: usize = 16;
 
 static ACTIVE_COMPONENT_HTTP: AtomicUsize = AtomicUsize::new(0);
 
-/// Returns true only for a top-level component binary. The generated binding
-/// validates the concrete package/world during instantiation.
-pub(crate) fn is_indexer_component(wasm: &[u8]) -> Result<bool, String> {
+/// Returns true only for a top-level component binary, whatever world it
+/// implements. Every component-backed plugin kind classifies on this first and
+/// lets its generated binding validate the concrete package/world during
+/// instantiation.
+pub(crate) fn is_component_binary(wasm: &[u8]) -> Result<bool, String> {
     let mut parser = wasmparser::Parser::new(0);
     match parser.parse(wasm, true) {
         Ok(wasmparser::Chunk::Parsed {

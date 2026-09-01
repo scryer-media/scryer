@@ -650,6 +650,7 @@ pub enum ArchivePluginFormat {
     Zip,
     #[serde(rename = "7z")]
     SevenZip,
+    Xz,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -1070,9 +1071,15 @@ pub enum PluginErrorDetails {
 pub struct PluginError {
     pub code: PluginErrorCode,
     pub public_message: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    // No `skip_serializing_if` on the optional fields: this type also crosses
+    // the host-call transport as postcard, which is not self-describing —
+    // skipping a `None` writes fewer fields than the derived deserializer
+    // reads, so a natural in-band `Unsupported` answer would be undecodable by
+    // the guest. `default` keeps old JSON documents (which omitted the fields)
+    // deserializing.
+    #[serde(default)]
     pub debug_message: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub retry_after_seconds: Option<i64>,
     #[serde(default)]
     pub details: Option<PluginErrorDetails>,
@@ -1092,6 +1099,11 @@ pub struct ArchivePluginProcessRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+// PAR2 recovery is deliberately absent here. Verifying and repairing a PAR2 set
+// is plugin-internal and data-driven: an extractor scans the source directory it
+// is given, notices the `.par2` files, and repairs before extracting as part of
+// processing. The host neither orchestrates nor observes it, so it is not an
+// operation on this enum.
 pub enum ArchivePluginOperation {
     Inspect {
         source_dir: String,
@@ -2914,6 +2926,14 @@ mod tests {
     }
 
     #[test]
+    fn xz_archive_format_uses_xz_wire_value() {
+        let json = serde_json::to_string(&ArchivePluginFormat::Xz).unwrap();
+        assert_eq!(json, "\"xz\"");
+        let parsed: ArchivePluginFormat = serde_json::from_str("\"xz\"").unwrap();
+        assert_eq!(parsed, ArchivePluginFormat::Xz);
+    }
+
+    #[test]
     fn effective_host_sdk_constraint_widens_legacy_minor_line() {
         assert_eq!(
             effective_host_sdk_constraint(Some("1.5.0"), ">=1.5.0, <1.6.0"),
@@ -3376,6 +3396,32 @@ mod tests {
                 .expect("missing torrent capability");
             assert!(!torrent.supported_sources.is_empty());
         }
+    }
+
+    /// `PluginError` crosses the component host-call transport as postcard,
+    /// which is positional: every field the deserializer reads must have been
+    /// written. A `skip_serializing_if` on the optional fields would make the
+    /// natural in-band `Unsupported` answer (both options `None`) undecodable
+    /// by the guest — this pins the round trip so that attribute can never
+    /// quietly return.
+    #[test]
+    fn plugin_error_round_trips_through_postcard_with_no_optional_fields() {
+        let error = PluginError {
+            code: PluginErrorCode::Unsupported,
+            public_message: "x".to_string(),
+            debug_message: None,
+            retry_after_seconds: None,
+            details: None,
+        };
+
+        let encoded = postcard::to_stdvec(&error).unwrap();
+        let decoded: PluginError = postcard::from_bytes(&encoded).unwrap();
+
+        assert!(matches!(decoded.code, PluginErrorCode::Unsupported));
+        assert_eq!(decoded.public_message, "x");
+        assert_eq!(decoded.debug_message, None);
+        assert_eq!(decoded.retry_after_seconds, None);
+        assert!(decoded.details.is_none());
     }
 
     #[test]
