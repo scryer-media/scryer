@@ -76,6 +76,18 @@ export type VerificationDepth = "FULL" | "QUICK";
 
 export type LocationConfirmationRequirement = "SIMPLE" | "TYPED";
 
+/**
+ * What FR-055 destination-title detection concluded for a title crossing into
+ * another library. Detection is by stable metadata identity, never by title
+ * text — `SAME_NAME_NO_IDENTITY` is precisely the case where the names agree
+ * and the identities do not.
+ */
+export type LocationDestinationIdentityMatch =
+  | "UNIQUE"
+  | "NONE"
+  | "AMBIGUOUS"
+  | "SAME_NAME_NO_IDENTITY";
+
 export type LocationClassifiedTitle = {
   titleId: string;
   class: TitleLocationClass;
@@ -89,6 +101,24 @@ export type LocationClassifiedTitle = {
   destinationRootId: string;
   reasonCode: string | null;
   reason: string | null;
+  /**
+   * FR-055 detection outcome, or null when the title stays in its own library
+   * and no detection ran.
+   *
+   * This and the four fields below are optional rather than required: they are
+   * additive on a payload the dialog also builds in tests and reads from a
+   * cache, and a row that arrives without them must degrade into "no detection
+   * outcome to state" rather than into a crash.
+   */
+  destinationIdentityMatch?: LocationDestinationIdentityMatch | null;
+  /** Existing destination title this one merges into, when detection is UNIQUE. */
+  mergeTargetTitleId?: string | null;
+  /** Destination title sharing the name but no identity — never auto-merged. */
+  sameNamedDestinationTitleId?: string | null;
+  /** Name of that same-named destination title. */
+  sameNamedDestinationTitleName?: string | null;
+  /** Destination titles the user must choose between, for an AMBIGUOUS match. */
+  ambiguousDestinationTitleIds?: string[] | null;
 };
 
 export type LocationClassificationGroup = {
@@ -402,6 +432,168 @@ export function classifiedTitlePlacement(
 /** True when this entry is blocked by an active download or import (FR-086). */
 export function isActiveWorkBlock(entry: LocationClassifiedTitle): boolean {
   return entry.reasonCode === "active_download_or_import";
+}
+
+/**
+ * Blocked because several destination titles share this title's identity: the
+ * user must say which one before the transfer can start (FR-055).
+ */
+export function isAmbiguousDestinationBlock(
+  entry: LocationClassifiedTitle,
+): boolean {
+  return entry.reasonCode === "ambiguous_destination_identity";
+}
+
+/**
+ * Blocked because exactly one destination title shares this title's identity,
+ * which is a merge — and the merge engine is not wired to the transfer yet.
+ */
+export function isMergeNotSupportedBlock(
+  entry: LocationClassifiedTitle,
+): boolean {
+  return entry.reasonCode === "merge_not_yet_supported";
+}
+
+/**
+ * The same-named destination title this transfer will *not* merge into.
+ *
+ * FR-055 never merges by name, so this outcome is a warning and not a block:
+ * the transfer proceeds and the destination library ends up holding two titles
+ * with the same name. The user has to be told that before confirming, which is
+ * why the id alone is enough to warn on — the name is stated when the payload
+ * carries it.
+ */
+export type SameNamedDestinationTitle = {
+  titleId: string | null;
+  name: string | null;
+};
+
+/** Whether this row must show the FR-055 same-name warning. */
+export function isSameNameWarning(entry: LocationClassifiedTitle): boolean {
+  return entry.destinationIdentityMatch === "SAME_NAME_NO_IDENTITY";
+}
+
+/** The same-named destination title to name in the warning, when there is one. */
+export function sameNamedDestinationTitle(
+  entry: LocationClassifiedTitle,
+): SameNamedDestinationTitle | null {
+  if (!isSameNameWarning(entry)) {
+    return null;
+  }
+  const titleId = entry.sameNamedDestinationTitleId ?? null;
+  const name = entry.sameNamedDestinationTitleName ?? null;
+  if (titleId === null && name === null) {
+    return null;
+  }
+  return { titleId, name };
+}
+
+/** One destination title the user is choosing between for an ambiguous match. */
+export type AmbiguousDestinationCandidate = {
+  titleId: string;
+  /** Resolved display name, or null when only the identity is known. */
+  name: string | null;
+};
+
+/**
+ * The destination titles an ambiguous match is choosing between, in payload
+ * order and de-duplicated. Empty for every other outcome, so a caller can
+ * render the list unconditionally.
+ *
+ * The payload carries identities only; `resolveName` is how the caller supplies
+ * a name for a destination title it happens to know about. Everything else
+ * renders by identity, which is still what the user needs in order to resolve
+ * it before starting.
+ */
+export function ambiguousCandidates(
+  entry: LocationClassifiedTitle,
+  resolveName?: (titleId: string) => string | null | undefined,
+): AmbiguousDestinationCandidate[] {
+  if (entry.destinationIdentityMatch !== "AMBIGUOUS") {
+    return [];
+  }
+  const seen = new Set<string>();
+  const candidates: AmbiguousDestinationCandidate[] = [];
+  for (const titleId of entry.ambiguousDestinationTitleIds ?? []) {
+    if (!titleId || seen.has(titleId)) {
+      continue;
+    }
+    seen.add(titleId);
+    candidates.push({ titleId, name: resolveName?.(titleId) ?? null });
+  }
+  return candidates;
+}
+
+/**
+ * The destination title a blocked merge would have merged into, when the block
+ * is `merge_not_yet_supported`. Null for every other block, so the merge prose
+ * never names a title that has nothing to do with it.
+ */
+export function mergeBlockedTarget(
+  entry: LocationClassifiedTitle,
+): string | null {
+  if (!isMergeNotSupportedBlock(entry)) {
+    return null;
+  }
+  return entry.mergeTargetTitleId ?? null;
+}
+
+/** The destination library a cross-library transfer states it lands in (FR-016). */
+export type TransferStatement = {
+  destinationLibraryId: string;
+  /** Resolved library name, or null when the caller could not name it. */
+  destinationLibraryName: string | null;
+};
+
+/**
+ * The "transfers into <library>" statement for a title crossing libraries, or
+ * null when the title is not crossing one. Naming the destination library is
+ * the whole point: a cross-library transfer is the one class where the title's
+ * library changes, and the row otherwise shows only paths.
+ */
+export function transferStatement(
+  entry: LocationClassifiedTitle,
+  resolveLibraryName?: (libraryId: string) => string | null | undefined,
+): TransferStatement | null {
+  if (entry.class !== "CROSS_LIBRARY_TRANSFER") {
+    return null;
+  }
+  return {
+    destinationLibraryId: entry.destinationLibraryId,
+    destinationLibraryName: resolveLibraryName?.(entry.destinationLibraryId) ?? null,
+  };
+}
+
+/** Everything the detection outcome adds to one classified row. */
+export type DestinationIdentityPresentation = {
+  /** Present for a title crossing libraries; null otherwise. */
+  transfer: TransferStatement | null;
+  /** Present for `SAME_NAME_NO_IDENTITY` with a title to name; null otherwise. */
+  sameNameWarning: SameNamedDestinationTitle | null;
+  /** Non-empty only for `AMBIGUOUS`. */
+  ambiguous: AmbiguousDestinationCandidate[];
+  /** Present only for a `merge_not_yet_supported` block that named its target. */
+  mergeBlockedTargetTitleId: string | null;
+};
+
+/**
+ * One pass over the FR-055 detection outcome, turning all four match kinds into
+ * the render decisions the dialog needs. Keeping it here rather than in the
+ * component is what makes the four outcomes testable without a renderer.
+ */
+export function destinationIdentityPresentation(
+  entry: LocationClassifiedTitle,
+  context: {
+    resolveLibraryName?: (libraryId: string) => string | null | undefined;
+    resolveTitleName?: (titleId: string) => string | null | undefined;
+  } = {},
+): DestinationIdentityPresentation {
+  return {
+    transfer: transferStatement(entry, context.resolveLibraryName),
+    sameNameWarning: sameNamedDestinationTitle(entry),
+    ambiguous: ambiguousCandidates(entry, context.resolveTitleName),
+    mergeBlockedTargetTitleId: mergeBlockedTarget(entry),
+  };
 }
 
 /**
@@ -731,12 +923,14 @@ export function verificationStampText(
 }
 
 /**
- * Destination reachable in this phase. Cross-library transfer is a later story,
- * so a library other than the selection's own is offered but disabled with the
- * reason naming the source library (FR-017).
+ * Destination reachable for this selection (FR-017).
+ *
+ * Another library is now a reachable destination — that is the cross-library
+ * transfer this story adds — so the only destinations still refused are the
+ * ones no plan could be built for: nothing selected, or a selection spanning
+ * several source libraries, which has no single library to transfer out of.
  */
 export function destinationLibraryDisabledReasonKey(
-  candidateLibraryId: string,
   sourceLibraryIds: string[],
 ): string | null {
   if (sourceLibraryIds.length === 0) {
@@ -745,8 +939,16 @@ export function destinationLibraryDisabledReasonKey(
   if (sourceLibraryIds.length > 1) {
     return "move.destinationMixedSourceLibraries";
   }
-  if (sourceLibraryIds[0] !== candidateLibraryId) {
-    return "move.destinationCrossLibraryUnavailable";
-  }
   return null;
+}
+
+/** Whether picking this library would carry the selection out of its own (FR-016). */
+export function isCrossLibraryDestination(
+  candidateLibraryId: string,
+  sourceLibraryIds: string[],
+): boolean {
+  if (!candidateLibraryId || sourceLibraryIds.length !== 1) {
+    return false;
+  }
+  return sourceLibraryIds[0] !== candidateLibraryId;
 }

@@ -4054,6 +4054,11 @@ export const locationOperationPreviewQuery = `query LocationOperationPreview($in
           destinationRootId
           reasonCode
           reason
+          destinationIdentityMatch
+          mergeTargetTitleId
+          sameNamedDestinationTitleId
+          sameNamedDestinationTitleName
+          ambiguousDestinationTitleIds
         }
       }
     }

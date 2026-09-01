@@ -1842,7 +1842,18 @@ const es: LocaleDictionary = {
   "move.destinationRootHelp": "Cambiar el destino abre el flujo de movimiento en lugar de guardar el título.",
   "move.destinationNoSelection": "No hay títulos seleccionados.",
   "move.destinationMixedSourceLibraries": "La selección abarca varias bibliotecas; mueve una biblioteca a la vez.",
-  "move.destinationCrossLibraryUnavailable": "Mover a otra biblioteca aún no está disponible.",
+  "move.destinationCrossLibraryNotice":
+    "Estos títulos salen de su biblioteca actual y pasan a formar parte de {{library}}.",
+  "move.destinationLibraryInMoveWorkflow":
+    "Elige otra biblioteca en el flujo de movimiento, después de escoger una raíz de destino.",
+  "move.transferIntoLibrary": "Se transfiere a {{library}}.",
+  "move.sameNameWarning":
+    "{{library}} ya tiene un título llamado «{{title}}». Scryer nunca fusiona por nombre, así que esta transferencia deja dos títulos con ese nombre.",
+  "move.ambiguousDestinationHelp":
+    "Varios títulos de la biblioteca de destino comparten la identidad de este título. Resuelve cuál es antes de iniciar este movimiento.",
+  "move.mergeNotSupported":
+    "La biblioteca de destino ya tiene este título como «{{title}}». Fusionar con un título existente aún no está disponible.",
+  "move.operationTransferNote": "Estos títulos se están moviendo a otra biblioteca.",
   "move.modeHeading": "¿Cómo deben llegar los archivos?",
   "move.mode.MOVE_WITH_SCRYER": "Mover con Scryer",
   "move.mode.FILES_ALREADY_THERE": "Los archivos ya están allí",

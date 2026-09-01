@@ -1673,7 +1673,18 @@ const zh_CN: LocaleDictionary = {
   "move.destinationRootHelp": "更改目标会打开移动流程，而不是保存标题。",
   "move.destinationNoSelection": "未选择任何标题。",
   "move.destinationMixedSourceLibraries": "所选内容跨越多个库；请一次移动一个库。",
-  "move.destinationCrossLibraryUnavailable": "暂不支持移动到其他库。",
+  "move.destinationCrossLibraryNotice":
+    "这些标题将离开当前库，成为 {{library}} 的一部分。",
+  "move.destinationLibraryInMoveWorkflow":
+    "选择目标根目录后，在移动流程中选择其他库。",
+  "move.transferIntoLibrary": "将转移到 {{library}}。",
+  "move.sameNameWarning":
+    "{{library}} 中已有名为“{{title}}”的标题。Scryer 从不按名称合并，因此本次转移后会保留两个同名标题。",
+  "move.ambiguousDestinationHelp":
+    "目标库中有多个标题与此标题具有相同的标识。请在开始本次移动前确定是哪一个。",
+  "move.mergeNotSupported":
+    "目标库中已有此标题，名为“{{title}}”。暂不支持合并到已有标题。",
+  "move.operationTransferNote": "这些标题正在移动到其他库。",
   "move.modeHeading": "文件应如何到达那里？",
   "move.mode.MOVE_WITH_SCRYER": "由 Scryer 移动",
   "move.mode.FILES_ALREADY_THERE": "文件已经在那里",

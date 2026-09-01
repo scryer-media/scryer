@@ -3420,7 +3420,18 @@ const en: LocaleDictionary = {
   "move.destinationRootHelp": "Changing the destination opens the move workflow instead of saving the title.",
   "move.destinationNoSelection": "No titles are selected.",
   "move.destinationMixedSourceLibraries": "The selection spans several libraries; move one library at a time.",
-  "move.destinationCrossLibraryUnavailable": "Moving to another library is not available yet.",
+  "move.destinationCrossLibraryNotice":
+    "These titles leave their current library and become part of {{library}}.",
+  "move.destinationLibraryInMoveWorkflow":
+    "Choose a different library in the move workflow, after picking a destination root.",
+  "move.transferIntoLibrary": "Transfers into {{library}}.",
+  "move.sameNameWarning":
+    "{{library}} already has a title named “{{title}}”. Scryer never merges by name, so this transfer leaves two titles with that name.",
+  "move.ambiguousDestinationHelp":
+    "Several titles in the destination library share this title's identity. Resolve which one it is before starting this move.",
+  "move.mergeNotSupported":
+    "The destination library already has this title as “{{title}}”. Merging into an existing title is not available yet.",
+  "move.operationTransferNote": "These titles are moving into another library.",
   "move.modeHeading": "How should the files get there?",
   "move.mode.MOVE_WITH_SCRYER": "Move with Scryer",
   "move.mode.FILES_ALREADY_THERE": "Files are already there",

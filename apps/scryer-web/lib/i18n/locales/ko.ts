@@ -1744,7 +1744,18 @@ const ko: LocaleDictionary = {
   "move.destinationRootHelp": "대상을 바꾸면 타이틀을 저장하는 대신 이동 절차가 열립니다.",
   "move.destinationNoSelection": "선택된 타이틀이 없습니다.",
   "move.destinationMixedSourceLibraries": "선택 항목이 여러 라이브러리에 걸쳐 있습니다. 라이브러리별로 이동하세요.",
-  "move.destinationCrossLibraryUnavailable": "다른 라이브러리로 이동하는 기능은 아직 제공되지 않습니다.",
+  "move.destinationCrossLibraryNotice":
+    "이 타이틀들은 현재 라이브러리를 떠나 {{library}}에 속하게 됩니다.",
+  "move.destinationLibraryInMoveWorkflow":
+    "대상 루트를 고른 뒤, 이동 워크플로에서 다른 라이브러리를 선택하세요.",
+  "move.transferIntoLibrary": "{{library}}(으)로 이관됩니다.",
+  "move.sameNameWarning":
+    "{{library}}에는 이미 “{{title}}”이라는 타이틀이 있습니다. Scryer는 이름으로 병합하지 않으므로, 이 이관 후에는 같은 이름의 타이틀이 두 개 남습니다.",
+  "move.ambiguousDestinationHelp":
+    "대상 라이브러리의 여러 타이틀이 이 타이틀과 같은 식별 정보를 공유합니다. 이동을 시작하기 전에 어느 것인지 확정하세요.",
+  "move.mergeNotSupported":
+    "대상 라이브러리에 이 타이틀이 이미 “{{title}}”(으)로 있습니다. 기존 타이틀로 병합하는 기능은 아직 제공되지 않습니다.",
+  "move.operationTransferNote": "이 타이틀들은 다른 라이브러리로 이동하고 있습니다.",
   "move.modeHeading": "파일을 어떻게 옮길까요?",
   "move.mode.MOVE_WITH_SCRYER": "Scryer로 이동",
   "move.mode.FILES_ALREADY_THERE": "파일이 이미 그곳에 있음",

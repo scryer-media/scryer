@@ -35,11 +35,16 @@ import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
 import { startLocationOperationMutation } from "@/lib/graphql/mutations";
 import { locationOperationPreviewQuery } from "@/lib/graphql/queries";
 import {
+  ambiguousCandidates,
   blockingTitles,
   classBlocksStart,
   classificationLabelKey,
   classifiedTitlePlacement,
   destinationLibraryDisabledReasonKey,
+  isAmbiguousDestinationBlock,
+  isCrossLibraryDestination,
+  isSameNameWarning,
+  mergeBlockedTarget,
   offersModeSelection,
   orderedClassificationGroups,
   orderedPlanKindCounts,
@@ -50,7 +55,9 @@ import {
   refusalMessageKey,
   refusalNeedsFreshPreview,
   remainingSelection,
+  sameNamedDestinationTitle,
   toCount,
+  transferStatement,
   typedConfirmationSatisfied,
   type ClassifiedTitlePlacement,
   type LocationClassifiedTitle,
@@ -413,11 +420,23 @@ export function MoveTitlesDialog({
     setPreviewNonce((current) => current + 1);
   }, []);
 
-  const destinationDisabledReasonKey = React.useCallback(
-    (candidateLibraryId: string) =>
-      destinationLibraryDisabledReasonKey(candidateLibraryId, sourceLibraryIds),
+  const destinationDisabledReasonKey = React.useMemo(
+    () => destinationLibraryDisabledReasonKey(sourceLibraryIds),
     [sourceLibraryIds],
   );
+
+  // Naming the destination library is what makes a cross-library transfer
+  // readable: every row otherwise states only paths (FR-016, US6).
+  const libraryName = React.useCallback(
+    (candidateLibraryId: string) =>
+      libraryById.get(candidateLibraryId)?.name ?? null,
+    [libraryById],
+  );
+  const titleName = React.useCallback(
+    (titleId: string) => titleById.get(titleId)?.name ?? null,
+    [titleById],
+  );
+  const crossLibrary = isCrossLibraryDestination(libraryId, sourceLibraryIds);
 
   const totalFiles = toCount(preview?.counts.filesTotal);
   const totalBytes = toCount(preview?.counts.bytesTotal);
@@ -474,20 +493,17 @@ export function MoveTitlesDialog({
                   <SelectValue placeholder={t("move.destinationLibrary")} />
                 </SelectTrigger>
                 <SelectContent>
-                  {libraries.map((library) => {
-                    const reasonKey = destinationDisabledReasonKey(library.id);
-                    return (
-                      <SelectItem
-                        key={library.id}
-                        value={library.id}
-                        disabled={reasonKey !== null}
-                      >
-                        {reasonKey === null
-                          ? library.name
-                          : `${library.name} — ${t(reasonKey)}`}
-                      </SelectItem>
-                    );
-                  })}
+                  {libraries.map((library) => (
+                    <SelectItem
+                      key={library.id}
+                      value={library.id}
+                      disabled={destinationDisabledReasonKey !== null}
+                    >
+                      {destinationDisabledReasonKey === null
+                        ? library.name
+                        : `${library.name} — ${t(destinationDisabledReasonKey)}`}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
               {sourceLibraryIds.length > 1 ? (
@@ -496,6 +512,16 @@ export function MoveTitlesDialog({
                   className="mt-1 text-xs text-[var(--scry-warning-text)]"
                 >
                   {t("move.destinationMixedSourceLibraries")}
+                </p>
+              ) : null}
+              {crossLibrary ? (
+                <p
+                  id="move-titles-cross-library-notice"
+                  className="mt-1 text-xs text-muted-foreground"
+                >
+                  {t("move.destinationCrossLibraryNotice", {
+                    library: libraryName(libraryId) ?? libraryId,
+                  })}
                 </p>
               ) : null}
             </div>
@@ -663,23 +689,30 @@ export function MoveTitlesDialog({
                     {blocked.map((entry) => (
                       <li
                         key={entry.titleId}
-                        className="flex items-center justify-between gap-2 text-sm text-[var(--scry-danger-text)]"
+                        className="space-y-1 text-sm text-[var(--scry-danger-text)]"
                       >
-                        <span className="min-w-0 truncate">
-                          {titleById.get(entry.titleId)?.name ?? entry.titleId}
-                          {entry.reason ? ` — ${entry.reason}` : ""}
+                        <span className="flex items-center justify-between gap-2">
+                          <span className="min-w-0 truncate">
+                            {titleById.get(entry.titleId)?.name ?? entry.titleId}
+                            {entry.reason ? ` — ${entry.reason}` : ""}
+                          </span>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            id={`move-titles-deselect-${entry.titleId}`}
+                            onClick={() => deselect(entry.titleId)}
+                            disabled={starting}
+                          >
+                            <X className="mr-1 h-3.5 w-3.5" />
+                            {t("move.deselect")}
+                          </Button>
                         </span>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          id={`move-titles-deselect-${entry.titleId}`}
-                          onClick={() => deselect(entry.titleId)}
-                          disabled={starting}
-                        >
-                          <X className="mr-1 h-3.5 w-3.5" />
-                          {t("move.deselect")}
-                        </Button>
+                        <BlockedIdentityDetail
+                          entry={entry}
+                          titleName={titleName}
+                          t={t}
+                        />
                       </li>
                     ))}
                   </ul>
@@ -726,6 +759,7 @@ export function MoveTitlesDialog({
                       })
                     }
                     files={filesByTitle}
+                    destinationLibraryName={libraryName}
                     onDeselect={deselect}
                     deselectDisabled={starting}
                     t={t}
@@ -967,6 +1001,7 @@ type ClassificationGroupProps = {
   currentLibraryName: (entry: LocationClassifiedTitle) => string | null;
   placement: (entry: LocationClassifiedTitle) => ClassifiedTitlePlacement;
   files: Map<string, { files: number; bytes: number }>;
+  destinationLibraryName: (libraryId: string) => string | null;
   onDeselect: (titleId: string) => void;
   deselectDisabled: boolean;
   t: (key: string, values?: Record<string, string | number>) => string;
@@ -980,6 +1015,7 @@ function ClassificationGroup({
   currentLibraryName,
   placement,
   files,
+  destinationLibraryName,
   onDeselect,
   deselectDisabled,
   t,
@@ -1049,6 +1085,16 @@ function ClassificationGroup({
                     })}
                   </span>
                 ) : null}
+                <TransferNote
+                  entry={entry}
+                  destinationLibraryName={destinationLibraryName}
+                  t={t}
+                />
+                <SameNameWarning
+                  entry={entry}
+                  destinationLibraryName={destinationLibraryName}
+                  t={t}
+                />
                 {entry.reason ? (
                   <span className="block text-muted-foreground">
                     {entry.reason}
@@ -1057,6 +1103,139 @@ function ClassificationGroup({
               </li>
             );
           })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/**
+ * FR-016: a title crossing libraries says so in words, naming the library it
+ * lands in. The paths above it change root; only this line changes library.
+ */
+function TransferNote({
+  entry,
+  destinationLibraryName,
+  t,
+}: {
+  entry: LocationClassifiedTitle;
+  destinationLibraryName: (libraryId: string) => string | null;
+  t: (key: string, values?: Record<string, string | number>) => string;
+}) {
+  const statement = transferStatement(entry, destinationLibraryName);
+  if (!statement) {
+    return null;
+  }
+  return (
+    <span
+      id={`move-titles-transfer-note-${entry.titleId}`}
+      className="block text-foreground"
+    >
+      {t("move.transferIntoLibrary", {
+        library:
+          statement.destinationLibraryName ?? statement.destinationLibraryId,
+      })}
+    </span>
+  );
+}
+
+/**
+ * FR-055 never merges by name. When the destination already holds a title with
+ * the same name but no shared identity, the transfer still happens — and the
+ * user has to see, before confirming, that they are about to end up with two
+ * same-named titles rather than one merged one.
+ */
+function SameNameWarning({
+  entry,
+  destinationLibraryName,
+  t,
+}: {
+  entry: LocationClassifiedTitle;
+  destinationLibraryName: (libraryId: string) => string | null;
+  t: (key: string, values?: Record<string, string | number>) => string;
+}) {
+  if (!isSameNameWarning(entry)) {
+    return null;
+  }
+  const sameNamed = sameNamedDestinationTitle(entry);
+  const library =
+    destinationLibraryName(entry.destinationLibraryId) ??
+    entry.destinationLibraryId;
+  return (
+    <span
+      id={`move-titles-same-name-warning-${entry.titleId}`}
+      className="flex items-start gap-1 text-[var(--scry-warning-text)]"
+    >
+      <TriangleAlert aria-hidden="true" className="mt-0.5 h-3 w-3 shrink-0" />
+      <span>
+        {t("move.sameNameWarning", {
+          library,
+          title: sameNamed?.name ?? sameNamed?.titleId ?? "",
+        })}
+      </span>
+    </span>
+  );
+}
+
+/**
+ * The identity outcomes that stop a transfer from starting, presented beside
+ * the Deselect the blocked list already offers. Neither offers a resolution
+ * picker yet: choosing between ambiguous destination titles, and merging into
+ * a unique one, both land with the merge wiring.
+ */
+function BlockedIdentityDetail({
+  entry,
+  titleName,
+  t,
+}: {
+  entry: LocationClassifiedTitle;
+  titleName: (titleId: string) => string | null;
+  t: (key: string, values?: Record<string, string | number>) => string;
+}) {
+  const mergeTarget = mergeBlockedTarget(entry);
+  if (mergeTarget !== null) {
+    return (
+      <p
+        id={`move-titles-merge-blocked-${entry.titleId}`}
+        className="text-xs text-[var(--scry-danger-text)]"
+      >
+        {t("move.mergeNotSupported", {
+          title: titleName(mergeTarget) ?? mergeTarget,
+        })}
+      </p>
+    );
+  }
+  if (!isAmbiguousDestinationBlock(entry)) {
+    return null;
+  }
+  const candidates = ambiguousCandidates(entry, titleName);
+  return (
+    <div
+      id={`move-titles-ambiguous-${entry.titleId}`}
+      className="space-y-1 text-xs text-[var(--scry-danger-text)]"
+    >
+      <p>{t("move.ambiguousDestinationHelp")}</p>
+      {candidates.length === 0 ? null : (
+        <ul className="ml-4 list-disc space-y-0.5">
+          {candidates.map((candidate) => (
+            <li
+              key={candidate.titleId}
+              id={`move-titles-ambiguous-candidate-${entry.titleId}-${candidate.titleId}`}
+            >
+              {candidate.name ? (
+                <>
+                  <span>{candidate.name}</span>{" "}
+                  <span className="font-[var(--font-code)] break-all opacity-80">
+                    {candidate.titleId}
+                  </span>
+                </>
+              ) : (
+                <span className="font-[var(--font-code)] break-all">
+                  {candidate.titleId}
+                </span>
+              )}
+            </li>
+          ))}
         </ul>
       )}
     </div>

@@ -249,7 +249,12 @@ export function LocationOperationPanel({ operationId, onDismiss }: Props) {
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
             <p className="flex items-center gap-2 text-sm font-medium text-foreground">
-              {t(`move.operationType.${operation.operationType}`)}
+              <span
+                id="location-operation-type"
+                data-operation-type={operation.operationType}
+              >
+                {t(`move.operationType.${operation.operationType}`)}
+              </span>
               <Badge id="location-operation-state" tone={operationTone(operation)}>
                 {t(operationStateLabelKey(operation.state))}
               </Badge>
@@ -259,6 +264,17 @@ export function LocationOperationPanel({ operationId, onDismiss }: Props) {
                 </Badge>
               ) : null}
             </p>
+            {operation.operationType === "CROSS_LIBRARY_TRANSFER" ? (
+              // A cross-library transfer rides the root-move machinery, so
+              // every other line on this panel reads like a root move. This is
+              // the one that says the library changed too (US6, FR-056).
+              <p
+                id="location-operation-transfer-note"
+                className="mt-0.5 text-xs text-muted-foreground"
+              >
+                {t("move.operationTransferNote")}
+              </p>
+            ) : null}
             <p className="mt-0.5 font-[var(--font-code)] text-xs text-muted-foreground">
               {operation.id}
             </p>

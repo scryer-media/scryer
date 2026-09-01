@@ -1788,7 +1788,18 @@ const ja: LocaleDictionary = {
   "move.destinationRootHelp": "移動先を変更すると、タイトルを保存する代わりに移動ワークフローが開きます。",
   "move.destinationNoSelection": "タイトルが選択されていません。",
   "move.destinationMixedSourceLibraries": "選択が複数のライブラリにまたがっています。ライブラリごとに移動してください。",
-  "move.destinationCrossLibraryUnavailable": "他のライブラリへの移動はまだ利用できません。",
+  "move.destinationCrossLibraryNotice":
+    "これらのタイトルは現在のライブラリを離れ、{{library}} に所属します。",
+  "move.destinationLibraryInMoveWorkflow":
+    "移動先のルートを選んだあと、移動ワークフローで別のライブラリを選択してください。",
+  "move.transferIntoLibrary": "{{library}} へ移管されます。",
+  "move.sameNameWarning":
+    "{{library}} には「{{title}}」という名前のタイトルがすでにあります。Scryer が名前で統合することはないため、この移管後は同じ名前のタイトルが 2 つ残ります。",
+  "move.ambiguousDestinationHelp":
+    "移動先ライブラリの複数のタイトルがこのタイトルと同じ識別情報を持っています。この移動を開始する前に、どれに当たるかを解決してください。",
+  "move.mergeNotSupported":
+    "移動先ライブラリには、このタイトルが「{{title}}」としてすでに存在します。既存のタイトルへの統合はまだ利用できません。",
+  "move.operationTransferNote": "これらのタイトルは別のライブラリへ移動しています。",
   "move.modeHeading": "ファイルをどのように移しますか？",
   "move.mode.MOVE_WITH_SCRYER": "Scryer で移動",
   "move.mode.FILES_ALREADY_THERE": "ファイルは既にそこにある",

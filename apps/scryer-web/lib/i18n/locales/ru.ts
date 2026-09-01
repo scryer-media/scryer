@@ -4757,7 +4757,18 @@ const ru: LocaleDictionary = {
   "move.destinationRootHelp": "Смена назначения открывает процесс перемещения вместо сохранения тайтла.",
   "move.destinationNoSelection": "Тайтлы не выбраны.",
   "move.destinationMixedSourceLibraries": "Выбор охватывает несколько библиотек; перемещайте по одной библиотеке за раз.",
-  "move.destinationCrossLibraryUnavailable": "Перемещение в другую библиотеку пока недоступно.",
+  "move.destinationCrossLibraryNotice":
+    "Эти тайтлы покинут текущую библиотеку и станут частью библиотеки {{library}}.",
+  "move.destinationLibraryInMoveWorkflow":
+    "Выберите другую библиотеку в мастере перемещения, после выбора корневой папки назначения.",
+  "move.transferIntoLibrary": "Переносится в библиотеку {{library}}.",
+  "move.sameNameWarning":
+    "В библиотеке {{library}} уже есть тайтл с названием «{{title}}». Scryer никогда не объединяет по названию, поэтому после переноса останутся два тайтла с этим названием.",
+  "move.ambiguousDestinationHelp":
+    "Несколько тайтлов в библиотеке назначения имеют ту же идентификацию, что и этот. Определите, какой из них нужен, прежде чем запускать перемещение.",
+  "move.mergeNotSupported":
+    "В библиотеке назначения этот тайтл уже есть как «{{title}}». Объединение с существующим тайтлом пока недоступно.",
+  "move.operationTransferNote": "Эти тайтлы перемещаются в другую библиотеку.",
   "move.modeHeading": "Как файлы должны туда попасть?",
   "move.mode.MOVE_WITH_SCRYER": "Переместить через Scryer",
   "move.mode.FILES_ALREADY_THERE": "Файлы уже на месте",

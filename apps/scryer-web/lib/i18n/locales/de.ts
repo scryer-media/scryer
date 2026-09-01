@@ -1816,7 +1816,18 @@ const de: LocaleDictionary = {
   "move.destinationRootHelp": "Das Ändern des Ziels öffnet den Verschiebe-Ablauf, statt den Titel zu speichern.",
   "move.destinationNoSelection": "Es sind keine Titel ausgewählt.",
   "move.destinationMixedSourceLibraries": "Die Auswahl umfasst mehrere Bibliotheken; verschiebe jeweils nur eine Bibliothek.",
-  "move.destinationCrossLibraryUnavailable": "Das Verschieben in eine andere Bibliothek ist noch nicht verfügbar.",
+  "move.destinationCrossLibraryNotice":
+    "Diese Titel verlassen ihre aktuelle Bibliothek und gehören danach zu {{library}}.",
+  "move.destinationLibraryInMoveWorkflow":
+    "Wähle eine andere Bibliothek im Verschiebe-Workflow, nachdem du ein Ziel-Stammverzeichnis gewählt hast.",
+  "move.transferIntoLibrary": "Wird nach {{library}} übertragen.",
+  "move.sameNameWarning":
+    "In {{library}} gibt es bereits einen Titel namens „{{title}}“. Scryer führt niemals anhand des Namens zusammen, daher bleiben nach dieser Übertragung zwei Titel mit diesem Namen bestehen.",
+  "move.ambiguousDestinationHelp":
+    "Mehrere Titel in der Zielbibliothek teilen die Identität dieses Titels. Kläre vor dem Start dieses Verschiebens, um welchen es sich handelt.",
+  "move.mergeNotSupported":
+    "Die Zielbibliothek enthält diesen Titel bereits als „{{title}}“. Das Zusammenführen mit einem vorhandenen Titel ist noch nicht verfügbar.",
+  "move.operationTransferNote": "Diese Titel werden in eine andere Bibliothek verschoben.",
   "move.modeHeading": "Wie sollen die Dateien dorthin gelangen?",
   "move.mode.MOVE_WITH_SCRYER": "Mit Scryer verschieben",
   "move.mode.FILES_ALREADY_THERE": "Dateien sind bereits dort",

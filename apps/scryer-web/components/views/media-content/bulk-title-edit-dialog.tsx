@@ -191,8 +191,9 @@ export function BulkTitleEditDialog({
           </EditableField>
 
           {/* FR-010: the destination library sits beside the destination root.
-              Cross-library transfer is a later story, so a mixed-library or
-              other-library destination is refused with its reason (FR-017). */}
+              This control only ever names the selection's own library — the
+              destination library is chosen in the move workflow itself, which
+              is where a cross-library transfer is previewed (FR-017). */}
           {onRequestMove ? (
             <EditableField label={t("move.destinationLibrary")}>
               <Select value="__current__" disabled>
@@ -212,7 +213,7 @@ export function BulkTitleEditDialog({
               </Select>
               <p className="text-xs text-muted-foreground">
                 {destinationLibraryName
-                  ? t("move.destinationCrossLibraryUnavailable")
+                  ? t("move.destinationLibraryInMoveWorkflow")
                   : t("move.destinationMixedSourceLibraries")}
               </p>
             </EditableField>

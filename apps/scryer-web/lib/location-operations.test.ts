@@ -3,6 +3,7 @@ import test from "node:test";
 
 import type { Translate } from "@/components/root/types";
 import {
+  ambiguousCandidates,
   blockingTitles,
   canCancelOperation,
   canResumeOperation,
@@ -11,8 +12,14 @@ import {
   classBlocksStart,
   classifiedTitlePlacement,
   classMovesFiles,
+  destinationIdentityPresentation,
   isActiveWorkBlock,
+  isAmbiguousDestinationBlock,
   isBlockedSelectionMessage,
+  isCrossLibraryDestination,
+  isMergeNotSupportedBlock,
+  isSameNameWarning,
+  mergeBlockedTarget,
   isInsufficientSpaceMessage,
   isStalePlanMessage,
   isTerminalOperationState,
@@ -27,9 +34,11 @@ import {
   refusalMessageKey,
   refusalNeedsFreshPreview,
   remainingSelection,
+  sameNamedDestinationTitle,
   shouldPollOperation,
   startRefusalCodeFromError,
   toCount,
+  transferStatement,
   typedConfirmationSatisfied,
   verificationStampText,
   destinationLibraryDisabledReasonKey,
@@ -678,17 +687,218 @@ test("every classified title states where it lives now (FR-012)", () => {
 });
 
 test("a disabled destination names why it cannot accept the selection", () => {
-  assert.equal(destinationLibraryDisabledReasonKey("lib", ["lib"]), null);
+  assert.equal(destinationLibraryDisabledReasonKey(["lib"]), null);
   assert.equal(
-    destinationLibraryDisabledReasonKey("lib", []),
+    destinationLibraryDisabledReasonKey([]),
     "move.destinationNoSelection",
   );
   assert.equal(
-    destinationLibraryDisabledReasonKey("lib", ["lib", "other"]),
+    destinationLibraryDisabledReasonKey(["lib", "other"]),
     "move.destinationMixedSourceLibraries",
   );
+  // Another library is a reachable destination now: it is the cross-library
+  // transfer, not a refusal (US6, FR-016).
+  assert.equal(destinationLibraryDisabledReasonKey(["lib"]), null);
+});
+
+test("a destination in another library is recognised as a transfer", () => {
+  assert.equal(isCrossLibraryDestination("other", ["lib"]), true);
+  assert.equal(isCrossLibraryDestination("lib", ["lib"]), false);
+  // Nothing picked, nothing selected, or a selection spanning libraries has no
+  // single source library to transfer out of.
+  assert.equal(isCrossLibraryDestination("", ["lib"]), false);
+  assert.equal(isCrossLibraryDestination("other", []), false);
+  assert.equal(isCrossLibraryDestination("other", ["lib", "second"]), false);
+});
+
+/** A classified row carrying one FR-055 detection outcome. */
+function crossLibraryEntry(
+  overrides: Partial<LocationClassifiedTitle> = {},
+): LocationClassifiedTitle {
+  return {
+    titleId: "moving",
+    class: "CROSS_LIBRARY_TRANSFER",
+    sourceLibraryId: "lib-movies",
+    sourceRootId: "root-a",
+    sourceFolderPath: "/data/a/Moving (2024)",
+    destinationLibraryId: "lib-4k",
+    destinationRootId: "root-b",
+    reasonCode: null,
+    reason: null,
+    ...overrides,
+  };
+}
+
+test("no destination match transfers, naming the library it lands in", () => {
+  const entry = crossLibraryEntry({ destinationIdentityMatch: "NONE" });
+  const presentation = destinationIdentityPresentation(entry, {
+    resolveLibraryName: (id) => (id === "lib-4k" ? "4K Movies" : null),
+  });
+
+  assert.deepEqual(presentation.transfer, {
+    destinationLibraryId: "lib-4k",
+    destinationLibraryName: "4K Movies",
+  });
+  // NONE is the plain transfer: nothing to warn about, nothing to resolve.
+  assert.equal(presentation.sameNameWarning, null);
+  assert.deepEqual(presentation.ambiguous, []);
+  assert.equal(presentation.mergeBlockedTargetTitleId, null);
+
+  // An unnamable library still states the transfer; the caller falls back to
+  // the identity rather than dropping the sentence.
+  assert.deepEqual(transferStatement(entry), {
+    destinationLibraryId: "lib-4k",
+    destinationLibraryName: null,
+  });
+  // A title staying in its own library makes no transfer statement at all.
   assert.equal(
-    destinationLibraryDisabledReasonKey("other", ["lib"]),
-    "move.destinationCrossLibraryUnavailable",
+    transferStatement(crossLibraryEntry({ class: "ROOT_MOVE" })),
+    null,
   );
+});
+
+test("a same-named destination title warns instead of merging (FR-055)", () => {
+  const entry = crossLibraryEntry({
+    destinationIdentityMatch: "SAME_NAME_NO_IDENTITY",
+    sameNamedDestinationTitleId: "other-title",
+    sameNamedDestinationTitleName: "Moving",
+  });
+
+  assert.equal(isSameNameWarning(entry), true);
+  assert.deepEqual(sameNamedDestinationTitle(entry), {
+    titleId: "other-title",
+    name: "Moving",
+  });
+  // The warning is not a block: the transfer still happens, and it still
+  // states the library it lands in.
+  const presentation = destinationIdentityPresentation(entry);
+  assert.notEqual(presentation.transfer, null);
+  assert.deepEqual(presentation.ambiguous, []);
+  assert.equal(presentation.mergeBlockedTargetTitleId, null);
+
+  // The match kind is what makes it a warning; a row that lost the name still
+  // warns, because the user must see the second same-named title coming.
+  const nameless = crossLibraryEntry({
+    destinationIdentityMatch: "SAME_NAME_NO_IDENTITY",
+  });
+  assert.equal(isSameNameWarning(nameless), true);
+  assert.equal(sameNamedDestinationTitle(nameless), null);
+
+  // Every other match kind is silent here.
+  assert.equal(
+    isSameNameWarning(crossLibraryEntry({ destinationIdentityMatch: "NONE" })),
+    false,
+  );
+  assert.equal(isSameNameWarning(crossLibraryEntry()), false);
+});
+
+test("an ambiguous identity lists the candidates it must be resolved against", () => {
+  const entry = crossLibraryEntry({
+    class: "NEEDS_RESOLUTION",
+    destinationIdentityMatch: "AMBIGUOUS",
+    reasonCode: "ambiguous_destination_identity",
+    reason: "Several destination titles share this identity.",
+    // A repeated identity is one candidate, not two.
+    ambiguousDestinationTitleIds: ["cand-a", "cand-b", "cand-a"],
+  });
+
+  assert.equal(isAmbiguousDestinationBlock(entry), true);
+  assert.deepEqual(
+    ambiguousCandidates(entry, (id) => (id === "cand-a" ? "Moving (2024)" : null)),
+    [
+      { titleId: "cand-a", name: "Moving (2024)" },
+      // The payload carries identities only, so an unnamable candidate is
+      // still listed by identity rather than dropped.
+      { titleId: "cand-b", name: null },
+    ],
+  );
+
+  // Candidates belong to the ambiguous outcome alone.
+  assert.deepEqual(
+    ambiguousCandidates(
+      crossLibraryEntry({ ambiguousDestinationTitleIds: ["cand-a"] }),
+    ),
+    [],
+  );
+  assert.deepEqual(
+    ambiguousCandidates(
+      crossLibraryEntry({ destinationIdentityMatch: "AMBIGUOUS" }),
+    ),
+    [],
+  );
+
+  const presentation = destinationIdentityPresentation(entry);
+  assert.equal(presentation.ambiguous.length, 2);
+  // A blocked row is not a transfer statement: it never starts.
+  assert.equal(presentation.transfer, null);
+  assert.equal(presentation.sameNameWarning, null);
+  assert.equal(presentation.mergeBlockedTargetTitleId, null);
+});
+
+test("a unique identity blocks as a merge and names the target (FR-055)", () => {
+  const entry = crossLibraryEntry({
+    class: "NEEDS_RESOLUTION",
+    destinationIdentityMatch: "UNIQUE",
+    reasonCode: "merge_not_yet_supported",
+    reason: "The destination already has this title.",
+    mergeTargetTitleId: "destination-title",
+  });
+
+  assert.equal(isMergeNotSupportedBlock(entry), true);
+  assert.equal(mergeBlockedTarget(entry), "destination-title");
+  assert.deepEqual(ambiguousCandidates(entry), []);
+
+  // The merge target is only named for the merge block; a title that carries
+  // one while blocked for another reason must not have it read out as a merge.
+  assert.equal(
+    mergeBlockedTarget(
+      crossLibraryEntry({
+        class: "NEEDS_RESOLUTION",
+        destinationIdentityMatch: "UNIQUE",
+        reasonCode: "active_download_or_import",
+        mergeTargetTitleId: "destination-title",
+      }),
+    ),
+    null,
+  );
+  assert.equal(isMergeNotSupportedBlock(crossLibraryEntry()), false);
+  assert.equal(isAmbiguousDestinationBlock(entry), false);
+
+  const presentation = destinationIdentityPresentation(entry);
+  assert.equal(presentation.mergeBlockedTargetTitleId, "destination-title");
+  assert.equal(presentation.transfer, null);
+});
+
+test("blocked identity outcomes still hold the plan back (FR-016)", () => {
+  const ambiguous = crossLibraryEntry({
+    titleId: "ambiguous",
+    class: "NEEDS_RESOLUTION",
+    destinationIdentityMatch: "AMBIGUOUS",
+    reasonCode: "ambiguous_destination_identity",
+    ambiguousDestinationTitleIds: ["cand-a"],
+  });
+  const merge = crossLibraryEntry({
+    titleId: "merge",
+    class: "NEEDS_RESOLUTION",
+    destinationIdentityMatch: "UNIQUE",
+    reasonCode: "merge_not_yet_supported",
+    mergeTargetTitleId: "destination-title",
+  });
+  const transferring = crossLibraryEntry({ destinationIdentityMatch: "NONE" });
+
+  // Both new reason codes ride the NEEDS_RESOLUTION class, so they reach the
+  // existing blocked list with its Deselect — and the transferring title does
+  // not.
+  assert.deepEqual(
+    blockingTitles(
+      classification([
+        { class: "NEEDS_RESOLUTION", titles: [ambiguous, merge] },
+        { class: "CROSS_LIBRARY_TRANSFER", titles: [transferring] },
+      ]),
+    ).map((entry) => entry.titleId),
+    ["ambiguous", "merge"],
+  );
+  // Neither is the active-work block, which has its own prose.
+  assert.equal(isActiveWorkBlock(ambiguous), false);
+  assert.equal(isActiveWorkBlock(merge), false);
 });

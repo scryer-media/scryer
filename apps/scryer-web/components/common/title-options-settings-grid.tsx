@@ -207,8 +207,9 @@ export function TitleOptionsSettingsGrid({
       </div>
 
       {/* FR-010: the destination library sits beside the destination root.
-          Cross-library transfer is a later story, so the control names the
-          title's own library and explains why it cannot change yet (FR-017). */}
+          The control names the title's own library; the destination library is
+          chosen in the move workflow, which is where a cross-library transfer
+          is previewed before anything moves (FR-017). */}
       {onRequestMove ? (
         <div className="min-w-0">
           <label className="mb-1 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
@@ -229,7 +230,7 @@ export function TitleOptionsSettingsGrid({
             </SelectContent>
           </Select>
           <p className="mt-1 text-xs text-muted-foreground">
-            {t("move.destinationCrossLibraryUnavailable")}
+            {t("move.destinationLibraryInMoveWorkflow")}
           </p>
         </div>
       ) : null}
