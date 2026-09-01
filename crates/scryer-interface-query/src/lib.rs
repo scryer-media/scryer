@@ -33,7 +33,8 @@ use scryer_interface_media::mappers::{
     discovery_items_query_from_input, from_active_import_stream, from_activity_event,
     from_application_upgrade_status, from_backup_info, from_catalog_discovery, from_collection,
     from_dashboard_activity_stats, from_delete_preview, from_delete_titles_preview,
-    from_discovery_home, from_discovery_home_cards, from_discovery_home_filter_options,
+    from_change_title_folder_preview, from_discovery_home, from_discovery_home_cards,
+    from_discovery_home_filter_options,
     from_discovery_item, from_discovery_items_result, from_domain_event, from_download_queue_item,
     from_episode, from_external_import_monitor_warmup_progress, from_job_definition, from_job_run,
     from_library, from_library_scan_session, from_library_settings, from_linked_account,
@@ -1506,6 +1507,24 @@ impl CatalogQueries {
                 from_media_rename_plan(plan)
             })
             .collect())
+    }
+
+    /// Preview correcting which existing folder a title owns; no files are moved.
+    async fn change_title_folder_preview(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(
+            desc = "Title and candidate folder whose ownership change is described; nothing is changed."
+        )]
+        input: ChangeTitleFolderPreviewInput,
+    ) -> GqlResult<ChangeTitleFolderPreviewPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let preview = app
+            .change_title_folder_preview(&actor, input.title_id.as_str(), &input.folder_path)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(from_change_title_folder_preview(preview))
     }
 
     /// Preview deleting all media files for one title without changing files.

@@ -758,6 +758,25 @@ type ApplicationUpgradeStatusPayload {
 }
 
 """
+Request applying a folder-match correction.
+"""
+input ApplyTitleFolderChangeInput {
+	"""
+	Title whose folder match changes.
+	"""
+	titleId: ID!
+	"""
+	Chosen folder, which must be inside one of the title's library roots.
+	"""
+	folderPath: String!
+	"""
+	How to settle ownership. Defaults to ASSIGN, which is refused when
+	another title already owns the folder.
+	"""
+	resolution: FolderMatchResolutionValue
+}
+
+"""
 Approval choices for a media request.
 """
 input ApproveMediaRequestInput {
@@ -1419,6 +1438,129 @@ enum CatalogRefreshStateValue {
 	Catalog is usable with degraded availability.
 	"""
 	DEGRADED
+}
+
+"""
+Result of applying a folder-match correction.
+"""
+type ChangeTitleFolderPayload {
+	"""
+	What the correction actually did.
+	"""
+	outcome: FolderMatchOutcomeValue!
+	"""
+	The edited title after the change.
+	"""
+	title: FolderMatchTitleRefPayload!
+	"""
+	Folder the edited title owned before, or null when it owned none.
+	"""
+	previousFolderPath: String
+	"""
+	Media associations detached because a title gave up a folder.
+	"""
+	detachedMediaFileCount: Int!
+	"""
+	Rescan of the edited title's new folder, or null for a no-op.
+	"""
+	scan: LibraryScanSummaryPayload
+	"""
+	The other title after a swap, with the folder it received.
+	"""
+	swappedTitle: FolderMatchTitleRefPayload
+	"""
+	Rescan of the swapped title's new folder.
+	"""
+	swappedTitleScan: LibraryScanSummaryPayload
+	"""
+	The title left unmatched by a takeover, or null when none was displaced.
+	"""
+	displacedTitle: DisplacedTitleRepairPayload
+}
+
+"""
+Request describing a proposed folder-match correction; changes nothing.
+"""
+input ChangeTitleFolderPreviewInput {
+	"""
+	Title whose folder match would change.
+	"""
+	titleId: ID!
+	"""
+	Candidate folder, which must be inside one of the title's library roots.
+	"""
+	folderPath: String!
+}
+
+"""
+Read-only description of a proposed folder-match correction.
+"""
+type ChangeTitleFolderPreviewPayload {
+	"""
+	The title being edited.
+	"""
+	title: FolderMatchTitleRefPayload!
+	"""
+	Media facet of the title being edited.
+	"""
+	facet: MediaFacetValue!
+	"""
+	Library that owns the title and every candidate folder.
+	"""
+	libraryId: ID!
+	"""
+	Library display name.
+	"""
+	libraryName: String!
+	"""
+	Root containing the title's current folder, or null when it owns none.
+	"""
+	currentRootId: ID
+	"""
+	Path of the root containing the title's current folder.
+	"""
+	currentRootPath: String
+	"""
+	Candidate folder, normalized to its stored form.
+	"""
+	selectedFolderPath: String!
+	"""
+	Root containing the candidate folder; always a root of the title's library.
+	"""
+	selectedRootId: ID!
+	"""
+	Path of the root containing the candidate folder.
+	"""
+	selectedRootPath: String!
+	"""
+	How the candidate folder relates to the title being edited.
+	"""
+	ownership: FolderMatchOwnershipValue!
+	"""
+	The other title holding the candidate folder, or null when unowned.
+	"""
+	currentOwner: FolderMatchTitleRefPayload
+	"""
+	Tracked media rows the title currently has inside its existing folder.
+	"""
+	currentFolderTrackedMediaCount: Int!
+	"""
+	Tracked media rows inside the candidate folder, counted across the title
+	being edited and the candidate folder's owner.
+	"""
+	selectedFolderTrackedMediaCount: Int!
+	"""
+	Always false: correcting a folder match never moves file content.
+	"""
+	filesWillMove: Boolean!
+	"""
+	Whether the title already owns the candidate folder, making this a no-op.
+	"""
+	noOp: Boolean!
+	"""
+	Resolutions this exact selection admits.
+	"""
+	availableResolutions: [FolderMatchResolutionValue!]!
 }
 
 """
@@ -3754,6 +3896,28 @@ type DismissPendingReleasePayload {
 	Pending release ID.
 	"""
 	id: ID!
+}
+
+"""
+A title left without a folder by a takeover, and how it surfaces for repair.
+"""
+type DisplacedTitleRepairPayload {
+	"""
+	Displaced title identity.
+	"""
+	id: ID!
+	"""
+	Displaced title display name.
+	"""
+	name: String!
+	"""
+	Folder the displaced title no longer owns.
+	"""
+	previousFolderPath: String!
+	"""
+	Reason recorded on its unmatched-discovery item.
+	"""
+	repairReasonCode: String!
 }
 
 """
@@ -6274,6 +6438,83 @@ type FloatConfigValuePayload {
 	Floating-point value.
 	"""
 	value: Float!
+}
+
+"""
+What a folder-match correction actually did.
+"""
+enum FolderMatchOutcomeValue {
+	"""
+	The title already owned the folder; nothing was submitted.
+	"""
+	ALREADY_OWNED
+	"""
+	An unowned folder became the title's folder.
+	"""
+	ASSIGNED
+	"""
+	Two titles traded folders.
+	"""
+	SWAPPED
+	"""
+	The folder changed hands and the former owner is now unmatched.
+	"""
+	TAKEN_OVER
+}
+
+"""
+How a candidate folder relates to the title being edited.
+"""
+enum FolderMatchOwnershipValue {
+	"""
+	No title in the library claims the folder.
+	"""
+	UNOWNED
+	"""
+	The title being edited already owns it; selecting it is a no-op.
+	"""
+	OWNED_BY_THIS_TITLE
+	"""
+	Another title owns it; it is never taken silently.
+	"""
+	OWNED_BY_ANOTHER_TITLE
+}
+
+"""
+How the user chose to settle a candidate folder's ownership.
+"""
+enum FolderMatchResolutionValue {
+	"""
+	Claim an unowned folder. The default, and rejected against an owned
+	folder so a conflict never resolves itself.
+	"""
+	ASSIGN
+	"""
+	Trade folders with the current owner.
+	"""
+	SWAP
+	"""
+	Take the folder; the former owner becomes unmatched and needs repair.
+	"""
+	TAKE_OVER
+}
+
+"""
+A title taking part in a folder-match correction.
+"""
+type FolderMatchTitleRefPayload {
+	"""
+	Title identity.
+	"""
+	id: ID!
+	"""
+	Title display name.
+	"""
+	name: String!
+	"""
+	Folder this title owns, or null when it owns none.
+	"""
+	folderPath: String
 }
 
 """
@@ -10315,6 +10556,19 @@ type MutationRoot {
 		input: SetPrimaryMovieFileInput!
 	): TitlePayload!
 	"""
+	Correct which existing folder a title owns, rescanning it; never moves files.
+	
+	Ownership of a folder another title holds is never taken silently: the
+	default resolution is refused and the caller must choose SWAP or
+	TAKE_OVER.
+	"""
+	applyTitleFolderChange(
+		"""
+		Title, chosen folder inside its library roots, and how to settle ownership.
+		"""
+		input: ApplyTitleFolderChangeInput!
+	): ChangeTitleFolderPayload!
+	"""
 	Associate a title with a metadata identity and return any hydration or scan result.
 	"""
 	fixTitleMatch(
@@ -14071,6 +14325,15 @@ type QueryRoot {
 		"""
 		input: MediaRenamePreviewBulkInput!
 	): [MediaRenamePlanPayload!]!
+	"""
+	Preview correcting which existing folder a title owns; no files are moved.
+	"""
+	changeTitleFolderPreview(
+		"""
+		Title and candidate folder whose ownership change is described; nothing is changed.
+		"""
+		input: ChangeTitleFolderPreviewInput!
+	): ChangeTitleFolderPreviewPayload!
 	"""
 	Preview deleting all media files for one title without changing files.
 	"""

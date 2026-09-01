@@ -560,19 +560,29 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // existing config option type: OBJECT 318->319, public types 615->616.
     // Account-security reauthentication adds three mutation roots without
     // changing the established factor-mutation payload contracts: mutation 194->197.
+    // Folder-match correction adds the changeTitleFolderPreview query root and
+    // the applyTitleFolderChange mutation root, four payload objects (preview,
+    // apply, title ref, displaced-title repair), two inputs, and three enums
+    // (ownership state, resolution, outcome): query +1, mutation +1, OBJECT +4,
+    // INPUT_OBJECT +2, ENUM +3, public types +9.
+    // The stated baseline had also drifted one feature behind before this change
+    // — an earlier query root, mutation root, payload object, input object, and
+    // enum landed without updating these numbers — so the totals below absorb
+    // that drift as well: query 134->136, mutation 197->199, OBJECT 319->324,
+    // INPUT_OBJECT 173->176, ENUM 112->116, public types 616->628.
     assert_eq!(
-        query_field_count, 134,
+        query_field_count, 136,
         "query fields: {query_field_names:?}"
     );
     assert_eq!(
-        mutation_field_count, 197,
+        mutation_field_count, 199,
         "mutation fields: {mutation_field_names:?}"
     );
     assert_eq!(subscription_field_count, 14);
-    assert_eq!(public_types.len(), 616);
-    assert_eq!(kind_count("OBJECT"), 319);
-    assert_eq!(kind_count("INPUT_OBJECT"), 173);
-    assert_eq!(kind_count("ENUM"), 112);
+    assert_eq!(public_types.len(), 628);
+    assert_eq!(kind_count("OBJECT"), 324);
+    assert_eq!(kind_count("INPUT_OBJECT"), 176);
+    assert_eq!(kind_count("ENUM"), 116);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
     assert!(query_field_names.contains(&"backupSettings"));
@@ -585,6 +595,11 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     assert!(query_field_names.contains(&"canCreateMyApiKeys"));
     assert!(query_field_names.contains(&"applicationUpgradeStatus"));
     assert!(query_field_names.contains(&"activeImportStreams"));
+    assert!(query_field_names.contains(&"changeTitleFolderPreview"));
+    assert!(mutation_field_names.contains(&"applyTitleFolderChange"));
+    assert!(public_type_names.contains(&"ChangeTitleFolderPreviewPayload"));
+    assert!(public_type_names.contains(&"ChangeTitleFolderPayload"));
+    assert!(public_type_names.contains(&"DisplacedTitleRepairPayload"));
     assert!(mutation_field_names.contains(&"cancelActiveImport"));
     assert!(mutation_field_names.contains(&"startApplicationUpgrade"));
     assert!(mutation_field_names.contains(&"accountSecurityPasswordVerify"));

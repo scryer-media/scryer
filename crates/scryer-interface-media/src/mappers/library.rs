@@ -943,3 +943,109 @@ pub fn from_import_record(record: scryer_domain::ImportRecord) -> ImportRecordPa
         created_at: parse_required_datetime(&record.created_at, "import history created_at"),
     }
 }
+
+use scryer_application::location::folder_match::{
+    ChangeTitleFolderPreview, ChangeTitleFolderResult, DisplacedTitleRepair, FolderMatchOutcome,
+    FolderMatchOwnership, FolderMatchResolution, FolderMatchTitleRef,
+};
+
+/// Stored paths carry an internal escape form for names the platform cannot
+/// spell in UTF-8; the API always hands back the real path.
+fn display_path(path: &str) -> String {
+    scryer_application::stored_paths::stored_path_to_display_string(path)
+}
+
+pub fn folder_match_resolution_into_application(
+    value: FolderMatchResolutionValue,
+) -> FolderMatchResolution {
+    match value {
+        FolderMatchResolutionValue::Assign => FolderMatchResolution::Assign,
+        FolderMatchResolutionValue::Swap => FolderMatchResolution::Swap,
+        FolderMatchResolutionValue::TakeOver => FolderMatchResolution::TakeOver,
+    }
+}
+
+fn from_folder_match_resolution(resolution: FolderMatchResolution) -> FolderMatchResolutionValue {
+    match resolution {
+        FolderMatchResolution::Assign => FolderMatchResolutionValue::Assign,
+        FolderMatchResolution::Swap => FolderMatchResolutionValue::Swap,
+        FolderMatchResolution::TakeOver => FolderMatchResolutionValue::TakeOver,
+    }
+}
+
+fn from_folder_match_ownership(ownership: FolderMatchOwnership) -> FolderMatchOwnershipValue {
+    match ownership {
+        FolderMatchOwnership::Unowned => FolderMatchOwnershipValue::Unowned,
+        FolderMatchOwnership::OwnedByThisTitle => FolderMatchOwnershipValue::OwnedByThisTitle,
+        FolderMatchOwnership::OwnedByAnotherTitle => FolderMatchOwnershipValue::OwnedByAnotherTitle,
+    }
+}
+
+fn from_folder_match_outcome(outcome: FolderMatchOutcome) -> FolderMatchOutcomeValue {
+    match outcome {
+        FolderMatchOutcome::AlreadyOwned => FolderMatchOutcomeValue::AlreadyOwned,
+        FolderMatchOutcome::Assigned => FolderMatchOutcomeValue::Assigned,
+        FolderMatchOutcome::Swapped => FolderMatchOutcomeValue::Swapped,
+        FolderMatchOutcome::TakenOver => FolderMatchOutcomeValue::TakenOver,
+    }
+}
+
+fn from_folder_match_title_ref(title: FolderMatchTitleRef) -> FolderMatchTitleRefPayload {
+    FolderMatchTitleRefPayload {
+        id: ID::from(title.title_id),
+        name: title.title_name,
+        // Stored paths are an internal encoding; the API always shows the real one.
+        folder_path: title.folder_path.as_deref().map(display_path),
+    }
+}
+
+fn from_displaced_title_repair(displaced: DisplacedTitleRepair) -> DisplacedTitleRepairPayload {
+    DisplacedTitleRepairPayload {
+        id: ID::from(displaced.title_id),
+        name: displaced.title_name,
+        previous_folder_path: display_path(&displaced.previous_folder_path),
+        repair_reason_code: displaced.repair_reason_code,
+    }
+}
+
+pub fn from_change_title_folder_preview(
+    preview: ChangeTitleFolderPreview,
+) -> ChangeTitleFolderPreviewPayload {
+    ChangeTitleFolderPreviewPayload {
+        facet: MediaFacetValue::from_domain(preview.facet),
+        title: from_folder_match_title_ref(preview.title),
+        library_id: ID::from(preview.library_id),
+        library_name: preview.library_name,
+        current_root_id: preview.current_root_id.map(ID::from),
+        current_root_path: preview.current_root_path.as_deref().map(display_path),
+        selected_folder_path: display_path(&preview.selected_folder_path),
+        selected_root_id: ID::from(preview.selected_root_id),
+        selected_root_path: display_path(&preview.selected_root_path),
+        ownership: from_folder_match_ownership(preview.ownership),
+        current_owner: preview.current_owner.map(from_folder_match_title_ref),
+        current_folder_tracked_media_count: preview.current_folder_tracked_media_count as i32,
+        selected_folder_tracked_media_count: preview.selected_folder_tracked_media_count as i32,
+        files_will_move: preview.files_will_move,
+        no_op: preview.no_op,
+        available_resolutions: preview
+            .available_resolutions
+            .into_iter()
+            .map(from_folder_match_resolution)
+            .collect(),
+    }
+}
+
+pub fn from_change_title_folder_result(
+    result: ChangeTitleFolderResult,
+) -> ChangeTitleFolderPayload {
+    ChangeTitleFolderPayload {
+        outcome: from_folder_match_outcome(result.outcome),
+        title: from_folder_match_title_ref(result.title),
+        previous_folder_path: result.previous_folder_path.as_deref().map(display_path),
+        detached_media_file_count: result.detached_media_file_count as i32,
+        scan: result.scan.map(from_library_scan_summary),
+        swapped_title: result.swapped_title.map(from_folder_match_title_ref),
+        swapped_title_scan: result.swapped_title_scan.map(from_library_scan_summary),
+        displaced_title: result.displaced_title.map(from_displaced_title_repair),
+    }
+}

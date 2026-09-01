@@ -287,16 +287,22 @@ fn library_scan_summary_has_pending_import_success(summary: &LibraryScanSummary)
     summary.imported > 0 || summary.matched > 0
 }
 
+/// Whether this item names a folder-ownership problem a person has to settle:
+/// either a scan found a title already owning some other folder, or a user
+/// deliberately took a folder away from its owner (FR-007).
+fn pending_import_item_is_folder_ownership_item(item: &LibraryScanUnmatchedItem) -> bool {
+    item.reason_code == crate::library_scan_unmatched::LIBRARY_SCAN_TITLE_ALREADY_OWNS_ANOTHER_FOLDER
+        || item.reason_code
+            == crate::library_scan_unmatched::LIBRARY_SCAN_FOLDER_OWNERSHIP_CHANGED_BY_USER
+}
+
 fn pending_import_item_requires_action(item: &LibraryScanUnmatchedItem) -> bool {
-    item.reason_code
-        == crate::library_scan_unmatched::LIBRARY_SCAN_TITLE_ALREADY_OWNS_ANOTHER_FOLDER
+    pending_import_item_is_folder_ownership_item(item)
         || !(item.facet == MediaFacet::Movie && item.title_id.is_some())
 }
 
 fn reject_folder_ownership_conflict_resolution(item: &LibraryScanUnmatchedItem) -> AppResult<()> {
-    if item.reason_code
-        == crate::library_scan_unmatched::LIBRARY_SCAN_TITLE_ALREADY_OWNS_ANOTHER_FOLDER
-    {
+    if pending_import_item_is_folder_ownership_item(item) {
         return Err(AppError::Validation(
             "folder ownership conflicts cannot be bound or adopted".into(),
         ));

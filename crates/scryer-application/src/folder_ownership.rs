@@ -21,7 +21,11 @@ pub(crate) fn title_owns_another_folder(title: &Title, folder_path: &Path) -> bo
         && !title_owns_folder(title, folder_path)
 }
 
-async fn find_other_folder_owner(
+pub(crate) fn title_folder_path(title: &Title) -> Option<&str> {
+    non_empty_folder_path(title.folder_path.as_deref())
+}
+
+pub(crate) async fn find_other_folder_owner(
     app: &AppUseCase,
     title: &Title,
     folder_path: &str,
@@ -123,12 +127,28 @@ pub(crate) async fn unlink_title_media_in_folder(
         return Ok(0);
     }
 
+    detach_title_media_in_folder(app, &title.id, folder_path).await
+}
+
+/// Drop every catalog media row of `title_id` that lives inside `folder_path`,
+/// without asking whether the title still owns some other folder.
+///
+/// [`unlink_title_media_in_folder`] guards on ownership because a scan only ever
+/// detaches rows from a folder the title lost to someone else. Folder-match
+/// correction detaches from a folder the title is *giving up* — including the
+/// takeover case where the displaced title is left owning nothing at all — so it
+/// needs the unguarded form (FR-003, FR-007).
+pub(crate) async fn detach_title_media_in_folder(
+    app: &AppUseCase,
+    title_id: &str,
+    folder_path: &Path,
+) -> AppResult<u32> {
     let folder_path = path_to_stored_string(folder_path);
     let media_file_ids = app
         .services
         .library
         .media_files
-        .list_media_files_for_title(&title.id)
+        .list_media_files_for_title(title_id)
         .await?
         .into_iter()
         .filter(|media_file| {
@@ -145,7 +165,7 @@ pub(crate) async fn unlink_title_media_in_folder(
     }
     let deleted = media_file_ids.len() as u32;
     tracing::info!(
-        title_id = %title.id,
+        title_id = %title_id,
         folder_path = %folder_path,
         unlinked_media_files = deleted,
         "unlinked catalog media outside the title-owned folder"

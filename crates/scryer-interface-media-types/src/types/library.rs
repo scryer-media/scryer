@@ -1072,3 +1072,147 @@ pub struct DeleteMediaFilePayload {
     /// Background job accepted to complete deletion and related cleanup.
     pub job_run: JobRunPayload,
 }
+
+/// How a candidate folder relates to the title being edited.
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+pub enum FolderMatchOwnershipValue {
+    /// No title in the library claims the folder.
+    Unowned,
+    /// The title being edited already owns it; selecting it is a no-op.
+    OwnedByThisTitle,
+    /// Another title owns it; it is never taken silently.
+    OwnedByAnotherTitle,
+}
+
+/// How the user chose to settle a candidate folder's ownership.
+#[derive(Enum, Copy, Clone, Eq, PartialEq, Default)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+pub enum FolderMatchResolutionValue {
+    /// Claim an unowned folder. The default, and rejected against an owned
+    /// folder so a conflict never resolves itself.
+    #[default]
+    Assign,
+    /// Trade folders with the current owner.
+    Swap,
+    /// Take the folder; the former owner becomes unmatched and needs repair.
+    TakeOver,
+}
+
+/// What a folder-match correction actually did.
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+pub enum FolderMatchOutcomeValue {
+    /// The title already owned the folder; nothing was submitted.
+    AlreadyOwned,
+    /// An unowned folder became the title's folder.
+    Assigned,
+    /// Two titles traded folders.
+    Swapped,
+    /// The folder changed hands and the former owner is now unmatched.
+    TakenOver,
+}
+
+#[derive(SimpleObject, Clone)]
+/// A title taking part in a folder-match correction.
+pub struct FolderMatchTitleRefPayload {
+    /// Title identity.
+    pub id: ID,
+    /// Title display name.
+    pub name: String,
+    /// Folder this title owns, or null when it owns none.
+    pub folder_path: Option<String>,
+}
+
+#[derive(SimpleObject, Clone)]
+/// A title left without a folder by a takeover, and how it surfaces for repair.
+pub struct DisplacedTitleRepairPayload {
+    /// Displaced title identity.
+    pub id: ID,
+    /// Displaced title display name.
+    pub name: String,
+    /// Folder the displaced title no longer owns.
+    pub previous_folder_path: String,
+    /// Reason recorded on its unmatched-discovery item.
+    pub repair_reason_code: String,
+}
+
+#[derive(SimpleObject, Clone)]
+/// Read-only description of a proposed folder-match correction.
+pub struct ChangeTitleFolderPreviewPayload {
+    /// The title being edited.
+    pub title: FolderMatchTitleRefPayload,
+    /// Media facet of the title being edited.
+    pub facet: MediaFacetValue,
+    /// Library that owns the title and every candidate folder.
+    pub library_id: ID,
+    /// Library display name.
+    pub library_name: String,
+    /// Root containing the title's current folder, or null when it owns none.
+    pub current_root_id: Option<ID>,
+    /// Path of the root containing the title's current folder.
+    pub current_root_path: Option<String>,
+    /// Candidate folder, normalized to its stored form.
+    pub selected_folder_path: String,
+    /// Root containing the candidate folder; always a root of the title's library.
+    pub selected_root_id: ID,
+    /// Path of the root containing the candidate folder.
+    pub selected_root_path: String,
+    /// How the candidate folder relates to the title being edited.
+    pub ownership: FolderMatchOwnershipValue,
+    /// The other title holding the candidate folder, or null when unowned.
+    pub current_owner: Option<FolderMatchTitleRefPayload>,
+    /// Tracked media rows the title currently has inside its existing folder.
+    pub current_folder_tracked_media_count: i32,
+    /// Tracked media rows inside the candidate folder, counted across the title
+    /// being edited and the candidate folder's owner.
+    pub selected_folder_tracked_media_count: i32,
+    /// Always false: correcting a folder match never moves file content.
+    pub files_will_move: bool,
+    /// Whether the title already owns the candidate folder, making this a no-op.
+    pub no_op: bool,
+    /// Resolutions this exact selection admits.
+    pub available_resolutions: Vec<FolderMatchResolutionValue>,
+}
+
+#[derive(SimpleObject, Clone)]
+/// Result of applying a folder-match correction.
+pub struct ChangeTitleFolderPayload {
+    /// What the correction actually did.
+    pub outcome: FolderMatchOutcomeValue,
+    /// The edited title after the change.
+    pub title: FolderMatchTitleRefPayload,
+    /// Folder the edited title owned before, or null when it owned none.
+    pub previous_folder_path: Option<String>,
+    /// Media associations detached because a title gave up a folder.
+    pub detached_media_file_count: i32,
+    /// Rescan of the edited title's new folder, or null for a no-op.
+    pub scan: Option<LibraryScanSummaryPayload>,
+    /// The other title after a swap, with the folder it received.
+    pub swapped_title: Option<FolderMatchTitleRefPayload>,
+    /// Rescan of the swapped title's new folder.
+    pub swapped_title_scan: Option<LibraryScanSummaryPayload>,
+    /// The title left unmatched by a takeover, or null when none was displaced.
+    pub displaced_title: Option<DisplacedTitleRepairPayload>,
+}
+
+#[derive(InputObject, Clone)]
+/// Request describing a proposed folder-match correction; changes nothing.
+pub struct ChangeTitleFolderPreviewInput {
+    /// Title whose folder match would change.
+    pub title_id: ID,
+    /// Candidate folder, which must be inside one of the title's library roots.
+    pub folder_path: String,
+}
+
+#[derive(InputObject, Clone)]
+/// Request applying a folder-match correction.
+pub struct ApplyTitleFolderChangeInput {
+    /// Title whose folder match changes.
+    pub title_id: ID,
+    /// Chosen folder, which must be inside one of the title's library roots.
+    pub folder_path: String,
+    /// How to settle ownership. Defaults to ASSIGN, which is refused when
+    /// another title already owns the folder.
+    pub resolution: Option<FolderMatchResolutionValue>,
+}

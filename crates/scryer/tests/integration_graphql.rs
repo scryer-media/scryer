@@ -20,6 +20,8 @@ mod downloads_housekeeping_system;
 mod emby_contract;
 #[path = "integration_graphql/external_import_secret_drafts.rs"]
 mod external_import_secret_drafts;
+#[path = "integration_graphql/folder_match.rs"]
+mod folder_match;
 #[path = "integration_graphql/library_scan.rs"]
 mod library_scan;
 #[path = "integration_graphql/media_rename.rs"]

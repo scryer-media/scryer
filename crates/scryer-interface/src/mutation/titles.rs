@@ -6,7 +6,10 @@ use scryer_application::{
 use scryer_domain::{Library, LibraryPermission, LibraryRoot, MediaFacet, Title, User};
 
 use crate::context::{actor_from_ctx, app_from_ctx, to_gql_error};
-use crate::mappers::{from_job_run, from_library_scan_summary, from_title};
+use crate::mappers::{
+    folder_match_resolution_into_application, from_change_title_folder_result, from_job_run,
+    from_library_scan_summary, from_title,
+};
 use crate::types::*;
 use crate::utils::{
     ResolvedTitleOptionsInput, map_add_input, merge_title_option_tags, normalize_title_tags,
@@ -442,6 +445,35 @@ impl TitleMutations {
             .await
             .map_err(to_gql_error)?;
         Ok(from_title(&app, title))
+    }
+
+    /// Correct which existing folder a title owns, rescanning it; never moves files.
+    ///
+    /// Ownership of a folder another title holds is never taken silently: the
+    /// default resolution is refused and the caller must choose SWAP or
+    /// TAKE_OVER.
+    async fn apply_title_folder_change(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(
+            desc = "Title, chosen folder inside its library roots, and how to settle ownership."
+        )]
+        input: ApplyTitleFolderChangeInput,
+    ) -> GqlResult<ChangeTitleFolderPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let resolution =
+            folder_match_resolution_into_application(input.resolution.unwrap_or_default());
+        let result = app
+            .apply_title_folder_change(
+                &actor,
+                input.title_id.as_str(),
+                &input.folder_path,
+                resolution,
+            )
+            .await
+            .map_err(to_gql_error)?;
+        Ok(from_change_title_folder_result(result))
     }
 
     /// Associate a title with a metadata identity and return any hydration or scan result.
