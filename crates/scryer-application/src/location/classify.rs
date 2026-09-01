@@ -1,0 +1,1448 @@
+//! Per-title classification of a requested destination.
+//!
+//! Every title in a selection classifies into exactly one class, and the preview
+//! groups them with counts and omits none (FR-015, SC-005). The fileless
+//! catalog-only fast path is its own class so it never presents a move-mode
+//! choice (FR-076).
+//!
+//! # Facts in, classes out
+//!
+//! [`classify_selection`] performs no IO. Everything it needs about a title
+//! arrives as a [`TitleClassificationFacts`] value the caller assembled, the way
+//! [`crate::location::collisions`] takes its destination facts. That keeps the
+//! whole FR-015/FR-016/FR-017/FR-076/FR-086 rule set unit-testable, and it means
+//! the preview, the confirm path, and the executor's admission check can all ask
+//! the same function the same question and never disagree.
+
+use serde::{Deserialize, Serialize};
+
+use scryer_domain::MediaFacet;
+
+use crate::location::identity::DestinationIdentityOutcome;
+use crate::location::transfer_effects::{
+    FacetConversion, TitleAssociationFacts, plan_facet_conversion,
+};
+
+/// The single class a selected title falls into for a requested destination.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum TitleLocationClass {
+    /// Destination is in another library and the transfer is supported.
+    CrossLibraryTransfer,
+    /// Destination is another root inside the title's current library.
+    RootMove,
+    /// The title already lives at the requested destination; nothing to do.
+    NoOp,
+    /// Monitored title with no tracked files on disk: catalog reassignment only,
+    /// no filesystem work and no move-mode selection (FR-076).
+    CatalogOnly,
+    /// The destination can never accept this title (facet or media-kind rules in
+    /// spec "Boundaries"); the reason names the incompatible source library or
+    /// facet (FR-017).
+    Incompatible,
+    /// The title could go, but a user decision is outstanding: ambiguous
+    /// destination-title identity (FR-055), an active download or import
+    /// (FR-086), or unmapped episode-scoped merge records (FR-066).
+    NeedsResolution,
+}
+
+impl TitleLocationClass {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::CrossLibraryTransfer => "cross_library_transfer",
+            Self::RootMove => "root_move",
+            Self::NoOp => "no_op",
+            Self::CatalogOnly => "catalog_only",
+            Self::Incompatible => "incompatible",
+            Self::NeedsResolution => "needs_resolution",
+        }
+    }
+
+    /// Parse a persisted class value (checkpoint rows carry the class the title
+    /// was previewed as). Unknown values are rejected rather than defaulted.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim() {
+            "cross_library_transfer" => Some(Self::CrossLibraryTransfer),
+            "root_move" => Some(Self::RootMove),
+            "no_op" => Some(Self::NoOp),
+            "catalog_only" => Some(Self::CatalogOnly),
+            "incompatible" => Some(Self::Incompatible),
+            "needs_resolution" => Some(Self::NeedsResolution),
+            _ => None,
+        }
+    }
+
+    /// Whether a title in this class moves bytes. `NoOp`, `CatalogOnly`,
+    /// `Incompatible`, and `NeedsResolution` never do.
+    pub fn moves_files(&self) -> bool {
+        matches!(self, Self::CrossLibraryTransfer | Self::RootMove)
+    }
+
+    /// A bulk operation must not start while any title is in a blocking class;
+    /// the user resolves it or removes it from the selection (FR-016).
+    pub fn blocks_start(&self) -> bool {
+        matches!(self, Self::Incompatible | Self::NeedsResolution)
+    }
+}
+
+/// One classified title in a preview, carrying the explanation the UI shows for
+/// blocking classes (FR-017).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ClassifiedTitle {
+    pub title_id: String,
+    pub class: TitleLocationClass,
+    /// Why this title landed in its class. Required for `Incompatible` and
+    /// `NeedsResolution`; optional otherwise.
+    pub reason: Option<String>,
+}
+
+/// Complete counts per class for a selection. Every selected title is counted
+/// exactly once (SC-005).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct ClassificationCounts {
+    pub cross_library_transfer: i64,
+    pub root_move: i64,
+    pub no_op: i64,
+    pub catalog_only: i64,
+    pub incompatible: i64,
+    pub needs_resolution: i64,
+}
+
+impl ClassificationCounts {
+    pub fn total(&self) -> i64 {
+        self.cross_library_transfer
+            + self.root_move
+            + self.no_op
+            + self.catalog_only
+            + self.incompatible
+            + self.needs_resolution
+    }
+
+    /// Any non-zero blocking class prevents the operation from starting
+    /// (FR-016).
+    pub fn blocks_start(&self) -> bool {
+        self.incompatible > 0 || self.needs_resolution > 0
+    }
+}
+
+/// Machine-readable reason codes carried on a [`ClassifiedTitle`], so the UI can
+/// group and translate without parsing prose (C3).
+pub mod reason_codes {
+    /// The destination library's facet can never accept the title's facet.
+    pub const INCOMPATIBLE_FACET: &str = "incompatible_facet";
+    /// The requested destination root does not belong to the destination
+    /// library.
+    pub const ROOT_NOT_IN_DESTINATION_LIBRARY: &str = "root_not_in_destination_library";
+    /// An active download or import owns the title right now (FR-086).
+    pub const ACTIVE_DOWNLOAD_OR_IMPORT: &str = "active_download_or_import";
+    /// Another location operation already owns the title (FR-084).
+    pub const OWNED_BY_LOCATION_OPERATION: &str = "owned_by_location_operation";
+    /// The title has no tracked files, so the change is catalog-only (FR-076).
+    pub const NO_TRACKED_FILES: &str = "no_tracked_files";
+    /// The title already lives at the requested destination.
+    pub const ALREADY_AT_DESTINATION: &str = "already_at_destination";
+    /// The title cannot be placed because its folder is unknown.
+    pub const NO_FOLDER_MATCH: &str = "no_folder_match";
+    /// More than one destination title shares a metadata identity with this
+    /// title; the user picks one before the job starts (FR-055, FR-016).
+    pub const AMBIGUOUS_DESTINATION_IDENTITY: &str = "ambiguous_destination_identity";
+    /// The merge this title would perform references source episode identities
+    /// that cannot be mapped onto the destination, so the merge engine refuses
+    /// to attach those records to a guess (FR-066). The blocking records are
+    /// named in the explanation.
+    pub const MERGE_RECORDS_UNMAPPED: &str = "merge_records_unmapped";
+}
+
+/// The destination a selection was previewed against.
+///
+/// Both fields are optional because bulk editing exposes two independent
+/// controls (FR-010): changing only the root keeps every title in its own
+/// library, and changing only the library lets the destination library's root
+/// selection decide.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DestinationRequest {
+    /// Destination library, or `None` to keep each title in its own library.
+    pub library_id: Option<String>,
+    /// Destination root inside the destination library, or `None` to keep each
+    /// title on its own root.
+    pub root_id: Option<String>,
+}
+
+impl DestinationRequest {
+    pub fn to_root(root_id: impl Into<String>) -> Self {
+        Self {
+            library_id: None,
+            root_id: Some(root_id.into()),
+        }
+    }
+
+    pub fn to_library(library_id: impl Into<String>) -> Self {
+        Self {
+            library_id: Some(library_id.into()),
+            root_id: None,
+        }
+    }
+
+    pub fn to_library_root(library_id: impl Into<String>, root_id: impl Into<String>) -> Self {
+        Self {
+            library_id: Some(library_id.into()),
+            root_id: Some(root_id.into()),
+        }
+    }
+
+    /// Nothing was asked for, so every title is a no-op.
+    pub fn is_empty(&self) -> bool {
+        self.library_id.is_none() && self.root_id.is_none()
+    }
+}
+
+/// What the classifier knows about the destination library the request names.
+///
+/// `None` for the whole struct means "keep each title's own library", which is
+/// the same-library root move US2 is about.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DestinationLibraryFacts {
+    pub library_id: String,
+    /// Shown in the FR-017 explanation for a disabled destination.
+    pub library_name: String,
+    pub facet: MediaFacet,
+    /// Root ids configured on the destination library, used to reject a root id
+    /// that belongs somewhere else.
+    pub root_ids: Vec<String>,
+}
+
+/// Everything the classifier needs about one selected title.
+///
+/// Assembled by the caller from the catalog; the classifier never reads a
+/// repository, so every rule below is testable from literals.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TitleClassificationFacts {
+    pub title_id: String,
+    /// Used only in explanations.
+    pub title_name: String,
+    pub facet: MediaFacet,
+    pub monitored: bool,
+    pub library_id: String,
+    /// Named in the FR-017 incompatibility explanation.
+    pub library_name: String,
+    pub root_id: String,
+    /// Whether the title owns a folder today. A title with tracked files but no
+    /// folder match cannot have a destination folder calculated for it.
+    pub has_folder_match: bool,
+    /// Stored path of the folder the title owns today, when it owns one. This
+    /// is the "current folder" half of FR-012's current → destination
+    /// statement, carried so every class — including the ones that plan no
+    /// filesystem work — can state where the title lives now.
+    pub folder_path: Option<String>,
+    /// Tracked media files on disk. Zero is the FR-076 fast path.
+    pub tracked_file_count: i64,
+    /// An active download or import on this title (FR-086). The string is the
+    /// explanation shown beside the deselect control.
+    pub active_work: Option<String>,
+    /// Another location operation already owns this title (FR-084).
+    pub owned_by_operation: Option<String>,
+    /// Any other outstanding user decision the caller already knows about
+    /// (unmapped merge records).
+    pub unresolved: Option<String>,
+    /// The machine-readable code for [`Self::unresolved`], when the caller has
+    /// one. Carried separately so an FR-066 merge block groups and translates
+    /// like every other blocking reason instead of arriving as prose only.
+    #[serde(default)]
+    pub unresolved_reason_code: Option<String>,
+    /// What destination-title detection concluded for this title (FR-055),
+    /// from [`crate::location::identity::detect_destination_titles`].
+    ///
+    /// `None` means detection was not run — for a same-library root move there
+    /// is no destination library to detect against. Additive with a serde
+    /// default so plans persisted before FR-055 landed still deserialize.
+    #[serde(default)]
+    pub destination_identity: Option<DestinationIdentityOutcome>,
+    /// The title's tags, reserved `scryer:*` namespace included. Read only to
+    /// enumerate what a series↔anime facet conversion invalidates, resets, or
+    /// gives a new meaning (FR-057).
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// Series-movie links, collections, and episodes this title owns, for the
+    /// FR-060–FR-062 dispositions the preview states.
+    #[serde(default)]
+    pub associations: TitleAssociationFacts,
+}
+
+impl TitleClassificationFacts {
+    /// The minimum a caller has to supply; the optional blockers default to
+    /// "nothing outstanding".
+    pub fn new(
+        title_id: impl Into<String>,
+        facet: MediaFacet,
+        library_id: impl Into<String>,
+        root_id: impl Into<String>,
+    ) -> Self {
+        let title_id = title_id.into();
+        Self {
+            title_name: title_id.clone(),
+            title_id,
+            facet,
+            monitored: true,
+            library_id: library_id.into(),
+            library_name: String::new(),
+            root_id: root_id.into(),
+            has_folder_match: true,
+            folder_path: None,
+            tracked_file_count: 0,
+            active_work: None,
+            owned_by_operation: None,
+            unresolved: None,
+            unresolved_reason_code: None,
+            destination_identity: None,
+            tags: Vec::new(),
+            associations: TitleAssociationFacts::default(),
+        }
+    }
+
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.title_name = name.into();
+        self
+    }
+
+    pub fn with_library_name(mut self, name: impl Into<String>) -> Self {
+        self.library_name = name.into();
+        self
+    }
+
+    pub fn with_tracked_files(mut self, count: i64) -> Self {
+        self.tracked_file_count = count;
+        self
+    }
+
+    /// Record the folder the title owns today. `None` is a title with no folder
+    /// match, so this sets both halves at once and they can never disagree.
+    pub fn with_folder_path(mut self, folder_path: Option<String>) -> Self {
+        self.has_folder_match = folder_path.is_some();
+        self.folder_path = folder_path;
+        self
+    }
+
+    pub fn with_monitored(mut self, monitored: bool) -> Self {
+        self.monitored = monitored;
+        self
+    }
+
+    pub fn with_active_work(mut self, detail: impl Into<String>) -> Self {
+        self.active_work = Some(detail.into());
+        self
+    }
+
+    pub fn with_owned_by_operation(mut self, operation_id: impl Into<String>) -> Self {
+        self.owned_by_operation = Some(operation_id.into());
+        self
+    }
+
+    pub fn with_unresolved(mut self, detail: impl Into<String>) -> Self {
+        self.unresolved = Some(detail.into());
+        self
+    }
+
+    /// An outstanding decision that carries a machine-readable code — the
+    /// FR-066 merge block is the one this exists for.
+    pub fn with_unresolved_reason(
+        mut self,
+        reason_code: impl Into<String>,
+        detail: impl Into<String>,
+    ) -> Self {
+        self.unresolved_reason_code = Some(reason_code.into());
+        self.unresolved = Some(detail.into());
+        self
+    }
+
+    /// Attach the FR-055 detection outcome for this title. An ambiguous outcome
+    /// becomes a `NeedsResolution` classification; a unique one rides along so
+    /// the preview and the merge engine read the same merge target.
+    pub fn with_destination_identity(mut self, outcome: DestinationIdentityOutcome) -> Self {
+        self.destination_identity = Some(outcome);
+        self
+    }
+
+    /// The title's tags, so a facet conversion can name the settings it affects
+    /// (FR-057).
+    pub fn with_tags(mut self, tags: Vec<String>) -> Self {
+        self.tags = tags;
+        self
+    }
+
+    /// The link, collection, and episode counts behind the FR-060–FR-062
+    /// dispositions.
+    pub fn with_associations(mut self, associations: TitleAssociationFacts) -> Self {
+        self.associations = associations;
+        self
+    }
+
+    /// Whether the title has content on disk this operation would have to move.
+    pub fn has_tracked_files(&self) -> bool {
+        self.tracked_file_count > 0
+    }
+}
+
+/// Whether `destination` can ever accept a title with `source` facet.
+///
+/// Spec "Boundaries": movies move only between movie libraries; series and anime
+/// move within their own facet or between series and anime libraries; the
+/// movie/episodic boundary is not crossed (the FR-060–062 carve-outs are
+/// title-level dispositions handled by the cross-library phase, not a facet
+/// rule).
+pub fn facets_are_compatible(source: &MediaFacet, destination: &MediaFacet) -> bool {
+    match (source, destination) {
+        (MediaFacet::Movie, MediaFacet::Movie) => true,
+        (MediaFacet::Movie, _) | (_, MediaFacet::Movie) => false,
+        // Series and anime are both episodic; a crossover converts the facet
+        // automatically (FR-057).
+        _ => true,
+    }
+}
+
+/// One classified title carrying the machine-readable reason beside the prose.
+///
+/// [`ClassifiedTitle`] is the persisted/serialized shape; this is the richer
+/// value the planner works with before it reduces to it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TitleClassification {
+    pub title_id: String,
+    pub class: TitleLocationClass,
+    /// Library the title lives in today (FR-012).
+    pub source_library_id: String,
+    /// Root the title lives on today (FR-012).
+    pub source_root_id: String,
+    /// Stored path of the folder the title owns today, or `None` for a title
+    /// that owns no folder (FR-012).
+    pub source_folder_path: Option<String>,
+    /// Library the title ends up in.
+    pub destination_library_id: String,
+    /// Root the title ends up on.
+    pub destination_root_id: String,
+    pub reason_code: Option<String>,
+    pub reason: Option<String>,
+    /// The FR-055 detection outcome this classification was reached with, when
+    /// the caller ran detection. Carried onto every class so the preview can
+    /// state "merges into X", "a same-named title already exists", or "choose
+    /// which title this is" without re-deriving anything.
+    ///
+    /// Additive with a serde default: plans persisted before FR-055 landed read
+    /// back as "detection was not run".
+    #[serde(default)]
+    pub destination_identity: Option<DestinationIdentityOutcome>,
+    /// The series↔anime conversion this destination performs, with every
+    /// setting it invalidates, resets, or gives a new meaning (FR-057).
+    /// `None` when the destination library's facet is the title's own.
+    ///
+    /// Carried on the classification rather than derived twice, so the preview
+    /// items, the execution plan's catalog write, and the GraphQL payload are
+    /// the same list by construction.
+    #[serde(default)]
+    pub facet_conversion: Option<FacetConversion>,
+    /// The link/collection/episode counts the FR-060–FR-062 statements are
+    /// drawn from, carried so a caller does not have to read them again.
+    #[serde(default)]
+    pub associations: TitleAssociationFacts,
+}
+
+impl TitleClassification {
+    /// The existing destination title this title merges into (US7, D8), or
+    /// `None` for a transfer into a new destination title (FR-056).
+    ///
+    /// This is what fills
+    /// [`crate::location::model::TitleCheckpointPlacement::merged_into_title_id`].
+    pub fn merge_target_title_id(&self) -> Option<&str> {
+        self.destination_identity
+            .as_ref()
+            .and_then(DestinationIdentityOutcome::merge_target)
+    }
+
+    /// The name of the destination title this title merges into (US7, D8).
+    ///
+    /// The id alone reads out as an opaque string in the preview; the name is
+    /// what "merges into X" is supposed to say. Detection already resolved it,
+    /// so nothing is read a second time to produce it.
+    pub fn merge_target_title_name(&self) -> Option<&str> {
+        self.destination_identity
+            .as_ref()
+            .and_then(DestinationIdentityOutcome::merge_target_title_name)
+    }
+
+    /// A destination title with the same name and no shared identity. It is
+    /// never merged into (FR-055); the preview says it exists so the user is not
+    /// surprised by two same-named titles in one library.
+    pub fn same_named_destination_title_id(&self) -> Option<&str> {
+        self.destination_identity
+            .as_ref()
+            .and_then(|outcome| outcome.same_name_title_id.as_deref())
+    }
+
+    /// Whether this destination converts the title's facet (FR-057).
+    pub fn converts_facet(&self) -> bool {
+        self.facet_conversion.is_some()
+    }
+
+    pub fn to_classified_title(&self) -> ClassifiedTitle {
+        ClassifiedTitle {
+            title_id: self.title_id.clone(),
+            class: self.class,
+            reason: self.reason.clone(),
+        }
+    }
+
+    /// Whether this title stops the operation from starting (FR-016).
+    pub fn blocks_start(&self) -> bool {
+        self.class.blocks_start()
+    }
+}
+
+/// The complete result of classifying a selection: one entry per selected
+/// title, in selection order, plus the grouped counts (FR-015, SC-005).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct SelectionClassification {
+    pub titles: Vec<TitleClassification>,
+    pub counts: ClassificationCounts,
+}
+
+impl SelectionClassification {
+    /// Ids the user must resolve or deselect before the job can start
+    /// (FR-016, FR-086).
+    pub fn blocking_title_ids(&self) -> Vec<String> {
+        self.titles
+            .iter()
+            .filter(|title| title.blocks_start())
+            .map(|title| title.title_id.clone())
+            .collect()
+    }
+
+    /// Ids in one class, for the preview's grouped lists.
+    pub fn title_ids_in(&self, class: TitleLocationClass) -> Vec<String> {
+        self.titles
+            .iter()
+            .filter(|title| title.class == class)
+            .map(|title| title.title_id.clone())
+            .collect()
+    }
+
+    pub fn classification_of(&self, title_id: &str) -> Option<&TitleClassification> {
+        self.titles.iter().find(|title| title.title_id == title_id)
+    }
+
+    /// The plan-level FR-016 check the preview and confirm paths enforce: a bulk
+    /// job must not start while an included title is unresolved or incompatible.
+    pub fn blocks_start(&self) -> bool {
+        self.counts.blocks_start()
+    }
+
+    pub fn to_classified_titles(&self) -> Vec<ClassifiedTitle> {
+        self.titles
+            .iter()
+            .map(TitleClassification::to_classified_title)
+            .collect()
+    }
+}
+
+/// Classify one title against the requested destination.
+///
+/// The order of the checks is the contract, not an implementation detail:
+///
+/// 1. **Incompatible** first — a destination that can never accept the title is
+///    the answer regardless of anything else about it (FR-017).
+/// 2. **No-op** — already at the destination, so nothing can go wrong and
+///    nothing needs resolving.
+/// 3. **Blocked** — an active download or import, another operation's ownership,
+///    an ambiguous destination-title identity (FR-055), or a caller-supplied
+///    unresolved decision such as the merge engine's FR-066 refusal (FR-086,
+///    FR-084, FR-016). A *unique* destination identity is deliberately not here:
+///    that is a merge, and a merge is a startable cross-library transfer that
+///    carries its merge target (US7). This sits *above* the
+///    fileless fast path on purpose: a fileless title with an in-flight import
+///    is exactly the case where files are about to land in the old root, and a
+///    fileless title with an ambiguous destination identity is still a merge
+///    decision the user owes.
+/// 4. **Catalog-only** — no tracked files, so there is nothing to move (FR-076).
+/// 5. The move itself: cross-library or same-library root move.
+pub fn classify_title(
+    facts: &TitleClassificationFacts,
+    destination: &DestinationRequest,
+    destination_library: Option<&DestinationLibraryFacts>,
+) -> TitleClassification {
+    let destination_library_id = destination
+        .library_id
+        .clone()
+        .unwrap_or_else(|| facts.library_id.clone());
+    let crosses_libraries = destination_library_id != facts.library_id;
+
+    // FR-057: the conversion is a property of the pair of facets, so it is
+    // settled here — before any class branch — and rides every class the title
+    // can land in. `plan_facet_conversion` returns `None` for a same facet and
+    // for anything touching movie, so an incompatible pairing can never carry
+    // one.
+    let facet_conversion = crosses_libraries
+        .then_some(destination_library)
+        .flatten()
+        .and_then(|library| {
+            plan_facet_conversion(
+                &facts.facet,
+                &library.facet,
+                &facts.tags,
+                facts.associations,
+            )
+        });
+
+    let classified = |class: TitleLocationClass,
+                      root_id: String,
+                      reason_code: Option<&str>,
+                      reason: Option<String>| TitleClassification {
+        title_id: facts.title_id.clone(),
+        class,
+        source_library_id: facts.library_id.clone(),
+        source_root_id: facts.root_id.clone(),
+        source_folder_path: facts.folder_path.clone(),
+        destination_library_id: destination_library_id.clone(),
+        destination_root_id: root_id,
+        reason_code: reason_code.map(str::to_string),
+        reason,
+        destination_identity: facts.destination_identity.clone(),
+        facet_conversion: facet_conversion.clone(),
+        associations: facts.associations,
+    };
+
+    // 1. Incompatible: FR-017's explanation names the source library and facet.
+    if crosses_libraries {
+        let Some(library) = destination_library else {
+            return classified(
+                TitleLocationClass::Incompatible,
+                facts.root_id.clone(),
+                Some(reason_codes::INCOMPATIBLE_FACET),
+                Some(format!(
+                    "destination library {destination_library_id} is unknown, so \"{}\" cannot be moved into it",
+                    facts.title_name
+                )),
+            );
+        };
+        if !facets_are_compatible(&facts.facet, &library.facet) {
+            return classified(
+                TitleLocationClass::Incompatible,
+                facts.root_id.clone(),
+                Some(reason_codes::INCOMPATIBLE_FACET),
+                Some(format!(
+                    "\"{}\" is a {} title in {}; a {} library cannot accept it",
+                    facts.title_name,
+                    facts.facet.as_str(),
+                    display_library(&facts.library_name, &facts.library_id),
+                    library.facet.as_str()
+                )),
+            );
+        }
+    }
+
+    // The destination root: the requested one, or the title's own when the
+    // request left the root alone.
+    let destination_root_id = match destination.root_id.as_deref() {
+        Some(root_id) => root_id.to_string(),
+        None => facts.root_id.clone(),
+    };
+    if let Some(requested_root) = destination.root_id.as_deref()
+        && let Some(library) = destination_library
+        && !library
+            .root_ids
+            .iter()
+            .any(|root_id| root_id == requested_root)
+    {
+        return classified(
+            TitleLocationClass::Incompatible,
+            destination_root_id,
+            Some(reason_codes::ROOT_NOT_IN_DESTINATION_LIBRARY),
+            Some(format!(
+                "root {requested_root} is not configured on {}",
+                display_library(&library.library_name, &library.library_id)
+            )),
+        );
+    }
+
+    // 2. No-op: already exactly where the request asks for.
+    if !crosses_libraries && destination_root_id == facts.root_id {
+        return classified(
+            TitleLocationClass::NoOp,
+            destination_root_id,
+            Some(reason_codes::ALREADY_AT_DESTINATION),
+            Some(format!(
+                "\"{}\" already lives on this root",
+                facts.title_name
+            )),
+        );
+    }
+
+    // 3. Blocked: something must be resolved or deselected before the job starts.
+    if let Some(detail) = facts.active_work.as_deref() {
+        return classified(
+            TitleLocationClass::NeedsResolution,
+            destination_root_id,
+            Some(reason_codes::ACTIVE_DOWNLOAD_OR_IMPORT),
+            Some(detail.to_string()),
+        );
+    }
+    if let Some(operation_id) = facts.owned_by_operation.as_deref() {
+        return classified(
+            TitleLocationClass::NeedsResolution,
+            destination_root_id,
+            Some(reason_codes::OWNED_BY_LOCATION_OPERATION),
+            Some(format!(
+                "location operation {operation_id} is already working on \"{}\"",
+                facts.title_name
+            )),
+        );
+    }
+    // FR-055: more than one destination title claims an identity this title
+    // holds. It is never auto-merged into either; the user decides first.
+    if let Some(outcome) = facts.destination_identity.as_ref()
+        && outcome.needs_resolution()
+    {
+        return classified(
+            TitleLocationClass::NeedsResolution,
+            destination_root_id,
+            outcome.reason_code(),
+            outcome.blocked_reason(&facts.title_name),
+        );
+    }
+    // FR-055 + US7: exactly one destination title shares a canonical identity,
+    // so this title merges rather than transfers (FR-056). A merge is not a
+    // separate class — it rides the cross-library machinery, and the merge
+    // target it carries in `destination_identity` is what tells the planner,
+    // the executor, and `merged_into_title_id` apart from a plain transfer. The
+    // one thing that *does* block it is an FR-066 refusal from the merge
+    // engine, which the caller supplies through `unresolved` below.
+    if let Some(detail) = facts.unresolved.as_deref() {
+        return classified(
+            TitleLocationClass::NeedsResolution,
+            destination_root_id,
+            facts.unresolved_reason_code.as_deref(),
+            Some(detail.to_string()),
+        );
+    }
+    // A title with files but no folder match has nothing to move *from*; the
+    // repair for that is US1's change-folder flow, not a move.
+    if facts.has_tracked_files() && !facts.has_folder_match {
+        return classified(
+            TitleLocationClass::NeedsResolution,
+            destination_root_id,
+            Some(reason_codes::NO_FOLDER_MATCH),
+            Some(format!(
+                "\"{}\" has tracked files but owns no folder; correct the folder match first",
+                facts.title_name
+            )),
+        );
+    }
+
+    // 4. Catalog-only fast path (FR-076): nothing on disk, so no move-mode
+    //    choice and no filesystem work.
+    if !facts.has_tracked_files() {
+        return classified(
+            TitleLocationClass::CatalogOnly,
+            destination_root_id,
+            Some(reason_codes::NO_TRACKED_FILES),
+            Some(format!(
+                "\"{}\" has no tracked files on disk, so only its catalog record changes",
+                facts.title_name
+            )),
+        );
+    }
+
+    // 5. The move.
+    let class = if crosses_libraries {
+        TitleLocationClass::CrossLibraryTransfer
+    } else {
+        TitleLocationClass::RootMove
+    };
+    classified(class, destination_root_id, None, None)
+}
+
+fn display_library(name: &str, id: &str) -> String {
+    let name = name.trim();
+    if name.is_empty() {
+        id.to_string()
+    } else {
+        format!("\"{name}\"")
+    }
+}
+
+/// Classify a whole selection, counting every title exactly once (SC-005).
+///
+/// The returned list preserves selection order and has exactly one entry per
+/// input, so a caller can never lose a title between the preview and the plan.
+pub fn classify_selection(
+    titles: &[TitleClassificationFacts],
+    destination: &DestinationRequest,
+    destination_library: Option<&DestinationLibraryFacts>,
+) -> SelectionClassification {
+    let mut counts = ClassificationCounts::default();
+    let classified: Vec<TitleClassification> = titles
+        .iter()
+        .map(|facts| {
+            let classification = classify_title(facts, destination, destination_library);
+            match classification.class {
+                TitleLocationClass::CrossLibraryTransfer => counts.cross_library_transfer += 1,
+                TitleLocationClass::RootMove => counts.root_move += 1,
+                TitleLocationClass::NoOp => counts.no_op += 1,
+                TitleLocationClass::CatalogOnly => counts.catalog_only += 1,
+                TitleLocationClass::Incompatible => counts.incompatible += 1,
+                TitleLocationClass::NeedsResolution => counts.needs_resolution += 1,
+            }
+            classification
+        })
+        .collect();
+
+    SelectionClassification {
+        titles: classified,
+        counts,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_file_bearing_classes_move_bytes() {
+        assert!(TitleLocationClass::CrossLibraryTransfer.moves_files());
+        assert!(TitleLocationClass::RootMove.moves_files());
+        for class in [
+            TitleLocationClass::NoOp,
+            TitleLocationClass::CatalogOnly,
+            TitleLocationClass::Incompatible,
+            TitleLocationClass::NeedsResolution,
+        ] {
+            assert!(
+                !class.moves_files(),
+                "{} must not move files",
+                class.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn unresolved_or_incompatible_titles_block_the_start() {
+        assert!(TitleLocationClass::Incompatible.blocks_start());
+        assert!(TitleLocationClass::NeedsResolution.blocks_start());
+        assert!(!TitleLocationClass::RootMove.blocks_start());
+
+        let clean = ClassificationCounts {
+            root_move: 3,
+            no_op: 1,
+            ..ClassificationCounts::default()
+        };
+        assert_eq!(clean.total(), 4);
+        assert!(!clean.blocks_start());
+
+        let blocked = ClassificationCounts {
+            needs_resolution: 1,
+            ..clean
+        };
+        assert_eq!(blocked.total(), 5);
+        assert!(blocked.blocks_start());
+    }
+
+    fn movie_facts(id: &str, root: &str) -> TitleClassificationFacts {
+        TitleClassificationFacts::new(id, MediaFacet::Movie, "lib-movies", root)
+            .with_library_name("Movies")
+            .with_tracked_files(3)
+    }
+
+    fn movies_library(root_ids: &[&str]) -> DestinationLibraryFacts {
+        DestinationLibraryFacts {
+            library_id: "lib-movies".to_string(),
+            library_name: "Movies".to_string(),
+            facet: MediaFacet::Movie,
+            root_ids: root_ids.iter().map(|id| (*id).to_string()).collect(),
+        }
+    }
+
+    /// US2.3: a bulk selection mixing titles on root A and root B with B as the
+    /// destination classifies A-titles as moves and B-titles as no-ops, and
+    /// omits nothing (FR-015, SC-005).
+    #[test]
+    fn bulk_root_move_classifies_every_title_exactly_once() {
+        let titles = vec![
+            movie_facts("on-a-1", "root-a"),
+            movie_facts("on-b-1", "root-b"),
+            movie_facts("on-a-2", "root-a"),
+        ];
+        let destination = DestinationRequest::to_root("root-b");
+        let library = movies_library(&["root-a", "root-b"]);
+
+        let result = classify_selection(&titles, &destination, Some(&library));
+
+        assert_eq!(result.titles.len(), titles.len());
+        assert_eq!(result.counts.total(), titles.len() as i64);
+        assert_eq!(result.counts.root_move, 2);
+        assert_eq!(result.counts.no_op, 1);
+        assert!(!result.blocks_start());
+        assert_eq!(
+            result.title_ids_in(TitleLocationClass::RootMove),
+            vec!["on-a-1".to_string(), "on-a-2".to_string()]
+        );
+        assert_eq!(
+            result
+                .classification_of("on-b-1")
+                .expect("title present")
+                .reason_code
+                .as_deref(),
+            Some(reason_codes::ALREADY_AT_DESTINATION)
+        );
+        // Every classified title carries the destination it would end up on.
+        for title in &result.titles {
+            assert_eq!(title.destination_root_id, "root-b");
+            assert_eq!(title.destination_library_id, "lib-movies");
+        }
+    }
+
+    /// FR-012 / US2.1: the preview states current → destination for every
+    /// title, so the source placement rides on every class — including the
+    /// no-op and catalog-only ones that plan no filesystem work at all.
+    #[test]
+    fn every_class_carries_the_titles_current_placement() {
+        let titles = vec![
+            movie_facts("moving", "root-a")
+                .with_folder_path(Some("/media/a/Moving (2024)".to_string())),
+            movie_facts("staying", "root-b")
+                .with_folder_path(Some("/media/b/Staying (2024)".to_string())),
+            movie_facts("fileless", "root-a").with_tracked_files(0),
+            movie_facts("blocked", "root-a")
+                .with_folder_path(Some("/media/a/Blocked (2024)".to_string()))
+                .with_active_work("an import is still running"),
+        ];
+        let library = movies_library(&["root-a", "root-b"]);
+
+        let result = classify_selection(
+            &titles,
+            &DestinationRequest::to_root("root-b"),
+            Some(&library),
+        );
+
+        for (title_id, expected_root, expected_folder) in [
+            ("moving", "root-a", Some("/media/a/Moving (2024)")),
+            ("staying", "root-b", Some("/media/b/Staying (2024)")),
+            ("fileless", "root-a", None),
+            ("blocked", "root-a", Some("/media/a/Blocked (2024)")),
+        ] {
+            let classified = result.classification_of(title_id).expect("title present");
+            assert_eq!(classified.source_library_id, "lib-movies");
+            assert_eq!(classified.source_root_id, expected_root, "{title_id}");
+            assert_eq!(
+                classified.source_folder_path.as_deref(),
+                expected_folder,
+                "{title_id}"
+            );
+        }
+        // The classes those titles landed in are the point: two of them move
+        // nothing and still state where they live.
+        assert_eq!(result.counts.root_move, 1);
+        assert_eq!(result.counts.no_op, 1);
+        assert_eq!(result.counts.catalog_only, 1);
+        assert_eq!(result.counts.needs_resolution, 1);
+    }
+
+    /// A title with tracked files but no folder to move from is unresolvable,
+    /// and `with_folder_path(None)` is the one way to say so.
+    #[test]
+    fn tracked_files_without_a_folder_need_resolution() {
+        let facts = movie_facts("orphan", "root-a").with_folder_path(None);
+        let library = movies_library(&["root-a", "root-b"]);
+
+        let classification = classify_title(
+            &facts,
+            &DestinationRequest::to_root("root-b"),
+            Some(&library),
+        );
+
+        assert_eq!(classification.class, TitleLocationClass::NeedsResolution);
+        assert_eq!(
+            classification.reason_code.as_deref(),
+            Some(reason_codes::NO_FOLDER_MATCH)
+        );
+        assert!(classification.source_folder_path.is_none());
+    }
+
+    /// US2.4 / FR-076: a monitored title with no tracked files is catalog-only
+    /// and never enters move-mode selection.
+    #[test]
+    fn fileless_monitored_title_is_catalog_only() {
+        let facts = movie_facts("fileless", "root-a")
+            .with_tracked_files(0)
+            .with_monitored(true);
+        let library = movies_library(&["root-a", "root-b"]);
+
+        let classification = classify_title(
+            &facts,
+            &DestinationRequest::to_root("root-b"),
+            Some(&library),
+        );
+
+        assert_eq!(classification.class, TitleLocationClass::CatalogOnly);
+        assert!(!classification.class.moves_files());
+        assert!(!classification.blocks_start());
+        assert_eq!(
+            classification.reason_code.as_deref(),
+            Some(reason_codes::NO_TRACKED_FILES)
+        );
+    }
+
+    /// FR-086: an active download or import blocks the title, identifies it for
+    /// deselection, and — because the import is about to land files in the old
+    /// root — outranks the fileless fast path.
+    #[test]
+    fn active_download_blocks_a_title_even_when_it_is_fileless() {
+        let titles = vec![
+            movie_facts("busy", "root-a")
+                .with_tracked_files(0)
+                .with_active_work("a download for \"busy\" is still importing"),
+            movie_facts("free", "root-a"),
+        ];
+        let library = movies_library(&["root-a", "root-b"]);
+
+        let result = classify_selection(
+            &titles,
+            &DestinationRequest::to_root("root-b"),
+            Some(&library),
+        );
+
+        assert_eq!(result.counts.needs_resolution, 1);
+        assert_eq!(result.counts.catalog_only, 0);
+        assert_eq!(result.counts.root_move, 1);
+        assert!(result.blocks_start(), "FR-016: the job must not start");
+        assert_eq!(result.blocking_title_ids(), vec!["busy".to_string()]);
+        assert_eq!(
+            result
+                .classification_of("busy")
+                .expect("title present")
+                .reason_code
+                .as_deref(),
+            Some(reason_codes::ACTIVE_DOWNLOAD_OR_IMPORT)
+        );
+    }
+
+    /// FR-084: a title another operation already owns needs resolution rather
+    /// than silently joining a second operation.
+    #[test]
+    fn title_owned_by_another_operation_needs_resolution() {
+        let facts = movie_facts("owned", "root-a").with_owned_by_operation("op-1");
+        let library = movies_library(&["root-a", "root-b"]);
+
+        let classification = classify_title(
+            &facts,
+            &DestinationRequest::to_root("root-b"),
+            Some(&library),
+        );
+
+        assert_eq!(classification.class, TitleLocationClass::NeedsResolution);
+        assert_eq!(
+            classification.reason_code.as_deref(),
+            Some(reason_codes::OWNED_BY_LOCATION_OPERATION)
+        );
+        assert!(
+            classification
+                .reason
+                .as_deref()
+                .expect("reason")
+                .contains("op-1")
+        );
+    }
+
+    /// FR-017: an incompatible destination explains itself by naming the source
+    /// library and facet.
+    #[test]
+    fn movie_into_series_library_is_incompatible_and_names_the_source() {
+        let facts = movie_facts("a-movie", "root-a").with_name("A Movie");
+        let series_library = DestinationLibraryFacts {
+            library_id: "lib-series".to_string(),
+            library_name: "Series".to_string(),
+            facet: MediaFacet::Series,
+            root_ids: vec!["root-s".to_string()],
+        };
+
+        let classification = classify_title(
+            &facts,
+            &DestinationRequest::to_library_root("lib-series", "root-s"),
+            Some(&series_library),
+        );
+
+        assert_eq!(classification.class, TitleLocationClass::Incompatible);
+        assert!(classification.blocks_start());
+        let reason = classification.reason.expect("reason");
+        assert!(
+            reason.contains("Movies"),
+            "names the source library: {reason}"
+        );
+        assert!(reason.contains("movie"), "names the source facet: {reason}");
+    }
+
+    /// Series↔anime crossover is supported (spec Boundaries, FR-057); the
+    /// movie/episodic boundary is not.
+    #[test]
+    fn facet_compatibility_matches_the_documented_boundaries() {
+        assert!(facets_are_compatible(
+            &MediaFacet::Series,
+            &MediaFacet::Anime
+        ));
+        assert!(facets_are_compatible(
+            &MediaFacet::Anime,
+            &MediaFacet::Series
+        ));
+        assert!(facets_are_compatible(
+            &MediaFacet::Movie,
+            &MediaFacet::Movie
+        ));
+        assert!(!facets_are_compatible(
+            &MediaFacet::Movie,
+            &MediaFacet::Series
+        ));
+        assert!(!facets_are_compatible(
+            &MediaFacet::Anime,
+            &MediaFacet::Movie
+        ));
+    }
+
+    /// A root that belongs to another library is rejected rather than silently
+    /// reinterpreted.
+    #[test]
+    fn root_outside_the_destination_library_is_incompatible() {
+        let facts = movie_facts("a-movie", "root-a");
+        let library = movies_library(&["root-a", "root-b"]);
+
+        let classification = classify_title(
+            &facts,
+            &DestinationRequest::to_root("root-elsewhere"),
+            Some(&library),
+        );
+
+        assert_eq!(classification.class, TitleLocationClass::Incompatible);
+        assert_eq!(
+            classification.reason_code.as_deref(),
+            Some(reason_codes::ROOT_NOT_IN_DESTINATION_LIBRARY)
+        );
+    }
+
+    /// FR-055 + FR-016: an ambiguous destination identity is a blocked title
+    /// carrying the machine-readable reason code, not a silent merge.
+    #[test]
+    fn ambiguous_destination_identity_blocks_the_title() {
+        use crate::location::identity::{
+            DestinationTitleCandidate, IdentityRedirects, SourceTitleIdentity,
+            detect_destination_title,
+        };
+
+        let outcome = detect_destination_title(
+            &SourceTitleIdentity::new("moving", MediaFacet::Movie)
+                .with_name("The Gift")
+                .with_identity("tmdb", "603")
+                .with_identity("imdb", "tt0133093"),
+            &[
+                DestinationTitleCandidate::new("dest-a", MediaFacet::Movie)
+                    .with_name("The Matrix")
+                    .with_identity("tmdb", "603"),
+                DestinationTitleCandidate::new("dest-b", MediaFacet::Movie)
+                    .with_name("The Matrix Reloaded")
+                    .with_identity("imdb", "tt0133093"),
+            ],
+            &IdentityRedirects::new(),
+        );
+
+        let facts = TitleClassificationFacts::new("moving", MediaFacet::Movie, "lib-a", "root-a")
+            .with_name("The Gift")
+            .with_tracked_files(4)
+            .with_destination_identity(outcome);
+        let destination_library = DestinationLibraryFacts {
+            library_id: "lib-b".to_string(),
+            library_name: "Movies B".to_string(),
+            facet: MediaFacet::Movie,
+            root_ids: vec!["root-b".to_string()],
+        };
+
+        let classification = classify_title(
+            &facts,
+            &DestinationRequest::to_library_root("lib-b", "root-b"),
+            Some(&destination_library),
+        );
+
+        assert_eq!(classification.class, TitleLocationClass::NeedsResolution);
+        assert!(classification.blocks_start());
+        assert_eq!(
+            classification.reason_code.as_deref(),
+            Some(reason_codes::AMBIGUOUS_DESTINATION_IDENTITY)
+        );
+        assert!(
+            classification.merge_target_title_id().is_none(),
+            "FR-055: an ambiguous title is never auto-merged"
+        );
+        assert!(
+            classification
+                .reason
+                .as_deref()
+                .expect("reason")
+                .contains("The Matrix")
+        );
+    }
+
+    /// FR-055: a unique match crosses libraries as a transfer that carries its
+    /// merge target, and a same-name-only match crosses as a plain transfer that
+    /// still records the same-named title.
+    #[test]
+    fn a_series_into_an_anime_library_carries_the_facet_conversion() {
+        use crate::location::transfer_effects::{SettingDisposition, TitleAssociationFacts};
+
+        let facts = TitleClassificationFacts::new("show", MediaFacet::Series, "lib-a", "root-a")
+            .with_name("Some Show")
+            .with_tracked_files(6)
+            .with_tags(vec![
+                "scryer:filler-policy:skip_filler".to_string(),
+                "scryer:season-folder:enabled".to_string(),
+            ])
+            .with_associations(TitleAssociationFacts::new(0, 2, 24));
+        let destination_library = DestinationLibraryFacts {
+            library_id: "lib-b".to_string(),
+            library_name: "Anime".to_string(),
+            facet: MediaFacet::Anime,
+            root_ids: vec!["root-b".to_string()],
+        };
+
+        let classification = classify_title(
+            &facts,
+            &DestinationRequest::to_library_root("lib-b", "root-b"),
+            Some(&destination_library),
+        );
+
+        assert_eq!(classification.class, TitleLocationClass::CrossLibraryTransfer);
+        assert!(classification.converts_facet());
+        let conversion = classification
+            .facet_conversion
+            .as_ref()
+            .expect("the conversion rides the classification");
+        assert_eq!(conversion.from, MediaFacet::Series);
+        assert_eq!(conversion.to, MediaFacet::Anime);
+        assert_eq!(
+            conversion
+                .settings
+                .iter()
+                .find(|setting| setting.setting == "filler_policy")
+                .map(|setting| setting.disposition),
+            Some(SettingDisposition::ChangesMeaning)
+        );
+        assert_eq!(classification.associations.collections, 2);
+    }
+
+    #[test]
+    fn a_same_facet_destination_carries_no_conversion() {
+        let facts = TitleClassificationFacts::new("show", MediaFacet::Series, "lib-a", "root-a")
+            .with_tracked_files(6)
+            .with_tags(vec!["scryer:filler-policy:skip_filler".to_string()]);
+        let destination_library = DestinationLibraryFacts {
+            library_id: "lib-b".to_string(),
+            library_name: "Series B".to_string(),
+            facet: MediaFacet::Series,
+            root_ids: vec!["root-b".to_string()],
+        };
+
+        let classification = classify_title(
+            &facts,
+            &DestinationRequest::to_library_root("lib-b", "root-b"),
+            Some(&destination_library),
+        );
+
+        assert_eq!(classification.class, TitleLocationClass::CrossLibraryTransfer);
+        assert!(!classification.converts_facet());
+    }
+
+    /// FR-017 stands: a refused pairing is refused, and it never carries a
+    /// conversion the executor could act on.
+    #[test]
+    fn an_incompatible_pairing_carries_no_conversion() {
+        let facts = TitleClassificationFacts::new("film", MediaFacet::Movie, "lib-a", "root-a")
+            .with_tracked_files(1);
+        let destination_library = DestinationLibraryFacts {
+            library_id: "lib-b".to_string(),
+            library_name: "Series".to_string(),
+            facet: MediaFacet::Series,
+            root_ids: vec!["root-b".to_string()],
+        };
+
+        let classification = classify_title(
+            &facts,
+            &DestinationRequest::to_library_root("lib-b", "root-b"),
+            Some(&destination_library),
+        );
+
+        assert_eq!(classification.class, TitleLocationClass::Incompatible);
+        assert!(classification.facet_conversion.is_none());
+    }
+
+    #[test]
+    fn identity_outcomes_ride_along_on_cross_library_transfers() {
+        use crate::location::identity::{
+            DestinationTitleCandidate, IdentityRedirects, SourceTitleIdentity,
+            detect_destination_title,
+        };
+
+        let candidates = vec![
+            DestinationTitleCandidate::new("twin", MediaFacet::Movie)
+                .with_name("The Gift")
+                .with_identity("tmdb", "999"),
+            DestinationTitleCandidate::new("real", MediaFacet::Movie)
+                .with_name("Amélie")
+                .with_identity("tmdb", "194"),
+        ];
+        let redirects = IdentityRedirects::new();
+        let destination_library = DestinationLibraryFacts {
+            library_id: "lib-b".to_string(),
+            library_name: "Movies B".to_string(),
+            facet: MediaFacet::Movie,
+            root_ids: vec!["root-b".to_string()],
+        };
+        let destination = DestinationRequest::to_library_root("lib-b", "root-b");
+
+        let merging = detect_destination_title(
+            &SourceTitleIdentity::new("merging", MediaFacet::Movie)
+                .with_name("Amelie")
+                .with_identity("tmdb", "194"),
+            &candidates,
+            &redirects,
+        );
+        let same_name = detect_destination_title(
+            &SourceTitleIdentity::new("same-name", MediaFacet::Movie)
+                .with_name("The Gift")
+                .with_identity("tmdb", "1"),
+            &candidates,
+            &redirects,
+        );
+
+        let titles = vec![
+            TitleClassificationFacts::new("merging", MediaFacet::Movie, "lib-a", "root-a")
+                .with_tracked_files(2)
+                .with_destination_identity(merging),
+            TitleClassificationFacts::new("same-name", MediaFacet::Movie, "lib-a", "root-a")
+                .with_tracked_files(2)
+                .with_destination_identity(same_name),
+        ];
+
+        let result = classify_selection(&titles, &destination, Some(&destination_library));
+
+        // FR-055 splits these two apart: a shared identity is a merge, and a
+        // shared name is not. Both start — the merge rides the cross-library
+        // machinery (US7) and is told apart by the merge target it carries.
+        assert_eq!(result.counts.cross_library_transfer, 2);
+        assert_eq!(result.counts.needs_resolution, 0);
+        assert!(!result.blocks_start());
+
+        let merging = result.classification_of("merging").expect("title present");
+        assert_eq!(merging.class, TitleLocationClass::CrossLibraryTransfer);
+        assert_eq!(merging.reason_code, None);
+        assert_eq!(
+            merging.merge_target_title_id(),
+            Some("real"),
+            "the merge target rides along on the classification for the merge engine to read"
+        );
+        assert_eq!(
+            merging.merge_target_title_name(),
+            Some("Amélie"),
+            "the surviving title's own name rides along too — not the merging \
+             title's, which is spelled differently"
+        );
+
+        let same_name = result
+            .classification_of("same-name")
+            .expect("title present");
+        assert_eq!(
+            same_name.class,
+            TitleLocationClass::CrossLibraryTransfer,
+            "FR-055: a same name is never enough to merge, so this transfers"
+        );
+        assert_eq!(
+            same_name.merge_target_title_id(),
+            None,
+            "FR-055: a same name is never enough to merge"
+        );
+        assert_eq!(
+            same_name.merge_target_title_name(),
+            None,
+            "no merge target means no merge target name"
+        );
+        assert_eq!(same_name.same_named_destination_title_id(), Some("twin"));
+    }
+
+    /// FR-066: the merge engine's refusal arrives as a caller-supplied
+    /// unresolved decision, and it keeps its machine-readable code so the UI
+    /// groups it rather than parsing the record list out of prose.
+    #[test]
+    fn an_unmappable_merge_record_blocks_the_title_with_its_own_code() {
+        let facts =
+            TitleClassificationFacts::new("merging", MediaFacet::Movie, "lib-a", "root-a")
+                .with_tracked_files(2)
+                .with_unresolved_reason(
+                    reason_codes::MERGE_RECORDS_UNMAPPED,
+                    "wanted_items (unmapped_episode): e-1",
+                );
+        let destination_library = DestinationLibraryFacts {
+            library_id: "lib-b".to_string(),
+            library_name: "Movies B".to_string(),
+            facet: MediaFacet::Movie,
+            root_ids: vec!["root-b".to_string()],
+        };
+
+        let classification = classify_title(
+            &facts,
+            &DestinationRequest::to_library_root("lib-b", "root-b"),
+            Some(&destination_library),
+        );
+
+        assert_eq!(classification.class, TitleLocationClass::NeedsResolution);
+        assert!(classification.blocks_start());
+        assert_eq!(
+            classification.reason_code.as_deref(),
+            Some(reason_codes::MERGE_RECORDS_UNMAPPED)
+        );
+        assert!(
+            classification
+                .reason
+                .as_deref()
+                .expect("reason")
+                .contains("wanted_items")
+        );
+    }
+
+    /// A selection spanning three source libraries into one destination
+    /// classifies 100% of titles into exactly one class (SC-005).
+    #[test]
+    fn selection_spanning_three_libraries_omits_nothing() {
+        let titles = vec![
+            TitleClassificationFacts::new("m1", MediaFacet::Movie, "lib-a", "root-a")
+                .with_library_name("Movies A")
+                .with_tracked_files(1),
+            TitleClassificationFacts::new("s1", MediaFacet::Series, "lib-b", "root-b")
+                .with_library_name("Series B")
+                .with_tracked_files(1),
+            TitleClassificationFacts::new("a1", MediaFacet::Anime, "lib-c", "root-c")
+                .with_library_name("Anime C")
+                .with_tracked_files(0),
+        ];
+        let destination_library = DestinationLibraryFacts {
+            library_id: "lib-b".to_string(),
+            library_name: "Series B".to_string(),
+            facet: MediaFacet::Series,
+            root_ids: vec!["root-b".to_string()],
+        };
+
+        let result = classify_selection(
+            &titles,
+            &DestinationRequest::to_library_root("lib-b", "root-b"),
+            Some(&destination_library),
+        );
+
+        assert_eq!(result.counts.total(), 3);
+        // The movie cannot enter an episodic library; the series is already
+        // there; the fileless anime converts facet as a catalog-only change.
+        assert_eq!(result.counts.incompatible, 1);
+        assert_eq!(result.counts.no_op, 1);
+        assert_eq!(result.counts.catalog_only, 1);
+        assert!(result.blocks_start());
+        assert_eq!(result.to_classified_titles().len(), 3);
+    }
+}

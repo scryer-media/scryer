@@ -2,7 +2,14 @@
 
 **Feature Branch**: `feature/library-location-spec`
 **Created**: 2026-08-30
-**Status**: Draft
+**Status**: Implemented (2026-09-01) — all nine user stories built on
+`feature/library-location-movement`. US3 (adoption), US4 (change root) and US5
+(consolidate root) landed `cf9f92bcd`..`b51f30973`; the relocation-prototype
+gate on US4 dissolved and the phase was built fresh against this spec. Final
+acceptance (tasks.md T096) and the operator-run e2e gate (T095) are still
+pending; known deltas are recorded in
+[checklists/requirements.md](./checklists/requirements.md) and the tasks-file
+phase notes.
 **Input**: Operator product plan (2026-08-30) + plan review amendments + operator decisions recorded in the Clarifications section below.
 
 ## Summary
@@ -303,23 +310,27 @@ stops at the next safe title checkpoint with completed titles consistent.
    deduplicated assets separately from media files, and states the verification
    depth applied.
 
-### User Story 9 — Operator controls verification depth; catalog hashes converge (Priority: P3)
+### User Story 9 — Operator controls import verification depth; catalog hashes converge (Priority: P3)
 
-An operator chooses between full verification (default) and quick check, and a
-background job slowly backfills full-file hashes across the catalog.
+An operator chooses between full verification (default) and quick check for
+download-client import copies, and a background job slowly backfills full-file
+hashes across the catalog. Location operations are not governed by the
+preference: a move over existing library content always verifies full (FR-042).
 
-**Independent test**: Flip the preference and verify move operations honor it and
-stamp the applied depth; run the backfill job against a catalog with unhashed files
-and verify convergence, throttling, and skip rules.
+**Independent test**: Flip the preference and verify import copies honor it while
+location operations ignore it and always verify full, stamping the applied depth
+either way; run the backfill job against a catalog with unhashed files and verify
+convergence, throttling, and skip rules.
 
 **Acceptance scenarios**:
 
-1. **Given** the default preference, **When** a cross-filesystem copy completes,
-   **Then** the destination is fully read back and compared against the streaming
-   CRC before the source is touched.
-2. **Given** the quick-check preference, **When** a copy completes, **Then**
-   verification uses the sampled head+tail proof plus size, and the operation
-   records "verified (quick)".
+1. **Given** any preference, **When** a location operation's cross-filesystem
+   copy completes, **Then** the destination is fully read back and compared
+   against the streaming CRC before the source is touched — the quick-check
+   preference does not apply to moves.
+2. **Given** the quick-check preference, **When** a download-client import copy
+   completes, **Then** verification uses the sampled head+tail proof plus size,
+   and the result records "verified (quick)".
 3. **Given** full verification cannot run for a file, **Then** verification falls
    back to the quick check (never below it) and the fallback is recorded.
 4. **Given** the backfill job runs, **Then** it hashes only files missing a persisted
@@ -461,11 +472,15 @@ and verify convergence, throttling, and skip rules.
 - **FR-041**: The same streaming pass MUST also compute the full-file BLAKE3; both
   values are persisted with the media file, separately from the sampled head+tail
   proof.
-- **FR-042**: Verification depth is a user preference: **full** (default) reads the
-  destination back in full (cache-bypassed where the platform allows) and compares
-  against the streaming CRC; **quick check** uses the sampled head+tail proof plus
-  size. The quick check is the universal floor: full mode falls back to it when a
-  full read-back cannot run, and verification never drops below it.
+- **FR-042**: Two verification depths exist: **full** reads the destination back
+  in full (cache-bypassed where the platform allows) and compares against the
+  streaming CRC; **quick check** uses the sampled head+tail proof plus size. The
+  depth is a user preference **for download-client import copies only** (full by
+  default). **Location operations always verify full**: existing library content
+  is never put at a user-selectable level of risk by a move (operator decision,
+  2026-09-01). The quick check remains the universal floor in both contexts: full
+  verification falls back to it when a full read-back cannot run, and
+  verification never drops below it.
 - **FR-043**: The applied depth MUST be stamped on the operation: the preview states
   the depth that will apply; Activity and per-file results record
   "verified (full)" or "verified (quick)" (including fallback cases).
@@ -699,6 +714,30 @@ and verify convergence, throttling, and skip rules.
   actionable error.
 
 ## Clarifications
+
+### Session 2026-09-01 (operator decisions)
+
+- Q: Should the verification-depth preference govern location operations as well
+  as import copies → A: **No — moves are forced full.** The preference stays
+  user-facing for download-client import copies; library/root moves and every
+  other location operation always verify full. Rationale: losing banked library
+  data on a move is far more damaging than losing a fresh import the user never
+  had. Supersedes the 2026-08-30 depth-preference answer for the location-move
+  scope; the quick floor and recorded fallback are unchanged.
+- Q: What happens to a recycle bin that lives inside a root whose path is being
+  replaced → A: **The bin's contents move with the operation** (always the
+  intended design): after recycling completes and before the configuration
+  flips, the in-root bin relocates to the destination path, and restores of
+  entries recycled before the flip re-anchor onto the new root path.
+- Q: Does US5 consolidation offer both execution modes (CHK003 found the spec
+  silent) → A: **Move with Scryer only**, implementation-decided and accepted:
+  a consolidation's destination is a configured root whose content already
+  belongs to other titles, so "files are already there" has no coherent
+  meaning there and is refused by name
+  (`root_consolidation_mode_not_supported`). A root change refuses it too —
+  its destination must be empty or absent, so files can never already be
+  there. Adoption of externally-moved content remains the title-scoped US3
+  workflow.
 
 ### Session 2026-08-30 (operator decisions)
 

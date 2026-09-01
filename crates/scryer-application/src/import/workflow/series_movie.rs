@@ -758,6 +758,14 @@ async fn dispatch_completed_import_target(
     started_at: chrono::DateTime<Utc>,
     target: &CompletedImportTarget,
 ) -> AppResult<ImportResult> {
+    // The target title is settled and nothing has been written yet: the last
+    // point an import can be refused cleanly while an operation owns the title
+    // (FR-084). The refusal reaches the operator as a failed import record.
+    app.ensure_location_ownership_allows_title(
+        &crate::location::ownership_guard::COMPLETED_IMPORT_ENTRY,
+        &target.title.id,
+    )
+    .await?;
     // Branch on facet: movies import the single largest file, series import all episode files.
     //
     // The automatic lane's operator-intent signal is the submission purpose; the

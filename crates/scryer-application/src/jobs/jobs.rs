@@ -1692,6 +1692,13 @@ impl AppUseCase {
                     Ok(JobExecutionOutcome::new(Some(summary_text), summary_json))
                 }
             }
+            JobKey::FullHashBackfill => {
+                let summary = self.run_full_hash_backfill_job().await?;
+                Ok(JobExecutionOutcome::new(
+                    Some(summary.summary_text()),
+                    serde_json::to_string(&summary).ok(),
+                ))
+            }
             JobKey::DiscoverySync => self.run_discovery_sync_job(run.trigger_source).await,
             JobKey::TitleImageCacheRefresh => {
                 let summary = self.run_title_image_cache_refresh().await?;
@@ -1726,6 +1733,9 @@ impl AppUseCase {
             JobKey::ApplicationUpgrade => Err(AppError::Validation(
                 "application upgrade jobs must be started from the application upgrade mutation"
                     .into(),
+            )),
+            JobKey::LocationOperation => Err(AppError::Validation(
+                "location operations must be started from the location operation mutation".into(),
             )),
         }
     }

@@ -53,6 +53,15 @@ export type GeneralSettingsUpdate = Partial<
 
 export type UiDateTimeFormat = "LOCALE" | "ISO24H";
 
+/**
+ * How thoroughly a copied file is proven before its source may be touched.
+ *
+ * The preference governs **download-client import copies only**. Library and
+ * root moves always verify in full, whatever this says, because they move the
+ * only copy of the content.
+ */
+export type VerificationDepth = "FULL" | "QUICK";
+
 export type UiTableColumnSetting = {
   facet: string;
   tableViewMode: string;

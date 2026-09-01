@@ -36,14 +36,15 @@ use crate::{
     ExternalImportMonitorStore, ExternalImportSetupSecretDraftStore, FileSystemStagedNzbStore,
     HousekeepingStore, ImportStore, InMemoryIndexerStatsTracker, IndexerConfigStore,
     IndexerErrorStore, IndexerProxyConfigStore, IndexerSearchLearningStore, LibraryProbeStore,
-    LibraryScanUnmatchedStore, MaintenanceEvaluationStore, MaintenanceRuleSetStore, MediaFileStore,
-    MediaRequestStore, MediaServerConnectionStore, MediaServerSignalStore, MetadataGatewayClient,
-    MigrationMode, NotificationStore, OAuthStore, PendingReleaseStore, PluginStore,
-    PostProcessingScriptStore, QualityProfileStore, ReleaseStore, RuleSetStore,
+    LibraryScanUnmatchedStore, LocationOperationStore, MaintenanceEvaluationStore,
+    MaintenanceRuleSetStore, MediaFileStore, MediaRequestStore, MediaServerConnectionStore,
+    MediaServerSignalStore, MetadataGatewayClient, MigrationMode, NotificationStore, OAuthStore,
+    PendingReleaseStore, PluginStore, PostProcessingScriptStore, QualityProfileStore, ReleaseStore,
+    RuleSetStore,
     SeedingProfileStore, SettingsStore, ShowStore, SmgEnrollmentConfig,
     SqliteLogicalBackupExporter, SqliteServices, SubtitleDownloadStore,
-    SubtitleProviderConfigStore, TitleImageStore, TitleStore, TotpStore, WantedStore,
-    WebauthnStore, WorkflowOperationStore,
+    SubtitleProviderConfigStore, TitleImageStore, TitleMergeStore, TitleStore, TotpStore,
+    WantedStore, WebauthnStore, WorkflowOperationStore,
 };
 use crate::{LibraryStore, UserStore};
 
@@ -645,6 +646,7 @@ enum DatastoreStores {
         plugin_store: Arc<PluginStore>,
         library_probe_store: Arc<LibraryProbeStore>,
         library_scan_unmatched_store: Arc<LibraryScanUnmatchedStore>,
+        location_operation_store: Arc<LocationOperationStore>,
         media_file_store: Arc<MediaFileStore>,
         wanted_store: Arc<WantedStore>,
         pending_release_store: Arc<PendingReleaseStore>,
@@ -691,6 +693,7 @@ enum DatastoreStores {
         plugin_store: Arc<PluginStore>,
         library_probe_store: Arc<LibraryProbeStore>,
         library_scan_unmatched_store: Arc<LibraryScanUnmatchedStore>,
+        location_operation_store: Arc<LocationOperationStore>,
         media_file_store: Arc<MediaFileStore>,
         wanted_store: Arc<WantedStore>,
         pending_release_store: Arc<PendingReleaseStore>,
@@ -771,6 +774,7 @@ impl DatastoreAssembly {
         let library_probe_store = Arc::new(LibraryProbeStore::new(datastore.clone()));
         let library_scan_unmatched_store =
             Arc::new(LibraryScanUnmatchedStore::new(datastore.clone()));
+        let location_operation_store = Arc::new(LocationOperationStore::new(datastore.clone()));
         let media_file_store = Arc::new(MediaFileStore::new(datastore.clone()));
         let wanted_store = Arc::new(WantedStore::new(datastore.clone()));
         let pending_release_store = Arc::new(PendingReleaseStore::new(
@@ -831,6 +835,7 @@ impl DatastoreAssembly {
             plugin_store,
             library_probe_store,
             library_scan_unmatched_store,
+            location_operation_store,
             media_file_store,
             wanted_store,
             pending_release_store,
@@ -905,6 +910,7 @@ impl DatastoreAssembly {
         let library_probe_store = Arc::new(LibraryProbeStore::new(datastore.clone()));
         let library_scan_unmatched_store =
             Arc::new(LibraryScanUnmatchedStore::new(datastore.clone()));
+        let location_operation_store = Arc::new(LocationOperationStore::new(datastore.clone()));
         let media_file_store = Arc::new(MediaFileStore::new(datastore.clone()));
         let wanted_store = Arc::new(WantedStore::new(datastore.clone()));
         let pending_release_store = Arc::new(PendingReleaseStore::new(
@@ -963,6 +969,7 @@ impl DatastoreAssembly {
             plugin_store,
             library_probe_store,
             library_scan_unmatched_store,
+            location_operation_store,
             media_file_store,
             wanted_store,
             pending_release_store,
@@ -1408,6 +1415,7 @@ impl DatastoreAssembly {
                 release_store,
                 library_probe_store,
                 library_scan_unmatched_store,
+            location_operation_store,
                 media_file_store,
                 wanted_store,
                 pending_release_store,
@@ -1483,6 +1491,13 @@ impl DatastoreAssembly {
                 .with_blocklist_repo(blocklist_store.clone())
                 .with_library_probe_signatures(library_probe_store.clone())
                 .with_library_scan_unmatched_items(library_scan_unmatched_store.clone())
+                .with_location_operation_repository(location_operation_store.clone())
+                // The US7 merge store needs only the datastore, so it is
+                // built here rather than threaded through both store
+                // variants: nothing else in the assembly holds it.
+                .with_title_merge_repository(Arc::new(TitleMergeStore::new(
+                    self.datastore(),
+                )))
                 .with_title_images(title_image_store.clone())
                 .with_image_proxy(image_proxy_store.clone())
                 .with_housekeeping(housekeeping_store.clone())
@@ -1526,6 +1541,7 @@ impl DatastoreAssembly {
                 plugin_store,
                 library_probe_store,
                 library_scan_unmatched_store,
+            location_operation_store,
                 media_file_store,
                 wanted_store,
                 pending_release_store,
@@ -1599,6 +1615,13 @@ impl DatastoreAssembly {
                 .with_blocklist_repo(blocklist_store.clone())
                 .with_library_probe_signatures(library_probe_store.clone())
                 .with_library_scan_unmatched_items(library_scan_unmatched_store.clone())
+                .with_location_operation_repository(location_operation_store.clone())
+                // The US7 merge store needs only the datastore, so it is
+                // built here rather than threaded through both store
+                // variants: nothing else in the assembly holds it.
+                .with_title_merge_repository(Arc::new(TitleMergeStore::new(
+                    self.datastore(),
+                )))
                 .with_title_images(title_image_store.clone())
                 .with_image_proxy(image_proxy_store.clone())
                 .with_housekeeping(housekeeping_store.clone())

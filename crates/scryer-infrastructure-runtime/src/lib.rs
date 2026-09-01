@@ -121,7 +121,9 @@ pub(crate) use scryer_infrastructure_library::media::images::processor::HttpTitl
 pub(crate) use scryer_infrastructure_library::media::{
     images::title_image_store::TitleImageStore,
     libraries::{
+        location_operation_store::LocationOperationStore,
         scan_unmatched_store::LibraryScanUnmatchedStore,
+        title_merge_store::TitleMergeStore,
         state_store::{
             BlocklistStore, HousekeepingStore, LibraryProbeStore, PendingReleaseStore,
             SubtitleDownloadStore, WantedStore,

@@ -1743,3 +1743,60 @@ engine = "sqlite"
 through_version = 198
 file = "postgres/baselines/0198_baseline.sql"
 engine = "postgres"
+
+[[migration]]
+version = 208
+description = "synthetic stable library root ids"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0208_synthetic_root_ids.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0208_synthetic_root_ids.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration.steps]]
+kind = "rust"
+hook_id = "migrate_synthetic_root_ids"
+engine = "all"
+scope = "all"
+
+[[migration]]
+version = 209
+description = "persist full file hashes on media files"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0209_media_file_full_hashes.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0209_media_file_full_hashes.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 210
+description = "location operation persistence"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0210_location_operations.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0210_location_operations.sql"
+engine = "postgres"
+scope = "all"

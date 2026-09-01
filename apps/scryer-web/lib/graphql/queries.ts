@@ -1068,6 +1068,37 @@ export const deleteTitlePreviewQuery = `query DeleteTitlePreview($titleId: ID!) 
   }
 }`;
 
+// Folder-match correction: describes what claiming a candidate folder would do.
+// Read-only — nothing is changed and no file is ever moved.
+export const changeTitleFolderPreviewQuery = `query ChangeTitleFolderPreview($input: ChangeTitleFolderPreviewInput!) {
+  changeTitleFolderPreview(input: $input) {
+    title {
+      id
+      name
+      folderPath
+    }
+    facet
+    libraryId
+    libraryName
+    currentRootId
+    currentRootPath
+    selectedFolderPath
+    selectedRootId
+    selectedRootPath
+    ownership
+    currentOwner {
+      id
+      name
+      folderPath
+    }
+    currentFolderTrackedMediaCount
+    selectedFolderTrackedMediaCount
+    filesWillMove
+    noOp
+    availableResolutions
+  }
+}`;
+
 export const deleteTitlesPreviewQuery = `query DeleteTitlesPreview($input: DeleteTitlesPreviewInput!) {
   deleteTitlesPreview(input: $input) {
     preview {${DELETE_PREVIEW_FIELDS}
@@ -3285,6 +3316,16 @@ export const recycleBinSettingsQuery = `query RecycleBinSettings {
   }
 }`;
 
+/**
+ * The verification depth applied to download-client import copies. Location
+ * operations force full depth and ignore this.
+ */
+export const verificationSettingsQuery = `query VerificationSettings {
+  verificationSettings {
+    depth
+  }
+}`;
+
 export const pluginAutoUpdateSettingsQuery = `query PluginAutoUpdateSettings {
   pluginAutoUpdateSettings {
     enabled
@@ -4130,6 +4171,487 @@ export const indexerDownloadClientMappingCatalogQuery = `query IndexerDownloadCl
       protocolFamilies
       supportsMapping
       compatibleClientIds
+    }
+  }
+}`;
+
+const LOCATION_PLAN_ITEM_FIELDS = `
+      kind
+      titleId
+      mediaFileId
+      sourcePath
+      destinationPath
+      sizeBytes
+      sameVolume
+      reasonCode
+      detail`;
+
+export const locationOperationPreviewQuery = `query LocationOperationPreview($input: LocationOperationPreviewInput!) {
+  locationOperationPreview(input: $input) {
+    planFingerprint
+    operationType
+    mode
+    sourceLibraryId
+    destinationLibraryId
+    sourceRootId
+    destinationRootId
+    selection
+    counts {
+      itemsTotal
+      titlesTotal
+      filesTotal
+      bytesTotal
+      byKind {
+        kind
+        count
+      }
+    }
+    sections {
+      kind
+      itemsTotal
+      bytesTotal
+      complete
+      items {${LOCATION_PLAN_ITEM_FIELDS}
+      }
+    }
+    classification {
+      titlesTotal
+      blocksStart
+      groups {
+        class
+        count
+        titles {
+          titleId
+          class
+          sourceLibraryId
+          sourceRootId
+          sourceFolderPath
+          destinationLibraryId
+          destinationRootId
+          reasonCode
+          reason
+          destinationIdentityMatch
+          mergeTargetTitleId
+          mergeTargetTitleName
+          sameNamedDestinationTitleId
+          sameNamedDestinationTitleName
+          ambiguousDestinationTitleIds
+          ambiguousDestinationCandidates {
+            titleId
+            titleName
+            sharedIdentities
+          }
+        }
+      }
+    }
+    freeSpace {
+      destinationRequiredBytes
+      destinationTotalRequiredBytes
+      destinationAvailableBytes
+      recycleRequiredBytes
+      recycleAvailableBytes
+      sameVolumeMove
+      recycleOnOtherVolume
+      recycleSharesDestinationVolume
+      recyclingAvailable
+      probed
+      sufficient
+    }
+    verification {
+      depth
+      files
+      bytes
+      applies
+    }
+    confirmation {
+      requirement
+      typedPhrase
+      typedPrompt
+    }
+    warnings
+    blocksStart
+    merges {
+      sourceTitleId
+      destinationTitleId
+      destinationTitleName
+      sourceLibraryId
+      destinationLibraryId
+      blocked
+      blockedRecords {
+        table
+        reason
+        sourceId
+        detail
+      }
+      destinationWins {
+        setting
+        destinationValue
+        sourceValue
+      }
+      dispositions {
+        table
+        disposition
+        sourceRowCount
+        note
+      }
+      roleChanges {
+        fileId
+        sourceEpisodeId
+        destinationEpisodeId
+        previousRole
+        newRole
+        reason
+        detail
+      }
+      reservedTagConflicts {
+        prefix
+        setting
+        destinationValue
+        sourceValue
+      }
+      freeFormTagsAdded
+      mediaRequestRepoints {
+        requestId
+        previousLibraryId
+        destinationLibraryId
+      }
+      dropped {
+        table
+        sourceRowCount
+        decision
+        reason
+      }
+      postMergeWork
+      notes
+    }
+  }
+}`;
+
+export const LOCATION_OPERATION_FIELDS = `
+    id
+    operationType
+    mode
+    state
+    initiatedByUserId
+    sourceLibraryId
+    destinationLibraryId
+    sourceRootId
+    destinationRootId
+    planFingerprint
+    verificationDepth
+    verificationFallbackCount
+    counters {
+      titlesTotal
+      titlesProcessed
+      titlesBlocked
+      filesTotal
+      filesProcessed
+      bytesTotal
+      bytesProcessed
+      merges
+      dedups
+      renames
+      noOps
+      unresolved
+    }
+    detail
+    jobRunId
+    workflowOperationId
+    cancelRequested
+    cancelRequestedAt
+    confirmedAt
+    startedAt
+    createdAt
+    updatedAt
+    completedAt
+    titleCheckpoints {
+      titleId
+      sequence
+      state
+      classification
+      sourceLibraryId
+      sourceRootId
+      sourceFolderPath
+      destinationLibraryId
+      destinationRootId
+      destinationFolderPath
+      mergedIntoTitleId
+      mergedIntoTitleName
+      filesTotal
+      filesVerified
+      bytesTotal
+      bytesVerified
+      detail
+      startedAt
+      updatedAt
+      completedAt
+    }`;
+
+export const locationOperationQuery = `query LocationOperation($id: ID!) {
+  locationOperation(id: $id) {${LOCATION_OPERATION_FIELDS}
+  }
+}`;
+
+/**
+ * Which files the operation renamed and deduplicated (FR-091). Read separately
+ * from the operation row because the per-file identities live in the stored
+ * plan, which the two-second progress poll has no reason to load.
+ */
+export const locationOperationAssetsQuery = `query LocationOperationAssets($id: ID!) {
+  locationOperationAssets(id: $id) {
+    operationId
+    renamesTotal
+    renamesDone
+    dedupsTotal
+    dedupsDone
+    titles {
+      titleId
+      titleName
+      sequence
+      settled
+      checkpointState
+      renames {
+        sourcePath
+        sourceName
+        destinationPath
+        destinationName
+        provenanceLabel
+        mediaFileId
+        sizeBytes
+        done
+      }
+      dedups {
+        sourcePath
+        sourceName
+        survivingPath
+        survivingName
+        done
+      }
+    }
+  }
+}`;
+
+/**
+ * The plan fields both root-scoped previews share (US4, US5). Narrower than the
+ * move dialog's selection: a root-scoped plan has no per-title classification
+ * entries to read, and the titles that need naming come from the accounting
+ * ledger instead (FR-023).
+ */
+const LOCATION_ROOT_PLAN_FIELDS = `
+    planFingerprint
+    operationType
+    mode
+    sourceLibraryId
+    destinationLibraryId
+    sourceRootId
+    destinationRootId
+    counts {
+      itemsTotal
+      titlesTotal
+      filesTotal
+      bytesTotal
+      byKind {
+        kind
+        count
+      }
+    }
+    sections {
+      kind
+      itemsTotal
+      bytesTotal
+      complete
+      items {${LOCATION_PLAN_ITEM_FIELDS}
+      }
+    }
+    classification {
+      titlesTotal
+      blocksStart
+      groups {
+        class
+        count
+      }
+    }
+    freeSpace {
+      destinationRequiredBytes
+      destinationTotalRequiredBytes
+      destinationAvailableBytes
+      recycleRequiredBytes
+      recycleAvailableBytes
+      sameVolumeMove
+      recycleOnOtherVolume
+      recycleSharesDestinationVolume
+      recyclingAvailable
+      probed
+      sufficient
+    }
+    verification {
+      depth
+      files
+      bytes
+      applies
+    }
+    confirmation {
+      requirement
+      typedPhrase
+      typedPrompt
+    }
+    warnings
+    blocksStart`;
+
+/** The every-title ledger, with no exclude affordance to offer (FR-023). */
+const LOCATION_TITLE_ACCOUNTING_FIELDS = `
+    assignedTotal
+    relocating
+    catalogOnly
+    blocked
+    accountsForEveryTitle
+    blocksStart
+    blockedTitles {
+      titleId
+      titleName
+      reason
+      reasonCode
+    }`;
+
+/** FR-027's three buckets plus the directory facts cleanup may act on. */
+const LOCATION_ROOT_CONTENT_FIELDS = `
+    managed {
+      class
+      total
+      bytesTotal
+      complete
+      entries {
+        path
+        sizeBytes
+        class
+        canonicalSidecar
+      }
+    }
+    companions {
+      class
+      total
+      bytesTotal
+      complete
+      entries {
+        path
+        sizeBytes
+        class
+        canonicalSidecar
+      }
+    }
+    unknown {
+      class
+      total
+      bytesTotal
+      complete
+      entries {
+        path
+        sizeBytes
+        class
+        canonicalSidecar
+      }
+    }
+    unknownBytes
+    blocksSourceRemoval
+    entryCount
+    prunableDirectories {
+      total
+      complete
+      paths
+    }
+    retainedDirectories {
+      total
+      complete
+      paths
+    }`;
+
+/** What happens to the old location afterwards (FR-028, FR-031, FR-087). */
+const LOCATION_ROOT_RETIREMENT_FIELDS = `
+    sourceRootPath
+    destinationRootPath
+    retireConfigurationAfterRecycling
+    recycleAllowlistPaths {
+      total
+      complete
+      paths
+    }
+    requiresVerificationBeforeSourceRemoval
+    emptyDirectoriesOnly
+    removableDirectories {
+      total
+      complete
+      paths
+    }
+    retainedDirectories {
+      total
+      complete
+      paths
+    }
+    permitsSourceRemoval
+    blockers {
+      code
+      detail
+    }`;
+
+/**
+ * US4: replacing one root's path with a new, unconfigured one. A destination
+ * that is already a configured root is refused with
+ * `root_change_destination_is_configured_root`, which routes the dialog to the
+ * consolidation branch (FR-020).
+ */
+export const locationRootChangePreviewQuery = `query LocationRootChangePreview($input: LocationRootChangePreviewInput!) {
+  locationRootChangePreview(input: $input) {
+    plan {${LOCATION_ROOT_PLAN_FIELDS}
+    }
+    accounting {${LOCATION_TITLE_ACCOUNTING_FIELDS}
+    }
+    retention {
+      rootId
+      keepsRootId
+      wasLibraryDefault
+      remainsLibraryDefault
+      retainedRole
+      retainedTitleAssignments
+    }
+    content {${LOCATION_ROOT_CONTENT_FIELDS}
+    }
+    retirement {${LOCATION_ROOT_RETIREMENT_FIELDS}
+    }
+  }
+}`;
+
+/**
+ * US5: folding one root into another root of the same library. A destination
+ * that is not a configured root is refused with
+ * `root_consolidation_destination_not_a_configured_root`, which routes the
+ * dialog back to the new-path branch (FR-020).
+ */
+export const locationRootConsolidationPreviewQuery = `query LocationRootConsolidationPreview($input: LocationRootConsolidationPreviewInput!) {
+  locationRootConsolidationPreview(input: $input) {
+    plan {${LOCATION_ROOT_PLAN_FIELDS}
+    }
+    accounting {${LOCATION_TITLE_ACCOUNTING_FIELDS}
+    }
+    classification {
+      movingIntoUnusedFolders
+      mergingWithDestinationTitles
+      folderNameCollisions
+      mediaCollisions
+      dedupEligibleFiles
+      companionCollisions
+      untrackedSourceEntries
+      catalogOnly
+      blocked
+    }
+    defaultTransfer {
+      sourceWasDefault
+      destinationWasDefault
+      destinationBecomesDefault
+      transfersTheDefault
+    }
+    content {${LOCATION_ROOT_CONTENT_FIELDS}
+    }
+    retirement {${LOCATION_ROOT_RETIREMENT_FIELDS}
     }
   }
 }`;

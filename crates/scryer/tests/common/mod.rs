@@ -54,6 +54,8 @@ use scryer_infrastructure_identity::{
 use scryer_infrastructure_library::media::{
     images::{image_proxy_store::ImageProxyStore, title_image_store::TitleImageStore},
     libraries::{
+        location_operation_store::LocationOperationStore,
+        title_merge_store::TitleMergeStore,
         scan_unmatched_store::LibraryScanUnmatchedStore,
         scanner::FileSystemLibraryScanner,
         state_store::{
@@ -918,6 +920,16 @@ impl TestContext {
         .with_blocklist_repo(Arc::new(blocklist_store))
         .with_library_probe_signatures(Arc::new(library_probe_store.clone()))
         .with_library_scan_unmatched_items(Arc::new(library_scan_unmatched_store.clone()))
+        // Location operations persist through the same store production wires,
+        // so a test exercising a move sees real rows rather than the
+        // "nothing is configured" null repository.
+        .with_location_operation_repository(Arc::new(LocationOperationStore::new(
+            datastore.clone(),
+        )))
+        // The merge engine's Group 0 read and Groups 1–5 transaction, over the
+        // same real schema, so a US7 preview sees the destination title the
+        // test seeded rather than the null repository's refusal.
+        .with_title_merge_repository(Arc::new(TitleMergeStore::new(datastore.clone())))
         .with_title_images(Arc::new(title_image_store))
         .with_image_proxy(Arc::new(image_proxy_store))
         .with_housekeeping(Arc::new(housekeeping_store))

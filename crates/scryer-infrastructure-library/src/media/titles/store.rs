@@ -188,6 +188,13 @@ impl TitleStore {
                 Box::pin(async move {
                     let mut title =
                         load_title_canonical_tx_or_not_found(tx, &existing_id, true).await?;
+                    refuse_direct_root_write_for_reused_title_tx(
+                        tx,
+                        &title,
+                        &options_patch,
+                        &requested_root_folder_id,
+                    )
+                    .await?;
                     apply_reused_title_options_patch(
                         &mut title,
                         &options_patch,
@@ -1069,6 +1076,13 @@ impl TitleRepository for TitleStore {
                     if let Some(mut existing) =
                         find_existing_title_for_create_tx(tx, &title).await?
                     {
+                        refuse_direct_root_write_for_reused_title_tx(
+                            tx,
+                            &existing,
+                            &options_patch,
+                            &title.root_folder_id,
+                        )
+                        .await?;
                         apply_reused_title_options_patch(
                             &mut existing,
                             &options_patch,
@@ -1704,6 +1718,75 @@ impl TitleRepository for TitleStore {
                     &[SqlArg::Text(folder_path), SqlArg::Text(id)],
                 )
                 .await?;
+                Ok(())
+            })
+        })
+        .await
+    }
+
+    async fn transfer_to_library(
+        &self,
+        id: &str,
+        library_id: &str,
+        root_folder_id: &str,
+        facet: Option<MediaFacet>,
+        drop_tag_prefixes: &[String],
+    ) -> AppResult<()> {
+        let id = id.to_string();
+        let library_id = library_id.trim().to_string();
+        let root_folder_id = root_folder_id.trim().to_string();
+        let drop_tag_prefixes = drop_tag_prefixes.to_vec();
+        if library_id.is_empty() || root_folder_id.is_empty() {
+            return Err(AppError::Validation(
+                "a transfer needs both a destination library and a destination root".to_string(),
+            ));
+        }
+        SqlRuntime::run_in_transaction(&self.datastore, "transfer_title_to_library", move |tx| {
+            let id = id.clone();
+            let library_id = library_id.clone();
+            let root_folder_id = root_folder_id.clone();
+            let facet = facet.clone();
+            let drop_tag_prefixes = drop_tag_prefixes.clone();
+            Box::pin(async move {
+                let library = SqlRuntime::fetch_optional(
+                    SqlExec::Tx(tx),
+                    "SELECT id FROM libraries WHERE id = {}",
+                    &[SqlArg::Text(library_id.clone())],
+                )
+                .await?;
+                if library.is_none() {
+                    return Err(AppError::Validation(format!(
+                        "library {library_id} does not exist"
+                    )));
+                }
+
+                // Facet compatibility is the classifier's rule (FR-017) and is
+                // settled before a plan can be confirmed; this write must not
+                // second-guess it. What it does write, when the caller asks for
+                // it, is the series↔anime conversion (FR-057) — in this same
+                // transaction, because a row whose facet and library facet
+                // disagree is rejected by every later root resolution.
+                let mut title = load_title_canonical_tx_or_not_found(tx, &id, true).await?;
+                title.library_id = library_id;
+                title.root_folder_id = root_folder_id;
+                if let Some(facet) = facet {
+                    title.facet = facet;
+                    // Values hydrated under the facet being left. The caller
+                    // supplies the list; the store only applies it.
+                    if !drop_tag_prefixes.is_empty() {
+                        title.tags.retain(|tag| {
+                            !drop_tag_prefixes
+                                .iter()
+                                .any(|prefix| tag.starts_with(prefix.as_str()))
+                        });
+                    }
+                }
+                // `persist_title_tx` rewrites the search and external-id
+                // projections from the row it is given, so
+                // `title_external_ids.library_id` *and* `.facet` follow the
+                // title in the same transaction rather than being left pointing
+                // at the library and facet it left (FR-055's match key).
+                persist_title_tx(tx, &title, HydrationStateWrite::Preserve).await?;
                 Ok(())
             })
         })
@@ -3375,6 +3458,55 @@ fn set_reused_title_option_tag(tags: &mut Vec<String>, prefix: &str, value: Opti
     if let Some(value) = value.filter(|value| !value.trim().is_empty()) {
         tags.push(format!("{prefix}{}", value.trim()));
     }
+}
+
+/// Whether the title still owns at least one live file on disk, using the same
+/// recycle-bin exclusion the media-file listing applies, so "tracked files"
+/// means the same thing here as it does everywhere else.
+async fn title_has_tracked_files_tx(tx: &mut SqlTx<'_>, title_id: &str) -> AppResult<bool> {
+    let dialect = match &*tx {
+        SqlTx::Sqlite(_) => TitleCatalogSqlDialect::Sqlite,
+        SqlTx::Postgres(_) => TitleCatalogSqlDialect::Postgres,
+    };
+    let sql = format!(
+        "SELECT mf.id
+           FROM media_files mf
+          WHERE mf.title_id = {{}}
+            AND {}
+          LIMIT 1",
+        title_catalog_live_media_file_predicate(dialect, "mf")
+    );
+    Ok(SqlRuntime::fetch_optional(
+        SqlExec::Tx(tx),
+        &sql,
+        &[SqlArg::Text(title_id.to_string())],
+    )
+    .await?
+    .is_some())
+}
+
+/// FR-077/SC-009 on the creation path's reuse branch. Creating a title may pick
+/// its root, but reusing one that already exists is not creating it: rewriting
+/// the root there would move the catalog entry while the files stay put, which
+/// is the direct write the move workflow replaces. Only a real change on a
+/// title with tracked files is refused, so re-adding a title on the root it
+/// already sits on, and reuse of a fileless title, both stay on the direct path.
+async fn refuse_direct_root_write_for_reused_title_tx(
+    tx: &mut SqlTx<'_>,
+    existing: &Title,
+    patch: &TitleOptionsPatch,
+    requested_root_folder_id: &str,
+) -> AppResult<()> {
+    if patch.root_folder_id.is_none() || requested_root_folder_id == existing.root_folder_id {
+        return Ok(());
+    }
+    if !title_has_tracked_files_tx(tx, &existing.id).await? {
+        return Ok(());
+    }
+    Err(AppError::direct_root_write_retired(
+        &existing.name,
+        &existing.id,
+    ))
 }
 
 fn apply_reused_title_options_patch(

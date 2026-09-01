@@ -758,6 +758,25 @@ type ApplicationUpgradeStatusPayload {
 }
 
 """
+Request applying a folder-match correction.
+"""
+input ApplyTitleFolderChangeInput {
+	"""
+	Title whose folder match changes.
+	"""
+	titleId: ID!
+	"""
+	Chosen folder, which must be inside one of the title's library roots.
+	"""
+	folderPath: String!
+	"""
+	How to settle ownership. Defaults to ASSIGN, which is refused when
+	another title already owns the folder.
+	"""
+	resolution: FolderMatchResolutionValue
+}
+
+"""
 Approval choices for a media request.
 """
 input ApproveMediaRequestInput {
@@ -1238,6 +1257,20 @@ type CancelLibraryScanPayload {
 }
 
 """
+Result of requesting cancellation; the runner stops at the next title checkpoint.
+"""
+type CancelLocationOperationPayload {
+	"""
+	Operation the cancel was requested for.
+	"""
+	id: ID!
+	"""
+	Whether the request was recorded; false when the operation already finished.
+	"""
+	cancelRequested: Boolean!
+}
+
+"""
 Canonical metadata tag with provenance and content-safety flags.
 """
 type CanonicalMediaTagPayload {
@@ -1419,6 +1452,129 @@ enum CatalogRefreshStateValue {
 	Catalog is usable with degraded availability.
 	"""
 	DEGRADED
+}
+
+"""
+Result of applying a folder-match correction.
+"""
+type ChangeTitleFolderPayload {
+	"""
+	What the correction actually did.
+	"""
+	outcome: FolderMatchOutcomeValue!
+	"""
+	The edited title after the change.
+	"""
+	title: FolderMatchTitleRefPayload!
+	"""
+	Folder the edited title owned before, or null when it owned none.
+	"""
+	previousFolderPath: String
+	"""
+	Media associations detached because a title gave up a folder.
+	"""
+	detachedMediaFileCount: Int!
+	"""
+	Rescan of the edited title's new folder, or null for a no-op.
+	"""
+	scan: LibraryScanSummaryPayload
+	"""
+	The other title after a swap, with the folder it received.
+	"""
+	swappedTitle: FolderMatchTitleRefPayload
+	"""
+	Rescan of the swapped title's new folder.
+	"""
+	swappedTitleScan: LibraryScanSummaryPayload
+	"""
+	The title left unmatched by a takeover, or null when none was displaced.
+	"""
+	displacedTitle: DisplacedTitleRepairPayload
+}
+
+"""
+Request describing a proposed folder-match correction; changes nothing.
+"""
+input ChangeTitleFolderPreviewInput {
+	"""
+	Title whose folder match would change.
+	"""
+	titleId: ID!
+	"""
+	Candidate folder, which must be inside one of the title's library roots.
+	"""
+	folderPath: String!
+}
+
+"""
+Read-only description of a proposed folder-match correction.
+"""
+type ChangeTitleFolderPreviewPayload {
+	"""
+	The title being edited.
+	"""
+	title: FolderMatchTitleRefPayload!
+	"""
+	Media facet of the title being edited.
+	"""
+	facet: MediaFacetValue!
+	"""
+	Library that owns the title and every candidate folder.
+	"""
+	libraryId: ID!
+	"""
+	Library display name.
+	"""
+	libraryName: String!
+	"""
+	Root containing the title's current folder, or null when it owns none.
+	"""
+	currentRootId: ID
+	"""
+	Path of the root containing the title's current folder.
+	"""
+	currentRootPath: String
+	"""
+	Candidate folder, normalized to its stored form.
+	"""
+	selectedFolderPath: String!
+	"""
+	Root containing the candidate folder; always a root of the title's library.
+	"""
+	selectedRootId: ID!
+	"""
+	Path of the root containing the candidate folder.
+	"""
+	selectedRootPath: String!
+	"""
+	How the candidate folder relates to the title being edited.
+	"""
+	ownership: FolderMatchOwnershipValue!
+	"""
+	The other title holding the candidate folder, or null when unowned.
+	"""
+	currentOwner: FolderMatchTitleRefPayload
+	"""
+	Tracked media rows the title currently has inside its existing folder.
+	"""
+	currentFolderTrackedMediaCount: Int!
+	"""
+	Tracked media rows inside the candidate folder, counted across the title
+	being edited and the candidate folder's owner.
+	"""
+	selectedFolderTrackedMediaCount: Int!
+	"""
+	Always false: correcting a folder match never moves file content.
+	"""
+	filesWillMove: Boolean!
+	"""
+	Whether the title already owns the candidate folder, making this a no-op.
+	"""
+	noOp: Boolean!
+	"""
+	Resolutions this exact selection admits.
+	"""
+	availableResolutions: [FolderMatchResolutionValue!]!
 }
 
 """
@@ -3806,6 +3962,28 @@ type DismissPendingReleasePayload {
 	Pending release ID.
 	"""
 	id: ID!
+}
+
+"""
+A title left without a folder by a takeover, and how it surfaces for repair.
+"""
+type DisplacedTitleRepairPayload {
+	"""
+	Displaced title identity.
+	"""
+	id: ID!
+	"""
+	Displaced title display name.
+	"""
+	name: String!
+	"""
+	Folder the displaced title no longer owns.
+	"""
+	previousFolderPath: String!
+	"""
+	Reason recorded on its unmatched-discovery item.
+	"""
+	repairReasonCode: String!
 }
 
 """
@@ -6347,6 +6525,83 @@ type FloatConfigValuePayload {
 }
 
 """
+What a folder-match correction actually did.
+"""
+enum FolderMatchOutcomeValue {
+	"""
+	The title already owned the folder; nothing was submitted.
+	"""
+	ALREADY_OWNED
+	"""
+	An unowned folder became the title's folder.
+	"""
+	ASSIGNED
+	"""
+	Two titles traded folders.
+	"""
+	SWAPPED
+	"""
+	The folder changed hands and the former owner is now unmatched.
+	"""
+	TAKEN_OVER
+}
+
+"""
+How a candidate folder relates to the title being edited.
+"""
+enum FolderMatchOwnershipValue {
+	"""
+	No title in the library claims the folder.
+	"""
+	UNOWNED
+	"""
+	The title being edited already owns it; selecting it is a no-op.
+	"""
+	OWNED_BY_THIS_TITLE
+	"""
+	Another title owns it; it is never taken silently.
+	"""
+	OWNED_BY_ANOTHER_TITLE
+}
+
+"""
+How the user chose to settle a candidate folder's ownership.
+"""
+enum FolderMatchResolutionValue {
+	"""
+	Claim an unowned folder. The default, and rejected against an owned
+	folder so a conflict never resolves itself.
+	"""
+	ASSIGN
+	"""
+	Trade folders with the current owner.
+	"""
+	SWAP
+	"""
+	Take the folder; the former owner becomes unmatched and needs repair.
+	"""
+	TAKE_OVER
+}
+
+"""
+A title taking part in a folder-match correction.
+"""
+type FolderMatchTitleRefPayload {
+	"""
+	Title identity.
+	"""
+	id: ID!
+	"""
+	Title display name.
+	"""
+	name: String!
+	"""
+	Folder this title owns, or null when it owns none.
+	"""
+	folderPath: String
+}
+
+"""
 Result of requesting an immediate grab for a pending release.
 """
 type ForceGrabPendingReleasePayload {
@@ -7798,6 +8053,10 @@ enum JobKeyValue {
 	"""
 	STAGED_NZB_PRUNE
 	"""
+	Background full-file content-hash backfill.
+	"""
+	FULL_HASH_BACKFILL
+	"""
 	Discovery synchronization.
 	"""
 	DISCOVERY_SYNC
@@ -7845,6 +8104,10 @@ enum JobKeyValue {
 	Application upgrade.
 	"""
 	APPLICATION_UPGRADE
+	"""
+	Location operation: a root move, transfer, or other placement change.
+	"""
+	LOCATION_OPERATION
 }
 
 """
@@ -8669,6 +8932,2029 @@ type LinkedAccountPayload {
 	UTC time when the link was last changed.
 	"""
 	updatedAt: DateTime!
+}
+
+"""
+One destination title an ambiguous identity points at, with what it shares.
+
+The ids alone cannot be chosen between; the name is what the user reads and
+the shared identities are why the candidate is on the list at all (FR-055).
+"""
+type LocationAmbiguousDestinationCandidatePayload {
+	"""
+	The candidate destination title.
+	"""
+	titleId: ID!
+	"""
+	Its name in the destination library.
+	"""
+	titleName: String!
+	"""
+	The identities both titles carry, as `source:external_id`, sorted.
+	"""
+	sharedIdentities: [String!]!
+}
+
+"""
+One title that cannot enter a root-scoped operation, named rather than
+silently dropped (FR-023).
+"""
+type LocationBlockedTitlePayload {
+	"""
+	The title that is blocked.
+	"""
+	titleId: ID!
+	"""
+	Its name, so the ledger reads as titles rather than as ids.
+	"""
+	titleName: String!
+	"""
+	The sentence explaining what has to be repaired.
+	"""
+	reason: String!
+	"""
+	Machine-readable reason, for grouping and translation.
+	"""
+	reasonCode: String
+}
+
+"""
+One classification group: a class, its count, and the titles in it.
+"""
+type LocationClassificationGroupPayload {
+	"""
+	Class shared by every title in this group.
+	"""
+	class: TitleLocationClassValue!
+	"""
+	How many selected titles fall into this class.
+	"""
+	count: Long!
+	"""
+	The titles in this class, in selection order.
+	"""
+	titles: [LocationClassifiedTitlePayload!]!
+}
+
+"""
+One selected title and the class it was previewed as.
+"""
+type LocationClassifiedTitlePayload {
+	"""
+	Selected title identity.
+	"""
+	titleId: ID!
+	"""
+	Class this title falls into for the requested destination.
+	"""
+	class: TitleLocationClassValue!
+	"""
+	Library this title lives in today.
+	"""
+	sourceLibraryId: ID!
+	"""
+	Root this title lives on today.
+	"""
+	sourceRootId: ID!
+	"""
+	Folder this title owns today, or null when it owns none.
+	"""
+	sourceFolderPath: String
+	"""
+	Library this title would end up in.
+	"""
+	destinationLibraryId: ID!
+	"""
+	Root this title would end up on.
+	"""
+	destinationRootId: ID!
+	"""
+	Machine-readable reason for the class, for grouping and translation.
+	"""
+	reasonCode: String
+	"""
+	Human-readable explanation, always present for blocking classes.
+	"""
+	reason: String
+	"""
+	Whether this title stops the operation from starting.
+	"""
+	blocksStart: Boolean!
+	"""
+	What destination-title detection concluded, or null when the title stays
+	in its own library and no detection was run.
+	"""
+	destinationIdentityMatch: LocationDestinationIdentityMatchValue
+	"""
+	The existing destination title this title merges into, or null for a
+	transfer into a title the destination library does not have yet.
+	"""
+	mergeTargetTitleId: ID
+	"""
+	Name of that destination title, so the preview can say "merges into “X”"
+	rather than printing an id. Null whenever `mergeTargetTitleId` is.
+	"""
+	mergeTargetTitleName: String
+	"""
+	A destination title carrying the same name but no shared identity, or
+	null when there is none. It is never merged into automatically.
+	"""
+	sameNamedDestinationTitleId: ID
+	"""
+	Name of that same-named destination title, when there is one.
+	"""
+	sameNamedDestinationTitleName: String
+	"""
+	The destination titles the user is choosing between, for an ambiguous
+	identity. Empty for every other outcome.
+	"""
+	ambiguousDestinationTitleIds: [ID!]!
+	"""
+	The same titles with the names and shared identities the user needs to
+	tell them apart. Empty for every outcome that is not ambiguous.
+	"""
+	ambiguousDestinationCandidates: [LocationAmbiguousDestinationCandidatePayload!]!
+	"""
+	The series↔anime facet conversion this destination performs, or null when
+	the destination library's facet is the title's own (FR-057).
+	"""
+	facetConversion: LocationFacetConversionPayload
+}
+
+"""
+How much consent an operation demands before it may start.
+"""
+enum LocationConfirmationRequirementValue {
+	"""
+	Confirming the fingerprinted plan is enough.
+	"""
+	SIMPLE
+	"""
+	A root-wide operation that also requires the typed phrase.
+	"""
+	TYPED
+}
+
+"""
+FR-024's seven groups, counted off the same decisions that built the plan
+items. This is the consolidation preview (US5.1).
+"""
+type LocationConsolidationClassificationPayload {
+	"""
+	Titles moving into destination folders nothing occupies.
+	"""
+	movingIntoUnusedFolders: Long!
+	"""
+	Titles merging with a destination title they share an identity with.
+	"""
+	mergingWithDestinationTitles: Long!
+	"""
+	Folder names already taken at the destination, so the incoming folder
+	gets a unique previewed name.
+	"""
+	folderNameCollisions: Long!
+	"""
+	Media files whose destination name is already taken.
+	"""
+	mediaCollisions: Long!
+	"""
+	Source files proven identical to destination content, so they are
+	recycled rather than copied.
+	"""
+	dedupEligibleFiles: Long!
+	"""
+	Companion assets whose destination name is already taken.
+	"""
+	companionCollisions: Long!
+	"""
+	Entries beneath the source root that no title accounts for.
+	"""
+	untrackedSourceEntries: Long!
+	"""
+	Titles with no tracked files: catalog reassignment only (FR-076).
+	"""
+	catalogOnly: Long!
+	"""
+	Titles that cannot enter the operation.
+	"""
+	blocked: Long!
+}
+
+"""
+Which root new content lands on after a consolidation (FR-022).
+"""
+type LocationDefaultRootTransferPayload {
+	"""
+	Whether the root being folded away was the library default.
+	"""
+	sourceWasDefault: Boolean!
+	"""
+	Whether the destination root was already the library default.
+	"""
+	destinationWasDefault: Boolean!
+	"""
+	Whether the destination root is the library default afterwards.
+	"""
+	destinationBecomesDefault: Boolean!
+	"""
+	Whether the default actually moves. Say so out loud when it does.
+	"""
+	transfersTheDefault: Boolean!
+}
+
+"""
+What destination-title detection concluded for a title crossing into another
+library. Matching is by stable metadata identity, never by title text.
+"""
+enum LocationDestinationIdentityMatchValue {
+	"""
+	Exactly one destination title shares the identity, so this is a merge.
+	"""
+	UNIQUE
+	"""
+	No destination title shares the identity, so this is a plain transfer.
+	"""
+	NONE
+	"""
+	Several destination titles share an identity and the user must choose.
+	"""
+	AMBIGUOUS
+	"""
+	A destination title has the same name but shares no identity. It is never
+	merged into automatically.
+	"""
+	SAME_NAME_NO_IDENTITY
+}
+
+"""
+Destination for a location operation. Both fields are optional: naming only a
+root keeps each title in its own library, and naming only a library lets that
+library's root selection decide.
+"""
+input LocationDestinationInput {
+	"""
+	Destination library, or null to keep each title in its own library.
+	"""
+	libraryId: ID
+	"""
+	Destination root, or null to keep each title on its own root.
+	"""
+	rootId: ID
+}
+
+"""
+The filesystem side a client may ask for when previewing or starting a
+location operation (FR-011, FR-050).
+
+Deliberately narrower than the reported `LocationExecutionModeValue`:
+`CATALOG_ONLY` is derived by the server for a selection with no files on
+disk (FR-076), so it is reported and never requested. Omitting the field
+asks for `MOVE_WITH_SCRYER`.
+"""
+enum LocationExecutionModeInput {
+	"""
+	Scryer performs and verifies the filesystem operation.
+	"""
+	MOVE_WITH_SCRYER
+	"""
+	The user already moved the files; Scryer accounts for them at the
+	destination and adopts them where they lie.
+	"""
+	FILES_ALREADY_THERE
+}
+
+"""
+How the filesystem side of an operation is performed.
+"""
+enum LocationExecutionModeValue {
+	"""
+	Scryer performs and verifies the filesystem operation.
+	"""
+	MOVE_WITH_SCRYER
+	"""
+	The user already moved the files; Scryer verifies and adopts them.
+	"""
+	FILES_ALREADY_THERE
+	"""
+	No filesystem work at all: fileless titles and folder-match correction.
+	"""
+	CATALOG_ONLY
+}
+
+"""
+The series↔anime conversion a cross-library transfer performs, with every
+setting it affects (FR-057) and the folder-only scope of the rename
+(FR-058).
+"""
+type LocationFacetConversionPayload {
+	"""
+	The facet the title carries today.
+	"""
+	fromFacet: MediaFacetValue!
+	"""
+	The facet it carries after the transfer.
+	"""
+	toFacet: MediaFacetValue!
+	"""
+	Every affected setting, in a stable order. Empty when the conversion
+	touches nothing the title has set.
+	"""
+	settings: [LocationFacetConvertedSettingPayload!]!
+	"""
+	FR-058, as the sentence the preview shows: the conversion recalculates
+	the folder name only.
+	"""
+	filesKeepTheirNames: String!
+}
+
+"""
+One title-level setting the facet conversion affects, named individually so
+the client lists them rather than showing a blanket sentence (FR-057).
+"""
+type LocationFacetConvertedSettingPayload {
+	"""
+	Stable machine key for the setting, for grouping and translation.
+	"""
+	setting: String!
+	"""
+	Human-readable name of the setting.
+	"""
+	label: String!
+	"""
+	The value the title carries today, or null when it carries none
+	explicitly and the conversion changes which default applies.
+	"""
+	value: String
+	"""
+	Whether the setting becomes invalid, resets, or changes meaning.
+	"""
+	disposition: LocationFacetSettingDispositionValue!
+	"""
+	The sentence explaining the consequence.
+	"""
+	detail: String!
+}
+
+"""
+What a facet conversion does to one title-level setting (FR-057).
+"""
+enum LocationFacetSettingDispositionValue {
+	"""
+	The value stays on the title, but nothing reads it under the new facet.
+	"""
+	BECOMES_INVALID
+	"""
+	The value does not survive the conversion.
+	"""
+	RESETS
+	"""
+	The value is still read, and decides something different than it did.
+	"""
+	CHANGES_MEANING
+}
+
+"""
+Estimated free space the operation needs, including recycle-copy cost.
+"""
+type LocationFreeSpaceEstimatePayload {
+	"""
+	Bytes that must be free on the destination volume.
+	"""
+	destinationRequiredBytes: Long!
+	"""
+	Destination requirement including the recycle cost when the bin shares that volume.
+	"""
+	destinationTotalRequiredBytes: Long!
+	"""
+	Bytes free on the destination volume, or null when it was not probed.
+	"""
+	destinationAvailableBytes: Long
+	"""
+	Bytes that must be free wherever the recycle bin lives.
+	"""
+	recycleRequiredBytes: Long!
+	"""
+	Bytes free on the recycle volume, or null when it was not probed.
+	"""
+	recycleAvailableBytes: Long
+	"""
+	Whether the move is a same-volume rename that needs no destination space.
+	"""
+	sameVolumeMove: Boolean!
+	"""
+	Whether recycling copies bytes because the bin is on another volume.
+	"""
+	recycleOnOtherVolume: Boolean!
+	"""
+	Whether the recycle bin shares the destination volume.
+	"""
+	recycleSharesDestinationVolume: Boolean!
+	"""
+	Whether recycling is configured and available for this operation.
+	"""
+	recyclingAvailable: Boolean!
+	"""
+	Whether the volumes behind this estimate were actually probed.
+	"""
+	probed: Boolean!
+	"""
+	Whether the space suffices, or null when it could not be determined.
+	"""
+	sufficient: Boolean
+}
+
+"""
+Why one record stops a merge from running (FR-066).
+"""
+enum LocationMergeBlockReasonValue {
+	"""
+	No destination episode carries the source episode's identity.
+	"""
+	UNMAPPED_EPISODE
+	"""
+	More than one destination episode carries it.
+	"""
+	AMBIGUOUS_DESTINATION_EPISODE
+	"""
+	Two source episodes carry the same identity.
+	"""
+	AMBIGUOUS_SOURCE_EPISODE
+	"""
+	The source episode has no season/episode pair and no absolute number.
+	"""
+	UNIDENTIFIABLE_EPISODE
+	"""
+	A record references a source episode that is not in the catalog.
+	"""
+	UNKNOWN_EPISODE_REFERENCE
+	"""
+	No destination collection carries the source collection's identity.
+	"""
+	UNMAPPED_COLLECTION
+	"""
+	More than one destination collection carries it.
+	"""
+	AMBIGUOUS_DESTINATION_COLLECTION
+	"""
+	Two source collections carry the same identity.
+	"""
+	AMBIGUOUS_SOURCE_COLLECTION
+	"""
+	No destination series-movie link carries the source link's identity.
+	"""
+	UNMAPPED_SERIES_MOVIE_LINK
+	"""
+	More than one destination link carries it.
+	"""
+	AMBIGUOUS_DESTINATION_SERIES_MOVIE_LINK
+	"""
+	Two source links carry the same identity.
+	"""
+	AMBIGUOUS_SOURCE_SERIES_MOVIE_LINK
+	"""
+	Another resumable location operation still holds the source title.
+	"""
+	RESUMABLE_OPERATION_HOLDS_SOURCE
+	"""
+	An unconsumed manual-import selection is an active import on the source.
+	"""
+	ACTIVE_MANUAL_IMPORT_SELECTION
+}
+
+"""
+One record the merge engine could not map, so the merge cannot run (FR-066).
+"""
+type LocationMergeBlockedRecordPayload {
+	"""
+	The table whose source rows cannot be carried.
+	"""
+	table: String!
+	"""
+	Why the record blocks the merge.
+	"""
+	reason: LocationMergeBlockReasonValue!
+	"""
+	The source identity that could not be mapped.
+	"""
+	sourceId: ID!
+	"""
+	The sentence explaining what would otherwise be guessed at.
+	"""
+	detail: String!
+}
+
+"""
+One setting the destination title keeps and the merging title loses (FR-063).
+"""
+type LocationMergeDestinationWinsPayload {
+	"""
+	The setting, in the words the rule states it.
+	"""
+	setting: String!
+	"""
+	The value the destination keeps, when it is a value worth naming.
+	"""
+	destinationValue: String
+	"""
+	The value the merging title loses, when it is a value worth naming.
+	"""
+	sourceValue: String
+}
+
+"""
+How one table's rows are treated when a title merges into another (FR-064).
+"""
+enum LocationMergeDispositionValue {
+	"""
+	Source rows are re-pointed and kept beside the destination's own.
+	"""
+	UNION
+	"""
+	Source rows are rewritten through the source-to-destination identity map.
+	"""
+	MAP
+	"""
+	The destination's value stands and the source's is discarded.
+	"""
+	DESTINATION_WINS
+	"""
+	Source rows are intentionally not carried over.
+	"""
+	DROP
+}
+
+"""
+One category of data the merge deliberately does not carry (FR-071).
+"""
+type LocationMergeDroppedCategoryPayload {
+	"""
+	The table the rows live in.
+	"""
+	table: String!
+	"""
+	How many source rows are dropped.
+	"""
+	sourceRowCount: Long!
+	"""
+	The adjudication that decided it.
+	"""
+	decision: String!
+	"""
+	Why dropping is the right answer.
+	"""
+	reason: String!
+}
+
+"""
+One media request whose library follows the content into the destination.
+"""
+type LocationMergeMediaRequestRepointPayload {
+	"""
+	The request being repointed.
+	"""
+	requestId: ID!
+	"""
+	The library it belonged to.
+	"""
+	previousLibraryId: ID!
+	"""
+	The library it belongs to after the merge.
+	"""
+	destinationLibraryId: ID!
+}
+
+"""
+The role a media file holds for one logical slot after a merge (FR-068).
+"""
+enum LocationMergeMediaRoleValue {
+	"""
+	The file that represents the slot.
+	"""
+	PRIMARY
+	"""
+	A further file kept alongside the primary.
+	"""
+	ADDITIONAL
+}
+
+"""
+Derived-cache work a completed merge leaves behind for Scryer to redo.
+"""
+enum LocationMergePostMergeWorkValue {
+	"""
+	Rebuild the merged title's search projection.
+	"""
+	REINDEX_TITLE_SEARCH_TERMS
+	"""
+	Refresh the merged title's recommendations.
+	"""
+	REGENERATE_RECOMMENDATIONS
+	"""
+	Recompute title and library statistics.
+	"""
+	RECOMPUTE_STATISTICS
+	"""
+	Drop the retired title's indexer coverage rows.
+	"""
+	DROP_SOURCE_INDEXER_COVERAGE
+}
+
+"""
+What merging one title into an existing destination title would do (FR-071).
+
+The same decision the merge itself is built from, so the preview can never
+describe a merge the engine would not perform.
+"""
+type LocationMergePreviewPayload {
+	"""
+	The title that merges away.
+	"""
+	sourceTitleId: ID!
+	"""
+	The title that survives.
+	"""
+	destinationTitleId: ID!
+	"""
+	Name of the surviving title, read with the rest of its catalog row when
+	the merge was planned. Null only when that row could not name it.
+	"""
+	destinationTitleName: String
+	"""
+	Library the merging title comes from.
+	"""
+	sourceLibraryId: ID
+	"""
+	Library the surviving title lives in.
+	"""
+	destinationLibraryId: ID
+	"""
+	Whether unmappable records stop this merge from running.
+	"""
+	blocked: Boolean!
+	"""
+	The records that block it, one per line the user can act on.
+	"""
+	blockedRecords: [LocationMergeBlockedRecordPayload!]!
+	"""
+	What the destination keeps.
+	"""
+	destinationWins: [LocationMergeDestinationWinsPayload!]!
+	"""
+	What carries forward, per table, with counts.
+	"""
+	dispositions: [LocationMergeTableDispositionPayload!]!
+	"""
+	Every media-file role the merge changes.
+	"""
+	roleChanges: [LocationMergeRoleChangePayload!]!
+	"""
+	Reserved settings whose values disagree.
+	"""
+	reservedTagConflicts: [LocationMergeReservedTagConflictPayload!]!
+	"""
+	Free-form tags the merging title contributes.
+	"""
+	freeFormTagsAdded: [String!]!
+	"""
+	Requests whose library follows the content.
+	"""
+	mediaRequestRepoints: [LocationMergeMediaRequestRepointPayload!]!
+	"""
+	What is not carried over, and why.
+	"""
+	dropped: [LocationMergeDroppedCategoryPayload!]!
+	"""
+	Derived caches the merge leaves for Scryer to rebuild afterwards.
+	"""
+	postMergeWork: [LocationMergePostMergeWorkValue!]!
+	"""
+	Anything else the operator should read before confirming, including the
+	notes explaining where this schema differs from the merge inventory.
+	"""
+	notes: [String!]!
+}
+
+"""
+One reserved setting whose two sides disagreed; the destination's wins.
+"""
+type LocationMergeReservedTagConflictPayload {
+	"""
+	The reserved tag prefix, for grouping and translation.
+	"""
+	prefix: String!
+	"""
+	Human-readable name of the setting, when the prefix is a known one.
+	"""
+	setting: String
+	"""
+	The value the destination keeps.
+	"""
+	destinationValue: String
+	"""
+	The value the merging title loses.
+	"""
+	sourceValue: String
+}
+
+"""
+One media-file role the merge resolves, never silently (FR-068 to FR-070).
+"""
+type LocationMergeRoleChangePayload {
+	"""
+	The media file whose role changes.
+	"""
+	fileId: ID!
+	"""
+	The source episode the file was attached to.
+	"""
+	sourceEpisodeId: ID!
+	"""
+	The destination episode it is attached to after the merge.
+	"""
+	destinationEpisodeId: ID!
+	"""
+	The role it held.
+	"""
+	previousRole: LocationMergeMediaRoleValue!
+	"""
+	The role it holds after the merge.
+	"""
+	newRole: LocationMergeMediaRoleValue!
+	"""
+	Why the role changed.
+	"""
+	reason: LocationMergeRoleChangeReasonValue!
+	"""
+	The sentence the preview shows for this change.
+	"""
+	detail: String!
+}
+
+"""
+Why a media file's role changed in a merge (FR-070).
+"""
+enum LocationMergeRoleChangeReasonValue {
+	"""
+	The destination already had a primary for the slot, and a move never
+	demotes one.
+	"""
+	DESTINATION_PRIMARY_RETAINED
+	"""
+	Another source file already claimed primary for that destination episode.
+	"""
+	SOURCE_PRIMARY_ALREADY_CLAIMED
+	"""
+	Two source episodes collapsed onto one destination episode.
+	"""
+	COLLAPSED_SOURCE_EPISODES
+}
+
+"""
+One table's contribution to the merge, with the rows it applies to (FR-064).
+"""
+type LocationMergeTableDispositionPayload {
+	"""
+	The table.
+	"""
+	table: String!
+	"""
+	How its rows are treated.
+	"""
+	disposition: LocationMergeDispositionValue!
+	"""
+	Source rows the disposition applies to.
+	"""
+	sourceRowCount: Long!
+	"""
+	Why, in one line.
+	"""
+	note: String!
+}
+
+"""
+Which files an operation renames and deduplicates, split per title and by
+whether the work has happened yet.
+
+Read from the plan the user confirmed, so a canceled or failed title still
+reports what it would have done rather than dropping the files from view.
+"""
+type LocationOperationAssetListingPayload {
+	"""
+	Operation this listing describes.
+	"""
+	operationId: ID!
+	"""
+	Titles carrying at least one rename or deduplication, in confirmed-plan
+	order. A title with neither is not listed.
+	"""
+	titles: [LocationOperationTitleAssetsPayload!]!
+	"""
+	Renames the confirmed plan carries across every title.
+	"""
+	renamesTotal: Long!
+	"""
+	How many of those have happened.
+	"""
+	renamesDone: Long!
+	"""
+	Deduplications the confirmed plan carries across every title.
+	"""
+	dedupsTotal: Long!
+	"""
+	How many of those have happened.
+	"""
+	dedupsDone: Long!
+}
+
+"""
+Aggregate counters for a running or finished operation.
+"""
+type LocationOperationCountersPayload {
+	"""
+	Titles the confirmed plan covers.
+	"""
+	titlesTotal: Long!
+	"""
+	Titles the operation has finished processing.
+	"""
+	titlesProcessed: Long!
+	"""
+	Titles that could not enter the operation.
+	"""
+	titlesBlocked: Long!
+	"""
+	Files the confirmed plan covers.
+	"""
+	filesTotal: Long!
+	"""
+	Files the operation has finished processing.
+	"""
+	filesProcessed: Long!
+	"""
+	Bytes the confirmed plan covers.
+	"""
+	bytesTotal: Long!
+	"""
+	Bytes the operation has finished processing.
+	"""
+	bytesProcessed: Long!
+	"""
+	Titles merged into an existing destination title.
+	"""
+	merges: Long!
+	"""
+	Files recycled as proven duplicates.
+	"""
+	dedups: Long!
+	"""
+	Files renamed to avoid a collision.
+	"""
+	renames: Long!
+	"""
+	Titles that needed no change.
+	"""
+	noOps: Long!
+	"""
+	Items still needing a user decision.
+	"""
+	unresolved: Long!
+}
+
+"""
+One source file proven identical to destination content, so it is recycled
+instead of copied.
+"""
+type LocationOperationDeduplicatedAssetPayload {
+	"""
+	Path of the redundant source copy.
+	"""
+	sourcePath: String!
+	"""
+	Its file name.
+	"""
+	sourceName: String!
+	"""
+	Path of the destination copy that survives, or null when the plan does
+	not carry enough placement to name it.
+	"""
+	survivingPath: String
+	"""
+	File name of that survivor.
+	"""
+	survivingName: String
+	"""
+	Whether this deduplication has happened. False means the title carrying
+	it has not settled yet, so the source copy is still in place.
+	"""
+	done: Boolean!
+}
+
+"""
+A confirmed location operation and everything Activity shows about it.
+"""
+type LocationOperationPayload {
+	"""
+	Operation identity.
+	"""
+	id: ID!
+	"""
+	Which location workflow this operation belongs to.
+	"""
+	operationType: LocationOperationTypeValue!
+	"""
+	How the filesystem side is performed.
+	"""
+	mode: LocationExecutionModeValue!
+	"""
+	Lifecycle state.
+	"""
+	state: LocationOperationStateValue!
+	"""
+	User who confirmed the operation, or null once that user is deleted.
+	"""
+	initiatedByUserId: ID
+	"""
+	Source library, when the operation is scoped to one.
+	"""
+	sourceLibraryId: ID
+	"""
+	Destination library; differs from the source only for transfers.
+	"""
+	destinationLibraryId: ID
+	"""
+	Source root, for root-scoped operations.
+	"""
+	sourceRootId: ID
+	"""
+	Destination root.
+	"""
+	destinationRootId: ID
+	"""
+	Fingerprint of the full confirmed plan.
+	"""
+	planFingerprint: String!
+	"""
+	Depth the user's preference asked for at confirmation time.
+	"""
+	verificationDepth: VerificationDepthValue!
+	"""
+	Files that could only be proven at the quick floor.
+	"""
+	verificationFallbackCount: Long!
+	"""
+	Aggregate counters shown in Activity.
+	"""
+	counters: LocationOperationCountersPayload!
+	"""
+	Concise failure or warning explanation.
+	"""
+	detail: String
+	"""
+	The Activity job run this operation reports through, when it has one.
+	"""
+	jobRunId: ID
+	"""
+	The workflow-operation row this operation reports through, when it has one.
+	"""
+	workflowOperationId: ID
+	"""
+	Whether a cancel was requested.
+	"""
+	cancelRequested: Boolean!
+	"""
+	When the cancel was requested.
+	"""
+	cancelRequestedAt: DateTime
+	"""
+	When the user confirmed the fingerprinted plan.
+	"""
+	confirmedAt: DateTime
+	"""
+	When the runner first left the queued state.
+	"""
+	startedAt: DateTime
+	"""
+	When the operation row was created.
+	"""
+	createdAt: DateTime!
+	"""
+	When the operation row was last written.
+	"""
+	updatedAt: DateTime!
+	"""
+	When the operation reached a terminal state.
+	"""
+	completedAt: DateTime
+	"""
+	Per-title checkpoints in plan order.
+	"""
+	titleCheckpoints: [LocationTitleCheckpointPayload!]!
+}
+
+"""
+Selection and destination to preview; nothing is changed.
+"""
+input LocationOperationPreviewInput {
+	"""
+	Titles to move, in the order the client submitted them.
+	"""
+	titleIds: [ID!]!
+	"""
+	Where the selection would go.
+	"""
+	destination: LocationDestinationInput!
+	"""
+	How the files would get there; omitted asks Scryer to do the moving.
+	"""
+	mode: LocationExecutionModeInput
+}
+
+"""
+A read-only preview of a location operation; nothing is changed.
+"""
+type LocationOperationPreviewPayload {
+	"""
+	Fingerprint over the full plan, echoed back to confirm it.
+	"""
+	planFingerprint: String!
+	"""
+	Which location workflow this plan belongs to.
+	"""
+	operationType: LocationOperationTypeValue!
+	"""
+	How the filesystem side would be performed.
+	"""
+	mode: LocationExecutionModeValue!
+	"""
+	Source library, when the whole selection shares one.
+	"""
+	sourceLibraryId: ID
+	"""
+	Destination library for the selection.
+	"""
+	destinationLibraryId: ID
+	"""
+	Source root, when the whole selection shares one.
+	"""
+	sourceRootId: ID
+	"""
+	Destination root, when the request named one.
+	"""
+	destinationRootId: ID
+	"""
+	The selection this plan was built for, in a stable order.
+	"""
+	selection: [ID!]!
+	"""
+	Complete counts across the whole plan.
+	"""
+	counts: LocationPlanCountsPayload!
+	"""
+	Plan sections in a stable kind order, each a complete count plus a sample.
+	"""
+	sections: [LocationPlanSectionPayload!]!
+	"""
+	Every selected title grouped by class.
+	"""
+	classification: LocationSelectionClassificationPayload!
+	"""
+	Estimated free space the operation needs.
+	"""
+	freeSpace: LocationFreeSpaceEstimatePayload!
+	"""
+	The verification depth that will apply.
+	"""
+	verification: LocationVerificationStatementPayload!
+	"""
+	The confirmation this plan demands.
+	"""
+	confirmation: LocationPlanConfirmationPayload!
+	"""
+	Warnings the user must see before confirming.
+	"""
+	warnings: [String!]!
+	"""
+	Whether blocking items or classes stop this plan from starting.
+	"""
+	blocksStart: Boolean!
+	"""
+	One summary per title that merges into an existing destination title.
+	Empty for every plan with no merge in it.
+	"""
+	merges: [LocationMergePreviewPayload!]!
+}
+
+"""
+One file the operation lands under a different name so destination content
+keeps its own.
+"""
+type LocationOperationRenamedAssetPayload {
+	"""
+	Path the file is read from, or null when the stored plan no longer
+	carries the file this destination came from.
+	"""
+	sourcePath: String
+	"""
+	File name at the source.
+	"""
+	sourceName: String
+	"""
+	Path the file lands under.
+	"""
+	destinationPath: String!
+	"""
+	File name it lands under.
+	"""
+	destinationName: String!
+	"""
+	Source library named inside the rename suffix, or null when the rename
+	only had a number appended.
+	"""
+	provenanceLabel: String
+	"""
+	Tracked media file, or null for a companion asset.
+	"""
+	mediaFileId: ID
+	"""
+	Size of the file being renamed.
+	"""
+	sizeBytes: Long!
+	"""
+	Whether this rename has happened. False means the title carrying it has
+	not settled yet, so the rename is still only planned.
+	"""
+	done: Boolean!
+}
+
+"""
+Lifecycle state of a confirmed location operation, as shown in Activity.
+"""
+enum LocationOperationStateValue {
+	"""
+	Accepted and persisted; not yet started.
+	"""
+	QUEUED
+	"""
+	Validating paths, ownership, permissions, and free space.
+	"""
+	PREPARING
+	"""
+	Renaming or copying title content.
+	"""
+	MOVING
+	"""
+	Verifying destination content at the applicable depth.
+	"""
+	VERIFYING
+	"""
+	Applying catalog changes: ownership flips, merges, role resolution.
+	"""
+	RECONCILING
+	"""
+	Recycling redundant sources and removing empty source directories.
+	"""
+	CLEANING_UP
+	"""
+	Finished with every item as previewed.
+	"""
+	COMPLETED
+	"""
+	Finished, but with warnings the user must see.
+	"""
+	COMPLETED_WITH_WARNINGS
+	"""
+	Stopped at a safe title checkpoint on user request.
+	"""
+	CANCELED
+	"""
+	Stopped on an error; completed titles remain consistent.
+	"""
+	FAILED
+}
+
+"""
+One title's renamed and deduplicated files inside an operation.
+"""
+type LocationOperationTitleAssetsPayload {
+	"""
+	Title these assets belong to.
+	"""
+	titleId: ID!
+	"""
+	Title name as the confirmed plan recorded it.
+	"""
+	titleName: String!
+	"""
+	Position of this title in the confirmed plan.
+	"""
+	sequence: Long!
+	"""
+	Whether this title finished, which is what turns its planned renames and
+	deduplications into things that actually happened.
+	"""
+	settled: Boolean!
+	"""
+	The title's checkpoint state, or null when it has not entered the run.
+	"""
+	checkpointState: LocationTitleCheckpointStateValue
+	"""
+	Files renamed around a destination collision.
+	"""
+	renames: [LocationOperationRenamedAssetPayload!]!
+	"""
+	Source files recycled as proven duplicates.
+	"""
+	dedups: [LocationOperationDeduplicatedAssetPayload!]!
+}
+
+"""
+Which location workflow an operation belongs to.
+"""
+enum LocationOperationTypeValue {
+	"""
+	Correct which folder a title owns; file content is never touched.
+	"""
+	FOLDER_REASSIGNMENT
+	"""
+	Move selected titles to another root inside the same library.
+	"""
+	ROOT_MOVE
+	"""
+	Replace one root's path with a new, unconfigured path.
+	"""
+	ROOT_CHANGE
+	"""
+	Fold one root's managed contents into another root in the same library.
+	"""
+	ROOT_CONSOLIDATION
+	"""
+	Move titles into a different library, with or without a merge.
+	"""
+	CROSS_LIBRARY_TRANSFER
+	"""
+	Adopt content the user already moved outside Scryer.
+	"""
+	ADOPTION
+}
+
+"""
+The confirmation this plan demands before it may start.
+"""
+type LocationPlanConfirmationPayload {
+	"""
+	How much consent the operation demands.
+	"""
+	requirement: LocationConfirmationRequirementValue!
+	"""
+	The phrase the user must type, when typed confirmation applies.
+	"""
+	typedPhrase: String
+	"""
+	The prompt shown beside the typed-confirmation field.
+	"""
+	typedPrompt: String
+}
+
+"""
+Complete counts across the whole plan, independent of sampling.
+"""
+type LocationPlanCountsPayload {
+	"""
+	Every plan item, of every kind.
+	"""
+	itemsTotal: Long!
+	"""
+	Titles the plan covers.
+	"""
+	titlesTotal: Long!
+	"""
+	Files the plan covers.
+	"""
+	filesTotal: Long!
+	"""
+	Bytes the plan covers.
+	"""
+	bytesTotal: Long!
+	"""
+	Per-kind complete counts, including kinds with no sampled items.
+	"""
+	byKind: [LocationPlanKindCountPayload!]!
+}
+
+"""
+Every kind of change a location plan can contain.
+"""
+enum LocationPlanItemKindValue {
+	"""
+	Content moves from a source path to a destination path.
+	"""
+	MOVE
+	"""
+	Content keeps its directory but changes name.
+	"""
+	RENAME
+	"""
+	A source title folds into an existing destination title.
+	"""
+	MERGE
+	"""
+	A proven-duplicate file is recycled rather than moved.
+	"""
+	DEDUP
+	"""
+	Catalog-only change; no bytes move.
+	"""
+	CATALOG_CHANGE
+	"""
+	A media file's role for its logical slot changes.
+	"""
+	ROLE_CHANGE
+	"""
+	The title already satisfies the request; nothing happens.
+	"""
+	NO_OP
+	"""
+	The title cannot enter the operation until the user resolves something.
+	"""
+	BLOCKED
+	"""
+	Content at the source that Scryer does not manage.
+	"""
+	UNMANAGED_CONTENT
+	"""
+	Something the user must see before confirming.
+	"""
+	WARNING
+}
+
+"""
+One previewed change, in the vocabulary every location workflow shares.
+"""
+type LocationPlanItemPayload {
+	"""
+	What kind of change this item describes.
+	"""
+	kind: LocationPlanItemKindValue!
+	"""
+	Title this item belongs to, or null when it belongs to none.
+	"""
+	titleId: ID
+	"""
+	Media file this item acts on, or null for untracked content.
+	"""
+	mediaFileId: ID
+	"""
+	Source path, or null when the item has no source.
+	"""
+	sourcePath: String
+	"""
+	Destination path, or null when the item has no destination.
+	"""
+	destinationPath: String
+	"""
+	Bytes this item accounts for; zero for catalog-only items.
+	"""
+	sizeBytes: Long!
+	"""
+	Whether source and destination share a volume, or null when undetermined.
+	"""
+	sameVolume: Boolean
+	"""
+	Machine-readable reason, for grouping and translation.
+	"""
+	reasonCode: String
+	"""
+	Human-readable explanation, always present for blocking and warning items.
+	"""
+	detail: String
+}
+
+"""
+Complete item count for one plan-item kind.
+"""
+type LocationPlanKindCountPayload {
+	"""
+	The kind being counted.
+	"""
+	kind: LocationPlanItemKindValue!
+	"""
+	How many items of that kind the whole plan contains.
+	"""
+	count: Long!
+}
+
+"""
+One section of a plan: the complete count for a kind plus a sample of its items.
+"""
+type LocationPlanSectionPayload {
+	"""
+	Kind every item in this section shares.
+	"""
+	kind: LocationPlanItemKindValue!
+	"""
+	Complete count for this section across the whole plan.
+	"""
+	itemsTotal: Long!
+	"""
+	Complete byte total for this section, not just the sampled items.
+	"""
+	bytesTotal: Long!
+	"""
+	Whether the sampled items are the complete section.
+	"""
+	complete: Boolean!
+	"""
+	The sampled items the client renders.
+	"""
+	items: [LocationPlanItemPayload!]!
+}
+
+"""
+The root and the new path a root change would move it to (US4, FR-020).
+"""
+input LocationRootChangePreviewInput {
+	"""
+	Library the root belongs to.
+	"""
+	libraryId: ID!
+	"""
+	The root being changed. Its identity survives the change (FR-021).
+	"""
+	rootId: ID!
+	"""
+	The new, unconfigured path. A path that is already a configured root of
+	this library is refused and routed to consolidation instead.
+	"""
+	destinationPath: String!
+	"""
+	How the files get there; omitted asks Scryer to do the moving.
+	"""
+	mode: LocationExecutionModeInput
+}
+
+"""
+A read-only preview of replacing one root's path (US4, FR-020 to FR-029).
+"""
+type LocationRootChangePreviewPayload {
+	"""
+	The fingerprinted plan, in the vocabulary every location workflow
+	shares. Root-scoped plans have no title selection, so the plan's
+	classification carries per-class counts with no per-title entries; the
+	titles that need naming are in `accounting.blockedTitles`.
+	"""
+	plan: LocationOperationPreviewPayload!
+	"""
+	Every title assigned to the root, with no way to exclude one.
+	"""
+	accounting: LocationTitleAccountingPayload!
+	"""
+	What the root keeps. The first thing the dialog states.
+	"""
+	retention: LocationRootIdentityRetentionPayload!
+	"""
+	Everything found beneath the source root, in three buckets.
+	"""
+	content: LocationRootContentInventoryPayload!
+	"""
+	What happens to the old location afterwards.
+	"""
+	retirement: LocationRootRetirementContractPayload!
+}
+
+"""
+The root being changed and the path it moves to, as confirmed by a start.
+"""
+input LocationRootChangeTargetInput {
+	"""
+	Library the root belongs to.
+	"""
+	libraryId: ID!
+	"""
+	The root being changed.
+	"""
+	rootId: ID!
+	"""
+	The previewed destination path.
+	"""
+	destinationPath: String!
+}
+
+"""
+The two roots a consolidation folds together (US5, FR-020).
+"""
+input LocationRootConsolidationPreviewInput {
+	"""
+	Library both roots belong to. A consolidation never crosses libraries.
+	"""
+	libraryId: ID!
+	"""
+	The root being folded away; its configuration is retired at the end.
+	"""
+	sourceRootId: ID!
+	"""
+	The root that absorbs it. Must already be configured in this library; a
+	destination that is not is refused and routed to a root change instead.
+	"""
+	destinationRootId: ID!
+	"""
+	How the files get there; omitted asks Scryer to do the moving.
+	"""
+	mode: LocationExecutionModeInput
+}
+
+"""
+A read-only preview of folding one root into another (US5, FR-020, FR-022,
+FR-024 to FR-029).
+"""
+type LocationRootConsolidationPreviewPayload {
+	"""
+	The fingerprinted plan, in the vocabulary every location workflow
+	shares. Root-scoped plans have no title selection, so the plan's
+	classification carries per-class counts with no per-title entries; the
+	titles that need naming are in `accounting.blockedTitles`, and every
+	changed folder name is a `RENAME` plan item.
+	"""
+	plan: LocationOperationPreviewPayload!
+	"""
+	Every title assigned to the source root, with no way to exclude one.
+	"""
+	accounting: LocationTitleAccountingPayload!
+	"""
+	FR-024's seven groups with their counts.
+	"""
+	classification: LocationConsolidationClassificationPayload!
+	"""
+	Which root new content lands on afterwards. The destination root keeps
+	its own id either way (FR-078); what can move is the default.
+	"""
+	defaultTransfer: LocationDefaultRootTransferPayload!
+	"""
+	Everything found beneath the source root, in three buckets.
+	"""
+	content: LocationRootContentInventoryPayload!
+	"""
+	What happens to the source root's configuration afterwards.
+	"""
+	retirement: LocationRootRetirementContractPayload!
+}
+
+"""
+The two roots a consolidation folds together, as confirmed by a start.
+"""
+input LocationRootConsolidationTargetInput {
+	"""
+	Library both roots belong to.
+	"""
+	libraryId: ID!
+	"""
+	The root being folded away.
+	"""
+	sourceRootId: ID!
+	"""
+	The root that absorbs it.
+	"""
+	destinationRootId: ID!
+}
+
+"""
+One of FR-027's three content buckets: the complete counts plus a sample.
+"""
+type LocationRootContentBucketPayload {
+	"""
+	Which bucket this is.
+	"""
+	class: LocationRootContentClassValue!
+	"""
+	Complete count of files in this bucket, not just the sampled ones.
+	"""
+	total: Long!
+	"""
+	Complete byte total for this bucket.
+	"""
+	bytesTotal: Long!
+	"""
+	Whether the sampled entries are the complete bucket.
+	"""
+	complete: Boolean!
+	"""
+	The sampled entries the client lists.
+	"""
+	entries: [LocationRootContentEntryPayload!]!
+}
+
+"""
+What the catalog can say about one entry found beneath a root (FR-027).
+"""
+enum LocationRootContentClassValue {
+	"""
+	A file the catalog tracks as media for a title assigned to this root.
+	"""
+	MANAGED
+	"""
+	An untracked file inside a title's owned folder: sidecars, artwork,
+	subtitles, trickplay. It travels with its title.
+	"""
+	COMPANION
+	"""
+	Anything else. Never deleted, never abandoned, and it keeps the old
+	location standing (FR-027, FR-028).
+	"""
+	UNKNOWN
+}
+
+"""
+One file found beneath the root, with what the catalog could say about it.
+"""
+type LocationRootContentEntryPayload {
+	"""
+	Where the file is today.
+	"""
+	path: String!
+	"""
+	Its size.
+	"""
+	sizeBytes: Long!
+	"""
+	Which of FR-027's three buckets it fell into.
+	"""
+	class: LocationRootContentClassValue!
+	"""
+	Whether it is a canonical folder-level sidecar such as `movie.nfo`.
+	"""
+	canonicalSidecar: Boolean!
+}
+
+"""
+Everything found beneath the source root, in FR-027's three buckets, plus
+the directory facts cleanup is allowed to act on (FR-028).
+"""
+type LocationRootContentInventoryPayload {
+	"""
+	Files the catalog tracks for titles assigned to this root.
+	"""
+	managed: LocationRootContentBucketPayload!
+	"""
+	Untracked files inside a title's folder; they travel with their title.
+	"""
+	companions: LocationRootContentBucketPayload!
+	"""
+	Everything else. Listed separately because it is what keeps the old
+	location standing.
+	"""
+	unknown: LocationRootContentBucketPayload!
+	"""
+	Bytes of unexplained content.
+	"""
+	unknownBytes: Long!
+	"""
+	Whether unexplained content stops the source location from being removed.
+	"""
+	blocksSourceRemoval: Boolean!
+	"""
+	Every scanned file across the three buckets.
+	"""
+	entryCount: Long!
+	"""
+	Directories outside every title folder that hold nothing unexplained, so
+	cleanup may remove them once they are empty.
+	"""
+	prunableDirectories: LocationSampledPathsPayload!
+	"""
+	Directories that hold unexplained content and are therefore left
+	standing, with their contents.
+	"""
+	retainedDirectories: LocationSampledPathsPayload!
+}
+
+"""
+What the root keeps when its path changes or it absorbs another root
+(FR-021, FR-022, FR-078).
+
+For a root change this describes the changed root; for a consolidation it
+describes the destination root, the one that survives.
+"""
+type LocationRootIdentityRetentionPayload {
+	"""
+	The root whose identity is retained.
+	"""
+	rootId: ID!
+	"""
+	Whether the synthetic root id survives. It always does.
+	"""
+	keepsRootId: Boolean!
+	"""
+	Whether the root was the library default before the operation.
+	"""
+	wasLibraryDefault: Boolean!
+	"""
+	Whether it is the library default after the operation.
+	"""
+	remainsLibraryDefault: Boolean!
+	"""
+	The role the root carried, when it carries one. Roots have no role
+	concept yet, so this is always null today.
+	"""
+	retainedRole: String
+	"""
+	Title assignments the root keeps pointing at it.
+	"""
+	retainedTitleAssignments: Long!
+}
+
+"""
+One reason the source location cannot be retired (FR-028).
+"""
+type LocationRootRetirementBlockerPayload {
+	"""
+	Machine-readable code, for grouping and translation.
+	"""
+	code: String!
+	"""
+	The sentence explaining what has to be resolved.
+	"""
+	detail: String!
+}
+
+"""
+What happens to the old location after every title has settled (FR-028,
+FR-031, FR-087).
+"""
+type LocationRootRetirementContractPayload {
+	"""
+	The path being retired.
+	"""
+	sourceRootPath: String!
+	"""
+	The path the root points at afterwards. For a consolidation this is the
+	destination root's own configured path.
+	"""
+	destinationRootPath: String!
+	"""
+	Whether the source configuration is retired only after all recycling for
+	the operation completes.
+	"""
+	retireConfigurationAfterRecycling: Boolean!
+	"""
+	Paths that stay allowlisted for recycling while the retirement runs.
+	"""
+	recycleAllowlistPaths: LocationSampledPathsPayload!
+	"""
+	Whether verification has to succeed before anything at the source is
+	removed.
+	"""
+	requiresVerificationBeforeSourceRemoval: Boolean!
+	"""
+	Whether only empty directories may be removed automatically.
+	"""
+	emptyDirectoriesOnly: Boolean!
+	"""
+	Directories cleanup may remove once they are empty, deepest first.
+	"""
+	removableDirectories: LocationSampledPathsPayload!
+	"""
+	Directories that are left standing with their contents.
+	"""
+	retainedDirectories: LocationSampledPathsPayload!
+	"""
+	Whether the source location may be removed at all.
+	"""
+	permitsSourceRemoval: Boolean!
+	"""
+	Every reason it may not be, when there are any.
+	"""
+	blockers: [LocationRootRetirementBlockerPayload!]!
+}
+
+"""
+A complete count of paths beside the sample the client renders.
+"""
+type LocationSampledPathsPayload {
+	"""
+	How many paths there are in total.
+	"""
+	total: Long!
+	"""
+	Whether the sampled paths are the complete list.
+	"""
+	complete: Boolean!
+	"""
+	The sampled paths.
+	"""
+	paths: [String!]!
+}
+
+"""
+Every selected title grouped by class, with no title omitted.
+"""
+type LocationSelectionClassificationPayload {
+	"""
+	One group per class, always all six, including empty ones.
+	"""
+	groups: [LocationClassificationGroupPayload!]!
+	"""
+	Selected titles across every group.
+	"""
+	titlesTotal: Long!
+	"""
+	Whether any title in the selection blocks the start.
+	"""
+	blocksStart: Boolean!
+}
+
+"""
+Every title assigned to the root being changed or consolidated, in one
+closed ledger (FR-023).
+
+There is no way to exclude a title from a root-scoped operation, so this is
+an accounting rather than a selection: the four counts close against
+`assignedTotal`, and a blocked title stops the operation until it is
+repaired.
+"""
+type LocationTitleAccountingPayload {
+	"""
+	Every title assigned to the root.
+	"""
+	assignedTotal: Long!
+	"""
+	Titles whose files move.
+	"""
+	relocating: Long!
+	"""
+	Titles with no tracked files: catalog reassignment only (FR-076).
+	"""
+	catalogOnly: Long!
+	"""
+	Titles that cannot enter the operation.
+	"""
+	blocked: Long!
+	"""
+	Whether the three counts close against `assignedTotal`.
+	"""
+	accountsForEveryTitle: Boolean!
+	"""
+	Whether any blocked title stops the operation from starting.
+	"""
+	blocksStart: Boolean!
+	"""
+	Every blocked title, named. Rendered with no exclude affordance.
+	"""
+	blockedTitles: [LocationBlockedTitlePayload!]!
+}
+
+"""
+Per-title progress inside an operation; the unit a resume restarts from.
+"""
+type LocationTitleCheckpointPayload {
+	"""
+	Title this checkpoint tracks.
+	"""
+	titleId: ID!
+	"""
+	Position of this title in the confirmed plan.
+	"""
+	sequence: Long!
+	"""
+	How far this title has progressed.
+	"""
+	state: LocationTitleCheckpointStateValue!
+	"""
+	Class this title was previewed as, or null for workflows that do not classify.
+	"""
+	classification: TitleLocationClassValue
+	"""
+	Library the title started in.
+	"""
+	sourceLibraryId: ID
+	"""
+	Root the title started on.
+	"""
+	sourceRootId: ID
+	"""
+	Folder the title started in.
+	"""
+	sourceFolderPath: String
+	"""
+	Library the title ends up in.
+	"""
+	destinationLibraryId: ID
+	"""
+	Root the title ends up on.
+	"""
+	destinationRootId: ID
+	"""
+	Folder the title ends up in.
+	"""
+	destinationFolderPath: String
+	"""
+	Destination title this one merges into, when it merges.
+	"""
+	mergedIntoTitleId: ID
+	"""
+	Name of that surviving title, resolved from the catalog when the
+	checkpoint is read. Null when it merged into a title that has since been
+	deleted, in which case the id still identifies it.
+	"""
+	mergedIntoTitleName: String
+	"""
+	Files planned for this title.
+	"""
+	filesTotal: Long!
+	"""
+	Files whose destination is verified.
+	"""
+	filesVerified: Long!
+	"""
+	Bytes planned for this title.
+	"""
+	bytesTotal: Long!
+	"""
+	Bytes whose destination is verified.
+	"""
+	bytesVerified: Long!
+	"""
+	Warning or failure explanation for this title.
+	"""
+	detail: String
+	"""
+	When this title entered the operation.
+	"""
+	startedAt: DateTime
+	"""
+	When this checkpoint was last written.
+	"""
+	updatedAt: DateTime!
+	"""
+	When this title settled.
+	"""
+	completedAt: DateTime
+}
+
+"""
+Progress of one title inside an operation.
+"""
+enum LocationTitleCheckpointStateValue {
+	"""
+	Planned but not started.
+	"""
+	PENDING
+	"""
+	Content is being renamed or copied.
+	"""
+	MOVING
+	"""
+	Destination content is being proven at the applicable depth.
+	"""
+	VERIFYING
+	"""
+	Destination verified; catalog ownership and merge unions are running.
+	"""
+	RECONCILING
+	"""
+	Sources recycled and empty source directories cleaned up.
+	"""
+	CLEANING_UP
+	"""
+	Title finished exactly as previewed.
+	"""
+	COMPLETED
+	"""
+	Title finished, but the user must see something about it.
+	"""
+	COMPLETED_WITH_WARNINGS
+	"""
+	Deliberately not processed.
+	"""
+	SKIPPED
+	"""
+	Could not enter the operation.
+	"""
+	BLOCKED
+	"""
+	Processing failed; the source is intact.
+	"""
+	FAILED
+}
+
+"""
+The verification depth this plan will apply, stated before anything moves.
+"""
+type LocationVerificationStatementPayload {
+	"""
+	Depth resolved from the user preference at preview time.
+	"""
+	depth: VerificationDepthValue!
+	"""
+	Files this depth will be applied to.
+	"""
+	files: Long!
+	"""
+	Bytes this depth will be applied to.
+	"""
+	bytes: Long!
+	"""
+	Whether any file in this plan will actually be verified.
+	"""
+	applies: Boolean!
 }
 
 """
@@ -11165,6 +13451,19 @@ type MutationRoot {
 		input: SetPrimaryMovieFileInput!
 	): TitlePayload!
 	"""
+	Correct which existing folder a title owns, rescanning it; never moves files.
+	
+	Ownership of a folder another title holds is never taken silently: the
+	default resolution is refused and the caller must choose SWAP or
+	TAKE_OVER.
+	"""
+	applyTitleFolderChange(
+		"""
+		Title, chosen folder inside its library roots, and how to settle ownership.
+		"""
+		input: ApplyTitleFolderChangeInput!
+	): ChangeTitleFolderPayload!
+	"""
 	Associate a title with a metadata identity and return any hydration or scan result.
 	"""
 	fixTitleMatch(
@@ -11643,6 +13942,15 @@ type MutationRoot {
 		"""
 		input: UpdateRecycleBinSettingsInput!
 	): RecycleBinSettingsPayload!
+	"""
+	Saves the verification depth applied to download-client completed-download copies, after checking the system-settings permission. Location operations always verify in full and ignore it.
+	"""
+	updateVerificationSettings(
+		"""
+		Verification depth to save.
+		"""
+		input: UpdateVerificationSettingsInput!
+	): VerificationSettingsPayload!
 	"""
 	Saves the automatic official-plugin patch update setting after checking the system-settings permission.
 	"""
@@ -12319,6 +14627,54 @@ type MutationRoot {
 		"""
 		input: RehydrateAllMetadataInput!
 	): RehydrateAllMetadataPayload!
+	"""
+	Confirm a previewed location operation and start it in the background.
+	
+	The plan is rebuilt server side and compared against the fingerprint the
+	client previewed; a stale fingerprint, or a selection that still holds
+	blocked or unresolved titles, is refused instead of started.
+	
+	The mode is confirmed the same way everything else is: it rebuilds the
+	plan, so confirming `FILES_ALREADY_THERE` against a managed-move
+	fingerprint fails the comparison rather than running the other workflow.
+	An adoption whose destination is missing or ambiguous media is refused
+	here, because its rebuilt plan is blocked (FR-052).
+	
+	A root change (US4) and a root consolidation (US5) confirm through the
+	same mutation and the same typed-confirmation field; only the destination
+	form differs. Exactly one of the three destination forms may be named.
+	"""
+	startLocationOperation(
+		"""
+		Previewed destination form (selection, root change, or root consolidation), mode, plan fingerprint, and typed confirmation when one is required.
+		"""
+		input: StartLocationOperationInput!
+	): StartLocationOperationPayload!
+	"""
+	Request cancellation; the operation stops at its next title checkpoint.
+	
+	Titles already finished stay where the operation put them: cancelling is
+	a safe stop, never a rollback.
+	"""
+	cancelLocationOperation(
+		"""
+		Location-operation identity to stop at its next title checkpoint.
+		"""
+		id: ID!
+	): CancelLocationOperationPayload!
+	"""
+	Pick an interrupted operation back up from its last verified checkpoint.
+	
+	Finished titles are never reprocessed, and an operation that is already
+	terminal or was stored without its plan is reported as not resumed rather
+	than restarted from the beginning.
+	"""
+	resumeLocationOperation(
+		"""
+		Location-operation identity to resume from its checkpoints.
+		"""
+		id: ID!
+	): ResumeLocationOperationPayload!
 	"""
 	Create a media request with the requested metadata and acquisition preferences.
 	"""
@@ -15082,6 +17438,94 @@ type QueryRoot {
 		input: MediaRenamePreviewBulkInput!
 	): [MediaRenamePlanPayload!]!
 	"""
+	Preview correcting which existing folder a title owns; no files are moved.
+	"""
+	changeTitleFolderPreview(
+		"""
+		Title and candidate folder whose ownership change is described; nothing is changed.
+		"""
+		input: ChangeTitleFolderPreviewInput!
+	): ChangeTitleFolderPreviewPayload!
+	"""
+	Preview moving selected titles to another library or root; nothing is moved.
+	
+	The returned fingerprint is what `startLocationOperation` confirms. A
+	changed filesystem, catalog, selection, destination, or mode produces a
+	different fingerprint and voids the confirmation.
+	
+	The mode picks which preview runs: the managed move plans the copy, and
+	`FILES_ALREADY_THERE` instead accounts for what is already at the
+	destination (FR-050 to FR-053). The reported mode can still come back as
+	`CATALOG_ONLY` when the selection has no files on disk (FR-076).
+	"""
+	locationOperationPreview(
+		"""
+		Titles to move, the destination library or root they would move to, and how the files get there.
+		"""
+		input: LocationOperationPreviewInput!
+	): LocationOperationPreviewPayload!
+	"""
+	Preview replacing one root's path with a new, unconfigured one (US4).
+	
+	Root scoped, so there is no selection: every title assigned to the root
+	goes, and the ledger says so rather than offering a way to exclude one
+	(FR-023). The returned fingerprint is what `startLocationOperation`
+	confirms with its `rootChange` target.
+	
+	A destination that is already a configured root of this library is
+	refused with `refusalCode: root_change_destination_is_configured_root`,
+	because that request is a consolidation and belongs to
+	`locationRootConsolidationPreview` (FR-020).
+	"""
+	locationRootChangePreview(
+		"""
+		The root whose path changes, the new path it moves to, and how the files get there.
+		"""
+		input: LocationRootChangePreviewInput!
+	): LocationRootChangePreviewPayload!
+	"""
+	Preview folding one root into another root of the same library (US5).
+	
+	The other half of FR-020's single settings action: the destination is a
+	root id rather than a path, which is exactly what makes this a
+	consolidation. FR-024's seven groups are the preview.
+	
+	A destination that is not a configured root of this library is refused
+	with `refusalCode:
+	root_consolidation_destination_not_a_configured_root`, because that
+	request is a root change and belongs to `locationRootChangePreview`.
+	"""
+	locationRootConsolidationPreview(
+		"""
+		The root being folded away, the root that absorbs it, and how the files get there.
+		"""
+		input: LocationRootConsolidationPreviewInput!
+	): LocationRootConsolidationPreviewPayload!
+	"""
+	Read one location operation with its per-title checkpoints.
+	"""
+	locationOperation(
+		"""
+		Location-operation identity.
+		"""
+		id: ID!
+	): LocationOperationPayload
+	"""
+	Which files one location operation renames and deduplicates, per title.
+	
+	Activity's counters say how many; this says which ones, and whether each
+	has happened yet or is still only what the confirmed plan intends
+	(FR-091). It is a separate read from `locationOperation` because the
+	per-file identities live in the operation's stored plan, which a
+	progress poll has no reason to load.
+	"""
+	locationOperationAssets(
+		"""
+		Location-operation identity.
+		"""
+		id: ID!
+	): LocationOperationAssetListingPayload
+	"""
 	Preview deleting all media files for one title without changing files.
 	"""
 	deleteTitlePreview(
@@ -15531,6 +17975,10 @@ type QueryRoot {
 	Returns whether the recycle bin is enabled for the authenticated actor.
 	"""
 	recycleBinSettings: RecycleBinSettingsPayload!
+	"""
+	Returns the verification depth applied to download-client completed-download copies. Location operations always verify in full and ignore it.
+	"""
+	verificationSettings: VerificationSettingsPayload!
 	"""
 	Returns whether the scheduled plugin catalog refresh installs official patch updates automatically.
 	"""
@@ -17034,6 +19482,24 @@ input ResumeDownloadInput {
 }
 
 """
+Result of asking an interrupted operation to pick up from its checkpoints.
+"""
+type ResumeLocationOperationPayload {
+	"""
+	Operation the resume was requested for.
+	"""
+	id: ID!
+	"""
+	Whether the operation was restarted.
+	"""
+	resumed: Boolean!
+	"""
+	Why it was not restarted, when it was not.
+	"""
+	detail: String
+}
+
+"""
 Identifier returned after resuming a wanted state row or convergence scope.
 """
 type ResumeWantedItemPayload {
@@ -18242,6 +20708,64 @@ input StartExternalImportProwlarrWarmupInput {
 }
 
 """
+Confirmation of a previewed location operation.
+
+Exactly one destination form is confirmed: a title selection with its
+destination, a root change, or a root consolidation. `titleIds` and
+`destination` stayed where they were and are still what a selection sends;
+they are nullable only so a root-scoped confirmation does not have to claim
+an empty selection going nowhere.
+"""
+input StartLocationOperationInput {
+	"""
+	Titles to move, matching the previewed selection. Omitted for a
+	root-scoped confirmation, which has no selection to express.
+	"""
+	titleIds: [ID!]
+	"""
+	Where the selection goes, matching the previewed destination. Omitted
+	for a root-scoped confirmation, which names its roots below instead.
+	"""
+	destination: LocationDestinationInput
+	"""
+	Confirms a previewed root change (US4): one root's path is replaced.
+	"""
+	rootChange: LocationRootChangeTargetInput
+	"""
+	Confirms a previewed root consolidation (US5): one root is folded into
+	another root of the same library.
+	"""
+	rootConsolidation: LocationRootConsolidationTargetInput
+	"""
+	The mode the plan was previewed under; a different mode is a different
+	plan, so it produces a different fingerprint and is refused.
+	"""
+	mode: LocationExecutionModeInput
+	"""
+	Fingerprint of the previewed plan; a stale fingerprint is refused.
+	"""
+	planFingerprint: String!
+	"""
+	Phrase the user typed, for operations that require typed confirmation.
+	"""
+	typedConfirmation: String
+}
+
+"""
+Acceptance of a confirmed location operation; the work runs in the background.
+"""
+type StartLocationOperationPayload {
+	"""
+	The accepted operation, as persisted.
+	"""
+	operation: LocationOperationPayload!
+	"""
+	Fingerprint of the plan the server rebuilt and accepted.
+	"""
+	planFingerprint: String!
+}
+
+"""
 Filesystem usage of the volume backing one library root folder.
 """
 type StorageRootUsagePayload {
@@ -19427,6 +21951,36 @@ type TitleHistoryPagePayload {
 }
 
 """
+The single class a selected title falls into for a requested destination.
+"""
+enum TitleLocationClassValue {
+	"""
+	Destination is in another library and the transfer is supported.
+	"""
+	CROSS_LIBRARY_TRANSFER
+	"""
+	Destination is another root inside the title's current library.
+	"""
+	ROOT_MOVE
+	"""
+	The title already lives at the requested destination; nothing to do.
+	"""
+	NO_OP
+	"""
+	Monitored title with no tracked files: catalog reassignment only.
+	"""
+	CATALOG_ONLY
+	"""
+	The destination can never accept this title.
+	"""
+	INCOMPATIBLE
+	"""
+	The title could go, but a user decision is still outstanding.
+	"""
+	NEEDS_RESOLUTION
+}
+
+"""
 Source used to match a release to a title.
 """
 enum TitleMatchTypeValue {
@@ -19651,9 +22205,9 @@ input TitleOptionsInput {
 	"""
 	qualityProfileId: ID
 	"""
-	Root-folder identity; omission preserves the current value, null clears it, and a value replaces it.
+	Root-folder identity used when a title is created; omission preserves the current value, null clears it, and a value replaces it. Changing the root of an existing title that has tracked files is refused: preview the change with locationOperationPreview and run it with startLocationOperation.
 	"""
-	rootFolderId: ID
+	rootFolderId: ID @deprecated(reason: "Retired for existing titles with tracked files: use locationOperationPreview and startLocationOperation to move a title. Still accepted at title creation and for titles with no tracked files.")
 	"""
 	Monitoring policy; omission preserves the current value, null clears it, and a value replaces it.
 	"""
@@ -21520,6 +24074,19 @@ input UpdateTitleInput {
 }
 
 """
+Verification depth applied to download-client completed-download copies.
+Location operations (library moves, root changes, consolidations) always
+verify in full and ignore this preference: they move the only copy of the
+content, so the stronger guarantee is a floor rather than a choice.
+"""
+input UpdateVerificationSettingsInput {
+	"""
+	Depth applied when proving a copied file before its source is touched.
+	"""
+	depth: VerificationDepthValue!
+}
+
+"""
 A multipart file upload
 """
 scalar Upload
@@ -21638,6 +24205,36 @@ input ValidateRuleSetInput {
 	Existing rule-set ID for context, or null for standalone validation.
 	"""
 	ruleSetId: ID
+}
+
+"""
+How thoroughly a copied file is proven before its source may be touched.
+"""
+enum VerificationDepthValue {
+	"""
+	Read the destination back in full and compare it against the CRC streamed
+	during the copy.
+	"""
+	FULL
+	"""
+	Compare the sampled head and tail content proof plus the file size. This
+	is also the floor full verification falls back to when a full read-back
+	cannot run.
+	"""
+	QUICK
+}
+
+"""
+Verification depth applied to download-client completed-download copies.
+Location operations (library moves, root changes, consolidations) always
+verify in full and ignore this preference: they move the only copy of the
+content, so the stronger guarantee is a floor rather than a choice.
+"""
+type VerificationSettingsPayload {
+	"""
+	Depth applied when proving a copied file before its source is touched.
+	"""
+	depth: VerificationDepthValue!
 }
 
 """

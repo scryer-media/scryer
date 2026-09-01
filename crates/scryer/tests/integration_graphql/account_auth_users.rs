@@ -2062,7 +2062,7 @@ async fn delete_media_file_honors_custom_library_permissions_after_library_refac
     let now = Utc::now();
     let custom_library_id = Id::new().0;
 
-    scryer_application::LibraryRepository::create(
+    let custom_library = scryer_application::LibraryRepository::create(
         &ctx.libraries,
         Library {
             id: custom_library_id.clone(),
@@ -2081,6 +2081,12 @@ async fn delete_media_file_honors_custom_library_permissions_after_library_refac
     )
     .await
     .expect("create custom library");
+    // Root ids are allocated, not derived from the path, so read the stored id back.
+    let custom_root_id = custom_library
+        .roots
+        .first()
+        .map(|root| root.id.clone())
+        .expect("custom library should expose its root");
 
     let title = Title {
         id: Id::new().0,
@@ -2094,9 +2100,7 @@ async fn delete_media_file_honors_custom_library_permissions_after_library_refac
             source: "tvdb".to_string(),
             value: "998877".to_string(),
         }],
-        root_folder_id: scryer_domain::root_folder_id_for_path(
-            media_root.path().to_string_lossy().as_ref(),
-        ),
+        root_folder_id: custom_root_id,
         created_by: None,
         created_at: now,
         year: Some(2024),

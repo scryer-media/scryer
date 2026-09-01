@@ -33,7 +33,11 @@ use scryer_interface_media::mappers::{
     discovery_items_query_from_input, from_active_import_stream, from_activity_event,
     from_application_upgrade_status, from_backup_info, from_catalog_discovery, from_collection,
     from_dashboard_activity_stats, from_delete_preview, from_delete_titles_preview,
-    from_discovery_home, from_discovery_home_cards, from_discovery_home_filter_options,
+    from_change_title_folder_preview, from_discovery_home, from_discovery_home_cards,
+    from_location_operation, from_location_operation_asset_listing, from_root_change_preview,
+    from_root_consolidation_preview, from_root_move_preview,
+    location_destination_into_application, location_execution_mode_into_application,
+    from_discovery_home_filter_options,
     from_discovery_item, from_discovery_items_result, from_domain_event, from_download_queue_item,
     from_episode, from_external_import_monitor_warmup_progress, from_job_definition, from_job_run,
     from_library, from_library_scan_session, from_library_settings, from_linked_account,
@@ -1506,6 +1510,197 @@ impl CatalogQueries {
                 from_media_rename_plan(plan)
             })
             .collect())
+    }
+
+    /// Preview correcting which existing folder a title owns; no files are moved.
+    async fn change_title_folder_preview(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(
+            desc = "Title and candidate folder whose ownership change is described; nothing is changed."
+        )]
+        input: ChangeTitleFolderPreviewInput,
+    ) -> GqlResult<ChangeTitleFolderPreviewPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let preview = app
+            .change_title_folder_preview(&actor, input.title_id.as_str(), &input.folder_path)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(from_change_title_folder_preview(preview))
+    }
+
+    /// Preview moving selected titles to another library or root; nothing is moved.
+    ///
+    /// The returned fingerprint is what `startLocationOperation` confirms. A
+    /// changed filesystem, catalog, selection, destination, or mode produces a
+    /// different fingerprint and voids the confirmation.
+    ///
+    /// The mode picks which preview runs: the managed move plans the copy, and
+    /// `FILES_ALREADY_THERE` instead accounts for what is already at the
+    /// destination (FR-050 to FR-053). The reported mode can still come back as
+    /// `CATALOG_ONLY` when the selection has no files on disk (FR-076).
+    async fn location_operation_preview(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(
+            desc = "Titles to move, the destination library or root they would move to, and how the files get there."
+        )]
+        input: LocationOperationPreviewInput,
+    ) -> GqlResult<LocationOperationPreviewPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let mode = location_execution_mode_into_application(input.mode);
+        let request = scryer_application::location::operations::RootMovePreviewRequest {
+            title_ids: input
+                .title_ids
+                .into_iter()
+                .map(|id| id.to_string())
+                .collect(),
+            destination: location_destination_into_application(input.destination),
+        };
+        let preview = match mode {
+            scryer_application::location::model::LocationExecutionMode::FilesAlreadyThere => {
+                app.preview_adoption(&actor, request).await
+            }
+            _ => app.preview_root_move(&actor, request).await,
+        }
+        .map_err(to_gql_error)?;
+        Ok(from_root_move_preview(&preview))
+    }
+
+    /// Preview replacing one root's path with a new, unconfigured one (US4).
+    ///
+    /// Root scoped, so there is no selection: every title assigned to the root
+    /// goes, and the ledger says so rather than offering a way to exclude one
+    /// (FR-023). The returned fingerprint is what `startLocationOperation`
+    /// confirms with its `rootChange` target.
+    ///
+    /// A destination that is already a configured root of this library is
+    /// refused with `refusalCode: root_change_destination_is_configured_root`,
+    /// because that request is a consolidation and belongs to
+    /// `locationRootConsolidationPreview` (FR-020).
+    async fn location_root_change_preview(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(
+            desc = "The root whose path changes, the new path it moves to, and how the files get there."
+        )]
+        input: LocationRootChangePreviewInput,
+    ) -> GqlResult<LocationRootChangePreviewPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let request = scryer_application::location::root_change_execution::RootChangePreviewRequest {
+            library_id: input.library_id.to_string(),
+            root_id: input.root_id.to_string(),
+            destination_path: input.destination_path,
+            // The planner refuses an unsupported mode itself, by name
+            // (`root_change_mode_not_supported`), so the request travels
+            // through the shared mapper and the refusal is a routable code
+            // rather than an interface sentence the client cannot translate.
+            mode: location_execution_mode_into_application(input.mode),
+        };
+        let preview = app
+            .preview_root_change(&actor, request)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(from_root_change_preview(&preview))
+    }
+
+    /// Preview folding one root into another root of the same library (US5).
+    ///
+    /// The other half of FR-020's single settings action: the destination is a
+    /// root id rather than a path, which is exactly what makes this a
+    /// consolidation. FR-024's seven groups are the preview.
+    ///
+    /// A destination that is not a configured root of this library is refused
+    /// with `refusalCode:
+    /// root_consolidation_destination_not_a_configured_root`, because that
+    /// request is a root change and belongs to `locationRootChangePreview`.
+    async fn location_root_consolidation_preview(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(
+            desc = "The root being folded away, the root that absorbs it, and how the files get there."
+        )]
+        input: LocationRootConsolidationPreviewInput,
+    ) -> GqlResult<LocationRootConsolidationPreviewPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let request =
+            scryer_application::location::consolidation_execution::RootConsolidationPreviewRequest {
+                library_id: input.library_id.to_string(),
+                source_root_id: input.source_root_id.to_string(),
+                destination_root_id: input.destination_root_id.to_string(),
+                mode: location_execution_mode_into_application(input.mode),
+            };
+        let preview = app
+            .preview_root_consolidation(&actor, request)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(from_root_consolidation_preview(&preview))
+    }
+
+    /// Read one location operation with its per-title checkpoints.
+    async fn location_operation(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Location-operation identity.")] id: ID,
+    ) -> GqlResult<Option<LocationOperationPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let operation_id = id.to_string();
+        let Some(operation) = app
+            .location_operation(&operation_id)
+            .await
+            .map_err(to_gql_error)?
+        else {
+            return Ok(None);
+        };
+        // The same source-and-destination gate the operation was started under
+        // (FR-083); reading an operation is reading both libraries' state.
+        app.require_location_operation_permission(&actor, &operation)
+            .await
+            .map_err(to_gql_error)?;
+        let checkpoints = app
+            .location_operation_checkpoints(&operation_id)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(Some(from_location_operation(&operation, &checkpoints)))
+    }
+
+    /// Which files one location operation renames and deduplicates, per title.
+    ///
+    /// Activity's counters say how many; this says which ones, and whether each
+    /// has happened yet or is still only what the confirmed plan intends
+    /// (FR-091). It is a separate read from `locationOperation` because the
+    /// per-file identities live in the operation's stored plan, which a
+    /// progress poll has no reason to load.
+    async fn location_operation_assets(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Location-operation identity.")] id: ID,
+    ) -> GqlResult<Option<LocationOperationAssetListingPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let operation_id = id.to_string();
+        let Some(operation) = app
+            .location_operation(&operation_id)
+            .await
+            .map_err(to_gql_error)?
+        else {
+            return Ok(None);
+        };
+        // The same source-and-destination gate reading the operation itself
+        // applies (FR-083); this reads the same two libraries' paths.
+        app.require_location_operation_permission(&actor, &operation)
+            .await
+            .map_err(to_gql_error)?;
+        let listing = app
+            .location_operation_asset_listing(&operation_id)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(Some(from_location_operation_asset_listing(&listing)))
     }
 
     /// Preview deleting all media files for one title without changing files.

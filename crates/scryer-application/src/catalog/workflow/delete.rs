@@ -113,6 +113,13 @@ impl AppUseCase {
             scryer_domain::LibraryPermission::ManageTitles,
         )
         .await?;
+        // Deleting a title an operation is mid-move would strip the catalog
+        // record out from under it (FR-084).
+        self.ensure_location_ownership_allows_title(
+            &crate::location::ownership_guard::TITLE_DELETE_ENTRY,
+            &title.id,
+        )
+        .await?;
 
         if delete_files_on_disk {
             let delete_confirmation = delete_confirmation.ok_or_else(|| {
@@ -429,6 +436,14 @@ impl AppUseCase {
             .get_by_id(&item.title_id)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("title {}", item.title_id)))?;
+        // The bulk job does not route through `delete_title`, so it carries its
+        // own check (FR-084). One item's refusal leaves the rest of the batch
+        // alone.
+        self.ensure_location_ownership_allows_title(
+            &crate::location::ownership_guard::TITLE_DELETE_JOB_ENTRY,
+            &title.id,
+        )
+        .await?;
 
         if delete_files_on_disk {
             let preview_fingerprint = item
@@ -848,6 +863,14 @@ impl AppUseCase {
             actor,
             &library_id,
             scryer_domain::LibraryPermission::ManageTitles,
+        )
+        .await?;
+        // Removing a file (or its disk copy) under an in-flight move would
+        // invalidate the plan the operation is executing (FR-084). The bulk
+        // deletion job routes through here too.
+        self.ensure_location_ownership_allows_title(
+            &crate::location::ownership_guard::MEDIA_FILE_DELETE_ENTRY,
+            &media_file.title_id,
         )
         .await?;
         let matching_movie_collection_ids = self

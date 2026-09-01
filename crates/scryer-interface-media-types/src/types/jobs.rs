@@ -36,6 +36,8 @@ pub enum JobKeyValue {
     PendingReleaseProcessing,
     /// Staged NZB pruning.
     StagedNzbPrune,
+    /// Background full-file content-hash backfill.
+    FullHashBackfill,
     /// Discovery synchronization.
     DiscoverySync,
     /// Title-image cache refresh.
@@ -60,6 +62,8 @@ pub enum JobKeyValue {
     AcquisitionSearch,
     /// Application upgrade.
     ApplicationUpgrade,
+    /// Location operation: a root move, transfer, or other placement change.
+    LocationOperation,
 }
 
 /// Broad category assigned to a job.

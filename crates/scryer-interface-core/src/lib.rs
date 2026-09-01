@@ -401,6 +401,39 @@ pub fn to_gql_error(err: AppError) -> Error {
         AppError::Validation(message) => {
             coded_gql_error(format!("validation: {message}"), "VALIDATION_ERROR")
         }
+        // A refused location plan is a validation failure the client acts on:
+        // `stale_plan` means re-preview, `blocked_items` means unblock the
+        // selection, `insufficient_space` means neither will help and the user
+        // has to free room. The reason travels as a code so the client never
+        // has to parse the sentence (FR-016, FR-080, FR-081).
+        AppError::LocationPlanRefused { message, code } => {
+            Error::new(format!("validation: {message}")).extend_with(|_, extensions| {
+                extensions.set("code", "LOCATION_PLAN_REFUSED");
+                extensions.set("refusalCode", code.as_str());
+            })
+        }
+        // A root-scoped workflow refused the request before planning: the
+        // destination is not admissible, the source root cannot be read, or the
+        // user asked the wrong half of FR-020's one control. The code is the
+        // application's own vocabulary and travels typed, so the client
+        // cross-routes between "change root" and "consolidate" without reading
+        // a sentence (FR-020 to FR-029).
+        AppError::LocationRootRefused { message, code } => {
+            Error::new(format!("validation: {message}")).extend_with(|_, extensions| {
+                extensions.set("code", "LOCATION_ROOT_REFUSED");
+                extensions.set("refusalCode", code);
+            })
+        }
+        // The retired direct root write (FR-077). Its own code, so a client can
+        // route the user into the move workflow instead of surfacing a generic
+        // validation failure, and the title id so a bulk edit can name the row
+        // that refused.
+        AppError::DirectRootWriteRetired { message, title_id } => {
+            Error::new(format!("validation: {message}")).extend_with(|_, extensions| {
+                extensions.set("code", "DIRECT_ROOT_WRITE_RETIRED");
+                extensions.set("titleId", title_id);
+            })
+        }
         AppError::NoAutoEligibleRelease {
             candidate_count,
             reasons,
@@ -552,6 +585,9 @@ fn app_error_kind(err: &AppError) -> &'static str {
     match err {
         AppError::Unauthorized(_) => "Unauthorized",
         AppError::Validation(_) => "Validation",
+        AppError::LocationPlanRefused { .. } => "LocationPlanRefused",
+        AppError::LocationRootRefused { .. } => "LocationRootRefused",
+        AppError::DirectRootWriteRetired { .. } => "DirectRootWriteRetired",
         AppError::NoAutoEligibleRelease { .. } => "NoAutoEligibleRelease",
         AppError::PluginInstallInProgress(_) => "PluginInstallInProgress",
         AppError::NotFound(_) => "NotFound",
@@ -873,6 +909,66 @@ mod tests {
             let error = to_login_gql_error("jellyfin", err);
             assert_eq!(error.message, LOGIN_FAILED_MESSAGE);
             assert_eq!(graphql_error_code(&error), Some("LOGIN_FAILED"));
+        }
+    }
+
+    #[test]
+    fn a_root_scoped_refusal_promotes_its_code_and_carries_no_machine_tail() {
+        let error = to_gql_error(AppError::LocationRootRefused {
+            message: "that path is already the root “/media/new” of this library; consolidate \
+                      instead"
+                .into(),
+            code: "root_change_destination_is_configured_root",
+        });
+        assert_eq!(
+            error.message,
+            "validation: that path is already the root “/media/new” of this library; consolidate instead"
+        );
+        assert!(
+            !error.message.contains('['),
+            "the code travels in extensions, never as a bracketed tail on the sentence"
+        );
+        assert_eq!(graphql_error_code(&error), Some("LOCATION_ROOT_REFUSED"));
+        assert_eq!(
+            graphql_error_extension_string(&error, "refusalCode"),
+            Some("root_change_destination_is_configured_root")
+        );
+    }
+
+    #[test]
+    fn the_fr_020_cross_route_pair_both_carry_their_codes() {
+        for code in [
+            "root_change_destination_is_configured_root",
+            "root_consolidation_destination_not_a_configured_root",
+        ] {
+            let error = to_gql_error(AppError::LocationRootRefused {
+                message: "pick the other one".into(),
+                code,
+            });
+            assert_eq!(graphql_error_code(&error), Some("LOCATION_ROOT_REFUSED"));
+            assert_eq!(
+                graphql_error_extension_string(&error, "refusalCode"),
+                Some(code)
+            );
+        }
+    }
+
+    #[test]
+    fn a_plain_validation_failure_from_a_root_workflow_stays_a_validation_error() {
+        // Nothing parses prose any more: a sentence that merely *looks* like a
+        // coded refusal is still an ordinary validation failure.
+        for message in [
+            "choose a new path for this root",
+            "something went wrong [root_change_paths_overlap]",
+        ] {
+            let error = to_gql_error(AppError::Validation(message.into()));
+            assert_eq!(error.message, format!("validation: {message}"));
+            assert_eq!(graphql_error_code(&error), Some("VALIDATION_ERROR"));
+            assert_eq!(
+                graphql_error_extension_string(&error, "refusalCode"),
+                None,
+                "a plain validation failure carries no refusal code"
+            );
         }
     }
 

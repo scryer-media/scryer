@@ -1645,3 +1645,16 @@ pub enum PendingReleaseRoleValue {
     /// A lower-ranked active candidate retained as a fallback.
     Fallback,
 }
+
+/// How thoroughly a copied file is proven before its source may be touched.
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+pub enum VerificationDepthValue {
+    /// Read the destination back in full and compare it against the CRC streamed
+    /// during the copy.
+    Full,
+    /// Compare the sampled head and tail content proof plus the file size. This
+    /// is also the floor full verification falls back to when a full read-back
+    /// cannot run.
+    Quick,
+}

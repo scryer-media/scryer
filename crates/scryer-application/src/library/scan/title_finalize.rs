@@ -9,6 +9,9 @@ struct ExistingScannedMediaFile<'a> {
     file_id: &'a str,
     should_skip_analysis: bool,
     should_refresh_source_signature: bool,
+    /// FR-046: the sampled quick proof changed, so the persisted full hashes
+    /// describe bytes that no longer exist.
+    should_invalidate_full_hashes: bool,
 }
 
 struct PersistedScannedMediaFile {
@@ -44,6 +47,36 @@ async fn persist_or_reuse_scanned_media_file(
 
     if let Some(existing) = existing {
         let mut db_elapsed = Duration::default();
+
+        // FR-046: a changed quick proof throws away the persisted full hashes
+        // before anything else, so a crash between here and the signature
+        // refresh leaves the file queued for backfill rather than carrying a
+        // hash of content it no longer holds. The scan itself never computes a
+        // full hash; it only ever clears one.
+        if existing.should_invalidate_full_hashes {
+            let db_started = Instant::now();
+            let invalidated = app
+                .services
+                .library
+                .media_files
+                .clear_media_file_content_hashes(existing.file_id)
+                .await;
+            db_elapsed = db_elapsed.saturating_add(db_started.elapsed());
+            match invalidated {
+                Ok(true) => tracing::info!(
+                    title_id = %title.id,
+                    file_id = %existing.file_id,
+                    "sampled content proof changed; cleared persisted full hashes and re-queued the file for backfill"
+                ),
+                Ok(false) => {}
+                Err(error) => warn!(
+                    error = %error,
+                    title_id = %title.id,
+                    file_id = %existing.file_id,
+                    "failed to invalidate persisted full hashes after a changed content proof"
+                ),
+            }
+        }
 
         if existing.should_refresh_source_signature {
             let db_started = Instant::now();
@@ -307,10 +340,12 @@ pub(crate) async fn finalize_title_scan_file(
             file_id,
             should_skip_analysis,
             should_refresh_source_signature,
+            should_invalidate_full_hashes,
         } => Some(ExistingScannedMediaFile {
             file_id,
             should_skip_analysis: *should_skip_analysis,
             should_refresh_source_signature: *should_refresh_source_signature,
+            should_invalidate_full_hashes: *should_invalidate_full_hashes,
         }),
         PlannedTitleScanRecord::New => None,
     };
@@ -590,6 +625,9 @@ pub(super) async fn finalize_movie_scan_file(
                 || existing.source_signature_scheme != desired_source_signature_scheme.clone()
                 || existing.source_signature_value != desired_source_signature_value.clone()
                 || existing.scan_status != "scanned",
+            should_invalidate_full_hashes: title_media_file_quick_proof_changed(
+                existing, &snapshot,
+            ),
         });
 
     let destination_permit = app

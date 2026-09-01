@@ -182,7 +182,8 @@ async fn configure_default_library_root(
         .await
         .expect("default library should load")
         .expect("default library should exist");
-    ctx.libraries
+    let updated = ctx
+        .libraries
         .update(
             &library_id,
             library.name,
@@ -194,7 +195,14 @@ async fn configure_default_library_root(
         )
         .await
         .expect("default library root should update");
-    scryer_domain::root_folder_id_for_path(media_root)
+    // Root ids are allocated, not derived from the path, so read the stored id back.
+    updated
+        .roots
+        .iter()
+        .find(|root| root.is_default)
+        .or_else(|| updated.roots.first())
+        .map(|root| root.id.clone())
+        .expect("configured library should expose its root")
 }
 
 /// Add a minimal movie Title to the DB with `media_root` configured as the

@@ -233,11 +233,15 @@ pub(crate) async fn import_file_with_record_progress(
         completed.map_or("", |item| item.client_type.as_str()),
     )
     .with_active_import_stream(active_stream.clone());
+    // FR-045: the depth is resolved *at import time*, not at process start, so
+    // a preference change takes effect on the next import rather than the next
+    // restart.
+    let verification_depth = app.resolve_verification_depth().await;
     let result = app
         .services
         .workflow
         .file_importer
-        .import_file_with_execution_context(
+        .import_file_verified_with_execution_context(
             source,
             dest,
             mode,
@@ -245,6 +249,7 @@ pub(crate) async fn import_file_with_record_progress(
             Some(progress_tx),
             &permissions,
             &execution_context,
+            verification_depth,
         )
         .await;
 
@@ -380,6 +385,8 @@ impl CoordinatedImportFileResult {
             .media_files
             .claim_import_destination(input, &associations)
             .await?;
+        self.persist_content_hashes(app, &claimed.media_file_id)
+            .await;
         Ok(CoordinatedMediaFilePersistence {
             media_file_id: claimed.media_file_id,
             reused_existing: matches!(
@@ -388,6 +395,48 @@ impl CoordinatedImportFileResult {
             ),
             destination_created,
         })
+    }
+
+    /// Persist what the copy proved about this file (FR-041/045, migration
+    /// 0205).
+    ///
+    /// Only a copy has hashes to persist: a hardlink or same-filesystem rename
+    /// moved no bytes, so it carries no verification and leaves the columns
+    /// alone for the backfill job (FR-047) to fill in later.
+    ///
+    /// A write failure is logged, never propagated. The bytes are already
+    /// placed and proven; losing the hash costs a later backfill pass, while
+    /// failing the import here would cost the user a completed download.
+    async fn persist_content_hashes(&self, app: &AppUseCase, media_file_id: &str) {
+        let Some(verification) = self.result.verification.as_ref() else {
+            return;
+        };
+        if !verification.permits_source_removal() {
+            return;
+        }
+
+        let hashes = crate::location::model::PersistedContentHashes::from_streamed(
+            &verification.hashes,
+            Utc::now(),
+        );
+        match app
+            .services
+            .library
+            .media_files
+            .update_media_file_content_hashes(media_file_id, &hashes)
+            .await
+        {
+            Ok(()) => tracing::debug!(
+                media_file_id,
+                depth = %verification.depth.label(),
+                "persisted import content hashes"
+            ),
+            Err(error) => tracing::warn!(
+                error = %error,
+                media_file_id,
+                "failed to persist import content hashes; the backfill job will recompute them"
+            ),
+        }
     }
 
     pub(crate) fn destination_permit(&self) -> ImportDestinationPermit {

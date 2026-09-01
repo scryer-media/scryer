@@ -788,6 +788,165 @@ impl WorkflowOperationRepository for NullWorkflowOperationRepository {
 }
 
 #[derive(Default)]
+pub struct NullLocationOperationRepository;
+
+#[async_trait]
+impl crate::ports::LocationOperationRepository for NullLocationOperationRepository {
+    async fn create_location_operation(
+        &self,
+        _operation: &crate::location::model::LocationOperation,
+        _plan_json: Option<&str>,
+    ) -> AppResult<()> {
+        Err(location_operation_repository_missing())
+    }
+
+    async fn get_location_operation(
+        &self,
+        _operation_id: &str,
+    ) -> AppResult<Option<crate::location::model::LocationOperation>> {
+        Err(location_operation_repository_missing())
+    }
+
+    async fn get_location_operation_plan_json(
+        &self,
+        _operation_id: &str,
+    ) -> AppResult<Option<String>> {
+        Err(location_operation_repository_missing())
+    }
+
+    async fn list_active_location_operations(
+        &self,
+    ) -> AppResult<Vec<crate::location::model::LocationOperation>> {
+        Ok(Vec::new())
+    }
+
+    async fn update_location_operation_progress(
+        &self,
+        _progress: &crate::ports::LocationOperationProgress,
+    ) -> AppResult<()> {
+        Err(location_operation_repository_missing())
+    }
+
+    async fn set_location_operation_job_run(
+        &self,
+        _operation_id: &str,
+        _job_run_id: &str,
+    ) -> AppResult<()> {
+        Err(location_operation_repository_missing())
+    }
+
+    async fn request_location_operation_cancel(&self, _operation_id: &str) -> AppResult<bool> {
+        Err(location_operation_repository_missing())
+    }
+
+    async fn location_operation_cancel_requested(&self, _operation_id: &str) -> AppResult<bool> {
+        Ok(false)
+    }
+
+    async fn upsert_location_title_checkpoint(
+        &self,
+        _checkpoint: &crate::location::model::TitleCheckpoint,
+    ) -> AppResult<()> {
+        Err(location_operation_repository_missing())
+    }
+
+    async fn list_location_title_checkpoints(
+        &self,
+        _operation_id: &str,
+    ) -> AppResult<Vec<crate::location::model::TitleCheckpoint>> {
+        Ok(Vec::new())
+    }
+
+    async fn record_location_file_verification(
+        &self,
+        _record: &crate::location::model::FileVerificationRecord,
+    ) -> AppResult<()> {
+        Err(location_operation_repository_missing())
+    }
+
+    async fn list_location_file_verifications(
+        &self,
+        _operation_id: &str,
+        _title_id: Option<&str>,
+    ) -> AppResult<Vec<crate::location::model::FileVerificationRecord>> {
+        Ok(Vec::new())
+    }
+
+    async fn verified_destination_paths(
+        &self,
+        _operation_id: &str,
+        _title_id: &str,
+    ) -> AppResult<std::collections::BTreeSet<String>> {
+        Ok(std::collections::BTreeSet::new())
+    }
+
+    async fn claim_location_operation_ownership(
+        &self,
+        _operation_id: &str,
+        _entities: &[crate::location::ownership_guard::OwnedEntity],
+    ) -> AppResult<crate::ports::LocationOwnershipOutcome> {
+        Err(location_operation_repository_missing())
+    }
+
+    async fn release_location_operation_ownership(&self, _operation_id: &str) -> AppResult<u64> {
+        Ok(0)
+    }
+
+    async fn location_ownership_holder(
+        &self,
+        _entity: &crate::location::ownership_guard::OwnedEntity,
+    ) -> AppResult<Option<String>> {
+        Ok(None)
+    }
+
+    async fn list_location_ownership_claims(
+        &self,
+    ) -> AppResult<Vec<crate::ports::LocationOwnershipClaim>> {
+        Ok(Vec::new())
+    }
+}
+
+/// Reads answer "nothing is happening" so a guard consulting an unconfigured
+/// datastore never invents a conflict; writes fail loudly rather than pretending
+/// an operation was persisted.
+fn location_operation_repository_missing() -> AppError {
+    AppError::Repository("location operation repository is not configured".to_string())
+}
+
+/// The US7 merge engine with no datastore behind it.
+///
+/// Unlike the location-operation null repository, **both** halves fail here.
+/// There is no safe "nothing is happening" answer for a merge: an empty
+/// snapshot would plan a merge over a destination the engine cannot see, which
+/// is precisely the guess FR-066 exists to prevent. A deployment with no merge
+/// store configured must refuse the merge, not perform an unexamined one.
+#[derive(Default)]
+pub struct NullTitleMergeRepository;
+
+#[async_trait]
+impl crate::location::merge::engine::TitleMergeRepository for NullTitleMergeRepository {
+    async fn load_merge_snapshot(
+        &self,
+        _source_title_id: &str,
+        _destination_title_id: &str,
+        _current_operation_id: Option<&str>,
+    ) -> AppResult<crate::location::merge::engine::MergeCatalogSnapshot> {
+        Err(title_merge_repository_missing())
+    }
+
+    async fn execute_title_merge(
+        &self,
+        _plan: &crate::location::merge::engine::MergePlan,
+    ) -> AppResult<crate::location::merge::engine::MergeOutcome> {
+        Err(title_merge_repository_missing())
+    }
+}
+
+fn title_merge_repository_missing() -> AppError {
+    AppError::Repository("title merge repository is not configured".to_string())
+}
+
+#[derive(Default)]
 pub struct NullMediaFileRepository;
 
 #[async_trait]
@@ -2741,6 +2900,12 @@ impl LibraryRepository for NullLibraryRepository {
         _slug: String,
         _roots: Vec<LibraryRootDraft>,
     ) -> AppResult<Library> {
+        Err(AppError::Repository(
+            "library repository not configured".into(),
+        ))
+    }
+
+    async fn set_root_path(&self, _root_id: &str, _path: &str) -> AppResult<Library> {
         Err(AppError::Repository(
             "library repository not configured".into(),
         ))

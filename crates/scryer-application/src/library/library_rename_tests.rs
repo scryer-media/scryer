@@ -991,6 +991,7 @@ fn test_media_file(path: &str) -> TitleMediaFile {
         announced_size_bytes: None,
         source_signature_scheme: None,
         source_signature_value: None,
+        content_hashes: None,
         quality_label: Some("720p".to_string()),
         scan_status: "scanned".to_string(),
         created_at: "2026-04-11T00:00:00Z".to_string(),

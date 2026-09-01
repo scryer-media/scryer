@@ -438,6 +438,7 @@ fn media_row_as_import_would_write(
         role: crate::MediaFileRole::Primary,
         source_signature_scheme: None,
         source_signature_value: None,
+        content_hashes: None,
         quality_label: stored_parse.quality.clone(),
         scan_status: "imported".into(),
         created_at: "2026-01-01T00:00:00Z".into(),

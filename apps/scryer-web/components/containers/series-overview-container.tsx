@@ -68,6 +68,7 @@ import type { OverviewTitleTarget } from "@/components/root/types";
 import type { TitleOptionUpdates } from "@/lib/types/title-options";
 import type {
   CanonicalMediaTag,
+  LibraryRecord,
   LibraryRootRecord,
   TitleCreditRecord,
 } from "@/lib/types/titles";
@@ -394,6 +395,9 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
   const [defaultRootFolder, setDefaultRootFolder] = React.useState(DEFAULT_SERIES_LIBRARY_PATH);
   const [renameEnabled, setRenameEnabled] = React.useState(true);
   const [rootFolders, setRootFolders] = React.useState<LibraryRootRecord[]>([]);
+  // Every library this facet offers, not just the title's own: the move
+  // workflow needs the full list to reach a cross-library destination.
+  const [libraries, setLibraries] = React.useState<LibraryRecord[]>([]);
   const [mediaFilesByEpisode, setMediaFilesByEpisode] = React.useState<
     Record<string, EpisodeMediaFile[]>
   >({});
@@ -1295,11 +1299,13 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
       const libraryId = title?.libraryId;
       if (!libraryId) {
         setRootFolders([]);
+        setLibraries([]);
         return;
       }
       const facet = facetById(title?.facet)?.id;
       if (!facet) {
         setRootFolders([]);
+        setLibraries([]);
         return;
       }
       try {
@@ -1312,12 +1318,17 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
           .toPromise();
         if (error) throw error;
         if (cancelled) return;
-        const library = (data.libraries ?? []).find(
-          (candidate: { id: string }) => candidate.id === libraryId,
-        );
+        const all: LibraryRecord[] = Array.isArray(data.libraries)
+          ? data.libraries
+          : [];
+        const library = all.find((candidate) => candidate.id === libraryId);
         setRootFolders(Array.isArray(library?.roots) ? library.roots : []);
+        setLibraries(all);
       } catch {
-        if (!cancelled) setRootFolders([]);
+        if (!cancelled) {
+          setRootFolders([]);
+          setLibraries([]);
+        }
       }
     };
     void load();
@@ -1833,6 +1844,7 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
         defaultRootFolder={defaultRootFolder}
         renameEnabled={renameEnabled}
         rootFolders={rootFolders}
+        libraries={libraries}
         onUpdateTitleOptions={handleUpdateTitleOptions}
         completedDownloads={completedDownloads}
         onOpenManualImport={handleOpenManualImport}

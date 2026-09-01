@@ -1,4 +1,8 @@
-import type { IndexerProxyDraft, UiDateTimeFormat } from "../types/index.ts";
+import type {
+  IndexerProxyDraft,
+  UiDateTimeFormat,
+  VerificationDepth,
+} from "../types/index.ts";
 
 function buildIndexerProxyCommonInput(draft: IndexerProxyDraft) {
   return {
@@ -28,6 +32,15 @@ export function buildUpdateIndexerProxyInput(
 
 export function parseUiDateTimeFormat(value: string): UiDateTimeFormat | null {
   return value === "LOCALE" || value === "ISO24H" ? value : null;
+}
+
+/**
+ * The verification depth a select handed back, or `null` for anything the
+ * server would not accept. Keeps the GraphQL enum's casing: the value goes
+ * straight back into `updateVerificationSettings`.
+ */
+export function parseVerificationDepth(value: string): VerificationDepth | null {
+  return value === "FULL" || value === "QUICK" ? value : null;
 }
 
 export function buildDownloadClientConnectionTestInput<TConfig>(

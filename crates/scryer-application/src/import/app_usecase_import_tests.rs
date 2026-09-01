@@ -1858,6 +1858,7 @@ fn scoped_media_file(
             announced_size_bytes: None,
             source_signature_scheme: None,
             source_signature_value: None,
+            content_hashes: None,
             quality_label: Some("1080p".to_string()),
             scan_status: "scanned".to_string(),
             created_at: chrono::Utc::now().to_rfc3339(),

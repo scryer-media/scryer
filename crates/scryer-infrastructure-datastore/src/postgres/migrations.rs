@@ -527,6 +527,9 @@ async fn run_postgres_rust_hook(
         "compact_event_storage" => {
             crate::migrations::event_storage::compact_event_storage_postgres(tx).await
         }
+        "migrate_synthetic_root_ids" => {
+            crate::migrations::synthetic_root_ids::migrate_synthetic_root_ids_postgres(tx).await
+        }
         #[cfg(test)]
         "test_insert_hook_marker" => {
             let marker = match install_kind {

@@ -2,6 +2,11 @@
 mod tests {
     #[cfg(unix)]
     use super::is_sample_file;
+    // Only the runtime-media-analysis tests below use these; gating the import
+    // keeps the default-feature lane free of unused-import warnings without
+    // breaking the workspace lane, where feature unification turns them on.
+    #[cfg(feature = "runtime-media-analysis")]
+    use super::{discover_manual_import_video_candidates, qualify_manual_import_video_candidate};
     use super::{
         CompletedDownloadSubmissionMatch, CompletedDownloadSubmissionResolution,
         CompletedImportEvidenceInputs, CompletedImportEvidenceSource,
@@ -9,9 +14,9 @@ mod tests {
         IMPORT_TRANSFER_HEARTBEAT_INTERVAL, ManualImportCandidateMapping, ReleaseEvidence,
         SelectedCompletedImportEvidence, StoredCompletedImportRequestPayload,
         completed_import_error_message_is_retryable, completed_import_status_for_result,
-        discover_manual_import_video_candidates, download_submission_persistence_may_be_in_flight,
+        download_submission_persistence_may_be_in_flight,
         manual_episode_suggestion_for_grabbed_scope, parse_import_release_for_title,
-        qualify_manual_import_video_candidate, resolved_episode_ids_are_within_expected,
+        resolved_episode_ids_are_within_expected,
         sanitized_title_folder_component,
         select_completed_import_evidence, should_persist_import_transfer_heartbeat,
         skip_reason_for_import_check_code, stamp_scryer_submission_origin,

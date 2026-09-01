@@ -21,6 +21,9 @@ pub(super) struct MockTitleRepo {
     pub(super) store: Arc<Mutex<Vec<Title>>>,
     pub(super) smg_identity_backfill_attempts: Arc<Mutex<HashMap<String, i64>>>,
     pub(super) create_or_get_existing_error: Arc<Mutex<Option<String>>>,
+    /// `(title_id, message)`: fail folder-ownership writes for one title, so a
+    /// compensating transaction can be exercised at the exact commit that fails.
+    pub(super) folder_path_write_error: Arc<Mutex<Option<(String, String)>>>,
     pub(super) delete_operation_log: OptionalDeleteOperationLog,
     pub(super) pending_import_items: Option<Arc<Mutex<Vec<LibraryScanUnmatchedItem>>>>,
     pub(super) external_id_batch_lookup_calls: AtomicUsize,
@@ -156,6 +159,21 @@ pub(super) fn sorted_limited_job_runs(
 impl MockTitleRepo {
     pub(super) async fn fail_create_or_get_existing(&self, message: &str) {
         *self.create_or_get_existing_error.lock().await = Some(message.to_string());
+    }
+
+    /// Make every `set_folder_path`/`clear_folder_path` for `title_id` fail.
+    pub(super) async fn fail_folder_path_writes_for(&self, title_id: &str, message: &str) {
+        *self.folder_path_write_error.lock().await =
+            Some((title_id.to_string(), message.to_string()));
+    }
+
+    async fn folder_path_write_failure(&self, id: &str) -> Option<AppError> {
+        self.folder_path_write_error
+            .lock()
+            .await
+            .as_ref()
+            .filter(|(failing_id, _)| failing_id == id)
+            .map(|(_, message)| AppError::Repository(message.clone()))
     }
 
     pub(super) async fn set_delete_operation_log(&self, operation_log: Arc<Mutex<Vec<String>>>) {
@@ -684,6 +702,36 @@ impl TitleRepository for MockTitleRepo {
         Ok(title.clone())
     }
 
+    /// FR-056: the transfer repoints the existing row, so everything keyed on
+    /// the title id stays exactly where it is. The mock mirrors the store's
+    /// behaviour rather than the store's SQL: the row's library and root change,
+    /// and nothing else about the title does.
+    async fn transfer_to_library(
+        &self,
+        id: &str,
+        library_id: &str,
+        root_folder_id: &str,
+        facet: Option<MediaFacet>,
+        drop_tag_prefixes: &[String],
+    ) -> AppResult<()> {
+        let mut list = self.store.lock().await;
+        let title = list
+            .iter_mut()
+            .find(|entry| entry.id == id)
+            .ok_or_else(|| AppError::NotFound(format!("title {id}")))?;
+        title.library_id = library_id.to_string();
+        title.root_folder_id = root_folder_id.to_string();
+        // FR-057: the facet converts in the same write, and the values derived
+        // under the old facet go with it.
+        if let Some(facet) = facet {
+            title.facet = facet;
+            title
+                .tags
+                .retain(|tag| !drop_tag_prefixes.iter().any(|prefix| tag.starts_with(prefix)));
+        }
+        Ok(())
+    }
+
     async fn update_monitored(&self, id: &str, monitored: bool) -> AppResult<Title> {
         let mut list = self.store.lock().await;
         let title = list
@@ -769,6 +817,9 @@ impl TitleRepository for MockTitleRepo {
     }
 
     async fn set_folder_path(&self, id: &str, folder_path: &str) -> AppResult<()> {
+        if let Some(error) = self.folder_path_write_failure(id).await {
+            return Err(error);
+        }
         let mut list = self.store.lock().await;
         let title = list
             .iter_mut()
@@ -779,6 +830,9 @@ impl TitleRepository for MockTitleRepo {
     }
 
     async fn clear_folder_path(&self, id: &str) -> AppResult<()> {
+        if let Some(error) = self.folder_path_write_failure(id).await {
+            return Err(error);
+        }
         let mut list = self.store.lock().await;
         let title = list
             .iter_mut()

@@ -4,6 +4,7 @@ use super::keys::{
 };
 use super::*;
 use crate::acquisition_policy::AcquisitionThresholds;
+use crate::location::model::VerificationDepth;
 use crate::ports::ImportFilePermissions;
 use crate::scoring_weights::ScoringPersona;
 use crate::subtitles::{normalize_subtitle_language_code, wanted::SubtitleLanguagePref};
@@ -16,6 +17,7 @@ use crate::{
     RECYCLE_BIN_PATH_KEY, RECYCLE_BIN_RETENTION_DAYS_KEY, REQUIRED_AUDIO_LANGUAGES_KEY,
     SCORING_PERSONA_KEY, SETTINGS_SOURCE_TYPED_GRAPHQL, SETUP_COMPLETE_KEY,
     SKIP_LOGIN_FOR_LOCAL_IPS_KEY, TITLE_REQUIRED_AUDIO_OVERRIDE_KEY, USE_SEASON_FOLDERS_KEY,
+    VERIFICATION_DEPTH_KEY,
 };
 use aws_lc_rs::digest as aws_lc_digest;
 use regex::Regex;
@@ -35,6 +37,7 @@ include!("acquisition.rs");
 include!("general.rs");
 include!("security.rs");
 include!("recycle_bin.rs");
+include!("verification.rs");
 include!("library.rs");
 include!("media.rs");
 include!("quality_profiles.rs");

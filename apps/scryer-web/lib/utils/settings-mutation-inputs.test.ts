@@ -5,6 +5,7 @@ import {
   buildDownloadClientConnectionTestInput,
   buildUpdateIndexerProxyInput,
   parseUiDateTimeFormat,
+  parseVerificationDepth,
 } from "./settings-mutation-inputs.ts";
 
 const proxyDraft = {
@@ -36,6 +37,14 @@ test("time format values preserve GraphQL enum casing", () => {
   assert.equal(parseUiDateTimeFormat("LOCALE"), "LOCALE");
   assert.equal(parseUiDateTimeFormat("ISO24H"), "ISO24H");
   assert.equal(parseUiDateTimeFormat("locale"), null);
+});
+
+test("verification depth values preserve GraphQL enum casing", () => {
+  assert.equal(parseVerificationDepth("FULL"), "FULL");
+  assert.equal(parseVerificationDepth("QUICK"), "QUICK");
+  assert.equal(parseVerificationDepth("full"), null);
+  assert.equal(parseVerificationDepth(""), null);
+  assert.equal(parseVerificationDepth("SAMPLED"), null);
 });
 
 test("download client tests include only an editing client id", () => {

@@ -3,9 +3,9 @@ use chrono::Utc;
 use scryer_application::{AppError, AppResult, LibraryRepository, LibraryRootDraft};
 use scryer_domain::{
     AppPermissionMask, Library, LibraryGrant, LibraryPermissionMask, LibraryRoot, MediaFacet,
-    default_library_id_for_facet, normalize_library_root_path, root_folder_id_for_path,
+    allocate_root_folder_id, default_library_id_for_facet, normalize_library_root_path,
 };
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTx, StoreDatastore};
 
@@ -74,6 +74,27 @@ impl LibraryRepository for LibraryStore {
                 update_library_tx(tx, &library_id, name, slug, roots).await?;
                 load_library_tx(tx, &library_id).await?.ok_or_else(|| {
                     AppError::Repository("updated library was not found".to_string())
+                })
+            })
+        })
+        .await
+    }
+
+    async fn set_root_path(&self, root_id: &str, path: &str) -> AppResult<Library> {
+        let root_id = root_id.to_string();
+        let path = path.trim().to_string();
+        if path.is_empty() {
+            return Err(AppError::Validation(
+                "a library root path cannot be empty".to_string(),
+            ));
+        }
+        SqlRuntime::run_in_transaction(&self.datastore, "set_library_root_path", move |tx| {
+            let root_id = root_id.clone();
+            let path = path.clone();
+            Box::pin(async move {
+                let library_id = set_root_path_tx(tx, &root_id, path).await?;
+                load_library_tx(tx, &library_id).await?.ok_or_else(|| {
+                    AppError::Repository("library of the relocated root was not found".to_string())
                 })
             })
         })
@@ -242,7 +263,8 @@ async fn insert_library_tx(
     )
     .await?;
 
-    insert_library_roots_tx(tx, &library.id, roots).await
+    // A brand new library has no roots to inherit identity from.
+    insert_library_roots_tx(tx, &library.id, roots, &HashMap::new()).await
 }
 
 async fn update_library_tx(
@@ -267,36 +289,113 @@ async fn update_library_tx(
         return Err(AppError::NotFound(format!("library {library_id}")));
     }
 
-    reject_referenced_root_removals_tx(tx, library_id, &roots).await?;
+    // The stored ids have to be read before the rows are deleted: a root's
+    // identity is permanent, so reinserting it must land it back on the id it
+    // already had rather than deriving a new one from its path (FR-078).
+    let existing_root_ids = existing_root_ids_by_normalized_path_tx(tx, library_id).await?;
+
+    reject_referenced_root_removals_tx(tx, library_id, &existing_root_ids, &roots).await?;
     tx.execute(
         "DELETE FROM library_roots WHERE library_id = {}",
         &[SqlArg::Text(library_id.to_string())],
     )
     .await?;
-    insert_library_roots_tx(tx, library_id, roots).await
+    insert_library_roots_tx(tx, library_id, roots, &existing_root_ids).await
+}
+
+/// Point one existing root row at a new path, in place (FR-021, FR-078).
+///
+/// The row is never deleted and reinserted, so the id, the library, the default
+/// flag, and every `titles.root_folder_id` reference survive untouched — the
+/// whole point of a root change is that the identity does not move with the
+/// path. Returns the library the root belongs to.
+async fn set_root_path_tx(
+    tx: &mut SqlTx<'_>,
+    root_id: &str,
+    path: String,
+) -> AppResult<String> {
+    let library_id = SqlRuntime::fetch_optional(
+        SqlExec::Tx(tx),
+        "SELECT library_id FROM library_roots WHERE id = {}",
+        &[SqlArg::Text(root_id.to_string())],
+    )
+    .await?
+    .map(|row| row.text("library_id"))
+    .transpose()?
+    .ok_or_else(|| AppError::NotFound(format!("library root {root_id}")))?;
+
+    let normalized_path = normalize_library_root_path(&path);
+    // `library_roots.normalized_path` is uniquely indexed, so a destination that
+    // is already somebody's root would fail here with a constraint violation the
+    // user cannot read. The caller refuses that case by name (it is
+    // consolidation, US5); this is the last line of defence, phrased.
+    let conflicting = SqlRuntime::fetch_optional(
+        SqlExec::Tx(tx),
+        "SELECT id FROM library_roots WHERE normalized_path = {} AND id <> {}",
+        &[
+            SqlArg::Text(normalized_path.clone()),
+            SqlArg::Text(root_id.to_string()),
+        ],
+    )
+    .await?
+    .map(|row| row.text("id"))
+    .transpose()?;
+    if let Some(conflicting) = conflicting {
+        return Err(AppError::Validation(format!(
+            "library root '{path}' is already configured as root {conflicting}"
+        )));
+    }
+
+    tx.execute(
+        "UPDATE library_roots SET path = {}, normalized_path = {}, updated_at = {} WHERE id = {}",
+        &[
+            SqlArg::Text(path),
+            SqlArg::Text(normalized_path),
+            SqlArg::Timestamp(Utc::now()),
+            SqlArg::Text(root_id.to_string()),
+        ],
+    )
+    .await?;
+
+    Ok(library_id)
+}
+
+/// A library's stored root ids, keyed by the normalized path each one points at.
+///
+/// Root ids are read back, never recomputed. This is the lookup that replaces
+/// the pre-0204 `root_folder_id_for_path` derivation.
+async fn existing_root_ids_by_normalized_path_tx(
+    tx: &mut SqlTx<'_>,
+    library_id: &str,
+) -> AppResult<HashMap<String, String>> {
+    let rows = SqlRuntime::fetch_all(
+        SqlExec::Tx(tx),
+        "SELECT id, normalized_path FROM library_roots WHERE library_id = {}",
+        &[SqlArg::Text(library_id.to_string())],
+    )
+    .await?;
+    rows.into_iter()
+        .map(|row| Ok((row.text("normalized_path")?, row.text("id")?)))
+        .collect()
 }
 
 async fn reject_referenced_root_removals_tx(
     tx: &mut SqlTx<'_>,
     library_id: &str,
+    existing_root_ids: &HashMap<String, String>,
     roots: &[LibraryRootDraft],
 ) -> AppResult<()> {
-    let rows = SqlRuntime::fetch_all(
-        SqlExec::Tx(tx),
-        "SELECT id FROM library_roots WHERE library_id = {}",
-        &[SqlArg::Text(library_id.to_string())],
-    )
-    .await?;
-    let existing_ids = rows
-        .into_iter()
-        .map(|row| row.text("id"))
-        .collect::<AppResult<HashSet<_>>>()?;
     let desired_ids = roots
         .iter()
-        .map(|root| root_folder_id_for_path(&root.path))
+        .filter_map(|root| {
+            existing_root_ids
+                .get(&normalize_library_root_path(&root.path))
+                .cloned()
+        })
         .collect::<HashSet<_>>();
-    let mut removed_root_ids = existing_ids
-        .difference(&desired_ids)
+    let mut removed_root_ids = existing_root_ids
+        .values()
+        .filter(|id| !desired_ids.contains(*id))
         .cloned()
         .collect::<Vec<_>>();
     removed_root_ids.sort();
@@ -335,6 +434,7 @@ async fn insert_library_roots_tx(
     tx: &mut SqlTx<'_>,
     library_id: &str,
     roots: Vec<LibraryRootDraft>,
+    existing_root_ids: &HashMap<String, String>,
 ) -> AppResult<()> {
     let now = Utc::now();
     for root in roots {
@@ -342,7 +442,13 @@ async fn insert_library_roots_tx(
         if path.is_empty() {
             continue;
         }
-        let root_id = root_folder_id_for_path(path);
+        let normalized_path = normalize_library_root_path(path);
+        // An existing root keeps the identity it already has; only a genuinely
+        // new root is allocated one.
+        let root_id = existing_root_ids
+            .get(&normalized_path)
+            .cloned()
+            .unwrap_or_else(allocate_root_folder_id);
         tx.execute(
             "INSERT INTO library_roots
              (id, library_id, path, normalized_path, is_default, created_at, updated_at)
@@ -351,7 +457,7 @@ async fn insert_library_roots_tx(
                 SqlArg::Text(root_id),
                 SqlArg::Text(library_id.to_string()),
                 SqlArg::Text(path.to_string()),
-                SqlArg::Text(normalize_library_root_path(path)),
+                SqlArg::Text(normalized_path),
                 SqlArg::Bool(root.is_default),
                 SqlArg::Timestamp(now),
                 SqlArg::Timestamp(now),
@@ -456,4 +562,257 @@ fn mask_to_db_value(mask: u64) -> i64 {
 
 fn mask_from_db_value(mask: i64) -> u64 {
     mask as u64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    async fn test_store() -> LibraryStore {
+        scryer_infrastructure_datastore::register_spellfix_auto_extension()
+            .expect("spellfix extension should register before migrations");
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite should open");
+        scryer_infrastructure_datastore::migrations::replay_source_catalog_for_fresh_install(
+            &pool, None, true,
+        )
+        .await
+        .expect("fresh migrations should apply");
+        LibraryStore::new(StoreDatastore::Sqlite {
+            pool,
+            writer_gate: std::sync::Arc::new(tokio::sync::Mutex::new(())),
+        })
+    }
+
+    fn draft(path: &str, is_default: bool) -> LibraryRootDraft {
+        LibraryRootDraft {
+            path: path.to_string(),
+            is_default,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_new_root_is_allocated_an_opaque_id_rather_than_one_derived_from_its_path() {
+        let store = test_store().await;
+        let now = Utc::now();
+        let library = store
+            .create(
+                Library {
+                    id: "allocated-root-library".to_string(),
+                    facet: MediaFacet::Movie,
+                    name: "Allocated".to_string(),
+                    slug: "allocated".to_string(),
+                    is_default: false,
+                    roots: Vec::new(),
+                    created_at: now,
+                    updated_at: now,
+                },
+                vec![draft("/mnt/allocated", true)],
+            )
+            .await
+            .expect("library should create");
+
+        let root = library.roots.first().expect("library should have a root");
+        assert!(
+            root.id
+                .starts_with(scryer_domain::SYNTHETIC_ROOT_ID_PREFIX),
+            "root id should be allocated, got {}",
+            root.id
+        );
+        assert_ne!(
+            root.id,
+            scryer_domain::root_folder_id_for_path("/mnt/allocated"),
+            "root identity must not be a function of the root path"
+        );
+    }
+
+    #[tokio::test]
+    async fn updating_a_library_keeps_the_identity_of_the_roots_it_still_has() {
+        let store = test_store().await;
+        let now = Utc::now();
+        let created = store
+            .create(
+                Library {
+                    id: "stable-root-library".to_string(),
+                    facet: MediaFacet::Movie,
+                    name: "Stable".to_string(),
+                    slug: "stable".to_string(),
+                    is_default: false,
+                    roots: Vec::new(),
+                    created_at: now,
+                    updated_at: now,
+                },
+                vec![draft("/mnt/stable", true)],
+            )
+            .await
+            .expect("library should create");
+        let original_root_id = created
+            .roots
+            .first()
+            .expect("library should have a root")
+            .id
+            .clone();
+
+        // The update path deletes and reinserts every root row, so this is where
+        // a derived id would silently mint a new identity.
+        let updated = store
+            .update(
+                "stable-root-library",
+                "Stable Renamed".to_string(),
+                "stable-renamed".to_string(),
+                vec![draft("/mnt/stable", true), draft("/mnt/stable-extra", false)],
+            )
+            .await
+            .expect("library should update");
+
+        let kept = updated
+            .roots
+            .iter()
+            .find(|root| root.path == "/mnt/stable")
+            .expect("the original root should survive the update");
+        assert_eq!(kept.id, original_root_id);
+
+        let added = updated
+            .roots
+            .iter()
+            .find(|root| root.path == "/mnt/stable-extra")
+            .expect("the added root should exist");
+        assert_ne!(added.id, original_root_id);
+        assert!(
+            added
+                .id
+                .starts_with(scryer_domain::SYNTHETIC_ROOT_ID_PREFIX),
+            "a newly added root should be allocated an id, got {}",
+            added.id
+        );
+    }
+
+    /// US4.2, FR-021/FR-078: a root change writes the new path onto the row the
+    /// root already has. Everything that identifies it survives.
+    #[tokio::test]
+    async fn setting_a_root_path_keeps_the_root_id_and_its_default_status() {
+        let store = test_store().await;
+        let now = Utc::now();
+        let created = store
+            .create(
+                Library {
+                    id: "relocating-library".to_string(),
+                    facet: MediaFacet::Movie,
+                    name: "Relocating".to_string(),
+                    slug: "relocating".to_string(),
+                    is_default: false,
+                    roots: Vec::new(),
+                    created_at: now,
+                    updated_at: now,
+                },
+                vec![draft("/mnt/old-disk", true), draft("/mnt/other", false)],
+            )
+            .await
+            .expect("library should create");
+        let root_id = created
+            .roots
+            .iter()
+            .find(|root| root.path == "/mnt/old-disk")
+            .expect("the relocating root exists")
+            .id
+            .clone();
+
+        let updated = store
+            .set_root_path(&root_id, "/mnt/new-disk")
+            .await
+            .expect("the root path should flip");
+
+        let relocated = updated
+            .roots
+            .iter()
+            .find(|root| root.id == root_id)
+            .expect("the root keeps its identity across a path change");
+        assert_eq!(relocated.path, "/mnt/new-disk");
+        assert!(
+            relocated.is_default,
+            "a path change never moves the library default (FR-021)"
+        );
+        assert!(
+            !updated.roots.iter().any(|root| root.path == "/mnt/old-disk"),
+            "the old path is gone rather than left beside the new one"
+        );
+        assert_eq!(
+            updated.roots.len(),
+            2,
+            "the library's other root is untouched"
+        );
+
+        // The normalized column travels with the path, or the next lookup by
+        // path would still answer with the retired location.
+        let reread = store
+            .get_by_id("relocating-library")
+            .await
+            .expect("read back")
+            .expect("library exists");
+        assert_eq!(
+            reread
+                .roots
+                .iter()
+                .find(|root| root.id == root_id)
+                .expect("root still there")
+                .path,
+            "/mnt/new-disk"
+        );
+    }
+
+    /// FR-020: a destination that is already a configured root is
+    /// *consolidation* (US5), not a root change. The store refuses it in words
+    /// rather than as a unique-index violation.
+    #[tokio::test]
+    async fn setting_a_root_path_refuses_a_path_another_root_already_holds() {
+        let store = test_store().await;
+        let now = Utc::now();
+        let created = store
+            .create(
+                Library {
+                    id: "colliding-library".to_string(),
+                    facet: MediaFacet::Movie,
+                    name: "Colliding".to_string(),
+                    slug: "colliding".to_string(),
+                    is_default: false,
+                    roots: Vec::new(),
+                    created_at: now,
+                    updated_at: now,
+                },
+                vec![draft("/mnt/left", true), draft("/mnt/right", false)],
+            )
+            .await
+            .expect("library should create");
+        let left = created
+            .roots
+            .iter()
+            .find(|root| root.path == "/mnt/left")
+            .expect("left root")
+            .id
+            .clone();
+
+        let error = store
+            .set_root_path(&left, "/mnt/right")
+            .await
+            .expect_err("a configured root is not a root-change destination");
+        assert!(
+            matches!(error, AppError::Validation(_)),
+            "expected a validation refusal, got {error:?}"
+        );
+
+        // An unknown root is a not-found, not a silently ignored write.
+        let missing = store
+            .set_root_path("no-such-root", "/mnt/anywhere")
+            .await
+            .expect_err("an unknown root cannot be relocated");
+        assert!(
+            matches!(missing, AppError::NotFound(_)),
+            "expected a not-found refusal, got {missing:?}"
+        );
+    }
 }

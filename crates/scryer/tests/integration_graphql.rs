@@ -20,8 +20,12 @@ mod downloads_housekeeping_system;
 mod emby_contract;
 #[path = "integration_graphql/external_import_secret_drafts.rs"]
 mod external_import_secret_drafts;
+#[path = "integration_graphql/folder_match.rs"]
+mod folder_match;
 #[path = "integration_graphql/library_scan.rs"]
 mod library_scan;
+#[path = "integration_graphql/location_operations.rs"]
+mod location_operations;
 #[path = "integration_graphql/media_rename.rs"]
 mod media_rename;
 #[path = "integration_graphql/metadata_search.rs"]
@@ -1822,7 +1826,8 @@ async fn configure_default_library_root(
         .expect("lookup default library")
         .expect("default library exists");
     let media_root_path = media_root.to_string_lossy().to_string();
-    ctx.libraries
+    let updated = ctx
+        .libraries
         .update(
             &library_id,
             library.name,
@@ -1834,7 +1839,14 @@ async fn configure_default_library_root(
         )
         .await
         .expect("configure default library root");
-    scryer_domain::root_folder_id_for_path(&media_root_path)
+    // Root ids are allocated, not derived from the path, so read the stored id back.
+    updated
+        .roots
+        .iter()
+        .find(|root| root.is_default)
+        .or_else(|| updated.roots.first())
+        .map(|root| root.id.clone())
+        .expect("configured library should expose its root")
 }
 
 async fn default_library_root_id(ctx: &TestContext, facet: &MediaFacet) -> String {
