@@ -360,6 +360,32 @@ fn unsupported_response(request: PluginHostRequest) -> PluginHostResponse {
 
 pub(crate) fn add_to_linker(linker: &mut Linker<HostCtx>) -> wasmtime::Result<()> {
     linker.func_wrap_async(HOST_ABI_MODULE, "scryer_host_call", host_call)?;
+    linker.func_wrap_async(
+        HOST_ABI_MODULE,
+        "scryer_host_response_len",
+        host_response_len_async,
+    )?;
+    linker.func_wrap_async(
+        HOST_ABI_MODULE,
+        "scryer_host_response_read",
+        host_response_read_async,
+    )?;
+    linker.func_wrap_async(
+        HOST_ABI_MODULE,
+        "scryer_host_response_drop",
+        host_response_drop_async,
+    )?;
+    Ok(())
+}
+
+/// Wire the synchronous descriptor-extraction sandbox.
+///
+/// A command descriptor is static metadata and must not make host-service
+/// requests. Keeping this linker synchronous lets extraction run before a
+/// plugin descriptor exists, while operational invocations use the async
+/// linker above.
+pub(crate) fn add_describe_to_linker(linker: &mut Linker<HostCtx>) -> wasmtime::Result<()> {
+    linker.func_wrap(HOST_ABI_MODULE, "scryer_host_call", describe_host_call)?;
     linker.func_wrap(
         HOST_ABI_MODULE,
         "scryer_host_response_len",
@@ -376,6 +402,10 @@ pub(crate) fn add_to_linker(linker: &mut Linker<HostCtx>) -> wasmtime::Result<()
         host_response_drop,
     )?;
     Ok(())
+}
+
+fn describe_host_call(_caller: Caller<'_, HostCtx>, _request_ptr: i32, _request_len: i32) -> i32 {
+    0
 }
 
 fn host_call(
@@ -409,6 +439,13 @@ fn host_response_len(caller: Caller<'_, HostCtx>, handle: i32) -> i32 {
         .unwrap_or(-1)
 }
 
+fn host_response_len_async(
+    caller: Caller<'_, HostCtx>,
+    (handle,): (i32,),
+) -> Box<dyn std::future::Future<Output = i32> + Send + '_> {
+    Box::new(async move { host_response_len(caller, handle) })
+}
+
 fn host_response_read(
     mut caller: Caller<'_, HostCtx>,
     handle: i32,
@@ -430,10 +467,24 @@ fn host_response_read(
     i32::try_from(response.len()).unwrap_or(-1)
 }
 
+fn host_response_read_async(
+    caller: Caller<'_, HostCtx>,
+    (handle, destination_ptr, destination_len): (i32, i32, i32),
+) -> Box<dyn std::future::Future<Output = i32> + Send + '_> {
+    Box::new(async move { host_response_read(caller, handle, destination_ptr, destination_len) })
+}
+
 fn host_response_drop(mut caller: Caller<'_, HostCtx>, handle: i32) {
     if let Ok(handle) = u32::try_from(handle) {
         caller.data_mut().command_host.drop_response(handle);
     }
+}
+
+fn host_response_drop_async(
+    caller: Caller<'_, HostCtx>,
+    (handle,): (i32,),
+) -> Box<dyn std::future::Future<Output = ()> + Send + '_> {
+    Box::new(async move { host_response_drop(caller, handle) })
 }
 
 fn memory(caller: &mut Caller<'_, HostCtx>) -> Result<Memory, String> {

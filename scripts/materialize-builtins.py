@@ -9,6 +9,9 @@ Cargo and makes every downloaded input visible in the workflow log.
 from __future__ import annotations
 
 import argparse
+import atexit
+import base64
+from datetime import datetime, timezone
 import hashlib
 import json
 import os
@@ -29,6 +32,17 @@ OFFICIAL_PLUGIN_REPOSITORY = "scryer-media/scryer-plugins"
 OFFICIAL_PLUGIN_WORKFLOW = ".github/workflows/release-plugin-v3.yml"
 OFFICIAL_PLUGIN_WORKFLOW_NAME = "release-plugin-v3"
 OIDC_ISSUER = "https://token.actions.githubusercontent.com"
+SIGSTORE_TUF_SOURCE = "https://tuf-repo-cdn.sigstore.dev"
+SIGSTORE_TUF_TARGET = "trusted_root.json"
+SIGSTORE_TRUST_ROOT_MEDIA_TYPE = (
+    "application/vnd.dev.sigstore.trustedroot+json;version=0.1"
+)
+SIGSTORE_TRUST_ROOT_FILENAME = "sigstore-trusted-root.json"
+SIGSTORE_TRUST_ROOT_PROVENANCE_FILENAME = (
+    "sigstore-trusted-root.provenance.json"
+)
+SIGSTORE_TRUST_ROOT_TIMEOUT = "120s"
+COSIGN = os.environ.get("SCRYER_COSIGN", "cosign")
 BUILTINS = {
     "newznab": "newznab_indexer",
     "torznab": "torznab_indexer",
@@ -43,7 +57,7 @@ def fail(message: str) -> None:
 
 def download(url: str, destination: Path) -> bytes:
     request = urllib.request.Request(url, headers={"User-Agent": "scryer-builtins/1"})
-    with urllib.request.urlopen(request, timeout=60) as response:
+    with urllib.request.urlopen(request, timeout=120) as response:
         payload = response.read()
     destination.write_bytes(payload)
     return payload
@@ -85,13 +99,19 @@ def decoded_bundle(path: Path, temp_dir: Path) -> Path:
     return path
 
 
-def verify_sigstore(blob: Path, bundle: Path, temp_dir: Path) -> None:
+def verify_sigstore(
+    blob: Path, bundle: Path, trust_root: Path, temp_dir: Path
+) -> None:
     bundle = decoded_bundle(bundle, temp_dir)
     run(
-        "cosign",
+        COSIGN,
+        "--timeout",
+        SIGSTORE_TRUST_ROOT_TIMEOUT,
         "verify-blob",
         "--bundle",
         str(bundle),
+        "--trusted-root",
+        str(trust_root),
         "--certificate-identity-regexp",
         ".*",
         "--certificate-oidc-issuer",
@@ -102,6 +122,257 @@ def verify_sigstore(blob: Path, bundle: Path, temp_dir: Path) -> None:
         OFFICIAL_PLUGIN_WORKFLOW_NAME,
         str(blob),
     )
+
+
+def cosign_version() -> str:
+    try:
+        version = json.loads(run(COSIGN, "version", "--json"))
+    except json.JSONDecodeError as error:
+        fail(f"cosign returned malformed version metadata: {error}")
+    git_version = version.get("gitVersion")
+    if not isinstance(git_version, str) or not git_version.strip():
+        fail("cosign version metadata is missing gitVersion")
+    return f"cosign {git_version.strip()}"
+
+
+def current_head_commit(repo_root: Path) -> str:
+    commit = os.environ.get("GITHUB_SHA") or run(
+        "git", "rev-parse", "HEAD", cwd=repo_root
+    ).strip()
+    if not re.fullmatch(r"[0-9a-fA-F]{40,64}", commit):
+        fail("source commit is not a valid Git object ID")
+    return commit.lower()
+
+
+def decode_trust_root_base64(value: Any, label: str) -> bytes:
+    if not isinstance(value, str) or not value:
+        fail(f"Sigstore {label} must be non-empty base64")
+    try:
+        return base64.b64decode(value, validate=True)
+    except ValueError as error:
+        fail(f"Sigstore {label} is invalid base64: {error}")
+    raise AssertionError("unreachable")
+
+
+def validate_trust_time_range(value: Any, label: str) -> None:
+    if not isinstance(value, dict) or not isinstance(value.get("start"), str):
+        fail(f"Sigstore {label} has no validity start")
+    end_raw = value.get("end")
+    if end_raw is not None and not isinstance(end_raw, str):
+        fail(f"Sigstore {label} validity end must be an RFC 3339 timestamp")
+    try:
+        start_raw = value["start"]
+        if "T" not in start_raw or (end_raw is not None and "T" not in end_raw):
+            raise ValueError("timestamp must contain a date/time separator")
+        start = datetime.fromisoformat(start_raw.replace("Z", "+00:00"))
+        end = (
+            datetime.fromisoformat(end_raw.replace("Z", "+00:00"))
+            if isinstance(end_raw, str)
+            else None
+        )
+    except ValueError as error:
+        fail(f"Sigstore {label} has an invalid validity timestamp: {error}")
+    if start.utcoffset() is None or (end is not None and end.utcoffset() is None):
+        fail(f"Sigstore {label} validity timestamp must include a UTC offset")
+    if end is not None and end < start:
+        fail(f"Sigstore {label} validity ends before it starts")
+
+
+def validate_der_with_openssl(
+    der: bytes, kind: str, label: str, temp_dir: Path, index: int
+) -> None:
+    path = temp_dir / f"trust-material-{index}.der"
+    path.write_bytes(der)
+    try:
+        if kind == "public-key":
+            run(
+                "openssl",
+                "pkey",
+                "-pubin",
+                "-inform",
+                "DER",
+                "-in",
+                str(path),
+                "-noout",
+            )
+        elif kind == "certificate":
+            run(
+                "openssl",
+                "x509",
+                "-inform",
+                "DER",
+                "-in",
+                str(path),
+                "-noout",
+            )
+        else:
+            raise AssertionError(f"unsupported DER validation kind: {kind}")
+    except RuntimeError as error:
+        fail(f"failed to parse Sigstore {label}: {error}")
+    finally:
+        path.unlink(missing_ok=True)
+
+
+def validate_trusted_logs(
+    root: dict[str, Any], field: str, label: str, temp_dir: Path, index: int
+) -> int:
+    logs = root.get(field)
+    if not isinstance(logs, list) or not logs:
+        fail(f"Sigstore trusted root has no {field}")
+    key_ids: set[bytes] = set()
+    for log in logs:
+        if not isinstance(log, dict):
+            fail(f"Sigstore {label} log must be an object")
+        log_id = log.get("logId")
+        public_key = log.get("publicKey")
+        if not isinstance(log_id, dict) or not isinstance(public_key, dict):
+            fail(f"Sigstore {label} log is missing its ID or public key")
+        key_id = decode_trust_root_base64(log_id.get("keyId"), f"{label} log ID")
+        if not key_id:
+            fail(f"Sigstore {label} log ID is empty")
+        if key_id in key_ids:
+            fail(f"Sigstore trusted root contains a duplicate {label} log ID")
+        key_ids.add(key_id)
+        key_der = decode_trust_root_base64(
+            public_key.get("rawBytes"), f"{label} public key"
+        )
+        validate_der_with_openssl(
+            key_der, "public-key", f"{label} public key", temp_dir, index
+        )
+        index += 1
+        validate_trust_time_range(
+            public_key.get("validFor"), f"{label} public key"
+        )
+    return index
+
+
+def validate_certificate_authorities(
+    root: dict[str, Any], field: str, label: str, temp_dir: Path, index: int
+) -> int:
+    authorities = root.get(field)
+    if not isinstance(authorities, list) or not authorities:
+        fail(f"Sigstore trusted root has no {field}")
+    for authority_index, authority in enumerate(authorities):
+        if not isinstance(authority, dict):
+            fail(f"Sigstore {label} authority must be an object")
+        validate_trust_time_range(
+            authority.get("validFor"),
+            f"{label} authority {authority_index}",
+        )
+        chain = authority.get("certChain")
+        certificates = chain.get("certificates") if isinstance(chain, dict) else None
+        if not isinstance(certificates, list) or not certificates:
+            fail(
+                f"Sigstore {label} authority {authority_index} has an empty certificate chain"
+            )
+        for certificate_index, certificate in enumerate(certificates):
+            if not isinstance(certificate, dict):
+                fail(
+                    f"Sigstore {label} authority {authority_index} certificate "
+                    f"{certificate_index} must be an object"
+                )
+            certificate_der = decode_trust_root_base64(
+                certificate.get("rawBytes"),
+                f"{label} authority {authority_index} certificate {certificate_index}",
+            )
+            validate_der_with_openssl(
+                certificate_der,
+                "certificate",
+                f"{label} authority {authority_index} certificate {certificate_index}",
+                temp_dir,
+                index,
+            )
+            index += 1
+    return index
+
+
+def validate_runtime_trust_root(root: dict[str, Any]) -> None:
+    if root.get("mediaType") != SIGSTORE_TRUST_ROOT_MEDIA_TYPE:
+        fail("Sigstore trusted root has an unsupported media type")
+    with tempfile.TemporaryDirectory(prefix="scryer-trust-validation-") as temporary:
+        temp_dir = Path(temporary)
+        index = validate_trusted_logs(root, "tlogs", "Rekor", temp_dir, 0)
+        index = validate_trusted_logs(root, "ctlogs", "CT", temp_dir, index)
+        index = validate_certificate_authorities(
+            root,
+            "certificateAuthorities",
+            "Fulcio",
+            temp_dir,
+            index,
+        )
+        validate_certificate_authorities(
+            root,
+            "timestampAuthorities",
+            "timestamp-authority",
+            temp_dir,
+            index,
+        )
+
+
+def materialize_sigstore_trust_root(
+    repo_root: Path, output_dir: Path
+) -> Path:
+    trust_root_path = output_dir / SIGSTORE_TRUST_ROOT_FILENAME
+    run(
+        COSIGN,
+        "--timeout",
+        SIGSTORE_TRUST_ROOT_TIMEOUT,
+        "initialize",
+    )
+    tuf_host = urlparse(SIGSTORE_TUF_SOURCE).hostname
+    if not tuf_host:
+        fail(f"Sigstore TUF source has no host: {SIGSTORE_TUF_SOURCE}")
+    root_cache = Path.home() / ".sigstore/root"
+    verified_targets = (
+        root_cache / tuf_host / "targets" / SIGSTORE_TUF_TARGET,
+        root_cache / "targets" / SIGSTORE_TUF_TARGET,
+    )
+    verified_target = next(
+        (path for path in verified_targets if path.is_file()), None
+    )
+    if verified_target is None:
+        searched = ", ".join(str(path) for path in verified_targets)
+        fail(
+            "cosign initialize did not materialize the TUF-verified "
+            f"{SIGSTORE_TUF_TARGET} target (searched: {searched})"
+        )
+    shutil.copyfile(verified_target, trust_root_path)
+    root_bytes = trust_root_path.read_bytes()
+    try:
+        root = json.loads(root_bytes)
+    except json.JSONDecodeError as error:
+        fail(f"Sigstore trusted root is invalid JSON: {error}")
+    if not isinstance(root, dict):
+        fail("Sigstore trusted root must be a JSON object")
+    validate_runtime_trust_root(root)
+
+    sha256 = hashlib.sha256(root_bytes).hexdigest()
+    receipt: dict[str, Any] = {
+        "schemaVersion": 1,
+        "source": SIGSTORE_TUF_SOURCE,
+        "target": SIGSTORE_TUF_TARGET,
+        "sha256": sha256,
+        "retrievedAt": datetime.now(timezone.utc).isoformat(),
+        "sigstoreVersion": cosign_version(),
+        "sourceCommit": current_head_commit(repo_root),
+    }
+    for field, environment_name in (
+        ("githubRepository", "GITHUB_REPOSITORY"),
+        ("githubWorkflowRef", "GITHUB_WORKFLOW_REF"),
+        ("githubRunId", "GITHUB_RUN_ID"),
+    ):
+        value = os.environ.get(environment_name)
+        if value:
+            receipt[field] = value
+
+    receipt_path = output_dir / SIGSTORE_TRUST_ROOT_PROVENANCE_FILENAME
+    receipt_path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
+    parsed_receipt = json.loads(receipt_path.read_text())
+    if parsed_receipt.get("sha256") != hashlib.sha256(
+        trust_root_path.read_bytes()
+    ).hexdigest():
+        fail("Sigstore trust-root provenance digest mismatch")
+    return trust_root_path
 
 
 def blake3(path: Path) -> str:
@@ -183,13 +454,10 @@ def version_is(value: str, wanted: str) -> bool:
     return value.strip().lstrip("v") == wanted.strip().lstrip("v")
 
 
-def version_matches_constraint(version: tuple[int, int, int], constraint: str) -> bool:
-    """Evaluate the catalog's comma-separated comparison constraints.
-
-    Catalog-v3 uses ordinary semver comparison clauses for built-in releases.
-    Rejecting an unfamiliar clause is intentional: accepting a future syntax
-    without understanding it could select an incompatible pinned release.
-    """
+def version_matches_constraint(
+    version: tuple[int, int, int], constraint: str
+) -> bool:
+    """Evaluate the catalog's comma-separated comparison constraints."""
     for clause in constraint.split(","):
         match = re.fullmatch(r"\s*(>=|<=|>|<|=)\s*v?(\d+\.\d+\.\d+)\s*", clause)
         if not match:
@@ -263,6 +531,23 @@ def bundle_temp_path(temp_dir: Path, url: str, fallback: str) -> Path:
     return temp_dir / (name or fallback)
 
 
+def publish_directory(staging_dir: Path, output_dir: Path) -> None:
+    backup_dir = output_dir.parent / f".{output_dir.name}.previous-{os.getpid()}"
+    if backup_dir.exists():
+        fail(f"refusing to overwrite stale materialization backup {backup_dir}")
+    had_previous = output_dir.exists()
+    if had_previous:
+        os.replace(output_dir, backup_dir)
+    try:
+        os.replace(staging_dir, output_dir)
+    except OSError:
+        if had_previous:
+            os.replace(backup_dir, output_dir)
+        raise
+    if had_previous:
+        shutil.rmtree(backup_dir)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo-root", type=Path, default=Path.cwd())
@@ -272,15 +557,37 @@ def main() -> int:
 
     repo_root = args.repo_root.resolve()
     manifest_path = repo_root / "crates/scryer-plugins/builtin-versions.json"
-    output_dir = (args.output or repo_root / "crates/scryer-plugins/builtins").resolve()
-    provenance_path = (args.provenance or output_dir / "provenance.json").resolve()
+    final_output_dir = (
+        args.output or repo_root / "crates/scryer-plugins/builtins"
+    ).resolve()
+    final_provenance_path = (
+        args.provenance or final_output_dir / "provenance.json"
+    ).resolve()
+    try:
+        provenance_relative_path = final_provenance_path.relative_to(final_output_dir)
+    except ValueError:
+        fail("--provenance must be located within --output")
+    final_output_dir.parent.mkdir(parents=True, exist_ok=True)
+    staging_parent = Path(
+        tempfile.mkdtemp(
+            prefix=".builtins-materializing-", dir=final_output_dir.parent
+        )
+    )
+    atexit.register(shutil.rmtree, staging_parent, ignore_errors=True)
+    output_dir = staging_parent / "builtins"
+    provenance_path = output_dir / provenance_relative_path
+    output_dir.mkdir(parents=True)
+
     scryer_version = current_scryer_version(repo_root)
     sdk_version = current_sdk_version(repo_root)
     manifest = json.loads(manifest_path.read_text())
-    if manifest.get("schemaVersion") != 2 or not isinstance(manifest.get("plugins"), dict):
+    if manifest.get("schemaVersion") != 2 or not isinstance(
+        manifest.get("plugins"), dict
+    ):
         fail(
             f"invalid built-in version manifest: {manifest_path} "
-            "(schemaVersion 2 pins version and wasm_blake3; run `cargo xtask builtins sync`)"
+            "(schemaVersion 2 pins version and wasm_blake3; "
+            "run `cargo xtask builtins sync`)"
         )
     pins = manifest["plugins"]
     if set(pins) != set(BUILTINS):
@@ -297,22 +604,25 @@ def main() -> int:
             ch not in "0123456789abcdef" for ch in digest
         ):
             fail(
-                f"built-in pin for {plugin_id} must carry wasm_blake3 as 64 lowercase hex "
-                "characters (run `cargo xtask builtins sync` to refresh it)"
+                f"built-in pin for {plugin_id} must carry wasm_blake3 as 64 "
+                "lowercase hex characters (run `cargo xtask builtins sync` to refresh it)"
             )
     selected = {plugin_id: pin["version"] for plugin_id, pin in pins.items()}
 
-    output_dir.mkdir(parents=True, exist_ok=True)
     bundle_dir = output_dir / "provenance"
+    trust_root_path = materialize_sigstore_trust_root(repo_root, output_dir)
     with tempfile.TemporaryDirectory(prefix="scryer-builtins-") as temporary:
         temp_dir = Path(temporary)
         redirect_path = temp_dir / "catalog.redirect.json"
         redirect_bundle_path = temp_dir / "catalog.redirect.bundle.json"
         download(CATALOG_REDIRECT_URL, redirect_path)
         download(CATALOG_REDIRECT_BUNDLE_URL, redirect_bundle_path)
-        verify_sigstore(redirect_path, redirect_bundle_path, temp_dir)
+        verify_sigstore(
+            redirect_path, redirect_bundle_path, trust_root_path, temp_dir
+        )
         redirect_bundle_sha256 = copy_bundle(
-            redirect_bundle_path, bundle_dir / "catalog-v3.redirect.bundle.json"
+            redirect_bundle_path,
+            bundle_dir / "catalog-v3.redirect.bundle.json",
         )
         redirect = json.loads(redirect_path.read_text())
         artifacts = redirect.get("artifacts") or []
@@ -321,17 +631,27 @@ def main() -> int:
         catalog_artifact = artifacts[-1]
         catalog_path = temp_dir / "catalog.bundle"
         catalog_signature_path = bundle_temp_path(
-            temp_dir, catalog_artifact["signature_url"], "catalog.bundle.sigstore"
+            temp_dir,
+            catalog_artifact["signature_url"],
+            "catalog.bundle.sigstore",
         )
         download(catalog_artifact["url"], catalog_path)
         download(catalog_artifact["signature_url"], catalog_signature_path)
-        verify_sigstore(catalog_path, catalog_signature_path, temp_dir)
-        catalog_bundle_sha256 = copy_bundle(
-            catalog_signature_path, bundle_dir / "catalog-v3.bundle.sigstore"
+        verify_sigstore(
+            catalog_path, catalog_signature_path, trust_root_path, temp_dir
         )
-        catalog_bytes = zstd_decode(catalog_path, temp_dir / "catalog.json") if catalog_artifact["url"].endswith(".zst") else catalog_path.read_bytes()
+        catalog_bundle_sha256 = copy_bundle(
+            catalog_signature_path,
+            bundle_dir / "catalog-v3.bundle.sigstore",
+        )
+        if catalog_artifact["url"].endswith(".zst"):
+            catalog_bytes = zstd_decode(catalog_path, temp_dir / "catalog.json")
+        else:
+            catalog_bytes = catalog_path.read_bytes()
         catalog = json.loads(catalog_bytes)
-        catalog_plugins = {entry["id"]: entry for entry in catalog.get("plugins", [])}
+        catalog_plugins = {
+            entry["id"]: entry for entry in catalog.get("plugins", [])
+        }
         provenance_plugins: dict[str, Any] = {}
 
         for plugin_id, stem in BUILTINS.items():
@@ -339,7 +659,10 @@ def main() -> int:
             if entry is None:
                 fail(f"catalog does not contain built-in plugin {plugin_id}")
             signer = entry.get("required_signer") or {}
-            if signer.get("github_repository") != OFFICIAL_PLUGIN_REPOSITORY or signer.get("github_workflow") != OFFICIAL_PLUGIN_WORKFLOW:
+            if (
+                signer.get("github_repository") != OFFICIAL_PLUGIN_REPOSITORY
+                or signer.get("github_workflow") != OFFICIAL_PLUGIN_WORKFLOW
+            ):
                 fail(f"{plugin_id} has an unexpected required signer")
             wanted_version = str(selected[plugin_id])
             release = next(
@@ -351,11 +674,17 @@ def main() -> int:
                 None,
             )
             if release is None:
-                fail(f"catalog does not contain requested {plugin_id} version {wanted_version}")
-            if not release_is_compatible(plugin_id, release, scryer_version, sdk_version):
                 fail(
-                    f"requested {plugin_id} version {wanted_version} is not compatible with "
-                    f"Scryer {'.'.join(map(str, scryer_version))} and SDK {'.'.join(map(str, sdk_version))}"
+                    f"catalog does not contain requested {plugin_id} "
+                    f"version {wanted_version}"
+                )
+            if not release_is_compatible(
+                plugin_id, release, scryer_version, sdk_version
+            ):
+                fail(
+                    f"requested {plugin_id} version {wanted_version} is not "
+                    f"compatible with Scryer {'.'.join(map(str, scryer_version))} "
+                    f"and SDK {'.'.join(map(str, sdk_version))}"
                 )
             artifact = next(
                 (
@@ -372,67 +701,98 @@ def main() -> int:
                 fail(f"{plugin_id} {wanted_version} has no baseline WASM artifact")
             compressed = temp_dir / f"{stem}.wasm.zst"
             signature = bundle_temp_path(
-                temp_dir, artifact["signature_url"], f"{stem}.wasm.zst.sigstore"
+                temp_dir,
+                artifact["signature_url"],
+                f"{stem}.wasm.zst.sigstore",
             )
             download(artifact["url"], compressed)
             download(artifact["signature_url"], signature)
-            verify_sigstore(compressed, signature, temp_dir)
+            verify_sigstore(compressed, signature, trust_root_path, temp_dir)
             signature_sha256 = copy_bundle(
                 signature, bundle_dir / f"{stem}.wasm.zst.sigstore"
             )
-            compressed_digest = assert_blake3(f"{plugin_id} compressed artifact", compressed, artifact.get("digests") or [])
+            compressed_digest = assert_blake3(
+                f"{plugin_id} compressed artifact",
+                compressed,
+                artifact.get("digests") or [],
+            )
             wasm_path = temp_dir / f"{stem}.wasm"
             wasm = zstd_decode(compressed, wasm_path)
-            wasm_digest = assert_blake3(f"{plugin_id} WASM artifact", wasm_path, artifact.get("wasm_digests") or [])
-            # The signature chain proves who built these bytes; the repo pin
-            # proves they are the bytes that were reviewed. A catalog that
-            # re-points the pinned version at new content fails here instead of
-            # materializing silently — the only way past is a reviewed
-            # builtin-versions.json bump via `cargo xtask builtins sync`.
+            wasm_digest = assert_blake3(
+                f"{plugin_id} WASM artifact",
+                wasm_path,
+                artifact.get("wasm_digests") or [],
+            )
             pinned_wasm = pins[plugin_id]["wasm_blake3"]
             if wasm_digest.lower() != pinned_wasm:
                 fail(
-                    f"{plugin_id} {wanted_version} WASM digest does not match the pinned "
-                    f"wasm_blake3 in builtin-versions.json (pinned {pinned_wasm}, "
-                    f"catalog {wasm_digest}); if this change is intended, refresh the pin "
-                    "with `cargo xtask builtins sync`"
+                    f"{plugin_id} {wanted_version} WASM digest does not match "
+                    "the pinned wasm_blake3 in builtin-versions.json "
+                    f"(pinned {pinned_wasm}, catalog {wasm_digest}); if this "
+                    "change is intended, refresh the pin with "
+                    "`cargo xtask builtins sync`"
                 )
             descriptor = embedded_descriptor(wasm)
-            if descriptor.get("id") != plugin_id or str(descriptor.get("version")) != wanted_version:
-                fail(f"{plugin_id} descriptor does not match the requested catalog release")
+            if (
+                descriptor.get("id") != plugin_id
+                or str(descriptor.get("version")) != wanted_version
+            ):
+                fail(
+                    f"{plugin_id} descriptor does not match the requested catalog release"
+                )
             descriptor["sdk_version"] = ".".join(map(str, sdk_version))
             descriptor["sdk_constraint"] = legacy_sdk_constraint(sdk_version)
             destination = output_dir / f"{stem}.wasm.zst"
             shutil.copyfile(compressed, destination)
-            (output_dir / f"{stem}.descriptor.json").write_text(json.dumps(descriptor, indent=2, sort_keys=True) + "\n")
-            (output_dir / f"{stem}.description.txt").write_text(str(entry.get("description", "")).strip() + "\n")
+            descriptor_path = output_dir / f"{stem}.descriptor.json"
+            descriptor_path.write_text(
+                json.dumps(descriptor, indent=2, sort_keys=True) + "\n"
+            )
+            (output_dir / f"{stem}.description.txt").write_text(
+                str(entry.get("description", "")).strip() + "\n"
+            )
             provenance_plugins[plugin_id] = {
                 "version": wanted_version,
                 "artifact_url": artifact["url"],
                 "signature_url": artifact["signature_url"],
                 "compressed_blake3": compressed_digest,
                 "wasm_blake3": wasm_digest,
-                "descriptor_sha256": hashlib.sha256((output_dir / f"{stem}.descriptor.json").read_bytes()).hexdigest(),
+                "descriptor_sha256": hashlib.sha256(
+                    descriptor_path.read_bytes()
+                ).hexdigest(),
                 "signature_bundle_sha256": signature_sha256,
             }
 
         provenance_path.parent.mkdir(parents=True, exist_ok=True)
-        provenance_path.write_text(json.dumps({
-            "schemaVersion": 1,
-            "host": {
-                "scryer_version": ".".join(map(str, scryer_version)),
-                "sdk_version": ".".join(map(str, sdk_version)),
-                "sdk_constraint": legacy_sdk_constraint(sdk_version),
-            },
-            "catalog_redirect_url": CATALOG_REDIRECT_URL,
-            "catalog_url": catalog_artifact["url"],
-            "verified_bundles": {
-                "catalog_redirect_sha256": redirect_bundle_sha256,
-                "catalog_sha256": catalog_bundle_sha256,
-            },
-            "signer": {"repository": OFFICIAL_PLUGIN_REPOSITORY, "workflow": OFFICIAL_PLUGIN_WORKFLOW},
-            "plugins": provenance_plugins,
-        }, indent=2, sort_keys=True) + "\n")
+        provenance_path.write_text(
+            json.dumps(
+                {
+                    "schemaVersion": 1,
+                    "host": {
+                        "scryer_version": ".".join(map(str, scryer_version)),
+                        "sdk_version": ".".join(map(str, sdk_version)),
+                        "sdk_constraint": legacy_sdk_constraint(sdk_version),
+                    },
+                    "catalog_redirect_url": CATALOG_REDIRECT_URL,
+                    "catalog_url": catalog_artifact["url"],
+                    "verified_bundles": {
+                        "catalog_redirect_sha256": redirect_bundle_sha256,
+                        "catalog_sha256": catalog_bundle_sha256,
+                    },
+                    "signer": {
+                        "repository": OFFICIAL_PLUGIN_REPOSITORY,
+                        "workflow": OFFICIAL_PLUGIN_WORKFLOW,
+                    },
+                    "plugins": provenance_plugins,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n"
+        )
+
+    publish_directory(output_dir, final_output_dir)
+    shutil.rmtree(staging_parent, ignore_errors=True)
     return 0
 
 

@@ -38,7 +38,7 @@ use scryer_domain::{
 };
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Notify};
 
 fn canonical_genre_tags(labels: &[&str]) -> Vec<CanonicalMediaTag> {
     labels
@@ -150,7 +150,7 @@ async fn discovery_sync_recovers_committed_unacked_snapshot_before_new_submit() 
     });
     let mut run = discovery_run_record("run-unacked", observed_at, "complete");
     run.smg_request_id = Some("request-unacked".to_string());
-    run.raw_ack_json = None;
+    run.acknowledged_at = None;
     discovery.runs.lock().await.push(run);
 
     app.run_scheduled_job_now(JobKey::DiscoverySync, JobTriggerSource::ScheduledInterval)
@@ -171,7 +171,7 @@ async fn discovery_sync_recovers_committed_unacked_snapshot_before_new_submit() 
         .find(|run| run.id == "run-unacked")
         .expect("unacked run should remain in ledger");
     assert_eq!(recovered.status, "complete");
-    assert!(recovered.raw_ack_json.is_some());
+    assert!(recovered.acknowledged_at.is_some());
     assert!(recovered.error_text.is_none());
 }
 
@@ -2205,8 +2205,10 @@ async fn title_more_like_this_filters_readable_library_titles_and_refills_limit(
 }
 
 #[tokio::test]
-async fn title_more_like_this_refreshes_empty_cache_from_metadata_gateway() {
+async fn title_more_like_this_queues_empty_cache_refresh_off_the_read_path() {
     let gateway = Arc::new(SnapshotMetadataGateway::default());
+    let recommendation_gate = Arc::new(Notify::new());
+    *gateway.title_recommendation_gate.lock().await = Some(recommendation_gate.clone());
     let mut malformed_recommendation = test_discovery_title();
     malformed_recommendation.target_key = "tvdb:movie:".to_string();
     malformed_recommendation.display_title.clear();
@@ -2243,10 +2245,51 @@ async fn title_more_like_this_refreshes_empty_cache_from_metadata_gateway() {
     source_title.library_id = movie_library_id.clone();
     titles.store.lock().await.push(source_title);
 
+    let items = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        app.title_more_like_this(&viewer, "source-title", 12),
+    )
+    .await
+    .expect("title more-like-this should not await the metadata gateway")
+    .expect("title more-like-this should load the empty cache");
+
+    assert!(items.is_empty());
+    tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        gateway.title_recommendation_started.notified(),
+    )
+    .await
+    .expect("queued recommendation refresh should reach the metadata gateway");
+
+    let inputs = gateway.title_recommendation_inputs.lock().await.clone();
+    assert_eq!(inputs.len(), 1);
+    assert_eq!(inputs[0].subject.tvdb_id, Some(200));
+    assert_eq!(inputs[0].subject.tmdb_id, Some(100));
+    assert_eq!(inputs[0].subject.facet.as_deref(), Some("movie"));
+    assert!(inputs[0].include_unresolved);
+
+    recommendation_gate.notify_one();
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            if discovery
+                .title_more_like_this_items
+                .lock()
+                .await
+                .get("source-title")
+                .is_some_and(|items| !items.is_empty())
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("queued recommendation refresh should populate the cache");
+
     let items = app
         .title_more_like_this(&viewer, "source-title", 12)
         .await
-        .expect("title more-like-this should refresh and load");
+        .expect("title more-like-this should load the refreshed cache");
 
     assert_eq!(
         items
@@ -2255,15 +2298,9 @@ async fn title_more_like_this_refreshes_empty_cache_from_metadata_gateway() {
             .collect::<Vec<_>>(),
         vec!["Fresh Gateway Recommendation"]
     );
-    let inputs = gateway.title_recommendation_inputs.lock().await;
-    assert_eq!(inputs.len(), 1);
-    assert_eq!(inputs[0].subject.tvdb_id, Some(200));
-    assert_eq!(inputs[0].subject.tmdb_id, Some(100));
-    assert_eq!(inputs[0].subject.facet.as_deref(), Some("movie"));
-    assert!(inputs[0].include_unresolved);
     assert_eq!(
         *discovery.title_more_like_this_limits.lock().await,
-        vec![1, 48]
+        vec![1, 48, 1, 48]
     );
 }
 
@@ -2534,8 +2571,8 @@ async fn discovery_sync_initial_snapshot_submits_smg_and_commits_local_generatio
 
     let runs = discovery.runs.lock().await;
     assert!(
-        runs.iter().any(|run| run.raw_ack_json.is_some()),
-        "ack payload should be written back to the run ledger"
+        runs.iter().any(|run| run.acknowledged_at.is_some()),
+        "ack timestamp should be written back to the run ledger"
     );
 }
 
@@ -2979,7 +3016,7 @@ async fn discovery_sync_ack_failure_after_commit_schedules_retry() {
         .find(|run| run.kind == "context_snapshot")
         .expect("snapshot run should be recorded");
     assert_eq!(run.status, "warning");
-    assert!(run.raw_ack_json.is_none());
+    assert!(run.acknowledged_at.is_none());
     assert!(
         run.error_text
             .as_deref()
@@ -4766,6 +4803,8 @@ struct SnapshotMetadataGateway {
     public_feed_inputs: Mutex<Vec<DiscoveryPublicFeedInput>>,
     title_recommendation_inputs: Mutex<Vec<TitleRecommendationsInput>>,
     title_recommendation_results: Mutex<Vec<DiscoveryTitle>>,
+    title_recommendation_gate: Mutex<Option<Arc<Notify>>>,
+    title_recommendation_started: Notify,
     status_requests: Mutex<Vec<String>>,
     page_requests: Mutex<Vec<(String, i32)>>,
     ack_requests: Mutex<Vec<String>>,
@@ -4841,6 +4880,10 @@ impl MetadataGateway for SnapshotMetadataGateway {
             .lock()
             .await
             .push(input.clone());
+        if let Some(gate) = self.title_recommendation_gate.lock().await.clone() {
+            self.title_recommendation_started.notify_one();
+            gate.notified().await;
+        }
         Ok(DiscoveryRelatedResult {
             subject_key: input.subject.key.clone().unwrap_or_default(),
             query: input.query.clone(),
@@ -5154,7 +5197,7 @@ impl DiscoveryRepository for RecordingDiscoveryRepository {
             .filter(|run| run.kind == "context_snapshot")
             .filter(|run| run.status == "complete" || run.status == "warning")
             .filter(|run| run.smg_request_id.is_some())
-            .filter(|run| run.raw_ack_json.is_none())
+            .filter(|run| run.acknowledged_at.is_none())
             .take(limit.clamp(1, 100) as usize)
             .cloned()
             .collect())
@@ -6007,10 +6050,7 @@ fn discovery_run_record(
         page_count: Some(1),
         item_count: Some(5),
         facet_count: Some(2),
-        raw_submit_json: None,
-        raw_changes_json: None,
-        raw_final_status_json: None,
-        raw_ack_json: None,
+        acknowledged_at: None,
         error_text: None,
         started_at: Some(observed_at),
         completed_at: Some(observed_at),

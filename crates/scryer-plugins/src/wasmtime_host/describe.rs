@@ -131,7 +131,7 @@ fn run_describe(module: &Module) -> AppResult<PluginDescriptor> {
             ))
         },
     )?;
-    command_host::add_to_linker(&mut linker).map_err(|error| {
+    command_host::add_describe_to_linker(&mut linker).map_err(|error| {
         AppError::Repository(format!(
             "failed to register native command host functions for describe: {error:#}"
         ))

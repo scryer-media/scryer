@@ -10,6 +10,7 @@ export type JwtPayload = {
     permissions: string[];
   }[];
   mfaVerifiedUntil?: number | string | null;
+  securityActionVerifiedUntil?: number | string | null;
   mfaStepUpVerifiedUntil?: number | string | null;
   authScope?: "full" | "mfa_enrollment" | "password_change_required";
 };

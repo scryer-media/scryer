@@ -185,10 +185,7 @@ pub struct DiscoverySyncRunRecord {
     pub page_count: Option<i32>,
     pub item_count: Option<i64>,
     pub facet_count: Option<i64>,
-    pub raw_submit_json: Option<String>,
-    pub raw_changes_json: Option<String>,
-    pub raw_final_status_json: Option<String>,
-    pub raw_ack_json: Option<String>,
+    pub acknowledged_at: Option<DateTime<Utc>>,
     pub error_text: Option<String>,
     pub started_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
@@ -457,14 +454,14 @@ pub struct DiscoverySectionRecord {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct DiscoverySourceTagRecord {
     pub category: Option<String>,
     pub name: Option<String>,
     pub values: Vec<String>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct DiscoveryExternalIdRecord {
     pub source: String,
     pub kind: String,
@@ -472,21 +469,21 @@ pub struct DiscoveryExternalIdRecord {
     pub key: String,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct DiscoveryRankComponentRecord {
     pub component_index: i32,
     pub component_name: Option<String>,
     pub component_value: Option<String>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct DiscoveryItemLibraryProvenanceRecord {
     pub subject_key: String,
     pub title_id: Option<String>,
     pub library_id: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct DiscoveryItemRecord {
     pub id: String,
     pub run_id: String,
@@ -2073,10 +2070,32 @@ pub trait ShowRepository: Send + Sync {
 #[async_trait]
 pub trait UserRepository: Send + Sync {
     async fn get_by_username(&self, username: &str) -> AppResult<Option<User>>;
+    async fn get_login_snapshot_by_username(
+        &self,
+        username: &str,
+    ) -> AppResult<Option<crate::types::UserLoginSnapshot>> {
+        let Some(user) = self.get_by_username(username).await? else {
+            return Ok(None);
+        };
+        let auth_session_version = self.auth_session_version(&user.id).await?;
+        Ok(Some(crate::types::UserLoginSnapshot {
+            user,
+            auth_session_version,
+        }))
+    }
     async fn create(&self, user: User) -> AppResult<User>;
     async fn list_all(&self) -> AppResult<Vec<User>>;
     async fn get_by_id(&self, id: &str) -> AppResult<Option<User>>;
     async fn auth_session_version(&self, user_id: &str) -> AppResult<Option<String>>;
+    async fn rotate_auth_session_version(
+        &self,
+        _user_id: &str,
+        _auth_session_version: &str,
+    ) -> AppResult<User> {
+        Err(AppError::Repository(
+            "authentication-session rotation is not configured".into(),
+        ))
+    }
     async fn reset_authentication_factors_and_invalidate_sessions(
         &self,
         _user_id: &str,
@@ -2086,22 +2105,21 @@ pub trait UserRepository: Send + Sync {
             "authentication-factor recovery is not configured".into(),
         ))
     }
-    async fn update_password_hash(
+    async fn update_password_and_invalidate_sessions(
         &self,
         id: &str,
         password_hash: String,
         password_change_required: bool,
+        auth_session_version: &str,
     ) -> AppResult<User>;
-    async fn set_temporary_password_and_invalidate_sessions(
+    async fn update_own_password_and_invalidate_sessions(
         &self,
-        _id: &str,
-        _password_hash: String,
-        _auth_session_version: &str,
-    ) -> AppResult<User> {
-        Err(AppError::Repository(
-            "temporary-password replacement is not configured".into(),
-        ))
-    }
+        id: &str,
+        password_hash: String,
+        password_change_required: bool,
+        auth_session_version: &str,
+        expected_password_hash: Option<&str>,
+    ) -> AppResult<User>;
     async fn complete_required_password_change(
         &self,
         _id: &str,
@@ -2182,6 +2200,14 @@ pub trait OAuthRepository: Send + Sync {
         id: &str,
         consumed_at: chrono::DateTime<chrono::Utc>,
     ) -> AppResult<bool>;
+    async fn consume_authorization_code_and_create_refresh_grant(
+        &self,
+        code: OAuthAuthorizationCodeRecord,
+        consumed_at: chrono::DateTime<chrono::Utc>,
+        grant: OAuthRefreshGrantRecord,
+        token: OAuthRefreshTokenRecord,
+        require_active_client_registration: bool,
+    ) -> AppResult<Option<OAuthRefreshGrantRecord>>;
     async fn create_refresh_grant(
         &self,
         grant: OAuthRefreshGrantRecord,
@@ -2779,6 +2805,16 @@ pub trait WebauthnRepository: Send + Sync {
         &self,
         credential: WebauthnCredentialRecord,
     ) -> AppResult<WebauthnCredentialRecord>;
+    /// Installs a passkey only while the observed authentication session remains current.
+    async fn create_credential_for_current_session(
+        &self,
+        _credential: WebauthnCredentialRecord,
+        _expected_auth_session_version: Option<&str>,
+    ) -> AppResult<WebauthnCredentialRecord> {
+        Err(AppError::Repository(
+            "atomic passkey creation for the current session is not configured".into(),
+        ))
+    }
     async fn update_credential(
         &self,
         credential: WebauthnCredentialRecord,
@@ -2793,6 +2829,17 @@ pub trait WebauthnRepository: Send + Sync {
         credential_record_id: &str,
         user_id: &str,
     ) -> AppResult<()>;
+    /// Deletes a passkey only when another sign-in route and the current session remain valid.
+    async fn delete_credential_preserving_login_route_for_current_session(
+        &self,
+        _credential_record_id: &str,
+        _user_id: &str,
+        _expected_auth_session_version: Option<&str>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "atomic passkey deletion for the current session is not configured".into(),
+        ))
+    }
     async fn create_challenge(
         &self,
         challenge: WebauthnChallengeRecord,
@@ -2804,6 +2851,7 @@ pub trait WebauthnRepository: Send + Sync {
     async fn create_login_verification_challenge(
         &self,
         _challenge: LoginVerificationChallengeRecord,
+        _expected_auth_session_version: &Option<String>,
     ) -> AppResult<LoginVerificationChallengeRecord> {
         Err(AppError::Repository(
             "login verification challenges are not configured".into(),
@@ -2860,6 +2908,39 @@ pub trait TotpRepository: Send + Sync {
         user_id: &str,
         auth_session_version: &str,
     ) -> AppResult<()>;
+    /// Atomically installs a newly verified TOTP factor while the observed session remains current.
+    async fn complete_enrollment_for_current_session(
+        &self,
+        _credential: TotpCredentialRecord,
+        _challenge_id: &str,
+        _recovery_codes: Vec<TotpRecoveryCodeRecord>,
+        _expected_auth_session_version: Option<&str>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "atomic TOTP enrollment completion for the current session is not configured".into(),
+        ))
+    }
+    /// Atomically removes a TOTP factor and its related secrets for the current session.
+    async fn disable_for_current_session(
+        &self,
+        _user_id: &str,
+        _expected_auth_session_version: Option<&str>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "atomic TOTP disablement for the current session is not configured".into(),
+        ))
+    }
+    /// Atomically replaces recovery codes for the current session.
+    async fn replace_recovery_codes_for_current_session(
+        &self,
+        _user_id: &str,
+        _codes: Vec<TotpRecoveryCodeRecord>,
+        _expected_auth_session_version: Option<&str>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "atomic recovery-code replacement for the current session is not configured".into(),
+        ))
+    }
     async fn replace_recovery_codes(
         &self,
         user_id: &str,
@@ -2875,6 +2956,33 @@ pub trait TotpRepository: Send + Sync {
         user_id: &str,
         used_at: &str,
     ) -> AppResult<()>;
+    /// Atomically reserves one verification attempt for the credential's rolling window.
+    async fn reserve_totp_attempt(
+        &self,
+        user_id: &str,
+        attempted_at: &str,
+        window_started_after: &str,
+        limit: i32,
+    ) -> AppResult<bool> {
+        let _ = (user_id, attempted_at, window_started_after, limit);
+        Err(AppError::Repository(
+            "atomic TOTP attempt reservations are not configured".into(),
+        ))
+    }
+    /// Clears the rolling attempt reservation after a successful verification.
+    async fn clear_totp_attempt_reservations(&self, user_id: &str) -> AppResult<()> {
+        let _ = user_id;
+        Err(AppError::Repository(
+            "atomic TOTP attempt reservations are not configured".into(),
+        ))
+    }
+    /// Atomically accepts one previously unused TOTP time step.
+    async fn claim_totp_step(&self, user_id: &str, step: i64, used_at: &str) -> AppResult<bool> {
+        let _ = (user_id, step, used_at);
+        Err(AppError::Repository(
+            "atomic TOTP step claims are not configured".into(),
+        ))
+    }
     async fn record_failed_attempt(&self, attempt: TotpFailedAttemptRecord) -> AppResult<()>;
     async fn count_failed_attempts_since(&self, user_id: &str, since: &str) -> AppResult<i64>;
     async fn clear_failed_attempts(&self, user_id: &str) -> AppResult<u64>;

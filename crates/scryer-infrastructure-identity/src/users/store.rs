@@ -3,7 +3,8 @@ use chrono::Utc;
 use scryer_application::{
     AppError, AppResult, UiDateTimeFormat, UiDefaultLandingView, UiDensity, UiSettings,
     UiSettingsFacet, UiSettingsUpdate, UiSidebarMode, UiTableColumnSetting, UiTableViewMode,
-    UiTheme, UserExternalAccountRepository, UserRepository, UserUiSettingsRepository,
+    UiTheme, UserExternalAccountRepository, UserLoginSnapshot, UserRepository,
+    UserUiSettingsRepository,
 };
 use scryer_domain::{
     AppPermissionMask, ExternalAccountProvider, ExternalAccountStatus, LibraryGrant, User,
@@ -27,6 +28,13 @@ impl UserStore {
 impl UserRepository for UserStore {
     async fn get_by_username(&self, username: &str) -> AppResult<Option<User>> {
         load_user_by_username(self.datastore.read_exec(), username).await
+    }
+
+    async fn get_login_snapshot_by_username(
+        &self,
+        username: &str,
+    ) -> AppResult<Option<UserLoginSnapshot>> {
+        load_user_login_snapshot_by_username(self.datastore.read_exec(), username).await
     }
 
     async fn create(&self, user: User) -> AppResult<User> {
@@ -63,6 +71,37 @@ impl UserRepository for UserStore {
         .await?;
         row.map(|row| row.opt_text("auth_session_version"))
             .unwrap_or(Ok(None))
+    }
+
+    async fn rotate_auth_session_version(
+        &self,
+        user_id: &str,
+        auth_session_version: &str,
+    ) -> AppResult<User> {
+        let user_id = user_id.to_string();
+        let auth_session_version = auth_session_version.to_string();
+        SqlRuntime::run_in_transaction(&self.datastore, "rotate_auth_session_version", move |tx| {
+            let user_id = user_id.clone();
+            let auth_session_version = auth_session_version.clone();
+            Box::pin(async move {
+                let rows = tx
+                    .execute(
+                        "UPDATE users SET auth_session_version = {} WHERE id = {}",
+                        &[
+                            SqlArg::Text(auth_session_version),
+                            SqlArg::Text(user_id.clone()),
+                        ],
+                    )
+                    .await?;
+                if rows == 0 {
+                    return Err(AppError::NotFound(format!("user {user_id}")));
+                }
+                load_user_by_id_tx(tx, &user_id)
+                    .await?
+                    .ok_or_else(|| AppError::NotFound(format!("user {user_id}")))
+            })
+        })
+        .await
     }
 
     async fn reset_authentication_factors_and_invalidate_sessions(
@@ -113,49 +152,18 @@ impl UserRepository for UserStore {
         .await
     }
 
-    async fn update_password_hash(
+    async fn update_password_and_invalidate_sessions(
         &self,
         id: &str,
         password_hash: String,
         password_change_required: bool,
-    ) -> AppResult<User> {
-        let id = id.to_string();
-        SqlRuntime::run_in_transaction(&self.datastore, "update_user_password_hash", move |tx| {
-            let id = id.clone();
-            let password_hash = password_hash.clone();
-            Box::pin(async move {
-                let rows = tx
-                    .execute(
-                        "UPDATE users SET password_hash = {}, password_change_required = {} WHERE id = {}",
-                        &[
-                            SqlArg::Text(password_hash),
-                            SqlArg::Bool(password_change_required),
-                            SqlArg::Text(id.clone()),
-                        ],
-                    )
-                    .await?;
-                if rows == 0 {
-                    return Err(AppError::NotFound(format!("user {id}")));
-                }
-                load_user_by_id_tx(tx, &id)
-                    .await?
-                    .ok_or_else(|| AppError::NotFound(format!("user {id}")))
-            })
-        })
-        .await
-    }
-
-    async fn set_temporary_password_and_invalidate_sessions(
-        &self,
-        id: &str,
-        password_hash: String,
         auth_session_version: &str,
     ) -> AppResult<User> {
         let id = id.to_string();
         let auth_session_version = auth_session_version.to_string();
         SqlRuntime::run_in_transaction(
             &self.datastore,
-            "set_temporary_password_and_invalidate_sessions",
+            "update_password_and_invalidate_sessions",
             move |tx| {
                 let id = id.clone();
                 let password_hash = password_hash.clone();
@@ -168,7 +176,7 @@ impl UserRepository for UserStore {
                              WHERE id = {}",
                             &[
                                 SqlArg::Text(password_hash),
-                                SqlArg::Bool(true),
+                                SqlArg::Bool(password_change_required),
                                 SqlArg::Text(auth_session_version),
                                 SqlArg::Text(id.clone()),
                             ],
@@ -176,6 +184,79 @@ impl UserRepository for UserStore {
                         .await?;
                     if rows == 0 {
                         return Err(AppError::NotFound(format!("user {id}")));
+                    }
+                    for table in [
+                        "totp_enrollment_challenges",
+                        "webauthn_challenges",
+                        "login_verification_challenges",
+                    ] {
+                        tx.execute(
+                            &format!("DELETE FROM {table} WHERE user_id = {{}}"),
+                            &[SqlArg::Text(id.clone())],
+                        )
+                        .await?;
+                    }
+                    load_user_by_id_tx(tx, &id)
+                        .await?
+                        .ok_or_else(|| AppError::NotFound(format!("user {id}")))
+                })
+            },
+        )
+        .await
+    }
+
+    async fn update_own_password_and_invalidate_sessions(
+        &self,
+        id: &str,
+        password_hash: String,
+        password_change_required: bool,
+        auth_session_version: &str,
+        expected_password_hash: Option<&str>,
+    ) -> AppResult<User> {
+        let id = id.to_string();
+        let expected_password_hash = expected_password_hash.map(str::to_string);
+        let auth_session_version = auth_session_version.to_string();
+        SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "update_own_password_and_invalidate_sessions",
+            move |tx| {
+                let id = id.clone();
+                let password_hash = password_hash.clone();
+                let expected_password_hash = expected_password_hash.clone();
+                let auth_session_version = auth_session_version.clone();
+                Box::pin(async move {
+                    let rows = if let Some(expected_password_hash) = expected_password_hash {
+                        tx.execute(
+                            "UPDATE users
+                             SET password_hash = {}, password_change_required = {}, auth_session_version = {}
+                             WHERE id = {} AND password_hash = {}",
+                            &[
+                                SqlArg::Text(password_hash),
+                                SqlArg::Bool(password_change_required),
+                                SqlArg::Text(auth_session_version),
+                                SqlArg::Text(id.clone()),
+                                SqlArg::Text(expected_password_hash),
+                            ],
+                        )
+                        .await?
+                    } else {
+                        tx.execute(
+                            "UPDATE users
+                             SET password_hash = {}, password_change_required = {}, auth_session_version = {}
+                             WHERE id = {} AND password_hash IS NULL",
+                            &[
+                                SqlArg::Text(password_hash),
+                                SqlArg::Bool(password_change_required),
+                                SqlArg::Text(auth_session_version),
+                                SqlArg::Text(id.clone()),
+                            ],
+                        )
+                        .await?
+                    };
+                    if rows == 0 {
+                        return Err(AppError::ReauthenticationRequired(
+                            "account credentials changed; authenticate again".into(),
+                        ));
                     }
                     for table in [
                         "totp_enrollment_challenges",
@@ -492,14 +573,45 @@ impl UserExternalAccountRepository for UserStore {
         SqlRuntime::run_in_transaction(&self.datastore, "delete_user_external_account", move |tx| {
             let id = id.clone();
             Box::pin(async move {
+                let Some(account) = SqlRuntime::fetch_optional(
+                    SqlExec::Tx(tx),
+                    "SELECT user_id FROM user_external_accounts WHERE id = {}",
+                    &[SqlArg::Text(id.clone())],
+                )
+                .await?
+                else {
+                    return Err(AppError::NotFound(format!("external account {id}")));
+                };
+                let user_id = account.text("user_id")?;
+                tx.execute(
+                    "UPDATE users SET auth_session_version = auth_session_version WHERE id = {}",
+                    &[SqlArg::Text(user_id.clone())],
+                )
+                .await?;
                 let rows = tx
                     .execute(
-                        "DELETE FROM user_external_accounts WHERE id = {}",
-                        &[SqlArg::Text(id.clone())],
+                        "DELETE FROM user_external_accounts
+                         WHERE id = {}
+                           AND (
+                                EXISTS (SELECT 1 FROM users
+                                        WHERE id = {} AND password_hash IS NOT NULL)
+                                OR EXISTS (SELECT 1 FROM webauthn_credentials WHERE user_id = {})
+                                OR EXISTS (SELECT 1 FROM user_external_accounts
+                                           WHERE user_id = {} AND status = 'active' AND id <> {})
+                           )",
+                        &[
+                            SqlArg::Text(id.clone()),
+                            SqlArg::Text(user_id.clone()),
+                            SqlArg::Text(user_id.clone()),
+                            SqlArg::Text(user_id),
+                            SqlArg::Text(id.clone()),
+                        ],
                     )
                     .await?;
                 if rows == 0 {
-                    return Err(AppError::NotFound(format!("external account {id}")));
+                    return Err(AppError::Validation(
+                        "cannot remove the last available sign-in method".into(),
+                    ));
                 }
                 Ok(())
             })
@@ -516,6 +628,26 @@ async fn load_user_by_username(exec: SqlExec<'_, '_>, username: &str) -> AppResu
     )
     .await?;
     row.as_ref().map(row_to_user).transpose()
+}
+
+async fn load_user_login_snapshot_by_username(
+    exec: SqlExec<'_, '_>,
+    username: &str,
+) -> AppResult<Option<UserLoginSnapshot>> {
+    let row = SqlRuntime::fetch_optional(
+        exec,
+        "SELECT id, username, password_hash, password_change_required, account_kind, status, auth_session_version FROM users WHERE username = {}",
+        &[SqlArg::Text(username.to_string())],
+    )
+    .await?;
+    row.as_ref()
+        .map(|row| {
+            Ok(UserLoginSnapshot {
+                user: row_to_user(row)?,
+                auth_session_version: row.opt_text("auth_session_version")?,
+            })
+        })
+        .transpose()
 }
 
 async fn load_user_by_id(exec: SqlExec<'_, '_>, id: &str) -> AppResult<Option<User>> {

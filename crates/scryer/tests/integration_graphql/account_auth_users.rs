@@ -1559,6 +1559,7 @@ async fn graphql_reset_user_mfa_clears_all_authentication_factors() {
     let pending_challenge = TotpEnrollmentChallengeRecord {
         id: Id::new().0,
         user_id: target.id.clone(),
+        auth_session_version: None,
         secret_base32: "JBSWY3DPEHPK3PXP".to_string(),
         algorithm: "SHA1".to_string(),
         digits: 6,

@@ -6,7 +6,7 @@ import {
   oauthAuthorizationClientQuery,
 } from "@/lib/graphql/queries";
 import { backendClient } from "@/lib/graphql/urql-client";
-import { getAuthToken } from "@/lib/hooks/use-auth";
+import { clearClientAuthSession, getAuthToken } from "@/lib/hooks/use-auth";
 import { getRuntimeBackendUrl, getRuntimeBasePath } from "@/lib/runtime-config";
 import type { AuthRuntimeState } from "@/lib/types/settings";
 import { selectorId } from "@/lib/utils/dom-ids";
@@ -47,6 +47,7 @@ export default function OAuthAuthorizePage() {
   const params = useMemo(() => new URLSearchParams(window.location.search), []);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [reauthenticationRequired, setReauthenticationRequired] = useState(false);
   const [clientName, setClientName] = useState<string | null>(null);
   const [clientValidationError, setClientValidationError] = useState<string | null>(null);
   const [effectiveFormLoginEnabled, setEffectiveFormLoginEnabled] = useState<boolean | null>(null);
@@ -135,9 +136,20 @@ export default function OAuthAuthorizePage() {
         }),
       });
       const body = (await response.json().catch(() => null)) as
-        | { redirectUri?: string; errorDescription?: string; error_description?: string }
+        | {
+            redirectUri?: string;
+            error?: string;
+            errorDescription?: string;
+            error_description?: string;
+          }
         | null;
       if (!response.ok || !body?.redirectUri) {
+        if (body?.error === "reauthentication_required") {
+          clearClientAuthSession();
+          setReauthenticationRequired(true);
+          setError("Your session is no longer fresh. Sign in again to continue.");
+          return;
+        }
         setError(
           body?.error_description ??
             body?.errorDescription ??
@@ -210,15 +222,26 @@ export default function OAuthAuthorizePage() {
           <p className={OAUTH_ERROR_CLASS}>{error ?? clientValidationError}</p>
         ) : null}
         <div className="flex flex-wrap gap-2">
-          <Button
-            id={selectorId("oauth-authorize-approve")}
-            disabled={busy || !clientName}
-            className={OAUTH_PRIMARY_BUTTON_CLASS}
-            onClick={() => decide(true)}
-          >
-            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-            {authlessAuthorization ? "Authorize as Anonymous" : "Authorize"}
-          </Button>
+          {reauthenticationRequired ? (
+            <Button
+              id={selectorId("oauth-authorize-sign-in-again")}
+              className={OAUTH_PRIMARY_BUTTON_CLASS}
+              onClick={() => window.location.assign(loginUrl())}
+            >
+              <LogIn className="h-4 w-4" aria-hidden="true" />
+              Sign in again
+            </Button>
+          ) : (
+            <Button
+              id={selectorId("oauth-authorize-approve")}
+              disabled={busy || !clientName}
+              className={OAUTH_PRIMARY_BUTTON_CLASS}
+              onClick={() => decide(true)}
+            >
+              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              {authlessAuthorization ? "Authorize as Anonymous" : "Authorize"}
+            </Button>
+          )}
           <Button
             id={selectorId("oauth-authorize-deny")}
             variant="outline"

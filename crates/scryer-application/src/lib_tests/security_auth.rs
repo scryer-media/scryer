@@ -493,6 +493,7 @@ async fn token_signed_without_auth_session_version_authenticates() {
         library_permissions: vec![],
         mfa_verified_until: None,
         mfa_step_up_verified_until: None,
+        security_action_verified_until: None,
         actor_capabilities: vec![],
         oauth_client_id: None,
         oauth_grant_id: None,
@@ -870,6 +871,7 @@ async fn oauth_token_with_app_permissions_is_rejected_during_authentication() {
         library_permissions: vec![],
         mfa_verified_until: None,
         mfa_step_up_verified_until: None,
+        security_action_verified_until: None,
         actor_capabilities: vec![],
         oauth_client_id: Some("generic-native".to_string()),
         oauth_grant_id: Some("grant-with-app-permission".to_string()),
@@ -927,6 +929,7 @@ async fn oauth_token_with_actor_capabilities_is_rejected_during_authentication()
         library_permissions: vec![],
         mfa_verified_until: None,
         mfa_step_up_verified_until: None,
+        security_action_verified_until: None,
         actor_capabilities: vec!["manageOwnAccount".to_string()],
         oauth_client_id: Some("generic-native".to_string()),
         oauth_grant_id: Some("grant-with-actor-capability".to_string()),
@@ -1700,6 +1703,7 @@ async fn expired_token_returns_unauthorized() {
         library_permissions: vec![],
         mfa_verified_until: None,
         mfa_step_up_verified_until: None,
+        security_action_verified_until: None,
         actor_capabilities: vec![],
         oauth_client_id: None,
         oauth_grant_id: None,
@@ -1744,6 +1748,7 @@ async fn wrong_issuer_token_returns_unauthorized() {
         library_permissions: vec![],
         mfa_verified_until: None,
         mfa_step_up_verified_until: None,
+        security_action_verified_until: None,
         actor_capabilities: vec![],
         oauth_client_id: None,
         oauth_grant_id: None,
@@ -1868,28 +1873,136 @@ async fn passkey_management_requires_enabled_form_login() {
 
     assert_form_login_required(app.webauthn_register_start(&user, false).await);
     assert_form_login_required(app.list_my_passkeys(&user, false).await);
-    assert_form_login_required(app.delete_my_passkey(&user, "credential-id", false).await);
+    assert_form_login_required(
+        app.delete_my_passkey(&user, "credential-id", false, None)
+            .await,
+    );
+}
+
+#[derive(Default)]
+struct InMemoryWebauthnChallengeRepository {
+    challenges: Mutex<HashMap<String, WebauthnChallengeRecord>>,
+}
+
+#[async_trait]
+impl WebauthnRepository for InMemoryWebauthnChallengeRepository {
+    async fn list_credentials_for_user(&self, _: &str) -> AppResult<Vec<WebauthnCredentialRecord>> {
+        Ok(Vec::new())
+    }
+
+    async fn get_credential_by_id_for_user(
+        &self,
+        _: &str,
+        _: &str,
+    ) -> AppResult<Option<WebauthnCredentialRecord>> {
+        Ok(None)
+    }
+
+    async fn get_credential_by_credential_id(
+        &self,
+        _: &str,
+    ) -> AppResult<Option<WebauthnCredentialRecord>> {
+        Ok(None)
+    }
+
+    async fn create_credential(
+        &self,
+        _: WebauthnCredentialRecord,
+    ) -> AppResult<WebauthnCredentialRecord> {
+        Err(AppError::Repository(
+            "not needed for discoverable starts".into(),
+        ))
+    }
+
+    async fn update_credential(
+        &self,
+        _: WebauthnCredentialRecord,
+    ) -> AppResult<WebauthnCredentialRecord> {
+        Err(AppError::Repository(
+            "not needed for discoverable starts".into(),
+        ))
+    }
+
+    async fn update_credential_if_current(
+        &self,
+        _: WebauthnCredentialRecord,
+        _: &str,
+    ) -> AppResult<Option<WebauthnCredentialRecord>> {
+        Err(AppError::Repository(
+            "not needed for discoverable starts".into(),
+        ))
+    }
+
+    async fn delete_credential_for_user(&self, _: &str, _: &str) -> AppResult<()> {
+        Ok(())
+    }
+
+    async fn create_challenge(
+        &self,
+        challenge: WebauthnChallengeRecord,
+    ) -> AppResult<WebauthnChallengeRecord> {
+        self.challenges
+            .lock()
+            .await
+            .insert(challenge.id.clone(), challenge.clone());
+        Ok(challenge)
+    }
+
+    async fn get_challenge(&self, id: &str) -> AppResult<Option<WebauthnChallengeRecord>> {
+        Ok(self.challenges.lock().await.get(id).cloned())
+    }
+
+    async fn take_challenge(&self, id: &str) -> AppResult<Option<WebauthnChallengeRecord>> {
+        Ok(self.challenges.lock().await.remove(id))
+    }
+
+    async fn delete_challenge(&self, id: &str) -> AppResult<()> {
+        self.challenges.lock().await.remove(id);
+        Ok(())
+    }
+
+    async fn delete_expired_challenges(&self, _: &str) -> AppResult<u64> {
+        Ok(0)
+    }
 }
 
 #[tokio::test]
-async fn disabled_user_cannot_start_passkey_authentication() {
+async fn discoverable_passkey_start_does_not_enumerate_disabled_or_unknown_users() {
     let users = Arc::new(MockUserRepo::default());
-    let mut user = User::with_password_hash("disabled_passkey", TEST_PASSWORD_HASH);
-    user.set_login_status(scryer_domain::UserLoginStatus::Disabled);
-    users.create(user.clone()).await.expect("create user");
+    let mut disabled_user = User::with_password_hash("disabled_passkey", TEST_PASSWORD_HASH);
+    disabled_user.set_login_status(scryer_domain::UserLoginStatus::Disabled);
+    users
+        .create(disabled_user.clone())
+        .await
+        .expect("create disabled user");
+    let enabled_user = User::with_password_hash("enabled_passkey", TEST_PASSWORD_HASH);
+    users
+        .create(enabled_user.clone())
+        .await
+        .expect("create enabled user");
 
-    let (mut app, _) = bootstrap_with_user_repo(users);
+    let challenges = Arc::new(InMemoryWebauthnChallengeRepository::default());
+    let (app, _) = bootstrap_with_user_repo(users);
+    let app = app.with_test_overrides(|services| services.with_webauthn_store(challenges));
     let origin = url::Url::parse("https://scryer.test").expect("valid WebAuthn origin");
     let webauthn = webauthn_rs::WebauthnBuilder::new("scryer.test", &origin)
         .expect("valid WebAuthn builder")
         .build()
         .expect("valid WebAuthn runtime");
+    let mut app = app;
     app.webauthn = services::RuntimeFeature::enabled(Arc::new(webauthn));
 
-    let result = app
-        .webauthn_authenticate_start(Some(&user.username), true)
-        .await;
-    assert!(matches!(result, Err(AppError::Unauthorized(_))));
+    for username in [
+        disabled_user.username.as_str(),
+        "unknown_passkey_user",
+        enabled_user.username.as_str(),
+    ] {
+        let challenge = app
+            .webauthn_authenticate_start(Some(username), true)
+            .await
+            .expect("discoverable authentication start should not enumerate users");
+        assert!(!challenge.challenge_id.is_empty());
+    }
 }
 
 #[tokio::test]
@@ -1914,6 +2027,49 @@ async fn password_change_invalidates_existing_token_immediately() {
     assert!(
         result.is_err(),
         "old token should be rejected after password change"
+    );
+}
+
+#[tokio::test]
+async fn verified_old_password_cannot_continue_after_password_epoch_changes() {
+    let (app, admin) = bootstrap();
+    let created = create_user_with_permissions(
+        &app,
+        &admin,
+        "password_epoch_race",
+        "before-pass",
+        vec![TestPermissionPreset::CatalogView],
+    )
+    .await
+    .expect("create user");
+    let verified = app
+        .authenticate_local_credentials("password_epoch_race", "before-pass")
+        .await
+        .expect("verify old password");
+
+    app.set_user_password(&admin, &created.id, "after-pass".to_string())
+        .await
+        .expect("rotate password epoch");
+
+    let old_login = app
+        .login_verification_requirement(
+            &verified.user,
+            LoginVerificationMethod::LocalPassword,
+            false,
+            false,
+            None,
+            Some(&verified.auth_session_version),
+        )
+        .await;
+    assert!(
+        matches!(old_login, Err(AppError::Unauthorized(_))),
+        "the paused old-password request must not issue a token or challenge"
+    );
+    assert!(
+        app.authenticate_local_credentials("password_epoch_race", "after-pass")
+            .await
+            .is_ok(),
+        "the replacement password should authenticate normally"
     );
 }
 
@@ -2045,6 +2201,7 @@ async fn token_permission_claims_do_not_override_database_authorization() {
         library_permissions: vec![],
         mfa_verified_until: None,
         mfa_step_up_verified_until: None,
+        security_action_verified_until: None,
         actor_capabilities: vec![],
         oauth_client_id: None,
         oauth_grant_id: None,

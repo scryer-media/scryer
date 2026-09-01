@@ -129,10 +129,30 @@ async fn custom_client_grant_creation_requires_an_enabled_registration() {
         .await
         .expect("disabled client registration should insert");
 
+    let authorization_code = scryer_application::OAuthAuthorizationCodeRecord {
+        id: "code-disabled-client".to_string(),
+        code_hash: "hash-code-disabled-client".to_string(),
+        client_id: client_id.to_string(),
+        user_id: user.id.clone(),
+        auth_session_version: "1".to_string(),
+        authorization_source: scryer_application::OAuthAuthorizationSource::Authenticated,
+        redirect_uri: "https://example.test/oauth/callback".to_string(),
+        scope: "library".to_string(),
+        code_challenge: "challenge-disabled-client".to_string(),
+        code_challenge_method: "S256".to_string(),
+        created_at: now,
+        expires_at: now + chrono::Duration::minutes(5),
+        consumed_at: None,
+    };
+    oauth
+        .create_authorization_code(authorization_code.clone())
+        .await
+        .expect("authorization code should insert");
+
     let grant = scryer_application::OAuthRefreshGrantRecord {
         id: "grant-disabled-client".to_string(),
         family_id: "family-disabled-client".to_string(),
-        user_id: user.id,
+        user_id: user.id.clone(),
         authorization_source: scryer_application::OAuthAuthorizationSource::Authenticated,
         client_id: client_id.to_string(),
         scope: "library".to_string(),
@@ -162,6 +182,50 @@ async fn custom_client_grant_creation_requires_an_enabled_registration() {
         scryer_application::AppError::Unauthorized(_)
     ));
 
+    let exchange_grant = scryer_application::OAuthRefreshGrantRecord {
+        id: "grant-disabled-client-exchange".to_string(),
+        family_id: "family-disabled-client-exchange".to_string(),
+        user_id: user.id.clone(),
+        authorization_source: scryer_application::OAuthAuthorizationSource::Authenticated,
+        client_id: client_id.to_string(),
+        scope: "library".to_string(),
+        auth_session_version: "1".to_string(),
+        created_at: now,
+        updated_at: now,
+        last_used_at: None,
+        revoked_at: None,
+        revoked_reason: None,
+    };
+    let exchange_token = scryer_application::OAuthRefreshTokenRecord {
+        id: "token-disabled-client-exchange".to_string(),
+        grant_id: exchange_grant.id.clone(),
+        family_id: exchange_grant.family_id.clone(),
+        token_hash: "hash-disabled-client-exchange".to_string(),
+        created_at: now,
+        consumed_at: None,
+        revoked_at: None,
+    };
+    let error = oauth
+        .consume_authorization_code_and_create_refresh_grant(
+            authorization_code,
+            now,
+            exchange_grant,
+            exchange_token,
+            true,
+        )
+        .await
+        .expect_err("disabled client must not consume an authorization code");
+    assert!(matches!(
+        error,
+        scryer_application::AppError::Unauthorized(_)
+    ));
+    let code = oauth
+        .get_authorization_code("code-disabled-client")
+        .await
+        .expect("authorization code should load")
+        .expect("authorization code should remain");
+    assert!(code.consumed_at.is_none());
+
     let grant_count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM oauth_refresh_grants WHERE id = 'grant-disabled-client'",
     )
@@ -169,6 +233,14 @@ async fn custom_client_grant_creation_requires_an_enabled_registration() {
     .await
     .expect("grant count should load");
     assert_eq!(grant_count, 0);
+
+    let exchange_grant_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM oauth_refresh_grants WHERE id = 'grant-disabled-client-exchange'",
+    )
+    .fetch_one(services.pool())
+    .await
+    .expect("exchange grant count should load");
+    assert_eq!(exchange_grant_count, 0);
 
     let _ = std::fs::remove_file(db);
 }
