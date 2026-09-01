@@ -4355,11 +4355,10 @@ async fn migrations_0202_and_0203_bind_factor_state_and_session_epochs() {
         assert_eq!(has_session_version, 1, "{table} should carry the epoch");
     }
 
-    let remaining_codes: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM oauth_authorization_codes")
-            .fetch_one(&pool)
-            .await
-            .expect("authorization code count should load");
+    let remaining_codes: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM oauth_authorization_codes")
+        .fetch_one(&pool)
+        .await
+        .expect("authorization code count should load");
     assert_eq!(remaining_codes, 0);
     sqlx::query(
         "INSERT INTO oauth_authorization_codes (
