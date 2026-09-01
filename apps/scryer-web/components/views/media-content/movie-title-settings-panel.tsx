@@ -42,15 +42,32 @@ export function MovieTitleSettingsPanel({
   // Root chosen in the destination control; opening the move workflow instead
   // of writing the title's root in place (FR-011).
   const [moveRootId, setMoveRootId] = React.useState<string | null>(null);
+  // Every library, not just the title's own: a destination in another library
+  // is a cross-library transfer (FR-055/FR-056), and the move dialog owns the
+  // rules for which destinations are pickable.
   const moveLibraries = React.useMemo(
-    () => [
-      {
-        id: title.libraryId,
-        name: libraryName?.trim() || title.libraryName?.trim() || title.libraryId,
-        roots: rootFolders,
-      },
-    ],
-    [libraryName, rootFolders, title.libraryId, title.libraryName],
+    () =>
+      libraries.length > 0
+        ? libraries.map((entry) => ({
+            id: entry.id,
+            name:
+              entry.name?.trim() ||
+              (entry.id === title.libraryId
+                ? title.libraryName?.trim() || entry.id
+                : entry.id),
+            roots: entry.roots,
+          }))
+        : [
+            {
+              id: title.libraryId,
+              name:
+                libraryName?.trim() ||
+                title.libraryName?.trim() ||
+                title.libraryId,
+              roots: rootFolders,
+            },
+          ],
+    [libraries, libraryName, rootFolders, title.libraryId, title.libraryName],
   );
 
   React.useEffect(() => {
