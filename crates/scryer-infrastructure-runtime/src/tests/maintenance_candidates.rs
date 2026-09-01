@@ -4,8 +4,9 @@
 
 use super::*;
 use scryer_application::{
-    MaintenanceCandidateQuery, MaintenanceCandidateRepository, MaintenanceEvaluationRunRepository,
-    MaintenanceExclusionRepository, MaintenanceRuleSetRepository,
+    LifecycleActionRunRepository, MaintenanceCandidateQuery, MaintenanceCandidateRepository,
+    MaintenanceEvaluationRunRepository, MaintenanceExclusionRepository,
+    MaintenanceRuleSetRepository,
 };
 use scryer_domain::{
     LifecycleCandidate, MaintenanceCandidateState, MaintenanceEvaluationMode,
@@ -29,6 +30,7 @@ async fn seed_rule_set(services: &SqliteServices, id: &str) {
                 description: String::new(),
                 enabled: false,
                 evaluation_mode: MaintenanceEvaluationMode::Disabled,
+                effect_arming: scryer_domain::MaintenanceEffectArming::None,
                 library_ids: Vec::new(),
                 subject_kind: MaintenanceRuleSubjectKind::Title,
                 current_revision_number: 1,
@@ -74,6 +76,7 @@ fn candidate(id: &str, rule_set_id: &str, title_id: &str, generation: i64) -> Li
         due_at: now + chrono::Duration::days(7),
         last_evaluated_at: now,
         held_since: None,
+        action_attempts: 0,
         created_at: now,
         updated_at: now,
     }
@@ -600,6 +603,225 @@ async fn evaluation_mode_and_enabled_move_together() {
         MaintenanceEvaluationMode::Disabled
     );
     assert!(!disarmed.enabled);
+
+    let _ = std::fs::remove_file(db);
+}
+
+#[tokio::test]
+async fn the_execution_lease_is_exclusive_and_reclaimable_when_stale() {
+    let (services, db) = temp_services("scryer_maintenance_lease").await;
+    seed_rule_set(&services, "rule-a").await;
+    let store = evaluation_store(&services);
+    let now = Utc::now();
+
+    let mut row = candidate("cand-1", "rule-a", "title-1", 1);
+    row.state = MaintenanceCandidateState::Due;
+    store.create_candidate(&row).await.expect("create");
+
+    let stale_before = now - chrono::Duration::hours(1);
+    assert!(
+        store
+            .lease_candidate_for_execution("cand-1", stale_before, now)
+            .await
+            .expect("first lease"),
+        "a due candidate must be leasable"
+    );
+    assert!(
+        !store
+            .lease_candidate_for_execution("cand-1", stale_before, now)
+            .await
+            .expect("second lease"),
+        "a fresh executing lease must be exclusive"
+    );
+
+    // A lease whose worker crashed goes stale and may be reclaimed.
+    let later = now + chrono::Duration::hours(2);
+    assert!(
+        store
+            .lease_candidate_for_execution("cand-1", later - chrono::Duration::hours(1), later)
+            .await
+            .expect("stale re-lease"),
+        "a stale executing lease must be reclaimable"
+    );
+
+    // Terminal candidates are never leasable.
+    store
+        .transition_candidate_state(
+            "cand-1",
+            MaintenanceCandidateState::Succeeded,
+            "action_succeeded",
+            later,
+        )
+        .await
+        .expect("finish");
+    assert!(
+        !store
+            .lease_candidate_for_execution("cand-1", stale_before, later)
+            .await
+            .expect("terminal lease"),
+        "a terminal candidate must not be leasable"
+    );
+
+    let _ = std::fs::remove_file(db);
+}
+
+#[tokio::test]
+async fn due_selection_returns_only_actionable_states_past_their_due_time() {
+    let (services, db) = temp_services("scryer_maintenance_due").await;
+    seed_rule_set(&services, "rule-a").await;
+    let store = evaluation_store(&services);
+    let now = Utc::now();
+
+    let mut due_row = candidate("cand-due", "rule-a", "title-1", 1);
+    due_row.due_at = now - chrono::Duration::hours(1);
+    store.create_candidate(&due_row).await.expect("create due");
+
+    let mut future_row = candidate("cand-future", "rule-a", "title-2", 1);
+    future_row.due_at = now + chrono::Duration::days(3);
+    store
+        .create_candidate(&future_row)
+        .await
+        .expect("create future");
+
+    let mut blocked_row = candidate("cand-blocked", "rule-a", "title-3", 1);
+    blocked_row.state = MaintenanceCandidateState::Blocked;
+    blocked_row.due_at = now - chrono::Duration::hours(2);
+    store
+        .create_candidate(&blocked_row)
+        .await
+        .expect("create blocked");
+
+    let due = store
+        .list_due_candidates("rule-a", now, 10)
+        .await
+        .expect("list due");
+    let ids: Vec<&str> = due.iter().map(|row| row.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        vec!["cand-blocked", "cand-due"],
+        "oldest due first; blocked re-checks, future stays out"
+    );
+
+    let _ = std::fs::remove_file(db);
+}
+
+#[tokio::test]
+async fn action_runs_append_finish_and_enforce_attempt_uniqueness() {
+    let (services, db) = temp_services("scryer_maintenance_action_runs").await;
+    seed_rule_set(&services, "rule-a").await;
+    let store = evaluation_store(&services);
+    let now = Utc::now();
+
+    let row = candidate("cand-1", "rule-a", "title-1", 1);
+    store.create_candidate(&row).await.expect("create");
+
+    let mut run = scryer_domain::LifecycleActionRun {
+        id: "run-1".to_string(),
+        candidate_id: "cand-1".to_string(),
+        rule_set_id: "rule-a".to_string(),
+        revision_number: 1,
+        title_id: "title-1".to_string(),
+        action_kind: "unmonitor_scope_keep_files".to_string(),
+        match_generation: 1,
+        idempotency_key: "cand-1:1:unmonitor:abcd".to_string(),
+        attempt: 1,
+        status: scryer_domain::LifecycleActionRunStatus::Running,
+        hold_reason: None,
+        error: None,
+        detail: "{}".to_string(),
+        started_at: now,
+        finished_at: None,
+        created_at: now,
+    };
+    store.start_action_run(&run).await.expect("start");
+
+    // The same (key, attempt) must be refused: that is the duplicate-execution
+    // detector.
+    let mut duplicate = run.clone();
+    duplicate.id = "run-dup".to_string();
+    assert!(
+        store.start_action_run(&duplicate).await.is_err(),
+        "duplicate (idempotency_key, attempt) must be refused"
+    );
+
+    // A retry is the same key with the next attempt.
+    let mut retry = run.clone();
+    retry.id = "run-2".to_string();
+    retry.attempt = 2;
+    store.start_action_run(&retry).await.expect("retry row");
+
+    run.status = scryer_domain::LifecycleActionRunStatus::Succeeded;
+    run.detail = r#"{"unmonitored":true}"#.to_string();
+    run.finished_at = Some(now + chrono::Duration::seconds(1));
+    store.finish_action_run(&run).await.expect("finish");
+
+    let listed = store
+        .list_action_runs(Some("rule-a"), None, Some(10))
+        .await
+        .expect("list");
+    assert_eq!(listed.len(), 2);
+    let finished = listed
+        .iter()
+        .find(|stored| stored.id == "run-1")
+        .expect("finished row");
+    assert_eq!(
+        finished.status,
+        scryer_domain::LifecycleActionRunStatus::Succeeded
+    );
+    assert_eq!(finished.detail, r#"{"unmonitored":true}"#);
+    assert!(finished.finished_at.is_some());
+
+    let by_candidate = store
+        .list_action_runs(None, Some("cand-1"), None)
+        .await
+        .expect("list by candidate");
+    assert_eq!(by_candidate.len(), 2);
+
+    let _ = std::fs::remove_file(db);
+}
+
+#[tokio::test]
+async fn effect_arming_and_attempts_round_trip() {
+    let (services, db) = temp_services("scryer_maintenance_arming").await;
+    seed_rule_set(&services, "rule-a").await;
+    let rules = crate::MaintenanceRuleSetStore::new(services.datastore());
+    let store = evaluation_store(&services);
+    let now = Utc::now();
+
+    rules
+        .update_rule_set_arming(
+            "rule-a",
+            scryer_domain::MaintenanceEffectArming::Destructive,
+            now,
+        )
+        .await
+        .expect("arm");
+    let armed = rules
+        .get_rule_set("rule-a")
+        .await
+        .expect("read")
+        .expect("exists");
+    assert_eq!(
+        armed.effect_arming,
+        scryer_domain::MaintenanceEffectArming::Destructive
+    );
+    assert_eq!(
+        armed.current_revision_number, 1,
+        "arming never appends a revision"
+    );
+
+    let row = candidate("cand-1", "rule-a", "title-1", 1);
+    store.create_candidate(&row).await.expect("create");
+    store
+        .record_candidate_attempts("cand-1", 2, now)
+        .await
+        .expect("attempts");
+    let stored = store
+        .get_active_candidate("rule-a", "title-1")
+        .await
+        .expect("read")
+        .expect("exists");
+    assert_eq!(stored.action_attempts, 2);
 
     let _ = std::fs::remove_file(db);
 }

@@ -53,6 +53,51 @@ pub fn maintenance_rule_subject_kind_value(
     }
 }
 
+pub fn maintenance_effect_arming_value(
+    arming: scryer_domain::MaintenanceEffectArming,
+) -> MaintenanceEffectArming {
+    match arming {
+        scryer_domain::MaintenanceEffectArming::None => MaintenanceEffectArming::None,
+        scryer_domain::MaintenanceEffectArming::Reversible => MaintenanceEffectArming::Reversible,
+        scryer_domain::MaintenanceEffectArming::Destructive => MaintenanceEffectArming::Destructive,
+    }
+}
+
+pub fn maintenance_effect_arming_into_application(
+    arming: MaintenanceEffectArming,
+) -> scryer_domain::MaintenanceEffectArming {
+    match arming {
+        MaintenanceEffectArming::None => scryer_domain::MaintenanceEffectArming::None,
+        MaintenanceEffectArming::Reversible => scryer_domain::MaintenanceEffectArming::Reversible,
+        MaintenanceEffectArming::Destructive => scryer_domain::MaintenanceEffectArming::Destructive,
+    }
+}
+
+/// One action-handler attempt. An action kind this build cannot parse renders
+/// nothing rather than a wrong kind, but by construction the executor only
+/// stores catalog wire names, so the fallback is unreachable in practice.
+pub fn from_maintenance_action_run(
+    view: scryer_application::maintenance_rules::MaintenanceActionRunView,
+) -> Option<MaintenanceActionRun> {
+    let run = view.run;
+    let kind = AppActionKind::parse_wire_str(&run.action_kind)?;
+    Some(MaintenanceActionRun {
+        id: ID::from(run.id),
+        rule_set_id: ID::from(run.rule_set_id),
+        candidate_id: ID::from(run.candidate_id),
+        title_id: ID::from(run.title_id),
+        title_name: view.title_name,
+        action_kind: maintenance_action_kind_value(kind),
+        match_generation: to_graphql_int(run.match_generation),
+        attempt: to_graphql_int(run.attempt),
+        status: run.status.as_storage_str().to_string(),
+        hold_reason: run.hold_reason,
+        error: run.error,
+        started_at: run.started_at,
+        finished_at: run.finished_at,
+    })
+}
+
 pub fn maintenance_action_kind_value(kind: AppActionKind) -> MaintenanceActionKind {
     match kind {
         AppActionKind::DoNothing => MaintenanceActionKind::DoNothing,
@@ -174,6 +219,7 @@ pub fn from_maintenance_rule_set(detail: &AppRuleSetDetail) -> MaintenanceRuleSe
         description: rule_set.description.clone(),
         enabled: rule_set.enabled,
         evaluation_mode: maintenance_evaluation_mode_value(rule_set.evaluation_mode),
+        effect_arming: maintenance_effect_arming_value(rule_set.effect_arming),
         library_ids: rule_set.library_ids.clone(),
         subject_kind: maintenance_rule_subject_kind_value(rule_set.subject_kind),
         current_revision_number: to_graphql_int(rule_set.current_revision_number),

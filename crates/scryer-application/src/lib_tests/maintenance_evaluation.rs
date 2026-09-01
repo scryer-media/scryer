@@ -15,7 +15,7 @@ use crate::maintenance_rules::{
 };
 use crate::ports::MaintenanceCandidateQuery;
 use scryer_domain::{
-    LifecycleCandidate, MaintenanceCandidateState, MaintenanceEvaluationMode,
+    LifecycleActionRun, LifecycleCandidate, MaintenanceCandidateState, MaintenanceEvaluationMode,
     MaintenanceEvaluationRun, MaintenanceEvaluationRunStatus, MaintenanceRuleExclusion,
     MaintenanceRuleRevision,
 };
@@ -52,19 +52,24 @@ const UNKNOWN_MATCHER: &str = "package whatever\n\
 /// (rule, title) invariant, so a service bug cannot hide behind a permissive
 /// double.
 #[derive(Default)]
-struct InMemoryMaintenanceEvaluationRepo {
+pub(super) struct InMemoryMaintenanceEvaluationRepo {
     candidates: Mutex<Vec<LifecycleCandidate>>,
     exclusions: Mutex<Vec<MaintenanceRuleExclusion>>,
     runs: Mutex<Vec<MaintenanceEvaluationRun>>,
+    action_runs: Mutex<Vec<LifecycleActionRun>>,
 }
 
 impl InMemoryMaintenanceEvaluationRepo {
-    async fn all_candidates(&self) -> Vec<LifecycleCandidate> {
+    pub(super) async fn all_candidates(&self) -> Vec<LifecycleCandidate> {
         self.candidates.lock().await.clone()
     }
 
     async fn all_runs(&self) -> Vec<MaintenanceEvaluationRun> {
         self.runs.lock().await.clone()
+    }
+
+    pub(super) async fn all_action_runs(&self) -> Vec<LifecycleActionRun> {
+        self.action_runs.lock().await.clone()
     }
 }
 
@@ -241,6 +246,124 @@ impl MaintenanceCandidateRepository for InMemoryMaintenanceEvaluationRepo {
         }
         let mut rows: Vec<(MaintenanceCandidateState, i64)> = counts.into_values().collect();
         rows.sort_by_key(|(state, _)| state.as_storage_str());
+        Ok(rows)
+    }
+
+    async fn list_due_candidates(
+        &self,
+        rule_set_id: &str,
+        due_before: DateTime<Utc>,
+        limit: usize,
+    ) -> AppResult<Vec<LifecycleCandidate>> {
+        let mut rows: Vec<LifecycleCandidate> = self
+            .candidates
+            .lock()
+            .await
+            .iter()
+            .filter(|candidate| {
+                candidate.rule_set_id == rule_set_id
+                    && candidate.due_at <= due_before
+                    && matches!(
+                        candidate.state,
+                        MaintenanceCandidateState::Observing
+                            | MaintenanceCandidateState::PendingAction
+                            | MaintenanceCandidateState::Due
+                            | MaintenanceCandidateState::Blocked
+                    )
+            })
+            .cloned()
+            .collect();
+        rows.sort_by_key(|candidate| candidate.due_at);
+        rows.truncate(limit);
+        Ok(rows)
+    }
+
+    async fn lease_candidate_for_execution(
+        &self,
+        id: &str,
+        stale_before: DateTime<Utc>,
+        updated_at: DateTime<Utc>,
+    ) -> AppResult<bool> {
+        let mut rows = self.candidates.lock().await;
+        let Some(candidate) = rows.iter_mut().find(|candidate| candidate.id == id) else {
+            return Ok(false);
+        };
+        let leasable = candidate.state == MaintenanceCandidateState::Due
+            || (candidate.state == MaintenanceCandidateState::Executing
+                && candidate.updated_at < stale_before);
+        if !leasable {
+            return Ok(false);
+        }
+        candidate.state = MaintenanceCandidateState::Executing;
+        candidate.state_reason = "execution_leased".to_string();
+        candidate.updated_at = updated_at;
+        Ok(true)
+    }
+
+    async fn record_candidate_attempts(
+        &self,
+        id: &str,
+        action_attempts: i64,
+        updated_at: DateTime<Utc>,
+    ) -> AppResult<()> {
+        let mut rows = self.candidates.lock().await;
+        let candidate = rows
+            .iter_mut()
+            .find(|candidate| candidate.id == id)
+            .ok_or_else(|| AppError::NotFound(id.to_string()))?;
+        candidate.action_attempts = action_attempts;
+        candidate.updated_at = updated_at;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl LifecycleActionRunRepository for InMemoryMaintenanceEvaluationRepo {
+    async fn start_action_run(&self, run: &LifecycleActionRun) -> AppResult<()> {
+        let mut rows = self.action_runs.lock().await;
+        if rows.iter().any(|stored| {
+            stored.idempotency_key == run.idempotency_key && stored.attempt == run.attempt
+        }) {
+            return Err(AppError::Repository(format!(
+                "duplicate action attempt {}#{}",
+                run.idempotency_key, run.attempt
+            )));
+        }
+        rows.push(run.clone());
+        Ok(())
+    }
+
+    async fn finish_action_run(&self, run: &LifecycleActionRun) -> AppResult<()> {
+        let mut rows = self.action_runs.lock().await;
+        let stored = rows
+            .iter_mut()
+            .find(|stored| stored.id == run.id)
+            .ok_or_else(|| AppError::NotFound(run.id.clone()))?;
+        *stored = run.clone();
+        Ok(())
+    }
+
+    async fn list_action_runs(
+        &self,
+        rule_set_id: Option<&str>,
+        candidate_id: Option<&str>,
+        limit: Option<usize>,
+    ) -> AppResult<Vec<LifecycleActionRun>> {
+        let mut rows: Vec<LifecycleActionRun> = self
+            .action_runs
+            .lock()
+            .await
+            .iter()
+            .filter(|run| {
+                rule_set_id.is_none_or(|rule_set_id| run.rule_set_id == rule_set_id)
+                    && candidate_id.is_none_or(|candidate_id| run.candidate_id == candidate_id)
+            })
+            .cloned()
+            .collect();
+        rows.sort_by_key(|run| std::cmp::Reverse(run.started_at));
+        if let Some(limit) = limit {
+            rows.truncate(limit);
+        }
         Ok(rows)
     }
 }

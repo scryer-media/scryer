@@ -23,6 +23,20 @@ pub enum MaintenanceRuleSubjectKind {
     Title,
 }
 
+/// How far a rule set's effects are armed. Arming is per rule and independent
+/// of the instance effect gates; an action executes only when both permit it.
+#[derive(Enum, Copy, Clone, Debug, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+pub enum MaintenanceEffectArming {
+    /// Evaluate and track candidates, never act.
+    None,
+    /// Low- and medium-risk actions may execute.
+    Reversible,
+    /// High-risk actions may additionally execute. Requires acknowledging the
+    /// rule's current candidate count when set.
+    Destructive,
+}
+
 /// The closed catalog of actions a maintenance rule revision can authorize.
 #[derive(Enum, Copy, Clone, Debug, Eq, PartialEq)]
 #[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
@@ -136,6 +150,8 @@ pub struct MaintenanceRuleSet {
     pub enabled: bool,
     /// Evaluation mode currently stored for the rule set.
     pub evaluation_mode: MaintenanceEvaluationMode,
+    /// How far this rule's effects are armed, independent of its mode.
+    pub effect_arming: MaintenanceEffectArming,
     /// Libraries the rule is confined to. Empty means every library.
     pub library_ids: Vec<String>,
     /// Granularity the rule is scoped to.
@@ -391,6 +407,37 @@ pub struct DeleteMaintenanceExclusionPayload {
     pub id: ID,
 }
 
+/// One recorded action-handler attempt on one candidate, holds included.
+#[derive(SimpleObject, Clone)]
+pub struct MaintenanceActionRun {
+    /// Action-run ID.
+    pub id: ID,
+    /// Rule set the attempt belongs to.
+    pub rule_set_id: ID,
+    /// Candidate the attempt acted on.
+    pub candidate_id: ID,
+    /// Title the attempt acted on.
+    pub title_id: ID,
+    /// Display name of the title, or its stored ID when the title is gone.
+    pub title_name: String,
+    /// Action the attempt performed or refused.
+    pub action_kind: MaintenanceActionKind,
+    /// Match generation of the candidate at attempt time.
+    pub match_generation: i32,
+    /// Attempt number for this candidate generation, starting at one.
+    pub attempt: i32,
+    /// Outcome: running, succeeded, already_satisfied, failed, or held.
+    pub status: String,
+    /// Why a held attempt was refused; null otherwise.
+    pub hold_reason: Option<String>,
+    /// Error text of a failed attempt; null otherwise.
+    pub error: Option<String>,
+    /// UTC start time of the attempt.
+    pub started_at: DateTime<Utc>,
+    /// UTC finish time; null while the attempt is running.
+    pub finished_at: Option<DateTime<Utc>>,
+}
+
 /// Outcome of asking for an immediate evaluation pass.
 #[derive(SimpleObject, Clone)]
 pub struct MaintenanceEvaluationTriggerPayload {
@@ -466,6 +513,19 @@ pub struct SetMaintenanceRuleModeInput {
     pub id: ID,
     /// Mode to store. Anything other than `DISABLED` also enables the rule.
     pub mode: MaintenanceEvaluationMode,
+}
+
+/// Sets how far one rule set's effects are armed.
+#[derive(InputObject)]
+pub struct SetMaintenanceRuleArmingInput {
+    /// Rule-set ID.
+    pub id: ID,
+    /// Arming level to store. `DESTRUCTIVE` requires acknowledging the rule's
+    /// current candidate count and applies only to high-risk actions.
+    pub arming: MaintenanceEffectArming,
+    /// The candidate count the operator saw and acknowledged; required for
+    /// `DESTRUCTIVE` and must equal the rule's current non-terminal count.
+    pub acknowledged_candidate_count: Option<i32>,
 }
 
 /// Arms or disarms the instance-wide maintenance gates. An omitted field leaves

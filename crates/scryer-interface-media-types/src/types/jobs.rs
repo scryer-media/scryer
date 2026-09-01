@@ -42,6 +42,8 @@ pub enum JobKeyValue {
     TitleImageCacheRefresh,
     /// Scheduled maintenance rule evaluation.
     MaintenanceRuleEvaluation,
+    /// Scheduled maintenance lifecycle action handling.
+    LifecycleActionHandling,
     /// Title deletion.
     TitleDeletion,
     /// Title rename.

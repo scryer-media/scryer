@@ -3815,6 +3815,9 @@ pub struct MaintenanceRuleSet {
     pub description: String,
     pub enabled: bool,
     pub evaluation_mode: MaintenanceEvaluationMode,
+    /// How far this rule's effects are armed, independent of its mode. The
+    /// action handler requires both this and the instance effect gates.
+    pub effect_arming: MaintenanceEffectArming,
     /// Libraries this rule is confined to. Empty means every library.
     pub library_ids: Vec<String>,
     pub subject_kind: MaintenanceRuleSubjectKind,
@@ -3965,6 +3968,10 @@ pub struct LifecycleCandidate {
     /// Set while the latest evaluation could not decide (unknown fact or a
     /// per-title evaluation error), cleared by the next confirmed match.
     pub held_since: Option<DateTime<Utc>>,
+    /// Failed execution attempts for the current match generation. Bounded by
+    /// the action handler; reset implicitly because a new match starts a new
+    /// candidate row.
+    pub action_attempts: i64,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -4034,6 +4041,107 @@ pub struct MaintenanceEvaluationRun {
     pub superseded_candidates: i64,
     pub duration_ms: Option<i64>,
     pub error: Option<String>,
+}
+
+/// How far a maintenance rule set's effects are armed (RFC 137 sections 8 and
+/// 17 D2/D3). Arming is per rule and independent of the instance-wide effect
+/// gates: an action executes only when both permit it.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MaintenanceEffectArming {
+    /// Evaluate and track candidates; never act.
+    #[default]
+    None,
+    /// Low- and medium-risk actions may execute.
+    Reversible,
+    /// High-risk actions may additionally execute.
+    Destructive,
+}
+
+impl MaintenanceEffectArming {
+    pub const fn as_storage_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Reversible => "reversible",
+            Self::Destructive => "destructive",
+        }
+    }
+
+    /// An unknown stored value must read back as [`Self::None`], never as a
+    /// higher level: a build that cannot interpret an arming level must not act
+    /// on it.
+    pub fn parse_storage(value: &str) -> Option<Self> {
+        match value {
+            "none" => Some(Self::None),
+            "reversible" => Some(Self::Reversible),
+            "destructive" => Some(Self::Destructive),
+            _ => None,
+        }
+    }
+}
+
+/// Outcome of one action-handler attempt on one candidate.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LifecycleActionRunStatus {
+    /// Started and not yet finished; a row left here traces an interruption.
+    #[default]
+    Running,
+    Succeeded,
+    /// The postcondition already held, so no mutation was performed.
+    AlreadySatisfied,
+    Failed,
+    /// A safety precondition refused the attempt; `hold_reason` says which.
+    Held,
+}
+
+impl LifecycleActionRunStatus {
+    pub const fn as_storage_str(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Succeeded => "succeeded",
+            Self::AlreadySatisfied => "already_satisfied",
+            Self::Failed => "failed",
+            Self::Held => "held",
+        }
+    }
+
+    pub fn parse_storage(value: &str) -> Option<Self> {
+        match value {
+            "running" => Some(Self::Running),
+            "succeeded" => Some(Self::Succeeded),
+            "already_satisfied" => Some(Self::AlreadySatisfied),
+            "failed" => Some(Self::Failed),
+            "held" => Some(Self::Held),
+            _ => None,
+        }
+    }
+}
+
+/// One recorded action-handler attempt, holds included, so the executed (or
+/// refused) history of a candidate is append-only evidence (RFC 137 section 8).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LifecycleActionRun {
+    pub id: String,
+    pub candidate_id: String,
+    pub rule_set_id: String,
+    pub revision_number: i64,
+    pub title_id: String,
+    /// Catalog wire name of the action, as stored on the candidate.
+    pub action_kind: String,
+    pub match_generation: i64,
+    /// Stable across retries of the same candidate generation and action;
+    /// `attempt` distinguishes retries.
+    pub idempotency_key: String,
+    pub attempt: i64,
+    pub status: LifecycleActionRunStatus,
+    pub hold_reason: Option<String>,
+    pub error: Option<String>,
+    /// Versioned JSON evidence (preview fingerprints, profile ids, …).
+    pub detail: String,
+    pub started_at: DateTime<Utc>,
+    pub finished_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]

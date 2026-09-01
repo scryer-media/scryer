@@ -274,6 +274,54 @@ impl MaintenanceRuleMutations {
         Ok(crate::mappers::from_maintenance_rule_set(&detail))
     }
 
+    /// Set how far one rule set's effects are armed. Destructive arming requires acknowledging the rule's current candidate count.
+    async fn set_maintenance_rule_arming(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(
+            desc = "Rule-set identity, the arming level, and the acknowledged candidate count for destructive arming."
+        )]
+        input: SetMaintenanceRuleArmingInput,
+    ) -> GqlResult<MaintenanceRuleSet> {
+        let app = app_from_ctx(ctx)?;
+        let actor =
+            require_config_app_permission(ctx, AppPermission::ManageCatalogSettings).await?;
+
+        let detail = app
+            .set_maintenance_rule_arming(
+                &actor,
+                input.id.as_ref(),
+                crate::mappers::maintenance_effect_arming_into_application(input.arming),
+                input
+                    .acknowledged_candidate_count
+                    .map(|count| i64::from(count)),
+            )
+            .await
+            .map_err(to_gql_error)?;
+
+        Ok(crate::mappers::from_maintenance_rule_set(&detail))
+    }
+
+    /// Run the maintenance action handler immediately instead of waiting for its schedule.
+    async fn run_maintenance_action_handler_now(
+        &self,
+        ctx: &Context<'_>,
+    ) -> GqlResult<MaintenanceEvaluationTriggerPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor =
+            require_config_app_permission(ctx, AppPermission::ManageCatalogSettings).await?;
+
+        let trigger = app
+            .run_maintenance_action_handler_now(&actor)
+            .await
+            .map_err(to_gql_error)?;
+
+        Ok(MaintenanceEvaluationTriggerPayload {
+            started: trigger.started,
+            message: trigger.message,
+        })
+    }
+
     /// Arm or disarm the instance-wide maintenance gates. Omitted fields keep their stored value.
     async fn set_maintenance_instance_gates(
         &self,

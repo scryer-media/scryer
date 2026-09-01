@@ -19,7 +19,7 @@ use crate::types::TitleMediaFile;
 /// Structured tag prefix carrying a title's quality profile. Kept in sync with
 /// [`crate::ports::TitleRepository::count_by_quality_profile_id`], which
 /// defines the trim-after-strip resolver semantics reused here.
-const QUALITY_PROFILE_TAG_PREFIX: &str = "scryer:quality-profile:";
+pub(crate) const QUALITY_PROFILE_TAG_PREFIX: &str = "scryer:quality-profile:";
 
 /// Stable reason codes for facts this wave cannot observe.
 ///

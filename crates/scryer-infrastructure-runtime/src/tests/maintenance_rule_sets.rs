@@ -17,6 +17,7 @@ fn rule_set(id: &str, library_ids: Vec<String>) -> MaintenanceRuleSet {
         description: "Unwatched for a long time".to_string(),
         enabled: false,
         evaluation_mode: MaintenanceEvaluationMode::Disabled,
+        effect_arming: scryer_domain::MaintenanceEffectArming::None,
         library_ids,
         subject_kind: MaintenanceRuleSubjectKind::Title,
         current_revision_number: 1,

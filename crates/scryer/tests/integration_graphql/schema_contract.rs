@@ -572,19 +572,25 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // query 138->142, mutation 203->208, OBJECT 328->334, INPUT_OBJECT
     // 179->182, ENUM 118->119, public types 637->647. MAINTENANCE_RULE_EVALUATION
     // joins the existing job key enum, so it adds no type.
+    // The maintenance action executor adds the maintenanceActionRuns query
+    // root, the setMaintenanceRuleArming and runMaintenanceActionHandlerNow
+    // mutation roots, the action-run payload object, the arming input, and the
+    // arming enum: query 142->143, mutation 208->210, OBJECT 334->335,
+    // INPUT_OBJECT 182->183, ENUM 119->120, public types 647->650.
+    // LIFECYCLE_ACTION_HANDLING joins the existing job key enum.
     assert_eq!(
-        query_field_count, 142,
+        query_field_count, 143,
         "query fields: {query_field_names:?}"
     );
     assert_eq!(
-        mutation_field_count, 208,
+        mutation_field_count, 210,
         "mutation fields: {mutation_field_names:?}"
     );
     assert_eq!(subscription_field_count, 14);
-    assert_eq!(public_types.len(), 647);
-    assert_eq!(kind_count("OBJECT"), 334);
-    assert_eq!(kind_count("INPUT_OBJECT"), 182);
-    assert_eq!(kind_count("ENUM"), 119);
+    assert_eq!(public_types.len(), 650);
+    assert_eq!(kind_count("OBJECT"), 335);
+    assert_eq!(kind_count("INPUT_OBJECT"), 183);
+    assert_eq!(kind_count("ENUM"), 120);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
     assert!(query_field_names.contains(&"backupSettings"));
@@ -699,6 +705,14 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     assert!(public_type_names.contains(&"MaintenanceExclusion"));
     assert!(public_type_names.contains(&"DeleteMaintenanceExclusionPayload"));
     assert!(public_type_names.contains(&"MaintenanceEvaluationTriggerPayload"));
+
+    // The maintenance action-executor contract the same web wave binds to.
+    assert!(query_field_names.contains(&"maintenanceActionRuns"));
+    assert!(mutation_field_names.contains(&"setMaintenanceRuleArming"));
+    assert!(mutation_field_names.contains(&"runMaintenanceActionHandlerNow"));
+    assert!(public_type_names.contains(&"MaintenanceActionRun"));
+    assert!(public_type_names.contains(&"MaintenanceEffectArming"));
+    assert!(public_type_names.contains(&"SetMaintenanceRuleArmingInput"));
 
     // 0.17.0 API surface trim (root wave): dead root fields and their
     // exclusive snapshot payload types are gone.

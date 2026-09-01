@@ -5483,6 +5483,13 @@ pub trait MaintenanceRuleSetRepository: Send + Sync {
         enabled: bool,
         updated_at: DateTime<Utc>,
     ) -> AppResult<()>;
+
+    async fn update_rule_set_arming(
+        &self,
+        id: &str,
+        arming: scryer_domain::MaintenanceEffectArming,
+        updated_at: DateTime<Utc>,
+    ) -> AppResult<()>;
 }
 
 /// Which candidates a read should return. Every field narrows; an empty
@@ -5567,6 +5574,54 @@ pub trait MaintenanceCandidateRepository: Send + Sync {
         &self,
         rule_set_id: &str,
     ) -> AppResult<Vec<(scryer_domain::MaintenanceCandidateState, i64)>>;
+
+    /// Candidates of one rule whose materialized `due_at` has passed and whose
+    /// state can still reach execution (observing, pending_action, due,
+    /// blocked). Ordered oldest due first.
+    async fn list_due_candidates(
+        &self,
+        rule_set_id: &str,
+        due_before: DateTime<Utc>,
+        limit: usize,
+    ) -> AppResult<Vec<scryer_domain::LifecycleCandidate>>;
+
+    /// Take the execution lease: a single conditional write moving the row to
+    /// `executing`, succeeding only from `due`, or from an `executing` row not
+    /// touched since `stale_before` (crash recovery). Returns whether this
+    /// caller won the lease.
+    async fn lease_candidate_for_execution(
+        &self,
+        id: &str,
+        stale_before: DateTime<Utc>,
+        updated_at: DateTime<Utc>,
+    ) -> AppResult<bool>;
+
+    /// Persist the bounded failed-attempt counter for the current generation.
+    async fn record_candidate_attempts(
+        &self,
+        id: &str,
+        action_attempts: i64,
+        updated_at: DateTime<Utc>,
+    ) -> AppResult<()>;
+}
+
+/// Append-only record of action-handler attempts (RFC 137 section 8).
+#[async_trait]
+pub trait LifecycleActionRunRepository: Send + Sync {
+    /// Insert the attempt as `running` before anything is mutated, so an
+    /// interrupted attempt leaves evidence.
+    async fn start_action_run(&self, run: &scryer_domain::LifecycleActionRun) -> AppResult<()>;
+
+    /// Write the attempt's terminal status, hold reason, error, and detail.
+    async fn finish_action_run(&self, run: &scryer_domain::LifecycleActionRun) -> AppResult<()>;
+
+    /// Newest first, optionally narrowed by rule set and/or candidate.
+    async fn list_action_runs(
+        &self,
+        rule_set_id: Option<&str>,
+        candidate_id: Option<&str>,
+        limit: Option<usize>,
+    ) -> AppResult<Vec<scryer_domain::LifecycleActionRun>>;
 }
 
 /// Subjects a maintenance rule must never act on (RFC 137 section 11).
@@ -5617,12 +5672,15 @@ pub trait MaintenanceEvaluationRunRepository: Send + Sync {
     ) -> AppResult<Vec<scryer_domain::MaintenanceEvaluationRun>>;
 }
 
-/// The three maintenance-evaluation tables land together, are written together
-/// by one job pass, and cascade from the same rule set, so they are wired as
-/// one service slot. The capability traits stay separate so a caller declares
-/// only what it uses.
+/// The maintenance evaluation/execution tables land together, are written by
+/// the two maintenance job passes, and cascade from the same rule set, so they
+/// are wired as one service slot. The capability traits stay separate so a
+/// caller declares only what it uses.
 pub trait MaintenanceEvaluationRepository:
-    MaintenanceCandidateRepository + MaintenanceExclusionRepository + MaintenanceEvaluationRunRepository
+    MaintenanceCandidateRepository
+    + MaintenanceExclusionRepository
+    + MaintenanceEvaluationRunRepository
+    + LifecycleActionRunRepository
 {
 }
 
@@ -5630,6 +5688,7 @@ impl<T> MaintenanceEvaluationRepository for T where
     T: MaintenanceCandidateRepository
         + MaintenanceExclusionRepository
         + MaintenanceEvaluationRunRepository
+        + LifecycleActionRunRepository
 {
 }
 

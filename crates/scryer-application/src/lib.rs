@@ -407,7 +407,7 @@ pub use jobs::definitions::{
     JobScheduleInfo, JobScheduleKind, JobSection, JobTriggerSource, LibraryProbeSignature,
     MAINTENANCE_RULE_EVALUATION_INTERVAL_SECONDS,
 };
-pub use library::user_delete::{DeletePreview, DeleteTitlesPreview};
+pub use library::user_delete::{DeletePreview, DeleteTitlesPreview, PolicyDeleteAuthorization};
 pub use library_scan::{
     AnimeEpisodeMapping, AnimeMapping, AnimeMovie, BulkArtworkUrlResult, BulkMetadataResult,
     DiscoveryCollectionCompletionInput, DiscoveryCollectionCompletionResult,
@@ -476,8 +476,8 @@ pub use ports::{
     IndexerSearchLearningKey, IndexerSearchLearningRecord, IndexerSearchLearningRepository,
     IndexerSearchRunWrite, IndexerStatsTracker, IndexerSystemBackoff, JellyfinServerUser,
     JobRunRepository, LibraryProbeRepository, LibraryRepository,
-    LibraryScanUnmatchedItemRepository, LogicalBackupExporter, MaintenanceCandidateQuery,
-    MaintenanceCandidateRepository, MaintenanceEvaluationRepository,
+    LibraryScanUnmatchedItemRepository, LifecycleActionRunRepository, LogicalBackupExporter,
+    MaintenanceCandidateQuery, MaintenanceCandidateRepository, MaintenanceEvaluationRepository,
     MaintenanceEvaluationRunRepository, MaintenanceExclusionRepository,
     MaintenanceRuleSetRepository, MediaAnalyzer, MediaFileRepository, MediaRequestQuery,
     MediaRequestRepository, MediaServerConnectionRepository, MediaServerUser, MediaServerUserGroup,

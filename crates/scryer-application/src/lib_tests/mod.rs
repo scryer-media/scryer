@@ -21,6 +21,7 @@ mod indexer_download_client_mappings;
 mod libraries;
 mod library_scan;
 mod maintenance_evaluation;
+mod maintenance_execution;
 mod maintenance_rules;
 mod maintenance_safety;
 mod media_requests;

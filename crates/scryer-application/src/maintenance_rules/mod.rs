@@ -31,6 +31,7 @@
 //! `conflicts.rs`, `exclusions.rs`, `import.rs`) alongside these.
 
 pub mod action_catalog;
+pub mod action_execution;
 pub mod evaluation;
 pub mod facts;
 pub mod safety;
@@ -56,3 +57,9 @@ pub use service::{
 };
 // ── Safety preconditions (RFC 137 §9.10, WP-G) ──────────────────────────────
 pub use safety::{MaintenanceActivityCheck, MaintenancePlaybackHold, fold_playback_hold};
+// ── Action execution (RFC 137 tracks D2/D3, WP-H) ───────────────────────────
+pub use action_execution::{
+    MAINTENANCE_HIGH_RISK_FAILURE_BREAKER, MAINTENANCE_MAX_ACTION_ATTEMPTS,
+    MAINTENANCE_MAX_ACTIONS_PER_RULE_PER_RUN, MAINTENANCE_MAX_HIGH_RISK_ACTIONS_PER_RUN,
+    MaintenanceActionHandlingReport, MaintenanceActionRunView, execution_reason,
+};

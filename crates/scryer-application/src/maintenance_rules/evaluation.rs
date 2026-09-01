@@ -490,7 +490,7 @@ impl AppUseCase {
             .await
     }
 
-    async fn maintenance_title_names(
+    pub(crate) async fn maintenance_title_names(
         &self,
         title_ids: impl Iterator<Item = String>,
     ) -> AppResult<HashMap<String, String>> {
@@ -511,7 +511,7 @@ impl AppUseCase {
 }
 
 /// A subject whose title is gone renders as its stored id rather than blank.
-fn maintenance_title_name(names: &HashMap<String, String>, title_id: &str) -> String {
+pub(crate) fn maintenance_title_name(names: &HashMap<String, String>, title_id: &str) -> String {
     names
         .get(title_id)
         .cloned()
@@ -963,6 +963,7 @@ impl AppUseCase {
                                 due_at: evaluation_time + Duration::days(grace_days),
                                 last_evaluated_at: evaluation_time,
                                 held_since: None,
+                                action_attempts: 0,
                                 created_at: evaluation_time,
                                 updated_at: evaluation_time,
                             })
@@ -1036,7 +1037,7 @@ impl AppUseCase {
     /// One batched media-file load per chunk, grouped by title, exactly as
     /// preview does. A per-title query here would make the job's cost scale
     /// with the library.
-    async fn maintenance_files_for_titles(
+    pub(crate) async fn maintenance_files_for_titles(
         &self,
         titles: &[Title],
     ) -> AppResult<HashMap<String, Vec<crate::types::TitleMediaFile>>> {

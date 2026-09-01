@@ -1500,3 +1500,242 @@ async fn the_evaluation_surface_is_permission_gated() {
     .await;
     assert_error_contains(&excluded, "unauthorized");
 }
+
+// ── Action execution (WP-H) ─────────────────────────────────────────────────
+
+fn unmonitor_action() -> Value {
+    json!({ "kind": "UNMONITOR_SCOPE_KEEP_FILES" })
+}
+
+const SET_ARMING_MUTATION: &str = r#"mutation($input: SetMaintenanceRuleArmingInput!) {
+    setMaintenanceRuleArming(input: $input) {
+        id
+        effectArming
+        currentRevisionNumber
+    }
+}"#;
+
+const RUN_HANDLER_MUTATION: &str = r#"mutation {
+    runMaintenanceActionHandlerNow { started message }
+}"#;
+
+const ACTION_RUNS_QUERY: &str = r#"query($ruleSetId: ID) {
+    maintenanceActionRuns(ruleSetId: $ruleSetId, limit: 10) {
+        id
+        ruleSetId
+        candidateId
+        titleId
+        titleName
+        actionKind
+        attempt
+        status
+        holdReason
+        error
+        startedAt
+        finishedAt
+    }
+}"#;
+
+/// Move a rule to observe mode and open the named gates. Every step is its own
+/// deliberate mutation, mirroring how an operator arms the real thing.
+async fn observe_rule_with_gates(
+    ctx: &TestContext,
+    rule_set_id: &str,
+    reversible: bool,
+    destructive: bool,
+) {
+    seed_maintenance_gate_definitions(ctx).await;
+    let observed = gql(
+        ctx,
+        SET_MODE_MUTATION,
+        json!({ "input": { "id": rule_set_id, "mode": "OBSERVE" } }),
+    )
+    .await;
+    assert_no_errors(&observed);
+    let gates = gql(
+        ctx,
+        &set_gates_mutation(),
+        json!({ "input": {
+            "evaluationEnabled": true,
+            "resultDisplayEnabled": true,
+            "reversibleEffectsEnabled": reversible,
+            "destructiveEffectsEnabled": destructive,
+        }}),
+    )
+    .await;
+    assert_no_errors(&gates);
+}
+
+/// The handler trigger runs in the background; poll the candidate until it
+/// reaches `state` or the budget runs out.
+async fn wait_for_candidate_state(ctx: &TestContext, rule_set_id: &str, state: &str) -> Value {
+    for _ in 0..50 {
+        let shown = gql(
+            ctx,
+            &candidates_query(),
+            json!({ "ruleSetId": rule_set_id, "includeShadow": true, "states": [state] }),
+        )
+        .await;
+        assert_no_errors(&shown);
+        let rows = shown["data"]["maintenanceCandidates"]
+            .as_array()
+            .expect("candidates")
+            .clone();
+        if let Some(row) = rows.first() {
+            return row.clone();
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    panic!("candidate never reached state {state} for rule {rule_set_id}");
+}
+
+#[tokio::test]
+async fn the_full_destructive_journey_removes_a_matching_title() {
+    let ctx = TestContext::new().await;
+    seed_title(&ctx, "title-doomed", "Doomed Movie", true).await;
+    let detail = create_rule(&ctx, "Retire watched", MONITORED_MATCHER, delete_action()).await;
+    let rule_set_id = detail["ruleSet"]["id"]
+        .as_str()
+        .expect("rule id")
+        .to_string();
+    observe_rule_with_gates(&ctx, &rule_set_id, false, true).await;
+
+    let started = gql(&ctx, RUN_NOW_MUTATION, json!({ "ruleSetId": rule_set_id })).await;
+    assert_no_errors(&started);
+
+    // Destructive arming demands the acknowledged candidate count, and a
+    // mismatch names the real count so the client can re-present it.
+    let mismatch = gql(
+        &ctx,
+        SET_ARMING_MUTATION,
+        json!({ "input": { "id": rule_set_id, "arming": "DESTRUCTIVE", "acknowledgedCandidateCount": 7 } }),
+    )
+    .await;
+    let message = mismatch["errors"][0]["message"]
+        .as_str()
+        .expect("mismatch error");
+    assert!(
+        message.contains("acknowledging the current candidate count (1)"),
+        "{message}"
+    );
+
+    let armed = gql(
+        &ctx,
+        SET_ARMING_MUTATION,
+        json!({ "input": { "id": rule_set_id, "arming": "DESTRUCTIVE", "acknowledgedCandidateCount": 1 } }),
+    )
+    .await;
+    assert_no_errors(&armed);
+    assert_eq!(
+        armed["data"]["setMaintenanceRuleArming"]["effectArming"],
+        "DESTRUCTIVE"
+    );
+
+    let handled = gql(&ctx, RUN_HANDLER_MUTATION, json!({})).await;
+    assert_no_errors(&handled);
+    assert_eq!(
+        handled["data"]["runMaintenanceActionHandlerNow"]["started"],
+        true
+    );
+
+    let candidate = wait_for_candidate_state(&ctx, &rule_set_id, "SUCCEEDED").await;
+    assert_eq!(candidate["stateReason"], "action_succeeded");
+
+    let gone = ctx
+        .titles
+        .get_by_id("title-doomed")
+        .await
+        .expect("read title");
+    assert!(gone.is_none(), "the title must be removed by the action");
+
+    let runs = gql(&ctx, ACTION_RUNS_QUERY, json!({ "ruleSetId": rule_set_id })).await;
+    assert_no_errors(&runs);
+    let rows = runs["data"]["maintenanceActionRuns"]
+        .as_array()
+        .expect("runs");
+    assert_eq!(rows.len(), 1, "{runs}");
+    assert_eq!(rows[0]["status"], "succeeded");
+    assert_eq!(rows[0]["actionKind"], "DELETE_TITLE_AND_FILES");
+    assert_eq!(rows[0]["attempt"], 1);
+    assert_ne!(rows[0]["finishedAt"], Value::Null);
+}
+
+#[tokio::test]
+async fn a_reversible_unmonitor_journey_needs_only_the_reversible_gate() {
+    let ctx = TestContext::new().await;
+    seed_title(&ctx, "title-unmon", "Stale Movie", true).await;
+    let detail = create_rule(&ctx, "Unmonitor stale", MONITORED_MATCHER, unmonitor_action()).await;
+    let rule_set_id = detail["ruleSet"]["id"]
+        .as_str()
+        .expect("rule id")
+        .to_string();
+    observe_rule_with_gates(&ctx, &rule_set_id, true, false).await;
+
+    let armed = gql(
+        &ctx,
+        SET_ARMING_MUTATION,
+        json!({ "input": { "id": rule_set_id, "arming": "REVERSIBLE" } }),
+    )
+    .await;
+    assert_no_errors(&armed);
+
+    let started = gql(&ctx, RUN_NOW_MUTATION, json!({ "ruleSetId": rule_set_id })).await;
+    assert_no_errors(&started);
+    let handled = gql(&ctx, RUN_HANDLER_MUTATION, json!({})).await;
+    assert_no_errors(&handled);
+
+    let candidate = wait_for_candidate_state(&ctx, &rule_set_id, "SUCCEEDED").await;
+    assert_eq!(candidate["stateReason"], "action_succeeded");
+
+    let title = ctx
+        .titles
+        .get_by_id("title-unmon")
+        .await
+        .expect("read title")
+        .expect("title survives an unmonitor");
+    assert!(!title.monitored, "the action must unmonitor the title");
+}
+
+#[tokio::test]
+async fn a_subject_that_stopped_matching_is_canceled_at_execution_time() {
+    let ctx = TestContext::new().await;
+    seed_title(&ctx, "title-kept", "Rewatched Movie", true).await;
+    let detail = create_rule(&ctx, "Retire watched", MONITORED_MATCHER, delete_action()).await;
+    let rule_set_id = detail["ruleSet"]["id"]
+        .as_str()
+        .expect("rule id")
+        .to_string();
+    observe_rule_with_gates(&ctx, &rule_set_id, false, true).await;
+    let started = gql(&ctx, RUN_NOW_MUTATION, json!({ "ruleSetId": rule_set_id })).await;
+    assert_no_errors(&started);
+    let armed = gql(
+        &ctx,
+        SET_ARMING_MUTATION,
+        json!({ "input": { "id": rule_set_id, "arming": "DESTRUCTIVE", "acknowledgedCandidateCount": 1 } }),
+    )
+    .await;
+    assert_no_errors(&armed);
+
+    // The subject stops matching between evaluation and handling; the fresh
+    // re-evaluation at execution time must cancel rather than delete.
+    ctx.titles
+        .update_monitored("title-kept", false)
+        .await
+        .expect("unmonitor title");
+
+    let handled = gql(&ctx, RUN_HANDLER_MUTATION, json!({})).await;
+    assert_no_errors(&handled);
+
+    let candidate = wait_for_candidate_state(&ctx, &rule_set_id, "CANCELED").await;
+    assert_eq!(candidate["stateReason"], "no_match_at_execution");
+
+    let survivor = ctx
+        .titles
+        .get_by_id("title-kept")
+        .await
+        .expect("read title");
+    assert!(
+        survivor.is_some(),
+        "a canceled candidate must not delete the title"
+    );
+}

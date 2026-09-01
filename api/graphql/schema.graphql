@@ -7810,6 +7810,10 @@ enum JobKeyValue {
 	"""
 	MAINTENANCE_RULE_EVALUATION
 	"""
+	Scheduled maintenance lifecycle action handling.
+	"""
+	LIFECYCLE_ACTION_HANDLING
+	"""
 	Title deletion.
 	"""
 	TITLE_DELETION
@@ -8961,6 +8965,64 @@ enum MaintenanceActionKind {
 }
 
 """
+One recorded action-handler attempt on one candidate, holds included.
+"""
+type MaintenanceActionRun {
+	"""
+	Action-run ID.
+	"""
+	id: ID!
+	"""
+	Rule set the attempt belongs to.
+	"""
+	ruleSetId: ID!
+	"""
+	Candidate the attempt acted on.
+	"""
+	candidateId: ID!
+	"""
+	Title the attempt acted on.
+	"""
+	titleId: ID!
+	"""
+	Display name of the title, or its stored ID when the title is gone.
+	"""
+	titleName: String!
+	"""
+	Action the attempt performed or refused.
+	"""
+	actionKind: MaintenanceActionKind!
+	"""
+	Match generation of the candidate at attempt time.
+	"""
+	matchGeneration: Int!
+	"""
+	Attempt number for this candidate generation, starting at one.
+	"""
+	attempt: Int!
+	"""
+	Outcome: running, succeeded, already_satisfied, failed, or held.
+	"""
+	status: String!
+	"""
+	Why a held attempt was refused; null otherwise.
+	"""
+	holdReason: String
+	"""
+	Error text of a failed attempt; null otherwise.
+	"""
+	error: String
+	"""
+	UTC start time of the attempt.
+	"""
+	startedAt: DateTime!
+	"""
+	UTC finish time; null while the attempt is running.
+	"""
+	finishedAt: DateTime
+}
+
+"""
 The closed, schema-versioned action configuration a rule revision stores.
 """
 type MaintenanceActionSpec {
@@ -9132,6 +9194,26 @@ enum MaintenanceCandidateState {
 	A safety precondition refused the action.
 	"""
 	BLOCKED
+}
+
+"""
+How far a rule set's effects are armed. Arming is per rule and independent
+of the instance effect gates; an action executes only when both permit it.
+"""
+enum MaintenanceEffectArming {
+	"""
+	Evaluate and track candidates, never act.
+	"""
+	NONE
+	"""
+	Low- and medium-risk actions may execute.
+	"""
+	REVERSIBLE
+	"""
+	High-risk actions may additionally execute. Requires acknowledging the
+	rule's current candidate count when set.
+	"""
+	DESTRUCTIVE
 }
 
 """
@@ -9454,6 +9536,10 @@ type MaintenanceRuleSet {
 	Evaluation mode currently stored for the rule set.
 	"""
 	evaluationMode: MaintenanceEvaluationMode!
+	"""
+	How far this rule's effects are armed, independent of its mode.
+	"""
+	effectArming: MaintenanceEffectArming!
 	"""
 	Libraries the rule is confined to. Empty means every library.
 	"""
@@ -12435,6 +12521,19 @@ type MutationRoot {
 		"""
 		input: SetMaintenanceRuleModeInput!
 	): MaintenanceRuleSet!
+	"""
+	Set how far one rule set's effects are armed. Destructive arming requires acknowledging the rule's current candidate count.
+	"""
+	setMaintenanceRuleArming(
+		"""
+		Rule-set identity, the arming level, and the acknowledged candidate count for destructive arming.
+		"""
+		input: SetMaintenanceRuleArmingInput!
+	): MaintenanceRuleSet!
+	"""
+	Run the maintenance action handler immediately instead of waiting for its schedule.
+	"""
+	runMaintenanceActionHandlerNow: MaintenanceEvaluationTriggerPayload!
 	"""
 	Arm or disarm the instance-wide maintenance gates. Omitted fields keep their stored value.
 	"""
@@ -15838,6 +15937,23 @@ type QueryRoot {
 		ruleSetId: ID
 	): [MaintenanceExclusion!]!
 	"""
+	List recorded maintenance action-handler attempts, newest first.
+	"""
+	maintenanceActionRuns(
+		"""
+		Return only attempts for this rule set.
+		"""
+		ruleSetId: ID,
+		"""
+		Return only attempts for this candidate.
+		"""
+		candidateId: ID,
+		"""
+		Maximum rows to return; defaults to fifty.
+		"""
+		limit: Int
+	): [MaintenanceActionRun!]!
+	"""
 	List post-processing scripts visible to the caller.
 	"""
 	postProcessingScripts: [PostProcessingScriptPayload!]!
@@ -17716,6 +17832,26 @@ input SetMaintenanceInstanceGatesInput {
 	Reserved for high risk actions.
 	"""
 	destructiveEffectsEnabled: Boolean
+}
+
+"""
+Sets how far one rule set's effects are armed.
+"""
+input SetMaintenanceRuleArmingInput {
+	"""
+	Rule-set ID.
+	"""
+	id: ID!
+	"""
+	Arming level to store. `DESTRUCTIVE` requires acknowledging the rule's
+	current candidate count and applies only to high-risk actions.
+	"""
+	arming: MaintenanceEffectArming!
+	"""
+	The candidate count the operator saw and acknowledged; required for
+	`DESTRUCTIVE` and must equal the rule's current non-terminal count.
+	"""
+	acknowledgedCandidateCount: Int
 }
 
 """

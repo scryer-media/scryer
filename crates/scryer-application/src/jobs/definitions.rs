@@ -16,6 +16,10 @@ const JOB_RUN_PUSH_INTERVAL: Duration = Duration::from_millis(500);
 /// than a contract.
 pub const MAINTENANCE_RULE_EVALUATION_INTERVAL_SECONDS: i64 = 8 * 3600;
 
+/// RFC 137 section 10: collection/action handling defaults to every twelve
+/// hours.
+pub const LIFECYCLE_ACTION_HANDLING_INTERVAL_SECONDS: i64 = 12 * 3600;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum JobCategory {
     Library,
@@ -169,6 +173,7 @@ pub enum JobKey {
     AcquisitionSearch,
     ApplicationUpgrade,
     MaintenanceRuleEvaluation,
+    LifecycleActionHandling,
 }
 
 impl JobKey {
@@ -199,6 +204,7 @@ impl JobKey {
             Self::AcquisitionSearch => "acquisition_search",
             Self::ApplicationUpgrade => "application_upgrade",
             Self::MaintenanceRuleEvaluation => "maintenance_rule_evaluation",
+            Self::LifecycleActionHandling => "lifecycle_action_handling",
         }
     }
 
@@ -229,6 +235,7 @@ impl JobKey {
             "acquisition_search" => Some(Self::AcquisitionSearch),
             "application_upgrade" => Some(Self::ApplicationUpgrade),
             "maintenance_rule_evaluation" => Some(Self::MaintenanceRuleEvaluation),
+            "lifecycle_action_handling" => Some(Self::LifecycleActionHandling),
             _ => None,
         }
     }
@@ -260,6 +267,7 @@ impl JobKey {
             Self::AcquisitionSearch => "Acquisition Search",
             Self::ApplicationUpgrade => "Application Upgrade",
             Self::MaintenanceRuleEvaluation => "Maintenance Rule Evaluation",
+            Self::LifecycleActionHandling => "Maintenance Action Handling",
         }
     }
 
@@ -310,6 +318,9 @@ impl JobKey {
             Self::MaintenanceRuleEvaluation => {
                 "Evaluate enabled maintenance rules and reconcile lifecycle candidates. Never executes an action."
             }
+            Self::LifecycleActionHandling => {
+                "Execute due maintenance candidates of armed observe-mode rules, behind the instance effect gates and full safety rechecks."
+            }
         }
     }
 
@@ -339,7 +350,8 @@ impl JobKey {
             Self::Housekeeping
             | Self::PendingReleaseProcessing
             | Self::StagedNzbPrune
-            | Self::MaintenanceRuleEvaluation => JobCategory::Maintenance,
+            | Self::MaintenanceRuleEvaluation
+            | Self::LifecycleActionHandling => JobCategory::Maintenance,
         }
     }
 
@@ -362,7 +374,8 @@ impl JobKey {
             | Self::Housekeeping
             | Self::HealthChecks
             | Self::StagedNzbPrune
-            | Self::MaintenanceRuleEvaluation => JobScheduleKind::Interval,
+            | Self::MaintenanceRuleEvaluation
+            | Self::LifecycleActionHandling => JobScheduleKind::Interval,
             Self::DiscoverySync => JobScheduleKind::StartupAndInterval,
             Self::AutoBackup => JobScheduleKind::DailyAtTime,
             Self::LibraryScanMovies
@@ -395,6 +408,7 @@ impl JobKey {
             Self::PendingReleaseProcessing => "Re-evaluated during RSS sync",
             Self::StagedNzbPrune => "Every hour",
             Self::MaintenanceRuleEvaluation => "Every 8 hours",
+            Self::LifecycleActionHandling => "Every 12 hours",
             Self::DiscoverySync => "Dynamic discovery evaluator with daily backstop",
             Self::LibraryScanMovies
             | Self::LibraryScanSeries
@@ -422,6 +436,7 @@ impl JobKey {
             Self::HealthChecks => Some(6 * 3600),
             Self::StagedNzbPrune => Some(3600),
             Self::MaintenanceRuleEvaluation => Some(MAINTENANCE_RULE_EVALUATION_INTERVAL_SECONDS),
+            Self::LifecycleActionHandling => Some(LIFECYCLE_ACTION_HANDLING_INTERVAL_SECONDS),
             Self::DiscoverySync => Some(24 * 3600),
             _ => None,
         }
@@ -466,7 +481,7 @@ impl JobKey {
     }
 }
 
-pub const ALL_JOB_KEYS: [JobKey; 17] = [
+pub const ALL_JOB_KEYS: [JobKey; 18] = [
     JobKey::LibraryScanMovies,
     JobKey::LibraryScanSeries,
     JobKey::LibraryScanAnime,
@@ -484,6 +499,7 @@ pub const ALL_JOB_KEYS: [JobKey; 17] = [
     JobKey::DiscoverySync,
     JobKey::TitleImageCacheRefresh,
     JobKey::MaintenanceRuleEvaluation,
+    JobKey::LifecycleActionHandling,
 ];
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

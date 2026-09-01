@@ -224,6 +224,7 @@ impl AppUseCase {
             // not exist.
             enabled: false,
             evaluation_mode: MaintenanceEvaluationMode::Disabled,
+            effect_arming: scryer_domain::MaintenanceEffectArming::None,
             library_ids: draft.library_ids,
             subject_kind: MaintenanceRuleSubjectKind::Title,
             current_revision_number: 1,

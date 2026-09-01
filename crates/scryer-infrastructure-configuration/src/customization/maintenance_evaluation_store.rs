@@ -11,12 +11,14 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use scryer_application::{
-    AppError, AppResult, MaintenanceCandidateQuery, MaintenanceCandidateRepository,
-    MaintenanceEvaluationRunRepository, MaintenanceExclusionRepository,
+    AppError, AppResult, LifecycleActionRunRepository, MaintenanceCandidateQuery,
+    MaintenanceCandidateRepository, MaintenanceEvaluationRunRepository,
+    MaintenanceExclusionRepository,
 };
 use scryer_domain::{
-    LifecycleCandidate, MAINTENANCE_TERMINAL_CANDIDATE_STATES, MaintenanceCandidateState,
-    MaintenanceEvaluationRun, MaintenanceEvaluationRunStatus, MaintenanceRuleExclusion,
+    LifecycleActionRun, LifecycleActionRunStatus, LifecycleCandidate,
+    MAINTENANCE_TERMINAL_CANDIDATE_STATES, MaintenanceCandidateState, MaintenanceEvaluationRun,
+    MaintenanceEvaluationRunStatus, MaintenanceRuleExclusion,
 };
 
 use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, StoreDatastore};
@@ -38,14 +40,24 @@ impl MaintenanceEvaluationStore {
 const CANDIDATE_COLUMNS: &str = "id, rule_set_id, revision_number, matcher_content_hash, title_id,
     library_id, facet, subject_kind, match_generation, state, state_reason, reason_codes,
     action_kind, grace_days, first_matched_at, last_matched_at, due_at, last_evaluated_at,
-    held_since, created_at, updated_at";
+    held_since, action_attempts, created_at, updated_at";
 
 const INSERT_CANDIDATE_SQL: &str = "INSERT INTO lifecycle_candidates
         (id, rule_set_id, revision_number, matcher_content_hash, title_id, library_id, facet,
          subject_kind, match_generation, state, state_reason, reason_codes, action_kind,
          grace_days, first_matched_at, last_matched_at, due_at, last_evaluated_at, held_since,
-         created_at, updated_at)
-     VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
+         action_attempts, created_at, updated_at)
+     VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
+
+const ACTION_RUN_COLUMNS: &str = "id, candidate_id, rule_set_id, revision_number, title_id,
+    action_kind, match_generation, idempotency_key, attempt, status, hold_reason, error,
+    detail, started_at, finished_at, created_at";
+
+const INSERT_ACTION_RUN_SQL: &str = "INSERT INTO lifecycle_action_runs
+        (id, candidate_id, rule_set_id, revision_number, title_id, action_kind,
+         match_generation, idempotency_key, attempt, status, hold_reason, error, detail,
+         started_at, finished_at, created_at)
+     VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
 
 const EXCLUSION_COLUMNS: &str = "id, rule_set_id, title_id, reason, created_by, created_at";
 
@@ -358,6 +370,185 @@ impl MaintenanceCandidateRepository for MaintenanceEvaluationStore {
         }
         Ok(counts)
     }
+
+    async fn list_due_candidates(
+        &self,
+        rule_set_id: &str,
+        due_before: DateTime<Utc>,
+        limit: usize,
+    ) -> AppResult<Vec<LifecycleCandidate>> {
+        let sql = format!(
+            "SELECT {CANDIDATE_COLUMNS}
+               FROM lifecycle_candidates
+              WHERE rule_set_id = {{}} AND due_at <= {{}}
+                AND state IN ({{}}, {{}}, {{}}, {{}})
+              ORDER BY due_at ASC, id ASC
+              LIMIT {{}}"
+        );
+        let args = vec![
+            SqlArg::Text(rule_set_id.to_string()),
+            SqlArg::Timestamp(due_before),
+            SqlArg::Text(
+                MaintenanceCandidateState::Observing
+                    .as_storage_str()
+                    .to_string(),
+            ),
+            SqlArg::Text(
+                MaintenanceCandidateState::PendingAction
+                    .as_storage_str()
+                    .to_string(),
+            ),
+            SqlArg::Text(MaintenanceCandidateState::Due.as_storage_str().to_string()),
+            SqlArg::Text(
+                MaintenanceCandidateState::Blocked
+                    .as_storage_str()
+                    .to_string(),
+            ),
+            SqlArg::I64(limit as i64),
+        ];
+        SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args)
+            .await?
+            .iter()
+            .map(row_to_candidate)
+            .collect()
+    }
+
+    async fn lease_candidate_for_execution(
+        &self,
+        id: &str,
+        stale_before: DateTime<Utc>,
+        updated_at: DateTime<Utc>,
+    ) -> AppResult<bool> {
+        // The lease is the row count of one conditional write: exactly one
+        // caller can move the row into `executing`, and a crashed lease is
+        // reclaimable only once its `updated_at` has gone stale.
+        let sql = "UPDATE lifecycle_candidates
+                      SET state = {}, state_reason = {}, updated_at = {}
+                    WHERE id = {}
+                      AND (state = {} OR (state = {} AND updated_at < {}))";
+        let args = vec![
+            SqlArg::Text(
+                MaintenanceCandidateState::Executing
+                    .as_storage_str()
+                    .to_string(),
+            ),
+            SqlArg::Text("execution_leased".to_string()),
+            SqlArg::Timestamp(updated_at),
+            SqlArg::Text(id.to_string()),
+            SqlArg::Text(MaintenanceCandidateState::Due.as_storage_str().to_string()),
+            SqlArg::Text(
+                MaintenanceCandidateState::Executing
+                    .as_storage_str()
+                    .to_string(),
+            ),
+            SqlArg::Timestamp(stale_before),
+        ];
+        let affected = SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "lease_lifecycle_candidate",
+            move |tx| {
+                let args = args.clone();
+                Box::pin(async move { SqlRuntime::execute(SqlExec::Tx(tx), sql, &args).await })
+            },
+        )
+        .await?;
+        Ok(affected == 1)
+    }
+
+    async fn record_candidate_attempts(
+        &self,
+        id: &str,
+        action_attempts: i64,
+        updated_at: DateTime<Utc>,
+    ) -> AppResult<()> {
+        execute_write(
+            &self.datastore,
+            "record_lifecycle_candidate_attempts",
+            "UPDATE lifecycle_candidates
+                SET action_attempts = {}, updated_at = {}
+              WHERE id = {}",
+            vec![
+                SqlArg::I64(action_attempts),
+                SqlArg::Timestamp(updated_at),
+                SqlArg::Text(id.to_string()),
+            ],
+        )
+        .await
+    }
+}
+
+// ── Action runs ─────────────────────────────────────────────────────────────
+
+#[async_trait]
+impl LifecycleActionRunRepository for MaintenanceEvaluationStore {
+    async fn start_action_run(&self, run: &LifecycleActionRun) -> AppResult<()> {
+        execute_write(
+            &self.datastore,
+            "start_lifecycle_action_run",
+            INSERT_ACTION_RUN_SQL,
+            action_run_args(run),
+        )
+        .await
+    }
+
+    async fn finish_action_run(&self, run: &LifecycleActionRun) -> AppResult<()> {
+        execute_write(
+            &self.datastore,
+            "finish_lifecycle_action_run",
+            "UPDATE lifecycle_action_runs
+                SET status = {}, hold_reason = {}, error = {}, detail = {}, finished_at = {}
+              WHERE id = {}",
+            vec![
+                SqlArg::Text(run.status.as_storage_str().to_string()),
+                SqlArg::OptText(run.hold_reason.clone()),
+                SqlArg::OptText(run.error.clone()),
+                SqlArg::Text(run.detail.clone()),
+                SqlArg::OptTimestamp(run.finished_at),
+                SqlArg::Text(run.id.clone()),
+            ],
+        )
+        .await
+    }
+
+    async fn list_action_runs(
+        &self,
+        rule_set_id: Option<&str>,
+        candidate_id: Option<&str>,
+        limit: Option<usize>,
+    ) -> AppResult<Vec<LifecycleActionRun>> {
+        let mut clauses: Vec<String> = Vec::new();
+        let mut args: Vec<SqlArg> = Vec::new();
+        if let Some(rule_set_id) = rule_set_id {
+            clauses.push("rule_set_id = {}".to_string());
+            args.push(SqlArg::Text(rule_set_id.to_string()));
+        }
+        if let Some(candidate_id) = candidate_id {
+            clauses.push("candidate_id = {}".to_string());
+            args.push(SqlArg::Text(candidate_id.to_string()));
+        }
+        let where_clause = if clauses.is_empty() {
+            String::new()
+        } else {
+            format!(" WHERE {}", clauses.join(" AND "))
+        };
+        let limit_clause = match limit {
+            Some(limit) => {
+                args.push(SqlArg::I64(limit as i64));
+                " LIMIT {}"
+            }
+            None => "",
+        };
+        let sql = format!(
+            "SELECT {ACTION_RUN_COLUMNS}
+               FROM lifecycle_action_runs{where_clause}
+              ORDER BY started_at DESC, id DESC{limit_clause}"
+        );
+        SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args)
+            .await?
+            .iter()
+            .map(row_to_action_run)
+            .collect()
+    }
 }
 
 // ── Exclusions ──────────────────────────────────────────────────────────────
@@ -565,9 +756,52 @@ fn candidate_args(candidate: &LifecycleCandidate) -> AppResult<Vec<SqlArg>> {
         SqlArg::Timestamp(candidate.due_at),
         SqlArg::Timestamp(candidate.last_evaluated_at),
         SqlArg::OptTimestamp(candidate.held_since),
+        SqlArg::I64(candidate.action_attempts),
         SqlArg::Timestamp(candidate.created_at),
         SqlArg::Timestamp(candidate.updated_at),
     ])
+}
+
+fn action_run_args(run: &LifecycleActionRun) -> Vec<SqlArg> {
+    vec![
+        SqlArg::Text(run.id.clone()),
+        SqlArg::Text(run.candidate_id.clone()),
+        SqlArg::Text(run.rule_set_id.clone()),
+        SqlArg::I64(run.revision_number),
+        SqlArg::Text(run.title_id.clone()),
+        SqlArg::Text(run.action_kind.clone()),
+        SqlArg::I64(run.match_generation),
+        SqlArg::Text(run.idempotency_key.clone()),
+        SqlArg::I64(run.attempt),
+        SqlArg::Text(run.status.as_storage_str().to_string()),
+        SqlArg::OptText(run.hold_reason.clone()),
+        SqlArg::OptText(run.error.clone()),
+        SqlArg::Text(run.detail.clone()),
+        SqlArg::Timestamp(run.started_at),
+        SqlArg::OptTimestamp(run.finished_at),
+        SqlArg::Timestamp(run.created_at),
+    ]
+}
+
+fn row_to_action_run(row: &SqlRow) -> AppResult<LifecycleActionRun> {
+    Ok(LifecycleActionRun {
+        id: row.text("id")?,
+        candidate_id: row.text("candidate_id")?,
+        rule_set_id: row.text("rule_set_id")?,
+        revision_number: row.i64("revision_number")?,
+        title_id: row.text("title_id")?,
+        action_kind: row.text("action_kind")?,
+        match_generation: row.i64("match_generation")?,
+        idempotency_key: row.text("idempotency_key")?,
+        attempt: row.i64("attempt")?,
+        status: LifecycleActionRunStatus::parse_storage(&row.text("status")?).unwrap_or_default(),
+        hold_reason: row.opt_text("hold_reason")?,
+        error: row.opt_text("error")?,
+        detail: row.text("detail")?,
+        started_at: row.timestamp("started_at")?,
+        finished_at: row.opt_timestamp("finished_at")?,
+        created_at: row.timestamp("created_at")?,
+    })
 }
 
 fn row_to_candidate(row: &SqlRow) -> AppResult<LifecycleCandidate> {
@@ -595,6 +829,7 @@ fn row_to_candidate(row: &SqlRow) -> AppResult<LifecycleCandidate> {
         due_at: row.timestamp("due_at")?,
         last_evaluated_at: row.timestamp("last_evaluated_at")?,
         held_since: row.opt_timestamp("held_since")?,
+        action_attempts: row.i64("action_attempts")?,
         created_at: row.timestamp("created_at")?,
         updated_at: row.timestamp("updated_at")?,
     })

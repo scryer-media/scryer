@@ -180,6 +180,22 @@ impl MaintenanceRuleSetRepository for InMemoryMaintenanceRuleRepo {
         rule_set.updated_at = updated_at;
         Ok(())
     }
+
+    async fn update_rule_set_arming(
+        &self,
+        id: &str,
+        arming: scryer_domain::MaintenanceEffectArming,
+        updated_at: DateTime<Utc>,
+    ) -> AppResult<()> {
+        let mut rule_sets = self.rule_sets.lock().await;
+        let rule_set = rule_sets
+            .iter_mut()
+            .find(|rule_set| rule_set.id == id)
+            .ok_or_else(|| AppError::NotFound(id.to_string()))?;
+        rule_set.effect_arming = arming;
+        rule_set.updated_at = updated_at;
+        Ok(())
+    }
 }
 
 struct MaintenanceFixture {

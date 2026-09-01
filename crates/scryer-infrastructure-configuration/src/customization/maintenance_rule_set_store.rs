@@ -2,8 +2,8 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use scryer_application::{AppResult, MaintenanceRuleSetRepository};
 use scryer_domain::{
-    MaintenanceEvaluationMode, MaintenanceRuleRevision, MaintenanceRuleSet,
-    MaintenanceRuleSubjectKind,
+    MaintenanceEffectArming, MaintenanceEvaluationMode, MaintenanceRuleRevision,
+    MaintenanceRuleSet, MaintenanceRuleSubjectKind,
 };
 use sqlx::Row;
 
@@ -205,18 +205,39 @@ impl MaintenanceRuleSetRepository for MaintenanceRuleSetStore {
         )
         .await
     }
+
+    async fn update_rule_set_arming(
+        &self,
+        id: &str,
+        arming: MaintenanceEffectArming,
+        updated_at: DateTime<Utc>,
+    ) -> AppResult<()> {
+        execute_write(
+            &self.datastore,
+            "update_maintenance_rule_set_arming",
+            "UPDATE maintenance_rule_sets
+                SET effect_arming = {}, updated_at = {}
+              WHERE id = {}",
+            vec![
+                SqlArg::Text(arming.as_storage_str().to_string()),
+                SqlArg::Timestamp(updated_at),
+                SqlArg::Text(id.to_string()),
+            ],
+        )
+        .await
+    }
 }
 
-const RULE_SET_COLUMNS: &str = "id, name, description, enabled, evaluation_mode, subject_kind,
-    library_ids, current_revision_number, created_at, updated_at";
+const RULE_SET_COLUMNS: &str = "id, name, description, enabled, evaluation_mode, effect_arming,
+    subject_kind, library_ids, current_revision_number, created_at, updated_at";
 
 const REVISION_COLUMNS: &str = "id, rule_set_id, revision_number, rego_source, action_spec,
     grace_days, matcher_content_hash, created_by, created_at";
 
 const INSERT_RULE_SET_SQL: &str = "INSERT INTO maintenance_rule_sets
-        (id, name, description, enabled, evaluation_mode, subject_kind,
+        (id, name, description, enabled, evaluation_mode, effect_arming, subject_kind,
          library_ids, current_revision_number, created_at, updated_at)
-     VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
+     VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
 
 const INSERT_REVISION_SQL: &str = "INSERT INTO maintenance_rule_revisions
         (id, rule_set_id, revision_number, rego_source, action_spec,
@@ -246,6 +267,7 @@ fn rule_set_args(rule_set: &MaintenanceRuleSet) -> AppResult<Vec<SqlArg>> {
         SqlArg::Text(rule_set.description.clone()),
         SqlArg::Bool(rule_set.enabled),
         SqlArg::Text(rule_set.evaluation_mode.as_storage_str().to_string()),
+        SqlArg::Text(rule_set.effect_arming.as_storage_str().to_string()),
         SqlArg::Text(rule_set.subject_kind.as_storage_str().to_string()),
         SqlArg::Text(canonical_json_text(&rule_set.library_ids)?),
         SqlArg::I64(rule_set.current_revision_number),
@@ -278,6 +300,10 @@ fn row_to_rule_set(row: &SqlRow) -> AppResult<MaintenanceRuleSet> {
         // reads back as disabled so this build never acts on semantics it does
         // not implement.
         evaluation_mode: MaintenanceEvaluationMode::parse_storage(&row.text("evaluation_mode")?)
+            .unwrap_or_default(),
+        // Same newer-build rule as the mode: an unknown arming level reads as
+        // none, so this build never acts under an arming it cannot interpret.
+        effect_arming: MaintenanceEffectArming::parse_storage(&row.text("effect_arming")?)
             .unwrap_or_default(),
         library_ids: library_ids(row)?,
         subject_kind: MaintenanceRuleSubjectKind::parse_storage(&row.text("subject_kind")?)

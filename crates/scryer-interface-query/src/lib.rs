@@ -3162,6 +3162,32 @@ impl AcquisitionQueries {
             .collect())
     }
 
+    /// List recorded maintenance action-handler attempts, newest first.
+    async fn maintenance_action_runs(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Return only attempts for this rule set.")] rule_set_id: Option<ID>,
+        #[graphql(desc = "Return only attempts for this candidate.")] candidate_id: Option<ID>,
+        #[graphql(desc = "Maximum rows to return; defaults to fifty.")] limit: Option<i32>,
+    ) -> GqlResult<Vec<MaintenanceActionRun>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+
+        let runs = app
+            .list_maintenance_action_runs(
+                &actor,
+                rule_set_id.as_ref().map(|id| id.as_str()),
+                candidate_id.as_ref().map(|id| id.as_str()),
+                limit.and_then(|limit| usize::try_from(limit).ok()),
+            )
+            .await
+            .map_err(to_gql_error)?;
+        Ok(runs
+            .into_iter()
+            .filter_map(crate::mappers::from_maintenance_action_run)
+            .collect())
+    }
+
     // ── Post-Processing Scripts ──────────────────────────────────────────
 
     /// List post-processing scripts visible to the caller.

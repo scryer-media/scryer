@@ -1375,6 +1375,16 @@ impl MaintenanceRuleSetRepository for NullMaintenanceRuleSetRepository {
             "maintenance rule repository is not configured".to_string(),
         ))
     }
+    async fn update_rule_set_arming(
+        &self,
+        _id: &str,
+        _arming: scryer_domain::MaintenanceEffectArming,
+        _updated_at: DateTime<Utc>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "maintenance rule repository is not configured".to_string(),
+        ))
+    }
 }
 
 /// Reads answer empty and writes refuse: an assembly with no maintenance
@@ -1456,6 +1466,54 @@ impl crate::ports::MaintenanceCandidateRepository for NullMaintenanceEvaluationR
         &self,
         _rule_set_id: &str,
     ) -> AppResult<Vec<(scryer_domain::MaintenanceCandidateState, i64)>> {
+        Ok(vec![])
+    }
+    async fn list_due_candidates(
+        &self,
+        _rule_set_id: &str,
+        _due_before: DateTime<Utc>,
+        _limit: usize,
+    ) -> AppResult<Vec<scryer_domain::LifecycleCandidate>> {
+        Ok(vec![])
+    }
+    async fn lease_candidate_for_execution(
+        &self,
+        _id: &str,
+        _stale_before: DateTime<Utc>,
+        _updated_at: DateTime<Utc>,
+    ) -> AppResult<bool> {
+        Ok(false)
+    }
+    async fn record_candidate_attempts(
+        &self,
+        _id: &str,
+        _action_attempts: i64,
+        _updated_at: DateTime<Utc>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            MAINTENANCE_EVALUATION_NOT_CONFIGURED.to_string(),
+        ))
+    }
+}
+
+#[async_trait]
+impl crate::ports::LifecycleActionRunRepository for NullMaintenanceEvaluationRepository {
+    async fn start_action_run(&self, _run: &scryer_domain::LifecycleActionRun) -> AppResult<()> {
+        Err(AppError::Repository(
+            MAINTENANCE_EVALUATION_NOT_CONFIGURED.to_string(),
+        ))
+    }
+    async fn finish_action_run(&self, _run: &scryer_domain::LifecycleActionRun) -> AppResult<()> {
+        Err(AppError::Repository(
+            MAINTENANCE_EVALUATION_NOT_CONFIGURED.to_string(),
+        ))
+    }
+    async fn list_action_runs(
+        &self,
+        _rule_set_id: Option<&str>,
+        _candidate_id: Option<&str>,
+        _limit: Option<usize>,
+    ) -> AppResult<Vec<scryer_domain::LifecycleActionRun>> {
         Ok(vec![])
     }
 }

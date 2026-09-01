@@ -14,6 +14,25 @@ const DELETE_TYPED_CONFIRMATION_VALUE: &str = "DELETE";
 const DELETE_TYPED_CONFIRMATION_PROMPT: &str = "Type DELETE to confirm this large delete.";
 const BULK_DELETE_PREVIEW_CONCURRENCY: usize = 4;
 
+/// What authorized a file deletion past the large-delete guard (RFC 137 §9.6).
+///
+/// A human confirms a large delete by typing the confirmation value; a
+/// maintenance policy instead presents a typed authorization naming the arming
+/// record. Neither path may weaken the fingerprint check, which both share.
+pub(crate) enum DeleteConfirmationAuthority<'a> {
+    Human { typed_confirmation: Option<&'a str> },
+    Policy(&'a PolicyDeleteAuthorization),
+}
+
+/// Provenance of a maintenance-policy deletion: the rule, candidate, and
+/// matcher revision whose arming authorized it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PolicyDeleteAuthorization {
+    pub rule_set_id: String,
+    pub candidate_id: String,
+    pub revision_number: i64,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeletePreview {
     pub fingerprint: String,
@@ -362,8 +381,32 @@ impl AppUseCase {
         typed_confirmation: Option<&str>,
     ) -> AppResult<()> {
         let context = self.resolve_title_delete_context(title_id).await?;
-        self.execute_delete_context(context, preview_fingerprint, typed_confirmation)
-            .await
+        self.execute_delete_context(
+            context,
+            preview_fingerprint,
+            DeleteConfirmationAuthority::Human { typed_confirmation },
+        )
+        .await
+    }
+
+    /// Maintenance-policy variant of [`Self::execute_delete_title_files`]
+    /// (RFC 137 section 9.6): the deletion carries a typed authorization naming
+    /// the rule, candidate, and revision that authorized it, in place of the
+    /// typed confirmation a human would give. Everything else — the fresh
+    /// manifest, the fingerprint check, root availability — is identical.
+    pub(crate) async fn execute_delete_title_files_by_policy(
+        &self,
+        title_id: &str,
+        preview_fingerprint: &str,
+        authorization: &PolicyDeleteAuthorization,
+    ) -> AppResult<()> {
+        let context = self.resolve_title_delete_context(title_id).await?;
+        self.execute_delete_context(
+            context,
+            preview_fingerprint,
+            DeleteConfirmationAuthority::Policy(authorization),
+        )
+        .await
     }
 
     pub(crate) async fn execute_delete_media_file(
@@ -373,8 +416,12 @@ impl AppUseCase {
         typed_confirmation: Option<&str>,
     ) -> AppResult<()> {
         let context = self.resolve_media_file_delete_context(file_id).await?;
-        self.execute_delete_context(context, preview_fingerprint, typed_confirmation)
-            .await
+        self.execute_delete_context(
+            context,
+            preview_fingerprint,
+            DeleteConfirmationAuthority::Human { typed_confirmation },
+        )
+        .await
     }
 
     pub(crate) async fn validate_delete_media_file(
@@ -384,9 +431,13 @@ impl AppUseCase {
         typed_confirmation: Option<&str>,
     ) -> AppResult<()> {
         let context = self.resolve_media_file_delete_context(file_id).await?;
-        self.validate_delete_context(context, preview_fingerprint, typed_confirmation)
-            .await
-            .map(|_| ())
+        self.validate_delete_context(
+            context,
+            preview_fingerprint,
+            DeleteConfirmationAuthority::Human { typed_confirmation },
+        )
+        .await
+        .map(|_| ())
     }
 
     pub async fn delete_external_subtitle(
@@ -481,7 +532,7 @@ impl AppUseCase {
                 facet: title.facet,
             }),
             preview_fingerprint,
-            typed_confirmation,
+            DeleteConfirmationAuthority::Human { typed_confirmation },
         )
         .await?;
 
@@ -533,10 +584,10 @@ impl AppUseCase {
         &self,
         context: UserDeleteContext,
         preview_fingerprint: &str,
-        typed_confirmation: Option<&str>,
+        authority: DeleteConfirmationAuthority<'_>,
     ) -> AppResult<()> {
         let manifest = self
-            .validate_delete_context(context, preview_fingerprint, typed_confirmation)
+            .validate_delete_context(context, preview_fingerprint, authority)
             .await?;
 
         for entry in &manifest.entries {
@@ -555,7 +606,7 @@ impl AppUseCase {
         &self,
         context: UserDeleteContext,
         preview_fingerprint: &str,
-        typed_confirmation: Option<&str>,
+        authority: DeleteConfirmationAuthority<'_>,
     ) -> AppResult<UserDeleteManifest> {
         let manifest = self.build_delete_manifest(context.clone()).await?;
         if manifest.fingerprint != preview_fingerprint {
@@ -564,12 +615,31 @@ impl AppUseCase {
             ));
         }
 
-        if manifest.media_count > LARGE_DELETE_MEDIA_THRESHOLD
-            && typed_confirmation.unwrap_or_default().trim() != DELETE_TYPED_CONFIRMATION_VALUE
-        {
-            return Err(AppError::Validation(format!(
-                "typed confirmation is required; enter {DELETE_TYPED_CONFIRMATION_VALUE}"
-            )));
+        if manifest.media_count > LARGE_DELETE_MEDIA_THRESHOLD {
+            match authority {
+                DeleteConfirmationAuthority::Human { typed_confirmation } => {
+                    if typed_confirmation.unwrap_or_default().trim()
+                        != DELETE_TYPED_CONFIRMATION_VALUE
+                    {
+                        return Err(AppError::Validation(format!(
+                            "typed confirmation is required; enter {DELETE_TYPED_CONFIRMATION_VALUE}"
+                        )));
+                    }
+                }
+                // RFC 137 §9.6: a policy deletion never synthesizes the human
+                // confirmation; the typed authorization it carries — arming
+                // record, candidate, revision — stands in for it, and is logged
+                // so the audit trail names what authorized a large delete.
+                DeleteConfirmationAuthority::Policy(authorization) => {
+                    tracing::info!(
+                        rule_set_id = authorization.rule_set_id.as_str(),
+                        candidate_id = authorization.candidate_id.as_str(),
+                        revision_number = authorization.revision_number,
+                        media_count = manifest.media_count,
+                        "maintenance policy authorized a large deletion"
+                    );
+                }
+            }
         }
 
         ensure_delete_context_roots_available(&context)?;
