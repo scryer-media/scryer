@@ -393,6 +393,73 @@ pub fn restore_context_from_ctx(ctx: &Context<'_>) -> GqlResult<RestoreContext> 
         .ok_or_else(|| to_gql_error(AppError::Validation("restore is not configured".into())))
 }
 
+/// Every refusal code the two root-scoped workflows can raise (FR-020 to
+/// FR-029), in the application's own spelling.
+///
+/// The pair that matters most is the FR-020 cross-route:
+/// `root_change_destination_is_configured_root` means the user asked for a new
+/// path that is already a configured root, so the answer is a consolidation;
+/// `root_consolidation_destination_not_a_configured_root` is the mirror image
+/// and the answer is a root change. One control in the UI offers both, so the
+/// client has to be able to switch branches without reading a sentence.
+const LOCATION_ROOT_REFUSAL_CODES: [&str; 15] = [
+    // location::root_change::refusal_codes
+    "root_change_path_not_absolute",
+    "root_change_paths_overlap",
+    "root_change_source_root_is_symlink",
+    "root_change_source_root_unavailable",
+    "root_change_destination_not_empty",
+    "root_change_destination_parent_missing",
+    "root_change_destination_is_configured_root",
+    // location::consolidation::refusal_codes
+    "root_consolidation_path_not_absolute",
+    "root_consolidation_same_root",
+    "root_consolidation_paths_overlap",
+    "root_consolidation_destination_not_a_configured_root",
+    "root_consolidation_source_root_is_symlink",
+    "root_consolidation_source_root_unavailable",
+    "root_consolidation_destination_root_unavailable",
+    "root_consolidation_mode_not_supported",
+];
+
+/// Splits a root-scoped refusal message into its sentence and its code.
+///
+/// The application raises these as `AppError::Validation` whose message ends
+/// `"<sentence> [<code>]"`. Until the refusal is a typed `AppError` variant of
+/// its own, this is the **one** place that suffix is parsed: the code is
+/// promoted onto the GraphQL error's extensions and the sentence is handed back
+/// without the machine-readable tail, so no client ever reads the brackets.
+fn split_location_root_refusal(message: &str) -> Option<(&str, &'static str)> {
+    let trimmed = message.trim_end();
+    let opened = trimmed.strip_suffix(']')?.rfind('[')?;
+    let code = &trimmed[opened + 1..trimmed.len() - 1];
+    let known = LOCATION_ROOT_REFUSAL_CODES
+        .iter()
+        .find(|candidate| **candidate == code)?;
+    Some((trimmed[..opened].trim_end(), known))
+}
+
+/// The error conversion the two root-scoped entry points use.
+///
+/// Identical to [`to_gql_error`] except for one thing: a validation failure
+/// carrying a known root-scoped refusal code travels as
+/// `LOCATION_ROOT_REFUSED` with `extensions.refusalCode`, the same shape
+/// `LocationPlanRefused` already uses. Everything else, including a validation
+/// failure with no code, goes through the shared conversion unchanged.
+pub fn to_location_root_gql_error(err: AppError) -> Error {
+    let AppError::Validation(message) = &err else {
+        return to_gql_error(err);
+    };
+    let Some((sentence, code)) = split_location_root_refusal(message) else {
+        return to_gql_error(err);
+    };
+    let sentence = format!("validation: {sentence}");
+    Error::new(sentence).extend_with(|_, extensions| {
+        extensions.set("code", "LOCATION_ROOT_REFUSED");
+        extensions.set("refusalCode", code);
+    })
+}
+
 pub fn to_gql_error(err: AppError) -> Error {
     match err {
         AppError::Unauthorized(message) => {
@@ -896,6 +963,52 @@ mod tests {
             let error = to_login_gql_error("jellyfin", err);
             assert_eq!(error.message, LOGIN_FAILED_MESSAGE);
             assert_eq!(graphql_error_code(&error), Some("LOGIN_FAILED"));
+        }
+    }
+
+    #[test]
+    fn a_root_scoped_refusal_promotes_its_code_and_drops_the_bracketed_tail() {
+        let error = to_location_root_gql_error(AppError::Validation(
+            "that path is already the root “/media/new” of this library; consolidate instead \
+             [root_change_destination_is_configured_root]"
+                .into(),
+        ));
+        assert_eq!(
+            error.message,
+            "validation: that path is already the root “/media/new” of this library; consolidate instead"
+        );
+        assert_eq!(graphql_error_code(&error), Some("LOCATION_ROOT_REFUSED"));
+        assert_eq!(
+            graphql_error_extension_string(&error, "refusalCode"),
+            Some("root_change_destination_is_configured_root")
+        );
+    }
+
+    #[test]
+    fn the_fr_020_cross_route_pair_both_carry_their_codes() {
+        for code in [
+            "root_change_destination_is_configured_root",
+            "root_consolidation_destination_not_a_configured_root",
+        ] {
+            let error =
+                to_location_root_gql_error(AppError::Validation(format!("pick the other one [{code}]")));
+            assert_eq!(
+                graphql_error_extension_string(&error, "refusalCode"),
+                Some(code)
+            );
+        }
+    }
+
+    #[test]
+    fn a_validation_failure_without_a_known_code_stays_a_plain_validation_error() {
+        for message in [
+            "choose a new path for this root",
+            "something went wrong [not_a_location_code]",
+            "unbalanced brackets root_change_paths_overlap]",
+        ] {
+            let error = to_location_root_gql_error(AppError::Validation(message.into()));
+            assert_eq!(error.message, format!("validation: {message}"));
+            assert_eq!(graphql_error_code(&error), Some("VALIDATION_ERROR"));
         }
     }
 

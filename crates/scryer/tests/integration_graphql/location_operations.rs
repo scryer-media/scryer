@@ -1631,3 +1631,762 @@ async fn graphql_adoption_surfaces_additional_destination_files_without_blocking
         moved_folder.join("notes.txt").to_string_lossy().as_ref()
     );
 }
+
+// ── US4 and US5: the two root-scoped workflows ───────────────────────────────
+
+const ROOT_CHANGE_PREVIEW_QUERY: &str = r#"
+    query RootChangePreview($input: LocationRootChangePreviewInput!) {
+      locationRootChangePreview(input: $input) {
+        plan {
+          planFingerprint
+          operationType
+          mode
+          sourceRootId
+          destinationRootId
+          blocksStart
+          warnings
+          counts { titlesTotal filesTotal bytesTotal byKind { kind count } }
+          sections {
+            kind
+            itemsTotal
+            complete
+            items { kind titleId sourcePath destinationPath reasonCode detail }
+          }
+          classification { titlesTotal blocksStart groups { class count titles { titleId } } }
+          confirmation { requirement typedPhrase typedPrompt }
+          verification { depth applies }
+        }
+        accounting {
+          assignedTotal
+          relocating
+          catalogOnly
+          blocked
+          accountsForEveryTitle
+          blocksStart
+          blockedTitles { titleId titleName reason reasonCode }
+        }
+        retention {
+          rootId
+          keepsRootId
+          wasLibraryDefault
+          remainsLibraryDefault
+          retainedRole
+          retainedTitleAssignments
+        }
+        content {
+          managed { class total bytesTotal complete entries { path sizeBytes class canonicalSidecar } }
+          companions { class total complete entries { path class } }
+          unknown { class total bytesTotal complete entries { path class } }
+          unknownBytes
+          blocksSourceRemoval
+          entryCount
+          prunableDirectories { total complete paths }
+          retainedDirectories { total complete paths }
+        }
+        retirement {
+          sourceRootPath
+          destinationRootPath
+          retireConfigurationAfterRecycling
+          recycleAllowlistPaths { total complete paths }
+          requiresVerificationBeforeSourceRemoval
+          emptyDirectoriesOnly
+          removableDirectories { total complete paths }
+          retainedDirectories { total complete paths }
+          permitsSourceRemoval
+          blockers { code detail }
+        }
+      }
+    }
+"#;
+
+const ROOT_CONSOLIDATION_PREVIEW_QUERY: &str = r#"
+    query RootConsolidationPreview($input: LocationRootConsolidationPreviewInput!) {
+      locationRootConsolidationPreview(input: $input) {
+        plan {
+          planFingerprint
+          operationType
+          mode
+          sourceRootId
+          destinationRootId
+          blocksStart
+          counts { titlesTotal filesTotal }
+          sections {
+            kind
+            itemsTotal
+            complete
+            items { kind titleId sourcePath destinationPath reasonCode detail }
+          }
+          classification { titlesTotal blocksStart groups { class count titles { titleId } } }
+          confirmation { requirement typedPhrase typedPrompt }
+          merges { sourceTitleId destinationTitleId blocked }
+        }
+        accounting {
+          assignedTotal
+          relocating
+          catalogOnly
+          blocked
+          accountsForEveryTitle
+          blocksStart
+          blockedTitles { titleId titleName reasonCode }
+        }
+        classification {
+          movingIntoUnusedFolders
+          mergingWithDestinationTitles
+          folderNameCollisions
+          mediaCollisions
+          dedupEligibleFiles
+          companionCollisions
+          untrackedSourceEntries
+          catalogOnly
+          blocked
+        }
+        defaultTransfer {
+          sourceWasDefault
+          destinationWasDefault
+          destinationBecomesDefault
+          transfersTheDefault
+        }
+        content { unknown { total complete entries { path } } blocksSourceRemoval entryCount }
+        retirement {
+          sourceRootPath
+          destinationRootPath
+          permitsSourceRemoval
+          emptyDirectoriesOnly
+          blockers { code detail }
+        }
+      }
+    }
+"#;
+
+/// The refusal code the server attached, when it attached one.
+fn refusal_code(body: &Value) -> Option<&str> {
+    body["errors"]
+        .as_array()?
+        .iter()
+        .find_map(|error| error["extensions"]["refusalCode"].as_str())
+}
+
+fn error_code(body: &Value) -> Option<&str> {
+    body["errors"]
+        .as_array()?
+        .iter()
+        .find_map(|error| error["extensions"]["code"].as_str())
+}
+
+/// US4.1 through US4.5 in one request: the identity statement, the closed
+/// every-title ledger, the three content buckets with the unknown one listed
+/// apart, the empty-directories-only retirement contract, and the typed
+/// confirmation. Then the start that confirms it.
+#[tokio::test]
+async fn graphql_a_root_change_preview_states_what_the_root_keeps_and_accounts_for_every_title() {
+    let ctx = TestContext::new().await;
+    let source_root = tempfile::tempdir().expect("source root tempdir");
+    let other_root = tempfile::tempdir().expect("other root tempdir");
+    let destination = tempfile::tempdir().expect("destination tempdir");
+    let (source_root_id, _other_root_id) =
+        configure_two_movie_roots(&ctx, source_root.path(), other_root.path()).await;
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+
+    let folder = make_folder(source_root.path(), "Changed Movie (2024)");
+    let moving = movable_title(&ctx, "Changed Movie", &folder, "Changed.2024.mkv").await;
+    // A monitored title with no tracked files: FR-076's catalog-only half of
+    // the ledger, which still has to be accounted for.
+    let fileless = create_catalog_title(
+        &ctx,
+        "Fileless Movie",
+        MediaFacet::Movie,
+        vec![],
+        vec![],
+        true,
+    )
+    .await;
+    // Content at the root that no title explains (FR-027).
+    std::fs::write(source_root.path().join("stranger.txt"), b"not mine")
+        .expect("write unexplained content");
+
+    // The destination has to be an empty directory that is not yet configured;
+    // `tempdir` hands one over exactly.
+    let destination_path = destination.path().join("new-disk");
+    let body = gql(
+        &ctx,
+        ROOT_CHANGE_PREVIEW_QUERY,
+        json!({ "input": {
+            "libraryId": library_id,
+            "rootId": source_root_id,
+            "destinationPath": destination_path.to_string_lossy(),
+        }}),
+    )
+    .await;
+    assert_no_errors(&body);
+    let preview = &body["data"]["locationRootChangePreview"];
+
+    let plan = &preview["plan"];
+    assert_eq!(plan["operationType"], "ROOT_CHANGE");
+    assert_eq!(plan["mode"], "MOVE_WITH_SCRYER");
+    // FR-021: one root id on both sides. The root does not become another root.
+    assert_eq!(plan["sourceRootId"], source_root_id);
+    assert_eq!(plan["destinationRootId"], source_root_id);
+    assert_eq!(plan["blocksStart"], false, "{preview}");
+    // FR-031: a location operation always verifies at full depth.
+    assert_eq!(plan["verification"]["depth"], "FULL");
+
+    // FR-029: the stronger confirmation, and the phrase is the shared MOVE.
+    assert_eq!(plan["confirmation"]["requirement"], "TYPED");
+    assert_eq!(plan["confirmation"]["typedPhrase"], "MOVE");
+
+    // Root-scoped plans have no selection, so the six groups are counts with no
+    // per-title entries; the titles that need naming live in the accounting.
+    assert_eq!(
+        plan["classification"]["groups"]
+            .as_array()
+            .expect("groups")
+            .len(),
+        6
+    );
+    for group in plan["classification"]["groups"]
+        .as_array()
+        .expect("groups")
+    {
+        assert_eq!(group["titles"], json!([]), "{preview}");
+    }
+
+    // FR-021, said first: the root keeps its id and its default status.
+    let retention = &preview["retention"];
+    assert_eq!(retention["rootId"], source_root_id);
+    assert_eq!(retention["keepsRootId"], true);
+    assert_eq!(retention["wasLibraryDefault"], true);
+    assert_eq!(retention["remainsLibraryDefault"], true);
+    assert!(retention["retainedRole"].is_null());
+    assert_eq!(retention["retainedTitleAssignments"], 2);
+
+    // FR-023: every assigned title, with no way to exclude one, and the counts
+    // close against the total.
+    let accounting = &preview["accounting"];
+    assert_eq!(accounting["assignedTotal"], 2, "{preview}");
+    assert_eq!(accounting["relocating"], 1);
+    assert_eq!(accounting["catalogOnly"], 1);
+    assert_eq!(accounting["blocked"], 0);
+    assert_eq!(accounting["accountsForEveryTitle"], true);
+    assert_eq!(accounting["blocksStart"], false);
+    assert_eq!(accounting["blockedTitles"], json!([]));
+    // Both titles are in the ledger, and one of them owns no files at all.
+    assert_eq!(plan["counts"]["titlesTotal"], 2, "{preview}");
+    assert!(
+        moving.id != fileless.id,
+        "the two titles are distinct rows: {preview}"
+    );
+
+    // FR-027: three buckets, and the unexplained file is in its own.
+    let content = &preview["content"];
+    assert_eq!(content["managed"]["class"], "MANAGED");
+    assert_eq!(content["managed"]["total"], 1, "{preview}");
+    assert_eq!(content["managed"]["complete"], true);
+    assert_eq!(
+        content["managed"]["entries"][0]["path"],
+        folder
+            .join("Changed.2024.mkv")
+            .to_string_lossy()
+            .to_string()
+    );
+    assert_eq!(content["unknown"]["class"], "UNKNOWN");
+    assert_eq!(content["unknown"]["total"], 1, "{preview}");
+    assert_eq!(
+        content["unknown"]["entries"][0]["path"],
+        source_root
+            .path()
+            .join("stranger.txt")
+            .to_string_lossy()
+            .to_string()
+    );
+    assert_eq!(content["blocksSourceRemoval"], true);
+    assert_eq!(content["entryCount"], 2, "{preview}");
+
+    // FR-028 / FR-087: the old location does not go away while something at it
+    // is unexplained, and only empty directories are ever removed.
+    let retirement = &preview["retirement"];
+    assert_eq!(
+        retirement["sourceRootPath"],
+        source_root.path().to_string_lossy().to_string()
+    );
+    assert_eq!(
+        retirement["destinationRootPath"],
+        destination_path.to_string_lossy().to_string()
+    );
+    assert_eq!(retirement["emptyDirectoriesOnly"], true);
+    assert_eq!(retirement["requiresVerificationBeforeSourceRemoval"], true);
+    assert_eq!(retirement["retireConfigurationAfterRecycling"], true);
+    assert_eq!(retirement["permitsSourceRemoval"], false, "{preview}");
+    let blockers = retirement["blockers"].as_array().expect("blockers");
+    assert!(
+        blockers
+            .iter()
+            .any(|blocker| blocker["code"] == "unexplained_source_content"),
+        "unexplained content is a named retirement blocker: {preview}"
+    );
+
+    // The confirmation goes back through the shared start mutation, with the
+    // root-change target instead of a selection.
+    let fingerprint = plan["planFingerprint"]
+        .as_str()
+        .expect("preview fingerprint")
+        .to_string();
+    let started = gql(
+        &ctx,
+        START_MUTATION,
+        json!({ "input": {
+            "rootChange": {
+                "libraryId": library_id,
+                "rootId": source_root_id,
+                "destinationPath": destination_path.to_string_lossy(),
+            },
+            "planFingerprint": fingerprint,
+            "typedConfirmation": "MOVE",
+        }}),
+    )
+    .await;
+    assert_no_errors(&started);
+    let operation = &started["data"]["startLocationOperation"]["operation"];
+    assert_eq!(operation["operationType"], "ROOT_CHANGE");
+    assert_eq!(operation["sourceLibraryId"], library_id);
+    assert_eq!(operation["destinationRootId"], source_root_id);
+    assert_eq!(operation["planFingerprint"], fingerprint);
+}
+
+/// FR-029: the typed phrase is not optional for a root-wide operation, and a
+/// missing one is refused rather than assumed.
+#[tokio::test]
+async fn graphql_a_root_change_without_the_typed_phrase_is_refused() {
+    let ctx = TestContext::new().await;
+    let source_root = tempfile::tempdir().expect("source root tempdir");
+    let other_root = tempfile::tempdir().expect("other root tempdir");
+    let destination = tempfile::tempdir().expect("destination tempdir");
+    let (source_root_id, _other) =
+        configure_two_movie_roots(&ctx, source_root.path(), other_root.path()).await;
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+
+    let folder = make_folder(source_root.path(), "Typed Movie (2024)");
+    movable_title(&ctx, "Typed Movie", &folder, "Typed.2024.mkv").await;
+    let destination_path = destination.path().join("new-disk");
+
+    let body = gql(
+        &ctx,
+        ROOT_CHANGE_PREVIEW_QUERY,
+        json!({ "input": {
+            "libraryId": library_id,
+            "rootId": source_root_id,
+            "destinationPath": destination_path.to_string_lossy(),
+        }}),
+    )
+    .await;
+    assert_no_errors(&body);
+    let fingerprint = body["data"]["locationRootChangePreview"]["plan"]["planFingerprint"]
+        .as_str()
+        .expect("preview fingerprint")
+        .to_string();
+
+    let refused = gql(
+        &ctx,
+        START_MUTATION,
+        json!({ "input": {
+            "rootChange": {
+                "libraryId": library_id,
+                "rootId": source_root_id,
+                "destinationPath": destination_path.to_string_lossy(),
+            },
+            "planFingerprint": fingerprint,
+        }}),
+    )
+    .await;
+    assert!(
+        refused["errors"].is_array(),
+        "a root change without its phrase is refused: {refused}"
+    );
+    assert_eq!(
+        refusal_code(&refused),
+        Some("typed_confirmation_required"),
+        "{refused}"
+    );
+}
+
+/// FR-020, first half: a "new path" that is already a configured root of this
+/// library is a consolidation. The refusal says so with a code the dialog can
+/// route on, not with a sentence it would have to parse.
+#[tokio::test]
+async fn graphql_a_root_change_onto_a_configured_root_routes_to_consolidation() {
+    let ctx = TestContext::new().await;
+    let source_root = tempfile::tempdir().expect("source root tempdir");
+    let destination_root = tempfile::tempdir().expect("destination root tempdir");
+    let (source_root_id, _destination_root_id) =
+        configure_two_movie_roots(&ctx, source_root.path(), destination_root.path()).await;
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+
+    let body = gql(
+        &ctx,
+        ROOT_CHANGE_PREVIEW_QUERY,
+        json!({ "input": {
+            "libraryId": library_id,
+            "rootId": source_root_id,
+            "destinationPath": destination_root.path().to_string_lossy(),
+        }}),
+    )
+    .await;
+    assert!(body["errors"].is_array(), "{body}");
+    assert_eq!(error_code(&body), Some("LOCATION_ROOT_REFUSED"), "{body}");
+    assert_eq!(
+        refusal_code(&body),
+        Some("root_change_destination_is_configured_root"),
+        "{body}"
+    );
+    // The bracketed code is promoted onto the extensions, never left in the
+    // sentence the user reads.
+    let message = body["errors"][0]["message"]
+        .as_str()
+        .expect("refusal message");
+    assert!(
+        !message.contains("[root_change_destination_is_configured_root]"),
+        "the machine-readable tail is stripped: {message}"
+    );
+}
+
+/// FR-020, second half: the mirror image. A consolidation destination that is
+/// not a configured root of this library is a root change, and the refusal
+/// routes there.
+#[tokio::test]
+async fn graphql_a_consolidation_onto_an_unconfigured_root_routes_to_a_root_change() {
+    let ctx = TestContext::new().await;
+    let source_root = tempfile::tempdir().expect("source root tempdir");
+    let other_root = tempfile::tempdir().expect("other root tempdir");
+    let (source_root_id, _other_root_id) =
+        configure_two_movie_roots(&ctx, source_root.path(), other_root.path()).await;
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+
+    let body = gql(
+        &ctx,
+        ROOT_CONSOLIDATION_PREVIEW_QUERY,
+        json!({ "input": {
+            "libraryId": library_id,
+            "sourceRootId": source_root_id,
+            "destinationRootId": "00000000-0000-0000-0000-0000000000ff",
+        }}),
+    )
+    .await;
+    assert!(body["errors"].is_array(), "{body}");
+    assert_eq!(error_code(&body), Some("LOCATION_ROOT_REFUSED"), "{body}");
+    assert_eq!(
+        refusal_code(&body),
+        Some("root_consolidation_destination_not_a_configured_root"),
+        "{body}"
+    );
+}
+
+/// US5.1 through US5.4: FR-024's seven groups are the preview, the FR-022
+/// default transfer is stated, every changed folder name is a previewed rename,
+/// and the source root's configuration is what retires. Then the start.
+#[tokio::test]
+async fn graphql_a_root_consolidation_preview_carries_the_seven_groups_and_the_default_transfer() {
+    let ctx = TestContext::new().await;
+    let source_root = tempfile::tempdir().expect("source root tempdir");
+    let destination_root = tempfile::tempdir().expect("destination root tempdir");
+    // The first root is the library default, so consolidating it into the
+    // second is the FR-022 case where the default has to move.
+    let (source_root_id, destination_root_id) =
+        configure_two_movie_roots(&ctx, source_root.path(), destination_root.path()).await;
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+
+    let moving_folder = make_folder(source_root.path(), "Folded Movie (2024)");
+    let moving = movable_title(&ctx, "Folded Movie", &moving_folder, "Folded.2024.mkv").await;
+
+    // An unrelated title at the destination owning the same folder name: the
+    // incoming folder is uniqued rather than merged into (FR-025).
+    let collided_folder = make_folder(destination_root.path(), "Collided Movie (2024)");
+    let collided = movable_title(
+        &ctx,
+        "Collided Movie",
+        &collided_folder,
+        "Collided.2024.mkv",
+    )
+    .await;
+    move_title_to_root(&ctx, &collided.id, &destination_root_id).await;
+    let colliding_folder = make_folder(source_root.path(), "Collided Movie (2024)");
+    let colliding = movable_title(
+        &ctx,
+        "Colliding Movie",
+        &colliding_folder,
+        "Colliding.2024.mkv",
+    )
+    .await;
+
+    let body = gql(
+        &ctx,
+        ROOT_CONSOLIDATION_PREVIEW_QUERY,
+        json!({ "input": {
+            "libraryId": library_id,
+            "sourceRootId": source_root_id,
+            "destinationRootId": destination_root_id,
+        }}),
+    )
+    .await;
+    assert_no_errors(&body);
+    let preview = &body["data"]["locationRootConsolidationPreview"];
+    let plan = &preview["plan"];
+
+    assert_eq!(plan["operationType"], "ROOT_CONSOLIDATION");
+    assert_eq!(plan["mode"], "MOVE_WITH_SCRYER");
+    // Two different root ids in one library: that is what makes it a
+    // consolidation rather than a root change.
+    assert_eq!(plan["sourceRootId"], source_root_id);
+    assert_eq!(plan["destinationRootId"], destination_root_id);
+    assert_ne!(source_root_id, destination_root_id);
+    assert_eq!(plan["blocksStart"], false, "{preview}");
+    assert_eq!(plan["confirmation"]["requirement"], "TYPED");
+    assert_eq!(plan["confirmation"]["typedPhrase"], "MOVE");
+
+    // FR-023: both source titles are accounted for; the destination title is
+    // not in the ledger, because it is not assigned to the root being folded.
+    let accounting = &preview["accounting"];
+    assert_eq!(accounting["assignedTotal"], 2, "{preview}");
+    assert_eq!(accounting["accountsForEveryTitle"], true);
+    assert_eq!(accounting["blocked"], 0);
+    assert_eq!(accounting["blockedTitles"], json!([]));
+
+    // FR-024: the seven groups, counted off the same decisions that built the
+    // items, and mutually exclusive per title. One title lands in a free
+    // folder; the other collided and is counted as a folder-name collision
+    // rather than twice.
+    let classification = &preview["classification"];
+    assert_eq!(classification["movingIntoUnusedFolders"], 1, "{preview}");
+    assert_eq!(classification["mergingWithDestinationTitles"], 0);
+    assert_eq!(classification["folderNameCollisions"], 1, "{preview}");
+    assert_eq!(classification["catalogOnly"], 0);
+    assert_eq!(classification["blocked"], 0);
+
+    // US5.4: the changed folder name is previewed, by name, as a rename item.
+    let uniqued = items_with_reason(plan, "RENAME", "folder_name_uniqued");
+    assert_eq!(uniqued.len(), 1, "{preview}");
+    let renamed_to = uniqued[0]["destinationPath"]
+        .as_str()
+        .expect("the uniqued folder names its destination");
+    let destination_root_path = destination_root.path().to_string_lossy().to_string();
+    assert!(
+        renamed_to.starts_with(&destination_root_path),
+        "the uniqued folder lands on the destination root: {renamed_to}"
+    );
+    let taken_name = destination_root
+        .path()
+        .join("Collided Movie (2024)")
+        .to_string_lossy()
+        .to_string();
+    assert_ne!(
+        renamed_to, taken_name,
+        "the incoming folder does not take the name the destination title owns"
+    );
+
+    // FR-022: the default follows the content, and the preview says so.
+    let transfer = &preview["defaultTransfer"];
+    assert_eq!(transfer["sourceWasDefault"], true);
+    assert_eq!(transfer["destinationWasDefault"], false);
+    assert_eq!(transfer["destinationBecomesDefault"], true);
+    assert_eq!(transfer["transfersTheDefault"], true);
+
+    // FR-028: nothing unexplained is at the source, so its configuration may
+    // retire, and the contract names the destination root's own path.
+    let retirement = &preview["retirement"];
+    assert_eq!(
+        retirement["sourceRootPath"],
+        source_root.path().to_string_lossy().to_string()
+    );
+    assert_eq!(
+        retirement["destinationRootPath"],
+        destination_root.path().to_string_lossy().to_string()
+    );
+    assert_eq!(retirement["permitsSourceRemoval"], true, "{preview}");
+    assert_eq!(retirement["blockers"], json!([]));
+    assert_eq!(preview["content"]["blocksSourceRemoval"], false);
+
+    let fingerprint = plan["planFingerprint"]
+        .as_str()
+        .expect("preview fingerprint")
+        .to_string();
+    let started = gql(
+        &ctx,
+        START_MUTATION,
+        json!({ "input": {
+            "rootConsolidation": {
+                "libraryId": library_id,
+                "sourceRootId": source_root_id,
+                "destinationRootId": destination_root_id,
+            },
+            "planFingerprint": fingerprint,
+            "typedConfirmation": "MOVE",
+        }}),
+    )
+    .await;
+    assert_no_errors(&started);
+    let operation = &started["data"]["startLocationOperation"]["operation"];
+    assert_eq!(operation["operationType"], "ROOT_CONSOLIDATION");
+    assert_eq!(operation["sourceLibraryId"], library_id);
+    assert_eq!(operation["destinationRootId"], destination_root_id);
+    assert_eq!(operation["planFingerprint"], fingerprint);
+    assert!(
+        moving.id != colliding.id,
+        "the two source titles are distinct rows: {started}"
+    );
+}
+
+/// The mirror of the consolidation's CHK003 refusal, for the other branch of
+/// FR-020: a root change's destination has to be empty or absent, so the files
+/// can never already be there. The interface refuses the mode rather than
+/// letting the planner stamp one the executor does not honour.
+#[tokio::test]
+async fn graphql_a_root_change_refuses_the_files_already_there_mode() {
+    let ctx = TestContext::new().await;
+    let source_root = tempfile::tempdir().expect("source root tempdir");
+    let other_root = tempfile::tempdir().expect("other root tempdir");
+    let destination = tempfile::tempdir().expect("destination tempdir");
+    let (source_root_id, _other) =
+        configure_two_movie_roots(&ctx, source_root.path(), other_root.path()).await;
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+
+    let body = gql(
+        &ctx,
+        ROOT_CHANGE_PREVIEW_QUERY,
+        json!({ "input": {
+            "libraryId": library_id,
+            "rootId": source_root_id,
+            "destinationPath": destination.path().join("new-disk").to_string_lossy(),
+            "mode": "FILES_ALREADY_THERE",
+        }}),
+    )
+    .await;
+    assert!(body["errors"].is_array(), "{body}");
+    assert_eq!(error_code(&body), Some("VALIDATION_ERROR"), "{body}");
+
+    // And the same guard on the confirmation, so a client cannot preview one
+    // workflow and start the other.
+    let refused = gql(
+        &ctx,
+        START_MUTATION,
+        json!({ "input": {
+            "rootChange": {
+                "libraryId": library_id,
+                "rootId": source_root_id,
+                "destinationPath": destination.path().join("new-disk").to_string_lossy(),
+            },
+            "mode": "FILES_ALREADY_THERE",
+            "planFingerprint": "whatever",
+            "typedConfirmation": "MOVE",
+        }}),
+    )
+    .await;
+    assert!(refused["errors"].is_array(), "{refused}");
+    assert_eq!(error_code(&refused), Some("VALIDATION_ERROR"), "{refused}");
+}
+
+/// CHK003: a consolidation is a managed move between two configured roots.
+/// "Files are already there" adopts content at a destination folder and has no
+/// meaning for a whole root, so it is refused by name rather than half-run.
+#[tokio::test]
+async fn graphql_a_consolidation_refuses_the_files_already_there_mode() {
+    let ctx = TestContext::new().await;
+    let source_root = tempfile::tempdir().expect("source root tempdir");
+    let destination_root = tempfile::tempdir().expect("destination root tempdir");
+    let (source_root_id, destination_root_id) =
+        configure_two_movie_roots(&ctx, source_root.path(), destination_root.path()).await;
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+
+    let body = gql(
+        &ctx,
+        ROOT_CONSOLIDATION_PREVIEW_QUERY,
+        json!({ "input": {
+            "libraryId": library_id,
+            "sourceRootId": source_root_id,
+            "destinationRootId": destination_root_id,
+            "mode": "FILES_ALREADY_THERE",
+        }}),
+    )
+    .await;
+    assert!(body["errors"].is_array(), "{body}");
+    assert_eq!(
+        refusal_code(&body),
+        Some("root_consolidation_mode_not_supported"),
+        "{body}"
+    );
+}
+
+/// The start mutation carries three destination forms and exactly one of them
+/// describes a plan. Naming two, or none, is refused before anything is
+/// rebuilt.
+#[tokio::test]
+async fn graphql_a_start_naming_two_destination_forms_is_refused() {
+    let ctx = TestContext::new().await;
+    let source_root = tempfile::tempdir().expect("source root tempdir");
+    let destination_root = tempfile::tempdir().expect("destination root tempdir");
+    let (source_root_id, destination_root_id) =
+        configure_two_movie_roots(&ctx, source_root.path(), destination_root.path()).await;
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+
+    let body = gql(
+        &ctx,
+        START_MUTATION,
+        json!({ "input": {
+            "titleIds": [],
+            "destination": { "rootId": destination_root_id },
+            "rootChange": {
+                "libraryId": library_id,
+                "rootId": source_root_id,
+                "destinationPath": "/somewhere/else",
+            },
+            "planFingerprint": "whatever",
+            "typedConfirmation": "MOVE",
+        }}),
+    )
+    .await;
+    assert!(body["errors"].is_array(), "{body}");
+    assert!(
+        body["errors"][0]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("exactly one")),
+        "{body}"
+    );
+
+    // Both root-scoped forms at once is the same mistake.
+    let both = gql(
+        &ctx,
+        START_MUTATION,
+        json!({ "input": {
+            "rootChange": {
+                "libraryId": library_id,
+                "rootId": source_root_id,
+                "destinationPath": "/somewhere/else",
+            },
+            "rootConsolidation": {
+                "libraryId": library_id,
+                "sourceRootId": source_root_id,
+                "destinationRootId": destination_root_id,
+            },
+            "planFingerprint": "whatever",
+            "typedConfirmation": "MOVE",
+        }}),
+    )
+    .await;
+    assert!(both["errors"].is_array(), "{both}");
+
+    // And so is naming none of them: with the selection fields nullable, a
+    // confirmation carrying only a fingerprint describes no plan at all.
+    let none = gql(
+        &ctx,
+        START_MUTATION,
+        json!({ "input": {
+            "planFingerprint": "whatever",
+            "typedConfirmation": "MOVE",
+        }}),
+    )
+    .await;
+    assert!(none["errors"].is_array(), "{none}");
+    assert!(
+        none["errors"][0]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("exactly one")),
+        "{none}"
+    );
+}

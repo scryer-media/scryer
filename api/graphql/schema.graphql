@@ -8874,6 +8874,29 @@ type LocationAmbiguousDestinationCandidatePayload {
 }
 
 """
+One title that cannot enter a root-scoped operation, named rather than
+silently dropped (FR-023).
+"""
+type LocationBlockedTitlePayload {
+	"""
+	The title that is blocked.
+	"""
+	titleId: ID!
+	"""
+	Its name, so the ledger reads as titles rather than as ids.
+	"""
+	titleName: String!
+	"""
+	The sentence explaining what has to be repaired.
+	"""
+	reason: String!
+	"""
+	Machine-readable reason, for grouping and translation.
+	"""
+	reasonCode: String
+}
+
+"""
 One classification group: a class, its count, and the titles in it.
 """
 type LocationClassificationGroupPayload {
@@ -8988,6 +9011,73 @@ enum LocationConfirmationRequirementValue {
 	A root-wide operation that also requires the typed phrase.
 	"""
 	TYPED
+}
+
+"""
+FR-024's seven groups, counted off the same decisions that built the plan
+items. This is the consolidation preview (US5.1).
+"""
+type LocationConsolidationClassificationPayload {
+	"""
+	Titles moving into destination folders nothing occupies.
+	"""
+	movingIntoUnusedFolders: Long!
+	"""
+	Titles merging with a destination title they share an identity with.
+	"""
+	mergingWithDestinationTitles: Long!
+	"""
+	Folder names already taken at the destination, so the incoming folder
+	gets a unique previewed name.
+	"""
+	folderNameCollisions: Long!
+	"""
+	Media files whose destination name is already taken.
+	"""
+	mediaCollisions: Long!
+	"""
+	Source files proven identical to destination content, so they are
+	recycled rather than copied.
+	"""
+	dedupEligibleFiles: Long!
+	"""
+	Companion assets whose destination name is already taken.
+	"""
+	companionCollisions: Long!
+	"""
+	Entries beneath the source root that no title accounts for.
+	"""
+	untrackedSourceEntries: Long!
+	"""
+	Titles with no tracked files: catalog reassignment only (FR-076).
+	"""
+	catalogOnly: Long!
+	"""
+	Titles that cannot enter the operation.
+	"""
+	blocked: Long!
+}
+
+"""
+Which root new content lands on after a consolidation (FR-022).
+"""
+type LocationDefaultRootTransferPayload {
+	"""
+	Whether the root being folded away was the library default.
+	"""
+	sourceWasDefault: Boolean!
+	"""
+	Whether the destination root was already the library default.
+	"""
+	destinationWasDefault: Boolean!
+	"""
+	Whether the destination root is the library default afterwards.
+	"""
+	destinationBecomesDefault: Boolean!
+	"""
+	Whether the default actually moves. Say so out loud when it does.
+	"""
+	transfersTheDefault: Boolean!
 }
 
 """
@@ -10198,6 +10288,380 @@ type LocationPlanSectionPayload {
 }
 
 """
+The root and the new path a root change would move it to (US4, FR-020).
+"""
+input LocationRootChangePreviewInput {
+	"""
+	Library the root belongs to.
+	"""
+	libraryId: ID!
+	"""
+	The root being changed. Its identity survives the change (FR-021).
+	"""
+	rootId: ID!
+	"""
+	The new, unconfigured path. A path that is already a configured root of
+	this library is refused and routed to consolidation instead.
+	"""
+	destinationPath: String!
+	"""
+	How the files get there; omitted asks Scryer to do the moving.
+	"""
+	mode: LocationExecutionModeInput
+}
+
+"""
+A read-only preview of replacing one root's path (US4, FR-020 to FR-029).
+"""
+type LocationRootChangePreviewPayload {
+	"""
+	The fingerprinted plan, in the vocabulary every location workflow
+	shares. Root-scoped plans have no title selection, so the plan's
+	classification carries per-class counts with no per-title entries; the
+	titles that need naming are in `accounting.blockedTitles`.
+	"""
+	plan: LocationOperationPreviewPayload!
+	"""
+	Every title assigned to the root, with no way to exclude one.
+	"""
+	accounting: LocationTitleAccountingPayload!
+	"""
+	What the root keeps. The first thing the dialog states.
+	"""
+	retention: LocationRootIdentityRetentionPayload!
+	"""
+	Everything found beneath the source root, in three buckets.
+	"""
+	content: LocationRootContentInventoryPayload!
+	"""
+	What happens to the old location afterwards.
+	"""
+	retirement: LocationRootRetirementContractPayload!
+}
+
+"""
+The root being changed and the path it moves to, as confirmed by a start.
+"""
+input LocationRootChangeTargetInput {
+	"""
+	Library the root belongs to.
+	"""
+	libraryId: ID!
+	"""
+	The root being changed.
+	"""
+	rootId: ID!
+	"""
+	The previewed destination path.
+	"""
+	destinationPath: String!
+}
+
+"""
+The two roots a consolidation folds together (US5, FR-020).
+"""
+input LocationRootConsolidationPreviewInput {
+	"""
+	Library both roots belong to. A consolidation never crosses libraries.
+	"""
+	libraryId: ID!
+	"""
+	The root being folded away; its configuration is retired at the end.
+	"""
+	sourceRootId: ID!
+	"""
+	The root that absorbs it. Must already be configured in this library; a
+	destination that is not is refused and routed to a root change instead.
+	"""
+	destinationRootId: ID!
+	"""
+	How the files get there; omitted asks Scryer to do the moving.
+	"""
+	mode: LocationExecutionModeInput
+}
+
+"""
+A read-only preview of folding one root into another (US5, FR-020, FR-022,
+FR-024 to FR-029).
+"""
+type LocationRootConsolidationPreviewPayload {
+	"""
+	The fingerprinted plan, in the vocabulary every location workflow
+	shares. Root-scoped plans have no title selection, so the plan's
+	classification carries per-class counts with no per-title entries; the
+	titles that need naming are in `accounting.blockedTitles`, and every
+	changed folder name is a `RENAME` plan item.
+	"""
+	plan: LocationOperationPreviewPayload!
+	"""
+	Every title assigned to the source root, with no way to exclude one.
+	"""
+	accounting: LocationTitleAccountingPayload!
+	"""
+	FR-024's seven groups with their counts.
+	"""
+	classification: LocationConsolidationClassificationPayload!
+	"""
+	Which root new content lands on afterwards. The destination root keeps
+	its own id either way (FR-078); what can move is the default.
+	"""
+	defaultTransfer: LocationDefaultRootTransferPayload!
+	"""
+	Everything found beneath the source root, in three buckets.
+	"""
+	content: LocationRootContentInventoryPayload!
+	"""
+	What happens to the source root's configuration afterwards.
+	"""
+	retirement: LocationRootRetirementContractPayload!
+}
+
+"""
+The two roots a consolidation folds together, as confirmed by a start.
+"""
+input LocationRootConsolidationTargetInput {
+	"""
+	Library both roots belong to.
+	"""
+	libraryId: ID!
+	"""
+	The root being folded away.
+	"""
+	sourceRootId: ID!
+	"""
+	The root that absorbs it.
+	"""
+	destinationRootId: ID!
+}
+
+"""
+One of FR-027's three content buckets: the complete counts plus a sample.
+"""
+type LocationRootContentBucketPayload {
+	"""
+	Which bucket this is.
+	"""
+	class: LocationRootContentClassValue!
+	"""
+	Complete count of files in this bucket, not just the sampled ones.
+	"""
+	total: Long!
+	"""
+	Complete byte total for this bucket.
+	"""
+	bytesTotal: Long!
+	"""
+	Whether the sampled entries are the complete bucket.
+	"""
+	complete: Boolean!
+	"""
+	The sampled entries the client lists.
+	"""
+	entries: [LocationRootContentEntryPayload!]!
+}
+
+"""
+What the catalog can say about one entry found beneath a root (FR-027).
+"""
+enum LocationRootContentClassValue {
+	"""
+	A file the catalog tracks as media for a title assigned to this root.
+	"""
+	MANAGED
+	"""
+	An untracked file inside a title's owned folder: sidecars, artwork,
+	subtitles, trickplay. It travels with its title.
+	"""
+	COMPANION
+	"""
+	Anything else. Never deleted, never abandoned, and it keeps the old
+	location standing (FR-027, FR-028).
+	"""
+	UNKNOWN
+}
+
+"""
+One file found beneath the root, with what the catalog could say about it.
+"""
+type LocationRootContentEntryPayload {
+	"""
+	Where the file is today.
+	"""
+	path: String!
+	"""
+	Its size.
+	"""
+	sizeBytes: Long!
+	"""
+	Which of FR-027's three buckets it fell into.
+	"""
+	class: LocationRootContentClassValue!
+	"""
+	Whether it is a canonical folder-level sidecar such as `movie.nfo`.
+	"""
+	canonicalSidecar: Boolean!
+}
+
+"""
+Everything found beneath the source root, in FR-027's three buckets, plus
+the directory facts cleanup is allowed to act on (FR-028).
+"""
+type LocationRootContentInventoryPayload {
+	"""
+	Files the catalog tracks for titles assigned to this root.
+	"""
+	managed: LocationRootContentBucketPayload!
+	"""
+	Untracked files inside a title's folder; they travel with their title.
+	"""
+	companions: LocationRootContentBucketPayload!
+	"""
+	Everything else. Listed separately because it is what keeps the old
+	location standing.
+	"""
+	unknown: LocationRootContentBucketPayload!
+	"""
+	Bytes of unexplained content.
+	"""
+	unknownBytes: Long!
+	"""
+	Whether unexplained content stops the source location from being removed.
+	"""
+	blocksSourceRemoval: Boolean!
+	"""
+	Every scanned file across the three buckets.
+	"""
+	entryCount: Long!
+	"""
+	Directories outside every title folder that hold nothing unexplained, so
+	cleanup may remove them once they are empty.
+	"""
+	prunableDirectories: LocationSampledPathsPayload!
+	"""
+	Directories that hold unexplained content and are therefore left
+	standing, with their contents.
+	"""
+	retainedDirectories: LocationSampledPathsPayload!
+}
+
+"""
+What the root keeps when its path changes or it absorbs another root
+(FR-021, FR-022, FR-078).
+
+For a root change this describes the changed root; for a consolidation it
+describes the destination root, the one that survives.
+"""
+type LocationRootIdentityRetentionPayload {
+	"""
+	The root whose identity is retained.
+	"""
+	rootId: ID!
+	"""
+	Whether the synthetic root id survives. It always does.
+	"""
+	keepsRootId: Boolean!
+	"""
+	Whether the root was the library default before the operation.
+	"""
+	wasLibraryDefault: Boolean!
+	"""
+	Whether it is the library default after the operation.
+	"""
+	remainsLibraryDefault: Boolean!
+	"""
+	The role the root carried, when it carries one. Roots have no role
+	concept yet, so this is always null today.
+	"""
+	retainedRole: String
+	"""
+	Title assignments the root keeps pointing at it.
+	"""
+	retainedTitleAssignments: Long!
+}
+
+"""
+One reason the source location cannot be retired (FR-028).
+"""
+type LocationRootRetirementBlockerPayload {
+	"""
+	Machine-readable code, for grouping and translation.
+	"""
+	code: String!
+	"""
+	The sentence explaining what has to be resolved.
+	"""
+	detail: String!
+}
+
+"""
+What happens to the old location after every title has settled (FR-028,
+FR-031, FR-087).
+"""
+type LocationRootRetirementContractPayload {
+	"""
+	The path being retired.
+	"""
+	sourceRootPath: String!
+	"""
+	The path the root points at afterwards. For a consolidation this is the
+	destination root's own configured path.
+	"""
+	destinationRootPath: String!
+	"""
+	Whether the source configuration is retired only after all recycling for
+	the operation completes.
+	"""
+	retireConfigurationAfterRecycling: Boolean!
+	"""
+	Paths that stay allowlisted for recycling while the retirement runs.
+	"""
+	recycleAllowlistPaths: LocationSampledPathsPayload!
+	"""
+	Whether verification has to succeed before anything at the source is
+	removed.
+	"""
+	requiresVerificationBeforeSourceRemoval: Boolean!
+	"""
+	Whether only empty directories may be removed automatically.
+	"""
+	emptyDirectoriesOnly: Boolean!
+	"""
+	Directories cleanup may remove once they are empty, deepest first.
+	"""
+	removableDirectories: LocationSampledPathsPayload!
+	"""
+	Directories that are left standing with their contents.
+	"""
+	retainedDirectories: LocationSampledPathsPayload!
+	"""
+	Whether the source location may be removed at all.
+	"""
+	permitsSourceRemoval: Boolean!
+	"""
+	Every reason it may not be, when there are any.
+	"""
+	blockers: [LocationRootRetirementBlockerPayload!]!
+}
+
+"""
+A complete count of paths beside the sample the client renders.
+"""
+type LocationSampledPathsPayload {
+	"""
+	How many paths there are in total.
+	"""
+	total: Long!
+	"""
+	Whether the sampled paths are the complete list.
+	"""
+	complete: Boolean!
+	"""
+	The sampled paths.
+	"""
+	paths: [String!]!
+}
+
+"""
 Every selected title grouped by class, with no title omitted.
 """
 type LocationSelectionClassificationPayload {
@@ -10213,6 +10677,46 @@ type LocationSelectionClassificationPayload {
 	Whether any title in the selection blocks the start.
 	"""
 	blocksStart: Boolean!
+}
+
+"""
+Every title assigned to the root being changed or consolidated, in one
+closed ledger (FR-023).
+
+There is no way to exclude a title from a root-scoped operation, so this is
+an accounting rather than a selection: the four counts close against
+`assignedTotal`, and a blocked title stops the operation until it is
+repaired.
+"""
+type LocationTitleAccountingPayload {
+	"""
+	Every title assigned to the root.
+	"""
+	assignedTotal: Long!
+	"""
+	Titles whose files move.
+	"""
+	relocating: Long!
+	"""
+	Titles with no tracked files: catalog reassignment only (FR-076).
+	"""
+	catalogOnly: Long!
+	"""
+	Titles that cannot enter the operation.
+	"""
+	blocked: Long!
+	"""
+	Whether the three counts close against `assignedTotal`.
+	"""
+	accountsForEveryTitle: Boolean!
+	"""
+	Whether any blocked title stops the operation from starting.
+	"""
+	blocksStart: Boolean!
+	"""
+	Every blocked title, named. Rendered with no exclude affordance.
+	"""
+	blockedTitles: [LocationBlockedTitlePayload!]!
 }
 
 """
@@ -13285,10 +13789,14 @@ type MutationRoot {
 	fingerprint fails the comparison rather than running the other workflow.
 	An adoption whose destination is missing or ambiguous media is refused
 	here, because its rebuilt plan is blocked (FR-052).
+	
+	A root change (US4) and a root consolidation (US5) confirm through the
+	same mutation and the same typed-confirmation field; only the destination
+	form differs. Exactly one of the three destination forms may be named.
 	"""
 	startLocationOperation(
 		"""
-		Previewed selection, destination, mode, plan fingerprint, and typed confirmation when one is required.
+		Previewed destination form (selection, root change, or root consolidation), mode, plan fingerprint, and typed confirmation when one is required.
 		"""
 		input: StartLocationOperationInput!
 	): StartLocationOperationPayload!
@@ -15937,6 +16445,43 @@ type QueryRoot {
 		"""
 		input: LocationOperationPreviewInput!
 	): LocationOperationPreviewPayload!
+	"""
+	Preview replacing one root's path with a new, unconfigured one (US4).
+	
+	Root scoped, so there is no selection: every title assigned to the root
+	goes, and the ledger says so rather than offering a way to exclude one
+	(FR-023). The returned fingerprint is what `startLocationOperation`
+	confirms with its `rootChange` target.
+	
+	A destination that is already a configured root of this library is
+	refused with `refusalCode: root_change_destination_is_configured_root`,
+	because that request is a consolidation and belongs to
+	`locationRootConsolidationPreview` (FR-020).
+	"""
+	locationRootChangePreview(
+		"""
+		The root whose path changes, the new path it moves to, and how the files get there.
+		"""
+		input: LocationRootChangePreviewInput!
+	): LocationRootChangePreviewPayload!
+	"""
+	Preview folding one root into another root of the same library (US5).
+	
+	The other half of FR-020's single settings action: the destination is a
+	root id rather than a path, which is exactly what makes this a
+	consolidation. FR-024's seven groups are the preview.
+	
+	A destination that is not a configured root of this library is refused
+	with `refusalCode:
+	root_consolidation_destination_not_a_configured_root`, because that
+	request is a root change and belongs to `locationRootChangePreview`.
+	"""
+	locationRootConsolidationPreview(
+		"""
+		The root being folded away, the root that absorbs it, and how the files get there.
+		"""
+		input: LocationRootConsolidationPreviewInput!
+	): LocationRootConsolidationPreviewPayload!
 	"""
 	Read one location operation with its per-title checkpoints.
 	"""
@@ -18969,16 +19514,33 @@ input StartExternalImportProwlarrWarmupInput {
 
 """
 Confirmation of a previewed location operation.
+
+Exactly one destination form is confirmed: a title selection with its
+destination, a root change, or a root consolidation. `titleIds` and
+`destination` stayed where they were and are still what a selection sends;
+they are nullable only so a root-scoped confirmation does not have to claim
+an empty selection going nowhere.
 """
 input StartLocationOperationInput {
 	"""
-	Titles to move, matching the previewed selection.
+	Titles to move, matching the previewed selection. Omitted for a
+	root-scoped confirmation, which has no selection to express.
 	"""
-	titleIds: [ID!]!
+	titleIds: [ID!]
 	"""
-	Where the selection goes, matching the previewed destination.
+	Where the selection goes, matching the previewed destination. Omitted
+	for a root-scoped confirmation, which names its roots below instead.
 	"""
-	destination: LocationDestinationInput!
+	destination: LocationDestinationInput
+	"""
+	Confirms a previewed root change (US4): one root's path is replaced.
+	"""
+	rootChange: LocationRootChangeTargetInput
+	"""
+	Confirms a previewed root consolidation (US5): one root is folded into
+	another root of the same library.
+	"""
+	rootConsolidation: LocationRootConsolidationTargetInput
 	"""
 	The mode the plan was previewed under; a different mode is a different
 	plan, so it produces a different fingerprint and is refused.

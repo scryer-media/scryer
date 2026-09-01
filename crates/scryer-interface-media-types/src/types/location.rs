@@ -948,11 +948,24 @@ pub struct LocationOperationPreviewInput {
 
 #[derive(InputObject, Clone)]
 /// Confirmation of a previewed location operation.
+///
+/// Exactly one destination form is confirmed: a title selection with its
+/// destination, a root change, or a root consolidation. `titleIds` and
+/// `destination` stayed where they were and are still what a selection sends;
+/// they are nullable only so a root-scoped confirmation does not have to claim
+/// an empty selection going nowhere.
 pub struct StartLocationOperationInput {
-    /// Titles to move, matching the previewed selection.
-    pub title_ids: Vec<ID>,
-    /// Where the selection goes, matching the previewed destination.
-    pub destination: LocationDestinationInput,
+    /// Titles to move, matching the previewed selection. Omitted for a
+    /// root-scoped confirmation, which has no selection to express.
+    pub title_ids: Option<Vec<ID>>,
+    /// Where the selection goes, matching the previewed destination. Omitted
+    /// for a root-scoped confirmation, which names its roots below instead.
+    pub destination: Option<LocationDestinationInput>,
+    /// Confirms a previewed root change (US4): one root's path is replaced.
+    pub root_change: Option<LocationRootChangeTargetInput>,
+    /// Confirms a previewed root consolidation (US5): one root is folded into
+    /// another root of the same library.
+    pub root_consolidation: Option<LocationRootConsolidationTargetInput>,
     /// The mode the plan was previewed under; a different mode is a different
     /// plan, so it produces a different fingerprint and is refused.
     pub mode: Option<LocationExecutionModeInput>,
@@ -960,4 +973,313 @@ pub struct StartLocationOperationInput {
     pub plan_fingerprint: String,
     /// Phrase the user typed, for operations that require typed confirmation.
     pub typed_confirmation: Option<String>,
+}
+
+// ── US4 and US5: the two root-scoped workflows (FR-020 to FR-029) ────────────
+
+#[derive(InputObject, Clone)]
+/// The root and the new path a root change would move it to (US4, FR-020).
+pub struct LocationRootChangePreviewInput {
+    /// Library the root belongs to.
+    pub library_id: ID,
+    /// The root being changed. Its identity survives the change (FR-021).
+    pub root_id: ID,
+    /// The new, unconfigured path. A path that is already a configured root of
+    /// this library is refused and routed to consolidation instead.
+    pub destination_path: String,
+    /// How the files get there; omitted asks Scryer to do the moving.
+    pub mode: Option<LocationExecutionModeInput>,
+}
+
+#[derive(InputObject, Clone)]
+/// The root being changed and the path it moves to, as confirmed by a start.
+pub struct LocationRootChangeTargetInput {
+    /// Library the root belongs to.
+    pub library_id: ID,
+    /// The root being changed.
+    pub root_id: ID,
+    /// The previewed destination path.
+    pub destination_path: String,
+}
+
+#[derive(InputObject, Clone)]
+/// The two roots a consolidation folds together (US5, FR-020).
+pub struct LocationRootConsolidationPreviewInput {
+    /// Library both roots belong to. A consolidation never crosses libraries.
+    pub library_id: ID,
+    /// The root being folded away; its configuration is retired at the end.
+    pub source_root_id: ID,
+    /// The root that absorbs it. Must already be configured in this library; a
+    /// destination that is not is refused and routed to a root change instead.
+    pub destination_root_id: ID,
+    /// How the files get there; omitted asks Scryer to do the moving.
+    pub mode: Option<LocationExecutionModeInput>,
+}
+
+#[derive(InputObject, Clone)]
+/// The two roots a consolidation folds together, as confirmed by a start.
+pub struct LocationRootConsolidationTargetInput {
+    /// Library both roots belong to.
+    pub library_id: ID,
+    /// The root being folded away.
+    pub source_root_id: ID,
+    /// The root that absorbs it.
+    pub destination_root_id: ID,
+}
+
+/// What the catalog can say about one entry found beneath a root (FR-027).
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+pub enum LocationRootContentClassValue {
+    /// A file the catalog tracks as media for a title assigned to this root.
+    Managed,
+    /// An untracked file inside a title's owned folder: sidecars, artwork,
+    /// subtitles, trickplay. It travels with its title.
+    Companion,
+    /// Anything else. Never deleted, never abandoned, and it keeps the old
+    /// location standing (FR-027, FR-028).
+    Unknown,
+}
+
+#[derive(SimpleObject, Clone)]
+/// One title that cannot enter a root-scoped operation, named rather than
+/// silently dropped (FR-023).
+pub struct LocationBlockedTitlePayload {
+    /// The title that is blocked.
+    pub title_id: ID,
+    /// Its name, so the ledger reads as titles rather than as ids.
+    pub title_name: String,
+    /// The sentence explaining what has to be repaired.
+    pub reason: String,
+    /// Machine-readable reason, for grouping and translation.
+    pub reason_code: Option<String>,
+}
+
+#[derive(SimpleObject, Clone)]
+/// Every title assigned to the root being changed or consolidated, in one
+/// closed ledger (FR-023).
+///
+/// There is no way to exclude a title from a root-scoped operation, so this is
+/// an accounting rather than a selection: the four counts close against
+/// `assignedTotal`, and a blocked title stops the operation until it is
+/// repaired.
+pub struct LocationTitleAccountingPayload {
+    /// Every title assigned to the root.
+    pub assigned_total: Long,
+    /// Titles whose files move.
+    pub relocating: Long,
+    /// Titles with no tracked files: catalog reassignment only (FR-076).
+    pub catalog_only: Long,
+    /// Titles that cannot enter the operation.
+    pub blocked: Long,
+    /// Whether the three counts close against `assignedTotal`.
+    pub accounts_for_every_title: bool,
+    /// Whether any blocked title stops the operation from starting.
+    pub blocks_start: bool,
+    /// Every blocked title, named. Rendered with no exclude affordance.
+    pub blocked_titles: Vec<LocationBlockedTitlePayload>,
+}
+
+#[derive(SimpleObject, Clone)]
+/// What the root keeps when its path changes or it absorbs another root
+/// (FR-021, FR-022, FR-078).
+///
+/// For a root change this describes the changed root; for a consolidation it
+/// describes the destination root, the one that survives.
+pub struct LocationRootIdentityRetentionPayload {
+    /// The root whose identity is retained.
+    pub root_id: ID,
+    /// Whether the synthetic root id survives. It always does.
+    pub keeps_root_id: bool,
+    /// Whether the root was the library default before the operation.
+    pub was_library_default: bool,
+    /// Whether it is the library default after the operation.
+    pub remains_library_default: bool,
+    /// The role the root carried, when it carries one. Roots have no role
+    /// concept yet, so this is always null today.
+    pub retained_role: Option<String>,
+    /// Title assignments the root keeps pointing at it.
+    pub retained_title_assignments: Long,
+}
+
+#[derive(SimpleObject, Clone)]
+/// One file found beneath the root, with what the catalog could say about it.
+pub struct LocationRootContentEntryPayload {
+    /// Where the file is today.
+    pub path: String,
+    /// Its size.
+    pub size_bytes: Long,
+    /// Which of FR-027's three buckets it fell into.
+    pub class: LocationRootContentClassValue,
+    /// Whether it is a canonical folder-level sidecar such as `movie.nfo`.
+    pub canonical_sidecar: bool,
+}
+
+#[derive(SimpleObject, Clone)]
+/// One of FR-027's three content buckets: the complete counts plus a sample.
+pub struct LocationRootContentBucketPayload {
+    /// Which bucket this is.
+    pub class: LocationRootContentClassValue,
+    /// Complete count of files in this bucket, not just the sampled ones.
+    pub total: Long,
+    /// Complete byte total for this bucket.
+    pub bytes_total: Long,
+    /// Whether the sampled entries are the complete bucket.
+    pub complete: bool,
+    /// The sampled entries the client lists.
+    pub entries: Vec<LocationRootContentEntryPayload>,
+}
+
+#[derive(SimpleObject, Clone)]
+/// A complete count of paths beside the sample the client renders.
+pub struct LocationSampledPathsPayload {
+    /// How many paths there are in total.
+    pub total: Long,
+    /// Whether the sampled paths are the complete list.
+    pub complete: bool,
+    /// The sampled paths.
+    pub paths: Vec<String>,
+}
+
+#[derive(SimpleObject, Clone)]
+/// Everything found beneath the source root, in FR-027's three buckets, plus
+/// the directory facts cleanup is allowed to act on (FR-028).
+pub struct LocationRootContentInventoryPayload {
+    /// Files the catalog tracks for titles assigned to this root.
+    pub managed: LocationRootContentBucketPayload,
+    /// Untracked files inside a title's folder; they travel with their title.
+    pub companions: LocationRootContentBucketPayload,
+    /// Everything else. Listed separately because it is what keeps the old
+    /// location standing.
+    pub unknown: LocationRootContentBucketPayload,
+    /// Bytes of unexplained content.
+    pub unknown_bytes: Long,
+    /// Whether unexplained content stops the source location from being removed.
+    pub blocks_source_removal: bool,
+    /// Every scanned file across the three buckets.
+    pub entry_count: Long,
+    /// Directories outside every title folder that hold nothing unexplained, so
+    /// cleanup may remove them once they are empty.
+    pub prunable_directories: LocationSampledPathsPayload,
+    /// Directories that hold unexplained content and are therefore left
+    /// standing, with their contents.
+    pub retained_directories: LocationSampledPathsPayload,
+}
+
+#[derive(SimpleObject, Clone)]
+/// One reason the source location cannot be retired (FR-028).
+pub struct LocationRootRetirementBlockerPayload {
+    /// Machine-readable code, for grouping and translation.
+    pub code: String,
+    /// The sentence explaining what has to be resolved.
+    pub detail: String,
+}
+
+#[derive(SimpleObject, Clone)]
+/// What happens to the old location after every title has settled (FR-028,
+/// FR-031, FR-087).
+pub struct LocationRootRetirementContractPayload {
+    /// The path being retired.
+    pub source_root_path: String,
+    /// The path the root points at afterwards. For a consolidation this is the
+    /// destination root's own configured path.
+    pub destination_root_path: String,
+    /// Whether the source configuration is retired only after all recycling for
+    /// the operation completes.
+    pub retire_configuration_after_recycling: bool,
+    /// Paths that stay allowlisted for recycling while the retirement runs.
+    pub recycle_allowlist_paths: LocationSampledPathsPayload,
+    /// Whether verification has to succeed before anything at the source is
+    /// removed.
+    pub requires_verification_before_source_removal: bool,
+    /// Whether only empty directories may be removed automatically.
+    pub empty_directories_only: bool,
+    /// Directories cleanup may remove once they are empty, deepest first.
+    pub removable_directories: LocationSampledPathsPayload,
+    /// Directories that are left standing with their contents.
+    pub retained_directories: LocationSampledPathsPayload,
+    /// Whether the source location may be removed at all.
+    pub permits_source_removal: bool,
+    /// Every reason it may not be, when there are any.
+    pub blockers: Vec<LocationRootRetirementBlockerPayload>,
+}
+
+#[derive(SimpleObject, Clone)]
+/// A read-only preview of replacing one root's path (US4, FR-020 to FR-029).
+pub struct LocationRootChangePreviewPayload {
+    /// The fingerprinted plan, in the vocabulary every location workflow
+    /// shares. Root-scoped plans have no title selection, so the plan's
+    /// classification carries per-class counts with no per-title entries; the
+    /// titles that need naming are in `accounting.blockedTitles`.
+    pub plan: LocationOperationPreviewPayload,
+    /// Every title assigned to the root, with no way to exclude one.
+    pub accounting: LocationTitleAccountingPayload,
+    /// What the root keeps. The first thing the dialog states.
+    pub retention: LocationRootIdentityRetentionPayload,
+    /// Everything found beneath the source root, in three buckets.
+    pub content: LocationRootContentInventoryPayload,
+    /// What happens to the old location afterwards.
+    pub retirement: LocationRootRetirementContractPayload,
+}
+
+#[derive(SimpleObject, Clone)]
+/// FR-024's seven groups, counted off the same decisions that built the plan
+/// items. This is the consolidation preview (US5.1).
+pub struct LocationConsolidationClassificationPayload {
+    /// Titles moving into destination folders nothing occupies.
+    pub moving_into_unused_folders: Long,
+    /// Titles merging with a destination title they share an identity with.
+    pub merging_with_destination_titles: Long,
+    /// Folder names already taken at the destination, so the incoming folder
+    /// gets a unique previewed name.
+    pub folder_name_collisions: Long,
+    /// Media files whose destination name is already taken.
+    pub media_collisions: Long,
+    /// Source files proven identical to destination content, so they are
+    /// recycled rather than copied.
+    pub dedup_eligible_files: Long,
+    /// Companion assets whose destination name is already taken.
+    pub companion_collisions: Long,
+    /// Entries beneath the source root that no title accounts for.
+    pub untracked_source_entries: Long,
+    /// Titles with no tracked files: catalog reassignment only (FR-076).
+    pub catalog_only: Long,
+    /// Titles that cannot enter the operation.
+    pub blocked: Long,
+}
+
+#[derive(SimpleObject, Clone)]
+/// Which root new content lands on after a consolidation (FR-022).
+pub struct LocationDefaultRootTransferPayload {
+    /// Whether the root being folded away was the library default.
+    pub source_was_default: bool,
+    /// Whether the destination root was already the library default.
+    pub destination_was_default: bool,
+    /// Whether the destination root is the library default afterwards.
+    pub destination_becomes_default: bool,
+    /// Whether the default actually moves. Say so out loud when it does.
+    pub transfers_the_default: bool,
+}
+
+#[derive(SimpleObject, Clone)]
+/// A read-only preview of folding one root into another (US5, FR-020, FR-022,
+/// FR-024 to FR-029).
+pub struct LocationRootConsolidationPreviewPayload {
+    /// The fingerprinted plan, in the vocabulary every location workflow
+    /// shares. Root-scoped plans have no title selection, so the plan's
+    /// classification carries per-class counts with no per-title entries; the
+    /// titles that need naming are in `accounting.blockedTitles`, and every
+    /// changed folder name is a `RENAME` plan item.
+    pub plan: LocationOperationPreviewPayload,
+    /// Every title assigned to the source root, with no way to exclude one.
+    pub accounting: LocationTitleAccountingPayload,
+    /// FR-024's seven groups with their counts.
+    pub classification: LocationConsolidationClassificationPayload,
+    /// Which root new content lands on afterwards. The destination root keeps
+    /// its own id either way (FR-078); what can move is the default.
+    pub default_transfer: LocationDefaultRootTransferPayload,
+    /// Everything found beneath the source root, in three buckets.
+    pub content: LocationRootContentInventoryPayload,
+    /// What happens to the source root's configuration afterwards.
+    pub retirement: LocationRootRetirementContractPayload,
 }

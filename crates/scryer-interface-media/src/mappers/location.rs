@@ -13,6 +13,7 @@ use scryer_application::location::asset_listing::{
 use scryer_application::location::classify::{
     DestinationRequest, SelectionClassification, TitleClassification, TitleLocationClass,
 };
+use scryer_application::location::consolidation_execution::RootConsolidationPreview;
 use scryer_application::location::identity::{DestinationIdentityOutcome, MetadataIdentity};
 use scryer_application::location::merge::map::{MergeBlockReason};
 use scryer_application::location::merge::roles::RoleChangeReason;
@@ -26,19 +27,26 @@ use scryer_application::location::model::{
 };
 use scryer_application::location::operations::RootMovePreview;
 use scryer_application::location::preview::{
-    ConfirmationRequirement, FreeSpaceEstimate, LocationPlan, PlanConfirmation, PlanCounts,
-    PlanFingerprint, PlanItem, PlanItemKind, PlanSection, VerificationStatement,
+    ConfirmationRequirement, FreeSpaceEstimate, LocationPlan, PLAN_SECTION_SAMPLE_LIMIT,
+    PlanConfirmation, PlanCounts, PlanFingerprint, PlanItem, PlanItemKind, PlanSection,
+    VerificationStatement,
 };
+use scryer_application::location::root_change::{
+    BlockedTitle, ClassifiedRootEntry, RootContentClass, RootContentInventory,
+    RootIdentityRetention, RootRetirementContract, TitleAccounting,
+};
+use scryer_application::location::root_change_execution::RootChangePreview;
 use scryer_application::location::transfer_effects::{
     FILES_KEEP_THEIR_NAMES, FacetConversion, SettingDisposition,
 };
 
 use crate::types::{
     CancelLocationOperationPayload, LocationAmbiguousDestinationCandidatePayload,
-    LocationClassificationGroupPayload, LocationClassifiedTitlePayload,
-    LocationConfirmationRequirementValue, LocationDestinationIdentityMatchValue,
-    LocationDestinationInput, LocationExecutionModeInput, LocationExecutionModeValue,
-    LocationFacetConversionPayload,
+    LocationBlockedTitlePayload, LocationClassificationGroupPayload,
+    LocationClassifiedTitlePayload, LocationConfirmationRequirementValue,
+    LocationConsolidationClassificationPayload, LocationDefaultRootTransferPayload,
+    LocationDestinationIdentityMatchValue, LocationDestinationInput, LocationExecutionModeInput,
+    LocationExecutionModeValue, LocationFacetConversionPayload,
     LocationFacetConvertedSettingPayload, LocationFacetSettingDispositionValue,
     LocationFreeSpaceEstimatePayload, LocationMergeBlockReasonValue,
     LocationMergeBlockedRecordPayload, LocationMergeDestinationWinsPayload,
@@ -53,10 +61,15 @@ use crate::types::{
     LocationOperationStateValue, LocationOperationTitleAssetsPayload, LocationOperationTypeValue,
     LocationPlanConfirmationPayload, LocationPlanCountsPayload, LocationPlanItemKindValue,
     LocationPlanItemPayload, LocationPlanKindCountPayload, LocationPlanSectionPayload,
-    LocationSelectionClassificationPayload, LocationTitleCheckpointPayload,
-    LocationTitleCheckpointStateValue, LocationVerificationStatementPayload, Long, MediaFacetValue,
-    ResumeLocationOperationPayload, StartLocationOperationPayload, TitleLocationClassValue,
-    VerificationDepthValue,
+    LocationRootChangePreviewPayload, LocationRootConsolidationPreviewPayload,
+    LocationRootContentBucketPayload, LocationRootContentClassValue,
+    LocationRootContentEntryPayload, LocationRootContentInventoryPayload,
+    LocationRootIdentityRetentionPayload, LocationRootRetirementBlockerPayload,
+    LocationRootRetirementContractPayload, LocationSampledPathsPayload,
+    LocationSelectionClassificationPayload, LocationTitleAccountingPayload,
+    LocationTitleCheckpointPayload, LocationTitleCheckpointStateValue,
+    LocationVerificationStatementPayload, Long, MediaFacetValue, ResumeLocationOperationPayload,
+    StartLocationOperationPayload, TitleLocationClassValue, VerificationDepthValue,
 };
 
 /// Plan-item kinds in the order the preview presents them; the same order the
@@ -211,6 +224,36 @@ pub fn location_execution_mode_into_application(
         }
         Some(LocationExecutionModeInput::MoveWithScryer) | None => {
             LocationExecutionMode::MoveWithScryer
+        }
+    }
+}
+
+/// The execution mode a root-scoped request may ask for.
+///
+/// Both root-scoped workflows support exactly one requestable mode. A
+/// consolidation refuses `FILES_ALREADY_THERE` in the application layer, by
+/// name, because its destination is a configured root whose content already
+/// belongs to other titles. A root change never gets that far: its destination
+/// must be empty or not exist at all, so content cannot already be there, and
+/// the planner would otherwise stamp a mode on the plan header that the
+/// executor does not honour. Refusing it here keeps the two halves of FR-020's
+/// single control answering the same way.
+///
+/// `CATALOG_ONLY` is not requestable anywhere: it is the server's own
+/// conclusion about a root with no files on it (FR-076).
+pub fn root_scoped_execution_mode_into_application(
+    input: Option<LocationExecutionModeInput>,
+) -> Result<LocationExecutionMode, scryer_application::AppError> {
+    match input {
+        Some(LocationExecutionModeInput::FilesAlreadyThere) => {
+            Err(scryer_application::AppError::Validation(
+                "a root-scoped operation always moves the files; \"files are already there\" \
+                 adopts content at a destination folder and is not offered here"
+                    .to_string(),
+            ))
+        }
+        Some(LocationExecutionModeInput::MoveWithScryer) | None => {
+            Ok(LocationExecutionMode::MoveWithScryer)
         }
     }
 }
@@ -660,6 +703,236 @@ pub fn from_root_move_preview(preview: &RootMovePreview) -> LocationOperationPre
         from_selection_classification(&preview.classification),
         preview.warnings.clone(),
     )
+}
+
+// ── US4 and US5: the two root-scoped previews (FR-020 to FR-029) ─────────────
+
+/// The six classification groups for a plan that has no title selection.
+///
+/// A root-scoped operation covers every title assigned to the root and offers
+/// no way to exclude one, so there is no per-title selection to group: the plan
+/// carries per-class counts and nothing else. The groups are still all six, in
+/// the same order, so a client renders the same control it renders for a move;
+/// the titles that need naming come from the accounting ledger instead
+/// (FR-023).
+fn from_classification_counts(
+    counts: &scryer_application::location::classify::ClassificationCounts,
+) -> LocationSelectionClassificationPayload {
+    let count_for = |class: TitleLocationClass| match class {
+        TitleLocationClass::CrossLibraryTransfer => counts.cross_library_transfer,
+        TitleLocationClass::RootMove => counts.root_move,
+        TitleLocationClass::NoOp => counts.no_op,
+        TitleLocationClass::CatalogOnly => counts.catalog_only,
+        TitleLocationClass::Incompatible => counts.incompatible,
+        TitleLocationClass::NeedsResolution => counts.needs_resolution,
+    };
+    LocationSelectionClassificationPayload {
+        groups: TITLE_LOCATION_CLASSES
+            .iter()
+            .map(|class| LocationClassificationGroupPayload {
+                class: from_title_location_class(*class),
+                count: Long(count_for(*class)),
+                titles: Vec::new(),
+            })
+            .collect(),
+        titles_total: Long(counts.total()),
+        blocks_start: counts.blocks_start(),
+    }
+}
+
+fn from_root_content_class(value: RootContentClass) -> LocationRootContentClassValue {
+    match value {
+        RootContentClass::Managed => LocationRootContentClassValue::Managed,
+        RootContentClass::Companion => LocationRootContentClassValue::Companion,
+        RootContentClass::Unknown => LocationRootContentClassValue::Unknown,
+    }
+}
+
+fn from_root_content_entry(entry: &ClassifiedRootEntry) -> LocationRootContentEntryPayload {
+    LocationRootContentEntryPayload {
+        path: display_path(&entry.path),
+        size_bytes: bytes(entry.size_bytes),
+        class: from_root_content_class(entry.class),
+        canonical_sidecar: entry.canonical_sidecar,
+    }
+}
+
+/// One content bucket, sampled the way plan sections are: the complete count
+/// and byte total always, the entries only up to the shared sample limit.
+fn from_root_content_bucket(
+    class: RootContentClass,
+    entries: &[ClassifiedRootEntry],
+) -> LocationRootContentBucketPayload {
+    let bytes_total = entries
+        .iter()
+        .fold(0_u64, |total, entry| total.saturating_add(entry.size_bytes));
+    LocationRootContentBucketPayload {
+        class: from_root_content_class(class),
+        total: Long(entries.len() as i64),
+        bytes_total: bytes(bytes_total),
+        complete: entries.len() <= PLAN_SECTION_SAMPLE_LIMIT,
+        entries: entries
+            .iter()
+            .take(PLAN_SECTION_SAMPLE_LIMIT)
+            .map(from_root_content_entry)
+            .collect(),
+    }
+}
+
+/// A path list the client renders, with the complete count beside it. Directory
+/// lists under a large root are unbounded, so the payload states how many there
+/// are rather than shipping all of them.
+fn from_sampled_paths(paths: &[String]) -> LocationSampledPathsPayload {
+    LocationSampledPathsPayload {
+        total: Long(paths.len() as i64),
+        complete: paths.len() <= PLAN_SECTION_SAMPLE_LIMIT,
+        paths: paths
+            .iter()
+            .take(PLAN_SECTION_SAMPLE_LIMIT)
+            .map(|path| display_path(path))
+            .collect(),
+    }
+}
+
+fn from_blocked_title(title: &BlockedTitle) -> LocationBlockedTitlePayload {
+    LocationBlockedTitlePayload {
+        title_id: ID::from(title.title_id.clone()),
+        title_name: title.title_name.clone(),
+        reason: title.reason.clone(),
+        reason_code: title.reason_code.clone(),
+    }
+}
+
+fn from_title_accounting(accounting: &TitleAccounting) -> LocationTitleAccountingPayload {
+    LocationTitleAccountingPayload {
+        assigned_total: Long(accounting.assigned_total),
+        relocating: Long(accounting.relocating),
+        catalog_only: Long(accounting.catalog_only),
+        blocked: Long(accounting.blocked),
+        accounts_for_every_title: accounting.accounts_for_every_title(),
+        blocks_start: accounting.blocks_start(),
+        blocked_titles: accounting
+            .blocked_titles
+            .iter()
+            .map(from_blocked_title)
+            .collect(),
+    }
+}
+
+fn from_root_identity_retention(
+    retention: &RootIdentityRetention,
+) -> LocationRootIdentityRetentionPayload {
+    LocationRootIdentityRetentionPayload {
+        root_id: ID::from(retention.root_id.clone()),
+        keeps_root_id: retention.keeps_root_id,
+        was_library_default: retention.was_library_default,
+        remains_library_default: retention.remains_library_default,
+        retained_role: retention.retained_role.clone(),
+        retained_title_assignments: Long(retention.retained_title_assignments),
+    }
+}
+
+fn from_root_content_inventory(
+    content: &RootContentInventory,
+) -> LocationRootContentInventoryPayload {
+    LocationRootContentInventoryPayload {
+        managed: from_root_content_bucket(RootContentClass::Managed, &content.managed),
+        companions: from_root_content_bucket(RootContentClass::Companion, &content.companions),
+        unknown: from_root_content_bucket(RootContentClass::Unknown, &content.unknown),
+        unknown_bytes: bytes(content.unknown_bytes()),
+        blocks_source_removal: content.blocks_source_removal(),
+        entry_count: Long(content.entry_count() as i64),
+        prunable_directories: from_sampled_paths(&content.prunable_directories),
+        retained_directories: from_sampled_paths(&content.retained_directories),
+    }
+}
+
+fn from_root_retirement_contract(
+    retirement: &RootRetirementContract,
+) -> LocationRootRetirementContractPayload {
+    LocationRootRetirementContractPayload {
+        source_root_path: display_path(&retirement.source_root_path),
+        destination_root_path: display_path(&retirement.destination_root_path),
+        retire_configuration_after_recycling: retirement.retire_configuration_after_recycling,
+        recycle_allowlist_paths: from_sampled_paths(&retirement.recycle_allowlist_paths),
+        requires_verification_before_source_removal: retirement
+            .requires_verification_before_source_removal,
+        empty_directories_only: retirement.empty_directories_only,
+        removable_directories: from_sampled_paths(&retirement.removable_directories),
+        retained_directories: from_sampled_paths(&retirement.retained_directories),
+        permits_source_removal: retirement.permits_source_removal(),
+        blockers: retirement
+            .blockers
+            .iter()
+            .map(|blocker| LocationRootRetirementBlockerPayload {
+                code: blocker.code.clone(),
+                detail: blocker.detail.clone(),
+            })
+            .collect(),
+    }
+}
+
+/// The complete root-change preview (US4): the shared plan payload plus the
+/// four blocks a root-scoped operation adds.
+///
+/// `RootChangePreview.execution` is deliberately not projected. The start path
+/// rebuilds the plan from current state rather than trusting a round trip
+/// (FR-081), so handing the client the instruction set would be shipping
+/// something it must never send back.
+pub fn from_root_change_preview(preview: &RootChangePreview) -> LocationRootChangePreviewPayload {
+    LocationRootChangePreviewPayload {
+        plan: from_location_plan(
+            &preview.plan,
+            from_classification_counts(&preview.plan.classification),
+            preview.warnings.clone(),
+        ),
+        accounting: from_title_accounting(&preview.accounting),
+        retention: from_root_identity_retention(&preview.retention),
+        content: from_root_content_inventory(&preview.content),
+        retirement: from_root_retirement_contract(&preview.retirement),
+    }
+}
+
+/// The complete consolidation preview (US5): the shared plan payload, FR-024's
+/// seven groups, FR-022's default statement, and the two blocks it shares with
+/// a root change.
+///
+/// `RootConsolidationPreview.execution` is not projected, for the same reason a
+/// root change's is not.
+pub fn from_root_consolidation_preview(
+    preview: &RootConsolidationPreview,
+) -> LocationRootConsolidationPreviewPayload {
+    let classification = &preview.classification;
+    let transfer = &preview.default_transfer;
+    LocationRootConsolidationPreviewPayload {
+        plan: from_location_plan(
+            &preview.plan,
+            from_classification_counts(&preview.plan.classification),
+            preview.warnings.clone(),
+        ),
+        accounting: from_title_accounting(&preview.accounting),
+        classification: LocationConsolidationClassificationPayload {
+            moving_into_unused_folders: Long(classification.moving_into_unused_folders),
+            merging_with_destination_titles: Long(classification.merging_with_destination_titles),
+            folder_name_collisions: Long(classification.folder_name_collisions),
+            media_collisions: Long(classification.media_collisions),
+            dedup_eligible_files: Long(classification.dedup_eligible_files),
+            companion_collisions: Long(classification.companion_collisions),
+            untracked_source_entries: Long(classification.untracked_source_entries),
+            catalog_only: Long(classification.catalog_only),
+            blocked: Long(classification.blocked),
+        },
+        default_transfer: LocationDefaultRootTransferPayload {
+            source_was_default: transfer.source_was_default,
+            destination_was_default: transfer.destination_was_default,
+            // Both are methods on the application type, resolved here so the
+            // client reads a fact rather than re-deriving the rule (FR-022).
+            destination_becomes_default: transfer.destination_becomes_default(),
+            transfers_the_default: transfer.transfers_the_default(),
+        },
+        content: from_root_content_inventory(&preview.content),
+        retirement: from_root_retirement_contract(&preview.retirement),
+    }
 }
 
 fn from_location_operation_counters(

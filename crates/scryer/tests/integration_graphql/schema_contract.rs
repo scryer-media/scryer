@@ -591,8 +591,20 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // unchanged, and nothing is added to the operation payload itself: the
     // per-file identities live in the stored plan, which a progress poll has no
     // reason to load.
+    // The two root-scoped workflows (T064, US4 and US5, FR-020 to FR-029) add
+    // the locationRootChangePreview and locationRootConsolidationPreview query
+    // roots, thirteen payload objects (root-change preview, consolidation
+    // preview, title accounting, blocked title, root identity retention,
+    // content inventory, content bucket, content entry, sampled paths,
+    // retirement contract, retirement blocker, consolidation classification,
+    // default-root transfer), four inputs (the two preview inputs and the two
+    // start targets), and one enum for FR-027's three content classes:
+    // query 139->141, OBJECT 356->369, INPUT_OBJECT 179->183, ENUM 131->132,
+    // public types 678->696. No new mutation: both workflows confirm through
+    // the existing startLocationOperation, whose input gained the two
+    // root-scoped destination variants beside the selection it already carried.
     assert_eq!(
-        query_field_count, 139,
+        query_field_count, 141,
         "query fields: {query_field_names:?}"
     );
     assert_eq!(
@@ -634,10 +646,10 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // Query, mutation, subscription, OBJECT, and INPUT_OBJECT counts are
     // unchanged: both fields join input objects that already exist.
     assert_eq!(subscription_field_count, 14);
-    assert_eq!(public_types.len(), 678);
-    assert_eq!(kind_count("OBJECT"), 356);
-    assert_eq!(kind_count("INPUT_OBJECT"), 179);
-    assert_eq!(kind_count("ENUM"), 131);
+    assert_eq!(public_types.len(), 696);
+    assert_eq!(kind_count("OBJECT"), 369);
+    assert_eq!(kind_count("INPUT_OBJECT"), 183);
+    assert_eq!(kind_count("ENUM"), 132);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
     assert!(query_field_names.contains(&"backupSettings"));
@@ -674,6 +686,28 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // inputs, and distinct from the reported LocationExecutionModeValue.
     assert!(public_type_names.contains(&"LocationExecutionModeInput"));
     assert!(public_type_names.contains(&"LocationExecutionModeValue"));
+    // US4 and US5: FR-020's one settings action is two queries, because the two
+    // destinations are two different requests with two different payloads.
+    assert!(query_field_names.contains(&"locationRootChangePreview"));
+    assert!(query_field_names.contains(&"locationRootConsolidationPreview"));
+    assert!(public_type_names.contains(&"LocationRootChangePreviewPayload"));
+    assert!(public_type_names.contains(&"LocationRootConsolidationPreviewPayload"));
+    assert!(public_type_names.contains(&"LocationRootChangePreviewInput"));
+    assert!(public_type_names.contains(&"LocationRootConsolidationPreviewInput"));
+    assert!(public_type_names.contains(&"LocationRootChangeTargetInput"));
+    assert!(public_type_names.contains(&"LocationRootConsolidationTargetInput"));
+    assert!(public_type_names.contains(&"LocationTitleAccountingPayload"));
+    assert!(public_type_names.contains(&"LocationBlockedTitlePayload"));
+    assert!(public_type_names.contains(&"LocationRootIdentityRetentionPayload"));
+    assert!(public_type_names.contains(&"LocationRootContentInventoryPayload"));
+    assert!(public_type_names.contains(&"LocationRootContentBucketPayload"));
+    assert!(public_type_names.contains(&"LocationRootContentEntryPayload"));
+    assert!(public_type_names.contains(&"LocationRootContentClassValue"));
+    assert!(public_type_names.contains(&"LocationSampledPathsPayload"));
+    assert!(public_type_names.contains(&"LocationRootRetirementContractPayload"));
+    assert!(public_type_names.contains(&"LocationRootRetirementBlockerPayload"));
+    assert!(public_type_names.contains(&"LocationConsolidationClassificationPayload"));
+    assert!(public_type_names.contains(&"LocationDefaultRootTransferPayload"));
     assert!(mutation_field_names.contains(&"cancelActiveImport"));
     assert!(mutation_field_names.contains(&"startApplicationUpgrade"));
     assert!(mutation_field_names.contains(&"accountSecurityPasswordVerify"));

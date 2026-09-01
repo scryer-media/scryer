@@ -4254,3 +4254,228 @@ export const locationOperationAssetsQuery = `query LocationOperationAssets($id: 
     }
   }
 }`;
+
+/**
+ * The plan fields both root-scoped previews share (US4, US5). Narrower than the
+ * move dialog's selection: a root-scoped plan has no per-title classification
+ * entries to read, and the titles that need naming come from the accounting
+ * ledger instead (FR-023).
+ */
+const LOCATION_ROOT_PLAN_FIELDS = `
+    planFingerprint
+    operationType
+    mode
+    sourceLibraryId
+    destinationLibraryId
+    sourceRootId
+    destinationRootId
+    counts {
+      itemsTotal
+      titlesTotal
+      filesTotal
+      bytesTotal
+      byKind {
+        kind
+        count
+      }
+    }
+    sections {
+      kind
+      itemsTotal
+      bytesTotal
+      complete
+      items {${LOCATION_PLAN_ITEM_FIELDS}
+      }
+    }
+    classification {
+      titlesTotal
+      blocksStart
+      groups {
+        class
+        count
+      }
+    }
+    freeSpace {
+      destinationRequiredBytes
+      destinationTotalRequiredBytes
+      destinationAvailableBytes
+      recycleRequiredBytes
+      recycleAvailableBytes
+      sameVolumeMove
+      recycleOnOtherVolume
+      recycleSharesDestinationVolume
+      recyclingAvailable
+      probed
+      sufficient
+    }
+    verification {
+      depth
+      files
+      bytes
+      applies
+    }
+    confirmation {
+      requirement
+      typedPhrase
+      typedPrompt
+    }
+    warnings
+    blocksStart`;
+
+/** The every-title ledger, with no exclude affordance to offer (FR-023). */
+const LOCATION_TITLE_ACCOUNTING_FIELDS = `
+    assignedTotal
+    relocating
+    catalogOnly
+    blocked
+    accountsForEveryTitle
+    blocksStart
+    blockedTitles {
+      titleId
+      titleName
+      reason
+      reasonCode
+    }`;
+
+/** FR-027's three buckets plus the directory facts cleanup may act on. */
+const LOCATION_ROOT_CONTENT_FIELDS = `
+    managed {
+      class
+      total
+      bytesTotal
+      complete
+      entries {
+        path
+        sizeBytes
+        class
+        canonicalSidecar
+      }
+    }
+    companions {
+      class
+      total
+      bytesTotal
+      complete
+      entries {
+        path
+        sizeBytes
+        class
+        canonicalSidecar
+      }
+    }
+    unknown {
+      class
+      total
+      bytesTotal
+      complete
+      entries {
+        path
+        sizeBytes
+        class
+        canonicalSidecar
+      }
+    }
+    unknownBytes
+    blocksSourceRemoval
+    entryCount
+    prunableDirectories {
+      total
+      complete
+      paths
+    }
+    retainedDirectories {
+      total
+      complete
+      paths
+    }`;
+
+/** What happens to the old location afterwards (FR-028, FR-031, FR-087). */
+const LOCATION_ROOT_RETIREMENT_FIELDS = `
+    sourceRootPath
+    destinationRootPath
+    retireConfigurationAfterRecycling
+    recycleAllowlistPaths {
+      total
+      complete
+      paths
+    }
+    requiresVerificationBeforeSourceRemoval
+    emptyDirectoriesOnly
+    removableDirectories {
+      total
+      complete
+      paths
+    }
+    retainedDirectories {
+      total
+      complete
+      paths
+    }
+    permitsSourceRemoval
+    blockers {
+      code
+      detail
+    }`;
+
+/**
+ * US4: replacing one root's path with a new, unconfigured one. A destination
+ * that is already a configured root is refused with
+ * `root_change_destination_is_configured_root`, which routes the dialog to the
+ * consolidation branch (FR-020).
+ */
+export const locationRootChangePreviewQuery = `query LocationRootChangePreview($input: LocationRootChangePreviewInput!) {
+  locationRootChangePreview(input: $input) {
+    plan {${LOCATION_ROOT_PLAN_FIELDS}
+    }
+    accounting {${LOCATION_TITLE_ACCOUNTING_FIELDS}
+    }
+    retention {
+      rootId
+      keepsRootId
+      wasLibraryDefault
+      remainsLibraryDefault
+      retainedRole
+      retainedTitleAssignments
+    }
+    content {${LOCATION_ROOT_CONTENT_FIELDS}
+    }
+    retirement {${LOCATION_ROOT_RETIREMENT_FIELDS}
+    }
+  }
+}`;
+
+/**
+ * US5: folding one root into another root of the same library. A destination
+ * that is not a configured root is refused with
+ * `root_consolidation_destination_not_a_configured_root`, which routes the
+ * dialog back to the new-path branch (FR-020).
+ */
+export const locationRootConsolidationPreviewQuery = `query LocationRootConsolidationPreview($input: LocationRootConsolidationPreviewInput!) {
+  locationRootConsolidationPreview(input: $input) {
+    plan {${LOCATION_ROOT_PLAN_FIELDS}
+    }
+    accounting {${LOCATION_TITLE_ACCOUNTING_FIELDS}
+    }
+    classification {
+      movingIntoUnusedFolders
+      mergingWithDestinationTitles
+      folderNameCollisions
+      mediaCollisions
+      dedupEligibleFiles
+      companionCollisions
+      untrackedSourceEntries
+      catalogOnly
+      blocked
+    }
+    defaultTransfer {
+      sourceWasDefault
+      destinationWasDefault
+      destinationBecomesDefault
+      transfersTheDefault
+    }
+    content {${LOCATION_ROOT_CONTENT_FIELDS}
+    }
+    retirement {${LOCATION_ROOT_RETIREMENT_FIELDS}
+    }
+  }
+}`;

@@ -25,6 +25,7 @@ use scryer_interface_core::{
     actor_from_ctx, actor_has_any_library_permission, actor_has_app_permission, app_from_ctx,
     application_upgrade_assessment_from_ctx, current_user_from_ctx, mfa_verification_from_ctx,
     require_app_permission, require_config_app_permission, to_gql_error,
+    to_location_root_gql_error,
 };
 use scryer_interface_media::mappers;
 use scryer_interface_media::mappers::{
@@ -34,8 +35,10 @@ use scryer_interface_media::mappers::{
     from_application_upgrade_status, from_backup_info, from_catalog_discovery, from_collection,
     from_dashboard_activity_stats, from_delete_preview, from_delete_titles_preview,
     from_change_title_folder_preview, from_discovery_home, from_discovery_home_cards,
-    from_location_operation, from_location_operation_asset_listing, from_root_move_preview,
+    from_location_operation, from_location_operation_asset_listing, from_root_change_preview,
+    from_root_consolidation_preview, from_root_move_preview,
     location_destination_into_application, location_execution_mode_into_application,
+    root_scoped_execution_mode_into_application,
     from_discovery_home_filter_options,
     from_discovery_item, from_discovery_items_result, from_domain_event, from_download_queue_item,
     from_episode, from_external_import_monitor_warmup_progress, from_job_definition, from_job_run,
@@ -1566,6 +1569,78 @@ impl CatalogQueries {
         }
         .map_err(to_gql_error)?;
         Ok(from_root_move_preview(&preview))
+    }
+
+    /// Preview replacing one root's path with a new, unconfigured one (US4).
+    ///
+    /// Root scoped, so there is no selection: every title assigned to the root
+    /// goes, and the ledger says so rather than offering a way to exclude one
+    /// (FR-023). The returned fingerprint is what `startLocationOperation`
+    /// confirms with its `rootChange` target.
+    ///
+    /// A destination that is already a configured root of this library is
+    /// refused with `refusalCode: root_change_destination_is_configured_root`,
+    /// because that request is a consolidation and belongs to
+    /// `locationRootConsolidationPreview` (FR-020).
+    async fn location_root_change_preview(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(
+            desc = "The root whose path changes, the new path it moves to, and how the files get there."
+        )]
+        input: LocationRootChangePreviewInput,
+    ) -> GqlResult<LocationRootChangePreviewPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let request = scryer_application::location::root_change_execution::RootChangePreviewRequest {
+            library_id: input.library_id.to_string(),
+            root_id: input.root_id.to_string(),
+            destination_path: input.destination_path,
+            mode: root_scoped_execution_mode_into_application(input.mode)
+                .map_err(to_gql_error)?,
+        };
+        let preview = app
+            .preview_root_change(&actor, request)
+            .await
+            .map_err(to_location_root_gql_error)?;
+        Ok(from_root_change_preview(&preview))
+    }
+
+    /// Preview folding one root into another root of the same library (US5).
+    ///
+    /// The other half of FR-020's single settings action: the destination is a
+    /// root id rather than a path, which is exactly what makes this a
+    /// consolidation. FR-024's seven groups are the preview.
+    ///
+    /// A destination that is not a configured root of this library is refused
+    /// with `refusalCode:
+    /// root_consolidation_destination_not_a_configured_root`, because that
+    /// request is a root change and belongs to `locationRootChangePreview`.
+    async fn location_root_consolidation_preview(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(
+            desc = "The root being folded away, the root that absorbs it, and how the files get there."
+        )]
+        input: LocationRootConsolidationPreviewInput,
+    ) -> GqlResult<LocationRootConsolidationPreviewPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let request =
+            scryer_application::location::consolidation_execution::RootConsolidationPreviewRequest {
+                library_id: input.library_id.to_string(),
+                source_root_id: input.source_root_id.to_string(),
+                // Not the root-change guard: the consolidation planner refuses
+                // an unsupported mode itself, by name, and a routable code beats
+                // an interface sentence the client cannot translate.
+                destination_root_id: input.destination_root_id.to_string(),
+                mode: location_execution_mode_into_application(input.mode),
+            };
+        let preview = app
+            .preview_root_consolidation(&actor, request)
+            .await
+            .map_err(to_location_root_gql_error)?;
+        Ok(from_root_consolidation_preview(&preview))
     }
 
     /// Read one location operation with its per-title checkpoints.
