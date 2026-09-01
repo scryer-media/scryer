@@ -15,6 +15,7 @@
 //! | [`classify`] | Per-title classification of a requested destination (FR-015, FR-076). |
 //! | [`folder_match`] | Folder-match correction: preview, assign, swap, take over — catalog only, never a file operation (FR-001–008, FR-014). |
 //! | [`root_move`] | Title-scoped root-move planner: calculated destination folders, per-title plan items, execution instructions (FR-012–013, FR-076). |
+//! | [`root_change`] | Root-scoped planner for replacing a root's path: every-title accounting, identity/default retention, unmanaged-content buckets, retirement ordering (FR-020–029, FR-087). |
 //! | [`execution`] | The root-move runner seams: mover, reconciler, admission check (FR-031–032, FR-044, FR-089). |
 //! | [`operations`] | The use-case API GraphQL calls: preview, confirm-and-start, cancel, restart resume (FR-030, FR-033, FR-083). |
 //! | [`executor`] | The operation runner: state machine, per-title checkpoints, safe-cancel points, restart resume (FR-030–033, FR-089, FR-092). |
@@ -46,6 +47,7 @@ pub mod model;
 pub mod operations;
 pub mod ownership_guard;
 pub mod preview;
+pub mod root_change;
 pub mod root_move;
 #[cfg(test)]
 pub(crate) mod test_support;
