@@ -44,8 +44,17 @@ pub struct RulePackCatalogEntry {
     pub min_scryer_version: Option<String>,
 }
 
+// Forward tolerance, deliberately.
+//
+// Every catalog-v3 wire struct below used to carry `#[serde(deny_unknown_fields)]`,
+// which made any field a future catalog gains a hard parse error for the whole
+// document — one plugin's new field and this Scryer's plugin catalog goes dark.
+// The 0.18.12 `max_scryer_version` addition already had to be worked around by
+// publishing a second, field-stripped projection of the whole catalog for older
+// clients. Unknown fields are now ignored instead. Integrity does not depend on
+// this: the catalog blob is Sigstore-verified against a required signer and
+// every artifact is digest-checked before it is used.
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
 pub struct RequiredSigner {
     pub github_repository: String,
     #[serde(default)]
@@ -60,11 +69,54 @@ pub const CATALOG_V3_REDIRECT_BUNDLE_SUFFIX: &str = ".bundle.json";
 pub const CATALOG_V3_RUNTIME_WASIP1: &str = "wasm32-wasip1";
 pub const CATALOG_V3_RUNTIME_WASIP2: &str = "wasm32-wasip2";
 
-pub(super) fn catalog_v3_runtime_is_supported(runtime: &str) -> bool {
-    matches!(
-        runtime,
-        CATALOG_V3_RUNTIME_WASIP1 | CATALOG_V3_RUNTIME_WASIP2
+/// Ordering used when a release ships the same plugin for several WASI targets:
+/// a host that satisfies more than one takes the newest it can run.
+///
+/// Unknown targets sort above every known one on purpose. A target this build
+/// has never heard of can only be present in `runtime_capabilities` because the
+/// host put it there, which means the host is newer than this table, and the
+/// newest thing the host declares is the thing it wants.
+const CATALOG_V3_RUNTIME_RANK: &[&str] = &[CATALOG_V3_RUNTIME_WASIP1, CATALOG_V3_RUNTIME_WASIP2];
+
+fn catalog_v3_runtime_rank(runtime: &str) -> usize {
+    CATALOG_V3_RUNTIME_RANK
+        .iter()
+        .position(|known| *known == runtime)
+        .unwrap_or(CATALOG_V3_RUNTIME_RANK.len())
+}
+
+/// Whether this host can run `artifact`.
+///
+/// Both halves of an artifact's requirement are opaque capability tokens
+/// matched against the set the host declares (WASI target plus wasm features,
+/// one namespace — see `scryer_plugins::runtime_features`). Nothing here
+/// enumerates the tokens it knows about, which is exactly why a wasip3 artifact
+/// row added to the catalog years from now is a skipped artifact on this build
+/// rather than a rejected catalog.
+pub fn catalog_v3_artifact_is_runnable(
+    artifact: &CatalogV3PluginArtifact,
+    runtime_capabilities: &HashSet<String>,
+) -> bool {
+    runtime_capabilities.contains(&normalize_capability_token(&artifact.runtime))
+        && artifact
+            .required_features
+            .iter()
+            .all(|feature| runtime_capabilities.contains(&normalize_capability_token(feature)))
+        && artifact_encoding_from_url(&artifact.url).is_some()
+}
+
+/// How specific a runnable artifact is, for picking between the variants of one
+/// release. Higher is better: newest WASI target first, then the most
+/// specialised feature set (a `simd128` build over the baseline build).
+pub fn catalog_v3_artifact_preference(artifact: &CatalogV3PluginArtifact) -> (usize, usize) {
+    (
+        catalog_v3_runtime_rank(artifact.runtime.trim()),
+        artifact.required_features.len(),
     )
+}
+
+fn normalize_capability_token(token: &str) -> String {
+    token.trim().to_ascii_lowercase()
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -76,7 +128,6 @@ pub enum PluginLifecycleStatus {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
 pub struct CatalogV3Redirect {
     pub schema_version: String,
     pub catalog_version: u64,
@@ -84,7 +135,6 @@ pub struct CatalogV3Redirect {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
 pub struct CatalogV3RedirectArtifact {
     pub url: String,
     #[serde(default)]
@@ -95,7 +145,6 @@ pub struct CatalogV3RedirectArtifact {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
 pub struct CatalogV3 {
     pub schema_version: String,
     pub catalog_version: u64,
@@ -107,7 +156,6 @@ pub struct CatalogV3 {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
 pub struct CatalogV3CommunitySource {
     pub id: String,
     pub github_repository: String,
@@ -115,7 +163,6 @@ pub struct CatalogV3CommunitySource {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
 pub struct CatalogV3PluginEntry {
     pub id: String,
     pub name: String,
@@ -132,7 +179,6 @@ pub struct CatalogV3PluginEntry {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
 pub struct CatalogV3PluginRelease {
     pub version: String,
     pub sdk_constraint: String,
@@ -144,7 +190,6 @@ pub struct CatalogV3PluginRelease {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
 pub struct CatalogV3PluginArtifact {
     pub runtime: String,
     #[serde(default)]
@@ -161,7 +206,6 @@ pub struct CatalogV3PluginArtifact {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
 pub struct CatalogV3RulePackEntry {
     pub id: String,
     pub name: String,
@@ -171,7 +215,6 @@ pub struct CatalogV3RulePackEntry {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
 pub struct CatalogV3RulePackRelease {
     pub version: String,
     #[serde(default)]
@@ -183,7 +226,6 @@ pub struct CatalogV3RulePackRelease {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
 pub struct CatalogV3DistributionArtifact {
     pub url: String,
     #[serde(default)]
@@ -852,15 +894,21 @@ fn validate_plugin_release_set(plugin: &CatalogV3PluginEntry) -> AppResult<()> {
                 plugin.id, release.version
             )));
         }
+        // Capability tolerance, deliberately.
+        //
+        // An artifact's `runtime` and `required_features` say what a host needs
+        // in order to run it. They are not a closed vocabulary this build gets
+        // to police: when the fleet moves to a target or a wasm feature newer
+        // than this binary, the honest answer is "not for me", not "this
+        // catalog is corrupt". Rejecting the document here is what took every
+        // Scryer at or below 0.18.21 off the catalog the moment one wasip2
+        // artifact row was published. Unknown tokens now make a single artifact
+        // unrunnable; `select_catalog_release_and_artifact` then falls back to
+        // the newest release this host *can* run. Everything below stays an
+        // error, because it is integrity, not capability.
         let mut artifact_keys = HashSet::new();
         for artifact in &release.artifacts {
             require_non_empty("artifact runtime", &artifact.runtime)?;
-            if !catalog_v3_runtime_is_supported(&artifact.runtime) {
-                return Err(AppError::Validation(format!(
-                    "plugin '{}' release '{}' has unsupported runtime '{}'",
-                    plugin.id, release.version, artifact.runtime
-                )));
-            }
             let mut features = artifact
                 .required_features
                 .iter()
@@ -868,33 +916,13 @@ fn validate_plugin_release_set(plugin: &CatalogV3PluginEntry) -> AppResult<()> {
                 .collect::<Vec<_>>();
             features.sort();
             features.dedup();
-            for feature in &features {
-                match feature.as_str() {
-                    "simd128" | "relaxed-simd" => {}
-                    _ => {
-                        return Err(AppError::Validation(format!(
-                            "plugin '{}' release '{}' uses unsupported required feature '{}'",
-                            plugin.id, release.version, feature
-                        )));
-                    }
-                }
-            }
-            if features.iter().any(|feature| feature == "relaxed-simd")
-                && !features.iter().any(|feature| feature == "simd128")
-            {
-                return Err(AppError::Validation(format!(
-                    "plugin '{}' release '{}' cannot require relaxed-simd without simd128",
-                    plugin.id, release.version
-                )));
-            }
             let artifact_url = artifact.url.trim();
-            let encoding = artifact_encoding_from_url(artifact_url).ok_or_else(|| {
-                AppError::Validation(format!(
-                    "plugin '{}' release '{}' artifact '{}' has unsupported encoding",
-                    plugin.id, release.version, artifact.url
-                ))
-            })?;
-            let artifact_key = format!("{encoding}|{}", features.join(","));
+            let encoding = artifact_encoding_from_url(artifact_url).unwrap_or("unknown");
+            let artifact_key = format!(
+                "{}|{encoding}|{}",
+                artifact.runtime.trim().to_ascii_lowercase(),
+                features.join(",")
+            );
             if !artifact_keys.insert(artifact_key) {
                 return Err(AppError::Validation(format!(
                     "plugin '{}' release '{}' has duplicate artifact variant/encoding rows",
@@ -1059,11 +1087,193 @@ mod tests {
         assert_eq!(digest, "0123456789abcdef");
     }
 
+    fn test_artifact(runtime: &str, required_features: &[&str]) -> CatalogV3PluginArtifact {
+        CatalogV3PluginArtifact {
+            runtime: runtime.to_string(),
+            required_features: required_features
+                .iter()
+                .map(|feature| (*feature).to_string())
+                .collect(),
+            url: "https://cdn.scryer.media/plugins-v3/alpha/plugin.wasm.zst".to_string(),
+            mirror_urls: Vec::new(),
+            signature_url: "https://cdn.scryer.media/plugins-v3/alpha/plugin.wasm.zst.bundle.zst"
+                .to_string(),
+            signature_mirror_urls: Vec::new(),
+            digests: vec!["blake3:ab".to_string()],
+            wasm_digests: vec!["blake3:cd".to_string()],
+            bytes: 1,
+        }
+    }
+
+    fn capabilities(tokens: &[&str]) -> HashSet<String> {
+        tokens
+            .iter()
+            .map(|token| (*token).to_string())
+            .collect::<HashSet<_>>()
+    }
+
     #[test]
-    fn catalog_v3_accepts_wasip1_and_wasip2_runtimes() {
-        assert!(catalog_v3_runtime_is_supported("wasm32-wasip1"));
-        assert!(catalog_v3_runtime_is_supported("wasm32-wasip2"));
-        assert!(!catalog_v3_runtime_is_supported("wasm32-unknown"));
+    fn artifact_is_runnable_matches_target_and_features_as_capability_tokens() {
+        let host = capabilities(&["wasm32-wasip2", "simd128"]);
+
+        assert!(catalog_v3_artifact_is_runnable(
+            &test_artifact("wasm32-wasip2", &[]),
+            &host
+        ));
+        assert!(catalog_v3_artifact_is_runnable(
+            &test_artifact("wasm32-wasip2", &["simd128"]),
+            &host
+        ));
+        assert!(
+            !catalog_v3_artifact_is_runnable(&test_artifact("wasm32-wasip1", &[]), &host),
+            "a target the host does not declare must not be selected"
+        );
+        assert!(
+            !catalog_v3_artifact_is_runnable(&test_artifact("wasm32-wasip3", &[]), &host),
+            "a target this build has never heard of must not be selected"
+        );
+        assert!(
+            !catalog_v3_artifact_is_runnable(
+                &test_artifact("wasm32-wasip2", &["simd128", "relaxed-simd"]),
+                &host
+            ),
+            "a feature the host does not declare must not be selected"
+        );
+    }
+
+    #[test]
+    fn artifact_preference_prefers_newest_target_then_most_specific_features() {
+        let p3 = catalog_v3_artifact_preference(&test_artifact("wasm32-wasip3", &[]));
+        let p2_simd = catalog_v3_artifact_preference(&test_artifact("wasm32-wasip2", &["simd128"]));
+        let p2 = catalog_v3_artifact_preference(&test_artifact("wasm32-wasip2", &[]));
+        let p1 = catalog_v3_artifact_preference(&test_artifact("wasm32-wasip1", &[]));
+
+        assert!(p3 > p2_simd);
+        assert!(p2_simd > p2);
+        assert!(p2 > p1);
+    }
+
+    #[test]
+    fn catalog_v3_tolerates_future_runtimes_features_and_fields() {
+        let raw = br#"{
+            "schema_version": "scryer.plugin.catalog.v3",
+            "catalog_version": 9,
+            "provenance": {"cut_by": "a future xtask"},
+            "plugins": [
+                {
+                    "id": "alpha",
+                    "name": "Alpha",
+                    "description": "Alpha plugin",
+                    "plugin_type": "indexer",
+                    "provider_type": "alpha",
+                    "publisher": "scryer",
+                    "support_tier": "official",
+                    "status": "active",
+                    "docs_url": "https://github.com/scryer-media/alpha",
+                    "source_repo": "https://github.com/scryer-media/alpha",
+                    "required_signer": { "github_repository": "scryer-media/alpha" },
+                    "releases": [
+                        {
+                            "version": "2.0.0",
+                            "sdk_constraint": ">=1.5.0, <1.6.0",
+                            "deprecation_notice": "a field from the future",
+                            "artifacts": [
+                                {
+                                    "runtime": "wasm32-wasip3",
+                                    "required_features": ["memory64"],
+                                    "url": "https://github.com/scryer-media/alpha/releases/download/v2.0.0/alpha.wasm.zst",
+                                    "signature_url": "https://github.com/scryer-media/alpha/releases/download/v2.0.0/alpha.wasm.zst.bundle.json",
+                                    "digests": ["blake3:11"],
+                                    "wasm_digests": ["blake3:22"],
+                                    "bytes": 1234,
+                                    "provenance_url": "https://example.test/slsa"
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ],
+            "rule_packs": []
+        }"#;
+
+        let catalog = parse_and_validate_catalog_v3(raw)
+            .expect("an unknown runtime, feature token, and field must not fail the catalog");
+        let artifact = &catalog.plugins[0].releases[0].artifacts[0];
+        assert!(!catalog_v3_artifact_is_runnable(
+            artifact,
+            &capabilities(&["wasm32-wasip2", "simd128"])
+        ));
+    }
+
+    #[test]
+    fn catalog_v3_still_rejects_integrity_failures() {
+        let base = r#"{
+            "schema_version": "scryer.plugin.catalog.v3",
+            "catalog_version": 1,
+            "plugins": [
+                {
+                    "id": "alpha",
+                    "name": "Alpha",
+                    "description": "Alpha plugin",
+                    "plugin_type": "indexer",
+                    "provider_type": "alpha",
+                    "publisher": "scryer",
+                    "support_tier": "official",
+                    "status": "active",
+                    "docs_url": "https://github.com/scryer-media/alpha",
+                    "source_repo": "https://github.com/scryer-media/alpha",
+                    "required_signer": { "github_repository": "scryer-media/alpha" },
+                    "releases": [
+                        {
+                            "version": "1.0.0",
+                            "sdk_constraint": ">=1.5.0, <1.6.0",
+                            "artifacts": [
+                                {
+                                    "runtime": "wasm32-wasip2",
+                                    "url": "https://github.com/scryer-media/alpha/releases/download/v1.0.0/alpha.wasm.zst",
+                                    "signature_url": "https://github.com/scryer-media/alpha/releases/download/v1.0.0/alpha.wasm.zst.bundle.json",
+                                    "digests": ["blake3:11"],
+                                    "wasm_digests": ["blake3:22"],
+                                    "bytes": 1234
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ],
+            "rule_packs": []
+        }"#;
+        parse_and_validate_catalog_v3(base.as_bytes()).expect("baseline fixture should parse");
+
+        let no_digests = base.replace(r#""digests": ["blake3:11"],"#, r#""digests": [],"#);
+        assert!(parse_and_validate_catalog_v3(no_digests.as_bytes()).is_err());
+
+        let bad_scheme = base.replace(
+            "https://github.com/scryer-media/alpha/releases/download/v1.0.0/alpha.wasm.zst\"",
+            "file:///etc/passwd\"",
+        );
+        assert!(parse_and_validate_catalog_v3(bad_scheme.as_bytes()).is_err());
+
+        let zero_bytes = base.replace(r#""bytes": 1234"#, r#""bytes": 0"#);
+        assert!(parse_and_validate_catalog_v3(zero_bytes.as_bytes()).is_err());
+
+        let duplicate_variant = base.replace(
+            r#""bytes": 1234
+                                }"#,
+            r#""bytes": 1234
+                                },
+                                {
+                                    "runtime": "wasm32-wasip2",
+                                    "url": "https://github.com/scryer-media/alpha/releases/download/v1.0.0/alpha.wasm.zst",
+                                    "signature_url": "https://github.com/scryer-media/alpha/releases/download/v1.0.0/alpha.wasm.zst.bundle.json",
+                                    "digests": ["blake3:11"],
+                                    "wasm_digests": ["blake3:22"],
+                                    "bytes": 1234
+                                }"#,
+        );
+        let error = parse_and_validate_catalog_v3(duplicate_variant.as_bytes())
+            .expect_err("duplicate artifact rows are a publisher bug, not a capability gap");
+        assert!(error.to_string().contains("duplicate artifact variant"));
     }
 
     #[test]

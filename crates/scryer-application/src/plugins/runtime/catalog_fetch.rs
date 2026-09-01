@@ -317,34 +317,29 @@ fn catalog_plugin_update_available(
         std::cmp::Ordering::Less => false,
     }
 }
-fn artifact_required_features_supported(
-    artifact: &CatalogV3PluginArtifact,
-    supported_features: &HashSet<String>,
-) -> bool {
-    catalog_v3_runtime_is_supported(&artifact.runtime)
-        && artifact
-            .required_features
-            .iter()
-            .all(|feature| supported_features.contains(&feature.trim().to_ascii_lowercase()))
-}
-fn artifact_feature_specificity(artifact: &CatalogV3PluginArtifact) -> usize {
-    artifact.required_features.len()
-}
+/// Select the best artifact of one release for this host.
+///
+/// `runtime_capabilities` is the host's capability-token set — WASI targets and
+/// wasm features in one namespace, as declared by
+/// `scryer_plugins::runtime_features`. An artifact the host cannot run is
+/// skipped rather than rejected, so a release that only ships for a newer WASI
+/// target simply yields nothing here and the caller falls back to an older
+/// release.
 fn select_catalog_release_artifact(
     release: &CatalogV3PluginRelease,
-    supported_features: &HashSet<String>,
+    runtime_capabilities: &HashSet<String>,
     cpu_class: crate::services::RuntimePerformanceClass,
 ) -> Option<CatalogV3PluginArtifact> {
     let preferred_encoding = preferred_plugin_artifact_encoding(cpu_class);
     let mut matching = release
         .artifacts
         .iter()
-        .filter(|artifact| artifact_required_features_supported(artifact, supported_features))
+        .filter(|artifact| catalog_v3_artifact_is_runnable(artifact, runtime_capabilities))
         .cloned()
         .collect::<Vec<_>>();
     matching.sort_by(|left, right| {
-        artifact_feature_specificity(right)
-            .cmp(&artifact_feature_specificity(left))
+        catalog_v3_artifact_preference(right)
+            .cmp(&catalog_v3_artifact_preference(left))
             .then_with(|| {
                 let left_preferred =
                     artifact_encoding_from_url(&left.url) == Some(preferred_encoding);
@@ -355,9 +350,15 @@ fn select_catalog_release_artifact(
     });
     matching.into_iter().next()
 }
+/// Newest release this host can actually run.
+///
+/// A release is a candidate only when the host satisfies its SDK and Scryer
+/// version bounds *and* one of its artifacts is runnable here. That last clause
+/// is the WASI-version fallback: offered `2.1.0` built only for a target this
+/// build does not have and `2.0.4` built for one it does, this returns 2.0.4.
 fn select_catalog_release_and_artifact(
     plugin: &CatalogV3PluginEntry,
-    supported_features: &HashSet<String>,
+    runtime_capabilities: &HashSet<String>,
     cpu_class: crate::services::RuntimePerformanceClass,
 ) -> Option<(CatalogV3PluginRelease, CatalogV3PluginArtifact)> {
     plugin
@@ -365,7 +366,7 @@ fn select_catalog_release_and_artifact(
         .iter()
         .filter(|release| catalog_release_is_host_compatible(&plugin.id, release))
         .filter_map(|release| {
-            select_catalog_release_artifact(release, supported_features, cpu_class)
+            select_catalog_release_artifact(release, runtime_capabilities, cpu_class)
                 .map(|artifact| (release, artifact))
         })
         .filter_map(|(release, artifact)| {
@@ -1095,23 +1096,56 @@ impl AppUseCase {
 impl AppUseCase {
     async fn fetch_verified_catalog_v3(&self) -> AppResult<(CatalogV3, String, u64)> {
         let (redirect, redirect_url) = self.fetch_verified_catalog_redirect().await?;
-        // Catalog-v3 redirects put the legacy projection first for pre-0.18.12 clients and the
-        // extended projection last. Older clients keep selecting the first artifact; clients that
-        // understand release ceilings select the last artifact.
-        let artifact = redirect.artifacts.last().cloned().ok_or_else(|| {
-            AppError::Validation(
+        if redirect.artifacts.is_empty() {
+            return Err(AppError::Validation(
                 "plugin catalog redirect did not contain any artifacts".to_string(),
-            )
-        })?;
-        let data_urls = primary_and_mirrors(&artifact.url, &artifact.mirror_urls);
-        let signature_urls =
-            primary_and_mirrors(&artifact.signature_url, &artifact.signature_mirror_urls);
-        let (raw, actual_url) =
-            fetch_verified_central_catalog_blob(&data_urls, &signature_urls, "plugin catalog")
+            ));
+        }
+        // A catalog-v3 redirect is an ordered ladder of projections of one
+        // catalog, oldest-tolerating first, newest last. Shipped clients pick a
+        // fixed rung by position — pre-0.18.12 took the first, 0.18.12 through
+        // 0.19.5 took the last — which is why those two bands could never be
+        // served different content once their tolerances diverged: the ladder
+        // has exactly two addressable positions.
+        //
+        // This walks back instead. Newest rung first, falling back to the rung
+        // below whenever one cannot be fetched, verified, or parsed. A rung
+        // added for a future Scryer is therefore never a trap for this one, and
+        // the ladder can grow without bound.
+        let mut last_error = None;
+        for (index, artifact) in redirect.artifacts.iter().enumerate().rev() {
+            let data_urls = primary_and_mirrors(&artifact.url, &artifact.mirror_urls);
+            let signature_urls =
+                primary_and_mirrors(&artifact.signature_url, &artifact.signature_mirror_urls);
+            let candidate = async {
+                let (raw, actual_url) = fetch_verified_central_catalog_blob(
+                    &data_urls,
+                    &signature_urls,
+                    "plugin catalog",
+                )
                 .await?;
-        let decoded = decode_catalog_json(raw, &actual_url, "plugin catalog").await?;
-        let catalog = parse_and_validate_catalog_v3(&decoded)?;
-        Ok((catalog, redirect_url, redirect.catalog_version))
+                let decoded = decode_catalog_json(raw, &actual_url, "plugin catalog").await?;
+                parse_and_validate_catalog_v3(&decoded)
+            }
+            .await;
+            match candidate {
+                Ok(catalog) => return Ok((catalog, redirect_url, redirect.catalog_version)),
+                Err(error) => {
+                    warn!(
+                        projection_index = index,
+                        url = artifact.url.as_str(),
+                        error = %error,
+                        "plugin catalog projection unusable; falling back to the previous one"
+                    );
+                    last_error = Some(error);
+                }
+            }
+        }
+        Err(last_error.unwrap_or_else(|| {
+            AppError::Validation(
+                "plugin catalog redirect did not yield a usable catalog".to_string(),
+            )
+        }))
     }
 
     async fn fetch_verified_community_catalog_v3(

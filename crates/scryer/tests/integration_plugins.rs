@@ -92,7 +92,7 @@ fn catalog_plugin_entry(
             "version": version,
             "sdk_constraint": test_sdk_constraint,
             "artifacts": [{
-                "runtime": "wasm32-wasip1",
+                "runtime": "wasm32-wasip2",
                 "required_features": [],
                 "url": wasm_url,
                 "mirror_urls": [],

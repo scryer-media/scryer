@@ -179,9 +179,21 @@ mod catalog_artifact_selection_tests {
     use crate::services::RuntimePerformanceClass;
     use std::collections::HashSet;
 
+    /// A host capability set: the WASI target this build declares plus the
+    /// wasm features named. Production builds this the same way, via
+    /// `scryer_plugins::detect_plugin_runtime_capabilities`.
+    fn host_capabilities(features: &[&str]) -> HashSet<String> {
+        let mut capabilities = features
+            .iter()
+            .map(|feature| (*feature).to_string())
+            .collect::<HashSet<_>>();
+        capabilities.insert(CATALOG_V3_RUNTIME_WASIP2.to_string());
+        capabilities
+    }
+
     fn artifact(required_features: &[&str], url: &str) -> CatalogV3PluginArtifact {
         CatalogV3PluginArtifact {
-            runtime: CATALOG_V3_RUNTIME_WASIP1.to_string(),
+            runtime: CATALOG_V3_RUNTIME_WASIP2.to_string(),
             required_features: required_features
                 .iter()
                 .map(|feature| (*feature).to_string())
@@ -316,7 +328,7 @@ mod catalog_artifact_selection_tests {
 
         let (selected_release, selected_artifact) = select_catalog_release_and_artifact(
             &plugin,
-            &HashSet::new(),
+            &host_capabilities(&[]),
             RuntimePerformanceClass::Slow,
         )
         .expect("SDK 3 release");
@@ -337,7 +349,7 @@ mod catalog_artifact_selection_tests {
 
         let selected = select_catalog_release_artifact(
             &release,
-            &HashSet::new(),
+            &host_capabilities(&[]),
             RuntimePerformanceClass::Slow,
         )
         .expect("baseline artifact");
@@ -354,7 +366,7 @@ mod catalog_artifact_selection_tests {
 
         let selected = select_catalog_release_artifact(
             &release,
-            &HashSet::new(),
+            &host_capabilities(&[]),
             RuntimePerformanceClass::Slow,
         )
         .expect("WASIp2 artifact");
@@ -375,7 +387,7 @@ mod catalog_artifact_selection_tests {
 
         let selected = select_catalog_release_artifact(
             &release,
-            &HashSet::from(["simd128".to_string()]),
+            &host_capabilities(&["simd128"]),
             RuntimePerformanceClass::Slow,
         )
         .expect("simd128 artifact");
@@ -401,7 +413,7 @@ mod catalog_artifact_selection_tests {
 
         let selected = select_catalog_release_artifact(
             &release,
-            &HashSet::from(["simd128".to_string(), "relaxed-simd".to_string()]),
+            &host_capabilities(&["simd128", "relaxed-simd"]),
             RuntimePerformanceClass::Slow,
         )
         .expect("relaxed simd artifact");
@@ -425,7 +437,7 @@ mod catalog_artifact_selection_tests {
 
         let (_, selected) = select_catalog_release_and_artifact(
             &plugin,
-            &HashSet::from(["simd128".to_string(), "relaxed-simd".to_string()]),
+            &host_capabilities(&["simd128", "relaxed-simd"]),
             RuntimePerformanceClass::Slow,
         )
         .expect("runtime feature selection should not depend on native build class");
@@ -544,7 +556,7 @@ mod catalog_artifact_selection_tests {
 
         let (selected_release, _) = select_catalog_release_and_artifact(
             &plugin,
-            &HashSet::new(),
+            &host_capabilities(&[]),
             RuntimePerformanceClass::Slow,
         )
         .expect("compatible release");
@@ -571,7 +583,7 @@ mod catalog_artifact_selection_tests {
 
         let (selected_release, _) = select_catalog_release_and_artifact(
             &plugin,
-            &HashSet::new(),
+            &host_capabilities(&[]),
             RuntimePerformanceClass::Slow,
         )
         .expect("compatible release");
@@ -611,7 +623,7 @@ mod catalog_artifact_selection_tests {
 
         let (selected_release, selected_artifact) = select_catalog_release_and_artifact(
             &plugin,
-            &HashSet::new(),
+            &host_capabilities(&[]),
             RuntimePerformanceClass::Slow,
         )
         .expect("compatible release");
@@ -620,6 +632,144 @@ mod catalog_artifact_selection_tests {
         assert_eq!(
             selected_artifact.url,
             "https://example.invalid/plugin-v2.zst"
+        );
+    }
+
+    fn artifact_for(runtime: &str, url: &str) -> CatalogV3PluginArtifact {
+        let mut artifact = artifact(&[], url);
+        artifact.runtime = runtime.to_string();
+        artifact
+    }
+
+    #[test]
+    fn a_preview1_only_host_keeps_the_newest_release_it_can_run() {
+        let mut legacy = release(vec![artifact_for(
+            CATALOG_V3_RUNTIME_WASIP1,
+            "https://example.invalid/plugin-p1.zst",
+        )]);
+        legacy.version = "2.0.3".to_string();
+        let mut component = release(vec![artifact_for(
+            CATALOG_V3_RUNTIME_WASIP2,
+            "https://example.invalid/plugin-p2.zst",
+        )]);
+        component.version = "2.0.4".to_string();
+        let plugin = plugin(vec![legacy, component]);
+
+        let preview1_host = HashSet::from([CATALOG_V3_RUNTIME_WASIP1.to_string()]);
+        let (selected_release, selected_artifact) = select_catalog_release_and_artifact(
+            &plugin,
+            &preview1_host,
+            RuntimePerformanceClass::Slow,
+        )
+        .expect("a Preview 1 host must fall back rather than come up empty");
+
+        assert_eq!(selected_release.version, "2.0.3");
+        assert_eq!(selected_artifact.runtime, CATALOG_V3_RUNTIME_WASIP1);
+    }
+
+    #[test]
+    fn a_component_host_takes_the_newer_component_release() {
+        let mut legacy = release(vec![artifact_for(
+            CATALOG_V3_RUNTIME_WASIP1,
+            "https://example.invalid/plugin-p1.zst",
+        )]);
+        legacy.version = "2.0.3".to_string();
+        let mut component = release(vec![artifact_for(
+            CATALOG_V3_RUNTIME_WASIP2,
+            "https://example.invalid/plugin-p2.zst",
+        )]);
+        component.version = "2.0.4".to_string();
+        let plugin = plugin(vec![legacy, component]);
+
+        let (selected_release, selected_artifact) = select_catalog_release_and_artifact(
+            &plugin,
+            &host_capabilities(&[]),
+            RuntimePerformanceClass::Slow,
+        )
+        .expect("a component host must take the component release");
+
+        assert_eq!(selected_release.version, "2.0.4");
+        assert_eq!(selected_artifact.runtime, CATALOG_V3_RUNTIME_WASIP2);
+    }
+
+    #[test]
+    fn a_future_target_only_release_is_skipped_not_fatal() {
+        let mut current = release(vec![artifact_for(
+            CATALOG_V3_RUNTIME_WASIP2,
+            "https://example.invalid/plugin-p2.zst",
+        )]);
+        current.version = "3.0.0".to_string();
+        let mut future = release(vec![artifact_for(
+            "wasm32-wasip3",
+            "https://example.invalid/plugin-p3.zst",
+        )]);
+        future.version = "4.0.0".to_string();
+        let plugin = plugin(vec![current, future]);
+
+        let (selected_release, selected_artifact) = select_catalog_release_and_artifact(
+            &plugin,
+            &host_capabilities(&[]),
+            RuntimePerformanceClass::Slow,
+        )
+        .expect("a wasip3-only release must not strand a wasip2 host");
+
+        assert_eq!(selected_release.version, "3.0.0");
+        assert_eq!(selected_artifact.runtime, CATALOG_V3_RUNTIME_WASIP2);
+    }
+
+    #[test]
+    fn a_release_shipping_both_targets_serves_each_host_its_own_artifact() {
+        let both = release(vec![
+            artifact_for(
+                CATALOG_V3_RUNTIME_WASIP2,
+                "https://example.invalid/plugin-p2.zst",
+            ),
+            artifact_for("wasm32-wasip3", "https://example.invalid/plugin-p3.zst"),
+        ]);
+        let plugin = plugin(vec![both]);
+
+        let (_, on_wasip2) = select_catalog_release_and_artifact(
+            &plugin,
+            &host_capabilities(&[]),
+            RuntimePerformanceClass::Slow,
+        )
+        .expect("wasip2 host");
+        assert_eq!(on_wasip2.runtime, CATALOG_V3_RUNTIME_WASIP2);
+
+        let wasip3_host = HashSet::from([
+            CATALOG_V3_RUNTIME_WASIP2.to_string(),
+            "wasm32-wasip3".to_string(),
+        ]);
+        let (_, on_wasip3) = select_catalog_release_and_artifact(
+            &plugin,
+            &wasip3_host,
+            RuntimePerformanceClass::Slow,
+        )
+        .expect("wasip3 host");
+        assert_eq!(
+            on_wasip3.runtime, "wasm32-wasip3",
+            "a host that declares the newer target must prefer it within the same release"
+        );
+    }
+
+    #[test]
+    fn an_unrunnable_newest_release_does_not_hide_the_plugin() {
+        let mut only_future = release(vec![artifact_for(
+            "wasm32-wasip3",
+            "https://example.invalid/plugin-p3.zst",
+        )]);
+        only_future.version = "4.0.0".to_string();
+        let plugin = plugin(vec![only_future]);
+
+        assert!(
+            select_catalog_release_and_artifact(
+                &plugin,
+                &host_capabilities(&[]),
+                RuntimePerformanceClass::Slow,
+            )
+            .is_none(),
+            "with nothing runnable the plugin resolves to nothing — it must not panic or \
+             poison the rest of the catalog"
         );
     }
 }
