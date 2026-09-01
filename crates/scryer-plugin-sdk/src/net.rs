@@ -146,99 +146,23 @@ pub struct SocketCloseResponse {
 
 pub type SocketResult<T> = Result<T, SocketError>;
 
-#[cfg(target_arch = "wasm32")]
-fn encode_request<T: Serialize>(request: &T) -> SocketResult<String> {
-    serde_json::to_string(request).map_err(|error| {
-        SocketError::new(
-            SocketErrorCode::ProtocolError,
-            format!("failed to encode socket request: {error}"),
-        )
-    })
-}
-
-#[cfg(target_arch = "wasm32")]
-fn decode_response<T: for<'de> Deserialize<'de>>(raw: &str) -> SocketResult<T> {
-    let response: SocketResponse<T> = serde_json::from_str(raw).map_err(|error| {
-        SocketError::new(
-            SocketErrorCode::ProtocolError,
-            format!("failed to decode socket response: {error}"),
-        )
-    })?;
-
-    if response.ok {
-        response.value.ok_or_else(|| {
-            SocketError::new(
-                SocketErrorCode::ProtocolError,
-                "socket response was successful but missing a value",
-            )
-        })
-    } else {
-        Err(response.error.unwrap_or_else(|| {
-            SocketError::new(
-                SocketErrorCode::ProtocolError,
-                "socket response failed without an error",
-            )
-        }))
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
-mod guest {
-    use super::*;
-    use extism_pdk::host_fn;
-
-    #[host_fn]
-    extern "ExtismHost" {
-        fn scryer_socket_open(input: String) -> String;
-        fn scryer_socket_read(input: String) -> String;
-        fn scryer_socket_write(input: String) -> String;
-        fn scryer_socket_starttls(input: String) -> String;
-        fn scryer_socket_close(input: String) -> String;
-    }
-
-    fn call_host<T: for<'de> Deserialize<'de>>(
-        request: impl Serialize,
-        f: unsafe fn(String) -> Result<String, extism_pdk::Error>,
-    ) -> SocketResult<T> {
-        let input = encode_request(&request)?;
-        let raw = unsafe { f(input) }.map_err(|error| {
-            SocketError::new(
-                SocketErrorCode::ProtocolError,
-                format!("socket host function failed: {error}"),
-            )
-        })?;
-        decode_response(&raw)
-    }
-
-    pub fn socket_open(request: SocketOpenRequest) -> SocketResult<SocketOpenResponse> {
-        call_host(request, scryer_socket_open)
-    }
-
-    pub fn socket_read(request: SocketReadRequest) -> SocketResult<SocketReadResponse> {
-        call_host(request, scryer_socket_read)
-    }
-
-    pub fn socket_write(request: SocketWriteRequest) -> SocketResult<SocketWriteResponse> {
-        call_host(request, scryer_socket_write)
-    }
-
-    pub fn socket_starttls(request: SocketStartTlsRequest) -> SocketResult<SocketStartTlsResponse> {
-        call_host(request, scryer_socket_starttls)
-    }
-
-    pub fn socket_close(request: SocketCloseRequest) -> SocketResult<SocketCloseResponse> {
-        call_host(request, scryer_socket_close)
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
+/// Stub socket entry points retained for source compatibility.
+///
+/// The types above are the live contract: they are what a guest serializes
+/// into `PluginHostRequest::Socket*` and what the host answers with. The
+/// *transport* that once lived here was the Extism pointer ABI, and Scryer's
+/// host no longer serves it — a component that linked these entry points would
+/// carry an `extism:host/user` import nothing satisfies and fail to
+/// instantiate. Guests reach sockets through `scryer-plugin-pdk`'s host-call
+/// helpers instead, so every call here is answered `Unsupported` on all
+/// targets rather than being wired to a door that is not there.
 mod guest {
     use super::*;
 
     fn unsupported<T>() -> SocketResult<T> {
         Err(SocketError::new(
             SocketErrorCode::Unsupported,
-            "socket host functions are only available to wasm plugins",
+            "socket host functions are not served by this SDK; use scryer-plugin-pdk's host-call helpers",
         ))
     }
 

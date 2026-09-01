@@ -4801,14 +4801,16 @@
           "type": [
             "string",
             "null"
-          ]
+          ],
+          "default": null
         },
         "retry_after_seconds": {
           "type": [
             "integer",
             "null"
           ],
-          "format": "int64"
+          "format": "int64",
+          "default": null
         },
         "details": {
           "anyOf": [

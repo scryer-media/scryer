@@ -1071,9 +1071,15 @@ pub enum PluginErrorDetails {
 pub struct PluginError {
     pub code: PluginErrorCode,
     pub public_message: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    // No `skip_serializing_if` on the optional fields: this type also crosses
+    // the host-call transport as postcard, which is not self-describing —
+    // skipping a `None` writes fewer fields than the derived deserializer
+    // reads, so a natural in-band `Unsupported` answer would be undecodable by
+    // the guest. `default` keeps old JSON documents (which omitted the fields)
+    // deserializing.
+    #[serde(default)]
     pub debug_message: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub retry_after_seconds: Option<i64>,
     #[serde(default)]
     pub details: Option<PluginErrorDetails>,
@@ -3390,6 +3396,32 @@ mod tests {
                 .expect("missing torrent capability");
             assert!(!torrent.supported_sources.is_empty());
         }
+    }
+
+    /// `PluginError` crosses the component host-call transport as postcard,
+    /// which is positional: every field the deserializer reads must have been
+    /// written. A `skip_serializing_if` on the optional fields would make the
+    /// natural in-band `Unsupported` answer (both options `None`) undecodable
+    /// by the guest — this pins the round trip so that attribute can never
+    /// quietly return.
+    #[test]
+    fn plugin_error_round_trips_through_postcard_with_no_optional_fields() {
+        let error = PluginError {
+            code: PluginErrorCode::Unsupported,
+            public_message: "x".to_string(),
+            debug_message: None,
+            retry_after_seconds: None,
+            details: None,
+        };
+
+        let encoded = postcard::to_stdvec(&error).unwrap();
+        let decoded: PluginError = postcard::from_bytes(&encoded).unwrap();
+
+        assert!(matches!(decoded.code, PluginErrorCode::Unsupported));
+        assert_eq!(decoded.public_message, "x");
+        assert_eq!(decoded.debug_message, None);
+        assert_eq!(decoded.retry_after_seconds, None);
+        assert!(decoded.details.is_none());
     }
 
     #[test]
