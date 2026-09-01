@@ -49,7 +49,9 @@ use crate::rate_limit::{
 };
 
 const X_FORWARDED_PROTO: &str = "x-forwarded-proto";
-pub(crate) const GRAPHQL_MAX_MESSAGE_BYTES: usize = 1024 * 1024;
+// Sized for `installUploadedPlugin`: real plugin components are multi-MB and
+// travel inline as base64, so this must stay well above the artifact ceiling.
+pub(crate) const GRAPHQL_MAX_MESSAGE_BYTES: usize = 64 * 1024 * 1024;
 const GRAPHQL_MAX_BATCH_OPERATIONS: usize = 10;
 const GRAPHQL_POST_EXECUTION_TIMEOUT_CODE: &str = "GRAPHQL_EXECUTION_TIMEOUT";
 const AUTHENTICATION_REQUIRED_CODE: &str = "AUTHENTICATION_REQUIRED";
