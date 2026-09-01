@@ -3,6 +3,7 @@ import { Loader2, LogIn, ShieldCheck, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   authRuntimeStateQuery,
+  meQuery,
   oauthAuthorizationClientQuery,
 } from "@/lib/graphql/queries";
 import { backendClient } from "@/lib/graphql/urql-client";
@@ -49,27 +50,34 @@ export default function OAuthAuthorizePage() {
   const [error, setError] = useState<string | null>(null);
   const [reauthenticationRequired, setReauthenticationRequired] = useState(false);
   const [clientName, setClientName] = useState<string | null>(null);
+  const [authorizationScope, setAuthorizationScope] = useState<string | null>(null);
+  const [actorUsername, setActorUsername] = useState<string | null>(null);
   const [clientValidationError, setClientValidationError] = useState<string | null>(null);
   const [effectiveFormLoginEnabled, setEffectiveFormLoginEnabled] = useState<boolean | null>(null);
   const clientId = params.get("client_id") ?? "";
   const redirectUri = params.get("redirect_uri") ?? "";
   const token = getAuthToken();
   const authlessAuthorization = effectiveFormLoginEnabled === false;
+  const approvalPreviewReady =
+    !!clientName && !clientValidationError && (authlessAuthorization || !!actorUsername);
 
   useEffect(() => {
     let cancelled = false;
 
     (async () => {
       try {
-        const [runtimeResult, clientResult] = await Promise.all([
+        const [runtimeResult, clientResult, actorResult] = await Promise.all([
           backendClient
             .query<{ authRuntimeState?: AuthRuntimeState | null }>(authRuntimeStateQuery, {})
             .toPromise(),
           backendClient
             .query<{
-              oauthAuthorizationClient?: { clientId: string; displayName: string } | null;
-            }>(oauthAuthorizationClientQuery, { clientId, redirectUri })
+              oauthAuthorizationClient?: { clientId: string; displayName: string; scope: string } | null;
+            }>(oauthAuthorizationClientQuery, { clientId, redirectUri, scope: params.get("scope") })
             .toPromise(),
+          token
+            ? backendClient.query<{ me?: { username?: string | null } | null }>(meQuery, {}).toPromise()
+            : Promise.resolve(null),
         ]);
         if (!cancelled) {
           const runtimeState = runtimeResult.data?.authRuntimeState ?? null;
@@ -79,11 +87,21 @@ export default function OAuthAuthorizePage() {
               : null,
           );
           const authorizationClient = clientResult.data?.oauthAuthorizationClient ?? null;
+          const username = actorResult?.data?.me?.username?.trim() || null;
+          const authenticatedPreviewError =
+            runtimeState?.effectiveFormLoginEnabled !== false &&
+            (!username || actorResult?.error)
+              ? "Unable to verify the signed-in Scryer account for this OAuth request."
+              : null;
           if (authorizationClient?.displayName) {
             setClientName(authorizationClient.displayName);
-            setClientValidationError(null);
+            setAuthorizationScope(authorizationClient.scope);
+            setActorUsername(username);
+            setClientValidationError(authenticatedPreviewError);
           } else {
             setClientName(null);
+            setAuthorizationScope(null);
+            setActorUsername(null);
             setClientValidationError(
               clientResult.error?.message ?? "This OAuth request has an invalid client or redirect URI.",
             );
@@ -93,6 +111,8 @@ export default function OAuthAuthorizePage() {
         if (!cancelled) {
           setEffectiveFormLoginEnabled(null);
           setClientName(null);
+          setAuthorizationScope(null);
+          setActorUsername(null);
           setClientValidationError("Unable to validate this OAuth request.");
         }
       }
@@ -101,13 +121,13 @@ export default function OAuthAuthorizePage() {
     return () => {
       cancelled = true;
     };
-  }, [clientId, redirectUri]);
+  }, [clientId, redirectUri, token]);
 
   const decide = async (approved: boolean) => {
     setBusy(true);
     setError(null);
     try {
-      if (!clientName) {
+      if (!approvalPreviewReady) {
         setError(clientValidationError ?? "Validating OAuth request. Please try again.");
         return;
       }
@@ -211,13 +231,23 @@ export default function OAuthAuthorizePage() {
         </div>
         <div className="grid gap-2 rounded-[9px] border border-[var(--scry-border3)] bg-[var(--scry-inset)] p-4 text-sm leading-6 text-[var(--scry-ink2)]">
           <p>
-            Can access Scryer as {authlessAuthorization ? "Anonymous" : "you"}, limited to library
-            permissions.
+            Scryer account: {authlessAuthorization ? "Anonymous" : actorUsername ?? "unavailable"}.
+            This client can access Scryer only within your library permissions.
           </p>
           <p className="text-[var(--scry-muted)]">
             Cannot manage users, settings, backups, security, or app configuration.
           </p>
         </div>
+        {authorizationScope?.split(" ").includes("jellyfin-link") ? (
+          <div className="grid gap-2 rounded-[9px] border border-[var(--scry-baccent)] bg-[rgba(var(--scry-accent-rgb),0.08)] p-4 text-sm leading-6 text-[var(--scry-ink2)]">
+            <p>
+              This approval separately grants <strong>Jellyfin account linking</strong>.
+            </p>
+            <p className="text-[var(--scry-muted)]">
+              After Scryer verifies your Jellyfin identity, it creates a durable external-account link to the Scryer account shown above. That verified link remains associated with this Scryer account even if you later disconnect the plugin.
+            </p>
+          </div>
+        ) : null}
         {error ?? clientValidationError ? (
           <p className={OAUTH_ERROR_CLASS}>{error ?? clientValidationError}</p>
         ) : null}
@@ -234,7 +264,7 @@ export default function OAuthAuthorizePage() {
           ) : (
             <Button
               id={selectorId("oauth-authorize-approve")}
-              disabled={busy || !clientName}
+              disabled={busy || !approvalPreviewReady}
               className={OAUTH_PRIMARY_BUTTON_CLASS}
               onClick={() => decide(true)}
             >
@@ -245,7 +275,7 @@ export default function OAuthAuthorizePage() {
           <Button
             id={selectorId("oauth-authorize-deny")}
             variant="outline"
-            disabled={busy || !clientName}
+            disabled={busy || !approvalPreviewReady}
             className={OAUTH_SECONDARY_BUTTON_CLASS}
             onClick={() => decide(false)}
           >
