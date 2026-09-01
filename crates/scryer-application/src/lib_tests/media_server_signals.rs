@@ -29,13 +29,19 @@ use scryer_domain::{
 
 // ── Fixtures ────────────────────────────────────────────────────────────────
 
-const CONNECTION_ID: &str = "conn-jellyfin";
+pub(super) const CONNECTION_ID: &str = "conn-jellyfin";
 const PARTICIPANT_EXTERNAL_ID: &str = "jf-user-alpha";
 const PARTICIPANT_SCRYER_ID: &str = "scryer-user-alpha";
 
-fn jellyfin_connection(enabled: bool) -> MediaServerConnection {
+pub(super) fn jellyfin_connection(enabled: bool) -> MediaServerConnection {
+    named_jellyfin_connection(CONNECTION_ID, enabled)
+}
+
+/// The same connection under a caller-chosen id, so a test can stand up more
+/// than one server and prove they are judged independently.
+pub(super) fn named_jellyfin_connection(id: &str, enabled: bool) -> MediaServerConnection {
     MediaServerConnection {
-        id: CONNECTION_ID.to_string(),
+        id: id.to_string(),
         provider: MediaServerProvider::Jellyfin,
         display_name: "Example Jellyfin".to_string(),
         base_url: "http://jellyfin.example".to_string(),
@@ -248,9 +254,9 @@ fn two_episodes_at_the_same_coordinates_stay_unmapped() {
 // ── Doubles for the sweep ───────────────────────────────────────────────────
 
 #[derive(Default)]
-struct StubSignalConnections {
-    connections: Vec<MediaServerConnection>,
-    fail_list: bool,
+pub(super) struct StubSignalConnections {
+    pub(super) connections: Vec<MediaServerConnection>,
+    pub(super) fail_list: bool,
 }
 
 #[async_trait]
@@ -320,8 +326,8 @@ impl MediaServerConnectionRepository for StubSignalConnections {
 }
 
 #[derive(Default)]
-struct StubExternalAccounts {
-    accounts: Vec<UserExternalAccount>,
+pub(super) struct StubExternalAccounts {
+    pub(super) accounts: Vec<UserExternalAccount>,
 }
 
 #[async_trait]
@@ -432,7 +438,7 @@ impl MediaServerSignalSource for StubSignalSource {
 /// Mirrors the SQL store's replace-generation contract closely enough that a
 /// sync bug cannot hide behind a permissive double.
 #[derive(Default)]
-struct InMemorySignalRepo {
+pub(super) struct InMemorySignalRepo {
     rows: Mutex<Vec<UserMediaSignal>>,
     states: Mutex<Vec<MediaServerSignalSyncState>>,
     generations: Mutex<HashMap<(String, String), i64>>,

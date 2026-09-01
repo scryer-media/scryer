@@ -4930,6 +4930,10 @@ const ru: LocaleDictionary = {
     "settings.refMaintFactsEpisodeFileCount": "Сколько из этих эпизодов имеют файл",
     "settings.refMaintFactsMonitoredEpisodeCount": "Сколько из этих эпизодов отслеживается",
     "settings.refMaintFactsActiveDownloads": "Есть ли у субъекта активная загрузка",
+    "settings.refMaintFactsWatchedByUserIds": "Пользователи, которые смотрели субъект на подключённом медиасервере",
+    "settings.refMaintFactsLastWatchedAt": "Когда субъект в последний раз кто-либо смотрел",
+    "settings.refMaintFactsWatchedByAnyRequester": "Смотрел ли субъект хотя бы один из запросивших его пользователей",
+    "settings.refMaintFactsWatchedByAllRequesters": "Смотрели ли субъект все запросившие его пользователи",
     "settings.refMaintObsStatus": "known, absent или unknown. absent означает, что источник ответил и значения нет; unknown означает, что Scryer не смог выяснить. Проверяйте это перед чтением value — неизвестный факт никогда не приводится к false, 0 или пустой строке.",
     "settings.refMaintSectionObservations": "— Те же факты в виде полных конвертов, для правил, которым нужно отличать absent от unknown или читать причину. Чтение факта здесь отключает для него автоматическое удержание: ответственность за трёхзначный ответ берёте на себя вы.",
     "settings.refMaintSectionObsFiles": "— По одной записи на файл в input.observations.files.value",
@@ -4954,6 +4958,10 @@ const ru: LocaleDictionary = {
     "settings.refMaintFactsEpisodeFileCountValue": "Количество этих эпизодов, у которых есть файл",
     "settings.refMaintFactsMonitoredEpisodeCountValue": "Количество этих эпизодов, которые отслеживаются",
     "settings.refMaintFactsActiveDownloadsValue": "True, когда для субъекта выполняется загрузка",
+    "settings.refMaintFactsWatchedByUserIdsValue": "Идентификаторы всех, кто смотрел субъект, отсортированные и без повторов; пустой список означает, что не смотрел никто. Факты о просмотрах неизвестны для сериалов (show_watch_rollup_unavailable), когда не подключён ни один медиасервер (no_media_server_connection), когда подключение ни разу не синхронизировалось начисто (signal_sync_never_succeeded), когда последняя чистая синхронизация старше 48 часов (signals_stale) и когда просмотр невозможно связать с пользователем Scryer (signal_identity_missing).",
+    "settings.refMaintFactsLastWatchedAtValue": "Метка времени RFC3339 последнего просмотра; absent с причиной never_watched, если субъект никто не смотрел",
+    "settings.refMaintFactsWatchedByAnyRequesterValue": "True, когда субъект смотрел хотя бы один запросивший; absent с причиной title_not_requested, если субъект никто не запрашивал, и unknown с причиной requester_not_linked, если у запросившего нет привязанной учётной записи медиасервера",
+    "settings.refMaintFactsWatchedByAllRequestersValue": "True, когда субъект смотрели все запросившие; absent с причиной title_not_requested, если субъект никто не запрашивал, и unknown с причиной requester_not_linked, если у запросившего нет привязанной учётной записи медиасервера",
     "settings.refMaintSectionFiles": "— По одной записи на файл в input.facts.files",
     "settings.refMaintFileSizeBytes": "Размер файла в байтах",
     "settings.refMaintFileQuality": "Определённое качество файла (например, 2160P, 1080P)",
@@ -4998,6 +5006,9 @@ const ru: LocaleDictionary = {
     "settings.maintenanceTemplateSystemAddedTitle": "Очистка добавленного системой",
     "settings.maintenanceTemplateSystemAddedDescription":
       "Тайтлы, которые обнаружило сканирование, а не добавил человек, и у которых есть файл. Через 60 дней область снимается с отслеживания, а файлы остаются на месте.",
+    "settings.maintenanceTemplateWatchedRequestedTitle": "Посмотрели все, кто запрашивал",
+    "settings.maintenanceTemplateWatchedRequestedDescription":
+      "Внимание: этот шаблон удаляет тайтл вместе с файлами. Он совпадает с запрошенными фильмами, которые посмотрели все запросившие их пользователи, после отсрочки в 30 дней. Только фильмы: Scryer записывает просмотры по фильмам и эпизодам, но не по сериалам, поэтому сериал удерживается, а не совпадает. Правило также удерживается, если у запросившего нет привязанной учётной записи медиасервера или последняя синхронизация сигналов старше 48 часов — неполная картина просмотров не является основанием для удаления.",
     "settings.maintenanceTemplateNoProfileTitle": "Без профиля качества",
     "settings.maintenanceTemplateNoProfileDescription":
       "Тайтлы, которым не назначен профиль качества. Не выполняет никаких действий: этот шаблон нужен, чтобы собрать список и посмотреть на него, прежде чем решать, что с ним делать.",

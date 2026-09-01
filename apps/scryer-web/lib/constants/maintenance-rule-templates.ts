@@ -135,6 +135,18 @@ export const MAINTENANCE_RULE_TEMPLATES: MaintenanceRuleTemplate[] = [
       "package rules\nimport rego.v1\n\nmatch if {\n\tnot input.facts.added_by_user_id\n\tinput.facts.has_file\n}\n",
   },
   {
+    id: "watched-by-every-requester",
+    name: "watched_by_every_requester",
+    titleKey: "settings.maintenanceTemplateWatchedRequestedTitle",
+    descriptionKey: "settings.maintenanceTemplateWatchedRequestedDescription",
+    actionKind: "DELETE_TITLE_AND_FILES",
+    graceDays: 30,
+    subjectFacets: ["movie"],
+    destructive: true,
+    regoSource:
+      "package rules\nimport rego.v1\n\nmatch if {\n\tinput.facts.requested\n\tinput.facts.watched_by_all_requesters\n}\n",
+  },
+  {
     id: "no-quality-profile",
     name: "no_quality_profile",
     titleKey: "settings.maintenanceTemplateNoProfileTitle",

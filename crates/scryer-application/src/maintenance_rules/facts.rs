@@ -13,10 +13,10 @@
 //! on. `unknown` is a gap, and rules never see it at all on `input.facts`;
 //! they get held instead.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
-use scryer_domain::{MediaFacet, Title};
+use scryer_domain::{MediaFacet, Title, UserMediaSignal};
 use scryer_rules::maintenance::{
     MAINTENANCE_INPUT_SCHEMA_VERSION, MaintenanceFactsDoc, MaintenanceFileDoc, MaintenanceInput,
     MaintenanceLibraryDoc, MaintenanceSubjectDoc, MaintenanceSubjectKind, Observation,
@@ -57,6 +57,112 @@ pub mod unknown_reason {
     /// stays known; only the name is unavailable, so a rule matching on names
     /// is held rather than told the wrong one.
     pub const USER_NOT_FOUND: &str = "user_not_found";
+
+    /// Watch signals are recorded per movie and per episode, never per show
+    /// (RFC 137 "Normalized observation model"). A series- or anime-facet title
+    /// therefore has no watch answer at all in this MVP, and a silent `false`
+    /// would let "delete what nobody watched" fire on every show in the
+    /// library.
+    pub const SHOW_WATCH_ROLLUP_UNAVAILABLE: &str = "show_watch_rollup_unavailable";
+
+    /// No enabled media-server connection of a signal-sync provider exists, so
+    /// nothing could have reported a play. Distinct from "nobody watched it".
+    pub const NO_MEDIA_SERVER_CONNECTION: &str = "no_media_server_connection";
+
+    /// An enabled signal-sync connection has never completed a clean sweep, so
+    /// its part of the watch picture has never been read at all.
+    pub const SIGNAL_SYNC_NEVER_SUCCEEDED: &str = "signal_sync_never_succeeded";
+
+    /// An enabled signal-sync connection last swept cleanly longer ago than
+    /// [`super::WATCH_SIGNAL_FRESHNESS_HOURS`], so what it reported may no
+    /// longer be true.
+    pub const SIGNALS_STALE: &str = "signals_stale";
+
+    /// A played row carries no Scryer user id. Participants are verified links,
+    /// so this should not occur — but an unattributable watcher must fail
+    /// closed rather than silently vanish from the watcher set.
+    pub const SIGNAL_IDENTITY_MISSING: &str = "signal_identity_missing";
+
+    /// The gate passed and no play was ever recorded for the subject. An
+    /// *absence* reason: the signal store answered, and the answer is nothing.
+    pub const NEVER_WATCHED: &str = "never_watched";
+
+    /// The subject has no requesters, so "did the requesters watch it" has no
+    /// subject set to be true or false over. An absence reason, not an unknown:
+    /// Scryer looked and there is nobody to ask about.
+    pub const TITLE_NOT_REQUESTED: &str = "title_not_requested";
+
+    /// A requester holds no verified linked account on any enabled signal-sync
+    /// connection. Their watch state is unknowable, so neither requester
+    /// rollup can be honest about them.
+    pub const REQUESTER_NOT_LINKED: &str = "requester_not_linked";
+}
+
+/// How recently every enabled signal-sync connection must have swept cleanly
+/// before watch facts may be reported at all.
+///
+/// Watch facts are what a "delete what nobody watched" rule deletes on, so the
+/// window is a freshness *floor*, not a cache hint: past it, Scryer says it
+/// does not know rather than reporting a play count that may be two days out of
+/// date. The signal sync job runs every six hours, so 48 hours tolerates seven
+/// consecutive missed sweeps before rules stop deciding.
+pub const WATCH_SIGNAL_FRESHNESS_HOURS: i64 = 48;
+
+/// Whether media-server watch signals may be reported for this run at all.
+///
+/// Deliberately whole-instance and all-or-nothing: one stale or never-swept
+/// connection poisons the gate for every subject, because a partial watch
+/// picture makes "nobody watched this" a lie rather than an approximation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WatchSignalFreshness {
+    /// Every enabled signal-sync connection swept cleanly inside the window.
+    Fresh,
+    /// Watch facts are unknown, for this stable reason code.
+    Unavailable(&'static str),
+}
+
+impl Default for WatchSignalFreshness {
+    /// An unconfigured context reports the most conservative answer there is:
+    /// a caller that forgot to resolve the gate must not get `Fresh`.
+    fn default() -> Self {
+        Self::Unavailable(unknown_reason::NO_MEDIA_SERVER_CONNECTION)
+    }
+}
+
+/// Watch-signal state resolved once per evaluation run, shared by every subject
+/// in it.
+///
+/// Both members are run-scoped on purpose. Re-reading the sync states or the
+/// participant roster per title would make the job's cost scale with the
+/// library, and — worse — would let two subjects in one run disagree about
+/// whether the signal picture is fresh.
+#[derive(Clone, Debug, Default)]
+pub struct MaintenanceWatchContext {
+    pub freshness: WatchSignalFreshness,
+    /// Every Scryer user with a verified linked account on some enabled
+    /// signal-sync connection. A requester outside this set is a participant
+    /// Scryer cannot observe.
+    pub linked_user_ids: HashSet<String>,
+}
+
+impl MaintenanceWatchContext {
+    /// The gate answer, or `None` when watch facts may be reported.
+    fn unavailable_reason(&self) -> Option<&'static str> {
+        match self.freshness {
+            WatchSignalFreshness::Fresh => None,
+            WatchSignalFreshness::Unavailable(reason) => Some(reason),
+        }
+    }
+}
+
+/// The watch signals for one title, resolved by the caller in batch.
+#[derive(Clone, Copy, Debug)]
+pub struct MaintenanceTitleWatch<'a> {
+    pub context: &'a MaintenanceWatchContext,
+    /// This title's movie-level signals. `None` means the store held no rows
+    /// for it, which — once the gate has passed — is a confirmed "nobody
+    /// watched it", not a gap.
+    pub signals: Option<&'a [UserMediaSignal]>,
 }
 
 /// Everything the builder needs about one library, resolved once per run.
@@ -94,6 +200,7 @@ pub fn build_title_input(
     library: &MaintenanceLibraryRef,
     files: &[TitleMediaFile],
     people: MaintenanceTitlePeople<'_>,
+    watch: MaintenanceTitleWatch<'_>,
 ) -> MaintenanceInput {
     MaintenanceInput {
         schema_version: MAINTENANCE_INPUT_SCHEMA_VERSION,
@@ -111,7 +218,7 @@ pub fn build_title_input(
             id: library.id.clone(),
             name: library.name.clone(),
         },
-        facts: build_facts(title, files, people),
+        facts: build_facts(title, files, people, watch),
     }
 }
 
@@ -119,6 +226,7 @@ fn build_facts(
     title: &Title,
     files: &[TitleMediaFile],
     people: MaintenanceTitlePeople<'_>,
+    watch: MaintenanceTitleWatch<'_>,
 ) -> MaintenanceFactsDoc {
     let file_docs: Vec<MaintenanceFileDoc> = files.iter().map(file_doc).collect();
     let total_size: i64 = files.iter().map(|file| file.size_bytes).sum();
@@ -126,6 +234,7 @@ fn build_facts(
         added_by_observations(title.created_by.as_deref(), people.usernames);
     let (requested, requested_by_user_ids, requested_by_usernames) =
         requested_observations(people.requester_user_ids, people.usernames);
+    let watched = watch_observations(&title.facet, people.requester_user_ids, watch);
 
     MaintenanceFactsDoc {
         monitored: Observation::known(title.monitored),
@@ -151,6 +260,10 @@ fn build_facts(
         episode_file_count: episode_count_observation(&title.facet),
         monitored_episode_count: episode_count_observation(&title.facet),
         active_downloads: Observation::unknown(unknown_reason::NOT_YET_COLLECTED),
+        watched_by_user_ids: watched.watched_by_user_ids,
+        last_watched_at: watched.last_watched_at,
+        watched_by_any_requester: watched.watched_by_any_requester,
+        watched_by_all_requesters: watched.watched_by_all_requesters,
     }
 }
 
@@ -237,6 +350,164 @@ fn requested_observations(
     )
 }
 
+/// The four watch facts for one subject.
+struct WatchObservations {
+    watched_by_user_ids: Observation<Vec<String>>,
+    last_watched_at: Observation<String>,
+    watched_by_any_requester: Observation<bool>,
+    watched_by_all_requesters: Observation<bool>,
+}
+
+impl WatchObservations {
+    /// Every watch fact unknown for one reason. Used wherever Scryer has no
+    /// watch picture at all for the subject, rather than an empty one.
+    fn all_unknown(reason: &'static str) -> Self {
+        Self {
+            watched_by_user_ids: Observation::unknown(reason),
+            last_watched_at: Observation::unknown(reason),
+            watched_by_any_requester: Observation::unknown(reason),
+            watched_by_all_requesters: Observation::unknown(reason),
+        }
+    }
+}
+
+/// Who watched the subject, when it was last watched, and whether its
+/// requesters have (RFC 137 section 7.3).
+///
+/// Three gates run before any signal is read, in this order, because each one
+/// makes the next question meaningless rather than merely harder:
+///
+/// 1. **Facet.** Signals exist per movie and per episode; there is no
+///    show-level rollup in this MVP, so a series or anime title has no watch
+///    answer at all.
+/// 2. **Freshness.** Resolved once per run by the caller. A missing, never-swept,
+///    or stale connection means the watch picture is incomplete, and an
+///    incomplete picture reported as complete is what turns "nobody watched
+///    this" into a deletion of something somebody did watch.
+/// 3. **Attribution.** A played row with no Scryer user id is a watcher Scryer
+///    cannot name, so the watcher set — and anything computed from it — fails
+///    closed rather than quietly omitting them.
+///
+/// Past those, an empty signal set is an *answer*: a known-empty watcher list
+/// and an absent `last_watched_at`, so `not input.facts.last_watched_at` is a
+/// decisive "never watched" rather than something the engine holds on.
+fn watch_observations(
+    facet: &MediaFacet,
+    requester_user_ids: Option<&[String]>,
+    watch: MaintenanceTitleWatch<'_>,
+) -> WatchObservations {
+    if !matches!(facet, MediaFacet::Movie) {
+        return WatchObservations::all_unknown(unknown_reason::SHOW_WATCH_ROLLUP_UNAVAILABLE);
+    }
+    if let Some(reason) = watch.context.unavailable_reason() {
+        return WatchObservations::all_unknown(reason);
+    }
+
+    let played: Vec<&UserMediaSignal> = watch
+        .signals
+        .unwrap_or_default()
+        .iter()
+        .filter(|signal| signal.played)
+        .collect();
+
+    let mut watchers: BTreeSet<&str> = BTreeSet::new();
+    let mut unattributed = false;
+    for signal in &played {
+        match signal
+            .scryer_user_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|user_id| !user_id.is_empty())
+        {
+            Some(user_id) => {
+                watchers.insert(user_id);
+            }
+            None => unattributed = true,
+        }
+    }
+
+    let watched_by_user_ids = if unattributed {
+        Observation::unknown(unknown_reason::SIGNAL_IDENTITY_MISSING)
+    } else {
+        Observation::known(watchers.iter().map(|id| (*id).to_string()).collect())
+    };
+
+    let last_watched_at = played
+        .iter()
+        .filter_map(|signal| signal.last_played_at)
+        .max()
+        .map_or_else(
+            || Observation::absent_because(unknown_reason::NEVER_WATCHED),
+            |latest| Observation::known(latest.to_rfc3339()),
+        );
+
+    let (watched_by_any_requester, watched_by_all_requesters) =
+        requester_watch_observations(requester_user_ids, &watchers, unattributed, watch.context);
+
+    WatchObservations {
+        watched_by_user_ids,
+        last_watched_at,
+        watched_by_any_requester,
+        watched_by_all_requesters,
+    }
+}
+
+/// The two requester rollups.
+///
+/// A subject nobody requested makes both facts *absent* rather than false: with
+/// an empty requester set, "all of them watched it" is vacuously true and "any
+/// of them watched it" is vacuously false, and a rule that deletes on either
+/// would then fire on every unrequested title in the library. Absence says the
+/// question does not apply, which a rule can test for with `not`.
+///
+/// A requester with no verified link on any enabled signal-sync connection is
+/// an unknown participant: Scryer never sees their plays, so it cannot honestly
+/// answer either rollup and both are held.
+fn requester_watch_observations(
+    requester_user_ids: Option<&[String]>,
+    watchers: &BTreeSet<&str>,
+    unattributed: bool,
+    context: &MaintenanceWatchContext,
+) -> (Observation<bool>, Observation<bool>) {
+    let requesters = requester_user_ids.unwrap_or_default();
+    if requesters.is_empty() {
+        return (
+            Observation::absent_because(unknown_reason::TITLE_NOT_REQUESTED),
+            Observation::absent_because(unknown_reason::TITLE_NOT_REQUESTED),
+        );
+    }
+    // An unnamed watcher could be any of these requesters, so neither rollup
+    // can be computed without possibly attributing a play to the wrong person.
+    if unattributed {
+        return (
+            Observation::unknown(unknown_reason::SIGNAL_IDENTITY_MISSING),
+            Observation::unknown(unknown_reason::SIGNAL_IDENTITY_MISSING),
+        );
+    }
+    if requesters
+        .iter()
+        .any(|requester| !context.linked_user_ids.contains(requester.as_str()))
+    {
+        return (
+            Observation::unknown(unknown_reason::REQUESTER_NOT_LINKED),
+            Observation::unknown(unknown_reason::REQUESTER_NOT_LINKED),
+        );
+    }
+
+    (
+        Observation::known(
+            requesters
+                .iter()
+                .any(|requester| watchers.contains(requester.as_str())),
+        ),
+        Observation::known(
+            requesters
+                .iter()
+                .all(|requester| watchers.contains(requester.as_str())),
+        ),
+    )
+}
+
 /// Earliest file timestamp. Absent when the title has no files at all; unknown
 /// only when files exist but carry no readable timestamp.
 fn first_imported_observation(files: &[TitleMediaFile]) -> Observation<String> {
@@ -296,7 +567,10 @@ mod tests {
     use super::*;
 
     fn title(created_by: Option<&str>) -> Title {
-        let facet = MediaFacet::Movie;
+        faceted_title(created_by, MediaFacet::Movie)
+    }
+
+    fn faceted_title(created_by: Option<&str>, facet: MediaFacet) -> Title {
         Title {
             id: "title-1".to_string(),
             library_id: scryer_domain::default_library_id_for_facet(&facet),
@@ -358,6 +632,24 @@ mod tests {
         requester_user_ids: Option<&[String]>,
         usernames: &HashMap<String, String>,
     ) -> serde_json::Value {
+        watch_document(
+            title,
+            requester_user_ids,
+            usernames,
+            &MaintenanceWatchContext::default(),
+            None,
+        )
+    }
+
+    /// The same document with the watch inputs spelled out, so a test can pin
+    /// one gate, one signal set, or one participant roster at a time.
+    fn watch_document(
+        title: &Title,
+        requester_user_ids: Option<&[String]>,
+        usernames: &HashMap<String, String>,
+        context: &MaintenanceWatchContext,
+        signals: Option<&[UserMediaSignal]>,
+    ) -> serde_json::Value {
         let input = build_title_input(
             Utc::now(),
             title,
@@ -367,8 +659,58 @@ mod tests {
                 requester_user_ids,
                 usernames,
             },
+            MaintenanceTitleWatch { context, signals },
         );
         serde_json::to_value(input).expect("input serializes")
+    }
+
+    const WATCH_FACTS: [&str; 4] = [
+        "watched_by_user_ids",
+        "last_watched_at",
+        "watched_by_any_requester",
+        "watched_by_all_requesters",
+    ];
+
+    fn fresh_context(linked: &[&str]) -> MaintenanceWatchContext {
+        MaintenanceWatchContext {
+            freshness: WatchSignalFreshness::Fresh,
+            linked_user_ids: linked.iter().map(|id| (*id).to_string()).collect(),
+        }
+    }
+
+    fn signal(scryer_user_id: Option<&str>, played: bool, watched_at: &str) -> UserMediaSignal {
+        UserMediaSignal {
+            id: scryer_domain::Id::new().0,
+            connection_id: "connection-1".to_string(),
+            provider: scryer_domain::MediaServerProvider::Jellyfin,
+            external_user_id: "jf-user".to_string(),
+            scryer_user_id: scryer_user_id.map(str::to_string),
+            provider_item_id: "jf-item".to_string(),
+            kind: scryer_domain::MediaServerSignalKind::Movie,
+            scryer_title_id: Some("title-1".to_string()),
+            scryer_episode_id: None,
+            played,
+            play_count: i64::from(played),
+            last_played_at: Some(
+                DateTime::parse_from_rfc3339(watched_at)
+                    .expect("fixture timestamp parses")
+                    .with_timezone(&Utc),
+            ),
+            observed_at: Utc::now(),
+            sync_generation: 1,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    /// Assert every watch fact is missing from the simple surface and unknown
+    /// with `reason` on the envelope one.
+    fn assert_watch_facts_unknown(doc: &serde_json::Value, reason: &str) {
+        for fact in WATCH_FACTS {
+            assert!(doc["facts"].get(fact).is_none(), "{fact}");
+            assert_eq!(doc["observations"][fact]["status"], "unknown", "{fact}");
+            assert_eq!(doc["observations"][fact]["reason"], reason, "{fact}");
+        }
     }
 
     #[test]
@@ -497,5 +839,274 @@ mod tests {
             doc["facts"]["requested_by_user_ids"],
             serde_json::json!(["user-1", "user-gone"])
         );
+    }
+
+    // ── Watch signals ───────────────────────────────────────────────────────
+
+    #[test]
+    fn a_show_has_no_watch_answer_at_all() {
+        // No show-level rollup exists, and a silent false here is exactly what
+        // would delete a series somebody is halfway through.
+        for facet in [MediaFacet::Series, MediaFacet::Anime] {
+            let doc = watch_document(
+                &faceted_title(Some("user-1"), facet),
+                Some(&["user-1".to_string()]),
+                &usernames(&[("user-1", "operator-one")]),
+                &fresh_context(&["user-1"]),
+                Some(&[signal(Some("user-1"), true, "2024-05-01T00:00:00Z")]),
+            );
+
+            assert_watch_facts_unknown(&doc, "show_watch_rollup_unavailable");
+        }
+    }
+
+    #[test]
+    fn watch_facts_are_unknown_without_a_media_server_connection() {
+        let doc = watch_document(
+            &title(Some("user-1")),
+            None,
+            &usernames(&[]),
+            &MaintenanceWatchContext {
+                freshness: WatchSignalFreshness::Unavailable(
+                    unknown_reason::NO_MEDIA_SERVER_CONNECTION,
+                ),
+                ..Default::default()
+            },
+            None,
+        );
+
+        assert_watch_facts_unknown(&doc, "no_media_server_connection");
+    }
+
+    #[test]
+    fn watch_facts_are_unknown_while_a_connection_has_never_swept_cleanly() {
+        let doc = watch_document(
+            &title(Some("user-1")),
+            None,
+            &usernames(&[]),
+            &MaintenanceWatchContext {
+                freshness: WatchSignalFreshness::Unavailable(
+                    unknown_reason::SIGNAL_SYNC_NEVER_SUCCEEDED,
+                ),
+                ..Default::default()
+            },
+            None,
+        );
+
+        assert_watch_facts_unknown(&doc, "signal_sync_never_succeeded");
+    }
+
+    /// Stale signals are held even when rows exist: the rows may simply be old,
+    /// and "watched two days ago, according to a sweep two days old" is not
+    /// evidence a deletion may run on.
+    #[test]
+    fn stale_signals_hold_even_though_rows_exist() {
+        let doc = watch_document(
+            &title(Some("user-1")),
+            None,
+            &usernames(&[]),
+            &MaintenanceWatchContext {
+                freshness: WatchSignalFreshness::Unavailable(unknown_reason::SIGNALS_STALE),
+                ..Default::default()
+            },
+            Some(&[signal(Some("user-1"), true, "2024-05-01T00:00:00Z")]),
+        );
+
+        assert_watch_facts_unknown(&doc, "signals_stale");
+    }
+
+    #[test]
+    fn a_title_nobody_watched_reports_an_empty_watcher_list_and_no_watch_time() {
+        // Known-empty, not unknown: the gate passed, so "nobody watched it" is
+        // an answer a rule may act on.
+        let doc = watch_document(
+            &title(Some("user-1")),
+            None,
+            &usernames(&[]),
+            &fresh_context(&[]),
+            None,
+        );
+
+        assert_eq!(
+            doc["facts"]["watched_by_user_ids"],
+            serde_json::json!([]),
+            "an absent signal row set is a confirmed empty watcher list"
+        );
+        assert!(doc["facts"].get("last_watched_at").is_none());
+        assert_eq!(doc["observations"]["last_watched_at"]["status"], "absent");
+        assert_eq!(
+            doc["observations"]["last_watched_at"]["reason"],
+            "never_watched"
+        );
+    }
+
+    #[test]
+    fn watchers_are_deduplicated_sorted_and_dated_by_the_latest_play() {
+        let doc = watch_document(
+            &title(Some("user-1")),
+            None,
+            &usernames(&[]),
+            &fresh_context(&[]),
+            Some(&[
+                signal(Some("viewer-two"), true, "2024-05-01T00:00:00Z"),
+                signal(Some("operator-one"), true, "2024-06-01T00:00:00Z"),
+                signal(Some("viewer-two"), true, "2024-04-01T00:00:00Z"),
+            ]),
+        );
+
+        assert_eq!(
+            doc["facts"]["watched_by_user_ids"],
+            serde_json::json!(["operator-one", "viewer-two"])
+        );
+        assert_eq!(
+            doc["facts"]["last_watched_at"], "2024-06-01T00:00:00+00:00",
+            "the newest play is the one a rule ages against"
+        );
+    }
+
+    #[test]
+    fn an_unplayed_row_is_not_a_watcher() {
+        let doc = watch_document(
+            &title(Some("user-1")),
+            None,
+            &usernames(&[]),
+            &fresh_context(&[]),
+            Some(&[signal(Some("viewer-two"), false, "2024-05-01T00:00:00Z")]),
+        );
+
+        assert_eq!(doc["facts"]["watched_by_user_ids"], serde_json::json!([]));
+        assert_eq!(
+            doc["observations"]["last_watched_at"]["reason"], "never_watched",
+            "a row that was never played carries no watch time"
+        );
+    }
+
+    /// Participants are verified links, so this should not happen — but a
+    /// watcher Scryer cannot name has to fail closed rather than disappear from
+    /// the list and make it look shorter than it is.
+    #[test]
+    fn an_unattributable_play_makes_the_watcher_set_unknown() {
+        let doc = watch_document(
+            &title(Some("user-1")),
+            Some(&["user-1".to_string()]),
+            &usernames(&[("user-1", "operator-one")]),
+            &fresh_context(&["user-1"]),
+            Some(&[
+                signal(Some("user-1"), true, "2024-05-01T00:00:00Z"),
+                signal(None, true, "2024-05-02T00:00:00Z"),
+            ]),
+        );
+
+        for fact in [
+            "watched_by_user_ids",
+            "watched_by_any_requester",
+            "watched_by_all_requesters",
+        ] {
+            assert!(doc["facts"].get(fact).is_none(), "{fact}");
+            assert_eq!(
+                doc["observations"][fact]["reason"], "signal_identity_missing",
+                "{fact}"
+            );
+        }
+        // The anonymous aggregate is still answerable: something was played,
+        // and when is not a question about who.
+        assert_eq!(doc["facts"]["last_watched_at"], "2024-05-02T00:00:00+00:00");
+    }
+
+    #[test]
+    fn an_unrequested_title_has_no_requester_rollup_to_report() {
+        for requesters in [None, Some(&[] as &[String])] {
+            let doc = watch_document(
+                &title(Some("user-1")),
+                requesters,
+                &usernames(&[]),
+                &fresh_context(&[]),
+                Some(&[signal(Some("viewer-two"), true, "2024-05-01T00:00:00Z")]),
+            );
+
+            // Absent, not a vacuous true: "all of nobody watched it" would
+            // otherwise match every unrequested title in the library.
+            for fact in ["watched_by_any_requester", "watched_by_all_requesters"] {
+                assert!(doc["facts"].get(fact).is_none(), "{fact}");
+                assert_eq!(doc["observations"][fact]["status"], "absent", "{fact}");
+                assert_eq!(
+                    doc["observations"][fact]["reason"], "title_not_requested",
+                    "{fact}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn an_unlinked_requester_holds_both_rollups() {
+        let doc = watch_document(
+            &title(Some("user-1")),
+            Some(&["user-1".to_string(), "user-2".to_string()]),
+            &usernames(&[("user-1", "operator-one"), ("user-2", "viewer-two")]),
+            // user-2 never linked an account, so Scryer never sees their plays.
+            &fresh_context(&["user-1"]),
+            Some(&[signal(Some("user-1"), true, "2024-05-01T00:00:00Z")]),
+        );
+
+        for fact in ["watched_by_any_requester", "watched_by_all_requesters"] {
+            assert!(doc["facts"].get(fact).is_none(), "{fact}");
+            assert_eq!(doc["observations"][fact]["status"], "unknown", "{fact}");
+            assert_eq!(
+                doc["observations"][fact]["reason"], "requester_not_linked",
+                "{fact}"
+            );
+        }
+        // The watcher list itself is unaffected: it reports who Scryer saw.
+        assert_eq!(
+            doc["facts"]["watched_by_user_ids"],
+            serde_json::json!(["user-1"])
+        );
+    }
+
+    #[test]
+    fn one_of_two_linked_requesters_watching_is_any_but_not_all() {
+        let doc = watch_document(
+            &title(Some("user-1")),
+            Some(&["user-1".to_string(), "user-2".to_string()]),
+            &usernames(&[("user-1", "operator-one"), ("user-2", "viewer-two")]),
+            &fresh_context(&["user-1", "user-2"]),
+            Some(&[signal(Some("user-1"), true, "2024-05-01T00:00:00Z")]),
+        );
+
+        assert_eq!(doc["facts"]["watched_by_any_requester"], true);
+        assert_eq!(doc["facts"]["watched_by_all_requesters"], false);
+    }
+
+    #[test]
+    fn every_linked_requester_watching_satisfies_both_rollups() {
+        let doc = watch_document(
+            &title(Some("user-1")),
+            Some(&["user-1".to_string(), "user-2".to_string()]),
+            &usernames(&[("user-1", "operator-one"), ("user-2", "viewer-two")]),
+            &fresh_context(&["user-1", "user-2"]),
+            Some(&[
+                signal(Some("user-1"), true, "2024-05-01T00:00:00Z"),
+                signal(Some("user-2"), true, "2024-05-03T00:00:00Z"),
+            ]),
+        );
+
+        assert_eq!(doc["facts"]["watched_by_any_requester"], true);
+        assert_eq!(doc["facts"]["watched_by_all_requesters"], true);
+    }
+
+    /// A watcher who is not a requester counts towards nothing on the rollups:
+    /// the rollups are about the people who asked for the title.
+    #[test]
+    fn a_non_requester_watching_does_not_satisfy_the_requester_rollups() {
+        let doc = watch_document(
+            &title(Some("user-1")),
+            Some(&["user-1".to_string()]),
+            &usernames(&[("user-1", "operator-one")]),
+            &fresh_context(&["user-1"]),
+            Some(&[signal(Some("user-9"), true, "2024-05-01T00:00:00Z")]),
+        );
+
+        assert_eq!(doc["facts"]["watched_by_any_requester"], false);
+        assert_eq!(doc["facts"]["watched_by_all_requesters"], false);
     }
 }

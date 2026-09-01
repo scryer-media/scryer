@@ -39,9 +39,11 @@ use tracing::warn;
 
 use crate::jobs::{JobKey, JobTriggerSource};
 use crate::maintenance_rules::facts::{
-    MaintenanceLibraryRef, MaintenanceTitlePeople, build_title_input,
+    MaintenanceLibraryRef, MaintenanceTitlePeople, MaintenanceTitleWatch, MaintenanceWatchContext,
+    WATCH_SIGNAL_FRESHNESS_HOURS, WatchSignalFreshness, build_title_input, unknown_reason,
 };
 use crate::maintenance_rules::service::MaintenanceRuleSetDetail;
+use crate::media_server_signals::SIGNAL_SYNC_PROVIDERS;
 use crate::ports::MaintenanceCandidateQuery;
 use crate::settings::keys::{
     MAINTENANCE_GATE_DESTRUCTIVE_EFFECTS_KEY, MAINTENANCE_GATE_EVALUATION_KEY,
@@ -794,11 +796,17 @@ impl AppUseCase {
         // small and bounded, and one snapshot keeps every subject in the run
         // resolving names against the same view, exactly like the clock.
         let usernames = self.maintenance_usernames_by_id().await?;
+        // The watch gate is whole-instance and, like the roster, is read once
+        // per rule rather than per chunk.
+        let watch_context = self.maintenance_watch_context().await?;
 
         let mut counts = RuleCounts::default();
         for chunk in titles.chunks(MAINTENANCE_EVALUATION_TITLE_CHUNK) {
             let files_by_title = self.maintenance_files_for_titles(chunk).await?;
             let requesters_by_title = self.maintenance_requesters_for_titles(chunk).await?;
+            let signals_by_title = self
+                .maintenance_watch_signals_for_titles(&watch_context, chunk)
+                .await?;
             for title in chunk {
                 let files = files_by_title
                     .get(&title.id)
@@ -808,6 +816,10 @@ impl AppUseCase {
                     requester_user_ids: requesters_by_title.get(&title.id).map(Vec::as_slice),
                     usernames: &usernames,
                 };
+                let watch = MaintenanceTitleWatch {
+                    context: &watch_context,
+                    signals: signals_by_title.get(&title.id).map(Vec::as_slice),
+                };
                 if let Err(error) = self
                     .reconcile_maintenance_title(
                         detail,
@@ -815,6 +827,7 @@ impl AppUseCase {
                         title,
                         files,
                         people,
+                        watch,
                         libraries,
                         &excluded,
                         evaluation_time,
@@ -848,6 +861,7 @@ impl AppUseCase {
         title: &Title,
         files: &[crate::types::TitleMediaFile],
         people: MaintenanceTitlePeople<'_>,
+        watch: MaintenanceTitleWatch<'_>,
         libraries: &HashMap<String, MaintenanceLibraryRef>,
         excluded: &HashSet<String>,
         evaluation_time: DateTime<Utc>,
@@ -904,7 +918,7 @@ impl AppUseCase {
                 id: title.library_id.clone(),
                 name: String::new(),
             });
-        let input = build_title_input(evaluation_time, title, &library, files, people);
+        let input = build_title_input(evaluation_time, title, &library, files, people, watch);
         let evaluation = evaluator.evaluate(&input);
         counts.evaluated += 1;
 
@@ -1089,6 +1103,129 @@ impl AppUseCase {
             .catalog
             .media_requests
             .requester_user_ids_by_title_ids(&title_ids)
+            .await
+    }
+
+    /// The watch-signal gate and participant roster, read once per rule.
+    ///
+    /// Both halves are whole-instance answers, so resolving them per title
+    /// would be both wasteful and wrong: two subjects in one run must never
+    /// disagree about whether the watch picture is fresh, exactly as they never
+    /// disagree about the clock.
+    ///
+    /// The gate is deliberately unanimous. Every *enabled* connection of a
+    /// signal-sync provider has to have swept cleanly inside
+    /// [`WATCH_SIGNAL_FRESHNESS_HOURS`]; one that has not poisons watch facts
+    /// for the whole run, because Scryer would otherwise be reporting a partial
+    /// watch picture as a complete one. A disabled connection is skipped: an
+    /// operator turning a server off is a decision, not a gap.
+    pub(crate) async fn maintenance_watch_context(&self) -> AppResult<MaintenanceWatchContext> {
+        let mut connections = Vec::new();
+        for provider in SIGNAL_SYNC_PROVIDERS {
+            connections.extend(
+                self.services
+                    .integrations
+                    .media_server_connections
+                    .list(Some(provider))
+                    .await?,
+            );
+        }
+        connections.retain(|connection| connection.enabled);
+        if connections.is_empty() {
+            return Ok(MaintenanceWatchContext {
+                freshness: WatchSignalFreshness::Unavailable(
+                    unknown_reason::NO_MEDIA_SERVER_CONNECTION,
+                ),
+                linked_user_ids: HashSet::new(),
+            });
+        }
+
+        let states: HashMap<String, DateTime<Utc>> = self
+            .services
+            .integrations
+            .media_server_signals
+            .signal_sync_states()
+            .await?
+            .into_iter()
+            .filter_map(|state| Some((state.connection_id, state.last_success_at?)))
+            .collect();
+
+        // Never-swept is reported ahead of stale: it is the more specific
+        // answer, and the one an operator can actually act on.
+        if connections
+            .iter()
+            .any(|connection| !states.contains_key(&connection.id))
+        {
+            return Ok(MaintenanceWatchContext {
+                freshness: WatchSignalFreshness::Unavailable(
+                    unknown_reason::SIGNAL_SYNC_NEVER_SUCCEEDED,
+                ),
+                linked_user_ids: HashSet::new(),
+            });
+        }
+        let oldest_allowed = Utc::now() - Duration::hours(WATCH_SIGNAL_FRESHNESS_HOURS);
+        if connections
+            .iter()
+            .filter_map(|connection| states.get(&connection.id))
+            .any(|last_success_at| *last_success_at < oldest_allowed)
+        {
+            return Ok(MaintenanceWatchContext {
+                freshness: WatchSignalFreshness::Unavailable(unknown_reason::SIGNALS_STALE),
+                linked_user_ids: HashSet::new(),
+            });
+        }
+
+        // Only resolved once the gate has passed: with watch facts already
+        // unknown, the roster would answer a question nothing is going to ask.
+        let mut linked_user_ids = HashSet::new();
+        for connection in &connections {
+            let Some(provider) = connection.provider.external_account_provider() else {
+                continue;
+            };
+            for account in self
+                .services
+                .identity
+                .external_accounts
+                .list_verified_by_connection(provider, &connection.id)
+                .await?
+            {
+                linked_user_ids.insert(account.user_id);
+            }
+        }
+
+        Ok(MaintenanceWatchContext {
+            freshness: WatchSignalFreshness::Fresh,
+            linked_user_ids,
+        })
+    }
+
+    /// One batched movie-signal load per chunk, keyed by owning title.
+    ///
+    /// Only movie-facet titles are asked about, for the same reason only they
+    /// get a watch answer: episode signals roll up to nothing this wave can
+    /// report, so fetching them would be work whose result is discarded. A
+    /// closed gate skips the query entirely — every watch fact is already
+    /// unknown, so the rows could not change a decision.
+    pub(crate) async fn maintenance_watch_signals_for_titles(
+        &self,
+        context: &MaintenanceWatchContext,
+        titles: &[Title],
+    ) -> AppResult<HashMap<String, Vec<scryer_domain::UserMediaSignal>>> {
+        if context.freshness != WatchSignalFreshness::Fresh {
+            return Ok(HashMap::new());
+        }
+        let title_ids: Vec<String> = titles
+            .iter()
+            .filter(|title| matches!(title.facet, scryer_domain::MediaFacet::Movie))
+            .map(|title| title.id.clone())
+            .collect();
+        if title_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        self.services
+            .integrations
+            .media_server_signals
+            .movie_signals_for_titles(&title_ids)
             .await
     }
 

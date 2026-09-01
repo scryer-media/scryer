@@ -26,9 +26,10 @@
 //! # What is not here
 //!
 //! No maintenance-rule facts and no GraphQL. The signals are collected and
-//! stored; the fact-snapshot builder that reads them is a later work package,
-//! which is why [`crate::ports::MediaServerSignalRepository`] already exposes
-//! the two batched, title-keyed reads that builder needs.
+//! stored here; the fact-snapshot builder that turns them into rule facts lives
+//! in [`crate::maintenance_rules::facts`] and reaches them only through the two
+//! batched, title-keyed reads on
+//! [`crate::ports::MediaServerSignalRepository`].
 
 pub mod mapping;
 pub mod sync;

@@ -171,6 +171,26 @@
           "field": "active_downloads",
           "type": "bool",
           "descKey": "settings.refMaintFactsActiveDownloads"
+        },
+        {
+          "field": "watched_by_user_ids",
+          "type": "string[]",
+          "descKey": "settings.refMaintFactsWatchedByUserIds"
+        },
+        {
+          "field": "last_watched_at",
+          "type": "string",
+          "descKey": "settings.refMaintFactsLastWatchedAt"
+        },
+        {
+          "field": "watched_by_any_requester",
+          "type": "bool",
+          "descKey": "settings.refMaintFactsWatchedByAnyRequester"
+        },
+        {
+          "field": "watched_by_all_requesters",
+          "type": "bool",
+          "descKey": "settings.refMaintFactsWatchedByAllRequesters"
         }
       ]
     },
@@ -318,6 +338,26 @@
           "field": "active_downloads",
           "type": "object",
           "descKey": "settings.refMaintFactsActiveDownloads"
+        },
+        {
+          "field": "watched_by_user_ids",
+          "type": "object",
+          "descKey": "settings.refMaintFactsWatchedByUserIds"
+        },
+        {
+          "field": "last_watched_at",
+          "type": "object",
+          "descKey": "settings.refMaintFactsLastWatchedAt"
+        },
+        {
+          "field": "watched_by_any_requester",
+          "type": "object",
+          "descKey": "settings.refMaintFactsWatchedByAnyRequester"
+        },
+        {
+          "field": "watched_by_all_requesters",
+          "type": "object",
+          "descKey": "settings.refMaintFactsWatchedByAllRequesters"
         }
       ]
     },
@@ -802,6 +842,110 @@
           "field": "value",
           "type": "bool",
           "descKey": "settings.refMaintFactsActiveDownloadsValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsWatchedByUserIds",
+      "path": "input.observations.watched_by_user_ids",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string[]",
+          "descKey": "settings.refMaintFactsWatchedByUserIdsValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsLastWatchedAt",
+      "path": "input.observations.last_watched_at",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refMaintFactsLastWatchedAtValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsWatchedByAnyRequester",
+      "path": "input.observations.watched_by_any_requester",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "bool",
+          "descKey": "settings.refMaintFactsWatchedByAnyRequesterValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsWatchedByAllRequesters",
+      "path": "input.observations.watched_by_all_requesters",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "bool",
+          "descKey": "settings.refMaintFactsWatchedByAllRequestersValue"
         },
         {
           "field": "observed_at",

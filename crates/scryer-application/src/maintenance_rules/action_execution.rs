@@ -40,7 +40,8 @@ use crate::maintenance_rules::action_catalog::{
 };
 use crate::maintenance_rules::evaluation::MaintenanceEvaluationTrigger;
 use crate::maintenance_rules::facts::{
-    MaintenanceLibraryRef, MaintenanceTitlePeople, QUALITY_PROFILE_TAG_PREFIX, build_title_input,
+    MaintenanceLibraryRef, MaintenanceTitlePeople, MaintenanceTitleWatch,
+    QUALITY_PROFILE_TAG_PREFIX, build_title_input,
 };
 use crate::maintenance_rules::safety::{MaintenanceActivityCheck, MaintenancePlaybackHold};
 use crate::maintenance_rules::service::MaintenanceRuleSetDetail;
@@ -774,11 +775,29 @@ impl AppUseCase {
             Ok(usernames) => usernames,
             Err(_) => return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION),
         };
+        // Watch signals are resolved on the same fail-closed terms: a gate or
+        // signal read that errors holds, and a gate that is merely closed makes
+        // every watch fact unknown, which holds any rule that reads one.
+        let watch_context = match self.maintenance_watch_context().await {
+            Ok(context) => context,
+            Err(_) => return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION),
+        };
+        let signals_by_title = match self
+            .maintenance_watch_signals_for_titles(&watch_context, std::slice::from_ref(&title))
+            .await
+        {
+            Ok(signals) => signals,
+            Err(_) => return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION),
+        };
         let people = MaintenanceTitlePeople {
             requester_user_ids: requesters_by_title.get(&title.id).map(Vec::as_slice),
             usernames: &usernames,
         };
-        let input = build_title_input(Utc::now(), &title, &library, files, people);
+        let watch = MaintenanceTitleWatch {
+            context: &watch_context,
+            signals: signals_by_title.get(&title.id).map(Vec::as_slice),
+        };
+        let input = build_title_input(Utc::now(), &title, &library, files, people, watch);
         let outcome = engine
             .evaluator()
             .evaluate(&input)

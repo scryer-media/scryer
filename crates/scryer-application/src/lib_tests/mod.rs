@@ -24,6 +24,7 @@ mod maintenance_evaluation;
 mod maintenance_execution;
 mod maintenance_rules;
 mod maintenance_safety;
+mod maintenance_watch_facts;
 mod media_requests;
 mod media_server_signals;
 mod metadata_search;

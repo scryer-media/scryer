@@ -6,10 +6,12 @@
 //! owns the matcher, so a malformed or timed-out evaluation can never authorize
 //! one.
 //!
-//! Media-server signals (Plex watchlist, Jellyfin/Emby favorites, play history)
-//! are deliberately absent from the current schema. They arrive on their own
-//! track once a provider-neutral signal store exists; adding them here early
-//! would force rules to be written against facts Scryer cannot yet observe.
+//! Media-server play history is in the schema now that a provider-neutral
+//! signal store stands behind it, and it is fact-shaped like everything else:
+//! `watched_by_user_ids`, `last_watched_at`, and the two requester rollups are
+//! plain values that go missing when the host could not observe them. Watchlist
+//! and favorite signals are still absent — nothing collects them yet, and a
+//! fact rules cannot be told the truth about has no business in the contract.
 //!
 //! Two things make a rule safe to write. The rule reads facts as plain values,
 //! so it says what it means (`input.facts.monitored`, not a status dance), and
@@ -282,7 +284,36 @@ pub struct MaintenanceFactsDoc {
     pub episode_file_count: Observation<i64>,
     pub monitored_episode_count: Observation<i64>,
     pub active_downloads: Observation<bool>,
+    /// Media-server watch signals (RFC 137 section 7.3). Every one of these is
+    /// unknown unless a signal-sync provider is connected *and* every enabled
+    /// connection of it swept cleanly and recently: a partial watch picture
+    /// would make "nobody watched this" a lie, and these are the facts a rule
+    /// deletes media on.
+    pub watched_by_user_ids: Observation<Vec<String>>,
+    pub last_watched_at: Observation<String>,
+    pub watched_by_any_requester: Observation<bool>,
+    pub watched_by_all_requesters: Observation<bool>,
 }
+
+/// Facts that name, or are computed from, identifiable people.
+///
+/// Authoring a matcher that reads one of these is a way of asking the instance
+/// who added, requested, or watched something, so the host requires the author
+/// to already hold the instance's permission-management authority. The list
+/// lives here, beside the fact document, because it is a property of the facts
+/// themselves rather than of any one caller.
+///
+/// `requested` and `last_watched_at` are deliberately absent: they are
+/// anonymous aggregates that say something happened, never who did it.
+pub const PERSON_TARGETED_MAINTENANCE_FACTS: [&str; 7] = [
+    "added_by_user_id",
+    "added_by_username",
+    "requested_by_user_ids",
+    "requested_by_usernames",
+    "watched_by_user_ids",
+    "watched_by_any_requester",
+    "watched_by_all_requesters",
+];
 
 #[derive(Debug, Clone, Serialize)]
 pub struct MaintenanceFileDoc {
@@ -756,6 +787,10 @@ pub(crate) fn synthetic_maintenance_input() -> MaintenanceInput {
             episode_file_count: Observation::known(0),
             monitored_episode_count: Observation::known(0),
             active_downloads: Observation::known(false),
+            watched_by_user_ids: Observation::known(vec!["user-1".to_string()]),
+            last_watched_at: Observation::known("2024-03-01T00:00:00Z".to_string()),
+            watched_by_any_requester: Observation::known(true),
+            watched_by_all_requesters: Observation::known(true),
         },
     }
 }

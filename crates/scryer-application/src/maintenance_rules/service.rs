@@ -16,13 +16,16 @@ use scryer_domain::{
     MaintenanceRuleSubjectKind, MediaFacet, Title, User,
 };
 use scryer_rules::maintenance::{
-    MaintenanceOutcome, MaintenancePolicy, MaintenanceRulesEngine, rewrite_package_declaration,
+    MaintenanceOutcome, MaintenancePolicy, MaintenanceRulesEngine,
+    PERSON_TARGETED_MAINTENANCE_FACTS, rewrite_package_declaration,
 };
 use scryer_rules::runtime::content_hash;
-use scryer_rules::validation::{ValidationResult, validate_maintenance_rule};
+use scryer_rules::validation::{
+    ValidationResult, maintenance_referenced_facts, validate_maintenance_rule,
+};
 
 use crate::maintenance_rules::facts::{
-    MaintenanceLibraryRef, MaintenanceTitlePeople, build_title_input,
+    MaintenanceLibraryRef, MaintenanceTitlePeople, MaintenanceTitleWatch, build_title_input,
 };
 use crate::maintenance_rules::{
     MaintenanceActionSpec, MaintenanceSubjectKind as ActionSubjectKind,
@@ -215,6 +218,8 @@ impl AppUseCase {
             &draft.action_spec,
             draft.grace_days,
         )?;
+        self.require_person_fact_authority(actor, &prepared.rego_source, &id)
+            .await?;
 
         let now = Utc::now();
         let rule_set = MaintenanceRuleSet {
@@ -266,6 +271,8 @@ impl AppUseCase {
             &draft.action_spec,
             draft.grace_days,
         )?;
+        self.require_person_fact_authority(actor, &prepared.rego_source, &rule_set.id)
+            .await?;
 
         let now = Utc::now();
         let revision_number = rule_set.current_revision_number + 1;
@@ -393,6 +400,12 @@ impl AppUseCase {
         // batched people lookups run here, once for the whole selection.
         let requesters_by_title = self.maintenance_requesters_for_titles(&titles).await?;
         let usernames = self.maintenance_usernames_by_id().await?;
+        // Watch signals go through the same run-scoped gate the evaluator uses,
+        // so a preview cannot show a match the scheduled pass would hold.
+        let watch_context = self.maintenance_watch_context().await?;
+        let signals_by_title = self
+            .maintenance_watch_signals_for_titles(&watch_context, &titles)
+            .await?;
 
         let matcher_content_hash = content_hash(&policy.rego_source);
         let rule_set_id = policy.id.clone();
@@ -418,7 +431,11 @@ impl AppUseCase {
                 requester_user_ids: requesters_by_title.get(&title.id).map(Vec::as_slice),
                 usernames: &usernames,
             };
-            let input = build_title_input(evaluated_at, &title, &library, files, people);
+            let watch = MaintenanceTitleWatch {
+                context: &watch_context,
+                signals: signals_by_title.get(&title.id).map(Vec::as_slice),
+            };
+            let input = build_title_input(evaluated_at, &title, &library, files, people, watch);
 
             let evaluation = evaluator
                 .evaluate(&input)
@@ -456,6 +473,48 @@ impl AppUseCase {
             evaluated_at,
             titles: results,
         })
+    }
+
+    /// Gate authoring a matcher that reads person-targeted facts.
+    ///
+    /// Catalog-settings management is enough to write a rule about *media*.
+    /// Writing one about *people* — who added a title, who asked for it, who
+    /// watched it — is a use of the instance's identity records, so it asks for
+    /// the same authority that hands out permissions in the first place. The
+    /// bar is on authoring, deliberately: a stored revision keeps running under
+    /// the system principal, because revoking an author's permission must not
+    /// silently stop a rule an operator armed.
+    ///
+    /// The fact set comes from the same static extraction the engine holds
+    /// rules on, so a rule cannot reach a person fact by a path this check
+    /// cannot see — the source that would allow it does not validate.
+    async fn require_person_fact_authority(
+        &self,
+        actor: &User,
+        rego_source: &str,
+        rule_set_id: &str,
+    ) -> AppResult<()> {
+        let referenced = maintenance_referenced_facts(rego_source, rule_set_id)
+            .map_err(|e| AppError::Validation(format!("rule validation failed: {e}")))?;
+        let person_facts: Vec<&str> = PERSON_TARGETED_MAINTENANCE_FACTS
+            .into_iter()
+            .filter(|fact| referenced.contains(*fact))
+            .collect();
+        if person_facts.is_empty() {
+            return Ok(());
+        }
+
+        if self
+            .has_app_permission(actor, AppPermission::ManagePermissions)
+            .await?
+        {
+            return Ok(());
+        }
+
+        Err(AppError::Unauthorized(format!(
+            "This rule reads facts about specific people ({}), so saving it needs permission to manage permissions. Ask an administrator to save it, or rewrite the rule without those facts.",
+            person_facts.join(", ")
+        )))
     }
 
     pub(crate) async fn require_maintenance_rule_set(

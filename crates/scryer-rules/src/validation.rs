@@ -364,6 +364,22 @@ pub(crate) fn maintenance_fact_references(
     module_referenced_facts(&module)
 }
 
+/// The `input.facts.<name>` facts a maintenance matcher reads, for callers
+/// outside this crate that must decide something about a rule *before* it runs.
+///
+/// This is the same static set the engine holds rules on, exposed once so an
+/// authorization check and the evaluator can never disagree about what a rule
+/// reads. It fails for exactly the sources the engine would refuse to load, so
+/// a caller that cannot get an answer here must reject the rule rather than
+/// assume it reads nothing.
+pub fn maintenance_referenced_facts(
+    rego_source: &str,
+    rule_set_id: &str,
+) -> Result<BTreeSet<String>, RulesError> {
+    maintenance_fact_references(rego_source, &maintenance::user_policy_path(rule_set_id))
+        .map_err(RulesError::Compilation)
+}
+
 /// Reject any import that pulls `input` (or part of it) into scope.
 ///
 /// `import input.facts` would let a rule write `facts.monitored`, which the
@@ -1304,7 +1320,7 @@ mod tests {
     /// have to be changed together deliberately.
     #[test]
     fn every_pinned_maintenance_template_validates() {
-        let templates: [(&str, &str); 9] = [
+        let templates: [(&str, &str); 10] = [
             (
                 "dead-wanted",
                 "package rules\nimport rego.v1\n\nmatch if {\n\tinput.facts.monitored\n\tnot input.facts.has_file\n}\n",
@@ -1336,6 +1352,10 @@ mod tests {
             (
                 "system-added",
                 "package rules\nimport rego.v1\n\nmatch if {\n\tnot input.facts.added_by_user_id\n\tinput.facts.has_file\n}\n",
+            ),
+            (
+                "watched-by-every-requester",
+                "package rules\nimport rego.v1\n\nmatch if {\n\tinput.facts.requested\n\tinput.facts.watched_by_all_requesters\n}\n",
             ),
             (
                 "no-profile",

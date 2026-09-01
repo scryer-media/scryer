@@ -3604,6 +3604,10 @@ const en: LocaleDictionary = {
   "settings.refMaintFactsEpisodeFileCount": "How many of those episodes have a file",
   "settings.refMaintFactsMonitoredEpisodeCount": "How many of those episodes are monitored",
   "settings.refMaintFactsActiveDownloads": "Whether the subject has a download in flight",
+  "settings.refMaintFactsWatchedByUserIds": "Users who have played the subject on a connected media server",
+  "settings.refMaintFactsLastWatchedAt": "When the subject was last played by anyone",
+  "settings.refMaintFactsWatchedByAnyRequester": "Whether at least one of the subject's requesters has played it",
+  "settings.refMaintFactsWatchedByAllRequesters": "Whether every one of the subject's requesters has played it",
   "settings.refMaintObsStatus": "known, absent, or unknown. absent means the source answered and there is no value; unknown means Scryer could not find out. Test this before reading value — an unknown fact is never coerced to false, 0, or an empty string.",
   "settings.refMaintSectionObservations": "— The same facts as full envelopes, for rules that need to tell absent apart from unknown or to read the reason. Reading a fact here opts that fact out of the automatic hold: you are taking responsibility for the three-valued answer.",
   "settings.refMaintSectionObsFiles": "— One entry per file in input.observations.files.value",
@@ -3628,6 +3632,10 @@ const en: LocaleDictionary = {
   "settings.refMaintFactsEpisodeFileCountValue": "Number of those episodes that have a file",
   "settings.refMaintFactsMonitoredEpisodeCountValue": "Number of those episodes that are monitored",
   "settings.refMaintFactsActiveDownloadsValue": "True when a download for the subject is in flight",
+  "settings.refMaintFactsWatchedByUserIdsValue": "Identifiers of everyone who played it, sorted and deduplicated; an empty list means nobody has. Watch facts are unknown for shows (show_watch_rollup_unavailable), when no media server is connected (no_media_server_connection), when a connection has never synced cleanly (signal_sync_never_succeeded), when the last clean sync is over 48 hours old (signals_stale), and when a play cannot be attributed to a Scryer user (signal_identity_missing).",
+  "settings.refMaintFactsLastWatchedAtValue": "RFC3339 timestamp of the most recent play; absent with reason never_watched when nobody has played it",
+  "settings.refMaintFactsWatchedByAnyRequesterValue": "True when at least one requester played it; absent with reason title_not_requested when nobody requested the subject, and unknown with reason requester_not_linked when a requester has no linked media-server account",
+  "settings.refMaintFactsWatchedByAllRequestersValue": "True when every requester played it; absent with reason title_not_requested when nobody requested the subject, and unknown with reason requester_not_linked when a requester has no linked media-server account",
   "settings.refMaintSectionFiles": "— One entry per file in input.facts.files",
   "settings.refMaintFileSizeBytes": "Size of the file in bytes",
   "settings.refMaintFileQuality": "Detected quality of the file (for example 2160P, 1080P)",
@@ -3672,6 +3680,9 @@ const en: LocaleDictionary = {
   "settings.maintenanceTemplateSystemAddedTitle": "System-added cleanup",
   "settings.maintenanceTemplateSystemAddedDescription":
     "Titles a scan discovered rather than a person adding them, and that hold a file. After 60 days the scope is unmonitored and the files stay where they are.",
+  "settings.maintenanceTemplateWatchedRequestedTitle": "Watched by everyone who asked",
+  "settings.maintenanceTemplateWatchedRequestedDescription":
+    "Caution: this template deletes the title and its files. It matches requested movies that every one of their requesters has now played, after a 30-day grace period. Movies only: Scryer records plays per movie and per episode, never per show, so a series holds instead of matching. It also holds whenever a requester has no linked media-server account, or the last signal sync is over 48 hours old — a partial watch picture is not evidence to delete on.",
   "settings.maintenanceTemplateNoProfileTitle": "No quality profile",
   "settings.maintenanceTemplateNoProfileDescription":
     "Titles with no quality profile assigned. Takes no action at all: this one is for collecting a list to look at before deciding what should happen to it.",
