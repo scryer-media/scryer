@@ -46,6 +46,10 @@ struct RuleInputCatalog {
 struct InputPathContext {
     catalog: &'static RuleInputCatalog,
     allow_release_extra: bool,
+    /// Maintenance only: every `input.facts.<name>` must name its fact with a
+    /// literal, because the engine reads that set to decide whether the subject
+    /// is even knowable enough to consult the rule.
+    static_facts_only: bool,
 }
 
 impl InputPathContext {
@@ -53,6 +57,7 @@ impl InputPathContext {
         Self {
             catalog: release_input_catalog(),
             allow_release_extra: true,
+            static_facts_only: false,
         }
     }
 
@@ -60,6 +65,7 @@ impl InputPathContext {
         Self {
             catalog: maintenance_input_catalog(),
             allow_release_extra: false,
+            static_facts_only: true,
         }
     }
 }
@@ -135,6 +141,53 @@ impl InputReferencePath {
             .iter()
             .any(|component| matches!(component, InputPathComponent::Dynamic))
     }
+
+    /// The fact this path reads, when it reads one by name.
+    ///
+    /// `input.facts.tags[0]` and `input.facts.files[_].quality` both name
+    /// `tags` / `files`; `input.facts` on its own names nothing.
+    fn maintenance_fact_name(&self) -> Option<&str> {
+        match self.components.as_slice() {
+            [
+                InputPathComponent::Field(input),
+                InputPathComponent::Field(facts),
+                InputPathComponent::Field(name),
+                ..,
+            ] if input == "input" && facts == "facts" => Some(name.as_str()),
+            _ => None,
+        }
+    }
+
+    /// True when the path selects a fact with something other than a literal
+    /// name — `input.facts[key]`, `input.facts[_]`, `input.facts[i]`.
+    fn selects_fact_dynamically(&self) -> bool {
+        matches!(
+            self.components.as_slice(),
+            [
+                InputPathComponent::Field(input),
+                InputPathComponent::Field(facts),
+                selector,
+                ..,
+            ] if input == "input"
+                && facts == "facts"
+                && !matches!(selector, InputPathComponent::Field(_))
+        )
+    }
+
+    /// True when the path reads the whole `input.facts` object without naming
+    /// a fact — e.g. `object.get(input.facts, "x", false)` or
+    /// `count(input.facts)`. Such a read reaches facts the referenced-fact set
+    /// never sees, so an unknown fact would be read as absent instead of
+    /// holding the rule.
+    fn reads_facts_object_wholesale(&self) -> bool {
+        matches!(
+            self.components.as_slice(),
+            [
+                InputPathComponent::Field(input),
+                InputPathComponent::Field(facts),
+            ] if input == "input" && facts == "facts"
+        )
+    }
 }
 
 fn build_input_catalog(contract_json: &str, contract_name: &str) -> RuleInputCatalog {
@@ -198,6 +251,23 @@ fn unknown_rule_input_path_message(path: &str) -> String {
     }
 }
 
+fn dynamic_fact_access_message(path: &str) -> String {
+    format!(
+        "Unsupported dynamic fact access '{path}'. Name the fact directly (for example \
+         input.facts.monitored) — Scryer holds a rule whose facts it could not observe, and it can \
+         only do that when it can tell which facts the rule reads."
+    )
+}
+
+fn whole_facts_object_message(path: &str) -> String {
+    format!(
+        "Unsupported reference to the whole fact object '{path}'. Name each fact directly (for \
+         example input.facts.monitored) — reading the object wholesale would let a rule see an \
+         unknown fact as missing instead of being held, and use input.observations for \
+         envelope-level access."
+    )
+}
+
 fn unsupported_dynamic_input_path_message(path: &str) -> String {
     format!(
         "Unsupported dynamic rule input path '{path}'. Use documented field access, documented array indexing, or input.release.extra.<key>."
@@ -223,10 +293,97 @@ fn collect_unknown_input_path_errors(
 
 fn module_input_path_errors(module: &Module, ctx: InputPathContext) -> Vec<String> {
     let mut errors = BTreeSet::new();
-    for rule in &module.policy {
-        visit_rule(rule, &mut errors, ctx);
-    }
+    walk_module_input_paths(module, ctx, |path| {
+        if let Some(error) = validate_input_reference_path(path, ctx) {
+            errors.insert(error);
+        }
+    });
     errors.into_iter().collect()
+}
+
+/// Names of the `input.facts.<name>` facts a maintenance policy references.
+///
+/// This is the compile-time half of host-derived unknownness: the engine holds
+/// this set per rule and, at evaluation time, refuses to consult a rule whose
+/// referenced facts are not all resolvable for that subject. It is deliberately
+/// *static* — [`validate_maintenance_rule`] rejects dynamic fact access and
+/// `input` imports precisely so this set can never be an underestimate of what
+/// a rule actually reads.
+///
+/// References under `input.observations.*` are not collected: that namespace is
+/// the opted-out surface where the author takes responsibility for the
+/// three-valued envelope themselves.
+fn module_referenced_facts(module: &Module) -> Result<BTreeSet<String>, String> {
+    let ctx = InputPathContext::maintenance();
+    let mut facts = BTreeSet::new();
+    let mut error: Option<String> = None;
+    walk_module_input_paths(module, ctx, |path| {
+        if error.is_some() {
+            return;
+        }
+        // Mirrored here, not only in validation: a stored revision that
+        // predates (or somehow bypassed) validation must still never load with
+        // an underestimated fact set.
+        if path.selects_fact_dynamically() {
+            error = Some(dynamic_fact_access_message(&path.display));
+        } else if path.reads_facts_object_wholesale() {
+            error = Some(whole_facts_object_message(&path.display));
+        } else if let Some(name) = path.maintenance_fact_name() {
+            facts.insert(name.to_string());
+        }
+    });
+    match error {
+        Some(error) => Err(error),
+        None => Ok(facts),
+    }
+}
+
+fn walk_module_input_paths(
+    module: &Module,
+    ctx: InputPathContext,
+    mut sink: impl FnMut(&InputReferencePath),
+) {
+    for rule in &module.policy {
+        visit_rule(rule, &mut sink, ctx);
+    }
+}
+
+/// Facts a maintenance policy reads, plus the parse work needed to find them.
+///
+/// Fails rather than guessing: a source that will not parse, or that pulls part
+/// of `input` in through an import, has no statically resolvable fact set, and
+/// a rule whose fact set is unknown must never load.
+pub(crate) fn maintenance_fact_references(
+    rego_source: &str,
+    policy_path: &str,
+) -> Result<BTreeSet<String>, String> {
+    let module = parse_module(rego_source, policy_path)?;
+    if let Some(error) = input_import_error(&module) {
+        return Err(error);
+    }
+    module_referenced_facts(&module)
+}
+
+/// Reject any import that pulls `input` (or part of it) into scope.
+///
+/// `import input.facts` would let a rule write `facts.monitored`, which the
+/// path walker sees as a plain variable, not a fact reference — the rule would
+/// then read facts the host never knew to check for unknownness, silently
+/// losing the fail-closed guarantee. Resolving imports back to full paths is
+/// tractable, but it means teaching the walker scoping rules (aliases, local
+/// bindings that shadow the import) to buy an abbreviation worth one word. The
+/// import is refused instead, and the author writes the path out.
+fn input_import_error(module: &Module) -> Option<String> {
+    module.imports.iter().find_map(|import| {
+        (rule_head_name(&import.refr) == Some("input")).then(|| {
+            format!(
+                "Unsupported import '{}' in a maintenance rule. Reference facts by their full path \
+                 (for example input.facts.monitored) so Scryer can tell which facts the rule \
+                 depends on.",
+                import.refr.span().text().trim()
+            )
+        })
+    })
 }
 
 /// Leading name of a rule head reference, e.g. `match` for `match["x"]`.
@@ -252,72 +409,84 @@ fn module_defines_rule(module: &Module, name: &str) -> bool {
     })
 }
 
-fn visit_rule(rule: &Rule, errors: &mut BTreeSet<String>, ctx: InputPathContext) {
+fn visit_rule(rule: &Rule, sink: &mut dyn FnMut(&InputReferencePath), ctx: InputPathContext) {
     match rule {
         Rule::Spec { head, bodies, .. } => {
-            visit_rule_head(head, errors, ctx);
+            visit_rule_head(head, sink, ctx);
             for body in bodies {
-                visit_rule_body(body, errors, ctx);
+                visit_rule_body(body, sink, ctx);
             }
         }
         Rule::Default {
             refr, args, value, ..
         } => {
-            visit_expr(refr, errors, ctx);
+            visit_expr(refr, sink, ctx);
             for arg in args {
-                visit_expr(arg, errors, ctx);
+                visit_expr(arg, sink, ctx);
             }
-            visit_expr(value, errors, ctx);
+            visit_expr(value, sink, ctx);
         }
     }
 }
 
-fn visit_rule_head(head: &RuleHead, errors: &mut BTreeSet<String>, ctx: InputPathContext) {
+fn visit_rule_head(
+    head: &RuleHead,
+    sink: &mut dyn FnMut(&InputReferencePath),
+    ctx: InputPathContext,
+) {
     match head {
         RuleHead::Compr { refr, assign, .. } => {
-            visit_expr(refr, errors, ctx);
+            visit_expr(refr, sink, ctx);
             if let Some(assign) = assign {
-                visit_expr(&assign.value, errors, ctx);
+                visit_expr(&assign.value, sink, ctx);
             }
         }
         RuleHead::Set { refr, key, .. } => {
-            visit_expr(refr, errors, ctx);
+            visit_expr(refr, sink, ctx);
             if let Some(key) = key {
-                visit_expr(key, errors, ctx);
+                visit_expr(key, sink, ctx);
             }
         }
         RuleHead::Func {
             refr, args, assign, ..
         } => {
-            visit_expr(refr, errors, ctx);
+            visit_expr(refr, sink, ctx);
             for arg in args {
-                visit_expr(arg, errors, ctx);
+                visit_expr(arg, sink, ctx);
             }
             if let Some(assign) = assign {
-                visit_expr(&assign.value, errors, ctx);
+                visit_expr(&assign.value, sink, ctx);
             }
         }
     }
 }
 
-fn visit_rule_body(body: &RuleBody, errors: &mut BTreeSet<String>, ctx: InputPathContext) {
+fn visit_rule_body(
+    body: &RuleBody,
+    sink: &mut dyn FnMut(&InputReferencePath),
+    ctx: InputPathContext,
+) {
     if let Some(assign) = &body.assign {
-        visit_expr(&assign.value, errors, ctx);
+        visit_expr(&assign.value, sink, ctx);
     }
-    visit_query(&body.query, errors, ctx);
+    visit_query(&body.query, sink, ctx);
 }
 
-fn visit_query(query: &Query, errors: &mut BTreeSet<String>, ctx: InputPathContext) {
+fn visit_query(query: &Query, sink: &mut dyn FnMut(&InputReferencePath), ctx: InputPathContext) {
     for stmt in &query.stmts {
-        visit_literal(&stmt.literal, errors, ctx);
+        visit_literal(&stmt.literal, sink, ctx);
         for with_mod in &stmt.with_mods {
-            visit_expr(&with_mod.refr, errors, ctx);
-            visit_expr(&with_mod.r#as, errors, ctx);
+            visit_expr(&with_mod.refr, sink, ctx);
+            visit_expr(&with_mod.r#as, sink, ctx);
         }
     }
 }
 
-fn visit_literal(literal: &Literal, errors: &mut BTreeSet<String>, ctx: InputPathContext) {
+fn visit_literal(
+    literal: &Literal,
+    sink: &mut dyn FnMut(&InputReferencePath),
+    ctx: InputPathContext,
+) {
     match literal {
         Literal::SomeVars { .. } => {}
         Literal::SomeIn {
@@ -327,67 +496,77 @@ fn visit_literal(literal: &Literal, errors: &mut BTreeSet<String>, ctx: InputPat
             ..
         } => {
             if let Some(key) = key {
-                visit_expr(key, errors, ctx);
+                visit_expr(key, sink, ctx);
             }
-            visit_expr(value, errors, ctx);
-            visit_expr(collection, errors, ctx);
+            visit_expr(value, sink, ctx);
+            visit_expr(collection, sink, ctx);
         }
-        Literal::Expr { expr, .. } | Literal::NotExpr { expr, .. } => visit_expr(expr, errors, ctx),
+        Literal::Expr { expr, .. } | Literal::NotExpr { expr, .. } => visit_expr(expr, sink, ctx),
         Literal::Every { domain, query, .. } => {
-            visit_expr(domain, errors, ctx);
-            visit_query(query, errors, ctx);
+            visit_expr(domain, sink, ctx);
+            visit_query(query, sink, ctx);
         }
     }
 }
 
-fn visit_expr(expr: &Expr, errors: &mut BTreeSet<String>, ctx: InputPathContext) {
-    if let Some(path) = extract_input_reference_path(expr, ctx)
-        && let Some(error) = validate_input_reference_path(&path, ctx)
-    {
-        errors.insert(error);
+fn visit_expr(expr: &Expr, sink: &mut dyn FnMut(&InputReferencePath), ctx: InputPathContext) {
+    // Emit maximal paths only: when this node is itself an input reference,
+    // its `refr` chain is a prefix of the same reference and is not re-emitted
+    // below. That is what lets a *standalone* `input.facts` — one passed to a
+    // builtin rather than followed by a fact name — be told apart from the
+    // harmless `input.facts` inside `input.facts.monitored`.
+    let extracted = extract_input_reference_path(expr, ctx);
+    if let Some(path) = &extracted {
+        sink(path);
     }
 
     match expr {
         Expr::Array { items, .. } | Expr::Set { items, .. } => {
             for item in items {
-                visit_expr(item, errors, ctx);
+                visit_expr(item, sink, ctx);
             }
         }
         Expr::Object { fields, .. } => {
             for (_, key, value) in fields {
-                visit_expr(key, errors, ctx);
-                visit_expr(value, errors, ctx);
+                visit_expr(key, sink, ctx);
+                visit_expr(value, sink, ctx);
             }
         }
         Expr::ArrayCompr { term, query, .. } | Expr::SetCompr { term, query, .. } => {
-            visit_expr(term, errors, ctx);
-            visit_query(query, errors, ctx);
+            visit_expr(term, sink, ctx);
+            visit_query(query, sink, ctx);
         }
         Expr::ObjectCompr {
             key, value, query, ..
         } => {
-            visit_expr(key, errors, ctx);
-            visit_expr(value, errors, ctx);
-            visit_query(query, errors, ctx);
+            visit_expr(key, sink, ctx);
+            visit_expr(value, sink, ctx);
+            visit_query(query, sink, ctx);
         }
         Expr::Call { fcn, params, .. } => {
-            visit_expr(fcn, errors, ctx);
+            visit_expr(fcn, sink, ctx);
             for param in params {
-                visit_expr(param, errors, ctx);
+                visit_expr(param, sink, ctx);
             }
         }
-        Expr::UnaryExpr { expr, .. } => visit_expr(expr, errors, ctx),
-        Expr::RefDot { refr, .. } => visit_expr(refr, errors, ctx),
+        Expr::UnaryExpr { expr, .. } => visit_expr(expr, sink, ctx),
+        Expr::RefDot { refr, .. } => {
+            if extracted.is_none() {
+                visit_expr(refr, sink, ctx);
+            }
+        }
         Expr::RefBrack { refr, index, .. } => {
-            visit_expr(refr, errors, ctx);
-            visit_expr(index, errors, ctx);
+            if extracted.is_none() {
+                visit_expr(refr, sink, ctx);
+            }
+            visit_expr(index, sink, ctx);
         }
         Expr::BinExpr { lhs, rhs, .. }
         | Expr::BoolExpr { lhs, rhs, .. }
         | Expr::ArithExpr { lhs, rhs, .. }
         | Expr::AssignExpr { lhs, rhs, .. } => {
-            visit_expr(lhs, errors, ctx);
-            visit_expr(rhs, errors, ctx);
+            visit_expr(lhs, sink, ctx);
+            visit_expr(rhs, sink, ctx);
         }
         Expr::Membership {
             key,
@@ -396,10 +575,10 @@ fn visit_expr(expr: &Expr, errors: &mut BTreeSet<String>, ctx: InputPathContext)
             ..
         } => {
             if let Some(key) = key {
-                visit_expr(key, errors, ctx);
+                visit_expr(key, sink, ctx);
             }
-            visit_expr(value, errors, ctx);
-            visit_expr(collection, errors, ctx);
+            visit_expr(value, sink, ctx);
+            visit_expr(collection, sink, ctx);
         }
         Expr::String { .. }
         | Expr::RawString { .. }
@@ -408,8 +587,8 @@ fn visit_expr(expr: &Expr, errors: &mut BTreeSet<String>, ctx: InputPathContext)
         | Expr::Null { .. }
         | Expr::Var { .. } => {}
         Expr::OrExpr { lhs, rhs, .. } => {
-            visit_expr(lhs, errors, ctx);
-            visit_expr(rhs, errors, ctx);
+            visit_expr(lhs, sink, ctx);
+            visit_expr(rhs, sink, ctx);
         }
     }
 }
@@ -466,6 +645,17 @@ fn validate_input_reference_path(
 ) -> Option<String> {
     if ctx.allow_release_extra && path.is_dynamic_extra_path() {
         return None;
+    }
+
+    // Fact names must be literal: the engine derives the set of facts a rule
+    // depends on from these paths, and a computed name would leave that set
+    // silently incomplete.
+    if ctx.static_facts_only && path.selects_fact_dynamically() {
+        return Some(dynamic_fact_access_message(&path.display));
+    }
+
+    if ctx.static_facts_only && path.reads_facts_object_wholesale() {
+        return Some(whole_facts_object_message(&path.display));
     }
 
     if path.has_dynamic_component() {
@@ -629,12 +819,15 @@ pub fn validate_managed_rule(
 /// Checks:
 /// 1. Package declaration matches `scryer.maintenance.user.<rule_set_id>`.
 /// 2. Source and the generated decision wrapper both compile.
-/// 3. The source defines a rule named `match`. The wrapper defaults an
+/// 3. No import pulls part of `input` into scope, and every fact is selected by
+///    a literal name. Both keep the referenced-fact set statically resolvable,
+///    which is what lets the engine hold a rule whose facts it cannot observe.
+/// 4. The source defines a rule named `match`. The wrapper defaults an
 ///    undefined `match` to false, so a matcher that never defines one would
 ///    quietly evaluate to no-match forever — this is the only place that catches
 ///    it.
-/// 4. Every `input.*` reference resolves in the maintenance catalog.
-/// 5. A dry run against synthetic input yields a well-formed decision.
+/// 5. Every `input.*` reference resolves in the maintenance catalog.
+/// 6. A dry run against synthetic input yields a well-formed decision.
 pub fn validate_maintenance_rule(
     rego_source: &str,
     rule_set_id: &str,
@@ -660,6 +853,10 @@ pub fn validate_maintenance_rule(
     }
 
     let module = parse_module(rego_source, &policy_path).map_err(RulesError::Compilation)?;
+
+    if let Some(error) = input_import_error(&module) {
+        return Ok(ValidationResult::invalid(error));
+    }
 
     let input_path_errors = module_input_path_errors(&module, InputPathContext::maintenance());
     if !input_path_errors.is_empty() {
@@ -1005,11 +1202,29 @@ mod tests {
         let result = validate_maintenance_body(
             "unmonitored_and_stale",
             "match if {\n  \
-               input.facts.monitored.status == \"known\"\n  \
-               not input.facts.monitored.value\n  \
-               input.facts.files.value[0].quality == \"2160P\"\n\
+               not input.facts.monitored\n  \
+               input.facts.files[0].quality == \"2160P\"\n\
              }\n\n\
              reasons contains \"unmonitored\"\n",
+        );
+        assert!(result.valid, "errors: {:?}", result.errors);
+    }
+
+    /// The advanced surface stays documented and reachable: envelope fields,
+    /// including the per-file detail under `value[]`, still validate.
+    #[test]
+    fn a_maintenance_rule_may_read_the_observation_envelope_directly() {
+        let result = validate_maintenance_body(
+            "envelope_reader",
+            "match if {\n  \
+               input.observations.monitored.status == \"known\"\n  \
+               not input.observations.monitored.value\n  \
+               input.observations.files.value[0].quality == \"2160P\"\n\
+             }\n\n\
+             unknown if {\n  \
+               input.observations.last_upgraded_at.status == \"unknown\"\n\
+             }\n\n\
+             reasons contains input.observations.last_upgraded_at.reason\n",
         );
         assert!(result.valid, "errors: {:?}", result.errors);
     }
@@ -1018,7 +1233,7 @@ mod tests {
     fn maintenance_rule_without_match_is_rejected() {
         let result = validate_maintenance_body(
             "no_match_rule",
-            "unknown if {\n  input.facts.monitored.status != \"known\"\n}\n",
+            "unknown if {\n  not input.facts.monitored\n}\n",
         );
         assert!(!result.valid);
         assert!(
@@ -1026,6 +1241,114 @@ mod tests {
             "{:?}",
             result.errors
         );
+    }
+
+    /// The referenced-fact set is what makes an unobservable fact hold a rule,
+    /// so a fact name the host cannot read off the source is refused outright.
+    #[test]
+    fn maintenance_rule_with_dynamic_fact_access_is_rejected() {
+        let result = validate_maintenance_body(
+            "dynamic_fact",
+            "match if {\n  some fact\n  input.facts[fact]\n}\n",
+        );
+        assert!(!result.valid);
+        assert!(
+            result.errors.iter().any(|error| {
+                error.contains("Unsupported dynamic fact access")
+                    && error.contains("input.facts.monitored")
+            }),
+            "{:?}",
+            result.errors
+        );
+    }
+
+    /// Passing the whole fact object to a builtin sidesteps the referenced-fact
+    /// set the same way a computed name would: `object.get(input.facts, "x",
+    /// false)` reads fact `x` without ever writing the path, so an unknown `x`
+    /// would decide as a plain false instead of holding the rule.
+    #[test]
+    fn maintenance_rule_reading_the_whole_fact_object_is_rejected() {
+        let result = validate_maintenance_body(
+            "whole_object",
+            "match if {\n  object.get(input.facts, \"monitored\", false)\n}\n",
+        );
+        assert!(!result.valid);
+        assert!(
+            result.errors.iter().any(|error| {
+                error.contains("Unsupported reference to the whole fact object")
+                    && error.contains("input.observations")
+            }),
+            "{:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn maintenance_rule_importing_part_of_input_is_rejected() {
+        let source = maintenance::rewrite_package_declaration(
+            "import input.facts\n\nmatch if {\n  facts.monitored\n}\n",
+            "imported_facts",
+        );
+        let result = validate_maintenance_rule(&source, "imported_facts").expect("validates");
+        assert!(!result.valid);
+        assert!(
+            result.errors[0].contains("Unsupported import 'input.facts'"),
+            "{:?}",
+            result.errors
+        );
+    }
+
+    /// Every matcher the web offers as a starting point must validate exactly
+    /// as written; a template that needs editing before it saves is not a
+    /// template. Pinned here rather than parsed out of the gallery so the two
+    /// have to be changed together deliberately.
+    #[test]
+    fn every_pinned_maintenance_template_validates() {
+        let templates: [(&str, &str); 9] = [
+            (
+                "dead-wanted",
+                "package rules\nimport rego.v1\n\nmatch if {\n\tinput.facts.monitored\n\tnot input.facts.has_file\n}\n",
+            ),
+            (
+                "library-aging",
+                "package rules\nimport rego.v1\n\nmatch if {\n\tinput.facts.has_file\n\tnot \"keep\" in input.facts.tags\n}\n",
+            ),
+            (
+                "added-age",
+                "package rules\nimport rego.v1\n\nday_ns := (24 * 60 * 60) * 1000000000\n\nmatch if {\n\tage := time.parse_rfc3339_ns(input.evaluation_time) - time.parse_rfc3339_ns(input.facts.added_at)\n\tage > 180 * day_ns\n}\n",
+            ),
+            (
+                "oversized",
+                "package rules\nimport rego.v1\n\nmatch if input.facts.total_file_size_bytes > 40000000000\n",
+            ),
+            (
+                "4k-purge",
+                "package rules\nimport rego.v1\n\nmatch if {\n\tsome file in input.facts.files\n\tfile.video_height >= 2160\n}\n",
+            ),
+            (
+                "requested-expiry",
+                "package rules\nimport rego.v1\n\nmatch if {\n\tinput.facts.requested\n\tnot \"keep\" in input.facts.tags\n}\n",
+            ),
+            (
+                "departed-requester",
+                "package rules\nimport rego.v1\n\nmatch if {\n\t\"departed-user\" in input.facts.requested_by_usernames\n}\n",
+            ),
+            (
+                "system-added",
+                "package rules\nimport rego.v1\n\nmatch if {\n\tnot input.facts.added_by_user_id\n\tinput.facts.has_file\n}\n",
+            ),
+            (
+                "no-profile",
+                "package rules\nimport rego.v1\n\nmatch if not input.facts.quality_profile_id\n",
+            ),
+        ];
+
+        for (index, (template_id, rego_source)) in templates.into_iter().enumerate() {
+            let rule_id = format!("maintenance_template_{index}");
+            let rewritten = maintenance::rewrite_package_declaration(rego_source, &rule_id);
+            let result = validate_maintenance_rule(&rewritten, &rule_id).expect("validates");
+            assert!(result.valid, "{template_id}: {:?}", result.errors);
+        }
     }
 
     #[test]
@@ -1043,7 +1366,7 @@ mod tests {
     fn maintenance_rule_with_unknown_input_path_is_rejected() {
         let result = validate_maintenance_body(
             "watch_count",
-            "match if {\n  input.facts.watch_count.value == 0\n}\n",
+            "match if {\n  input.facts.watch_count == 0\n}\n",
         );
         assert!(!result.valid);
         assert!(
@@ -1063,7 +1386,7 @@ mod tests {
         );
         assert!(!result.valid);
         assert!(
-            result.errors[0].contains("Unknown rule input path 'input.release'"),
+            result.errors[0].contains("Unknown rule input path 'input.release.extra.anything'"),
             "{:?}",
             result.errors
         );

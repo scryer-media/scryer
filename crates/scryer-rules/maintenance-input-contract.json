@@ -79,6 +79,153 @@
       "fields": [
         {
           "field": "monitored",
+          "type": "bool",
+          "descKey": "settings.refMaintFactsMonitored"
+        },
+        {
+          "field": "tags",
+          "type": "string[]",
+          "descKey": "settings.refMaintFactsTags"
+        },
+        {
+          "field": "quality_profile_id",
+          "type": "string",
+          "descKey": "settings.refMaintFactsQualityProfileId"
+        },
+        {
+          "field": "added_at",
+          "type": "string",
+          "descKey": "settings.refMaintFactsAddedAt"
+        },
+        {
+          "field": "added_by_user_id",
+          "type": "string",
+          "descKey": "settings.refMaintFactsAddedByUserId"
+        },
+        {
+          "field": "added_by_username",
+          "type": "string",
+          "descKey": "settings.refMaintFactsAddedByUsername"
+        },
+        {
+          "field": "requested",
+          "type": "bool",
+          "descKey": "settings.refMaintFactsRequested"
+        },
+        {
+          "field": "requested_by_user_ids",
+          "type": "string[]",
+          "descKey": "settings.refMaintFactsRequestedByUserIds"
+        },
+        {
+          "field": "requested_by_usernames",
+          "type": "string[]",
+          "descKey": "settings.refMaintFactsRequestedByUsernames"
+        },
+        {
+          "field": "first_imported_at",
+          "type": "string",
+          "descKey": "settings.refMaintFactsFirstImportedAt"
+        },
+        {
+          "field": "last_upgraded_at",
+          "type": "string",
+          "descKey": "settings.refMaintFactsLastUpgradedAt"
+        },
+        {
+          "field": "has_file",
+          "type": "bool",
+          "descKey": "settings.refMaintFactsHasFile"
+        },
+        {
+          "field": "file_count",
+          "type": "number",
+          "descKey": "settings.refMaintFactsFileCount"
+        },
+        {
+          "field": "total_file_size_bytes",
+          "type": "number",
+          "descKey": "settings.refMaintFactsTotalFileSizeBytes"
+        },
+        {
+          "field": "files",
+          "type": "object[]",
+          "descKey": "settings.refMaintFactsFiles"
+        },
+        {
+          "field": "episode_count",
+          "type": "number",
+          "descKey": "settings.refMaintFactsEpisodeCount"
+        },
+        {
+          "field": "episode_file_count",
+          "type": "number",
+          "descKey": "settings.refMaintFactsEpisodeFileCount"
+        },
+        {
+          "field": "monitored_episode_count",
+          "type": "number",
+          "descKey": "settings.refMaintFactsMonitoredEpisodeCount"
+        },
+        {
+          "field": "active_downloads",
+          "type": "bool",
+          "descKey": "settings.refMaintFactsActiveDownloads"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintSectionFiles",
+      "path": "input.facts.files[]",
+      "fields": [
+        {
+          "field": "size_bytes",
+          "type": "number?",
+          "descKey": "settings.refMaintFileSizeBytes"
+        },
+        {
+          "field": "quality",
+          "type": "string?",
+          "descKey": "settings.refMaintFileQuality"
+        },
+        {
+          "field": "video_codec",
+          "type": "string?",
+          "descKey": "settings.refMaintFileVideoCodec"
+        },
+        {
+          "field": "video_width",
+          "type": "number?",
+          "descKey": "settings.refMaintFileVideoWidth"
+        },
+        {
+          "field": "video_height",
+          "type": "number?",
+          "descKey": "settings.refMaintFileVideoHeight"
+        },
+        {
+          "field": "audio_languages",
+          "type": "string[]",
+          "descKey": "settings.refMaintFileAudioLanguages"
+        },
+        {
+          "field": "subtitle_languages",
+          "type": "string[]",
+          "descKey": "settings.refMaintFileSubtitleLanguages"
+        },
+        {
+          "field": "added_at",
+          "type": "string?",
+          "descKey": "settings.refMaintFileAddedAt"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintSectionObservations",
+      "path": "input.observations",
+      "fields": [
+        {
+          "field": "monitored",
           "type": "object",
           "descKey": "settings.refMaintFactsMonitored"
         },
@@ -176,7 +323,7 @@
     },
     {
       "titleKey": "settings.refMaintFactsMonitored",
-      "path": "input.facts.monitored",
+      "path": "input.observations.monitored",
       "fields": [
         {
           "field": "status",
@@ -202,7 +349,7 @@
     },
     {
       "titleKey": "settings.refMaintFactsTags",
-      "path": "input.facts.tags",
+      "path": "input.observations.tags",
       "fields": [
         {
           "field": "status",
@@ -228,7 +375,7 @@
     },
     {
       "titleKey": "settings.refMaintFactsQualityProfileId",
-      "path": "input.facts.quality_profile_id",
+      "path": "input.observations.quality_profile_id",
       "fields": [
         {
           "field": "status",
@@ -254,7 +401,7 @@
     },
     {
       "titleKey": "settings.refMaintFactsAddedAt",
-      "path": "input.facts.added_at",
+      "path": "input.observations.added_at",
       "fields": [
         {
           "field": "status",
@@ -280,7 +427,7 @@
     },
     {
       "titleKey": "settings.refMaintFactsAddedByUserId",
-      "path": "input.facts.added_by_user_id",
+      "path": "input.observations.added_by_user_id",
       "fields": [
         {
           "field": "status",
@@ -306,7 +453,7 @@
     },
     {
       "titleKey": "settings.refMaintFactsAddedByUsername",
-      "path": "input.facts.added_by_username",
+      "path": "input.observations.added_by_username",
       "fields": [
         {
           "field": "status",
@@ -332,7 +479,7 @@
     },
     {
       "titleKey": "settings.refMaintFactsRequested",
-      "path": "input.facts.requested",
+      "path": "input.observations.requested",
       "fields": [
         {
           "field": "status",
@@ -358,7 +505,7 @@
     },
     {
       "titleKey": "settings.refMaintFactsRequestedByUserIds",
-      "path": "input.facts.requested_by_user_ids",
+      "path": "input.observations.requested_by_user_ids",
       "fields": [
         {
           "field": "status",
@@ -384,7 +531,7 @@
     },
     {
       "titleKey": "settings.refMaintFactsRequestedByUsernames",
-      "path": "input.facts.requested_by_usernames",
+      "path": "input.observations.requested_by_usernames",
       "fields": [
         {
           "field": "status",
@@ -410,7 +557,7 @@
     },
     {
       "titleKey": "settings.refMaintFactsFirstImportedAt",
-      "path": "input.facts.first_imported_at",
+      "path": "input.observations.first_imported_at",
       "fields": [
         {
           "field": "status",
@@ -436,7 +583,7 @@
     },
     {
       "titleKey": "settings.refMaintFactsLastUpgradedAt",
-      "path": "input.facts.last_upgraded_at",
+      "path": "input.observations.last_upgraded_at",
       "fields": [
         {
           "field": "status",
@@ -462,7 +609,7 @@
     },
     {
       "titleKey": "settings.refMaintFactsHasFile",
-      "path": "input.facts.has_file",
+      "path": "input.observations.has_file",
       "fields": [
         {
           "field": "status",
@@ -488,7 +635,7 @@
     },
     {
       "titleKey": "settings.refMaintFactsFileCount",
-      "path": "input.facts.file_count",
+      "path": "input.observations.file_count",
       "fields": [
         {
           "field": "status",
@@ -514,7 +661,7 @@
     },
     {
       "titleKey": "settings.refMaintFactsTotalFileSizeBytes",
-      "path": "input.facts.total_file_size_bytes",
+      "path": "input.observations.total_file_size_bytes",
       "fields": [
         {
           "field": "status",
@@ -540,7 +687,7 @@
     },
     {
       "titleKey": "settings.refMaintFactsFiles",
-      "path": "input.facts.files",
+      "path": "input.observations.files",
       "fields": [
         {
           "field": "status",
@@ -566,7 +713,7 @@
     },
     {
       "titleKey": "settings.refMaintFactsEpisodeCount",
-      "path": "input.facts.episode_count",
+      "path": "input.observations.episode_count",
       "fields": [
         {
           "field": "status",
@@ -592,7 +739,7 @@
     },
     {
       "titleKey": "settings.refMaintFactsEpisodeFileCount",
-      "path": "input.facts.episode_file_count",
+      "path": "input.observations.episode_file_count",
       "fields": [
         {
           "field": "status",
@@ -618,7 +765,7 @@
     },
     {
       "titleKey": "settings.refMaintFactsMonitoredEpisodeCount",
-      "path": "input.facts.monitored_episode_count",
+      "path": "input.observations.monitored_episode_count",
       "fields": [
         {
           "field": "status",
@@ -644,7 +791,7 @@
     },
     {
       "titleKey": "settings.refMaintFactsActiveDownloads",
-      "path": "input.facts.active_downloads",
+      "path": "input.observations.active_downloads",
       "fields": [
         {
           "field": "status",
@@ -669,8 +816,8 @@
       ]
     },
     {
-      "titleKey": "settings.refMaintSectionFiles",
-      "path": "input.facts.files.value[]",
+      "titleKey": "settings.refMaintSectionObsFiles",
+      "path": "input.observations.files.value[]",
       "fields": [
         {
           "field": "size_bytes",

@@ -75,8 +75,7 @@ fn assert_error_contains(body: &Value, expected: &str) {
 /// Matches every monitored title. The package line is deliberately absent: the
 /// server owns it, and the editor never sees it.
 const MONITORED_MATCHER: &str = "match if {\n\
-     \tinput.facts.monitored.status == \"known\"\n\
-     \tinput.facts.monitored.value\n\
+     \tinput.facts.monitored\n\
      }\n";
 
 /// Matches nothing: the facet never equals this sentinel.
@@ -85,15 +84,11 @@ const NEVER_MATCHER: &str = "match if {\n\
      }\n";
 
 /// Reads a fact this wave cannot observe, so every title must be held rather
-/// than reported as a no-match.
+/// than reported as a no-match. Nothing in the source says so: the server
+/// derives the hold from the fact the matcher references, which is exactly the
+/// mistake an author can no longer make.
 const ACTIVE_DOWNLOADS_MATCHER: &str = "match if {\n\
-     \tinput.facts.active_downloads.value\n\
-     }\n\n\
-     unknown if {\n\
-     \tinput.facts.active_downloads.status != \"known\"\n\
-     }\n\n\
-     reasons contains \"active_downloads_unavailable\" if {\n\
-     \tinput.facts.active_downloads.status != \"known\"\n\
+     \tnot input.facts.active_downloads\n\
      }\n";
 
 const INVALID_MATCHER: &str = "match if { this is not rego\n";
@@ -700,7 +695,7 @@ async fn maintenance_rule_preview_holds_a_title_on_an_unobservable_fact() {
     // action here deletes files.
     assert_eq!(held["outcome"], "UNKNOWN");
     assert_eq!(held["error"], Value::Null);
-    assert_eq!(held["reasonCodes"], json!(["active_downloads_unavailable"]));
+    assert_eq!(held["reasonCodes"], json!(["not_yet_collected"]));
 }
 
 #[tokio::test]
@@ -1664,7 +1659,13 @@ async fn the_full_destructive_journey_removes_a_matching_title() {
 async fn a_reversible_unmonitor_journey_needs_only_the_reversible_gate() {
     let ctx = TestContext::new().await;
     seed_title(&ctx, "title-unmon", "Stale Movie", true).await;
-    let detail = create_rule(&ctx, "Unmonitor stale", MONITORED_MATCHER, unmonitor_action()).await;
+    let detail = create_rule(
+        &ctx,
+        "Unmonitor stale",
+        MONITORED_MATCHER,
+        unmonitor_action(),
+    )
+    .await;
     let rule_set_id = detail["ruleSet"]["id"]
         .as_str()
         .expect("rule id")

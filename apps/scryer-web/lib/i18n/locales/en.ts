@@ -3563,16 +3563,16 @@ const en: LocaleDictionary = {
   // ── Maintenance rules — input reference ──
   "settings.refMaintTitle": "Maintenance input reference",
   "settings.refMaintSubtitle": "Click to expand every fact a maintenance matcher can read.",
-  "settings.refMaintIntro": "Every maintenance rule receives one input object per subject: input.subject identifies what is being evaluated, input.library says where it lives, input.facts carries the fact snapshot, and the evaluation envelope sits on input itself. Facts are three-valued — always test .status before reading .value.",
+  "settings.refMaintIntro": "Every maintenance rule receives one input object per subject: input.subject identifies what is being evaluated, input.library says where it lives, input.facts carries the fact snapshot, and the evaluation envelope sits on input itself. A fact is a plain value, and the key is simply missing when there is nothing to report — so write input.facts.monitored, not a status check. If a rule reads a fact Scryer could not observe for that subject, Scryer holds the subject for you; you never have to write that guard yourself.",
   "settings.refMaintOutputTitle": "Rule output",
   "settings.refMaintOutputIntro": "A matcher defines up to three names. Anything else in the package is ignored, and a decision that is not exactly this shape is rejected rather than coerced.",
   "settings.refMaintOutputMatch": "match — boolean. Leaving it undefined means the subject did not match.",
-  "settings.refMaintOutputUnknown": "unknown — boolean. Set it when the rule cannot see enough to decide; unknown always beats a match.",
+  "settings.refMaintOutputUnknown": "unknown — boolean. Set it when the rule itself cannot see enough to decide; unknown always beats a match. Facts Scryer could not observe are already handled for you, so this is only for judgements of your own.",
   "settings.refMaintOutputReasons": "reasons — a set of short machine codes explaining the decision. They are stored on the candidate and shown in preview.",
   "settings.refMaintOutputNoPackage": "Do not write a package or import line. Scryer adds both when it stores the rule and strips them back off for the editor.",
   "settings.refMaintSectionInput": "— The evaluation envelope",
   "settings.refMaintInputSchemaVersion": "Version of the maintenance input document this rule is authored against",
-  "settings.refMaintInputEvaluationTime": "RFC3339 instant captured once per run, so every subject compares against the same clock. Rules must never reach for a clock of their own.",
+  "settings.refMaintInputEvaluationTime": "RFC3339 instant captured once per run, so every subject compares against the same clock. Use it for date maths — time.now_ns() exists, but it would make the same subject decide differently on a retry.",
   "settings.refMaintSectionSubject": "— The title, season, or episode under evaluation",
   "settings.refMaintSubjectKind": "Granularity under evaluation: title, season, or episode",
   "settings.refMaintSubjectTitleId": "Scryer identifier of the title the subject belongs to",
@@ -3584,7 +3584,7 @@ const en: LocaleDictionary = {
   "settings.refMaintSectionLibrary": "— The library the subject lives in",
   "settings.refMaintLibraryId": "Identifier of the library holding the subject",
   "settings.refMaintLibraryName": "Display name of that library",
-  "settings.refMaintSectionFacts": "— The fact snapshot; every fact is an observation envelope",
+  "settings.refMaintSectionFacts": "— The fact snapshot; each fact is a plain value, and the key is missing when the fact is absent or could not be observed",
   "settings.refMaintFactsMonitored": "Whether the subject is monitored",
   "settings.refMaintFactsTags": "Tags applied to the subject",
   "settings.refMaintFactsQualityProfileId": "Quality profile the subject is assigned to",
@@ -3605,6 +3605,8 @@ const en: LocaleDictionary = {
   "settings.refMaintFactsMonitoredEpisodeCount": "How many of those episodes are monitored",
   "settings.refMaintFactsActiveDownloads": "Whether the subject has a download in flight",
   "settings.refMaintObsStatus": "known, absent, or unknown. absent means the source answered and there is no value; unknown means Scryer could not find out. Test this before reading value — an unknown fact is never coerced to false, 0, or an empty string.",
+  "settings.refMaintSectionObservations": "— The same facts as full envelopes, for rules that need to tell absent apart from unknown or to read the reason. Reading a fact here opts that fact out of the automatic hold: you are taking responsibility for the three-valued answer.",
+  "settings.refMaintSectionObsFiles": "— One entry per file in input.observations.files.value",
   "settings.refMaintObsObservedAt": "When the value was observed, if the source recorded a time",
   "settings.refMaintObsReason": "Stable machine code explaining why the fact is unknown, or why an absent fact has no value",
   "settings.refMaintFactsMonitoredValue": "True when the subject is monitored",
@@ -3621,12 +3623,12 @@ const en: LocaleDictionary = {
   "settings.refMaintFactsHasFileValue": "True when at least one file is on disk",
   "settings.refMaintFactsFileCountValue": "Number of files on disk",
   "settings.refMaintFactsTotalFileSizeBytesValue": "Combined size of those files in bytes",
-  "settings.refMaintFactsFilesValue": "One entry per file; see input.facts.files.value[] below",
+  "settings.refMaintFactsFilesValue": "One entry per file; see input.observations.files.value[] below",
   "settings.refMaintFactsEpisodeCountValue": "Number of episodes in scope",
   "settings.refMaintFactsEpisodeFileCountValue": "Number of those episodes that have a file",
   "settings.refMaintFactsMonitoredEpisodeCountValue": "Number of those episodes that are monitored",
   "settings.refMaintFactsActiveDownloadsValue": "True when a download for the subject is in flight",
-  "settings.refMaintSectionFiles": "— One entry per file in input.facts.files.value",
+  "settings.refMaintSectionFiles": "— One entry per file in input.facts.files",
   "settings.refMaintFileSizeBytes": "Size of the file in bytes",
   "settings.refMaintFileQuality": "Detected quality of the file (for example 2160P, 1080P)",
   "settings.refMaintFileVideoCodec": "Video codec of the file (for example H.265, H.264)",
@@ -3635,6 +3637,44 @@ const en: LocaleDictionary = {
   "settings.refMaintFileAudioLanguages": "Audio languages present in the file",
   "settings.refMaintFileSubtitleLanguages": "Subtitle languages present in the file",
   "settings.refMaintFileAddedAt": "RFC3339 timestamp the file was added",
+
+  "settings.maintenanceTemplateGallery": "Starter templates",
+  "settings.maintenanceTemplateGalleryDescription":
+    "Load a written-out matcher into the editor. Nothing is saved until you review it and press create.",
+  "settings.maintenanceTemplateApply": "Use template",
+  "settings.maintenanceTemplateFacetMovie": "Movies",
+  "settings.maintenanceTemplateFacetShow": "Shows",
+  "settings.maintenanceTemplateGraceBadge": "{{count}}-day grace",
+  "settings.maintenanceTemplateNoGraceBadge": "No grace period",
+  "settings.maintenanceTemplateDestructiveBadge": "Deletes files",
+  "settings.maintenanceTemplateNeedsProfileBadge": "Pick a target profile",
+  "settings.maintenanceTemplateDeadWantedTitle": "Dead wanted entries",
+  "settings.maintenanceTemplateDeadWantedDescription":
+    "Titles you still monitor that no file ever arrived for. Facts are plain values, so a title whose monitoring or file state Scryer cannot see holds instead of matching. After a 30-day grace period the scope is unmonitored and anything already on disk is left alone.",
+  "settings.maintenanceTemplateLibraryAgingTitle": "Library aging",
+  "settings.maintenanceTemplateLibraryAgingDescription":
+    "Caution: this template deletes the title and its files. Anything holding a file ages out unless it carries the \"keep\" tag. A 180-day grace period runs first, and the instance gates plus this rule's own arming still have to agree before anything is removed.",
+  "settings.maintenanceTemplateAddedLongAgoTitle": "Added over 180 days ago",
+  "settings.maintenanceTemplateAddedLongAgoDescription":
+    "Real date math: the matcher subtracts the title's added_at from the evaluation time and matches past 180 days. The scope is unmonitored and the files stay. A title with no added-at value holds rather than matching.",
+  "settings.maintenanceTemplateOversizedTitle": "Oversized releases",
+  "settings.maintenanceTemplateOversizedDescription":
+    "Titles whose files total more than 40 GB. Moves the title onto a quality profile you choose and searches again only if the profile actually changed — pick that target profile in the editor before saving.",
+  "settings.maintenanceTemplateFourKPurgeTitle": "4K purge",
+  "settings.maintenanceTemplateFourKPurgeDescription":
+    "Any title holding a 2160p file. After a 7-day grace period it moves onto a quality profile you choose and searches again if the profile changed. Pick that target profile in the editor before saving.",
+  "settings.maintenanceTemplateRequestedExpiryTitle": "Requested media expiry",
+  "settings.maintenanceTemplateRequestedExpiryDescription":
+    "Caution: this template deletes the title and its files. Titles that came in from a request age out after 120 days unless they carry the \"keep\" tag.",
+  "settings.maintenanceTemplateDepartedRequesterTitle": "Departed requester",
+  "settings.maintenanceTemplateDepartedRequesterDescription":
+    "Caution: this template deletes the title and its files. It matches titles requested by one named user — edit the \"departed-user\" placeholder in the matcher to the username you mean before saving, or it will match nothing.",
+  "settings.maintenanceTemplateSystemAddedTitle": "System-added cleanup",
+  "settings.maintenanceTemplateSystemAddedDescription":
+    "Titles a scan discovered rather than a person adding them, and that hold a file. After 60 days the scope is unmonitored and the files stay where they are.",
+  "settings.maintenanceTemplateNoProfileTitle": "No quality profile",
+  "settings.maintenanceTemplateNoProfileDescription":
+    "Titles with no quality profile assigned. Takes no action at all: this one is for collecting a list to look at before deciding what should happen to it.",
 };
 
 export default en;

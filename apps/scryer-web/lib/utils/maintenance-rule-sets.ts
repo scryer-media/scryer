@@ -19,27 +19,21 @@ export const MAINTENANCE_PREVIEW_LIMIT_DEFAULT = 20;
 /// Starter matcher for a new rule. No `package` or `import` line: the API
 /// generates both and strips them back off when it hands the source to the
 /// editor, so a template carrying them would vanish on the first round trip.
-export const MAINTENANCE_STARTER_SOURCE = `# Maintenance matcher. Define \`match\` to select a subject, \`reasons\` to
-# explain why, and \`unknown\` when the rule cannot see enough to decide.
+export const MAINTENANCE_STARTER_SOURCE = `# Maintenance matcher. Define \`match\` to select a subject and \`reasons\` to
+# explain why.
 #
-# Every fact is a three-valued envelope: check \`.status == "known"\` before
-# trusting \`.value\`. A fact Scryer could not resolve stays unknown rather
-# than reading as false, 0, or "".
+# Facts are plain values: \`input.facts.monitored\` is the boolean itself. A
+# fact with nothing to report is simply missing, so \`not input.facts.has_file\`
+# is how you ask for "no files". If a fact Scryer could not observe is one this
+# rule reads, Scryer holds the subject for you — you never write that guard.
 
 match if {
-	input.facts.monitored.status == "known"
-	not input.facts.monitored.value
-	input.facts.has_file.status == "known"
-	input.facts.has_file.value
+	not input.facts.monitored
+	input.facts.has_file
 }
 
 reasons contains "unmonitored_with_files" if {
 	match
-}
-
-# Prefer an explicit unknown over a confident wrong answer.
-unknown if {
-	input.facts.monitored.status == "unknown"
 }
 `;
 

@@ -76,8 +76,7 @@ fn execution_app(playback: Option<PlaybackProbeStatus>) -> ExecutionFixture {
 }
 
 const MONITORED_MATCHER: &str = "match if {\n\
-     \tinput.facts.monitored.status == \"known\"\n\
-     \tinput.facts.monitored.value\n\
+     \tinput.facts.monitored\n\
      }\n";
 
 const ALWAYS_MATCHER: &str = "match := true\n";

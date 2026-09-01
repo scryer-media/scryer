@@ -16,8 +16,7 @@ use scryer_rules::maintenance::MaintenanceOutcome;
 const MONITORED_MATCHER: &str = "package whatever\n\
      import rego.v1\n\n\
      match if {\n\
-     \tinput.facts.monitored.status == \"known\"\n\
-     \tinput.facts.monitored.value\n\
+     \tinput.facts.monitored\n\
      }\n";
 
 /// Matches nothing: the facet never equals this sentinel.
@@ -28,14 +27,14 @@ const NEVER_MATCHER: &str = "package whatever\n\
      }\n";
 
 /// Would match, but needs a fact this wave cannot observe, so it must hold.
+///
+/// No `unknown` rule of its own: reading `input.facts.last_upgraded_at` is
+/// enough, because the engine will not consult a rule whose facts it could not
+/// observe for the subject.
 const NEEDS_UPGRADE_HISTORY_MATCHER: &str = "package whatever\n\
      import rego.v1\n\n\
-     match := true\n\n\
-     unknown if {\n\
-     \tinput.facts.last_upgraded_at.status != \"known\"\n\
-     }\n\n\
-     reasons contains \"upgrade_history_missing\" if {\n\
-     \tinput.facts.last_upgraded_at.status != \"known\"\n\
+     match if {\n\
+     \tinput.facts.last_upgraded_at != \"\"\n\
      }\n";
 
 #[derive(Default)]
@@ -634,7 +633,9 @@ async fn preview_separates_match_from_no_match() {
 }
 
 /// The fail-closed property the RFC turns on: a rule that needs a fact Scryer
-/// does not collect holds instead of matching.
+/// does not collect holds instead of matching — and it holds without the author
+/// having written a single guard, which is the whole point of the host deriving
+/// unknownness from the facts a rule references.
 #[tokio::test]
 async fn a_rule_needing_an_uncollected_fact_reports_unknown() {
     let MaintenanceFixture { app, user, .. } = maintenance_app();
@@ -661,11 +662,12 @@ async fn a_rule_needing_an_uncollected_fact_reports_unknown() {
     assert_eq!(
         preview.titles[0].outcome,
         Some(MaintenanceOutcome::Unknown),
-        "an unknown fact must beat a bare `match := true`"
+        "a fact Scryer cannot observe must hold the subject, with no guard written"
     );
     assert_eq!(
         preview.titles[0].reason_codes,
-        vec!["upgrade_history_missing".to_string()]
+        vec!["not_yet_collected".to_string()],
+        "the reason is the observation's own code, so the operator sees why"
     );
 }
 
@@ -764,16 +766,15 @@ async fn file_facts_distinguish_having_files_from_having_none() {
     let matcher = "package whatever\n\
          import rego.v1\n\n\
          match if {\n\
-         \tinput.facts.has_file.status == \"known\"\n\
-         \tinput.facts.has_file.value\n\
-         \tinput.facts.file_count.value == 1\n\
-         \tinput.facts.total_file_size_bytes.value == 4000000000\n\
-         \tinput.facts.first_imported_at.status == \"known\"\n\
+         \tinput.facts.has_file\n\
+         \tinput.facts.file_count == 1\n\
+         \tinput.facts.total_file_size_bytes == 4000000000\n\
+         \tinput.facts.first_imported_at != \"\"\n\
          }\n\n\
          match if {\n\
-         \tinput.facts.has_file.value == false\n\
-         \tinput.facts.file_count.value == 0\n\
-         \tinput.facts.first_imported_at.status == \"absent\"\n\
+         \tinput.facts.has_file == false\n\
+         \tinput.facts.file_count == 0\n\
+         \tnot input.facts.first_imported_at\n\
          }\n";
 
     let preview = app
@@ -821,7 +822,7 @@ async fn episode_counts_are_absent_for_movies() {
                     rego_source: "package whatever\n\
                          import rego.v1\n\n\
                          match if {\n\
-                         \tinput.facts.episode_count.status == \"absent\"\n\
+                         \tnot input.facts.episode_count\n\
                          }\n"
                     .to_string(),
                     action_spec: MaintenanceActionSpec::new(

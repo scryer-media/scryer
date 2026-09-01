@@ -24,8 +24,7 @@ use scryer_domain::{
 const MONITORED_MATCHER: &str = "package whatever\n\
      import rego.v1\n\n\
      match if {\n\
-     \tinput.facts.monitored.status == \"known\"\n\
-     \tinput.facts.monitored.value\n\
+     \tinput.facts.monitored\n\
      }\n";
 
 /// Matches nothing: the facet never equals this sentinel.
@@ -35,15 +34,20 @@ const NEVER_MATCHER: &str = "package whatever\n\
      \tinput.subject.facet == \"not-a-facet\"\n\
      }\n";
 
-/// Would match, but needs a fact this wave cannot observe, so it must hold.
+/// Would match, but declares its own hold on the envelope surface.
+///
+/// Deliberately written against `input.observations` rather than
+/// `input.facts`: this is the manual, opted-out path, so the hold here is the
+/// rule's own `unknown` rather than the engine's, and the reason code is one
+/// the author chose. The candidate must be held either way.
 const UNKNOWN_MATCHER: &str = "package whatever\n\
      import rego.v1\n\n\
      match := true\n\n\
      unknown if {\n\
-     \tinput.facts.last_upgraded_at.status != \"known\"\n\
+     \tinput.observations.last_upgraded_at.status != \"known\"\n\
      }\n\n\
      reasons contains \"upgrade_history_missing\" if {\n\
-     \tinput.facts.last_upgraded_at.status != \"known\"\n\
+     \tinput.observations.last_upgraded_at.status != \"known\"\n\
      }\n";
 
 // ── In-memory evaluation store ──────────────────────────────────────────────
@@ -1097,10 +1101,9 @@ async fn candidates_are_only_visible_through_the_gate_or_an_explicit_shadow_requ
 const REQUESTED_MATCHER: &str = "package whatever\n\
      import rego.v1\n\n\
      match if {\n\
-     \tinput.facts.requested.status == \"known\"\n\
-     \tinput.facts.requested.value\n\
-     \tcount(input.facts.requested_by_user_ids.value) == 2\n\
-     \tinput.facts.added_by_username.value == \"admin\"\n\
+     \tinput.facts.requested\n\
+     \tcount(input.facts.requested_by_user_ids) == 2\n\
+     \tinput.facts.added_by_username == \"admin\"\n\
      }\n";
 
 /// [`evaluation_app`] with the media-request repository swapped in and the

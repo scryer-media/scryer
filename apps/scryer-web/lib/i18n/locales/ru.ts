@@ -4889,16 +4889,16 @@ const ru: LocaleDictionary = {
     // ── Maintenance rules — input reference ──
     "settings.refMaintTitle": "Справочник входных данных обслуживания",
     "settings.refMaintSubtitle": "Нажмите, чтобы развернуть полный список фактов, доступных правилу обслуживания.",
-    "settings.refMaintIntro": "Каждое правило обслуживания получает один объект input на субъект: input.subject определяет, что оценивается, input.library — где он находится, input.facts содержит снимок фактов, а сам input несёт конверт оценки. Факты трёхзначные — всегда проверяйте .status перед чтением .value.",
+    "settings.refMaintIntro": "Каждое правило обслуживания получает один объект input на субъект: input.subject определяет, что оценивается, input.library — где он находится, input.facts содержит снимок фактов, а сам input несёт конверт оценки. Факт — это обычное значение, а ключ просто отсутствует, когда сообщать нечего, поэтому пишите input.facts.monitored, а не проверку статуса. Если правило читает факт, который Scryer не смог наблюдать для этого субъекта, Scryer сам удержит субъект — писать такую защиту вручную не нужно.",
     "settings.refMaintOutputTitle": "Результат правила",
     "settings.refMaintOutputIntro": "Правило определяет не более трёх имён. Всё остальное в пакете игнорируется, а решение, не соответствующее в точности этой форме, отклоняется, а не приводится к типу.",
     "settings.refMaintOutputMatch": "match — логическое значение. Если оно не определено, субъект не совпал.",
-    "settings.refMaintOutputUnknown": "unknown — логическое значение. Устанавливайте его, когда правило не может принять решение; unknown всегда имеет приоритет над совпадением.",
+    "settings.refMaintOutputUnknown": "unknown — логическое значение. Устанавливайте его, когда само правило не может принять решение; unknown всегда имеет приоритет над совпадением. Факты, которые Scryer не смог наблюдать, уже обрабатываются автоматически.",
     "settings.refMaintOutputReasons": "reasons — набор коротких машинных кодов, объясняющих решение. Они сохраняются у кандидата и показываются в предпросмотре.",
     "settings.refMaintOutputNoPackage": "Не пишите строки package или import. Scryer добавляет их при сохранении правила и удаляет обратно для редактора.",
     "settings.refMaintSectionInput": "— Конверт оценки",
     "settings.refMaintInputSchemaVersion": "Версия документа входных данных обслуживания, под которую написано правило",
-    "settings.refMaintInputEvaluationTime": "Момент времени в формате RFC3339, фиксируемый один раз за прогон, чтобы все субъекты сравнивались с одними и теми же часами. Правила никогда не должны обращаться к собственным часам.",
+    "settings.refMaintInputEvaluationTime": "Момент времени в формате RFC3339, фиксируемый один раз за прогон, чтобы все субъекты сравнивались с одними и теми же часами. Используйте его для вычислений с датами: time.now_ns() существует, но тогда один и тот же субъект при повторе решался бы иначе.",
     "settings.refMaintSectionSubject": "— Оцениваемый тайтл, сезон или эпизод",
     "settings.refMaintSubjectKind": "Уровень оценки: тайтл, сезон или эпизод",
     "settings.refMaintSubjectTitleId": "Идентификатор Scryer для тайтла, к которому относится субъект",
@@ -4910,7 +4910,7 @@ const ru: LocaleDictionary = {
     "settings.refMaintSectionLibrary": "— Библиотека, в которой находится субъект",
     "settings.refMaintLibraryId": "Идентификатор библиотеки, содержащей субъект",
     "settings.refMaintLibraryName": "Отображаемое имя этой библиотеки",
-    "settings.refMaintSectionFacts": "— Снимок фактов; каждый факт — это конверт наблюдения",
+    "settings.refMaintSectionFacts": "— Снимок фактов; каждый факт — обычное значение, а ключ отсутствует, если факт отсутствует или его не удалось наблюдать",
     "settings.refMaintFactsMonitored": "Отслеживается ли субъект",
     "settings.refMaintFactsTags": "Теги, назначенные субъекту",
     "settings.refMaintFactsQualityProfileId": "Профиль качества, назначенный субъекту",
@@ -4931,6 +4931,8 @@ const ru: LocaleDictionary = {
     "settings.refMaintFactsMonitoredEpisodeCount": "Сколько из этих эпизодов отслеживается",
     "settings.refMaintFactsActiveDownloads": "Есть ли у субъекта активная загрузка",
     "settings.refMaintObsStatus": "known, absent или unknown. absent означает, что источник ответил и значения нет; unknown означает, что Scryer не смог выяснить. Проверяйте это перед чтением value — неизвестный факт никогда не приводится к false, 0 или пустой строке.",
+    "settings.refMaintSectionObservations": "— Те же факты в виде полных конвертов, для правил, которым нужно отличать absent от unknown или читать причину. Чтение факта здесь отключает для него автоматическое удержание: ответственность за трёхзначный ответ берёте на себя вы.",
+    "settings.refMaintSectionObsFiles": "— По одной записи на файл в input.observations.files.value",
     "settings.refMaintObsObservedAt": "Когда значение было получено, если источник записал время",
     "settings.refMaintObsReason": "Устойчивый машинный код, объясняющий, почему факт неизвестен или почему у отсутствующего факта нет значения",
     "settings.refMaintFactsMonitoredValue": "True, когда субъект отслеживается",
@@ -4947,12 +4949,12 @@ const ru: LocaleDictionary = {
     "settings.refMaintFactsHasFileValue": "True, когда на диске есть хотя бы один файл",
     "settings.refMaintFactsFileCountValue": "Количество файлов на диске",
     "settings.refMaintFactsTotalFileSizeBytesValue": "Суммарный размер этих файлов в байтах",
-    "settings.refMaintFactsFilesValue": "По одной записи на файл; см. input.facts.files.value[] ниже",
+    "settings.refMaintFactsFilesValue": "По одной записи на файл; см. input.observations.files.value[] ниже",
     "settings.refMaintFactsEpisodeCountValue": "Количество эпизодов в области действия",
     "settings.refMaintFactsEpisodeFileCountValue": "Количество этих эпизодов, у которых есть файл",
     "settings.refMaintFactsMonitoredEpisodeCountValue": "Количество этих эпизодов, которые отслеживаются",
     "settings.refMaintFactsActiveDownloadsValue": "True, когда для субъекта выполняется загрузка",
-    "settings.refMaintSectionFiles": "— По одной записи на файл в input.facts.files.value",
+    "settings.refMaintSectionFiles": "— По одной записи на файл в input.facts.files",
     "settings.refMaintFileSizeBytes": "Размер файла в байтах",
     "settings.refMaintFileQuality": "Определённое качество файла (например, 2160P, 1080P)",
     "settings.refMaintFileVideoCodec": "Видеокодек файла (например, H.265, H.264)",
@@ -4961,6 +4963,44 @@ const ru: LocaleDictionary = {
     "settings.refMaintFileAudioLanguages": "Языки аудиодорожек в файле",
     "settings.refMaintFileSubtitleLanguages": "Языки субтитров в файле",
     "settings.refMaintFileAddedAt": "Метка времени RFC3339 добавления файла",
+
+    "settings.maintenanceTemplateGallery": "Готовые шаблоны",
+    "settings.maintenanceTemplateGalleryDescription":
+      "Загрузите готовый матчер в редактор. Ничего не сохраняется, пока вы не проверите правило и не нажмёте «Создать».",
+    "settings.maintenanceTemplateApply": "Использовать шаблон",
+    "settings.maintenanceTemplateFacetMovie": "Фильмы",
+    "settings.maintenanceTemplateFacetShow": "Сериалы",
+    "settings.maintenanceTemplateGraceBadge": "Отсрочка {{count}} дн.",
+    "settings.maintenanceTemplateNoGraceBadge": "Без отсрочки",
+    "settings.maintenanceTemplateDestructiveBadge": "Удаляет файлы",
+    "settings.maintenanceTemplateNeedsProfileBadge": "Выберите целевой профиль",
+    "settings.maintenanceTemplateDeadWantedTitle": "Мёртвые запрошенные записи",
+    "settings.maintenanceTemplateDeadWantedDescription":
+      "Отслеживаемые тайтлы, для которых так и не появился ни один файл. Факты — это обычные значения, поэтому тайтл, у которого Scryer не видит состояние отслеживания или наличия файла, удерживается, а не совпадает. После отсрочки в 30 дней область снимается с отслеживания, а всё, что уже есть на диске, остаётся нетронутым.",
+    "settings.maintenanceTemplateLibraryAgingTitle": "Устаревание библиотеки",
+    "settings.maintenanceTemplateLibraryAgingDescription":
+      "Внимание: этот шаблон удаляет тайтл вместе с файлами. Всё, у чего есть файл, устаревает, если на нём нет тега «keep». Сначала идёт отсрочка в 180 дней, и прежде чем что-либо будет удалено, должны совпасть общие ограничители экземпляра и собственное вооружение правила.",
+    "settings.maintenanceTemplateAddedLongAgoTitle": "Добавлено более 180 дней назад",
+    "settings.maintenanceTemplateAddedLongAgoDescription":
+      "Настоящая арифметика дат: матчер вычитает added_at тайтла из времени вычисления и совпадает после 180 дней. Область снимается с отслеживания, файлы остаются. Тайтл без значения added_at удерживается, а не совпадает.",
+    "settings.maintenanceTemplateOversizedTitle": "Слишком большие релизы",
+    "settings.maintenanceTemplateOversizedDescription":
+      "Тайтлы, файлы которых в сумме занимают более 40 ГБ. Переводит тайтл на выбранный вами профиль качества и запускает поиск заново, только если профиль действительно изменился — выберите целевой профиль в редакторе до сохранения.",
+    "settings.maintenanceTemplateFourKPurgeTitle": "Очистка 4K",
+    "settings.maintenanceTemplateFourKPurgeDescription":
+      "Любой тайтл, у которого есть файл 2160p. После отсрочки в 7 дней он переводится на выбранный вами профиль качества, и поиск запускается заново, если профиль изменился. Выберите целевой профиль в редакторе до сохранения.",
+    "settings.maintenanceTemplateRequestedExpiryTitle": "Истечение срока запрошенного",
+    "settings.maintenanceTemplateRequestedExpiryDescription":
+      "Внимание: этот шаблон удаляет тайтл вместе с файлами. Тайтлы, пришедшие по запросу, устаревают через 120 дней, если на них нет тега «keep».",
+    "settings.maintenanceTemplateDepartedRequesterTitle": "Ушедший заказчик",
+    "settings.maintenanceTemplateDepartedRequesterDescription":
+      "Внимание: этот шаблон удаляет тайтл вместе с файлами. Он совпадает с тайтлами, запрошенными одним указанным пользователем — замените в матчере заполнитель «departed-user» на нужное имя пользователя до сохранения, иначе правило не совпадёт ни с чем.",
+    "settings.maintenanceTemplateSystemAddedTitle": "Очистка добавленного системой",
+    "settings.maintenanceTemplateSystemAddedDescription":
+      "Тайтлы, которые обнаружило сканирование, а не добавил человек, и у которых есть файл. Через 60 дней область снимается с отслеживания, а файлы остаются на месте.",
+    "settings.maintenanceTemplateNoProfileTitle": "Без профиля качества",
+    "settings.maintenanceTemplateNoProfileDescription":
+      "Тайтлы, которым не назначен профиль качества. Не выполняет никаких действий: этот шаблон нужен, чтобы собрать список и посмотреть на него, прежде чем решать, что с ним делать.",
 };
 
 export default ru;

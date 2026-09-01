@@ -114,7 +114,7 @@ const detail: MaintenanceRuleSetDetail = {
     id: "rev-3",
     ruleSetId: "rule-1",
     revisionNumber: 3,
-    regoSource: "match if {\n\tinput.facts.has_file.value\n}\n",
+    regoSource: "match if {\n\tinput.facts.has_file\n}\n",
     graceDays: 14,
     matcherContentHash: "blake3:abcdef",
     createdBy: "operator",
@@ -307,13 +307,21 @@ test("every action kind in the pinned enum has a label", () => {
   assert.equal(actionKindLabelKey("SOME_FUTURE_KIND"), null);
 });
 
-test("the maintenance reference table documents the observation envelope", () => {
-  const monitored = maintenanceInputContract.sections.find(
-    (section) => section.path === "input.facts.monitored",
+test("the maintenance reference table documents bare facts and full envelopes", () => {
+  // The simple surface: a fact is its value, with no envelope fields to wade
+  // through.
+  const facts = maintenanceInputContract.sections.find(
+    (section) => section.path === "input.facts",
   );
+  const monitored = facts?.fields.find((field) => field.field === "monitored");
+  assert.equal(monitored?.type, "bool");
 
+  // The advanced surface documents the envelope, under its own namespace.
+  const observed = maintenanceInputContract.sections.find(
+    (section) => section.path === "input.observations.monitored",
+  );
   assert.deepEqual(
-    monitored?.fields.map((field) => field.field),
+    observed?.fields.map((field) => field.field),
     ["status", "value", "observed_at", "reason"],
   );
 });

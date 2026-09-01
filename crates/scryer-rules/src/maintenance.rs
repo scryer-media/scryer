@@ -7,15 +7,25 @@
 //! one.
 //!
 //! Media-server signals (Plex watchlist, Jellyfin/Emby favorites, play history)
-//! are deliberately absent from schema v1. They arrive on their own track once
-//! a provider-neutral signal store exists; adding them here early would force
-//! rules to be written against facts Scryer cannot yet observe.
+//! are deliberately absent from the current schema. They arrive on their own
+//! track once a provider-neutral signal store exists; adding them here early
+//! would force rules to be written against facts Scryer cannot yet observe.
+//!
+//! Two things make a rule safe to write. The rule reads facts as plain values,
+//! so it says what it means (`input.facts.monitored`, not a status dance), and
+//! the *host* — not the author — decides that a rule reading a fact Scryer
+//! could not observe for this subject must be held. The set of facts a rule
+//! reads is extracted from its source at build time, which is why fact names
+//! have to be literal and why `input` cannot be imported.
 
 use crate::RulesError;
 use crate::runtime::{self, RuntimeLimits};
+use crate::validation;
 use chrono::{DateTime, Utc};
 use regorus::{Engine, Value};
 use serde::Serialize;
+use serde::ser::{SerializeStruct, Serializer};
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use tracing::warn;
 
@@ -23,7 +33,17 @@ use tracing::warn;
 
 /// Version of the maintenance input document. Rules are authored against a
 /// specific version; bumping it is a breaking change to every stored matcher.
-pub const MAINTENANCE_INPUT_SCHEMA_VERSION: u32 = 1;
+///
+/// v2 split the fact snapshot in two: `input.facts.<name>` is the bare value
+/// and is simply missing when the fact is absent or unknown, while
+/// `input.observations.<name>` keeps the full three-valued envelope for rules
+/// that need to tell those two apart.
+pub const MAINTENANCE_INPUT_SCHEMA_VERSION: u32 = 2;
+
+/// Status string an [`Observation`] serializes when Scryer could not find out.
+const UNKNOWN_STATUS: &str = "unknown";
+/// Status string an [`Observation`] serializes when it carries a value.
+const KNOWN_STATUS: &str = "known";
 
 /// Package prefix for user-authored maintenance matchers.
 pub(crate) const USER_PACKAGE_PREFIX: &str = "scryer.maintenance.user";
@@ -128,14 +148,79 @@ impl<T: Serialize> Observation<T> {
 ///
 /// `evaluation_time` is supplied by the host and captured once per run so every
 /// subject in that run compares against the same instant. Policies must never
-/// reach for a clock of their own.
-#[derive(Debug, Clone, Serialize)]
+/// reach for a clock of their own — `time.now_ns()` exists, but it would make
+/// the same subject decide differently on a retry.
+///
+/// The fact snapshot is held once, as envelopes, and serializes into two
+/// namespaces: `observations` is the envelope map verbatim, and `facts` is
+/// derived from it by unwrapping the known values and dropping everything else.
+/// Deriving rather than storing both is the point — the simple surface and the
+/// advanced one cannot drift apart.
+#[derive(Debug, Clone)]
 pub struct MaintenanceInput {
     pub schema_version: u32,
     pub evaluation_time: DateTime<Utc>,
     pub subject: MaintenanceSubjectDoc,
     pub library: MaintenanceLibraryDoc,
     pub facts: MaintenanceFactsDoc,
+}
+
+/// One serialized fact snapshot: the envelope map and the bare map derived
+/// from it.
+pub(crate) struct SerializedFacts {
+    /// `input.observations` — every fact, envelope and all.
+    pub(crate) observations: serde_json::Map<String, serde_json::Value>,
+    /// `input.facts` — known facts only, unwrapped. An absent or unknown fact
+    /// is a missing key, so `not input.facts.added_by_user_id` matches both a
+    /// system-added title and one Scryer could not resolve; the engine deals
+    /// with the second case before the rule ever runs.
+    pub(crate) facts: serde_json::Map<String, serde_json::Value>,
+}
+
+impl MaintenanceFactsDoc {
+    /// Serialize the snapshot into both namespaces.
+    pub(crate) fn serialize_namespaces(&self) -> Result<SerializedFacts, serde_json::Error> {
+        let observations = match serde_json::to_value(self)? {
+            serde_json::Value::Object(map) => map,
+            other => {
+                return Err(serde::ser::Error::custom(format!(
+                    "fact snapshot must serialize to an object, got {other}"
+                )));
+            }
+        };
+        let facts = observations
+            .iter()
+            .filter_map(|(name, envelope)| {
+                if envelope.get("status").and_then(serde_json::Value::as_str) != Some(KNOWN_STATUS)
+                {
+                    return None;
+                }
+                let value = envelope.get("value")?;
+                Some((name.clone(), value.clone()))
+            })
+            .collect();
+        Ok(SerializedFacts {
+            observations,
+            facts,
+        })
+    }
+}
+
+impl Serialize for MaintenanceInput {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let namespaces = self
+            .facts
+            .serialize_namespaces()
+            .map_err(serde::ser::Error::custom)?;
+        let mut state = serializer.serialize_struct("MaintenanceInput", 6)?;
+        state.serialize_field("schema_version", &self.schema_version)?;
+        state.serialize_field("evaluation_time", &self.evaluation_time)?;
+        state.serialize_field("subject", &self.subject)?;
+        state.serialize_field("library", &self.library)?;
+        state.serialize_field("facts", &namespaces.facts)?;
+        state.serialize_field("observations", &namespaces.observations)?;
+        state.end()
+    }
 }
 
 /// Granularity the rule set is scoped to.
@@ -166,9 +251,10 @@ pub struct MaintenanceLibraryDoc {
     pub name: String,
 }
 
-/// The fact snapshot. Every field is an observation envelope: a fact Scryer
-/// failed to resolve stays unknown rather than defaulting to a value the rule
-/// would read as decisive.
+/// The fact snapshot, and the single source of truth for both input
+/// namespaces. Every field is an observation envelope: a fact Scryer failed to
+/// resolve stays unknown rather than defaulting to a value the rule would read
+/// as decisive.
 #[derive(Debug, Clone, Serialize)]
 pub struct MaintenanceFactsDoc {
     pub monitored: Observation<bool>,
@@ -306,6 +392,10 @@ struct MaintenanceRuleHandle {
     id: String,
     name: String,
     content_hash: String,
+    /// Facts this matcher reads through `input.facts.*`, resolved statically at
+    /// build time. Empty for a matcher that reads only subject, library, or
+    /// `input.observations.*`.
+    referenced_facts: BTreeSet<String>,
 }
 
 /// Pre-compiled engine holding every active maintenance matcher.
@@ -335,8 +425,9 @@ impl MaintenanceRulesEngine {
         let mut rules = Vec::with_capacity(policies.len());
 
         for policy in policies {
+            let policy_path = user_policy_path(&policy.id);
             engine
-                .add_policy(user_policy_path(&policy.id), policy.rego_source.clone())
+                .add_policy(policy_path.clone(), policy.rego_source.clone())
                 .map_err(|e| RulesError::Compilation(format!("{}: {e}", policy.id)))?;
             engine
                 .add_policy(
@@ -344,10 +435,17 @@ impl MaintenanceRulesEngine {
                     decision_wrapper_source(&policy.id),
                 )
                 .map_err(|e| RulesError::Compilation(format!("{}: {e}", policy.id)))?;
+            // A matcher whose fact dependencies cannot be read off its source
+            // must not load at all: the host could not then tell whether it is
+            // deciding on evidence Scryer actually has.
+            let referenced_facts =
+                validation::maintenance_fact_references(&policy.rego_source, &policy_path)
+                    .map_err(|e| RulesError::Compilation(format!("{}: {e}", policy.id)))?;
             rules.push(MaintenanceRuleHandle {
                 id: policy.id.clone(),
                 name: policy.name.clone(),
                 content_hash: runtime::content_hash(&policy.rego_source),
+                referenced_facts,
             });
         }
 
@@ -400,6 +498,20 @@ impl MaintenanceRulesEvaluator {
     /// exceed the execution budget, or return a malformed decision — are
     /// collected and never abort the batch. A failing rule contributes no
     /// record, so it cannot advance or cancel a candidate.
+    ///
+    /// A rule that reads a fact Scryer could not observe for this subject is
+    /// held before it is consulted at all. On the simple surface an unknown
+    /// fact is simply a missing key, which a policy would otherwise read as a
+    /// decisive "no" — so the host, not the author, is what makes an
+    /// unobservable fact fail closed. Rules that opt out by reading
+    /// `input.observations.*` are consulted normally and may still declare
+    /// their own `unknown`, which composes with this one: either is enough to
+    /// hold the subject.
+    ///
+    /// A held rule is not evaluated, so its reason codes are the observations'
+    /// own — the operator sees *which fact* Scryer could not read, which is the
+    /// actionable half. A policy's `reasons` still apply on every path where
+    /// the policy is consulted at all, including its own `unknown`.
     pub fn evaluate(
         &mut self,
         input: &MaintenanceInput,
@@ -413,10 +525,26 @@ impl MaintenanceRulesEvaluator {
             return Ok(result);
         }
 
-        let input_value = runtime::bounded_input_value(input, &self.limits)?;
+        let document = serde_json::to_value(input).map_err(RulesError::Serialization)?;
+        let unobservable = unobservable_facts(&document);
+        let input_value = runtime::bounded_input_value(&document, &self.limits)?;
         self.engine.set_input(input_value);
 
         for rule in &self.rules {
+            let held_by = held_reason_codes(&rule.referenced_facts, &unobservable);
+            if !held_by.is_empty() {
+                result.records.push(MaintenanceEvalRecord {
+                    rule_set_id: rule.id.clone(),
+                    rule_set_name: rule.name.clone(),
+                    policy_content_hash: rule.content_hash.clone(),
+                    decision: MaintenanceDecision {
+                        outcome: MaintenanceOutcome::Unknown,
+                        reason_codes: held_by,
+                    },
+                });
+                continue;
+            }
+
             match self.engine.eval_rule(decision_wrapper_rule_path(&rule.id)) {
                 Ok(value) => match decode_decision(&value) {
                     Ok(decision) => result.records.push(MaintenanceEvalRecord {
@@ -455,6 +583,52 @@ impl MaintenanceRulesEvaluator {
 
         Ok(result)
     }
+}
+
+// ── Host-derived unknownness ────────────────────────────────────────────────
+
+/// Facts this subject's snapshot could not answer, mapped to the stable code
+/// saying why.
+///
+/// Only `unknown` counts. An `absent` fact is an answer — the source replied
+/// and there is nothing there — so a rule matching on the missing key is
+/// deciding on real evidence and must not be held.
+fn unobservable_facts(document: &serde_json::Value) -> BTreeMap<String, String> {
+    let Some(observations) = document.get("observations").and_then(|obs| obs.as_object()) else {
+        return BTreeMap::new();
+    };
+
+    observations
+        .iter()
+        .filter_map(|(name, envelope)| {
+            if envelope.get("status").and_then(serde_json::Value::as_str) != Some(UNKNOWN_STATUS) {
+                return None;
+            }
+            let reason = envelope
+                .get("reason")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or(UNKNOWN_STATUS);
+            Some((name.clone(), reason.to_string()))
+        })
+        .collect()
+}
+
+/// Reason codes explaining why a rule cannot be consulted, deduplicated and in
+/// fact-name order. Empty when every fact the rule reads is observable, which
+/// is the signal to evaluate it normally.
+fn held_reason_codes(
+    referenced_facts: &BTreeSet<String>,
+    unobservable: &BTreeMap<String, String>,
+) -> Vec<String> {
+    let mut codes: Vec<String> = Vec::new();
+    for fact in referenced_facts {
+        if let Some(reason) = unobservable.get(fact)
+            && !codes.iter().any(|existing| existing == reason)
+        {
+            codes.push(reason.clone());
+        }
+    }
+    codes
 }
 
 // ── Output validation ───────────────────────────────────────────────────────
@@ -532,7 +706,9 @@ fn decode_reasons(value: &Value) -> Result<Vec<String>, String> {
 
 /// Build a representative input for validation dry-runs: a Title subject with
 /// every fact known, so a rule reaching for any documented fact executes its
-/// real path instead of short-circuiting on an unknown envelope.
+/// real path. Nothing is unknown here on purpose — validation is about whether
+/// the rule is well-formed, and a rule held for unobservable facts would prove
+/// nothing about that.
 pub(crate) fn synthetic_maintenance_input() -> MaintenanceInput {
     MaintenanceInput {
         schema_version: MAINTENANCE_INPUT_SCHEMA_VERSION,
@@ -599,10 +775,17 @@ mod tests {
     }
 
     fn evaluate(policies: &[MaintenancePolicy]) -> MaintenanceEvalResult {
+        evaluate_against(policies, synthetic_maintenance_input())
+    }
+
+    fn evaluate_against(
+        policies: &[MaintenancePolicy],
+        input: MaintenanceInput,
+    ) -> MaintenanceEvalResult {
         let engine = MaintenanceRulesEngine::build(policies).expect("policies should compile");
         engine
             .evaluator()
-            .evaluate(&synthetic_maintenance_input())
+            .evaluate(&input)
             .expect("evaluation should succeed")
     }
 
@@ -610,7 +793,7 @@ mod tests {
     fn matching_rule_reports_match() {
         let result = evaluate(&[policy(
             "monitored_movie",
-            "match if {\n  input.facts.monitored.status == \"known\"\n  input.facts.monitored.value\n}\n",
+            "match if {\n  input.facts.monitored\n}\n",
         )]);
 
         assert!(result.errors.is_empty(), "{:?}", result.errors);
@@ -636,17 +819,157 @@ mod tests {
         );
     }
 
+    /// The manual surface: `input.observations.*` never triggers host-derived
+    /// unknownness, so a rule that opts into it still owns its own `unknown`.
     #[test]
-    fn unknown_takes_precedence_over_match() {
+    fn a_policy_declared_unknown_takes_precedence_over_match() {
         let result = evaluate(&[policy(
             "holds_on_unknown",
-            "match := true\n\nunknown if {\n  input.facts.last_upgraded_at.status == \"known\"\n}\n",
+            "match := true\n\nunknown if {\n  input.observations.last_upgraded_at.status == \"known\"\n}\n",
         )]);
 
         assert!(result.errors.is_empty(), "{:?}", result.errors);
         assert_eq!(
             result.records[0].decision.outcome,
             MaintenanceOutcome::Unknown
+        );
+    }
+
+    /// The core of schema v2: no `unknown if` is written anywhere, and the rule
+    /// is still held because a fact it reads is one Scryer could not observe.
+    #[test]
+    fn a_rule_reading_an_unobservable_fact_is_held_without_declaring_unknown() {
+        let mut input = synthetic_maintenance_input();
+        input.facts.active_downloads = Observation::unknown("not_yet_collected");
+
+        let result = evaluate_against(
+            &[policy(
+                "downloads_in_flight",
+                "match if {\n  not input.facts.active_downloads\n}\n",
+            )],
+            input,
+        );
+
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        assert_eq!(
+            result.records[0].decision.outcome,
+            MaintenanceOutcome::Unknown,
+            "a missing key would otherwise read as a decisive 'no downloads'"
+        );
+        assert_eq!(
+            result.records[0].decision.reason_codes,
+            vec!["not_yet_collected".to_string()]
+        );
+    }
+
+    /// Absence is an answer. `added_by_user_id` is absent for a scan-created
+    /// title, and a rule keying on that must decide rather than hold.
+    #[test]
+    fn a_rule_matching_an_absent_fact_decides_rather_than_holding() {
+        let mut input = synthetic_maintenance_input();
+        input.facts.added_by_user_id = Observation::absent_because("title_added_by_system");
+
+        let result = evaluate_against(
+            &[policy(
+                "system_added",
+                "match if {\n  not input.facts.added_by_user_id\n  input.facts.has_file\n}\n",
+            )],
+            input,
+        );
+
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        assert_eq!(
+            result.records[0].decision.outcome,
+            MaintenanceOutcome::Match
+        );
+        assert!(result.records[0].decision.reason_codes.is_empty());
+    }
+
+    /// Every unobservable fact the rule reads contributes its reason, once.
+    #[test]
+    fn held_rules_report_the_union_of_the_reasons_that_held_them() {
+        let mut input = synthetic_maintenance_input();
+        input.facts.active_downloads = Observation::unknown("not_yet_collected");
+        input.facts.last_upgraded_at = Observation::unknown("not_yet_collected");
+        input.facts.added_by_username = Observation::unknown("user_not_found");
+
+        let result = evaluate_against(
+            &[policy(
+                "many_unknowns",
+                "match if {\n  input.facts.active_downloads\n  input.facts.last_upgraded_at\n  \
+                 input.facts.added_by_username == \"operator\"\n}\n",
+            )],
+            input,
+        );
+
+        assert_eq!(
+            result.records[0].decision.reason_codes,
+            vec![
+                "not_yet_collected".to_string(),
+                "user_not_found".to_string()
+            ],
+            "one code per distinct reason, in fact-name order"
+        );
+    }
+
+    /// The opt-out has to actually opt out, or the advanced surface is
+    /// unreachable: a rule reading the envelope sees the unknown itself.
+    #[test]
+    fn observation_references_do_not_trigger_host_derived_unknownness() {
+        let mut input = synthetic_maintenance_input();
+        input.facts.active_downloads = Observation::unknown("not_yet_collected");
+
+        let result = evaluate_against(
+            &[policy(
+                "inspects_the_envelope",
+                "match if {\n  input.observations.active_downloads.status == \"unknown\"\n}\n\n\
+                 reasons contains reason if {\n  \
+                   reason := input.observations.active_downloads.reason\n\
+                 }\n",
+            )],
+            input,
+        );
+
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        assert_eq!(
+            result.records[0].decision.outcome,
+            MaintenanceOutcome::Match
+        );
+        assert_eq!(
+            result.records[0].decision.reason_codes,
+            vec!["not_yet_collected".to_string()]
+        );
+    }
+
+    /// `evaluation_time` is the clock rules are meant to use, and date maths on
+    /// it has to work — this is what the regorus `time` feature buys.
+    #[test]
+    fn evaluation_time_supports_date_arithmetic() {
+        const AGE_MATCHER: &str = "day_ns := (24 * 60 * 60) * 1000000000\n\n\
+             match if {\n  \
+               age := time.parse_rfc3339_ns(input.evaluation_time) - \
+             time.parse_rfc3339_ns(input.facts.added_at)\n  \
+               age > 180 * day_ns\n\
+             }\n";
+
+        // Synthetic input is evaluated at 2023-11-14.
+        let mut old = synthetic_maintenance_input();
+        old.facts.added_at = Observation::known("2020-01-01T00:00:00Z".to_string());
+        let matched = evaluate_against(&[policy("added_long_ago", AGE_MATCHER)], old);
+        assert!(matched.errors.is_empty(), "{:?}", matched.errors);
+        assert_eq!(
+            matched.records[0].decision.outcome,
+            MaintenanceOutcome::Match,
+            "date maths must actually run, not evaluate to undefined"
+        );
+
+        let mut recent = synthetic_maintenance_input();
+        recent.facts.added_at = Observation::known("2023-11-01T00:00:00Z".to_string());
+        let unmatched = evaluate_against(&[policy("added_recently", AGE_MATCHER)], recent);
+        assert!(unmatched.errors.is_empty(), "{:?}", unmatched.errors);
+        assert_eq!(
+            unmatched.records[0].decision.outcome,
+            MaintenanceOutcome::NoMatch
         );
     }
 
@@ -811,6 +1134,34 @@ mod tests {
             .evaluate(&synthetic_maintenance_input())
             .expect_err("input should exceed the bound");
         assert!(matches!(err, RulesError::InputTooLarge { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn the_input_document_carries_bare_facts_and_full_observations() {
+        let mut input = synthetic_maintenance_input();
+        input.facts.active_downloads = Observation::unknown("not_yet_collected");
+        input.facts.added_by_user_id = Observation::absent_because("title_added_by_system");
+
+        let doc = serde_json::to_value(&input).expect("input serializes");
+
+        assert_eq!(doc["schema_version"], 2);
+        // Known: bare value on facts, envelope on observations.
+        assert_eq!(doc["facts"]["monitored"], true);
+        assert_eq!(doc["observations"]["monitored"]["status"], "known");
+        assert_eq!(doc["observations"]["monitored"]["value"], true);
+        // Unknown and absent: missing from facts entirely, still on
+        // observations with the reason that explains them.
+        for fact in ["active_downloads", "added_by_user_id"] {
+            assert!(doc["facts"].get(fact).is_none(), "{fact}");
+            assert!(doc["observations"][fact]["reason"].is_string(), "{fact}");
+        }
+        assert_eq!(doc["observations"]["active_downloads"]["status"], "unknown");
+        assert_eq!(doc["observations"]["added_by_user_id"]["status"], "absent");
+        // The two namespaces describe the same facts, so neither can gain a
+        // key the other never heard of.
+        for fact in doc["facts"].as_object().expect("facts object").keys() {
+            assert!(doc["observations"].get(fact).is_some(), "{fact}");
+        }
     }
 
     #[test]

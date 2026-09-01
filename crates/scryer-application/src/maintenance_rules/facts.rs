@@ -2,10 +2,16 @@
 //!
 //! Every fact the matcher can read is built here, from ports Scryer already
 //! has. A fact Scryer cannot resolve becomes [`Observation::unknown`] with a
-//! stable code rather than a plausible-looking default: an unknown fact holds
-//! the rule (`unknown` beats `match` in the decoder), which is the fail-closed
-//! behaviour the RFC demands. Guessing `false`, `0`, or "the newest file" would
-//! silently authorize a destructive action on evidence Scryer never had.
+//! stable code rather than a plausible-looking default: the engine holds any
+//! rule that reads an unknown fact, which is the fail-closed behaviour the RFC
+//! demands. Guessing `false`, `0`, or "the newest file" would silently
+//! authorize a destructive action on evidence Scryer never had.
+//!
+//! The distinction between `absent` and `unknown` is what drives that, so it is
+//! decided here and nowhere else. `absent` is an answer — the source replied
+//! and there is nothing there — and rules see it as a missing key they may act
+//! on. `unknown` is a gap, and rules never see it at all on `input.facts`;
+//! they get held instead.
 
 use std::collections::HashMap;
 
@@ -25,8 +31,9 @@ pub(crate) const QUALITY_PROFILE_TAG_PREFIX: &str = "scryer:quality-profile:";
 
 /// Stable reason codes for facts this wave cannot observe.
 ///
-/// These are part of the rule-authoring contract: a matcher that tests
-/// `input.facts.<fact>.reason` compares against exactly these strings.
+/// These are part of the rule-authoring contract twice over: they are the
+/// reason codes recorded on a candidate the engine held, and a matcher reading
+/// `input.observations.<fact>.reason` compares against exactly these strings.
 pub mod unknown_reason {
     /// Scryer does not record this signal yet. Applies to `last_upgraded_at`
     /// (no distinct upgrade event exists — the newest file timestamp is a
@@ -195,10 +202,10 @@ fn added_by_observations(
 /// Username resolution is deliberately all-or-nothing: if any requester id
 /// fails to resolve, `requested_by_usernames` is unknown instead of a shorter
 /// list. A partial list is worse than no list, because the rule cannot tell it
-/// apart from a complete one — `not "alice" in input.facts.requested_by_usernames.value`
-/// would silently hold on a run where alice's user row is the one that is
-/// missing. The ids stay known in that case, so a rule that wants to proceed
-/// can match on those instead.
+/// apart from a complete one — `not "alice" in input.facts.requested_by_usernames`
+/// would silently pass on a run where alice's user row is the one that is
+/// missing. Unknown instead means the engine holds the subject. The ids stay
+/// known in that case, so a rule that wants to proceed can match on those.
 fn requested_observations(
     requester_user_ids: Option<&[String]>,
     usernames: &HashMap<String, String>,
@@ -344,7 +351,9 @@ mod tests {
         }
     }
 
-    fn facts(
+    /// The serialized input document, which is what a rule actually reads:
+    /// bare values under `facts`, full envelopes under `observations`.
+    fn document(
         title: &Title,
         requester_user_ids: Option<&[String]>,
         usernames: &HashMap<String, String>,
@@ -359,84 +368,96 @@ mod tests {
                 usernames,
             },
         );
-        serde_json::to_value(input.facts).expect("facts serialize")
+        serde_json::to_value(input).expect("input serializes")
     }
 
     #[test]
     fn a_title_added_through_the_add_flow_reports_who_added_it() {
         let names = usernames(&[("user-1", "operator-one")]);
-        let facts = facts(&title(Some("user-1")), None, &names);
+        let doc = document(&title(Some("user-1")), None, &names);
 
-        assert_eq!(facts["added_by_user_id"]["status"], "known");
-        assert_eq!(facts["added_by_user_id"]["value"], "user-1");
-        assert_eq!(facts["added_by_username"]["status"], "known");
-        assert_eq!(facts["added_by_username"]["value"], "operator-one");
+        assert_eq!(doc["facts"]["added_by_user_id"], "user-1");
+        assert_eq!(doc["facts"]["added_by_username"], "operator-one");
+        assert_eq!(doc["observations"]["added_by_user_id"]["status"], "known");
+        assert_eq!(doc["observations"]["added_by_user_id"]["value"], "user-1");
     }
 
     #[test]
     fn a_scan_created_title_is_absent_with_the_system_reason_not_unknown() {
-        let facts = facts(&title(None), None, &usernames(&[]));
+        let doc = document(&title(None), None, &usernames(&[]));
 
         // Absent, not unknown: Scryer looked and confirmed nobody added it, so
-        // a rule asking "was this added by a person" gets a decisive answer
-        // rather than being held.
+        // `not input.facts.added_by_user_id` is a decisive match rather than
+        // something the engine holds the title on.
         for fact in ["added_by_user_id", "added_by_username"] {
-            assert_eq!(facts[fact]["status"], "absent", "{fact}");
-            assert_eq!(facts[fact]["reason"], "title_added_by_system", "{fact}");
-            assert!(facts[fact].get("value").is_none(), "{fact}");
+            assert!(doc["facts"].get(fact).is_none(), "{fact}");
+            assert_eq!(doc["observations"][fact]["status"], "absent", "{fact}");
+            assert_eq!(
+                doc["observations"][fact]["reason"], "title_added_by_system",
+                "{fact}"
+            );
+            assert!(doc["observations"][fact].get("value").is_none(), "{fact}");
         }
     }
 
     #[test]
     fn a_blank_created_by_reads_as_system_added() {
-        let facts = facts(&title(Some("   ")), None, &usernames(&[]));
+        let doc = document(&title(Some("   ")), None, &usernames(&[]));
 
-        assert_eq!(facts["added_by_user_id"]["status"], "absent");
-        assert_eq!(facts["added_by_user_id"]["reason"], "title_added_by_system");
+        assert!(doc["facts"].get("added_by_user_id").is_none());
+        assert_eq!(doc["observations"]["added_by_user_id"]["status"], "absent");
+        assert_eq!(
+            doc["observations"]["added_by_user_id"]["reason"],
+            "title_added_by_system"
+        );
     }
 
     #[test]
     fn an_adding_user_that_no_longer_exists_leaves_the_name_unknown() {
-        let facts = facts(&title(Some("user-gone")), None, &usernames(&[]));
+        let doc = document(&title(Some("user-gone")), None, &usernames(&[]));
 
-        // The id is still a fact Scryer holds; only the name is unavailable.
-        assert_eq!(facts["added_by_user_id"]["status"], "known");
-        assert_eq!(facts["added_by_user_id"]["value"], "user-gone");
-        assert_eq!(facts["added_by_username"]["status"], "unknown");
-        assert_eq!(facts["added_by_username"]["reason"], "user_not_found");
+        // The id is still a fact Scryer holds; only the name is unavailable,
+        // so only the name disappears from the simple surface.
+        assert_eq!(doc["facts"]["added_by_user_id"], "user-gone");
+        assert!(doc["facts"].get("added_by_username").is_none());
+        assert_eq!(
+            doc["observations"]["added_by_username"]["status"],
+            "unknown"
+        );
+        assert_eq!(
+            doc["observations"]["added_by_username"]["reason"],
+            "user_not_found"
+        );
     }
 
     #[test]
     fn a_title_no_request_created_is_a_known_false_with_empty_lists() {
-        let facts = facts(&title(Some("user-1")), None, &usernames(&[]));
+        let doc = document(&title(Some("user-1")), None, &usernames(&[]));
 
-        assert_eq!(facts["requested"]["status"], "known");
-        assert_eq!(facts["requested"]["value"], false);
-        assert_eq!(facts["requested_by_user_ids"]["status"], "known");
+        // Known false, not missing: `input.facts.requested` is present and
+        // false, which is a different thing from a fact Scryer could not read.
+        assert_eq!(doc["facts"]["requested"], false);
+        assert_eq!(doc["facts"]["requested_by_user_ids"], serde_json::json!([]));
         assert_eq!(
-            facts["requested_by_user_ids"]["value"],
+            doc["facts"]["requested_by_usernames"],
             serde_json::json!([])
         );
-        assert_eq!(facts["requested_by_usernames"]["status"], "known");
-        assert_eq!(
-            facts["requested_by_usernames"]["value"],
-            serde_json::json!([])
-        );
+        assert_eq!(doc["observations"]["requested"]["status"], "known");
     }
 
     #[test]
     fn a_requested_title_carries_every_requester_in_the_order_it_was_given() {
         let names = usernames(&[("user-1", "operator-one"), ("user-2", "viewer-two")]);
         let ids = vec!["user-1".to_string(), "user-2".to_string()];
-        let facts = facts(&title(Some("user-1")), Some(&ids), &names);
+        let doc = document(&title(Some("user-1")), Some(&ids), &names);
 
-        assert_eq!(facts["requested"]["value"], true);
+        assert_eq!(doc["facts"]["requested"], true);
         assert_eq!(
-            facts["requested_by_user_ids"]["value"],
+            doc["facts"]["requested_by_user_ids"],
             serde_json::json!(["user-1", "user-2"])
         );
         assert_eq!(
-            facts["requested_by_usernames"]["value"],
+            doc["facts"]["requested_by_usernames"],
             serde_json::json!(["operator-one", "viewer-two"])
         );
     }
@@ -445,15 +466,12 @@ mod tests {
     fn an_empty_requester_list_still_reports_the_title_as_requested() {
         // Key presence is the answer, not list length: a linked request with no
         // resolvable requester rows is still a request.
-        let facts = facts(&title(None), Some(&[]), &usernames(&[]));
+        let doc = document(&title(None), Some(&[]), &usernames(&[]));
 
-        assert_eq!(facts["requested"]["value"], true);
+        assert_eq!(doc["facts"]["requested"], true);
+        assert_eq!(doc["facts"]["requested_by_user_ids"], serde_json::json!([]));
         assert_eq!(
-            facts["requested_by_user_ids"]["value"],
-            serde_json::json!([])
-        );
-        assert_eq!(
-            facts["requested_by_usernames"]["value"],
+            doc["facts"]["requested_by_usernames"],
             serde_json::json!([])
         );
     }
@@ -462,15 +480,21 @@ mod tests {
     fn one_unresolvable_requester_makes_the_whole_username_list_unknown() {
         let names = usernames(&[("user-1", "operator-one")]);
         let ids = vec!["user-1".to_string(), "user-gone".to_string()];
-        let facts = facts(&title(Some("user-1")), Some(&ids), &names);
+        let doc = document(&title(Some("user-1")), Some(&ids), &names);
 
         // A partial list is indistinguishable from a complete one, so it is
         // withheld entirely; the ids stay known for rules that can use them.
-        assert_eq!(facts["requested_by_usernames"]["status"], "unknown");
-        assert_eq!(facts["requested_by_usernames"]["reason"], "user_not_found");
-        assert!(facts["requested_by_usernames"].get("value").is_none());
+        assert!(doc["facts"].get("requested_by_usernames").is_none());
         assert_eq!(
-            facts["requested_by_user_ids"]["value"],
+            doc["observations"]["requested_by_usernames"]["status"],
+            "unknown"
+        );
+        assert_eq!(
+            doc["observations"]["requested_by_usernames"]["reason"],
+            "user_not_found"
+        );
+        assert_eq!(
+            doc["facts"]["requested_by_user_ids"],
             serde_json::json!(["user-1", "user-gone"])
         );
     }
