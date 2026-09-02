@@ -22,6 +22,7 @@ pub struct SubmitMediaRequestInput {
     pub runtime_minutes: Option<i32>,
     pub language: Option<String>,
     pub content_status: Option<String>,
+    pub rating_summary: TitleRatingSummary,
     pub requested_quality_profile_id: Option<String>,
     pub requested_monitor_type: Option<String>,
     pub external_ids: Vec<ExternalId>,
@@ -124,6 +125,12 @@ impl AppUseCase {
             .overview
             .or_else(|| normalized_optional_string(input.overview));
         let rating_summary = metadata_enrichment.rating_summary;
+        let rating_summary =
+            if rating_summary.rating.is_some() || !rating_summary.external_ratings.is_empty() {
+                rating_summary
+            } else {
+                input.rating_summary
+            };
 
         let request = NewMediaRequest {
             id: Id::new().0,

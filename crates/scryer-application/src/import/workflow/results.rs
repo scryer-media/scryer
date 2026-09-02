@@ -608,6 +608,8 @@ async fn remove_rtorrent_payload_before_entry_cleanup(
         )));
     }
     crate::fs_safety::resolve_available_root_for_path(&target, &roots)?;
+    ensure_rtorrent_path_has_no_symlink_ancestors(&containing_root).await?;
+    ensure_rtorrent_target_parents_are_not_symlinks(&containing_root, &target).await?;
 
     let libraries = app.services.catalog.libraries.list(None).await?;
     if crate::catalog_workflow::library_root_folders_from_libraries(&libraries, None)
@@ -640,6 +642,71 @@ async fn remove_rtorrent_payload_before_entry_cleanup(
         ))),
     }
 }
+
+async fn ensure_rtorrent_path_has_no_symlink_ancestors(path: &std::path::Path) -> AppResult<()> {
+    let mut current = Some(path);
+    while let Some(ancestor) = current {
+        let metadata = tokio::fs::symlink_metadata(ancestor)
+            .await
+            .map_err(|error| {
+                AppError::Repository(format!(
+                    "failed to inspect rTorrent output-root ancestor {}: {error}",
+                    ancestor.display()
+                ))
+            })?;
+        if metadata.file_type().is_symlink() {
+            return Err(AppError::Validation(format!(
+                "rTorrent output root {} has symlink ancestor {}",
+                path.display(),
+                ancestor.display()
+            )));
+        }
+        current = ancestor.parent();
+    }
+    Ok(())
+}
+
+async fn ensure_rtorrent_target_parents_are_not_symlinks(
+    root: &std::path::Path,
+    target: &std::path::Path,
+) -> AppResult<()> {
+    let relative = target.strip_prefix(root).map_err(|_| {
+        AppError::Validation(format!(
+            "rTorrent payload path {} is outside output root {}",
+            target.display(),
+            root.display()
+        ))
+    })?;
+    let mut parent = root.to_path_buf();
+    for component in relative.components() {
+        let std::path::Component::Normal(component) = component else {
+            continue;
+        };
+        let candidate = parent.join(component);
+        if candidate == target {
+            break;
+        }
+        match tokio::fs::symlink_metadata(&candidate).await {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(AppError::Validation(format!(
+                    "rTorrent payload path {} traverses symlink {}",
+                    target.display(),
+                    candidate.display()
+                )));
+            }
+            Ok(_) => parent = candidate,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => {
+                return Err(AppError::Repository(format!(
+                    "failed to inspect rTorrent payload ancestor {}: {error}",
+                    candidate.display()
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// `SeedGoalMetAction::StopSeeding`: leave the entry in the client but stop it
 /// uploading.
 ///

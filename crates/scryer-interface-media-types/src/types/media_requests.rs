@@ -44,6 +44,23 @@ pub struct MediaRequestExternalRatingPayload {
     pub url: String,
 }
 
+/// One provider-specific rating submitted with a media request.
+#[derive(InputObject, Clone)]
+pub struct MediaRequestExternalRatingInput {
+    /// Rating provider name.
+    pub source: String,
+    /// Provider rating value before normalization, or null when absent.
+    pub value: Option<f64>,
+    /// Provider score on its native scale, or null when absent.
+    pub score: Option<f64>,
+    /// Score normalized to the shared comparison scale.
+    pub normalized: f64,
+    /// Number of votes reported by the provider, or null when absent.
+    pub votes: Option<i32>,
+    /// Provider page for this rating.
+    pub url: String,
+}
+
 /// Media request with current status, title identity, and resolution metadata.
 #[derive(SimpleObject, Clone)]
 pub struct MediaRequestPayload {
@@ -170,6 +187,12 @@ pub struct SubmitMediaRequestInput {
     pub language: Option<String>,
     /// Provider content-status label.
     pub content_status: Option<String>,
+    /// Combined metadata rating, or null when unavailable.
+    pub rating: Option<f64>,
+    /// Sources contributing to the combined metadata rating.
+    pub rating_sources: Option<Vec<String>>,
+    /// Provider-specific metadata ratings.
+    pub external_ratings: Option<Vec<MediaRequestExternalRatingInput>>,
     /// Quality profile identity requested for approval.
     pub requested_quality_profile_id: Option<ID>,
     /// Monitoring policy requested for approval.

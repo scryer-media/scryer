@@ -571,9 +571,9 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
         "mutation fields: {mutation_field_names:?}"
     );
     assert_eq!(subscription_field_count, 14);
-    assert_eq!(public_types.len(), 616);
-    assert_eq!(kind_count("OBJECT"), 319);
-    assert_eq!(kind_count("INPUT_OBJECT"), 173);
+    assert_eq!(public_types.len(), 618);
+    assert_eq!(kind_count("OBJECT"), 320);
+    assert_eq!(kind_count("INPUT_OBJECT"), 174);
     assert_eq!(kind_count("ENUM"), 112);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);

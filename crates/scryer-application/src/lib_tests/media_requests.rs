@@ -691,6 +691,7 @@ async fn submit_media_request_enriches_movie_external_ids_from_metadata() {
             url: "https://www.imdb.com/title/tt9100100/".to_string(),
         }],
     };
+    let expected_rating_summary = movie.ratings.clone();
     let hydration_result =
         crate::catalog::facets::handler::movie_to_hydration_result(movie.clone(), "eng");
     let expected_external_ids = normalize_media_request_external_ids(
@@ -719,7 +720,7 @@ async fn submit_media_request_enriches_movie_external_ids_from_metadata() {
     let requests = harness.media_requests.requests.lock().await;
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].overview.as_deref(), Some("Hydrated overview"));
-    assert_eq!(requests[0].rating_summary, movie.ratings);
+    assert_eq!(requests[0].rating_summary, expected_rating_summary);
     assert_eq!(requests[0].external_ids, expected_external_ids);
     assert_external_ids(
         &requests[0].external_ids,
@@ -852,6 +853,19 @@ async fn submit_media_request_keeps_original_ids_when_metadata_enrichment_fails(
     let mut input = media_request_input(library_id, 91_201);
     input.external_ids = vec![external_id("TVDB", 91_201)];
     input.overview = Some("Submitted overview".to_string());
+    let submitted_rating_summary = TitleRatingSummary {
+        rating: Some(7.4),
+        rating_sources: vec!["tmdb".to_string()],
+        external_ratings: vec![TitleExternalRating {
+            source: "tmdb".to_string(),
+            value: Some(7.4),
+            score: None,
+            normalized: 7.4,
+            votes: Some(9_876),
+            url: "https://www.themoviedb.org/movie/91201".to_string(),
+        }],
+    };
+    input.rating_summary = submitted_rating_summary.clone();
 
     app.submit_media_request(&harness.user, input)
         .await
@@ -860,7 +874,7 @@ async fn submit_media_request_keeps_original_ids_when_metadata_enrichment_fails(
     let requests = harness.media_requests.requests.lock().await;
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].overview.as_deref(), Some("Submitted overview"));
-    assert_eq!(requests[0].rating_summary, TitleRatingSummary::default());
+    assert_eq!(requests[0].rating_summary, submitted_rating_summary);
     assert_external_ids(&requests[0].external_ids, &[("tvdb", "91201")]);
 }
 

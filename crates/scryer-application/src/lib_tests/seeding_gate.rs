@@ -1825,6 +1825,70 @@ async fn rtorrent_cleanup_refuses_to_delete_an_output_root() {
     assert!(download_client.deleted_requests.lock().await.is_empty());
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn rtorrent_cleanup_refuses_a_symlinked_payload_ancestor() {
+    let download_client = Arc::new(StubDownloadClient::default());
+    let (app, _user, config, mut tracked) = rtorrent_cleanup_fixture(
+        download_client.clone(),
+        "rTorrent Symlink Guard",
+        "rtorrent-symlink-1",
+    )
+    .await;
+    let tempdir = tempfile::tempdir().expect("temporary download root");
+    let root = tempdir.path().join("downloads");
+    let outside = tempdir.path().join("library");
+    let payload = outside.join("Release");
+    std::fs::create_dir_all(&root).expect("create output root");
+    std::fs::write(root.join(".mounted"), b"mounted").expect("make root available");
+    std::fs::create_dir_all(&payload).expect("create outside payload");
+    std::fs::write(payload.join("movie.mkv"), b"media").expect("create outside media");
+    std::os::unix::fs::symlink(&outside, root.join("escape"))
+        .expect("create payload ancestor symlink");
+    download_client
+        .set_client_status(crate::DownloadClientStatus {
+            remote_output_roots: vec![root.display().to_string()],
+            ..Default::default()
+        })
+        .await;
+    download_client
+        .completed_downloads
+        .lock()
+        .await
+        .push(scryer_domain::CompletedDownload {
+            client_type: "rtorrent".to_string(),
+            client_id: config.id,
+            download_client_item_id: "rtorrent-symlink-1".to_string(),
+            download_id: None,
+            name: "Release".to_string(),
+            release_name: None,
+            dest_dir: root.join("escape/Release").display().to_string(),
+            category: None,
+            size_bytes: None,
+            completed_at: None,
+            parameters: Vec::new(),
+        });
+    observed(
+        DownloadSeedingSnapshot {
+            can_remove: Some(true),
+            ..DownloadSeedingSnapshot::default()
+        },
+        &mut tracked,
+    );
+
+    let outcome = crate::import::import::reconcile_terminal_download_cleanup_for_tracked(
+        &app,
+        &tracked,
+        TrackedDownloadState::Imported,
+        None,
+    )
+    .await;
+
+    assert_eq!(outcome, TerminalDownloadCleanupOutcome::RetryableFailure);
+    assert!(payload.exists(), "the symlink target must remain intact");
+    assert!(download_client.deleted_requests.lock().await.is_empty());
+}
+
 #[tokio::test]
 async fn rtorrent_cleanup_deletes_a_direct_completed_file() {
     let download_client = Arc::new(StubDownloadClient::default());
