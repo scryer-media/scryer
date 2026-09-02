@@ -15,7 +15,7 @@ import {
 import {
   downloadClientProviderTypesQuery,
   downloadClientsInitQuery,
-  downloadClientsQuery,
+  settingsDownloadClientsQuery,
 } from "@/lib/graphql/queries";
 import { DEFAULT_DOWNLOAD_CLIENT_DRAFT } from "@/lib/constants/download-clients";
 import { useClient } from "urql";
@@ -34,7 +34,11 @@ import {
   isBuiltInDownloadClientType,
   normalizeDownloadClientType,
 } from "@/lib/utils/download-clients";
-import { buildDownloadClientConnectionTestInput } from "@/lib/utils/settings-mutation-inputs";
+import {
+  buildDownloadClientConnectionTestInput,
+  buildDownloadClientProxyCreateInput,
+  buildDownloadClientProxyUpdateInput,
+} from "@/lib/utils/settings-mutation-inputs";
 import {
   localPathStyleFromRuntimeValue,
   type LocalPathStyle,
@@ -44,6 +48,7 @@ import type {
   DownloadClientDraft,
   DownloadClientTypeOption,
   ProviderTypeInfo,
+  ProxyRecord,
 } from "@/lib/types";
 
 type SettingsDownloadClientsSectionProps = ComponentProps<typeof SettingsDownloadClientsSection>;
@@ -96,6 +101,7 @@ export function SettingsDownloadClientsContainer({
   const [editorMode, setEditorMode] = useState<"create" | "edit">("create");
   const [localPathStyle, setLocalPathStyle] =
     useState<LocalPathStyle | undefined>(undefined);
+  const [proxyConfigs, setProxyConfigs] = useState<ProxyRecord[]>([]);
   const [pendingEditorAction, setPendingEditorAction] =
     useState<PendingDownloadClientEditorAction>(null);
   const [draftBaseline, setDraftBaseline] = useState<DownloadClientDraft>(() =>
@@ -134,7 +140,7 @@ export function SettingsDownloadClientsContainer({
   const refreshDownloadClients = useCallback(async () => {
     try {
       const { data, error } = await client
-        .query(downloadClientsQuery, {}, { requestPolicy: "network-only" })
+        .query(settingsDownloadClientsQuery, {}, { requestPolicy: "network-only" })
         .toPromise();
       if (error) throw error;
       const clients: DownloadClientRecord[] = data.downloadClientConfigs || [];
@@ -177,6 +183,7 @@ export function SettingsDownloadClientsContainer({
             (data?.downloadClientProviderTypes as ProviderTypeInfo[] | undefined) ?? [],
           ),
         );
+        setProxyConfigs(data?.proxyConfigs || []);
       } catch (error) {
         setDownloadClientTypeOptions(buildDownloadClientTypeOptions([]));
         setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"));
@@ -284,6 +291,7 @@ export function SettingsDownloadClientsContainer({
         selectedDownloadClientConfigFields,
         editingStoredSecretKeys,
       ),
+      proxyConfigId: downloadClientDraft.proxyConfigId,
       isEnabled: downloadClientDraft.isEnabled,
     };
 
@@ -315,6 +323,7 @@ export function SettingsDownloadClientsContainer({
                   editingDownloadClientId,
                   payload.clientType,
                   payload.config,
+                  payload.proxyConfigId,
                 ),
               })
               .toPromise();
@@ -338,6 +347,7 @@ export function SettingsDownloadClientsContainer({
             name: payload.name,
             clientType: payload.clientType,
             config: payload.config,
+            ...buildDownloadClientProxyUpdateInput(payload.proxyConfigId),
             isEnabled: payload.isEnabled,
           },
         }).toPromise();
@@ -351,6 +361,7 @@ export function SettingsDownloadClientsContainer({
               name: payload.name,
               clientType: payload.clientType,
               config: payload.config,
+              ...buildDownloadClientProxyCreateInput(payload.proxyConfigId),
               isEnabled: payload.isEnabled,
             },
           },
@@ -388,6 +399,7 @@ export function SettingsDownloadClientsContainer({
         selectedDownloadClientConfigFields,
         editingStoredSecretKeys,
       ),
+      proxyConfigId: downloadClientDraft.proxyConfigId,
     };
 
     if (!payload.name || !payload.host) {
@@ -422,6 +434,7 @@ export function SettingsDownloadClientsContainer({
                 editingDownloadClientId,
                 payload.clientType,
                 payload.config,
+                payload.proxyConfigId,
               ),
             })
             .toPromise();
@@ -636,6 +649,7 @@ export function SettingsDownloadClientsContainer({
         downloadClientTypeOptions={availableDownloadClientTypeOptions}
         downloadClientDraft={downloadClientDraft}
         setDownloadClientDraft={setDownloadClientDraft}
+        proxyConfigs={proxyConfigs}
         submitDownloadClient={submitDownloadClient}
         testDownloadClientConnection={testDownloadClientConnection}
         isTestingDownloadClientConnection={isTestingDownloadClientConnection}

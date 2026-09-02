@@ -24,6 +24,7 @@ export type SettingsSection =
   | "mediaServers"
   | "indexers"
   | "downloadClients"
+  | "proxies"
   | "qualityProfiles"
   | "delayProfiles"
   | "acquisition"
@@ -36,8 +37,9 @@ export type SettingsSection =
 
 /// Panes of the Indexers settings page. Seeding profiles live here rather than
 /// in their own settings section because a profile is only ever reached
-/// through the indexer that applies it.
-export type IndexerSettingsTab = "indexers" | "proxies" | "seedingProfiles";
+/// through the indexer that applies it. Proxies used to be a pane too; they
+/// are a settings section of their own now that download clients assign them.
+export type IndexerSettingsTab = "indexers" | "seedingProfiles";
 export type ContentSettingsSection =
   | "overview"
   | "import"

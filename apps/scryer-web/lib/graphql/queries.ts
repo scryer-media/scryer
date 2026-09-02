@@ -2156,6 +2156,16 @@ const proxyConfigFieldSelection = `
     requestTimeoutSeconds
     hasCredentials
     remoteDns
+    hasPrivateKey
+    peerPublicKey
+    hasPresharedKey
+    tunnelPublicKey
+    tunnelAddresses
+    tunnelDnsServers
+    tunnelMtu
+    tunnelKeepaliveSeconds
+    hostKeyFingerprint
+    hostKeyPinnedAt
     isEnabled
     lastHealthStatus
     lastErrorMessage
@@ -2307,6 +2317,7 @@ const downloadClientFieldSelection = `
     baseUrl
     config {${PROVIDER_CONFIG_VALUE_FIELDS}
     }
+    proxyConfigId
     isEnabled
     status
     lastError
@@ -2502,12 +2513,25 @@ export const downloadClientsInitQuery = `query DownloadClientsInit {
   }
   downloadClientProviderTypes {${PROVIDER_TYPE_FIELDS}
   }
+  proxyConfigs {${proxyConfigFieldSelection}
+  }
   runtimeInfo {
     runtimePathStyle
   }
 }`;
 
 export const libraryDownloadClientsQuery = `query LibraryDownloadClients {
+  downloadClientConfigs {${downloadClientFieldSelection}
+  }
+}`;
+
+/**
+ * The settings page's refresh. It reads the same full selection the init query
+ * does, so a save does not blank the columns the list renders (base URL,
+ * status, the assigned proxy); the slim `DownloadClients` document stays for
+ * callers that only need a name for an id.
+ */
+export const settingsDownloadClientsQuery = `query SettingsDownloadClients {
   downloadClientConfigs {${downloadClientFieldSelection}
   }
 }`;

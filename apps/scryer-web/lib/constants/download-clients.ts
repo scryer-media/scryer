@@ -37,5 +37,6 @@ export const DEFAULT_DOWNLOAD_CLIENT_DRAFT: DownloadClientDraft = {
   password: "",
   remotePathMappings: "",
   configValues: {},
+  proxyConfigId: null,
   isEnabled: true,
 };

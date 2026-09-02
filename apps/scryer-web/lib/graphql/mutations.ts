@@ -449,6 +449,16 @@ const PROXY_CONFIG_FIELDS = `
     requestTimeoutSeconds
     hasCredentials
     remoteDns
+    hasPrivateKey
+    peerPublicKey
+    hasPresharedKey
+    tunnelPublicKey
+    tunnelAddresses
+    tunnelDnsServers
+    tunnelMtu
+    tunnelKeepaliveSeconds
+    hostKeyFingerprint
+    hostKeyPinnedAt
     isEnabled
     lastHealthStatus
     lastErrorMessage
@@ -478,6 +488,15 @@ export const testProxyConfigMutation = `mutation TestProxyConfig($id: ID!) {
     status
     message
     durationMs
+  }
+}`;
+
+/**
+ * Trust-on-first-use reset: forgetting the pinned host key makes the next
+ * connection pin whatever the server offers.
+ */
+export const resetProxyHostKeyMutation = `mutation ResetProxyHostKey($id: ID!) {
+  resetProxyHostKey(id: $id) {${PROXY_CONFIG_FIELDS}
   }
 }`;
 
@@ -513,6 +532,7 @@ export const createDownloadClientMutation = `mutation CreateDownloadClient($inpu
     config {${PROVIDER_CONFIG_VALUE_FIELDS}
     }
     storedSecretKeys
+    proxyConfigId
     isEnabled
     status
     lastError
@@ -531,6 +551,7 @@ export const updateDownloadClientMutation = `mutation UpdateDownloadClient($inpu
     config {${PROVIDER_CONFIG_VALUE_FIELDS}
     }
     storedSecretKeys
+    proxyConfigId
     isEnabled
     status
     lastError

@@ -19,23 +19,13 @@ import { useIndexersSubscription } from "@/lib/hooks/use-indexers-subscription";
 import type { IndexerSettingsTab } from "@/components/root/types";
 import type {
   ConfigFieldDef,
-  ProxyDraft,
-  ProxyProviderTypeValue,
   ProxyRecord,
   IndexerRecord,
   ProviderTypeInfo,
   IndexerDownloadClientMappingCatalog,
   IndexerDownloadClientMappingCatalogResource,
 } from "@/lib/types";
-import {
-  isProxyProviderType,
-  supportsProxyRemoteDns,
-} from "@/lib/types";
 import { runConnectionFeedback } from "@/lib/utils/connection-feedback";
-import {
-  buildCreateProxyInput,
-  buildUpdateProxyInput,
-} from "@/lib/utils/settings-mutation-inputs";
 import {
   getIndexerDownloadClientDraftMappingViewModel,
   updateIndexerDownloadClientMapping,
@@ -49,16 +39,12 @@ import {
 } from "@/lib/graphql/queries";
 import {
   createIndexerMutation,
-  createProxyConfigMutation,
   deleteIndexerMutation,
-  deleteProxyConfigMutation,
   syncIndexerConfigMutation,
   setIndexerDownloadClientMappingMutation,
   setIndexerSeedingProfileMutation,
   testIndexerConnectionMutation,
-  testProxyConfigMutation,
   updateIndexerMutation,
-  updateProxyConfigMutation,
 } from "@/lib/graphql/mutations";
 import {
   providerConfigRecordToValues,
@@ -81,35 +67,6 @@ const INDEXER_INITIAL_DRAFT = {
   enableInteractiveSearch: true,
   enableAutoSearch: true,
   configValues: {} as Record<string, string>,
-};
-
-const PROXY_INITIAL_DRAFT: ProxyDraft = {
-  providerType: "byparr",
-  name: "",
-  baseUrl: "http://localhost:8191",
-  requestTimeoutSeconds: 60,
-  username: "",
-  password: "",
-  hasStoredCredentials: false,
-  clearCredentials: false,
-  remoteDns: false,
-  isEnabled: true,
-};
-
-/**
- * Each provider's base URL has to match its own scheme, so switching provider
- * in the editor reseeds the placeholder rather than leaving a solver URL on a
- * SOCKS row.
- */
-const PROXY_DEFAULT_BASE_URLS: Record<
-  ProxyProviderTypeValue,
-  string
-> = {
-  byparr: "http://localhost:8191",
-  trawl: "http://localhost:8191",
-  http: "http://localhost:3128",
-  socks4: "socks4://localhost:1080",
-  socks5: "socks5://localhost:1080",
 };
 
 function serializeConfigValues(
@@ -304,15 +261,7 @@ export function SettingsIndexersContainer({
   const [editingIndexerId, setEditingIndexerId] = useState<string | null>(null);
   const [pendingDeleteIndexer, setPendingDeleteIndexer] =
     useState<IndexerRecord | null>(null);
-  const [pendingDeleteProxy, setPendingDeleteProxy] =
-    useState<ProxyRecord | null>(null);
   const [isTestingConnection, setIsTestingConnection] = useState(false);
-  const [editingProxyId, setEditingProxyId] = useState<string | null>(null);
-  const [isProxyEditorOpen, setIsProxyEditorOpen] = useState(false);
-  const [mutatingProxyId, setMutatingProxyId] = useState<string | null>(null);
-  const [testingProxyId, setTestingProxyId] = useState<string | null>(null);
-  const [proxyDraft, setProxyDraft] =
-    useState<ProxyDraft>(() => ({ ...PROXY_INITIAL_DRAFT }));
   const defaultProxyConfigId = useMemo(
     () => proxyConfigs.find((proxy) => proxy.isEnabled)?.id ?? null,
     [proxyConfigs],
@@ -1041,179 +990,6 @@ export function SettingsIndexersContainer({
     }
   };
 
-  const resetProxyDraft = useCallback(() => {
-    setEditingProxyId(null);
-    setIsProxyEditorOpen(false);
-    setProxyDraft({ ...PROXY_INITIAL_DRAFT });
-  }, []);
-
-  const editProxy = useCallback((proxy: ProxyRecord) => {
-    setEditingProxyId(proxy.id);
-    setIsProxyEditorOpen(true);
-    setProxyDraft({
-      providerType: isProxyProviderType(proxy.providerType)
-        ? proxy.providerType
-        : "byparr",
-      name: proxy.name,
-      baseUrl: proxy.baseUrl,
-      requestTimeoutSeconds: proxy.requestTimeoutSeconds,
-      // Credentials are write-only: they are never read back, so the editor
-      // opens with blank inputs meaning "leave the stored secret alone".
-      username: "",
-      password: "",
-      hasStoredCredentials: proxy.hasCredentials,
-      clearCredentials: false,
-      remoteDns: proxy.remoteDns,
-      isEnabled: proxy.isEnabled,
-    });
-    setGlobalStatus(`Editing proxy ${proxy.name}`);
-  }, [setGlobalStatus]);
-
-  const startCreateProxy = useCallback(() => {
-    setEditingProxyId(null);
-    setProxyDraft({ ...PROXY_INITIAL_DRAFT });
-    setIsProxyEditorOpen(true);
-  }, []);
-
-  const changeProxyProvider = useCallback(
-    (providerType: ProxyProviderTypeValue) => {
-      setProxyDraft((prev) => {
-        if (prev.providerType === providerType) {
-          return prev;
-        }
-        const previousDefault =
-          PROXY_DEFAULT_BASE_URLS[prev.providerType];
-        return {
-          ...prev,
-          providerType,
-          // Only reseed a URL the operator has not customized; a typed value
-          // survives so switching provider by accident costs nothing.
-          baseUrl:
-            prev.baseUrl.trim() === "" || prev.baseUrl === previousDefault
-              ? PROXY_DEFAULT_BASE_URLS[providerType]
-              : prev.baseUrl,
-          // Fields the new provider rejects must not linger in the draft.
-          username: "",
-          password: "",
-          clearCredentials: false,
-          remoteDns: supportsProxyRemoteDns(providerType)
-            ? prev.remoteDns
-            : false,
-        };
-      });
-    },
-    [],
-  );
-
-  const submitProxy = useCallback(async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const name = proxyDraft.name.trim();
-    const baseUrl = proxyDraft.baseUrl.trim();
-    if (!name || !baseUrl) {
-      setGlobalStatus(t("form.indexerValidation"));
-      return;
-    }
-
-    setMutatingProxyId(editingProxyId || "new");
-    try {
-      if (editingProxyId) {
-        const { error } = await client
-          .mutation(updateProxyConfigMutation, {
-            input: buildUpdateProxyInput(editingProxyId, proxyDraft),
-          })
-          .toPromise();
-        if (error) throw error;
-        setGlobalStatus("Proxy updated");
-      } else {
-        const { error } = await client
-          .mutation(createProxyConfigMutation, {
-            input: buildCreateProxyInput(proxyDraft),
-          })
-          .toPromise();
-        if (error) throw error;
-        setGlobalStatus("Proxy created");
-      }
-      resetProxyDraft();
-      await Promise.all([refreshProxyConfigs(), refreshIndexers()]);
-    } catch (error) {
-      setGlobalStatus(
-        error instanceof Error ? error.message : t("status.failedToUpdate"),
-      );
-    } finally {
-      setMutatingProxyId(null);
-    }
-  }, [
-    client,
-    editingProxyId,
-    proxyDraft,
-    refreshProxyConfigs,
-    refreshIndexers,
-    resetProxyDraft,
-    setGlobalStatus,
-    t,
-  ]);
-
-  const testProxy = useCallback(async (proxy: ProxyRecord) => {
-    setTestingProxyId(proxy.id);
-    try {
-      const { data, error } = await client
-        .mutation(testProxyConfigMutation, { id: proxy.id })
-        .toPromise();
-      if (error) throw error;
-      const result = data?.testProxyConfig;
-      setGlobalStatus(
-        result?.message ||
-          (result?.ok ? "Proxy test passed" : "Proxy test failed"),
-      );
-      await refreshProxyConfigs();
-    } catch (error) {
-      setGlobalStatus(
-        error instanceof Error ? error.message : "Proxy test failed",
-      );
-    } finally {
-      setTestingProxyId(null);
-    }
-  }, [client, refreshProxyConfigs, setGlobalStatus]);
-
-  const deleteProxy = useCallback((proxy: ProxyRecord) => {
-    setPendingDeleteProxy(proxy);
-  }, []);
-
-  const confirmDeleteProxy = useCallback(async () => {
-    if (!pendingDeleteProxy) {
-      return;
-    }
-    const proxy = pendingDeleteProxy;
-    setMutatingProxyId(proxy.id);
-    try {
-      const { error } = await client
-        .mutation(deleteProxyConfigMutation, { id: proxy.id })
-        .toPromise();
-      if (error) throw error;
-      setGlobalStatus("Proxy deleted");
-      if (editingProxyId === proxy.id) {
-        resetProxyDraft();
-      }
-      await Promise.all([refreshProxyConfigs(), refreshIndexers()]);
-    } catch (error) {
-      setGlobalStatus(
-        error instanceof Error ? error.message : t("status.failedToDelete"),
-      );
-    } finally {
-      setMutatingProxyId(null);
-      setPendingDeleteProxy(null);
-    }
-  }, [
-    client,
-    editingProxyId,
-    pendingDeleteProxy,
-    refreshProxyConfigs,
-    refreshIndexers,
-    resetProxyDraft,
-    setGlobalStatus,
-    t,
-  ]);
-
   return (
     <>
       {pluginsTarget
@@ -1248,19 +1024,6 @@ export function SettingsIndexersContainer({
         mutatingIndexerSeedingProfileIds={mutatingIndexerSeedingProfileIds}
         setIndexerSeedingProfile={setIndexerSeedingProfile}
         proxyConfigs={proxyConfigs}
-        proxyDraft={proxyDraft}
-        setProxyDraft={setProxyDraft}
-        editingProxyId={editingProxyId}
-        isProxyEditorOpen={isProxyEditorOpen}
-        mutatingProxyId={mutatingProxyId}
-        testingProxyId={testingProxyId}
-        submitProxy={submitProxy}
-        resetProxyDraft={resetProxyDraft}
-        startCreateProxy={startCreateProxy}
-        changeProxyProvider={changeProxyProvider}
-        editProxy={editProxy}
-        testProxy={testProxy}
-        deleteProxy={deleteProxy}
         editIndexer={requestEditIndexer}
         toggleIndexerEnabled={toggleIndexerEnabled}
         deleteIndexer={deleteIndexer}
@@ -1304,23 +1067,6 @@ export function SettingsIndexersContainer({
         isBusy={mutatingIndexerId !== null}
         onConfirm={confirmDeleteIndexer}
         onCancel={() => setPendingDeleteIndexer(null)}
-      />
-      <ConfirmDialog
-        open={pendingDeleteProxy !== null}
-        contentId="settings-indexer-proxy-delete-dialog"
-        title={t("label.delete")}
-        description={
-          pendingDeleteProxy
-            ? `Delete proxy ${pendingDeleteProxy.name}?`
-            : ""
-        }
-        confirmLabel={t("label.delete")}
-        cancelLabel={t("label.cancel")}
-        confirmButtonId="settings-indexer-proxy-delete-confirm"
-        cancelButtonId="settings-indexer-proxy-delete-cancel"
-        isBusy={mutatingProxyId !== null}
-        onConfirm={confirmDeleteProxy}
-        onCancel={() => setPendingDeleteProxy(null)}
       />
     </>
   );
