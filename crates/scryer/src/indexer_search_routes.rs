@@ -108,15 +108,14 @@ fn content_disposition(file_name: &str) -> String {
     let ascii = file_name
         .chars()
         .map(|character| {
-            if character.is_ascii_graphic() || character == ' ' {
+            let quotable = character.is_ascii_graphic() || character == ' ';
+            if quotable && character != '\\' && character != '"' {
                 character
             } else {
                 '_'
             }
         })
-        .collect::<String>()
-        .replace('\\', "_")
-        .replace('"', "_");
+        .collect::<String>();
     let encoded = utf8_percent_encode(file_name, NON_ALPHANUMERIC);
     format!("attachment; filename=\"{ascii}\"; filename*=UTF-8''{encoded}")
 }
