@@ -1,5 +1,13 @@
 import * as React from "react";
-import { Copy, Edit, KeyRound, Plus, RefreshCw, Trash2 } from "lucide-react";
+import {
+  Copy,
+  Edit,
+  KeyRound,
+  Plus,
+  RefreshCw,
+  Trash2,
+  Upload,
+} from "lucide-react";
 import { AddNewButton } from "@/components/common/add-new-button";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
@@ -77,6 +85,12 @@ export type SettingsProxiesSectionProps = {
   startCreateProxy: () => void;
   changeProxyProvider: (providerType: ProxyProviderTypeValue) => void;
   editProxy: (proxy: ProxyRecord) => void;
+  /**
+   * Fill the draft from a pasted or uploaded configuration. False when the text
+   * was not a WireGuard configuration at all, which is when the paste buffer is
+   * worth keeping so the operator can see what they gave us.
+   */
+  importWireguardConfig: (text: string) => boolean;
   testProxy: (proxy: ProxyRecord) => Promise<void> | void;
   deleteProxy: (proxy: ProxyRecord) => Promise<void> | void;
   requestResetHostKey: (proxy: ProxyRecord) => void;
@@ -118,6 +132,7 @@ export function SettingsProxiesSection({
   startCreateProxy,
   changeProxyProvider,
   editProxy,
+  importWireguardConfig,
   testProxy,
   deleteProxy,
   requestResetHostKey,
@@ -125,6 +140,32 @@ export function SettingsProxiesSection({
 }: SettingsProxiesSectionProps) {
   const t = useTranslate();
   const dateTimeFormat = useUiDateTimeFormat();
+  // The paste buffer is transient: it is what the operator dropped in, not part
+  // of the proxy being edited, so it lives here and never reaches the draft.
+  const [configText, setConfigText] = React.useState("");
+  const configFileRef = React.useRef<HTMLInputElement>(null);
+
+  const applyConfigText = React.useCallback(
+    (text: string) => {
+      if (importWireguardConfig(text)) {
+        setConfigText("");
+      }
+    },
+    [importWireguardConfig],
+  );
+
+  const readConfigFile = React.useCallback(
+    async (event: React.ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0];
+      // Cleared straight away so choosing the same file twice still fires.
+      event.target.value = "";
+      if (!file) {
+        return;
+      }
+      applyConfigText(await file.text());
+    },
+    [applyConfigText],
+  );
 
   const formatProxyHealth = React.useCallback(
     (status: string | null | undefined): string => {
@@ -336,6 +377,65 @@ export function SettingsProxiesSection({
                 className="flex flex-col gap-3"
                 onSubmit={submitProxy}
               >
+                {/* First, because a whole configuration file is what an
+                    operator is handed: filling the form from it beats
+                    transcribing eight fields by hand, and every field below
+                    still accepts the same lines pasted one at a time. */}
+                {isWireguardDraft ? (
+                  <div
+                    id="settings-indexer-proxy-import-config"
+                    className="rounded border border-border bg-card/60 p-3"
+                  >
+                    <div className="mb-1 text-sm font-medium">
+                      {t("settings.proxyImportConfig")}
+                    </div>
+                    <p className="mb-2 text-xs text-muted-foreground">
+                      {t("settings.proxyImportConfigHelp")}
+                    </p>
+                    <Textarea
+                      id="settings-indexer-proxy-import-config-text"
+                      className="min-h-24 font-mono text-xs"
+                      spellCheck={false}
+                      autoComplete="off"
+                      rows={5}
+                      value={configText}
+                      placeholder={
+                        "[Interface]\nPrivateKey = …\nAddress = 10.6.0.2/32\n\n[Peer]\nPublicKey = …\nEndpoint = vpn.example.com:51820"
+                      }
+                      onChange={(event) => setConfigText(event.target.value)}
+                    />
+                    <input
+                      id="settings-indexer-proxy-import-config-file"
+                      ref={configFileRef}
+                      type="file"
+                      accept=".conf,.txt,text/plain"
+                      className="hidden"
+                      onChange={(event) => {
+                        void readConfigFile(event);
+                      }}
+                    />
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <Button
+                        id="settings-indexer-proxy-import-config-apply"
+                        type="button"
+                        variant="outline"
+                        disabled={configText.trim() === ""}
+                        onClick={() => applyConfigText(configText)}
+                      >
+                        {t("settings.proxyImportConfigApply")}
+                      </Button>
+                      <Button
+                        id="settings-indexer-proxy-import-config-choose"
+                        type="button"
+                        variant="outline"
+                        onClick={() => configFileRef.current?.click()}
+                      >
+                        <Upload className="h-4 w-4" />
+                        {t("settings.proxyImportConfigFile")}
+                      </Button>
+                    </div>
+                  </div>
+                ) : null}
                 <div className="grid gap-3 md:grid-cols-[12rem_minmax(0,1fr)_minmax(0,1.4fr)_10rem_auto]">
                   <label>
                     <Label

@@ -210,14 +210,129 @@ export function looksLikeWireguardKey(value: string): boolean {
 }
 
 /**
+ * The attribute names a WireGuard configuration uses for each field, so a
+ * pasted `Key = value` line is worth exactly as much as the bare value. These
+ * mirror the workflow's own lists, which are the authority.
+ */
+export const ENDPOINT_CONFIG_KEYS = ["endpoint"] as const;
+export const PRIVATE_KEY_CONFIG_KEYS = ["privatekey"] as const;
+export const PEER_PUBLIC_KEY_CONFIG_KEYS = ["publickey", "peerpublickey"] as const;
+export const PRESHARED_KEY_CONFIG_KEYS = ["presharedkey"] as const;
+export const MTU_CONFIG_KEYS = ["mtu"] as const;
+export const KEEPALIVE_CONFIG_KEYS = ["persistentkeepalive", "keepalive"] as const;
+/**
+ * Both list fields answer to either name: a stray `DNS =` pasted into the
+ * address box is still an operator pasting a line, and stripping it is kinder
+ * than refusing it.
+ */
+export const TUNNEL_LIST_CONFIG_KEYS = ["address", "addresses", "dns"] as const;
+
+/**
+ * Everything from an unquoted `#` or `;` is a comment in a `wg` file.
+ *
+ * Only applied to single-line values that cannot legitimately contain one: an
+ * endpoint, a base64 key, an address list. A password can contain anything, so
+ * it is deliberately never run through this.
+ */
+export function stripTrailingComment(line: string): string {
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index];
+    if (
+      (character === "#" || character === ";") &&
+      (index === 0 || /\s/.test(line[index - 1] ?? ""))
+    ) {
+      return line.slice(0, index).trimEnd();
+    }
+  }
+  return line;
+}
+
+/**
+ * Take the value out of a `Key = value` line when the key is one this field
+ * answers to, and hand back anything else untouched.
+ *
+ * Matching the key by name is what makes this safe: a base64 key ends in `=` as
+ * well, but `xJ4…` is not an attribute name, so such a value is kept whole. A
+ * multi-line value is a PEM block rather than an assignment, and is returned as
+ * it arrived.
+ */
+export function stripConfigAssignment(
+  raw: string,
+  keys: readonly string[],
+): string {
+  const trimmed = raw.trim();
+  if (trimmed.includes("\n")) {
+    return trimmed;
+  }
+  const value = stripTrailingComment(trimmed);
+  const separator = value.indexOf("=");
+  if (separator === -1) {
+    return value;
+  }
+  const name = value.slice(0, separator).trim().toLowerCase();
+  return keys.includes(name) ? value.slice(separator + 1).trim() : value;
+}
+
+/** The URL scheme each provider's endpoint has to carry. */
+const PROXY_URL_SCHEMES: Record<ProxyProviderTypeValue, string> = {
+  byparr: "http",
+  trawl: "http",
+  http: "http",
+  socks4: "socks4",
+  socks5: "socks5",
+  ssh_tunnel: "ssh",
+  wireguard: "wireguard",
+};
+
+function hasUrlScheme(value: string): boolean {
+  return /^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(value);
+}
+
+/**
+ * The endpoint as it will be stored: the assignment stripped, and the
+ * provider's own scheme supplied when the operator pasted a bare authority.
+ *
+ * `vpn.example.com:51820` is what a WireGuard configuration contains and what
+ * an operator naturally types. A bare IPv6 literal is bracketed on the way
+ * through, because `fd00::1` is a host and only `[fd00::1]:51820` can also
+ * carry a port. A scheme the operator actually wrote is never rewritten: that
+ * would hide a real mistake rather than forgive a paste.
+ */
+export function normalizeProxyEndpoint(
+  providerType: string,
+  raw: string,
+): string {
+  const stripped = stripConfigAssignment(raw, ENDPOINT_CONFIG_KEYS).replace(
+    /\/+$/,
+    "",
+  );
+  if (stripped === "" || hasUrlScheme(stripped)) {
+    return stripped;
+  }
+  if (!isProxyProviderType(providerType)) {
+    // A provider only a newer server knows: no scheme of ours to supply.
+    return stripped;
+  }
+  const scheme = PROXY_URL_SCHEMES[providerType];
+  const authority =
+    !stripped.startsWith("[") && stripped.split(":").length > 2
+      ? `[${stripped}]`
+      : stripped;
+  return `${scheme}://${authority}`;
+}
+
+/**
  * Split an address or DNS list the way the workflow does: a `wg` config writes
  * them as one comma-separated line, and an operator is at least as likely to
- * paste one entry per line, so both separators split here. Blank entries are
- * dropped, so a trailing newline or comma costs nothing.
+ * paste one entry per line or the whole `Address = …` line, so all of those
+ * mean the same list. Blank entries and comments are dropped, so a trailing
+ * newline or comma costs nothing.
  */
 export function splitTunnelList(raw: string): string[] {
   return raw
-    .split(/[\n,]/)
+    .split("\n")
+    .map((line) => stripConfigAssignment(line, TUNNEL_LIST_CONFIG_KEYS))
+    .flatMap((line) => line.split(","))
     .map((entry) => entry.trim())
     .filter((entry) => entry !== "");
 }
@@ -410,3 +525,41 @@ export const PROXY_INITIAL_DRAFT: ProxyDraft = {
   remoteDns: false,
   isEnabled: true,
 };
+
+/**
+ * The draft as it will be stored: every field cleaned of the `Key = value`
+ * shape an operator pastes, the endpoint carrying its provider's scheme, and
+ * the two lists rewritten one entry per line.
+ *
+ * Applied on save rather than on every keystroke, so nothing fights the
+ * operator while they type, and the form then shows exactly what was stored.
+ * The workflow normalizes the same way and stays the authority; doing it here
+ * as well is what makes the form's own validation see the same values the API
+ * will.
+ */
+export function normalizeProxyDraft(draft: ProxyDraft): ProxyDraft {
+  const baseUrl = normalizeProxyEndpoint(draft.providerType, draft.baseUrl);
+  if (!supportsProxyWireguardFields(draft.providerType)) {
+    return baseUrl === draft.baseUrl ? draft : { ...draft, baseUrl };
+  }
+  return {
+    ...draft,
+    baseUrl,
+    privateKey: stripConfigAssignment(draft.privateKey, PRIVATE_KEY_CONFIG_KEYS),
+    peerPublicKey: stripConfigAssignment(
+      draft.peerPublicKey,
+      PEER_PUBLIC_KEY_CONFIG_KEYS,
+    ),
+    presharedKey: stripConfigAssignment(
+      draft.presharedKey,
+      PRESHARED_KEY_CONFIG_KEYS,
+    ),
+    tunnelAddresses: formatTunnelList(splitTunnelList(draft.tunnelAddresses)),
+    tunnelDnsServers: formatTunnelList(splitTunnelList(draft.tunnelDnsServers)),
+    tunnelMtu: stripConfigAssignment(draft.tunnelMtu, MTU_CONFIG_KEYS),
+    tunnelKeepaliveSeconds: stripConfigAssignment(
+      draft.tunnelKeepaliveSeconds,
+      KEEPALIVE_CONFIG_KEYS,
+    ),
+  };
+}

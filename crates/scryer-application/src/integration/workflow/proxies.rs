@@ -27,8 +27,9 @@ impl AppUseCase {
         validate_proxy_credentials(provider_type, username.as_deref(), password.as_deref())?;
         let private_key = normalize_proxy_private_key(input.private_key);
         let private_key_passphrase = normalize_proxy_credential(input.private_key_passphrase);
-        let peer_public_key = normalize_proxy_credential(input.peer_public_key);
-        let preshared_key = normalize_proxy_credential(input.preshared_key);
+        let peer_public_key =
+            normalize_config_value(input.peer_public_key, PEER_PUBLIC_KEY_CONFIG_KEYS);
+        let preshared_key = normalize_config_value(input.preshared_key, PRESHARED_KEY_CONFIG_KEYS);
         let tunnel_addresses = normalize_tunnel_list(input.tunnel_addresses).unwrap_or_default();
         let tunnel_dns_servers =
             normalize_tunnel_list(input.tunnel_dns_servers).unwrap_or_default();
@@ -144,10 +145,12 @@ impl AppUseCase {
         // The peer's public key is not a secret and not optional, so it has no
         // "clear it" state: omission keeps what is stored.
         if let Some(peer_public_key) = update.peer_public_key {
-            config.peer_public_key = normalize_proxy_credential(Some(peer_public_key));
+            config.peer_public_key =
+                normalize_config_value(Some(peer_public_key), PEER_PUBLIC_KEY_CONFIG_KEYS);
         }
         if let Some(preshared_key) = update.preshared_key {
-            config.preshared_key_encrypted = normalize_proxy_credential(preshared_key);
+            config.preshared_key_encrypted =
+                normalize_config_value(preshared_key, PRESHARED_KEY_CONFIG_KEYS);
         }
         if let Some(addresses) = normalize_tunnel_list(update.tunnel_addresses) {
             config.tunnel_addresses = addresses;
@@ -577,12 +580,111 @@ fn normalize_proxy_name(raw: &str) -> AppResult<String> {
     Ok(name)
 }
 
+/// Attribute names a WireGuard configuration uses for the fields we accept, so
+/// a pasted `Key = value` line is worth exactly as much as the bare value.
+const ENDPOINT_CONFIG_KEYS: &[&str] = &["endpoint"];
+const PRIVATE_KEY_CONFIG_KEYS: &[&str] = &["privatekey"];
+const PEER_PUBLIC_KEY_CONFIG_KEYS: &[&str] = &["publickey", "peerpublickey"];
+const PRESHARED_KEY_CONFIG_KEYS: &[&str] = &["presharedkey"];
+/// Both list fields answer to either name: a stray `DNS =` pasted into the
+/// address box is still an operator pasting a line, and stripping it is kinder
+/// than refusing it.
+const TUNNEL_LIST_CONFIG_KEYS: &[&str] = &["address", "addresses", "dns"];
+
+/// Everything from an unquoted `#` or `;` is a comment in a `wg` file.
+///
+/// Only applied to single-line values that cannot legitimately contain one: an
+/// endpoint, a base64 key, an address list. A password can contain anything,
+/// so it is deliberately never run through this.
+fn strip_trailing_comment(line: &str) -> &str {
+    let bytes = line.as_bytes();
+    for (index, byte) in bytes.iter().enumerate() {
+        if matches!(byte, b'#' | b';') && (index == 0 || bytes[index - 1].is_ascii_whitespace()) {
+            return line[..index].trim_end();
+        }
+    }
+    line
+}
+
+/// Take the value out of a `Key = value` line when the key is one this field
+/// answers to, and hand back anything else untouched.
+///
+/// An operator has their WireGuard configuration open in front of them, so
+/// pasting `Endpoint = vpn.example.com:51820` into the endpoint box is at least
+/// as likely as pasting the value alone. Matching the key by name is what makes
+/// this safe: a base64 key ends in `=` as well, but `xJ4...` is not an attribute
+/// name, so such a value is kept whole. A multi-line value is a PEM block rather
+/// than an assignment and is returned as it arrived.
+fn strip_config_assignment<'a>(raw: &'a str, keys: &[&str]) -> &'a str {
+    let trimmed = raw.trim();
+    if trimmed.contains('\n') {
+        return trimmed;
+    }
+    let value = strip_trailing_comment(trimmed);
+    let Some((name, rest)) = value.split_once('=') else {
+        return value;
+    };
+    if keys.iter().any(|key| name.trim().eq_ignore_ascii_case(key)) {
+        rest.trim()
+    } else {
+        value
+    }
+}
+
+/// Trim a pasted value, strip an assignment off it, and drop it when nothing
+/// is left.
+fn normalize_config_value(raw: Option<String>, keys: &[&str]) -> Option<String> {
+    raw.map(|value| strip_config_assignment(&value, keys).to_string())
+        .filter(|value| !value.is_empty())
+}
+
+/// The URL scheme a provider's endpoint has to carry.
+fn default_proxy_scheme(provider_type: scryer_domain::ProxyProviderType) -> &'static str {
+    use scryer_domain::ProxyProviderType as Provider;
+    match provider_type {
+        Provider::Byparr | Provider::Trawl | Provider::Http => "http",
+        Provider::Socks4 => "socks4",
+        Provider::Socks5 => "socks5",
+        Provider::SshTunnel => "ssh",
+        Provider::WireGuard => "wireguard",
+    }
+}
+
+fn has_url_scheme(value: &str) -> bool {
+    value.split_once("://").is_some_and(|(scheme, _)| {
+        scheme.starts_with(|character: char| character.is_ascii_alphabetic())
+            && scheme.chars().all(|character| {
+                character.is_ascii_alphanumeric() || matches!(character, '+' | '-' | '.')
+            })
+    })
+}
+
+/// Supply the provider's own scheme when the operator pasted a bare authority.
+///
+/// `vpn.example.com:51820` is what a WireGuard configuration contains and what
+/// an operator naturally types; refusing that with "relative URL without a
+/// base" teaches nobody anything. A bare IPv6 literal is bracketed on the way
+/// through, because `fd00::1` is a host and only `[fd00::1]:51820` can also
+/// carry a port.
+fn ensure_url_scheme(scheme: &str, value: &str) -> String {
+    if has_url_scheme(value) {
+        return value.to_string();
+    }
+    if !value.starts_with('[') && value.matches(':').count() >= 2 {
+        return format!("{scheme}://[{value}]");
+    }
+    format!("{scheme}://{value}")
+}
+
 fn normalize_proxy_base_url(raw: &str) -> AppResult<String> {
-    let trimmed = raw.trim().trim_end_matches('/');
-    if trimmed.is_empty() {
+    let stripped = strip_config_assignment(raw, ENDPOINT_CONFIG_KEYS).trim_end_matches('/');
+    if stripped.is_empty() {
         return Err(AppError::Validation("proxy base URL is required".into()));
     }
-    let parsed = url::Url::parse(trimmed)
+    // A solver is addressed as an ordinary URL, so a pasted `localhost:8191`
+    // means http.
+    let trimmed = ensure_url_scheme("http", stripped);
+    let parsed = url::Url::parse(&trimmed)
         .map_err(|error| AppError::Validation(format!("invalid proxy base URL: {error}")))?;
     if !matches!(parsed.scheme(), "http" | "https") {
         return Err(AppError::Validation(
@@ -594,7 +696,7 @@ fn normalize_proxy_base_url(raw: &str) -> AppResult<String> {
             "proxy base URL must include a host".into(),
         ));
     }
-    Ok(trimmed.to_string())
+    Ok(trimmed)
 }
 
 /// A validated proxy endpoint plus whatever its scheme said about remote DNS.
@@ -625,11 +727,12 @@ fn normalize_proxy_endpoint(
         });
     }
 
-    let trimmed = raw.trim().trim_end_matches('/');
-    if trimmed.is_empty() {
+    let stripped = strip_config_assignment(raw, ENDPOINT_CONFIG_KEYS).trim_end_matches('/');
+    if stripped.is_empty() {
         return Err(AppError::Validation("proxy base URL is required".into()));
     }
-    let parsed = url::Url::parse(trimmed)
+    let trimmed = ensure_url_scheme(default_proxy_scheme(provider_type), stripped);
+    let parsed = url::Url::parse(&trimmed)
         .map_err(|error| AppError::Validation(format!("invalid proxy base URL: {error}")))?;
     if parsed.host_str().is_none_or(|host| host.trim().is_empty()) {
         return Err(AppError::Validation(
@@ -647,7 +750,7 @@ fn normalize_proxy_endpoint(
 
     match (provider_type, parsed.scheme()) {
         (Provider::Http, "http" | "https") => Ok(NormalizedProxyEndpoint {
-            base_url: trimmed.to_string(),
+            base_url: trimmed,
             scheme_remote_dns: None,
         }),
         // An SSH endpoint is a host and a port and nothing else: there is no
@@ -666,7 +769,7 @@ fn normalize_proxy_endpoint(
                 ));
             }
             Ok(NormalizedProxyEndpoint {
-                base_url: trimmed.to_string(),
+                base_url: trimmed,
                 scheme_remote_dns: None,
             })
         }
@@ -685,13 +788,13 @@ fn normalize_proxy_endpoint(
                 ));
             }
             Ok(NormalizedProxyEndpoint {
-                base_url: trimmed.to_string(),
+                base_url: trimmed,
                 scheme_remote_dns: None,
             })
         }
         (Provider::Socks4, "socks4") | (Provider::Socks5, "socks5") => {
             Ok(NormalizedProxyEndpoint {
-                base_url: trimmed.to_string(),
+                base_url: trimmed,
                 scheme_remote_dns: None,
             })
         }
@@ -793,8 +896,7 @@ fn validate_proxy_credentials(
 /// internal newlines: a PEM body is line-structured and trimming only the ends
 /// is what makes a copy-pasted block usable.
 fn normalize_proxy_private_key(raw: Option<String>) -> Option<String> {
-    raw.map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
+    normalize_config_value(raw, PRIVATE_KEY_CONFIG_KEYS)
 }
 
 /// Structural PEM check, ahead of the real parse in `validate_tunnel_auth`.
@@ -987,7 +1089,13 @@ fn normalize_tunnel_list(raw: Option<Vec<String>>) -> Option<Vec<String>> {
     raw.map(|values| {
         values
             .iter()
-            .flat_map(|value| value.split(','))
+            // A `wg` file writes one comma-separated line; an operator is at
+            // least as likely to paste one entry per line, or the whole
+            // `Address = ...` line, or several lines at once. All of those mean
+            // the same list.
+            .flat_map(|value| value.lines())
+            .map(|line| strip_config_assignment(line, TUNNEL_LIST_CONFIG_KEYS))
+            .flat_map(|line| line.split(','))
             .map(str::trim)
             .filter(|entry| !entry.is_empty())
             .map(str::to_string)
@@ -1946,6 +2054,128 @@ mod proxy_tests {
         // Omission and clearing stay distinguishable.
         assert_eq!(normalize_tunnel_list(None), None);
         assert_eq!(normalize_tunnel_list(Some(Vec::new())), Some(Vec::new()));
+    }
+
+    /// An operator has their `wg` configuration open in front of them, so every
+    /// field takes the whole line as readily as the value.
+    #[test]
+    fn every_field_accepts_a_pasted_configuration_line() {
+        assert_eq!(
+            normalize_proxy_endpoint(Provider::WireGuard, "Endpoint = vpn.test:51820")
+                .expect("a pasted endpoint line")
+                .base_url,
+            "wireguard://vpn.test:51820"
+        );
+        assert_eq!(
+            normalize_config_value(
+                Some("PublicKey = cGVlcg==".to_string()),
+                PEER_PUBLIC_KEY_CONFIG_KEYS,
+            ),
+            Some("cGVlcg==".to_string())
+        );
+        assert_eq!(
+            normalize_config_value(
+                Some("PresharedKey=cHNr".to_string()),
+                PRESHARED_KEY_CONFIG_KEYS,
+            ),
+            Some("cHNr".to_string())
+        );
+        assert_eq!(
+            normalize_proxy_private_key(Some("  privatekey = c2VjcmV0  ".to_string())),
+            Some("c2VjcmV0".to_string())
+        );
+        // The whole `[Interface]` block's worth of lines, pasted into the two
+        // list fields, means the list it names.
+        assert_eq!(
+            normalize_tunnel_list(Some(vec![
+                "Address = 10.6.0.2/32, fd00::2/128\n# spare\nDNS = 10.6.0.1".to_string(),
+            ])),
+            Some(vec![
+                "10.6.0.2/32".to_string(),
+                "fd00::2/128".to_string(),
+                "10.6.0.1".to_string(),
+            ])
+        );
+
+        // A bare value is still a value: the key has to be a *name* this field
+        // answers to, so a base64 key that merely ends in `=` is kept whole.
+        assert_eq!(
+            normalize_config_value(Some("cGVlcg==".to_string()), PEER_PUBLIC_KEY_CONFIG_KEYS),
+            Some("cGVlcg==".to_string())
+        );
+        assert_eq!(
+            normalize_config_value(
+                Some("Name = value".to_string()),
+                PEER_PUBLIC_KEY_CONFIG_KEYS
+            ),
+            Some("Name = value".to_string())
+        );
+        // A PEM block is multi-line and is never read as an assignment.
+        let pem = "-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----";
+        assert_eq!(
+            normalize_proxy_private_key(Some(pem.to_string())),
+            Some(pem.to_string())
+        );
+        // Comment stripping is for the fields that cannot contain a `#`; a
+        // password can contain anything and is left exactly as typed.
+        assert_eq!(
+            normalize_proxy_credential(Some("hunter2 # not a comment".to_string())),
+            Some("hunter2 # not a comment".to_string())
+        );
+    }
+
+    /// The endpoint field takes what the operator's configuration says, which
+    /// is an authority and not a URL.
+    #[test]
+    fn an_endpoint_without_a_scheme_takes_the_providers_own() {
+        for (provider, pasted, expected) in [
+            (
+                Provider::WireGuard,
+                "vpn.test:51820",
+                "wireguard://vpn.test:51820",
+            ),
+            (
+                Provider::SshTunnel,
+                "seedbox.test:2222",
+                "ssh://seedbox.test:2222",
+            ),
+            (
+                Provider::Socks5,
+                "127.0.0.1:1080",
+                "socks5://127.0.0.1:1080",
+            ),
+            (
+                Provider::Socks4,
+                "127.0.0.1:1080",
+                "socks4://127.0.0.1:1080",
+            ),
+            (Provider::Http, "127.0.0.1:3128", "http://127.0.0.1:3128"),
+            (Provider::Byparr, "localhost:8191", "http://localhost:8191"),
+        ] {
+            assert_eq!(
+                normalize_proxy_endpoint(provider, pasted)
+                    .unwrap_or_else(|error| panic!("{pasted} for {provider:?}: {error:?}"))
+                    .base_url,
+                expected
+            );
+        }
+        // A bare IPv6 literal is a host, so it is bracketed rather than read as
+        // a host and a nonsense port.
+        assert_eq!(
+            normalize_proxy_endpoint(Provider::WireGuard, "Endpoint = fd00::1")
+                .expect("a v6 endpoint")
+                .base_url,
+            "wireguard://[fd00::1]"
+        );
+        assert_eq!(
+            normalize_proxy_endpoint(Provider::WireGuard, "[fd00::1]:51820")
+                .expect("a bracketed v6 endpoint")
+                .base_url,
+            "wireguard://[fd00::1]:51820"
+        );
+        // Supplying the missing scheme is forgiveness; rewriting a scheme the
+        // operator actually wrote would hide a real mistake.
+        assert!(normalize_proxy_endpoint(Provider::WireGuard, "https://vpn.test").is_err());
     }
 
     #[test]
