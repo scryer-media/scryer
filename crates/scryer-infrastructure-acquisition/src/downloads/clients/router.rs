@@ -45,6 +45,15 @@ const DOWNLOAD_CLIENT_FEEDBACK_POLL_CONCURRENCY: usize = 4;
 const PROXIED_TORRENT_FILE_MAX_BYTES: usize = 32 * 1024 * 1024;
 const SOLVER_RESPONSE_MAX_BYTES: usize = PROXIED_TORRENT_FILE_MAX_BYTES * 2;
 
+/// Who fetches an NZB URL during request preparation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ArtifactFetch {
+    /// The download client pulls the URL itself (the submit path).
+    ClientSide,
+    /// Scryer resolves the bytes so it holds the file (D17 browser downloads).
+    HostSide,
+}
+
 pub fn download_client_feedback_timeout() -> Duration {
     static CACHED: std::sync::OnceLock<Duration> = std::sync::OnceLock::new();
     *CACHED.get_or_init(|| {
@@ -1271,6 +1280,22 @@ impl PrioritizedDownloadClientRouter {
         request: &DownloadClientAddRequest,
         indexer: Option<&scryer_domain::IndexerConfig>,
     ) -> AppResult<DownloadClientAddRequest> {
+        self.prepare_download_request_with(request, indexer, ArtifactFetch::ClientSide)
+            .await
+    }
+
+    /// `prepare_download_request` with the NZB fetch policy made explicit.
+    ///
+    /// `ClientSide` is the submit path's historical behaviour: an NZB URL is
+    /// handed to the download client untouched. `HostSide` (D17) makes Scryer
+    /// resolve the bytes itself, which is the only way to put the file in the
+    /// operator's browser.
+    async fn prepare_download_request_with(
+        &self,
+        request: &DownloadClientAddRequest,
+        indexer: Option<&scryer_domain::IndexerConfig>,
+        artifact_fetch: ArtifactFetch,
+    ) -> AppResult<DownloadClientAddRequest> {
         if request.resolved_download_artifact.is_some() {
             return Ok(request.clone());
         }
@@ -1305,7 +1330,8 @@ impl PrioritizedDownloadClientRouter {
         // treated as a torrent artifact, matching the adapter's historical
         // default and ensuring download clients never fetch arbitrary URLs.
         let has_proxy = indexer.and_then(|value| value.indexer_proxy_config_id.as_deref());
-        if has_proxy.is_none()
+        if artifact_fetch == ArtifactFetch::ClientSide
+            && has_proxy.is_none()
             && (request.staged_nzb.is_some()
                 || matches!(
                     request.source_kind,
@@ -2762,6 +2788,32 @@ impl PrioritizedDownloadClientRouter {
 
 #[async_trait]
 impl DownloadClient for PrioritizedDownloadClientRouter {
+    /// Resolve the release's file without submitting it (D17).
+    ///
+    /// The indexer is resolved exactly as the submit path resolves it, so an
+    /// assigned challenge solver or a private tracker's own grab flow still
+    /// owns the fetch. A magnet comes back as-is; refusing it belongs to the
+    /// caller, which knows the release title to name in the message.
+    async fn fetch_download_artifact(
+        &self,
+        request: &DownloadClientAddRequest,
+    ) -> AppResult<ResolvedDownloadArtifact> {
+        let indexer_config = self
+            .load_indexer_config_for_submission(request)
+            .await
+            .map_err(AppError::into_download_submit_unavailable)?;
+        let prepared = self
+            .prepare_download_request_with(
+                request,
+                indexer_config.as_ref(),
+                ArtifactFetch::HostSide,
+            )
+            .await?;
+        prepared.resolved_download_artifact.ok_or_else(|| {
+            AppError::Validation("release has no download artifact to fetch".to_string())
+        })
+    }
+
     async fn submit_download(
         &self,
         request: &DownloadClientAddRequest,
@@ -4823,6 +4875,50 @@ mod tests {
                 ..
             }) if hash == &"ab".repeat(32)
         ));
+    }
+
+    #[tokio::test]
+    async fn fetch_download_artifact_resolves_an_nzb_url_the_submit_path_leaves_alone() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        const NZB: &[u8] =
+            br#"<?xml version="1.0" encoding="UTF-8"?><nzb xmlns="http://www.newzbin.com/DTD/2003/nzb"><file subject="release"><segments><segment bytes="1" number="1">a@b</segment></segments></file></nzb>"#;
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/release.nzb"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "application/x-nzb")
+                    .set_body_bytes(NZB),
+            )
+            .mount(&server)
+            .await;
+
+        let router = no_client_router();
+        let request = test_add_request(
+            &format!("{}/release.nzb", server.uri()),
+            Some(DownloadSourceKind::NzbUrl),
+        );
+
+        let artifact = router
+            .fetch_download_artifact(&request)
+            .await
+            .expect("host-side fetch should resolve the NZB");
+        let ResolvedDownloadArtifact::Nzb { bytes, .. } = artifact else {
+            panic!("an application/x-nzb body should classify as an NZB");
+        };
+        assert_eq!(bytes, NZB);
+
+        // The submit path is untouched: the download client still fetches the
+        // URL itself.
+        let prepared = router
+            .prepare_download_request(&request, None)
+            .await
+            .expect("submit preparation should still leave the NZB URL alone");
+        assert!(prepared.resolved_download_artifact.is_none());
+        assert_eq!(prepared.source_hint, request.source_hint);
     }
 
     #[tokio::test]

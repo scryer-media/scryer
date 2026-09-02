@@ -5445,6 +5445,8 @@ const ru: LocaleDictionary = {
   "indexerSearch.column.peers": "Пиры",
   "indexerSearch.row.select": "Выбрать релиз",
   "indexerSearch.row.grab": "Забрать",
+  "indexerSearch.row.download": "Скачать файл",
+  "indexerSearch.download.unavailable": "Этот релиз — магнет-ссылка, скачиваемого файла нет",
   "indexerSearch.row.expand": "Показать подробности",
   "indexerSearch.row.collapse": "Скрыть подробности",
   "indexerSearch.row.priority": "Приоритет {{value}}",
@@ -5465,6 +5467,7 @@ const ru: LocaleDictionary = {
   "indexerSearch.footer.nothingQueued":
     "Ничего не ставится в очередь, пока вы не заберёте.",
   "indexerSearch.footer.grabSelected": "Забрать выбранные",
+  "indexerSearch.footer.downloadSelected": "Скачать {{count}}",
   "indexerSearch.empty.prompt":
     "Введите запрос и выполните поиск по индексаторам.",
   "indexerSearch.empty.searching": "Идёт поиск по индексаторам…",

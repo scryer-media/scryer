@@ -2408,6 +2408,8 @@ const fr: LocaleDictionary = {
   "indexerSearch.column.peers": "Pairs",
   "indexerSearch.row.select": "Sélectionner la release",
   "indexerSearch.row.grab": "Capturer",
+  "indexerSearch.row.download": "Télécharger le fichier",
+  "indexerSearch.download.unavailable": "Cette version est un lien magnet et n'a aucun fichier à télécharger",
   "indexerSearch.row.expand": "Afficher les détails",
   "indexerSearch.row.collapse": "Masquer les détails",
   "indexerSearch.row.priority": "Priorité {{value}}",
@@ -2428,6 +2430,7 @@ const fr: LocaleDictionary = {
   "indexerSearch.footer.nothingQueued":
     "Rien n'est mis en file d'attente tant que vous ne capturez pas.",
   "indexerSearch.footer.grabSelected": "Capturer la sélection",
+  "indexerSearch.footer.downloadSelected": "Télécharger {{count}}",
   "indexerSearch.empty.prompt":
     "Saisissez une requête et interrogez vos indexeurs.",
   "indexerSearch.empty.searching": "Recherche sur les indexeurs…",

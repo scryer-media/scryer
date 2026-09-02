@@ -790,3 +790,303 @@ async fn an_unlinked_grab_refuses_unknown_releases_unusable_clients_and_unprivil
         .expect_err("permission gate");
     assert!(matches!(denied, AppError::Unauthorized(_)), "{denied:?}");
 }
+
+// ── Download to browser (D17, FR-028) ───────────────────────────────────────
+
+/// Answers `fetch_download_artifact` from a scripted table keyed by download
+/// URL; a URL with no entry fails the way an unreachable indexer would.
+#[derive(Default)]
+struct ArtifactDownloadClient {
+    artifacts: HashMap<String, ResolvedDownloadArtifact>,
+}
+
+#[async_trait]
+impl DownloadClient for ArtifactDownloadClient {
+    async fn submit_download(
+        &self,
+        _request: &DownloadClientAddRequest,
+    ) -> AppResult<DownloadGrabResult> {
+        Err(AppError::Repository(
+            "a browser download never submits".to_string(),
+        ))
+    }
+
+    async fn fetch_download_artifact(
+        &self,
+        request: &DownloadClientAddRequest,
+    ) -> AppResult<ResolvedDownloadArtifact> {
+        let url = request.source_hint.clone().unwrap_or_default();
+        self.artifacts
+            .get(&url)
+            .cloned()
+            .ok_or_else(|| AppError::Validation(format!("indexer refused {url}")))
+    }
+}
+
+fn nzb_artifact(marker: &str) -> ResolvedDownloadArtifact {
+    ResolvedDownloadArtifact::Nzb {
+        bytes: format!("<nzb>{marker}</nzb>").into_bytes(),
+        file_name: None,
+        content_type: None,
+    }
+}
+
+async fn grabbed_release_titles(app: &AppUseCase) -> Vec<String> {
+    app.services
+        .events
+        .domain_events
+        .list(&DomainEventFilter {
+            event_types: Some(vec![DomainEventType::ReleaseGrabbed]),
+            title_id: None,
+            facet: None,
+            after_sequence: Some(0),
+            before_sequence: None,
+            limit: 50,
+        })
+        .await
+        .expect("release grabbed events should load")
+        .iter()
+        .filter_map(|event| match &event.payload {
+            DomainEventPayload::ReleaseGrabbed(data) => data.source_title.clone(),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Swap in a download client that answers with exactly these artifacts.
+fn with_artifacts(
+    app: &AppUseCase,
+    artifacts: HashMap<String, ResolvedDownloadArtifact>,
+) -> AppUseCase {
+    app.with_test_overrides(|services| {
+        services.with_download_client(Arc::new(ArtifactDownloadClient { artifacts }))
+    })
+}
+
+/// Bootstrap a completed search over `releases` and return its download URLs.
+async fn browser_download_fixture(
+    releases: Vec<IndexerSearchResult>,
+) -> (AppUseCase, User, String, Vec<String>) {
+    let expected = releases.len();
+    let indexer_client = ScriptedIndexerClient::default()
+        .with_releases("idx-a", releases)
+        .await;
+    let (app, user) = bootstrap_search(
+        Arc::new(StoredSettingsRepo::default()),
+        indexer_client,
+        vec![synthetic_direct_nab_indexer_config("idx-a", "newznab")],
+    );
+    let start = app
+        .start_interactive_release_search(
+            &user,
+            query_request("paperman", InteractiveSearchKind::Movie),
+        )
+        .await
+        .expect("start");
+    let done = await_completion(&app, &user, &start.id).await;
+    let urls = done
+        .results
+        .iter()
+        .map(|result| result.download_url.clone().expect("release download url"))
+        .collect::<Vec<_>>();
+    assert_eq!(urls.len(), expected, "every seeded release should survive dedupe");
+    (app, user, start.id, urls)
+}
+
+fn targets(search_id: &str, urls: &[String]) -> Vec<InteractiveSearchArtifactTarget> {
+    urls.iter()
+        .map(|url| InteractiveSearchArtifactTarget {
+            search_id: search_id.to_string(),
+            download_url: url.clone(),
+        })
+        .collect()
+}
+
+#[test]
+fn artifact_file_names_are_sanitised_and_deduped() {
+    use crate::catalog::interactive_release_search::{
+        artifact_file_name, dedupe_archive_file_name,
+    };
+
+    assert_eq!(
+        artifact_file_name("Paperman.2012.1080p.WEB-DL", ".nzb"),
+        "Paperman.2012.1080p.WEB-DL.nzb"
+    );
+    // Path separators and control characters cannot escape the archive root.
+    assert_eq!(
+        artifact_file_name("../etc/pass\u{7}wd", ".torrent"),
+        "etcpasswd.torrent"
+    );
+    assert_eq!(artifact_file_name("  Some\t Release \n", ".nzb"), "Some Release.nzb");
+    assert_eq!(artifact_file_name("   ", ".nzb"), "release.nzb");
+    assert_eq!(artifact_file_name(&"a".repeat(400), ".nzb").len(), 184);
+
+    let mut taken = std::collections::HashSet::new();
+    assert_eq!(dedupe_archive_file_name(&mut taken, "Same.nzb"), "Same.nzb");
+    assert_eq!(
+        dedupe_archive_file_name(&mut taken, "Same.nzb"),
+        "Same (2).nzb"
+    );
+    assert_eq!(
+        dedupe_archive_file_name(&mut taken, "Same.nzb"),
+        "Same (3).nzb"
+    );
+    assert_eq!(
+        dedupe_archive_file_name(&mut taken, "no-extension"),
+        "no-extension"
+    );
+}
+
+#[tokio::test]
+async fn one_release_downloads_its_own_file_and_records_a_grab() {
+    let (app, user, search_id, urls) =
+        browser_download_fixture(vec![nzb_release("Paperman.2012.1080p.WEB-DL", "g1")]).await;
+    let app = with_artifacts(
+        &app,
+        HashMap::from([(urls[0].clone(), nzb_artifact("one"))]),
+    );
+
+    let bundle = app
+        .download_interactive_search_artifacts(&user, &targets(&search_id, &urls))
+        .await
+        .expect("single release download");
+    assert_eq!(bundle.file_name, "Paperman.2012.1080p.WEB-DL.nzb");
+    assert_eq!(bundle.content_type, "application/x-nzb");
+    assert_eq!(bundle.bytes, b"<nzb>one</nzb>");
+
+    assert_eq!(
+        grabbed_release_titles(&app).await,
+        vec!["Paperman.2012.1080p.WEB-DL".to_string()],
+        "a browser download is a grab from the indexer's perspective"
+    );
+}
+
+#[tokio::test]
+async fn several_releases_download_as_one_tar_gz_and_record_a_grab_each() {
+    use std::io::Read as _;
+
+    let (app, user, search_id, urls) = browser_download_fixture(vec![
+        nzb_release("Paperman.2012.1080p.WEB-DL", "g1"),
+        nzb_release("Paperman.2012.1080p.WEB-DL", "g2"),
+    ])
+    .await;
+    let app = with_artifacts(
+        &app,
+        HashMap::from([
+            (urls[0].clone(), nzb_artifact("first")),
+            (urls[1].clone(), nzb_artifact("second")),
+        ]),
+    );
+
+    let bundle = app
+        .download_interactive_search_artifacts(&user, &targets(&search_id, &urls))
+        .await
+        .expect("bundled download");
+    assert!(
+        bundle.file_name.starts_with("scryer-releases-") && bundle.file_name.ends_with(".tar.gz"),
+        "{}",
+        bundle.file_name
+    );
+    assert_eq!(bundle.content_type, "application/gzip");
+
+    let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(bundle.bytes.as_slice()));
+    let mut members = Vec::new();
+    for entry in archive.entries().expect("archive entries") {
+        let mut entry = entry.expect("archive entry");
+        let path = entry.path().expect("entry path").display().to_string();
+        let mut bytes = Vec::new();
+        entry.read_to_end(&mut bytes).expect("entry bytes");
+        members.push((path, bytes));
+    }
+    // Both indexer rows carry the same release name, so the second is deduped
+    // rather than overwriting the first.
+    assert_eq!(
+        members,
+        vec![
+            (
+                "Paperman.2012.1080p.WEB-DL.nzb".to_string(),
+                b"<nzb>first</nzb>".to_vec()
+            ),
+            (
+                "Paperman.2012.1080p.WEB-DL (2).nzb".to_string(),
+                b"<nzb>second</nzb>".to_vec()
+            ),
+        ]
+    );
+
+    assert_eq!(grabbed_release_titles(&app).await.len(), 2);
+}
+
+#[tokio::test]
+async fn a_failed_or_magnet_only_release_fails_the_bundle_without_recording_a_grab() {
+    let (app, user, search_id, urls) = browser_download_fixture(vec![
+        nzb_release("Paperman.2012.1080p.WEB-DL", "g1"),
+        nzb_release("Bluey.S01E01.1080p.WEB-DL", "g2"),
+    ])
+    .await;
+
+    // Only the first release resolves: the second fetch fails the request.
+    let partial = with_artifacts(
+        &app,
+        HashMap::from([(urls[0].clone(), nzb_artifact("first"))]),
+    );
+    let error = partial
+        .download_interactive_search_artifacts(&user, &targets(&search_id, &urls))
+        .await
+        .expect_err("a failed fetch fails the whole bundle");
+    assert_eq!(
+        error.to_string(),
+        "validation: Bluey.S01E01.1080p.WEB-DL: indexer refused https://example.invalid/g2.nzb",
+        "the message must name the release that failed"
+    );
+    assert!(
+        grabbed_release_titles(&partial).await.is_empty(),
+        "a failed bundle records no grab"
+    );
+
+    let magnet_only = with_artifacts(
+        &app,
+        HashMap::from([(
+            urls[0].clone(),
+            ResolvedDownloadArtifact::Magnet {
+                uri: "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567".to_string(),
+                info_hash_hint: None,
+            },
+        )]),
+    );
+    let error = magnet_only
+        .download_interactive_search_artifacts(&user, &targets(&search_id, &urls[..1]))
+        .await
+        .expect_err("a magnet has no file");
+    assert!(
+        error.to_string().contains("magnet link"),
+        "{error}"
+    );
+    assert!(grabbed_release_titles(&magnet_only).await.is_empty());
+}
+
+#[tokio::test]
+async fn browser_downloads_refuse_empty_oversized_and_unprivileged_requests() {
+    let (app, user, search_id, urls) =
+        browser_download_fixture(vec![nzb_release("Paperman.2012.1080p.WEB-DL", "g1")]).await;
+
+    let empty = app
+        .download_interactive_search_artifacts(&user, &[])
+        .await
+        .expect_err("nothing selected");
+    assert!(matches!(empty, AppError::Validation(_)), "{empty:?}");
+
+    let too_many = vec![urls[0].clone(); 51];
+    let oversized = app
+        .download_interactive_search_artifacts(&user, &targets(&search_id, &too_many))
+        .await
+        .expect_err("over the per-request cap");
+    assert!(matches!(oversized, AppError::Validation(_)), "{oversized:?}");
+
+    let viewer = test_user_with_app_permissions("viewer", AppPermissionMask::default());
+    let denied = app
+        .download_interactive_search_artifacts(&viewer, &targets(&search_id, &urls[..1]))
+        .await
+        .expect_err("permission gate");
+    assert!(matches!(denied, AppError::Unauthorized(_)), "{denied:?}");
+}

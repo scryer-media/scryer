@@ -2377,6 +2377,8 @@ const de: LocaleDictionary = {
   "indexerSearch.column.peers": "Peers",
   "indexerSearch.row.select": "Release auswählen",
   "indexerSearch.row.grab": "Holen",
+  "indexerSearch.row.download": "Datei herunterladen",
+  "indexerSearch.download.unavailable": "Diese Veröffentlichung ist ein Magnet-Link und hat keine herunterladbare Datei",
   "indexerSearch.row.expand": "Details anzeigen",
   "indexerSearch.row.collapse": "Details ausblenden",
   "indexerSearch.row.priority": "Priorität {{value}}",
@@ -2397,6 +2399,7 @@ const de: LocaleDictionary = {
   "indexerSearch.footer.nothingQueued":
     "Es wird nichts eingereiht, bis Sie holen.",
   "indexerSearch.footer.grabSelected": "Auswahl holen",
+  "indexerSearch.footer.downloadSelected": "{{count}} herunterladen",
   "indexerSearch.empty.prompt":
     "Suchbegriff eingeben und die Indexer durchsuchen.",
   "indexerSearch.empty.searching": "Indexer werden durchsucht…",

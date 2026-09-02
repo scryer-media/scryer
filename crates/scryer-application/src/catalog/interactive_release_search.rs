@@ -33,6 +33,40 @@ const COMPLETED_JOB_TTL_MINUTES: i64 = 5;
 const RUNNING_JOB_TTL_MINUTES: i64 = 10;
 /// Per-actor cap on concurrently running jobs.
 const MAX_RUNNING_JOBS_PER_ACTOR: usize = 8;
+/// Releases one browser download may bundle (D17). Each one is a separate
+/// upstream fetch, so the cap bounds how long a single request can hold.
+const MAX_INTERACTIVE_SEARCH_ARTIFACT_DOWNLOADS: usize = 50;
+/// Room for the extension and a dedupe suffix inside every filesystem's limit.
+const ARTIFACT_FILE_NAME_STEM_MAX_BYTES: usize = 180;
+
+/// One release the browser asked for, addressed by the job that produced it.
+/// "Retry failed" merges a second job's rows into the same table, so one
+/// selection can span several jobs and still has to come back as one file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InteractiveSearchArtifactTarget {
+    pub search_id: String,
+    pub download_url: String,
+}
+
+/// One file for the browser: a release's own artifact, or the `tar.gz` holding
+/// several of them (D17).
+pub struct InteractiveSearchArtifactBundle {
+    pub file_name: String,
+    pub content_type: String,
+    pub bytes: Vec<u8>,
+}
+
+/// Summarises the payload rather than dumping it: a bundle carries megabytes.
+impl std::fmt::Debug for InteractiveSearchArtifactBundle {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("InteractiveSearchArtifactBundle")
+            .field("file_name", &self.file_name)
+            .field("content_type", &self.content_type)
+            .field("bytes", &self.bytes.len())
+            .finish()
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InteractiveReleaseSearchState {
@@ -1242,6 +1276,163 @@ impl AppUseCase {
         })
     }
 
+    /// Hand the operator the selected releases' own files (D17, FR-028).
+    ///
+    /// A third grab mode next to "assign to a title" and "grab unlinked":
+    /// nothing is submitted, queued or tracked, so there is no submission row
+    /// to follow — but from the indexer's perspective these are grabs, so each
+    /// one lands in History exactly as an unlinked grab does. All or nothing:
+    /// one failed fetch fails the whole request and emits no history at all.
+    pub async fn download_interactive_search_artifacts(
+        &self,
+        actor: &User,
+        targets: &[InteractiveSearchArtifactTarget],
+    ) -> AppResult<InteractiveSearchArtifactBundle> {
+        // Same gate as the unlinked grab (D13): this bypasses every library.
+        self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
+            .await?;
+        if targets.is_empty() {
+            return Err(AppError::Validation(
+                "select at least one release to download".to_string(),
+            ));
+        }
+        if targets.len() > MAX_INTERACTIVE_SEARCH_ARTIFACT_DOWNLOADS {
+            return Err(AppError::Validation(format!(
+                "at most {MAX_INTERACTIVE_SEARCH_ARTIFACT_DOWNLOADS} releases can be downloaded at once"
+            )));
+        }
+
+        let now = self.runtime.environment.now();
+        let mut artifacts: Vec<FetchedSearchArtifact> = Vec::with_capacity(targets.len());
+        for target in targets {
+            let (result, kind) = self
+                .find_interactive_search_result(actor, &target.search_id, &target.download_url)
+                .await?;
+            let Some((source_hint, source_kind)) = result.canonical_download_source() else {
+                return Err(AppError::Validation(format!(
+                    "{} has no usable download source",
+                    result.title
+                )));
+            };
+            // With no title there is no owner facet, so the search kind stands
+            // in for one exactly as the unlinked grab reads it.
+            let facet = kind
+                .and_then(InteractiveSearchKind::facet)
+                .unwrap_or_else(|| {
+                    if result
+                        .parsed_release_metadata
+                        .as_ref()
+                        .is_some_and(|parsed| parsed.episode.is_some())
+                    {
+                        MediaFacet::Series
+                    } else {
+                        MediaFacet::Movie
+                    }
+                });
+            let stand_in_title = unlinked_grab_title(&result.title, facet, now);
+            let info_hash_hint = result
+                .extra
+                .get("info_hash")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string);
+            let artifact = self
+                .services
+                .integrations
+                .download_client
+                .fetch_download_artifact(&DownloadClientAddRequest {
+                    title: stand_in_title.clone(),
+                    search_facet: None,
+                    purpose: DownloadSubmissionPurpose::OperatorQueued,
+                    // Nothing is submitted, so there is no download identity to
+                    // mint and nothing for the tracker to reconcile later.
+                    download_id: None,
+                    source_hint: Some(source_hint.clone()),
+                    staged_nzb: None,
+                    resolved_download_artifact: None,
+                    source_kind: Some(source_kind),
+                    source_title: Some(result.title.clone()),
+                    source_password: result.password_hint.clone(),
+                    category: None,
+                    queue_priority: None,
+                    download_directory: None,
+                    release_title: None,
+                    indexer_name: Some(result.source.clone()),
+                    indexer_id: result.indexer_id.clone(),
+                    info_hash_hint,
+                    seed_goal_ratio: None,
+                    seed_goal_seconds: None,
+                    tracker_min_seed_ratio: None,
+                    tracker_min_seed_time_minutes: None,
+                    season_pack_seed_ratio: None,
+                    season_pack_seed_time_minutes: None,
+                    is_recent: None,
+                    season_pack: None,
+                    pinned_download_client_id: None,
+                })
+                .await
+                .map_err(|error| prefix_app_error(error, &result.title))?;
+
+            let (extension, default_content_type, bytes, content_type) = match artifact {
+                ResolvedDownloadArtifact::Nzb {
+                    bytes, content_type, ..
+                } => (".nzb", "application/x-nzb", bytes, content_type),
+                ResolvedDownloadArtifact::TorrentFile {
+                    bytes, content_type, ..
+                } => (".torrent", "application/x-bittorrent", bytes, content_type),
+                ResolvedDownloadArtifact::Magnet { .. } => {
+                    return Err(AppError::Validation(format!(
+                        "{} is a magnet link and has no file to download",
+                        result.title
+                    )));
+                }
+            };
+            artifacts.push(FetchedSearchArtifact {
+                file_name: artifact_file_name(&result.title, extension),
+                content_type: content_type.unwrap_or_else(|| default_content_type.to_string()),
+                bytes,
+                stand_in_title,
+                source_title: result.title,
+                source_hint,
+                source_provider: result.source,
+            });
+        }
+
+        let bundle = if artifacts.len() == 1 {
+            let artifact = &artifacts[0];
+            InteractiveSearchArtifactBundle {
+                file_name: artifact.file_name.clone(),
+                content_type: artifact.content_type.clone(),
+                bytes: artifact.bytes.clone(),
+            }
+        } else {
+            InteractiveSearchArtifactBundle {
+                file_name: format!("scryer-releases-{}.tar.gz", now.format("%Y%m%d-%H%M%S")),
+                content_type: "application/gzip".to_string(),
+                bytes: build_release_artifact_archive(&artifacts, now)?,
+            }
+        };
+
+        // Every fetch succeeded, so every release was grabbed as far as the
+        // indexer is concerned; a failed bundle above emitted nothing.
+        for artifact in artifacts {
+            self.append_domain_event(new_global_domain_event(
+                actor,
+                DomainEventPayload::ReleaseGrabbed(ReleaseGrabbedEventData {
+                    title: title_context_snapshot(&artifact.stand_in_title),
+                    source_title: Some(artifact.source_title),
+                    source_hint: Some(artifact.source_hint),
+                    source_provider: Some(artifact.source_provider),
+                    // Nothing was submitted, so there is no client item id.
+                    download_id: None,
+                    episode_ids: Vec::new(),
+                }),
+            ))
+            .await?;
+        }
+
+        Ok(bundle)
+    }
+
     /// Locate one release of the actor's own live search by the download URL
     /// the search payload already handed the browser, with the search's kind.
     ///
@@ -1325,6 +1516,115 @@ impl AppUseCase {
             }
         }
     }
+}
+
+/// One release's file, held until every release in the request has resolved.
+struct FetchedSearchArtifact {
+    file_name: String,
+    content_type: String,
+    bytes: Vec<u8>,
+    stand_in_title: Title,
+    source_title: String,
+    source_hint: String,
+    source_provider: String,
+}
+
+/// Restate which release an artifact fetch failed on: the operator picked
+/// several and the message is all they see. The kind is flattened to a
+/// validation failure because that is what it is for the caller — one of the
+/// releases they chose cannot be downloaded.
+fn prefix_app_error(error: AppError, release_title: &str) -> AppError {
+    let rendered = error.to_string();
+    let detail = rendered.strip_prefix("validation: ").unwrap_or(&rendered);
+    AppError::Validation(format!("{release_title}: {detail}"))
+}
+
+/// `<sanitized release title><extension>`, safe to put in a
+/// `Content-Disposition` header and in a tar entry.
+pub(crate) fn artifact_file_name(title: &str, extension: &str) -> String {
+    let mut stem = String::new();
+    let mut pending_space = false;
+    for character in title.chars() {
+        // Path separators and control characters would let a release name
+        // escape the archive root or forge a header line.
+        if character.is_control() || character == '/' || character == '\\' {
+            continue;
+        }
+        if character.is_whitespace() {
+            pending_space = !stem.is_empty();
+            continue;
+        }
+        if pending_space {
+            stem.push(' ');
+            pending_space = false;
+        }
+        stem.push(character);
+    }
+    // A leading dot would make the file hidden, and `.`/`..` are directories.
+    let mut stem = stem.trim_start_matches('.').trim().to_string();
+    while stem.len() > ARTIFACT_FILE_NAME_STEM_MAX_BYTES {
+        stem.pop();
+    }
+    let stem = stem.trim_end();
+    if stem.is_empty() {
+        return format!("release{extension}");
+    }
+    format!("{stem}{extension}")
+}
+
+/// Keep every archive member's name unique: two indexers routinely answer with
+/// the same release name.
+pub(crate) fn dedupe_archive_file_name(
+    taken: &mut std::collections::HashSet<String>,
+    file_name: &str,
+) -> String {
+    if taken.insert(file_name.to_string()) {
+        return file_name.to_string();
+    }
+    let (stem, extension) = match file_name.rfind('.') {
+        Some(index) if index > 0 => file_name.split_at(index),
+        _ => (file_name, ""),
+    };
+    let mut ordinal = 2usize;
+    loop {
+        let candidate = format!("{stem} ({ordinal}){extension}");
+        if taken.insert(candidate.clone()) {
+            return candidate;
+        }
+        ordinal += 1;
+    }
+}
+
+/// Every file at the archive root, so an extract drops them beside each other.
+fn build_release_artifact_archive(
+    artifacts: &[FetchedSearchArtifact],
+    now: DateTime<Utc>,
+) -> AppResult<Vec<u8>> {
+    let encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    let mut archive = tar::Builder::new(encoder);
+    let mut taken = std::collections::HashSet::new();
+    let mtime = now.timestamp().max(0) as u64;
+    for artifact in artifacts {
+        let file_name = dedupe_archive_file_name(&mut taken, &artifact.file_name);
+        let mut header = tar::Header::new_gnu();
+        header
+            .set_path(&file_name)
+            .map_err(|error| AppError::Repository(format!("failed to name {file_name}: {error}")))?;
+        header.set_size(artifact.bytes.len() as u64);
+        header.set_mode(0o644);
+        header.set_mtime(mtime);
+        header.set_cksum();
+        archive
+            .append(&header, artifact.bytes.as_slice())
+            .map_err(|error| {
+                AppError::Repository(format!("failed to archive {file_name}: {error}"))
+            })?;
+    }
+    archive
+        .into_inner()
+        .map_err(|error| AppError::Repository(format!("failed to finish archive: {error}")))?
+        .finish()
+        .map_err(|error| AppError::Repository(format!("failed to compress archive: {error}")))
 }
 
 /// The title-less stand-in an unlinked grab submits under (D8).

@@ -10,6 +10,7 @@ import {
   Database,
   Download,
   ExternalLink,
+  FileDown,
   Film,
   FolderTree,
   Funnel,
@@ -47,6 +48,7 @@ import type { Release } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { formatUiDateTime } from "@/lib/utils/date-format";
 import {
+  indexerSearchResultDownloadId,
   indexerSearchResultExpandId,
   indexerSearchResultGrabId,
   indexerSearchResultRowId,
@@ -54,10 +56,12 @@ import {
   selectorId,
 } from "@/lib/utils/dom-ids";
 import {
+  downloadableReleases,
   formatReleaseAge,
   formatReleaseSize,
   indexerHealthTone,
   indexerSearchRowKey,
+  isDownloadableRelease,
   isReleaseRejected,
   releaseAgeMs,
   releaseBlockCode,
@@ -126,6 +130,10 @@ export type SettingsIndexerSearchSectionProps = {
   onToggleExpanded: (release: Release) => void;
   /** WP5 owns the grab dialog; this pane only names the releases to grab. */
   onGrab: (releases: Release[]) => void;
+  /** Hand the raw file(s) to the browser instead of queueing anything (D17). */
+  onDownload: (releases: Release[]) => void;
+  /** A download is in flight; a second one would race the same save dialog. */
+  downloading: boolean;
 };
 
 const SEARCH_KINDS: InteractiveSearchKind[] = [
@@ -946,6 +954,8 @@ function ReleaseRow({
   onToggleRow,
   onToggleExpanded,
   onGrab,
+  onDownload,
+  downloading,
 }: {
   release: Release;
   selected: boolean;
@@ -955,10 +965,13 @@ function ReleaseRow({
   onToggleRow: (release: Release) => void;
   onToggleExpanded: (release: Release) => void;
   onGrab: (releases: Release[]) => void;
+  onDownload: (releases: Release[]) => void;
+  downloading: boolean;
 }) {
   const t = useTranslate();
   const badges = useReleaseBadges(release);
   const rejected = isReleaseRejected(release);
+  const downloadable = isDownloadableRelease(release);
   const age = formatReleaseAge(releaseAgeMs(release, nowMs));
   const peers =
     release.seeders != null
@@ -1047,6 +1060,21 @@ function ReleaseRow({
             <Download className="h-3.5 w-3.5" />
           </IconButton>
           <IconButton
+            id={indexerSearchResultDownloadId(release)}
+            label={t("indexerSearch.row.download")}
+            title={
+              downloadable
+                ? t("indexerSearch.row.download")
+                : t("indexerSearch.download.unavailable")
+            }
+            tone="neutral"
+            className="h-[29px] w-[29px]"
+            disabled={!downloadable || downloading}
+            onClick={() => onDownload([release])}
+          >
+            <FileDown className="h-3.5 w-3.5" />
+          </IconButton>
+          <IconButton
             id={indexerSearchResultExpandId(release)}
             label={
               expanded
@@ -1089,6 +1117,8 @@ export function SettingsIndexerSearchSection(
     expandedRowKey,
     onToggleExpanded,
     onGrab,
+    onDownload,
+    downloading,
   } = props;
 
   const selectedKeys = new Set(selectedRowKeys);
@@ -1096,6 +1126,9 @@ export function SettingsIndexerSearchSection(
     selectedKeys.has(indexerSearchRowKey(release)),
   );
   const hasSelection = selectedReleases.length > 0;
+  // Magnet-only rows have no file, so the count the button shows is the number
+  // of files the operator would actually get, not the number selected.
+  const downloadableSelection = downloadableReleases(selectedReleases);
 
   return (
     <div className="w-full min-w-0 max-w-full">
@@ -1177,6 +1210,8 @@ export function SettingsIndexerSearchSection(
                     onToggleRow={onToggleRow}
                     onToggleExpanded={onToggleExpanded}
                     onGrab={onGrab}
+                    onDownload={onDownload}
+                    downloading={downloading}
                   />
                 );
               })}
@@ -1223,6 +1258,19 @@ export function SettingsIndexerSearchSection(
                 : t("indexerSearch.footer.nothingQueued")}
             </span>
             <div className="min-w-2 flex-1" />
+            <Button
+              id="indexer-search-download-selected"
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={downloadableSelection.length === 0 || downloading}
+              onClick={() => onDownload(downloadableSelection)}
+            >
+              <FileDown className="h-3.5 w-3.5" />
+              {t("indexerSearch.footer.downloadSelected", {
+                count: downloadableSelection.length,
+              })}
+            </Button>
             <Button
               id="indexer-search-grab-selected"
               type="button"

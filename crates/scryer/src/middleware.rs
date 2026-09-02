@@ -1918,9 +1918,9 @@ fn graphql_post_execution_timeout_for(download_feedback_timeout: Duration) -> Du
 }
 
 #[derive(Clone)]
-struct ResolvedActor {
-    user: scryer_domain::User,
-    token_claims: AuthenticatedTokenClaims,
+pub(crate) struct ResolvedActor {
+    pub(crate) user: scryer_domain::User,
+    pub(crate) token_claims: AuthenticatedTokenClaims,
     source: ResolvedActorSource,
     api_key_id: Option<String>,
 }
@@ -2227,7 +2227,7 @@ async fn resolve_ws_connection_init_actor(
     Ok(None)
 }
 
-async fn resolve_actor(
+pub(crate) async fn resolve_actor(
     state: &AuthState,
     headers: &HeaderMap,
     remote_addr: Option<SocketAddr>,
@@ -3053,7 +3053,7 @@ pub(crate) fn map_app_error(error: AppError) -> Response {
 
 #[cfg(test)]
 #[path = "../tests/common/mod.rs"]
-mod integration_test_common;
+pub(crate) mod integration_test_common;
 
 #[cfg(test)]
 mod tests {

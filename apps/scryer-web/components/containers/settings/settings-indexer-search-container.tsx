@@ -23,8 +23,13 @@ import {
 } from "@/lib/graphql/release-search";
 import type { IndexerRecord, Release } from "@/lib/types";
 import {
+  downloadIndexerSearchArtifacts,
+  type IndexerSearchArtifactTarget,
+} from "@/lib/utils/indexer-search-download";
+import {
   addSavedIndexerSearch,
   buildIndexerSearchFacets,
+  downloadableReleases,
   filterIndexerSearchReleases,
   indexerPriorityByName,
   indexerSearchRowKey,
@@ -102,6 +107,7 @@ export function SettingsIndexerSearchContainer() {
     null,
   );
   const [grabTargets, setGrabTargets] = React.useState<Release[] | null>(null);
+  const [downloading, setDownloading] = React.useState(false);
   // A grab names its release by (searchId, downloadUrl), and "retry failed"
   // mints a second job whose rows merge into this same table, so each row keeps
   // the id of the job it actually arrived on.
@@ -339,6 +345,47 @@ export function SettingsIndexerSearchContainer() {
     setSelectedRowKeys([]);
   }, []);
 
+  // The raw file(s) go straight to the browser (D17): nothing is queued, so
+  // success needs no toast — the browser's own download is the confirmation.
+  const handleDownload = React.useCallback(
+    (targets: Release[]) => {
+      const downloadable = downloadableReleases(targets);
+      if (downloadable.length === 0) {
+        return;
+      }
+      // "Retry failed" mints a second job whose rows merge into this table, so
+      // each release names its own job and the whole selection is one file.
+      const releases: IndexerSearchArtifactTarget[] = [];
+      for (const release of downloadable) {
+        const searchId = searchIdByRowKey.get(indexerSearchRowKey(release));
+        const downloadUrl = release.downloadUrl ?? release.link;
+        if (searchId && downloadUrl) {
+          releases.push({ searchId, downloadUrl });
+        }
+      }
+      if (releases.length === 0) {
+        return;
+      }
+
+      setDownloading(true);
+      void (async () => {
+        try {
+          await downloadIndexerSearchArtifacts({
+            releases,
+            failureMessage: t("status.failedToLoad"),
+          });
+        } catch (error) {
+          setGlobalStatus(
+            error instanceof Error ? error.message : t("status.failedToLoad"),
+          );
+        } finally {
+          setDownloading(false);
+        }
+      })();
+    },
+    [searchIdByRowKey, setGlobalStatus, t],
+  );
+
   const facetGroups = React.useMemo(
     () => buildIndexerSearchFacets(releases),
     [releases],
@@ -434,6 +481,8 @@ export function SettingsIndexerSearchContainer() {
         expandedRowKey={expandedRowKey}
         onToggleExpanded={handleToggleExpanded}
         onGrab={handleGrab}
+        onDownload={handleDownload}
+        downloading={downloading}
       />
       <GrabDialog
         open={grabTargets !== null}

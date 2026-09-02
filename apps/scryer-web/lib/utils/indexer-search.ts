@@ -79,6 +79,20 @@ export function releaseProtocol(release: Release): "usenet" | "torrent" | null {
   }
 }
 
+/**
+ * Whether the release has a file Scryer can hand the browser (D17). A magnet is
+ * a pointer, not a file, and a release with no URL at all has nothing to fetch.
+ */
+export function isDownloadableRelease(release: Release): boolean {
+  const url = (release.downloadUrl ?? release.link ?? "").trim();
+  return /^https?:\/\//i.test(url);
+}
+
+/** The subset of `releases` a browser download can actually produce a file for. */
+export function downloadableReleases(releases: Release[]): Release[] {
+  return releases.filter((release) => isDownloadableRelease(release));
+}
+
 export function isReleaseRejected(release: Release): boolean {
   return (release.qualityProfileDecision?.blockCodes?.length ?? 0) > 0;
 }

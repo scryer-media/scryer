@@ -355,6 +355,16 @@ export function indexerSearchResultGrabId(
   );
 }
 
+/** The row's "download to my browser" button (D17). */
+export function indexerSearchResultDownloadId(
+  release: ReleaseSearchSelectorInput,
+): string {
+  return selectorId(
+    "indexer-search-download",
+    ...releaseSearchResultSelectorParts(release),
+  );
+}
+
 export function indexerSearchResultExpandId(
   release: ReleaseSearchSelectorInput,
 ): string {

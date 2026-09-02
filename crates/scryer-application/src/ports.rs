@@ -7185,6 +7185,22 @@ pub trait DownloadClient: Send + Sync {
         request: &DownloadClientAddRequest,
     ) -> AppResult<DownloadGrabResult>;
 
+    /// Resolve the release's own file without submitting it anywhere (D17).
+    ///
+    /// The submit path deliberately leaves NZB URLs unfetched so the download
+    /// client pulls them itself; handing the operator the raw file needs the
+    /// host-side fetch instead. Only the router implements this — an individual
+    /// client has no indexer provenance, proxy or plugin grab flow to resolve
+    /// the URL with.
+    async fn fetch_download_artifact(
+        &self,
+        _request: &DownloadClientAddRequest,
+    ) -> AppResult<ResolvedDownloadArtifact> {
+        Err(AppError::Validation(
+            "artifact download is not supported by this client".into(),
+        ))
+    }
+
     async fn submit_to_download_queue(
         &self,
         title: &Title,

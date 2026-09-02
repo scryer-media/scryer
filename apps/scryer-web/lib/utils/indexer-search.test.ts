@@ -6,12 +6,14 @@ import type { Release } from "@/lib/types";
 import {
   addSavedIndexerSearch,
   buildIndexerSearchFacets,
+  downloadableReleases,
   EMPTY_INDEXER_SEARCH_FILTERS,
   filterIndexerSearchReleases,
   formatReleaseAge,
   formatReleaseSize,
   indexerHealthTone,
   indexerSearchRowKey,
+  isDownloadableRelease,
   MAX_SAVED_INDEXER_SEARCHES,
   mergeIndexerProgress,
   mergeIndexerSearchReleases,
@@ -450,5 +452,39 @@ test("stored saved searches survive junk in localStorage", () => {
       ]),
     ),
     [{ query: "dune", kind: "MOVIE", indexerIds: ["a"], categories: [] }],
+  );
+});
+
+test("only http(s) releases can be downloaded to the browser", () => {
+  const usenet = release({ title: "Paperman.2012.1080p" });
+  const magnet = release({
+    title: "Paperman.2012.2160p",
+    downloadUrl: null,
+    link: "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567",
+    sourceKind: "MAGNET_URI",
+  });
+  const torrentFile = release({
+    title: "Paperman.2012.720p",
+    downloadUrl: null,
+    link: "https://tracker.test/a.torrent",
+    sourceKind: "TORRENT_FILE",
+  });
+  const nothing = release({
+    title: "Paperman.2012.480p",
+    downloadUrl: null,
+    link: null,
+  });
+
+  assert.equal(isDownloadableRelease(usenet), true);
+  // The link is the fallback when the payload carries no download URL.
+  assert.equal(isDownloadableRelease(torrentFile), true);
+  assert.equal(isDownloadableRelease(magnet), false);
+  assert.equal(isDownloadableRelease(nothing), false);
+
+  assert.deepEqual(
+    downloadableReleases([usenet, magnet, torrentFile, nothing]).map(
+      (entry) => entry.title,
+    ),
+    [usenet.title, torrentFile.title],
   );
 });

@@ -62,6 +62,12 @@ export function getRuntimeGraphqlUrl(): string {
   return runtimeConfig.graphqlUrl;
 }
 
+/** An app-relative path with the deployment's base path in front of it. */
+export function buildAppUrl(path: string): string {
+  const basePath = getRuntimeBasePath();
+  return basePath === "/" ? path : `${basePath}${path}`;
+}
+
 export function getRuntimeBackendUrl(path: string): string {
   const suffix = path.startsWith("/") ? path : `/${path}`;
   if (typeof window === "undefined") {
