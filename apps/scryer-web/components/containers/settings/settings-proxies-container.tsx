@@ -14,6 +14,7 @@ import {
   isSshTunnelProxyProvider,
   isWireguardProxyProvider,
   looksLikeWireguardKey,
+  normalizeProxyDraft,
   splitTunnelList,
   supportsProxyRemoteDns,
 } from "@/lib/types";
@@ -21,6 +22,7 @@ import {
   buildCreateProxyInput,
   buildUpdateProxyInput,
 } from "@/lib/utils/settings-mutation-inputs";
+import { parseWireguardConfig } from "@/lib/utils/wireguard-config";
 import { proxyConfigsQuery } from "@/lib/graphql/queries";
 import {
   createProxyConfigMutation,
@@ -253,16 +255,84 @@ export function SettingsProxiesContainer() {
     [t, wireguardValidationMessage],
   );
 
+  /**
+   * Fill the form from a pasted or uploaded `wg-quick` configuration.
+   *
+   * The whole file is the unit an operator is handed, so reading it beats
+   * transcribing eight fields out of it by hand. Only the fields the file
+   * actually names are replaced: a name already typed, and the enabled and
+   * timeout settings, survive the import.
+   */
+  const importWireguardConfig = useCallback(
+    (text: string): boolean => {
+      const parsed = parseWireguardConfig(text);
+      if (!parsed) {
+        setGlobalStatus(t("status.proxyImportConfigUnreadable"));
+        return false;
+      }
+      setProxyDraft((prev) => {
+        // A file without an `Endpoint` leaves a typed one alone, but must not
+        // leave another provider's default behind on a row that is now a
+        // WireGuard tunnel. Same rule the provider switch uses.
+        const previousDefault = PROXY_DEFAULT_BASE_URLS[prev.providerType];
+        const keptBaseUrl =
+          prev.baseUrl.trim() === "" || prev.baseUrl === previousDefault
+            ? PROXY_DEFAULT_BASE_URLS.wireguard
+            : prev.baseUrl;
+        return normalizeProxyDraft({
+          ...prev,
+          providerType: "wireguard",
+          baseUrl: parsed.endpoint || keptBaseUrl,
+          privateKey: parsed.privateKey || prev.privateKey,
+          clearPrivateKey: parsed.privateKey ? false : prev.clearPrivateKey,
+          peerPublicKey: parsed.peerPublicKey || prev.peerPublicKey,
+          presharedKey: parsed.presharedKey || prev.presharedKey,
+          clearPresharedKey: parsed.presharedKey
+            ? false
+            : prev.clearPresharedKey,
+          tunnelAddresses: parsed.tunnelAddresses || prev.tunnelAddresses,
+          tunnelDnsServers: parsed.tunnelDnsServers || prev.tunnelDnsServers,
+          tunnelMtu: parsed.tunnelMtu || prev.tunnelMtu,
+          tunnelKeepaliveSeconds:
+            parsed.tunnelKeepaliveSeconds || prev.tunnelKeepaliveSeconds,
+        });
+      });
+      // One message, so the operator learns in the same breath what was filled
+      // in and what the file said that a tunnel proxy cannot honour.
+      const notes = [t("status.proxyImportConfigFilled")];
+      if (parsed.peerCount > 1) {
+        notes.push(
+          t("status.proxyImportConfigFirstPeer", { count: parsed.peerCount }),
+        );
+      }
+      if (parsed.ignored.length > 0) {
+        notes.push(
+          t("status.proxyImportConfigIgnored", {
+            keys: parsed.ignored.join(", "),
+          }),
+        );
+      }
+      setGlobalStatus(notes.join(" "));
+      return true;
+    },
+    [setGlobalStatus, t],
+  );
+
   const submitProxy = useCallback(
     async (event: FormEvent<HTMLFormElement>) => {
       event.preventDefault();
-      const name = proxyDraft.name.trim();
-      const baseUrl = proxyDraft.baseUrl.trim();
+      // Parse on save: the draft is cleaned once, the form is put back with
+      // what was actually parsed, and both the validation below and the payload
+      // builders then see exactly the values that will be stored.
+      const draft = normalizeProxyDraft(proxyDraft);
+      setProxyDraft(draft);
+      const name = draft.name.trim();
+      const baseUrl = draft.baseUrl.trim();
       if (!name || !baseUrl) {
         setGlobalStatus(t("settings.proxyValidation"));
         return;
       }
-      const tunnelProblem = tunnelValidationMessage(proxyDraft);
+      const tunnelProblem = tunnelValidationMessage(draft);
       if (tunnelProblem) {
         setGlobalStatus(tunnelProblem);
         return;
@@ -273,7 +343,7 @@ export function SettingsProxiesContainer() {
         if (editingProxyId) {
           const { error } = await client
             .mutation(updateProxyConfigMutation, {
-              input: buildUpdateProxyInput(editingProxyId, proxyDraft),
+              input: buildUpdateProxyInput(editingProxyId, draft),
             })
             .toPromise();
           if (error) throw error;
@@ -281,7 +351,7 @@ export function SettingsProxiesContainer() {
         } else {
           const { error } = await client
             .mutation(createProxyConfigMutation, {
-              input: buildCreateProxyInput(proxyDraft),
+              input: buildCreateProxyInput(draft),
             })
             .toPromise();
           if (error) throw error;
@@ -438,6 +508,7 @@ export function SettingsProxiesContainer() {
         startCreateProxy={startCreateProxy}
         changeProxyProvider={changeProxyProvider}
         editProxy={editProxy}
+        importWireguardConfig={importWireguardConfig}
         testProxy={testProxy}
         deleteProxy={deleteProxy}
         requestResetHostKey={setPendingHostKeyResetProxy}

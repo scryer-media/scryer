@@ -458,7 +458,7 @@ fn build_test_plugin_fixture(ctx: &TaskContext) -> Result<()> {
             "--locked",
             "--release",
             "--target",
-            "wasm32-unknown-unknown",
+            "wasm32-wasip2",
             "--manifest-path",
         ])
         .arg(&manifest)
@@ -469,7 +469,7 @@ fn build_test_plugin_fixture(ctx: &TaskContext) -> Result<()> {
         .env_remove("CARGO_ENCODED_RUSTFLAGS");
     run_checked(&mut build)?;
 
-    let built_wasm = build_target.join("wasm32-unknown-unknown/release/test_indexer.wasm");
+    let built_wasm = build_target.join("wasm32-wasip2/release/test_indexer.wasm");
     if !built_wasm.is_file() {
         bail!(
             "test indexer build did not produce expected artifact: {}",
@@ -477,13 +477,21 @@ fn build_test_plugin_fixture(ctx: &TaskContext) -> Result<()> {
         );
     }
 
+    // The loader identifies an indexer component by its top-level descriptor
+    // custom section, never by calling `describe`, so the fixture is embedded
+    // the same way the plugin release tooling embeds shipped artifacts.
+    let component = fs::read(&built_wasm)
+        .with_context(|| format!("failed to read {}", built_wasm.display()))?;
+    let descriptor_json = serde_json::to_vec(&test_indexer_descriptor::descriptor())
+        .context("failed to serialize the test indexer descriptor")?;
+    let embedded = embed_plugin_descriptor_custom_section(&component, &descriptor_json)?;
+
     fs::create_dir_all(&fixture_dir)
         .with_context(|| format!("failed to create {}", fixture_dir.display()))?;
     let fixture_wasm = fixture_dir.join("plugin.wasm");
-    fs::copy(&built_wasm, &fixture_wasm).with_context(|| {
+    fs::write(&fixture_wasm, embedded).with_context(|| {
         format!(
-            "failed to copy test indexer fixture from {} to {}",
-            built_wasm.display(),
+            "failed to write test indexer fixture to {}",
             fixture_wasm.display()
         )
     })?;
@@ -507,6 +515,51 @@ fn build_test_plugin_fixture(ctx: &TaskContext) -> Result<()> {
         fixture_wasm.display()
     ));
     Ok(())
+}
+
+/// Name of the custom section the plugin loader reads a component's descriptor
+/// from (`scryer_plugins::embedded_descriptor::PLUGIN_DESCRIPTOR_CUSTOM_SECTION_V1`).
+const PLUGIN_DESCRIPTOR_CUSTOM_SECTION_V1: &str = "scryer.plugin-descriptor.v1";
+const WASM_COMPONENT_HEADER: &[u8] = b"\0asm\r\0\x01\0";
+
+fn write_wasm_u32_leb(mut value: u32, output: &mut Vec<u8>) {
+    loop {
+        let mut byte = (value & 0x7f) as u8;
+        value >>= 7;
+        if value != 0 {
+            byte |= 0x80;
+        }
+        output.push(byte);
+        if value == 0 {
+            break;
+        }
+    }
+}
+
+/// Appends the descriptor JSON as a top-level custom section of a WebAssembly
+/// component, mirroring the plugin release tooling's embedding.
+fn embed_plugin_descriptor_custom_section(component: &[u8], payload: &[u8]) -> Result<Vec<u8>> {
+    if !component.starts_with(WASM_COMPONENT_HEADER) {
+        bail!("test indexer artifact is not a WebAssembly component");
+    }
+
+    let name = PLUGIN_DESCRIPTOR_CUSTOM_SECTION_V1.as_bytes();
+    let mut body = Vec::with_capacity(name.len() + payload.len() + 5);
+    write_wasm_u32_leb(
+        u32::try_from(name.len()).context("descriptor section name is too large")?,
+        &mut body,
+    );
+    body.extend_from_slice(name);
+    body.extend_from_slice(payload);
+
+    let mut embedded = component.to_vec();
+    embedded.push(0);
+    write_wasm_u32_leb(
+        u32::try_from(body.len()).context("descriptor section is too large")?,
+        &mut embedded,
+    );
+    embedded.extend_from_slice(&body);
+    Ok(embedded)
 }
 
 fn delegate_migrations(ctx: &TaskContext, args: &MigrationsArgs) -> Result<()> {
@@ -1463,6 +1516,31 @@ pub(crate) fn run_capture(command: &mut Command) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn embedded_descriptor_section_is_appended_to_a_component() {
+        let component = WASM_COMPONENT_HEADER.to_vec();
+        let payload = br#"{"id":"test"}"#;
+        let embedded = embed_plugin_descriptor_custom_section(&component, payload)
+            .expect("descriptor section");
+
+        let mut expected = component.clone();
+        let name = PLUGIN_DESCRIPTOR_CUSTOM_SECTION_V1.as_bytes();
+        let body_len = 1 + name.len() + payload.len();
+        expected.push(0);
+        expected.push(body_len as u8);
+        expected.push(name.len() as u8);
+        expected.extend_from_slice(name);
+        expected.extend_from_slice(payload);
+        assert_eq!(embedded, expected);
+    }
+
+    #[test]
+    fn embedded_descriptor_section_rejects_core_modules() {
+        let module = b"\0asm\x01\0\0\0".to_vec();
+        let error = embed_plugin_descriptor_custom_section(&module, b"{}").unwrap_err();
+        assert!(error.to_string().contains("not a WebAssembly component"));
+    }
 
     fn manifest(version: &str) -> ServeBuiltinVersionManifest {
         ServeBuiltinVersionManifest {

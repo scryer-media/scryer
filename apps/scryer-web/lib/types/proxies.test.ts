@@ -29,8 +29,11 @@ import {
   isTunnelProxyProvider,
   isWireguardProxyProvider,
   looksLikeWireguardKey,
+  normalizeProxyDraft,
+  normalizeProxyEndpoint,
   proxyProviderFamily,
   splitTunnelList,
+  stripConfigAssignment,
   supportsProxyCredentials,
   supportsProxyHostKey,
   supportsProxyPrivateKey,
@@ -127,6 +130,14 @@ const PROXY_LOCALE_KEYS = [
   "settings.proxyTunnelPublicKeyHelp",
   "settings.proxyTunnelPublicKeyPending",
   "settings.proxyTunnelPublicKeyCopy",
+  "settings.proxyImportConfig",
+  "settings.proxyImportConfigHelp",
+  "settings.proxyImportConfigApply",
+  "settings.proxyImportConfigFile",
+  "status.proxyImportConfigFilled",
+  "status.proxyImportConfigUnreadable",
+  "status.proxyImportConfigFirstPeer",
+  "status.proxyImportConfigIgnored",
   "settings.proxyValidationWireguardPrivateKey",
   "settings.proxyValidationWireguardPeerPublicKey",
   "settings.proxyValidationWireguardAddresses",
@@ -355,6 +366,16 @@ test("interpolated proxy strings keep their placeholders in every locale", () =>
       /\{\{field\}\}/,
       `${name} -> settings.proxyValidationWireguardKeyShape`,
     );
+    assert.match(
+      dictionary["status.proxyImportConfigFirstPeer"],
+      /\{\{count\}\}/,
+      `${name} -> status.proxyImportConfigFirstPeer`,
+    );
+    assert.match(
+      dictionary["status.proxyImportConfigIgnored"],
+      /\{\{keys\}\}/,
+      `${name} -> status.proxyImportConfigIgnored`,
+    );
   }
 });
 
@@ -396,4 +417,102 @@ test("the WireGuard key help is the backend's own sentence in English", () => {
       name,
     );
   }
+});
+
+test("every field takes a pasted configuration line", () => {
+  // An operator has the file open in front of them, so the whole line is at
+  // least as likely as the value alone.
+  assert.equal(
+    stripConfigAssignment("PublicKey = cGVlcg==", ["publickey"]),
+    "cGVlcg==",
+  );
+  assert.equal(
+    stripConfigAssignment("  privatekey=c2VjcmV0  ", ["privatekey"]),
+    "c2VjcmV0",
+  );
+  // The key has to be a name this field answers to: a base64 value merely ends
+  // in `=` and is kept whole, and so is any other assignment.
+  assert.equal(stripConfigAssignment("cGVlcg==", ["publickey"]), "cGVlcg==");
+  assert.equal(
+    stripConfigAssignment("Name = value", ["publickey"]),
+    "Name = value",
+  );
+  // Comments go, but only where one can legitimately start.
+  assert.equal(
+    stripConfigAssignment("Endpoint = vpn.test:51820 # main", ["endpoint"]),
+    "vpn.test:51820",
+  );
+  // A PEM block is multi-line and is never read as an assignment.
+  const pem = "-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----";
+  assert.equal(stripConfigAssignment(pem, ["privatekey"]), pem);
+});
+
+test("an endpoint without a scheme takes its provider's own", () => {
+  assert.equal(
+    normalizeProxyEndpoint("wireguard", "Endpoint = vpn.test:51820"),
+    "wireguard://vpn.test:51820",
+  );
+  assert.equal(
+    normalizeProxyEndpoint("ssh_tunnel", "seedbox.test:2222"),
+    "ssh://seedbox.test:2222",
+  );
+  assert.equal(normalizeProxyEndpoint("socks5", "127.0.0.1:1080"), "socks5://127.0.0.1:1080");
+  assert.equal(normalizeProxyEndpoint("byparr", "localhost:8191"), "http://localhost:8191");
+  // A bare IPv6 literal is a host, so it is bracketed rather than read as a
+  // host and a nonsense port.
+  assert.equal(normalizeProxyEndpoint("wireguard", "fd00::1"), "wireguard://[fd00::1]");
+  assert.equal(
+    normalizeProxyEndpoint("wireguard", "[fd00::1]:51820"),
+    "wireguard://[fd00::1]:51820",
+  );
+  // A scheme the operator actually wrote is never rewritten: that would hide a
+  // real mistake rather than forgive a paste.
+  assert.equal(normalizeProxyEndpoint("wireguard", "https://vpn.test"), "https://vpn.test");
+  // A provider only a newer server knows has no scheme of ours to supply.
+  assert.equal(normalizeProxyEndpoint("something-new", "vpn.test"), "vpn.test");
+  assert.equal(normalizeProxyEndpoint("wireguard", "   "), "");
+});
+
+test("a list field takes lines, commas and whole configuration lines", () => {
+  assert.deepEqual(
+    splitTunnelList("Address = 10.6.0.2/32, fd00::2/128\n# spare\nDNS = 10.6.0.1"),
+    ["10.6.0.2/32", "fd00::2/128", "10.6.0.1"],
+  );
+  assert.deepEqual(splitTunnelList("10.6.0.2/32,\n\n"), ["10.6.0.2/32"]);
+});
+
+test("a draft is parsed on save so what is stored is what is shown", () => {
+  const draft = normalizeProxyDraft({
+    ...PROXY_INITIAL_DRAFT,
+    providerType: "wireguard",
+    baseUrl: "Endpoint = vpn.test:51820",
+    privateKey: "PrivateKey = c2VjcmV0",
+    peerPublicKey: "PublicKey = cGVlcg==",
+    presharedKey: "PresharedKey = cHNr",
+    tunnelAddresses: "Address = 10.6.0.2/32, fd00::2/128",
+    tunnelDnsServers: "DNS = 10.6.0.1",
+    tunnelMtu: "MTU = 1420",
+    tunnelKeepaliveSeconds: "PersistentKeepalive = 25",
+  });
+  assert.equal(draft.baseUrl, "wireguard://vpn.test:51820");
+  assert.equal(draft.privateKey, "c2VjcmV0");
+  assert.equal(draft.peerPublicKey, "cGVlcg==");
+  assert.equal(draft.presharedKey, "cHNr");
+  assert.equal(draft.tunnelAddresses, "10.6.0.2/32\nfd00::2/128");
+  assert.equal(draft.tunnelDnsServers, "10.6.0.1");
+  assert.equal(draft.tunnelMtu, "1420");
+  assert.equal(draft.tunnelKeepaliveSeconds, "25");
+  // Normalizing again changes nothing: the operator can save twice.
+  assert.deepEqual(normalizeProxyDraft(draft), draft);
+
+  // Another provider's endpoint is cleaned too, and its own fields are left
+  // exactly as typed — a password can contain anything.
+  const ssh = normalizeProxyDraft({
+    ...PROXY_INITIAL_DRAFT,
+    providerType: "ssh_tunnel",
+    baseUrl: "seedbox.test:2222",
+    password: "hunter2 # not a comment",
+  });
+  assert.equal(ssh.baseUrl, "ssh://seedbox.test:2222");
+  assert.equal(ssh.password, "hunter2 # not a comment");
 });

@@ -17,6 +17,7 @@ signal-hook = "0.4.4"
 tempfile = "3"
 url = "2"
 uuid = { workspace = true }
+test-indexer-descriptor = { path = "../test-plugins/test-indexer/descriptor" }
 xtask-support = { path = "../xtask-support" }
 
 [target.'cfg(unix)'.dependencies]

@@ -7,6 +7,7 @@ import type {
 // and the barrel's extensionless re-exports only resolve for erased types.
 import {
   isTunnelProxyProvider,
+  normalizeProxyDraft,
   splitTunnelList,
   supportsProxyCredentials,
   supportsProxyPrivateKey,
@@ -192,7 +193,14 @@ function buildProxyTunnelNumberInput<Field extends string>(
     : ({ [field]: parsed } as Record<Field, number>);
 }
 
-export function buildCreateProxyInput(draft: ProxyDraft) {
+/**
+ * Every payload is built from a normalized draft, so a value pasted as
+ * `Key = value` and the same value typed bare reach the API identically. The
+ * workflow normalizes again on its side and stays the authority; doing it here
+ * is what makes what the form shows and what is stored the same string.
+ */
+export function buildCreateProxyInput(rawDraft: ProxyDraft) {
+  const draft = normalizeProxyDraft(rawDraft);
   return {
     providerType: draft.providerType,
     ...buildProxyCommonInput(draft),
@@ -206,8 +214,9 @@ export function buildCreateProxyInput(draft: ProxyDraft) {
 
 export function buildUpdateProxyInput(
   id: string,
-  draft: ProxyDraft,
+  rawDraft: ProxyDraft,
 ) {
+  const draft = normalizeProxyDraft(rawDraft);
   return {
     id,
     ...buildProxyCommonInput(draft),

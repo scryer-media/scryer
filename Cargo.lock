@@ -7988,6 +7988,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "test-indexer-descriptor"
+version = "0.1.0"
+dependencies = [
+ "scryer-plugin-sdk",
+]
+
+[[package]]
 name = "thiserror"
 version = "1.0.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9786,6 +9793,7 @@ dependencies = [
  "sha2 0.11.0",
  "signal-hook",
  "tempfile",
+ "test-indexer-descriptor",
  "url",
  "uuid",
  "xtask-support",
