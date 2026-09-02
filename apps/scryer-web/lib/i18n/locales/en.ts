@@ -4129,6 +4129,50 @@ const en: LocaleDictionary = {
   "indexerSearch.empty.prompt": "Enter a query and search your indexers.",
   "indexerSearch.empty.searching": "Searching indexers…",
   "indexerSearch.empty.noResults": "No releases matched.",
+  "grabDialog.title.one": "Grab release",
+  "grabDialog.title.many": "Grab {{count}} releases",
+  "grabDialog.subtitle":
+    "Pick the library title this grab belongs to. Scryer imports and renames it under that title.",
+  "grabDialog.summary.mix": "MIX",
+  "grabDialog.summary.mixed": "{{count}} selected releases",
+  "grabDialog.assign.label": "Assign to title",
+  "grabDialog.assign.placeholder": "Search your library titles…",
+  "grabDialog.assign.count": "{{shown}} of {{total}} titles",
+  "grabDialog.assign.loading": "Searching titles…",
+  "grabDialog.assign.empty": "No library title matched.",
+  "grabDialog.assign.unlinked":
+    "Grab without linking — straight to the client, match later in Import",
+  "grabDialog.gap.missing": "{{count}} missing",
+  "grabDialog.gap.complete": "Complete",
+  "grabDialog.gap.wanted": "Wanted",
+  "grabDialog.season": "Season",
+  "grabDialog.episode": "Episode",
+  "grabDialog.episodic.help":
+    "Leave both blank and Scryer reads the season and episode from the release name.",
+  "grabDialog.episodic.incomplete":
+    "Enter both a season and an episode, or leave both blank.",
+  "grabDialog.client": "Download client",
+  "grabDialog.client.routed": "By indexer mapping",
+  "grabDialog.client.placeholder": "Choose a download client",
+  "grabDialog.client.none": "No download client is enabled.",
+  "grabDialog.importPath": "Import path",
+  "grabDialog.importPath.clientDefault": "download client default",
+  "grabDialog.option.replace": "Replace the existing file with this release",
+  "grabDialog.option.acknowledge":
+    "I understand this release is rejected by {{codes}}",
+  "grabDialog.footer.linked": "Imports as {{name}}",
+  "grabDialog.footer.unlinked":
+    "Nothing will be linked — match it later in Import",
+  "grabDialog.footer.pickTitle":
+    "Pick a library title, or grab without linking.",
+  "grabDialog.cta.assign": "Grab & assign",
+  "grabDialog.cta.assignAll": "Grab & assign all",
+  "grabDialog.cta.unlinked": "Grab unlinked",
+  "grabDialog.conflict": "{{name}} already has a download in progress.",
+  "grabDialog.status.unlinked": "Sent {{name}} to {{client}}",
+  "grabDialog.status.failed": "{{name}}: {{reason}}",
+  "grabDialog.error.expired":
+    "That release is no longer in a live search. Run the search again.",
 };
 
 export default en;

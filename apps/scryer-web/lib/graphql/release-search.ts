@@ -27,6 +27,12 @@ export type InteractiveSearchIndexerProgress = {
 };
 
 export type InteractiveSearchProgress = {
+  /**
+   * Job the snapshot came from. A grab names its release by
+   * `(searchId, downloadUrl)`, and a retry mints a second job, so callers that
+   * grab from a merged view must remember which job each row arrived on.
+   */
+  searchId: string;
   releases: Release[];
   indexers: InteractiveSearchIndexerProgress[];
   state: "RUNNING" | "COMPLETED" | "CANCELLED";
@@ -107,6 +113,7 @@ export async function runIterativeReleaseSearch(
   const applySnapshot = (job: InteractiveReleaseSearchJobPayload) => {
     releases = job.results ?? [];
     onUpdate?.({
+      searchId: job.id,
       releases,
       indexers: job.indexers ?? [],
       state: job.state,

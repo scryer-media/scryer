@@ -2325,6 +2325,50 @@ const ko: LocaleDictionary = {
   "indexerSearch.empty.prompt": "검색어를 입력해 인덱서를 검색하세요.",
   "indexerSearch.empty.searching": "인덱서 검색 중…",
   "indexerSearch.empty.noResults": "일치하는 릴리스가 없습니다.",
+  "grabDialog.title.one": "릴리스 가져오기",
+  "grabDialog.title.many": "릴리스 {{count}}개 가져오기",
+  "grabDialog.subtitle":
+    "이 가져오기가 속할 라이브러리 제목을 선택하세요. Scryer가 해당 제목으로 가져오고 이름을 바꿉니다.",
+  "grabDialog.summary.mix": "혼합",
+  "grabDialog.summary.mixed": "선택한 릴리스 {{count}}개",
+  "grabDialog.assign.label": "제목에 할당",
+  "grabDialog.assign.placeholder": "라이브러리 제목 검색…",
+  "grabDialog.assign.count": "제목 {{total}}개 중 {{shown}}개",
+  "grabDialog.assign.loading": "제목을 검색하는 중…",
+  "grabDialog.assign.empty": "일치하는 라이브러리 제목이 없습니다.",
+  "grabDialog.assign.unlinked":
+    "연결하지 않고 가져오기 — 클라이언트로 바로 보내고 나중에 가져오기에서 연결",
+  "grabDialog.gap.missing": "{{count}}개 없음",
+  "grabDialog.gap.complete": "완료",
+  "grabDialog.gap.wanted": "필요함",
+  "grabDialog.season": "시즌",
+  "grabDialog.episode": "에피소드",
+  "grabDialog.episodic.help":
+    "둘 다 비워 두면 Scryer가 릴리스 이름에서 시즌과 에피소드를 읽습니다.",
+  "grabDialog.episodic.incomplete":
+    "시즌과 에피소드를 함께 입력하거나 둘 다 비워 두세요.",
+  "grabDialog.client": "다운로드 클라이언트",
+  "grabDialog.client.routed": "인덱서 매핑에 따름",
+  "grabDialog.client.placeholder": "다운로드 클라이언트 선택",
+  "grabDialog.client.none": "활성화된 다운로드 클라이언트가 없습니다.",
+  "grabDialog.importPath": "가져오기 경로",
+  "grabDialog.importPath.clientDefault": "다운로드 클라이언트 기본값",
+  "grabDialog.option.replace": "기존 파일을 이 릴리스로 교체",
+  "grabDialog.option.acknowledge":
+    "이 릴리스가 {{codes}}에 의해 거부된 것을 이해합니다",
+  "grabDialog.footer.linked": "{{name}}(으)로 가져옵니다",
+  "grabDialog.footer.unlinked":
+    "아무것도 연결되지 않습니다 — 나중에 가져오기에서 연결하세요",
+  "grabDialog.footer.pickTitle":
+    "라이브러리 제목을 선택하거나 연결하지 않고 가져오세요.",
+  "grabDialog.cta.assign": "가져와서 할당",
+  "grabDialog.cta.assignAll": "모두 가져와서 할당",
+  "grabDialog.cta.unlinked": "연결 없이 가져오기",
+  "grabDialog.conflict": "{{name}}에는 이미 진행 중인 다운로드가 있습니다.",
+  "grabDialog.status.unlinked": "{{name}}을(를) {{client}}(으)로 보냈습니다",
+  "grabDialog.status.failed": "{{name}}: {{reason}}",
+  "grabDialog.error.expired":
+    "이 릴리스는 더 이상 진행 중인 검색에 없습니다. 검색을 다시 실행하세요.",
 };
 
 export default ko;

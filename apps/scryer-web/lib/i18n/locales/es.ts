@@ -2427,6 +2427,52 @@ const es: LocaleDictionary = {
     "Escribe una consulta y busca en tus indexadores.",
   "indexerSearch.empty.searching": "Buscando en los indexadores…",
   "indexerSearch.empty.noResults": "Ningún lanzamiento coincide.",
+  "grabDialog.title.one": "Capturar lanzamiento",
+  "grabDialog.title.many": "Capturar {{count}} lanzamientos",
+  "grabDialog.subtitle":
+    "Elige el título de la biblioteca al que pertenece esta captura. Scryer lo importa y lo renombra bajo ese título.",
+  "grabDialog.summary.mix": "MIX",
+  "grabDialog.summary.mixed": "{{count}} lanzamientos seleccionados",
+  "grabDialog.assign.label": "Asignar a un título",
+  "grabDialog.assign.placeholder": "Busca títulos de tu biblioteca…",
+  "grabDialog.assign.count": "{{shown}} de {{total}} títulos",
+  "grabDialog.assign.loading": "Buscando títulos…",
+  "grabDialog.assign.empty": "Ningún título de la biblioteca coincide.",
+  "grabDialog.assign.unlinked":
+    "Capturar sin vincular — directo al cliente, empareja más tarde en Importación",
+  "grabDialog.gap.missing": "faltan {{count}}",
+  "grabDialog.gap.complete": "Completo",
+  "grabDialog.gap.wanted": "Deseado",
+  "grabDialog.season": "Temporada",
+  "grabDialog.episode": "Episodio",
+  "grabDialog.episodic.help":
+    "Deja ambos campos vacíos y Scryer leerá la temporada y el episodio del nombre del lanzamiento.",
+  "grabDialog.episodic.incomplete":
+    "Indica temporada y episodio a la vez, o deja ambos vacíos.",
+  "grabDialog.client": "Cliente de descarga",
+  "grabDialog.client.routed": "Según la asignación del indexador",
+  "grabDialog.client.placeholder": "Elige un cliente de descarga",
+  "grabDialog.client.none": "No hay ningún cliente de descarga habilitado.",
+  "grabDialog.importPath": "Ruta de importación",
+  "grabDialog.importPath.clientDefault":
+    "predeterminado del cliente de descarga",
+  "grabDialog.option.replace":
+    "Reemplazar el archivo existente por este lanzamiento",
+  "grabDialog.option.acknowledge":
+    "Entiendo que este lanzamiento fue rechazado por {{codes}}",
+  "grabDialog.footer.linked": "Se importa como {{name}}",
+  "grabDialog.footer.unlinked":
+    "No se vinculará nada — empareja más tarde en Importación",
+  "grabDialog.footer.pickTitle":
+    "Elige un título de la biblioteca o captura sin vincular.",
+  "grabDialog.cta.assign": "Capturar y asignar",
+  "grabDialog.cta.assignAll": "Capturar y asignar todo",
+  "grabDialog.cta.unlinked": "Capturar sin vincular",
+  "grabDialog.conflict": "{{name}} ya tiene una descarga en curso.",
+  "grabDialog.status.unlinked": "{{name}} enviado a {{client}}",
+  "grabDialog.status.failed": "{{name}}: {{reason}}",
+  "grabDialog.error.expired":
+    "Ese lanzamiento ya no está en una búsqueda activa. Vuelve a ejecutar la búsqueda.",
 };
 
 export default es;

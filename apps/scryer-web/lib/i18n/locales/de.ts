@@ -2401,6 +2401,51 @@ const de: LocaleDictionary = {
     "Suchbegriff eingeben und die Indexer durchsuchen.",
   "indexerSearch.empty.searching": "Indexer werden durchsucht…",
   "indexerSearch.empty.noResults": "Keine passenden Releases.",
+  "grabDialog.title.one": "Release holen",
+  "grabDialog.title.many": "{{count}} Releases holen",
+  "grabDialog.subtitle":
+    "Wähle den Bibliothekstitel, zu dem dieser Grab gehört. Scryer importiert und benennt ihn unter diesem Titel.",
+  "grabDialog.summary.mix": "MIX",
+  "grabDialog.summary.mixed": "{{count}} ausgewählte Releases",
+  "grabDialog.assign.label": "Titel zuordnen",
+  "grabDialog.assign.placeholder": "Bibliothekstitel durchsuchen…",
+  "grabDialog.assign.count": "{{shown}} von {{total}} Titeln",
+  "grabDialog.assign.loading": "Titel werden gesucht…",
+  "grabDialog.assign.empty": "Kein Bibliothekstitel gefunden.",
+  "grabDialog.assign.unlinked":
+    "Ohne Verknüpfung holen — direkt an den Client, später im Import zuordnen",
+  "grabDialog.gap.missing": "{{count}} fehlen",
+  "grabDialog.gap.complete": "Vollständig",
+  "grabDialog.gap.wanted": "Gewünscht",
+  "grabDialog.season": "Staffel",
+  "grabDialog.episode": "Episode",
+  "grabDialog.episodic.help":
+    "Beide Felder leer lassen, dann liest Scryer Staffel und Episode aus dem Release-Namen.",
+  "grabDialog.episodic.incomplete":
+    "Gib Staffel und Episode zusammen an oder lass beide Felder leer.",
+  "grabDialog.client": "Download-Client",
+  "grabDialog.client.routed": "Über Indexer-Zuordnung",
+  "grabDialog.client.placeholder": "Download-Client wählen",
+  "grabDialog.client.none": "Kein Download-Client ist aktiviert.",
+  "grabDialog.importPath": "Importpfad",
+  "grabDialog.importPath.clientDefault": "Standard des Download-Clients",
+  "grabDialog.option.replace":
+    "Die vorhandene Datei durch dieses Release ersetzen",
+  "grabDialog.option.acknowledge":
+    "Mir ist bewusst, dass dieses Release abgelehnt wurde durch {{codes}}",
+  "grabDialog.footer.linked": "Wird importiert als {{name}}",
+  "grabDialog.footer.unlinked":
+    "Nichts wird verknüpft — später im Import zuordnen",
+  "grabDialog.footer.pickTitle":
+    "Wähle einen Bibliothekstitel oder hole ohne Verknüpfung.",
+  "grabDialog.cta.assign": "Holen & zuordnen",
+  "grabDialog.cta.assignAll": "Alle holen & zuordnen",
+  "grabDialog.cta.unlinked": "Ohne Verknüpfung holen",
+  "grabDialog.conflict": "{{name}} hat bereits einen laufenden Download.",
+  "grabDialog.status.unlinked": "{{name}} an {{client}} gesendet",
+  "grabDialog.status.failed": "{{name}}: {{reason}}",
+  "grabDialog.error.expired":
+    "Dieses Release ist in keiner laufenden Suche mehr enthalten. Führe die Suche erneut aus.",
 };
 
 export default de;

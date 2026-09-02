@@ -2410,6 +2410,51 @@ const pt_BR: LocaleDictionary = {
     "Digite uma consulta e busque nos seus indexadores.",
   "indexerSearch.empty.searching": "Buscando nos indexadores…",
   "indexerSearch.empty.noResults": "Nenhum lançamento correspondente.",
+  "grabDialog.title.one": "Capturar lançamento",
+  "grabDialog.title.many": "Capturar {{count}} lançamentos",
+  "grabDialog.subtitle":
+    "Escolha o título da biblioteca ao qual esta captura pertence. O Scryer importa e renomeia sob esse título.",
+  "grabDialog.summary.mix": "MISTO",
+  "grabDialog.summary.mixed": "{{count}} lançamentos selecionados",
+  "grabDialog.assign.label": "Atribuir a um título",
+  "grabDialog.assign.placeholder": "Pesquise os títulos da sua biblioteca…",
+  "grabDialog.assign.count": "{{shown}} de {{total}} títulos",
+  "grabDialog.assign.loading": "Pesquisando títulos…",
+  "grabDialog.assign.empty": "Nenhum título da biblioteca corresponde.",
+  "grabDialog.assign.unlinked":
+    "Capturar sem vincular — direto para o cliente, associe depois em Importação",
+  "grabDialog.gap.missing": "{{count}} faltando",
+  "grabDialog.gap.complete": "Completo",
+  "grabDialog.gap.wanted": "Desejado",
+  "grabDialog.season": "Temporada",
+  "grabDialog.episode": "Episódio",
+  "grabDialog.episodic.help":
+    "Deixe os dois campos vazios e o Scryer lê a temporada e o episódio do nome do lançamento.",
+  "grabDialog.episodic.incomplete":
+    "Informe temporada e episódio juntos, ou deixe os dois vazios.",
+  "grabDialog.client": "Cliente de download",
+  "grabDialog.client.routed": "Pelo mapeamento do indexador",
+  "grabDialog.client.placeholder": "Escolha um cliente de download",
+  "grabDialog.client.none": "Nenhum cliente de download está habilitado.",
+  "grabDialog.importPath": "Caminho de importação",
+  "grabDialog.importPath.clientDefault": "padrão do cliente de download",
+  "grabDialog.option.replace":
+    "Substituir o arquivo existente por este lançamento",
+  "grabDialog.option.acknowledge":
+    "Entendo que este lançamento foi rejeitado por {{codes}}",
+  "grabDialog.footer.linked": "Importa como {{name}}",
+  "grabDialog.footer.unlinked":
+    "Nada será vinculado — associe depois em Importação",
+  "grabDialog.footer.pickTitle":
+    "Escolha um título da biblioteca ou capture sem vincular.",
+  "grabDialog.cta.assign": "Capturar e atribuir",
+  "grabDialog.cta.assignAll": "Capturar e atribuir tudo",
+  "grabDialog.cta.unlinked": "Capturar sem vincular",
+  "grabDialog.conflict": "{{name}} já tem um download em andamento.",
+  "grabDialog.status.unlinked": "{{name}} enviado para {{client}}",
+  "grabDialog.status.failed": "{{name}}: {{reason}}",
+  "grabDialog.error.expired":
+    "Esse lançamento não está mais em uma busca ativa. Execute a busca novamente.",
 };
 
 export default pt_BR;

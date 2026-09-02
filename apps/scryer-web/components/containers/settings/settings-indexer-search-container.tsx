@@ -7,6 +7,7 @@ import * as React from "react";
 import { useSearchParams } from "react-router";
 import { useClient } from "urql";
 
+import { GrabDialog } from "@/components/common/grab-dialog";
 import {
   SettingsIndexerSearchSection,
   type IndexerSearchAdvancedLimits,
@@ -40,6 +41,9 @@ import {
   type SavedIndexerSearch,
 } from "@/lib/utils/indexer-search";
 
+/** Stable identity for the closed grab dialog, so it never re-renders on it. */
+const NO_GRAB_TARGETS: Release[] = [];
+
 const EMPTY_ADVANCED: IndexerSearchAdvancedLimits = {
   minSizeGiB: "",
   maxSizeGiB: "",
@@ -56,17 +60,7 @@ function positiveNumberOrNull(raw: string): number | null {
   return value;
 }
 
-export type SettingsIndexerSearchContainerProps = {
-  /**
-   * Named releases to grab. WP5 mounts the grab dialog on this seam; the pane
-   * itself never queues anything.
-   */
-  onGrab?: (releases: Release[]) => void;
-};
-
-export function SettingsIndexerSearchContainer({
-  onGrab,
-}: SettingsIndexerSearchContainerProps = {}) {
+export function SettingsIndexerSearchContainer() {
   const client = useClient();
   const t = useTranslate();
   const setGlobalStatus = useGlobalStatus();
@@ -107,6 +101,13 @@ export function SettingsIndexerSearchContainer({
   const [expandedRowKey, setExpandedRowKey] = React.useState<string | null>(
     null,
   );
+  const [grabTargets, setGrabTargets] = React.useState<Release[] | null>(null);
+  // A grab names its release by (searchId, downloadUrl), and "retry failed"
+  // mints a second job whose rows merge into this same table, so each row keeps
+  // the id of the job it actually arrived on.
+  const [searchIdByRowKey, setSearchIdByRowKey] = React.useState<
+    ReadonlyMap<string, string>
+  >(() => new Map());
 
   const searchAbortRef = React.useRef<AbortController | null>(null);
 
@@ -178,6 +179,7 @@ export function SettingsIndexerSearchContainer({
         setExpandedRowKey(null);
         setSelectedFacets([]);
         setSizeRangeGiB(null);
+        setSearchIdByRowKey(new Map());
       }
       setHasSearched(true);
       setSearching(true);
@@ -202,6 +204,13 @@ export function SettingsIndexerSearchContainer({
             signal: controller.signal,
             onUpdate: (snapshot) => {
               setNowMs(Date.now());
+              setSearchIdByRowKey((current) => {
+                const next = new Map(current);
+                for (const release of snapshot.releases) {
+                  next.set(indexerSearchRowKey(release), snapshot.searchId);
+                }
+                return next;
+              });
               setReleases(
                 isRetry
                   ? mergeIndexerSearchReleases(baseReleases, snapshot.releases)
@@ -320,12 +329,15 @@ export function SettingsIndexerSearchContainer({
     });
   }, []);
 
-  const handleGrab = React.useCallback(
-    (grabbed: Release[]) => {
-      onGrab?.(grabbed);
-    },
-    [onGrab],
-  );
+  const handleGrab = React.useCallback((grabbed: Release[]) => {
+    setGrabTargets(grabbed.length > 0 ? grabbed : null);
+  }, []);
+
+  // Rows stay in the table after a grab: the same release may legitimately be
+  // grabbed again for a second title.
+  const handleGrabbed = React.useCallback(() => {
+    setSelectedRowKeys([]);
+  }, []);
 
   const facetGroups = React.useMemo(
     () => buildIndexerSearchFacets(releases),
@@ -378,49 +390,64 @@ export function SettingsIndexerSearchContainer({
   );
 
   return (
-    <SettingsIndexerSearchSection
-      query={query}
-      onQueryChange={setQuery}
-      kind={kind}
-      onKindChange={setKind}
-      indexerOptions={indexerOptions}
-      selectedIndexerIds={selectedIndexerIds}
-      onSelectedIndexerIdsChange={setSelectedIndexerIds}
-      categories={categories}
-      onCategoriesChange={setCategories}
-      advancedOpen={advancedOpen}
-      onAdvancedOpenChange={setAdvancedOpen}
-      advanced={advanced}
-      onAdvancedChange={setAdvanced}
-      savedSearchLabels={savedSearchLabels}
-      onSaveSearch={handleSaveSearch}
-      onApplySavedSearch={handleApplySavedSearch}
-      onRemoveSavedSearch={handleRemoveSavedSearch}
-      onSearch={handleSearch}
-      onCancelSearch={handleCancelSearch}
-      searching={searching}
-      hasSearched={hasSearched}
-      indexers={indexers}
-      onRetryFailed={handleRetryFailed}
-      facetGroups={facetGroups}
-      selectedFacets={selectedFacets}
-      onToggleFacet={handleToggleFacet}
-      onResetRefine={handleResetRefine}
-      sizeBoundsGiB={sizeBoundsGiB}
-      sizeRangeGiB={sizeRangeGiB}
-      onSizeRangeChange={setSizeRangeGiB}
-      sort={sort}
-      onSortChange={setSort}
-      matchedCount={releases.length}
-      passingCount={passingCount}
-      rows={rows}
-      priorityByIndexer={priorityByIndexer}
-      nowMs={nowMs}
-      selectedRowKeys={selectedRowKeys}
-      onToggleRow={handleToggleRow}
-      expandedRowKey={expandedRowKey}
-      onToggleExpanded={handleToggleExpanded}
-      onGrab={handleGrab}
-    />
+    <>
+      <SettingsIndexerSearchSection
+        query={query}
+        onQueryChange={setQuery}
+        kind={kind}
+        onKindChange={setKind}
+        indexerOptions={indexerOptions}
+        selectedIndexerIds={selectedIndexerIds}
+        onSelectedIndexerIdsChange={setSelectedIndexerIds}
+        categories={categories}
+        onCategoriesChange={setCategories}
+        advancedOpen={advancedOpen}
+        onAdvancedOpenChange={setAdvancedOpen}
+        advanced={advanced}
+        onAdvancedChange={setAdvanced}
+        savedSearchLabels={savedSearchLabels}
+        onSaveSearch={handleSaveSearch}
+        onApplySavedSearch={handleApplySavedSearch}
+        onRemoveSavedSearch={handleRemoveSavedSearch}
+        onSearch={handleSearch}
+        onCancelSearch={handleCancelSearch}
+        searching={searching}
+        hasSearched={hasSearched}
+        indexers={indexers}
+        onRetryFailed={handleRetryFailed}
+        facetGroups={facetGroups}
+        selectedFacets={selectedFacets}
+        onToggleFacet={handleToggleFacet}
+        onResetRefine={handleResetRefine}
+        sizeBoundsGiB={sizeBoundsGiB}
+        sizeRangeGiB={sizeRangeGiB}
+        onSizeRangeChange={setSizeRangeGiB}
+        sort={sort}
+        onSortChange={setSort}
+        matchedCount={releases.length}
+        passingCount={passingCount}
+        rows={rows}
+        priorityByIndexer={priorityByIndexer}
+        nowMs={nowMs}
+        selectedRowKeys={selectedRowKeys}
+        onToggleRow={handleToggleRow}
+        expandedRowKey={expandedRowKey}
+        onToggleExpanded={handleToggleExpanded}
+        onGrab={handleGrab}
+      />
+      <GrabDialog
+        open={grabTargets !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setGrabTargets(null);
+          }
+        }}
+        releases={grabTargets ?? NO_GRAB_TARGETS}
+        searchIdByRowKey={searchIdByRowKey}
+        initialQuery={query}
+        kind={kind}
+        onGrabbed={handleGrabbed}
+      />
+    </>
   );
 }

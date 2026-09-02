@@ -2369,6 +2369,50 @@ const ja: LocaleDictionary = {
   "indexerSearch.empty.prompt": "キーワードを入力してインデクサーを検索してください。",
   "indexerSearch.empty.searching": "インデクサーを検索中…",
   "indexerSearch.empty.noResults": "一致するリリースはありません。",
+  "grabDialog.title.one": "リリースを取得",
+  "grabDialog.title.many": "{{count}} 件のリリースを取得",
+  "grabDialog.subtitle":
+    "この取得が属するライブラリのタイトルを選んでください。Scryer はそのタイトルとしてインポートし、名前を付け直します。",
+  "grabDialog.summary.mix": "混在",
+  "grabDialog.summary.mixed": "選択中のリリース {{count}} 件",
+  "grabDialog.assign.label": "タイトルに割り当て",
+  "grabDialog.assign.placeholder": "ライブラリのタイトルを検索…",
+  "grabDialog.assign.count": "{{total}} 件中 {{shown}} 件のタイトル",
+  "grabDialog.assign.loading": "タイトルを検索中…",
+  "grabDialog.assign.empty": "一致するライブラリのタイトルはありません。",
+  "grabDialog.assign.unlinked":
+    "リンクせずに取得 — クライアントへ直接送り、後でインポートで照合します",
+  "grabDialog.gap.missing": "{{count}} 件不足",
+  "grabDialog.gap.complete": "完了",
+  "grabDialog.gap.wanted": "未取得",
+  "grabDialog.season": "シーズン",
+  "grabDialog.episode": "エピソード",
+  "grabDialog.episodic.help":
+    "両方とも空欄にすると、Scryer がリリース名からシーズンとエピソードを読み取ります。",
+  "grabDialog.episodic.incomplete":
+    "シーズンとエピソードは両方入力するか、両方空欄にしてください。",
+  "grabDialog.client": "ダウンロードクライアント",
+  "grabDialog.client.routed": "インデクサーの割り当てに従う",
+  "grabDialog.client.placeholder": "ダウンロードクライアントを選択",
+  "grabDialog.client.none": "有効なダウンロードクライアントがありません。",
+  "grabDialog.importPath": "インポート先パス",
+  "grabDialog.importPath.clientDefault": "ダウンロードクライアントの既定値",
+  "grabDialog.option.replace": "既存のファイルをこのリリースで置き換える",
+  "grabDialog.option.acknowledge":
+    "このリリースが {{codes}} により拒否されていることを理解しています",
+  "grabDialog.footer.linked": "{{name}} としてインポートされます",
+  "grabDialog.footer.unlinked":
+    "何もリンクされません — 後でインポートで照合してください",
+  "grabDialog.footer.pickTitle":
+    "ライブラリのタイトルを選ぶか、リンクせずに取得してください。",
+  "grabDialog.cta.assign": "取得して割り当て",
+  "grabDialog.cta.assignAll": "すべて取得して割り当て",
+  "grabDialog.cta.unlinked": "リンクせずに取得",
+  "grabDialog.conflict": "{{name}} には進行中のダウンロードがすでにあります。",
+  "grabDialog.status.unlinked": "{{name}} を {{client}} に送信しました",
+  "grabDialog.status.failed": "{{name}}: {{reason}}",
+  "grabDialog.error.expired":
+    "このリリースは実行中の検索に含まれていません。検索をやり直してください。",
 };
 
 export default ja;

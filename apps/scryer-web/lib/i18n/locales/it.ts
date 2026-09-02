@@ -2411,6 +2411,51 @@ const it: LocaleDictionary = {
   "indexerSearch.empty.prompt": "Inserisci una query e cerca sui tuoi indexer.",
   "indexerSearch.empty.searching": "Ricerca sugli indexer…",
   "indexerSearch.empty.noResults": "Nessuna release corrispondente.",
+  "grabDialog.title.one": "Preleva release",
+  "grabDialog.title.many": "Preleva {{count}} release",
+  "grabDialog.subtitle":
+    "Scegli il titolo della libreria a cui appartiene questo prelievo. Scryer lo importa e lo rinomina sotto quel titolo.",
+  "grabDialog.summary.mix": "MIX",
+  "grabDialog.summary.mixed": "{{count}} release selezionate",
+  "grabDialog.assign.label": "Assegna a un titolo",
+  "grabDialog.assign.placeholder": "Cerca tra i titoli della libreria…",
+  "grabDialog.assign.count": "{{shown}} di {{total}} titoli",
+  "grabDialog.assign.loading": "Ricerca dei titoli…",
+  "grabDialog.assign.empty": "Nessun titolo della libreria corrisponde.",
+  "grabDialog.assign.unlinked":
+    "Preleva senza collegare — direttamente al client, abbina più tardi in Importazione",
+  "grabDialog.gap.missing": "{{count}} mancanti",
+  "grabDialog.gap.complete": "Completo",
+  "grabDialog.gap.wanted": "Desiderato",
+  "grabDialog.season": "Stagione",
+  "grabDialog.episode": "Episodio",
+  "grabDialog.episodic.help":
+    "Lascia entrambi i campi vuoti e Scryer leggerà stagione ed episodio dal nome della release.",
+  "grabDialog.episodic.incomplete":
+    "Inserisci stagione ed episodio insieme, oppure lascia entrambi vuoti.",
+  "grabDialog.client": "Client di download",
+  "grabDialog.client.routed": "Secondo la mappatura dell'indexer",
+  "grabDialog.client.placeholder": "Scegli un client di download",
+  "grabDialog.client.none": "Nessun client di download è abilitato.",
+  "grabDialog.importPath": "Percorso di importazione",
+  "grabDialog.importPath.clientDefault": "predefinito del client di download",
+  "grabDialog.option.replace":
+    "Sostituisci il file esistente con questa release",
+  "grabDialog.option.acknowledge":
+    "So che questa release è stata rifiutata da {{codes}}",
+  "grabDialog.footer.linked": "Importata come {{name}}",
+  "grabDialog.footer.unlinked":
+    "Non verrà collegato nulla — abbina più tardi in Importazione",
+  "grabDialog.footer.pickTitle":
+    "Scegli un titolo della libreria oppure preleva senza collegare.",
+  "grabDialog.cta.assign": "Preleva e assegna",
+  "grabDialog.cta.assignAll": "Preleva e assegna tutto",
+  "grabDialog.cta.unlinked": "Preleva senza collegare",
+  "grabDialog.conflict": "{{name}} ha già un download in corso.",
+  "grabDialog.status.unlinked": "{{name}} inviata a {{client}}",
+  "grabDialog.status.failed": "{{name}}: {{reason}}",
+  "grabDialog.error.expired":
+    "Questa release non è più in una ricerca attiva. Esegui di nuovo la ricerca.",
 };
 
 export default it;

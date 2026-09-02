@@ -2432,6 +2432,51 @@ const fr: LocaleDictionary = {
     "Saisissez une requête et interrogez vos indexeurs.",
   "indexerSearch.empty.searching": "Recherche sur les indexeurs…",
   "indexerSearch.empty.noResults": "Aucune release correspondante.",
+  "grabDialog.title.one": "Récupérer la release",
+  "grabDialog.title.many": "Récupérer {{count}} releases",
+  "grabDialog.subtitle":
+    "Choisissez le titre de la bibliothèque auquel cette récupération appartient. Scryer l'importe et le renomme sous ce titre.",
+  "grabDialog.summary.mix": "MIX",
+  "grabDialog.summary.mixed": "{{count}} releases sélectionnées",
+  "grabDialog.assign.label": "Affecter à un titre",
+  "grabDialog.assign.placeholder": "Rechercher un titre de la bibliothèque…",
+  "grabDialog.assign.count": "{{shown}} sur {{total}} titres",
+  "grabDialog.assign.loading": "Recherche des titres…",
+  "grabDialog.assign.empty": "Aucun titre de la bibliothèque ne correspond.",
+  "grabDialog.assign.unlinked":
+    "Récupérer sans lier — directement au client, à associer plus tard dans Import",
+  "grabDialog.gap.missing": "{{count}} manquants",
+  "grabDialog.gap.complete": "Complet",
+  "grabDialog.gap.wanted": "Souhaité",
+  "grabDialog.season": "Saison",
+  "grabDialog.episode": "Épisode",
+  "grabDialog.episodic.help":
+    "Laissez les deux champs vides et Scryer lira la saison et l'épisode dans le nom de la release.",
+  "grabDialog.episodic.incomplete":
+    "Renseignez la saison et l'épisode ensemble, ou laissez les deux vides.",
+  "grabDialog.client": "Client de téléchargement",
+  "grabDialog.client.routed": "Selon l'association de l'indexeur",
+  "grabDialog.client.placeholder": "Choisir un client de téléchargement",
+  "grabDialog.client.none": "Aucun client de téléchargement n'est activé.",
+  "grabDialog.importPath": "Chemin d'import",
+  "grabDialog.importPath.clientDefault": "valeur par défaut du client",
+  "grabDialog.option.replace":
+    "Remplacer le fichier existant par cette release",
+  "grabDialog.option.acknowledge":
+    "Je comprends que cette release est rejetée par {{codes}}",
+  "grabDialog.footer.linked": "Importée en tant que {{name}}",
+  "grabDialog.footer.unlinked":
+    "Rien ne sera lié — à associer plus tard dans Import",
+  "grabDialog.footer.pickTitle":
+    "Choisissez un titre de la bibliothèque, ou récupérez sans lier.",
+  "grabDialog.cta.assign": "Récupérer et affecter",
+  "grabDialog.cta.assignAll": "Tout récupérer et affecter",
+  "grabDialog.cta.unlinked": "Récupérer sans lier",
+  "grabDialog.conflict": "{{name}} a déjà un téléchargement en cours.",
+  "grabDialog.status.unlinked": "{{name}} envoyée à {{client}}",
+  "grabDialog.status.failed": "{{name}} : {{reason}}",
+  "grabDialog.error.expired":
+    "Cette release ne fait plus partie d'une recherche active. Relancez la recherche.",
 };
 
 export default fr;

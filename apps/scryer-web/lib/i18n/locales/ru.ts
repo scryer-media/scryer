@@ -5469,6 +5469,50 @@ const ru: LocaleDictionary = {
     "Введите запрос и выполните поиск по индексаторам.",
   "indexerSearch.empty.searching": "Идёт поиск по индексаторам…",
   "indexerSearch.empty.noResults": "Подходящих релизов нет.",
+  "grabDialog.title.one": "Забрать релиз",
+  "grabDialog.title.many": "Забрать релизов: {{count}}",
+  "grabDialog.subtitle":
+    "Выберите название в библиотеке, к которому относится этот захват. Scryer импортирует и переименует его под этим названием.",
+  "grabDialog.summary.mix": "МИКС",
+  "grabDialog.summary.mixed": "Выбрано релизов: {{count}}",
+  "grabDialog.assign.label": "Привязать к названию",
+  "grabDialog.assign.placeholder": "Поиск по названиям библиотеки…",
+  "grabDialog.assign.count": "{{shown}} из {{total}} названий",
+  "grabDialog.assign.loading": "Поиск названий…",
+  "grabDialog.assign.empty": "Подходящих названий в библиотеке нет.",
+  "grabDialog.assign.unlinked":
+    "Забрать без привязки — сразу в клиент, сопоставить позже в разделе «Импорт»",
+  "grabDialog.gap.missing": "не хватает: {{count}}",
+  "grabDialog.gap.complete": "Полностью",
+  "grabDialog.gap.wanted": "Требуется",
+  "grabDialog.season": "Сезон",
+  "grabDialog.episode": "Эпизод",
+  "grabDialog.episodic.help":
+    "Оставьте оба поля пустыми, и Scryer определит сезон и эпизод по имени релиза.",
+  "grabDialog.episodic.incomplete":
+    "Укажите сезон и эпизод вместе либо оставьте оба поля пустыми.",
+  "grabDialog.client": "Клиент загрузки",
+  "grabDialog.client.routed": "По привязке индексатора",
+  "grabDialog.client.placeholder": "Выберите клиент загрузки",
+  "grabDialog.client.none": "Нет ни одного включённого клиента загрузки.",
+  "grabDialog.importPath": "Путь импорта",
+  "grabDialog.importPath.clientDefault": "по умолчанию у клиента загрузки",
+  "grabDialog.option.replace": "Заменить существующий файл этим релизом",
+  "grabDialog.option.acknowledge":
+    "Я понимаю, что этот релиз отклонён по причине {{codes}}",
+  "grabDialog.footer.linked": "Импортируется как {{name}}",
+  "grabDialog.footer.unlinked":
+    "Ничего не будет привязано — сопоставьте позже в разделе «Импорт»",
+  "grabDialog.footer.pickTitle":
+    "Выберите название в библиотеке или заберите без привязки.",
+  "grabDialog.cta.assign": "Забрать и привязать",
+  "grabDialog.cta.assignAll": "Забрать и привязать все",
+  "grabDialog.cta.unlinked": "Забрать без привязки",
+  "grabDialog.conflict": "Для «{{name}}» уже идёт загрузка.",
+  "grabDialog.status.unlinked": "«{{name}}» отправлен в {{client}}",
+  "grabDialog.status.failed": "{{name}}: {{reason}}",
+  "grabDialog.error.expired":
+    "Этого релиза больше нет в активном поиске. Запустите поиск снова.",
 };
 
 export default ru;
