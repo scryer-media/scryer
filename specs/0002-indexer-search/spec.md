@@ -40,6 +40,9 @@ Search
   per-indexer result limit (default 100, cap 250). Not persisted.
 - FR-005 The search runs as a server-side job: accepted immediately, polled, cancellable,
   results stream in per indexer as they complete (same lifecycle as interactive search).
+  **The browser shows each indexer's rows the moment that indexer answers** — rows, health
+  dots, totals and facet counts refine live while other indexers are still searching; the page
+  never waits for the whole batch (operator requirement, 2026-09-02).
 - FR-006 Per-indexer outcome: state ok/slow/failed/skipped, result count, elapsed ms, and a
   short error word on failure (`timeout`, `auth`, `http 503`, …).
 - FR-007 Totals: matched (raw survivors of advanced limits), passing (after facets + rejections),
