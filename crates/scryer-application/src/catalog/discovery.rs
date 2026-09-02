@@ -390,7 +390,7 @@ fn record_query_coverage_outcomes(
     }
 }
 
-fn incomplete_indexer_reason(outcome: IndexerSearchOutcome) -> Option<String> {
+pub(crate) fn incomplete_indexer_reason(outcome: IndexerSearchOutcome) -> Option<String> {
     let (reason, retry_after) = match outcome {
         IndexerSearchOutcome::Complete { .. } => return None,
         IndexerSearchOutcome::Partial {

@@ -23,7 +23,7 @@ mod folder_match;
 mod full_hash_backfill;
 mod import_rejection_reopen;
 mod indexer_download_client_mappings;
-mod indexer_search;
+mod interactive_release_search;
 mod libraries;
 mod library_scan;
 mod maintenance_evaluation;

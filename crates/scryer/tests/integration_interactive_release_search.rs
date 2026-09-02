@@ -17,9 +17,9 @@ use common::{TestContext, disable_platform_keystore_for_tests, initialize_wasm_r
 use scryer_application::{
     AppServices, AppUseCase, FacetRegistry, INDEXER_ROUTING_SETTINGS_KEY, IndexerPluginProvider,
     InteractiveReleaseSearchIndexerStatus, InteractiveReleaseSearchRequest,
-    InteractiveReleaseSearchSnapshot, InteractiveReleaseSearchState, JwtAuthConfig,
-    LibraryRootDraft, MovieFacetHandler, QUALITY_PROFILE_CATALOG_KEY, QUALITY_PROFILE_ID_KEY,
-    SETTINGS_SCOPE_SYSTEM, SaveQualityProfileSettings, SeriesFacetHandler,
+    InteractiveReleaseSearchSnapshot, InteractiveReleaseSearchState, InteractiveSearchKind,
+    JwtAuthConfig, LibraryRootDraft, MovieFacetHandler, QUALITY_PROFILE_CATALOG_KEY,
+    QUALITY_PROFILE_ID_KEY, SETTINGS_SCOPE_SYSTEM, SaveQualityProfileSettings, SeriesFacetHandler,
 };
 use scryer_domain::{ExternalId, IndexerConfig, MediaFacet, NewTitle, User};
 use scryer_infrastructure_acquisition::{
@@ -407,6 +407,8 @@ async fn setup_app(configs: Vec<IndexerConfig>) -> (AppUseCase, User) {
     user.authorization = scryer_domain::UserAuthorization {
         app: scryer_domain::AppPermissionMask::from_permissions([
             scryer_domain::AppPermission::ManageCatalogSettings,
+            // The Indexers-page gate a title-less query subject is held to (D13).
+            scryer_domain::AppPermission::ManageSystemSettings,
         ]),
         default_library: scryer_domain::LibraryPermissionMask::from_permissions([
             scryer_domain::LibraryPermission::View,
@@ -457,11 +459,16 @@ async fn add_movie(app: &AppUseCase, user: &User, name: &str, imdb: &str) -> Str
 
 fn title_request(title_id: &str) -> InteractiveReleaseSearchRequest {
     InteractiveReleaseSearchRequest {
-        title_id: title_id.to_string(),
-        series_movie_link_id: None,
-        season: None,
-        episode: None,
-        limit: None,
+        title_id: Some(title_id.to_string()),
+        ..InteractiveReleaseSearchRequest::default()
+    }
+}
+
+fn raw_query_request(query: &str) -> InteractiveReleaseSearchRequest {
+    InteractiveReleaseSearchRequest {
+        query: Some(query.to_string()),
+        kind: Some(InteractiveSearchKind::Raw),
+        ..InteractiveReleaseSearchRequest::default()
     }
 }
 
@@ -858,7 +865,78 @@ async fn same_scope_restart_cancels_previous_job() {
     assert!(cancelled);
 }
 
-// ── 5. GraphQL smoke: start → poll → cancel-after-completion ──────────────
+// ── 5. A raw query subject issues a facet-less text search ────────────────
+
+#[tokio::test]
+async fn raw_query_subject_issues_a_text_search_and_completes_with_the_release() {
+    let indexer = MockServer::start().await;
+    mount_healthy(&indexer, "Paperman.2012.1080p.WEB-DL-GRP", "raw-1").await;
+
+    let now = chrono::Utc::now();
+    let (app, user) = setup_app(vec![indexer_config(
+        "raw-a",
+        format!("{}/api", indexer.uri()),
+        "key-a",
+        now,
+    )])
+    .await;
+
+    let start = app
+        .start_interactive_release_search(&user, raw_query_request("Paperman"))
+        .await
+        .expect("start raw query job");
+    assert_eq!(start.state, InteractiveReleaseSearchState::Running);
+    assert_eq!(start.indexers.len(), 1, "{start:?}");
+
+    let done = wait_for_snapshot(
+        &app,
+        &user,
+        &start.id,
+        Duration::from_secs(120),
+        |snapshot| snapshot.state != InteractiveReleaseSearchState::Running,
+    )
+    .await;
+    assert_eq!(done.state, InteractiveReleaseSearchState::Completed, "{done:?}");
+    assert!(
+        done.results
+            .iter()
+            .any(|result| result.title.contains("Paperman")),
+        "the raw query returns the indexer's release: {done:?}"
+    );
+    let view = indexer_status(&done, "raw-a");
+    assert_eq!(view.status, InteractiveReleaseSearchIndexerStatus::Completed);
+    assert!(
+        view.elapsed_ms.is_some(),
+        "per-indexer timing is recorded: {view:?}"
+    );
+
+    // A query subject with no facet must reach the plugin as plain text.
+    let requests = indexer
+        .received_requests()
+        .await
+        .expect("recorded requests on the indexer");
+    let search_requests = requests
+        .iter()
+        .map(|request| request.url.to_string())
+        .filter(|url| url.contains("q="))
+        .collect::<Vec<_>>();
+    assert!(
+        !search_requests.is_empty(),
+        "expected a q= search request, saw: {:?}",
+        requests
+            .iter()
+            .map(|request| request.url.to_string())
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        search_requests
+            .iter()
+            .any(|url| url.contains("t=search") && !url.contains("t=movie")),
+        "raw kind must issue a facet-less text search, saw: {search_requests:?}"
+    );
+}
+
+// ── 6. GraphQL smoke: start → poll → cancel-after-completion ──────────────
 
 async fn schema_exec(ctx: &TestContext, query: &str, user: &User) -> Value {
     let req = async_graphql::Request::new(query).data(user.clone());

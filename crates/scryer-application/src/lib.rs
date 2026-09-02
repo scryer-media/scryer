@@ -261,16 +261,10 @@ pub use catalog::facets::handler::{
 pub use catalog::facets::movie::MovieFacetHandler;
 pub use catalog::facets::registry::FacetRegistry;
 pub use catalog::facets::series::SeriesFacetHandler;
-pub use catalog::indexer_search::{
-    DEFAULT_INDEXER_SEARCH_PER_INDEXER_LIMIT, IndexerSearchFacet, IndexerSearchFacetItem,
-    IndexerSearchFacetValues, IndexerSearchIndexerStatus, IndexerSearchIndexerView,
-    IndexerSearchKind, IndexerSearchRelease, IndexerSearchRequest, IndexerSearchSnapshot,
-    IndexerSearchState, IndexerSearchTotals, MAX_INDEXER_SEARCH_PER_INDEXER_LIMIT,
-};
 pub use catalog::interactive_release_search::{
     InteractiveReleaseSearchIndexerStatus, InteractiveReleaseSearchIndexerView,
     InteractiveReleaseSearchRequest, InteractiveReleaseSearchSnapshot,
-    InteractiveReleaseSearchState,
+    InteractiveReleaseSearchState, InteractiveSearchKind,
 };
 pub use catalog::title_hydration::start_background_title_hydration_loop;
 pub use catalog::title_images::start_background_title_image_loop;

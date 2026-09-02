@@ -4218,7 +4218,6 @@ async fn graphql_introspection_title_acquisition_inputs_use_id_fields() {
     };
 
     for (input_alias, field_name) in [
-        ("searchReleases", "titleId"),
         ("queueDownload", "titleId"),
         ("queueBestRelease", "titleId"),
         ("retryImport", "importId"),
@@ -4245,6 +4244,8 @@ async fn graphql_introspection_title_acquisition_inputs_use_id_fields() {
     }
 
     for (input_alias, field_name) in [
+        // Nullable since spec 0002: a search names either a title or a query.
+        ("searchReleases", "titleId"),
         ("searchReleases", "seriesMovieLinkId"),
         ("pauseDownload", "clientId"),
         ("resumeDownload", "clientId"),

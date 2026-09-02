@@ -15,7 +15,7 @@ impl InteractiveSearchMutations {
         &self,
         ctx: &Context<'_>,
         #[graphql(
-            desc = "Title, optional series-movie link, season, episode, and result limit for the search."
+            desc = "Either a title (with optional series-movie link, season and episode) or a raw query and kind, plus an optional indexer restriction, categories and result limit."
         )]
         input: SearchReleasesInput,
     ) -> GqlResult<InteractiveReleaseSearchPayload> {
@@ -27,13 +27,22 @@ impl InteractiveSearchMutations {
             season,
             episode,
             limit,
+            query,
+            kind,
+            indexer_ids,
+            categories,
         } = input;
         let request = scryer_application::InteractiveReleaseSearchRequest {
-            title_id: title_id.to_string(),
+            title_id: title_id.map(String::from),
             series_movie_link_id: series_movie_link_id.map(String::from),
             season,
             episode,
             limit,
+            query,
+            kind: kind.map(interactive_search_kind_from_value),
+            indexer_ids: indexer_ids
+                .map(|ids| ids.into_iter().map(String::from).collect::<Vec<_>>()),
+            categories,
         };
         let snapshot = app
             .start_interactive_release_search(&actor, request)
@@ -55,5 +64,50 @@ impl InteractiveSearchMutations {
             .await
             .map_err(to_gql_error)?;
         Ok(CancelInteractiveReleaseSearchPayload { id, accepted })
+    }
+
+    /// Mint a candidate token for one release of an interactive search, bound to the chosen title
+    /// and season/episode target, so it can be queued with the existing download mutations.
+    async fn issue_interactive_release_candidate_token(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(
+            desc = "Search job, release download URL, and the title (with optional season and episode) the release is assigned to."
+        )]
+        input: IssueInteractiveReleaseCandidateTokenInput,
+    ) -> GqlResult<IndexerSearchResultPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let IssueInteractiveReleaseCandidateTokenInput {
+            search_id,
+            download_url,
+            title_id,
+            season,
+            episode,
+        } = input;
+        let result = app
+            .issue_interactive_release_candidate_token(
+                &actor,
+                search_id.as_ref(),
+                &download_url,
+                title_id.as_ref(),
+                season,
+                episode,
+            )
+            .await
+            .map_err(to_gql_error)?;
+        Ok(crate::mappers::from_search_result(result))
+    }
+}
+
+/// GraphQL search kinds map one-to-one onto the application's.
+fn interactive_search_kind_from_value(
+    value: InteractiveSearchKindValue,
+) -> scryer_application::InteractiveSearchKind {
+    match value {
+        InteractiveSearchKindValue::Movie => scryer_application::InteractiveSearchKind::Movie,
+        InteractiveSearchKindValue::Series => scryer_application::InteractiveSearchKind::Series,
+        InteractiveSearchKindValue::Anime => scryer_application::InteractiveSearchKind::Anime,
+        InteractiveSearchKindValue::Raw => scryer_application::InteractiveSearchKind::Raw,
     }
 }

@@ -7706,6 +7706,10 @@ type IndexerSearchResultPayload {
 	"""
 	source: String!
 	"""
+	Indexer configuration identity that returned the release, or null when unknown.
+	"""
+	indexerId: ID
+	"""
 	Release title shown by the indexer.
 	"""
 	title: String!
@@ -7737,6 +7741,10 @@ type IndexerSearchResultPayload {
 	Negative vote count, or null when not reported.
 	"""
 	thumbsDown: Int
+	"""
+	Grab count reported by the indexer, or null when not reported.
+	"""
+	grabs: Int
 	"""
 	Parsed release fields, or null when parsing did not produce a result.
 	"""
@@ -7810,6 +7818,10 @@ type InteractiveReleaseSearchIndexerPayload {
 	"""
 	name: String!
 	"""
+	Routing priority for this indexer; 0 when routing states none.
+	"""
+	priority: Int!
+	"""
 	Current indexer lifecycle state.
 	"""
 	status: InteractiveReleaseSearchIndexerStatusValue!
@@ -7817,6 +7829,10 @@ type InteractiveReleaseSearchIndexerPayload {
 	The indexer's own result count (before cross-indexer dedup).
 	"""
 	resultCount: Int!
+	"""
+	Wall time of this indexer's own call in milliseconds, or null before it answered.
+	"""
+	elapsedMs: Int
 	"""
 	Failure reason, or null when the indexer did not fail.
 	"""
@@ -7895,6 +7911,55 @@ enum InteractiveReleaseSearchStateValue {
 	Search was canceled before completion.
 	"""
 	CANCELLED
+}
+
+"""
+What a title-less interactive search looks for; picks the search facet and
+the default newznab categories.
+"""
+enum InteractiveSearchKindValue {
+	"""
+	Movie facet search.
+	"""
+	MOVIE
+	"""
+	Series facet search.
+	"""
+	SERIES
+	"""
+	Anime facet search.
+	"""
+	ANIME
+	"""
+	Plain text search with no facet.
+	"""
+	RAW
+}
+
+"""
+Names one release of an interactive search to mint a candidate token for.
+"""
+input IssueInteractiveReleaseCandidateTokenInput {
+	"""
+	Interactive release-search job holding the release.
+	"""
+	searchId: ID!
+	"""
+	Download URL of the release as returned by that search.
+	"""
+	downloadUrl: String!
+	"""
+	Title identity the release is being assigned to.
+	"""
+	titleId: ID!
+	"""
+	Optional season label or number for an episode target.
+	"""
+	season: String
+	"""
+	Optional episode label or number for an episode target.
+	"""
+	episode: String
 }
 
 """
@@ -15357,7 +15422,7 @@ type MutationRoot {
 	"""
 	startInteractiveReleaseSearch(
 		"""
-		Title, optional series-movie link, season, episode, and result limit for the search.
+		Either a title (with optional series-movie link, season and episode) or a raw query and kind, plus an optional indexer restriction, categories and result limit.
 		"""
 		input: SearchReleasesInput!
 	): InteractiveReleaseSearchPayload!
@@ -15370,6 +15435,16 @@ type MutationRoot {
 		"""
 		id: ID!
 	): CancelInteractiveReleaseSearchPayload!
+	"""
+	Mint a candidate token for one release of an interactive search, bound to the chosen title
+	and season/episode target, so it can be queued with the existing download mutations.
+	"""
+	issueInteractiveReleaseCandidateToken(
+		"""
+		Search job, release download URL, and the title (with optional season and episode) the release is assigned to.
+		"""
+		input: IssueInteractiveReleaseCandidateTokenInput!
+	): IndexerSearchResultPayload!
 }
 
 """
@@ -19927,13 +20002,14 @@ enum ScoringPersonaValue {
 }
 
 """
-Filters for an interactive release search.
+Filters for an interactive release search. Exactly one of `titleId` and
+`query` names the subject.
 """
 input SearchReleasesInput {
 	"""
-	Title identity whose releases are searched.
+	Title identity whose releases are searched; required unless `query` is given.
 	"""
-	titleId: ID!
+	titleId: ID
 	"""
 	Optional series/movie link identity for an episodic movie target.
 	"""
@@ -19950,6 +20026,22 @@ input SearchReleasesInput {
 	Optional result limit; the resolver applies its own default and cap.
 	"""
 	limit: Int
+	"""
+	Raw operator query searched without a catalog title.
+	"""
+	query: String
+	"""
+	Search kind; required with `query`.
+	"""
+	kind: InteractiveSearchKindValue
+	"""
+	Optional indexer configuration identities to restrict the search to.
+	"""
+	indexerIds: [ID!]
+	"""
+	Optional newznab categories; the kind's defaults apply when omitted.
+	"""
+	categories: [String!]
 }
 
 """

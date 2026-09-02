@@ -63,6 +63,7 @@ pub fn from_search_result(result: IndexerSearchResult) -> IndexerSearchResultPay
 
     IndexerSearchResultPayload {
         source: result.source,
+        indexer_id: result.indexer_id.map(Into::into),
         title: result.title,
         link: result.link,
         download_url: result.download_url,
@@ -73,6 +74,7 @@ pub fn from_search_result(result: IndexerSearchResult) -> IndexerSearchResultPay
         published_at: parse_optional_datetime(result.published_at, "indexer search published_at"),
         thumbs_up: result.thumbs_up,
         thumbs_down: result.thumbs_down,
+        grabs: result.indexer_grabs.map(|grabs| grabs as i32),
         parsed_release: result.parsed_release_metadata.map(from_parsed_release),
         quality_profile_decision: result
             .quality_profile_decision

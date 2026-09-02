@@ -292,8 +292,6 @@ pub enum HashDomain {
     IndexerSearchIdentity,
     /// Interactive-search candidate identity within one session.
     CandidateSessionIdentity,
-    /// Job-scoped release identity inside a title-less indexer search.
-    IndexerSearchRelease,
 }
 
 impl HashDomain {
@@ -316,7 +314,6 @@ impl HashDomain {
             Self::IndexerQuerySignature => "scryer.indexer.query-signature.v1",
             Self::IndexerSearchIdentity => "scryer.indexer.search-identity.v1",
             Self::CandidateSessionIdentity => "scryer.indexer.candidate-session.v1",
-            Self::IndexerSearchRelease => "scryer.indexer.search-release.v1",
         }
     }
 }
