@@ -10,6 +10,8 @@
 use super::*;
 
 use crate::lib_tests::maintenance_evaluation::InMemoryMaintenanceEvaluationRepo;
+use crate::location::ownership_guard::OwnedEntity;
+use crate::location::test_support::InMemoryLocationOperationStore;
 use crate::lib_tests::maintenance_rules::{InMemoryMaintenanceRuleRepo, MaintenanceRuleReadFault};
 use crate::maintenance_rules::{
     MAINTENANCE_MAX_ACTION_ATTEMPTS, MaintenanceActionKind, MaintenanceActionSpec,
@@ -1157,4 +1159,125 @@ async fn a_blocked_candidate_is_retried_on_the_next_pass() {
         .expect("read title")
         .expect("title exists");
     assert!(stored.monitored);
+}
+
+// ── A title an operation owns is out of reach (FR-084) ──────────────────────
+
+fn execution_app_with_operations(
+    operations: Arc<InMemoryLocationOperationStore>,
+) -> ExecutionFixture {
+    let (app, user) = bootstrap();
+    let rules = Arc::new(InMemoryMaintenanceRuleRepo::default());
+    let evaluation = Arc::new(InMemoryMaintenanceEvaluationRepo::default());
+    let media_files = Arc::new(MockMediaFileRepo::default());
+    let app = app.with_test_overrides(|services| {
+        services
+            .with_maintenance_rule_set_store(rules.clone())
+            .with_maintenance_evaluation_store(evaluation.clone())
+            .with_media_files(media_files)
+            .with_location_operation_repository(operations)
+    });
+    ExecutionFixture {
+        app,
+        user,
+        rules,
+        evaluation,
+    }
+}
+
+#[tokio::test]
+async fn a_destructive_action_holds_while_a_location_operation_owns_the_title() {
+    let operations = Arc::new(InMemoryLocationOperationStore::new());
+    let fixture = execution_app_with_operations(operations.clone());
+    let rule_id = fixture.observed_rule(delete_draft()).await;
+    fixture.open_gates(true, true).await;
+    let title = seed_title(&fixture.app, &fixture.user, "Mid-move", true).await;
+    fixture.evaluate().await;
+    fixture
+        .arm(&rule_id, MaintenanceEffectArming::Destructive, Some(1))
+        .await;
+    operations
+        .claim_location_operation_ownership(
+            "operation-1",
+            &[OwnedEntity::Title(title.id.clone())],
+        )
+        .await
+        .expect("claim the title");
+
+    let report = fixture.handle().await;
+    assert_eq!(report.held, 1, "{report:?}");
+    assert_eq!(report.executed, 0);
+    assert!(
+        fixture
+            .app
+            .get_title(&fixture.user, &title.id)
+            .await
+            .expect("read title")
+            .is_some(),
+        "a held delete must not remove the title"
+    );
+    let candidate = fixture.only_candidate().await;
+    assert_eq!(candidate.state, MaintenanceCandidateState::Blocked);
+    assert_eq!(
+        candidate.state_reason,
+        execution_reason::LOCATION_OPERATION_HOLD
+    );
+    let runs = fixture.evaluation.all_action_runs().await;
+    assert_eq!(runs.len(), 1);
+    assert_eq!(
+        runs[0].hold_reason.as_deref(),
+        Some(execution_reason::LOCATION_OPERATION_HOLD)
+    );
+
+    // The operation releasing its claim is what lifts the hold: the next pass
+    // no longer holds for this reason.
+    operations
+        .release_location_operation_ownership("operation-1")
+        .await
+        .expect("release the claim");
+    fixture.evaluate().await;
+    let second = fixture.handle().await;
+    assert_eq!(second.held, 0, "{second:?}");
+    let candidate = fixture.only_candidate().await;
+    assert_ne!(
+        candidate.state_reason,
+        execution_reason::LOCATION_OPERATION_HOLD
+    );
+}
+
+#[tokio::test]
+async fn the_policy_delete_itself_refuses_a_title_a_location_operation_owns() {
+    let operations = Arc::new(InMemoryLocationOperationStore::new());
+    let fixture = execution_app_with_operations(operations.clone());
+    let title = seed_title(&fixture.app, &fixture.user, "Mid-move", true).await;
+    operations
+        .claim_location_operation_ownership(
+            "operation-1",
+            &[OwnedEntity::Title(title.id.clone())],
+        )
+        .await
+        .expect("claim the title");
+
+    let authorization = crate::PolicyDeleteAuthorization {
+        rule_set_id: "rule-1".to_string(),
+        candidate_id: "candidate-1".to_string(),
+        revision_number: 1,
+    };
+    let error = fixture
+        .app
+        .delete_title_by_policy(&fixture.user, &title.id, "unused", &authorization)
+        .await
+        .expect_err("an owned title must be refused before any fingerprint check");
+    assert!(
+        matches!(&error, AppError::Validation(message) if message.contains("location operation owns")),
+        "{error:?}"
+    );
+    assert!(
+        fixture
+            .app
+            .get_title(&fixture.user, &title.id)
+            .await
+            .expect("read title")
+            .is_some()
+    );
 }

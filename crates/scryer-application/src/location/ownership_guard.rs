@@ -442,6 +442,26 @@ pub const FOLDER_MATCH_ENTRY: GuardedEntry = GuardedEntry {
     constant: "FOLDER_MATCH_ENTRY",
 };
 
+/// The maintenance executor's policy delete, which does not route through
+/// [`TITLE_DELETE_ENTRY`]: a scheduled destructive action is a delete like any
+/// other, and a title an operation is mid-move stays out of its reach.
+pub const MAINTENANCE_DELETE_ENTRY: GuardedEntry = GuardedEntry {
+    action: GuardedAction::MaintenanceJob,
+    module: "catalog/workflow/delete.rs",
+    function: "delete_title_by_policy",
+    constant: "MAINTENANCE_DELETE_ENTRY",
+};
+
+/// The maintenance executor's pre-action recheck. A destructive candidate whose
+/// title an operation owns *holds* rather than fails — the operation releases
+/// its claim on every terminal path, so the action simply retries later.
+pub const MAINTENANCE_ACTION_ENTRY: GuardedEntry = GuardedEntry {
+    action: GuardedAction::MaintenanceJob,
+    module: "maintenance_rules/action_execution.rs",
+    function: "maintenance_execution_safety_checks",
+    constant: "MAINTENANCE_ACTION_ENTRY",
+};
+
 /// Every registered mutating entry point. A new one is added here and nowhere
 /// else; [`guarded_entries_are_wired`] fails when this list and the code drift.
 pub const GUARDED_ENTRIES: &[&GuardedEntry] = &[
@@ -457,6 +477,8 @@ pub const GUARDED_ENTRIES: &[&GuardedEntry] = &[
     &LIBRARY_DELETE_ENTRY,
     &RECYCLE_RESTORE_ENTRY,
     &FOLDER_MATCH_ENTRY,
+    &MAINTENANCE_DELETE_ENTRY,
+    &MAINTENANCE_ACTION_ENTRY,
 ];
 
 /// Actions that need no registered entry point because exclusivity is enforced
@@ -602,6 +624,18 @@ impl crate::AppUseCase {
             .await
     }
 
+    /// Title-scoped probe for a caller that holds rather than refuses.
+    /// `Ok(None)` means nothing owns the title.
+    pub(crate) async fn location_ownership_denial_for_title(
+        &self,
+        entry: &'static GuardedEntry,
+        title_id: &str,
+    ) -> AppResult<Option<LocationOwnershipDenied>> {
+        self.location_ownership_guard()
+            .check(entry, &[OwnedEntity::Title(title_id.to_string())])
+            .await
+    }
+
     /// Root-scoped shorthand covering every root a library configures.
     pub(crate) async fn ensure_location_ownership_allows_library_roots(
         &self,
@@ -705,6 +739,10 @@ mod tests {
         (
             "catalog/workflow/delete.rs",
             include_str!("../catalog/workflow/delete.rs"),
+        ),
+        (
+            "maintenance_rules/action_execution.rs",
+            include_str!("../maintenance_rules/action_execution.rs"),
         ),
         (
             "catalog/workflow/metadata.rs",
