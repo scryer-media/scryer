@@ -869,6 +869,7 @@ function AuthenticatedHomePage({
     smgScryerUpdateNotice,
     showSmgScryerUpdateReminder,
     dismissSmgScryerUpdateReminder,
+    refreshSmgNotices,
   } = useSmgNotices({
     settingsSubscriptionEnabled: canSubscribeToLibraryEvents,
   });
@@ -1378,6 +1379,18 @@ function AuthenticatedHomePage({
     canManageTitle,
     canRequestMedia,
   });
+  const runningScryerVersion = scryerVersion?.trim() ?? "";
+  const updateNoticeCurrentVersion =
+    smgScryerUpdateNotice?.currentVersion.trim() ?? "";
+  const updateNoticeMatchesRunningVersion =
+    !runningScryerVersion ||
+    !updateNoticeCurrentVersion ||
+    runningScryerVersion === updateNoticeCurrentVersion;
+  useEffect(() => {
+    if (!updateNoticeMatchesRunningVersion) {
+      void refreshSmgNotices({ force: true });
+    }
+  }, [refreshSmgNotices, updateNoticeMatchesRunningVersion]);
   const viewingBackupsSettings =
     view === "settings" && settingsSection === "backups";
   const globalSearchRouteCommands = useMemo(
@@ -1774,7 +1787,9 @@ function AuthenticatedHomePage({
                         />
                       ) : null}
 
-                      {showSmgScryerUpdateReminder && smgScryerUpdateNotice ? (
+                      {showSmgScryerUpdateReminder &&
+                      smgScryerUpdateNotice &&
+                      updateNoticeMatchesRunningVersion ? (
                         <SmgScryerUpdateBanner
                           canManageSystemSettings={canManageSystemSettings}
                           notice={smgScryerUpdateNotice}

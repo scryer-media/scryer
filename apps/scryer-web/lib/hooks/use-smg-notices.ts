@@ -257,5 +257,6 @@ export function useSmgNotices({
     smgScryerUpdateNotice,
     showSmgScryerUpdateReminder,
     dismissSmgScryerUpdateReminder,
+    refreshSmgNotices,
   };
 }
