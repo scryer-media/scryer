@@ -2070,7 +2070,7 @@ pub fn indexer_search_identity(
         "endpoint": config.base_url.trim().trim_end_matches('/'),
         "config": config_json,
         "secret_fingerprint": secret_fingerprint,
-        "proxy": config.indexer_proxy_config_id,
+        "proxy": config.proxy_config_id,
         "routing": search_relevant_managed_indexer_metadata(config.managed_metadata_json.as_deref()),
         "caps": caps,
         "search_semantics": search_semantics_version,
@@ -3823,7 +3823,7 @@ mod indexer_search_identity_tests {
             is_enabled: true,
             enable_interactive_search: true,
             enable_auto_search: true,
-            indexer_proxy_config_id: None,
+            proxy_config_id: None,
             download_client_id: None,
             seeding_profile_id: None,
             managed_parent_config_id: None,
@@ -3899,7 +3899,7 @@ mod indexer_search_identity_tests {
             },
             {
                 let mut value = original.clone();
-                value.indexer_proxy_config_id = Some("proxy-1".into());
+                value.proxy_config_id = Some("proxy-1".into());
                 value
             },
             {

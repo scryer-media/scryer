@@ -200,18 +200,18 @@ const ja: LocaleDictionary = {
   "settings.securitySaveFailed": "Failed to save security settings.",
   "settings.users": "ユーザー",
   "settings.indexers": "インデクサー",
-  "settings.indexerProxies": "インデクサープロキシ",
-  "settings.indexerProxyUsername": "ユーザー名",
-  "settings.indexerProxyPassword": "パスワード",
-  "settings.indexerProxyCredentialsStored": "認証情報あり",
-  "settings.indexerProxyCredentialUnchanged": "変更なし",
-  "settings.indexerProxyClearCredentials": "保存された認証情報を消去",
-  "settings.indexerProxyCredentialsHelp":
+  "settings.proxies": "インデクサープロキシ",
+  "settings.proxyUsername": "ユーザー名",
+  "settings.proxyPassword": "パスワード",
+  "settings.proxyCredentialsStored": "認証情報あり",
+  "settings.proxyCredentialUnchanged": "変更なし",
+  "settings.proxyClearCredentials": "保存された認証情報を消去",
+  "settings.proxyCredentialsHelp":
     "認証情報は暗号化して保存され、再表示されることはありません。プロキシに不要な場合は両方とも空のままにしてください。",
-  "settings.indexerProxyCredentialsStoredHelp":
+  "settings.proxyCredentialsStoredHelp":
     "このプロキシには認証情報が保存されています。そのまま残す場合は空欄にし、置き換える場合は新しい値を入力してください。",
-  "settings.indexerProxyRemoteDns": "DNS をプロキシで解決",
-  "settings.indexerProxyRemoteDnsHelp":
+  "settings.proxyRemoteDns": "DNS をプロキシで解決",
+  "settings.proxyRemoteDnsHelp":
     "DNS をプロキシで解決するのは socks5h の動作です。接続先ホスト名をこのマシンではなくプロキシが解決します。",
   "settings.qualityProfiles": "品質プロファイル",
   "settings.downloadClients": "ダウンロードクライアント",

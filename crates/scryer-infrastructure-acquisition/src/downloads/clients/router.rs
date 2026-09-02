@@ -4,26 +4,27 @@ use std::path::{Component, Path};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use super::native_download_client_http_client;
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use scryer_application::challenge_solver as solver;
-use scryer_application::indexer_transport_proxy as transport_proxy;
+use scryer_application::transport_proxy;
 use scryer_application::{
     AppError, AppResult, DownloadClient, DownloadClientAddRequest,
     DownloadClientCategorySnapshotStore, DownloadClientConfigRepository,
     DownloadClientFeedbackScope, DownloadClientPluginProvider, DownloadClientRemotePathMapping,
     DownloadClientSnapshotOutcome, DownloadClientStatus, DownloadGrabResult, DownloadSourceKind,
-    IndexerConfigRepository, IndexerPluginProvider, IndexerProxyConfigRepository,
-    PersistedSeedGoals, RateLimitCooldownAction, ResolvedDownloadArtifact, ResolvedSeedGoals,
-    SeedGoalRequest, SeedGoalResolver, SeedingProfileRepository, SettingsRepository, StagedNzbRef,
-    StagedNzbStore, accepted_inputs_for_client, apply_remote_path_mappings_to_completed_download,
+    IndexerConfigRepository, IndexerPluginProvider, PersistedSeedGoals, ProxyConfigRepository,
+    RateLimitCooldownAction, ResolvedDownloadArtifact, ResolvedSeedGoals, SeedGoalRequest,
+    SeedGoalResolver, SeedingProfileRepository, SettingsRepository, StagedNzbRef, StagedNzbStore,
+    accepted_inputs_for_client, apply_remote_path_mappings_to_completed_download,
     apply_remote_path_mappings_to_status, extract_magnet_info_hash, is_valid_magnet_uri,
     normalize_torrent_info_hash, parse_download_client_remote_path_mappings,
 };
-use scryer_domain::{DownloadClientConfig, DownloadQueueItem, IndexerProxyConfig, MediaFacet};
+use scryer_domain::{DownloadClientConfig, DownloadQueueItem, MediaFacet, ProxyConfig};
 use scryer_outbound_http::{
     AsyncOutboundHttpError, OutboundHttpClient, RateLimitRegistry, generic_reqwest_client,
-    indexer_proxy_reqwest_client, prepare_plugin_http_target, prepare_plugin_http_target_from_url,
+    prepare_plugin_http_target, prepare_plugin_http_target_from_url, proxy_reqwest_client,
     send_reqwest_request_with_cooldown_budget,
 };
 use tokio::sync::Semaphore;
@@ -317,7 +318,7 @@ struct FetchedDownloadArtifact {
 #[derive(Clone, Copy, Debug)]
 enum ArtifactFetchEgress<'a> {
     Direct,
-    TransportProxy(&'a IndexerProxyConfig),
+    TransportProxy(&'a ProxyConfig),
 }
 
 const DOWNLOAD_CLIENT_FEEDBACK_BACKOFF_INITIAL_SECS: u64 = 15;
@@ -393,7 +394,7 @@ fn normalize_completed_download_import_dir(item: &mut scryer_domain::CompletedDo
 pub struct PrioritizedDownloadClientRouter {
     download_client_configs: Arc<dyn DownloadClientConfigRepository>,
     indexer_configs: Option<Arc<dyn IndexerConfigRepository>>,
-    indexer_proxy_configs: Option<Arc<dyn IndexerProxyConfigRepository>>,
+    proxy_configs: Option<Arc<dyn ProxyConfigRepository>>,
     indexer_plugin_provider: Option<Arc<dyn IndexerPluginProvider>>,
     settings: Arc<dyn SettingsRepository>,
     staged_nzb_store: Arc<dyn StagedNzbStore>,
@@ -883,7 +884,7 @@ impl PrioritizedDownloadClientRouter {
         Self {
             download_client_configs,
             indexer_configs: None,
-            indexer_proxy_configs: None,
+            proxy_configs: None,
             indexer_plugin_provider: None,
             settings,
             staged_nzb_store,
@@ -900,10 +901,10 @@ impl PrioritizedDownloadClientRouter {
     pub fn with_indexer_config_repositories(
         mut self,
         indexer_configs: Arc<dyn IndexerConfigRepository>,
-        indexer_proxy_configs: Arc<dyn IndexerProxyConfigRepository>,
+        proxy_configs: Arc<dyn ProxyConfigRepository>,
     ) -> Self {
         self.indexer_configs = Some(indexer_configs);
-        self.indexer_proxy_configs = Some(indexer_proxy_configs);
+        self.proxy_configs = Some(proxy_configs);
         self
     }
 
@@ -1019,6 +1020,17 @@ impl PrioritizedDownloadClientRouter {
         Fut: Future<Output = AppResult<T>> + Send,
     {
         let category_snapshot = self.category_snapshot_store.snapshot().await;
+        // Proxy assignments are resolved up front: the client build below runs
+        // inside a synchronous closure and cannot await, and an unresolvable
+        // assignment has to skip the client rather than read it unproxied.
+        let mut proxy_configs_by_client: HashMap<String, AppResult<Option<ProxyConfig>>> =
+            HashMap::new();
+        for config in &clients {
+            proxy_configs_by_client.insert(
+                config.id.clone(),
+                self.proxy_for_download_client(config).await,
+            );
+        }
         let reads = clients
             .into_iter()
             .enumerate()
@@ -1034,12 +1046,26 @@ impl PrioritizedDownloadClientRouter {
                     return None;
                 }
 
+                let proxy_config = match proxy_configs_by_client.get(&config.id) {
+                    Some(Ok(proxy_config)) => proxy_config.clone(),
+                    Some(Err(error)) => {
+                        tracing::warn!(
+                            client_id = %config.id,
+                            error = %error,
+                            operation,
+                            "skipping client for feedback read: assigned proxy is unusable"
+                        );
+                        return None;
+                    }
+                    None => None,
+                };
                 let client = match Self::client_from_config(
                     &config,
                     self.staged_nzb_store.clone(),
                     self.staged_nzb_pipeline_limit.clone(),
                     self.plugin_provider.as_ref(),
                     self.feedback_read_timeout,
+                    proxy_config.as_ref(),
                 ) {
                     Ok(client) => client,
                     Err(error) => {
@@ -1316,7 +1342,7 @@ impl PrioritizedDownloadClientRouter {
         // solver owns the indexer URL. Unlabelled HTTP is conservatively
         // treated as a torrent artifact, matching the adapter's historical
         // default and ensuring download clients never fetch arbitrary URLs.
-        let has_proxy = indexer.and_then(|value| value.indexer_proxy_config_id.as_deref());
+        let has_proxy = indexer.and_then(|value| value.proxy_config_id.as_deref());
         if has_proxy.is_none()
             && (request.staged_nzb.is_some()
                 || matches!(
@@ -1330,13 +1356,13 @@ impl PrioritizedDownloadClientRouter {
         // the indexer-owned grab below need it, and a misconfigured proxy must
         // fail the same way whichever path ends up resolving the artifact.
         let proxy_config = if let Some((indexer, proxy_config_id)) = indexer.zip(has_proxy) {
-            let Some(indexer_proxy_configs) = self.indexer_proxy_configs.as_ref() else {
+            let Some(proxy_configs) = self.proxy_configs.as_ref() else {
                 return Err(AppError::download_submit_unavailable(format!(
-                    "indexer {} routing is unavailable: indexer proxy repository is not wired",
+                    "indexer {} routing is unavailable: proxy repository is not wired",
                     indexer.id
                 )));
             };
-            let proxy_config = indexer_proxy_configs
+            let proxy_config = proxy_configs
                 .get_by_id(proxy_config_id)
                 .await
                 .map_err(|error| {
@@ -1401,9 +1427,12 @@ impl PrioritizedDownloadClientRouter {
                 )?,
             );
         };
-        let artifact_result = if proxy_config.is_transport() {
+        let artifact_result = if !proxy_config.is_challenge_solver() {
             // A transport proxy solves nothing: this is the direct fetch above,
-            // dialled through the operator's proxy instead of straight out.
+            // dialled through the operator's proxy instead of straight out. A
+            // tunnel takes the same arm and fails there until its engine
+            // exists, rather than being handed to the solver path or fetched
+            // directly.
             self.resolve_download_artifact_via_transport_proxy(
                 &proxy_config,
                 download_url,
@@ -1411,14 +1440,14 @@ impl PrioritizedDownloadClientRouter {
             )
             .await
         } else {
-            self.resolve_download_artifact_via_indexer_proxy(
+            self.resolve_download_artifact_via_proxy(
                 &proxy_config,
                 download_url,
                 request.info_hash_hint.clone(),
             )
             .await
         };
-        if let Some(repo) = self.indexer_proxy_configs.as_ref() {
+        if let Some(repo) = self.proxy_configs.as_ref() {
             solver::flush_solver_health(repo.as_ref()).await;
         }
         let artifact = artifact_result?;
@@ -1431,7 +1460,7 @@ impl PrioritizedDownloadClientRouter {
     /// the unproxied arm — only the egress client differs.
     async fn resolve_download_artifact_via_transport_proxy(
         &self,
-        proxy_config: &IndexerProxyConfig,
+        proxy_config: &ProxyConfig,
         download_url: &str,
         info_hash_hint: Option<String>,
     ) -> AppResult<ResolvedDownloadArtifact> {
@@ -1441,7 +1470,7 @@ impl PrioritizedDownloadClientRouter {
                 provider_name,
                 download_url,
                 &[],
-                scryer_outbound_http::effective_indexer_proxy_request_timeout(
+                scryer_outbound_http::effective_proxy_request_timeout(
                     proxy_config.request_timeout_seconds,
                 ),
                 ArtifactFetchEgress::TransportProxy(proxy_config),
@@ -1486,9 +1515,9 @@ impl PrioritizedDownloadClientRouter {
         Ok(prepared)
     }
 
-    async fn resolve_download_artifact_via_indexer_proxy(
+    async fn resolve_download_artifact_via_proxy(
         &self,
-        proxy_config: &IndexerProxyConfig,
+        proxy_config: &ProxyConfig,
         download_url: &str,
         info_hash_hint: Option<String>,
     ) -> AppResult<ResolvedDownloadArtifact> {
@@ -1521,7 +1550,7 @@ impl PrioritizedDownloadClientRouter {
                 provider_name,
                 download_url,
                 &session_headers,
-                scryer_outbound_http::effective_indexer_proxy_request_timeout(
+                scryer_outbound_http::effective_proxy_request_timeout(
                     proxy_config.request_timeout_seconds,
                 ),
             )
@@ -1565,14 +1594,14 @@ impl PrioritizedDownloadClientRouter {
         }
 
         let endpoint = solver::solver_solve_endpoint(&proxy_config.base_url);
-        let solver_timeout = scryer_outbound_http::effective_indexer_proxy_request_timeout(
+        let solver_timeout = scryer_outbound_http::effective_proxy_request_timeout(
             proxy_config.request_timeout_seconds,
         );
         let solver_deadline = tokio::time::Instant::now() + solver_timeout;
         let response = tokio::time::timeout_at(
             solver_deadline,
             send_reqwest_request_with_cooldown_budget(
-                indexer_proxy_reqwest_client()
+                proxy_reqwest_client()
                     .post(endpoint)
                     .timeout(solver_timeout)
                     .json(&solver::solver_solve_request(
@@ -1684,7 +1713,7 @@ impl PrioritizedDownloadClientRouter {
                     provider_name,
                     download_url,
                     &retry_headers,
-                    scryer_outbound_http::effective_indexer_proxy_request_timeout(
+                    scryer_outbound_http::effective_proxy_request_timeout(
                         proxy_config.request_timeout_seconds,
                     ),
                 )
@@ -1718,7 +1747,7 @@ impl PrioritizedDownloadClientRouter {
                     provider_name,
                     download_url,
                     &retry_headers,
-                    scryer_outbound_http::effective_indexer_proxy_request_timeout(
+                    scryer_outbound_http::effective_proxy_request_timeout(
                         proxy_config.request_timeout_seconds,
                     ),
                 )
@@ -1753,7 +1782,7 @@ impl PrioritizedDownloadClientRouter {
                         provider_name,
                         download_url,
                         &retry_headers,
-                        scryer_outbound_http::effective_indexer_proxy_request_timeout(
+                        scryer_outbound_http::effective_proxy_request_timeout(
                             proxy_config.request_timeout_seconds,
                         ),
                     )
@@ -2674,18 +2703,67 @@ impl PrioritizedDownloadClientRouter {
         }
     }
 
+    /// Load the proxy assigned to a download client.
+    ///
+    /// Fail-closed: an assignment that cannot be resolved (no repository, a
+    /// deleted proxy, a disabled proxy) is an error, never "carry on
+    /// unproxied". This mirrors how the indexer path resolves its own proxy in
+    /// `prepare_download_request`.
+    async fn proxy_for_download_client(
+        &self,
+        config: &DownloadClientConfig,
+    ) -> AppResult<Option<ProxyConfig>> {
+        let Some(proxy_config_id) = config
+            .proxy_config_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+        else {
+            return Ok(None);
+        };
+        let Some(proxy_configs) = self.proxy_configs.as_ref() else {
+            return Err(AppError::Validation(format!(
+                "download client {} is assigned a proxy but the proxy repository is not wired",
+                config.id
+            )));
+        };
+        let proxy_config = proxy_configs
+            .get_by_id(proxy_config_id)
+            .await?
+            .ok_or_else(|| {
+                AppError::Validation(format!(
+                    "download client {} references proxy configuration {proxy_config_id}, which was not found",
+                    config.id
+                ))
+            })?;
+        if !proxy_config.is_enabled {
+            return Err(AppError::Validation(format!(
+                "download client {} is assigned proxy {proxy_config_id}, which is disabled",
+                config.id
+            )));
+        }
+        Ok(Some(proxy_config))
+    }
+
     fn client_from_config(
         config: &DownloadClientConfig,
         staged_nzb_store: Arc<dyn StagedNzbStore>,
         staged_nzb_pipeline_limit: Arc<Semaphore>,
         plugin_provider: Option<&Arc<dyn DownloadClientPluginProvider>>,
         feedback_read_timeout: Duration,
+        proxy_config: Option<&ProxyConfig>,
     ) -> AppResult<Arc<dyn DownloadClient>> {
         if let Some(provider) = plugin_provider
-            && let Some(client) = provider.client_for_config(config)
+            && let Some(client) = provider.client_for_config_with_proxy(config, proxy_config)
         {
             return Ok(Self::wrap_feedback_client(client, feedback_read_timeout));
         }
+
+        // Native clients build their own reqwest client, so the proxy has to be
+        // attached here rather than in the plugin HTTP host. A tunnel fails to
+        // build, which stops the client being created at all rather than
+        // creating one that egresses directly.
+        let http_client = native_download_client_http_client(&config.name, proxy_config)?;
 
         let client = match config.client_type.as_str() {
             "nzbget" => {
@@ -2708,7 +2786,8 @@ impl PrioritizedDownloadClientRouter {
                     dupe_mode,
                     staged_nzb_store,
                     staged_nzb_pipeline_limit,
-                );
+                )
+                .with_http_client(http_client);
                 Self::wrap_feedback_client(Arc::new(client), feedback_read_timeout)
             }
             "sabnzbd" => {
@@ -2736,7 +2815,8 @@ impl PrioritizedDownloadClientRouter {
                     password,
                     staged_nzb_store,
                     staged_nzb_pipeline_limit,
-                );
+                )
+                .with_http_client(http_client);
                 Self::wrap_feedback_client(Arc::new(client), feedback_read_timeout)
             }
             "weaver" => {
@@ -2744,7 +2824,8 @@ impl PrioritizedDownloadClientRouter {
                     config,
                     staged_nzb_store,
                     staged_nzb_pipeline_limit,
-                )?;
+                )?
+                .with_http_client(http_client);
                 Self::wrap_feedback_client(Arc::new(client), feedback_read_timeout)
             }
             _ => {
@@ -2770,12 +2851,26 @@ impl PrioritizedDownloadClientRouter {
 
         let mut clients = Vec::new();
         for config in configs {
+            let proxy_config = match self.proxy_for_download_client(&config).await {
+                Ok(proxy_config) => proxy_config,
+                Err(error) => {
+                    warn!(
+                        routing_mode = "automatic",
+                        client_id = config.id.as_str(),
+                        client_name = config.name.as_str(),
+                        error = %error,
+                        "download client skipped while routing queue action: assigned proxy is unusable"
+                    );
+                    continue;
+                }
+            };
             match Self::client_from_config(
                 &config,
                 self.staged_nzb_store.clone(),
                 self.staged_nzb_pipeline_limit.clone(),
                 self.plugin_provider.as_ref(),
                 self.feedback_read_timeout,
+                proxy_config.as_ref(),
             ) {
                 Ok(client) => clients.push((config, client)),
                 Err(error) => {
@@ -2847,12 +2942,14 @@ impl PrioritizedDownloadClientRouter {
                 continue;
             }
 
+            let proxy_config = self.proxy_for_download_client(&config).await?;
             return Self::client_from_config(
                 &config,
                 self.staged_nzb_store.clone(),
                 self.staged_nzb_pipeline_limit.clone(),
                 self.plugin_provider.as_ref(),
                 self.feedback_read_timeout,
+                proxy_config.as_ref(),
             )
             .map(Some);
         }
@@ -2879,12 +2976,14 @@ impl PrioritizedDownloadClientRouter {
                 continue;
             }
 
+            let proxy_config = self.proxy_for_download_client(&config).await?;
             return Self::client_from_config(
                 &config,
                 self.staged_nzb_store.clone(),
                 self.staged_nzb_pipeline_limit.clone(),
                 self.plugin_provider.as_ref(),
                 self.feedback_read_timeout,
+                proxy_config.as_ref(),
             )
             .map(Some);
         }
@@ -3233,12 +3332,16 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
                 effective_scope = Self::routing_scope_label(selection.routing.as_ref()),
                 "selected download client route"
             );
+            // Fail-closed: a selected client whose proxy will not resolve is a
+            // routing failure, not a client to use unproxied.
+            let proxy_config = self.proxy_for_download_client(&config).await?;
             let client = match Self::client_from_config(
                 &config,
                 self.staged_nzb_store.clone(),
                 self.staged_nzb_pipeline_limit.clone(),
                 self.plugin_provider.as_ref(),
                 self.feedback_read_timeout,
+                proxy_config.as_ref(),
             ) {
                 Ok(client) => client,
                 Err(error) => {
@@ -4334,12 +4437,14 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
             return Ok(None);
         };
 
+        let proxy_config = self.proxy_for_download_client(config).await?;
         let client = Self::client_from_config(
             config,
             self.staged_nzb_store.clone(),
             self.staged_nzb_pipeline_limit.clone(),
             self.plugin_provider.as_ref(),
             self.feedback_read_timeout,
+            proxy_config.as_ref(),
         )?;
         let started_at = Instant::now();
         match client
@@ -4492,12 +4597,14 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
             .ok_or_else(|| {
                 AppError::Validation(format!("download client not found: {client_id}"))
             })?;
+        let proxy_config = self.proxy_for_download_client(&config).await?;
         let client = Self::client_from_config(
             &config,
             self.staged_nzb_store.clone(),
             self.staged_nzb_pipeline_limit.clone(),
             self.plugin_provider.as_ref(),
             self.feedback_read_timeout,
+            proxy_config.as_ref(),
         )?;
         let mut status = client.get_client_status().await?;
         let mappings = download_client_remote_path_mappings(&config);
@@ -4650,7 +4757,7 @@ mod tests {
             is_enabled: true,
             enable_interactive_search: true,
             enable_auto_search: true,
-            indexer_proxy_config_id: None,
+            proxy_config_id: None,
             download_client_id: None,
             seeding_profile_id: None,
             managed_parent_config_id: None,
@@ -4771,11 +4878,11 @@ mod tests {
     }
 
     fn transport_proxy_config(
-        provider_type: scryer_domain::IndexerProxyProviderType,
+        provider_type: scryer_domain::ProxyProviderType,
         base_url: String,
-    ) -> IndexerProxyConfig {
+    ) -> ProxyConfig {
         let now = chrono::Utc::now();
-        IndexerProxyConfig {
+        ProxyConfig {
             id: "transport-1".to_string(),
             name: "House VPN".to_string(),
             provider_type,
@@ -4791,6 +4898,10 @@ mod tests {
             last_error_at: None,
             created_at: now,
             updated_at: now,
+            host_key_fingerprint: None,
+            host_key_pinned_at: None,
+            private_key_encrypted: None,
+            private_key_passphrase_encrypted: None,
         }
     }
 
@@ -4849,7 +4960,7 @@ mod tests {
     async fn artifact_fetch_egresses_through_an_assigned_transport_proxy() {
         let (proxy_url, seen) = spawn_recording_artifact_proxy(b"d4:infod4:name4:testee").await;
         let proxy_config =
-            transport_proxy_config(scryer_domain::IndexerProxyProviderType::Http, proxy_url);
+            transport_proxy_config(scryer_domain::ProxyProviderType::Http, proxy_url);
 
         let artifact = no_client_router()
             .resolve_download_artifact_via_transport_proxy(
@@ -4877,7 +4988,7 @@ mod tests {
     #[tokio::test]
     async fn an_unreachable_transport_proxy_names_itself_rather_than_the_indexer() {
         let proxy_config = transport_proxy_config(
-            scryer_domain::IndexerProxyProviderType::Socks5,
+            scryer_domain::ProxyProviderType::Socks5,
             "socks5://127.0.0.1:1".to_string(),
         );
 
@@ -4894,6 +5005,55 @@ mod tests {
         assert!(
             message.contains("proxy House VPN unreachable:"),
             "the failure must name the proxy, got: {message}"
+        );
+    }
+
+    /// A tunnel-assigned artifact fetch must fail, not fall back to a direct
+    /// one. The destination is a live server here, so a dropped assignment
+    /// would show up as a successful download.
+    #[tokio::test]
+    async fn a_tunnel_proxy_fails_closed_on_an_artifact_fetch() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let origin = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "application/x-bittorrent")
+                    .set_body_bytes(b"d4:infod4:name4:testee"),
+            )
+            .mount(&origin)
+            .await;
+
+        let mut proxy_config = transport_proxy_config(
+            scryer_domain::ProxyProviderType::SshTunnel,
+            "ssh://seedbox.test:22".to_string(),
+        );
+        proxy_config.username_encrypted = Some("operator".to_string());
+        proxy_config.password_encrypted = Some("s3cret".to_string());
+
+        let error = no_client_router()
+            .resolve_download_artifact_via_transport_proxy(
+                &proxy_config,
+                &format!("{}/download?id=1", origin.uri()),
+                None,
+            )
+            .await
+            .expect_err("a tunnel with no engine must fail the fetch");
+
+        let message = error.to_string();
+        assert!(
+            message.contains("proxy House VPN unreachable: tunnel engine not available"),
+            "the failure must name the proxy and the missing engine, got: {message}"
+        );
+        assert!(
+            origin
+                .received_requests()
+                .await
+                .unwrap_or_default()
+                .is_empty(),
+            "the artifact must never be fetched directly when a tunnel is assigned"
         );
     }
 
@@ -5204,10 +5364,10 @@ mod tests {
             .await;
 
         let now = Utc::now();
-        let proxy = IndexerProxyConfig {
+        let proxy = ProxyConfig {
             id: "trawl-1".into(),
             name: "Trawl".into(),
-            provider_type: scryer_domain::IndexerProxyProviderType::Trawl,
+            provider_type: scryer_domain::ProxyProviderType::Trawl,
             protocol: Some(scryer_domain::ChallengeSolverProtocol::RequestSolutionV1),
             username_encrypted: None,
             password_encrypted: None,
@@ -5220,10 +5380,14 @@ mod tests {
             last_error_at: None,
             created_at: now,
             updated_at: now,
+            host_key_fingerprint: None,
+            host_key_pinned_at: None,
+            private_key_encrypted: None,
+            private_key_passphrase_encrypted: None,
         };
 
         let artifact = no_client_router()
-            .resolve_download_artifact_via_indexer_proxy(&proxy, &download_url, None)
+            .resolve_download_artifact_via_proxy(&proxy, &download_url, None)
             .await
             .expect("Trawl should resolve embedded NZB content");
 
@@ -5241,7 +5405,7 @@ mod tests {
                 .headers
                 .get("user-agent")
                 .and_then(|value| value.to_str().ok()),
-            Some(scryer_outbound_http::INDEXER_PROXY_USER_AGENT)
+            Some(scryer_outbound_http::PROXY_USER_AGENT)
         );
     }
 
@@ -5265,10 +5429,10 @@ mod tests {
             .await;
 
         let now = Utc::now();
-        let proxy = IndexerProxyConfig {
+        let proxy = ProxyConfig {
             id: "trawl-direct-first".into(),
             name: "Trawl".into(),
-            provider_type: scryer_domain::IndexerProxyProviderType::Trawl,
+            provider_type: scryer_domain::ProxyProviderType::Trawl,
             protocol: Some(scryer_domain::ChallengeSolverProtocol::RequestSolutionV1),
             username_encrypted: None,
             password_encrypted: None,
@@ -5281,10 +5445,14 @@ mod tests {
             last_error_at: None,
             created_at: now,
             updated_at: now,
+            host_key_fingerprint: None,
+            host_key_pinned_at: None,
+            private_key_encrypted: None,
+            private_key_passphrase_encrypted: None,
         };
 
         let artifact = no_client_router()
-            .resolve_download_artifact_via_indexer_proxy(&proxy, &download_url, None)
+            .resolve_download_artifact_via_proxy(&proxy, &download_url, None)
             .await
             .expect("direct artifact should bypass Trawl");
 
@@ -5342,10 +5510,10 @@ mod tests {
             .await;
 
         let now = Utc::now();
-        let proxy = IndexerProxyConfig {
+        let proxy = ProxyConfig {
             id: "trawl-1".into(),
             name: "Trawl".into(),
-            provider_type: scryer_domain::IndexerProxyProviderType::Trawl,
+            provider_type: scryer_domain::ProxyProviderType::Trawl,
             protocol: Some(scryer_domain::ChallengeSolverProtocol::RequestSolutionV1),
             username_encrypted: None,
             password_encrypted: None,
@@ -5358,10 +5526,14 @@ mod tests {
             last_error_at: None,
             created_at: now,
             updated_at: now,
+            host_key_fingerprint: None,
+            host_key_pinned_at: None,
+            private_key_encrypted: None,
+            private_key_passphrase_encrypted: None,
         };
 
         let artifact = no_client_router()
-            .resolve_download_artifact_via_indexer_proxy(&proxy, &download_url, None)
+            .resolve_download_artifact_via_proxy(&proxy, &download_url, None)
             .await
             .expect("Trawl should refetch binary torrent content");
 
@@ -5414,10 +5586,10 @@ mod tests {
             .await;
 
         let now = Utc::now();
-        let proxy = IndexerProxyConfig {
+        let proxy = ProxyConfig {
             id: "byparr-refetch".into(),
             name: "Byparr".into(),
-            provider_type: scryer_domain::IndexerProxyProviderType::Byparr,
+            provider_type: scryer_domain::ProxyProviderType::Byparr,
             protocol: Some(scryer_domain::ChallengeSolverProtocol::RequestSolutionV1),
             username_encrypted: None,
             password_encrypted: None,
@@ -5430,10 +5602,14 @@ mod tests {
             last_error_at: None,
             created_at: now,
             updated_at: now,
+            host_key_fingerprint: None,
+            host_key_pinned_at: None,
+            private_key_encrypted: None,
+            private_key_passphrase_encrypted: None,
         };
 
         let artifact = no_client_router()
-            .resolve_download_artifact_via_indexer_proxy(&proxy, &download_url, None)
+            .resolve_download_artifact_via_proxy(&proxy, &download_url, None)
             .await
             .expect("Byparr should refetch the NZB with its clearance session");
 
@@ -5473,10 +5649,10 @@ mod tests {
             .await;
 
         let now = Utc::now();
-        let proxy = IndexerProxyConfig {
+        let proxy = ProxyConfig {
             id: "trawl-unavailable".into(),
             name: "Trawl".into(),
-            provider_type: scryer_domain::IndexerProxyProviderType::Trawl,
+            provider_type: scryer_domain::ProxyProviderType::Trawl,
             protocol: Some(scryer_domain::ChallengeSolverProtocol::RequestSolutionV1),
             username_encrypted: None,
             password_encrypted: None,
@@ -5489,10 +5665,14 @@ mod tests {
             last_error_at: None,
             created_at: now,
             updated_at: now,
+            host_key_fingerprint: None,
+            host_key_pinned_at: None,
+            private_key_encrypted: None,
+            private_key_passphrase_encrypted: None,
         };
 
         let error = no_client_router()
-            .resolve_download_artifact_via_indexer_proxy(&proxy, &download_url, None)
+            .resolve_download_artifact_via_proxy(&proxy, &download_url, None)
             .await
             .expect_err("Trawl server errors must fail as solver unavailable");
 
@@ -5540,10 +5720,10 @@ mod tests {
         let router = no_client_router();
         let now = Utc::now();
         for provider_type in [
-            scryer_domain::IndexerProxyProviderType::Byparr,
-            scryer_domain::IndexerProxyProviderType::Trawl,
+            scryer_domain::ProxyProviderType::Byparr,
+            scryer_domain::ProxyProviderType::Trawl,
         ] {
-            let proxy = IndexerProxyConfig {
+            let proxy = ProxyConfig {
                 id: format!("{}-1", provider_type.as_str()),
                 name: solver::solver_provider_name(provider_type).to_string(),
                 provider_type,
@@ -5559,6 +5739,10 @@ mod tests {
                 last_error_at: None,
                 created_at: now,
                 updated_at: now,
+                host_key_fingerprint: None,
+                host_key_pinned_at: None,
+                private_key_encrypted: None,
+                private_key_passphrase_encrypted: None,
             };
             for target in [
                 "http://169.254.169.254/latest/meta-data/",
@@ -5584,7 +5768,7 @@ mod tests {
                 );
 
                 let error = match router
-                    .resolve_download_artifact_via_indexer_proxy(&proxy, target, None)
+                    .resolve_download_artifact_via_proxy(&proxy, target, None)
                     .await
                 {
                     Ok(_) => panic!("metadata destination must not be delegated to the solver"),
@@ -5756,35 +5940,32 @@ mod tests {
         }
     }
 
-    struct EmptyIndexerProxyConfigRepository;
+    struct EmptyProxyConfigRepository;
 
     #[async_trait]
-    impl IndexerProxyConfigRepository for EmptyIndexerProxyConfigRepository {
+    impl ProxyConfigRepository for EmptyProxyConfigRepository {
         async fn list(
             &self,
-            _provider_type: Option<scryer_domain::IndexerProxyProviderType>,
-        ) -> AppResult<Vec<scryer_domain::IndexerProxyConfig>> {
+            _provider_type: Option<scryer_domain::ProxyProviderType>,
+        ) -> AppResult<Vec<scryer_domain::ProxyConfig>> {
             Ok(Vec::new())
         }
 
-        async fn get_by_id(
-            &self,
-            _id: &str,
-        ) -> AppResult<Option<scryer_domain::IndexerProxyConfig>> {
+        async fn get_by_id(&self, _id: &str) -> AppResult<Option<scryer_domain::ProxyConfig>> {
             Ok(None)
         }
 
         async fn create(
             &self,
-            config: scryer_domain::IndexerProxyConfig,
-        ) -> AppResult<scryer_domain::IndexerProxyConfig> {
+            config: scryer_domain::ProxyConfig,
+        ) -> AppResult<scryer_domain::ProxyConfig> {
             Ok(config)
         }
 
         async fn update(
             &self,
-            config: scryer_domain::IndexerProxyConfig,
-        ) -> AppResult<scryer_domain::IndexerProxyConfig> {
+            config: scryer_domain::ProxyConfig,
+        ) -> AppResult<scryer_domain::ProxyConfig> {
             Ok(config)
         }
 
@@ -5795,10 +5976,23 @@ mod tests {
         async fn record_health(
             &self,
             _id: &str,
-            _status: scryer_domain::IndexerProxyHealthStatus,
+            _status: scryer_domain::ProxyHealthStatus,
             _error_message: Option<String>,
             _error_at: Option<chrono::DateTime<chrono::Utc>>,
         ) -> AppResult<()> {
+            Ok(())
+        }
+
+        async fn pin_host_key(
+            &self,
+            _id: &str,
+            _fingerprint: &str,
+            _pinned_at: chrono::DateTime<chrono::Utc>,
+        ) -> AppResult<()> {
+            Ok(())
+        }
+
+        async fn clear_host_key(&self, _id: &str) -> AppResult<()> {
             Ok(())
         }
     }
@@ -6343,6 +6537,7 @@ mod tests {
             client_priority: priority,
             created_at: Utc::now(),
             updated_at: Utc::now(),
+            proxy_config_id: None,
         }
     }
 
@@ -6453,7 +6648,7 @@ mod tests {
             Arc::new(RoutingIndexerConfigRepository {
                 configs: vec![indexer],
             }),
-            Arc::new(EmptyIndexerProxyConfigRepository),
+            Arc::new(EmptyProxyConfigRepository),
         );
 
         let mut request = DownloadClientAddRequest::from_legacy(
@@ -6509,7 +6704,7 @@ mod tests {
             Arc::new(RoutingIndexerConfigRepository {
                 configs: vec![test_indexer_config("https://indexer.example/api")],
             }),
-            Arc::new(EmptyIndexerProxyConfigRepository),
+            Arc::new(EmptyProxyConfigRepository),
         );
         let mut request = DownloadClientAddRequest::from_legacy(
             &test_title(),
@@ -6590,7 +6785,7 @@ mod tests {
             Arc::new(RoutingIndexerConfigRepository {
                 configs: Vec::new(),
             }),
-            Arc::new(EmptyIndexerProxyConfigRepository),
+            Arc::new(EmptyProxyConfigRepository),
         );
         let mut request = DownloadClientAddRequest::from_legacy(
             &test_title(),
@@ -6647,7 +6842,7 @@ mod tests {
             Arc::new(RoutingIndexerConfigRepository {
                 configs: vec![indexer],
             }),
-            Arc::new(EmptyIndexerProxyConfigRepository),
+            Arc::new(EmptyProxyConfigRepository),
         );
 
         let mut request = DownloadClientAddRequest::from_legacy(
@@ -6708,7 +6903,7 @@ mod tests {
             Arc::new(RoutingIndexerConfigRepository {
                 configs: vec![indexer],
             }),
-            Arc::new(EmptyIndexerProxyConfigRepository),
+            Arc::new(EmptyProxyConfigRepository),
         );
         let mut request = DownloadClientAddRequest::from_legacy(
             &test_title(),
@@ -6754,7 +6949,7 @@ mod tests {
             Arc::new(RoutingIndexerConfigRepository {
                 configs: vec![indexer],
             }),
-            Arc::new(EmptyIndexerProxyConfigRepository),
+            Arc::new(EmptyProxyConfigRepository),
         );
 
         let mut request = DownloadClientAddRequest::from_legacy(
@@ -6821,7 +7016,7 @@ mod tests {
             Arc::new(RoutingIndexerConfigRepository {
                 configs: vec![indexer],
             }),
-            Arc::new(EmptyIndexerProxyConfigRepository),
+            Arc::new(EmptyProxyConfigRepository),
         );
 
         let mut request = DownloadClientAddRequest::from_legacy(
@@ -6887,7 +7082,7 @@ mod tests {
             Arc::new(RoutingIndexerConfigRepository {
                 configs: vec![indexer],
             }),
-            Arc::new(EmptyIndexerProxyConfigRepository),
+            Arc::new(EmptyProxyConfigRepository),
         );
 
         let mut request = DownloadClientAddRequest::from_legacy(
@@ -6954,7 +7149,7 @@ mod tests {
             Arc::new(RoutingIndexerConfigRepository {
                 configs: vec![indexer],
             }),
-            Arc::new(EmptyIndexerProxyConfigRepository),
+            Arc::new(EmptyProxyConfigRepository),
         );
 
         let mut request = DownloadClientAddRequest::from_legacy(
@@ -8105,7 +8300,7 @@ mod tests {
                     ..test_indexer_config("https://indexer.invalid")
                 }],
             }),
-            Arc::new(EmptyIndexerProxyConfigRepository),
+            Arc::new(EmptyProxyConfigRepository),
         )
         .with_seed_goal_resolution(Arc::new(MockSeedingProfileRepository {
             profiles: vec![

@@ -456,6 +456,7 @@ async fn serialized_writer_handles_download_client_reorder() {
         last_seen_at: None,
         created_at: now,
         updated_at: now,
+        proxy_config_id: None,
     };
     let client_b = DownloadClientConfig {
         id: "client-b".to_string(),
@@ -469,6 +470,7 @@ async fn serialized_writer_handles_download_client_reorder() {
         last_seen_at: None,
         created_at: now,
         updated_at: now,
+        proxy_config_id: None,
     };
 
     DownloadClientConfigRepository::create(&store, client_a.clone())

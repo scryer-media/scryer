@@ -433,7 +433,7 @@ export function buildRouteCommands({
           label: `${integrationsGroupLabel} / ${t("settings.indexers")}`,
           description: t("settings.indexers"),
           groupLabel: integrationsGroupLabel,
-          // Seeding profiles and indexer proxies are panes of this page, so the
+          // Seeding profiles and proxies are panes of this page, so the
           // palette has to find it by their names too.
           keywords: [
             "settings",

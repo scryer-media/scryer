@@ -68,14 +68,22 @@ struct BridgeFingerprint {
     client_id: String,
     client_name: String,
     config_json: String,
+    /// `id@updated_at` of the assigned proxy, so editing or reassigning the
+    /// proxy restarts the bridge the same way editing the client does.
+    proxy_revision: Option<String>,
 }
 
 impl BridgeFingerprint {
-    fn from_config(config: &DownloadClientConfig) -> Self {
+    fn from_config(
+        config: &DownloadClientConfig,
+        proxy_config: Option<&scryer_domain::ProxyConfig>,
+    ) -> Self {
         Self {
             client_id: config.id.clone(),
             client_name: config.name.clone(),
             config_json: config.config_json.clone(),
+            proxy_revision: proxy_config
+                .map(scryer_application::transport_proxy::transport_proxy_revision),
         }
     }
 }
@@ -112,13 +120,14 @@ fn evaluate_bridge_action(
 /// bridgeable Weaver.
 fn desired_bridge_from_primary(
     primary: Option<&DownloadClientConfig>,
+    proxy_config: Option<&scryer_domain::ProxyConfig>,
 ) -> Option<(WeaverSubscriptionBridgeClient, BridgeFingerprint)> {
     let config = primary?;
     if config.client_type != WEAVER_CLIENT_TYPE {
         return None;
     }
-    match WeaverSubscriptionBridgeClient::from_config(config) {
-        Ok(client) => Some((client, BridgeFingerprint::from_config(config))),
+    match WeaverSubscriptionBridgeClient::from_config_with_proxy(config, proxy_config) {
+        Ok(client) => Some((client, BridgeFingerprint::from_config(config, proxy_config))),
         Err(error) => {
             // A malformed weaver primary polls like any other client rather
             // than knocking out download tracking entirely.
@@ -193,7 +202,25 @@ pub async fn start_weaver_bridge_supervisor(
                 continue;
             }
         };
-        let desired = desired_bridge_from_primary(primary.as_ref());
+        // A proxy the primary references but that cannot be resolved is not a
+        // reason to bridge unproxied: leave the current state alone and let the
+        // router's own (proxied) polling cover the client.
+        let proxy_config = match primary.as_ref() {
+            Some(config) => match app.proxy_config_for_download_client(config).await {
+                Ok(proxy_config) => proxy_config,
+                Err(error) => {
+                    warn!(
+                        client_id = %config.id,
+                        client = %config.name,
+                        error = %error,
+                        "weaver bridge supervisor could not resolve the primary client's proxy"
+                    );
+                    continue;
+                }
+            },
+            None => None,
+        };
+        let desired = desired_bridge_from_primary(primary.as_ref(), proxy_config.as_ref());
 
         let action = evaluate_bridge_action(
             running.as_ref().map(|bridge| &bridge.fingerprint),
@@ -283,6 +310,7 @@ mod tests {
             last_seen_at: None,
             created_at: now,
             updated_at: now,
+            proxy_config_id: None,
         }
     }
 
@@ -292,28 +320,28 @@ mod tests {
 
     #[test]
     fn no_bridge_is_desired_without_a_primary() {
-        assert!(desired_bridge_from_primary(None).is_none());
+        assert!(desired_bridge_from_primary(None, None).is_none());
     }
 
     #[test]
     fn no_bridge_is_desired_for_a_non_weaver_primary() {
         let sab = config("dc-1", "SAB", "sabnzbd", weaver_config_json());
-        assert!(desired_bridge_from_primary(Some(&sab)).is_none());
+        assert!(desired_bridge_from_primary(Some(&sab), None).is_none());
     }
 
     #[test]
     fn a_weaver_primary_yields_a_bridge_and_fingerprint() {
         let weaver = config("dc-1", "Weaver", "weaver", weaver_config_json());
         let (_, fingerprint) =
-            desired_bridge_from_primary(Some(&weaver)).expect("bridgeable weaver primary");
-        assert_eq!(fingerprint, BridgeFingerprint::from_config(&weaver));
+            desired_bridge_from_primary(Some(&weaver), None).expect("bridgeable weaver primary");
+        assert_eq!(fingerprint, BridgeFingerprint::from_config(&weaver, None));
     }
 
     #[test]
     fn an_unbridgeable_weaver_primary_falls_back_to_polling() {
         // No resolvable base URL → from_config fails → no bridge, no panic.
         let broken = config("dc-1", "Weaver", "weaver", "{}");
-        assert!(desired_bridge_from_primary(Some(&broken)).is_none());
+        assert!(desired_bridge_from_primary(Some(&broken), None).is_none());
     }
 
     #[test]
@@ -322,6 +350,7 @@ mod tests {
             client_id: "dc-1".into(),
             client_name: "Weaver".into(),
             config_json: weaver_config_json().into(),
+            proxy_revision: None,
         };
         let mut b = a.clone();
         b.config_json = r#"{"host":"weaver-2","port":9090}"#.into();
@@ -347,12 +376,41 @@ mod tests {
             client_id: "dc-1".into(),
             client_name: "Weaver".into(),
             config_json: weaver_config_json().into(),
+            proxy_revision: None,
         };
         let mut after = before.clone();
         after.client_name = "Weaver Prod".into();
         assert_eq!(
             evaluate_bridge_action(Some(&before), Some(&after)),
             BridgeAction::Restart
+        );
+    }
+
+    #[test]
+    fn assigning_or_editing_a_proxy_restarts_the_bridge() {
+        // The bridge's polling fallback dials through the assigned proxy, so a
+        // proxy change is a client change as far as the bridge is concerned.
+        let unproxied = BridgeFingerprint {
+            client_id: "dc-1".into(),
+            client_name: "Weaver".into(),
+            config_json: weaver_config_json().into(),
+            proxy_revision: None,
+        };
+        let mut proxied = unproxied.clone();
+        proxied.proxy_revision = Some("proxy-1@2026-09-01T00:00:00+00:00".to_string());
+        assert_eq!(
+            evaluate_bridge_action(Some(&unproxied), Some(&proxied)),
+            BridgeAction::Restart
+        );
+        let mut edited = proxied.clone();
+        edited.proxy_revision = Some("proxy-1@2026-09-02T00:00:00+00:00".to_string());
+        assert_eq!(
+            evaluate_bridge_action(Some(&proxied), Some(&edited)),
+            BridgeAction::Restart
+        );
+        assert_eq!(
+            evaluate_bridge_action(Some(&proxied), Some(&proxied)),
+            BridgeAction::None
         );
     }
 }

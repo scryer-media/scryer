@@ -200,18 +200,18 @@ const de: LocaleDictionary = {
   "settings.securitySaveFailed": "Failed to save security settings.",
   "settings.users": "Benutzer",
   "settings.indexers": "Indexer",
-  "settings.indexerProxies": "Indexer-Proxys",
-  "settings.indexerProxyUsername": "Benutzername",
-  "settings.indexerProxyPassword": "Passwort",
-  "settings.indexerProxyCredentialsStored": "Zugangsdaten hinterlegt",
-  "settings.indexerProxyCredentialUnchanged": "Unverändert",
-  "settings.indexerProxyClearCredentials": "Gespeicherte Zugangsdaten löschen",
-  "settings.indexerProxyCredentialsHelp":
+  "settings.proxies": "Indexer-Proxys",
+  "settings.proxyUsername": "Benutzername",
+  "settings.proxyPassword": "Passwort",
+  "settings.proxyCredentialsStored": "Zugangsdaten hinterlegt",
+  "settings.proxyCredentialUnchanged": "Unverändert",
+  "settings.proxyClearCredentials": "Gespeicherte Zugangsdaten löschen",
+  "settings.proxyCredentialsHelp":
     "Zugangsdaten werden verschlüsselt gespeichert und nie wieder angezeigt. Lassen Sie beide Felder leer, wenn der Proxy keine benötigt.",
-  "settings.indexerProxyCredentialsStoredHelp":
+  "settings.proxyCredentialsStoredHelp":
     "Für diesen Proxy sind Zugangsdaten hinterlegt. Lassen Sie die Felder leer, um sie zu behalten, oder geben Sie neue Werte ein, um sie zu ersetzen.",
-  "settings.indexerProxyRemoteDns": "DNS am Proxy auflösen",
-  "settings.indexerProxyRemoteDnsHelp":
+  "settings.proxyRemoteDns": "DNS am Proxy auflösen",
+  "settings.proxyRemoteDnsHelp":
     "DNS am Proxy aufzulösen entspricht dem socks5h-Verhalten: Der Proxy löst die Ziel-Hostnamen auf, nicht dieser Rechner.",
   "settings.qualityProfiles": "Qualitätsprofile",
   "settings.downloadClients": "Download-Clients",

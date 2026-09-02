@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  buildCreateIndexerProxyInput,
+  buildCreateProxyInput,
   buildDownloadClientConnectionTestInput,
-  buildUpdateIndexerProxyInput,
+  buildUpdateProxyInput,
   parseUiDateTimeFormat,
   parseVerificationDepth,
 } from "./settings-mutation-inputs.ts";
@@ -28,8 +28,8 @@ const socksProxyDraft = {
   baseUrl: "socks5://gateway:1080",
 };
 
-test("indexer proxy updates omit immutable provider type", () => {
-  const input = buildUpdateIndexerProxyInput("proxy-1", proxyDraft);
+test("proxy updates omit immutable provider type", () => {
+  const input = buildUpdateProxyInput("proxy-1", proxyDraft);
 
   assert.deepEqual(input, {
     id: "proxy-1",
@@ -41,8 +41,8 @@ test("indexer proxy updates omit immutable provider type", () => {
   assert.equal("providerType" in input, false);
 });
 
-test("indexer proxy creates include provider type", () => {
-  assert.equal(buildCreateIndexerProxyInput(proxyDraft).providerType, "trawl");
+test("proxy creates include provider type", () => {
+  assert.equal(buildCreateProxyInput(proxyDraft).providerType, "trawl");
 });
 
 test("challenge solvers never carry transport-only fields", () => {
@@ -55,19 +55,19 @@ test("challenge solvers never carry transport-only fields", () => {
     remoteDns: true,
   };
 
-  const created = buildCreateIndexerProxyInput(stale);
+  const created = buildCreateProxyInput(stale);
   assert.equal("username" in created, false);
   assert.equal("password" in created, false);
   assert.equal("remoteDns" in created, false);
 
-  const updated = buildUpdateIndexerProxyInput("proxy-1", stale);
+  const updated = buildUpdateProxyInput("proxy-1", stale);
   assert.equal("username" in updated, false);
   assert.equal("password" in updated, false);
   assert.equal("remoteDns" in updated, false);
 });
 
 test("socks5 creates carry trimmed credentials and the remote-DNS choice", () => {
-  const input = buildCreateIndexerProxyInput({
+  const input = buildCreateProxyInput({
     ...socksProxyDraft,
     username: "  operator  ",
     password: "  hunter2  ",
@@ -89,7 +89,7 @@ test("socks5 creates carry trimmed credentials and the remote-DNS choice", () =>
 test("http proxies send credentials but never a remote-DNS flag", () => {
   // An HTTP CONNECT proxy always resolves the destination itself, so the API
   // rejects the flag; credentials are still accepted.
-  const input = buildCreateIndexerProxyInput({
+  const input = buildCreateProxyInput({
     ...socksProxyDraft,
     providerType: "http",
     baseUrl: "http://gateway:3128",
@@ -104,7 +104,7 @@ test("http proxies send credentials but never a remote-DNS flag", () => {
 test("socks4 takes remote DNS but never credentials", () => {
   // The HTTP client builds its SOCKS4 connector without auth, so the API
   // rejects credentials rather than dropping them silently on the wire.
-  const input = buildCreateIndexerProxyInput({
+  const input = buildCreateProxyInput({
     ...socksProxyDraft,
     providerType: "socks4",
     baseUrl: "socks4://gateway:1080",
@@ -119,7 +119,7 @@ test("socks4 takes remote DNS but never credentials", () => {
 });
 
 test("socks4 updates never clear credentials it cannot hold", () => {
-  const input = buildUpdateIndexerProxyInput("proxy-1", {
+  const input = buildUpdateProxyInput("proxy-1", {
     ...socksProxyDraft,
     providerType: "socks4",
     baseUrl: "socks4://gateway:1080",
@@ -132,7 +132,7 @@ test("socks4 updates never clear credentials it cannot hold", () => {
 });
 
 test("blank credential fields leave a stored secret unchanged", () => {
-  const input = buildUpdateIndexerProxyInput("proxy-1", {
+  const input = buildUpdateProxyInput("proxy-1", {
     ...socksProxyDraft,
     hasStoredCredentials: true,
     username: "",
@@ -145,7 +145,7 @@ test("blank credential fields leave a stored secret unchanged", () => {
 });
 
 test("a password may be replaced on its own", () => {
-  const input = buildUpdateIndexerProxyInput("proxy-1", {
+  const input = buildUpdateProxyInput("proxy-1", {
     ...socksProxyDraft,
     hasStoredCredentials: true,
     password: "rotated",
@@ -156,7 +156,7 @@ test("a password may be replaced on its own", () => {
 });
 
 test("clearing credentials sends explicit nulls and ignores typed values", () => {
-  const input = buildUpdateIndexerProxyInput("proxy-1", {
+  const input = buildUpdateProxyInput("proxy-1", {
     ...socksProxyDraft,
     hasStoredCredentials: true,
     clearCredentials: true,
@@ -169,7 +169,7 @@ test("clearing credentials sends explicit nulls and ignores typed values", () =>
 });
 
 test("creates never send a credential clear", () => {
-  const input = buildCreateIndexerProxyInput({
+  const input = buildCreateProxyInput({
     ...socksProxyDraft,
     clearCredentials: true,
   });

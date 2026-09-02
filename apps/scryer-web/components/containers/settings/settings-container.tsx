@@ -154,7 +154,7 @@ const INDEXER_SETTINGS_TABS: {
   icon: LucideIcon;
 }[] = [
   { tab: "indexers", labelKey: "settings.indexers", icon: Database },
-  { tab: "proxies", labelKey: "settings.indexerProxies", icon: Network },
+  { tab: "proxies", labelKey: "settings.proxies", icon: Network },
   { tab: "seedingProfiles", labelKey: "settings.seedingProfiles", icon: UploadCloud },
 ];
 

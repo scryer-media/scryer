@@ -35,12 +35,11 @@ use crate::{
     DownloadQueueCommandStore, DownloadRegistryStore, DownloadSubmissionStore,
     ExternalImportMonitorStore, ExternalImportSetupSecretDraftStore, FileSystemStagedNzbStore,
     HousekeepingStore, ImportStore, InMemoryIndexerStatsTracker, IndexerConfigStore,
-    IndexerErrorStore, IndexerProxyConfigStore, IndexerSearchLearningStore, LibraryProbeStore,
-    LibraryScanUnmatchedStore, LocationOperationStore, MaintenanceEvaluationStore,
-    MaintenanceRuleSetStore, MediaFileStore, MediaRequestStore, MediaServerConnectionStore,
-    MediaServerSignalStore, MetadataGatewayClient, MigrationMode, NotificationStore, OAuthStore,
-    PendingReleaseStore, PluginStore, PostProcessingScriptStore, QualityProfileStore, ReleaseStore,
-    RuleSetStore,
+    IndexerErrorStore, IndexerSearchLearningStore, LibraryProbeStore, LibraryScanUnmatchedStore,
+    LocationOperationStore, MaintenanceEvaluationStore, MaintenanceRuleSetStore, MediaFileStore,
+    MediaRequestStore, MediaServerConnectionStore, MediaServerSignalStore, MetadataGatewayClient,
+    MigrationMode, NotificationStore, OAuthStore, PendingReleaseStore, PluginStore,
+    PostProcessingScriptStore, ProxyConfigStore, QualityProfileStore, ReleaseStore, RuleSetStore,
     SeedingProfileStore, SettingsStore, ShowStore, SmgEnrollmentConfig,
     SqliteLogicalBackupExporter, SqliteServices, SubtitleDownloadStore,
     SubtitleProviderConfigStore, TitleImageStore, TitleMergeStore, TitleStore, TotpStore,
@@ -637,7 +636,7 @@ enum DatastoreStores {
         oauth_store: Arc<OAuthStore>,
         indexer_config_store: Arc<IndexerConfigStore>,
         indexer_error_store: Arc<IndexerErrorStore>,
-        indexer_proxy_config_store: Arc<IndexerProxyConfigStore>,
+        proxy_config_store: Arc<ProxyConfigStore>,
         download_client_config_store: Arc<DownloadClientConfigStore>,
         seeding_profile_store: Arc<SeedingProfileStore>,
         subtitle_provider_config_store: Arc<SubtitleProviderConfigStore>,
@@ -684,7 +683,7 @@ enum DatastoreStores {
         oauth_store: Arc<OAuthStore>,
         indexer_config_store: Arc<IndexerConfigStore>,
         indexer_error_store: Arc<IndexerErrorStore>,
-        indexer_proxy_config_store: Arc<IndexerProxyConfigStore>,
+        proxy_config_store: Arc<ProxyConfigStore>,
         download_client_config_store: Arc<DownloadClientConfigStore>,
         seeding_profile_store: Arc<SeedingProfileStore>,
         subtitle_provider_config_store: Arc<SubtitleProviderConfigStore>,
@@ -753,7 +752,7 @@ impl DatastoreAssembly {
             db.encryption_key_state(),
         ));
         let indexer_error_store = Arc::new(IndexerErrorStore::new(datastore.clone()));
-        let indexer_proxy_config_store = Arc::new(IndexerProxyConfigStore::new(
+        let proxy_config_store = Arc::new(ProxyConfigStore::new(
             datastore.clone(),
             db.encryption_key_state(),
         ));
@@ -829,7 +828,7 @@ impl DatastoreAssembly {
             oauth_store,
             indexer_config_store,
             indexer_error_store,
-            indexer_proxy_config_store,
+            proxy_config_store,
             download_client_config_store,
             seeding_profile_store,
             subtitle_provider_config_store,
@@ -892,7 +891,7 @@ impl DatastoreAssembly {
             db.encryption_key_state(),
         ));
         let indexer_error_store = Arc::new(IndexerErrorStore::new(datastore.clone()));
-        let indexer_proxy_config_store = Arc::new(IndexerProxyConfigStore::new(
+        let proxy_config_store = Arc::new(ProxyConfigStore::new(
             datastore.clone(),
             db.encryption_key_state(),
         ));
@@ -966,7 +965,7 @@ impl DatastoreAssembly {
             oauth_store,
             indexer_config_store,
             indexer_error_store,
-            indexer_proxy_config_store,
+            proxy_config_store,
             download_client_config_store,
             seeding_profile_store,
             subtitle_provider_config_store,
@@ -1171,18 +1170,14 @@ impl DatastoreAssembly {
         }
     }
 
-    pub fn indexer_proxy_configs(
-        &self,
-    ) -> Arc<dyn scryer_application::IndexerProxyConfigRepository> {
+    pub fn proxy_configs(&self) -> Arc<dyn scryer_application::ProxyConfigRepository> {
         match &self.stores {
             DatastoreStores::Sqlite {
-                indexer_proxy_config_store,
-                ..
-            } => indexer_proxy_config_store.clone(),
+                proxy_config_store, ..
+            } => proxy_config_store.clone(),
             DatastoreStores::Postgres {
-                indexer_proxy_config_store,
-                ..
-            } => indexer_proxy_config_store.clone(),
+                proxy_config_store, ..
+            } => proxy_config_store.clone(),
         }
     }
 
@@ -1421,7 +1416,7 @@ impl DatastoreAssembly {
                 release_store,
                 library_probe_store,
                 library_scan_unmatched_store,
-            location_operation_store,
+                location_operation_store,
                 media_file_store,
                 wanted_store,
                 pending_release_store,
@@ -1477,7 +1472,7 @@ impl DatastoreAssembly {
                 .with_user_ui_settings_store(ui_settings)
                 .with_external_account_store(external_accounts)
                 .with_oauth_store(oauth)
-                .with_indexer_proxy_config_store(self.indexer_proxy_configs())
+                .with_proxy_config_store(self.proxy_configs())
                 .with_seeding_profiles(self.seeding_profiles())
                 .with_external_identity_verifier(Arc::new(HttpExternalIdentityVerifier::new()))
                 .with_media_server_connection_store(media_server_connection_store.clone())
@@ -1501,9 +1496,7 @@ impl DatastoreAssembly {
                 // The US7 merge store needs only the datastore, so it is
                 // built here rather than threaded through both store
                 // variants: nothing else in the assembly holds it.
-                .with_title_merge_repository(Arc::new(TitleMergeStore::new(
-                    self.datastore(),
-                )))
+                .with_title_merge_repository(Arc::new(TitleMergeStore::new(self.datastore())))
                 .with_title_images(title_image_store.clone())
                 .with_image_proxy(image_proxy_store.clone())
                 .with_housekeeping(housekeeping_store.clone())
@@ -1547,7 +1540,7 @@ impl DatastoreAssembly {
                 plugin_store,
                 library_probe_store,
                 library_scan_unmatched_store,
-            location_operation_store,
+                location_operation_store,
                 media_file_store,
                 wanted_store,
                 pending_release_store,
@@ -1601,7 +1594,7 @@ impl DatastoreAssembly {
                 .with_user_ui_settings_store(ui_settings)
                 .with_external_account_store(external_accounts)
                 .with_oauth_store(oauth)
-                .with_indexer_proxy_config_store(self.indexer_proxy_configs())
+                .with_proxy_config_store(self.proxy_configs())
                 .with_seeding_profiles(self.seeding_profiles())
                 .with_external_identity_verifier(Arc::new(HttpExternalIdentityVerifier::new()))
                 .with_media_server_connection_store(media_server_connection_store.clone())
@@ -1625,9 +1618,7 @@ impl DatastoreAssembly {
                 // The US7 merge store needs only the datastore, so it is
                 // built here rather than threaded through both store
                 // variants: nothing else in the assembly holds it.
-                .with_title_merge_repository(Arc::new(TitleMergeStore::new(
-                    self.datastore(),
-                )))
+                .with_title_merge_repository(Arc::new(TitleMergeStore::new(self.datastore())))
                 .with_title_images(title_image_store.clone())
                 .with_image_proxy(image_proxy_store.clone())
                 .with_housekeeping(housekeeping_store.clone())

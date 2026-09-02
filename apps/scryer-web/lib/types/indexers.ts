@@ -6,7 +6,7 @@ export type IndexerRecord = {
   name: string;
   providerType: string;
   baseUrl: string;
-  indexerProxyConfigId: string | null;
+  proxyConfigId: string | null;
   downloadClientId: string | null;
   /** Seeding profile assigned to this indexer. null inherits the routing/global default. */
   seedingProfileId: string | null;
@@ -43,10 +43,10 @@ export type IndexerRecord = {
 };
 
 /**
- * Every indexer proxy provider the API accepts, in the order the editor lists
+ * Every proxy provider the API accepts, in the order the editor lists
  * them: challenge solvers first, then transport proxies.
  */
-export const INDEXER_PROXY_PROVIDER_TYPES = [
+export const PROXY_PROVIDER_TYPES = [
   "byparr",
   "trawl",
   "http",
@@ -54,27 +54,27 @@ export const INDEXER_PROXY_PROVIDER_TYPES = [
   "socks5",
 ] as const;
 
-export type IndexerProxyProviderTypeValue =
-  (typeof INDEXER_PROXY_PROVIDER_TYPES)[number];
+export type ProxyProviderTypeValue =
+  (typeof PROXY_PROVIDER_TYPES)[number];
 
-const TRANSPORT_INDEXER_PROXY_PROVIDER_TYPES: ReadonlySet<string> = new Set([
+const TRANSPORT_PROXY_PROVIDER_TYPES: ReadonlySet<string> = new Set([
   "http",
   "socks4",
   "socks5",
 ]);
 
-export function isIndexerProxyProviderType(
+export function isProxyProviderType(
   value: string,
-): value is IndexerProxyProviderTypeValue {
-  return (INDEXER_PROXY_PROVIDER_TYPES as readonly string[]).includes(value);
+): value is ProxyProviderTypeValue {
+  return (PROXY_PROVIDER_TYPES as readonly string[]).includes(value);
 }
 
 /**
  * Transport proxies carry indexer traffic; challenge solvers answer browser
  * challenges. The two kinds take entirely different settings.
  */
-export function isTransportIndexerProxyProvider(providerType: string): boolean {
-  return TRANSPORT_INDEXER_PROXY_PROVIDER_TYPES.has(providerType);
+export function isTransportProxyProvider(providerType: string): boolean {
+  return TRANSPORT_PROXY_PROVIDER_TYPES.has(providerType);
 }
 
 /**
@@ -82,7 +82,7 @@ export function isTransportIndexerProxyProvider(providerType: string): boolean {
  * and SOCKS4 is rejected too: the HTTP client builds its SOCKS4 connector
  * without auth, so a credential would be silently dropped on the wire.
  */
-export function supportsIndexerProxyCredentials(providerType: string): boolean {
+export function supportsProxyCredentials(providerType: string): boolean {
   return providerType === "http" || providerType === "socks5";
 }
 
@@ -91,11 +91,11 @@ export function supportsIndexerProxyCredentials(providerType: string): boolean {
  * choice. An HTTP CONNECT proxy always resolves the destination itself, and a
  * solver fetches the page entirely on its own side.
  */
-export function supportsIndexerProxyRemoteDns(providerType: string): boolean {
+export function supportsProxyRemoteDns(providerType: string): boolean {
   return providerType === "socks4" || providerType === "socks5";
 }
 
-export type IndexerProxyRecord = {
+export type ProxyRecord = {
   id: string;
   name: string;
   providerType: string;
@@ -118,7 +118,7 @@ export type IndexerProxyRecord = {
 export type IndexerDraft = {
   name: string;
   providerType: string;
-  indexerProxyConfigId: string | null;
+  proxyConfigId: string | null;
   downloadClientId: string | null;
   seedingProfileId: string | null;
   storedSecretKeys: string[];
@@ -128,8 +128,8 @@ export type IndexerDraft = {
   configValues: Record<string, string>;
 };
 
-export type IndexerProxyDraft = {
-  providerType: IndexerProxyProviderTypeValue;
+export type ProxyDraft = {
+  providerType: ProxyProviderTypeValue;
   name: string;
   baseUrl: string;
   requestTimeoutSeconds: number;

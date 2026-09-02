@@ -848,6 +848,7 @@ async fn list_download_queue_reads_cached_observed_items_without_client_calls() 
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await
@@ -955,6 +956,7 @@ async fn list_download_queue_uses_live_queue_only_for_all_activity() {
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await
@@ -1035,6 +1037,7 @@ async fn list_download_queue_for_title_filters_the_shared_cache() {
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await
@@ -1301,6 +1304,7 @@ async fn list_download_import_page_returns_only_import_rows_for_selected_filter(
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await
@@ -1390,6 +1394,7 @@ async fn count_download_import_items_matches_selected_filter() {
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await
@@ -1672,6 +1677,7 @@ async fn find_download_queue_scope_ignores_stale_submission_titles() {
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await
@@ -2673,6 +2679,7 @@ async fn list_download_import_page_returns_promptly_when_tracked_snapshot_handle
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await
@@ -2720,6 +2727,7 @@ async fn list_download_import_page_uses_runtime_tracked_snapshot_cache() {
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await
@@ -2804,6 +2812,7 @@ async fn list_download_import_page_degrades_promptly_for_limit_one_count_reads_w
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await
@@ -2858,6 +2867,7 @@ async fn download_import_page_renders_importing_state_from_runtime_snapshot() {
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await
@@ -8817,6 +8827,7 @@ async fn list_download_history_page_filters_terminal_rows_and_clamps_page_size_t
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await
@@ -8929,6 +8940,7 @@ async fn list_download_history_page_includes_tracked_terminal_rows_when_client_h
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await
@@ -9045,6 +9057,7 @@ async fn list_download_history_page_sorts_before_paginating() {
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await
@@ -9123,6 +9136,7 @@ async fn list_download_history_page_can_limit_to_scryer_submitted_rows() {
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await
@@ -9243,6 +9257,7 @@ async fn download_queue_subscription_bootstraps_from_runtime_cache_without_clien
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await
@@ -9325,6 +9340,7 @@ async fn download_queue_subscription_sends_empty_bootstrap_snapshot() {
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await

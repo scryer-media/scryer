@@ -5,11 +5,10 @@ mod tests {
         apply_import_record_to_queue_item, apply_submission_to_queue_item,
         apply_tracked_download_activity_projection, apply_tracked_download_queue_metadata,
         build_download_queue_status_detail, canonicalize_download_queue_item_clients,
-        classify_download_queue_item,
-        collect_download_client_filter_options, dedupe_download_queue_items,
-        derive_download_queue_display_state, derive_indexer_base_url_from_config_fields,
-        download_queue_client_filter_key, normalize_indexer_config_json,
-        prepare_next_tracked_download_background_work_dispatch,
+        classify_download_queue_item, collect_download_client_filter_options,
+        dedupe_download_queue_items, derive_download_queue_display_state,
+        derive_indexer_base_url_from_config_fields, download_queue_client_filter_key,
+        normalize_indexer_config_json, prepare_next_tracked_download_background_work_dispatch,
         prepare_tracked_download_background_work_dispatch,
         reconcile_duplicate_terminal_source_states, source_provider_label,
         synthetic_tracked_snapshot_queue_item, tracked_download_queue_snapshot,
@@ -239,10 +238,11 @@ mod tests {
         let id = "nzbget:job-2";
         let mut tracker = crate::tracked_downloads::TrackedDownloadService::new();
         let mut tracked = tracked_for_dispatch(id);
-        tracked.import_execution_retry = Some(crate::tracked_downloads::ImportExecutionRetryState {
-            attempts: 1,
-            next_retry_at: Utc::now() + Duration::seconds(30),
-        });
+        tracked.import_execution_retry =
+            Some(crate::tracked_downloads::ImportExecutionRetryState {
+                attempts: 1,
+                next_retry_at: Utc::now() + Duration::seconds(30),
+            });
         tracker.insert_for_tests(tracked);
 
         assert!(prepare_tracked_download_background_work_dispatch(&mut tracker, id).is_none());
@@ -408,7 +408,10 @@ mod tests {
 
         assert_eq!(id, import_id);
         assert_eq!(kind, TrackedDownloadBackgroundWorkKind::Import);
-        assert!(drain.has_pending(), "fifth failed item should remain queued");
+        assert!(
+            drain.has_pending(),
+            "fifth failed item should remain queued"
+        );
     }
 
     #[test]
@@ -536,6 +539,7 @@ mod tests {
             client_priority: priority,
             created_at: Utc::now(),
             updated_at: Utc::now(),
+            proxy_config_id: None,
         }
     }
 
@@ -599,7 +603,10 @@ mod tests {
         exact.client_id = "cfg-identity".to_string();
         exact.client_name = "E2E rTorrent Identity".to_string();
         exact.client_type = "rtorrent".to_string();
-        apply_submission_to_queue_item(&mut exact, &submission_for_client("cfg-cleanup", "rtorrent"));
+        apply_submission_to_queue_item(
+            &mut exact,
+            &submission_for_client("cfg-cleanup", "rtorrent"),
+        );
         assert_eq!(exact.client_id, "cfg-identity");
         assert_eq!(exact.client_name, "E2E rTorrent Identity");
     }
@@ -841,7 +848,9 @@ mod tests {
         // row must render (Pending/Importing, actions greyed); a finished record is
         // not — the block stays authoritative over stale Failed/Skipped/
         // Completed statuses.
-        fn blocked_tracked(queue_item: &DownloadQueueItem) -> crate::tracked_downloads::TrackedDownload {
+        fn blocked_tracked(
+            queue_item: &DownloadQueueItem,
+        ) -> crate::tracked_downloads::TrackedDownload {
             crate::tracked_downloads::TrackedDownload {
                 download_id: scryer_domain::download_identity::DownloadId::new(),
                 id: "weaver:job-1".to_string(),
@@ -881,7 +890,11 @@ mod tests {
             queue_item.import_status = Some(live);
             let metadata = tracked_download_queue_snapshot(&blocked_tracked(&queue_item));
             apply_tracked_download_activity_projection(&mut queue_item, &metadata);
-            assert_eq!(queue_item.import_status, Some(live), "{live:?} must survive the block");
+            assert_eq!(
+                queue_item.import_status,
+                Some(live),
+                "{live:?} must survive the block"
+            );
             assert_eq!(
                 derive_download_queue_display_state(&queue_item),
                 if live == ImportStatus::Pending {
@@ -906,7 +919,10 @@ mod tests {
             queue_item.import_status = Some(finished);
             let metadata = tracked_download_queue_snapshot(&blocked_tracked(&queue_item));
             apply_tracked_download_activity_projection(&mut queue_item, &metadata);
-            assert_eq!(queue_item.import_status, None, "{finished:?} is cleared by the block");
+            assert_eq!(
+                queue_item.import_status, None,
+                "{finished:?} is cleared by the block"
+            );
             assert_eq!(
                 derive_download_queue_display_state(&queue_item),
                 DownloadDisplayState::ImportBlocked

@@ -200,18 +200,18 @@ const pt_BR: LocaleDictionary = {
   "settings.securitySaveFailed": "Failed to save security settings.",
   "settings.users": "Usuários",
   "settings.indexers": "Indexadores",
-  "settings.indexerProxies": "Proxies de indexadores",
-  "settings.indexerProxyUsername": "Usuário",
-  "settings.indexerProxyPassword": "Senha",
-  "settings.indexerProxyCredentialsStored": "Credenciais definidas",
-  "settings.indexerProxyCredentialUnchanged": "Sem alteração",
-  "settings.indexerProxyClearCredentials": "Limpar as credenciais salvas",
-  "settings.indexerProxyCredentialsHelp":
+  "settings.proxies": "Proxies de indexadores",
+  "settings.proxyUsername": "Usuário",
+  "settings.proxyPassword": "Senha",
+  "settings.proxyCredentialsStored": "Credenciais definidas",
+  "settings.proxyCredentialUnchanged": "Sem alteração",
+  "settings.proxyClearCredentials": "Limpar as credenciais salvas",
+  "settings.proxyCredentialsHelp":
     "As credenciais são armazenadas criptografadas e nunca mais são exibidas. Deixe os dois campos vazios se o proxy não precisar de nenhuma.",
-  "settings.indexerProxyCredentialsStoredHelp":
+  "settings.proxyCredentialsStoredHelp":
     "Este proxy tem credenciais salvas. Deixe os campos vazios para mantê-las ou digite novos valores para substituí-las.",
-  "settings.indexerProxyRemoteDns": "Resolver DNS no proxy",
-  "settings.indexerProxyRemoteDnsHelp":
+  "settings.proxyRemoteDns": "Resolver DNS no proxy",
+  "settings.proxyRemoteDnsHelp":
     "Resolver o DNS no proxy é o comportamento socks5h: o proxy resolve os nomes de host de destino, não esta máquina.",
   "settings.qualityProfiles": "Perfis de qualidade",
   "settings.downloadClients": "Clientes de download",

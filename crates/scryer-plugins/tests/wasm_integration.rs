@@ -41,7 +41,7 @@ fn test_config(provider_type: &str) -> IndexerConfig {
         is_enabled: true,
         enable_interactive_search: true,
         enable_auto_search: true,
-        indexer_proxy_config_id: None,
+        proxy_config_id: None,
         download_client_id: None,
         seeding_profile_id: None,
         managed_parent_config_id: None,
@@ -283,10 +283,10 @@ search:
         .to_string(),
     );
     let now = Utc::now();
-    let proxy_config = scryer_domain::IndexerProxyConfig {
+    let proxy_config = scryer_domain::ProxyConfig {
         id: "trawl-cardigann".to_string(),
         name: "Trawl".to_string(),
-        provider_type: scryer_domain::IndexerProxyProviderType::Trawl,
+        provider_type: scryer_domain::ProxyProviderType::Trawl,
         protocol: Some(scryer_domain::ChallengeSolverProtocol::RequestSolutionV1),
         username_encrypted: None,
         password_encrypted: None,
@@ -299,6 +299,10 @@ search:
         last_error_at: None,
         created_at: now,
         updated_at: now,
+        host_key_fingerprint: None,
+        host_key_pinned_at: None,
+        private_key_encrypted: None,
+        private_key_passphrase_encrypted: None,
     };
 
     let client = provider

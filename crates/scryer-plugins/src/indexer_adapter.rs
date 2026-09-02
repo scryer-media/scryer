@@ -7,7 +7,7 @@ use scryer_application::{
     IndexerSearchStrategyEvent, IndexerSearchStrategyEventSink, ResolvedDownloadArtifact,
     SearchMode, extract_magnet_info_hash, is_valid_magnet_uri, normalize_release_password,
 };
-use scryer_domain::{IndexerConfig, IndexerProxyConfig, TaggedAlias};
+use scryer_domain::{IndexerConfig, ProxyConfig, TaggedAlias};
 use scryer_plugin_sdk::command::{
     PluginActionRequest, PluginActionResponse, PluginIndexerCommand, PluginIndexerCommandResult,
 };
@@ -22,7 +22,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use crate::loader::{allowed_hosts_for_descriptor, parse_config_json_entries};
-use crate::plugin_http_host::{IndexerErrorCaptureContext, IndexerProxyPolicy};
+use crate::plugin_http_host::{IndexerErrorCaptureContext, ProxyPolicy};
 use crate::types::{
     ConfigFieldRole, IndexerProtocol, IndexerSourceKind, PluginDescriptor, PluginSearchContext,
     PluginSearchOrigin, PluginSearchQueryKind, PluginSearchRequest, PluginSearchRequestKind,
@@ -70,11 +70,10 @@ impl WasmIndexerClient {
         descriptor: PluginDescriptor,
         indexer_name: String,
         config: IndexerConfig,
-        indexer_proxy_config: Option<IndexerProxyConfig>,
+        proxy_config: Option<ProxyConfig>,
         indexer_error_recorder: Arc<dyn IndexerErrorRecorder>,
     ) -> Result<Self, AppError> {
-        let inputs =
-            build_runtime_inputs(&descriptor, &indexer_name, &config, indexer_proxy_config);
+        let inputs = build_runtime_inputs(&descriptor, &indexer_name, &config, proxy_config);
         let provider_profile = if descriptor.provider_type() == "newznab" {
             let normalized_config_json =
                 serde_json::to_string(&inputs.config_entries).map_err(|error| {
@@ -107,7 +106,7 @@ impl WasmIndexerClient {
                 .into_iter()
                 .collect::<BTreeMap<_, _>>(),
             inputs.allowed_hosts,
-            inputs.indexer_proxy_policy,
+            inputs.proxy_policy,
             inputs.timeout,
             None,
             provider_profile,
@@ -608,7 +607,7 @@ struct IndexerRuntimeInputs {
     config_entries: std::collections::HashMap<String, String>,
     allowed_hosts: Vec<String>,
     timeout: std::time::Duration,
-    indexer_proxy_policy: Option<IndexerProxyPolicy>,
+    proxy_policy: Option<ProxyPolicy>,
     /// Managed-destination cooldown key: a shared upstream (a Prowlarr parent,
     /// say) must throttle as ONE destination rather than once per child.
     ///
@@ -626,7 +625,7 @@ fn build_runtime_inputs(
     descriptor: &PluginDescriptor,
     indexer_name: &str,
     config: &IndexerConfig,
-    indexer_proxy_config: Option<IndexerProxyConfig>,
+    proxy_config: Option<ProxyConfig>,
 ) -> IndexerRuntimeInputs {
     let config_entries = build_config_entries(descriptor, indexer_name, config);
     let connection_url = resolve_connection_url(descriptor, config_entries.as_ref());
@@ -636,7 +635,7 @@ fn build_runtime_inputs(
         config.config_json.as_deref(),
     );
     let timeout = scryer_outbound_http::effective_indexer_timeout(
-        indexer_proxy_config
+        proxy_config
             .as_ref()
             .map(|config| config.request_timeout_seconds),
     );
@@ -644,9 +643,9 @@ fn build_runtime_inputs(
         config_entries: config_entries.unwrap_or_default(),
         allowed_hosts,
         timeout,
-        indexer_proxy_policy: indexer_proxy_config.map(|proxy_config| IndexerProxyPolicy {
-            indexer_id: config.id.clone(),
-            indexer_name: indexer_name.to_string(),
+        proxy_policy: proxy_config.map(|proxy_config| ProxyPolicy {
+            consumer_id: config.id.clone(),
+            consumer_name: indexer_name.to_string(),
             config: proxy_config,
         }),
         destination_cooldown_key: Some(config.rate_limit_domain_key()),
@@ -1916,11 +1915,7 @@ mod tests {
         assert!(fallback.ids.is_empty());
         assert_eq!(fallback.facet, None);
         assert_eq!(
-            fallback
-                .context
-                .as_ref()
-                .expect("fallback context")
-                .year,
+            fallback.context.as_ref().expect("fallback context").year,
             Some(2026),
             "the facet-less fallback is the same movie subject"
         );
@@ -2254,7 +2249,7 @@ mod tests {
             is_enabled: true,
             enable_interactive_search: true,
             enable_auto_search: true,
-            indexer_proxy_config_id: None,
+            proxy_config_id: None,
             download_client_id: None,
             seeding_profile_id: None,
             managed_parent_config_id: managed_parent_config_id.map(ToString::to_string),

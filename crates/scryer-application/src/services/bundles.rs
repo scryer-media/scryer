@@ -69,15 +69,14 @@ pub struct AppLibraryServices {
     /// The US7 merge engine's Group 0 read and Groups 1–5 transaction. Read at
     /// preview time to plan the merge (FR-066/FR-071) and again at the title
     /// checkpoint to run it (FR-063–FR-067).
-    pub(crate) title_merges:
-        Arc<dyn crate::location::merge::engine::TitleMergeRepository>,
+    pub(crate) title_merges: Arc<dyn crate::location::merge::engine::TitleMergeRepository>,
 }
 
 #[derive(Clone)]
 pub struct AppIntegrationServices {
     pub(crate) indexer_configs: Arc<dyn IndexerConfigRepository>,
     pub(crate) indexer_errors: Arc<dyn IndexerErrorRepository>,
-    pub(crate) indexer_proxy_configs: Arc<dyn IndexerProxyConfigRepository>,
+    pub(crate) proxy_configs: Arc<dyn ProxyConfigRepository>,
     pub(crate) scope_indexer_coverage: Arc<dyn ScopeIndexerCoverageRepository>,
     pub(crate) indexer_caps_refresher: RuntimeFeature<Arc<dyn IndexerCapsSnapshotRefresher>>,
     pub(crate) indexer_client: Arc<dyn IndexerClient>,
@@ -322,9 +321,7 @@ impl AppServices {
             integrations: AppIntegrationServices {
                 indexer_configs,
                 indexer_errors: Arc::new(null_repositories::NullIndexerErrorRepository),
-                indexer_proxy_configs: Arc::new(
-                    null_repositories::NullIndexerProxyConfigRepository,
-                ),
+                proxy_configs: Arc::new(null_repositories::NullProxyConfigRepository),
                 scope_indexer_coverage: Arc::new(
                     null_repositories::NullScopeIndexerCoverageRepository,
                 ),

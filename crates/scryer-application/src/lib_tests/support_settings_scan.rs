@@ -736,7 +736,7 @@ impl IndexerConfigRepository for MockIndexerConfigRepo {
             is_enabled,
             enable_interactive_search,
             enable_auto_search,
-            indexer_proxy_config_id,
+            proxy_config_id,
             download_client_id,
             seeding_profile_id,
             managed_parent_config_id,
@@ -775,8 +775,8 @@ impl IndexerConfigRepository for MockIndexerConfigRepo {
         if let Some(enable_auto_search) = enable_auto_search {
             item.enable_auto_search = enable_auto_search;
         }
-        if let Some(indexer_proxy_config_id) = indexer_proxy_config_id {
-            item.indexer_proxy_config_id = indexer_proxy_config_id;
+        if let Some(proxy_config_id) = proxy_config_id {
+            item.proxy_config_id = proxy_config_id;
         }
         if let Some(download_client_id) = download_client_id {
             item.download_client_id = download_client_id;
@@ -919,6 +919,7 @@ impl DownloadClientConfigRepository for MockDownloadClientConfigRepo {
             client_type,
             config_json,
             is_enabled,
+            proxy_config_id,
         } = update;
         let mut entries = self.store.lock().await;
         let item = entries
@@ -937,6 +938,9 @@ impl DownloadClientConfigRepository for MockDownloadClientConfigRepo {
         }
         if let Some(is_enabled) = is_enabled {
             item.is_enabled = is_enabled;
+        }
+        if let Some(proxy_config_id) = proxy_config_id {
+            item.proxy_config_id = proxy_config_id;
         }
         item.updated_at = Utc::now();
 

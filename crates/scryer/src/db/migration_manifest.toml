@@ -1803,17 +1803,17 @@ scope = "all"
 
 [[migration]]
 version = 211
-description = "indexer transport proxies with optional solver protocol and credentials"
+description = "first-class proxies for indexers and download clients"
 checksum_algo = "blake3"
 
 [[migration.steps]]
 kind = "sql"
-file = "migrations/0211_indexer_transport_proxies.sql"
+file = "migrations/0211_first_class_proxies.sql"
 engine = "sqlite"
 scope = "all"
 
 [[migration.steps]]
 kind = "sql"
-file = "postgres/migrations/0211_indexer_transport_proxies.sql"
+file = "postgres/migrations/0211_first_class_proxies.sql"
 engine = "postgres"
 scope = "all"

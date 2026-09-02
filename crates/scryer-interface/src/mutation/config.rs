@@ -1,17 +1,15 @@
 use async_graphql::{Context, ID, MaybeUndefined, Object, Result as GqlResult};
 use chrono::{DateTime, Utc};
 use scryer_application::{
-    AppError, DownloadClientConfigUpdate, IndexerConfigUpdate, IndexerProxyConfigUpdate,
-    NewIndexerProxyConfig, NewSeedingProfile, SeedingProfileUpdate, SubtitleProviderConfigUpdate,
+    AppError, DownloadClientConfigUpdate, IndexerConfigUpdate, NewProxyConfig, NewSeedingProfile,
+    ProxyConfigUpdate, SeedingProfileUpdate, SubtitleProviderConfigUpdate,
 };
-use scryer_domain::{
-    AppPermission, IndexerProxyProviderType, NewDownloadClientConfig, NewIndexerConfig,
-};
+use scryer_domain::{AppPermission, NewDownloadClientConfig, NewIndexerConfig, ProxyProviderType};
 
 use crate::context::{actor_from_ctx, app_from_ctx, require_config_app_permission, to_gql_error};
 use crate::mappers::{
     from_download_client_config_with_fields, from_indexer_config_sync_result,
-    from_indexer_config_with_fields, from_indexer_proxy_config, from_indexer_proxy_test_result,
+    from_indexer_config_with_fields, from_proxy_config, from_proxy_test_result,
     from_rss_sync_report, from_seeding_profile, from_subtitle_provider_config,
     post_import_tracking_from_value, provider_config_values_to_json,
     season_pack_seed_mode_from_value, seed_goal_met_action_from_value,
@@ -59,7 +57,7 @@ fn parse_challenge_solver_protocol(
     raw.map(|value| {
         scryer_domain::ChallengeSolverProtocol::parse(value).ok_or_else(|| {
             to_gql_error(AppError::Validation(format!(
-                "unsupported indexer proxy protocol '{value}'"
+                "unsupported proxy protocol '{value}'"
             )))
         })
     })
@@ -183,7 +181,7 @@ impl ConfigMutations {
                     is_enabled: input.is_enabled.unwrap_or(true),
                     enable_interactive_search: input.enable_interactive_search.unwrap_or(true),
                     enable_auto_search: input.enable_auto_search.unwrap_or(true),
-                    indexer_proxy_config_id: input.indexer_proxy_config_id.map(|id| id.to_string()),
+                    proxy_config_id: input.proxy_config_id.map(|id| id.to_string()),
                     download_client_id: input.download_client_id.map(|id| id.to_string()),
                     config_json,
                 },
@@ -226,7 +224,7 @@ impl ConfigMutations {
                     is_enabled: input.is_enabled,
                     enable_interactive_search: input.enable_interactive_search,
                     enable_auto_search: input.enable_auto_search,
-                    indexer_proxy_config_id: optional_id_input(input.indexer_proxy_config_id),
+                    proxy_config_id: optional_id_input(input.proxy_config_id),
                     download_client_id: optional_id_input(input.download_client_id),
                     // Seeding profiles are assigned through setIndexerSeedingProfile
                     // so the torrent-capability check stays single-sourced.
@@ -440,22 +438,21 @@ impl ConfigMutations {
         })
     }
 
-    /// Create an indexer proxy configuration.
-    async fn create_indexer_proxy_config(
+    /// Create a proxy configuration.
+    async fn create_proxy_config(
         &self,
         ctx: &Context<'_>,
         #[graphql(desc = "Proxy provider, base URL, timeout, and enabled state.")]
-        input: CreateIndexerProxyConfigInput,
-    ) -> GqlResult<IndexerProxyConfigPayload> {
+        input: CreateProxyConfigInput,
+    ) -> GqlResult<ProxyConfigPayload> {
         let app = app_from_ctx(ctx)?;
         let actor = require_config_app_permission(ctx, AppPermission::ManageSystemSettings).await?;
-        let provider_type =
-            IndexerProxyProviderType::parse(&input.provider_type).ok_or_else(|| {
-                to_gql_error(AppError::Validation(format!(
-                    "unsupported indexer proxy provider '{}'",
-                    input.provider_type
-                )))
-            })?;
+        let provider_type = ProxyProviderType::parse(&input.provider_type).ok_or_else(|| {
+            to_gql_error(AppError::Validation(format!(
+                "unsupported proxy provider '{}'",
+                input.provider_type
+            )))
+        })?;
         let request_timeout_seconds = input
             .request_timeout_seconds
             .map(|value| {
@@ -468,9 +465,9 @@ impl ConfigMutations {
             .transpose()?;
         let protocol = parse_challenge_solver_protocol(input.protocol.as_deref())?;
         let config = app
-            .create_indexer_proxy_config(
+            .create_proxy_config(
                 &actor,
-                NewIndexerProxyConfig {
+                NewProxyConfig {
                     name: input.name,
                     provider_type,
                     protocol,
@@ -483,20 +480,22 @@ impl ConfigMutations {
                     username: input.username,
                     password: input.password,
                     remote_dns: input.remote_dns,
+                    private_key: input.private_key,
+                    private_key_passphrase: input.private_key_passphrase,
                 },
             )
             .await
             .map_err(to_gql_error)?;
-        Ok(from_indexer_proxy_config(config))
+        Ok(from_proxy_config(config))
     }
 
-    /// Patch an indexer proxy configuration while preserving omitted fields.
-    async fn update_indexer_proxy_config(
+    /// Patch a proxy configuration while preserving omitted fields.
+    async fn update_proxy_config(
         &self,
         ctx: &Context<'_>,
         #[graphql(desc = "Proxy configuration identity and optional replacement fields.")]
-        input: UpdateIndexerProxyConfigInput,
-    ) -> GqlResult<IndexerProxyConfigPayload> {
+        input: UpdateProxyConfigInput,
+    ) -> GqlResult<ProxyConfigPayload> {
         let app = app_from_ctx(ctx)?;
         let actor = require_config_app_permission(ctx, AppPermission::ManageSystemSettings).await?;
         let request_timeout_seconds = input
@@ -510,9 +509,9 @@ impl ConfigMutations {
             })
             .transpose()?;
         let config = app
-            .update_indexer_proxy_config(
+            .update_proxy_config(
                 &actor,
-                IndexerProxyConfigUpdate {
+                ProxyConfigUpdate {
                     id: input.id.to_string(),
                     name: input.name,
                     base_url: input.base_url,
@@ -523,40 +522,58 @@ impl ConfigMutations {
                     username: optional_scalar_input(input.username),
                     password: optional_scalar_input(input.password),
                     remote_dns: input.remote_dns,
+                    private_key: optional_scalar_input(input.private_key),
+                    private_key_passphrase: optional_scalar_input(input.private_key_passphrase),
                 },
             )
             .await
             .map_err(to_gql_error)?;
-        Ok(from_indexer_proxy_config(config))
+        Ok(from_proxy_config(config))
     }
 
-    /// Delete an indexer proxy configuration.
-    async fn delete_indexer_proxy_config(
+    /// Delete a proxy configuration.
+    async fn delete_proxy_config(
         &self,
         ctx: &Context<'_>,
-        #[graphql(desc = "Indexer proxy configuration identity to delete.")] id: ID,
-    ) -> GqlResult<DeleteIndexerProxyConfigPayload> {
+        #[graphql(desc = "Proxy configuration identity to delete.")] id: ID,
+    ) -> GqlResult<DeleteProxyConfigPayload> {
         let app = app_from_ctx(ctx)?;
         let actor = require_config_app_permission(ctx, AppPermission::ManageSystemSettings).await?;
-        app.delete_indexer_proxy_config(&actor, id.as_ref())
+        app.delete_proxy_config(&actor, id.as_ref())
             .await
             .map_err(to_gql_error)?;
-        Ok(DeleteIndexerProxyConfigPayload { id })
+        Ok(DeleteProxyConfigPayload { id })
     }
 
-    /// Test an indexer proxy connection and return provider validation details.
-    async fn test_indexer_proxy_config(
+    /// Test a proxy connection and return provider validation details.
+    async fn test_proxy_config(
         &self,
         ctx: &Context<'_>,
-        #[graphql(desc = "Indexer proxy configuration identity to test.")] id: ID,
-    ) -> GqlResult<IndexerProxyTestResultPayload> {
+        #[graphql(desc = "Proxy configuration identity to test.")] id: ID,
+    ) -> GqlResult<ProxyTestResultPayload> {
         let app = app_from_ctx(ctx)?;
         let actor = require_config_app_permission(ctx, AppPermission::ManageSystemSettings).await?;
         let result = app
-            .test_indexer_proxy_config(&actor, id.as_ref())
+            .test_proxy_config(&actor, id.as_ref())
             .await
             .map_err(to_gql_error)?;
-        Ok(from_indexer_proxy_test_result(result))
+        Ok(from_proxy_test_result(result))
+    }
+
+    /// Forget the pinned tunnel host key so the next connection trusts the server again.
+    async fn reset_proxy_host_key(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Tunnel proxy configuration identity whose pinned host key to forget.")]
+        id: ID,
+    ) -> GqlResult<ProxyConfigPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = require_config_app_permission(ctx, AppPermission::ManageSystemSettings).await?;
+        let config = app
+            .reset_proxy_host_key(&actor, id.as_ref())
+            .await
+            .map_err(to_gql_error)?;
+        Ok(from_proxy_config(config))
     }
 
     /// Delete an indexer configuration.
@@ -595,6 +612,7 @@ impl ConfigMutations {
                     config_json,
                     client_priority: 0,
                     is_enabled: input.is_enabled.unwrap_or(true),
+                    proxy_config_id: input.proxy_config_id.map(|id| id.to_string()),
                 },
             )
             .await
@@ -675,6 +693,8 @@ impl ConfigMutations {
                     client_type: input.client_type,
                     config_json: effective_config_json,
                     is_enabled: input.is_enabled,
+                    proxy_config_id: optional_scalar_input(input.proxy_config_id)
+                        .map(|id| id.map(|id| id.to_string())),
                 },
             )
             .await
@@ -763,9 +783,14 @@ impl ConfigMutations {
         } else {
             config_json
         };
-        app.test_download_client_connection(&actor, &client_type, &config_json)
-            .await
-            .map_err(to_gql_error)?;
+        app.test_download_client_connection(
+            &actor,
+            &client_type,
+            &config_json,
+            input.proxy_config_id.as_ref().map(|id| id.as_str()),
+        )
+        .await
+        .map_err(to_gql_error)?;
         Ok(ProviderValidationPayload {
             status: "ok".to_string(),
             message: None,
@@ -913,7 +938,7 @@ impl ConfigMutations {
             &input.provider_type,
             config_json.as_deref(),
             input.indexer_id.as_ref().map(|id| id.as_ref()),
-            match &input.indexer_proxy_config_id {
+            match &input.proxy_config_id {
                 async_graphql::MaybeUndefined::Undefined => None,
                 async_graphql::MaybeUndefined::Null => Some(None),
                 async_graphql::MaybeUndefined::Value(id) => Some(Some(id.as_ref())),
@@ -1001,7 +1026,7 @@ mod tests {
     }
 
     #[test]
-    fn indexer_proxy_protocol_input_parses_or_names_the_bad_value() {
+    fn proxy_protocol_input_parses_or_names_the_bad_value() {
         assert_eq!(parse_challenge_solver_protocol(None).unwrap(), None);
         assert_eq!(
             parse_challenge_solver_protocol(Some("request_solution_v1")).unwrap(),
@@ -1023,7 +1048,7 @@ mod tests {
     }
 
     #[test]
-    fn indexer_proxy_credential_patches_distinguish_omitted_from_cleared() {
+    fn proxy_credential_patches_distinguish_omitted_from_cleared() {
         // Write-only convention: omitted keeps the stored secret, explicit null
         // clears it, a value replaces it.
         assert_eq!(

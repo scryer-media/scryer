@@ -465,7 +465,7 @@ pub struct IndexerConfigUpdate {
     pub is_enabled: Option<bool>,
     pub enable_interactive_search: Option<bool>,
     pub enable_auto_search: Option<bool>,
-    pub indexer_proxy_config_id: Option<Option<String>>,
+    pub proxy_config_id: Option<Option<String>>,
     pub download_client_id: Option<Option<String>>,
     pub seeding_profile_id: Option<Option<String>>,
     pub managed_parent_config_id: Option<Option<String>>,
@@ -476,9 +476,9 @@ pub struct IndexerConfigUpdate {
 }
 
 #[derive(Clone, Debug)]
-pub struct NewIndexerProxyConfig {
+pub struct NewProxyConfig {
     pub name: String,
-    pub provider_type: scryer_domain::IndexerProxyProviderType,
+    pub provider_type: scryer_domain::ProxyProviderType,
     /// Only meaningful for challenge-solver providers; supplying one for a
     /// transport provider is rejected rather than silently dropped. `None` on
     /// a solver provider takes the single protocol Scryer speaks.
@@ -491,10 +491,15 @@ pub struct NewIndexerProxyConfig {
     pub password: Option<String>,
     /// SOCKS5 only: resolve destination hostnames at the proxy (`socks5h`).
     pub remote_dns: Option<bool>,
+    /// Tunnel providers only: PEM-encoded private key, pasted by the operator
+    /// and persisted encrypted at rest.
+    pub private_key: Option<String>,
+    /// Passphrase for `private_key`, when the key has one.
+    pub private_key_passphrase: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct IndexerProxyConfigUpdate {
+pub struct ProxyConfigUpdate {
     pub id: String,
     pub name: Option<String>,
     pub base_url: Option<String>,
@@ -506,9 +511,12 @@ pub struct IndexerProxyConfigUpdate {
     pub username: Option<Option<String>>,
     pub password: Option<Option<String>>,
     pub remote_dns: Option<bool>,
+    /// Tunnel key material, same write-only tri-state as the credentials.
+    pub private_key: Option<Option<String>>,
+    pub private_key_passphrase: Option<Option<String>>,
 }
 
-impl IndexerProxyConfigUpdate {
+impl ProxyConfigUpdate {
     pub fn has_changes(&self) -> bool {
         self.name.is_some()
             || self.base_url.is_some()
@@ -517,13 +525,15 @@ impl IndexerProxyConfigUpdate {
             || self.username.is_some()
             || self.password.is_some()
             || self.remote_dns.is_some()
+            || self.private_key.is_some()
+            || self.private_key_passphrase.is_some()
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct IndexerProxyTestResult {
+pub struct ProxyTestResult {
     pub ok: bool,
-    pub status: scryer_domain::IndexerProxyHealthStatus,
+    pub status: scryer_domain::ProxyHealthStatus,
     pub message: Option<String>,
     pub duration_ms: Option<u64>,
 }
@@ -538,7 +548,7 @@ impl IndexerConfigUpdate {
             || self.is_enabled.is_some()
             || self.enable_interactive_search.is_some()
             || self.enable_auto_search.is_some()
-            || self.indexer_proxy_config_id.is_some()
+            || self.proxy_config_id.is_some()
             || self.download_client_id.is_some()
             || self.seeding_profile_id.is_some()
             || self.managed_parent_config_id.is_some()
@@ -605,6 +615,10 @@ pub struct DownloadClientConfigUpdate {
     pub client_type: Option<String>,
     pub config_json: Option<String>,
     pub is_enabled: Option<bool>,
+    /// Proxy assignment, using the same nested-`Option` patch convention as
+    /// `IndexerConfigUpdate::proxy_config_id`: outer `None` leaves the stored
+    /// assignment alone, `Some(None)` clears it, `Some(Some(id))` sets it.
+    pub proxy_config_id: Option<Option<String>>,
 }
 
 impl DownloadClientConfigUpdate {
@@ -613,6 +627,7 @@ impl DownloadClientConfigUpdate {
             || self.client_type.is_some()
             || self.config_json.is_some()
             || self.is_enabled.is_some()
+            || self.proxy_config_id.is_some()
     }
 }
 

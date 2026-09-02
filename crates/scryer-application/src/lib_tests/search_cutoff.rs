@@ -542,6 +542,7 @@ async fn search_indexers_anime_required_original_and_english_accepts_dual_audio_
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await
@@ -618,6 +619,7 @@ async fn search_indexers_for_title_uses_tagged_aliases_for_auto_evaluation() {
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await
@@ -711,6 +713,7 @@ async fn search_indexers_for_title_returns_results_when_candidate_token_attachme
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await
@@ -969,6 +972,7 @@ async fn bootstrap_interactive_search_with_blocklist(
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await

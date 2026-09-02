@@ -883,7 +883,7 @@ impl Default for RateLimitRegistry {
 }
 
 pub const DEFAULT_USER_AGENT: &str = concat!("Scryer/", env!("CARGO_PKG_VERSION"));
-pub const INDEXER_PROXY_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) \
+pub const PROXY_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) \
 AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 /// Transport timeouts are per attempt; workflow-level guards own aggregate deadlines.
 pub const STANDARD_HTTP_TIMEOUT: Duration = Duration::from_secs(60);
@@ -895,10 +895,10 @@ pub const INDEXER_HTTP_TIMEOUT: Duration = Duration::from_secs(120);
 pub const DOWNLOAD_CLIENT_PLUGIN_TIMEOUT: Duration = Duration::from_secs(240);
 /// Default workflow deadline for reading download-client feedback.
 pub const DEFAULT_DOWNLOAD_CLIENT_FEEDBACK_TIMEOUT: Duration = Duration::from_secs(300);
-/// Maximum operator-configurable request budget for an indexer proxy.
-pub const MAX_INDEXER_PROXY_TIMEOUT_SECONDS: u32 = 120;
+/// Maximum operator-configurable request budget for a proxy.
+pub const MAX_PROXY_TIMEOUT_SECONDS: u32 = 120;
 /// Scheduling/response grace added when an indexer may invoke a configured proxy.
-pub const INDEXER_PROXY_TIMEOUT_GRACE: Duration = Duration::from_secs(5);
+pub const PROXY_TIMEOUT_GRACE: Duration = Duration::from_secs(5);
 /// Budget for bounded operations that legitimately outlive an ordinary request.
 pub const LONG_RUNNING_HTTP_OPERATION_TIMEOUT: Duration = Duration::from_secs(310);
 
@@ -910,11 +910,11 @@ pub fn effective_indexer_timeout(_proxy_request_timeout_seconds: Option<u32>) ->
 }
 
 /// Return the bounded request budget for a solver or proxy-health request.
-pub fn effective_indexer_proxy_request_timeout(request_timeout_seconds: u32) -> Duration {
+pub fn effective_proxy_request_timeout(request_timeout_seconds: u32) -> Duration {
     Duration::from_secs(u64::from(
-        request_timeout_seconds.clamp(1, MAX_INDEXER_PROXY_TIMEOUT_SECONDS),
+        request_timeout_seconds.clamp(1, MAX_PROXY_TIMEOUT_SECONDS),
     ))
-    .saturating_add(INDEXER_PROXY_TIMEOUT_GRACE)
+    .saturating_add(PROXY_TIMEOUT_GRACE)
     .min(INDEXER_HTTP_TIMEOUT)
 }
 
@@ -1521,28 +1521,28 @@ pub fn indexer_reqwest_client() -> Client {
     CLIENT.clone()
 }
 
-/// Returns the operator-managed client used for normal indexer-proxy solve
+/// Returns the operator-managed client used for normal challenge-solver proxy
 /// requests. These requests deliberately present a stable browser-like user
 /// agent while retaining the shared client's no-redirect policy.
-pub fn indexer_proxy_reqwest_client() -> Client {
+pub fn proxy_reqwest_client() -> Client {
     static CLIENT: LazyLock<Client> = LazyLock::new(|| {
         reqwest_client_builder()
-            .user_agent(INDEXER_PROXY_USER_AGENT)
+            .user_agent(PROXY_USER_AGENT)
             .build()
-            .expect("indexer proxy client should build")
+            .expect("proxy client should build")
     });
     CLIENT.clone()
 }
 
-/// Builds the indexer-proxy health client. The redirect limit preserves
+/// Builds the proxy health client. The redirect limit preserves
 /// reqwest's historical default for this path.
-pub fn indexer_proxy_health_reqwest_client(timeout: Duration) -> Result<Client, reqwest::Error> {
+pub fn proxy_health_reqwest_client(timeout: Duration) -> Result<Client, reqwest::Error> {
     reqwest_client_builder()
         .timeout(timeout)
         .redirect(reqwest::redirect::Policy::limited(
             DEFAULT_TRUSTED_REDIRECT_HOPS,
         ))
-        .user_agent(INDEXER_PROXY_USER_AGENT)
+        .user_agent(PROXY_USER_AGENT)
         .build()
 }
 
@@ -1563,7 +1563,7 @@ pub struct TransportProxyCredentials<'a> {
 /// Every caller of this family goes through `transport_proxy_egress_url` for
 /// the `remote_dns` → `socks5h`/`socks4a` mapping, so the mapping is not forked
 /// across the health probe and the egress paths.
-pub fn indexer_transport_proxy_reqwest_client(
+pub fn transport_proxy_reqwest_client(
     proxy_url: &str,
     credentials: Option<TransportProxyCredentials<'_>>,
     timeout: Duration,
@@ -1573,7 +1573,7 @@ pub fn indexer_transport_proxy_reqwest_client(
         .redirect(reqwest::redirect::Policy::limited(
             DEFAULT_TRUSTED_REDIRECT_HOPS,
         ))
-        .user_agent(INDEXER_PROXY_USER_AGENT)
+        .user_agent(PROXY_USER_AGENT)
         .proxy(transport_proxy(proxy_url, credentials)?)
         .build()
 }
@@ -1582,7 +1582,7 @@ pub fn indexer_transport_proxy_reqwest_client(
 /// private roots. A CONNECT tunnel or a SOCKS hop still terminates TLS at the
 /// destination, so an indexer behind a private CA needs the same bundle the
 /// direct plugin client gets.
-pub fn indexer_transport_proxy_reqwest_client_with_extra_ca(
+pub fn transport_proxy_reqwest_client_with_extra_ca(
     proxy_url: &str,
     credentials: Option<TransportProxyCredentials<'_>>,
     timeout: Duration,
@@ -1595,7 +1595,7 @@ pub fn indexer_transport_proxy_reqwest_client_with_extra_ca(
         .redirect(reqwest::redirect::Policy::limited(
             DEFAULT_TRUSTED_REDIRECT_HOPS,
         ))
-        .user_agent(INDEXER_PROXY_USER_AGENT)
+        .user_agent(PROXY_USER_AGENT)
         .proxy(proxy);
     if !extra_ca_bundle_pem.trim().is_empty() {
         builder = builder.tls_certs_merge(uploaded_root_certificates(extra_ca_bundle_pem)?);
@@ -1605,10 +1605,10 @@ pub fn indexer_transport_proxy_reqwest_client_with_extra_ca(
         .map_err(|error| format!("failed to build indexer transport proxy client: {error}"))
 }
 
-/// Blocking twin of `indexer_transport_proxy_reqwest_client_with_extra_ca`.
+/// Blocking twin of `transport_proxy_reqwest_client_with_extra_ca`.
 /// The plugin HTTP host is a blocking worker, so its transport-proxied egress
 /// needs a `reqwest::blocking::Client` rather than an async one.
-pub fn blocking_indexer_transport_proxy_reqwest_client(
+pub fn blocking_transport_proxy_reqwest_client(
     proxy_url: &str,
     credentials: Option<TransportProxyCredentials<'_>>,
     timeout: Duration,
@@ -1621,7 +1621,7 @@ pub fn blocking_indexer_transport_proxy_reqwest_client(
         .redirect(reqwest::redirect::Policy::limited(
             DEFAULT_TRUSTED_REDIRECT_HOPS,
         ))
-        .user_agent(INDEXER_PROXY_USER_AGENT)
+        .user_agent(PROXY_USER_AGENT)
         .proxy(proxy);
     if !extra_ca_bundle_pem.trim().is_empty() {
         builder = builder.tls_certs_merge(uploaded_root_certificates(extra_ca_bundle_pem)?);
@@ -1713,38 +1713,34 @@ pub fn blocking_plugin_host_client(extra_ca_bundle_pem: &str) -> Result<Blocking
         .map_err(|error| format!("failed to build plugin HTTP client: {error}"))
 }
 
-/// Builds the blocking operator-managed client used for indexer-proxy solve
+/// Builds the blocking operator-managed client used for challenge-solver proxy
 /// requests from the plugin host. Redirects remain disabled to preserve the
 /// existing solve-call behavior.
-pub fn blocking_indexer_proxy_reqwest_client(
-    extra_ca_bundle_pem: &str,
-) -> Result<BlockingClient, String> {
+pub fn blocking_proxy_reqwest_client(extra_ca_bundle_pem: &str) -> Result<BlockingClient, String> {
     let mut builder = blocking_reqwest_client_builder()
         .redirect(reqwest::redirect::Policy::none())
-        .user_agent(INDEXER_PROXY_USER_AGENT);
+        .user_agent(PROXY_USER_AGENT);
     if !extra_ca_bundle_pem.trim().is_empty() {
         builder = builder.tls_certs_merge(uploaded_root_certificates(extra_ca_bundle_pem)?);
     }
     builder
         .build()
-        .map_err(|error| format!("failed to build indexer proxy HTTP client: {error}"))
+        .map_err(|error| format!("failed to build proxy HTTP client: {error}"))
 }
 
 /// Builds the async operator-managed client used by WASI Preview 2 indexer
 /// components for challenge-solver requests. Redirects stay disabled and the
 /// operator-installed private roots match the guarded target client.
-pub fn indexer_proxy_reqwest_client_with_extra_ca(
-    extra_ca_bundle_pem: &str,
-) -> Result<Client, String> {
+pub fn proxy_reqwest_client_with_extra_ca(extra_ca_bundle_pem: &str) -> Result<Client, String> {
     let mut builder = reqwest_client_builder()
         .redirect(reqwest::redirect::Policy::none())
-        .user_agent(INDEXER_PROXY_USER_AGENT);
+        .user_agent(PROXY_USER_AGENT);
     if !extra_ca_bundle_pem.trim().is_empty() {
         builder = builder.tls_certs_merge(uploaded_root_certificates(extra_ca_bundle_pem)?);
     }
     builder
         .build()
-        .map_err(|error| format!("failed to build indexer proxy HTTP client: {error}"))
+        .map_err(|error| format!("failed to build proxy HTTP client: {error}"))
 }
 
 pub fn blocking_reqwest_client() -> Result<BlockingClient, reqwest::Error> {
@@ -2582,35 +2578,27 @@ mod tests {
             "socks5://gateway:1080",
             "socks5h://gateway:1080",
         ] {
-            indexer_transport_proxy_reqwest_client(proxy_url, None, Duration::from_secs(5))
+            transport_proxy_reqwest_client(proxy_url, None, Duration::from_secs(5))
                 .unwrap_or_else(|error| panic!("{proxy_url} should build a client: {error}"));
-            blocking_indexer_transport_proxy_reqwest_client(
-                proxy_url,
-                None,
-                Duration::from_secs(5),
-                "",
-            )
-            .unwrap_or_else(|error| panic!("{proxy_url} should build a blocking client: {error}"));
+            blocking_transport_proxy_reqwest_client(proxy_url, None, Duration::from_secs(5), "")
+                .unwrap_or_else(|error| {
+                    panic!("{proxy_url} should build a blocking client: {error}")
+                });
         }
     }
 
     /// `Proxy::all` is lazy: it accepts any parseable URL and only rejects an
     /// unsupported scheme when it tries to dial. Scheme validation therefore
-    /// belongs to the configuration workflow (`normalize_indexer_proxy_endpoint`),
+    /// belongs to the configuration workflow (`normalize_proxy_endpoint`),
     /// not to this factory — pinned here so nobody assumes otherwise.
     #[test]
     fn transport_proxy_client_does_not_validate_the_proxy_scheme() {
         assert!(
-            indexer_transport_proxy_reqwest_client(
-                "ftp://gateway:2121",
-                None,
-                Duration::from_secs(5),
-            )
-            .is_ok()
+            transport_proxy_reqwest_client("ftp://gateway:2121", None, Duration::from_secs(5),)
+                .is_ok()
         );
         assert!(
-            indexer_transport_proxy_reqwest_client("not a url", None, Duration::from_secs(5),)
-                .is_err(),
+            transport_proxy_reqwest_client("not a url", None, Duration::from_secs(5),).is_err(),
             "an unparseable proxy URL is still rejected"
         );
     }
@@ -2664,7 +2652,7 @@ mod tests {
     #[tokio::test]
     async fn transport_proxy_client_egresses_through_the_proxy_with_basic_auth() {
         let (proxy_url, seen) = spawn_recording_http_proxy().await;
-        let client = indexer_transport_proxy_reqwest_client(
+        let client = transport_proxy_reqwest_client(
             &proxy_url,
             Some(TransportProxyCredentials {
                 username: "operator",
@@ -2706,7 +2694,7 @@ mod tests {
                 held.push(stream);
             }
         });
-        let client = indexer_transport_proxy_reqwest_client(
+        let client = transport_proxy_reqwest_client(
             &format!("http://{address}"),
             None,
             Duration::from_millis(250),
@@ -2729,12 +2717,9 @@ mod tests {
             effective_indexer_timeout(Some(u32::MAX)),
             INDEXER_HTTP_TIMEOUT
         );
+        assert_eq!(effective_proxy_request_timeout(60), Duration::from_secs(65));
         assert_eq!(
-            effective_indexer_proxy_request_timeout(60),
-            Duration::from_secs(65)
-        );
-        assert_eq!(
-            effective_indexer_proxy_request_timeout(u32::MAX),
+            effective_proxy_request_timeout(u32::MAX),
             INDEXER_HTTP_TIMEOUT
         );
         assert!(LONG_RUNNING_HTTP_OPERATION_TIMEOUT > INDEXER_HTTP_TIMEOUT);

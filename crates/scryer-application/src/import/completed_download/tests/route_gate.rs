@@ -164,6 +164,7 @@ async fn run_route_gate_check(
                     client_priority: 0,
                     created_at: Utc::now(),
                     updated_at: Utc::now(),
+                    proxy_config_id: None,
                 }],
             }),
             download_submissions: Arc::new(

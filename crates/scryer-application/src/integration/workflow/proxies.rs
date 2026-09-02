@@ -1,38 +1,43 @@
 impl AppUseCase {
-    pub async fn list_indexer_proxy_configs(
+    pub async fn list_proxy_configs(
         &self,
         actor: &User,
-    ) -> AppResult<Vec<scryer_domain::IndexerProxyConfig>> {
+    ) -> AppResult<Vec<scryer_domain::ProxyConfig>> {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
             .await?;
-        self.services
-            .integrations
-            .indexer_proxy_configs
-            .list(None)
-            .await
+        self.services.integrations.proxy_configs.list(None).await
     }
 
-    pub async fn create_indexer_proxy_config(
+    pub async fn create_proxy_config(
         &self,
         actor: &User,
-        input: NewIndexerProxyConfig,
-    ) -> AppResult<scryer_domain::IndexerProxyConfig> {
+        input: NewProxyConfig,
+    ) -> AppResult<scryer_domain::ProxyConfig> {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
             .await?;
 
         let provider_type = input.provider_type;
-        let name = normalize_indexer_proxy_name(&input.name)?;
-        let endpoint = normalize_indexer_proxy_endpoint(provider_type, &input.base_url)?;
+        let name = normalize_proxy_name(&input.name)?;
+        let endpoint = normalize_proxy_endpoint(provider_type, &input.base_url)?;
         let request_timeout_seconds =
-            validate_indexer_proxy_timeout(input.request_timeout_seconds.unwrap_or(60))?;
+            validate_proxy_timeout(input.request_timeout_seconds.unwrap_or(60))?;
         let protocol = resolve_new_proxy_protocol(provider_type, input.protocol)?;
         let username = normalize_proxy_credential(input.username);
         let password = normalize_proxy_credential(input.password);
         validate_proxy_credentials(provider_type, username.as_deref(), password.as_deref())?;
+        let private_key = normalize_proxy_private_key(input.private_key);
+        let private_key_passphrase = normalize_proxy_credential(input.private_key_passphrase);
+        validate_tunnel_auth(
+            provider_type,
+            username.as_deref(),
+            password.as_deref(),
+            private_key.as_deref(),
+            private_key_passphrase.as_deref(),
+        )?;
         let remote_dns =
             resolve_remote_dns(provider_type, input.remote_dns, endpoint.scheme_remote_dns)?;
         let now = Utc::now();
-        let config = scryer_domain::IndexerProxyConfig {
+        let config = scryer_domain::ProxyConfig {
             id: Id::new().0,
             name,
             provider_type,
@@ -43,58 +48,62 @@ impl AppUseCase {
             username_encrypted: username,
             password_encrypted: password,
             remote_dns,
-            last_health_status: Some(scryer_domain::IndexerProxyHealthStatus::Unknown),
+            last_health_status: Some(scryer_domain::ProxyHealthStatus::Unknown),
             last_error_message: None,
             last_error_at: None,
             created_at: now,
             updated_at: now,
+            // A host key is pinned on the first successful connect (WP6), never
+            // supplied by the operator, so a new row always starts unpinned.
+            host_key_fingerprint: None,
+            host_key_pinned_at: None,
+            private_key_encrypted: private_key,
+            private_key_passphrase_encrypted: private_key_passphrase,
         };
         self.services
             .integrations
-            .indexer_proxy_configs
+            .proxy_configs
             .create(config)
             .await
     }
 
-    pub async fn update_indexer_proxy_config(
+    pub async fn update_proxy_config(
         &self,
         actor: &User,
-        update: IndexerProxyConfigUpdate,
-    ) -> AppResult<scryer_domain::IndexerProxyConfig> {
+        update: ProxyConfigUpdate,
+    ) -> AppResult<scryer_domain::ProxyConfig> {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
             .await?;
         let id = update.id.trim();
         if id.is_empty() {
-            return Err(AppError::Validation(
-                "indexer proxy config id is required".into(),
-            ));
+            return Err(AppError::Validation("proxy config id is required".into()));
         }
         if !update.has_changes() {
             return Err(AppError::Validation(
-                "at least one indexer proxy field must be provided".into(),
+                "at least one proxy field must be provided".into(),
             ));
         }
 
         let mut config = self
             .services
             .integrations
-            .indexer_proxy_configs
+            .proxy_configs
             .get_by_id(id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("indexer proxy config '{id}' not found")))?;
+            .ok_or_else(|| AppError::NotFound(format!("proxy config '{id}' not found")))?;
         if let Some(name) = update.name {
-            config.name = normalize_indexer_proxy_name(&name)?;
+            config.name = normalize_proxy_name(&name)?;
         }
         // Only a base URL supplied by *this* patch can imply remote DNS; the
         // stored flag is otherwise left to `update.remote_dns` alone.
         let mut scheme_remote_dns = None;
         if let Some(base_url) = update.base_url {
-            let endpoint = normalize_indexer_proxy_endpoint(config.provider_type, &base_url)?;
+            let endpoint = normalize_proxy_endpoint(config.provider_type, &base_url)?;
             config.base_url = endpoint.base_url;
             scheme_remote_dns = endpoint.scheme_remote_dns;
         }
         if let Some(timeout) = update.request_timeout_seconds {
-            config.request_timeout_seconds = validate_indexer_proxy_timeout(timeout)?;
+            config.request_timeout_seconds = validate_proxy_timeout(timeout)?;
         }
         // Credentials are write-only: an omitted field keeps the stored secret,
         // an explicit null clears it.
@@ -104,10 +113,23 @@ impl AppUseCase {
         if let Some(password) = update.password {
             config.password_encrypted = normalize_proxy_credential(password);
         }
+        if let Some(private_key) = update.private_key {
+            config.private_key_encrypted = normalize_proxy_private_key(private_key);
+        }
+        if let Some(passphrase) = update.private_key_passphrase {
+            config.private_key_passphrase_encrypted = normalize_proxy_credential(passphrase);
+        }
         validate_proxy_credentials(
             config.provider_type,
             config.username_encrypted.as_deref(),
             config.password_encrypted.as_deref(),
+        )?;
+        validate_tunnel_auth(
+            config.provider_type,
+            config.username_encrypted.as_deref(),
+            config.password_encrypted.as_deref(),
+            config.private_key_encrypted.as_deref(),
+            config.private_key_passphrase_encrypted.as_deref(),
         )?;
         if update.remote_dns.is_some() || scheme_remote_dns.is_some() {
             config.remote_dns =
@@ -122,12 +144,29 @@ impl AppUseCase {
                 .await?
                 .into_iter()
                 .filter(|indexer| {
-                    indexer.is_enabled && indexer.indexer_proxy_config_id.as_deref() == Some(id)
+                    indexer.is_enabled && indexer.proxy_config_id.as_deref() == Some(id)
                 })
                 .count();
             if assigned_count > 0 {
                 return Err(AppError::Validation(format!(
-                    "indexer proxy config is assigned to {assigned_count} enabled indexer(s)"
+                    "proxy config is assigned to {assigned_count} enabled indexer(s)"
+                )));
+            }
+            // Download clients are consumers on exactly the same terms, so the
+            // same guard applies: disabling a proxy out from under live traffic
+            // would silently route it somewhere the operator did not choose.
+            let assigned_clients = self
+                .services
+                .integrations
+                .download_client_configs
+                .list(None)
+                .await?
+                .into_iter()
+                .filter(|client| client.is_enabled && client.proxy_config_id.as_deref() == Some(id))
+                .count();
+            if assigned_clients > 0 {
+                return Err(AppError::Validation(format!(
+                    "proxy config is assigned to {assigned_clients} enabled download client(s)"
                 )));
             }
         }
@@ -138,19 +177,17 @@ impl AppUseCase {
 
         self.services
             .integrations
-            .indexer_proxy_configs
+            .proxy_configs
             .update(config)
             .await
     }
 
-    pub async fn delete_indexer_proxy_config(&self, actor: &User, id: &str) -> AppResult<()> {
+    pub async fn delete_proxy_config(&self, actor: &User, id: &str) -> AppResult<()> {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
             .await?;
         let id = id.trim();
         if id.is_empty() {
-            return Err(AppError::Validation(
-                "indexer proxy config id is required".into(),
-            ));
+            return Err(AppError::Validation("proxy config id is required".into()));
         }
         let assigned = self
             .services
@@ -159,60 +196,115 @@ impl AppUseCase {
             .list(None)
             .await?
             .into_iter()
-            .any(|indexer| indexer.indexer_proxy_config_id.as_deref() == Some(id));
+            .any(|indexer| indexer.proxy_config_id.as_deref() == Some(id));
         if assigned {
             return Err(AppError::Validation(
-                "indexer proxy config is assigned to one or more indexers".into(),
+                "proxy config is assigned to one or more indexers".into(),
             ));
         }
-        self.services
+        // Same rule for the other consumer family. Deletion refuses rather than
+        // clearing assignments, which is how the indexer side has always
+        // behaved: silently unproxying live traffic is the worse outcome.
+        let assigned_clients = self
+            .services
             .integrations
-            .indexer_proxy_configs
-            .delete(id)
-            .await
+            .download_client_configs
+            .list(None)
+            .await?
+            .into_iter()
+            .any(|client| client.proxy_config_id.as_deref() == Some(id));
+        if assigned_clients {
+            return Err(AppError::Validation(
+                "proxy config is assigned to one or more download clients".into(),
+            ));
+        }
+        self.services.integrations.proxy_configs.delete(id).await
     }
 
-    pub async fn test_indexer_proxy_config(
+    /// Forget the pinned tunnel host key so the next connect trusts the server
+    /// afresh.
+    ///
+    /// Trust-on-first-use is only usable if there is a way back: a legitimate
+    /// server rekey would otherwise leave the operator with a proxy that hard-
+    /// fails forever. Clearing is deliberately explicit and operator-driven,
+    /// never automatic on a mismatch.
+    pub async fn reset_proxy_host_key(
         &self,
         actor: &User,
         id: &str,
-    ) -> AppResult<IndexerProxyTestResult> {
+    ) -> AppResult<scryer_domain::ProxyConfig> {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
             .await?;
         let id = id.trim();
         if id.is_empty() {
-            return Err(AppError::Validation(
-                "indexer proxy config id is required".into(),
-            ));
+            return Err(AppError::Validation("proxy config id is required".into()));
         }
         let config = self
             .services
             .integrations
-            .indexer_proxy_configs
+            .proxy_configs
             .get_by_id(id)
             .await?
-            .ok_or_else(|| AppError::NotFound(format!("indexer proxy config '{id}' not found")))?;
+            .ok_or_else(|| AppError::NotFound(format!("proxy config '{id}' not found")))?;
+        if !config.is_tunnel() {
+            return Err(AppError::Validation(
+                "only tunnel proxies pin a host key".into(),
+            ));
+        }
+        self.services
+            .integrations
+            .proxy_configs
+            .clear_host_key(&config.id)
+            .await?;
+        self.services
+            .integrations
+            .proxy_configs
+            .get_by_id(&config.id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("proxy config '{id}' not found")))
+    }
+
+    pub async fn test_proxy_config(&self, actor: &User, id: &str) -> AppResult<ProxyTestResult> {
+        self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
+            .await?;
+        let id = id.trim();
+        if id.is_empty() {
+            return Err(AppError::Validation("proxy config id is required".into()));
+        }
+        let config = self
+            .services
+            .integrations
+            .proxy_configs
+            .get_by_id(id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("proxy config '{id}' not found")))?;
 
         let started = std::time::Instant::now();
         let result = match config.kind() {
-            scryer_domain::IndexerProxyKind::ChallengeSolver => probe_solver_health(&config).await,
-            scryer_domain::IndexerProxyKind::Transport => {
+            scryer_domain::ProxyKind::ChallengeSolver => probe_solver_health(&config).await,
+            scryer_domain::ProxyKind::Transport => {
                 let destination = self.transport_proxy_probe_destination(&config).await;
                 probe_transport_proxy_health(&config, destination.as_deref()).await
             }
+            // No fake pass. There is no tunnel to probe until the engine that
+            // builds one exists; WP6 replaces this arm with a handshake plus
+            // the same assigned-destination fetch the transport arm does.
+            scryer_domain::ProxyKind::Tunnel => Err(AppError::Validation(
+                crate::tunnel_proxy::TUNNEL_PROBE_UNAVAILABLE_MESSAGE.to_string(),
+            )),
         };
         let duration_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
         let test_result = match result {
-            Ok(message) => IndexerProxyTestResult {
+            Ok(message) => ProxyTestResult {
                 ok: true,
-                status: scryer_domain::IndexerProxyHealthStatus::Healthy,
+                status: scryer_domain::ProxyHealthStatus::Healthy,
                 message: Some(message),
                 duration_ms: Some(duration_ms),
             },
-            Err(error) => IndexerProxyTestResult {
+            Err(error) => ProxyTestResult {
                 ok: false,
-                status: scryer_domain::IndexerProxyHealthStatus::Unhealthy,
-                message: Some(crate::challenge_solver::sanitize_indexer_proxy_error(
+                status: scryer_domain::ProxyHealthStatus::Unhealthy,
+                message: Some(crate::challenge_solver::sanitize_proxy_error(
                     &error.to_string(),
                 )),
                 duration_ms: Some(duration_ms),
@@ -228,14 +320,14 @@ impl AppUseCase {
         if let Err(error) = self
             .services
             .integrations
-            .indexer_proxy_configs
+            .proxy_configs
             .record_health(&config.id, test_result.status, error_message, error_at)
             .await
         {
             tracing::warn!(
                 proxy_config_id = config.id.as_str(),
                 error = %error,
-                "failed to persist indexer proxy test result"
+                "failed to persist proxy test result"
             );
         }
 
@@ -250,7 +342,7 @@ impl AppUseCase {
     /// back to checking the proxy endpoint alone.
     async fn transport_proxy_probe_destination(
         &self,
-        config: &scryer_domain::IndexerProxyConfig,
+        config: &scryer_domain::ProxyConfig,
     ) -> Option<String> {
         let indexers = match self.services.integrations.indexer_configs.list(None).await {
             Ok(indexers) => indexers,
@@ -266,7 +358,7 @@ impl AppUseCase {
         let mut assigned: Vec<_> = indexers
             .into_iter()
             .filter(|indexer| {
-                indexer.indexer_proxy_config_id.as_deref() == Some(config.id.as_str())
+                indexer.proxy_config_id.as_deref() == Some(config.id.as_str())
                     && !indexer.base_url.trim().is_empty()
             })
             .collect();
@@ -280,34 +372,29 @@ impl AppUseCase {
     }
 }
 
-fn normalize_indexer_proxy_name(raw: &str) -> AppResult<String> {
+fn normalize_proxy_name(raw: &str) -> AppResult<String> {
     let name = raw.trim().to_string();
     if name.is_empty() {
-        return Err(AppError::Validation(
-            "indexer proxy name is required".into(),
-        ));
+        return Err(AppError::Validation("proxy name is required".into()));
     }
     Ok(name)
 }
 
-fn normalize_indexer_proxy_base_url(raw: &str) -> AppResult<String> {
+fn normalize_proxy_base_url(raw: &str) -> AppResult<String> {
     let trimmed = raw.trim().trim_end_matches('/');
     if trimmed.is_empty() {
-        return Err(AppError::Validation(
-            "indexer proxy base URL is required".into(),
-        ));
+        return Err(AppError::Validation("proxy base URL is required".into()));
     }
-    let parsed = url::Url::parse(trimmed).map_err(|error| {
-        AppError::Validation(format!("invalid indexer proxy base URL: {error}"))
-    })?;
+    let parsed = url::Url::parse(trimmed)
+        .map_err(|error| AppError::Validation(format!("invalid proxy base URL: {error}")))?;
     if !matches!(parsed.scheme(), "http" | "https") {
         return Err(AppError::Validation(
-            "indexer proxy base URL must use http or https".into(),
+            "proxy base URL must use http or https".into(),
         ));
     }
     if parsed.host_str().is_none_or(|host| host.trim().is_empty()) {
         return Err(AppError::Validation(
-            "indexer proxy base URL must include a host".into(),
+            "proxy base URL must include a host".into(),
         ));
     }
     Ok(trimmed.to_string())
@@ -325,40 +412,39 @@ struct NormalizedProxyEndpoint {
 /// Validate a proxy endpoint against what its provider actually is.
 ///
 /// Challenge solvers keep the original http/https rule untouched. Transport
-/// providers additionally have to match their own scheme, because a `socks5`
-/// row whose URL says `http` would be silently unusable at egress time.
-fn normalize_indexer_proxy_endpoint(
-    provider_type: scryer_domain::IndexerProxyProviderType,
+/// and tunnel providers additionally have to match their own scheme, because a
+/// `socks5` row whose URL says `http` would be silently unusable at egress
+/// time.
+fn normalize_proxy_endpoint(
+    provider_type: scryer_domain::ProxyProviderType,
     raw: &str,
 ) -> AppResult<NormalizedProxyEndpoint> {
-    use scryer_domain::IndexerProxyProviderType as Provider;
+    use scryer_domain::ProxyProviderType as Provider;
 
     if provider_type.is_challenge_solver() {
         return Ok(NormalizedProxyEndpoint {
-            base_url: normalize_indexer_proxy_base_url(raw)?,
+            base_url: normalize_proxy_base_url(raw)?,
             scheme_remote_dns: None,
         });
     }
 
     let trimmed = raw.trim().trim_end_matches('/');
     if trimmed.is_empty() {
-        return Err(AppError::Validation(
-            "indexer proxy base URL is required".into(),
-        ));
+        return Err(AppError::Validation("proxy base URL is required".into()));
     }
-    let parsed = url::Url::parse(trimmed).map_err(|error| {
-        AppError::Validation(format!("invalid indexer proxy base URL: {error}"))
-    })?;
+    let parsed = url::Url::parse(trimmed)
+        .map_err(|error| AppError::Validation(format!("invalid proxy base URL: {error}")))?;
     if parsed.host_str().is_none_or(|host| host.trim().is_empty()) {
         return Err(AppError::Validation(
-            "indexer proxy base URL must include a host".into(),
+            "proxy base URL must include a host".into(),
         ));
     }
     // Credentials belong in the username/password fields, which are encrypted
     // at rest. The base URL is stored in the clear.
     if !parsed.username().is_empty() || parsed.password().is_some() {
         return Err(AppError::Validation(
-            "indexer proxy base URL must not embed credentials; use the username and password fields".into(),
+            "proxy base URL must not embed credentials; use the username and password fields"
+                .into(),
         ));
     }
 
@@ -367,6 +453,26 @@ fn normalize_indexer_proxy_endpoint(
             base_url: trimmed.to_string(),
             scheme_remote_dns: None,
         }),
+        // An SSH endpoint is a host and a port and nothing else: there is no
+        // resource to address, so a path is a sign the operator pasted the
+        // wrong thing.
+        (Provider::SshTunnel, "ssh") => {
+            if !matches!(parsed.path(), "" | "/") {
+                return Err(AppError::Validation(
+                    "SSH tunnel base URL must be ssh://host[:port] with no path".into(),
+                ));
+            }
+            if parsed.query().is_some() || parsed.fragment().is_some() {
+                return Err(AppError::Validation(
+                    "SSH tunnel base URL must be ssh://host[:port] with no query or fragment"
+                        .into(),
+                ));
+            }
+            Ok(NormalizedProxyEndpoint {
+                base_url: trimmed.to_string(),
+                scheme_remote_dns: None,
+            })
+        }
         (Provider::Socks4, "socks4") | (Provider::Socks5, "socks5") => {
             Ok(NormalizedProxyEndpoint {
                 base_url: trimmed.to_string(),
@@ -400,6 +506,9 @@ fn normalize_indexer_proxy_endpoint(
         (Provider::Socks5, _) => Err(AppError::Validation(
             "SOCKS5 proxy base URL must use socks5 or socks5h".into(),
         )),
+        (Provider::SshTunnel, _) => Err(AppError::Validation(
+            "SSH tunnel base URL must use ssh".into(),
+        )),
         (Provider::Byparr | Provider::Trawl, _) => unreachable!("handled by the solver branch"),
     }
 }
@@ -408,20 +517,22 @@ fn normalize_indexer_proxy_endpoint(
 /// take none at all, and being handed one means the caller is confused about
 /// what it is configuring.
 fn resolve_new_proxy_protocol(
-    provider_type: scryer_domain::IndexerProxyProviderType,
+    provider_type: scryer_domain::ProxyProviderType,
     requested: Option<scryer_domain::ChallengeSolverProtocol>,
 ) -> AppResult<Option<scryer_domain::ChallengeSolverProtocol>> {
     match provider_type.kind() {
-        scryer_domain::IndexerProxyKind::ChallengeSolver => Ok(Some(
+        scryer_domain::ProxyKind::ChallengeSolver => Ok(Some(
             requested.unwrap_or(scryer_domain::ChallengeSolverProtocol::RequestSolutionV1),
         )),
-        scryer_domain::IndexerProxyKind::Transport if requested.is_some() => {
+        scryer_domain::ProxyKind::Transport | scryer_domain::ProxyKind::Tunnel
+            if requested.is_some() =>
+        {
             Err(AppError::Validation(format!(
                 "{} proxies do not use a challenge-solver protocol",
                 provider_type.as_str()
             )))
         }
-        scryer_domain::IndexerProxyKind::Transport => Ok(None),
+        scryer_domain::ProxyKind::Transport | scryer_domain::ProxyKind::Tunnel => Ok(None),
     }
 }
 
@@ -431,7 +542,7 @@ fn normalize_proxy_credential(raw: Option<String>) -> Option<String> {
 }
 
 fn validate_proxy_credentials(
-    provider_type: scryer_domain::IndexerProxyProviderType,
+    provider_type: scryer_domain::ProxyProviderType,
     username: Option<&str>,
     password: Option<&str>,
 ) -> AppResult<()> {
@@ -444,7 +555,7 @@ fn validate_proxy_credentials(
     // SOCKS4 connector without `with_auth`, so a username would be silently
     // dropped on the wire). Rejecting is honest; accepting would promise an
     // authenticated hop that never happens.
-    if provider_type == scryer_domain::IndexerProxyProviderType::Socks4
+    if provider_type == scryer_domain::ProxyProviderType::Socks4
         && (username.is_some() || password.is_some())
     {
         return Err(AppError::Validation(
@@ -453,8 +564,84 @@ fn validate_proxy_credentials(
     }
     if password.is_some() && username.is_none() {
         return Err(AppError::Validation(
-            "indexer proxy password requires a username".into(),
+            "proxy password requires a username".into(),
         ));
+    }
+    Ok(())
+}
+
+/// A pasted private key is normalized like any other secret, but keeps its
+/// internal newlines: a PEM body is line-structured and trimming only the ends
+/// is what makes a copy-pasted block usable.
+fn normalize_proxy_private_key(raw: Option<String>) -> Option<String> {
+    raw.map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+/// Structural PEM check only.
+///
+/// Real key parsing belongs to the tunnel engine (WP6, russh-keys); rejecting
+/// something that is plainly not a PEM block here just keeps an obvious paste
+/// mistake from being stored encrypted and failing much later with a worse
+/// message.
+fn validate_private_key_pem(pem: &str) -> AppResult<()> {
+    let trimmed = pem.trim();
+    let malformed = || {
+        AppError::Validation(
+            "private key must be a PEM block beginning with -----BEGIN and ending with -----"
+                .to_string(),
+        )
+    };
+    if !trimmed.starts_with("-----BEGIN") {
+        return Err(malformed());
+    }
+    let last_line = trimmed.lines().next_back().unwrap_or_default().trim();
+    if !(last_line.starts_with("-----END") && last_line.ends_with("-----")) {
+        return Err(malformed());
+    }
+    Ok(())
+}
+
+/// Authentication rules for the tunnel family, and the rejection that keeps
+/// key material off every other family.
+fn validate_tunnel_auth(
+    provider_type: scryer_domain::ProxyProviderType,
+    username: Option<&str>,
+    password: Option<&str>,
+    private_key: Option<&str>,
+    private_key_passphrase: Option<&str>,
+) -> AppResult<()> {
+    if !provider_type.is_tunnel() {
+        if private_key.is_some() {
+            return Err(AppError::Validation(
+                "only SSH tunnels take a private key".into(),
+            ));
+        }
+        if private_key_passphrase.is_some() {
+            return Err(AppError::Validation(
+                "only SSH tunnels take a private key passphrase".into(),
+            ));
+        }
+        return Ok(());
+    }
+
+    if username.is_none() {
+        return Err(AppError::Validation(
+            "SSH tunnels require a username".into(),
+        ));
+    }
+    if password.is_none() && private_key.is_none() {
+        return Err(AppError::Validation(
+            "SSH tunnels require a password or a private key".into(),
+        ));
+    }
+    if private_key_passphrase.is_some() && private_key.is_none() {
+        return Err(AppError::Validation(
+            "a private key passphrase requires a private key".into(),
+        ));
+    }
+    if let Some(private_key) = private_key {
+        validate_private_key_pem(private_key)?;
     }
     Ok(())
 }
@@ -462,7 +649,7 @@ fn validate_proxy_credentials(
 /// Resolve the stored remote-DNS flag from what the operator asked for and
 /// what the URL scheme implied.
 fn resolve_remote_dns(
-    provider_type: scryer_domain::IndexerProxyProviderType,
+    provider_type: scryer_domain::ProxyProviderType,
     requested: Option<bool>,
     scheme_remote_dns: Option<bool>,
 ) -> AppResult<bool> {
@@ -481,8 +668,7 @@ fn resolve_remote_dns(
     if resolved
         && !matches!(
             provider_type,
-            scryer_domain::IndexerProxyProviderType::Socks4
-                | scryer_domain::IndexerProxyProviderType::Socks5
+            scryer_domain::ProxyProviderType::Socks4 | scryer_domain::ProxyProviderType::Socks5
         )
     {
         return Err(AppError::Validation(
@@ -492,11 +678,11 @@ fn resolve_remote_dns(
     Ok(resolved)
 }
 
-fn validate_indexer_proxy_timeout(timeout: u32) -> AppResult<u32> {
-    if !(1..=scryer_outbound_http::MAX_INDEXER_PROXY_TIMEOUT_SECONDS).contains(&timeout) {
+fn validate_proxy_timeout(timeout: u32) -> AppResult<u32> {
+    if !(1..=scryer_outbound_http::MAX_PROXY_TIMEOUT_SECONDS).contains(&timeout) {
         return Err(AppError::Validation(format!(
-            "indexer proxy timeout must be between 1 and {} seconds",
-            scryer_outbound_http::MAX_INDEXER_PROXY_TIMEOUT_SECONDS
+            "proxy timeout must be between 1 and {} seconds",
+            scryer_outbound_http::MAX_PROXY_TIMEOUT_SECONDS
         )));
     }
     Ok(timeout)
@@ -506,7 +692,7 @@ const SOLVER_HEALTH_RESPONSE_MAX_BYTES: usize = 1024 * 1024;
 
 async fn read_solver_health_body_bounded(
     mut response: reqwest::Response,
-    provider: scryer_domain::IndexerProxyProviderType,
+    provider: scryer_domain::ProxyProviderType,
 ) -> AppResult<Vec<u8>> {
     let unreadable = || {
         AppError::Repository(
@@ -536,7 +722,7 @@ async fn read_solver_health_body_bounded(
 
 async fn send_solver_probe_request(
     request: reqwest::RequestBuilder,
-    provider: scryer_domain::IndexerProxyProviderType,
+    provider: scryer_domain::ProxyProviderType,
     deadline: tokio::time::Instant,
 ) -> AppResult<reqwest::Response> {
     tokio::time::timeout_at(
@@ -572,15 +758,14 @@ async fn send_solver_probe_request(
     })
 }
 
-async fn probe_solver_health(config: &scryer_domain::IndexerProxyConfig) -> AppResult<String> {
+async fn probe_solver_health(config: &scryer_domain::ProxyConfig) -> AppResult<String> {
     let provider_name = crate::challenge_solver::solver_provider_name(config.provider_type);
     let base_url = config.base_url.trim_end_matches('/');
     let health_url = format!("{base_url}/health");
-    let request_timeout = scryer_outbound_http::effective_indexer_proxy_request_timeout(
-        config.request_timeout_seconds,
-    );
-    let client = scryer_outbound_http::indexer_proxy_health_reqwest_client(request_timeout)
-        .map_err(|_| {
+    let request_timeout =
+        scryer_outbound_http::effective_proxy_request_timeout(config.request_timeout_seconds);
+    let client =
+        scryer_outbound_http::proxy_health_reqwest_client(request_timeout).map_err(|_| {
             AppError::Repository(
                 crate::challenge_solver::solver_error_message(
                     config.provider_type,
@@ -679,20 +864,36 @@ pub const TRANSPORT_PROXY_TIMEOUT_MESSAGE: &str = "transport proxy did not answe
 pub const TRANSPORT_PROXY_DOWNSTREAM_MESSAGE: &str =
     "transport proxy answered, but the request through it failed";
 
-fn transport_proxy_name(provider_type: scryer_domain::IndexerProxyProviderType) -> &'static str {
+fn transport_proxy_name(provider_type: scryer_domain::ProxyProviderType) -> &'static str {
     match provider_type {
-        scryer_domain::IndexerProxyProviderType::Http => "HTTP proxy",
-        scryer_domain::IndexerProxyProviderType::Socks4 => "SOCKS4 proxy",
-        scryer_domain::IndexerProxyProviderType::Socks5 => "SOCKS5 proxy",
-        scryer_domain::IndexerProxyProviderType::Byparr
-        | scryer_domain::IndexerProxyProviderType::Trawl => "challenge solver",
+        scryer_domain::ProxyProviderType::Http => "HTTP proxy",
+        scryer_domain::ProxyProviderType::Socks4 => "SOCKS4 proxy",
+        scryer_domain::ProxyProviderType::Socks5 => "SOCKS5 proxy",
+        scryer_domain::ProxyProviderType::SshTunnel => "SSH tunnel",
+        scryer_domain::ProxyProviderType::Byparr | scryer_domain::ProxyProviderType::Trawl => {
+            "challenge solver"
+        }
+    }
+}
+
+/// Default port for a proxy family whose scheme the URL crate has no default
+/// for: SOCKS listens on 1080, SSH on 22.
+fn proxy_default_port(provider_type: scryer_domain::ProxyProviderType) -> Option<u16> {
+    match provider_type {
+        scryer_domain::ProxyProviderType::Socks4 | scryer_domain::ProxyProviderType::Socks5 => {
+            Some(1080)
+        }
+        scryer_domain::ProxyProviderType::SshTunnel => Some(22),
+        // http/https already have a known default, and a solver is addressed
+        // as an ordinary URL.
+        scryer_domain::ProxyProviderType::Http
+        | scryer_domain::ProxyProviderType::Byparr
+        | scryer_domain::ProxyProviderType::Trawl => None,
     }
 }
 
 /// Split a stored transport-proxy base URL into the host and port to dial.
-fn transport_proxy_endpoint(
-    config: &scryer_domain::IndexerProxyConfig,
-) -> AppResult<(String, u16)> {
+fn transport_proxy_endpoint(config: &scryer_domain::ProxyConfig) -> AppResult<(String, u16)> {
     let parsed = url::Url::parse(config.base_url.trim())
         .map_err(|error| AppError::Validation(format!("invalid proxy base URL: {error}")))?;
     let host = parsed
@@ -700,11 +901,11 @@ fn transport_proxy_endpoint(
         .map(str::to_string)
         .filter(|host| !host.trim().is_empty())
         .ok_or_else(|| AppError::Validation("proxy base URL must include a host".to_string()))?;
-    // SOCKS URLs carry no scheme-implied default in the URL crate, so supply
-    // the same 1080 our HTTP client would.
+    // SOCKS and ssh URLs carry no scheme-implied default in the URL crate, so
+    // supply the same defaults our clients would.
     let port = parsed
         .port_or_known_default()
-        .or_else(|| config.provider_type.is_transport().then_some(1080))
+        .or_else(|| proxy_default_port(config.provider_type))
         .ok_or_else(|| AppError::Validation("proxy base URL must include a port".to_string()))?;
     Ok((host, port))
 }
@@ -715,7 +916,7 @@ fn transport_proxy_endpoint(
 /// host and port are right and something is accepting there, which is exactly
 /// the failure this separates out from "the request through the proxy failed".
 async fn probe_transport_proxy_reachable(
-    config: &scryer_domain::IndexerProxyConfig,
+    config: &scryer_domain::ProxyConfig,
     timeout: std::time::Duration,
 ) -> AppResult<(String, u16)> {
     let (host, port) = transport_proxy_endpoint(config)?;
@@ -744,13 +945,12 @@ async fn probe_transport_proxy_reachable(
 /// tunnel carries traffic, so the status code is reported rather than judged —
 /// this is a test of the proxy, not of the indexer's credentials.
 async fn probe_transport_proxy_health(
-    config: &scryer_domain::IndexerProxyConfig,
+    config: &scryer_domain::ProxyConfig,
     destination: Option<&str>,
 ) -> AppResult<String> {
     let proxy_name = transport_proxy_name(config.provider_type);
-    let request_timeout = scryer_outbound_http::effective_indexer_proxy_request_timeout(
-        config.request_timeout_seconds,
-    );
+    let request_timeout =
+        scryer_outbound_http::effective_proxy_request_timeout(config.request_timeout_seconds);
     let (host, port) = probe_transport_proxy_reachable(config, request_timeout).await?;
 
     let Some(destination) = destination else {
@@ -759,7 +959,7 @@ async fn probe_transport_proxy_health(
         ));
     };
 
-    let client = scryer_outbound_http::indexer_transport_proxy_reqwest_client(
+    let client = scryer_outbound_http::transport_proxy_reqwest_client(
         &effective_transport_proxy_url(config),
         transport_proxy_credentials(config),
         request_timeout,
@@ -787,57 +987,55 @@ async fn probe_transport_proxy_health(
     ))
 }
 
-use crate::indexer_transport_proxy::{
+use crate::transport_proxy::{
     transport_proxy_credentials, transport_proxy_egress_url as effective_transport_proxy_url,
 };
 
 #[cfg(test)]
-mod indexer_proxy_tests {
+mod proxy_tests {
     use super::*;
     use wiremock::matchers::{body_json, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    use scryer_domain::IndexerProxyProviderType as Provider;
+    use scryer_domain::ProxyProviderType as Provider;
 
     #[test]
     fn proxy_timeout_validation_uses_indexer_ceiling() {
-        assert_eq!(validate_indexer_proxy_timeout(120).unwrap(), 120);
-        assert!(validate_indexer_proxy_timeout(0).is_err());
-        assert!(validate_indexer_proxy_timeout(121).is_err());
+        assert_eq!(validate_proxy_timeout(120).unwrap(), 120);
+        assert!(validate_proxy_timeout(0).is_err());
+        assert!(validate_proxy_timeout(121).is_err());
     }
 
     #[test]
     fn solver_endpoints_keep_the_original_http_rule() {
-        let endpoint = normalize_indexer_proxy_endpoint(Provider::Trawl, " http://solver:8191/ ")
+        let endpoint = normalize_proxy_endpoint(Provider::Trawl, " http://solver:8191/ ")
             .expect("solver URLs are unchanged");
         assert_eq!(endpoint.base_url, "http://solver:8191");
         assert_eq!(endpoint.scheme_remote_dns, None);
-        assert!(
-            normalize_indexer_proxy_endpoint(Provider::Byparr, "socks5://solver:1080").is_err()
-        );
+        assert!(normalize_proxy_endpoint(Provider::Byparr, "socks5://solver:1080").is_err());
     }
 
     #[test]
     fn transport_endpoints_must_match_their_provider_scheme() {
         assert_eq!(
-            normalize_indexer_proxy_endpoint(Provider::Http, "http://gateway:3128")
+            normalize_proxy_endpoint(Provider::Http, "http://gateway:3128")
                 .expect("http proxy")
                 .base_url,
             "http://gateway:3128"
         );
         assert_eq!(
-            normalize_indexer_proxy_endpoint(Provider::Socks5, "socks5://gateway:1080")
+            normalize_proxy_endpoint(Provider::Socks5, "socks5://gateway:1080")
                 .expect("socks5 proxy")
                 .base_url,
             "socks5://gateway:1080"
         );
-        assert!(normalize_indexer_proxy_endpoint(Provider::Http, "socks5://gateway:1080").is_err());
-        assert!(normalize_indexer_proxy_endpoint(Provider::Socks5, "http://gateway:3128").is_err());
+        assert!(normalize_proxy_endpoint(Provider::Http, "socks5://gateway:1080").is_err());
+        assert!(normalize_proxy_endpoint(Provider::Socks5, "http://gateway:3128").is_err());
     }
 
     #[test]
     fn socks5h_is_stored_as_socks5_plus_remote_dns() {
-        let endpoint = normalize_indexer_proxy_endpoint(Provider::Socks5, "socks5h://gateway:1080")
+        let endpoint = normalize_proxy_endpoint(Provider::Socks5, "socks5h://gateway:1080")
             .expect("socks5h is accepted");
         assert_eq!(endpoint.base_url, "socks5://gateway:1080");
         assert_eq!(endpoint.scheme_remote_dns, Some(true));
@@ -848,7 +1046,7 @@ mod indexer_proxy_tests {
 
     #[test]
     fn transport_endpoints_reject_credentials_in_the_url() {
-        let error = normalize_indexer_proxy_endpoint(Provider::Socks5, "socks5://u:p@gateway:1080")
+        let error = normalize_proxy_endpoint(Provider::Socks5, "socks5://u:p@gateway:1080")
             .expect_err("credentials belong in the encrypted fields");
         assert!(error.to_string().contains("must not embed credentials"));
     }
@@ -868,21 +1066,17 @@ mod indexer_proxy_tests {
     #[test]
     fn socks4_endpoints_round_trip_like_socks5() {
         assert_eq!(
-            normalize_indexer_proxy_endpoint(Provider::Socks4, "socks4://gateway:1080")
+            normalize_proxy_endpoint(Provider::Socks4, "socks4://gateway:1080")
                 .expect("socks4 proxy")
                 .base_url,
             "socks4://gateway:1080"
         );
-        let endpoint = normalize_indexer_proxy_endpoint(Provider::Socks4, "socks4a://gateway:1080")
+        let endpoint = normalize_proxy_endpoint(Provider::Socks4, "socks4a://gateway:1080")
             .expect("socks4a is accepted");
         assert_eq!(endpoint.base_url, "socks4://gateway:1080");
         assert_eq!(endpoint.scheme_remote_dns, Some(true));
-        assert!(
-            normalize_indexer_proxy_endpoint(Provider::Socks4, "socks5://gateway:1080").is_err()
-        );
-        assert!(
-            normalize_indexer_proxy_endpoint(Provider::Socks5, "socks4://gateway:1080").is_err()
-        );
+        assert!(normalize_proxy_endpoint(Provider::Socks4, "socks5://gateway:1080").is_err());
+        assert!(normalize_proxy_endpoint(Provider::Socks5, "socks4://gateway:1080").is_err());
     }
 
     /// reqwest builds its SOCKS4 connector without `with_auth`, so a username
@@ -900,6 +1094,146 @@ mod indexer_proxy_tests {
         assert!(
             validate_proxy_credentials(Provider::Http, Some("operator"), Some("s3cret")).is_ok()
         );
+    }
+
+    #[test]
+    fn ssh_tunnel_endpoints_are_host_and_port_only() {
+        assert_eq!(
+            normalize_proxy_endpoint(Provider::SshTunnel, "ssh://seedbox.test:2222")
+                .expect("ssh endpoint")
+                .base_url,
+            "ssh://seedbox.test:2222"
+        );
+        // The port is optional in the URL; 22 is supplied when the endpoint is
+        // dialled rather than being written into the stored value.
+        assert_eq!(
+            normalize_proxy_endpoint(Provider::SshTunnel, "ssh://seedbox.test")
+                .expect("default port")
+                .base_url,
+            "ssh://seedbox.test"
+        );
+        assert_eq!(proxy_default_port(Provider::SshTunnel), Some(22));
+        // Everything else about the URL is a sign of a bad paste.
+        assert!(normalize_proxy_endpoint(Provider::SshTunnel, "ssh://seedbox.test/path").is_err());
+        assert!(normalize_proxy_endpoint(Provider::SshTunnel, "ssh://seedbox.test?x=1").is_err());
+        assert!(
+            normalize_proxy_endpoint(Provider::SshTunnel, "ssh://user:pw@seedbox.test").is_err()
+        );
+        assert!(normalize_proxy_endpoint(Provider::SshTunnel, "socks5://seedbox.test").is_err());
+        assert!(normalize_proxy_endpoint(Provider::Socks5, "ssh://seedbox.test").is_err());
+        // A trailing slash is the one path form that survives, because it names
+        // no resource.
+        assert_eq!(
+            normalize_proxy_endpoint(Provider::SshTunnel, "ssh://seedbox.test:22/")
+                .expect("trailing slash")
+                .base_url,
+            "ssh://seedbox.test:22"
+        );
+    }
+
+    #[test]
+    fn ssh_tunnels_require_a_username_and_one_form_of_authentication() {
+        const PEM: &str =
+            "-----BEGIN OPENSSH PRIVATE KEY-----\nbody\n-----END OPENSSH PRIVATE KEY-----";
+
+        // Username is not optional: there is no "current user" to fall back to.
+        assert!(
+            validate_tunnel_auth(Provider::SshTunnel, None, Some("s3cret"), None, None).is_err()
+        );
+        // Neither a password nor a key means nothing to authenticate with.
+        assert!(
+            validate_tunnel_auth(Provider::SshTunnel, Some("operator"), None, None, None).is_err()
+        );
+        // Either alone is enough, and both together is allowed (WP6 prefers the
+        // key).
+        assert!(
+            validate_tunnel_auth(
+                Provider::SshTunnel,
+                Some("operator"),
+                Some("s3cret"),
+                None,
+                None
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_tunnel_auth(Provider::SshTunnel, Some("operator"), None, Some(PEM), None)
+                .is_ok()
+        );
+        assert!(
+            validate_tunnel_auth(
+                Provider::SshTunnel,
+                Some("operator"),
+                Some("s3cret"),
+                Some(PEM),
+                Some("phrase")
+            )
+            .is_ok()
+        );
+        // A passphrase without a key protects nothing.
+        assert!(
+            validate_tunnel_auth(
+                Provider::SshTunnel,
+                Some("operator"),
+                Some("s3cret"),
+                None,
+                Some("phrase")
+            )
+            .is_err()
+        );
+        // Structural PEM check only; real parsing is the tunnel engine's job.
+        assert!(
+            validate_tunnel_auth(
+                Provider::SshTunnel,
+                Some("operator"),
+                None,
+                Some("not a key"),
+                None
+            )
+            .is_err()
+        );
+        assert!(validate_private_key_pem(PEM).is_ok());
+        assert!(validate_private_key_pem("-----BEGIN X-----\nbody").is_err());
+    }
+
+    #[test]
+    fn only_tunnels_take_key_material() {
+        const PEM: &str =
+            "-----BEGIN OPENSSH PRIVATE KEY-----\nbody\n-----END OPENSSH PRIVATE KEY-----";
+        for provider in [
+            Provider::Http,
+            Provider::Socks4,
+            Provider::Socks5,
+            Provider::Trawl,
+        ] {
+            assert!(
+                validate_tunnel_auth(provider, Some("operator"), None, Some(PEM), None).is_err(),
+                "{provider:?} must reject a private key"
+            );
+            assert!(
+                validate_tunnel_auth(provider, Some("operator"), None, None, Some("phrase"))
+                    .is_err(),
+                "{provider:?} must reject a passphrase"
+            );
+            assert!(validate_tunnel_auth(provider, Some("operator"), None, None, None).is_ok());
+        }
+    }
+
+    #[test]
+    fn tunnels_speak_no_solver_protocol_and_choose_no_dns() {
+        assert_eq!(
+            resolve_new_proxy_protocol(Provider::SshTunnel, None).expect("no protocol"),
+            None
+        );
+        assert!(
+            resolve_new_proxy_protocol(
+                Provider::SshTunnel,
+                Some(scryer_domain::ChallengeSolverProtocol::RequestSolutionV1)
+            )
+            .is_err()
+        );
+        assert!(resolve_remote_dns(Provider::SshTunnel, Some(true), None).is_err());
+        assert!(!resolve_remote_dns(Provider::SshTunnel, Some(false), None).expect("off is fine"));
     }
 
     #[test]
@@ -934,12 +1268,9 @@ mod indexer_proxy_tests {
         );
     }
 
-    fn transport_config(
-        provider_type: Provider,
-        base_url: &str,
-    ) -> scryer_domain::IndexerProxyConfig {
+    fn transport_config(provider_type: Provider, base_url: &str) -> scryer_domain::ProxyConfig {
         let now = Utc::now();
-        scryer_domain::IndexerProxyConfig {
+        scryer_domain::ProxyConfig {
             id: "transport-1".into(),
             name: "Transport".into(),
             provider_type,
@@ -955,6 +1286,10 @@ mod indexer_proxy_tests {
             last_error_at: None,
             created_at: now,
             updated_at: now,
+            host_key_fingerprint: None,
+            host_key_pinned_at: None,
+            private_key_encrypted: None,
+            private_key_passphrase_encrypted: None,
         }
     }
 
@@ -1081,10 +1416,10 @@ mod indexer_proxy_tests {
 
     fn test_config(
         server: &MockServer,
-        provider_type: scryer_domain::IndexerProxyProviderType,
-    ) -> scryer_domain::IndexerProxyConfig {
+        provider_type: scryer_domain::ProxyProviderType,
+    ) -> scryer_domain::ProxyConfig {
         let now = Utc::now();
-        scryer_domain::IndexerProxyConfig {
+        scryer_domain::ProxyConfig {
             id: "proxy-1".into(),
             name: "Solver".into(),
             provider_type,
@@ -1100,6 +1435,10 @@ mod indexer_proxy_tests {
             last_error_at: None,
             created_at: now,
             updated_at: now,
+            host_key_fingerprint: None,
+            host_key_pinned_at: None,
+            private_key_encrypted: None,
+            private_key_passphrase_encrypted: None,
         }
     }
 
@@ -1109,7 +1448,7 @@ mod indexer_proxy_tests {
                 .headers
                 .get("user-agent")
                 .and_then(|value| value.to_str().ok()),
-            Some(scryer_outbound_http::INDEXER_PROXY_USER_AGENT)
+            Some(scryer_outbound_http::PROXY_USER_AGENT)
         );
     }
 
@@ -1124,7 +1463,7 @@ mod indexer_proxy_tests {
 
         let result = probe_solver_health(&test_config(
             &server,
-            scryer_domain::IndexerProxyProviderType::Trawl,
+            scryer_domain::ProxyProviderType::Trawl,
         ))
         .await
         .expect("Trawl health probe should succeed");
@@ -1151,7 +1490,7 @@ mod indexer_proxy_tests {
 
         let result = probe_solver_health(&test_config(
             &server,
-            scryer_domain::IndexerProxyProviderType::Trawl,
+            scryer_domain::ProxyProviderType::Trawl,
         ))
         .await
         .expect("redirected Trawl health probe should succeed");
@@ -1192,10 +1531,10 @@ mod indexer_proxy_tests {
             }
         });
         let now = Utc::now();
-        let config = scryer_domain::IndexerProxyConfig {
+        let config = scryer_domain::ProxyConfig {
             id: "trawl-transport-failure".into(),
             name: "Trawl".into(),
-            provider_type: scryer_domain::IndexerProxyProviderType::Trawl,
+            provider_type: scryer_domain::ProxyProviderType::Trawl,
             protocol: Some(scryer_domain::ChallengeSolverProtocol::RequestSolutionV1),
             username_encrypted: None,
             password_encrypted: None,
@@ -1208,6 +1547,10 @@ mod indexer_proxy_tests {
             last_error_at: None,
             created_at: now,
             updated_at: now,
+            host_key_fingerprint: None,
+            host_key_pinned_at: None,
+            private_key_encrypted: None,
+            private_key_passphrase_encrypted: None,
         };
 
         let error = probe_solver_health(&config)
@@ -1256,7 +1599,7 @@ mod indexer_proxy_tests {
 
         let result = probe_solver_health(&test_config(
             &server,
-            scryer_domain::IndexerProxyProviderType::Trawl,
+            scryer_domain::ProxyProviderType::Trawl,
         ))
         .await
         .expect("Trawl v1 fallback should succeed");
@@ -1286,7 +1629,7 @@ mod indexer_proxy_tests {
 
         let error = probe_solver_health(&test_config(
             &server,
-            scryer_domain::IndexerProxyProviderType::Trawl,
+            scryer_domain::ProxyProviderType::Trawl,
         ))
         .await
         .expect_err("malformed Trawl output should fail");
@@ -1325,7 +1668,7 @@ mod indexer_proxy_tests {
 
         let error = probe_solver_health(&test_config(
             &server,
-            scryer_domain::IndexerProxyProviderType::Trawl,
+            scryer_domain::ProxyProviderType::Trawl,
         ))
         .await
         .expect_err("Trawl error envelopes must fail health checks");
@@ -1357,7 +1700,7 @@ mod indexer_proxy_tests {
 
         let error = probe_solver_health(&test_config(
             &server,
-            scryer_domain::IndexerProxyProviderType::Trawl,
+            scryer_domain::ProxyProviderType::Trawl,
         ))
         .await
         .expect_err("oversized Trawl output must fail health checks");
@@ -1380,7 +1723,7 @@ mod indexer_proxy_tests {
 
         let error = probe_solver_health(&test_config(
             &server,
-            scryer_domain::IndexerProxyProviderType::Trawl,
+            scryer_domain::ProxyProviderType::Trawl,
         ))
         .await
         .expect_err("rate-limited Trawl health should fail");

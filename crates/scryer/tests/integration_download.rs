@@ -366,6 +366,7 @@ fn qbittorrent_wasm_client(base_url: &str) -> Arc<dyn DownloadClient> {
         last_seen_at: None,
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
+        proxy_config_id: None,
     };
     provider
         .client_for_config(&config)
@@ -1154,6 +1155,7 @@ fn router_config(id: &str, base_url: &str, priority: i64, enabled: bool) -> Down
         last_seen_at: None,
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
+        proxy_config_id: None,
     }
 }
 
@@ -1297,6 +1299,7 @@ async fn router_skips_client_with_invalid_config() {
         last_seen_at: None,
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
+        proxy_config_id: None,
     };
     insert_download_client_config(&ctx, bad_config).await;
 
@@ -1331,6 +1334,7 @@ async fn router_skips_client_missing_base_url() {
         last_seen_at: None,
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
+        proxy_config_id: None,
     };
     insert_download_client_config(&ctx, no_url_config).await;
 

@@ -312,18 +312,18 @@ const en: LocaleDictionary = {
   "settings.createInvite": "Create invite",
   "settings.users": "Users",
   "settings.indexers": "Indexers",
-  "settings.indexerProxies": "Indexer Proxies",
-  "settings.indexerProxyUsername": "Username",
-  "settings.indexerProxyPassword": "Password",
-  "settings.indexerProxyCredentialsStored": "Credentials set",
-  "settings.indexerProxyCredentialUnchanged": "Unchanged",
-  "settings.indexerProxyClearCredentials": "Clear stored credentials",
-  "settings.indexerProxyCredentialsHelp":
+  "settings.proxies": "Proxies",
+  "settings.proxyUsername": "Username",
+  "settings.proxyPassword": "Password",
+  "settings.proxyCredentialsStored": "Credentials set",
+  "settings.proxyCredentialUnchanged": "Unchanged",
+  "settings.proxyClearCredentials": "Clear stored credentials",
+  "settings.proxyCredentialsHelp":
     "Credentials are stored encrypted and never shown again. Leave both empty if the proxy needs none.",
-  "settings.indexerProxyCredentialsStoredHelp":
+  "settings.proxyCredentialsStoredHelp":
     "Credentials are stored for this proxy. Leave the fields empty to keep them, or type new values to replace them.",
-  "settings.indexerProxyRemoteDns": "Resolve DNS at proxy",
-  "settings.indexerProxyRemoteDnsHelp":
+  "settings.proxyRemoteDns": "Resolve DNS at proxy",
+  "settings.proxyRemoteDnsHelp":
     "Resolving DNS at the proxy is the socks5h behaviour: the proxy looks up destination hostnames instead of this machine.",
   "settings.qualityProfiles": "Quality Profiles",
   "settings.downloadClients": "Download Clients",

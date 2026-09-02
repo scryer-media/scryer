@@ -2115,7 +2115,7 @@ export const indexersQuery = `query Indexers($providerType: String) {
     name
     providerType
     baseUrl
-    indexerProxyConfigId
+    proxyConfigId
     downloadClientId
     seedingProfileId
     hasProwlarrSeedCriteria
@@ -2147,7 +2147,7 @@ export const indexerProviderTypesQuery = `query IndexerProviderTypes {
   }
 }`;
 
-const indexerProxyConfigFieldSelection = `
+const proxyConfigFieldSelection = `
     id
     name
     providerType
@@ -2163,8 +2163,8 @@ const indexerProxyConfigFieldSelection = `
     createdAt
     updatedAt`;
 
-export const indexerProxyConfigsQuery = `query IndexerProxyConfigs {
-  indexerProxyConfigs {${indexerProxyConfigFieldSelection}
+export const proxyConfigsQuery = `query ProxyConfigs {
+  proxyConfigs {${proxyConfigFieldSelection}
   }
 }`;
 
@@ -2319,7 +2319,7 @@ const indexerFieldSelection = `
     name
     providerType
     baseUrl
-    indexerProxyConfigId
+    proxyConfigId
     downloadClientId
     seedingProfileId
     hasProwlarrSeedCriteria
@@ -2515,7 +2515,7 @@ export const libraryDownloadClientsQuery = `query LibraryDownloadClients {
 export const indexersInitQuery = `query IndexersInit($providerType: String) {
   indexers(providerType: $providerType) {${indexerFieldSelection}
   }
-  indexerProxyConfigs {${indexerProxyConfigFieldSelection}
+  proxyConfigs {${proxyConfigFieldSelection}
   }
   indexerProviderTypes {${PROVIDER_TYPE_FIELDS}
   }

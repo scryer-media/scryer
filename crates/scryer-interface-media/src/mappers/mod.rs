@@ -11,21 +11,21 @@ use scryer_application::{
     DiscoverySectionResult, DiscoverySyncStateRecord, DiscoverySyncStatus,
     DownloadClientRoutingSettingsEntry, EpisodeMediaAvailability, EpisodeMediaAvailabilityState,
     FacetScoringPersonaSelection, IgnorePendingImportResult, ImageProxyKind,
-    IndexerProxyTestResult, IndexerRoutingSettingsEntry, IndexerSearchResult, JobDefinition,
-    JobRun, LibraryPathsSettings, LibraryScanSummary, LibrarySettings, ManualPluginPreview,
-    MediaRequestCounts, MediaSettings, ParsedEpisodeMetadata, ParsedReleaseMetadata,
-    PendingImportConnection, PendingImportCounts, PendingImportItem, PendingImportSearchAttempt,
-    PendingRelease, PluginCatalogStatus, QualityProfile, QualityProfileCriteria,
-    QualityProfileDecision, QualityProfileSelection, QualityProfileSettings, RegistryPlugin,
-    RenameApplyItemResult, RenameApplyResult, RenamePlan, RenamePlanItem,
-    ResolvePendingImportResult, RssSyncReport, ScoringEntry, ScoringSource, ServiceSettings,
-    SmgScryerUpdateNotice, SmgVersionCompatibilityNotice, StorageRootUsage, SubmissionScope,
-    SystemHealth, TitleCredit, TitleHistoryPage, TitleRatingSummary, TitleReleaseBlocklistEntry,
+    IndexerRoutingSettingsEntry, IndexerSearchResult, JobDefinition, JobRun, LibraryPathsSettings,
+    LibraryScanSummary, LibrarySettings, ManualPluginPreview, MediaRequestCounts, MediaSettings,
+    ParsedEpisodeMetadata, ParsedReleaseMetadata, PendingImportConnection, PendingImportCounts,
+    PendingImportItem, PendingImportSearchAttempt, PendingRelease, PluginCatalogStatus,
+    ProxyTestResult, QualityProfile, QualityProfileCriteria, QualityProfileDecision,
+    QualityProfileSelection, QualityProfileSettings, RegistryPlugin, RenameApplyItemResult,
+    RenameApplyResult, RenamePlan, RenamePlanItem, ResolvePendingImportResult, RssSyncReport,
+    ScoringEntry, ScoringSource, ServiceSettings, SmgScryerUpdateNotice,
+    SmgVersionCompatibilityNotice, StorageRootUsage, SubmissionScope, SystemHealth, TitleCredit,
+    TitleHistoryPage, TitleRatingSummary, TitleReleaseBlocklistEntry,
 };
 use scryer_domain::{
     CalendarEpisode, Collection, ConfigFieldDef, ConfigFieldType, DomainEvent,
-    DownloadClientConfig, DownloadQueueItem, Episode, IndexerConfig, IndexerProxyConfig, Library,
-    MediaFacet, MediaRequest, PluginInstallation, PluginSupportTier, PostImportTracking, RuleSet,
+    DownloadClientConfig, DownloadQueueItem, Episode, IndexerConfig, Library, MediaFacet,
+    MediaRequest, PluginInstallation, PluginSupportTier, PostImportTracking, ProxyConfig, RuleSet,
     SeasonPackSeedMode, SeedGoalMetAction, SeedingProfile, SubtitleProviderConfig, Title,
     TitleHistoryRecord, User,
 };
@@ -59,7 +59,7 @@ mod tests {
     use super::discovery::{discovery_surface_value, preferred_discovery_poster_source};
     use super::{
         discovery_home_query_from_input, from_download_queue_item, from_import_record,
-        from_indexer_config_with_fields, from_indexer_proxy_config, from_title_history_record,
+        from_indexer_config_with_fields, from_proxy_config, from_title_history_record,
         from_wanted_item, provider_config_values_from_json_with_fields,
         provider_config_values_to_json,
     };
@@ -73,8 +73,8 @@ mod tests {
     use scryer_application::{AcquisitionScopeState, AcquisitionScopeStatus};
     use scryer_domain::{
         ChallengeSolverProtocol, CompletedDownload, ConfigFieldDef, ConfigFieldType,
-        ConfigFieldValueSource, ImportRecord, ImportStatus, ImportType, IndexerConfig,
-        IndexerProxyConfig, IndexerProxyProviderType, TitleHistoryEventType, TitleHistoryRecord,
+        ConfigFieldValueSource, ImportRecord, ImportStatus, ImportType, IndexerConfig, ProxyConfig,
+        ProxyProviderType, TitleHistoryEventType, TitleHistoryRecord,
     };
     use serde_json::{Value, json};
 
@@ -591,7 +591,7 @@ mod tests {
             is_enabled: true,
             enable_interactive_search: true,
             enable_auto_search: true,
-            indexer_proxy_config_id: None,
+            proxy_config_id: None,
             download_client_id: None,
             seeding_profile_id: None,
             managed_parent_config_id: Some("prowlarr-parent".to_string()),
@@ -658,12 +658,12 @@ mod tests {
         assert_eq!(disabled.prowlarr_minimum_seeders, Some(0));
     }
 
-    fn indexer_proxy_config(
-        provider_type: IndexerProxyProviderType,
+    fn proxy_config(
+        provider_type: ProxyProviderType,
         username: Option<&str>,
         password: Option<&str>,
-    ) -> IndexerProxyConfig {
-        IndexerProxyConfig {
+    ) -> ProxyConfig {
+        ProxyConfig {
             id: "proxy-1".to_string(),
             name: "Gateway".to_string(),
             provider_type,
@@ -681,13 +681,17 @@ mod tests {
             last_error_at: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
+            host_key_fingerprint: None,
+            host_key_pinned_at: None,
+            private_key_encrypted: None,
+            private_key_passphrase_encrypted: None,
         }
     }
 
     #[test]
-    fn indexer_proxy_payload_reports_stored_credentials_without_exposing_them() {
-        let payload = from_indexer_proxy_config(indexer_proxy_config(
-            IndexerProxyProviderType::Socks5,
+    fn proxy_payload_reports_stored_credentials_without_exposing_them() {
+        let payload = from_proxy_config(proxy_config(
+            ProxyProviderType::Socks5,
             Some("operator"),
             Some("hunter2"),
         ));
@@ -710,29 +714,21 @@ mod tests {
         assert!(!rendered.contains("hunter2"));
 
         // A username alone still counts as "credentials set".
-        let username_only = from_indexer_proxy_config(indexer_proxy_config(
-            IndexerProxyProviderType::Http,
+        let username_only = from_proxy_config(proxy_config(
+            ProxyProviderType::Http,
             Some("operator"),
             None,
         ));
         assert!(username_only.has_credentials);
 
         // An empty stored value is not a credential.
-        let blank = from_indexer_proxy_config(indexer_proxy_config(
-            IndexerProxyProviderType::Http,
-            Some(""),
-            Some(""),
-        ));
+        let blank = from_proxy_config(proxy_config(ProxyProviderType::Http, Some(""), Some("")));
         assert!(!blank.has_credentials);
     }
 
     #[test]
-    fn indexer_proxy_payload_keeps_solver_rows_unchanged() {
-        let payload = from_indexer_proxy_config(indexer_proxy_config(
-            IndexerProxyProviderType::Trawl,
-            None,
-            None,
-        ));
+    fn proxy_payload_keeps_solver_rows_unchanged() {
+        let payload = from_proxy_config(proxy_config(ProxyProviderType::Trawl, None, None));
 
         assert_eq!(payload.provider_type, "trawl");
         assert_eq!(payload.protocol.as_deref(), Some("request_solution_v1"));

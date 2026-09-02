@@ -115,6 +115,49 @@ impl CommandHost {
         }
     }
 
+    /// Build the host services for a download client, with the proxy the
+    /// operator assigned to it (if any).
+    ///
+    /// This exists rather than a seventh positional argument on
+    /// [`Self::with_archive_provider`] for the same reason
+    /// [`Self::for_notification`] does: every other command family would pass
+    /// `None`, and "who may have their egress rerouted" should be a question
+    /// with one answer in the source — whoever calls this or
+    /// [`Self::for_indexer`].
+    ///
+    /// The policy goes straight into [`PluginHttpHost`], which already knows
+    /// how to branch a solver from a transport hop, so a download client gets
+    /// the identical egress treatment an indexer does.
+    pub(crate) fn for_download_client(
+        plugin_id: String,
+        config: BTreeMap<String, String>,
+        allowed_hosts: Vec<String>,
+        timeout: Duration,
+        max_http_response_bytes: Option<u64>,
+        archive_provider: Option<Arc<dyn ArchiveExtractorPluginProvider>>,
+        proxy_policy: Option<crate::plugin_http_host::ProxyPolicy>,
+    ) -> Self {
+        Self {
+            services: Some(Arc::new(CommandHostServices {
+                plugin_id,
+                config,
+                state: Mutex::new(CommandState::default()),
+                http: PluginHttpHost::new(
+                    allowed_hosts,
+                    proxy_policy,
+                    None,
+                    max_http_response_bytes,
+                ),
+                timeout,
+                archive_provider,
+                runtime: tokio::runtime::Handle::try_current().ok(),
+                sockets: None,
+                processes: None,
+            })),
+            request_deadline: None,
+        }
+    }
+
     /// Build the host services for a notification channel.
     ///
     /// Notifications are the one family that holds authority beyond HTTP: an

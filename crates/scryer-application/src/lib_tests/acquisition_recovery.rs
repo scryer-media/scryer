@@ -2696,6 +2696,7 @@ async fn acquisition_cycle_records_failed_collection_submission_once() {
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await
@@ -2709,6 +2710,7 @@ async fn acquisition_cycle_records_failed_collection_submission_once() {
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await
@@ -2939,6 +2941,7 @@ async fn acquisition_cycle_episode_submission_blocks_only_matching_episode() {
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await
@@ -3546,6 +3549,7 @@ async fn acquisition_cycle_submits_one_hundred_episode_fallbacks_after_empty_pac
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await
@@ -9313,6 +9317,7 @@ async fn bootstrap_rss_with_media_files_and_profiles(
             last_seen_at: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
+            proxy_config_id: None,
         });
     let release_attempts = Arc::new(MockReleaseAttemptRepo::default());
     let settings = Arc::new(StoredSettingsRepo::default());
@@ -10450,6 +10455,7 @@ async fn background_acquisition_parks_ambiguous_candidate_without_skipping_eligi
                 config_json: "{}".to_string(),
                 client_priority: 1,
                 is_enabled: true,
+                proxy_config_id: None,
             },
         )
         .await

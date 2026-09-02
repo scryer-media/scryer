@@ -4728,13 +4728,15 @@ async fn migration_0186_postgres_relaxes_the_token_check_and_adds_the_canonical_
 }
 
 #[tokio::test]
-async fn migration_0211_relaxes_the_proxy_protocol_and_preserves_solver_rows() {
+async fn migration_0211_makes_proxies_first_class_and_preserves_solver_rows() {
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
         .connect("sqlite::memory:")
         .await
         .expect("migration test database should open");
-    // The pre-0211 shape, verbatim from the 0198 baseline.
+    // The pre-0211 shape, verbatim from the 0198 baseline: the proxy table, the
+    // indexer column that names it, and the download-client table that does not
+    // know about proxies at all yet.
     sqlx::raw_sql(
         "CREATE TABLE indexer_proxy_configs (
              id TEXT PRIMARY KEY NOT NULL,
@@ -4752,6 +4754,27 @@ async fn migration_0211_relaxes_the_proxy_protocol_and_preserves_solver_rows() {
          );
          CREATE INDEX idx_indexer_proxy_configs_provider_type
              ON indexer_proxy_configs(provider_type);
+         CREATE TABLE indexers(
+             id TEXT PRIMARY KEY,
+             name TEXT NOT NULL,
+             provider_type TEXT NOT NULL,
+             base_url TEXT NOT NULL,
+             is_enabled INTEGER NOT NULL DEFAULT 1,
+             created_at TEXT NOT NULL,
+             updated_at TEXT NOT NULL,
+             indexer_proxy_config_id TEXT
+         );
+         CREATE INDEX idx_indexers_indexer_proxy_config_id
+             ON indexers(indexer_proxy_config_id);
+         CREATE TABLE download_clients(
+             id TEXT PRIMARY KEY,
+             name TEXT NOT NULL,
+             client_type TEXT NOT NULL,
+             is_enabled INTEGER NOT NULL DEFAULT 1,
+             status TEXT NOT NULL DEFAULT 'idle',
+             created_at TEXT NOT NULL,
+             updated_at TEXT NOT NULL
+         );
          INSERT INTO indexer_proxy_configs (
              id, name, provider_type, protocol, base_url, request_timeout_seconds,
              is_enabled, last_health_status, last_error_message, last_error_at,
@@ -4759,6 +4782,19 @@ async fn migration_0211_relaxes_the_proxy_protocol_and_preserves_solver_rows() {
          ) VALUES (
              'solver-1', 'Trawl', 'trawl', 'request_solution_v1', 'http://trawl:8191',
              45, 1, 'healthy', NULL, NULL, '2026-01-01T00:00:00Z', '2026-01-02T00:00:00Z'
+         );
+         INSERT INTO indexers (
+             id, name, provider_type, base_url, is_enabled, created_at, updated_at,
+             indexer_proxy_config_id
+         ) VALUES (
+             'indexer-1', 'Nab', 'newznab', 'https://nab.test', 1,
+             '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 'solver-1'
+         );
+         INSERT INTO download_clients (
+             id, name, client_type, is_enabled, status, created_at, updated_at
+         ) VALUES (
+             'client-1', 'Seedbox SAB', 'sabnzbd', 1, 'idle',
+             '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'
          );",
     )
     .execute(&pool)
@@ -4767,7 +4803,7 @@ async fn migration_0211_relaxes_the_proxy_protocol_and_preserves_solver_rows() {
 
     run_embedded_migration(
         &pool,
-        include_str!("../../../scryer/src/db/migrations/0211_indexer_transport_proxies.sql"),
+        include_str!("../../../scryer/src/db/migrations/0211_first_class_proxies.sql"),
     )
     .await;
 
@@ -4782,12 +4818,12 @@ async fn migration_0211_relaxes_the_proxy_protocol_and_preserves_solver_rows() {
     ) = sqlx::query_as(
         "SELECT provider_type, protocol, request_timeout_seconds, is_enabled,
                     username_encrypted, password_encrypted, remote_dns
-               FROM indexer_proxy_configs
+               FROM proxy_configs
               WHERE id = 'solver-1'",
     )
     .fetch_one(&pool)
     .await
-    .expect("the existing solver row must survive the rebuild");
+    .expect("the existing solver row must survive the rename and rebuild");
     assert_eq!(
         solver,
         (
@@ -4801,9 +4837,42 @@ async fn migration_0211_relaxes_the_proxy_protocol_and_preserves_solver_rows() {
         )
     );
 
+    // The tunnel columns exist and default to unset on every carried-over row.
+    let tunnel_columns: (
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    ) = sqlx::query_as(
+        "SELECT private_key_encrypted, private_key_passphrase_encrypted,
+                        host_key_fingerprint, host_key_pinned_at
+                   FROM proxy_configs
+                  WHERE id = 'solver-1'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("the tunnel columns must exist");
+    assert_eq!(tunnel_columns, (None, None, None, None));
+
+    // The assignment survives under the renamed column.
+    let assigned: Option<String> =
+        sqlx::query_scalar("SELECT proxy_config_id FROM indexers WHERE id = 'indexer-1'")
+            .fetch_one(&pool)
+            .await
+            .expect("the indexer assignment must be readable under the new column name");
+    assert_eq!(assigned.as_deref(), Some("solver-1"));
+
+    // The second consumer family gains its column, unassigned.
+    let client_proxy: Option<String> =
+        sqlx::query_scalar("SELECT proxy_config_id FROM download_clients WHERE id = 'client-1'")
+            .fetch_one(&pool)
+            .await
+            .expect("download clients must gain the assignment column");
+    assert_eq!(client_proxy, None);
+
     // The point of the rebuild: a transport row with no protocol is now legal.
     sqlx::query(
-        "INSERT INTO indexer_proxy_configs (
+        "INSERT INTO proxy_configs (
              id, name, provider_type, protocol, base_url, request_timeout_seconds,
              is_enabled, username_encrypted, password_encrypted, remote_dns,
              created_at, updated_at
@@ -4816,15 +4885,51 @@ async fn migration_0211_relaxes_the_proxy_protocol_and_preserves_solver_rows() {
     .await
     .expect("a transport proxy stores no solver protocol");
 
-    let index_present: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM sqlite_master
-          WHERE type = 'index' AND name = 'idx_indexer_proxy_configs_provider_type'",
+    // And a tunnel row round-trips its key material and pin.
+    sqlx::query(
+        "INSERT INTO proxy_configs (
+             id, name, provider_type, protocol, base_url, request_timeout_seconds,
+             is_enabled, username_encrypted, private_key_encrypted,
+             private_key_passphrase_encrypted, host_key_fingerprint, host_key_pinned_at,
+             created_at, updated_at
+         ) VALUES (
+             'tunnel-1', 'Seedbox', 'ssh_tunnel', NULL, 'ssh://seedbox.test:22', 30,
+             1, 'enc:user', 'enc:key', 'enc:phrase', 'SHA256:abc',
+             '2026-03-01T00:00:00Z', '2026-03-01T00:00:00Z', '2026-03-01T00:00:00Z'
+         )",
     )
-    .fetch_one(&pool)
+    .execute(&pool)
+    .await
+    .expect("a tunnel proxy stores key material and a pinned host key");
+
+    let indexes: Vec<String> = sqlx::query_scalar(
+        "SELECT name FROM sqlite_master
+          WHERE type = 'index' AND name IN (
+              'idx_proxy_configs_provider_type',
+              'idx_indexers_proxy_config_id',
+              'idx_indexer_proxy_configs_provider_type',
+              'idx_indexers_indexer_proxy_config_id'
+          )
+          ORDER BY name",
+    )
+    .fetch_all(&pool)
     .await
     .expect("read index catalog");
     assert_eq!(
-        index_present, 1,
-        "the rebuild must recreate the provider_type index it dropped"
+        indexes,
+        vec![
+            "idx_indexers_proxy_config_id".to_string(),
+            "idx_proxy_configs_provider_type".to_string(),
+        ],
+        "both indexes must come back under the new names and neither old name may survive"
     );
+
+    let old_table: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sqlite_master
+          WHERE type = 'table' AND name = 'indexer_proxy_configs'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("read table catalog");
+    assert_eq!(old_table, 0, "the old table must be gone");
 }

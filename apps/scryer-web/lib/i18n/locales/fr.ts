@@ -200,19 +200,19 @@ const fr: LocaleDictionary = {
   "settings.securitySaveFailed": "Failed to save security settings.",
   "settings.users": "Utilisateurs",
   "settings.indexers": "Indexeurs",
-  "settings.indexerProxies": "Proxys d'indexeurs",
-  "settings.indexerProxyUsername": "Nom d'utilisateur",
-  "settings.indexerProxyPassword": "Mot de passe",
-  "settings.indexerProxyCredentialsStored": "Identifiants enregistrés",
-  "settings.indexerProxyCredentialUnchanged": "Inchangé",
-  "settings.indexerProxyClearCredentials":
+  "settings.proxies": "Proxys d'indexeurs",
+  "settings.proxyUsername": "Nom d'utilisateur",
+  "settings.proxyPassword": "Mot de passe",
+  "settings.proxyCredentialsStored": "Identifiants enregistrés",
+  "settings.proxyCredentialUnchanged": "Inchangé",
+  "settings.proxyClearCredentials":
     "Effacer les identifiants enregistrés",
-  "settings.indexerProxyCredentialsHelp":
+  "settings.proxyCredentialsHelp":
     "Les identifiants sont stockés chiffrés et ne sont plus jamais affichés. Laissez les deux champs vides si le proxy n'en a pas besoin.",
-  "settings.indexerProxyCredentialsStoredHelp":
+  "settings.proxyCredentialsStoredHelp":
     "Des identifiants sont enregistrés pour ce proxy. Laissez les champs vides pour les conserver ou saisissez de nouvelles valeurs pour les remplacer.",
-  "settings.indexerProxyRemoteDns": "Résoudre le DNS sur le proxy",
-  "settings.indexerProxyRemoteDnsHelp":
+  "settings.proxyRemoteDns": "Résoudre le DNS sur le proxy",
+  "settings.proxyRemoteDnsHelp":
     "Résoudre le DNS sur le proxy correspond au comportement socks5h : c'est le proxy qui résout les noms d'hôte de destination, pas cette machine.",
   "settings.qualityProfiles": "Profils de qualité",
   "settings.downloadClients": "Clients de téléchargement",

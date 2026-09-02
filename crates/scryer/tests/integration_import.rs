@@ -1146,6 +1146,7 @@ async fn import_movie_decypharr_symlink_release_folder_uses_remote_path_mapping(
             client_priority: 0,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
+            proxy_config_id: None,
         })
         .await
         .expect("seed qbittorrent config");

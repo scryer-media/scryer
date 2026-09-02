@@ -1804,6 +1804,11 @@ input CreateDownloadClientConfigInput {
 	"""
 	config: [ProviderConfigValueInput!]!
 	"""
+	Proxy to carry this client's traffic. Any proxy kind is accepted, and
+	the proxy must exist and be enabled.
+	"""
+	proxyConfigId: ID
+	"""
 	Whether the client is enabled.
 	"""
 	isEnabled: Boolean
@@ -1850,7 +1855,7 @@ input CreateIndexerConfigInput {
 	"""
 	Optional proxy configuration identity.
 	"""
-	indexerProxyConfigId: ID
+	proxyConfigId: ID
 	"""
 	Optional download-client identity used for routed grabs.
 	"""
@@ -1879,52 +1884,6 @@ input CreateIndexerConfigInput {
 	Provider configuration values, including secret fields.
 	"""
 	config: [ProviderConfigValueInput!]
-}
-
-"""
-Configuration for an indexer proxy provider.
-"""
-input CreateIndexerProxyConfigInput {
-	"""
-	Display name of the proxy.
-	"""
-	name: String!
-	"""
-	Proxy provider implementation identifier.
-	"""
-	providerType: String!
-	"""
-	Challenge-solver protocol. Omit to take the single protocol Scryer
-	speaks; transport proxies reject any value because they speak none.
-	"""
-	protocol: String
-	"""
-	Proxy base URL.
-	"""
-	baseUrl: String!
-	"""
-	Request timeout in seconds.
-	"""
-	requestTimeoutSeconds: Int
-	"""
-	Transport-proxy username. Write-only: stored encrypted and never read
-	back. Challenge solvers reject it.
-	"""
-	username: String
-	"""
-	Transport-proxy password. Write-only: stored encrypted and never read
-	back. Requires a username; challenge solvers reject it.
-	"""
-	password: String
-	"""
-	SOCKS5 only: resolve destination hostnames at the proxy. A `socks5h://`
-	base URL implies true.
-	"""
-	remoteDns: Boolean
-	"""
-	Whether the proxy is enabled.
-	"""
-	isEnabled: Boolean
 }
 
 """
@@ -2239,6 +2198,63 @@ input CreatePostProcessingScriptInput {
 	Whether debug output is enabled, or null for the service default.
 	"""
 	debug: Boolean
+}
+
+"""
+Configuration for a proxy provider.
+"""
+input CreateProxyConfigInput {
+	"""
+	Display name of the proxy.
+	"""
+	name: String!
+	"""
+	Proxy provider implementation identifier.
+	"""
+	providerType: String!
+	"""
+	Challenge-solver protocol. Omit to take the single protocol Scryer
+	speaks; transport proxies reject any value because they speak none.
+	"""
+	protocol: String
+	"""
+	Proxy base URL.
+	"""
+	baseUrl: String!
+	"""
+	Request timeout in seconds.
+	"""
+	requestTimeoutSeconds: Int
+	"""
+	Transport-proxy username. Write-only: stored encrypted and never read
+	back. Challenge solvers reject it.
+	"""
+	username: String
+	"""
+	Transport-proxy password. Write-only: stored encrypted and never read
+	back. Requires a username; challenge solvers reject it.
+	"""
+	password: String
+	"""
+	SOCKS5 only: resolve destination hostnames at the proxy. A `socks5h://`
+	base URL implies true.
+	"""
+	remoteDns: Boolean
+	"""
+	PEM-encoded private key for a tunnel provider. Write-only: stored
+	encrypted and never read back. Only SSH tunnels accept it, and a tunnel
+	needs either this or a password.
+	"""
+	privateKey: String
+	"""
+	Passphrase protecting the private key above. Write-only: stored
+	encrypted and never read back. Requires a private key.
+	"""
+	privateKeyPassphrase: String
+	"""
+	Whether the proxy is enabled.
+	"""
+	isEnabled: Boolean
 }
 
 """
@@ -2759,16 +2775,6 @@ type DeleteIndexerConfigPayload {
 }
 
 """
-Identity returned after deleting an indexer proxy.
-"""
-type DeleteIndexerProxyConfigPayload {
-	"""
-	Deleted proxy configuration identity.
-	"""
-	id: ID!
-}
-
-"""
 Identity returned after deleting a library.
 """
 type DeleteLibraryPayload {
@@ -2946,6 +2952,16 @@ type DeletePreviewPayload {
 	Sample paths from the selected files and directories.
 	"""
 	samplePaths: [String!]!
+}
+
+"""
+Identity returned after deleting a proxy.
+"""
+type DeleteProxyConfigPayload {
+	"""
+	Deleted proxy configuration identity.
+	"""
+	id: ID!
 }
 
 """
@@ -4342,6 +4358,12 @@ type DownloadClientConfigPayload {
 	UTC time the client was last observed, or null before the first observation.
 	"""
 	lastSeenAt: DateTime
+	"""
+	Proxy carrying this client's traffic, or null when none is assigned.
+	Any proxy kind may be assigned. A challenge solver has no effect on a
+	native client, whose requests are not made by a plugin guest.
+	"""
+	proxyConfigId: ID
 	"""
 	UTC creation time.
 	"""
@@ -7084,7 +7106,7 @@ type IndexerConfigPayload {
 	"""
 	Optional proxy configuration ID used by this indexer.
 	"""
-	indexerProxyConfigId: ID
+	proxyConfigId: ID
 	"""
 	Optional download-client ID associated with this indexer.
 	"""
@@ -7545,94 +7567,6 @@ type IndexerErrorSummaryPayload {
 	Response Content-Type header when it was valid UTF-8.
 	"""
 	contentType: String
-}
-
-"""
-Indexer proxy configuration and latest health state.
-"""
-type IndexerProxyConfigPayload {
-	"""
-	Proxy configuration ID.
-	"""
-	id: ID!
-	"""
-	Proxy configuration name.
-	"""
-	name: String!
-	"""
-	Proxy provider type.
-	"""
-	providerType: String!
-	"""
-	Challenge-solver protocol, or null for transport proxies, which speak
-	no protocol of their own.
-	"""
-	protocol: String
-	"""
-	Proxy base URL.
-	"""
-	baseUrl: String!
-	"""
-	Request timeout in seconds.
-	"""
-	requestTimeoutSeconds: Int!
-	"""
-	Whether a username or password is stored for this proxy, without
-	exposing either value. Always false for challenge solvers, which take
-	no credentials.
-	"""
-	hasCredentials: Boolean!
-	"""
-	Whether destination hostnames are resolved at the proxy (`socks5h`).
-	Always false outside SOCKS5.
-	"""
-	remoteDns: Boolean!
-	"""
-	Whether the proxy is enabled.
-	"""
-	isEnabled: Boolean!
-	"""
-	Most recent health status, or null before the first check.
-	"""
-	lastHealthStatus: String
-	"""
-	Most recent health error, or null when none is recorded.
-	"""
-	lastErrorMessage: String
-	"""
-	UTC time of the most recent health error, or null when none is recorded.
-	"""
-	lastErrorAt: DateTime
-	"""
-	UTC creation time.
-	"""
-	createdAt: DateTime!
-	"""
-	UTC last-update time.
-	"""
-	updatedAt: DateTime!
-}
-
-"""
-Result of testing an indexer proxy connection.
-"""
-type IndexerProxyTestResultPayload {
-	"""
-	Whether the connection test succeeded.
-	"""
-	ok: Boolean!
-	"""
-	Machine-readable test status.
-	"""
-	status: String!
-	"""
-	Optional diagnostic message.
-	"""
-	message: String
-	"""
-	Test duration in milliseconds, or null when unavailable.
-	"""
-	durationMs: Int
 }
 
 """
@@ -13778,41 +13712,50 @@ type MutationRoot {
 		input: SetMinimumSeedersFloorInput!
 	): DefaultSeedingProfilePayload!
 	"""
-	Create an indexer proxy configuration.
+	Create a proxy configuration.
 	"""
-	createIndexerProxyConfig(
+	createProxyConfig(
 		"""
 		Proxy provider, base URL, timeout, and enabled state.
 		"""
-		input: CreateIndexerProxyConfigInput!
-	): IndexerProxyConfigPayload!
+		input: CreateProxyConfigInput!
+	): ProxyConfigPayload!
 	"""
-	Patch an indexer proxy configuration while preserving omitted fields.
+	Patch a proxy configuration while preserving omitted fields.
 	"""
-	updateIndexerProxyConfig(
+	updateProxyConfig(
 		"""
 		Proxy configuration identity and optional replacement fields.
 		"""
-		input: UpdateIndexerProxyConfigInput!
-	): IndexerProxyConfigPayload!
+		input: UpdateProxyConfigInput!
+	): ProxyConfigPayload!
 	"""
-	Delete an indexer proxy configuration.
+	Delete a proxy configuration.
 	"""
-	deleteIndexerProxyConfig(
+	deleteProxyConfig(
 		"""
-		Indexer proxy configuration identity to delete.
-		"""
-		id: ID!
-	): DeleteIndexerProxyConfigPayload!
-	"""
-	Test an indexer proxy connection and return provider validation details.
-	"""
-	testIndexerProxyConfig(
-		"""
-		Indexer proxy configuration identity to test.
+		Proxy configuration identity to delete.
 		"""
 		id: ID!
-	): IndexerProxyTestResultPayload!
+	): DeleteProxyConfigPayload!
+	"""
+	Test a proxy connection and return provider validation details.
+	"""
+	testProxyConfig(
+		"""
+		Proxy configuration identity to test.
+		"""
+		id: ID!
+	): ProxyTestResultPayload!
+	"""
+	Forget the pinned tunnel host key so the next connection trusts the server again.
+	"""
+	resetProxyHostKey(
+		"""
+		Tunnel proxy configuration identity whose pinned host key to forget.
+		"""
+		id: ID!
+	): ProxyConfigPayload!
 	"""
 	Delete an indexer configuration.
 	"""
@@ -16967,6 +16910,109 @@ type ProviderValidationPayload {
 }
 
 """
+Proxy configuration and latest health state.
+"""
+type ProxyConfigPayload {
+	"""
+	Proxy configuration ID.
+	"""
+	id: ID!
+	"""
+	Proxy configuration name.
+	"""
+	name: String!
+	"""
+	Proxy provider type.
+	"""
+	providerType: String!
+	"""
+	Challenge-solver protocol, or null for transport proxies, which speak
+	no protocol of their own.
+	"""
+	protocol: String
+	"""
+	Proxy base URL.
+	"""
+	baseUrl: String!
+	"""
+	Request timeout in seconds.
+	"""
+	requestTimeoutSeconds: Int!
+	"""
+	Whether a username or password is stored for this proxy, without
+	exposing either value. Always false for challenge solvers, which take
+	no credentials.
+	"""
+	hasCredentials: Boolean!
+	"""
+	Whether destination hostnames are resolved at the proxy (`socks5h`).
+	Always false outside SOCKS5.
+	"""
+	remoteDns: Boolean!
+	"""
+	Whether a private key is stored for this tunnel, without exposing it.
+	Always false outside the tunnel providers.
+	"""
+	hasPrivateKey: Boolean!
+	"""
+	Host key pinned on the first successful tunnel connect, formatted as
+	OpenSSH prints it, or null before the first connect. A host key is
+	public, so this value is shown rather than masked.
+	"""
+	hostKeyFingerprint: String
+	"""
+	UTC time the host key above was pinned, or null when none is pinned.
+	"""
+	hostKeyPinnedAt: DateTime
+	"""
+	Whether the proxy is enabled.
+	"""
+	isEnabled: Boolean!
+	"""
+	Most recent health status, or null before the first check.
+	"""
+	lastHealthStatus: String
+	"""
+	Most recent health error, or null when none is recorded.
+	"""
+	lastErrorMessage: String
+	"""
+	UTC time of the most recent health error, or null when none is recorded.
+	"""
+	lastErrorAt: DateTime
+	"""
+	UTC creation time.
+	"""
+	createdAt: DateTime!
+	"""
+	UTC last-update time.
+	"""
+	updatedAt: DateTime!
+}
+
+"""
+Result of testing a proxy connection.
+"""
+type ProxyTestResultPayload {
+	"""
+	Whether the connection test succeeded.
+	"""
+	ok: Boolean!
+	"""
+	Machine-readable test status.
+	"""
+	status: String!
+	"""
+	Optional diagnostic message.
+	"""
+	message: String
+	"""
+	Test duration in milliseconds, or null when unavailable.
+	"""
+	durationMs: Int
+}
+
+"""
 Quality constraints and scoring rules for release selection.
 """
 input QualityProfileCriteriaInput {
@@ -18172,9 +18218,9 @@ type QueryRoot {
 	"""
 	indexerDownloadClientMappingCatalog: IndexerDownloadClientMappingCatalogPayload!
 	"""
-	Lists configured indexer proxy settings.
+	Lists configured proxy settings.
 	"""
-	indexerProxyConfigs: [IndexerProxyConfigPayload!]!
+	proxyConfigs: [ProxyConfigPayload!]!
 	"""
 	Lists root folders for a media facet.
 	"""
@@ -21270,6 +21316,11 @@ input TestDownloadClientConnectionInput {
 	Provider configuration values used for the test.
 	"""
 	config: [ProviderConfigValueInput!]!
+	"""
+	Proxy to dial through for this test, so it exercises the same egress
+	live traffic will use. Omit to test the client directly.
+	"""
+	proxyConfigId: ID
 }
 
 """
@@ -21309,7 +21360,7 @@ input TestIndexerConnectionInput {
 	"""
 	Proxy identity: omission preserves the stored association, null clears it, and a value replaces it.
 	"""
-	indexerProxyConfigId: ID
+	proxyConfigId: ID
 }
 
 """
@@ -23229,6 +23280,10 @@ input UpdateDownloadClientConfigInput {
 	"""
 	config: [ProviderConfigValueInput!]
 	"""
+	Replacement proxy assignment; omission preserves it and null clears it.
+	"""
+	proxyConfigId: ID
+	"""
 	Replacement enabled state; omission preserves it.
 	"""
 	isEnabled: Boolean
@@ -23289,7 +23344,7 @@ input UpdateIndexerConfigInput {
 	"""
 	Proxy identity: omission preserves it, null clears it, and a value replaces it.
 	"""
-	indexerProxyConfigId: ID
+	proxyConfigId: ID
 	"""
 	Download-client identity: omission preserves it, null clears it, and a value replaces it.
 	"""
@@ -23318,46 +23373,6 @@ input UpdateIndexerConfigInput {
 	Replacement provider configuration; omitted secret fields retain stored secrets.
 	"""
 	config: [ProviderConfigValueInput!]
-}
-
-"""
-Patch for an indexer proxy configuration.
-"""
-input UpdateIndexerProxyConfigInput {
-	"""
-	Proxy configuration identity to patch.
-	"""
-	id: ID!
-	"""
-	Replacement display name; omission preserves it.
-	"""
-	name: String
-	"""
-	Replacement base URL; omission preserves it.
-	"""
-	baseUrl: String
-	"""
-	Replacement request timeout in seconds; omission preserves it.
-	"""
-	requestTimeoutSeconds: Int
-	"""
-	Replacement transport-proxy username. Write-only: omission preserves
-	the stored value, null clears it, and it is never read back.
-	"""
-	username: String
-	"""
-	Replacement transport-proxy password. Write-only: omission preserves
-	the stored value, null clears it, and it is never read back.
-	"""
-	password: String
-	"""
-	Replacement SOCKS5 remote-DNS state; omission preserves it.
-	"""
-	remoteDns: Boolean
-	"""
-	Replacement enabled state; omission preserves it.
-	"""
-	isEnabled: Boolean
 }
 
 """
@@ -23843,6 +23858,56 @@ input UpdatePostProcessingScriptInput {
 	Replacement debug state, or null to leave unchanged.
 	"""
 	debug: Boolean
+}
+
+"""
+Patch for a proxy configuration.
+"""
+input UpdateProxyConfigInput {
+	"""
+	Proxy configuration identity to patch.
+	"""
+	id: ID!
+	"""
+	Replacement display name; omission preserves it.
+	"""
+	name: String
+	"""
+	Replacement base URL; omission preserves it.
+	"""
+	baseUrl: String
+	"""
+	Replacement request timeout in seconds; omission preserves it.
+	"""
+	requestTimeoutSeconds: Int
+	"""
+	Replacement transport-proxy username. Write-only: omission preserves
+	the stored value, null clears it, and it is never read back.
+	"""
+	username: String
+	"""
+	Replacement transport-proxy password. Write-only: omission preserves
+	the stored value, null clears it, and it is never read back.
+	"""
+	password: String
+	"""
+	Replacement SOCKS5 remote-DNS state; omission preserves it.
+	"""
+	remoteDns: Boolean
+	"""
+	Replacement PEM-encoded tunnel private key. Write-only: omission
+	preserves the stored value, null clears it, and it is never read back.
+	"""
+	privateKey: String
+	"""
+	Replacement private key passphrase. Write-only: omission preserves the
+	stored value, null clears it, and it is never read back.
+	"""
+	privateKeyPassphrase: String
+	"""
+	Replacement enabled state; omission preserves it.
+	"""
+	isEnabled: Boolean
 }
 
 """

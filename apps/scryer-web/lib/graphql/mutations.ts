@@ -388,7 +388,7 @@ export const createIndexerMutation = `mutation CreateIndexer($input: CreateIndex
     name
     providerType
     baseUrl
-    indexerProxyConfigId
+    proxyConfigId
     downloadClientId
     hasApiKey
     storedSecretKeys
@@ -417,7 +417,7 @@ export const updateIndexerMutation = `mutation UpdateIndexer($input: UpdateIndex
     name
     providerType
     baseUrl
-    indexerProxyConfigId
+    proxyConfigId
     downloadClientId
     hasApiKey
     storedSecretKeys
@@ -440,7 +440,7 @@ export const updateIndexerMutation = `mutation UpdateIndexer($input: UpdateIndex
   }
 }`;
 
-const INDEXER_PROXY_CONFIG_FIELDS = `
+const PROXY_CONFIG_FIELDS = `
     id
     name
     providerType
@@ -456,24 +456,24 @@ const INDEXER_PROXY_CONFIG_FIELDS = `
     createdAt
     updatedAt`;
 
-export const createIndexerProxyConfigMutation = `mutation CreateIndexerProxyConfig($input: CreateIndexerProxyConfigInput!) {
-  createIndexerProxyConfig(input: $input) {${INDEXER_PROXY_CONFIG_FIELDS}
+export const createProxyConfigMutation = `mutation CreateProxyConfig($input: CreateProxyConfigInput!) {
+  createProxyConfig(input: $input) {${PROXY_CONFIG_FIELDS}
   }
 }`;
 
-export const updateIndexerProxyConfigMutation = `mutation UpdateIndexerProxyConfig($input: UpdateIndexerProxyConfigInput!) {
-  updateIndexerProxyConfig(input: $input) {${INDEXER_PROXY_CONFIG_FIELDS}
+export const updateProxyConfigMutation = `mutation UpdateProxyConfig($input: UpdateProxyConfigInput!) {
+  updateProxyConfig(input: $input) {${PROXY_CONFIG_FIELDS}
   }
 }`;
 
-export const deleteIndexerProxyConfigMutation = `mutation DeleteIndexerProxyConfig($id: ID!) {
-  deleteIndexerProxyConfig(id: $id) {
+export const deleteProxyConfigMutation = `mutation DeleteProxyConfig($id: ID!) {
+  deleteProxyConfig(id: $id) {
       id
 }
 }`;
 
-export const testIndexerProxyConfigMutation = `mutation TestIndexerProxyConfig($id: ID!) {
-  testIndexerProxyConfig(id: $id) {
+export const testProxyConfigMutation = `mutation TestProxyConfig($id: ID!) {
+  testProxyConfig(id: $id) {
     ok
     status
     message

@@ -200,18 +200,18 @@ const ko: LocaleDictionary = {
   "settings.securitySaveFailed": "Failed to save security settings.",
   "settings.users": "사용자",
   "settings.indexers": "인덱서",
-  "settings.indexerProxies": "인덱서 프록시",
-  "settings.indexerProxyUsername": "사용자 이름",
-  "settings.indexerProxyPassword": "비밀번호",
-  "settings.indexerProxyCredentialsStored": "자격 증명 설정됨",
-  "settings.indexerProxyCredentialUnchanged": "변경 없음",
-  "settings.indexerProxyClearCredentials": "저장된 자격 증명 삭제",
-  "settings.indexerProxyCredentialsHelp":
+  "settings.proxies": "인덱서 프록시",
+  "settings.proxyUsername": "사용자 이름",
+  "settings.proxyPassword": "비밀번호",
+  "settings.proxyCredentialsStored": "자격 증명 설정됨",
+  "settings.proxyCredentialUnchanged": "변경 없음",
+  "settings.proxyClearCredentials": "저장된 자격 증명 삭제",
+  "settings.proxyCredentialsHelp":
     "자격 증명은 암호화되어 저장되며 다시 표시되지 않습니다. 프록시에 필요하지 않으면 두 항목을 비워 두세요.",
-  "settings.indexerProxyCredentialsStoredHelp":
+  "settings.proxyCredentialsStoredHelp":
     "이 프록시에 자격 증명이 저장되어 있습니다. 그대로 두려면 비워 두고, 교체하려면 새 값을 입력하세요.",
-  "settings.indexerProxyRemoteDns": "프록시에서 DNS 확인",
-  "settings.indexerProxyRemoteDnsHelp":
+  "settings.proxyRemoteDns": "프록시에서 DNS 확인",
+  "settings.proxyRemoteDnsHelp":
     "프록시에서 DNS를 확인하는 것은 socks5h 동작입니다. 이 컴퓨터가 아니라 프록시가 대상 호스트 이름을 조회합니다.",
   "settings.qualityProfiles": "품질 프로필",
   "settings.downloadClients": "다운로드 클라이언트",

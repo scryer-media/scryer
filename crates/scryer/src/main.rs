@@ -1192,10 +1192,7 @@ async fn bootstrap_application(
             staged_nzb_pipeline_limit.clone(),
             Some(download_client_plugin_provider.clone()),
         )
-        .with_indexer_config_repositories(
-            indexer_configs.clone(),
-            datastore.indexer_proxy_configs(),
-        )
+        .with_indexer_config_repositories(indexer_configs.clone(), datastore.proxy_configs())
         .with_indexer_plugin_provider(plugin_provider.clone())
         .with_download_client_category_snapshot_store(
             download_client_category_snapshot_store.clone(),
@@ -1220,7 +1217,7 @@ async fn bootstrap_application(
         indexer_stats.clone(),
         plugin_provider.clone(),
     )
-    .with_indexer_proxy_config_repository(datastore.indexer_proxy_configs())
+    .with_proxy_config_repository(datastore.proxy_configs())
     .with_search_learning_repository(indexer_learning)
     .with_indexer_error_repository(indexer_errors.clone())
     .with_upstream_scheduler(upstream_scheduler.clone());

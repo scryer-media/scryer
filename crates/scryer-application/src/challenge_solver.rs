@@ -13,8 +13,8 @@ use std::time::{Duration, Instant};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
-use crate::IndexerProxyConfigRepository;
-use scryer_domain::IndexerProxyHealthStatus;
+use crate::ProxyConfigRepository;
+use scryer_domain::ProxyHealthStatus;
 
 /// Path of the FlareSolverr-compatible solve endpoint under the proxy base URL.
 pub const SOLVER_SOLVE_PATH: &str = "/v1";
@@ -55,30 +55,31 @@ pub enum SolverErrorKind {
     MissingSolution,
 }
 
-/// Reported when a transport proxy (plain HTTP or SOCKS5) reaches a
-/// challenge-solver code path. Transport proxies carry bytes and solve
-/// nothing, so this message names a routing bug rather than a service fault.
+/// Reported when a proxy that only carries bytes (plain HTTP, SOCKS, or a
+/// tunnel) reaches a challenge-solver code path. Those proxies solve nothing,
+/// so this message names a routing bug rather than a service fault.
 pub const TRANSPORT_PROXY_NOT_A_SOLVER_MESSAGE: &str =
     "transport proxies do not solve browser challenges";
 
-pub fn solver_provider_name(provider: scryer_domain::IndexerProxyProviderType) -> &'static str {
+pub fn solver_provider_name(provider: scryer_domain::ProxyProviderType) -> &'static str {
     match provider {
-        scryer_domain::IndexerProxyProviderType::Byparr => "Byparr",
-        scryer_domain::IndexerProxyProviderType::Trawl => "Trawl",
-        scryer_domain::IndexerProxyProviderType::Http => "HTTP proxy",
-        scryer_domain::IndexerProxyProviderType::Socks4 => "SOCKS4 proxy",
-        scryer_domain::IndexerProxyProviderType::Socks5 => "SOCKS5 proxy",
+        scryer_domain::ProxyProviderType::Byparr => "Byparr",
+        scryer_domain::ProxyProviderType::Trawl => "Trawl",
+        scryer_domain::ProxyProviderType::Http => "HTTP proxy",
+        scryer_domain::ProxyProviderType::Socks4 => "SOCKS4 proxy",
+        scryer_domain::ProxyProviderType::Socks5 => "SOCKS5 proxy",
+        scryer_domain::ProxyProviderType::SshTunnel => "SSH tunnel",
     }
 }
 
 pub fn solver_error_message(
-    provider: scryer_domain::IndexerProxyProviderType,
+    provider: scryer_domain::ProxyProviderType,
     kind: SolverErrorKind,
 ) -> &'static str {
-    use scryer_domain::IndexerProxyProviderType::{Byparr, Http, Socks4, Socks5, Trawl};
+    use scryer_domain::ProxyProviderType::{Byparr, Http, Socks4, Socks5, SshTunnel, Trawl};
 
     match (provider, kind) {
-        (Http | Socks4 | Socks5, _) => TRANSPORT_PROXY_NOT_A_SOLVER_MESSAGE,
+        (Http | Socks4 | Socks5 | SshTunnel, _) => TRANSPORT_PROXY_NOT_A_SOLVER_MESSAGE,
         (Byparr, SolverErrorKind::Unreachable) => BYPARR_UNREACHABLE_MESSAGE,
         (Byparr, SolverErrorKind::Timeout) => BYPARR_TIMEOUT_MESSAGE,
         (Byparr, SolverErrorKind::Unavailable) => BYPARR_UNAVAILABLE_MESSAGE,
@@ -131,20 +132,19 @@ pub struct ChallengeSolverRequest<'a> {
 }
 
 pub fn solver_solve_request(
-    provider: scryer_domain::IndexerProxyProviderType,
+    provider: scryer_domain::ProxyProviderType,
     url: &str,
     request_timeout_seconds: u32,
 ) -> ChallengeSolverRequest<'_> {
     let max_timeout = match provider {
         // Transport proxies never reach a solve endpoint; seconds is the
         // harmless reading if a caller ever gets here by mistake.
-        scryer_domain::IndexerProxyProviderType::Byparr
-        | scryer_domain::IndexerProxyProviderType::Http
-        | scryer_domain::IndexerProxyProviderType::Socks4
-        | scryer_domain::IndexerProxyProviderType::Socks5 => request_timeout_seconds,
-        scryer_domain::IndexerProxyProviderType::Trawl => {
-            request_timeout_seconds.saturating_mul(1_000)
-        }
+        scryer_domain::ProxyProviderType::Byparr
+        | scryer_domain::ProxyProviderType::Http
+        | scryer_domain::ProxyProviderType::Socks4
+        | scryer_domain::ProxyProviderType::Socks5
+        | scryer_domain::ProxyProviderType::SshTunnel => request_timeout_seconds,
+        scryer_domain::ProxyProviderType::Trawl => request_timeout_seconds.saturating_mul(1_000),
     };
     ChallengeSolverRequest {
         cmd: "request.get",
@@ -178,7 +178,7 @@ pub enum ChallengeSolverParseError {
 }
 
 impl ChallengeSolverParseError {
-    pub fn message(self, provider: scryer_domain::IndexerProxyProviderType) -> &'static str {
+    pub fn message(self, provider: scryer_domain::ProxyProviderType) -> &'static str {
         match self {
             Self::Malformed => solver_error_message(provider, SolverErrorKind::Malformed),
             Self::ServiceError => solver_error_message(provider, SolverErrorKind::Unavailable),
@@ -429,7 +429,7 @@ pub fn sanitized_url_for_log(raw: &str) -> String {
 
 /// Redact credential-bearing query values from solver error text before it is
 /// logged or persisted as proxy health detail.
-pub fn sanitize_indexer_proxy_error(message: &str) -> String {
+pub fn sanitize_proxy_error(message: &str) -> String {
     let mut sanitized = message.to_string();
     for marker in [
         "apikey=", "api_key=", "token=", "passkey=", "auth=", "rsskey=", "jwt=",
@@ -591,7 +591,7 @@ impl SolverHealthLedger {
         self.record(SolverHealthEvent {
             proxy_config_id: proxy_config_id.to_string(),
             healthy: false,
-            message: Some(sanitize_indexer_proxy_error(message)),
+            message: Some(sanitize_proxy_error(message)),
             observed_at: Utc::now(),
         });
     }
@@ -616,12 +616,12 @@ impl SolverHealthLedger {
 /// Persist any pending solver-health observations. Health writes go through
 /// the dedicated repository method so they never bump `updated_at`, which
 /// doubles as the plugin client cache revision.
-pub async fn flush_solver_health(repo: &dyn IndexerProxyConfigRepository) {
+pub async fn flush_solver_health(repo: &dyn ProxyConfigRepository) {
     for event in SolverHealthLedger::shared().drain() {
         let status = if event.healthy {
-            IndexerProxyHealthStatus::Healthy
+            ProxyHealthStatus::Healthy
         } else {
-            IndexerProxyHealthStatus::Unhealthy
+            ProxyHealthStatus::Unhealthy
         };
         let existing = match repo.get_by_id(&event.proxy_config_id).await {
             Ok(Some(existing)) => existing,
@@ -630,7 +630,7 @@ pub async fn flush_solver_health(repo: &dyn IndexerProxyConfigRepository) {
                 tracing::warn!(
                     proxy_config_id = event.proxy_config_id.as_str(),
                     error = %error,
-                    "failed to load indexer proxy config for health update"
+                    "failed to load proxy config for health update"
                 );
                 continue;
             }
@@ -653,7 +653,7 @@ pub async fn flush_solver_health(repo: &dyn IndexerProxyConfigRepository) {
             tracing::warn!(
                 proxy_config_id = event.proxy_config_id.as_str(),
                 error = %error,
-                "failed to record indexer proxy runtime health"
+                "failed to record proxy runtime health"
             );
         }
     }
@@ -670,13 +670,13 @@ mod tests {
     #[test]
     fn solve_requests_serialize_provider_timeout_units() {
         let byparr = serde_json::to_value(solver_solve_request(
-            scryer_domain::IndexerProxyProviderType::Byparr,
+            scryer_domain::ProxyProviderType::Byparr,
             "https://example.com/",
             60,
         ))
         .expect("Byparr payload should serialize");
         let trawl = serde_json::to_value(solver_solve_request(
-            scryer_domain::IndexerProxyProviderType::Trawl,
+            scryer_domain::ProxyProviderType::Trawl,
             "https://example.com/",
             60,
         ))
@@ -993,11 +993,11 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_indexer_proxy_error_redacts_sensitive_query_values_once() {
+    fn sanitize_proxy_error_redacts_sensitive_query_values_once() {
         let message =
             "Byparr failed for https://example.invalid/api?t=search&apikey=abc123&token=def456";
 
-        let sanitized = sanitize_indexer_proxy_error(message);
+        let sanitized = sanitize_proxy_error(message);
 
         assert_eq!(
             sanitized,
@@ -1006,10 +1006,10 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_indexer_proxy_error_handles_all_sensitive_markers() {
+    fn sanitize_proxy_error_handles_all_sensitive_markers() {
         let message = "api_key=a passkey=b auth=c rsskey=d jwt=e apikey=f";
 
-        let sanitized = sanitize_indexer_proxy_error(message);
+        let sanitized = sanitize_proxy_error(message);
 
         assert_eq!(
             sanitized,
@@ -1018,10 +1018,10 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_indexer_proxy_error_does_not_loop_on_already_redacted_value() {
+    fn sanitize_proxy_error_does_not_loop_on_already_redacted_value() {
         let message = "request failed: apikey=REDACTED&token=still-secret";
 
-        let sanitized = sanitize_indexer_proxy_error(message);
+        let sanitized = sanitize_proxy_error(message);
 
         assert_eq!(sanitized, "request failed: apikey=REDACTED&token=REDACTED");
     }

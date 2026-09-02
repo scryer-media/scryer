@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use scryer_application::{
     CapturedIndexerHttpHeader, CapturedIndexerHttpResponse, challenge_solver as solver,
-    indexer_transport_proxy as transport_proxy,
+    transport_proxy,
 };
 use tokio::sync::mpsc;
 use wasmtime::component::{Component, HasSelf, Linker, ResourceTable};
@@ -19,7 +19,7 @@ use wasmtime::{Engine, Store};
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
 use crate::plugin_http_host::{
-    IndexerErrorCaptureContext, IndexerProxyPolicy, PluginHttpHost, enforce_allowed_hosts,
+    IndexerErrorCaptureContext, PluginHttpHost, ProxyPolicy, enforce_allowed_hosts,
     shared_plugin_http_runtime,
 };
 use crate::wasmtime_host::sandbox::HostLimits;
@@ -84,7 +84,7 @@ struct ComponentHostInner {
     config: BTreeMap<String, String>,
     provider_profile: Option<Vec<u8>>,
     allowed_hosts: Vec<String>,
-    indexer_proxy_policy: Option<IndexerProxyPolicy>,
+    proxy_policy: Option<ProxyPolicy>,
     timeout: Duration,
     max_response_bytes: usize,
     clock_origin: std::time::Instant,
@@ -164,14 +164,14 @@ impl ComponentHost {
     pub(crate) fn for_indexer(
         config: BTreeMap<String, String>,
         allowed_hosts: Vec<String>,
-        indexer_proxy_policy: Option<IndexerProxyPolicy>,
+        proxy_policy: Option<ProxyPolicy>,
         timeout: Duration,
         max_http_response_bytes: Option<u64>,
     ) -> Result<Self, String> {
         Self::for_indexer_with_provider_profile(
             config,
             allowed_hosts,
-            indexer_proxy_policy,
+            proxy_policy,
             timeout,
             max_http_response_bytes,
             None,
@@ -181,7 +181,7 @@ impl ComponentHost {
     pub(crate) fn for_indexer_with_provider_profile(
         config: BTreeMap<String, String>,
         allowed_hosts: Vec<String>,
-        indexer_proxy_policy: Option<IndexerProxyPolicy>,
+        proxy_policy: Option<ProxyPolicy>,
         timeout: Duration,
         max_http_response_bytes: Option<u64>,
         provider_profile: Option<Vec<u8>>,
@@ -191,7 +191,7 @@ impl ComponentHost {
                 config,
                 provider_profile,
                 allowed_hosts,
-                indexer_proxy_policy,
+                proxy_policy,
                 timeout,
                 max_response_bytes: max_http_response_bytes
                     .and_then(|value| usize::try_from(value).ok())
@@ -349,11 +349,15 @@ impl ComponentHost {
         // under `remote_dns` that name is the proxy's to resolve and may not
         // resolve here at all. The allowed-hosts check above stays the primary
         // boundary. Response handling below is the direct path's, unchanged.
+        // "Not a solver" rather than "is a transport": every non-solver kind
+        // must be forced through this branch so it either egresses through its
+        // proxy or fails. Falling through to the direct path below would send
+        // traffic the operator proxied out of the default route.
         if let Some(policy) = self
             .inner
-            .indexer_proxy_policy
+            .proxy_policy
             .as_ref()
-            .filter(|policy| policy.config.is_transport())
+            .filter(|policy| !policy.config.is_challenge_solver())
         {
             let transported = self
                 .send_transport_proxied_request(policy, &request, &extra_ca_bundle_pem)
@@ -371,7 +375,7 @@ impl ComponentHost {
                 "component plugin HTTP",
             ) => result.map_err(component_outbound_destination_error)?,
         };
-        let Some(policy) = self.inner.indexer_proxy_policy.as_ref() else {
+        let Some(policy) = self.inner.proxy_policy.as_ref() else {
             let direct = self
                 .send_direct_request(target.client(), target.url(), &request, &[])
                 .await?;
@@ -428,7 +432,7 @@ impl ComponentHost {
     /// header lists, captured responses and the response size cap are identical.
     async fn send_transport_proxied_request(
         &self,
-        policy: &IndexerProxyPolicy,
+        policy: &ProxyPolicy,
         request: &HttpRequest,
         extra_ca_bundle_pem: &str,
     ) -> Result<ComponentHttpResult, TransportError> {
@@ -448,7 +452,7 @@ impl ComponentHost {
 
     fn transport_proxy_client(
         &self,
-        config: &scryer_domain::IndexerProxyConfig,
+        config: &scryer_domain::ProxyConfig,
         extra_ca_bundle_pem: &str,
     ) -> Result<reqwest::Client, TransportError> {
         let revision = transport_proxy::transport_proxy_revision(config);
@@ -496,7 +500,7 @@ impl ComponentHost {
         url: &reqwest::Url,
         request: &HttpRequest,
         extra_headers: &[(String, String)],
-        transport_proxy_config: Option<&scryer_domain::IndexerProxyConfig>,
+        transport_proxy_config: Option<&scryer_domain::ProxyConfig>,
     ) -> Result<ComponentHttpResult, TransportError> {
         let method = reqwest::Method::from_bytes(request.method.as_bytes())
             .map_err(|_| TransportError::InvalidRequest)?;
@@ -548,26 +552,27 @@ impl ComponentHost {
         target_client: &reqwest::Client,
         target_url: &reqwest::Url,
         request: &HttpRequest,
-        policy: &IndexerProxyPolicy,
+        policy: &ProxyPolicy,
         extra_ca_bundle_pem: &str,
     ) -> Result<ComponentHttpResult, TransportError> {
         if !policy.config.is_enabled {
             return Err(TransportError::Transport);
         }
         let provider = policy.config.provider_type;
-        let solver_timeout = scryer_outbound_http::effective_indexer_proxy_request_timeout(
+        let solver_timeout = scryer_outbound_http::effective_proxy_request_timeout(
             policy.config.request_timeout_seconds,
         )
         .min(self.remaining_operation_timeout()?);
-        let proxy_client =
-            scryer_outbound_http::indexer_proxy_reqwest_client_with_extra_ca(extra_ca_bundle_pem)
-                .map_err(|_| {
-                solver::SolverHealthLedger::shared().record_failure(
-                    &policy.config.id,
-                    solver::solver_error_message(provider, solver::SolverErrorKind::Unreachable),
-                );
-                TransportError::Transport
-            })?;
+        let proxy_client = scryer_outbound_http::proxy_reqwest_client_with_extra_ca(
+            extra_ca_bundle_pem,
+        )
+        .map_err(|_| {
+            solver::SolverHealthLedger::shared().record_failure(
+                &policy.config.id,
+                solver::solver_error_message(provider, solver::SolverErrorKind::Unreachable),
+            );
+            TransportError::Transport
+        })?;
         let endpoint = solver::solver_solve_endpoint(&policy.config.base_url);
         let cancellation = self.cancellation();
         let response = tokio::select! {
@@ -1642,13 +1647,13 @@ mod tests {
         ComponentHost::for_indexer(
             BTreeMap::new(),
             vec!["127.0.0.1".to_string()],
-            Some(IndexerProxyPolicy {
-                indexer_id: "component-indexer".to_string(),
-                indexer_name: "Component indexer".to_string(),
-                config: scryer_domain::IndexerProxyConfig {
+            Some(ProxyPolicy {
+                consumer_id: "component-indexer".to_string(),
+                consumer_name: "Component indexer".to_string(),
+                config: scryer_domain::ProxyConfig {
                     id: proxy_id.to_string(),
                     name: "Component solver".to_string(),
-                    provider_type: scryer_domain::IndexerProxyProviderType::Trawl,
+                    provider_type: scryer_domain::ProxyProviderType::Trawl,
                     protocol: Some(scryer_domain::ChallengeSolverProtocol::RequestSolutionV1),
                     username_encrypted: None,
                     password_encrypted: None,
@@ -1661,6 +1666,10 @@ mod tests {
                     last_error_at: None,
                     created_at: now,
                     updated_at: now,
+                    host_key_fingerprint: None,
+                    host_key_pinned_at: None,
+                    private_key_encrypted: None,
+                    private_key_passphrase_encrypted: None,
                 },
             }),
             timeout,
@@ -1679,17 +1688,17 @@ mod tests {
     }
 
     fn component_transport_test_host(
-        provider_type: scryer_domain::IndexerProxyProviderType,
+        provider_type: scryer_domain::ProxyProviderType,
         base_url: String,
     ) -> ComponentHost {
         let now = chrono::Utc::now();
         ComponentHost::for_indexer(
             BTreeMap::new(),
             vec!["indexer.example".to_string()],
-            Some(IndexerProxyPolicy {
-                indexer_id: "component-indexer".to_string(),
-                indexer_name: "Component indexer".to_string(),
-                config: scryer_domain::IndexerProxyConfig {
+            Some(ProxyPolicy {
+                consumer_id: "component-indexer".to_string(),
+                consumer_name: "Component indexer".to_string(),
+                config: scryer_domain::ProxyConfig {
                     id: "component-transport".to_string(),
                     name: "House VPN".to_string(),
                     provider_type,
@@ -1705,6 +1714,10 @@ mod tests {
                     last_error_at: None,
                     created_at: now,
                     updated_at: now,
+                    host_key_fingerprint: None,
+                    host_key_pinned_at: None,
+                    private_key_encrypted: None,
+                    private_key_passphrase_encrypted: None,
                 },
             }),
             Duration::from_secs(30),
@@ -1766,8 +1779,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn component_http_egresses_through_an_assigned_transport_proxy() {
         let (proxy_url, seen) = spawn_recording_component_proxy("<rss>through</rss>").await;
-        let host =
-            component_transport_test_host(scryer_domain::IndexerProxyProviderType::Http, proxy_url);
+        let host = component_transport_test_host(scryer_domain::ProxyProviderType::Http, proxy_url);
 
         let response = host
             .http(HttpRequest {
@@ -1797,7 +1809,7 @@ mod tests {
     async fn component_http_does_not_solve_for_a_transport_proxy() {
         let (proxy_url, seen) = spawn_recording_component_proxy("<html>challenge</html>").await;
         let host = component_transport_test_host(
-            scryer_domain::IndexerProxyProviderType::Socks5,
+            scryer_domain::ProxyProviderType::Socks5,
             "socks5://127.0.0.1:1".to_string(),
         );
 
@@ -1815,6 +1827,81 @@ mod tests {
         assert!(
             seen.lock().expect("proxy recorder lock").is_empty(),
             "nothing may be sent to {proxy_url}: transport proxies do not solve"
+        );
+    }
+
+    /// The live WASI p2 egress path must not degrade a tunnel assignment into
+    /// a direct connection. The destination here is a real listener, so a
+    /// dropped policy would show up as a success rather than as an error.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn component_http_fails_closed_for_a_tunnel_proxy() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let origin = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("<rss>direct</rss>"))
+            .mount(&origin)
+            .await;
+        let origin_host = origin
+            .uri()
+            .trim_start_matches("http://")
+            .split(':')
+            .next()
+            .expect("origin host")
+            .to_string();
+
+        let now = chrono::Utc::now();
+        let host = ComponentHost::for_indexer(
+            BTreeMap::new(),
+            vec![origin_host],
+            Some(ProxyPolicy {
+                consumer_id: "component-indexer".to_string(),
+                consumer_name: "Component indexer".to_string(),
+                config: scryer_domain::ProxyConfig {
+                    id: "component-tunnel".to_string(),
+                    name: "Seedbox".to_string(),
+                    provider_type: scryer_domain::ProxyProviderType::SshTunnel,
+                    protocol: None,
+                    username_encrypted: Some("operator".to_string()),
+                    password_encrypted: Some("s3cret".to_string()),
+                    remote_dns: false,
+                    base_url: "ssh://seedbox.test:22".to_string(),
+                    request_timeout_seconds: 30,
+                    is_enabled: true,
+                    last_health_status: None,
+                    last_error_message: None,
+                    last_error_at: None,
+                    created_at: now,
+                    updated_at: now,
+                    host_key_fingerprint: None,
+                    host_key_pinned_at: None,
+                    private_key_encrypted: None,
+                    private_key_passphrase_encrypted: None,
+                },
+            }),
+            Duration::from_secs(30),
+            Some(1024 * 1024),
+        )
+        .expect("component host should accept a configured tunnel proxy");
+
+        let error = host
+            .http(HttpRequest {
+                method: "GET".to_string(),
+                url: format!("{}/api?t=search", origin.uri()),
+                headers: Vec::new(),
+                body: Vec::new(),
+            })
+            .await
+            .expect_err("a tunnel with no engine must fail the request");
+        assert!(matches!(error, TransportError::Transport), "{error:?}");
+        assert!(
+            origin
+                .received_requests()
+                .await
+                .unwrap_or_default()
+                .is_empty(),
+            "a tunnel-assigned request must never reach the origin directly"
         );
     }
 

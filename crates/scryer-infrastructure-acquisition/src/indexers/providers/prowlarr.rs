@@ -986,7 +986,7 @@ impl IndexerPluginProvider for NativeProwlarrIndexerProvider {
     fn client_for_provider_with_proxy(
         &self,
         config: &IndexerConfig,
-        proxy_config: Option<&scryer_domain::IndexerProxyConfig>,
+        proxy_config: Option<&scryer_domain::ProxyConfig>,
     ) -> Option<Arc<dyn IndexerClient>> {
         if is_prowlarr_provider(&config.provider_type) {
             return Some(Arc::new(ProwlarrSearchStub));
@@ -1688,7 +1688,7 @@ mod tests {
         fn client_for_provider_with_proxy(
             &self,
             _config: &IndexerConfig,
-            proxy_config: Option<&scryer_domain::IndexerProxyConfig>,
+            proxy_config: Option<&scryer_domain::ProxyConfig>,
         ) -> Option<Arc<dyn IndexerClient>> {
             *self.observed_proxy_id.lock().expect("proxy observation") =
                 proxy_config.map(|config| config.id.clone());
@@ -1705,17 +1705,17 @@ mod tests {
     }
 
     #[test]
-    fn non_prowlarr_clients_preserve_indexer_proxy_configuration() {
+    fn non_prowlarr_clients_preserve_proxy_configuration() {
         let delegate = Arc::new(ProxyRecordingProvider::default());
         let observed_proxy_id = Arc::clone(&delegate.observed_proxy_id);
         let provider = NativeProwlarrIndexerProvider::new(delegate);
         let mut config = test_indexer_config("http://newznab:8088");
         config.provider_type = "newznab".to_string();
         let now = Utc::now();
-        let proxy_config = scryer_domain::IndexerProxyConfig {
+        let proxy_config = scryer_domain::ProxyConfig {
             id: "proxy-1".to_string(),
             name: "Byparr".to_string(),
-            provider_type: scryer_domain::IndexerProxyProviderType::Byparr,
+            provider_type: scryer_domain::ProxyProviderType::Byparr,
             protocol: Some(scryer_domain::ChallengeSolverProtocol::RequestSolutionV1),
             username_encrypted: None,
             password_encrypted: None,
@@ -1728,6 +1728,10 @@ mod tests {
             last_error_at: None,
             created_at: now,
             updated_at: now,
+            host_key_fingerprint: None,
+            host_key_pinned_at: None,
+            private_key_encrypted: None,
+            private_key_passphrase_encrypted: None,
         };
 
         assert!(
@@ -1792,7 +1796,7 @@ mod tests {
             is_enabled: true,
             enable_interactive_search: false,
             enable_auto_search: false,
-            indexer_proxy_config_id: None,
+            proxy_config_id: None,
             download_client_id: None,
             seeding_profile_id: None,
             managed_parent_config_id: None,
