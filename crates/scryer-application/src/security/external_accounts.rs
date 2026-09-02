@@ -904,7 +904,9 @@ impl AppUseCase {
             .await
             .map_err(|error| match error {
                 AppError::Validation(message)
-                    if message == "external account is already linked to another Scryer user" =>
+                    if message == "external account is already linked to another Scryer user"
+                        || message
+                            == "external account is already linked to a different provider identity" =>
                 {
                     AppError::Validation("Jellyfin account could not be linked".into())
                 }

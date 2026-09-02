@@ -11341,6 +11341,15 @@ type MutationRoot {
 		input: LinkJellyfinAccountInput!
 	): LinkedAccountPayload!
 	"""
+	Links the current OAuth caller to the Jellyfin user bound to the plugin's approved OAuth grant. Neither a Scryer user nor a connection may be selected by the caller.
+	"""
+	linkCurrentOAuthJellyfinAccount(
+		"""
+		Canonical Jellyfin user GUID reported by the Jellyfin client.
+		"""
+		jellyfinUserId: String!
+	): LinkedAccountPayload!
+	"""
 	Links the authenticated actor to Emby using the selected connection mode and credentials.
 	"""
 	linkEmbyAccount(

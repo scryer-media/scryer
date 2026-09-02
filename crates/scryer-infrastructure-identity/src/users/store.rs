@@ -449,7 +449,7 @@ impl UserExternalAccountRepository for UserStore {
                             });
                     }
 
-                    load_external_account_by_provider_identity_tx(
+                    if let Some(existing) = load_external_account_by_provider_identity_tx(
                         tx,
                         &account.provider,
                         &account.connection_id,
@@ -460,12 +460,27 @@ impl UserExternalAccountRepository for UserStore {
                         })?,
                     )
                     .await?
-                    .ok_or_else(|| {
-                        AppError::Repository(
-                            "provider identity claim did not return its current external account"
+                    {
+                        return Ok(existing);
+                    }
+                    if load_external_account_by_user_binding_tx(
+                        tx,
+                        &account.user_id,
+                        &account.provider,
+                        &account.connection_id,
+                    )
+                    .await?
+                    .is_some()
+                    {
+                        return Err(AppError::Validation(
+                            "external account is already linked to a different provider identity"
                                 .into(),
-                        )
-                    })
+                        ));
+                    }
+                    Err(AppError::Repository(
+                        "provider identity claim did not return its current external account"
+                            .into(),
+                    ))
                 })
             },
         )
@@ -1067,6 +1082,28 @@ async fn load_external_account_by_provider_identity_tx(
     row.as_ref().map(row_to_external_account).transpose()
 }
 
+async fn load_external_account_by_user_binding_tx(
+    tx: &mut SqlTx<'_>,
+    user_id: &str,
+    provider: &ExternalAccountProvider,
+    connection_id: &str,
+) -> AppResult<Option<UserExternalAccount>> {
+    let row = SqlRuntime::fetch_optional(
+        SqlExec::Tx(tx),
+        "SELECT id, user_id, provider, connection_id, external_user_id, username,
+                display_name, avatar_url, status, verified_at, last_login_at, created_at, updated_at
+           FROM user_external_accounts
+          WHERE user_id = {} AND provider = {} AND connection_id = {}",
+        &[
+            SqlArg::Text(user_id.to_string()),
+            SqlArg::Text(provider.as_str().to_string()),
+            SqlArg::Text(connection_id.to_string()),
+        ],
+    )
+    .await?;
+    row.as_ref().map(row_to_external_account).transpose()
+}
+
 async fn insert_external_account_tx(
     tx: &mut SqlTx<'_>,
     account: &UserExternalAccount,
@@ -1108,7 +1145,7 @@ async fn insert_external_account_if_provider_identity_absent_tx(
                  display_name, avatar_url, status, verified_at, last_login_at, created_at, updated_at
               )
               VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})
-              ON CONFLICT (provider, connection_id, external_user_id) DO NOTHING",
+              ON CONFLICT DO NOTHING",
             &[
                 SqlArg::Text(account.id.clone()),
                 SqlArg::Text(account.user_id.clone()),
@@ -1518,6 +1555,45 @@ mod tests {
         assert_eq!(created.id, "account_a");
         assert_eq!(existing.id, "account_a");
         assert_eq!(existing.user_id, "user_a");
+    }
+
+    #[tokio::test]
+    async fn claim_external_account_rejects_a_different_identity_for_the_same_user_binding() {
+        let store = test_store().await;
+        UserRepository::create(&store, test_user("user_a"))
+            .await
+            .expect("create user");
+
+        UserExternalAccountRepository::create_or_get_by_provider_identity(
+            &store,
+            test_account(
+                "account_a",
+                "user_a",
+                ExternalAccountProvider::Jellyfin,
+                "server_1",
+                "external_1",
+            ),
+        )
+        .await
+        .expect("claim first provider identity");
+
+        let conflict = UserExternalAccountRepository::create_or_get_by_provider_identity(
+            &store,
+            test_account(
+                "account_b",
+                "user_a",
+                ExternalAccountProvider::Jellyfin,
+                "server_1",
+                "external_2",
+            ),
+        )
+        .await;
+
+        assert!(matches!(
+            conflict,
+            Err(AppError::Validation(message))
+                if message == "external account is already linked to a different provider identity"
+        ));
     }
 
     #[tokio::test]

@@ -464,8 +464,18 @@ impl OAuthRepository for OAuthStore {
                             .execute(
                                 "UPDATE oauth_client_registrations
                                     SET updated_at = updated_at
-                                  WHERE client_id = {} AND enabled = {}",
-                                &[SqlArg::Text(grant.client_id.clone()), SqlArg::Bool(true)],
+                                  WHERE client_id = {} AND enabled = {}
+                                    AND EXISTS (
+                                        SELECT 1
+                                          FROM oauth_client_redirect_uris
+                                         WHERE client_id = oauth_client_registrations.client_id
+                                           AND redirect_uri = {}
+                                    )",
+                                &[
+                                    SqlArg::Text(grant.client_id.clone()),
+                                    SqlArg::Bool(true),
+                                    SqlArg::Text(code.redirect_uri.clone()),
+                                ],
                             )
                             .await?;
                         if rows == 0 {

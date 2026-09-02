@@ -117,7 +117,52 @@ async fn oauth_authorize_decision_inner(
     headers: HeaderMap,
     input: OAuthAuthorizeDecisionRequest,
 ) -> Result<OAuthAuthorizeDecisionResponse, Response> {
-    let authless_authorization = !state.auth_runtime.snapshot().effective_form_login_enabled;
+    let form_login_enabled = state.auth_runtime.snapshot().effective_form_login_enabled;
+    let authless_authorization = !form_login_enabled;
+    state
+        .app
+        .validate_oauth_redirect_uri(&input.client_id, &input.redirect_uri)
+        .await
+        .map_err(oauth_validation_error)?;
+    if input.response_type != "code" {
+        return Ok(OAuthAuthorizeDecisionResponse {
+            redirect_uri: oauth_redirect_error(
+                &input.redirect_uri,
+                "unsupported_response_type",
+                "only response_type=code is supported",
+                input.state.as_deref(),
+            )
+            .map_err(|response| *response)?,
+        });
+    }
+    let scope = match state
+        .app
+        .effective_oauth_authorization_scope(input.scope.as_deref(), form_login_enabled)
+    {
+        Ok(scope) => scope,
+        Err(err) => {
+            return Ok(OAuthAuthorizeDecisionResponse {
+                redirect_uri: oauth_redirect_error(
+                    &input.redirect_uri,
+                    "invalid_scope",
+                    &oauth_error_description(&err),
+                    input.state.as_deref(),
+                )
+                .map_err(|response| *response)?,
+            });
+        }
+    };
+    if !input.approved {
+        return Ok(OAuthAuthorizeDecisionResponse {
+            redirect_uri: oauth_redirect_error(
+                &input.redirect_uri,
+                "access_denied",
+                "authorization was denied",
+                input.state.as_deref(),
+            )
+            .map_err(|response| *response)?,
+        });
+    }
     let (user, authorization_source, auth_session_version, security_action_verified_until) =
         if authless_authorization {
             let user = state
@@ -172,47 +217,6 @@ async fn oauth_authorize_decision_inner(
                 claims.security_action_verified_until,
             )
         };
-    state
-        .app
-        .validate_oauth_redirect_uri(&input.client_id, &input.redirect_uri)
-        .await
-        .map_err(oauth_validation_error)?;
-    if input.response_type != "code" {
-        return Ok(OAuthAuthorizeDecisionResponse {
-            redirect_uri: oauth_redirect_error(
-                &input.redirect_uri,
-                "unsupported_response_type",
-                "only response_type=code is supported",
-                input.state.as_deref(),
-            )
-            .map_err(|response| *response)?,
-        });
-    }
-    let scope = match state.app.validate_oauth_scope(input.scope.as_deref()) {
-        Ok(scope) => scope,
-        Err(err) => {
-            return Ok(OAuthAuthorizeDecisionResponse {
-                redirect_uri: oauth_redirect_error(
-                    &input.redirect_uri,
-                    "invalid_scope",
-                    &oauth_error_description(&err),
-                    input.state.as_deref(),
-                )
-                .map_err(|response| *response)?,
-            });
-        }
-    };
-    if !input.approved {
-        return Ok(OAuthAuthorizeDecisionResponse {
-            redirect_uri: oauth_redirect_error(
-                &input.redirect_uri,
-                "access_denied",
-                "authorization was denied",
-                input.state.as_deref(),
-            )
-            .map_err(|response| *response)?,
-        });
-    }
     if authorization_source == OAuthAuthorizationSource::Authenticated
         && security_action_verified_until
             .is_none_or(|verified_until| verified_until <= chrono::Utc::now().timestamp())

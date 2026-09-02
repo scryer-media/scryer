@@ -700,7 +700,11 @@ impl SettingsQueries {
         scope: Option<String>,
     ) -> GqlResult<OAuthAuthorizationClientPayload> {
         let app = app_from_ctx(ctx)?;
-        let scope = app.validate_oauth_scope(scope.as_deref())?;
+        let form_login_enabled = auth_runtime_from_ctx(ctx)
+            .snapshot()
+            .effective_form_login_enabled;
+        let scope =
+            app.effective_oauth_authorization_scope(scope.as_deref(), form_login_enabled)?;
         app.validate_oauth_redirect_uri(&client_id, &redirect_uri)
             .await
             .map(|client| OAuthAuthorizationClientPayload {

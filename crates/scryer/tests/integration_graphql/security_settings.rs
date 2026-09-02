@@ -146,7 +146,7 @@ async fn graphql_oauth_client_registration_lifecycle_enforces_admin_access_and_r
     );
     assert_eq!(
         lookup["data"]["oauthAuthorizationClient"]["scope"],
-        "library jellyfin-link"
+        "library"
     );
 
     let ordinary_user = ctx

@@ -260,6 +260,125 @@ async fn custom_client_grant_creation_requires_an_enabled_registration() {
 }
 
 #[tokio::test]
+async fn authorization_code_exchange_rechecks_the_registered_redirect_uri() {
+    let (services, db) = temp_services("scryer_oauth_redirect_recheck").await;
+    let oauth = oauth_store(&services);
+    let user = UserRepository::list_all(&user_store(&services))
+        .await
+        .expect("users should load")
+        .into_iter()
+        .next()
+        .expect("default user should exist");
+    let now = Utc::now();
+    let client_id = "oauth-client-redirect-change";
+    let approved_redirect = "https://example.test/oauth/callback";
+
+    oauth
+        .create_client_registration(scryer_application::OAuthClientRegistrationRecord {
+            client_id: client_id.to_string(),
+            display_name: "Redirect-changing client".to_string(),
+            redirect_uris: vec![approved_redirect.to_string()],
+            enabled: true,
+            created_at: now,
+            updated_at: now,
+        })
+        .await
+        .expect("client registration should insert");
+
+    let authorization_code = scryer_application::OAuthAuthorizationCodeRecord {
+        id: "code-redirect-change".to_string(),
+        code_hash: "hash-code-redirect-change".to_string(),
+        client_id: client_id.to_string(),
+        user_id: user.id.clone(),
+        auth_session_version: "1".to_string(),
+        authorization_source: scryer_application::OAuthAuthorizationSource::Authenticated,
+        redirect_uri: approved_redirect.to_string(),
+        scope: "library".to_string(),
+        jellyfin_connection_id: None,
+        jellyfin_external_url: None,
+        jellyfin_base_url: None,
+        jellyfin_api_key_hash: None,
+        code_challenge: "challenge-redirect-change".to_string(),
+        code_challenge_method: "S256".to_string(),
+        created_at: now,
+        expires_at: now + chrono::Duration::minutes(5),
+        consumed_at: None,
+    };
+    oauth
+        .create_authorization_code(authorization_code.clone())
+        .await
+        .expect("authorization code should insert");
+
+    oauth
+        .update_client_registration(
+            scryer_application::OAuthClientRegistrationRecord {
+                client_id: client_id.to_string(),
+                display_name: "Redirect-changing client".to_string(),
+                redirect_uris: vec!["https://example.test/new-callback".to_string()],
+                enabled: true,
+                created_at: now,
+                updated_at: now + chrono::Duration::seconds(1),
+            },
+            now + chrono::Duration::seconds(1),
+        )
+        .await
+        .expect("redirect update should succeed")
+        .expect("client should still exist");
+
+    let grant = scryer_application::OAuthRefreshGrantRecord {
+        id: "grant-redirect-change".to_string(),
+        family_id: "family-redirect-change".to_string(),
+        user_id: user.id,
+        authorization_source: scryer_application::OAuthAuthorizationSource::Authenticated,
+        client_id: client_id.to_string(),
+        redirect_uri: approved_redirect.to_string(),
+        scope: "library".to_string(),
+        jellyfin_connection_id: None,
+        jellyfin_external_url: None,
+        jellyfin_base_url: None,
+        jellyfin_api_key_hash: None,
+        auth_session_version: "1".to_string(),
+        created_at: now,
+        updated_at: now,
+        last_used_at: None,
+        revoked_at: None,
+        revoked_reason: None,
+    };
+    let token = scryer_application::OAuthRefreshTokenRecord {
+        id: "token-redirect-change".to_string(),
+        grant_id: grant.id.clone(),
+        family_id: grant.family_id.clone(),
+        token_hash: "hash-redirect-change".to_string(),
+        created_at: now,
+        consumed_at: None,
+        revoked_at: None,
+    };
+
+    let error = oauth
+        .consume_authorization_code_and_create_refresh_grant(
+            authorization_code,
+            now,
+            grant,
+            token,
+            true,
+        )
+        .await
+        .expect_err("a removed redirect must not receive a grant");
+    assert!(matches!(
+        error,
+        scryer_application::AppError::Unauthorized(_)
+    ));
+    let code = oauth
+        .get_authorization_code("code-redirect-change")
+        .await
+        .expect("authorization code should load")
+        .expect("authorization code should remain");
+    assert!(code.consumed_at.is_none());
+
+    let _ = std::fs::remove_file(db);
+}
+
+#[tokio::test]
 async fn refresh_grant_load_preserves_redirect_and_jellyfin_binding() {
     let (services, db) = temp_services("scryer_oauth_jellyfin_binding").await;
     let oauth = oauth_store(&services);

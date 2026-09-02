@@ -363,6 +363,15 @@ impl AppUseCase {
         })
     }
 
+    pub fn effective_oauth_authorization_scope(
+        &self,
+        scope: Option<&str>,
+        form_login_enabled: bool,
+    ) -> AppResult<String> {
+        self.validate_oauth_scope(scope)
+            .map(|scope| constrain_oauth_scope_for_authorization(scope, form_login_enabled))
+    }
+
     async fn oauth_jellyfin_link_binding(
         &self,
         client: &OAuthClientInfo,
@@ -1025,9 +1034,33 @@ fn env_flag_enabled(name: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn constrain_oauth_scope_for_authorization(scope: String, form_login_enabled: bool) -> String {
+    if !form_login_enabled && oauth_scope_has_jellyfin_link(&scope) {
+        OAUTH_LIBRARY_SCOPE.to_string()
+    } else {
+        scope
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn authless_authorization_reduces_jellyfin_link_to_library_scope() {
+        assert_eq!(
+            constrain_oauth_scope_for_authorization("library jellyfin-link".to_string(), false,),
+            "library"
+        );
+        assert_eq!(
+            constrain_oauth_scope_for_authorization("library jellyfin-link".to_string(), true,),
+            "library jellyfin-link"
+        );
+        assert_eq!(
+            constrain_oauth_scope_for_authorization("library".to_string(), false),
+            "library"
+        );
+    }
 
     #[test]
     fn pkce_s256_challenge_and_verifier_follow_rfc7636_syntax() {
