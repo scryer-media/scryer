@@ -1,12 +1,13 @@
 /**
- * Client-side model for the two root-scoped location workflows: US4 change root
- * (a root's path is replaced) and US5 consolidate root (a root is folded into
- * another root of the same library).
+ * Client-side model for **Change root**, FR-020's one settings action with two
+ * destinations: a new, unconfigured path (US4) or another configured root of
+ * the same library (US5).
  *
- * FR-020 calls them one settings action with two destinations, so they share a
- * dialog and most of this file; what differs is the request and the block of
- * facts each preview adds to the shared plan. Everything here is pure and
- * testable with `node --test`; React lives in the dialog.
+ * One query, one payload, one dialog. The server decides which destination a
+ * request named, and says so by which variant-only section of the payload comes
+ * back: `retention` for a path change, `classification` and `defaultTransfer`
+ * for a fold. Everything here is pure and testable with `node --test`; React
+ * lives in the dialog.
  */
 
 // Relative and extension-qualified on purpose: these helpers are exercised by
@@ -106,10 +107,18 @@ export type LocationRootRetirementContract = {
   blockers: LocationRootRetirementBlocker[];
 };
 
-export type LocationRootChangePreview = {
+/**
+ * One payload for both branches of **Change root** (US4 + US5). The sections
+ * both branches share are always present; `retention` is filled in only for a
+ * path change, and `classification` / `defaultTransfer` only for a fold into an
+ * existing root.
+ */
+export type LocationRootScopePreview = {
   plan: LocationOperationPreview;
   accounting: LocationTitleAccounting;
-  retention: LocationRootIdentityRetention;
+  retention?: LocationRootIdentityRetention | null;
+  classification?: LocationConsolidationClassification | null;
+  defaultTransfer?: LocationDefaultRootTransfer | null;
   content: LocationRootContentInventory;
   retirement: LocationRootRetirementContract;
 };
@@ -135,15 +144,6 @@ export type LocationDefaultRootTransfer = {
   transfersTheDefault: boolean;
 };
 
-export type LocationRootConsolidationPreview = {
-  plan: LocationOperationPreview;
-  accounting: LocationTitleAccounting;
-  classification: LocationConsolidationClassification;
-  defaultTransfer: LocationDefaultRootTransfer;
-  content: LocationRootContentInventory;
-  retirement: LocationRootRetirementContract;
-};
-
 /** The two destinations FR-020's single action offers. */
 export type RootDestinationKind = "NEW_PATH" | "EXISTING_ROOT";
 
@@ -166,7 +166,6 @@ export type LocationRootRefusalCode =
   | "root_consolidation_path_not_absolute"
   | "root_consolidation_same_root"
   | "root_consolidation_paths_overlap"
-  | "root_consolidation_destination_not_a_configured_root"
   | "root_consolidation_source_root_is_symlink"
   | "root_consolidation_source_root_unavailable"
   | "root_consolidation_destination_root_unavailable"
@@ -184,7 +183,6 @@ const ROOT_REFUSAL_CODES: readonly string[] = [
   "root_consolidation_path_not_absolute",
   "root_consolidation_same_root",
   "root_consolidation_paths_overlap",
-  "root_consolidation_destination_not_a_configured_root",
   "root_consolidation_source_root_is_symlink",
   "root_consolidation_source_root_unavailable",
   "root_consolidation_destination_root_unavailable",
@@ -212,26 +210,6 @@ export function rootRefusalCode(error: unknown): LocationRootRefusalCode | null 
   return null;
 }
 
-/**
- * FR-020's two halves, as one control.
- *
- * A "new path" that is already a configured root is a consolidation, and a
- * consolidation destination that is not a configured root is a root change.
- * Either refusal switches the dialog's destination branch instead of showing an
- * error the user has to interpret. Every other refusal leaves the branch alone.
- */
-export function crossRouteDestination(
-  code: LocationRootRefusalCode | null,
-): RootDestinationKind | null {
-  if (code === "root_change_destination_is_configured_root") {
-    return "EXISTING_ROOT";
-  }
-  if (code === "root_consolidation_destination_not_a_configured_root") {
-    return "NEW_PATH";
-  }
-  return null;
-}
-
 /** The translated sentence for a refusal, in Scryer's own words. */
 export function rootRefusalMessageKey(code: LocationRootRefusalCode): string {
   return `rootChange.refusal.${code}`;
@@ -245,7 +223,7 @@ export function rootRefusalMessageKey(code: LocationRootRefusalCode): string {
  * server's own sentence, which the plan item always carries.
  */
 const ROOT_REASON_CODES: readonly string[] = [
-  // location::root_change::plan_reasons
+  // location::root_scope::plan_reasons (the ChangePath branch)
   "root_identity_retained",
   "catalog_only_root_change",
   "title_blocked_for_root_change",
@@ -253,7 +231,7 @@ const ROOT_REASON_CODES: readonly string[] = [
   "source_retirement_blocked",
   "file_outside_title_folder",
   "hardlinked_source",
-  // location::consolidation::plan_reasons
+  // location::root_scope::plan_reasons (the FoldInto branch)
   "roots_consolidated",
   "default_root_transferred",
   "moves_into_unused_folder",

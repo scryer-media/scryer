@@ -71,7 +71,7 @@ use crate::location::collisions::{
     CollisionNaming, ContentFacts, DestinationItem, FullHash, PathCaseRule, RecycleAvailability,
 };
 use crate::location::execution::{
-    ImportFilePermissionsApplier, PostMergeWorkRequest, PostMergeWorkScheduler, RootMoveAdmission,
+    ImportFilePermissionsApplier, MergedSourceRetirement, MergedSourceRetirer, RootMoveAdmission,
     RootMoveCatalog, RootMoveFileMover, RootMoveReconciler, RecycleBinSourceRecycler,
     TitlePlacementSnapshot,
 };
@@ -79,9 +79,8 @@ use crate::location::media_server_refresh::{
     LocationMediaServerRefresh, MediaServerRefreshRequest, notify_media_servers_for_operation,
 };
 use crate::location::merge::engine::{MergePlan, plan_merge};
-use crate::location::merge::summary::PostMergeWork;
 use crate::location::executor::{LocationOperationRunner, OperationRunOutcome};
-use crate::location::hardlinks::detect_hardlinks;
+use crate::location::hardlinks::{HardlinkFact, detect_hardlinks};
 use crate::location::identity::{
     DestinationIdentityOutcome, DestinationTitleCandidate, IdentityRedirects, SourceTitleIdentity,
     detect_destination_titles,
@@ -167,6 +166,32 @@ pub struct StartRootMoveRequest {
 pub struct LocationOperationAccepted {
     pub operation: LocationOperation,
     pub plan: LocationPlan,
+}
+
+/// What one title's draft needs from the filesystem and the catalog.
+///
+/// The default is what a title the planner will not walk contributes: nothing
+/// on either side.
+#[derive(Default)]
+pub(super) struct TitleMoveFacts {
+    pub files: Vec<SourceFile>,
+    /// Directories beneath the source folder, deepest first, that cleanup may
+    /// remove once they are empty (FR-028).
+    pub source_directories: Vec<PathBuf>,
+    pub hardlinks: Vec<HardlinkFact>,
+    pub destination_entries: Vec<DestinationItem>,
+}
+
+/// A confirmed plan, on its way to becoming a persisted operation.
+pub(super) struct LocationOperationAdmission<'a> {
+    pub actor: &'a User,
+    pub plan: LocationPlan,
+    pub execution: RootMoveExecutionPlan,
+    /// The population Activity reports against: a selection's startable titles
+    /// (FR-091), or a root-scoped operation's every-title ledger (FR-023).
+    pub titles_total: i64,
+    /// What Activity says if the operation row could not be written.
+    pub failure_message: &'static str,
 }
 
 impl AppUseCase {
@@ -261,11 +286,38 @@ impl AppUseCase {
             ));
         }
 
-        // Activity's job run is opened before the row it belongs to, so the
-        // accepted payload can name it and the client can follow the operation
-        // from the jobs list the moment the mutation returns (FR-091).
-        let operation_id = scryer_domain::Id::new().0;
         let titles_total = planned.planned.execution.titles.len() as i64;
+        self.admit_location_operation(LocationOperationAdmission {
+            actor,
+            plan,
+            execution: planned.planned.execution,
+            titles_total,
+            failure_message: "The location operation could not be started.",
+        })
+        .await
+    }
+
+    /// Open the Activity run, write the operation row, and spawn the runner —
+    /// for every location operation there is.
+    ///
+    /// Activity's job run is opened before the row it belongs to, so the
+    /// accepted payload can name it and the client can follow the operation from
+    /// the jobs list the moment the mutation returns (FR-091). The confirmation
+    /// has already been checked: by the time an admission is built, the plan the
+    /// user confirmed is the plan being persisted.
+    pub(super) async fn admit_location_operation(
+        &self,
+        admission: LocationOperationAdmission<'_>,
+    ) -> AppResult<LocationOperationAccepted> {
+        let LocationOperationAdmission {
+            actor,
+            plan,
+            execution,
+            titles_total,
+            failure_message,
+        } = admission;
+
+        let operation_id = scryer_domain::Id::new().0;
         let job_run = self
             .open_location_operation_job_run(
                 &operation_id,
@@ -278,8 +330,9 @@ impl AppUseCase {
         let operation = LocationOperation {
             id: operation_id,
             // The planner decides this: a selection that changes library is a
-            // cross-library transfer in Activity, even though both types walk
-            // the same runner (FR-091).
+            // cross-library transfer in Activity, and a root-scoped operation is
+            // a root change or a consolidation, even though every type walks the
+            // same runner (FR-091).
             operation_type: plan.header.operation_type,
             mode: plan.header.mode,
             state: LocationOperationState::Queued,
@@ -293,21 +346,19 @@ impl AppUseCase {
             verification_fallback_count: 0,
             counters: LocationOperationCounters {
                 titles_total,
-                files_total: planned
-                    .planned
-                    .execution
+                files_total: execution
                     .titles
                     .iter()
                     .map(|title| title.files.len() as i64)
                     .sum(),
-                bytes_total: planned.planned.execution.moved_bytes() as i64,
+                bytes_total: execution.moved_bytes() as i64,
                 // The two counters the instruction set cannot carry: titles the
                 // preview called no-ops or could not resolve produce no work,
                 // but Activity still reports them (FR-091). The runner
                 // recomputes the row from the same plan on its first progress
                 // write, so these never drift from what it will report.
-                no_ops: planned.planned.execution.no_op_titles,
-                unresolved: planned.planned.execution.unresolved_titles,
+                no_ops: execution.no_op_titles,
+                unresolved: execution.unresolved_titles,
                 ..LocationOperationCounters::default()
             },
             detail: None,
@@ -330,7 +381,11 @@ impl AppUseCase {
         };
 
         let persisted = async {
-            let plan_json = serde_json::to_string(&planned.planned.execution)
+            // A root-scoped operation's tail rides inside this JSON (see
+            // `RootScopeTail`): resume needs the recycle allowlist and the
+            // retirement contract, and neither can be re-derived once the
+            // configuration has changed.
+            let plan_json = serde_json::to_string(&execution)
                 .map_err(|error| AppError::Repository(error.to_string()))?;
             self.services
                 .library
@@ -346,7 +401,7 @@ impl AppUseCase {
             self.close_location_operation_job_run(
                 &job_run,
                 crate::JobRunStatus::Failed,
-                "The location operation could not be started.".to_string(),
+                failure_message.to_string(),
                 Some(error.to_string()),
                 None,
             )
@@ -354,7 +409,7 @@ impl AppUseCase {
             return Err(error);
         }
 
-        self.spawn_location_operation(operation.id.clone(), planned.planned.execution);
+        self.spawn_location_operation(operation.id.clone(), execution);
 
         Ok(LocationOperationAccepted { operation, plan })
     }
@@ -450,7 +505,7 @@ impl AppUseCase {
         // `RootMoveExecutionPlan` whose two sides carry the same root id, and
         // its root-scoped tail rides on the same JSON and re-runs idempotently
         // (FR-087).
-        if !crate::location::root_change_execution::resumes_through_root_move_runner(
+        if !crate::location::root_scope_execution::resumes_through_root_move_runner(
             operation.operation_type,
         ) {
             return Ok(LocationResumeDecision::not_resumable(format!(
@@ -742,10 +797,12 @@ impl AppUseCase {
             &recycler,
         )
         .with_permissions(permissions)
-        // US7: the merge engine and the Group 6 scheduler the executor hands
-        // the returned work list to.
+        // US7: the merge engine, and the delete path the retired source title is
+        // handed to once the merge transaction commits.
         .with_merges(self.services.library.title_merges.as_ref())
-        .with_post_merge_work(Arc::new(AppUseCasePostMergeWork { app: self.clone() }));
+        .with_merged_source_retirer(Arc::new(AppUseCaseMergedSourceRetirer {
+            app: self.clone(),
+        }));
 
         // Activity's run mirrors the same pulse the operation row gets, so a
         // long copy shows a moving row in the jobs list instead of "queued"
@@ -763,7 +820,7 @@ impl AppUseCase {
         let epilogue = plan
             .root_change
             .as_ref()
-            .map(|tail| crate::location::root_change_execution::RootChangeEpilogue {
+            .map(|tail| crate::location::root_scope_execution::RootScopeEpilogue {
                 app: self,
                 tail,
             });
@@ -1740,45 +1797,37 @@ impl AppUseCase {
             // the whole plan behind an opaque failure, and the vanished-folder
             // case is exactly the user who should be offered "Files are already
             // there" (US3). Degrade to a blocked title the preview can name.
-            let (files, directories) =
-                match collect_source_files(source_folder_path.as_deref(), &media_files).await {
-                    Ok(walked) => walked,
-                    Err(error) => {
-                        downgrade_to_needs_resolution(&mut classification_counts, draft.class);
-                        draft.class = TitleLocationClass::NeedsResolution;
-                        draft.blocked_reason = Some(format!(
-                            "the source folder for \"{}\" could not be read ({}); if its files \
-                             were moved by hand, use \"Files are already there\"",
-                            title.name, error
-                        ));
-                        drafts.push(draft);
-                        continue;
-                    }
-                };
-            draft.files = files;
-            draft.source_directories = directories;
+            let facts = match self
+                .title_move_facts(
+                    source_folder_path.as_deref(),
+                    &media_files,
+                    Some(&destination_folder),
+                    merge_destination.map(|title| title.id.as_str()),
+                )
+                .await
+            {
+                Ok(facts) => facts,
+                Err(error) => {
+                    downgrade_to_needs_resolution(&mut classification_counts, draft.class);
+                    draft.class = TitleLocationClass::NeedsResolution;
+                    draft.blocked_reason = Some(format!(
+                        "the source folder for \"{}\" could not be read ({}); if its files \
+                         were moved by hand, use \"Files are already there\"",
+                        title.name, error
+                    ));
+                    drafts.push(draft);
+                    continue;
+                }
+            };
+            draft.files = facts.files;
+            draft.source_directories = facts.source_directories;
+            draft.hardlinks = facts.hardlinks;
+            draft.destination_entries = facts.destination_entries;
 
             draft.same_volume = match source_folder_path.as_deref() {
                 Some(folder) => Some(same_filesystem(folder, &destination_folder).await),
                 None => None,
             };
-            draft.hardlinks =
-                detect_hardlinks(draft.files.iter().map(|file| file.path.clone()).collect())
-                    .await?;
-            // FR-073 needs a *proven* hash on both sides, and the only place a
-            // destination file's hash exists without reading it again is the
-            // catalog. For a merge the destination folder's contents are the
-            // destination title's tracked media, so the persisted hashes are
-            // right there; without them every identical episode would be
-            // renamed beside its twin rather than deduplicated (D4).
-            let destination_hashes = match merge_destination {
-                Some(destination_title) => {
-                    self.persisted_hashes_for_title(&destination_title.id).await?
-                }
-                None => BTreeMap::new(),
-            };
-            draft.destination_entries =
-                read_destination_entries(&destination_folder, &destination_hashes).await;
             draft.recycle = match source_root_path.as_deref() {
                 Some(root) => {
                     let config = self
@@ -2020,10 +2069,52 @@ impl AppUseCase {
         Ok(destinations)
     }
 
+    /// The filesystem facts one title's draft needs, gathered once.
+    ///
+    /// Every workflow that moves a title asks the same four questions of the
+    /// same two paths — what is under the source folder, which of those files
+    /// share an inode (FR-085), what the destination folder already holds
+    /// (FR-072–075), and what the destination's persisted hashes prove (FR-073,
+    /// D4). Only the destination folder differs, and each caller has already
+    /// decided that: the naming policy for a move (FR-013), FR-025/FR-026 for a
+    /// root-scoped operation.
+    pub(super) async fn title_move_facts(
+        &self,
+        source_folder: Option<&Path>,
+        media_files: &[crate::TitleMediaFile],
+        destination_folder: Option<&Path>,
+        merge_target_title_id: Option<&str>,
+    ) -> AppResult<TitleMoveFacts> {
+        let (files, source_directories) =
+            collect_source_files(source_folder, media_files).await?;
+        let hardlinks =
+            detect_hardlinks(files.iter().map(|file| file.path.clone()).collect()).await?;
+        // FR-073 needs a *proven* hash on both sides, and the catalog is the
+        // only place a destination file's hash exists without reading it again.
+        // For a merge the destination folder holds the destination title's own
+        // tracked media, so the persisted hashes are right there; without them
+        // every identical episode would be renamed beside its twin rather than
+        // deduplicated (D4).
+        let destination_hashes = match merge_target_title_id {
+            Some(title_id) => self.persisted_hashes_for_title(title_id).await?,
+            None => BTreeMap::new(),
+        };
+        let destination_entries = match destination_folder {
+            Some(folder) => read_destination_entries(folder, &destination_hashes).await,
+            None => Vec::new(),
+        };
+        Ok(TitleMoveFacts {
+            files,
+            source_directories,
+            hardlinks,
+            destination_entries,
+        })
+    }
+
     /// Persisted full-BLAKE3 state for one title's tracked media, keyed by
     /// stored path, so the collision planner can prove a duplicate without
     /// reading a byte (D4, FR-047).
-    async fn persisted_hashes_for_title(
+    pub(super) async fn persisted_hashes_for_title(
         &self,
         title_id: &str,
     ) -> AppResult<BTreeMap<String, FullHash>> {
@@ -2540,7 +2631,7 @@ async fn sampled_proof_of(path: &Path) -> Option<scryer_domain::ImportContentPro
 /// dedup gate reads as "unproven" and therefore as *not* a duplicate (D4) —
 /// the same conservative answer this function gave before hashes were passed at
 /// all.
-async fn read_destination_entries(
+pub(super) async fn read_destination_entries(
     destination_folder: &Path,
     known_hashes: &BTreeMap<String, FullHash>,
 ) -> Vec<DestinationItem> {
@@ -2739,142 +2830,33 @@ impl RootMoveCatalog for AppUseCaseRootMoveCatalog {
     }
 }
 
-// ── Group 6 ──────────────────────────────────────────────────────────────────
+// ── Retiring a merged source title ───────────────────────────────────────────
 
-/// The production [`PostMergeWorkScheduler`]: the merge engine's Group 6 work
-/// list, mapped onto the subsystems that already own each cache.
+/// The production [`MergedSourceRetirer`]: the merge transaction has already
+/// removed the source `titles` row and every cascading dependent, so what is
+/// left is the *logical* cleanup the ordinary title delete performs — the rows
+/// no foreign key reaches.
 ///
-/// | Work | Where it goes |
-/// |---|---|
-/// | `ReindexTitleSearchTerms` | The destination title is re-persisted through `TitleRepository::update_metadata`, which is the write path that rebuilds `title_search_terms`. The merge writes `titles.tags` with raw SQL inside its transaction, so the projection is genuinely stale until this runs. |
-/// | `RegenerateRecommendations` | `queue_title_more_like_this_refresh_if_due`, the same queue hydration uses. |
-/// | `RecomputeStatistics` | Nothing to invalidate: Scryer keeps no persisted title or library statistics cache — Activity and the dashboard derive their counts on read — so this is satisfied by construction, and it is logged rather than silently skipped. |
-/// | `DropSourceIndexerCoverage` | `prune_scope_key_coverage` over every reversible scope key the merge retired: the source title, its episodes, its collections, and its series-movie links. The irreversible `episode_set:b3:` and `series_pack_set:b3:` forms cannot be reconstructed and are left to expire, which is exactly why OQ4 drops coverage uniformly rather than remapping it. |
+/// It is the same call `delete_title` makes, with the recycle-bin purge off:
+/// a merge repoints the source's files, it never removes them, so nothing the
+/// source title recycled is the merge's to purge.
 ///
-/// Every step is best effort. A failure here leaves a correct catalog with a
-/// stale derived cache, which the next natural refresh repairs; failing the
+/// Best effort. A failure here leaves rows referencing a title that no longer
+/// exists — exactly what an interrupted title delete leaves — and failing the
 /// title over one would undo a committed merge's checkpoint for no gain.
-struct AppUseCasePostMergeWork {
+struct AppUseCaseMergedSourceRetirer {
     app: AppUseCase,
 }
 
 #[async_trait::async_trait]
-impl PostMergeWorkScheduler for AppUseCasePostMergeWork {
-    async fn schedule_post_merge_work(&self, request: PostMergeWorkRequest) -> AppResult<()> {
-        for work in &request.work {
-            match work {
-                PostMergeWork::ReindexTitleSearchTerms => {
-                    self.reindex_search_terms(&request.destination_title_id)
-                        .await;
-                }
-                PostMergeWork::RegenerateRecommendations => {
-                    self.regenerate_recommendations(&request.destination_title_id)
-                        .await;
-                }
-                PostMergeWork::RecomputeStatistics => {
-                    tracing::debug!(
-                        operation_id = %request.operation_id,
-                        destination_title_id = %request.destination_title_id,
-                        "merge statistics need no recomputation: Scryer derives title and library counts on read"
-                    );
-                }
-                PostMergeWork::DropSourceIndexerCoverage => {
-                    self.drop_source_coverage(&request).await;
-                }
-            }
-        }
-        Ok(())
-    }
-}
-
-impl AppUseCasePostMergeWork {
-    async fn reindex_search_terms(&self, destination_title_id: &str) {
-        let title = match self
-            .app
-            .services
-            .catalog
-            .titles
-            .get_by_id(destination_title_id)
-            .await
-        {
-            Ok(Some(title)) => title,
-            Ok(None) => return,
-            Err(error) => {
-                tracing::warn!(
-                    destination_title_id,
-                    error = %error,
-                    "could not read the merged title to rebuild its search projection"
-                );
-                return;
-            }
-        };
-        // Writing the tags back is a no-op to the row and a rebuild to the
-        // projection: the merge already wrote the merged array, and this is the
-        // repository path that re-derives `title_search_terms` from it.
-        if let Err(error) = self
-            .app
-            .services
-            .catalog
-            .titles
-            .update_metadata(destination_title_id, None, None, Some(title.tags), None)
-            .await
-        {
-            tracing::warn!(
-                destination_title_id,
-                error = %error,
-                "could not rebuild the merged title's search projection; it rebuilds on the title's next write"
-            );
-        }
-    }
-
-    async fn regenerate_recommendations(&self, destination_title_id: &str) {
-        let Ok(Some(title)) = self
-            .app
-            .services
-            .catalog
-            .titles
-            .get_by_id(destination_title_id)
-            .await
-        else {
-            return;
-        };
-        if let Err(error) = self
-            .app
-            .queue_title_more_like_this_refresh_if_due(
-                &title,
-                crate::catalog::workflow::HydrationSource::BackgroundDue,
+impl MergedSourceRetirer for AppUseCaseMergedSourceRetirer {
+    async fn retire_merged_source(&self, request: MergedSourceRetirement) -> AppResult<()> {
+        self.app
+            .purge_title_dependent_records(
+                &request.source_title_id,
+                crate::domain_events::DomainEventActor::system(),
             )
             .await
-        {
-            tracing::warn!(
-                destination_title_id,
-                error = %error,
-                "could not queue the merged title's recommendation refresh"
-            );
-        }
-    }
-
-    async fn drop_source_coverage(&self, request: &PostMergeWorkRequest) {
-        let mut scope_keys = vec![format!("title:{}", request.source_title_id)];
-        scope_keys.extend(
-            request
-                .retired_episode_ids
-                .iter()
-                .map(|id| format!("episode:{id}")),
-        );
-        for collection_id in &request.retired_collection_ids {
-            scope_keys.push(format!("collection:{collection_id}"));
-            scope_keys.push(format!("series_pack_collection:{collection_id}"));
-        }
-        scope_keys.extend(
-            request
-                .retired_series_movie_link_ids
-                .iter()
-                .map(|id| format!("series_movie:{id}")),
-        );
-        for scope_key in scope_keys {
-            self.app.prune_scope_key_coverage(&scope_key, None).await;
-        }
     }
 }
 

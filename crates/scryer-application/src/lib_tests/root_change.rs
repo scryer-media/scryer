@@ -1,7 +1,7 @@
 //! US4 — "change a root to a new path" — at the story level (T065).
 //!
-//! Everything here drives the use-case API (`preview_root_change`,
-//! `start_root_change`, `resume_location_operation`, `run_root_move`) against
+//! Everything here drives the use-case API (`preview_root_scope`,
+//! `start_root_scope`, `resume_location_operation`, `run_root_move`) against
 //! real directories and real files, so the assertions are about what ends up on
 //! disk, in the catalog, and in the configured root.
 //!
@@ -31,8 +31,12 @@ use crate::location::ownership_guard::OwnedEntity;
 use crate::location::preview::{
     LOCATION_TYPED_CONFIRMATION_PHRASE, PlanConfirmationRequest, PlanItemKind,
 };
-use crate::location::root_change::{plan_reasons, refusal_codes, retirement_blockers};
-use crate::location::root_change_execution::{RootChangePreview, RootChangePreviewRequest, StartRootChangeRequest};
+use crate::location::root_scope::{
+    PlannedRootScope, plan_reasons, refusal_codes, retirement_blockers,
+};
+use crate::location::root_scope_execution::{
+    RootScopeCall, RootScopeCallDestination, StartRootScopeRequest,
+};
 use crate::location::test_support::{InMemoryLocationOperationStore, title_boundary_cancel_check};
 
 /// One movie library with two configured roots. The first is the one being
@@ -214,18 +218,20 @@ impl RootChangeFixture {
         paths
     }
 
-    fn request(&self) -> RootChangePreviewRequest {
-        RootChangePreviewRequest {
+    fn request(&self) -> RootScopeCall {
+        RootScopeCall {
             library_id: self.library_id.clone(),
             root_id: self.root_id.clone(),
-            destination_path: self.destination().to_string_lossy().to_string(),
+            destination: RootScopeCallDestination::Path(
+                self.destination().to_string_lossy().to_string(),
+            ),
             mode: LocationExecutionMode::MoveWithScryer,
         }
     }
 
-    async fn preview(&self) -> RootChangePreview {
+    async fn preview(&self) -> PlannedRootScope {
         self.app
-            .preview_root_change(&self.user, self.request())
+            .preview_root_scope(&self.user, &self.request())
             .await
             .expect("preview root change")
     }
@@ -234,13 +240,10 @@ impl RootChangeFixture {
         let preview = self.preview().await;
         let accepted = self
             .app
-            .start_root_change(
+            .start_root_scope(
                 &self.user,
-                StartRootChangeRequest {
-                    library_id: self.library_id.clone(),
-                    root_id: self.root_id.clone(),
-                    destination_path: self.destination().to_string_lossy().to_string(),
-                    mode: LocationExecutionMode::MoveWithScryer,
+                StartRootScopeRequest {
+                    call: self.request(),
                     confirmation: PlanConfirmationRequest {
                         fingerprint: preview.plan.fingerprint.clone(),
                         typed_confirmation: Some(
@@ -333,7 +336,7 @@ impl RootChangeFixture {
 }
 
 fn plan_items(
-    preview: &RootChangePreview,
+    preview: &PlannedRootScope,
     kind: PlanItemKind,
 ) -> Vec<&crate::location::preview::PlanItem> {
     preview
@@ -450,13 +453,10 @@ async fn a_blocked_title_is_named_and_stops_the_root_change_until_it_is_repaired
     assert!(preview.plan.blocks_start());
     let error = fixture
         .app
-        .start_root_change(
+        .start_root_scope(
             &fixture.user,
-            StartRootChangeRequest {
-                library_id: fixture.library_id.clone(),
-                root_id: fixture.root_id.clone(),
-                destination_path: fixture.destination().to_string_lossy().to_string(),
-                mode: LocationExecutionMode::MoveWithScryer,
+            StartRootScopeRequest {
+                call: fixture.request(),
                 confirmation: PlanConfirmationRequest {
                     fingerprint: preview.plan.fingerprint.clone(),
                     typed_confirmation: Some(LOCATION_TYPED_CONFIRMATION_PHRASE.to_string()),
@@ -726,13 +726,10 @@ async fn a_root_change_requires_the_stronger_typed_confirmation() {
     let start = async |typed: Option<&str>| {
         fixture
             .app
-            .start_root_change(
+            .start_root_scope(
                 &fixture.user,
-                StartRootChangeRequest {
-                    library_id: fixture.library_id.clone(),
-                    root_id: fixture.root_id.clone(),
-                    destination_path: fixture.destination().to_string_lossy().to_string(),
-                    mode: LocationExecutionMode::MoveWithScryer,
+                StartRootScopeRequest {
+                    call: fixture.request(),
                     confirmation: PlanConfirmationRequest {
                         fingerprint: preview.plan.fingerprint.clone(),
                         typed_confirmation: typed.map(str::to_string),
@@ -753,49 +750,43 @@ async fn a_root_change_requires_the_stronger_typed_confirmation() {
     fixture.settle(&accepted.operation.id).await;
 }
 
-// ── FR-020: the other branch is consolidation ────────────────────────────────
+// ── FR-020: the same action's other destination ──────────────────────────────
 
 /// FR-020: "a new unconfigured path, **or** another existing root in the same
-/// library — the latter being consolidation". The second branch is a different
-/// planner (US5), so it is refused by name rather than run as a root change
-/// over a destination that already holds content.
+/// library". One settings action, so one request either way: typing the path of
+/// a root this library already has *is* naming that root, and the server plans
+/// the fold rather than refusing the user onto a second query.
 #[tokio::test]
-async fn a_destination_that_is_already_a_configured_root_is_refused_as_consolidation() {
+async fn a_destination_that_is_already_a_configured_root_is_planned_as_a_fold() {
     let fixture = RootChangeFixture::new().await;
     fixture
         .seed_title("Folded", 2015, "Folded (2015)", &[("Folded.mkv", 64)])
         .await;
 
-    let error = fixture
+    let preview = fixture
         .app
-        .preview_root_change(
+        .preview_root_scope(
             &fixture.user,
-            RootChangePreviewRequest {
+            &RootScopeCall {
                 library_id: fixture.library_id.clone(),
                 root_id: fixture.root_id.clone(),
-                destination_path: fixture.other_root().to_string_lossy().to_string(),
+                destination: RootScopeCallDestination::Path(
+                    fixture.other_root().to_string_lossy().to_string(),
+                ),
                 mode: LocationExecutionMode::MoveWithScryer,
             },
         )
         .await
-        .expect_err("folding one root into another is not a root change");
-    // The code travels typed, beside the sentence, so the client routes on it
-    // without parsing prose.
-    let AppError::LocationRootRefused { message, code } = &error else {
-        panic!("the refusal has to carry a code the client can route on: {error:?}");
-    };
-    assert_eq!(*code, refusal_codes::DESTINATION_IS_CONFIGURED_ROOT);
-    assert!(
-        !message.contains('['),
-        "and the code is not smuggled into the sentence: {message}"
+        .expect("a path that is a root of this library is the fold branch");
+    assert_eq!(
+        preview.plan.header.operation_type,
+        LocationOperationType::RootConsolidation,
+        "the destination decides the branch, not which field named it"
     );
-    assert!(
-        message.contains("consolidation"),
-        "and it has to say which workflow this is: {message}"
-    );
-    assert!(
-        message.contains(&fixture.other_root_id),
-        "naming the root it collided with: {message}"
+    assert_eq!(
+        preview.plan.header.destination_root_id.as_deref(),
+        Some(fixture.other_root_id.as_str()),
+        "and the fold names the root it resolved to"
     );
 }
 
@@ -809,30 +800,27 @@ async fn a_destination_that_already_holds_content_is_refused() {
 
     let error = fixture
         .app
-        .preview_root_change(&fixture.user, fixture.request())
+        .preview_root_scope(&fixture.user, &fixture.request())
         .await
         .expect_err("a non-empty destination is not a root-change destination");
     assert!(
         matches!(
             &error,
             AppError::LocationRootRefused { code, .. }
-                if *code == refusal_codes::DESTINATION_NOT_EMPTY
+                if *code == refusal_codes::CHANGE_DESTINATION_NOT_EMPTY
         ),
         "got {error:?}"
     );
 }
 
-// ── The recycle bin travels with the operation ───────────────────────────────
+// ── The recycle bin never moves ──────────────────────────────────────────────
 
-/// The bin that lived under the source root moves with the operation, so
-/// housekeeping — which finds bins by enumerating *configured* library roots —
-/// still sees it after the flip.
-///
-/// Without this, every file the operation recycled would sit at a path that is
-/// no longer a configured root: never purged by retention, never listed, never
-/// restorable. Silently, and forever.
+/// The operator decision: a recycle bin is never relocated by a root-scoped
+/// operation. A bin under the source root stays exactly where it is, which
+/// leaves the source directory standing — so the operation completes with a
+/// warning that names it rather than failing over content it will not touch.
 #[tokio::test]
-async fn the_recycle_bin_under_the_source_root_travels_with_the_operation() {
+async fn a_recycle_bin_under_the_source_root_is_left_where_it_is() {
     let fixture = RootChangeFixture::new().await;
     let title = fixture
         .seed_title("Binned", 2014, "Binned (2014)", &[("Binned.mkv", 96)])
@@ -845,8 +833,7 @@ async fn the_recycle_bin_under_the_source_root_travels_with_the_operation() {
     assert!(source_bin.exists(), "the fixture put an entry in the bin");
 
     // The bin is Scryer's own storage, not content the catalog failed to
-    // explain, so it must not show up as unknown and must not block the
-    // retirement of the old location.
+    // explain, so it must not show up as unknown and must not block the plan.
     let preview = fixture.preview().await;
     assert!(
         preview.content.unknown.is_empty(),
@@ -858,221 +845,40 @@ async fn the_recycle_bin_under_the_source_root_travels_with_the_operation() {
     let operation = fixture.start_and_settle().await;
     assert_eq!(
         operation.state,
-        LocationOperationState::Completed,
+        LocationOperationState::CompletedWithWarnings,
         "detail: {:?}",
         operation.detail
     );
-
-    let destination_bin = fixture.destination().join(".scryer-recycle");
-    assert!(destination_bin.exists(), "the bin travelled with the root");
-    assert!(!source_bin.exists(), "and it did not stay behind as well");
-
-    // Housekeeping's own enumeration is the proof that matters: it lists bins
-    // by walking the configured library roots, which now means the new path.
-    let listed = fixture
-        .app
-        .list_recycled_items(&fixture.user, None)
-        .await
-        .expect("list recycled items");
-    assert_eq!(
-        listed.len(),
-        1,
-        "the relocated bin is invisible to housekeeping"
-    );
+    let detail = operation.detail.clone().unwrap_or_default();
     assert!(
-        listed[0]
-            .original_path
-            .starts_with(&*fixture.destination().to_string_lossy()),
-        "the entry still records the retired path: {}",
-        listed[0].original_path
+        detail.contains(&*fixture.source().to_string_lossy()),
+        "the warning has to name the source directory left standing: {detail}"
     );
-}
-
-/// A file recycled *before* the configuration flipped restores onto the new
-/// root path, because its recorded original path is re-anchored by the same
-/// rebase the planner applied to the content.
-#[tokio::test]
-async fn a_file_recycled_before_the_flip_restores_onto_the_new_root_path() {
-    let fixture = RootChangeFixture::new().await;
-    let title = fixture
-        .seed_title(
-            "Restorable",
-            2013,
-            "Restorable (2013)",
-            &[("Restorable.mkv", 96)],
-        )
-        .await;
-    let recycled_from = fixture
-        .recycle_under_source(&title.id, "Restorable (2013)/old-cut.mkv")
-        .await;
-    assert!(!recycled_from.exists(), "the bin took the file");
-
-    let operation = fixture.start_and_settle().await;
-    assert_eq!(operation.state, LocationOperationState::Completed);
-
-    let listed = fixture
-        .app
-        .list_recycled_items(&fixture.user, None)
-        .await
-        .expect("list recycled items");
-    let entry = listed.first().expect("the pre-flip entry survived the change");
-
+    // D6: the bin is the only thing left, so the warning says so rather than
+    // sending the user looking for content that is not there.
     assert!(
-        fixture
-            .app
-            .restore_recycled_item(&fixture.user, &entry.id)
-            .await
-            .expect("restore the pre-flip entry"),
+        detail.contains("was kept because it holds Scryer's recycle bin"),
+        "the warning has to name the bin as the reason the root was kept: {detail}"
     );
 
-    let restored_to = fixture
-        .destination()
-        .join("Restorable (2013)")
-        .join("old-cut.mkv");
+    assert!(source_bin.exists(), "the bin was moved rather than left alone");
     assert!(
-        restored_to.exists(),
-        "a pre-flip entry has to restore onto the new root, not the retired one"
-    );
-    assert!(
-        !fixture.source().join("Restorable (2013)").exists(),
-        "and certainly not back onto the location the change retired"
-    );
-}
-
-/// A bin that cannot be moved is named, not lost.
-///
-/// The content is at its destination and verified by the time the tail runs, so
-/// abandoning the whole operation over the bin would be the wrong trade — but
-/// so would completing silently while every file the operation recycled sits at
-/// a path nothing will ever look at again. The operation completes with a
-/// warning that names the path the bin was left at, and the bin is still there.
-#[tokio::test]
-async fn a_recycle_bin_that_cannot_be_moved_is_named_rather_than_lost() {
-    let fixture = RootChangeFixture::new().await;
-    let title = fixture
-        .seed_title("Stranded", 2007, "Stranded (2007)", &[("Stranded.mkv", 64)])
-        .await;
-    fixture
-        .recycle_under_source(&title.id, "Stranded (2007)/superseded.mkv")
-        .await;
-
-    let preview = fixture.preview().await;
-    let operation_id = "operation-stranded-bin";
-    fixture
-        .app
-        .services
-        .library
-        .location_operations
-        .create_location_operation(
-            &crate::location::test_support::queued_operation(
-                operation_id,
-                LocationOperationType::RootChange,
-                LocationExecutionMode::MoveWithScryer,
-                preview.plan.verification.depth,
-            ),
-            Some(&serde_json::to_string(&preview.execution).expect("serialize plan")),
-        )
-        .await
-        .expect("persist the operation");
-
-    // Something is already sitting where the bin has to land, and it is not a
-    // directory. The run is driven directly so this can be staged after the
-    // plan was confirmed — which is the only moment it could happen in
-    // production too.
-    std::fs::create_dir_all(fixture.destination()).expect("create the destination");
-    std::fs::write(fixture.destination().join(".scryer-recycle"), b"in the way")
-        .expect("block the bin's landing spot");
-
-    let outcome = fixture
-        .app
-        .run_root_move(operation_id, &preview.execution)
-        .await
-        .expect("the run itself does not fail over the bin");
-
-    assert_eq!(outcome.state, LocationOperationState::CompletedWithWarnings);
-    let detail = outcome.detail.clone().unwrap_or_default();
-    assert!(
-        detail.contains(&*fixture.source().join(".scryer-recycle").to_string_lossy()),
-        "the warning has to name the path the bin was left at: {detail}"
-    );
-    assert!(
-        fixture.source().join(".scryer-recycle").exists(),
-        "the bin was lost rather than left behind"
+        !fixture.destination().join(".scryer-recycle").exists(),
+        "nothing put a bin under the new root"
     );
 
     // The content still moved and the root still flipped: the bin is the one
     // thing that did not.
-    assert_eq!(fixture.root().await.path, fixture.destination().to_string_lossy());
+    assert_eq!(
+        fixture.root().await.path,
+        fixture.destination().to_string_lossy()
+    );
     assert!(
         fixture
             .destination()
-            .join("Stranded (2007)")
-            .join("Stranded.mkv")
+            .join("Binned (2014)")
+            .join("Binned.mkv")
             .exists()
-    );
-}
-
-/// The operator's carve-out: a bin configured to a **custom** path outside the
-/// source root belongs to the whole installation, not to this root, so it stays
-/// where it is. Its entries are re-anchored in place, which is what keeps a
-/// pre-flip entry restorable.
-#[tokio::test]
-async fn a_custom_recycle_bin_outside_the_source_root_stays_where_it_is() {
-    let fixture = RootChangeFixture::new().await;
-    let custom_bin = fixture.temp.path().join("shared-bin");
-    fixture
-        .app
-        .services
-        .config
-        .settings
-        .upsert_setting_json(
-            crate::SETTINGS_SCOPE_MEDIA,
-            crate::RECYCLE_BIN_PATH_KEY,
-            None,
-            serde_json::to_string(&custom_bin.to_string_lossy().to_string())
-                .expect("encode the custom bin path"),
-            crate::SETTINGS_SOURCE_TYPED_GRAPHQL,
-            None,
-        )
-        .await
-        .expect("point the bin at a shared path");
-
-    let title = fixture
-        .seed_title("Shared Bin", 2006, "Shared Bin (2006)", &[("Shared.mkv", 64)])
-        .await;
-    fixture
-        .recycle_under_source(&title.id, "Shared Bin (2006)/superseded.mkv")
-        .await;
-    assert!(custom_bin.exists(), "the fixture used the custom bin");
-
-    let operation = fixture.start_and_settle().await;
-    assert_eq!(
-        operation.state,
-        LocationOperationState::Completed,
-        "detail: {:?}",
-        operation.detail
-    );
-
-    assert!(custom_bin.exists(), "a shared bin does not travel with one root");
-    assert!(
-        !fixture.destination().join("shared-bin").exists(),
-        "and it certainly does not get copied into the new root"
-    );
-
-    // Its entries were re-anchored in place, so a pre-flip entry still restores
-    // onto the root's new path rather than being refused as outside it.
-    let listed = fixture
-        .app
-        .list_recycled_items(&fixture.user, None)
-        .await
-        .expect("list recycled items");
-    let entry = listed.first().expect("the pre-flip entry is still listed");
-    assert!(
-        entry
-            .original_path
-            .starts_with(&*fixture.destination().to_string_lossy()),
-        "the entry still records the retired path: {}",
-        entry.original_path
     );
 }
 

@@ -5210,12 +5210,10 @@ const ru: LocaleDictionary = {
   "move.mergeNoDetails": "Это объединение больше ничего не переносит.",
   "move.mergeBlockedHeading":
     "Объединение невозможно: эти записи нельзя перенести.",
-  "move.mergeDispositionsHeading": "Переносимые данные",
-  "move.mergeRowCount": "строк: {{count}}",
-  "move.mergeDisposition.UNION": "Сохраняются рядом с записями назначения",
-  "move.mergeDisposition.MAP": "Переназначены на тайтл назначения",
-  "move.mergeDisposition.DESTINATION_WINS": "Сохраняется значение назначения",
-  "move.mergeDisposition.DROP": "Не переносится",
+  "move.mergeCarried":
+    "Сохраняемое название получает {{files}} запись(ей) медиафайлов и {{history}} строк(и) истории.",
+  "move.mergeDropped":
+    "{{count}} прочая(-ие) запись(-и) объединяемого названия не переносятся и удаляются вместе с ним.",
   "move.mergeRoleChangesHeading":
     "Роли медиафайлов (файлов, теряющих роль основного: {{demotions}})",
   "move.mergeRoleChangesHeadingPlain": "Роли медиафайлов",
@@ -5230,18 +5228,6 @@ const ru: LocaleDictionary = {
     "Другой перемещаемый файл уже занял роль основного для этой серии назначения.",
   "move.mergeRoleReason.COLLAPSED_SOURCE_EPISODES":
     "Две исходные серии свелись к одной серии назначения.",
-  "move.mergeTagConflictsHeading": "Настройки с расхождениями",
-  "move.mergeTagConflictLine":
-    "{{setting}}: сохраняется «{{destination}}», отбрасывается «{{source}}».",
-  "move.mergeValueNone": "ничего",
-  "move.mergeDestinationWinsHeading":
-    "Настройки, которые сохраняет тайтл назначения",
-  "move.mergeDroppedHeading": "Не переносится",
-  "move.mergeFreeFormTags":
-    "Теги, добавленные к тайтлу назначения: {{tags}}.",
-  "move.mergeRequestRepoint":
-    "Запросов медиа, следующих за этим тайтлом в библиотеку назначения: {{count}}.",
-  "move.mergeNotesHeading": "Примечания",
   "move.operationTransferNote": "Эти тайтлы перемещаются в другую библиотеку.",
   "move.modeHeading": "Как файлы должны туда попасть?",
   "move.mode.MOVE_WITH_SCRYER": "Переместить через Scryer",
@@ -5388,8 +5374,6 @@ const ru: LocaleDictionary = {
   "rootChange.destinationExistingRootHelp": "Этот корень будет влит в выбранный, а его настройка выведена из обращения.",
   "rootChange.destinationNoOtherRoots": "В этой библиотеке нет другого корня, в который можно влить.",
   "rootChange.destinationPathPlaceholder": "/mnt/new-disk/movies",
-  "rootChange.crossRouteToConsolidation": "Этот путь уже является корнем этой библиотеки, значит это объединение. Назначение переключено за вас.",
-  "rootChange.crossRouteToNewPath": "Этот корень не настроен в данной библиотеке, значит это изменение корня. Назначение переключено за вас.",
   "rootChange.planChanged": "План изменился после предпросмотра. Постройте предпросмотр заново перед подтверждением.",
   "rootChange.previewFailed": "Не удалось построить предпросмотр этого изменения корня.",
   "rootChange.previewing": "Читаем весь корень.",
@@ -5460,12 +5444,11 @@ const ru: LocaleDictionary = {
   "rootChange.refusal.root_change_source_root_unavailable": "Этот корень сейчас недоступен для чтения, поэтому его содержимое нельзя спланировать.",
   "rootChange.refusal.root_change_destination_not_empty": "По новому пути уже есть содержимое. Выберите пустой или новый каталог.",
   "rootChange.refusal.root_change_destination_parent_missing": "Родительский каталог нового пути не существует.",
-  "rootChange.refusal.root_change_destination_is_configured_root": "Этот путь уже является корнем данной библиотеки.",
+  "rootChange.refusal.root_change_destination_is_configured_root": "Этот путь уже настроен как корень другой библиотеки.",
   "rootChange.refusal.root_change_mode_not_supported": "Смена корня всегда перемещает файлы; вариант «файлы уже на месте» здесь не предлагается.",
   "rootChange.refusal.root_consolidation_path_not_absolute": "Укажите абсолютный путь.",
   "rootChange.refusal.root_consolidation_same_root": "Корень нельзя влить в самого себя.",
   "rootChange.refusal.root_consolidation_paths_overlap": "Один из этих корней находится внутри другого.",
-  "rootChange.refusal.root_consolidation_destination_not_a_configured_root": "Этот корень не настроен в данной библиотеке.",
   "rootChange.refusal.root_consolidation_source_root_is_symlink": "Этот корень является символической ссылкой. Сначала укажите на реальный каталог.",
   "rootChange.refusal.root_consolidation_source_root_unavailable": "Этот корень сейчас недоступен для чтения, поэтому его содержимое нельзя спланировать.",
   "rootChange.refusal.root_consolidation_destination_root_unavailable": "Корень назначения сейчас недоступен для чтения, поэтому нельзя учесть то, что в нём уже лежит.",

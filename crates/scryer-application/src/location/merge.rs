@@ -1,20 +1,22 @@
-//! Merging a source title into an existing destination title (US7, FR-063–067,
-//! D8). Engine lands in T085, over the table inventory produced by T081.
+//! Merging a source title into an existing destination title (US7,
+//! FR-063–FR-067, D8).
 //!
-//! The full source→destination identity map (title, episodes, specials,
-//! series-movie links) is built before anything is written; records scoped to an
-//! episode that cannot be mapped block the plan rather than being dropped
-//! (FR-066, C3). Unions execute as transactional id-rewrites at the title
-//! checkpoint.
-
+//! The destination wins everything except the source's **media file records**
+//! and its **history**; every other row recorded against the source title
+//! retires with it through the ordinary title-delete path. The full
+//! source→destination identity map (title, episodes, specials, series-movie
+//! links) is built before anything is written, and a slot that carries a file or
+//! a history row and cannot be mapped blocks the plan rather than being guessed
+//! at (FR-066, C3).
+//!
 //! # Module map
 //!
 //! | Module | Responsibility |
 //! |---|---|
-//! | [`map`] | Group 0: the source→destination identity map and the FR-066 block decision. |
-//! | [`roles`] | T086: post-merge media-role resolution per logical slot (FR-068–FR-070). |
-//! | [`summary`] | FR-071: the serializable preview summary, and the `titles.tags` partition (OQ9). |
-//! | [`engine`] | `plan_merge` / `execute_merge`, the repository seam, and the Group 6 post-merge work list. |
+//! | [`map`] | The source→destination identity map and the FR-066 block decision. |
+//! | [`roles`] | Post-merge media-role resolution per logical slot (FR-068–FR-070). |
+//! | [`summary`] | FR-071: the serializable preview summary. |
+//! | [`engine`] | `plan_merge` / `execute_merge` and the repository seam. |
 
 pub mod engine;
 pub mod map;
@@ -22,34 +24,6 @@ pub mod roles;
 pub mod summary;
 
 use serde::{Deserialize, Serialize};
-
-/// How one table's rows are treated when a source title merges into a
-/// destination title. The per-table assignment is the T081 inventory
-/// deliverable.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[serde(rename_all = "snake_case")]
-pub enum MergeDisposition {
-    /// Source rows are re-pointed at the destination identity and kept alongside
-    /// the destination's own rows.
-    Union,
-    /// Source rows are rewritten through the identity map (episode ids, links).
-    Map,
-    /// The destination's value stands; the source's is discarded.
-    DestinationWins,
-    /// Source rows are intentionally not carried over.
-    Drop,
-}
-
-impl MergeDisposition {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Union => "union",
-            Self::Map => "map",
-            Self::DestinationWins => "destination_wins",
-            Self::Drop => "drop",
-        }
-    }
-}
 
 /// Result of matching a source title against destination candidates by stable
 /// metadata identity, including redirects (FR-055).

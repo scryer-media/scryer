@@ -1,216 +1,65 @@
 //! The merge engine's seam: [`plan_merge`] builds the whole decision before
-//! anything is written, [`execute_merge`] hands it to a repository that runs
-//! `merge-inventory.md` §8's Groups 1–5 in **one** transaction.
+//! anything is written, [`execute_merge`] hands it to a repository that runs it
+//! in **one** transaction.
 //!
-//! # How the executor wires this in (T085 → the title-checkpoint package)
+//! # The rule (FR-063–FR-067)
+//!
+//! The destination title wins everything except two things:
+//!
+//! 1. **Media file records.** The source's `media_files` rows are repointed at
+//!    the destination title, with their episode and series-movie-link rows
+//!    remapped and their roles resolved ([`super::roles`]). File-keyed
+//!    dependents travel with the file, because `media_files.id` never changes.
+//! 2. **History.** `history_events` and `domain_events` rows are unioned onto
+//!    the destination, with episode ids remapped inside the payloads that carry
+//!    them.
+//!
+//! Everything else recorded against the source title retires with it, through
+//! the ordinary title-delete path. There is no per-table disposition list and no
+//! foreign-key gate: the delete path already owns what a retired title leaves
+//! behind.
+//!
+//! # How the executor wires this in
 //!
 //! At a title checkpoint whose classification is a merge, the executor:
 //!
-//! 1. calls [`TitleMergeRepository::load_merge_snapshot`] — Group 0, read-only,
-//!    outside any write transaction;
+//! 1. calls [`TitleMergeRepository::load_merge_snapshot`] — read-only, outside
+//!    any write transaction;
 //! 2. calls [`plan_merge`], which either produces a [`MergePlan`] or fills its
 //!    [`MergePreviewSummary::blocked`] set. A blocked plan never reaches step 3:
 //!    the checkpoint goes to `TitleCheckpointState::Blocked` with
 //!    [`MergePreviewSummary::blocked_reason`] as its `blocked_reason` (FR-066);
-//! 3. calls [`execute_merge`], which runs Groups 1–5 transactionally and
-//!    returns a [`MergeOutcome`];
-//! 4. writes `merged_into_title_id` on the checkpoint and schedules
-//!    [`MergeOutcome::post_merge_work`] (Group 6) — derived-cache rebuilds that
-//!    are idempotent and safe to lose to a crash.
+//! 3. calls [`execute_merge`], which repoints, unions, and deletes the source
+//!    title row in one transaction and returns a [`MergeOutcome`];
+//! 4. writes `merged_into_title_id` on the checkpoint and retires the source
+//!    title's non-cascading dependents through the delete path.
 //!
 //! The same [`plan_merge`] call, with no execution, is the FR-071 preview. That
 //! is deliberate: the preview and the execution are the same decision, so a
 //! preview cannot describe a merge the engine would not perform.
-//!
-//! # Live-schema deviations from the T081 inventory
-//!
-//! `merge-inventory.md`'s schema reconstruction replayed `CREATE TABLE` and
-//! `ALTER TABLE` but not `DROP TABLE`, so five of its tables do not exist in
-//! the live schema. They are recorded in [`INVENTORY_DEVIATIONS`] and the
-//! engine touches none of them.
 
 use async_trait::async_trait;
 
 use serde::{Deserialize, Serialize};
 
 use crate::AppResult;
-use crate::location::merge::MergeDisposition;
 use crate::location::merge::map::{
     CollectionIdentityFacts, EpisodeIdentityFacts, MergeBlockedRecord, MergeIdentityInputs,
     MergeIdentityMap, MergeIdentityOutcome, SeriesMovieLinkIdentityFacts, evaluate_identity_map,
 };
-use crate::location::merge::roles::{FileEpisodeRoleRow, MergedRolePlan, resolve_media_roles};
-use crate::location::merge::summary::{
-    DestinationWinsEntry, DroppedCategory, MediaRequestRepoint, MergePreviewSummary, PostMergeWork,
-    TableDispositionEntry, TagMergeResult, partition_tags,
+use crate::location::merge::roles::{
+    FileEpisodeRoleRow, MergedRolePlan, TitleSlotFileRow, resolve_media_roles,
 };
+use crate::location::merge::summary::MergePreviewSummary;
 
-/// Tables with **no foreign key** to `titles` or `episodes`. Nothing in the
-/// database removes their source-id rows when the source title row goes, so the
-/// FR-067 gate asserts on them explicitly before the delete — a missed rewrite
-/// here is otherwise completely invisible (`merge-inventory.md` §8 Group 5).
-///
-/// Each entry is `(table, column, kind)` where `kind` says whether the column
-/// holds a source *title* id or a source *episode* id.
-pub const FR067_NO_FK_ASSERTIONS: &[(&str, &str, MergeGateIdKind)] = &[
-    ("domain_events", "title_id", MergeGateIdKind::Title),
-    ("domain_events", "stream_id", MergeGateIdKind::TitleStream),
-    ("download_submissions", "title_id", MergeGateIdKind::Title),
-    ("download_submissions", "episode_id", MergeGateIdKind::Episode),
-    (
-        "download_submission_episode_links",
-        "episode_id",
-        MergeGateIdKind::Episode,
-    ),
-    ("subtitle_downloads", "episode_id", MergeGateIdKind::Episode),
-    (
-        "post_processing_script_runs",
-        "title_id",
-        MergeGateIdKind::Title,
-    ),
-    ("manual_import_selections", "title_id", MergeGateIdKind::Title),
-    ("indexer_search_learning", "title_id", MergeGateIdKind::Title),
-    (
-        "media_server_playback_items",
-        "entity_id",
-        MergeGateIdKind::PlaybackEntity,
-    ),
-    (
-        "discovery_item_library_provenance",
-        "title_id",
-        MergeGateIdKind::Title,
-    ),
-    (
-        "discovery_pending_context_changes",
-        "previous_title_id",
-        MergeGateIdKind::Title,
-    ),
-    ("pending_releases", "title_id", MergeGateIdKind::Title),
-    ("release_decisions", "title_id", MergeGateIdKind::Title),
-    (
-        "location_operation_verifications",
-        "title_id",
-        MergeGateIdKind::Title,
-    ),
-    // Maintenance rules and watch signals (migrations 0205–0207) landed on
-    // release-NEXT beside this engine and were inventoried after the merge;
-    // every one of them names a title with no foreign key.
-    ("lifecycle_candidates", "title_id", MergeGateIdKind::Title),
-    ("lifecycle_action_runs", "title_id", MergeGateIdKind::Title),
-    (
-        "maintenance_rule_exclusions",
-        "title_id",
-        MergeGateIdKind::Title,
-    ),
-    (
-        "media_server_user_media_signals",
-        "scryer_title_id",
-        MergeGateIdKind::Title,
-    ),
-    (
-        "media_server_user_media_signals",
-        "scryer_episode_id",
-        MergeGateIdKind::Episode,
-    ),
-    // Found by the store's schema walk rather than the T081 sweep: the forward
-    // pointer of an earlier merge into the source title, and unmatched-scan
-    // items scoped to the source title (`title_id` joined the table in 0093,
-    // after §5 called it title-free). Both are repointed in Group 3.
-    (
-        "location_operation_title_checkpoints",
-        "merged_into_title_id",
-        MergeGateIdKind::Title,
-    ),
-    ("library_scan_unmatched_items", "title_id", MergeGateIdKind::Title),
-];
-
-/// Tables whose foreign key is `ON DELETE SET NULL`. A missed rewrite here does
-/// not dangle — it produces a surviving row with no title, which reads as an
-/// orphan in Activity and in the API. Quieter than the no-FK class, so it is
-/// the gate's second-priority assertion (`merge-inventory.md` §8 Group 5).
-pub const FR067_SET_NULL_ASSERTIONS: &[(&str, &str, MergeGateIdKind)] = &[
-    ("history_events", "title_id", MergeGateIdKind::Title),
-    ("workflow_operations", "title_id", MergeGateIdKind::Title),
-    ("workflow_operations", "episode_id", MergeGateIdKind::Episode),
-    (
-        "download_import_artifacts",
-        "title_id",
-        MergeGateIdKind::Title,
-    ),
-    (
-        "download_import_artifacts",
-        "episode_id",
-        MergeGateIdKind::Episode,
-    ),
-    ("media_requests", "created_title_id", MergeGateIdKind::Title),
-    (
-        "release_download_attempts",
-        "title_id",
-        MergeGateIdKind::Title,
-    ),
-    ("discovery_titles", "resolved_title_id", MergeGateIdKind::Title),
-    (
-        "discovery_submitted_subjects",
-        "title_id",
-        MergeGateIdKind::Title,
-    ),
-    (
-        "discovery_pending_context_changes",
-        "title_id",
-        MergeGateIdKind::Title,
-    ),
-];
-
-/// Title-named columns the FR-067 gate deliberately does not assert on, each
-/// with the reason. The store's schema-walk test fails on any title-named
-/// column that is neither cascaded, gated, nor listed here — which is how a
-/// table added on another branch gets classified instead of dangling.
-pub const FR067_TITLE_COLUMN_EXEMPTIONS: &[(&str, &str, &str)] = &[
-    (
-        "location_operation_title_checkpoints",
-        "title_id",
-        "part of the primary key and the record of which title the operation processed; \
-         rewriting it would erase the merge's own audit trail (merge-inventory.md §5)",
-    ),
-    (
-        "title_metadata_tag_sources",
-        "title_id",
-        "cascades through the composite key (title_id, tag_key) → title_metadata_tags, whose \
-         own rows cascade from titles; destination-wins by construction",
-    ),
-    (
-        "title_metadata_tag_source_keys",
-        "title_id",
-        "cascades through the composite key (title_id, tag_key) → title_metadata_tags, whose \
-         own rows cascade from titles; destination-wins by construction",
-    ),
-];
-
-/// What kind of source id a gate column holds, because the assertion query
-/// differs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum MergeGateIdKind {
-    /// The column holds a source title id.
-    Title,
-    /// `domain_events.stream_id`, which is a title id only when
-    /// `stream_kind = 'title'`.
-    TitleStream,
-    /// The column holds a source episode id.
-    Episode,
-    /// `media_server_playback_items.entity_id`, a title id when
-    /// `entity_kind = 'title'` and an episode id when it is `'episode'`.
-    PlaybackEntity,
-}
-
-/// `domain_events` types whose `payload_json` carries `$.data.episode_ids[]`
-/// (`merge-inventory.md` §6 OQ8). Only these are decompressed, remapped, and
-/// recompressed; every other event gets the cheap column-only rewrite.
+/// `domain_events` types whose `payload_json` carries `$.data.episode_ids[]`.
+/// Only these are decompressed, remapped, and recompressed; every other event
+/// gets the cheap column-only rewrite.
 ///
 /// `TitleContextSnapshot`, embedded in nearly every payload, carries no title
 /// id — only `title_name`, `facet`, `external_ids`, `poster_url`, `year` — and
-/// is never touched under any option.
-pub const OQ8_EPISODE_BEARING_EVENT_TYPES: &[&str] = &[
+/// is never touched.
+pub const EPISODE_BEARING_EVENT_TYPES: &[&str] = &[
     "release_grabbed",
     "download_failed",
     "release_blocklisted",
@@ -222,62 +71,14 @@ pub const OQ8_EPISODE_BEARING_EVENT_TYPES: &[&str] = &[
     "media_file_upgraded",
 ];
 
-/// Tables `merge-inventory.md` classifies but the live schema does not have,
-/// with the migration that removed each. Surfaced in the preview's notes so a
-/// reviewer comparing the engine against the appendix finds the answer here
-/// rather than assuming an omission.
-pub const INVENTORY_DEVIATIONS: &[(&str, &str)] = &[
-    (
-        "releases",
-        "dropped by sqlite migration 0122 and absent from the postgres baseline; OQ1's `drop` is a \
-         no-op",
-    ),
-    (
-        "policy_decisions",
-        "dropped by sqlite migration 0011 and absent from the postgres baseline; OQ2's `drop` is a \
-         no-op",
-    ),
-    (
-        "title_aliases",
-        "dropped by sqlite migration 0122, never present on postgres, and referenced by no Rust \
-         SQL; the §3 `union with dedupe` has nothing to union",
-    ),
-    (
-        "title_history",
-        "dropped by sqlite migration 0085; §2 already called it dead schema, and it is not merely \
-         unread but absent",
-    ),
-    (
-        "quarantine_items",
-        "dropped by sqlite migration 0122; the §4 `no rewrite needed` entry has no table",
-    ),
-    (
-        "subtitle_blacklist",
-        "renamed to `subtitle_blocklist` by sqlite migration 0094; still media-file keyed, so \
-         still needs no rewrite",
-    ),
-    (
-        "wanted_items",
-        "§2 justifies destination-wins by `next_search_at`, `search_count`, and `search_phase`, \
-         all three dropped by migration 0143. The disposition stands — `status` and the \
-         acquisition cursor still live on the destination row — but the stated reason is stale",
-    ),
-    (
-        "title_external_ids",
-        "§3 names three unique indexes; migrations 0079/0104/0105 left only \
-         `idx_title_external_ids_library_lookup`. The collision is still a certainty under \
-         FR-055, so the disposition (delete the source rows, never repoint) is unchanged",
-    ),
-];
-
-/// Everything Group 0 reads. Assembled by the repository; consumed by
+/// Everything the read phase collects. Assembled by the repository; consumed by
 /// [`plan_merge`], which performs no IO.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MergeCatalogSnapshot {
     pub source_title_id: String,
     pub destination_title_id: String,
-    /// The surviving title's name, read with the rest of its row in Group 0 so
-    /// the FR-071 summary can name it instead of printing its id.
+    /// The surviving title's name, read with the rest of its row so the FR-071
+    /// summary can name it instead of printing its id.
     pub destination_title_name: Option<String>,
     pub source_library_id: Option<String>,
     pub destination_library_id: Option<String>,
@@ -290,26 +91,42 @@ pub struct MergeCatalogSnapshot {
     pub destination_links: Vec<SeriesMovieLinkIdentityFacts>,
     pub source_file_episode_rows: Vec<FileEpisodeRoleRow>,
     pub destination_file_episode_rows: Vec<FileEpisodeRoleRow>,
+    /// Source media files that hang off the title rather than off an episode —
+    /// a movie's file, or a title-level extra.
+    pub source_title_slot_files: Vec<TitleSlotFileRow>,
+    /// Whether the destination title already has a primary file for that slot.
+    pub destination_title_slot_has_primary: bool,
 
-    pub source_tags: Vec<String>,
-    pub destination_tags: Vec<String>,
+    /// Source series-movie links a source media file is attached to.
+    pub source_file_link_ids: std::collections::BTreeSet<String>,
+    /// Source episode ids named by a history payload the merge carries.
+    pub history_episode_ids: std::collections::BTreeSet<String>,
+    /// Source collection ids named by a history payload the merge carries.
+    pub history_collection_ids: std::collections::BTreeSet<String>,
 
-    /// Table → the source episode ids that table's rows reference, for the
-    /// FR-066 evaluation.
-    pub episode_references: std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
-    /// Table → source row count, for the preview's per-disposition counts.
-    pub source_row_counts: std::collections::BTreeMap<String, i64>,
-    /// `media_requests` rows on the source title, for the OQ10 repoint note.
-    pub media_request_ids: Vec<String>,
+    /// `media_files` rows the merge repoints.
+    pub media_file_count: i64,
+    /// `history_events` + `domain_events` rows the merge carries.
+    pub history_row_count: i64,
+    /// Everything else recorded against the source title, as one count.
+    pub dropped_record_count: i64,
 
-    /// OQ7: resumable location operations holding the source title.
+    /// Resumable location operations holding the source title.
     pub resumable_operations_holding_source: Vec<String>,
     /// Unconsumed manual-import selections on the source title.
     pub unconsumed_manual_import_selections: Vec<String>,
+    /// Queued or in-flight download submissions on the source title.
+    pub active_acquisition_work: Vec<String>,
 }
 
 impl MergeCatalogSnapshot {
     fn identity_inputs(&self) -> MergeIdentityInputs {
+        let mut load_bearing_episode_ids = self.history_episode_ids.clone();
+        load_bearing_episode_ids.extend(
+            self.source_file_episode_rows
+                .iter()
+                .map(|row| row.episode_id.clone()),
+        );
         MergeIdentityInputs {
             source_title_id: self.source_title_id.clone(),
             destination_title_id: self.destination_title_id.clone(),
@@ -319,14 +136,13 @@ impl MergeCatalogSnapshot {
             destination_collections: self.destination_collections.clone(),
             source_links: self.source_links.clone(),
             destination_links: self.destination_links.clone(),
-            episode_references: self.episode_references.clone(),
+            load_bearing_episode_ids,
+            load_bearing_collection_ids: self.history_collection_ids.clone(),
+            load_bearing_series_movie_link_ids: self.source_file_link_ids.clone(),
             resumable_operations_holding_source: self.resumable_operations_holding_source.clone(),
             unconsumed_manual_import_selections: self.unconsumed_manual_import_selections.clone(),
+            active_acquisition_work: self.active_acquisition_work.clone(),
         }
-    }
-
-    fn rows(&self, table: &str) -> i64 {
-        self.source_row_counts.get(table).copied().unwrap_or(0)
     }
 }
 
@@ -344,10 +160,9 @@ pub struct MergePlan {
     /// `None` when the merge is blocked.
     pub identity_map: Option<MergeIdentityMap>,
     pub role_plan: MergedRolePlan,
-    /// The source rows the role plan replaces, so Group 1 can delete exactly
+    /// The source rows the role plan replaces, so the repoint can delete exactly
     /// what it is about to re-insert without re-deriving it.
     pub source_file_episode_rows: Vec<FileEpisodeRoleRow>,
-    pub tags: TagMergeResult,
     pub summary: MergePreviewSummary,
 }
 
@@ -378,31 +193,28 @@ impl MergePlan {
 pub struct MergeOutcome {
     pub source_title_id: String,
     pub destination_title_id: String,
-    /// Rows affected per statement group, for Activity and the operation
-    /// counters. Keyed `"<group>:<table>"`, e.g. `"1:media_files"`.
+    /// Rows affected per statement, for Activity and the operation counters.
+    /// Keyed `"<step>:<table>"`, e.g. `"files:media_files"`.
     pub rows_affected: std::collections::BTreeMap<String, u64>,
     /// `domain_events` rows whose compressed payload was decompressed,
-    /// remapped, and recompressed (OQ8's middle path).
+    /// remapped, and recompressed.
     pub domain_event_payloads_rewritten: u64,
-    /// Group 6, for the caller to schedule. The engine never reaches into those
-    /// subsystems itself.
-    pub post_merge_work: Vec<PostMergeWork>,
 }
 
-/// The Groups 1–5 transaction, and the Group 0 read that precedes it.
+/// The merge transaction, and the read that precedes it.
 ///
 /// Declared here, in the application layer, following the local-trait pattern
 /// the rest of `location` uses (see `executor::TitleFileMover`). The
 /// implementation lives in `scryer-infrastructure-library`.
 #[async_trait]
 pub trait TitleMergeRepository: Send + Sync {
-    /// Group 0. Read-only and outside any write transaction, so a blocked title
-    /// costs no rollback.
+    /// The read phase. Read-only and outside any write transaction, so a blocked
+    /// title costs no rollback.
     ///
     /// `current_operation_id` is the operation performing this merge. It is
-    /// excluded from the OQ7 resumable-operation check, because that operation
-    /// legitimately owns the source title — OQ7 is about a *second* operation
-    /// still holding it.
+    /// excluded from the resumable-operation check, because that operation
+    /// legitimately owns the source title — the check is about a *second*
+    /// operation still holding it.
     async fn load_merge_snapshot(
         &self,
         source_title_id: &str,
@@ -410,18 +222,15 @@ pub trait TitleMergeRepository: Send + Sync {
         current_operation_id: Option<&str>,
     ) -> AppResult<MergeCatalogSnapshot>;
 
-    /// Groups 1–5 in a single transaction, in the order
-    /// `merge-inventory.md` §8 forces, ending at the FR-067 gate: the source
-    /// `titles` row is deleted only after the no-FK and SET NULL assertion
-    /// lists come back empty. A failed assertion aborts the transaction with an
-    /// error naming the table.
+    /// Repoint the media file records, union the history, delete the source
+    /// title row — in one transaction, in that order, so no cascade can take a
+    /// row the merge has already moved.
     async fn execute_title_merge(&self, plan: &MergePlan) -> AppResult<MergeOutcome>;
 }
 
-/// Build the merge decision from the Group 0 snapshot. Pure.
+/// Build the merge decision from the snapshot. Pure.
 pub fn plan_merge(snapshot: &MergeCatalogSnapshot) -> MergePlan {
     let outcome = evaluate_identity_map(&snapshot.identity_inputs());
-    let tags = partition_tags(&snapshot.source_tags, &snapshot.destination_tags);
 
     let (identity_map, blocked) = match outcome {
         MergeIdentityOutcome::Mapped(map) => (Some(*map), Vec::new()),
@@ -435,74 +244,25 @@ pub fn plan_merge(snapshot: &MergeCatalogSnapshot) -> MergePlan {
                 map,
                 &snapshot.source_file_episode_rows,
                 &snapshot.destination_file_episode_rows,
+                &snapshot.source_title_slot_files,
+                snapshot.destination_title_slot_has_primary,
             )
         })
         .unwrap_or_default();
 
-    let mut summary = MergePreviewSummary {
+    let summary = MergePreviewSummary {
         source_title_id: snapshot.source_title_id.clone(),
         destination_title_id: snapshot.destination_title_id.clone(),
         destination_title_name: snapshot.destination_title_name.clone(),
         source_library_id: snapshot.source_library_id.clone(),
         destination_library_id: snapshot.destination_library_id.clone(),
-        destination_wins: destination_wins_entries(snapshot),
-        dispositions: disposition_entries(snapshot),
-        blocked,
+        media_files_repointed: snapshot.media_file_count,
         role_changes: role_plan.role_changes.clone(),
-        reserved_tag_conflicts: tags.reserved_tag_conflicts.clone(),
-        free_form_tags_added: tags.free_form_tags_added.clone(),
-        media_request_repoints: media_request_repoints(snapshot),
-        dropped: dropped_categories(snapshot),
-        post_merge_work: vec![
-            PostMergeWork::ReindexTitleSearchTerms,
-            PostMergeWork::RegenerateRecommendations,
-            PostMergeWork::RecomputeStatistics,
-            PostMergeWork::DropSourceIndexerCoverage,
-        ],
-        notes: Vec::new(),
+        role_demotions: role_plan.demotion_count() as i64,
+        history_rows_carried: snapshot.history_row_count,
+        source_records_dropped: snapshot.dropped_record_count,
+        blocked,
     };
-
-    // OQ6: the merge writes nothing outside the database, so a recycle-bin
-    // manifest recorded under the source title keeps a title id that no longer
-    // resolves. Stated, never silently accepted.
-    summary.notes.push(
-        "Recycle-bin manifests recorded under the source title keep its title id; the merge \
-         performs no filesystem writes (OQ6)."
-            .to_string(),
-    );
-    // OQ8: what the payload rewrite does and does not cover.
-    summary.notes.push(format!(
-        "Activity events keep their title: `title_id` and title `stream_id` are rewritten for every \
-         event, and `$.data.episode_ids[]` is remapped for the {} event types that carry it (OQ8).",
-        OQ8_EPISODE_BEARING_EVENT_TYPES.len()
-    ));
-    if !tags.reserved_tags_dropped.is_empty() {
-        summary.notes.push(format!(
-            "{} reserved `scryer:` tag(s) matched the destination's value and were dropped without \
-             a conflict (OQ9).",
-            tags.reserved_tags_dropped.len()
-        ));
-    }
-    if let Some(map) = identity_map.as_ref()
-        && !map.unevaluated_reference_tables.is_empty()
-    {
-        summary.notes.push(format!(
-            "Episode references were supplied for table(s) outside the FR-066 blocking set and \
-             were not evaluated: {}.",
-            map.unevaluated_reference_tables.join(", ")
-        ));
-    }
-    if !role_plan.unmapped_rows.is_empty() {
-        summary.notes.push(format!(
-            "{} file_episode_map row(s) reference an episode outside the identity map.",
-            role_plan.unmapped_rows.len()
-        ));
-    }
-    for (table, reason) in INVENTORY_DEVIATIONS {
-        summary
-            .notes
-            .push(format!("Inventory deviation — `{table}`: {reason}."));
-    }
 
     MergePlan {
         source_title_id: snapshot.source_title_id.clone(),
@@ -512,13 +272,12 @@ pub fn plan_merge(snapshot: &MergeCatalogSnapshot) -> MergePlan {
         identity_map,
         role_plan,
         source_file_episode_rows: snapshot.source_file_episode_rows.clone(),
-        tags,
         summary,
     }
 }
 
 /// Run a planned merge. Refuses a blocked plan without touching the database —
-/// FR-066's block is decided in Group 0 and must never cost a rollback.
+/// FR-066's block is decided in the read phase and must never cost a rollback.
 pub async fn execute_merge(
     repository: &dyn TitleMergeRepository,
     plan: &MergePlan,
@@ -537,355 +296,13 @@ pub async fn execute_merge(
     repository.execute_title_merge(plan).await
 }
 
-fn destination_wins_entries(snapshot: &MergeCatalogSnapshot) -> Vec<DestinationWinsEntry> {
-    // FR-063's list, in the order the spec states it.
-    vec![
-        DestinationWinsEntry {
-            setting: "title id".to_string(),
-            destination_value: Some(snapshot.destination_title_id.clone()),
-            source_value: Some(snapshot.source_title_id.clone()),
-        },
-        DestinationWinsEntry {
-            setting: "metadata identity".to_string(),
-            destination_value: None,
-            source_value: None,
-        },
-        DestinationWinsEntry {
-            setting: "monitoring".to_string(),
-            destination_value: None,
-            source_value: None,
-        },
-        DestinationWinsEntry {
-            setting: "explicit settings".to_string(),
-            destination_value: None,
-            source_value: None,
-        },
-        DestinationWinsEntry {
-            setting: "quality configuration".to_string(),
-            destination_value: None,
-            source_value: None,
-        },
-        DestinationWinsEntry {
-            setting: "naming behavior".to_string(),
-            destination_value: None,
-            source_value: None,
-        },
-        DestinationWinsEntry {
-            setting: "library inheritance".to_string(),
-            destination_value: snapshot.destination_library_id.clone(),
-            source_value: snapshot.source_library_id.clone(),
-        },
-    ]
-}
-
-fn disposition_entries(snapshot: &MergeCatalogSnapshot) -> Vec<TableDispositionEntry> {
-    let entry = |table: &str, disposition: MergeDisposition, note: &str| TableDispositionEntry {
-        table: table.to_string(),
-        disposition,
-        source_row_count: snapshot.rows(table),
-        note: note.to_string(),
-    };
-    let mut entries = vec![
-        // Group 1.
-        entry(
-            "media_files",
-            MergeDisposition::Union,
-            "title_id is repointed; the file id and file_path are untouched",
-        ),
-        entry(
-            "file_episode_map",
-            MergeDisposition::Map,
-            "episode ids remap and roles resolve per FR-068/069/070",
-        ),
-        entry(
-            "file_series_movie_link_map",
-            MergeDisposition::Map,
-            "the link id changes, the file id does not",
-        ),
-        // Group 2.
-        entry(
-            "wanted_items",
-            MergeDisposition::Union,
-            "destination-wins on UNIQUE(title_id, episode_id) and the two partial indexes (OQ5)",
-        ),
-        entry(
-            "download_submissions",
-            MergeDisposition::Union,
-            "client-keyed uniqueness, so a union cannot collide",
-        ),
-        entry(
-            "download_submission_episode_links",
-            MergeDisposition::Map,
-            "two source episodes collapsing onto one destination episode resolve ON CONFLICT DO \
-             NOTHING",
-        ),
-        entry(
-            "download_import_artifacts",
-            MergeDisposition::Union,
-            "title, episode, and imported file references all remap",
-        ),
-        entry(
-            "subtitle_downloads",
-            MergeDisposition::Union,
-            "title_id and episode_id remap; media_file_id is already stable",
-        ),
-        entry(
-            "workflow_operations",
-            MergeDisposition::Map,
-            "an audit row should describe the surviving identity",
-        ),
-        entry(
-            "domain_events",
-            MergeDisposition::Union,
-            "title_id and title stream_id rewritten for every event; episode_ids remapped for the \
-             event types that carry them (OQ8)",
-        ),
-        entry(
-            "media_server_playback_items",
-            MergeDisposition::Map,
-            "destination-wins on the (connection, kind, entity) primary key",
-        ),
-        // Group 3.
-        entry(
-            "blocklist",
-            MergeDisposition::Union,
-            "deduped ON CONFLICT DO NOTHING against both 0194 partial indexes; title-scoped since \
-             0194, so not in the FR-066 blocking set",
-        ),
-        entry(
-            "release_download_attempts",
-            MergeDisposition::Union,
-            "title_id repointed",
-        ),
-        entry(
-            "post_processing_script_runs",
-            MergeDisposition::Union,
-            "title_id only; title_name and env_payload_json are deliberate historical snapshots",
-        ),
-        entry(
-            "media_requests",
-            MergeDisposition::Union,
-            "created_title_id remaps and library_id is repointed to the destination (OQ10)",
-        ),
-        entry(
-            "imports",
-            MergeDisposition::Map,
-            "a JSON rewrite of payload_json $.target_title_id / $.manual_title_id",
-        ),
-        entry(
-            "indexer_search_learning",
-            MergeDisposition::Union,
-            "destination-wins on the (indexer, title, facet, strategy) primary key; counters are \
-             never summed (OQ3)",
-        ),
-        entry(
-            "discovery_titles",
-            MergeDisposition::Map,
-            "resolved_title_id remaps",
-        ),
-        entry(
-            "discovery_item_library_provenance",
-            MergeDisposition::Map,
-            "title_id and library_id remap, deduped ON CONFLICT DO NOTHING",
-        ),
-        entry(
-            "discovery_submitted_subjects",
-            MergeDisposition::Map,
-            "title_id and library_id remap",
-        ),
-        entry(
-            "discovery_pending_context_changes",
-            MergeDisposition::Map,
-            "both title_id and previous_title_id remap",
-        ),
-        entry(
-            "image_proxy_sources",
-            MergeDisposition::Map,
-            "owner_id remaps where owner_type denotes a title",
-        ),
-        entry(
-            "location_operation_owned_entities",
-            MergeDisposition::Map,
-            "a live claim must follow the surviving title",
-        ),
-        entry(
-            "location_operation_title_checkpoints",
-            MergeDisposition::Map,
-            "merged_into_title_id only; title_id is the operation's own audit trail",
-        ),
-        entry(
-            "titles.tags",
-            MergeDisposition::Union,
-            "free-form tags union; reserved scryer: tags are destination-wins (OQ9)",
-        ),
-        // Group 3, the maintenance and watch-signal tables that landed beside
-        // this engine (migrations 0205–0207).
-        entry(
-            "lifecycle_candidates",
-            MergeDisposition::Union,
-            "live source candidates close as canceled and every candidate follows the surviving \
-             title; the destination is re-evaluated on its own facts at the next pass",
-        ),
-        entry(
-            "lifecycle_action_runs",
-            MergeDisposition::Union,
-            "the append-only action audit follows the surviving title",
-        ),
-        entry(
-            "maintenance_rule_exclusions",
-            MergeDisposition::Union,
-            "a source exclusion carries onto the destination unless it already holds one for the \
-             same rule; a safety ward is never dropped by a merge",
-        ),
-        entry(
-            "library_scan_unmatched_items",
-            MergeDisposition::Union,
-            "title-scoped unmatched items follow the surviving title so an ignored item stays \
-             ignored; the next scan of the destination reconciles their paths",
-        ),
-        entry(
-            "media_server_user_media_signals",
-            MergeDisposition::Union,
-            "observations follow the surviving title; episode rows are remapped, and the next \
-             sync re-resolves anything the identity map could not",
-        ),
-        // Group 4/5.
-        entry(
-            "title_external_ids",
-            MergeDisposition::DestinationWins,
-            "source rows are deleted, never repointed: FR-055 guarantees both sides share \
-             (source, external_id)",
-        ),
-        entry(
-            "episode_external_ids",
-            MergeDisposition::DestinationWins,
-            "FR-063 gives the destination the metadata identity",
-        ),
-        entry(
-            "collection_external_ids",
-            MergeDisposition::DestinationWins,
-            "FR-065 gives duplicate collection metadata to the destination",
-        ),
-        entry(
-            "title_images",
-            MergeDisposition::DestinationWins,
-            "UNIQUE(title_id, kind) makes a union structurally impossible",
-        ),
-        entry(
-            "title_metadata_tags",
-            MergeDisposition::DestinationWins,
-            "hydrated from the destination's metadata identity",
-        ),
-        entry(
-            "title_credits",
-            MergeDisposition::DestinationWins,
-            "hydrated from the destination's metadata identity",
-        ),
-        entry(
-            "library_probe_signatures",
-            MergeDisposition::DestinationWins,
-            "the signature describes a folder path; the source's is stale after the move",
-        ),
-        entry(
-            "title_search_terms",
-            MergeDisposition::Drop,
-            "a derived spellfix projection, rebuilt in Group 6",
-        ),
-    ];
-    entries.sort();
-    entries
-}
-
-fn media_request_repoints(snapshot: &MergeCatalogSnapshot) -> Vec<MediaRequestRepoint> {
-    // OQ10: the request history follows the content into the destination
-    // library, and the repoint is named in the preview rather than left for a
-    // user to discover through their library permissions.
-    let (Some(previous), Some(destination)) = (
-        snapshot.source_library_id.as_ref(),
-        snapshot.destination_library_id.as_ref(),
-    ) else {
-        return Vec::new();
-    };
-    if previous == destination {
-        return Vec::new();
-    }
-    snapshot
-        .media_request_ids
-        .iter()
-        .map(|request_id| MediaRequestRepoint {
-            request_id: request_id.clone(),
-            previous_library_id: previous.clone(),
-            destination_library_id: destination.clone(),
-        })
-        .collect()
-}
-
-fn dropped_categories(snapshot: &MergeCatalogSnapshot) -> Vec<DroppedCategory> {
-    let mut dropped = vec![
-        // OQ5: the delay queue and its decisions were computed against the
-        // source title's quality profile, which FR-063 has just replaced. They
-        // re-derive from wanted_items on the next convergence pass.
-        DroppedCategory {
-            table: "pending_releases".to_string(),
-            source_row_count: snapshot.rows("pending_releases"),
-            decision: "OQ5".to_string(),
-            reason: "the delay queue was chosen against the source title's quality profile, which \
-                     the destination's replaces; it re-derives from wanted_items on the next \
-                     convergence pass"
-                .to_string(),
-        },
-        DroppedCategory {
-            table: "release_decisions".to_string(),
-            source_row_count: snapshot.rows("release_decisions"),
-            decision: "OQ5".to_string(),
-            reason: "decisions made against the source profile are misleading once the \
-                     destination's configuration wins"
-                .to_string(),
-        },
-        // OQ4: `episode_set:b3:<hex>` is a BLAKE3 hash over the sorted episode
-        // id list and cannot be recomputed against mapped ids, so all five
-        // scope_key forms are dropped uniformly rather than leaving season-pack
-        // coverage inconsistent with episode coverage.
-        DroppedCategory {
-            table: "scope_indexer_coverage".to_string(),
-            source_row_count: snapshot.rows("scope_indexer_coverage"),
-            decision: "OQ4".to_string(),
-            reason: "the episode_set:b3: scope key is an irreversible BLAKE3 hash, so every scope \
-                     row for the source title is dropped uniformly; coverage re-accumulates over \
-                     one search sweep per indexer"
-                .to_string(),
-        },
-        DroppedCategory {
-            table: "indexer_search_runs".to_string(),
-            source_row_count: snapshot.rows("indexer_search_runs"),
-            decision: "OQ4".to_string(),
-            reason: "same scope_key encoding as scope_indexer_coverage".to_string(),
-        },
-        DroppedCategory {
-            table: "history_events".to_string(),
-            source_row_count: snapshot.rows("history_events"),
-            decision: "inventory §5".to_string(),
-            reason: "legacy: no production reads or inserts survive".to_string(),
-        },
-        DroppedCategory {
-            table: "title_search_terms".to_string(),
-            source_row_count: snapshot.rows("title_search_terms"),
-            decision: "inventory §3".to_string(),
-            reason: "a derived spellfix projection, cheaper and safer to regenerate (Group 6)"
-                .to_string(),
-        },
-    ];
-    dropped.sort();
-    dropped
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::location::merge::MergedMediaRole;
     use crate::location::merge::map::MergeBlockReason;
     use scryer_domain::EpisodeType;
-    use std::collections::{BTreeMap, BTreeSet};
+    use std::collections::BTreeSet;
 
     fn episode(id: &str, season: &str, number: &str) -> EpisodeIdentityFacts {
         EpisodeIdentityFacts {
@@ -919,16 +336,9 @@ mod tests {
                 role: MergedMediaRole::Primary,
                 is_filler: false,
             }],
-            source_tags: vec![
-                "scryer:quality-profile:source-profile".to_string(),
-                "rewatch".to_string(),
-            ],
-            destination_tags: vec!["scryer:quality-profile:destination-profile".to_string()],
-            media_request_ids: vec!["request-1".to_string()],
-            source_row_counts: BTreeMap::from([
-                ("media_files".to_string(), 3),
-                ("pending_releases".to_string(), 2),
-            ]),
+            media_file_count: 3,
+            history_row_count: 12,
+            dropped_record_count: 7,
             ..MergeCatalogSnapshot::default()
         }
     }
@@ -948,45 +358,30 @@ mod tests {
         // FR-070: the demotion is in the plan and in the summary.
         assert_eq!(plan.role_plan.demotion_count(), 1);
         assert_eq!(plan.summary.role_changes.len(), 1);
-        // OQ9: the differing quality profile is an explicit conflict.
-        assert_eq!(plan.summary.reserved_tag_conflicts.len(), 1);
-        assert_eq!(plan.summary.free_form_tags_added, vec!["rewatch".to_string()]);
-        // OQ10: the cross-library repoint is named.
-        assert_eq!(plan.summary.media_request_repoints.len(), 1);
-        assert_eq!(
-            plan.summary.media_request_repoints[0].destination_library_id,
-            "library-b"
-        );
-        // Group 6 is returned, never executed here.
-        assert!(
-            plan.summary
-                .post_merge_work
-                .contains(&PostMergeWork::DropSourceIndexerCoverage)
-        );
+        assert_eq!(plan.summary.role_demotions, 1);
+        // FR-064: the three counts the preview reports.
+        assert_eq!(plan.summary.media_files_repointed, 3);
+        assert_eq!(plan.summary.history_rows_carried, 12);
+        assert_eq!(plan.summary.source_records_dropped, 7);
     }
 
     #[test]
-    fn a_same_library_merge_repoints_no_requests() {
-        let mut snapshot = snapshot();
-        snapshot.destination_library_id = snapshot.source_library_id.clone();
-        assert!(plan_merge(&snapshot).summary.media_request_repoints.is_empty());
-    }
-
-    #[test]
-    fn an_unmapped_episode_blocks_the_plan_and_the_execution() {
+    fn an_unmapped_episode_carrying_a_file_blocks_the_plan_and_the_execution() {
         let mut snapshot = snapshot();
         snapshot.source_episodes.push(episode("s-e2", "1", "2"));
-        snapshot.episode_references.insert(
-            "wanted_items".to_string(),
-            BTreeSet::from(["s-e2".to_string()]),
-        );
+        snapshot.source_file_episode_rows.push(FileEpisodeRoleRow {
+            file_id: "file-two".to_string(),
+            episode_id: "s-e2".to_string(),
+            role: MergedMediaRole::Primary,
+            is_filler: false,
+        });
         let plan = plan_merge(&snapshot);
         assert!(plan.is_blocked());
         assert!(plan.identity_map.is_none());
         assert!(
             plan.blocked()
                 .iter()
-                .any(|record| record.table == "wanted_items"
+                .any(|record| record.table == "episodes"
                     && record.reason == MergeBlockReason::UnmappedEpisode)
         );
         assert!(plan.require_identity_map().is_err());
@@ -995,68 +390,38 @@ mod tests {
     }
 
     #[test]
-    fn the_drop_list_carries_the_oq_that_decided_each_category() {
-        let plan = plan_merge(&snapshot());
-        let pending = plan
-            .summary
-            .dropped
-            .iter()
-            .find(|entry| entry.table == "pending_releases")
-            .expect("OQ5 drops the delay queue");
-        assert_eq!(pending.decision, "OQ5");
-        assert_eq!(pending.source_row_count, 2);
-        let coverage = plan
-            .summary
-            .dropped
-            .iter()
-            .find(|entry| entry.table == "scope_indexer_coverage")
-            .expect("OQ4 drops scope coverage");
-        assert_eq!(coverage.decision, "OQ4");
+    fn an_unmapped_episode_carrying_nothing_does_not_block() {
+        let mut snapshot = snapshot();
+        snapshot.source_episodes.push(episode("s-e2", "1", "2"));
+        let plan = plan_merge(&snapshot);
+        assert!(!plan.is_blocked());
+        assert!(
+            plan.require_identity_map()
+                .expect("the map exists")
+                .episode("s-e2")
+                .is_none()
+        );
     }
 
     #[test]
-    fn the_summary_states_the_live_schema_deviations() {
-        let plan = plan_merge(&snapshot());
-        for (table, _) in INVENTORY_DEVIATIONS {
-            assert!(
-                plan.summary
-                    .notes
-                    .iter()
-                    .any(|note| note.contains(&format!("`{table}`"))),
-                "the preview should state the {table} deviation"
-            );
-        }
+    fn a_history_only_episode_reference_still_blocks() {
+        let mut snapshot = snapshot();
+        snapshot.source_episodes.push(episode("s-e2", "1", "2"));
+        snapshot.history_episode_ids = BTreeSet::from(["s-e2".to_string()]);
+        assert!(plan_merge(&snapshot).is_blocked());
     }
 
     #[test]
-    fn the_gate_lists_name_only_tables_the_live_schema_still_has() {
-        // `merge-inventory.md` §8 lists `title_history` and `subtitle_blacklist`;
-        // both are gone from the live schema, so asserting on them would make
-        // the gate itself fail.
-        for (table, _, _) in FR067_NO_FK_ASSERTIONS
-            .iter()
-            .chain(FR067_SET_NULL_ASSERTIONS.iter())
-        {
-            assert!(
-                !matches!(
-                    *table,
-                    "title_history" | "subtitle_blacklist" | "releases" | "policy_decisions"
-                ),
-                "{table} is not in the live schema"
-            );
-        }
-    }
-
-    #[test]
-    fn media_files_counts_reach_the_disposition_list() {
-        let plan = plan_merge(&snapshot());
-        let media_files = plan
-            .summary
-            .dispositions
-            .iter()
-            .find(|entry| entry.table == "media_files")
-            .expect("media_files is inventoried");
-        assert_eq!(media_files.disposition, MergeDisposition::Union);
-        assert_eq!(media_files.source_row_count, 3);
+    fn a_live_download_on_the_source_blocks_the_merge() {
+        let mut snapshot = snapshot();
+        snapshot.active_acquisition_work = vec!["submission-1".to_string()];
+        let plan = plan_merge(&snapshot);
+        assert!(plan.is_blocked());
+        assert!(
+            plan.summary
+                .blocked_reason()
+                .expect("a reason")
+                .contains("active_acquisition_work")
+        );
     }
 }

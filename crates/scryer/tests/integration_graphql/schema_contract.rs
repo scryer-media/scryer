@@ -633,8 +633,21 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // public types 678->696. No new mutation: both workflows confirm through
     // the existing startLocationOperation, whose input gained the two
     // root-scoped destination variants beside the selection it already carried.
+    //
+    // FR-020 is one settings action with two destinations, and the surface was
+    // folded to match it: `locationRootChangePreview` and
+    // `locationRootConsolidationPreview` became one `locationRootScopePreview`
+    // (query 150->149), and the four inputs became two —
+    // `LocationRootScopePreviewInput` and `LocationRootScopeTargetInput`
+    // replace `LocationRootChangePreviewInput`,
+    // `LocationRootConsolidationPreviewInput`, `LocationRootChangeTargetInput`
+    // and `LocationRootConsolidationTargetInput` (INPUT_OBJECT 191->189,
+    // public types 727->725). No object and no enum changed:
+    // `LocationRootScopePreviewPayload` was already one payload for both
+    // branches, and `StartLocationOperationInput` swapped its `rootChange` and
+    // `rootConsolidation` fields for one `rootScope`.
     assert_eq!(
-        query_field_count, 150,
+        query_field_count, 149,
         "query fields: {query_field_names:?}"
     );
     // First-class proxies (WP4) add one mutation, resetProxyHostKey: SSH host
@@ -680,11 +693,26 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // derived from a fileless selection (FR-076) and is never requestable.
     // Query, mutation, subscription, OBJECT, and INPUT_OBJECT counts are
     // unchanged: both fields join input objects that already exist.
+    // Descoping the merge engine to "media file records and history, everything
+    // else retires with the title" (FR-063 to FR-071) removes five merge payload
+    // objects (table disposition, reserved-tag conflict, media-request repoint,
+    // dropped category, destination-wins entry) and two merge enums (disposition,
+    // post-merge work); folding US4's root change and US5's consolidation onto
+    // one root-scoped planner replaces their two preview payloads with one
+    // (`LocationRootScopePreviewPayload`): OBJECT 385->379, ENUM 140->138,
+    // public types 730->722.
+    // Folding the surface to match — one `locationRootScopePreview` query and
+    // one `rootScope` start target in place of the change/consolidation pair —
+    // then removes two inputs: `LocationRootScopePreviewInput` and
+    // `LocationRootScopeTargetInput` replace the four
+    // `LocationRootChange*`/`LocationRootConsolidation*` inputs, so
+    // INPUT_OBJECT 193->191 and public types 722->720. Query fields drop by one
+    // (150->149) with the second preview root; OBJECT and ENUM are unchanged.
     assert_eq!(subscription_field_count, 14);
-    assert_eq!(public_types.len(), 730);
-    assert_eq!(kind_count("OBJECT"), 385);
-    assert_eq!(kind_count("INPUT_OBJECT"), 193);
-    assert_eq!(kind_count("ENUM"), 140);
+    assert_eq!(public_types.len(), 720);
+    assert_eq!(kind_count("OBJECT"), 379);
+    assert_eq!(kind_count("INPUT_OBJECT"), 191);
+    assert_eq!(kind_count("ENUM"), 138);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
     assert!(query_field_names.contains(&"backupSettings"));
@@ -721,16 +749,15 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // inputs, and distinct from the reported LocationExecutionModeValue.
     assert!(public_type_names.contains(&"LocationExecutionModeInput"));
     assert!(public_type_names.contains(&"LocationExecutionModeValue"));
-    // US4 and US5: FR-020's one settings action is two queries, because the two
-    // destinations are two different requests with two different payloads.
-    assert!(query_field_names.contains(&"locationRootChangePreview"));
-    assert!(query_field_names.contains(&"locationRootConsolidationPreview"));
-    assert!(public_type_names.contains(&"LocationRootChangePreviewPayload"));
-    assert!(public_type_names.contains(&"LocationRootConsolidationPreviewPayload"));
-    assert!(public_type_names.contains(&"LocationRootChangePreviewInput"));
-    assert!(public_type_names.contains(&"LocationRootConsolidationPreviewInput"));
-    assert!(public_type_names.contains(&"LocationRootChangeTargetInput"));
-    assert!(public_type_names.contains(&"LocationRootConsolidationTargetInput"));
+    // US4 and US5: FR-020's one settings action is one query with two
+    // destinations, and one payload whose variant-only sections say which
+    // destination the server planned.
+    assert!(query_field_names.contains(&"locationRootScopePreview"));
+    assert!(!query_field_names.contains(&"locationRootChangePreview"));
+    assert!(!query_field_names.contains(&"locationRootConsolidationPreview"));
+    assert!(public_type_names.contains(&"LocationRootScopePreviewPayload"));
+    assert!(public_type_names.contains(&"LocationRootScopePreviewInput"));
+    assert!(public_type_names.contains(&"LocationRootScopeTargetInput"));
     assert!(public_type_names.contains(&"LocationTitleAccountingPayload"));
     assert!(public_type_names.contains(&"LocationBlockedTitlePayload"));
     assert!(public_type_names.contains(&"LocationRootIdentityRetentionPayload"));

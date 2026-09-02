@@ -68,12 +68,25 @@ impl RoleChangeReason {
     }
 }
 
+/// One media file whose role belongs to the *title's* slot rather than to an
+/// episode's — a movie's file, or a title-level extra with no episode mapping.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct TitleSlotFileRow {
+    pub file_id: String,
+    pub role: MergedMediaRole,
+}
+
 /// One role change, as the FR-071 preview renders it.
+///
+/// The episode ids are `None` for a title-slot file: a movie has one slot and
+/// it is the title.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct MediaRoleChange {
     pub file_id: String,
-    pub source_episode_id: String,
-    pub destination_episode_id: String,
+    #[serde(default)]
+    pub source_episode_id: Option<String>,
+    #[serde(default)]
+    pub destination_episode_id: Option<String>,
     pub previous_role: MergedMediaRole,
     pub new_role: MergedMediaRole,
     pub reason: RoleChangeReason,
@@ -95,14 +108,24 @@ impl MediaRoleChange {
                 "two source episodes map onto that one destination episode, so their rows collapse into one"
             }
         };
-        format!(
-            "file {} becomes {} for episode {} (was {} for source episode {}): {why}",
-            self.file_id,
-            self.new_role.as_str(),
-            self.destination_episode_id,
-            self.previous_role.as_str(),
-            self.source_episode_id
-        )
+        match (
+            self.destination_episode_id.as_deref(),
+            self.source_episode_id.as_deref(),
+        ) {
+            (Some(destination), Some(source)) => format!(
+                "file {} becomes {} for episode {destination} (was {} for source episode \
+                 {source}): {why}",
+                self.file_id,
+                self.new_role.as_str(),
+                self.previous_role.as_str(),
+            ),
+            _ => format!(
+                "file {} becomes {} for the merged title (was {}): {why}",
+                self.file_id,
+                self.new_role.as_str(),
+                self.previous_role.as_str(),
+            ),
+        }
     }
 }
 
@@ -113,6 +136,9 @@ pub struct MergedRolePlan {
     /// on destination episode ids. Destination rows are untouched and are not
     /// listed.
     pub rows: Vec<FileEpisodeRoleRow>,
+    /// The post-merge `media_files.role` values for source files that hang off
+    /// the title itself rather than off an episode.
+    pub title_slot_rows: Vec<TitleSlotFileRow>,
     pub role_changes: Vec<MediaRoleChange>,
     /// Destination episodes that had no primary and gained one from the source
     /// (FR-068's "stays or becomes primary where none exists").
@@ -144,6 +170,8 @@ pub fn resolve_media_roles(
     map: &MergeIdentityMap,
     source_rows: &[FileEpisodeRoleRow],
     destination_rows: &[FileEpisodeRoleRow],
+    source_title_slot_files: &[TitleSlotFileRow],
+    destination_title_slot_has_primary: bool,
 ) -> MergedRolePlan {
     let destination_primaries: BTreeSet<&str> = destination_rows
         .iter()
@@ -188,8 +216,8 @@ pub fn resolve_media_roles(
             plan.rows[existing].is_filler |= row.is_filler;
             plan.role_changes.push(MediaRoleChange {
                 file_id: row.file_id.clone(),
-                source_episode_id: row.episode_id.clone(),
-                destination_episode_id,
+                source_episode_id: Some(row.episode_id.clone()),
+                destination_episode_id: Some(destination_episode_id),
                 previous_role: row.role,
                 new_role: plan.rows[existing].role,
                 reason: RoleChangeReason::CollapsedSourceEpisodes,
@@ -204,8 +232,8 @@ pub fn resolve_media_roles(
             // FR-068/FR-070: the destination primary stands.
             plan.role_changes.push(MediaRoleChange {
                 file_id: row.file_id.clone(),
-                source_episode_id: row.episode_id.clone(),
-                destination_episode_id: destination_episode_id.clone(),
+                source_episode_id: Some(row.episode_id.clone()),
+                destination_episode_id: Some(destination_episode_id.clone()),
                 previous_role: MergedMediaRole::Primary,
                 new_role: MergedMediaRole::Additional,
                 reason: RoleChangeReason::DestinationPrimaryRetained,
@@ -214,8 +242,8 @@ pub fn resolve_media_roles(
         } else if claimed_primary.contains_key(&destination_episode_id) {
             plan.role_changes.push(MediaRoleChange {
                 file_id: row.file_id.clone(),
-                source_episode_id: row.episode_id.clone(),
-                destination_episode_id: destination_episode_id.clone(),
+                source_episode_id: Some(row.episode_id.clone()),
+                destination_episode_id: Some(destination_episode_id.clone()),
                 previous_role: MergedMediaRole::Primary,
                 new_role: MergedMediaRole::Additional,
                 reason: RoleChangeReason::SourcePrimaryAlreadyClaimed,
@@ -238,7 +266,56 @@ pub fn resolve_media_roles(
         });
     }
 
+    resolve_title_slot_roles(
+        source_title_slot_files,
+        destination_title_slot_has_primary,
+        &mut plan,
+    );
+
     plan
+}
+
+/// FR-068 for the slot a movie has: the title itself.
+///
+/// A movie's file hangs off no episode, so `file_episode_map` says nothing about
+/// it and `media_files.role` is the whole story. The rule is the same one the
+/// episode pass applies — the destination's primary is never demoted, and an
+/// incoming primary fills a slot that has none.
+fn resolve_title_slot_roles(
+    source_files: &[TitleSlotFileRow],
+    destination_has_primary: bool,
+    plan: &mut MergedRolePlan,
+) {
+    let mut ordered: Vec<&TitleSlotFileRow> = source_files.iter().collect();
+    ordered.sort();
+
+    let mut primary_claimed = destination_has_primary;
+    for file in ordered {
+        let resolved = if file.role == MergedMediaRole::Additional {
+            MergedMediaRole::Additional
+        } else if primary_claimed {
+            plan.role_changes.push(MediaRoleChange {
+                file_id: file.file_id.clone(),
+                source_episode_id: None,
+                destination_episode_id: None,
+                previous_role: MergedMediaRole::Primary,
+                new_role: MergedMediaRole::Additional,
+                reason: if destination_has_primary {
+                    RoleChangeReason::DestinationPrimaryRetained
+                } else {
+                    RoleChangeReason::SourcePrimaryAlreadyClaimed
+                },
+            });
+            MergedMediaRole::Additional
+        } else {
+            primary_claimed = true;
+            MergedMediaRole::Primary
+        };
+        plan.title_slot_rows.push(TitleSlotFileRow {
+            file_id: file.file_id.clone(),
+            role: resolved,
+        });
+    }
 }
 
 #[cfg(test)]
@@ -272,6 +349,8 @@ mod tests {
             &map(&[("s-e1", "d-e1")]),
             &[row("file-in", "s-e1", MergedMediaRole::Primary)],
             &[],
+            &[],
+            false,
         );
         assert_eq!(plan.rows, vec![row("file-in", "d-e1", MergedMediaRole::Primary)]);
         assert!(plan.role_changes.is_empty());
@@ -287,6 +366,8 @@ mod tests {
             &map(&[("s-e1", "d-e1")]),
             &[row("file-in", "s-e1", MergedMediaRole::Primary)],
             &[row("file-dest", "d-e1", MergedMediaRole::Primary)],
+            &[],
+            false,
         );
         assert_eq!(
             plan.rows,
@@ -314,6 +395,8 @@ mod tests {
                 row("file-in", "s-e2", MergedMediaRole::Primary),
             ],
             &[row("file-dest", "d-e1", MergedMediaRole::Primary)],
+            &[],
+            false,
         );
         assert_eq!(
             plan.rows,
@@ -323,7 +406,10 @@ mod tests {
             ]
         );
         assert_eq!(plan.role_changes.len(), 1);
-        assert_eq!(plan.role_changes[0].destination_episode_id, "d-e1");
+        assert_eq!(
+            plan.role_changes[0].destination_episode_id.as_deref(),
+            Some("d-e1")
+        );
     }
 
     #[test]
@@ -332,6 +418,8 @@ mod tests {
             &map(&[("s-e1", "d-e1")]),
             &[row("file-in", "s-e1", MergedMediaRole::Additional)],
             &[],
+            &[],
+            false,
         );
         assert_eq!(
             plan.rows,
@@ -351,6 +439,8 @@ mod tests {
                 row("file-a", "s-e1", MergedMediaRole::Primary),
             ],
             &[],
+            &[],
+            false,
         );
         // Sorted by (file_id, episode_id): file-a wins the primary claim.
         assert_eq!(
@@ -374,6 +464,8 @@ mod tests {
             &map(&[("s-e1", "d-e1"), ("s-e2", "d-e1")]),
             &[row("file-in", "s-e1", MergedMediaRole::Additional), filler],
             &[],
+            &[],
+            false,
         );
         assert_eq!(plan.rows.len(), 1);
         assert_eq!(plan.rows[0].role, MergedMediaRole::Primary);
@@ -385,11 +477,99 @@ mod tests {
     }
 
     #[test]
+    fn a_movie_file_becomes_additional_when_the_destination_already_has_a_primary() {
+        let plan = resolve_media_roles(
+            &map(&[]),
+            &[],
+            &[],
+            &[TitleSlotFileRow {
+                file_id: "movie-in".to_string(),
+                role: MergedMediaRole::Primary,
+            }],
+            true,
+        );
+        assert_eq!(
+            plan.title_slot_rows,
+            vec![TitleSlotFileRow {
+                file_id: "movie-in".to_string(),
+                role: MergedMediaRole::Additional,
+            }]
+        );
+        assert_eq!(plan.demotion_count(), 1);
+        assert_eq!(plan.role_changes[0].destination_episode_id, None);
+        assert_eq!(
+            plan.role_changes[0].reason,
+            RoleChangeReason::DestinationPrimaryRetained
+        );
+    }
+
+    #[test]
+    fn a_movie_file_stays_primary_when_the_destination_has_none() {
+        let plan = resolve_media_roles(
+            &map(&[]),
+            &[],
+            &[],
+            &[TitleSlotFileRow {
+                file_id: "movie-in".to_string(),
+                role: MergedMediaRole::Primary,
+            }],
+            false,
+        );
+        assert_eq!(
+            plan.title_slot_rows,
+            vec![TitleSlotFileRow {
+                file_id: "movie-in".to_string(),
+                role: MergedMediaRole::Primary,
+            }]
+        );
+        assert!(plan.role_changes.is_empty());
+    }
+
+    #[test]
+    fn only_one_incoming_movie_file_can_claim_the_empty_title_slot() {
+        let plan = resolve_media_roles(
+            &map(&[]),
+            &[],
+            &[],
+            &[
+                TitleSlotFileRow {
+                    file_id: "movie-b".to_string(),
+                    role: MergedMediaRole::Primary,
+                },
+                TitleSlotFileRow {
+                    file_id: "movie-a".to_string(),
+                    role: MergedMediaRole::Primary,
+                },
+            ],
+            false,
+        );
+        assert_eq!(
+            plan.title_slot_rows,
+            vec![
+                TitleSlotFileRow {
+                    file_id: "movie-a".to_string(),
+                    role: MergedMediaRole::Primary,
+                },
+                TitleSlotFileRow {
+                    file_id: "movie-b".to_string(),
+                    role: MergedMediaRole::Additional,
+                },
+            ]
+        );
+        assert_eq!(
+            plan.role_changes[0].reason,
+            RoleChangeReason::SourcePrimaryAlreadyClaimed
+        );
+    }
+
+    #[test]
     fn a_row_outside_the_map_is_reported_rather_than_silently_dropped() {
         let plan = resolve_media_roles(
             &map(&[("s-e1", "d-e1")]),
             &[row("file-in", "s-e9", MergedMediaRole::Primary)],
             &[],
+            &[],
+            false,
         );
         assert!(plan.rows.is_empty());
         assert_eq!(plan.unmapped_rows.len(), 1);

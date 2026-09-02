@@ -1,11 +1,11 @@
 //! Group 0 of the merge: the source→destination identity map, and the FR-066
-//! block decision (US7, T085).
+//! block decision (US7).
 //!
-//! D8 says the full map is built *before* anything is written, so a title that
-//! cannot be mapped costs no rollback. Everything in this module is therefore
-//! pure: the caller assembles both sides' catalog shapes (the Group 0 read set
-//! in `merge-inventory.md` §8) and the evaluation here is a function over those
-//! facts, testable from literals exactly like [`crate::location::identity`].
+//! The full map is built *before* anything is written, so a title that cannot
+//! be mapped costs no rollback. Everything in this module is therefore pure:
+//! the caller assembles both sides' catalog shapes and the evaluation here is a
+//! function over those facts, testable from literals exactly like
+//! [`crate::location::identity`].
 //!
 //! # What "identity" means here
 //!
@@ -22,14 +22,25 @@
 //! blocks rather than guesses — so a type disagreement between the two sides
 //! surfaces as an unmapped episode rather than as a silent mis-attachment.
 //!
-//! # Three ways an episode blocks
+//! # Only load-bearing slots block (FR-066)
 //!
-//! - **Unmapped** — no destination episode carries the identity.
-//! - **Ambiguous destination** — more than one destination episode does. Never
-//!   resolved by picking one (FR-066).
-//! - **Ambiguous source** — two *source* episodes carry the same identity, so
-//!   the map would collapse them. That is corrupt source data, and collapsing
-//!   would silently merge two slots' history, so it blocks too.
+//! A merge carries exactly two things across: the source's media file records
+//! and its history. So an unmappable slot only matters when something the merge
+//! is actually carrying sits on it. The caller supplies the *load-bearing* id
+//! sets — the source episodes a `file_episode_map` row or a history event names,
+//! the source collections a history payload names, the source series-movie links
+//! a source file is attached to — and an unmappable slot outside those sets is
+//! simply not mapped. Everything else on the source title is dropped with it by
+//! the ordinary title-delete path, so nothing is left attached to a guess.
+//!
+//! # Three ways a load-bearing slot blocks
+//!
+//! - **Unmapped** — no destination counterpart carries the identity.
+//! - **Ambiguous destination** — more than one does. Never resolved by picking
+//!   one (FR-066).
+//! - **Ambiguous source** — two *source* slots carry the same identity, so the
+//!   map would collapse them. That is corrupt source data, and collapsing would
+//!   silently merge two slots' history, so it blocks too.
 //!
 //! An episode with no usable identity at all (no parseable season/episode pair
 //! and no absolute number) is [`MergeBlockReason::UnidentifiableEpisode`].
@@ -39,50 +50,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 
 use scryer_domain::{CollectionType, EpisodeType};
-
-/// The record types whose unmapped source rows stop the operation
-/// (`merge-inventory.md` §7, FR-066).
-///
-/// Four of the inventory's fourteen entries are absent here and the reason is
-/// recorded at [`FR066_BLOCKING_TABLE_OMISSIONS`]: they name tables that the
-/// live schema no longer has, or dispositions that the OQ adjudications turned
-/// into deletes.
-pub const FR066_BLOCKING_TABLES: &[&str] = &[
-    "episodes",
-    "file_episode_map",
-    "episode_external_ids",
-    "wanted_items",
-    "download_submissions",
-    "download_submission_episode_links",
-    "download_import_artifacts",
-    "subtitle_downloads",
-    "domain_events",
-    "media_server_playback_items",
-    "workflow_operations",
-];
-
-/// Why the four remaining `merge-inventory.md` §7 entries are not in
-/// [`FR066_BLOCKING_TABLES`]. Kept as data so the FR-071 preview can state it
-/// rather than leaving a reader to infer it from an absence.
-pub const FR066_BLOCKING_TABLE_OMISSIONS: &[(&str, &str)] = &[
-    (
-        "releases",
-        "dropped from the live schema by migration 0122; OQ1's `drop` has nothing to act on",
-    ),
-    (
-        "policy_decisions",
-        "dropped from the live schema by migration 0011; OQ2's `drop` has nothing to act on",
-    ),
-    (
-        "pending_releases",
-        "OQ5 deletes the source title's delay-queue rows instead of mapping them, so no record is \
-         attached to a guessed identity",
-    ),
-    (
-        "release_decisions",
-        "OQ5 deletes the source title's decision rows instead of mapping them",
-    ),
-];
 
 /// Facts about one episode, from either side of the merge.
 ///
@@ -195,9 +162,10 @@ struct CollectionIdentityKey {
     index: String,
 }
 
-/// Facts about one series-movie link. D8 makes links first-class map entries;
-/// the shared `movie_entities` row is the identity, because that entity is not
-/// title-owned and survives the merge untouched (`merge-inventory.md` §1).
+/// Facts about one series-movie link. Links are first-class map entries because
+/// a source media file can be attached to one; the shared `movie_entities` row
+/// is the identity, because that entity is not title-owned and survives the
+/// merge untouched.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SeriesMovieLinkIdentityFacts {
     pub id: String,
@@ -208,8 +176,8 @@ pub struct SeriesMovieLinkIdentityFacts {
     pub legacy_collection_id: Option<String>,
 }
 
-/// Everything Group 0 reads, from both sides, plus the episode-scoped record
-/// references FR-066 is evaluated against.
+/// Everything Group 0 reads, from both sides, plus the load-bearing id sets
+/// FR-066 is evaluated against.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MergeIdentityInputs {
     pub source_title_id: String,
@@ -220,17 +188,22 @@ pub struct MergeIdentityInputs {
     pub destination_collections: Vec<CollectionIdentityFacts>,
     pub source_links: Vec<SeriesMovieLinkIdentityFacts>,
     pub destination_links: Vec<SeriesMovieLinkIdentityFacts>,
-    /// Table name → the source episode ids that table's source rows reference.
-    /// Only tables in [`FR066_BLOCKING_TABLES`] are evaluated; anything else is
-    /// reported as an ignored key rather than silently dropped.
-    pub episode_references: BTreeMap<String, BTreeSet<String>>,
+    /// Source episodes a media file record or a history row names. Only these
+    /// block when they cannot be mapped.
+    pub load_bearing_episode_ids: BTreeSet<String>,
+    /// Source collections a history payload names.
+    pub load_bearing_collection_ids: BTreeSet<String>,
+    /// Source series-movie links a source media file is attached to.
+    pub load_bearing_series_movie_link_ids: BTreeSet<String>,
     /// Ids of location operations that are resumable (not terminal) and hold
-    /// the source title. Any entry hard-blocks the merge — OQ7(a).
+    /// the source title. Any entry hard-blocks the merge.
     pub resumable_operations_holding_source: Vec<String>,
     /// Ids of unconsumed `manual_import_selections` rows on the source title.
-    /// `merge-inventory.md` §3 makes these a block, with `map` as the fallback
-    /// only if FR-086's active-work gate is ever relaxed.
     pub unconsumed_manual_import_selections: Vec<String>,
+    /// Queued or in-flight download submissions on the source title. A merge
+    /// retires the source through the ordinary delete path, which drops those
+    /// rows, so the merge refuses while any of them is live (FR-086).
+    pub active_acquisition_work: Vec<String>,
 }
 
 /// Why one record blocks the merge.
@@ -247,18 +220,18 @@ pub enum MergeBlockReason {
     /// The source episode has neither a parseable season/episode pair nor an
     /// absolute number, so it has no identity to match on.
     UnidentifiableEpisode,
-    /// A record references a source episode id that is not in the catalog.
-    UnknownEpisodeReference,
     UnmappedCollection,
     AmbiguousDestinationCollection,
     AmbiguousSourceCollection,
     UnmappedSeriesMovieLink,
     AmbiguousDestinationSeriesMovieLink,
     AmbiguousSourceSeriesMovieLink,
-    /// OQ7(a): a resumable location operation still holds the source title.
+    /// A resumable location operation still holds the source title.
     ResumableOperationHoldsSource,
     /// An unconsumed manual-import selection is an active import.
     ActiveManualImportSelection,
+    /// A queued or in-flight download on the source title.
+    ActiveAcquisitionWork,
 }
 
 impl MergeBlockReason {
@@ -268,7 +241,6 @@ impl MergeBlockReason {
             Self::AmbiguousDestinationEpisode => "ambiguous_destination_episode",
             Self::AmbiguousSourceEpisode => "ambiguous_source_episode",
             Self::UnidentifiableEpisode => "unidentifiable_episode",
-            Self::UnknownEpisodeReference => "unknown_episode_reference",
             Self::UnmappedCollection => "unmapped_collection",
             Self::AmbiguousDestinationCollection => "ambiguous_destination_collection",
             Self::AmbiguousSourceCollection => "ambiguous_source_collection",
@@ -277,13 +249,14 @@ impl MergeBlockReason {
             Self::AmbiguousSourceSeriesMovieLink => "ambiguous_source_series_movie_link",
             Self::ResumableOperationHoldsSource => "resumable_operation_holds_source",
             Self::ActiveManualImportSelection => "active_manual_import_selection",
+            Self::ActiveAcquisitionWork => "active_acquisition_work",
         }
     }
 }
 
 /// One blocked record. FR-066 requires the checkpoint's `blocked_reason` to
-/// name the table and the unmapped episode, so both are carried, never folded
-/// into prose.
+/// name the table and the unmapped slot, so both are carried, never folded into
+/// prose.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct MergeBlockedRecord {
     /// The table whose source row cannot be carried. `episodes` for the map
@@ -320,11 +293,6 @@ pub struct MergeIdentityMap {
     /// Source link ids whose `legacy_collection_id` must be nulled before the
     /// repoint, because the destination link already holds that `UNIQUE` value.
     pub legacy_collection_ids_to_clear: Vec<String>,
-    /// Table names present in [`MergeIdentityInputs::episode_references`] that
-    /// are not in [`FR066_BLOCKING_TABLES`]. Reported rather than dropped so a
-    /// caller that adds a table without adding it to the blocking set finds
-    /// out.
-    pub unevaluated_reference_tables: Vec<String>,
 }
 
 impl MergeIdentityMap {
@@ -375,10 +343,10 @@ impl MergeIdentityOutcome {
 pub fn evaluate_identity_map(inputs: &MergeIdentityInputs) -> MergeIdentityOutcome {
     let mut blocked: Vec<MergeBlockedRecord> = Vec::new();
 
-    // OQ7(a): a resumable operation holding the source title is a hard block,
-    // in the shape of FR-086's active-work gate. Rewriting its confirmed
-    // `plan_json` would falsify what the user confirmed and invalidate
-    // `plan_fingerprint` (FR-081/FR-089), so the merge refuses instead.
+    // A resumable operation holding the source title is a hard block, in the
+    // shape of FR-086's active-work gate. Rewriting its confirmed `plan_json`
+    // would falsify what the user confirmed and invalidate `plan_fingerprint`
+    // (FR-081/FR-089), so the merge refuses instead.
     for operation_id in &inputs.resumable_operations_holding_source {
         blocked.push(MergeBlockedRecord {
             table: "location_operations".to_string(),
@@ -386,7 +354,7 @@ pub fn evaluate_identity_map(inputs: &MergeIdentityInputs) -> MergeIdentityOutco
             source_id: operation_id.clone(),
             detail: format!(
                 "location operation {operation_id} is resumable and still holds source title {}; \
-                 finish, cancel, or fail it before merging (OQ7)",
+                 finish, cancel, or fail it before merging",
                 inputs.source_title_id
             ),
         });
@@ -402,64 +370,32 @@ pub fn evaluate_identity_map(inputs: &MergeIdentityInputs) -> MergeIdentityOutco
         });
     }
 
+    // FR-086 for the merge specifically: a plain move leaves the source title's
+    // acquisition rows where they are, but a merge retires the source through
+    // the delete path, which drops them. Refusing is what keeps a live grab from
+    // being cancelled out from under the user.
+    for submission_id in &inputs.active_acquisition_work {
+        blocked.push(MergeBlockedRecord {
+            table: "download_submissions".to_string(),
+            reason: MergeBlockReason::ActiveAcquisitionWork,
+            source_id: submission_id.clone(),
+            detail: format!(
+                "download {submission_id} is queued or in flight on source title {}; the merge \
+                 retires the source title and would drop it",
+                inputs.source_title_id
+            ),
+        });
+    }
+
     let episodes = map_episodes(inputs, &mut blocked);
     let collections = map_collections(inputs, &mut blocked);
     let (series_movie_links, legacy_collection_ids_to_clear) = map_links(inputs, &mut blocked);
-
-    // FR-066 proper: every episode-scoped record type, evaluated against the
-    // map that was just built. A reference to an episode id the source catalog
-    // does not even contain is its own reason, so a dangling row is never
-    // mistaken for a mapping failure.
-    let mut unevaluated_reference_tables = Vec::new();
-    for (table, episode_ids) in &inputs.episode_references {
-        if !FR066_BLOCKING_TABLES.contains(&table.as_str()) {
-            unevaluated_reference_tables.push(table.clone());
-            continue;
-        }
-        let known: BTreeSet<&str> = inputs
-            .source_episodes
-            .iter()
-            .map(|episode| episode.id.as_str())
-            .collect();
-        for episode_id in episode_ids {
-            if episodes.contains_key(episode_id) {
-                continue;
-            }
-            let (reason, detail) = if known.contains(episode_id.as_str()) {
-                (
-                    MergeBlockReason::UnmappedEpisode,
-                    format!(
-                        "source episode {episode_id} has no destination counterpart, so {table} \
-                         rows referencing it cannot be carried"
-                    ),
-                )
-            } else {
-                (
-                    MergeBlockReason::UnknownEpisodeReference,
-                    format!(
-                        "{table} references episode {episode_id}, which is not an episode of \
-                         source title {}",
-                        inputs.source_title_id
-                    ),
-                )
-            };
-            blocked.push(MergeBlockedRecord {
-                table: table.clone(),
-                reason,
-                source_id: episode_id.clone(),
-                detail,
-            });
-        }
-    }
 
     if !blocked.is_empty() {
         blocked.sort();
         blocked.dedup();
         return MergeIdentityOutcome::Blocked(blocked);
     }
-
-    unevaluated_reference_tables.sort();
-    unevaluated_reference_tables.dedup();
 
     MergeIdentityOutcome::Mapped(Box::new(MergeIdentityMap {
         source_title_id: inputs.source_title_id.clone(),
@@ -468,7 +404,6 @@ pub fn evaluate_identity_map(inputs: &MergeIdentityInputs) -> MergeIdentityOutco
         collections,
         series_movie_links,
         legacy_collection_ids_to_clear,
-        unevaluated_reference_tables,
     }))
 }
 
@@ -500,9 +435,17 @@ fn map_episodes(
 
     let mut mapped = BTreeMap::new();
     for episode in &inputs.source_episodes {
+        // Only a slot the merge is actually carrying something onto can block.
+        let carries_records = inputs.load_bearing_episode_ids.contains(&episode.id);
+        let mut block = |record: MergeBlockedRecord| {
+            if carries_records {
+                blocked.push(record);
+            }
+        };
+
         let keys = episode.keys();
         if keys.is_empty() {
-            blocked.push(MergeBlockedRecord {
+            block(MergeBlockedRecord {
                 table: "episodes".to_string(),
                 reason: MergeBlockReason::UnidentifiableEpisode,
                 source_id: episode.id.clone(),
@@ -520,7 +463,7 @@ fn map_episodes(
             .get(&primary_key)
             .is_some_and(|ids| ids.len() > 1)
         {
-            blocked.push(MergeBlockedRecord {
+            block(MergeBlockedRecord {
                 table: "episodes".to_string(),
                 reason: MergeBlockReason::AmbiguousSourceEpisode,
                 source_id: episode.id.clone(),
@@ -553,7 +496,7 @@ fn map_episodes(
             (Some(destination_id), _) => {
                 mapped.insert(episode.id.clone(), destination_id.to_string());
             }
-            (None, Some(key)) => blocked.push(MergeBlockedRecord {
+            (None, Some(key)) => block(MergeBlockedRecord {
                 table: "episodes".to_string(),
                 reason: MergeBlockReason::AmbiguousDestinationEpisode,
                 source_id: episode.id.clone(),
@@ -562,7 +505,7 @@ fn map_episodes(
                     key.describe()
                 ),
             }),
-            (None, None) => blocked.push(MergeBlockedRecord {
+            (None, None) => block(MergeBlockedRecord {
                 table: "episodes".to_string(),
                 reason: MergeBlockReason::UnmappedEpisode,
                 source_id: episode.id.clone(),
@@ -598,16 +541,23 @@ fn map_collections(
 
     let mut mapped = BTreeMap::new();
     for collection in &inputs.source_collections {
+        let carries_records = inputs
+            .load_bearing_collection_ids
+            .contains(&collection.id);
+        let mut block = |record: MergeBlockedRecord| {
+            if carries_records {
+                blocked.push(record);
+            }
+        };
         let key = collection.key();
         if source_index.get(&key).copied().unwrap_or(0) > 1 {
-            blocked.push(MergeBlockedRecord {
+            block(MergeBlockedRecord {
                 table: "collections".to_string(),
                 reason: MergeBlockReason::AmbiguousSourceCollection,
                 source_id: collection.id.clone(),
                 detail: format!(
                     "source title has more than one {} collection at index {}",
-                    key.collection_type,
-                    key.index
+                    key.collection_type, key.index
                 ),
             });
             continue;
@@ -616,7 +566,7 @@ fn map_collections(
             Some([only]) => {
                 mapped.insert(collection.id.clone(), only.to_string());
             }
-            Some(many) if many.len() > 1 => blocked.push(MergeBlockedRecord {
+            Some(many) if many.len() > 1 => block(MergeBlockedRecord {
                 table: "collections".to_string(),
                 reason: MergeBlockReason::AmbiguousDestinationCollection,
                 source_id: collection.id.clone(),
@@ -627,14 +577,13 @@ fn map_collections(
                     key.index
                 ),
             }),
-            _ => blocked.push(MergeBlockedRecord {
+            _ => block(MergeBlockedRecord {
                 table: "collections".to_string(),
                 reason: MergeBlockReason::UnmappedCollection,
                 source_id: collection.id.clone(),
                 detail: format!(
                     "no destination collection carries {} index {}",
-                    key.collection_type,
-                    key.index
+                    key.collection_type, key.index
                 ),
             }),
         }
@@ -664,9 +613,17 @@ fn map_links(
     let mut mapped = BTreeMap::new();
     let mut legacy_to_clear = Vec::new();
     for link in &inputs.source_links {
+        let carries_records = inputs
+            .load_bearing_series_movie_link_ids
+            .contains(&link.id);
+        let mut block = |record: MergeBlockedRecord| {
+            if carries_records {
+                blocked.push(record);
+            }
+        };
         let entity = link.movie_entity_id.as_str();
         if source_counts.get(entity).copied().unwrap_or(0) > 1 {
-            blocked.push(MergeBlockedRecord {
+            block(MergeBlockedRecord {
                 table: "series_movie_links".to_string(),
                 reason: MergeBlockReason::AmbiguousSourceSeriesMovieLink,
                 source_id: link.id.clone(),
@@ -689,7 +646,7 @@ fn map_links(
                     legacy_to_clear.push(link.id.clone());
                 }
             }
-            Some(many) if many.len() > 1 => blocked.push(MergeBlockedRecord {
+            Some(many) if many.len() > 1 => block(MergeBlockedRecord {
                 table: "series_movie_links".to_string(),
                 reason: MergeBlockReason::AmbiguousDestinationSeriesMovieLink,
                 source_id: link.id.clone(),
@@ -698,7 +655,7 @@ fn map_links(
                     many.len()
                 ),
             }),
-            _ => blocked.push(MergeBlockedRecord {
+            _ => block(MergeBlockedRecord {
                 table: "series_movie_links".to_string(),
                 reason: MergeBlockReason::UnmappedSeriesMovieLink,
                 source_id: link.id.clone(),
@@ -734,15 +691,22 @@ mod tests {
         }
     }
 
+    /// Every source episode carries a record, which is the shape most of these
+    /// cases are about: the load-bearing filter is exercised on its own below.
     fn inputs(
         source_episodes: Vec<EpisodeIdentityFacts>,
         destination_episodes: Vec<EpisodeIdentityFacts>,
     ) -> MergeIdentityInputs {
+        let load_bearing_episode_ids = source_episodes
+            .iter()
+            .map(|episode| episode.id.clone())
+            .collect();
         MergeIdentityInputs {
             source_title_id: "source".to_string(),
             destination_title_id: "destination".to_string(),
             source_episodes,
             destination_episodes,
+            load_bearing_episode_ids,
             ..MergeIdentityInputs::default()
         }
     }
@@ -774,18 +738,20 @@ mod tests {
     fn absolute_numbering_resolves_when_the_season_pair_finds_nothing() {
         let mut source = episode("s1", "1", "13");
         source.absolute_number = Some("13".to_string());
-        let mut destination = EpisodeIdentityFacts {
+        let destination = EpisodeIdentityFacts {
             id: "d1".to_string(),
             episode_type: EpisodeType::Standard,
             season_number: None,
             episode_number: None,
-            absolute_number: Some("013".to_string()),
+            absolute_number: Some("13".to_string()),
             collection_id: None,
         };
-        destination.absolute_number = Some("13".to_string());
         let outcome = evaluate_identity_map(&inputs(vec![source], vec![destination]));
         assert_eq!(
-            outcome.mapped().expect("absolute fallback maps").episode("s1"),
+            outcome
+                .mapped()
+                .expect("absolute fallback maps")
+                .episode("s1"),
             Some("d1")
         );
     }
@@ -836,70 +802,33 @@ mod tests {
     }
 
     #[test]
-    fn every_blocking_table_reports_its_own_unmapped_episode() {
+    fn an_unmappable_episode_carrying_nothing_does_not_block() {
+        // The source has an episode the destination does not, and nothing the
+        // merge carries sits on it: it retires with the source title.
         let mut input = inputs(
             vec![episode("s1", "1", "1"), episode("s2", "1", "2")],
             vec![episode("d1", "1", "1")],
         );
-        for table in ["wanted_items", "subtitle_downloads", "domain_events"] {
-            input.episode_references.insert(
-                table.to_string(),
-                BTreeSet::from(["s1".to_string(), "s2".to_string()]),
-            );
-        }
+        input.load_bearing_episode_ids = BTreeSet::from(["s1".to_string()]);
+        let outcome = evaluate_identity_map(&input);
+        let map = outcome.mapped().expect("the empty slot does not block");
+        assert_eq!(map.episode("s1"), Some("d1"));
+        assert_eq!(map.episode("s2"), None);
+    }
+
+    #[test]
+    fn an_unmappable_episode_carrying_a_file_blocks() {
+        let mut input = inputs(
+            vec![episode("s1", "1", "1"), episode("s2", "1", "2")],
+            vec![episode("d1", "1", "1")],
+        );
+        input.load_bearing_episode_ids = BTreeSet::from(["s2".to_string()]);
         let blocked = evaluate_identity_map(&input);
-        let tables: Vec<_> = blocked
-            .blocked()
-            .iter()
-            .map(|record| record.table.as_str())
-            .collect();
-        // `s1` maps, so only `s2` blocks — once for the map itself and once per
-        // referencing table.
+        assert_eq!(blocked.blocked().len(), 1);
+        assert_eq!(blocked.blocked()[0].source_id, "s2");
         assert_eq!(
-            tables,
-            vec![
-                "domain_events",
-                "episodes",
-                "subtitle_downloads",
-                "wanted_items"
-            ]
-        );
-        assert!(
-            blocked
-                .blocked()
-                .iter()
-                .all(|record| record.source_id == "s2")
-        );
-    }
-
-    #[test]
-    fn a_reference_to_a_foreign_episode_is_its_own_reason() {
-        let mut input = inputs(vec![episode("s1", "1", "1")], vec![episode("d1", "1", "1")]);
-        input.episode_references.insert(
-            "wanted_items".to_string(),
-            BTreeSet::from(["not-ours".to_string()]),
-        );
-        assert_eq!(
-            evaluate_identity_map(&input).blocked()[0].reason,
-            MergeBlockReason::UnknownEpisodeReference
-        );
-    }
-
-    #[test]
-    fn a_table_outside_the_blocking_set_is_reported_not_evaluated() {
-        let mut input = inputs(vec![episode("s1", "1", "1")], vec![episode("d1", "1", "1")]);
-        input.episode_references.insert(
-            "scope_indexer_coverage".to_string(),
-            BTreeSet::from(["ghost".to_string()]),
-        );
-        let map = input;
-        let outcome = evaluate_identity_map(&map);
-        assert_eq!(
-            outcome
-                .mapped()
-                .expect("a non-blocking table never blocks")
-                .unevaluated_reference_tables,
-            vec!["scope_indexer_coverage".to_string()]
+            blocked.blocked()[0].reason,
+            MergeBlockReason::UnmappedEpisode
         );
     }
 
@@ -926,13 +855,15 @@ mod tests {
     }
 
     #[test]
-    fn an_unmatched_collection_blocks() {
+    fn an_unmatched_collection_blocks_only_when_history_names_it() {
         let mut input = inputs(vec![], vec![]);
         input.source_collections = vec![CollectionIdentityFacts {
             id: "sc1".to_string(),
             collection_type: CollectionType::Season,
             collection_index: "2".to_string(),
         }];
+        assert!(evaluate_identity_map(&input).mapped().is_some());
+        input.load_bearing_collection_ids = BTreeSet::from(["sc1".to_string()]);
         assert_eq!(
             evaluate_identity_map(&input).blocked()[0].reason,
             MergeBlockReason::UnmappedCollection
@@ -959,7 +890,23 @@ mod tests {
     }
 
     #[test]
-    fn a_resumable_operation_holding_the_source_hard_blocks_oq7() {
+    fn an_unmatched_link_blocks_only_when_a_source_file_is_attached() {
+        let mut input = inputs(vec![], vec![]);
+        input.source_links = vec![SeriesMovieLinkIdentityFacts {
+            id: "sl1".to_string(),
+            movie_entity_id: "movie-1".to_string(),
+            legacy_collection_id: None,
+        }];
+        assert!(evaluate_identity_map(&input).mapped().is_some());
+        input.load_bearing_series_movie_link_ids = BTreeSet::from(["sl1".to_string()]);
+        assert_eq!(
+            evaluate_identity_map(&input).blocked()[0].reason,
+            MergeBlockReason::UnmappedSeriesMovieLink
+        );
+    }
+
+    #[test]
+    fn a_resumable_operation_holding_the_source_hard_blocks() {
         let mut input = inputs(vec![episode("s1", "1", "1")], vec![episode("d1", "1", "1")]);
         input.resumable_operations_holding_source = vec!["op-9".to_string()];
         let blocked = evaluate_identity_map(&input);
@@ -981,17 +928,29 @@ mod tests {
     }
 
     #[test]
+    fn a_queued_download_on_the_source_blocks_the_merge() {
+        let mut input = inputs(vec![episode("s1", "1", "1")], vec![episode("d1", "1", "1")]);
+        input.active_acquisition_work = vec!["submission-1".to_string()];
+        let outcome = evaluate_identity_map(&input);
+        assert_eq!(
+            outcome.blocked()[0].reason,
+            MergeBlockReason::ActiveAcquisitionWork
+        );
+        assert_eq!(outcome.blocked()[0].table, "download_submissions");
+    }
+
+    #[test]
     fn a_blocked_record_names_its_table_and_episode_for_the_checkpoint() {
         let record = MergeBlockedRecord {
-            table: "wanted_items".to_string(),
+            table: "file_episode_map".to_string(),
             reason: MergeBlockReason::UnmappedEpisode,
             source_id: "episode-7".to_string(),
             detail: "no destination episode carries standard S02E03".to_string(),
         };
         assert_eq!(
             record.summary_line(),
-            "wanted_items (unmapped_episode): episode-7 — no destination episode carries standard \
-             S02E03"
+            "file_episode_map (unmapped_episode): episode-7 — no destination episode carries \
+             standard S02E03"
         );
     }
 }

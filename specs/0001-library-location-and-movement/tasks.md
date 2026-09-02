@@ -251,12 +251,12 @@ offers **Move with Scryer only** — `FILES_ALREADY_THERE` is refused by name
 - [x] T080 Identity detection: canonical metadata identities + redirects; unique →
       merge preview; none → transfer; ambiguous → resolution-required;
       same-name-no-identity → never auto-merge. (FR-055)
-- [x] T081 **Inventory deliverable**: enumerate every table/record type bearing
-      title ids or episode ids (history, requests, import records, acquisition
-      history, blocklists, tracked downloads, grab-planner data, events, …) with a
-      per-table merge disposition (union / map / destination-wins / drop) checked
-      into `specs/0001-library-location-and-movement/` as an appendix. (D8, FR-064,
-      FR-066)
+- [x] T081 **Merge rule deliverable**: state, in
+      `specs/0001-library-location-and-movement/merge-inventory.md`, the rule the
+      engine implements — the destination wins everything except the merging
+      title's media file records and its history, and everything else retires
+      with it through the ordinary title-delete path. Superseded the per-table
+      disposition appendix. (D8, FR-064, FR-066)
 - [x] T082 Transfer-without-match: settings/tags carryover, destination inheritance,
       root + folder naming assignment, source removal after verify. (FR-056)
 - [x] T083 Facet conversion series↔anime: automatic facet change, invalid/reset/

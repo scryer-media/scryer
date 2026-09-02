@@ -34,7 +34,7 @@
 //!
 //! # Failure is never the operation's problem
 //!
-//! Same discipline as the Activity progress observer and the Group 6 post-merge
+//! Same discipline as the Activity progress observer and the post-merge
 //! scheduler: this runs *after* the operation has settled, its failures are
 //! logged and dropped, and nothing it does can change an operation's outcome.
 //! The worst case for a lost notification is a media server that re-reads the

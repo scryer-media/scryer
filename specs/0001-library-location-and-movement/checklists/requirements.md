@@ -445,8 +445,8 @@ media-server refresh, PostgreSQL migration run pending, resume attribution
 - Run this checklist after any material spec edit; record failures as spec issues,
   not implementation issues.
 - Traceability: FR ↔ story scenarios ↔ SC ↔ tasks (tasks.md references FRs per
-  task; T081 produces the merge-inventory appendix this spec depends on for
-  FR-064/FR-066 completeness — landed as `merge-inventory.md`, commit `9136c7992`).
+  task; T081's `merge-inventory.md` now states the merge rule FR-064/FR-066/FR-067
+  encode rather than a per-table disposition appendix).
 - Re-run 2026-09-01 raised six spec-edit candidates: FR-015 six-class list
   (CHK013), FR-083 plural source libraries (CHK040), FR-069 US7 scenario
   (CHK025), US5 execution modes (CHK003), FR-047 trigger (CHK006), and the four

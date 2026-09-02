@@ -3871,12 +3871,10 @@ const en: LocaleDictionary = {
   "move.mergeNoDetails": "This merge carries nothing else over.",
   "move.mergeBlockedHeading":
     "This merge cannot run: these records cannot be carried over.",
-  "move.mergeDispositionsHeading": "Data carried over",
-  "move.mergeRowCount": "{{count}} row(s)",
-  "move.mergeDisposition.UNION": "Kept alongside the destination's own",
-  "move.mergeDisposition.MAP": "Re-pointed to the destination",
-  "move.mergeDisposition.DESTINATION_WINS": "Destination's value kept",
-  "move.mergeDisposition.DROP": "Not carried over",
+  "move.mergeCarried":
+    "The surviving title takes over {{files}} media file record(s) and {{history}} history row(s).",
+  "move.mergeDropped":
+    "{{count}} other record(s) on this title (tags, requests, acquisition state) retire with it.",
   "move.mergeRoleChangesHeading":
     "Media file roles ({{demotions}} file(s) lose primary)",
   "move.mergeRoleChangesHeadingPlain": "Media file roles",
@@ -3891,16 +3889,6 @@ const en: LocaleDictionary = {
     "Another moving file already claimed primary for that destination episode.",
   "move.mergeRoleReason.COLLAPSED_SOURCE_EPISODES":
     "Two source episodes collapsed onto one destination episode.",
-  "move.mergeTagConflictsHeading": "Settings that disagreed",
-  "move.mergeTagConflictLine":
-    "{{setting}}: keeps “{{destination}}”, drops “{{source}}”.",
-  "move.mergeValueNone": "nothing",
-  "move.mergeDestinationWinsHeading": "Settings the destination keeps",
-  "move.mergeDroppedHeading": "Not carried over",
-  "move.mergeFreeFormTags": "Tags added to the destination title: {{tags}}.",
-  "move.mergeRequestRepoint":
-    "{{count}} media request(s) follow this title into the destination library.",
-  "move.mergeNotesHeading": "Notes",
   "move.operationTransferNote": "These titles are moving into another library.",
   "move.modeHeading": "How should the files get there?",
   "move.mode.MOVE_WITH_SCRYER": "Move with Scryer",
@@ -4047,8 +4035,6 @@ const en: LocaleDictionary = {
   "rootChange.destinationExistingRootHelp": "This root is folded into the one you pick, and its configuration is retired.",
   "rootChange.destinationNoOtherRoots": "This library has no other root to fold into.",
   "rootChange.destinationPathPlaceholder": "/mnt/new-disk/movies",
-  "rootChange.crossRouteToConsolidation": "That path is already a root of this library, so this is a consolidation. The destination was switched for you.",
-  "rootChange.crossRouteToNewPath": "That root is not configured in this library, so this is a root change. The destination was switched for you.",
   "rootChange.planChanged": "The plan changed since you previewed it. Preview again before confirming.",
   "rootChange.previewFailed": "Failed to preview this root change.",
   "rootChange.previewing": "Reading the whole root.",
@@ -4119,12 +4105,11 @@ const en: LocaleDictionary = {
   "rootChange.refusal.root_change_source_root_unavailable": "This root is not readable right now, so its contents cannot be planned.",
   "rootChange.refusal.root_change_destination_not_empty": "The new path already holds content. Choose an empty or a new directory.",
   "rootChange.refusal.root_change_destination_parent_missing": "The new path's parent directory does not exist.",
-  "rootChange.refusal.root_change_destination_is_configured_root": "That path is already a root of this library.",
+  "rootChange.refusal.root_change_destination_is_configured_root": "That path is already configured as a root of another library.",
   "rootChange.refusal.root_change_mode_not_supported": "A root change always moves the files; \"files are already there\" is not offered here.",
   "rootChange.refusal.root_consolidation_path_not_absolute": "Give an absolute path.",
   "rootChange.refusal.root_consolidation_same_root": "A root cannot be folded into itself.",
   "rootChange.refusal.root_consolidation_paths_overlap": "One of these roots is inside the other.",
-  "rootChange.refusal.root_consolidation_destination_not_a_configured_root": "That root is not configured in this library.",
   "rootChange.refusal.root_consolidation_source_root_is_symlink": "This root is a symlink. Point it at the real directory first.",
   "rootChange.refusal.root_consolidation_source_root_unavailable": "This root is not readable right now, so its contents cannot be planned.",
   "rootChange.refusal.root_consolidation_destination_root_unavailable": "The destination root is not readable right now, so what it already holds cannot be planned against.",

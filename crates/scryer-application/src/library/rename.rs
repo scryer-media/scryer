@@ -2523,7 +2523,7 @@ fn resolve_rendered_rename_filename(
 }
 
 fn rename_planning_path_key(stored_path: &str) -> String {
-    let normalized = lexically_normalize_rename_path(&stored_path_to_path_buf(stored_path));
+    let normalized = crate::stored_paths::lexically_normalize(&stored_path_to_path_buf(stored_path));
     let key = {
         #[cfg(windows)]
         {
@@ -2541,22 +2541,6 @@ fn rename_planning_path_key(stored_path: &str) -> String {
     // spellings have to key the same or every accented title plans a rename
     // that changes nothing.
     crate::stored_paths::path_identity_key(&key).unwrap_or(key)
-}
-
-fn lexically_normalize_rename_path(path: &Path) -> PathBuf {
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            std::path::Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
-            std::path::Component::RootDir => normalized.push(component.as_os_str()),
-            std::path::Component::CurDir => {}
-            std::path::Component::ParentDir => {
-                normalized.pop();
-            }
-            std::path::Component::Normal(segment) => normalized.push(segment),
-        }
-    }
-    normalized
 }
 
 fn finalize_rename_plan_item(

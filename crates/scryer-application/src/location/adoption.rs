@@ -55,7 +55,6 @@ use crate::location::execution::RootMoveCatalog;
 use crate::location::executor::{FileMoveRequest, TitleFileMover};
 use crate::location::root_move::RootMoveExecutionPlan;
 use crate::location::verify::{VerifiedFile, hash_existing_file};
-use crate::stored_paths::stored_path_to_path_buf;
 use crate::AppResult;
 
 /// How one file at the destination is accounted for during adoption (FR-051).
@@ -193,7 +192,7 @@ impl TrackedMediaFact {
         size_bytes: u64,
     ) -> Self {
         let source_path = source_path.into();
-        let file_name = file_name_of(&source_path);
+        let file_name = crate::stored_paths::stored_file_name(&source_path);
         Self {
             media_file_id: media_file_id.into(),
             source_path,
@@ -247,7 +246,7 @@ pub struct DestinationFileFact {
 impl DestinationFileFact {
     pub fn new(path: impl Into<String>, size_bytes: u64) -> Self {
         let path = path.into();
-        let file_name = file_name_of(&path);
+        let file_name = crate::stored_paths::stored_file_name(&path);
         Self {
             path,
             relative_path: None,
@@ -278,13 +277,6 @@ impl DestinationFileFact {
         self.sampled_proof = proof;
         self
     }
-}
-
-fn file_name_of(stored_path: &str) -> String {
-    stored_path_to_path_buf(stored_path)
-        .file_name()
-        .map(|name| name.to_string_lossy().to_string())
-        .unwrap_or_else(|| stored_path.to_string())
 }
 
 // ── Accounting out ───────────────────────────────────────────────────────────

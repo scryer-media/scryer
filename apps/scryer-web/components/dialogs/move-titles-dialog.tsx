@@ -1,9 +1,7 @@
 import * as React from "react";
 import { useClient } from "urql";
-import { useNavigate } from "react-router";
 import {
   ArrowRight,
-  CircleCheck,
   HardDrive,
   Loader2,
   Merge,
@@ -33,8 +31,14 @@ import {
 } from "@/components/ui/select";
 import { useTranslate } from "@/lib/context/translate-context";
 import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
-import { startLocationOperationMutation } from "@/lib/graphql/mutations";
 import { locationOperationPreviewQuery } from "@/lib/graphql/queries";
+import {
+  LocationDialogDismissButton,
+  LocationDialogPrimaryButton,
+  LocationOperationErrorNotice,
+  LocationOperationStartedPanel,
+  useLocationOperationStart,
+} from "@/components/dialogs/location-operation-start";
 import {
   adoptionAccounting,
   adoptionBlockedReasonKey,
@@ -47,7 +51,6 @@ import {
   isAmbiguousDestinationBlock,
   isCrossLibraryDestination,
   isSameNameWarning,
-  mergeDispositionLabelKey,
   mergePreviewsBySourceTitle,
   mergeRoleChangeReasonKey,
   mergeRoleLabelKey,
@@ -58,9 +61,6 @@ import {
   orderedPlanSections,
   planKindLabelKey,
   previewCanStart,
-  recognizeStartRefusal,
-  refusalMessageKey,
-  refusalNeedsFreshPreview,
   remainingSelection,
   REQUESTABLE_MOVE_MODES,
   sameNamedDestinationTitle,
@@ -155,15 +155,30 @@ export function MoveTitlesDialog({
   const [previewLoading, setPreviewLoading] = React.useState(false);
   const [previewError, setPreviewError] = React.useState<string | null>(null);
   const [typedConfirmation, setTypedConfirmation] = React.useState("");
-  const [starting, setStarting] = React.useState(false);
-  const [startError, setStartError] = React.useState<string | null>(null);
-  const [startedOperationId, setStartedOperationId] = React.useState<
-    string | null
-  >(null);
-  const [planChanged, setPlanChanged] = React.useState(false);
   // Bumped to force a fresh preview when nothing else about the request changed
   // (a refused confirmation, or the user asking to re-preview).
   const [previewNonce, setPreviewNonce] = React.useState(0);
+
+  // The preview effect always fetches network-only; the nonce is what makes it
+  // run again when the request itself is unchanged.
+  const refreshPreview = React.useCallback(
+    () => setPreviewNonce((current) => current + 1),
+    [],
+  );
+  const {
+    starting,
+    startError,
+    planChanged,
+    startedOperationId,
+    start,
+    clearStartError,
+    resetAll: resetStartAll,
+    clearPlanChanged,
+  } = useLocationOperationStart({
+    failedMessage: t("move.startFailed"),
+    onNeedsFreshPreview: refreshPreview,
+    onStarted,
+  });
 
   const titleById = React.useMemo(
     () => new Map(titles.map((title) => [title.id, title])),
@@ -199,11 +214,9 @@ export function MoveTitlesDialog({
     setPreview(null);
     setPreviewError(null);
     setTypedConfirmation("");
-    setStartError(null);
-    setPlanChanged(false);
     setPreviewNonce(0);
-    setStartedOperationId(null);
-  }, [open, soleSourceLibraryId, initialRootId]);
+    resetStartAll();
+  }, [open, soleSourceLibraryId, initialRootId, resetStartAll]);
 
   const selection = React.useMemo(
     () =>
@@ -226,7 +239,7 @@ export function MoveTitlesDialog({
     let active = true;
     setPreviewLoading(true);
     setPreviewError(null);
-    setStartError(null);
+    clearStartError();
     client
       .query(
         locationOperationPreviewQuery,
@@ -265,7 +278,7 @@ export function MoveTitlesDialog({
           return;
         }
         setPreview(next);
-        setPlanChanged(false);
+        clearPlanChanged();
       })
       .catch((error: unknown) => {
         if (!active) {
@@ -378,70 +391,24 @@ export function MoveTitlesDialog({
     if (!preview || !rootId) {
       return;
     }
-    setStarting(true);
-    setStartError(null);
-    try {
-      const { data, error } = await client
-        .mutation(startLocationOperationMutation, {
-          input: {
-            titleIds: preview.selection,
-            destination: { libraryId: libraryId || null, rootId },
-            // Read off the preview, not off the control: a confirmation states
-            // the mode the plan in hand was built from, so a mode the user
-            // changed after previewing meets the fingerprint refusal rather
-            // than starting the other workflow.
-            mode: startModeInput(preview),
-            planFingerprint: preview.planFingerprint,
-            typedConfirmation:
-              preview.confirmation.requirement === "TYPED"
-                ? typedConfirmation
-                : null,
-          },
-        })
-        .toPromise();
-      if (error) {
-        throw error;
-      }
-      const started = data?.startLocationOperation as
-        | { operation: { id: string } }
-        | undefined;
-      if (!started?.operation?.id) {
-        throw new Error(t("move.startFailed"));
-      }
-      // The dialog stays open on success: nothing lists location operations
-      // yet, so this is where the user picks the operation up in Activity.
-      setStartedOperationId(started.operation.id);
-      onStarted?.(started.operation.id);
-    } catch (error: unknown) {
-      const message = userFacingGraphQlErrorMessage(
-        error,
-        t("move.startFailed"),
-      );
-      // A refused confirmation is nearly always "the plan moved under you", or
-      // a title that became blocked between preview and confirm. Either way the
-      // answer is a fresh plan, not a backend sentence about fingerprints.
-      const refusal = recognizeStartRefusal(error, message);
-      if (refusalNeedsFreshPreview(refusal)) {
-        setPlanChanged(true);
-        setStartError(null);
-        setPreviewNonce((current) => current + 1);
-      } else {
-        // A refusal Scryer has its own words for says them; anything else
-        // shows the server's sentence rather than a guess.
-        const key = refusalMessageKey(refusal);
-        setStartError(key ? t(key) : message);
-      }
-    } finally {
-      setStarting(false);
-    }
-  }, [client, libraryId, onStarted, preview, rootId, t, typedConfirmation]);
+    await start({
+      titleIds: preview.selection,
+      destination: { libraryId: libraryId || null, rootId },
+      // Read off the preview, not off the control: a confirmation states the
+      // mode the plan in hand was built from, so a mode the user changed after
+      // previewing meets the fingerprint refusal rather than starting the
+      // other workflow.
+      mode: startModeInput(preview),
+      planFingerprint: preview.planFingerprint,
+      typedConfirmation:
+        preview.confirmation.requirement === "TYPED" ? typedConfirmation : null,
+    });
+  }, [libraryId, preview, rootId, start, typedConfirmation]);
 
   const rePreview = React.useCallback(() => {
-    setPlanChanged(false);
-    // The preview effect always fetches network-only; the nonce is what makes
-    // it run again when the request itself is unchanged.
-    setPreviewNonce((current) => current + 1);
-  }, []);
+    clearPlanChanged();
+    refreshPreview();
+  }, [clearPlanChanged, refreshPreview]);
 
   const destinationDisabledReasonKey = React.useMemo(
     () => destinationLibraryDisabledReasonKey(sourceLibraryIds),
@@ -477,20 +444,13 @@ export function MoveTitlesDialog({
         </DialogHeader>
 
         {startedOperationId ? (
-          <div id="move-titles-started" className="space-y-3">
-            <p className="flex items-start gap-2 rounded-lg border border-[var(--scry-success-border)] bg-[var(--scry-success-bg)] px-3 py-3 text-sm text-[var(--scry-success-text)]">
-              <CircleCheck className="mt-0.5 h-4 w-4 shrink-0" />
-              <span>{t("move.startedHeading")}</span>
-            </p>
-            <p className="font-[var(--font-code)] text-xs break-all text-muted-foreground">
-              {startedOperationId}
-            </p>
-            <ViewOperationButton
-              operationId={startedOperationId}
-              label={t("move.viewInActivity")}
-              onNavigated={() => onOpenChange(false)}
-            />
-          </div>
+          <LocationOperationStartedPanel
+            idPrefix="move-titles"
+            operationId={startedOperationId}
+            heading={t("move.startedHeading")}
+            viewLabel={t("move.viewInActivity")}
+            onNavigated={() => onOpenChange(false)}
+          />
         ) : (
         <div className="max-h-[65vh] space-y-4 overflow-y-auto pr-1">
           <div className="grid gap-3 sm:grid-cols-2">
@@ -641,14 +601,10 @@ export function MoveTitlesDialog({
             </p>
           ) : null}
 
-          {previewError ? (
-            <p
-              id="move-titles-preview-error"
-              className="rounded-lg border border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] px-3 py-3 text-sm text-[var(--scry-danger-text)]"
-            >
-              {previewError}
-            </p>
-          ) : null}
+          <LocationOperationErrorNotice
+            id="move-titles-preview-error"
+            message={previewError}
+          />
 
           {planChanged ? (
             <div
@@ -940,74 +896,32 @@ export function MoveTitlesDialog({
             </>
           ) : null}
 
-          {startError ? (
-            <p
-              id="move-titles-start-error"
-              className="rounded-lg border border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] px-3 py-3 text-sm text-[var(--scry-danger-text)]"
-            >
-              {startError}
-            </p>
-          ) : null}
+          <LocationOperationErrorNotice
+            id="move-titles-start-error"
+            message={startError}
+          />
         </div>
         )}
 
         <DialogFooter>
-          <Button
-            type="button"
-            variant="outline"
+          <LocationDialogDismissButton
             id="move-titles-dismiss"
-            onClick={() => onOpenChange(false)}
+            label={startedOperationId ? t("label.close") : t("label.cancel")}
             disabled={starting}
-          >
-            {startedOperationId ? t("label.close") : t("label.cancel")}
-          </Button>
+            onDismiss={() => onOpenChange(false)}
+          />
           {startedOperationId ? null : (
-            <Button
-              type="button"
-              variant="primary"
+            <LocationDialogPrimaryButton
               id="move-titles-confirm"
-              onClick={() => void handleStart()}
+              label={t("move.confirm")}
+              busy={starting}
               disabled={!canStart}
-            >
-              {starting ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : null}
-              {t("move.confirm")}
-            </Button>
+              onClick={() => void handleStart()}
+            />
           )}
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  );
-}
-
-/**
- * Router-dependent by design, and mounted only after a start succeeds: the
- * dialog itself must render outside a router (the title settings panels are
- * server-rendered in tests without one).
- */
-function ViewOperationButton({
-  operationId,
-  label,
-  onNavigated,
-}: {
-  operationId: string;
-  label: string;
-  onNavigated: () => void;
-}) {
-  const navigate = useNavigate();
-  return (
-    <Button
-      type="button"
-      variant="primary"
-      id="move-titles-view-operation"
-      onClick={() => {
-        onNavigated();
-        void navigate(`/activity?operation=${encodeURIComponent(operationId)}`);
-      }}
-    >
-      {label}
-    </Button>
   );
 }
 
@@ -1234,8 +1148,8 @@ function SameNameWarning({
  * This is the destructive-adjacent case in the whole workflow — the moving
  * title's identity is absorbed and the destination's settings win — so the
  * statement is always visible, and everything the engine would actually do
- * (per-table counts, every role change, the settings that disagreed, what is
- * dropped, and the backend's own notes) sits one disclosure below it.
+ * (what the surviving title takes over, every role change, and how much retires
+ * with the merging title) sits one disclosure below it.
  */
 function MergeNote({
   summary,
@@ -1291,31 +1205,12 @@ function MergeNote({
             {t("move.mergeSummaryHeading")}
           </summary>
           <div className="mt-1 space-y-1.5">
-            {summary.dispositions.length > 0 ? (
-              <div id={`move-titles-merge-dispositions-${titleId}`}>
-                <p className="text-foreground">
-                  {t("move.mergeDispositionsHeading")}
-                </p>
-                <ul className="ml-4 list-disc">
-                  {summary.dispositions.map((line) => (
-                    <li key={`${line.disposition}-${line.table}`}>
-                      <span className="font-[var(--font-code)] break-all">
-                        {line.table}
-                      </span>
-                      {" — "}
-                      {t(mergeDispositionLabelKey(line.disposition))}
-                      {" · "}
-                      {t("move.mergeRowCount", { count: line.sourceRowCount })}
-                      {line.note ? (
-                        <span className="block text-muted-foreground">
-                          {line.note}
-                        </span>
-                      ) : null}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
+            <p id={`move-titles-merge-carried-${titleId}`}>
+              {t("move.mergeCarried", {
+                files: summary.mediaFilesRepointed,
+                history: summary.historyRowsCarried,
+              })}
+            </p>
 
             {/* FR-070: every role change is named, and a demotion says so. */}
             {summary.roleChanges.length > 0 ? (
@@ -1361,101 +1256,16 @@ function MergeNote({
               </div>
             ) : null}
 
-            {/* OQ9: the setting, the value kept, and the value dropped. */}
-            {summary.tagConflicts.length > 0 ? (
-              <div id={`move-titles-merge-tag-conflicts-${titleId}`}>
-                <p className="text-foreground">
-                  {t("move.mergeTagConflictsHeading")}
-                </p>
-                <ul className="ml-4 list-disc">
-                  {summary.tagConflicts.map((conflict) => (
-                    <li
-                      key={conflict.prefix}
-                      id={`move-titles-merge-tag-conflict-${titleId}-${conflict.prefix}`}
-                    >
-                      {t("move.mergeTagConflictLine", {
-                        setting: conflict.setting,
-                        destination:
-                          conflict.destinationValue ??
-                          t("move.mergeValueNone"),
-                        source: conflict.sourceValue ?? t("move.mergeValueNone"),
-                      })}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
-
-            {summary.destinationWins.length > 0 ? (
-              <div id={`move-titles-merge-destination-wins-${titleId}`}>
-                <p className="text-foreground">
-                  {t("move.mergeDestinationWinsHeading")}
-                </p>
-                <ul className="ml-4 list-disc">
-                  {summary.destinationWins.map((entry) => (
-                    <li key={entry.setting}>
-                      {t("move.mergeTagConflictLine", {
-                        setting: entry.setting,
-                        destination:
-                          entry.destinationValue ?? t("move.mergeValueNone"),
-                        source: entry.sourceValue ?? t("move.mergeValueNone"),
-                      })}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
-
-            {summary.dropped.length > 0 ? (
-              <div id={`move-titles-merge-dropped-${titleId}`}>
-                <p className="text-foreground">
-                  {t("move.mergeDroppedHeading")}
-                </p>
-                <ul className="ml-4 list-disc">
-                  {summary.dropped.map((entry) => (
-                    <li
-                      key={entry.table}
-                      id={`move-titles-merge-dropped-${titleId}-${entry.table}`}
-                    >
-                      <span className="font-[var(--font-code)] break-all">
-                        {entry.table}
-                      </span>
-                      {" — "}
-                      {t("move.mergeRowCount", { count: entry.sourceRowCount })}
-                      <span className="block text-muted-foreground">
-                        {entry.reason}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
-
-            {summary.freeFormTagsAdded.length > 0 ? (
-              <p id={`move-titles-merge-free-form-tags-${titleId}`}>
-                {t("move.mergeFreeFormTags", {
-                  tags: summary.freeFormTagsAdded.join(", "),
+            {/* FR-064: everything else on the merging title goes with it. */}
+            {summary.sourceRecordsDropped > 0 ? (
+              <p
+                id={`move-titles-merge-dropped-${titleId}`}
+                className="text-[var(--scry-warning-text)]"
+              >
+                {t("move.mergeDropped", {
+                  count: summary.sourceRecordsDropped,
                 })}
               </p>
-            ) : null}
-
-            {summary.mediaRequestRepointCount > 0 ? (
-              <p id={`move-titles-merge-request-repoint-${titleId}`}>
-                {t("move.mergeRequestRepoint", {
-                  count: summary.mediaRequestRepointCount,
-                })}
-              </p>
-            ) : null}
-
-            {summary.notes.length > 0 ? (
-              <div id={`move-titles-merge-notes-${titleId}`}>
-                <p className="text-foreground">{t("move.mergeNotesHeading")}</p>
-                <ul className="ml-4 list-disc">
-                  {summary.notes.map((note) => (
-                    <li key={note}>{note}</li>
-                  ))}
-                </ul>
-              </div>
             ) : null}
           </div>
         </details>

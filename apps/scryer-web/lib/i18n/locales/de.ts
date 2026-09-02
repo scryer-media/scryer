@@ -2140,13 +2140,10 @@ const de: LocaleDictionary = {
   "move.mergeNoDetails": "Diese Zusammenführung überträgt nichts weiter.",
   "move.mergeBlockedHeading":
     "Diese Zusammenführung kann nicht laufen: Diese Datensätze lassen sich nicht übertragen.",
-  "move.mergeDispositionsHeading": "Übertragene Daten",
-  "move.mergeRowCount": "{{count}} Zeile(n)",
-  "move.mergeDisposition.UNION":
-    "Neben den vorhandenen der Zielbibliothek behalten",
-  "move.mergeDisposition.MAP": "Auf das Ziel umgehängt",
-  "move.mergeDisposition.DESTINATION_WINS": "Wert des Ziels bleibt",
-  "move.mergeDisposition.DROP": "Nicht übertragen",
+  "move.mergeCarried":
+    "Der verbleibende Titel übernimmt {{files}} Mediendatei-Eintrag/-Einträge und {{history}} Verlaufszeile(n).",
+  "move.mergeDropped":
+    "{{count}} weitere(r) Eintrag/Einträge des zusammengeführten Titels werden nicht übernommen und verfallen mit ihm.",
   "move.mergeRoleChangesHeading":
     "Rollen der Mediendateien ({{demotions}} Datei(en) verlieren die Hauptrolle)",
   "move.mergeRoleChangesHeadingPlain": "Rollen der Mediendateien",
@@ -2161,16 +2158,6 @@ const de: LocaleDictionary = {
     "Eine andere verschobene Datei hat die Hauptrolle für diese Zielepisode bereits belegt.",
   "move.mergeRoleReason.COLLAPSED_SOURCE_EPISODES":
     "Zwei Quellepisoden wurden auf eine Zielepisode zusammengelegt.",
-  "move.mergeTagConflictsHeading": "Einstellungen, die sich widersprachen",
-  "move.mergeTagConflictLine":
-    "{{setting}}: behält „{{destination}}“, verwirft „{{source}}“.",
-  "move.mergeValueNone": "nichts",
-  "move.mergeDestinationWinsHeading": "Einstellungen, die das Ziel behält",
-  "move.mergeDroppedHeading": "Nicht übertragen",
-  "move.mergeFreeFormTags": "Zum Zieltitel hinzugefügte Tags: {{tags}}.",
-  "move.mergeRequestRepoint":
-    "{{count}} Medienanfrage(n) folgen diesem Titel in die Zielbibliothek.",
-  "move.mergeNotesHeading": "Hinweise",
   "move.operationTransferNote": "Diese Titel werden in eine andere Bibliothek verschoben.",
   "move.modeHeading": "Wie sollen die Dateien dorthin gelangen?",
   "move.mode.MOVE_WITH_SCRYER": "Mit Scryer verschieben",
@@ -2317,8 +2304,6 @@ const de: LocaleDictionary = {
   "rootChange.destinationExistingRootHelp": "Dieser Stammordner wird in den gewählten überführt, und seine Konfiguration wird stillgelegt.",
   "rootChange.destinationNoOtherRoots": "Diese Bibliothek hat keinen weiteren Stammordner, in den überführt werden könnte.",
   "rootChange.destinationPathPlaceholder": "/mnt/neue-platte/filme",
-  "rootChange.crossRouteToConsolidation": "Dieser Pfad ist bereits ein Stammordner dieser Bibliothek, also ist das eine Zusammenführung. Das Ziel wurde für Sie umgestellt.",
-  "rootChange.crossRouteToNewPath": "Dieser Stammordner ist in dieser Bibliothek nicht konfiguriert, also ist das eine Stammordner-Änderung. Das Ziel wurde für Sie umgestellt.",
   "rootChange.planChanged": "Der Plan hat sich seit der Vorschau geändert. Bitte erneut in der Vorschau ansehen, bevor Sie bestätigen.",
   "rootChange.previewFailed": "Vorschau dieser Stammordner-Änderung fehlgeschlagen.",
   "rootChange.previewing": "Der gesamte Stammordner wird gelesen.",
@@ -2389,12 +2374,11 @@ const de: LocaleDictionary = {
   "rootChange.refusal.root_change_source_root_unavailable": "Dieser Stammordner ist gerade nicht lesbar, sein Inhalt lässt sich also nicht planen.",
   "rootChange.refusal.root_change_destination_not_empty": "Der neue Pfad enthält bereits Inhalte. Wählen Sie ein leeres oder ein neues Verzeichnis.",
   "rootChange.refusal.root_change_destination_parent_missing": "Das übergeordnete Verzeichnis des neuen Pfads existiert nicht.",
-  "rootChange.refusal.root_change_destination_is_configured_root": "Dieser Pfad ist bereits ein Stammordner dieser Bibliothek.",
+  "rootChange.refusal.root_change_destination_is_configured_root": "Dieser Pfad ist bereits als Stammordner einer anderen Bibliothek konfiguriert.",
   "rootChange.refusal.root_change_mode_not_supported": "Bei einem Stammordnerwechsel werden die Dateien immer verschoben; „Dateien sind bereits dort“ wird hier nicht angeboten.",
   "rootChange.refusal.root_consolidation_path_not_absolute": "Geben Sie einen absoluten Pfad an.",
   "rootChange.refusal.root_consolidation_same_root": "Ein Stammordner kann nicht in sich selbst überführt werden.",
   "rootChange.refusal.root_consolidation_paths_overlap": "Einer dieser Stammordner liegt im anderen.",
-  "rootChange.refusal.root_consolidation_destination_not_a_configured_root": "Dieser Stammordner ist in dieser Bibliothek nicht konfiguriert.",
   "rootChange.refusal.root_consolidation_source_root_is_symlink": "Dieser Stammordner ist ein Symlink. Verweisen Sie ihn zuerst auf das echte Verzeichnis.",
   "rootChange.refusal.root_consolidation_source_root_unavailable": "Dieser Stammordner ist gerade nicht lesbar, sein Inhalt lässt sich also nicht planen.",
   "rootChange.refusal.root_consolidation_destination_root_unavailable": "Der Ziel-Stammordner ist gerade nicht lesbar, sein vorhandener Inhalt lässt sich also nicht berücksichtigen.",

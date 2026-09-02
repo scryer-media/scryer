@@ -33,7 +33,7 @@
 //! title flips the same entries the counters move.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::AppResult;
 use crate::location::model::{TitleCheckpoint, TitleCheckpointState};
@@ -215,8 +215,8 @@ fn renames_for(title: &RootMoveTitleExecution, done: bool) -> Vec<RenamedAsset> 
                 .files
                 .iter()
                 .find(|file| &file.destination_path == destination_path);
-            let destination_name = file_name_of(destination_path);
-            let source_name = file.map(|file| file_name_of(&file.source_path));
+            let destination_name = crate::stored_paths::stored_file_name(destination_path);
+            let source_name = file.map(|file| crate::stored_paths::stored_file_name(&file.source_path));
             RenamedAsset {
                 provenance_label: collision_provenance_label(
                     source_name.as_deref(),
@@ -241,9 +241,9 @@ fn dedups_for(title: &RootMoveTitleExecution, done: bool) -> Vec<DeduplicatedAss
         .map(|source_path| {
             let surviving_path = surviving_destination(title, source_path);
             DeduplicatedAsset {
-                source_name: file_name_of(source_path),
+                source_name: crate::stored_paths::stored_file_name(source_path),
                 source_path: source_path.clone(),
-                surviving_name: surviving_path.as_deref().map(file_name_of),
+                surviving_name: surviving_path.as_deref().map(crate::stored_paths::stored_file_name),
                 surviving_path,
                 done,
             }
@@ -319,13 +319,6 @@ fn label_before_close(rest: &str) -> Option<String> {
     let end = rest.find(')')?;
     let label = rest[..end].trim();
     (!label.is_empty()).then(|| label.to_string())
-}
-
-fn file_name_of(stored_path: &str) -> String {
-    let path = stored_path_to_path_buf(stored_path);
-    path.file_name()
-        .map(|name| name.to_string_lossy().to_string())
-        .unwrap_or_else(|| Path::new(stored_path).to_string_lossy().to_string())
 }
 
 impl AppUseCase {

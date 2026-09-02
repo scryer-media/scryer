@@ -36,6 +36,35 @@ pub fn stored_path_to_display_string(stored: &str) -> String {
         .into_owned()
 }
 
+/// Resolve `.` and `..` without touching the filesystem. One definition for
+/// every caller that has to compare two paths the user typed against each
+/// other, or against a configured root, before either is known to exist.
+pub fn lexically_normalize(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            std::path::Component::RootDir => normalized.push(component.as_os_str()),
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            std::path::Component::Normal(segment) => normalized.push(segment),
+        }
+    }
+    normalized
+}
+
+/// The last segment of a stored path, or the stored path itself when it has
+/// none. One definition for every caller that reads a file name back out of a
+/// path the catalog stored.
+pub fn stored_file_name(stored_path: &str) -> String {
+    stored_path_to_path_buf(stored_path)
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| stored_path.to_string())
+}
+
 pub fn folder_path_identity_key(path: &str) -> Option<String> {
     folder_path_identity_key_for_platform(path, cfg!(windows))
 }

@@ -6654,6 +6654,7 @@ version = "0.19.4"
 dependencies = [
  "async-graphql",
  "chrono",
+ "scryer-application",
  "scryer-domain",
  "serde_json",
 ]

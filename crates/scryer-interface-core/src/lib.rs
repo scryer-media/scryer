@@ -936,24 +936,6 @@ mod tests {
     }
 
     #[test]
-    fn the_fr_020_cross_route_pair_both_carry_their_codes() {
-        for code in [
-            "root_change_destination_is_configured_root",
-            "root_consolidation_destination_not_a_configured_root",
-        ] {
-            let error = to_gql_error(AppError::LocationRootRefused {
-                message: "pick the other one".into(),
-                code,
-            });
-            assert_eq!(graphql_error_code(&error), Some("LOCATION_ROOT_REFUSED"));
-            assert_eq!(
-                graphql_error_extension_string(&error, "refusalCode"),
-                Some(code)
-            );
-        }
-    }
-
-    #[test]
     fn a_plain_validation_failure_from_a_root_workflow_stays_a_validation_error() {
         // Nothing parses prose any more: a sentence that merely *looks* like a
         // coded refusal is still an ordinary validation failure.

@@ -13,7 +13,7 @@ use chrono::{DateTime, Utc};
 
 /// Which location workflow an operation belongs to.
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
-#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE", remote = "scryer_application::location::model::LocationOperationType")]
 pub enum LocationOperationTypeValue {
     /// Correct which folder a title owns; file content is never touched.
     FolderReassignment,
@@ -31,7 +31,7 @@ pub enum LocationOperationTypeValue {
 
 /// How the filesystem side of an operation is performed.
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
-#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE", remote = "scryer_application::location::model::LocationExecutionMode")]
 pub enum LocationExecutionModeValue {
     /// Scryer performs and verifies the filesystem operation.
     MoveWithScryer,
@@ -60,7 +60,7 @@ pub enum LocationExecutionModeInput {
 
 /// Lifecycle state of a confirmed location operation, as shown in Activity.
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
-#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE", remote = "scryer_application::location::model::LocationOperationState")]
 pub enum LocationOperationStateValue {
     /// Accepted and persisted; not yet started.
     Queued,
@@ -86,7 +86,7 @@ pub enum LocationOperationStateValue {
 
 /// The single class a selected title falls into for a requested destination.
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
-#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE", remote = "scryer_application::location::classify::TitleLocationClass")]
 pub enum TitleLocationClassValue {
     /// Destination is in another library and the transfer is supported.
     CrossLibraryTransfer,
@@ -105,7 +105,7 @@ pub enum TitleLocationClassValue {
 /// What destination-title detection concluded for a title crossing into another
 /// library. Matching is by stable metadata identity, never by title text.
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
-#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE", remote = "scryer_application::location::merge::DestinationIdentityMatch")]
 pub enum LocationDestinationIdentityMatchValue {
     /// Exactly one destination title shares the identity, so this is a merge.
     Unique,
@@ -120,7 +120,7 @@ pub enum LocationDestinationIdentityMatchValue {
 
 /// Every kind of change a location plan can contain.
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
-#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE", remote = "scryer_application::location::preview::PlanItemKind")]
 pub enum LocationPlanItemKindValue {
     /// Content moves from a source path to a destination path.
     Move,
@@ -146,7 +146,7 @@ pub enum LocationPlanItemKindValue {
 
 /// Progress of one title inside an operation.
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
-#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE", remote = "scryer_application::location::model::TitleCheckpointState")]
 pub enum LocationTitleCheckpointStateValue {
     /// Planned but not started.
     Pending,
@@ -172,7 +172,7 @@ pub enum LocationTitleCheckpointStateValue {
 
 /// How much consent an operation demands before it may start.
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
-#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE", remote = "scryer_application::location::preview::ConfirmationRequirement")]
 pub enum LocationConfirmationRequirementValue {
     /// Confirming the fingerprinted plan is enough.
     Simple,
@@ -306,7 +306,7 @@ pub struct LocationAmbiguousDestinationCandidatePayload {
 
 /// What a facet conversion does to one title-level setting (FR-057).
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
-#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE", remote = "scryer_application::location::transfer_effects::SettingDisposition")]
 pub enum LocationFacetSettingDispositionValue {
     /// The value stays on the title, but nothing reads it under the new facet.
     BecomesInvalid,
@@ -463,23 +463,9 @@ pub struct LocationOperationPreviewPayload {
     pub merges: Vec<LocationMergePreviewPayload>,
 }
 
-/// How one table's rows are treated when a title merges into another (FR-064).
-#[derive(Enum, Copy, Clone, Eq, PartialEq)]
-#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
-pub enum LocationMergeDispositionValue {
-    /// Source rows are re-pointed and kept beside the destination's own.
-    Union,
-    /// Source rows are rewritten through the source-to-destination identity map.
-    Map,
-    /// The destination's value stands and the source's is discarded.
-    DestinationWins,
-    /// Source rows are intentionally not carried over.
-    Drop,
-}
-
 /// Why one record stops a merge from running (FR-066).
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
-#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE", remote = "scryer_application::location::merge::map::MergeBlockReason")]
 pub enum LocationMergeBlockReasonValue {
     /// No destination episode carries the source episode's identity.
     UnmappedEpisode,
@@ -489,8 +475,6 @@ pub enum LocationMergeBlockReasonValue {
     AmbiguousSourceEpisode,
     /// The source episode has no season/episode pair and no absolute number.
     UnidentifiableEpisode,
-    /// A record references a source episode that is not in the catalog.
-    UnknownEpisodeReference,
     /// No destination collection carries the source collection's identity.
     UnmappedCollection,
     /// More than one destination collection carries it.
@@ -507,11 +491,14 @@ pub enum LocationMergeBlockReasonValue {
     ResumableOperationHoldsSource,
     /// An unconsumed manual-import selection is an active import on the source.
     ActiveManualImportSelection,
+    /// A queued or in-flight download on the source title, which the merge would
+    /// retire along with it.
+    ActiveAcquisitionWork,
 }
 
 /// The role a media file holds for one logical slot after a merge (FR-068).
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
-#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE", remote = "scryer_application::location::merge::MergedMediaRole")]
 pub enum LocationMergeMediaRoleValue {
     /// The file that represents the slot.
     Primary,
@@ -521,29 +508,15 @@ pub enum LocationMergeMediaRoleValue {
 
 /// Why a media file's role changed in a merge (FR-070).
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
-#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE", remote = "scryer_application::location::merge::roles::RoleChangeReason")]
 pub enum LocationMergeRoleChangeReasonValue {
     /// The destination already had a primary for the slot, and a move never
     /// demotes one.
     DestinationPrimaryRetained,
-    /// Another source file already claimed primary for that destination episode.
+    /// Another source file already claimed primary for that destination slot.
     SourcePrimaryAlreadyClaimed,
     /// Two source episodes collapsed onto one destination episode.
     CollapsedSourceEpisodes,
-}
-
-/// Derived-cache work a completed merge leaves behind for Scryer to redo.
-#[derive(Enum, Copy, Clone, Eq, PartialEq)]
-#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
-pub enum LocationMergePostMergeWorkValue {
-    /// Rebuild the merged title's search projection.
-    ReindexTitleSearchTerms,
-    /// Refresh the merged title's recommendations.
-    RegenerateRecommendations,
-    /// Recompute title and library statistics.
-    RecomputeStatistics,
-    /// Drop the retired title's indexer coverage rows.
-    DropSourceIndexerCoverage,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -560,38 +533,16 @@ pub struct LocationMergeBlockedRecordPayload {
 }
 
 #[derive(SimpleObject, Clone)]
-/// One setting the destination title keeps and the merging title loses (FR-063).
-pub struct LocationMergeDestinationWinsPayload {
-    /// The setting, in the words the rule states it.
-    pub setting: String,
-    /// The value the destination keeps, when it is a value worth naming.
-    pub destination_value: Option<String>,
-    /// The value the merging title loses, when it is a value worth naming.
-    pub source_value: Option<String>,
-}
-
-#[derive(SimpleObject, Clone)]
-/// One table's contribution to the merge, with the rows it applies to (FR-064).
-pub struct LocationMergeTableDispositionPayload {
-    /// The table.
-    pub table: String,
-    /// How its rows are treated.
-    pub disposition: LocationMergeDispositionValue,
-    /// Source rows the disposition applies to.
-    pub source_row_count: Long,
-    /// Why, in one line.
-    pub note: String,
-}
-
-#[derive(SimpleObject, Clone)]
 /// One media-file role the merge resolves, never silently (FR-068 to FR-070).
 pub struct LocationMergeRoleChangePayload {
     /// The media file whose role changes.
     pub file_id: ID,
-    /// The source episode the file was attached to.
-    pub source_episode_id: ID,
-    /// The destination episode it is attached to after the merge.
-    pub destination_episode_id: ID,
+    /// The source episode the file was attached to. Null for a movie, whose
+    /// only slot is the title itself.
+    pub source_episode_id: Option<ID>,
+    /// The destination episode it is attached to after the merge. Null for a
+    /// movie.
+    pub destination_episode_id: Option<ID>,
     /// The role it held.
     pub previous_role: LocationMergeMediaRoleValue,
     /// The role it holds after the merge.
@@ -603,47 +554,12 @@ pub struct LocationMergeRoleChangePayload {
 }
 
 #[derive(SimpleObject, Clone)]
-/// One reserved setting whose two sides disagreed; the destination's wins.
-pub struct LocationMergeReservedTagConflictPayload {
-    /// The reserved tag prefix, for grouping and translation.
-    pub prefix: String,
-    /// Human-readable name of the setting, when the prefix is a known one.
-    pub setting: Option<String>,
-    /// The value the destination keeps.
-    pub destination_value: Option<String>,
-    /// The value the merging title loses.
-    pub source_value: Option<String>,
-}
-
-#[derive(SimpleObject, Clone)]
-/// One media request whose library follows the content into the destination.
-pub struct LocationMergeMediaRequestRepointPayload {
-    /// The request being repointed.
-    pub request_id: ID,
-    /// The library it belonged to.
-    pub previous_library_id: ID,
-    /// The library it belongs to after the merge.
-    pub destination_library_id: ID,
-}
-
-#[derive(SimpleObject, Clone)]
-/// One category of data the merge deliberately does not carry (FR-071).
-pub struct LocationMergeDroppedCategoryPayload {
-    /// The table the rows live in.
-    pub table: String,
-    /// How many source rows are dropped.
-    pub source_row_count: Long,
-    /// The adjudication that decided it.
-    pub decision: String,
-    /// Why dropping is the right answer.
-    pub reason: String,
-}
-
-#[derive(SimpleObject, Clone)]
 /// What merging one title into an existing destination title would do (FR-071).
 ///
-/// The same decision the merge itself is built from, so the preview can never
-/// describe a merge the engine would not perform.
+/// The destination wins everything except the merging title's media file
+/// records and its history; every other row recorded against it retires with it.
+/// This is the same decision the merge itself is built from, so the preview can
+/// never describe a merge the engine would not perform.
 pub struct LocationMergePreviewPayload {
     /// The title that merges away.
     pub source_title_id: ID,
@@ -660,25 +576,17 @@ pub struct LocationMergePreviewPayload {
     pub blocked: bool,
     /// The records that block it, one per line the user can act on.
     pub blocked_records: Vec<LocationMergeBlockedRecordPayload>,
-    /// What the destination keeps.
-    pub destination_wins: Vec<LocationMergeDestinationWinsPayload>,
-    /// What carries forward, per table, with counts.
-    pub dispositions: Vec<LocationMergeTableDispositionPayload>,
+    /// Media file records repointed onto the surviving title.
+    pub media_files_repointed: Long,
     /// Every media-file role the merge changes.
     pub role_changes: Vec<LocationMergeRoleChangePayload>,
-    /// Reserved settings whose values disagree.
-    pub reserved_tag_conflicts: Vec<LocationMergeReservedTagConflictPayload>,
-    /// Free-form tags the merging title contributes.
-    pub free_form_tags_added: Vec<String>,
-    /// Requests whose library follows the content.
-    pub media_request_repoints: Vec<LocationMergeMediaRequestRepointPayload>,
-    /// What is not carried over, and why.
-    pub dropped: Vec<LocationMergeDroppedCategoryPayload>,
-    /// Derived caches the merge leaves for Scryer to rebuild afterwards.
-    pub post_merge_work: Vec<LocationMergePostMergeWorkValue>,
-    /// Anything else the operator should read before confirming, including the
-    /// notes explaining where this schema differs from the merge inventory.
-    pub notes: Vec<String>,
+    /// How many of those role changes demote an incoming primary.
+    pub role_demotions: Long,
+    /// History rows carried onto the surviving title.
+    pub history_rows_carried: Long,
+    /// Everything else recorded against the merging title, as one count. Those
+    /// rows retire with it.
+    pub source_records_dropped: Long,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -950,10 +858,10 @@ pub struct LocationOperationPreviewInput {
 /// Confirmation of a previewed location operation.
 ///
 /// Exactly one destination form is confirmed: a title selection with its
-/// destination, a root change, or a root consolidation. `titleIds` and
-/// `destination` stayed where they were and are still what a selection sends;
-/// they are nullable only so a root-scoped confirmation does not have to claim
-/// an empty selection going nowhere.
+/// destination, or a root-scoped target. `titleIds` and `destination` stayed
+/// where they were and are still what a selection sends; they are nullable only
+/// so a root-scoped confirmation does not have to claim an empty selection
+/// going nowhere.
 pub struct StartLocationOperationInput {
     /// Titles to move, matching the previewed selection. Omitted for a
     /// root-scoped confirmation, which has no selection to express.
@@ -961,11 +869,10 @@ pub struct StartLocationOperationInput {
     /// Where the selection goes, matching the previewed destination. Omitted
     /// for a root-scoped confirmation, which names its roots below instead.
     pub destination: Option<LocationDestinationInput>,
-    /// Confirms a previewed root change (US4): one root's path is replaced.
-    pub root_change: Option<LocationRootChangeTargetInput>,
-    /// Confirms a previewed root consolidation (US5): one root is folded into
-    /// another root of the same library.
-    pub root_consolidation: Option<LocationRootConsolidationTargetInput>,
+    /// Confirms a previewed root-scoped operation (US4 + US5): one root's path
+    /// is replaced, or one root is folded into another root of the same
+    /// library.
+    pub root_scope: Option<LocationRootScopeTargetInput>,
     /// The mode the plan was previewed under; a different mode is a different
     /// plan, so it produces a different fingerprint and is refused.
     pub mode: Option<LocationExecutionModeInput>,
@@ -978,58 +885,49 @@ pub struct StartLocationOperationInput {
 // ── US4 and US5: the two root-scoped workflows (FR-020 to FR-029) ────────────
 
 #[derive(InputObject, Clone)]
-/// The root and the new path a root change would move it to (US4, FR-020).
-pub struct LocationRootChangePreviewInput {
-    /// Library the root belongs to.
+/// The root and the destination a **Change root** would move it to (US4 + US5,
+/// FR-020).
+///
+/// FR-020 is one settings action with two destinations, so it is one input with
+/// two destinations. Exactly one of `destinationPath` and `destinationRootId`
+/// is named; the server decides which branch that is.
+pub struct LocationRootScopePreviewInput {
+    /// Library the root belongs to. A root-scoped operation never crosses
+    /// libraries.
     pub library_id: ID,
-    /// The root being changed. Its identity survives the change (FR-021).
+    /// The root being moved. Its synthetic id survives either destination
+    /// (FR-021, FR-078).
     pub root_id: ID,
-    /// The new, unconfigured path. A path that is already a configured root of
-    /// this library is refused and routed to consolidation instead.
-    pub destination_path: String,
+    /// A new path for the root. A path that lexically matches a configured root
+    /// of this library is the same request as naming that root below, and is
+    /// planned as a fold.
+    pub destination_path: Option<String>,
+    /// Another configured root of this library, which absorbs the source root's
+    /// content. Its configuration survives; the source root's is retired.
+    pub destination_root_id: Option<ID>,
     /// How the files get there; omitted asks Scryer to do the moving.
     pub mode: Option<LocationExecutionModeInput>,
 }
 
 #[derive(InputObject, Clone)]
-/// The root being changed and the path it moves to, as confirmed by a start.
-pub struct LocationRootChangeTargetInput {
+/// The root and the destination it moves to, as confirmed by a start.
+///
+/// The same exactly-one-destination shape the preview took, so a confirmation
+/// says back exactly what was previewed.
+pub struct LocationRootScopeTargetInput {
     /// Library the root belongs to.
     pub library_id: ID,
-    /// The root being changed.
+    /// The root being moved.
     pub root_id: ID,
-    /// The previewed destination path.
-    pub destination_path: String,
-}
-
-#[derive(InputObject, Clone)]
-/// The two roots a consolidation folds together (US5, FR-020).
-pub struct LocationRootConsolidationPreviewInput {
-    /// Library both roots belong to. A consolidation never crosses libraries.
-    pub library_id: ID,
-    /// The root being folded away; its configuration is retired at the end.
-    pub source_root_id: ID,
-    /// The root that absorbs it. Must already be configured in this library; a
-    /// destination that is not is refused and routed to a root change instead.
-    pub destination_root_id: ID,
-    /// How the files get there; omitted asks Scryer to do the moving.
-    pub mode: Option<LocationExecutionModeInput>,
-}
-
-#[derive(InputObject, Clone)]
-/// The two roots a consolidation folds together, as confirmed by a start.
-pub struct LocationRootConsolidationTargetInput {
-    /// Library both roots belong to.
-    pub library_id: ID,
-    /// The root being folded away.
-    pub source_root_id: ID,
-    /// The root that absorbs it.
-    pub destination_root_id: ID,
+    /// The previewed destination path, when the preview named one.
+    pub destination_path: Option<String>,
+    /// The previewed destination root, when the preview named one.
+    pub destination_root_id: Option<ID>,
 }
 
 /// What the catalog can say about one entry found beneath a root (FR-027).
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
-#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE", remote = "scryer_application::location::root_scope::RootContentClass")]
 pub enum LocationRootContentClassValue {
     /// A file the catalog tracks as media for a title assigned to this root.
     Managed,
@@ -1205,24 +1103,6 @@ pub struct LocationRootRetirementContractPayload {
 }
 
 #[derive(SimpleObject, Clone)]
-/// A read-only preview of replacing one root's path (US4, FR-020 to FR-029).
-pub struct LocationRootChangePreviewPayload {
-    /// The fingerprinted plan, in the vocabulary every location workflow
-    /// shares. Root-scoped plans have no title selection, so the plan's
-    /// classification carries per-class counts with no per-title entries; the
-    /// titles that need naming are in `accounting.blockedTitles`.
-    pub plan: LocationOperationPreviewPayload,
-    /// Every title assigned to the root, with no way to exclude one.
-    pub accounting: LocationTitleAccountingPayload,
-    /// What the root keeps. The first thing the dialog states.
-    pub retention: LocationRootIdentityRetentionPayload,
-    /// Everything found beneath the source root, in three buckets.
-    pub content: LocationRootContentInventoryPayload,
-    /// What happens to the old location afterwards.
-    pub retirement: LocationRootRetirementContractPayload,
-}
-
-#[derive(SimpleObject, Clone)]
 /// FR-024's seven groups, counted off the same decisions that built the plan
 /// items. This is the consolidation preview (US5.1).
 pub struct LocationConsolidationClassificationPayload {
@@ -1262,9 +1142,13 @@ pub struct LocationDefaultRootTransferPayload {
 }
 
 #[derive(SimpleObject, Clone)]
-/// A read-only preview of folding one root into another (US5, FR-020, FR-022,
-/// FR-024 to FR-029).
-pub struct LocationRootConsolidationPreviewPayload {
+/// A read-only preview of a root-scoped operation: replacing one root's path,
+/// or folding one root into another (US4 + US5, FR-020 to FR-029).
+///
+/// One payload for both branches of **Change root**. The sections both branches
+/// share are always present; the variant-only ones are null for the other
+/// branch.
+pub struct LocationRootScopePreviewPayload {
     /// The fingerprinted plan, in the vocabulary every location workflow
     /// shares. Root-scoped plans have no title selection, so the plan's
     /// classification carries per-class counts with no per-title entries; the
@@ -1273,13 +1157,17 @@ pub struct LocationRootConsolidationPreviewPayload {
     pub plan: LocationOperationPreviewPayload,
     /// Every title assigned to the source root, with no way to exclude one.
     pub accounting: LocationTitleAccountingPayload,
-    /// FR-024's seven groups with their counts.
-    pub classification: LocationConsolidationClassificationPayload,
-    /// Which root new content lands on afterwards. The destination root keeps
-    /// its own id either way (FR-078); what can move is the default.
-    pub default_transfer: LocationDefaultRootTransferPayload,
+    /// What the root keeps when only its path changes. Null when the root is
+    /// being folded into another root instead.
+    pub retention: Option<LocationRootIdentityRetentionPayload>,
+    /// FR-024's seven groups with their counts. Null for a change to a new,
+    /// unconfigured path, whose destination holds nothing to classify against.
+    pub classification: Option<LocationConsolidationClassificationPayload>,
+    /// Which root new content lands on afterwards. Null for a path change,
+    /// which never moves the library default.
+    pub default_transfer: Option<LocationDefaultRootTransferPayload>,
     /// Everything found beneath the source root, in three buckets.
     pub content: LocationRootContentInventoryPayload,
-    /// What happens to the source root's configuration afterwards.
+    /// What happens to the old location afterwards.
     pub retirement: LocationRootRetirementContractPayload,
 }

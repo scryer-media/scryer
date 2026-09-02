@@ -213,13 +213,6 @@ export type LocationPlanConfirmation = {
   typedPrompt: string | null;
 };
 
-/** How one table's rows are treated when a title merges into another (FR-064). */
-export type LocationMergeDisposition =
-  | "UNION"
-  | "MAP"
-  | "DESTINATION_WINS"
-  | "DROP";
-
 /** The role a media file holds for one logical slot after a merge (FR-068). */
 export type LocationMergeMediaRole = "PRIMARY" | "ADDITIONAL";
 
@@ -229,47 +222,15 @@ export type LocationMergeRoleChangeReason =
   | "SOURCE_PRIMARY_ALREADY_CLAIMED"
   | "COLLAPSED_SOURCE_EPISODES";
 
-export type LocationMergeTableDisposition = {
-  table: string;
-  disposition: LocationMergeDisposition;
-  sourceRowCount: LongValue;
-  note: string;
-};
-
 export type LocationMergeRoleChange = {
   fileId: string;
-  sourceEpisodeId: string;
-  destinationEpisodeId: string;
+  /** Null for a movie, whose only slot is the title itself. */
+  sourceEpisodeId?: string | null;
+  destinationEpisodeId?: string | null;
   previousRole: LocationMergeMediaRole;
   newRole: LocationMergeMediaRole;
   reason: LocationMergeRoleChangeReason;
   detail: string;
-};
-
-export type LocationMergeReservedTagConflict = {
-  prefix: string;
-  setting: string | null;
-  destinationValue: string | null;
-  sourceValue: string | null;
-};
-
-export type LocationMergeDestinationWins = {
-  setting: string;
-  destinationValue: string | null;
-  sourceValue: string | null;
-};
-
-export type LocationMergeDroppedCategory = {
-  table: string;
-  sourceRowCount: LongValue;
-  decision: string;
-  reason: string;
-};
-
-export type LocationMergeMediaRequestRepoint = {
-  requestId: string;
-  previousLibraryId: string;
-  destinationLibraryId: string;
 };
 
 export type LocationMergeBlockedRecord = {
@@ -281,6 +242,9 @@ export type LocationMergeBlockedRecord = {
 
 /**
  * What merging one title into an existing destination title does (FR-071).
+ *
+ * The destination wins everything except the merging title's media file
+ * records and its history; every other row recorded against it retires with it.
  *
  * Every list is optional on the client type for the same reason the detection
  * fields are: the dialog builds this payload in tests and reads it from a
@@ -296,15 +260,10 @@ export type LocationMergePreview = {
   destinationLibraryId?: string | null;
   blocked: boolean;
   blockedRecords?: LocationMergeBlockedRecord[] | null;
-  destinationWins?: LocationMergeDestinationWins[] | null;
-  dispositions?: LocationMergeTableDisposition[] | null;
+  mediaFilesRepointed?: LongValue | null;
   roleChanges?: LocationMergeRoleChange[] | null;
-  reservedTagConflicts?: LocationMergeReservedTagConflict[] | null;
-  freeFormTagsAdded?: string[] | null;
-  mediaRequestRepoints?: LocationMergeMediaRequestRepoint[] | null;
-  dropped?: LocationMergeDroppedCategory[] | null;
-  postMergeWork?: string[] | null;
-  notes?: string[] | null;
+  historyRowsCarried?: LongValue | null;
+  sourceRecordsDropped?: LongValue | null;
 };
 
 export type LocationOperationPreview = {
@@ -841,50 +800,6 @@ export function transferStatement(
   };
 }
 
-/** Everything the detection outcome adds to one classified row. */
-export type DestinationIdentityPresentation = {
-  /** Present for a title crossing libraries; null otherwise. */
-  transfer: TransferStatement | null;
-  /** Present for `SAME_NAME_NO_IDENTITY` with a title to name; null otherwise. */
-  sameNameWarning: SameNamedDestinationTitle | null;
-  /** Non-empty only for `AMBIGUOUS`. */
-  ambiguous: AmbiguousDestinationCandidate[];
-  /** Present only for `UNIQUE`, the one outcome that merges. */
-  merge: MergeStatement | null;
-};
-
-/**
- * One pass over the FR-055 detection outcome, turning all four match kinds into
- * the render decisions the dialog needs. Keeping it here rather than in the
- * component is what makes the four outcomes testable without a renderer.
- */
-export function destinationIdentityPresentation(
-  entry: LocationClassifiedTitle,
-  context: {
-    resolveLibraryName?: (libraryId: string) => string | null | undefined;
-    resolveTitleName?: (titleId: string) => string | null | undefined;
-    merge?: LocationMergePreview | null;
-  } = {},
-): DestinationIdentityPresentation {
-  return {
-    transfer: transferStatement(entry, context.resolveLibraryName),
-    sameNameWarning: sameNamedDestinationTitle(entry),
-    ambiguous: ambiguousCandidates(entry, context.resolveTitleName),
-    merge: mergeStatement(entry, {
-      merge: context.merge,
-      resolveTitleName: context.resolveTitleName,
-    }),
-  };
-}
-
-/** Dispositions in the order the summary reads them: kept, then discarded. */
-export const MERGE_DISPOSITION_ORDER: LocationMergeDisposition[] = [
-  "UNION",
-  "MAP",
-  "DESTINATION_WINS",
-  "DROP",
-];
-
 /** Every per-title merge summary in the plan, keyed by the title that merges. */
 export function mergePreviewsBySourceTitle(
   preview: LocationOperationPreview | null | undefined,
@@ -899,46 +814,12 @@ export function mergePreviewsBySourceTitle(
   return merges;
 }
 
-/** One table's contribution to the merge, with its count already coerced. */
-export type MergeDispositionLine = {
-  table: string;
-  disposition: LocationMergeDisposition;
-  sourceRowCount: number;
-  note: string;
-};
-
-/**
- * Per-table dispositions in a stable order — what carries forward first, what
- * is discarded last — so two previews of the same plan read the same way.
- * Unknown dispositions keep their payload order behind the known ones.
- */
-export function mergeDispositionLines(
-  merge: LocationMergePreview | null | undefined,
-): MergeDispositionLine[] {
-  const rank = (value: LocationMergeDisposition) => {
-    const index = MERGE_DISPOSITION_ORDER.indexOf(value);
-    return index === -1 ? MERGE_DISPOSITION_ORDER.length : index;
-  };
-  return (merge?.dispositions ?? [])
-    .map((entry) => ({
-      table: entry.table,
-      disposition: entry.disposition,
-      sourceRowCount: toCount(entry.sourceRowCount),
-      note: entry.note,
-    }))
-    .sort((left, right) => {
-      const byDisposition = rank(left.disposition) - rank(right.disposition);
-      return byDisposition !== 0
-        ? byDisposition
-        : left.table.localeCompare(right.table);
-    });
-}
-
 /** One media-file role change, with the demotion called out (FR-070). */
 export type MergeRoleChangeLine = {
   fileId: string;
-  sourceEpisodeId: string;
-  destinationEpisodeId: string;
+  /** Null for a movie, whose only slot is the title itself. */
+  sourceEpisodeId: string | null;
+  destinationEpisodeId: string | null;
   previousRole: LocationMergeMediaRole;
   newRole: LocationMergeMediaRole;
   reason: LocationMergeRoleChangeReason;
@@ -959,8 +840,8 @@ export function mergeRoleChangeLines(
 ): MergeRoleChangeLine[] {
   return (merge?.roleChanges ?? []).map((change) => ({
     fileId: change.fileId,
-    sourceEpisodeId: change.sourceEpisodeId,
-    destinationEpisodeId: change.destinationEpisodeId,
+    sourceEpisodeId: change.sourceEpisodeId ?? null,
+    destinationEpisodeId: change.destinationEpisodeId ?? null,
     previousRole: change.previousRole,
     newRole: change.newRole,
     reason: change.reason,
@@ -969,87 +850,20 @@ export function mergeRoleChangeLines(
   }));
 }
 
-/** One reserved setting whose two sides disagreed; the destination's wins (OQ9). */
-export type MergeTagConflictLine = {
-  prefix: string;
-  /** The setting's readable name, falling back to the reserved prefix. */
-  setting: string;
-  /** The value the destination keeps, or null when there is none to name. */
-  destinationValue: string | null;
-  /** The value the merging title loses, or null when there is none to name. */
-  sourceValue: string | null;
-};
-
-/**
- * The reserved-tag conflicts, stated as "destination keeps X, source's Y is
- * dropped". A conflict with no readable setting name still reads out by its
- * prefix rather than disappearing.
- */
-export function mergeTagConflictLines(
-  merge: LocationMergePreview | null | undefined,
-): MergeTagConflictLine[] {
-  return (merge?.reservedTagConflicts ?? []).map((conflict) => ({
-    prefix: conflict.prefix,
-    setting: conflict.setting?.trim() || conflict.prefix,
-    destinationValue: conflict.destinationValue?.trim() || null,
-    sourceValue: conflict.sourceValue?.trim() || null,
-  }));
-}
-
-/** One category of data the merge deliberately does not carry (FR-071). */
-export type MergeDroppedCategoryLine = {
-  table: string;
-  sourceRowCount: number;
-  decision: string;
-  reason: string;
-};
-
-/**
- * Dropped categories, heaviest first: the user's question is "what am I losing",
- * and the biggest loss belongs at the top of the answer.
- */
-export function mergeDroppedCategoryLines(
-  merge: LocationMergePreview | null | undefined,
-): MergeDroppedCategoryLine[] {
-  return (merge?.dropped ?? [])
-    .map((entry) => ({
-      table: entry.table,
-      sourceRowCount: toCount(entry.sourceRowCount),
-      decision: entry.decision,
-      reason: entry.reason,
-    }))
-    .sort((left, right) => {
-      const byCount = right.sourceRowCount - left.sourceRowCount;
-      return byCount !== 0 ? byCount : left.table.localeCompare(right.table);
-    });
-}
-
-/**
- * How many media requests follow the content into the destination library. The
- * ids themselves are not worth reading out; the count is the note (FR-071).
- */
-export function mergeMediaRequestRepointCount(
-  merge: LocationMergePreview | null | undefined,
-): number {
-  return (merge?.mediaRequestRepoints ?? []).length;
-}
-
-/** Everything one merge summary renders, in one pass (FR-070, FR-071, OQ9). */
+/** Everything one merge summary renders, in one pass (FR-070, FR-071). */
 export type MergeSummaryPresentation = {
   statement: MergeStatement;
   blocked: boolean;
   blockedRecords: LocationMergeBlockedRecord[];
-  dispositions: MergeDispositionLine[];
+  /** Media file records the surviving title takes over. */
+  mediaFilesRepointed: number;
   roleChanges: MergeRoleChangeLine[];
   /** How many of those role changes take a file's primary away (FR-070). */
   demotionCount: number;
-  tagConflicts: MergeTagConflictLine[];
-  destinationWins: LocationMergeDestinationWins[];
-  dropped: MergeDroppedCategoryLine[];
-  freeFormTagsAdded: string[];
-  mediaRequestRepointCount: number;
-  /** The backend's notes, verbatim and in payload order. */
-  notes: string[];
+  /** History rows that follow the content onto the surviving title. */
+  historyRowsCarried: number;
+  /** Everything else on the merging title, which retires with it (FR-064). */
+  sourceRecordsDropped: number;
   /** True when there is nothing at all beyond the statement to show. */
   empty: boolean;
 };
@@ -1073,46 +887,27 @@ export function mergeSummaryPresentation(
   if (!statement) {
     return null;
   }
-  const dispositions = mergeDispositionLines(merge);
   const roleChanges = mergeRoleChangeLines(merge);
-  const tagConflicts = mergeTagConflictLines(merge);
-  const dropped = mergeDroppedCategoryLines(merge);
-  const destinationWins = [...(merge?.destinationWins ?? [])];
-  const freeFormTagsAdded = [...(merge?.freeFormTagsAdded ?? [])];
   const blockedRecords = [...(merge?.blockedRecords ?? [])];
-  const notes = [...(merge?.notes ?? [])];
-  const mediaRequestRepointCount = mergeMediaRequestRepointCount(merge);
+  const mediaFilesRepointed = toCount(merge?.mediaFilesRepointed);
+  const historyRowsCarried = toCount(merge?.historyRowsCarried);
+  const sourceRecordsDropped = toCount(merge?.sourceRecordsDropped);
   return {
     statement,
     blocked: merge?.blocked ?? false,
     blockedRecords,
-    dispositions,
+    mediaFilesRepointed,
     roleChanges,
     demotionCount: roleChanges.filter((change) => change.demotion).length,
-    tagConflicts,
-    destinationWins,
-    dropped,
-    freeFormTagsAdded,
-    mediaRequestRepointCount,
-    notes,
+    historyRowsCarried,
+    sourceRecordsDropped,
     empty:
-      dispositions.length === 0 &&
       roleChanges.length === 0 &&
-      tagConflicts.length === 0 &&
-      destinationWins.length === 0 &&
-      dropped.length === 0 &&
-      freeFormTagsAdded.length === 0 &&
       blockedRecords.length === 0 &&
-      notes.length === 0 &&
-      mediaRequestRepointCount === 0,
+      mediaFilesRepointed === 0 &&
+      historyRowsCarried === 0 &&
+      sourceRecordsDropped === 0,
   };
-}
-
-/** Translation key for a merge table disposition. */
-export function mergeDispositionLabelKey(
-  value: LocationMergeDisposition,
-): string {
-  return `move.mergeDisposition.${value}`;
 }
 
 /** Translation key for a media-file role in a merge. */
