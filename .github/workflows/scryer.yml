@@ -751,7 +751,7 @@ jobs:
             variant: portable
             build_lane: portable
             runner: ubuntu-24.04
-            release_runner: linux_release_x86
+            release_runner: ubuntu-24.04
             target: x86_64-unknown-linux-musl
             sccache_lane: pr-linux-x86_64-cpu
             artifact_name: scryer-linux-x86_64-portable
