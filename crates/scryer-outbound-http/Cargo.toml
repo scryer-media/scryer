@@ -4,7 +4,10 @@ version = "0.19.4"
 edition.workspace = true
 
 [dependencies]
-reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "http2", "gzip", "brotli", "deflate", "zstd", "blocking"] }
+# `socks` turns on reqwest's built-in SOCKS4/5 connector for operator-configured
+# transport proxies. It adds no crate to the tree: reqwest implements SOCKS over
+# the hyper-util `client-proxy` feature it already enables unconditionally.
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "http2", "gzip", "brotli", "deflate", "zstd", "blocking", "socks"] }
 rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs", "logging", "std", "tls12"] }
 tokio = { workspace = true }
 thiserror = { workspace = true }

@@ -2984,6 +2984,7 @@ async fn queue_replacement_release_from_candidate_token_marks_manual_replacement
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await
@@ -3096,6 +3097,7 @@ async fn queue_existing_title_download_additional_file_uses_signed_candidate_sco
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await
@@ -3298,6 +3300,7 @@ async fn queue_best_release_prefers_first_auto_eligible_candidate() {
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await
@@ -3390,6 +3393,7 @@ async fn queue_best_release_reports_auto_eligibility_reason_counts() {
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await
@@ -3527,6 +3531,7 @@ async fn queue_best_release_supports_series_movie_scope() {
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await
@@ -3836,6 +3841,7 @@ async fn search_indexers_for_series_movie_merges_categories_and_accepts_short_ti
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await

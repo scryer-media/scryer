@@ -584,7 +584,7 @@ pub fn from_indexer_config_with_fields(
         name: config.name,
         provider_type: config.provider_type,
         base_url: config.base_url,
-        indexer_proxy_config_id: config.indexer_proxy_config_id.map(Into::into),
+        proxy_config_id: config.proxy_config_id.map(Into::into),
         download_client_id: config.download_client_id.map(Into::into),
         seeding_profile_id: config.seeding_profile_id.map(Into::into),
         has_prowlarr_seed_criteria,
@@ -610,14 +610,52 @@ pub fn from_indexer_config_with_fields(
     }
 }
 
-pub fn from_indexer_proxy_config(config: IndexerProxyConfig) -> IndexerProxyConfigPayload {
-    IndexerProxyConfigPayload {
+pub fn from_proxy_config(config: ProxyConfig) -> ProxyConfigPayload {
+    // Credentials are write-only, exactly like `IndexerConfig.api_key_encrypted`:
+    // the payload says whether one is stored, never what it is.
+    let has_credentials = [
+        config.username_encrypted.as_deref(),
+        config.password_encrypted.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|value| !value.is_empty());
+    ProxyConfigPayload {
         id: config.id.into(),
         name: config.name,
         provider_type: config.provider_type.as_str().to_string(),
-        protocol: config.protocol.as_str().to_string(),
+        protocol: config
+            .protocol
+            .map(|protocol| protocol.as_str().to_string()),
         base_url: config.base_url,
         request_timeout_seconds: i32::try_from(config.request_timeout_seconds).unwrap_or(i32::MAX),
+        has_credentials,
+        remote_dns: config.remote_dns,
+        // Same write-only treatment as the credentials. The host key is the
+        // exception: it is public, and an operator has to be able to read it to
+        // compare it with their server.
+        has_private_key: config
+            .private_key_encrypted
+            .as_deref()
+            .is_some_and(|value| !value.is_empty()),
+        // Both WireGuard public keys are shown in full, for the same reason
+        // the host key is: the peer's is what the operator pasted out of their
+        // server, ours is what they must paste back into it, and masking
+        // either would hide the only two values that make a key mistake
+        // diagnosable. The preshared key *is* a secret and gets the write-only
+        // treatment.
+        peer_public_key: config.peer_public_key,
+        has_preshared_key: config
+            .preshared_key_encrypted
+            .as_deref()
+            .is_some_and(|value| !value.is_empty()),
+        tunnel_public_key: config.tunnel_public_key,
+        tunnel_addresses: config.tunnel_addresses,
+        tunnel_dns_servers: config.tunnel_dns_servers,
+        tunnel_mtu: config.tunnel_mtu.map(i32::from),
+        tunnel_keepalive_seconds: config.tunnel_keepalive_seconds.map(i32::from),
+        host_key_fingerprint: config.host_key_fingerprint,
+        host_key_pinned_at: config.host_key_pinned_at,
         is_enabled: config.is_enabled,
         last_health_status: config
             .last_health_status
@@ -629,10 +667,8 @@ pub fn from_indexer_proxy_config(config: IndexerProxyConfig) -> IndexerProxyConf
     }
 }
 
-pub fn from_indexer_proxy_test_result(
-    result: IndexerProxyTestResult,
-) -> IndexerProxyTestResultPayload {
-    IndexerProxyTestResultPayload {
+pub fn from_proxy_test_result(result: ProxyTestResult) -> ProxyTestResultPayload {
+    ProxyTestResultPayload {
         ok: result.ok,
         status: result.status.as_str().to_string(),
         message: result.message,
@@ -781,6 +817,7 @@ pub fn from_download_client_config_with_fields(
         status: config.status.as_str().to_string(),
         last_error: config.last_error,
         last_seen_at: config.last_seen_at,
+        proxy_config_id: config.proxy_config_id.map(Into::into),
         created_at: config.created_at,
         updated_at: config.updated_at,
     }

@@ -637,8 +637,13 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
         query_field_count, 150,
         "query fields: {query_field_names:?}"
     );
+    // First-class proxies (WP4) add one mutation, resetProxyHostKey: SSH host
+    // keys are pinned on trust-on-first-use, so a legitimate server rekey needs
+    // an explicit operator-driven way to forget the pin. Every other proxy and
+    // download-client change in that work package is additive fields on types
+    // that already existed. 215->216.
     assert_eq!(
-        mutation_field_count, 215,
+        mutation_field_count, 216,
         "mutation fields: {mutation_field_names:?}"
     );
     // Cross-library transfer (T082, FR-055/FR-056) surfaces destination-title
@@ -683,7 +688,7 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
     assert!(query_field_names.contains(&"backupSettings"));
-    assert!(query_field_names.contains(&"indexerProxyConfigs"));
+    assert!(query_field_names.contains(&"proxyConfigs"));
     assert!(query_field_names.contains(&"indexerDownloadClientMappingCatalog"));
     assert!(query_field_names.contains(&"externalImportSetupSecretDraft"));
     assert!(query_field_names.contains(&"externalImportSetupSecretDraftStatus"));
@@ -760,28 +765,28 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     assert!(public_type_names.contains(&"MediaServerPlaybackLinkPayload"));
     assert!(public_type_names.contains(&"PendingImportReasonClassValue"));
     assert!(mutation_field_names.contains(&"clearExternalImportSetupSecretDraft"));
-    assert!(mutation_field_names.contains(&"createIndexerProxyConfig"));
+    assert!(mutation_field_names.contains(&"createProxyConfig"));
     assert!(mutation_field_names.contains(&"setIndexerDownloadClientMapping"));
     assert!(query_field_names.contains(&"seedingProfiles"));
     assert!(mutation_field_names.contains(&"createSeedingProfile"));
     assert!(mutation_field_names.contains(&"setIndexerSeedingProfile"));
     assert!(public_type_names.contains(&"SeedingProfilePayload"));
     assert!(public_type_names.contains(&"IndexerDownloadClientMappingCatalogPayload"));
-    assert!(mutation_field_names.contains(&"deleteIndexerProxyConfig"));
+    assert!(mutation_field_names.contains(&"deleteProxyConfig"));
     assert!(mutation_field_names.contains(&"saveExternalImportSetupSecretDraft"));
     assert!(mutation_field_names.contains(&"beginManualImportSelection"));
     assert!(mutation_field_names.contains(&"cancelExternalImportArrSourceWarmup"));
     assert!(mutation_field_names.contains(&"setUserLoginEnabled"));
-    assert!(mutation_field_names.contains(&"testIndexerProxyConfig"));
-    assert!(mutation_field_names.contains(&"updateIndexerProxyConfig"));
+    assert!(mutation_field_names.contains(&"testProxyConfig"));
+    assert!(mutation_field_names.contains(&"updateProxyConfig"));
     assert!(mutation_field_names.contains(&"updateBackupSettings"));
     assert!(public_type_names.contains(&"BackupSettingsPayload"));
-    assert!(public_type_names.contains(&"CreateIndexerProxyConfigInput"));
-    assert!(public_type_names.contains(&"DeleteIndexerProxyConfigPayload"));
-    assert!(public_type_names.contains(&"IndexerProxyConfigPayload"));
-    assert!(public_type_names.contains(&"IndexerProxyTestResultPayload"));
+    assert!(public_type_names.contains(&"CreateProxyConfigInput"));
+    assert!(public_type_names.contains(&"DeleteProxyConfigPayload"));
+    assert!(public_type_names.contains(&"ProxyConfigPayload"));
+    assert!(public_type_names.contains(&"ProxyTestResultPayload"));
     assert!(public_type_names.contains(&"SaveExternalImportSetupSecretDraftInput"));
-    assert!(public_type_names.contains(&"UpdateIndexerProxyConfigInput"));
+    assert!(public_type_names.contains(&"UpdateProxyConfigInput"));
     assert!(public_type_names.contains(&"ExternalImportSetupSecretDraftPayload"));
     assert!(public_type_names.contains(&"RuntimeInfoPayload"));
     assert!(public_type_names.contains(&"RuntimePathStyleValue"));

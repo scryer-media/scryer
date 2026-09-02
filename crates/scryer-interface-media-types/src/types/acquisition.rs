@@ -321,7 +321,7 @@ pub struct IndexerConfigPayload {
     /// Indexer base URL.
     pub base_url: String,
     /// Optional proxy configuration ID used by this indexer.
-    pub indexer_proxy_config_id: Option<ID>,
+    pub proxy_config_id: Option<ID>,
     /// Optional download-client ID associated with this indexer.
     pub download_client_id: Option<ID>,
     /// Optional seeding profile ID applied to torrents grabbed from this indexer.
@@ -429,20 +429,59 @@ pub struct IndexerDownloadClientProviderCompatibilityPayload {
 }
 
 #[derive(SimpleObject, Clone)]
-/// Indexer proxy configuration and latest health state.
-pub struct IndexerProxyConfigPayload {
+/// Proxy configuration and latest health state.
+pub struct ProxyConfigPayload {
     /// Proxy configuration ID.
     pub id: ID,
     /// Proxy configuration name.
     pub name: String,
     /// Proxy provider type.
     pub provider_type: String,
-    /// Proxy protocol.
-    pub protocol: String,
+    /// Challenge-solver protocol, or null for transport proxies, which speak
+    /// no protocol of their own.
+    pub protocol: Option<String>,
     /// Proxy base URL.
     pub base_url: String,
     /// Request timeout in seconds.
     pub request_timeout_seconds: i32,
+    /// Whether a username or password is stored for this proxy, without
+    /// exposing either value. Always false for challenge solvers, which take
+    /// no credentials.
+    pub has_credentials: bool,
+    /// Whether destination hostnames are resolved at the proxy (`socks5h`).
+    /// Always false outside SOCKS5.
+    pub remote_dns: bool,
+    /// Whether a private key is stored for this tunnel, without exposing it.
+    /// Always false outside the tunnel providers.
+    pub has_private_key: bool,
+    /// WireGuard peer public key, from the `[Peer]` section, or null outside
+    /// WireGuard. A public key is public, so this value is shown rather than
+    /// masked.
+    pub peer_public_key: Option<String>,
+    /// Whether a WireGuard preshared key is stored, without exposing it.
+    /// Always false outside WireGuard.
+    pub has_preshared_key: bool,
+    /// This tunnel's own public key, derived from its private key, or null
+    /// when no private key is stored. It is the line the operator must paste
+    /// into the server's `[Peer]` section, so it is shown rather than masked.
+    pub tunnel_public_key: Option<String>,
+    /// WireGuard interface addresses, from the `[Interface] Address` line.
+    /// Empty outside WireGuard.
+    pub tunnel_addresses: Vec<String>,
+    /// WireGuard resolvers reached through the tunnel, from the
+    /// `[Interface] DNS` line. Empty when none are configured.
+    pub tunnel_dns_servers: Vec<String>,
+    /// WireGuard tunnel MTU, or null to use the engine's default.
+    pub tunnel_mtu: Option<i32>,
+    /// WireGuard persistent keepalive in seconds, or null to use the engine's
+    /// default. Zero means keepalive is switched off.
+    pub tunnel_keepalive_seconds: Option<i32>,
+    /// Host key pinned on the first successful tunnel connect, formatted as
+    /// OpenSSH prints it, or null before the first connect. A host key is
+    /// public, so this value is shown rather than masked.
+    pub host_key_fingerprint: Option<String>,
+    /// UTC time the host key above was pinned, or null when none is pinned.
+    pub host_key_pinned_at: Option<DateTime<Utc>>,
     /// Whether the proxy is enabled.
     pub is_enabled: bool,
     /// Most recent health status, or null before the first check.
@@ -458,8 +497,8 @@ pub struct IndexerProxyConfigPayload {
 }
 
 #[derive(SimpleObject, Clone)]
-/// Result of testing an indexer proxy connection.
-pub struct IndexerProxyTestResultPayload {
+/// Result of testing a proxy connection.
+pub struct ProxyTestResultPayload {
     /// Whether the connection test succeeded.
     pub ok: bool,
     /// Machine-readable test status.
@@ -506,6 +545,10 @@ pub struct DownloadClientConfigPayload {
     pub last_error: Option<String>,
     /// UTC time the client was last observed, or null before the first observation.
     pub last_seen_at: Option<DateTime<Utc>>,
+    /// Proxy carrying this client's traffic, or null when none is assigned.
+    /// Any proxy kind may be assigned. A challenge solver has no effect on a
+    /// native client, whose requests are not made by a plugin guest.
+    pub proxy_config_id: Option<ID>,
     /// UTC creation time.
     pub created_at: DateTime<Utc>,
     /// UTC last-update time.
@@ -761,7 +804,7 @@ pub struct CreateIndexerConfigInput {
     /// Provider implementation identifier.
     pub provider_type: String,
     /// Optional proxy configuration identity.
-    pub indexer_proxy_config_id: Option<ID>,
+    pub proxy_config_id: Option<ID>,
     /// Optional download-client identity used for routed grabs.
     pub download_client_id: Option<ID>,
     /// Rate-limit interval in seconds.
@@ -788,7 +831,7 @@ pub struct UpdateIndexerConfigInput {
     /// Replacement provider implementation; omission preserves the current value.
     pub provider_type: Option<String>,
     /// Proxy identity: omission preserves it, null clears it, and a value replaces it.
-    pub indexer_proxy_config_id: MaybeUndefined<ID>,
+    pub proxy_config_id: MaybeUndefined<ID>,
     /// Download-client identity: omission preserves it, null clears it, and a value replaces it.
     pub download_client_id: MaybeUndefined<ID>,
     /// Replacement rate-limit interval in seconds; omission preserves it.
@@ -815,23 +858,64 @@ pub struct SetIndexerDownloadClientMappingInput {
 }
 
 #[derive(InputObject)]
-/// Configuration for an indexer proxy provider.
-pub struct CreateIndexerProxyConfigInput {
+/// Configuration for a proxy provider.
+pub struct CreateProxyConfigInput {
     /// Display name of the proxy.
     pub name: String,
     /// Proxy provider implementation identifier.
     pub provider_type: String,
+    /// Challenge-solver protocol. Omit to take the single protocol Scryer
+    /// speaks; transport proxies reject any value because they speak none.
+    pub protocol: Option<String>,
     /// Proxy base URL.
     pub base_url: String,
     /// Request timeout in seconds.
     pub request_timeout_seconds: Option<i32>,
+    /// Transport-proxy username. Write-only: stored encrypted and never read
+    /// back. Challenge solvers reject it.
+    pub username: Option<String>,
+    /// Transport-proxy password. Write-only: stored encrypted and never read
+    /// back. Requires a username; challenge solvers reject it.
+    pub password: Option<String>,
+    /// SOCKS5 only: resolve destination hostnames at the proxy. A `socks5h://`
+    /// base URL implies true.
+    pub remote_dns: Option<bool>,
+    /// Private key for a tunnel provider: PEM for an SSH tunnel, base64 for
+    /// WireGuard. Write-only: stored encrypted and never read back. An SSH
+    /// tunnel needs either this or a password; WireGuard requires it.
+    pub private_key: Option<String>,
+    /// Passphrase protecting the private key above. Write-only: stored
+    /// encrypted and never read back. Requires a private key, and only SSH
+    /// tunnels accept one.
+    pub private_key_passphrase: Option<String>,
+    /// WireGuard peer public key, from the `[Peer]` section. Required for
+    /// WireGuard and rejected by every other provider. Not a secret: it is
+    /// read back in full.
+    pub peer_public_key: Option<String>,
+    /// Optional WireGuard preshared key. Write-only: stored encrypted and
+    /// never read back. Only WireGuard accepts it.
+    pub preshared_key: Option<String>,
+    /// WireGuard interface addresses, from the `[Interface] Address` line.
+    /// At least one is required for WireGuard; a single comma-separated entry
+    /// is also accepted. Only WireGuard accepts them.
+    pub tunnel_addresses: Option<Vec<String>>,
+    /// WireGuard resolvers, from the `[Interface] DNS` line. Optional; without
+    /// them a destination must be addressed by IP. Only WireGuard accepts
+    /// them.
+    pub tunnel_dns_servers: Option<Vec<String>>,
+    /// WireGuard tunnel MTU. Omit to use the engine's default. Only WireGuard
+    /// accepts it.
+    pub tunnel_mtu: Option<i32>,
+    /// WireGuard persistent keepalive in seconds. Omit to use the engine's
+    /// default; zero switches keepalive off. Only WireGuard accepts it.
+    pub tunnel_keepalive_seconds: Option<i32>,
     /// Whether the proxy is enabled.
     pub is_enabled: Option<bool>,
 }
 
 #[derive(InputObject)]
-/// Patch for an indexer proxy configuration.
-pub struct UpdateIndexerProxyConfigInput {
+/// Patch for a proxy configuration.
+pub struct UpdateProxyConfigInput {
     /// Proxy configuration identity to patch.
     pub id: ID,
     /// Replacement display name; omission preserves it.
@@ -840,6 +924,39 @@ pub struct UpdateIndexerProxyConfigInput {
     pub base_url: Option<String>,
     /// Replacement request timeout in seconds; omission preserves it.
     pub request_timeout_seconds: Option<i32>,
+    /// Replacement transport-proxy username. Write-only: omission preserves
+    /// the stored value, null clears it, and it is never read back.
+    pub username: MaybeUndefined<String>,
+    /// Replacement transport-proxy password. Write-only: omission preserves
+    /// the stored value, null clears it, and it is never read back.
+    pub password: MaybeUndefined<String>,
+    /// Replacement SOCKS5 remote-DNS state; omission preserves it.
+    pub remote_dns: Option<bool>,
+    /// Replacement tunnel private key: PEM for an SSH tunnel, base64 for
+    /// WireGuard. Write-only: omission preserves the stored value, null clears
+    /// it, and it is never read back. Writing it re-derives `tunnelPublicKey`.
+    pub private_key: MaybeUndefined<String>,
+    /// Replacement private key passphrase. Write-only: omission preserves the
+    /// stored value, null clears it, and it is never read back.
+    pub private_key_passphrase: MaybeUndefined<String>,
+    /// Replacement WireGuard peer public key; omission preserves it. It has no
+    /// cleared state: a WireGuard tunnel cannot exist without one.
+    pub peer_public_key: Option<String>,
+    /// Replacement WireGuard preshared key. Write-only: omission preserves the
+    /// stored value, null clears it, and it is never read back.
+    pub preshared_key: MaybeUndefined<String>,
+    /// Replacement WireGuard interface addresses; omission preserves them, and
+    /// an empty list clears them.
+    pub tunnel_addresses: Option<Vec<String>>,
+    /// Replacement WireGuard resolvers; omission preserves them, and an empty
+    /// list clears them.
+    pub tunnel_dns_servers: Option<Vec<String>>,
+    /// Replacement WireGuard MTU; omission preserves it and null restores the
+    /// engine's default.
+    pub tunnel_mtu: MaybeUndefined<i32>,
+    /// Replacement WireGuard keepalive in seconds; omission preserves it, null
+    /// restores the engine's default, and zero switches keepalive off.
+    pub tunnel_keepalive_seconds: MaybeUndefined<i32>,
     /// Replacement enabled state; omission preserves it.
     pub is_enabled: Option<bool>,
 }
@@ -940,8 +1057,8 @@ pub struct DefaultSeedingProfilePayload {
 }
 
 #[derive(SimpleObject, Clone)]
-/// Identity returned after deleting an indexer proxy.
-pub struct DeleteIndexerProxyConfigPayload {
+/// Identity returned after deleting a proxy.
+pub struct DeleteProxyConfigPayload {
     /// Deleted proxy configuration identity.
     pub id: ID,
 }
@@ -962,6 +1079,9 @@ pub struct CreateDownloadClientConfigInput {
     pub client_type: String,
     /// Provider configuration values, including secret fields.
     pub config: Vec<ProviderConfigValueInput>,
+    /// Proxy to carry this client's traffic. Any proxy kind is accepted, and
+    /// the proxy must exist and be enabled.
+    pub proxy_config_id: Option<ID>,
     /// Whether the client is enabled.
     pub is_enabled: Option<bool>,
 }
@@ -977,6 +1097,8 @@ pub struct UpdateDownloadClientConfigInput {
     pub client_type: Option<String>,
     /// Replacement provider configuration; omitted secret fields retain stored secrets.
     pub config: Option<Vec<ProviderConfigValueInput>>,
+    /// Replacement proxy assignment; omission preserves it and null clears it.
+    pub proxy_config_id: MaybeUndefined<ID>,
     /// Replacement enabled state; omission preserves it.
     pub is_enabled: Option<bool>,
 }
@@ -1013,6 +1135,9 @@ pub struct TestDownloadClientConnectionInput {
     pub client_type: String,
     /// Provider configuration values used for the test.
     pub config: Vec<ProviderConfigValueInput>,
+    /// Proxy to dial through for this test, so it exercises the same egress
+    /// live traffic will use. Omit to test the client directly.
+    pub proxy_config_id: Option<ID>,
 }
 
 #[derive(InputObject)]
@@ -1077,7 +1202,7 @@ pub struct TestIndexerConnectionInput {
     /// Existing indexer identity, when testing a stored configuration.
     pub indexer_id: Option<ID>,
     /// Proxy identity: omission preserves the stored association, null clears it, and a value replaces it.
-    pub indexer_proxy_config_id: MaybeUndefined<ID>,
+    pub proxy_config_id: MaybeUndefined<ID>,
 }
 
 #[derive(InputObject)]

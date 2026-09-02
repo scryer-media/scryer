@@ -731,7 +731,7 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
         classification: BackupTableClassification::Export,
     },
     BackupTableCatalogEntry {
-        table: "indexer_proxy_configs",
+        table: "proxy_configs",
         classification: BackupTableClassification::Export,
     },
     BackupTableCatalogEntry {

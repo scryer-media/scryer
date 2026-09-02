@@ -10,7 +10,7 @@ impl AppUseCase {
         provider_type: &str,
         config_json: Option<&str>,
         indexer_id: Option<&str>,
-        indexer_proxy_config_id_override: Option<Option<&str>>,
+        proxy_config_id_override: Option<Option<&str>>,
     ) -> AppResult<()> {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
             .await?;
@@ -80,28 +80,26 @@ impl AppUseCase {
             }
         }
 
-        let indexer_proxy_config_id = match indexer_proxy_config_id_override {
+        let proxy_config_id = match proxy_config_id_override {
             Some(Some(id)) => Some(id.to_string()),
             Some(None) => None,
             None => persisted_config
                 .as_ref()
-                .and_then(|config| config.indexer_proxy_config_id.clone()),
+                .and_then(|config| config.proxy_config_id.clone()),
         };
-        let indexer_proxy_config = if let Some(indexer_proxy_config_id) =
-            indexer_proxy_config_id.as_deref()
-        {
+        let proxy_config = if let Some(proxy_config_id) = proxy_config_id.as_deref() {
             let proxy_config = self
                 .services
                 .integrations
-                .indexer_proxy_configs
-                .get_by_id(indexer_proxy_config_id)
+                .proxy_configs
+                .get_by_id(proxy_config_id)
                 .await?
                 .ok_or_else(|| {
-                    AppError::Validation("Indexer proxy configuration was not found.".to_string())
+                    AppError::Validation("Proxy configuration was not found.".to_string())
                 })?;
             if !proxy_config.is_enabled {
                 return Err(AppError::Validation(
-                    "Indexer proxy is disabled for this indexer.".to_string(),
+                    "Proxy is disabled for this indexer.".to_string(),
                 ));
             }
             Some(proxy_config)
@@ -126,7 +124,7 @@ impl AppUseCase {
             enable_interactive_search: true,
             enable_auto_search: true,
             disabled_until: None,
-            indexer_proxy_config_id,
+            proxy_config_id,
             download_client_id: None,
             seeding_profile_id: None,
             managed_parent_config_id: None,
@@ -168,7 +166,7 @@ impl AppUseCase {
         }
 
         let client = provider
-            .client_for_provider_with_proxy(&temp_config, indexer_proxy_config.as_ref())
+            .client_for_provider_with_proxy(&temp_config, proxy_config.as_ref())
             .ok_or_else(|| {
                 AppError::Validation(format!(
                     "no indexer provider available for provider type '{provider_type}'"
@@ -295,7 +293,7 @@ impl AppUseCase {
             enable_interactive_search: false,
             enable_auto_search: false,
             disabled_until: None,
-            indexer_proxy_config_id: None,
+            proxy_config_id: None,
             download_client_id: None,
             seeding_profile_id: None,
             managed_parent_config_id: None,
@@ -1584,7 +1582,7 @@ mod tests {
                     is_enabled: true,
                     enable_interactive_search: true,
                     enable_auto_search: true,
-                    indexer_proxy_config_id: None,
+                    proxy_config_id: None,
                     download_client_id: None,
                     config_json: Some(
                         r#"{"feed_url":"https://ipt.beelyrics.net/t.rss?u=2203846"}"#.to_string(),
@@ -1627,7 +1625,7 @@ mod tests {
                 is_enabled: true,
                 enable_interactive_search: true,
                 enable_auto_search: true,
-                indexer_proxy_config_id: None,
+                proxy_config_id: None,
                 download_client_id: None,
                 config_json: Some(
                     r#"{"feed_url":"https://ipt.beelyrics.net/t.rss?u=2203846"}"#.to_string(),
@@ -1673,7 +1671,7 @@ mod tests {
                     is_enabled: true,
                     enable_interactive_search: true,
                     enable_auto_search: true,
-                    indexer_proxy_config_id: None,
+                    proxy_config_id: None,
                     download_client_id: None,
                     config_json: Some(
                         r#"{"base_url":"https://api.nzbgeek.info/","api_key":"bad-key"}"#
@@ -1706,7 +1704,7 @@ mod tests {
             is_enabled: true,
             enable_interactive_search: true,
             enable_auto_search: true,
-            indexer_proxy_config_id: None,
+            proxy_config_id: None,
             download_client_id: None,
             seeding_profile_id: None,
             managed_parent_config_id: None,
@@ -1754,7 +1752,7 @@ mod tests {
                     is_enabled: None,
                     enable_interactive_search: None,
                     enable_auto_search: None,
-                    indexer_proxy_config_id: None,
+                    proxy_config_id: None,
                     download_client_id: None,
                     seeding_profile_id: None,
                     managed_parent_config_id: None,
@@ -1800,7 +1798,7 @@ mod tests {
             is_enabled: true,
             enable_interactive_search: true,
             enable_auto_search: true,
-            indexer_proxy_config_id: None,
+            proxy_config_id: None,
             download_client_id: None,
             seeding_profile_id: None,
             managed_parent_config_id: None,
@@ -1849,7 +1847,7 @@ mod tests {
                     is_enabled: None,
                     enable_interactive_search: None,
                     enable_auto_search: None,
-                    indexer_proxy_config_id: None,
+                    proxy_config_id: None,
                     download_client_id: None,
                     seeding_profile_id: None,
                     managed_parent_config_id: None,
@@ -1883,7 +1881,7 @@ mod tests {
             is_enabled: true,
             enable_interactive_search: true,
             enable_auto_search: true,
-            indexer_proxy_config_id: None,
+            proxy_config_id: None,
             download_client_id: None,
             seeding_profile_id: None,
             managed_parent_config_id: None,
@@ -1931,7 +1929,7 @@ mod tests {
                 is_enabled: None,
                 enable_interactive_search: None,
                 enable_auto_search: None,
-                indexer_proxy_config_id: None,
+                proxy_config_id: None,
                 download_client_id: None,
                 seeding_profile_id: None,
                 managed_parent_config_id: None,
@@ -1966,7 +1964,7 @@ mod tests {
             is_enabled: true,
             enable_interactive_search: true,
             enable_auto_search: true,
-            indexer_proxy_config_id: None,
+            proxy_config_id: None,
             download_client_id: None,
             seeding_profile_id: None,
             managed_parent_config_id: None,
@@ -2047,7 +2045,7 @@ mod tests {
             is_enabled: true,
             enable_interactive_search: true,
             enable_auto_search: true,
-            indexer_proxy_config_id: None,
+            proxy_config_id: None,
             download_client_id: None,
             seeding_profile_id: None,
             managed_parent_config_id: None,
@@ -2124,7 +2122,7 @@ mod tests {
             is_enabled: true,
             enable_interactive_search: true,
             enable_auto_search: true,
-            indexer_proxy_config_id: None,
+            proxy_config_id: None,
             download_client_id: None,
             seeding_profile_id: None,
             managed_parent_config_id: None,
@@ -2232,7 +2230,7 @@ mod tests {
             is_enabled: true,
             enable_interactive_search: true,
             enable_auto_search: true,
-            indexer_proxy_config_id: None,
+            proxy_config_id: None,
             download_client_id: None,
             seeding_profile_id: None,
             managed_parent_config_id: None,
@@ -2299,7 +2297,7 @@ mod tests {
             is_enabled: true,
             enable_interactive_search: true,
             enable_auto_search: true,
-            indexer_proxy_config_id: None,
+            proxy_config_id: None,
             download_client_id: None,
             seeding_profile_id: None,
             managed_parent_config_id: None,
@@ -2372,7 +2370,7 @@ mod tests {
                     is_enabled: true,
                     enable_interactive_search: true,
                     enable_auto_search: true,
-                    indexer_proxy_config_id: None,
+                    proxy_config_id: None,
                     download_client_id: None,
                     config_json: Some(r#"{"base_url":"https://manager.example"}"#.to_string()),
                 },
@@ -2413,7 +2411,7 @@ mod tests {
             is_enabled: false,
             enable_interactive_search: false,
             enable_auto_search: false,
-            indexer_proxy_config_id: None,
+            proxy_config_id: None,
             download_client_id: None,
             seeding_profile_id: None,
             managed_parent_config_id: None,
@@ -2449,7 +2447,7 @@ mod tests {
                     is_enabled: Some(true),
                     enable_interactive_search: None,
                     enable_auto_search: None,
-                    indexer_proxy_config_id: None,
+                    proxy_config_id: None,
                     download_client_id: None,
                     seeding_profile_id: None,
                     managed_parent_config_id: None,
@@ -2893,7 +2891,7 @@ mod tests {
                     is_enabled: true,
                     enable_interactive_search: true,
                     enable_auto_search: true,
-                    indexer_proxy_config_id: None,
+                    proxy_config_id: None,
                     download_client_id: None,
                     config_json: Some(r#"{"base_url":"https://manager.example"}"#.to_string()),
                 },
@@ -2939,7 +2937,7 @@ mod tests {
                     is_enabled: true,
                     enable_interactive_search: true,
                     enable_auto_search: true,
-                    indexer_proxy_config_id: None,
+                    proxy_config_id: None,
                     download_client_id: None,
                     config_json: Some(r#"{"base_url":"https://manager.example"}"#.to_string()),
                 },
@@ -2976,7 +2974,7 @@ mod tests {
                     is_enabled: true,
                     enable_interactive_search: true,
                     enable_auto_search: true,
-                    indexer_proxy_config_id: None,
+                    proxy_config_id: None,
                     download_client_id: None,
                     config_json: Some(r#"{"base_url":"https://manager.example"}"#.to_string()),
                 },
@@ -3023,7 +3021,7 @@ mod tests {
                 is_enabled: true,
                 enable_interactive_search: false,
                 enable_auto_search: false,
-                indexer_proxy_config_id: None,
+                proxy_config_id: None,
                 download_client_id: None,
                 seeding_profile_id: None,
                 managed_parent_config_id: None,
@@ -3052,7 +3050,7 @@ mod tests {
                 is_enabled: true,
                 enable_interactive_search: true,
                 enable_auto_search: true,
-                indexer_proxy_config_id: None,
+                proxy_config_id: None,
                 download_client_id: None,
                 seeding_profile_id: None,
                 managed_parent_config_id: Some("parent".to_string()),
@@ -3113,7 +3111,7 @@ mod tests {
                 is_enabled: true,
                 enable_interactive_search: false,
                 enable_auto_search: false,
-                indexer_proxy_config_id: None,
+                proxy_config_id: None,
                 download_client_id: None,
                 seeding_profile_id: None,
                 managed_parent_config_id: None,
@@ -3144,7 +3142,7 @@ mod tests {
                 is_enabled: false,
                 enable_interactive_search: false,
                 enable_auto_search: false,
-                indexer_proxy_config_id: None,
+                proxy_config_id: None,
                 download_client_id: None,
                 seeding_profile_id: None,
                 managed_parent_config_id: Some("parent".to_string()),
@@ -3302,7 +3300,7 @@ mod tests {
                 is_enabled: true,
                 enable_interactive_search: false,
                 enable_auto_search: false,
-                indexer_proxy_config_id: None,
+                proxy_config_id: None,
                 download_client_id: None,
                 seeding_profile_id: None,
                 managed_parent_config_id: None,
@@ -3364,7 +3362,7 @@ mod tests {
                 is_enabled: true,
                 enable_interactive_search: false,
                 enable_auto_search: false,
-                indexer_proxy_config_id: None,
+                proxy_config_id: None,
                 download_client_id: None,
                 seeding_profile_id: None,
                 managed_parent_config_id: None,
@@ -3395,7 +3393,7 @@ mod tests {
                 is_enabled: false,
                 enable_interactive_search: false,
                 enable_auto_search: false,
-                indexer_proxy_config_id: None,
+                proxy_config_id: None,
                 download_client_id: None,
                 seeding_profile_id: None,
                 managed_parent_config_id: None,
@@ -3454,7 +3452,7 @@ mod tests {
                 is_enabled: true,
                 enable_interactive_search: false,
                 enable_auto_search: false,
-                indexer_proxy_config_id: None,
+                proxy_config_id: None,
                 download_client_id: None,
                 seeding_profile_id: None,
                 managed_parent_config_id: None,
@@ -3483,7 +3481,7 @@ mod tests {
                 is_enabled: true,
                 enable_interactive_search: false,
                 enable_auto_search: false,
-                indexer_proxy_config_id: None,
+                proxy_config_id: None,
                 download_client_id: None,
                 seeding_profile_id: None,
                 managed_parent_config_id: None,
@@ -3544,7 +3542,7 @@ mod tests {
                 is_enabled: true,
                 enable_interactive_search: false,
                 enable_auto_search: false,
-                indexer_proxy_config_id: None,
+                proxy_config_id: None,
                 download_client_id: None,
                 seeding_profile_id: None,
                 managed_parent_config_id: None,
@@ -3640,7 +3638,7 @@ mod tests {
             is_enabled: true,
             enable_interactive_search: false,
             enable_auto_search: false,
-            indexer_proxy_config_id: None,
+            proxy_config_id: None,
             download_client_id: None,
             seeding_profile_id: None,
             managed_parent_config_id: None,
@@ -3717,7 +3715,7 @@ mod tests {
             is_enabled: true,
             enable_interactive_search: true,
             enable_auto_search: true,
-            indexer_proxy_config_id: None,
+            proxy_config_id: None,
             download_client_id: None,
             seeding_profile_id: None,
             managed_parent_config_id: None,
@@ -3743,7 +3741,7 @@ mod tests {
             is_enabled: false,
             enable_interactive_search: false,
             enable_auto_search: false,
-            indexer_proxy_config_id: None,
+            proxy_config_id: None,
             download_client_id: None,
             seeding_profile_id: None,
             managed_parent_config_id: Some(parent.id.clone()),
@@ -3780,7 +3778,7 @@ mod tests {
             is_enabled: true,
             enable_interactive_search: true,
             enable_auto_search: true,
-            indexer_proxy_config_id: None,
+            proxy_config_id: None,
             download_client_id: None,
             seeding_profile_id: None,
             managed_parent_config_id: Some(parent.id.clone()),
@@ -3988,7 +3986,7 @@ mod tests {
             is_enabled: true,
             enable_interactive_search: false,
             enable_auto_search: false,
-            indexer_proxy_config_id: None,
+            proxy_config_id: None,
             download_client_id: None,
             seeding_profile_id: None,
             managed_parent_config_id: None,
@@ -4016,7 +4014,7 @@ mod tests {
             is_enabled: true,
             enable_interactive_search: true,
             enable_auto_search: true,
-            indexer_proxy_config_id: None,
+            proxy_config_id: None,
             download_client_id: None,
             seeding_profile_id: None,
             managed_parent_config_id: Some(parent.id.clone()),
@@ -4101,7 +4099,7 @@ mod tests {
                 is_enabled: true,
                 enable_interactive_search: false,
                 enable_auto_search: false,
-                indexer_proxy_config_id: None,
+                proxy_config_id: None,
                 download_client_id: None,
                 seeding_profile_id: None,
                 managed_parent_config_id: None,
@@ -4165,7 +4163,7 @@ mod tests {
                 is_enabled: true,
                 enable_interactive_search: false,
                 enable_auto_search: false,
-                indexer_proxy_config_id: None,
+                proxy_config_id: None,
                 download_client_id: None,
                 seeding_profile_id: None,
                 managed_parent_config_id: None,
@@ -4194,7 +4192,7 @@ mod tests {
                 is_enabled: true,
                 enable_interactive_search: true,
                 enable_auto_search: true,
-                indexer_proxy_config_id: None,
+                proxy_config_id: None,
                 download_client_id: None,
                 seeding_profile_id: None,
                 managed_parent_config_id: Some("parent".to_string()),

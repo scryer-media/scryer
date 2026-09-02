@@ -47,6 +47,7 @@ import {
   MessagesSquare,
   Monitor,
   Moon,
+  Network,
   Puzzle,
   Rss,
   Server,
@@ -193,6 +194,7 @@ const TOP_NAV_GROUPS: TopNavGroupDefinition[] = [
     items: [
       { kind: "settings", id: "indexers", icon: Database },
       { kind: "settings", id: "downloadClients", icon: Download },
+      { kind: "settings", id: "proxies", icon: Network },
       { kind: "settings", id: "mediaServers", icon: Server },
       { kind: "settings", id: "notifications", icon: Bell },
     ],
@@ -344,6 +346,12 @@ const settingsEntries: Array<{
   {
     id: "indexers",
     label: (t) => t("settings.indexers"),
+    requiredAnyAppPermission: [APP_PERMISSIONS.manageSystemSettings],
+  },
+  {
+    id: "proxies",
+    label: (t) => t("settings.proxies"),
+    icon: Network,
     requiredAnyAppPermission: [APP_PERMISSIONS.manageSystemSettings],
   },
   {

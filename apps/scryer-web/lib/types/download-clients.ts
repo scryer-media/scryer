@@ -9,6 +9,11 @@ export type DownloadClientRecord = {
   baseUrl: string | null;
   config: ProviderConfigValue[];
   storedSecretKeys: string[];
+  /**
+   * Proxy carrying this client's traffic, or null when none is assigned. Any
+   * proxy kind may be assigned.
+   */
+  proxyConfigId: string | null;
   isEnabled: boolean;
   status: string;
   lastError: string | null;
@@ -29,6 +34,8 @@ export type DownloadClientDraft = {
   password: string;
   remotePathMappings: string;
   configValues: Record<string, string>;
+  /** Proxy assignment; null is "direct". */
+  proxyConfigId: string | null;
   isEnabled: boolean;
 };
 

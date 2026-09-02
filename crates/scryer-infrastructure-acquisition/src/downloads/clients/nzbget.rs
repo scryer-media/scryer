@@ -97,6 +97,15 @@ impl NzbgetDownloadClient {
         }
     }
 
+    /// Replace the egress client, so an operator-assigned proxy carries this
+    /// client's traffic. Applied after construction because every existing
+    /// call site builds the default client and only the router knows whether a
+    /// proxy is assigned.
+    pub fn with_http_client(mut self, http_client: reqwest::Client) -> Self {
+        self.outbound_http = OutboundHttpClient::new(http_client, RateLimitRegistry::new());
+        self
+    }
+
     pub fn endpoint(&self) -> String {
         if self.rpc_url.is_empty() {
             "http://127.0.0.1:6789/jsonrpc".to_string()

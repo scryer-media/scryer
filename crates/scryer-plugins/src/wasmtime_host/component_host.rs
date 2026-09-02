@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 
 use scryer_application::{
     CapturedIndexerHttpHeader, CapturedIndexerHttpResponse, challenge_solver as solver,
+    transport_proxy,
 };
 use tokio::sync::mpsc;
 use wasmtime::component::{Component, HasSelf, Linker, ResourceTable};
@@ -18,7 +19,7 @@ use wasmtime::{Engine, Store};
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
 use crate::plugin_http_host::{
-    IndexerErrorCaptureContext, IndexerProxyPolicy, PluginHttpHost, enforce_allowed_hosts,
+    IndexerErrorCaptureContext, PluginHttpHost, ProxyPolicy, enforce_allowed_hosts,
     shared_plugin_http_runtime,
 };
 use crate::wasmtime_host::sandbox::HostLimits;
@@ -83,7 +84,7 @@ struct ComponentHostInner {
     config: BTreeMap<String, String>,
     provider_profile: Option<Vec<u8>>,
     allowed_hosts: Vec<String>,
-    indexer_proxy_policy: Option<IndexerProxyPolicy>,
+    proxy_policy: Option<ProxyPolicy>,
     timeout: Duration,
     max_response_bytes: usize,
     clock_origin: std::time::Instant,
@@ -93,6 +94,21 @@ struct ComponentHostInner {
     cancellation: Mutex<tokio_util::sync::CancellationToken>,
     indexer_error_capture: Mutex<Option<ComponentIndexerErrorCapture>>,
     strategy_events: Mutex<StrategyEventState>,
+    transport_proxy_client: Mutex<Option<CachedTransportProxyClient>>,
+}
+
+/// A transport-proxied egress client plus what it was built from.
+///
+/// Invalidation rule: rebuilt when the proxy revision — `(config id,
+/// updated_at)` — or the operator trust bundle changes. Health writes do not
+/// bump `updated_at`, so a flapping proxy does not churn clients; an endpoint,
+/// credential, `remote_dns` or reassignment edit does. (The provider's own
+/// client cache already keys on the same revision, so in practice this host is
+/// replaced too — the check makes the guarantee local rather than inherited.)
+struct CachedTransportProxyClient {
+    revision: String,
+    extra_ca_bundle_pem: String,
+    client: reqwest::Client,
 }
 
 #[derive(Default)]
@@ -148,14 +164,14 @@ impl ComponentHost {
     pub(crate) fn for_indexer(
         config: BTreeMap<String, String>,
         allowed_hosts: Vec<String>,
-        indexer_proxy_policy: Option<IndexerProxyPolicy>,
+        proxy_policy: Option<ProxyPolicy>,
         timeout: Duration,
         max_http_response_bytes: Option<u64>,
     ) -> Result<Self, String> {
         Self::for_indexer_with_provider_profile(
             config,
             allowed_hosts,
-            indexer_proxy_policy,
+            proxy_policy,
             timeout,
             max_http_response_bytes,
             None,
@@ -165,7 +181,7 @@ impl ComponentHost {
     pub(crate) fn for_indexer_with_provider_profile(
         config: BTreeMap<String, String>,
         allowed_hosts: Vec<String>,
-        indexer_proxy_policy: Option<IndexerProxyPolicy>,
+        proxy_policy: Option<ProxyPolicy>,
         timeout: Duration,
         max_http_response_bytes: Option<u64>,
         provider_profile: Option<Vec<u8>>,
@@ -175,7 +191,7 @@ impl ComponentHost {
                 config,
                 provider_profile,
                 allowed_hosts,
-                indexer_proxy_policy,
+                proxy_policy,
                 timeout,
                 max_response_bytes: max_http_response_bytes
                     .and_then(|value| usize::try_from(value).ok())
@@ -187,6 +203,7 @@ impl ComponentHost {
                 cancellation: Mutex::new(tokio_util::sync::CancellationToken::new()),
                 indexer_error_capture: Mutex::new(None),
                 strategy_events: Mutex::new(StrategyEventState::default()),
+                transport_proxy_client: Mutex::new(None),
             }),
         })
     }
@@ -325,6 +342,30 @@ impl ComponentHost {
         let extra_ca_bundle_pem = shared_plugin_http_runtime()
             .extra_ca_bundle_pem()
             .map_err(|_| TransportError::Transport)?;
+
+        // A transport proxy carries bytes and solves nothing, so it only
+        // changes which client dials. It is decided before the destination is
+        // prepared: the DNS-pinning guard resolves the destination locally, and
+        // under `remote_dns` that name is the proxy's to resolve and may not
+        // resolve here at all. The allowed-hosts check above stays the primary
+        // boundary. Response handling below is the direct path's, unchanged.
+        // "Not a solver" rather than "is a transport": every non-solver kind
+        // must be forced through this branch so it either egresses through its
+        // proxy or fails. Falling through to the direct path below would send
+        // traffic the operator proxied out of the default route.
+        if let Some(policy) = self
+            .inner
+            .proxy_policy
+            .as_ref()
+            .filter(|policy| !policy.config.is_challenge_solver())
+        {
+            let transported = self
+                .send_transport_proxied_request(policy, &request, &extra_ca_bundle_pem)
+                .await?;
+            self.capture_indexer_response(transported.captured_response.clone());
+            return Ok(transported.response);
+        }
+
         let cancellation = self.cancellation();
         let target = tokio::select! {
             _ = cancellation.cancelled() => return Err(TransportError::Cancelled),
@@ -334,7 +375,7 @@ impl ComponentHost {
                 "component plugin HTTP",
             ) => result.map_err(component_outbound_destination_error)?,
         };
-        let Some(policy) = self.inner.indexer_proxy_policy.as_ref() else {
+        let Some(policy) = self.inner.proxy_policy.as_ref() else {
             let direct = self
                 .send_direct_request(target.client(), target.url(), &request, &[])
                 .await?;
@@ -383,12 +424,83 @@ impl ComponentHost {
         Ok(solved.response)
     }
 
+    /// Egress for an indexer assigned a transport proxy.
+    ///
+    /// No solve step and no clearance merging: the guest's request is sent as
+    /// written, through a client that dials the operator's proxy. The response
+    /// is read by the same `send_direct_request` the unproxied path uses, so
+    /// header lists, captured responses and the response size cap are identical.
+    async fn send_transport_proxied_request(
+        &self,
+        policy: &ProxyPolicy,
+        request: &HttpRequest,
+        extra_ca_bundle_pem: &str,
+    ) -> Result<ComponentHttpResult, TransportError> {
+        if !policy.config.is_enabled {
+            return Err(TransportError::Transport);
+        }
+        let url =
+            scryer_outbound_http::validate_operator_http_url(&request.url, "component plugin HTTP")
+                .map_err(component_outbound_destination_error)?;
+        let client = self.transport_proxy_client(&policy.config, extra_ca_bundle_pem)?;
+        let result = self
+            .send_direct_request_via(&client, &url, request, &[], Some(&policy.config))
+            .await?;
+        transport_proxy::record_transport_proxy_success(&policy.config);
+        Ok(result)
+    }
+
+    fn transport_proxy_client(
+        &self,
+        config: &scryer_domain::ProxyConfig,
+        extra_ca_bundle_pem: &str,
+    ) -> Result<reqwest::Client, TransportError> {
+        let revision = transport_proxy::transport_proxy_revision(config);
+        let mut cached = self
+            .inner
+            .transport_proxy_client
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(entry) = cached.as_ref()
+            && entry.revision == revision
+            && entry.extra_ca_bundle_pem == extra_ca_bundle_pem
+        {
+            return Ok(entry.client.clone());
+        }
+        let client = transport_proxy::transport_proxied_reqwest_client(config, extra_ca_bundle_pem)
+            .map_err(|message| {
+                transport_proxy::record_transport_proxy_failure(config, &message);
+                TransportError::Transport
+            })?;
+        *cached = Some(CachedTransportProxyClient {
+            revision,
+            extra_ca_bundle_pem: extra_ca_bundle_pem.to_string(),
+            client: client.clone(),
+        });
+        Ok(client)
+    }
+
     async fn send_direct_request(
         &self,
         client: &reqwest::Client,
         url: &reqwest::Url,
         request: &HttpRequest,
         extra_headers: &[(String, String)],
+    ) -> Result<ComponentHttpResult, TransportError> {
+        self.send_direct_request_via(client, url, request, extra_headers, None)
+            .await
+    }
+
+    /// `transport_proxy_config` is `Some` only when `client` dials through a
+    /// transport proxy; it changes nothing about the request and only lets a
+    /// connector failure be attributed to the proxy rather than the indexer.
+    async fn send_direct_request_via(
+        &self,
+        client: &reqwest::Client,
+        url: &reqwest::Url,
+        request: &HttpRequest,
+        extra_headers: &[(String, String)],
+        transport_proxy_config: Option<&scryer_domain::ProxyConfig>,
     ) -> Result<ComponentHttpResult, TransportError> {
         let method = reqwest::Method::from_bytes(request.method.as_bytes())
             .map_err(|_| TransportError::InvalidRequest)?;
@@ -419,7 +531,18 @@ impl ComponentHost {
         let cancellation = self.cancellation();
         let response = tokio::select! {
             _ = cancellation.cancelled() => return Err(TransportError::Cancelled),
-            result = builder.send() => result.map_err(component_transport_error)?,
+            result = builder.send() => match result {
+                Ok(response) => response,
+                Err(error) => {
+                    if let Some(config) = transport_proxy_config
+                        && let Some(message) =
+                            transport_proxy::transport_proxy_connect_failure(config, &error)
+                    {
+                        transport_proxy::record_transport_proxy_failure(config, &message);
+                    }
+                    return Err(component_transport_error(error));
+                }
+            },
         };
         self.read_response(response).await
     }
@@ -429,26 +552,27 @@ impl ComponentHost {
         target_client: &reqwest::Client,
         target_url: &reqwest::Url,
         request: &HttpRequest,
-        policy: &IndexerProxyPolicy,
+        policy: &ProxyPolicy,
         extra_ca_bundle_pem: &str,
     ) -> Result<ComponentHttpResult, TransportError> {
         if !policy.config.is_enabled {
             return Err(TransportError::Transport);
         }
         let provider = policy.config.provider_type;
-        let solver_timeout = scryer_outbound_http::effective_indexer_proxy_request_timeout(
+        let solver_timeout = scryer_outbound_http::effective_proxy_request_timeout(
             policy.config.request_timeout_seconds,
         )
         .min(self.remaining_operation_timeout()?);
-        let proxy_client =
-            scryer_outbound_http::indexer_proxy_reqwest_client_with_extra_ca(extra_ca_bundle_pem)
-                .map_err(|_| {
-                solver::SolverHealthLedger::shared().record_failure(
-                    &policy.config.id,
-                    solver::solver_error_message(provider, solver::SolverErrorKind::Unreachable),
-                );
-                TransportError::Transport
-            })?;
+        let proxy_client = scryer_outbound_http::proxy_reqwest_client_with_extra_ca(
+            extra_ca_bundle_pem,
+        )
+        .map_err(|_| {
+            solver::SolverHealthLedger::shared().record_failure(
+                &policy.config.id,
+                solver::solver_error_message(provider, solver::SolverErrorKind::Unreachable),
+            );
+            TransportError::Transport
+        })?;
         let endpoint = solver::solver_solve_endpoint(&policy.config.base_url);
         let cancellation = self.cancellation();
         let response = tokio::select! {
@@ -1523,14 +1647,17 @@ mod tests {
         ComponentHost::for_indexer(
             BTreeMap::new(),
             vec!["127.0.0.1".to_string()],
-            Some(IndexerProxyPolicy {
-                indexer_id: "component-indexer".to_string(),
-                indexer_name: "Component indexer".to_string(),
-                config: scryer_domain::IndexerProxyConfig {
+            Some(ProxyPolicy {
+                consumer_id: "component-indexer".to_string(),
+                consumer_name: "Component indexer".to_string(),
+                config: scryer_domain::ProxyConfig {
                     id: proxy_id.to_string(),
                     name: "Component solver".to_string(),
-                    provider_type: scryer_domain::IndexerProxyProviderType::Trawl,
-                    protocol: scryer_domain::ChallengeSolverProtocol::RequestSolutionV1,
+                    provider_type: scryer_domain::ProxyProviderType::Trawl,
+                    protocol: Some(scryer_domain::ChallengeSolverProtocol::RequestSolutionV1),
+                    username_encrypted: None,
+                    password_encrypted: None,
+                    remote_dns: false,
                     base_url: server_uri,
                     request_timeout_seconds: 60,
                     is_enabled: true,
@@ -1539,6 +1666,17 @@ mod tests {
                     last_error_at: None,
                     created_at: now,
                     updated_at: now,
+                    host_key_fingerprint: None,
+                    host_key_pinned_at: None,
+                    private_key_encrypted: None,
+                    private_key_passphrase_encrypted: None,
+                    peer_public_key: None,
+                    preshared_key_encrypted: None,
+                    tunnel_public_key: None,
+                    tunnel_addresses: Vec::new(),
+                    tunnel_dns_servers: Vec::new(),
+                    tunnel_mtu: None,
+                    tunnel_keepalive_seconds: None,
                 },
             }),
             timeout,
@@ -1554,6 +1692,302 @@ mod tests {
             headers,
             body: Vec::new(),
         }
+    }
+
+    fn component_transport_test_host(
+        provider_type: scryer_domain::ProxyProviderType,
+        base_url: String,
+    ) -> ComponentHost {
+        let now = chrono::Utc::now();
+        ComponentHost::for_indexer(
+            BTreeMap::new(),
+            vec!["indexer.example".to_string()],
+            Some(ProxyPolicy {
+                consumer_id: "component-indexer".to_string(),
+                consumer_name: "Component indexer".to_string(),
+                config: scryer_domain::ProxyConfig {
+                    id: "component-transport".to_string(),
+                    name: "House VPN".to_string(),
+                    provider_type,
+                    protocol: None,
+                    username_encrypted: None,
+                    password_encrypted: None,
+                    remote_dns: false,
+                    base_url,
+                    request_timeout_seconds: 30,
+                    is_enabled: true,
+                    last_health_status: None,
+                    last_error_message: None,
+                    last_error_at: None,
+                    created_at: now,
+                    updated_at: now,
+                    host_key_fingerprint: None,
+                    host_key_pinned_at: None,
+                    private_key_encrypted: None,
+                    private_key_passphrase_encrypted: None,
+                    peer_public_key: None,
+                    preshared_key_encrypted: None,
+                    tunnel_public_key: None,
+                    tunnel_addresses: Vec::new(),
+                    tunnel_dns_servers: Vec::new(),
+                    tunnel_mtu: None,
+                    tunnel_keepalive_seconds: None,
+                },
+            }),
+            Duration::from_secs(30),
+            Some(1024 * 1024),
+        )
+        .expect("component host should accept a configured transport proxy")
+    }
+
+    /// Minimal in-process HTTP proxy: records the absolute-form request line
+    /// and answers itself, so reaching a host that does not resolve is proof
+    /// the hop went through the proxy.
+    async fn spawn_recording_component_proxy(
+        body: &'static str,
+    ) -> (String, Arc<Mutex<Vec<String>>>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("proxy double should bind");
+        let address = listener.local_addr().expect("proxy double should be bound");
+        let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let recorder = Arc::clone(&seen);
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let recorder = Arc::clone(&recorder);
+                tokio::spawn(async move {
+                    let mut buffer = vec![0u8; 8192];
+                    let mut received = Vec::new();
+                    loop {
+                        let Ok(read) = stream.read(&mut buffer).await else {
+                            return;
+                        };
+                        if read == 0 {
+                            break;
+                        }
+                        received.extend_from_slice(&buffer[..read]);
+                        if received.windows(4).any(|window| window == b"\r\n\r\n") {
+                            break;
+                        }
+                    }
+                    if let Some(line) = String::from_utf8_lossy(&received).lines().next() {
+                        recorder
+                            .lock()
+                            .expect("proxy recorder lock")
+                            .push(line.to_string());
+                    }
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/rss+xml\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = stream.write_all(response.as_bytes()).await;
+                    let _ = stream.flush().await;
+                });
+            }
+        });
+        (format!("http://{address}"), seen)
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn component_http_egresses_through_an_assigned_transport_proxy() {
+        let (proxy_url, seen) = spawn_recording_component_proxy("<rss>through</rss>").await;
+        let host = component_transport_test_host(scryer_domain::ProxyProviderType::Http, proxy_url);
+
+        let response = host
+            .http(HttpRequest {
+                method: "GET".to_string(),
+                // Deliberately unresolvable: only the proxy can reach it.
+                url: "http://indexer.example/api?t=search".to_string(),
+                headers: Vec::new(),
+                body: Vec::new(),
+            })
+            .await
+            .expect("the proxied component request should succeed");
+
+        assert_eq!(response.status, 200);
+        assert_eq!(response.body, b"<rss>through</rss>");
+        let seen = seen.lock().expect("proxy recorder lock").clone();
+        assert_eq!(seen.len(), 1, "expected one proxied request: {seen:?}");
+        assert!(
+            seen[0].contains("http://indexer.example/api?t=search"),
+            "expected an absolute-form proxied request line, got {}",
+            seen[0]
+        );
+    }
+
+    /// A transport proxy has no solve endpoint: an unreachable one must fail
+    /// the hop, never fall through to a solver POST.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn component_http_does_not_solve_for_a_transport_proxy() {
+        let (proxy_url, seen) = spawn_recording_component_proxy("<html>challenge</html>").await;
+        let host = component_transport_test_host(
+            scryer_domain::ProxyProviderType::Socks5,
+            "socks5://127.0.0.1:1".to_string(),
+        );
+
+        let error = host
+            .http(HttpRequest {
+                method: "GET".to_string(),
+                url: "http://indexer.example/api?t=search".to_string(),
+                headers: Vec::new(),
+                body: Vec::new(),
+            })
+            .await
+            .expect_err("an unreachable SOCKS proxy must fail the request");
+
+        assert!(matches!(error, TransportError::Transport), "{error:?}");
+        assert!(
+            seen.lock().expect("proxy recorder lock").is_empty(),
+            "nothing may be sent to {proxy_url}: transport proxies do not solve"
+        );
+    }
+
+    fn tunnel_policy(id: &str, base_url: String) -> ProxyPolicy {
+        let now = chrono::Utc::now();
+        ProxyPolicy {
+            consumer_id: "component-indexer".to_string(),
+            consumer_name: "Component indexer".to_string(),
+            config: scryer_domain::ProxyConfig {
+                id: id.to_string(),
+                name: "Seedbox".to_string(),
+                provider_type: scryer_domain::ProxyProviderType::SshTunnel,
+                protocol: None,
+                username_encrypted: Some("operator".to_string()),
+                password_encrypted: Some("s3cret".to_string()),
+                remote_dns: false,
+                base_url,
+                request_timeout_seconds: 30,
+                is_enabled: true,
+                last_health_status: None,
+                last_error_message: None,
+                last_error_at: None,
+                created_at: now,
+                updated_at: now,
+                host_key_fingerprint: None,
+                host_key_pinned_at: None,
+                private_key_encrypted: None,
+                private_key_passphrase_encrypted: None,
+                peer_public_key: None,
+                preshared_key_encrypted: None,
+                tunnel_public_key: None,
+                tunnel_addresses: Vec::new(),
+                tunnel_dns_servers: Vec::new(),
+                tunnel_mtu: None,
+                tunnel_keepalive_seconds: None,
+            },
+        }
+    }
+
+    /// Was `component_http_fails_closed_for_a_tunnel_proxy` while there was no
+    /// engine. The live WASI p2 egress path now *takes* the tunnel: the SSH
+    /// double records the destination it forwarded, so this proves the request
+    /// travelled through it rather than merely that it did not go direct.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn component_http_egresses_through_an_assigned_tunnel_proxy() {
+        let server = scryer_tunnel::test_support::SshServerDouble::start(
+            scryer_tunnel::test_support::SshServerOptions::default(),
+        )
+        .await;
+        let origin =
+            scryer_tunnel::test_support::TunnelledOrigin::start("<rss>tunnelled</rss>").await;
+
+        let host = ComponentHost::for_indexer(
+            BTreeMap::new(),
+            vec!["127.0.0.1".to_string()],
+            Some(tunnel_policy(
+                "component-tunnel",
+                format!("ssh://{}", server.addr()),
+            )),
+            Duration::from_secs(30),
+            Some(1024 * 1024),
+        )
+        .expect("component host should accept a configured tunnel proxy");
+
+        let response = host
+            .http(HttpRequest {
+                method: "GET".to_string(),
+                url: format!("http://{}/api?t=search", origin.addr()),
+                headers: Vec::new(),
+                body: Vec::new(),
+            })
+            .await
+            .expect("the tunnel must carry the request");
+        assert_eq!(response.status, 200);
+        assert_eq!(
+            String::from_utf8_lossy(&response.body),
+            "<rss>tunnelled</rss>"
+        );
+        assert_eq!(
+            server.forwarded_targets(),
+            vec![("127.0.0.1".to_string(), origin.addr().port())],
+            "the request must have travelled through the SSH server"
+        );
+        assert_eq!(origin.request_lines().len(), 1);
+
+        scryer_application::tunnel_proxy::stop_tunnel("component-tunnel");
+    }
+
+    /// The fail-closed half, kept: a tunnel that will not come up must not
+    /// degrade into a direct connection. The destination is a real listener, so
+    /// a dropped policy would show up as a success rather than as an error.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn component_http_fails_closed_when_a_tunnel_cannot_be_established() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let origin = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("<rss>direct</rss>"))
+            .mount(&origin)
+            .await;
+        let origin_host = origin
+            .uri()
+            .trim_start_matches("http://")
+            .split(':')
+            .next()
+            .expect("origin host")
+            .to_string();
+        let dead_ssh_port = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+            let port = listener.local_addr().expect("addr").port();
+            drop(listener);
+            port
+        };
+
+        let host = ComponentHost::for_indexer(
+            BTreeMap::new(),
+            vec![origin_host],
+            Some(tunnel_policy(
+                "component-tunnel-dead",
+                format!("ssh://127.0.0.1:{dead_ssh_port}"),
+            )),
+            Duration::from_secs(30),
+            Some(1024 * 1024),
+        )
+        .expect("component host should accept a configured tunnel proxy");
+
+        let error = host
+            .http(HttpRequest {
+                method: "GET".to_string(),
+                url: format!("{}/api?t=search", origin.uri()),
+                headers: Vec::new(),
+                body: Vec::new(),
+            })
+            .await
+            .expect_err("an unreachable tunnel must fail the request");
+        assert!(matches!(error, TransportError::Transport), "{error:?}");
+        assert!(
+            origin
+                .received_requests()
+                .await
+                .unwrap_or_default()
+                .is_empty(),
+            "a tunnel-assigned request must never reach the origin directly"
+        );
+
+        scryer_application::tunnel_proxy::stop_tunnel("component-tunnel-dead");
     }
 
     #[tokio::test(flavor = "multi_thread")]

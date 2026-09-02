@@ -6,7 +6,7 @@ export type IndexerRecord = {
   name: string;
   providerType: string;
   baseUrl: string;
-  indexerProxyConfigId: string | null;
+  proxyConfigId: string | null;
   downloadClientId: string | null;
   /** Seeding profile assigned to this indexer. null inherits the routing/global default. */
   seedingProfileId: string | null;
@@ -42,25 +42,10 @@ export type IndexerRecord = {
   updatedAt: string;
 };
 
-export type IndexerProxyRecord = {
-  id: string;
-  name: string;
-  providerType: string;
-  protocol: string;
-  baseUrl: string;
-  requestTimeoutSeconds: number;
-  isEnabled: boolean;
-  lastHealthStatus: string | null;
-  lastErrorMessage: string | null;
-  lastErrorAt: string | null;
-  createdAt: string;
-  updatedAt: string;
-};
-
 export type IndexerDraft = {
   name: string;
   providerType: string;
-  indexerProxyConfigId: string | null;
+  proxyConfigId: string | null;
   downloadClientId: string | null;
   seedingProfileId: string | null;
   storedSecretKeys: string[];
@@ -68,14 +53,6 @@ export type IndexerDraft = {
   enableInteractiveSearch: boolean;
   enableAutoSearch: boolean;
   configValues: Record<string, string>;
-};
-
-export type IndexerProxyDraft = {
-  providerType: "byparr" | "trawl";
-  name: string;
-  baseUrl: string;
-  requestTimeoutSeconds: number;
-  isEnabled: boolean;
 };
 
 export type ConfigFieldOption = {

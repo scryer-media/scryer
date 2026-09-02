@@ -54,6 +54,7 @@ test("canonical route families resolve to typed application state", () => {
     "/automation/post-processing",
     "/integrations/indexers",
     "/integrations/download-clients",
+    "/integrations/proxies",
     "/integrations/media-servers",
     "/integrations/notifications",
     "/settings/profile",
@@ -118,6 +119,13 @@ test("0.16 route aliases redirect to canonical 0.17 paths", () => {
     ["/settings/post-processing", "/automation/post-processing"],
     ["/settings/post-procesing", "/automation/post-processing"],
     ["/settings/indexers", "/integrations/indexers"],
+    ["/settings/proxies", "/integrations/proxies"],
+    // Proxies were a pane of the Indexers page until they became a section of
+    // their own; both spellings of that pane are links people already have.
+    ["/integrations/indexers/proxies", "/integrations/proxies"],
+    ["/integrations/indexers/indexer-proxies", "/integrations/proxies"],
+    ["/integrations/indexer-proxies", "/integrations/proxies"],
+    ["/settings/indexer-proxies", "/integrations/proxies"],
     ["/settings/download-clients", "/integrations/download-clients"],
     ["/settings/downloadClients", "/integrations/download-clients"],
     ["/settings/media-servers", "/integrations/media-servers"],
@@ -204,7 +212,6 @@ test("the dashboard route is canonical and takes no subpaths", () => {
 test("the indexers page carries its panes as a third path segment", () => {
   for (const path of [
     "/integrations/indexers",
-    "/integrations/indexers/proxies",
     "/integrations/indexers/seeding-profiles",
   ]) {
     const route = canonical(path);
@@ -227,7 +234,7 @@ test("seeding profiles are no longer a settings section of their own", () => {
 });
 
 test("indexer pane paths round-trip through the tab helpers", () => {
-  for (const tab of ["indexers", "proxies", "seedingProfiles"] as const) {
+  for (const tab of ["indexers", "seedingProfiles"] as const) {
     assert.equal(
       indexerSettingsTabFromPath(buildIndexerSettingsPath(tab)),
       tab,
@@ -241,4 +248,9 @@ test("indexer pane paths round-trip through the tab helpers", () => {
     "indexers",
   );
   assert.equal(indexerSettingsTabFromPath("/settings/profile"), "indexers");
+  // Proxies left the page, so its old segment is no longer a pane.
+  assert.equal(
+    indexerSettingsTabFromPath("/integrations/indexers/proxies"),
+    "indexers",
+  );
 });

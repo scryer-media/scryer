@@ -3,7 +3,6 @@ pub mod config_store;
 pub mod db;
 pub mod error_store;
 pub mod providers;
-pub mod proxy_config_store;
 pub mod scope_indexer_coverage_store;
 pub mod search_client;
 pub mod search_learning;

@@ -561,7 +561,7 @@ async fn create_indexer_config_writes_default_routing_entries() {
                 is_enabled: true,
                 enable_interactive_search: true,
                 enable_auto_search: true,
-                indexer_proxy_config_id: None,
+                proxy_config_id: None,
                 download_client_id: None,
                 config_json: Some(
                     serde_json::json!({
@@ -614,7 +614,7 @@ async fn ensure_indexer_routing_entries_for_existing_indexers_backfills_missing_
             is_enabled: true,
             enable_interactive_search: true,
             enable_auto_search: true,
-            indexer_proxy_config_id: None,
+            proxy_config_id: None,
             download_client_id: None,
             seeding_profile_id: None,
             managed_parent_config_id: None,

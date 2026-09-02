@@ -13,8 +13,8 @@ use scryer_application::{
     SubtitleProviderClient, SubtitleSyncClient,
 };
 use scryer_domain::{
-    DownloadClientConfig, IndexerConfig, IndexerProxyConfig, NotificationChannelConfig,
-    PluginHostBindingId, SubtitleProviderConfig,
+    DownloadClientConfig, IndexerConfig, NotificationChannelConfig, PluginHostBindingId,
+    ProxyConfig, SubtitleProviderConfig,
 };
 use tracing::{debug, info, warn};
 
@@ -133,7 +133,10 @@ fn module_flavor_for_artifact(
 
 type IndexerClientCacheKey = (String, String, String, String, String);
 type IndexerClientCache = std::sync::Mutex<HashMap<IndexerClientCacheKey, Arc<dyn IndexerClient>>>;
-type DownloadClientCacheKey = (String, String, String);
+/// `(provider type, config id, config revision, proxy id, proxy revision)` —
+/// the same shape as the indexer key, so editing an assigned proxy rebuilds the
+/// client and unassigning one drops the proxied build.
+type DownloadClientCacheKey = (String, String, String, String, String);
 type DownloadClientCache =
     std::sync::Mutex<HashMap<DownloadClientCacheKey, Arc<dyn DownloadClient>>>;
 type NotificationClientCacheKey = (String, String, String);
@@ -856,7 +859,7 @@ impl IndexerPluginProvider for WasmIndexerPluginProvider {
     fn client_for_provider_with_proxy(
         &self,
         config: &IndexerConfig,
-        indexer_proxy_config: Option<&IndexerProxyConfig>,
+        proxy_config: Option<&ProxyConfig>,
     ) -> Option<Arc<dyn IndexerClient>> {
         let provider = config.provider_type.trim().to_ascii_lowercase();
         let loaded = self.get_loaded(&provider)?;
@@ -894,7 +897,7 @@ impl IndexerPluginProvider for WasmIndexerPluginProvider {
                     loaded.descriptor.clone(),
                     config.name.clone(),
                     config.clone(),
-                    indexer_proxy_config.cloned(),
+                    proxy_config.cloned(),
                     Arc::clone(&self.indexer_error_recorder),
                 )
             }
@@ -1005,10 +1008,10 @@ impl IndexerPluginProvider for DynamicPluginProvider {
     fn client_for_provider_with_proxy(
         &self,
         config: &IndexerConfig,
-        indexer_proxy_config: Option<&IndexerProxyConfig>,
+        proxy_config: Option<&ProxyConfig>,
     ) -> Option<Arc<dyn IndexerClient>> {
         let provider_key = config.provider_type.trim().to_ascii_lowercase();
-        let (proxy_id, proxy_revision) = indexer_proxy_config
+        let (proxy_id, proxy_revision) = proxy_config
             .map(|config| (config.id.clone(), config.updated_at.to_rfc3339()))
             .unwrap_or_else(|| (String::new(), String::new()));
         let cache_key = (
@@ -1031,7 +1034,7 @@ impl IndexerPluginProvider for DynamicPluginProvider {
             .inner
             .read()
             .expect("DynamicPluginProvider lock poisoned");
-        let client = guard.client_for_provider_with_proxy(config, indexer_proxy_config)?;
+        let client = guard.client_for_provider_with_proxy(config, proxy_config)?;
 
         if let Ok(mut cache) = self.client_cache.lock() {
             return Some(insert_indexer_client_cache(
@@ -1358,6 +1361,7 @@ impl WasmDownloadClientPluginProvider {
         loaded: &LoadedPlugin,
         config: &DownloadClientConfig,
         archive_provider: Option<Arc<dyn ArchiveExtractorPluginProvider>>,
+        proxy_config: Option<&ProxyConfig>,
     ) -> Option<Arc<dyn DownloadClient>> {
         let wasm_bytes = match loaded.materialize_wasm() {
             Ok(wasm_bytes) => wasm_bytes,
@@ -1414,13 +1418,18 @@ impl WasmDownloadClientPluginProvider {
             computed_base_url.as_deref(),
             Some(&config.config_json),
         );
-        let command_host = crate::wasmtime_host::command_host::CommandHost::with_archive_provider(
+        let command_host = crate::wasmtime_host::command_host::CommandHost::for_download_client(
             loaded.descriptor.id.clone(),
             command_config,
             allowed_hosts,
             crate::download_client_adapter::DOWNLOAD_CLIENT_PLUGIN_TIMEOUT,
             None,
             archive_provider,
+            proxy_config.map(|proxy_config| crate::plugin_http_host::ProxyPolicy {
+                consumer_id: config.id.clone(),
+                consumer_name: config.name.clone(),
+                config: proxy_config.clone(),
+            }),
         );
         Some(Arc::new(WasmDownloadClient::new_component(
             wasm_bytes,
@@ -1434,9 +1443,17 @@ impl WasmDownloadClientPluginProvider {
 
 impl DownloadClientPluginProvider for WasmDownloadClientPluginProvider {
     fn client_for_config(&self, config: &DownloadClientConfig) -> Option<Arc<dyn DownloadClient>> {
+        self.client_for_config_with_proxy(config, None)
+    }
+
+    fn client_for_config_with_proxy(
+        &self,
+        config: &DownloadClientConfig,
+        proxy_config: Option<&ProxyConfig>,
+    ) -> Option<Arc<dyn DownloadClient>> {
         let provider = config.client_type.trim().to_ascii_lowercase();
         let loaded = self.get_loaded(&provider)?;
-        Self::create_download_client(loaded, config, self.archive_provider.clone())
+        Self::create_download_client(loaded, config, self.archive_provider.clone(), proxy_config)
     }
 
     fn available_provider_types(&self) -> Vec<String> {
@@ -1526,7 +1543,7 @@ impl DynamicDownloadClientPluginProvider {
             return;
         }
         if let Ok(mut cache) = self.client_cache.lock() {
-            cache.retain(|(provider_type, _, _), _| !provider_keys.contains(provider_type));
+            cache.retain(|(provider_type, _, _, _, _), _| !provider_keys.contains(provider_type));
         }
     }
 
@@ -1546,11 +1563,27 @@ impl DynamicDownloadClientPluginProvider {
 
 impl DownloadClientPluginProvider for DynamicDownloadClientPluginProvider {
     fn client_for_config(&self, config: &DownloadClientConfig) -> Option<Arc<dyn DownloadClient>> {
+        self.client_for_config_with_proxy(config, None)
+    }
+
+    fn client_for_config_with_proxy(
+        &self,
+        config: &DownloadClientConfig,
+        proxy_config: Option<&ProxyConfig>,
+    ) -> Option<Arc<dyn DownloadClient>> {
         let provider_key = config.client_type.trim().to_ascii_lowercase();
+        // The proxy revision is part of the key for exactly the reason it is on
+        // the indexer side: editing the proxy has to rebuild the client, and
+        // unassigning it has to stop serving the proxied build.
+        let (proxy_id, proxy_revision) = proxy_config
+            .map(|proxy| (proxy.id.clone(), proxy.updated_at.to_rfc3339()))
+            .unwrap_or_else(|| (String::new(), String::new()));
         let cache_key = (
             provider_key.clone(),
             config.id.clone(),
             config.updated_at.to_rfc3339(),
+            proxy_id,
+            proxy_revision,
         );
 
         if let Ok(cache) = self.client_cache.lock()
@@ -1563,7 +1596,7 @@ impl DownloadClientPluginProvider for DynamicDownloadClientPluginProvider {
             .inner
             .read()
             .expect("DynamicDownloadClientPluginProvider lock poisoned");
-        let client = guard.client_for_config(config)?;
+        let client = guard.client_for_config_with_proxy(config, proxy_config)?;
 
         if let Ok(mut cache) = self.client_cache.lock() {
             return Some(insert_download_client_cache(
@@ -3868,6 +3901,20 @@ mod tests {
         )
     }
 
+    fn download_cache_key(
+        provider_type: &str,
+        config_id: &str,
+        revision: &str,
+    ) -> DownloadClientCacheKey {
+        (
+            provider_type.to_string(),
+            config_id.to_string(),
+            revision.to_string(),
+            String::new(),
+            String::new(),
+        )
+    }
+
     struct DummyDownloadClient;
 
     #[async_trait::async_trait]
@@ -4583,29 +4630,37 @@ mod tests {
         let mut download_cache = HashMap::new();
         let first_download = insert_download_client_cache(
             &mut download_cache,
-            (
-                "sabnzbd".to_string(),
-                "download-1".to_string(),
-                "revision-1".to_string(),
-            ),
+            download_cache_key("sabnzbd", "download-1", "revision-1"),
             Arc::new(DummyDownloadClient),
         );
         let second_download = insert_download_client_cache(
+            &mut download_cache,
+            download_cache_key("sabnzbd", "download-1", "revision-2"),
+            Arc::new(DummyDownloadClient),
+        );
+        assert!(!Arc::ptr_eq(&first_download, &second_download));
+        assert_eq!(download_cache.len(), 1);
+        assert!(download_cache.contains_key(&download_cache_key(
+            "sabnzbd",
+            "download-1",
+            "revision-2"
+        )));
+
+        // Reassigning the proxy on an otherwise unchanged client is also a new
+        // build, and the stale proxied entry is evicted rather than kept.
+        let proxied_download = insert_download_client_cache(
             &mut download_cache,
             (
                 "sabnzbd".to_string(),
                 "download-1".to_string(),
                 "revision-2".to_string(),
+                "proxy-1".to_string(),
+                "2026-09-01T00:00:00+00:00".to_string(),
             ),
             Arc::new(DummyDownloadClient),
         );
-        assert!(!Arc::ptr_eq(&first_download, &second_download));
+        assert!(!Arc::ptr_eq(&second_download, &proxied_download));
         assert_eq!(download_cache.len(), 1);
-        assert!(download_cache.contains_key(&(
-            "sabnzbd".to_string(),
-            "download-1".to_string(),
-            "revision-2".to_string()
-        )));
 
         let mut subtitle_cache = HashMap::new();
         let first_subtitle = insert_subtitle_client_cache(
@@ -4799,19 +4854,15 @@ mod tests {
         {
             let mut cache = provider.client_cache.lock().expect("download cache lock");
             cache.insert(
-                (
-                    "qbittorrent".to_string(),
-                    "cfg-a".to_string(),
-                    "1".to_string(),
-                ),
+                download_cache_key("qbittorrent", "cfg-a", "1"),
                 Arc::new(DummyDownloadClient),
             );
             cache.insert(
-                ("qbt".to_string(), "cfg-b".to_string(), "1".to_string()),
+                download_cache_key("qbt", "cfg-b", "1"),
                 Arc::new(DummyDownloadClient),
             );
             cache.insert(
-                ("rtorrent".to_string(), "cfg-c".to_string(), "1".to_string()),
+                download_cache_key("rtorrent", "cfg-c", "1"),
                 Arc::new(DummyDownloadClient),
             );
         }
@@ -4825,7 +4876,7 @@ mod tests {
         assert!(
             cache
                 .keys()
-                .all(|(provider_type, _, _)| provider_type == "rtorrent")
+                .all(|(provider_type, _, _, _, _)| provider_type == "rtorrent")
         );
         assert_eq!(
             provider.available_provider_types(),

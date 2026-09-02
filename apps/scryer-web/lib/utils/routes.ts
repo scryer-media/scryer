@@ -72,6 +72,7 @@ export function canAccessSettingsSection(
     case "mediaServers":
     case "indexers":
     case "downloadClients":
+    case "proxies":
     case "acquisition":
     case "plugins":
     case "notifications":

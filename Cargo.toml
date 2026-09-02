@@ -9,6 +9,7 @@ members = [
     "crates/scryer-application",
     "crates/scryer-webauthn",
     "crates/scryer-outbound-http",
+    "crates/scryer-tunnel",
     "crates/scryer-release-parser",
     "crates/scryer-infrastructure-sql",
     "crates/scryer-infrastructure-crypto",

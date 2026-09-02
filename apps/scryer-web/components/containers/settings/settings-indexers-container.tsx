@@ -19,8 +19,7 @@ import { useIndexersSubscription } from "@/lib/hooks/use-indexers-subscription";
 import type { IndexerSettingsTab } from "@/components/root/types";
 import type {
   ConfigFieldDef,
-  IndexerProxyDraft,
-  IndexerProxyRecord,
+  ProxyRecord,
   IndexerRecord,
   ProviderTypeInfo,
   IndexerDownloadClientMappingCatalog,
@@ -28,32 +27,24 @@ import type {
 } from "@/lib/types";
 import { runConnectionFeedback } from "@/lib/utils/connection-feedback";
 import {
-  buildCreateIndexerProxyInput,
-  buildUpdateIndexerProxyInput,
-} from "@/lib/utils/settings-mutation-inputs";
-import {
   getIndexerDownloadClientDraftMappingViewModel,
   updateIndexerDownloadClientMapping,
   updatePendingIndexerMappingIds,
 } from "@/lib/utils/indexer-download-client-mapping";
 import {
   indexerProviderTypesQuery,
-  indexerProxyConfigsQuery,
+  proxyConfigsQuery,
   indexersInitQuery,
   indexersQuery,
 } from "@/lib/graphql/queries";
 import {
   createIndexerMutation,
-  createIndexerProxyConfigMutation,
   deleteIndexerMutation,
-  deleteIndexerProxyConfigMutation,
   syncIndexerConfigMutation,
   setIndexerDownloadClientMappingMutation,
   setIndexerSeedingProfileMutation,
   testIndexerConnectionMutation,
-  testIndexerProxyConfigMutation,
   updateIndexerMutation,
-  updateIndexerProxyConfigMutation,
 } from "@/lib/graphql/mutations";
 import {
   providerConfigRecordToValues,
@@ -68,7 +59,7 @@ type SettingsIndexersSectionProps = ComponentProps<
 const INDEXER_INITIAL_DRAFT = {
   name: "",
   providerType: "",
-  indexerProxyConfigId: null as string | null,
+  proxyConfigId: null as string | null,
   downloadClientId: null as string | null,
   seedingProfileId: null as string | null,
   storedSecretKeys: [] as string[],
@@ -76,14 +67,6 @@ const INDEXER_INITIAL_DRAFT = {
   enableInteractiveSearch: true,
   enableAutoSearch: true,
   configValues: {} as Record<string, string>,
-};
-
-const INDEXER_PROXY_INITIAL_DRAFT: IndexerProxyDraft = {
-  providerType: "byparr",
-  name: "",
-  baseUrl: "http://localhost:8191",
-  requestTimeoutSeconds: 60,
-  isEnabled: true,
 };
 
 function serializeConfigValues(
@@ -268,8 +251,8 @@ export function SettingsIndexersContainer({
     mutatingIndexerSeedingProfileIds,
     setMutatingIndexerSeedingProfileIds,
   ] = useState<Set<string>>(() => new Set());
-  const [indexerProxyConfigs, setIndexerProxyConfigs] = useState<
-    IndexerProxyRecord[]
+  const [proxyConfigs, setProxyConfigs] = useState<
+    ProxyRecord[]
   >([]);
   const [settingsIndexerFilter, setSettingsIndexerFilter] = useState("");
   const [mutatingIndexerId, setMutatingIndexerId] = useState<string | null>(
@@ -278,18 +261,10 @@ export function SettingsIndexersContainer({
   const [editingIndexerId, setEditingIndexerId] = useState<string | null>(null);
   const [pendingDeleteIndexer, setPendingDeleteIndexer] =
     useState<IndexerRecord | null>(null);
-  const [pendingDeleteProxy, setPendingDeleteProxy] =
-    useState<IndexerProxyRecord | null>(null);
   const [isTestingConnection, setIsTestingConnection] = useState(false);
-  const [editingProxyId, setEditingProxyId] = useState<string | null>(null);
-  const [isProxyEditorOpen, setIsProxyEditorOpen] = useState(false);
-  const [mutatingProxyId, setMutatingProxyId] = useState<string | null>(null);
-  const [testingProxyId, setTestingProxyId] = useState<string | null>(null);
-  const [indexerProxyDraft, setIndexerProxyDraft] =
-    useState<IndexerProxyDraft>(() => ({ ...INDEXER_PROXY_INITIAL_DRAFT }));
-  const defaultIndexerProxyConfigId = useMemo(
-    () => indexerProxyConfigs.find((proxy) => proxy.isEnabled)?.id ?? null,
-    [indexerProxyConfigs],
+  const defaultProxyConfigId = useMemo(
+    () => proxyConfigs.find((proxy) => proxy.isEnabled)?.id ?? null,
+    [proxyConfigs],
   );
   const [providerTypes, setProviderTypes] = useState<ProviderTypeInfo[]>([]);
   const [pluginsTarget, setPluginsTarget] = useState<HTMLElement | null>(null);
@@ -315,10 +290,10 @@ export function SettingsIndexersContainer({
     setIndexerDraft(() =>
       cloneIndexerDraft({
         ...INDEXER_INITIAL_DRAFT,
-        indexerProxyConfigId: defaultIndexerProxyConfigId,
+        proxyConfigId: defaultProxyConfigId,
       }),
     );
-  }, [defaultIndexerProxyConfigId]);
+  }, [defaultProxyConfigId]);
 
   useEffect(() => {
     if (!awaitingBaselineSync) {
@@ -350,13 +325,13 @@ export function SettingsIndexersContainer({
     }
   }, [client, settingsIndexerFilter, setGlobalStatus, t]);
 
-  const refreshIndexerProxyConfigs = useCallback(async () => {
+  const refreshProxyConfigs = useCallback(async () => {
     try {
       const { data, error } = await client
-        .query(indexerProxyConfigsQuery, {}, { requestPolicy: "network-only" })
+        .query(proxyConfigsQuery, {}, { requestPolicy: "network-only" })
         .toPromise();
       if (error) throw error;
-      setIndexerProxyConfigs(data?.indexerProxyConfigs || []);
+      setProxyConfigs(data?.proxyConfigs || []);
     } catch (error) {
       setGlobalStatus(
         error instanceof Error ? error.message : t("status.failedToLoad"),
@@ -382,7 +357,7 @@ export function SettingsIndexersContainer({
         if (error && !data?.indexers) throw error;
         if (cancelled) return;
         setSettingsIndexers(data?.indexers || []);
-        setIndexerProxyConfigs(data?.indexerProxyConfigs || []);
+        setProxyConfigs(data?.proxyConfigs || []);
         setProviderTypes(data?.indexerProviderTypes || []);
       } catch (error) {
         setGlobalStatus(
@@ -411,7 +386,7 @@ export function SettingsIndexersContainer({
       refreshProviderTypes(),
       refreshIndexers(),
       refreshIndexerDownloadClientMappingCatalog(),
-      refreshIndexerProxyConfigs(),
+      refreshProxyConfigs(),
     ]).catch((error: unknown) => {
       setGlobalStatus(
         error instanceof Error ? error.message : t("status.failedToLoad"),
@@ -420,7 +395,7 @@ export function SettingsIndexersContainer({
   }, [
     providerCatalogVersion,
     refreshIndexerDownloadClientMappingCatalog,
-    refreshIndexerProxyConfigs,
+    refreshProxyConfigs,
     refreshIndexers,
     refreshProviderTypes,
     setGlobalStatus,
@@ -508,7 +483,7 @@ export function SettingsIndexersContainer({
     const payload = {
       name: indexerDraft.name.trim(),
       providerType: normalizedProviderType,
-      indexerProxyConfigId: indexerDraft.indexerProxyConfigId,
+      proxyConfigId: indexerDraft.proxyConfigId,
       downloadClientId: indexerDraft.downloadClientId,
       seedingProfileId: indexerDraft.seedingProfileId,
       isEnabled: indexerDraft.isEnabled,
@@ -561,7 +536,7 @@ export function SettingsIndexersContainer({
               id: editingIndexerId,
               name: payload.name,
               providerType: payload.providerType,
-              indexerProxyConfigId: payload.indexerProxyConfigId,
+              proxyConfigId: payload.proxyConfigId,
               isEnabled: payload.isEnabled,
               enableInteractiveSearch: payload.enableInteractiveSearch,
               enableAutoSearch: payload.enableAutoSearch,
@@ -591,7 +566,7 @@ export function SettingsIndexersContainer({
             input: {
               name: payload.name,
               providerType: payload.providerType,
-              indexerProxyConfigId: payload.indexerProxyConfigId,
+              proxyConfigId: payload.proxyConfigId,
               isEnabled: payload.isEnabled,
               enableInteractiveSearch: payload.enableInteractiveSearch,
               enableAutoSearch: payload.enableAutoSearch,
@@ -644,7 +619,7 @@ export function SettingsIndexersContainer({
     setIndexerDraft({
       name: indexer.name,
       providerType: indexer.providerType,
-      indexerProxyConfigId: indexer.indexerProxyConfigId ?? null,
+      proxyConfigId: indexer.proxyConfigId ?? null,
       downloadClientId: indexer.downloadClientId ?? null,
       seedingProfileId: indexer.seedingProfileId ?? null,
       storedSecretKeys: indexer.storedSecretKeys,
@@ -970,7 +945,7 @@ export function SettingsIndexersContainer({
     );
     const payload = {
       providerType: normalizedProviderType,
-      indexerProxyConfigId: indexerDraft.indexerProxyConfigId,
+      proxyConfigId: indexerDraft.proxyConfigId,
       config: serializeConfigValues(
         selectedProvider?.configFields ?? [],
         indexerDraft.configValues,
@@ -1015,140 +990,6 @@ export function SettingsIndexersContainer({
     }
   };
 
-  const resetIndexerProxyDraft = useCallback(() => {
-    setEditingProxyId(null);
-    setIsProxyEditorOpen(false);
-    setIndexerProxyDraft({ ...INDEXER_PROXY_INITIAL_DRAFT });
-  }, []);
-
-  const editIndexerProxy = useCallback((proxy: IndexerProxyRecord) => {
-    setEditingProxyId(proxy.id);
-    setIsProxyEditorOpen(true);
-    setIndexerProxyDraft({
-      providerType: proxy.providerType === "trawl" ? "trawl" : "byparr",
-      name: proxy.name,
-      baseUrl: proxy.baseUrl,
-      requestTimeoutSeconds: proxy.requestTimeoutSeconds,
-      isEnabled: proxy.isEnabled,
-    });
-    setGlobalStatus(`Editing indexer proxy ${proxy.name}`);
-  }, [setGlobalStatus]);
-
-  const startCreateIndexerProxy = useCallback(() => {
-    setEditingProxyId(null);
-    setIndexerProxyDraft({ ...INDEXER_PROXY_INITIAL_DRAFT });
-    setIsProxyEditorOpen(true);
-  }, []);
-
-  const submitIndexerProxy = useCallback(async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const name = indexerProxyDraft.name.trim();
-    const baseUrl = indexerProxyDraft.baseUrl.trim();
-    if (!name || !baseUrl) {
-      setGlobalStatus(t("form.indexerValidation"));
-      return;
-    }
-
-    setMutatingProxyId(editingProxyId || "new");
-    try {
-      if (editingProxyId) {
-        const { error } = await client
-          .mutation(updateIndexerProxyConfigMutation, {
-            input: buildUpdateIndexerProxyInput(editingProxyId, indexerProxyDraft),
-          })
-          .toPromise();
-        if (error) throw error;
-        setGlobalStatus("Indexer proxy updated");
-      } else {
-        const { error } = await client
-          .mutation(createIndexerProxyConfigMutation, {
-            input: buildCreateIndexerProxyInput(indexerProxyDraft),
-          })
-          .toPromise();
-        if (error) throw error;
-        setGlobalStatus("Indexer proxy created");
-      }
-      resetIndexerProxyDraft();
-      await Promise.all([refreshIndexerProxyConfigs(), refreshIndexers()]);
-    } catch (error) {
-      setGlobalStatus(
-        error instanceof Error ? error.message : t("status.failedToUpdate"),
-      );
-    } finally {
-      setMutatingProxyId(null);
-    }
-  }, [
-    client,
-    editingProxyId,
-    indexerProxyDraft,
-    refreshIndexerProxyConfigs,
-    refreshIndexers,
-    resetIndexerProxyDraft,
-    setGlobalStatus,
-    t,
-  ]);
-
-  const testIndexerProxy = useCallback(async (proxy: IndexerProxyRecord) => {
-    setTestingProxyId(proxy.id);
-    try {
-      const { data, error } = await client
-        .mutation(testIndexerProxyConfigMutation, { id: proxy.id })
-        .toPromise();
-      if (error) throw error;
-      const result = data?.testIndexerProxyConfig;
-      setGlobalStatus(
-        result?.message ||
-          (result?.ok ? "Indexer proxy test passed" : "Indexer proxy test failed"),
-      );
-      await refreshIndexerProxyConfigs();
-    } catch (error) {
-      setGlobalStatus(
-        error instanceof Error ? error.message : "Indexer proxy test failed",
-      );
-    } finally {
-      setTestingProxyId(null);
-    }
-  }, [client, refreshIndexerProxyConfigs, setGlobalStatus]);
-
-  const deleteIndexerProxy = useCallback((proxy: IndexerProxyRecord) => {
-    setPendingDeleteProxy(proxy);
-  }, []);
-
-  const confirmDeleteIndexerProxy = useCallback(async () => {
-    if (!pendingDeleteProxy) {
-      return;
-    }
-    const proxy = pendingDeleteProxy;
-    setMutatingProxyId(proxy.id);
-    try {
-      const { error } = await client
-        .mutation(deleteIndexerProxyConfigMutation, { id: proxy.id })
-        .toPromise();
-      if (error) throw error;
-      setGlobalStatus("Indexer proxy deleted");
-      if (editingProxyId === proxy.id) {
-        resetIndexerProxyDraft();
-      }
-      await Promise.all([refreshIndexerProxyConfigs(), refreshIndexers()]);
-    } catch (error) {
-      setGlobalStatus(
-        error instanceof Error ? error.message : t("status.failedToDelete"),
-      );
-    } finally {
-      setMutatingProxyId(null);
-      setPendingDeleteProxy(null);
-    }
-  }, [
-    client,
-    editingProxyId,
-    pendingDeleteProxy,
-    refreshIndexerProxyConfigs,
-    refreshIndexers,
-    resetIndexerProxyDraft,
-    setGlobalStatus,
-    t,
-  ]);
-
   return (
     <>
       {pluginsTarget
@@ -1182,19 +1023,7 @@ export function SettingsIndexersContainer({
         seedingProfileOptions={seedingProfileOptions}
         mutatingIndexerSeedingProfileIds={mutatingIndexerSeedingProfileIds}
         setIndexerSeedingProfile={setIndexerSeedingProfile}
-        indexerProxyConfigs={indexerProxyConfigs}
-        indexerProxyDraft={indexerProxyDraft}
-        setIndexerProxyDraft={setIndexerProxyDraft}
-        editingProxyId={editingProxyId}
-        isProxyEditorOpen={isProxyEditorOpen}
-        mutatingProxyId={mutatingProxyId}
-        testingProxyId={testingProxyId}
-        submitIndexerProxy={submitIndexerProxy}
-        resetIndexerProxyDraft={resetIndexerProxyDraft}
-        startCreateIndexerProxy={startCreateIndexerProxy}
-        editIndexerProxy={editIndexerProxy}
-        testIndexerProxy={testIndexerProxy}
-        deleteIndexerProxy={deleteIndexerProxy}
+        proxyConfigs={proxyConfigs}
         editIndexer={requestEditIndexer}
         toggleIndexerEnabled={toggleIndexerEnabled}
         deleteIndexer={deleteIndexer}
@@ -1238,23 +1067,6 @@ export function SettingsIndexersContainer({
         isBusy={mutatingIndexerId !== null}
         onConfirm={confirmDeleteIndexer}
         onCancel={() => setPendingDeleteIndexer(null)}
-      />
-      <ConfirmDialog
-        open={pendingDeleteProxy !== null}
-        contentId="settings-indexer-proxy-delete-dialog"
-        title={t("label.delete")}
-        description={
-          pendingDeleteProxy
-            ? `Delete indexer proxy ${pendingDeleteProxy.name}?`
-            : ""
-        }
-        confirmLabel={t("label.delete")}
-        cancelLabel={t("label.cancel")}
-        confirmButtonId="settings-indexer-proxy-delete-confirm"
-        cancelButtonId="settings-indexer-proxy-delete-cancel"
-        isBusy={mutatingProxyId !== null}
-        onConfirm={confirmDeleteIndexerProxy}
-        onCancel={() => setPendingDeleteProxy(null)}
       />
     </>
   );

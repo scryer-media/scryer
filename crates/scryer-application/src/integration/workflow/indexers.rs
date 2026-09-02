@@ -24,7 +24,12 @@ const MANAGED_CHILD_LOCAL_DISABLES_KEY: &str = "locally_disabled_children";
 fn managed_child_is_locally_disabled(metadata: Option<&str>, child_key: &str) -> bool {
     metadata
         .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
-        .and_then(|value| value.get(MANAGED_CHILD_LOCAL_DISABLES_KEY)?.as_array().cloned())
+        .and_then(|value| {
+            value
+                .get(MANAGED_CHILD_LOCAL_DISABLES_KEY)?
+                .as_array()
+                .cloned()
+        })
         .is_some_and(|keys| {
             keys.iter()
                 .filter_map(serde_json::Value::as_str)
@@ -38,8 +43,9 @@ fn with_managed_child_local_disable(
     locally_disabled: bool,
 ) -> AppResult<Option<String>> {
     let mut value = match metadata.map(str::trim).filter(|raw| !raw.is_empty()) {
-        Some(raw) => serde_json::from_str::<serde_json::Value>(raw)
-            .map_err(|error| AppError::Repository(format!("invalid managed child metadata: {error}")))?,
+        Some(raw) => serde_json::from_str::<serde_json::Value>(raw).map_err(|error| {
+            AppError::Repository(format!("invalid managed child metadata: {error}"))
+        })?,
         None => serde_json::json!({}),
     };
     let object = value.as_object_mut().ok_or_else(|| {
@@ -418,11 +424,11 @@ impl AppUseCase {
                 if config.last_error_message.as_deref().is_some_and(|message| {
                     message.starts_with(crate::INDEXER_CAPS_REFRESH_ERROR_PREFIX)
                 }) && let Err(error) = self
-                        .services
-                        .integrations
-                        .indexer_configs
-                        .clear_last_error(&config.id)
-                        .await
+                    .services
+                    .integrations
+                    .indexer_configs
+                    .clear_last_error(&config.id)
+                    .await
                 {
                     tracing::warn!(config_id = %config.id, error = %error, "failed to clear recovered indexer caps error");
                 }
@@ -436,8 +442,7 @@ impl AppUseCase {
                 error_message: None,
             },
             Err(error) => {
-                let error_message =
-                    format!("{} {error}", crate::INDEXER_CAPS_REFRESH_ERROR_PREFIX);
+                let error_message = format!("{} {error}", crate::INDEXER_CAPS_REFRESH_ERROR_PREFIX);
                 self.record_caps_refresh_failure(config, &error).await;
                 tracing::warn!(
                     config_id = %config.id,
@@ -502,21 +507,20 @@ impl AppUseCase {
 
             match self.fetch_caps_snapshot_json_for_config(&config).await {
                 Ok(Some(snapshot_json)) => {
-                    let updated = if config.caps_snapshot_json.as_deref()
-                        != Some(snapshot_json.as_str())
-                    {
-                        self.services
-                            .integrations
-                            .indexer_configs
-                            .update(IndexerConfigUpdate {
-                                id: config.id.clone(),
-                                caps_snapshot_json: Some(Some(snapshot_json)),
-                                ..Default::default()
-                            })
-                            .await?
-                    } else {
-                        config.clone()
-                    };
+                    let updated =
+                        if config.caps_snapshot_json.as_deref() != Some(snapshot_json.as_str()) {
+                            self.services
+                                .integrations
+                                .indexer_configs
+                                .update(IndexerConfigUpdate {
+                                    id: config.id.clone(),
+                                    caps_snapshot_json: Some(Some(snapshot_json)),
+                                    ..Default::default()
+                                })
+                                .await?
+                        } else {
+                            config.clone()
+                        };
                     if crate::indexer_search_identity(&config, None)
                         != crate::indexer_search_identity(&updated, None)
                     {
@@ -529,11 +533,11 @@ impl AppUseCase {
                     if config.last_error_message.as_deref().is_some_and(|message| {
                         message.starts_with(crate::INDEXER_CAPS_REFRESH_ERROR_PREFIX)
                     }) && let Err(error) = self
-                            .services
-                            .integrations
-                            .indexer_configs
-                            .clear_last_error(&config.id)
-                            .await
+                        .services
+                        .integrations
+                        .indexer_configs
+                        .clear_last_error(&config.id)
+                        .await
                     {
                         tracing::warn!(config_id = %config.id, error = %error, "failed to clear recovered indexer caps error");
                     }
@@ -587,25 +591,23 @@ impl AppUseCase {
     }
 }
 impl AppUseCase {
-    async fn validate_enabled_indexer_proxy_config_id(&self, raw_id: &str) -> AppResult<String> {
+    async fn validate_enabled_proxy_config_id(&self, raw_id: &str) -> AppResult<String> {
         let id = raw_id.trim();
         if id.is_empty() {
             return Err(AppError::Validation(
-                "indexer proxy config id cannot be empty".into(),
+                "proxy config id cannot be empty".into(),
             ));
         }
         let config = self
             .services
             .integrations
-            .indexer_proxy_configs
+            .proxy_configs
             .get_by_id(id)
             .await?
-            .ok_or_else(|| {
-                AppError::Validation("Indexer proxy configuration was not found.".into())
-            })?;
+            .ok_or_else(|| AppError::Validation("Proxy configuration was not found.".into()))?;
         if !config.is_enabled {
             return Err(AppError::Validation(
-                "Indexer proxy is disabled for this indexer.".into(),
+                "Proxy is disabled for this indexer.".into(),
             ));
         }
         Ok(config.id)
@@ -652,8 +654,8 @@ impl AppUseCase {
             normalize_indexer_config_json(&fields, input.config_json.as_deref(), None)?;
         let base_url =
             derive_indexer_base_url_from_config_fields(&fields, Some(&normalized_config_json))?;
-        let indexer_proxy_config_id = match input.indexer_proxy_config_id {
-            Some(id) => Some(self.validate_enabled_indexer_proxy_config_id(&id).await?),
+        let proxy_config_id = match input.proxy_config_id {
+            Some(id) => Some(self.validate_enabled_proxy_config_id(&id).await?),
             None => None,
         };
         let download_client_id = input
@@ -665,7 +667,7 @@ impl AppUseCase {
             &provider_type,
             Some(&normalized_config_json),
             None,
-            Some(indexer_proxy_config_id.as_deref()),
+            Some(proxy_config_id.as_deref()),
         )
         .await?;
 
@@ -689,7 +691,7 @@ impl AppUseCase {
             } else {
                 input.enable_auto_search
             },
-            indexer_proxy_config_id,
+            proxy_config_id,
             download_client_id,
             seeding_profile_id: None,
             managed_parent_config_id: None,
@@ -711,9 +713,7 @@ impl AppUseCase {
                 .get_by_id(client_id)
                 .await?
                 .ok_or_else(|| {
-                    AppError::NotFound(format!(
-                        "download client config '{client_id}' not found"
-                    ))
+                    AppError::NotFound(format!("download client config '{client_id}' not found"))
                 })?;
             self.validate_indexer_download_client_mapping(&config, &client)?;
         }
@@ -827,23 +827,21 @@ impl AppUseCase {
             };
         let management_capabilities =
             self.indexer_management_capabilities_for_provider_type(&effective_provider);
-        let normalized_indexer_proxy_config_id = match update.indexer_proxy_config_id.clone() {
+        let normalized_proxy_config_id = match update.proxy_config_id.clone() {
             Some(Some(id)) => {
                 if existing.managed_parent_config_id.is_some() {
                     return Err(AppError::Validation(
-                        "managed indexers cannot use an indexer proxy; the managing application owns challenge solving".into(),
+                        "managed indexers cannot use a proxy; the managing application owns challenge solving".into(),
                     ));
                 }
-                Some(Some(
-                    self.validate_enabled_indexer_proxy_config_id(&id).await?,
-                ))
+                Some(Some(self.validate_enabled_proxy_config_id(&id).await?))
             }
             Some(None) => Some(None),
             None => None,
         };
         let should_validate_connection = normalized_provider.is_some()
             || normalized_config_json.is_some()
-            || normalized_indexer_proxy_config_id.is_some()
+            || normalized_proxy_config_id.is_some()
             || matches!(update.is_enabled, Some(true)) && !existing.is_enabled;
         let should_sync_managed_children = management_capabilities.supports_managed_children_sync
             && updated_managed_parent_requires_sync(
@@ -851,14 +849,14 @@ impl AppUseCase {
                 update.is_enabled,
                 normalized_provider.is_some(),
                 normalized_config_json.is_some(),
-                normalized_indexer_proxy_config_id.is_some(),
+                normalized_proxy_config_id.is_some(),
             );
 
         if should_validate_connection {
             let validation_config_json = normalized_config_json
                 .as_deref()
                 .or(existing.config_json.as_deref());
-            let proxy_override = normalized_indexer_proxy_config_id
+            let proxy_override = normalized_proxy_config_id
                 .as_ref()
                 .map(|value| value.as_deref());
             self.test_indexer_connection(
@@ -901,9 +899,9 @@ impl AppUseCase {
                     .enable_auto_search
                     .unwrap_or(existing.enable_auto_search)
             },
-            indexer_proxy_config_id: normalized_indexer_proxy_config_id
+            proxy_config_id: normalized_proxy_config_id
                 .clone()
-                .unwrap_or_else(|| existing.indexer_proxy_config_id.clone()),
+                .unwrap_or_else(|| existing.proxy_config_id.clone()),
             download_client_id: normalized_download_client_id
                 .clone()
                 .unwrap_or_else(|| existing.download_client_id.clone()),
@@ -976,7 +974,7 @@ impl AppUseCase {
                 } else {
                     update.enable_auto_search
                 },
-                indexer_proxy_config_id: normalized_indexer_proxy_config_id,
+                proxy_config_id: normalized_proxy_config_id,
                 download_client_id: normalized_download_client_id,
                 seeding_profile_id: None,
                 managed_parent_config_id: update.managed_parent_config_id,
@@ -988,7 +986,7 @@ impl AppUseCase {
             .await?;
         if caps_refresh.error_message.is_none()
             && crate::indexer_search_identity(&existing, None)
-            != crate::indexer_search_identity(&updated, None)
+                != crate::indexer_search_identity(&updated, None)
         {
             self.prune_indexer_search_learning_best_effort(
                 &updated.id,
@@ -1327,7 +1325,7 @@ impl AppUseCase {
                             is_enabled: Some(desired.is_enabled && !locally_disabled),
                             enable_interactive_search: Some(desired.enable_interactive_search),
                             enable_auto_search: Some(desired.enable_auto_search),
-                            indexer_proxy_config_id: Some(parent.indexer_proxy_config_id.clone()),
+                            proxy_config_id: Some(parent.proxy_config_id.clone()),
                             download_client_id: None,
                             seeding_profile_id: None,
                             managed_parent_config_id: Some(Some(parent.id.clone())),
@@ -1378,7 +1376,7 @@ impl AppUseCase {
                                 ),
                             enable_interactive_search: desired.enable_interactive_search,
                             enable_auto_search: desired.enable_auto_search,
-                            indexer_proxy_config_id: parent.indexer_proxy_config_id.clone(),
+                            proxy_config_id: parent.proxy_config_id.clone(),
                             download_client_id: None,
                             seeding_profile_id: None,
                             managed_parent_config_id: Some(parent.id.clone()),
@@ -1446,7 +1444,8 @@ impl AppUseCase {
         }
 
         if let Err(error) = self.sync_indexer_config(actor, &parent_id).await {
-            if let Err(restore_error) = self.set_managed_child_local_disable(&child_id, true).await {
+            if let Err(restore_error) = self.set_managed_child_local_disable(&child_id, true).await
+            {
                 tracing::error!(
                     child_id = %child_id,
                     error = %restore_error,
@@ -1500,7 +1499,9 @@ impl AppUseCase {
                 .indexer_configs
                 .get_by_id(&parent_id)
                 .await?
-                .ok_or_else(|| AppError::NotFound(format!("indexer config '{parent_id}' not found")))?;
+                .ok_or_else(|| {
+                    AppError::NotFound(format!("indexer config '{parent_id}' not found"))
+                })?;
             let metadata = with_managed_child_local_disable(
                 parent.managed_metadata_json.as_deref(),
                 child_key,
@@ -1642,9 +1643,12 @@ fn download_client_supports_protocol_families(
     required_families: &[&str],
 ) -> bool {
     let accepted_inputs = crate::accepted_inputs_for_client(client_type, plugin_provider);
-    let supports_usenet = accepted_inputs
-        .iter()
-        .any(|input| matches!(input, DownloadSourceKind::NzbFile | DownloadSourceKind::NzbUrl));
+    let supports_usenet = accepted_inputs.iter().any(|input| {
+        matches!(
+            input,
+            DownloadSourceKind::NzbFile | DownloadSourceKind::NzbUrl
+        )
+    });
     let supports_torrent = accepted_inputs.iter().any(|input| {
         matches!(
             input,
