@@ -56,16 +56,18 @@ type Props = {
   onTitleChanged?: () => Promise<void> | void;
   idPrefix: string;
   /**
-   * Destination library shown beside the destination root (FR-010). Phase 4
-   * moves stay inside one library, so the control is present but pinned.
+   * The library this title lives in, shown beside its root wherever the two are
+   * stated rather than edited (FR-010).
    */
   currentLibraryName?: string | null;
   /**
-   * When set, the root control becomes a **destination** control: changing it
-   * opens the move workflow instead of rewriting the title's root in place
-   * (FR-011, and the replace-on-write retirement in FR-077).
+   * Where the title's files live is not an editable field: changing it is a
+   * move, and a move is previewed and confirmed in the move workflow (FR-011,
+   * and the replace-on-write retirement in FR-077). Callers that surface the
+   * "Move To…" action pass `true` and the grid states the current library and
+   * root instead of offering a dropdown that would rewrite them in place.
    */
-  onRequestMove?: (rootFolderId: string) => void;
+  rootFolderReadOnly?: boolean;
 };
 
 export function TitleOptionsSettingsGrid({
@@ -77,7 +79,7 @@ export function TitleOptionsSettingsGrid({
   onTitleChanged,
   idPrefix,
   currentLibraryName,
-  onRequestMove,
+  rootFolderReadOnly = false,
 }: Props) {
   const t = useTranslate();
   const client = useClient();
@@ -171,6 +173,16 @@ export function TitleOptionsSettingsGrid({
   const folderLabel = (path: string) =>
     path.split("/").filter(Boolean).pop() ?? path;
 
+  // The read-only statement of where this title's files are. It names the full
+  // path rather than the folder name, because that is what the move workflow's
+  // destination list names and the two have to be readable against each other.
+  const currentRoot =
+    rootFolderById.get(currentRootFolderId) ?? sortedRootFolders[0] ?? null;
+  const currentRootPath = currentRoot?.path.trim() || defaultRootFolder;
+  const currentRootFolderLabel = currentRoot?.isDefault
+    ? t("title.defaultRootFolder", { path: currentRootPath })
+    : currentRootPath;
+
   return (
     <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
       <div className="min-w-0">
@@ -206,31 +218,22 @@ export function TitleOptionsSettingsGrid({
         ) : null}
       </div>
 
-      {/* FR-010: the destination library sits beside the destination root.
-          The control names the title's own library; the destination library is
-          chosen in the move workflow, which is where a cross-library transfer
-          is previewed before anything moves (FR-017). */}
-      {onRequestMove ? (
+      {/* FR-010: where a title lives is stated beside its other settings, but
+          it is not one of them — the library and the root only change through
+          the move workflow, which previews the transfer first (FR-011/FR-017).
+          Everything here is therefore read-only text, not a pinned control
+          pretending to be editable. */}
+      {rootFolderReadOnly ? (
         <div className="min-w-0">
           <label className="mb-1 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
             <Database aria-hidden="true" className="size-3.5" />
-            {t("move.destinationLibrary")}
+            {t("title.changeFolderLibrary")}
           </label>
-          <Select value="__current__" disabled>
-            <SelectTrigger
-              id={`${idPrefix}-destination-library`}
-              className="h-9 w-full text-sm"
-            >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="__current__">
-                {currentLibraryName?.trim() || t("move.destinationLibrary")}
-              </SelectItem>
-            </SelectContent>
-          </Select>
-          <p className="mt-1 text-xs text-muted-foreground">
-            {t("move.destinationLibraryInMoveWorkflow")}
+          <p
+            id={`${idPrefix}-library`}
+            className="flex h-9 items-center truncate text-sm text-foreground"
+          >
+            {currentLibraryName?.trim() || "—"}
           </p>
         </div>
       ) : null}
@@ -238,44 +241,42 @@ export function TitleOptionsSettingsGrid({
       <div className="min-w-0">
         <label className="mb-1 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
           <Folder aria-hidden="true" className="size-3.5" />
-          {onRequestMove ? t("move.destinationRoot") : t("title.rootFolder")}
+          {t("title.rootFolder")}
         </label>
-        <Select
-          value={rootFolderSelectValue}
-          onValueChange={(rootFolderId) => {
-            if (onRequestMove) {
-              // Changing the destination opens the move workflow; it never
-              // rewrites the title's root in place (FR-011).
-              onRequestMove(rootFolderId);
-              return;
-            }
-            void saveTitleOptions({ rootFolderId });
-          }}
-          disabled={saving || sortedRootFolders.length === 0}
-        >
-          <SelectTrigger
+        {rootFolderReadOnly ? (
+          <p
             id={`${idPrefix}-root-folder`}
-            className="h-9 w-full font-[var(--font-code)] text-sm"
+            className="flex h-9 items-center break-all font-[var(--font-code)] text-sm text-foreground"
           >
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {sortedRootFolders.map((rootFolder) => (
-              <SelectItem key={rootFolder.id} value={rootFolder.id}>
-                {rootFolder.isDefault
-                  ? t("title.defaultRootFolder", {
-                      path: folderLabel(rootFolder.path || defaultRootFolder),
-                    })
-                  : folderLabel(rootFolder.path)}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        {onRequestMove ? (
-          <p className="mt-1 text-xs text-muted-foreground">
-            {t("move.destinationRootHelp")}
+            {currentRootFolderLabel}
           </p>
-        ) : null}
+        ) : (
+          <Select
+            value={rootFolderSelectValue}
+            onValueChange={(rootFolderId) =>
+              void saveTitleOptions({ rootFolderId })
+            }
+            disabled={saving || sortedRootFolders.length === 0}
+          >
+            <SelectTrigger
+              id={`${idPrefix}-root-folder`}
+              className="h-9 w-full font-[var(--font-code)] text-sm"
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {sortedRootFolders.map((rootFolder) => (
+                <SelectItem key={rootFolder.id} value={rootFolder.id}>
+                  {rootFolder.isDefault
+                    ? t("title.defaultRootFolder", {
+                        path: folderLabel(rootFolder.path || defaultRootFolder),
+                      })
+                    : folderLabel(rootFolder.path)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
       </div>
 
       {title.facet !== "MOVIE" ? (

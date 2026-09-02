@@ -3853,6 +3853,21 @@ const en: LocaleDictionary = {
   "move.destinationLibrary": "Destination library",
   "move.destinationRoot": "Destination root",
   "move.destinationRootPlaceholder": "Choose a root",
+  "move.actionHeading": "Move to…",
+  "move.actionDescription":
+    "Move this title's files to another root folder, or to another library.",
+  "move.actionButton": "Move To…",
+  "move.wizardKindDescription": "Choose where this title should go.",
+  "move.kindRootHeading": "Move to another root",
+  "move.kindRootHelp":
+    "Keep the title in this library and move its files to one of its other root folders.",
+  "move.kindLibraryHeading": "Move to another library",
+  "move.kindLibraryHelp":
+    "Transfer the title into a different library, onto one of that library's roots.",
+  "move.noOtherRoots":
+    "This library has no other root folder to move to. Add one to the library, or move the title to another library.",
+  "move.back": "Back",
+  "move.next": "Next",
   "move.destinationRootHelp": "Changing the destination opens the move workflow instead of saving the title.",
   "move.destinationNoSelection": "No titles are selected.",
   "move.destinationMixedSourceLibraries": "The selection spans several libraries; move one library at a time.",

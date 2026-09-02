@@ -2149,6 +2149,21 @@ const fr: LocaleDictionary = {
   "move.destinationLibrary": "Bibliothèque de destination",
   "move.destinationRoot": "Racine de destination",
   "move.destinationRootPlaceholder": "Choisir une racine",
+  "move.actionHeading": "Déplacer vers…",
+  "move.actionDescription":
+    "Déplacez les fichiers de ce titre vers un autre dossier racine ou vers une autre bibliothèque.",
+  "move.actionButton": "Déplacer vers…",
+  "move.wizardKindDescription": "Choisissez où ce titre doit aller.",
+  "move.kindRootHeading": "Déplacer vers une autre racine",
+  "move.kindRootHelp":
+    "Le titre reste dans cette bibliothèque et ses fichiers passent dans un autre de ses dossiers racines.",
+  "move.kindLibraryHeading": "Déplacer vers une autre bibliothèque",
+  "move.kindLibraryHelp":
+    "Transférez le titre vers une autre bibliothèque, dans l'un des dossiers racines de celle-ci.",
+  "move.noOtherRoots":
+    "Cette bibliothèque n'a aucun autre dossier racine vers lequel déplacer. Ajoutez-en un à la bibliothèque ou déplacez le titre vers une autre bibliothèque.",
+  "move.back": "Retour",
+  "move.next": "Suivant",
   "move.destinationRootHelp": "Changer la destination ouvre le flux de déplacement au lieu d'enregistrer le titre.",
   "move.destinationNoSelection": "Aucun titre sélectionné.",
   "move.destinationMixedSourceLibraries": "La sélection couvre plusieurs bibliothèques ; déplacez une bibliothèque à la fois.",

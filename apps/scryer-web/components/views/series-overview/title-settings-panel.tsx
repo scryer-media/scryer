@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { ChangeTitleFolderCard } from "@/components/common/change-title-folder-card";
 import { FixTitleMatchSettingsCard } from "@/components/common/fix-title-match-settings-card";
 import { MediaRenamePlanPanel } from "@/components/common/media-rename-plan-panel";
+import { MoveTitleSettingsCard } from "@/components/common/move-title-settings-card";
 import { TitleOptionsSettingsGrid } from "@/components/common/title-options-settings-grid";
 import { MoveTitlesDialog } from "@/components/dialogs/move-titles-dialog";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
@@ -64,9 +65,10 @@ export function TitleSettingsPanel({
   const [renamePlan, setRenamePlan] = React.useState<MediaRenamePlan | null>(null);
   const [renamePreviewing, setRenamePreviewing] = React.useState(false);
   const [renameApplying, setRenameApplying] = React.useState(false);
-  // Root chosen in the destination control; opening the move workflow instead
-  // of writing the title's root in place (FR-011).
-  const [moveRootId, setMoveRootId] = React.useState<string | null>(null);
+  // The panel's one move entry point (FR-011): the action row opens the move
+  // wizard, which asks whether this is a root move or a library transfer
+  // before it asks where. No destination is pre-picked here.
+  const [moveOpen, setMoveOpen] = React.useState(false);
   // Every library, not just the title's own: a destination in another library
   // is a cross-library transfer (FR-055/FR-056), and the move dialog owns the
   // rules for which destinations are pickable.
@@ -167,16 +169,17 @@ export function TitleSettingsPanel({
         onTitleChanged={onTitleChanged}
         idPrefix="series-overview-settings"
         currentLibraryName={title.libraryName ?? null}
-        onRequestMove={setMoveRootId}
+        rootFolderReadOnly
+      />
+
+      <MoveTitleSettingsCard
+        idPrefix="series-overview-settings"
+        onOpen={() => setMoveOpen(true)}
       />
 
       <MoveTitlesDialog
-        open={moveRootId !== null}
-        onOpenChange={(open) => {
-          if (!open) {
-            setMoveRootId(null);
-          }
-        }}
+        open={moveOpen}
+        onOpenChange={setMoveOpen}
         titles={[
           {
             id: title.id,
@@ -188,7 +191,7 @@ export function TitleSettingsPanel({
           },
         ]}
         libraries={moveLibraries}
-        initialRootId={moveRootId}
+        initialRootId={null}
       />
 
       {onOpenFixMatch ? (

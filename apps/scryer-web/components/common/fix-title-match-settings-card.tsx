@@ -21,7 +21,7 @@ export function FixTitleMatchSettingsCard({
       : "title.fixMatchDescriptionSeries";
 
   return (
-    <div className="mt-5 flex items-center justify-between gap-3 rounded-lg border border-border/70 bg-muted/20 px-3 py-3">
+    <div className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-border/70 bg-muted/20 px-3 py-3">
       <div className="min-w-0">
         <p className="text-sm font-medium text-foreground">
           {t("title.fixMatchHeading")}
