@@ -18,8 +18,6 @@ messages, and generated JSON Schema. It does not run a plugin by itself.
 ## Use the PDK for plugins
 
 - New plugins should depend on `scryer-plugin-pdk`, not this crate directly.
-- Existing Extism-export plugins may continue using this SDK while they migrate
-  to the PDK.
 - Host integrations, catalog tools, and schema consumers may still use this
   crate directly when they only need the underlying contract types.
 
@@ -38,10 +36,10 @@ messages, and generated JSON Schema. It does not run a plugin by itself.
 
 Scryer loads plugins exclusively as WASI Preview 2 components built for
 `wasm32-wasip2`, one WIT world per plugin family, with host services reaching
-the guest through the shared `scryer:host/services@1.0.0` import. The older
-Extism and Preview 1 command integrations have been removed from the host: a
-legacy artifact is refused at load time with an upgrade diagnostic, and this
-crate no longer carries their guest-side transports.
+the guest through the shared `scryer:host/services@1.0.0` import. Older
+guest transports have been removed from the host: a legacy artifact is refused
+at load time with an upgrade diagnostic, and this crate carries no guest-side
+transport at all.
 
 Do not depend on this crate's transport for a new plugin. Use
 [`scryer-plugin-pdk`](https://github.com/scryer-media/scryer-plugins/tree/main/pdk/scryer-plugin-pdk),

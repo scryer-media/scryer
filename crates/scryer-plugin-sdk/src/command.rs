@@ -1,10 +1,10 @@
-//! Versioned stdin/stdout command protocol for native Scryer plugins.
+//! Versioned command envelope for Scryer plugins.
 //!
-//! Command artifacts are ordinary `wasm32-wasip1` commands. The host writes
-//! one JSON [`PluginCommandRequest`] to stdin and expects one matching
-//! [`PluginCommandResponse`] on stdout. The artifact's
-//! `scryer.plugin.command_abi` custom section selects this protocol; legacy
-//! Extism artifacts retain their export-based protocol.
+//! One JSON [`PluginCommandRequest`] in, one matching [`PluginCommandResponse`]
+//! out. Today the envelope travels as the opaque UTF-8 payload of each plugin
+//! family's WIT world (`process` on the WASI Preview 2 component hosts); the
+//! `scryer.plugin.command_abi` custom section and [`COMMAND_ABI_VERSION`] pin
+//! which revision of the envelope an artifact speaks.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -185,8 +185,8 @@ pub enum PluginSubtitleCommand {
     /// Subtitle-*sync* alignment, probing and window decoding.
     ///
     /// Alignment was never part of this envelope: it rode its own
-    /// [`SubtitleSyncPluginProcessRequest`] over the Preview 1 stdin/stdout
-    /// transport, which is gone. The payload here is that request type
+    /// [`SubtitleSyncPluginProcessRequest`] over a stdin/stdout transport the
+    /// host no longer has. The payload here is that request type
     /// **verbatim** — the same `Align` / `Probe` / `DecodeWindow` operations,
     /// the same nested request and response structs — so a migrating sync
     /// plugin keeps its types and its dispatch `match` and only changes how
@@ -281,7 +281,7 @@ mod tests {
         assert_eq!(request.scope.categories, vec!["Movies", "TV / Anime"]);
     }
 
-    /// The whole point of the sync variant: the payload is the Preview 1
+    /// The whole point of the sync variant: the payload is the original sync
     /// request type verbatim, so an align job survives the envelope unchanged.
     #[test]
     fn a_subtitle_sync_align_command_round_trips_verbatim() {

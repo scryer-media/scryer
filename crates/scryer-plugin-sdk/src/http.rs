@@ -1,11 +1,10 @@
 //! The source-level HTTP request shape used by Scryer plugins.
 //!
-//! Only the builder survives here. The wasm transport that used to sit beside
-//! it spoke the Extism pointer ABI over a `scryer:host/http` import, and
-//! Scryer's component-only host does not serve that import; a guest that
-//! linked it produced a component that could not instantiate. Guests issue
-//! HTTP through `scryer-plugin-pdk`'s `http::request`, which carries this same
-//! source shape over the postcard host-call contract.
+//! Only the builder lives here: this crate carries the request *shape*, not a
+//! transport. Guests issue HTTP through `scryer-plugin-pdk`'s `http::request`,
+//! which carries this same source shape over the postcard host-call contract
+//! (`scryer:host/services@1.0.0`), the only door Scryer's component host
+//! serves.
 
 use std::collections::BTreeMap;
 
