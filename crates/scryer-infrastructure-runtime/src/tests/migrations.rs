@@ -4728,13 +4728,13 @@ async fn migration_0186_postgres_relaxes_the_token_check_and_adds_the_canonical_
 }
 
 #[tokio::test]
-async fn migration_0208_relaxes_the_proxy_protocol_and_preserves_solver_rows() {
+async fn migration_0211_relaxes_the_proxy_protocol_and_preserves_solver_rows() {
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
         .connect("sqlite::memory:")
         .await
         .expect("migration test database should open");
-    // The pre-0208 shape, verbatim from the 0198 baseline.
+    // The pre-0211 shape, verbatim from the 0198 baseline.
     sqlx::raw_sql(
         "CREATE TABLE indexer_proxy_configs (
              id TEXT PRIMARY KEY NOT NULL,
@@ -4763,11 +4763,11 @@ async fn migration_0208_relaxes_the_proxy_protocol_and_preserves_solver_rows() {
     )
     .execute(&pool)
     .await
-    .expect("initialize pre-0208 schema");
+    .expect("initialize pre-0211 schema");
 
     run_embedded_migration(
         &pool,
-        include_str!("../../../scryer/src/db/migrations/0208_indexer_transport_proxies.sql"),
+        include_str!("../../../scryer/src/db/migrations/0211_indexer_transport_proxies.sql"),
     )
     .await;
 

@@ -132,6 +132,14 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
         scan_media_server_catalog(self, connection, true).await
     }
 
+    async fn refresh_media_server_paths(
+        &self,
+        connection: &MediaServerConnection,
+        paths: &[String],
+    ) -> AppResult<()> {
+        refresh_media_server_paths(self, connection, paths).await
+    }
+
     async fn verify_plex(
         &self,
         connection_id: &str,
@@ -1136,6 +1144,223 @@ fn plex_resources_include_machine(resources_xml: &str, machine_id: &str) -> AppR
     }
 }
 
+/// FR-088: ask one media server to re-read specific folders.
+///
+/// Targeted, never a full library scan. Every provider here has a first-class
+/// API for "this path changed", and that is the only thing this uses:
+///
+/// | Provider | Call |
+/// |---|---|
+/// | Jellyfin / Emby | `POST /Library/Media/Updated` with one `MediaUpdateInfo` per path — the same notification the servers' own filesystem watchers raise. |
+/// | Plex | `GET /library/sections/{key}/refresh?path=…`, Plex's partial scan, against the section whose configured location contains the path. |
+///
+/// A Plex path that falls outside every section is skipped rather than widened
+/// into a section-wide scan: a folder no section covers is a folder that server
+/// does not serve.
+async fn refresh_media_server_paths(
+    verifier: &HttpExternalIdentityVerifier,
+    connection: &MediaServerConnection,
+    paths: &[String],
+) -> AppResult<()> {
+    let paths = paths
+        .iter()
+        .map(|path| path.trim())
+        .filter(|path| !path.is_empty())
+        .collect::<Vec<_>>();
+    if paths.is_empty() {
+        return Ok(());
+    }
+
+    let api_key = connection
+        .api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+        .ok_or_else(|| {
+            AppError::Validation("media server refresh requires an API key".into())
+        })?;
+
+    match connection.provider {
+        MediaServerProvider::Jellyfin | MediaServerProvider::Emby => {
+            refresh_emby_paths(&verifier.client, &connection.base_url, api_key, &paths).await
+        }
+        MediaServerProvider::Plex => {
+            let machine_id = connection
+                .machine_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+                .ok_or_else(|| {
+                    AppError::Validation("Plex refresh requires a selected server".into())
+                })?;
+            refresh_plex_paths(verifier, machine_id, api_key, &paths).await
+        }
+    }
+}
+
+/// Jellyfin and Emby both accept the library-update notification their own
+/// watchers post, so one request carries every changed folder.
+async fn refresh_emby_paths(
+    client: &reqwest::Client,
+    base_url: &str,
+    api_key: &str,
+    paths: &[&str],
+) -> AppResult<()> {
+    let base_url = media_server_url(base_url)?;
+    let url = base_url.join("Library/Media/Updated").map_err(|error| {
+        AppError::Repository(format!("invalid media server refresh URL: {error}"))
+    })?;
+    let body = serde_json::json!({
+        "Updates": paths
+            .iter()
+            .map(|path| serde_json::json!({ "Path": path, "UpdateType": "Modified" }))
+            .collect::<Vec<_>>(),
+    });
+    let response = client
+        .post(url)
+        .header("Accept", "application/json")
+        .header("X-Emby-Token", api_key)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|error| {
+            AppError::Repository(format!("media server refresh failed: {error}"))
+        })?;
+    if !response.status().is_success() {
+        return Err(AppError::Repository(format!(
+            "media server refresh failed with status {}",
+            response.status()
+        )));
+    }
+    Ok(())
+}
+
+/// Plex has no "these paths changed" endpoint, but it does have a per-section
+/// partial scan, which is the same thing once the section is known.
+async fn refresh_plex_paths(
+    verifier: &HttpExternalIdentityVerifier,
+    machine_id: &str,
+    token: &str,
+    paths: &[&str],
+) -> AppResult<()> {
+    let server_url = plex_server_base_url(verifier, machine_id, token).await?;
+    let sections = plex_json(
+        &verifier.client,
+        server_url
+            .join("library/sections")
+            .map_err(|error| AppError::Repository(error.to_string()))?,
+        token,
+    )
+    .await?;
+    let locations = plex_section_locations(&sections);
+
+    for path in paths {
+        let Some(section_key) = plex_section_for_path(&locations, path) else {
+            tracing::debug!(
+                path,
+                "no Plex library section covers this folder; nothing to refresh"
+            );
+            continue;
+        };
+        let mut endpoint = server_url
+            .join(&format!("library/sections/{section_key}/refresh"))
+            .map_err(|error| AppError::Repository(error.to_string()))?;
+        endpoint.query_pairs_mut().append_pair("path", path);
+        let response = verifier
+            .client
+            .get(endpoint)
+            .header("Accept", "application/json")
+            .header("X-Plex-Token", token)
+            .send()
+            .await
+            .map_err(|error| {
+                AppError::Repository(format!("Plex partial scan failed: {error}"))
+            })?;
+        if !response.status().is_success() {
+            return Err(AppError::Repository(format!(
+                "Plex partial scan failed with status {}",
+                response.status()
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// `(section key, configured location)` for every movie or show section.
+fn plex_section_locations(sections: &Value) -> Vec<(String, String)> {
+    let mut locations = Vec::new();
+    for section in plex_entries(sections, "Directory") {
+        if !matches!(
+            section.get("type").and_then(Value::as_str),
+            Some("movie") | Some("show")
+        ) {
+            continue;
+        }
+        let Some(key) = section.get("key").and_then(Value::as_str) else {
+            continue;
+        };
+        for location in section
+            .get("Location")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+        {
+            if let Some(path) = location.get("path").and_then(Value::as_str) {
+                locations.push((key.to_string(), path.trim().to_string()));
+            }
+        }
+    }
+    locations
+}
+
+/// The most specific section whose location contains `path`.
+fn plex_section_for_path(locations: &[(String, String)], path: &str) -> Option<String> {
+    locations
+        .iter()
+        .filter(|(_, location)| {
+            let location = location.trim_end_matches(['/', '\\']);
+            !location.is_empty()
+                && (path == location
+                    || path
+                        .strip_prefix(location)
+                        .is_some_and(|rest| rest.starts_with(['/', '\\'])))
+        })
+        .max_by_key(|(_, location)| location.len())
+        .map(|(key, _)| key.clone())
+}
+
+/// The reachable base URL of the configured Plex server, via plex.tv's resource
+/// list. Shared by the catalog scan and the FR-088 partial scan.
+async fn plex_server_base_url(
+    verifier: &HttpExternalIdentityVerifier,
+    machine_id: &str,
+    token: &str,
+) -> AppResult<Url> {
+    let response = verifier
+        .client
+        .get(verifier.plex_url("api/resources?includeHttps=1")?)
+        .header("Accept", "application/xml")
+        .header("X-Plex-Token", token)
+        .send()
+        .await
+        .map_err(|error| {
+            AppError::Repository(format!("failed to reach Plex resources: {error}"))
+        })?;
+    if !response.status().is_success() {
+        return Err(AppError::Repository(format!(
+            "Plex resources discovery failed with status {}",
+            response.status()
+        )));
+    }
+    let resources = response.text().await.map_err(|error| {
+        AppError::Repository(format!("invalid Plex resources response: {error}"))
+    })?;
+    let server_url = plex_server_url(&resources, machine_id)?.ok_or_else(|| {
+        AppError::Repository("configured Plex server has no reachable URI".into())
+    })?;
+    media_server_url(&server_url)
+}
+
 async fn scan_media_server_catalog(
     verifier: &HttpExternalIdentityVerifier,
     connection: &MediaServerConnection,
@@ -1327,29 +1552,7 @@ async fn scan_plex_catalog(
     token: &str,
     recent_only: bool,
 ) -> AppResult<Vec<MediaServerCatalogItem>> {
-    let response = verifier
-        .client
-        .get(verifier.plex_url("api/resources?includeHttps=1")?)
-        .header("Accept", "application/xml")
-        .header("X-Plex-Token", token)
-        .send()
-        .await
-        .map_err(|error| {
-            AppError::Repository(format!("failed to reach Plex resources: {error}"))
-        })?;
-    if !response.status().is_success() {
-        return Err(AppError::Repository(format!(
-            "Plex resources discovery failed with status {}",
-            response.status()
-        )));
-    }
-    let resources = response.text().await.map_err(|error| {
-        AppError::Repository(format!("invalid Plex resources response: {error}"))
-    })?;
-    let server_url = plex_server_url(&resources, machine_id)?.ok_or_else(|| {
-        AppError::Repository("configured Plex server has no reachable URI".into())
-    })?;
-    let server_url = media_server_url(&server_url)?;
+    let server_url = plex_server_base_url(verifier, machine_id, token).await?;
     let sections = plex_json(
         &verifier.client,
         server_url
@@ -1751,6 +1954,118 @@ mod tests {
                 source: "tmdb".into(),
                 value: "550".into(),
             }]
+        );
+    }
+
+    /// FR-088 on the Emby/Jellyfin side: one library-update notification
+    /// carrying exactly the folders that changed, and nothing that would start a
+    /// full library scan.
+    #[tokio::test]
+    async fn emby_refresh_posts_the_changed_paths_as_a_library_update() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/Library/Media/Updated"))
+            .and(header("X-Emby-Token", "api-key"))
+            .and(wiremock::matchers::body_json(json!({
+                "Updates": [
+                    { "Path": "/data/tv/Some Show", "UpdateType": "Modified" },
+                    { "Path": "/data/tv/Other Show", "UpdateType": "Modified" },
+                ]
+            })))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        refresh_emby_paths(
+            &generic_reqwest_client(),
+            &server.uri(),
+            "api-key",
+            &["/data/tv/Some Show", "/data/tv/Other Show"],
+        )
+        .await
+        .expect("refresh");
+    }
+
+    #[tokio::test]
+    async fn emby_refresh_surfaces_a_rejected_notification() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/Library/Media/Updated"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+
+        let error = refresh_emby_paths(
+            &generic_reqwest_client(),
+            &server.uri(),
+            "api-key",
+            &["/data/tv/Some Show"],
+        )
+        .await
+        .expect_err("a rejected notification is not a success");
+        assert!(error.to_string().contains("401"), "{error}");
+    }
+
+    #[test]
+    fn plex_sections_are_matched_by_their_configured_locations() {
+        let sections = json!({
+            "MediaContainer": {
+                "Directory": [
+                    {
+                        "key": "1",
+                        "type": "movie",
+                        "Location": [{ "path": "/data/movies" }]
+                    },
+                    {
+                        "key": "2",
+                        "type": "show",
+                        "Location": [{ "path": "/data/tv" }, { "path": "/data/tv-4k" }]
+                    },
+                    {
+                        "key": "3",
+                        "type": "artist",
+                        "Location": [{ "path": "/data/music" }]
+                    }
+                ]
+            }
+        });
+        let locations = plex_section_locations(&sections);
+        assert_eq!(locations.len(), 3, "music sections are not video libraries");
+
+        assert_eq!(
+            plex_section_for_path(&locations, "/data/tv/Some Show").as_deref(),
+            Some("2")
+        );
+        assert_eq!(
+            plex_section_for_path(&locations, "/data/tv-4k/Some Show").as_deref(),
+            Some("2")
+        );
+        assert_eq!(
+            plex_section_for_path(&locations, "/data/movies").as_deref(),
+            Some("1")
+        );
+        assert_eq!(
+            plex_section_for_path(&locations, "/data/music/Some Band"),
+            None,
+            "a non-video section is never partially scanned"
+        );
+        assert_eq!(
+            plex_section_for_path(&locations, "/elsewhere/Some Show"),
+            None,
+            "a folder no section covers is skipped, never widened into a full scan"
+        );
+    }
+
+    #[test]
+    fn the_most_specific_plex_section_wins() {
+        let locations = vec![
+            ("1".to_string(), "/data".to_string()),
+            ("2".to_string(), "/data/tv".to_string()),
+        ];
+        assert_eq!(
+            plex_section_for_path(&locations, "/data/tv/Some Show").as_deref(),
+            Some("2")
         );
     }
 

@@ -282,6 +282,8 @@ pub enum HashDomain {
     DeletePreview,
     /// Rename-plan content hash.
     RenamePlan,
+    /// Location-operation plan fingerprint (FR-081).
+    LocationPlan,
     /// Indexer credential fingerprint inside the search identity.
     IndexerSecret,
     /// Search-diagnostics query signature.
@@ -307,6 +309,7 @@ impl HashDomain {
             Self::AuthorizationFingerprint => "scryer.auth.fingerprint.v1",
             Self::DeletePreview => "scryer.library.delete-preview.v1",
             Self::RenamePlan => "scryer.library.rename-plan.v1",
+            Self::LocationPlan => "scryer.location.plan.v1",
             Self::IndexerSecret => "scryer.indexer.secret.v1",
             Self::IndexerQuerySignature => "scryer.indexer.query-signature.v1",
             Self::IndexerSearchIdentity => "scryer.indexer.search-identity.v1",

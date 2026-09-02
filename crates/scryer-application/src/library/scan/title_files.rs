@@ -34,6 +34,9 @@ pub(crate) enum PlannedTitleScanRecord {
         file_id: String,
         should_skip_analysis: bool,
         should_refresh_source_signature: bool,
+        /// The sampled quick proof for this row actually *changed*, so any
+        /// persisted full hash describes bytes that are gone (FR-046).
+        should_invalidate_full_hashes: bool,
     },
     New,
 }
@@ -99,6 +102,47 @@ pub(super) fn title_media_file_matches_snapshot(
             .signature
             .as_ref()
             .is_some_and(|signature| signature.scheme == *scheme && signature.value == *value),
+        _ => false,
+    }
+}
+
+/// Did the file's sampled quick proof *change* since the catalog last saw it?
+///
+/// FR-046 separates two things a scan does to the same columns. Backfilling a
+/// signature onto a row that never had one (the `(None, None)` case
+/// [`title_media_file_matches_snapshot`] deliberately accepts) says nothing
+/// about the bytes and must leave the persisted full hashes alone. A size or
+/// signature that *differs from a recorded one* says the bytes moved on, and
+/// every stored full hash for that row is now a description of content that no
+/// longer exists — so it is cleared and the file re-enters the backfill queue.
+///
+/// Scans never compute a full hash. This function is the entire scan-side
+/// contribution to full-hash state: it decides when to throw one away.
+pub(crate) fn title_media_file_quick_proof_changed(
+    media_file: &TitleMediaFile,
+    snapshot: &FileSourceSnapshot,
+) -> bool {
+    if media_file.size_bytes != snapshot.size_bytes {
+        return true;
+    }
+
+    match (
+        &media_file.source_signature_scheme,
+        &media_file.source_signature_value,
+    ) {
+        // Nothing recorded to contradict; a first signature is a backfill, not
+        // a change.
+        (None, None) => false,
+        (Some(scheme), Some(value)) => match snapshot.signature.as_ref() {
+            // The file is on disk but its signature could not be read. That is
+            // not evidence of a change, and FR-046 never invalidates on a
+            // guess.
+            None => false,
+            Some(signature) => signature.scheme != *scheme || signature.value != *value,
+        },
+        // A half-written pair is not a proof either side can be compared
+        // against; treat it the way the match check does and leave the hashes
+        // for the backfill job to reconcile.
         _ => false,
     }
 }
@@ -502,6 +546,7 @@ mod tests {
             announced_size_bytes: None,
             source_signature_scheme: source_signature_scheme.map(str::to_string),
             source_signature_value: source_signature_value.map(str::to_string),
+            content_hashes: None,
             quality_label: None,
             scan_status: "scanned".into(),
             created_at: String::new(),
@@ -650,6 +695,102 @@ mod tests {
         };
 
         assert!(title_media_file_matches_snapshot(&media_file, &snapshot));
+    }
+
+    /// FR-046: a changed size means the bytes changed, whatever the signature
+    /// says.
+    #[test]
+    fn quick_proof_change_is_detected_from_a_different_size() {
+        let media_file = build_test_media_file(
+            1234,
+            Some(MEDIA_FILE_SOURCE_SIGNATURE_SCHEME),
+            Some("1:2"),
+            true,
+        );
+        let snapshot = FileSourceSnapshot {
+            size_bytes: 4321,
+            signature: Some(FileSourceSignature {
+                scheme: MEDIA_FILE_SOURCE_SIGNATURE_SCHEME.into(),
+                value: "1:2".into(),
+            }),
+        };
+
+        assert!(title_media_file_quick_proof_changed(&media_file, &snapshot));
+    }
+
+    /// FR-046: a recorded signature that no longer matches invalidates.
+    #[test]
+    fn quick_proof_change_is_detected_from_a_different_signature() {
+        let media_file = build_test_media_file(
+            1234,
+            Some(MEDIA_FILE_SOURCE_SIGNATURE_SCHEME),
+            Some("1:2"),
+            true,
+        );
+        let snapshot = FileSourceSnapshot {
+            size_bytes: 1234,
+            signature: Some(FileSourceSignature {
+                scheme: MEDIA_FILE_SOURCE_SIGNATURE_SCHEME.into(),
+                value: "9:9".into(),
+            }),
+        };
+
+        assert!(title_media_file_quick_proof_changed(&media_file, &snapshot));
+    }
+
+    /// The distinction FR-046 turns on: writing a *first* signature onto a
+    /// legacy row is a backfill, not evidence that the bytes changed, and must
+    /// not throw away a full hash the operator paid to compute.
+    #[test]
+    fn backfilling_a_first_signature_is_not_a_quick_proof_change() {
+        let media_file = build_test_media_file(1234, None, None, true);
+        let snapshot = FileSourceSnapshot {
+            size_bytes: 1234,
+            signature: Some(FileSourceSignature {
+                scheme: MEDIA_FILE_SOURCE_SIGNATURE_SCHEME.into(),
+                value: "1:2".into(),
+            }),
+        };
+
+        assert!(!title_media_file_quick_proof_changed(&media_file, &snapshot));
+    }
+
+    /// An unchanged file is left entirely alone.
+    #[test]
+    fn an_unchanged_file_reports_no_quick_proof_change() {
+        let media_file = build_test_media_file(
+            1234,
+            Some(MEDIA_FILE_SOURCE_SIGNATURE_SCHEME),
+            Some("1:2"),
+            true,
+        );
+        let snapshot = FileSourceSnapshot {
+            size_bytes: 1234,
+            signature: Some(FileSourceSignature {
+                scheme: MEDIA_FILE_SOURCE_SIGNATURE_SCHEME.into(),
+                value: "1:2".into(),
+            }),
+        };
+
+        assert!(!title_media_file_quick_proof_changed(&media_file, &snapshot));
+    }
+
+    /// An unreadable signature is not evidence of anything; FR-046 never
+    /// invalidates on a guess.
+    #[test]
+    fn an_unreadable_signature_is_not_a_quick_proof_change() {
+        let media_file = build_test_media_file(
+            1234,
+            Some(MEDIA_FILE_SOURCE_SIGNATURE_SCHEME),
+            Some("1:2"),
+            true,
+        );
+        let snapshot = FileSourceSnapshot {
+            size_bytes: 1234,
+            signature: None,
+        };
+
+        assert!(!title_media_file_quick_proof_changed(&media_file, &snapshot));
     }
 
     #[test]

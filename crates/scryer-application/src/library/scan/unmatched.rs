@@ -20,6 +20,13 @@ pub(crate) const LIBRARY_SCAN_SKIPPED_FILE_METADATA_UNREADABLE: &str =
     "skipped_file_metadata_unreadable";
 pub(crate) const LIBRARY_SCAN_TITLE_ALREADY_OWNS_ANOTHER_FOLDER: &str =
     "title_already_owns_another_folder";
+/// A user took this folder away from the title that owned it (FR-007, SC-008).
+///
+/// The displaced title keeps its identity, monitoring, and history but owns no
+/// folder, so it surfaces in the same unmatched/repair experience a scan uses —
+/// with a reason that says a person did this, not a failed match.
+pub(crate) const LIBRARY_SCAN_FOLDER_OWNERSHIP_CHANGED_BY_USER: &str =
+    "folder_ownership_changed_by_user";
 
 #[derive(Clone, Debug)]
 struct MovieUnmatchedScanRecord {

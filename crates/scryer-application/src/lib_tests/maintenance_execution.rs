@@ -10,10 +10,10 @@
 use super::*;
 
 use crate::lib_tests::maintenance_evaluation::InMemoryMaintenanceEvaluationRepo;
-use crate::lib_tests::maintenance_rules::InMemoryMaintenanceRuleRepo;
+use crate::lib_tests::maintenance_rules::{InMemoryMaintenanceRuleRepo, MaintenanceRuleReadFault};
 use crate::maintenance_rules::{
-    MaintenanceActionKind, MaintenanceActionSpec, MaintenanceGatesUpdate, MaintenanceRuleDraft,
-    execution_reason,
+    MAINTENANCE_MAX_ACTION_ATTEMPTS, MaintenanceActionKind, MaintenanceActionSpec,
+    MaintenanceGatesUpdate, MaintenanceMatcherDraft, MaintenanceRuleDraft, execution_reason,
 };
 use crate::ports::{
     ConnectionPlaybackActivity, MediaServerPlaybackProbe, PlaybackActivitySnapshot,
@@ -175,6 +175,478 @@ impl ExecutionFixture {
             .await
             .expect("handler pass")
     }
+
+    async fn only_candidate(&self) -> scryer_domain::LifecycleCandidate {
+        let candidates = self.evaluation.all_candidates().await;
+        assert_eq!(candidates.len(), 1, "{candidates:?}");
+        candidates[0].clone()
+    }
+}
+
+// ── Arming survives nothing it did not authorize (Fix 1) ────────────────────
+
+#[tokio::test]
+async fn replacing_the_matcher_disarms_the_rule() {
+    let fixture = execution_app(None);
+    let rule_id = fixture.observed_rule(delete_draft()).await;
+    fixture.open_gates(true, true).await;
+    seed_title(&fixture.app, &fixture.user, "Doomed", true).await;
+    fixture.evaluate().await;
+    fixture
+        .arm(&rule_id, MaintenanceEffectArming::Destructive, Some(1))
+        .await;
+
+    // The operator armed *this* matcher after acknowledging what it would
+    // delete. Swapping the matcher out needs only catalog-settings authority,
+    // so if the arming survived, a different rule would run destructively under
+    // an acknowledgement nobody gave for it.
+    let replaced = fixture
+        .app
+        .update_maintenance_rule_matcher(
+            &fixture.user,
+            &rule_id,
+            MaintenanceMatcherDraft {
+                rego_source: ALWAYS_MATCHER.to_string(),
+                action_spec: MaintenanceActionSpec::new(MaintenanceActionKind::DeleteTitleAndFiles),
+                grace_days: 0,
+            },
+        )
+        .await
+        .expect("replace the matcher");
+    assert_eq!(
+        replaced.rule_set.effect_arming,
+        MaintenanceEffectArming::None,
+        "the returned detail must report the disarm the store just wrote"
+    );
+
+    let stored = fixture
+        .app
+        .get_maintenance_rule_set(&fixture.user, &rule_id)
+        .await
+        .expect("read rule")
+        .expect("rule exists");
+    assert_eq!(
+        stored.rule_set.effect_arming,
+        MaintenanceEffectArming::None,
+        "the disarm must be persisted, not just reported"
+    );
+
+    // And it is a real refusal, not just a field: the next pass finds no
+    // eligible rule at all.
+    fixture.evaluate().await;
+    let report = fixture.handle().await;
+    assert_eq!(report.rules_eligible, 0, "{report:?}");
+    assert!(
+        fixture.evaluation.all_action_runs().await.is_empty(),
+        "a disarmed rule must not reach an action run"
+    );
+
+    // Re-arming against the new matcher is what puts it back in play.
+    let pending = fixture
+        .app
+        .count_active_maintenance_candidates(&rule_id)
+        .await
+        .expect("count candidates");
+    fixture
+        .arm(
+            &rule_id,
+            MaintenanceEffectArming::Destructive,
+            Some(pending),
+        )
+        .await;
+    let rearmed = fixture.handle().await;
+    assert_eq!(rearmed.rules_eligible, 1, "{rearmed:?}");
+}
+
+#[tokio::test]
+async fn renaming_a_rule_leaves_its_arming_alone() {
+    let fixture = execution_app(None);
+    let rule_id = fixture.observed_rule(delete_draft()).await;
+    fixture.open_gates(true, true).await;
+    seed_title(&fixture.app, &fixture.user, "Doomed", true).await;
+    fixture.evaluate().await;
+    fixture
+        .arm(&rule_id, MaintenanceEffectArming::Destructive, Some(1))
+        .await;
+
+    // A rename moves neither the matcher nor the action, so the operator's
+    // acknowledgement still describes exactly the same blast radius.
+    fixture
+        .app
+        .update_maintenance_rule_metadata(
+            &fixture.user,
+            &rule_id,
+            "Retire, renamed".to_string(),
+            "Same matcher".to_string(),
+            Vec::new(),
+        )
+        .await
+        .expect("rename");
+
+    let stored = fixture
+        .app
+        .get_maintenance_rule_set(&fixture.user, &rule_id)
+        .await
+        .expect("read rule")
+        .expect("rule exists");
+    assert_eq!(stored.rule_set.name, "Retire, renamed");
+    assert_eq!(
+        stored.rule_set.effect_arming,
+        MaintenanceEffectArming::Destructive,
+        "a rename must not disarm a rule"
+    );
+    assert_eq!(
+        stored.rule_set.current_revision_number, 1,
+        "a rename appends no revision, which is why it does not disarm"
+    );
+}
+
+// ── Stranded leases are recoverable (Fix 3) ─────────────────────────────────
+
+#[tokio::test]
+async fn a_stranded_execution_lease_is_reclaimed_and_retried_at_the_next_attempt() {
+    let fixture = execution_app(None);
+    let rule_id = fixture
+        .observed_rule(unmonitor_draft(MONITORED_MATCHER))
+        .await;
+    fixture.open_gates(true, false).await;
+    fixture
+        .arm(&rule_id, MaintenanceEffectArming::Reversible, None)
+        .await;
+    let title = seed_title(&fixture.app, &fixture.user, "Interrupted", true).await;
+    fixture.evaluate().await;
+
+    // Attempt one reserved its number and inserted its `running` row, then its
+    // worker died: the candidate is `executing` with nobody driving it and the
+    // run row never finished.
+    let candidate = fixture.only_candidate().await;
+    fixture
+        .evaluation
+        .record_candidate_attempts(&candidate.id, 1, Utc::now())
+        .await
+        .expect("reserve the interrupted attempt");
+    fixture
+        .evaluation
+        .start_action_run(&scryer_domain::LifecycleActionRun {
+            id: "run-interrupted".to_string(),
+            candidate_id: candidate.id.clone(),
+            rule_set_id: rule_id.clone(),
+            revision_number: candidate.revision_number,
+            title_id: title.id.clone(),
+            action_kind: candidate.action_kind.clone(),
+            match_generation: candidate.match_generation,
+            idempotency_key: "orphan-key".to_string(),
+            attempt: 1,
+            status: scryer_domain::LifecycleActionRunStatus::Running,
+            hold_reason: None,
+            error: None,
+            detail: "{}".to_string(),
+            started_at: Utc::now(),
+            finished_at: None,
+            created_at: Utc::now(),
+        })
+        .await
+        .expect("the interrupted attempt's run row");
+    fixture
+        .evaluation
+        .strand_as_executing(&candidate.id, Utc::now() - chrono::Duration::hours(4))
+        .await;
+
+    let report = fixture.handle().await;
+    assert_eq!(
+        report.candidates_considered, 1,
+        "a stranded lease must be selectable again: {report:?}"
+    );
+    assert_eq!(report.executed, 1, "{report:?}");
+
+    let stored = fixture
+        .app
+        .get_title(&fixture.user, &title.id)
+        .await
+        .expect("read title")
+        .expect("title exists");
+    assert!(!stored.monitored, "the reclaimed attempt must do the work");
+
+    let runs = fixture.evaluation.all_action_runs().await;
+    let orphan = runs
+        .iter()
+        .find(|run| run.id == "run-interrupted")
+        .expect("the orphaned run row is still there");
+    assert_eq!(
+        orphan.status,
+        scryer_domain::LifecycleActionRunStatus::Failed,
+        "an abandoned attempt must not keep reading as live work"
+    );
+    assert!(
+        orphan
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains(execution_reason::LEASE_RECLAIMED)),
+        "{orphan:?}"
+    );
+
+    let fresh = runs
+        .iter()
+        .find(|run| run.id != "run-interrupted")
+        .expect("the reclaiming attempt wrote its own row");
+    assert_eq!(
+        fresh.attempt, 2,
+        "the reclaim must take the next attempt number, not collide with the orphan's"
+    );
+    assert_eq!(
+        fresh.status,
+        scryer_domain::LifecycleActionRunStatus::Succeeded
+    );
+    assert_eq!(
+        fixture.only_candidate().await.state,
+        MaintenanceCandidateState::Succeeded
+    );
+}
+
+#[tokio::test]
+async fn a_reclaimed_candidate_whose_title_is_gone_cancels_instead_of_acting() {
+    let fixture = execution_app(None);
+    let rule_id = fixture
+        .observed_rule(unmonitor_draft(MONITORED_MATCHER))
+        .await;
+    fixture.open_gates(true, false).await;
+    fixture
+        .arm(&rule_id, MaintenanceEffectArming::Reversible, None)
+        .await;
+    let title = seed_title(&fixture.app, &fixture.user, "Vanished", true).await;
+    fixture.evaluate().await;
+
+    let candidate = fixture.only_candidate().await;
+    fixture
+        .evaluation
+        .strand_as_executing(&candidate.id, Utc::now() - chrono::Duration::hours(4))
+        .await;
+    // The subject was deleted while the lease was stranded. Reclaiming does not
+    // resume a decision made hours ago: the ordinary safety chain re-runs first,
+    // and a missing subject cancels there.
+    fixture
+        .app
+        .delete_title(&fixture.user, &title.id, false, None)
+        .await
+        .expect("delete the title");
+
+    let report = fixture.handle().await;
+    assert_eq!(report.canceled, 1, "{report:?}");
+    assert_eq!(report.executed, 0);
+
+    let candidate = fixture.only_candidate().await;
+    assert_eq!(candidate.state, MaintenanceCandidateState::Canceled);
+    assert_eq!(candidate.state_reason, execution_reason::TITLE_MISSING);
+}
+
+#[tokio::test]
+async fn a_candidate_that_crash_looped_through_its_attempts_terminates() {
+    let fixture = execution_app(None);
+    let rule_id = fixture
+        .observed_rule(unmonitor_draft(MONITORED_MATCHER))
+        .await;
+    fixture.open_gates(true, false).await;
+    fixture
+        .arm(&rule_id, MaintenanceEffectArming::Reversible, None)
+        .await;
+    let title = seed_title(&fixture.app, &fixture.user, "Doomed Loop", true).await;
+    fixture.evaluate().await;
+
+    // Every attempt in the budget was reserved and none of them reported back —
+    // the shape a crash loop leaves. Counting reservations is what lets the cap
+    // bite here at all; a counter only advanced on a handled failure would retry
+    // this row forever.
+    let candidate = fixture.only_candidate().await;
+    fixture
+        .evaluation
+        .record_candidate_attempts(&candidate.id, MAINTENANCE_MAX_ACTION_ATTEMPTS, Utc::now())
+        .await
+        .expect("reserve the whole budget");
+    fixture
+        .evaluation
+        .strand_as_executing(&candidate.id, Utc::now() - chrono::Duration::hours(4))
+        .await;
+
+    let report = fixture.handle().await;
+    assert_eq!(report.failed, 1, "{report:?}");
+    assert_eq!(report.executed, 0);
+
+    let candidate = fixture.only_candidate().await;
+    assert_eq!(candidate.state, MaintenanceCandidateState::Failed);
+    assert_eq!(candidate.state_reason, execution_reason::ACTION_FAILED);
+
+    let stored = fixture
+        .app
+        .get_title(&fixture.user, &title.id)
+        .await
+        .expect("read title")
+        .expect("title exists");
+    assert!(
+        stored.monitored,
+        "an exhausted candidate must not get one more go at the action"
+    );
+}
+
+// ── Concurrent writers cannot clobber each other (Fix 4) ────────────────────
+
+#[tokio::test]
+async fn the_evaluator_leaves_a_candidate_under_an_execution_lease_alone() {
+    let fixture = execution_app(None);
+    let rule_id = fixture
+        .observed_rule(unmonitor_draft(MONITORED_MATCHER))
+        .await;
+    fixture.open_gates(true, false).await;
+    fixture
+        .arm(&rule_id, MaintenanceEffectArming::Reversible, None)
+        .await;
+    let title = seed_title(&fixture.app, &fixture.user, "Leased", true).await;
+    fixture.evaluate().await;
+
+    let candidate = fixture.only_candidate().await;
+    let leased_at = Utc::now();
+    fixture
+        .evaluation
+        .strand_as_executing(&candidate.id, leased_at)
+        .await;
+
+    // The subject stops matching while the executor holds the lease. The
+    // evaluator runs on its own schedule and would ordinarily cancel here —
+    // straight over a row the executor is about to write a result to.
+    fixture
+        .app
+        .set_title_monitored(&fixture.user, &title.id, false)
+        .await
+        .expect("manual unmonitor");
+    let report = fixture
+        .app
+        .run_maintenance_rule_evaluation_job()
+        .await
+        .expect("evaluation pass");
+
+    assert_eq!(
+        report.candidates_canceled, 0,
+        "an executing candidate is the executor's to decide: {report:?}"
+    );
+    assert_eq!(
+        report.candidates_held, 0,
+        "not held either — the pass skips the subject whole"
+    );
+
+    let after = fixture.only_candidate().await;
+    assert_eq!(after.state, MaintenanceCandidateState::Executing);
+    assert_eq!(after.updated_at, leased_at, "the lease was not touched");
+}
+
+#[tokio::test]
+async fn a_terminal_write_after_the_lease_moved_reports_lease_lost() {
+    let fixture = execution_app(None);
+    let rule_id = fixture
+        .observed_rule(unmonitor_draft(MONITORED_MATCHER))
+        .await;
+    fixture.open_gates(true, false).await;
+    fixture
+        .arm(&rule_id, MaintenanceEffectArming::Reversible, None)
+        .await;
+    let title = seed_title(&fixture.app, &fixture.user, "Contested", true).await;
+    fixture.evaluate().await;
+
+    // Another pass declares this lease stale and takes the candidate in the
+    // window between the action finishing and its result being recorded.
+    let candidate = fixture.only_candidate().await;
+    fixture
+        .evaluation
+        .steal_lease_when_the_next_run_finishes(&candidate.id)
+        .await;
+
+    let report = fixture.handle().await;
+    assert_eq!(report.lease_lost, 1, "{report:?}");
+    assert_eq!(
+        report.executed, 0,
+        "a worker that lost its lease must not claim the outcome"
+    );
+
+    let after = fixture.only_candidate().await;
+    assert_eq!(
+        after.state,
+        MaintenanceCandidateState::Due,
+        "the new owner's state stands; the losing worker wrote nothing over it"
+    );
+    assert_ne!(after.state_reason, execution_reason::ACTION_SUCCEEDED);
+
+    // The action itself did happen, and its run row still says so: that is
+    // honest evidence of what this worker did, whoever owns the candidate now.
+    let stored = fixture
+        .app
+        .get_title(&fixture.user, &title.id)
+        .await
+        .expect("read title")
+        .expect("title exists");
+    assert!(!stored.monitored);
+    let runs = fixture.evaluation.all_action_runs().await;
+    assert_eq!(runs.len(), 1);
+    assert_eq!(
+        runs[0].status,
+        scryer_domain::LifecycleActionRunStatus::Succeeded
+    );
+}
+
+// ── A transient rule read holds; only a deleted rule cancels (Fix 5) ────────
+
+#[tokio::test]
+async fn a_rule_that_is_actually_gone_cancels_its_candidate() {
+    let fixture = execution_app(None);
+    let rule_id = fixture
+        .observed_rule(unmonitor_draft(MONITORED_MATCHER))
+        .await;
+    fixture.open_gates(true, false).await;
+    fixture
+        .arm(&rule_id, MaintenanceEffectArming::Reversible, None)
+        .await;
+    seed_title(&fixture.app, &fixture.user, "Orphaned", true).await;
+    fixture.evaluate().await;
+
+    fixture
+        .rules
+        .fail_rule_set_reads(MaintenanceRuleReadFault::Missing)
+        .await;
+
+    let report = fixture.handle().await;
+    assert_eq!(report.canceled, 1, "{report:?}");
+
+    let candidate = fixture.only_candidate().await;
+    assert_eq!(candidate.state, MaintenanceCandidateState::Canceled);
+    assert_eq!(candidate.state_reason, execution_reason::RULE_NOT_ELIGIBLE);
+}
+
+#[tokio::test]
+async fn an_unreadable_rule_store_holds_the_candidate_instead_of_cancelling_it() {
+    let fixture = execution_app(None);
+    let rule_id = fixture
+        .observed_rule(unmonitor_draft(MONITORED_MATCHER))
+        .await;
+    fixture.open_gates(true, false).await;
+    fixture
+        .arm(&rule_id, MaintenanceEffectArming::Reversible, None)
+        .await;
+    seed_title(&fixture.app, &fixture.user, "Unreadable", true).await;
+    fixture.evaluate().await;
+
+    // A store that cannot answer says nothing about whether the rule exists.
+    // Cancelling here would retire a live candidate on the strength of a network
+    // blip — the one failure on this path that used to do exactly that, while
+    // every sibling check held.
+    fixture
+        .rules
+        .fail_rule_set_reads(MaintenanceRuleReadFault::Unreachable)
+        .await;
+
+    let report = fixture.handle().await;
+    assert_eq!(report.held, 1, "{report:?}");
+    assert_eq!(report.canceled, 0);
+
+    let candidate = fixture.only_candidate().await;
+    assert_eq!(candidate.state, MaintenanceCandidateState::Blocked);
+    assert_eq!(candidate.state_reason, execution_reason::RULE_NOT_ELIGIBLE);
 }
 
 #[tokio::test]
@@ -308,6 +780,63 @@ async fn a_subject_that_stopped_matching_cancels_instead_of_acting() {
         candidates[0].state_reason,
         execution_reason::NO_MATCH_AT_EXECUTION
     );
+}
+
+/// Scope is part of what an operator acknowledged when they armed the rule, so
+/// the handler re-reads it with everything else it re-reads. Without this check
+/// a rule narrowed after its candidates were opened still acts on the subjects
+/// its scope no longer covers, and the narrowing is invisible to the executor.
+#[tokio::test]
+async fn a_candidate_outside_the_fresh_rule_scope_cancels_instead_of_acting() {
+    let fixture = execution_app(None);
+    let rule_id = fixture
+        .observed_rule(unmonitor_draft(MONITORED_MATCHER))
+        .await;
+    fixture.open_gates(true, false).await;
+    fixture
+        .arm(&rule_id, MaintenanceEffectArming::Reversible, None)
+        .await;
+    seed_title(&fixture.app, &fixture.user, "Out Of Scope", true).await;
+    fixture.evaluate().await;
+
+    // Narrowed at the store, with the arming deliberately left in place: going
+    // through the service would disarm the rule, and this test would then prove
+    // nothing about the executor's own scope check.
+    fixture
+        .rules
+        .re_scope_without_disarming(&rule_id, vec!["library-elsewhere".to_string()])
+        .await;
+
+    let report = fixture.handle().await;
+    assert_eq!(report.canceled, 1, "{report:?}");
+    assert_eq!(report.executed, 0, "{report:?}");
+
+    let candidate = fixture.only_candidate().await;
+    assert_eq!(candidate.state, MaintenanceCandidateState::Canceled);
+    assert_eq!(
+        candidate.state_reason,
+        crate::maintenance_rules::candidate_reason::OUT_OF_SCOPE
+    );
+}
+
+/// An empty scope means instance-wide, which covers every library, so the same
+/// check must not turn a rule with no scope into a rule that reaches nothing.
+#[tokio::test]
+async fn an_empty_rule_scope_still_reaches_every_library() {
+    let fixture = execution_app(None);
+    let rule_id = fixture
+        .observed_rule(unmonitor_draft(MONITORED_MATCHER))
+        .await;
+    fixture.open_gates(true, false).await;
+    fixture
+        .arm(&rule_id, MaintenanceEffectArming::Reversible, None)
+        .await;
+    seed_title(&fixture.app, &fixture.user, "In Scope", true).await;
+    fixture.evaluate().await;
+
+    let report = fixture.handle().await;
+    assert_eq!(report.executed, 1, "{report:?}");
+    assert_eq!(report.canceled, 0, "{report:?}");
 }
 
 #[tokio::test]

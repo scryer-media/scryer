@@ -96,17 +96,29 @@ export const PendingImportCard = React.memo(function PendingImportCard({
   onClearActiveItem,
 }: PendingImportCardProps) {
   const t = useTranslate();
-  const isOwnershipConflict = item.reason === "title_already_owns_another_folder";
+  // Both codes describe a folder-ownership problem rather than a metadata one,
+  // so neither is repaired by searching or binding metadata.
+  const isFolderOwnershipChange = item.reason === "folder_ownership_changed_by_user";
+  const isOwnershipConflict =
+    item.reason === "title_already_owns_another_folder" || isFolderOwnershipChange;
   const canSearchOrBind =
     !isOwnershipConflict && !(item.titleId && item.facet === "MOVIE");
 
   return (
-    <Card className="border-border/80 bg-card/60">
+    <Card
+      id={`pending-import-card-${item.id}`}
+      className="border-border/80 bg-card/60"
+    >
       <CardHeader className="space-y-2">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="space-y-1">
             <CardTitle className="text-base">{item.displayName}</CardTitle>
-            <p className="text-sm text-muted-foreground">{summary}</p>
+            <p
+              id={`pending-import-status-${item.id}`}
+              className="text-sm text-muted-foreground"
+            >
+              {summary}
+            </p>
             <p className="text-xs text-muted-foreground">{t("pendingImports.library")} {libraryLabel}</p>
           </div>
           <div className="flex flex-col gap-2 sm:flex-row">
@@ -114,6 +126,11 @@ export const PendingImportCard = React.memo(function PendingImportCard({
               <Button
                 type="button"
                 size="sm"
+                id={
+                  item.titleId
+                    ? `pending-import-bind-episodes-${item.id}`
+                    : `pending-import-search-${item.id}`
+                }
                 variant={isActive ? "secondary" : "default"}
                 onClick={() => onOpenSearch(item)}
                 disabled={isBusy}
@@ -126,6 +143,7 @@ export const PendingImportCard = React.memo(function PendingImportCard({
               <Button
                 type="button"
                 size="sm"
+                id={`pending-import-ignore-${item.id}`}
                 variant="destructive"
                 onClick={() => onRequestIgnore(item)}
                 disabled={isBusy}
@@ -161,7 +179,9 @@ export const PendingImportCard = React.memo(function PendingImportCard({
             className="rounded-lg border border-border/80 bg-background/60 p-3 text-sm text-muted-foreground"
             data-ui="pending-import-ownership-conflict-help"
           >
-            {t("pendingImports.ownershipConflictHelp")}
+            {isFolderOwnershipChange
+              ? t("pendingImports.folderOwnershipChangedHelp")
+              : t("pendingImports.ownershipConflictHelp")}
           </p>
         ) : null}
         {isActive && canSearchOrBind ? (
@@ -347,6 +367,7 @@ export const PendingImportCard = React.memo(function PendingImportCard({
                     <div className="flex justify-end">
                       <Button
                         type="button"
+                        id={`pending-import-bind-selected-${item.id}`}
                         disabled={isBusy || selectedEpisodeIds.length === 0}
                         onClick={() => void onBind()}
                       >

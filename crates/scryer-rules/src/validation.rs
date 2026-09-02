@@ -188,6 +188,18 @@ impl InputReferencePath {
             ] if input == "input" && facts == "facts"
         )
     }
+
+    /// True when the path is a bare `input` — the whole document handed around
+    /// as one value, e.g. `f := input`, `object.get(input, ["facts", "x"],
+    /// false)`, `walk(input, [p, v])` or `with input as {...}`. Because the
+    /// walker emits maximal paths, `input.facts.monitored` never produces this;
+    /// only a genuinely standalone `input` does.
+    fn references_input_wholesale(&self) -> bool {
+        matches!(
+            self.components.as_slice(),
+            [InputPathComponent::Field(input)] if input == "input"
+        )
+    }
 }
 
 fn build_input_catalog(contract_json: &str, contract_name: &str) -> RuleInputCatalog {
@@ -268,6 +280,15 @@ fn whole_facts_object_message(path: &str) -> String {
     )
 }
 
+fn whole_input_document_message(path: &str) -> String {
+    format!(
+        "Unsupported reference to the whole input document '{path}'. Reference what the rule reads \
+         directly (for example input.facts.monitored or input.subject.title_id) — handing the \
+         input document around as one value lets a rule reach facts Scryer cannot see it reading, \
+         so a fact Scryer could not observe would look absent instead of holding the rule."
+    )
+}
+
 fn unsupported_dynamic_input_path_message(path: &str) -> String {
     format!(
         "Unsupported dynamic rule input path '{path}'. Use documented field access, documented array indexing, or input.release.extra.<key>."
@@ -306,9 +327,9 @@ fn module_input_path_errors(module: &Module, ctx: InputPathContext) -> Vec<Strin
 /// This is the compile-time half of host-derived unknownness: the engine holds
 /// this set per rule and, at evaluation time, refuses to consult a rule whose
 /// referenced facts are not all resolvable for that subject. It is deliberately
-/// *static* — [`validate_maintenance_rule`] rejects dynamic fact access and
-/// `input` imports precisely so this set can never be an underestimate of what
-/// a rule actually reads.
+/// *static* — [`validate_maintenance_rule`] rejects dynamic fact access,
+/// `input` imports and bare `input` references precisely so this set can never
+/// be an underestimate of what a rule actually reads.
 ///
 /// References under `input.observations.*` are not collected: that namespace is
 /// the opted-out surface where the author takes responsibility for the
@@ -328,6 +349,8 @@ fn module_referenced_facts(module: &Module) -> Result<BTreeSet<String>, String> 
             error = Some(dynamic_fact_access_message(&path.display));
         } else if path.reads_facts_object_wholesale() {
             error = Some(whole_facts_object_message(&path.display));
+        } else if path.references_input_wholesale() {
+            error = Some(whole_input_document_message(&path.display));
         } else if let Some(name) = path.maintenance_fact_name() {
             facts.insert(name.to_string());
         }
@@ -674,6 +697,13 @@ fn validate_input_reference_path(
         return Some(whole_facts_object_message(&path.display));
     }
 
+    // Same reasoning one level up: a bare `input` carries every fact with it,
+    // so anything the rule reads out of it afterwards is invisible to the
+    // referenced-fact set.
+    if ctx.static_facts_only && path.references_input_wholesale() {
+        return Some(whole_input_document_message(&path.display));
+    }
+
     if path.has_dynamic_component() {
         return Some(unsupported_dynamic_input_path_message(&path.display));
     }
@@ -835,9 +865,10 @@ pub fn validate_managed_rule(
 /// Checks:
 /// 1. Package declaration matches `scryer.maintenance.user.<rule_set_id>`.
 /// 2. Source and the generated decision wrapper both compile.
-/// 3. No import pulls part of `input` into scope, and every fact is selected by
-///    a literal name. Both keep the referenced-fact set statically resolvable,
-///    which is what lets the engine hold a rule whose facts it cannot observe.
+/// 3. No import pulls part of `input` into scope, `input` is never referenced
+///    as a whole value, and every fact is selected by a literal name. All three
+///    keep the referenced-fact set statically resolvable, which is what lets the
+///    engine hold a rule whose facts it cannot observe.
 /// 4. The source defines a rule named `match`. The wrapper defaults an
 ///    undefined `match` to false, so a matcher that never defines one would
 ///    quietly evaluate to no-match forever — this is the only place that catches
@@ -1213,6 +1244,41 @@ mod tests {
         validate_maintenance_rule(&source, id).expect("validation should not fail outright")
     }
 
+    fn maintenance_policy(id: &str, body: &str) -> maintenance::MaintenancePolicy {
+        maintenance::MaintenancePolicy {
+            id: id.to_string(),
+            name: format!("rule {id}"),
+            rego_source: maintenance::rewrite_package_declaration(body, id),
+        }
+    }
+
+    /// The engine is the second gate: a revision stored before a rule existed
+    /// (or one that somehow bypassed validation) must still be refused at load,
+    /// so the fact set the engine holds a rule on is never an underestimate.
+    fn maintenance_build_error(id: &str, body: &str) -> String {
+        maintenance::MaintenanceRulesEngine::build(&[maintenance_policy(id, body)])
+            .err()
+            .map(|error| error.to_string())
+            .unwrap_or_else(|| panic!("engine build should have refused {id}"))
+    }
+
+    /// Both gates refuse a source, with the same explanation.
+    fn assert_maintenance_rejected_everywhere(id: &str, body: &str, expected: &str) {
+        let result = validate_maintenance_body(id, body);
+        assert!(!result.valid, "{id} should not validate");
+        assert!(
+            result.errors.iter().any(|error| error.contains(expected)),
+            "{id} validation errors: {:?}",
+            result.errors
+        );
+
+        let build_error = maintenance_build_error(id, body);
+        assert!(
+            build_error.contains(expected),
+            "{id} build error: {build_error}"
+        );
+    }
+
     #[test]
     fn valid_maintenance_rule_passes_validation() {
         let result = validate_maintenance_body(
@@ -1297,6 +1363,131 @@ mod tests {
             "{:?}",
             result.errors
         );
+
+        let build_error = maintenance_build_error(
+            "whole_object",
+            "match if {\n  object.get(input.facts, \"monitored\", false)\n}\n",
+        );
+        assert!(
+            build_error.contains("Unsupported reference to the whole fact object"),
+            "{build_error}"
+        );
+    }
+
+    /// Handing the whole document around defeats the referenced-fact set even
+    /// more completely than reading `input.facts` wholesale: every one of these
+    /// reads a fact without ever writing a fact path, so the engine's auto-hold
+    /// would never fire and an unobservable fact would decide as a plain
+    /// absence. Both gates — validation and engine build — refuse them.
+    #[test]
+    fn maintenance_rule_referencing_the_whole_input_document_is_rejected() {
+        const EXPECTED: &str = "Unsupported reference to the whole input document";
+
+        assert_maintenance_rejected_everywhere(
+            "input_alias",
+            "match if {\n  \
+               doc := input\n  \
+               doc.facts.watched_by_user_ids\n\
+             }\n",
+            EXPECTED,
+        );
+
+        assert_maintenance_rejected_everywhere(
+            "input_object_get",
+            "match if {\n  object.get(input, [\"facts\", \"monitored\"], false)\n}\n",
+            EXPECTED,
+        );
+
+        assert_maintenance_rejected_everywhere(
+            "input_as_function_argument",
+            "match if {\n  watched(input)\n}\n\n\
+             watched(doc) if {\n  doc.facts.last_watched_at\n}\n",
+            EXPECTED,
+        );
+
+        assert_maintenance_rejected_everywhere(
+            "input_walk",
+            "match if {\n  \
+               some path, value\n  \
+               walk(input, [path, value])\n  \
+               path == [\"facts\", \"monitored\"]\n  \
+               value\n\
+             }\n",
+            EXPECTED,
+        );
+
+        assert_maintenance_rejected_everywhere(
+            "input_bare_comparison",
+            "match if {\n  input == {}\n}\n",
+            EXPECTED,
+        );
+    }
+
+    /// `with input as {...}` reaches the same place by a different door: the
+    /// override target is a bare `input`, so the rule body underneath it reads
+    /// facts that never appear in the referenced-fact set.
+    #[test]
+    fn maintenance_rule_overriding_the_whole_input_document_is_rejected() {
+        assert_maintenance_rejected_everywhere(
+            "input_with_override",
+            "match if {\n  \
+               inner with input as {\"facts\": {\"monitored\": false}}\n\
+             }\n\n\
+             inner if {\n  not input.facts.monitored\n}\n",
+            "Unsupported reference to the whole input document",
+        );
+    }
+
+    /// Over-approximating on purpose: a `with input.facts.<name> as ...`
+    /// override still names its fact, so the referenced-fact set keeps counting
+    /// it — the rule is held on a fact it only substitutes for, which errs
+    /// toward holding rather than deciding.
+    #[test]
+    fn maintenance_rule_may_override_a_named_fact() {
+        let body = "match if {\n  \
+                      inner with input.facts.monitored as false\n\
+                    }\n\n\
+                    inner if {\n  not input.facts.monitored\n}\n";
+        let result = validate_maintenance_body("named_fact_override", body);
+        assert!(result.valid, "errors: {:?}", result.errors);
+
+        let facts = maintenance_referenced_facts(
+            &maintenance::rewrite_package_declaration(body, "named_fact_override"),
+            "named_fact_override",
+        )
+        .expect("named-fact override should resolve a fact set");
+        assert!(
+            facts.contains("monitored"),
+            "override should still count the fact: {facts:?}"
+        );
+    }
+
+    /// The rejection is exactly a *bare* `input`: the walker emits maximal
+    /// paths, so an ordinary fact read must stay untouched at both gates.
+    #[test]
+    fn maintenance_rule_reading_a_named_fact_is_still_accepted() {
+        let body = "match if {\n  not input.facts.monitored\n}\n";
+        let result = validate_maintenance_body("named_fact_read", body);
+        assert!(result.valid, "errors: {:?}", result.errors);
+
+        maintenance::MaintenanceRulesEngine::build(&[maintenance_policy("named_fact_read", body)])
+            .expect("a named fact read should load");
+    }
+
+    /// Release rules keep today's behavior: `input` there is not a fact-set
+    /// oracle, so a bare reference is no worse than any other broad read.
+    #[test]
+    fn release_rule_may_reference_input_as_a_whole() {
+        let source = r#"
+            package scryer.rules.user.bare_input
+            import rego.v1
+
+            score_entry["bonus"] := 100 if {
+                object.get(input, ["context", "is_anime"], false)
+            }
+        "#;
+        let result = validate_user_rule(source, "bare_input").unwrap();
+        assert!(result.valid, "errors: {:?}", result.errors);
     }
 
     #[test]

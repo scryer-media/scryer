@@ -88,6 +88,15 @@ async fn adding_a_revision_repoints_the_rule_set_and_preserves_the_old_one() {
         .await
         .expect("create rule set");
 
+    store
+        .update_rule_set_arming(
+            "rule-b",
+            scryer_domain::MaintenanceEffectArming::Destructive,
+            Utc::now(),
+        )
+        .await
+        .expect("arm the rule against revision 1");
+
     let updated_at = Utc::now();
     store
         .add_revision(&revision("rule-b", 2), updated_at)
@@ -100,6 +109,13 @@ async fn adding_a_revision_repoints_the_rule_set_and_preserves_the_old_one() {
         .unwrap()
         .expect("rule set exists");
     assert_eq!(loaded.current_revision_number, 2);
+    // The pointer move and the disarm are one write: arming acknowledges one
+    // matcher's blast radius, so it must not carry over to the next revision.
+    assert_eq!(
+        loaded.effect_arming,
+        scryer_domain::MaintenanceEffectArming::None,
+        "appending a revision must disarm the rule"
+    );
 
     let first = store
         .get_revision("rule-b", 1)
@@ -128,8 +144,10 @@ async fn metadata_updates_leave_the_revision_pointer_alone() {
     let (services, db) = temp_services("scryer_maintenance_metadata").await;
     let store = maintenance_rule_set_store(&services);
 
+    let mut armed = rule_set("rule-c", Vec::new());
+    armed.effect_arming = scryer_domain::MaintenanceEffectArming::Reversible;
     store
-        .create_rule_set(&rule_set("rule-c", Vec::new()), &revision("rule-c", 1))
+        .create_rule_set(&armed, &revision("rule-c", 1))
         .await
         .expect("create rule set");
 
@@ -139,6 +157,7 @@ async fn metadata_updates_leave_the_revision_pointer_alone() {
             "Renamed",
             "New description",
             &["library-9".to_string()],
+            false,
             Utc::now(),
         )
         .await
@@ -153,7 +172,59 @@ async fn metadata_updates_leave_the_revision_pointer_alone() {
     assert_eq!(loaded.description, "New description");
     assert_eq!(loaded.library_ids, vec!["library-9".to_string()]);
     assert_eq!(loaded.current_revision_number, 1);
+    // The caller decides whether the edit invalidated the arming; the store must
+    // not clear it on its own.
+    assert_eq!(
+        loaded.effect_arming,
+        scryer_domain::MaintenanceEffectArming::Reversible
+    );
     assert_eq!(store.list_revisions("rule-c").await.unwrap().len(), 1);
+
+    let _ = std::fs::remove_file(db);
+}
+
+/// The disarm and the scope it invalidates are one write, exactly as the
+/// revision pointer and its disarm are: there must be no instant at which the
+/// new scope is in force under the previous scope's arming.
+#[tokio::test]
+async fn a_scope_change_disarms_in_the_same_write() {
+    let (services, db) = temp_services("scryer_maintenance_rescope").await;
+    let store = maintenance_rule_set_store(&services);
+
+    let mut armed = rule_set("rule-f", vec!["library-1".to_string()]);
+    armed.effect_arming = scryer_domain::MaintenanceEffectArming::Destructive;
+    store
+        .create_rule_set(&armed, &revision("rule-f", 1))
+        .await
+        .expect("create rule set");
+
+    store
+        .update_rule_set_metadata(
+            "rule-f",
+            "Stale movies",
+            "Unwatched for a long time",
+            &["library-1".to_string(), "library-2".to_string()],
+            true,
+            Utc::now(),
+        )
+        .await
+        .expect("re-scope");
+
+    let loaded = store
+        .get_rule_set("rule-f")
+        .await
+        .unwrap()
+        .expect("rule set exists");
+    assert_eq!(
+        loaded.library_ids,
+        vec!["library-1".to_string(), "library-2".to_string()]
+    );
+    assert_eq!(
+        loaded.effect_arming,
+        scryer_domain::MaintenanceEffectArming::None,
+        "a widened scope must never stay armed under the narrower acknowledgement"
+    );
+    assert_eq!(loaded.current_revision_number, 1);
 
     let _ = std::fs::remove_file(db);
 }

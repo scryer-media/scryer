@@ -1,8 +1,10 @@
 import * as React from "react";
 import { useClient } from "urql";
 
+import { ChangeTitleFolderCard } from "@/components/common/change-title-folder-card";
 import { FixTitleMatchSettingsCard } from "@/components/common/fix-title-match-settings-card";
 import { TitleOptionsSettingsGrid } from "@/components/common/title-options-settings-grid";
+import { MoveTitlesDialog } from "@/components/dialogs/move-titles-dialog";
 import { DEFAULT_MOVIE_LIBRARY_PATH } from "@/lib/constants/settings";
 import { seriesOverviewSettingsInitQuery } from "@/lib/graphql/queries";
 import type { TitleOptionUpdates } from "@/lib/types/title-options";
@@ -31,9 +33,41 @@ export function MovieTitleSettingsPanel({
   const [defaultRootFolder, setDefaultRootFolder] = React.useState(
     DEFAULT_MOVIE_LIBRARY_PATH,
   );
-  const rootFolders = React.useMemo(
-    () => libraries.find((library) => library.id === title.libraryId)?.roots ?? [],
+  const library = React.useMemo(
+    () => libraries.find((entry) => entry.id === title.libraryId) ?? null,
     [libraries, title.libraryId],
+  );
+  const rootFolders = React.useMemo(() => library?.roots ?? [], [library]);
+  const libraryName = library?.name ?? null;
+  // Root chosen in the destination control; opening the move workflow instead
+  // of writing the title's root in place (FR-011).
+  const [moveRootId, setMoveRootId] = React.useState<string | null>(null);
+  // Every library, not just the title's own: a destination in another library
+  // is a cross-library transfer (FR-055/FR-056), and the move dialog owns the
+  // rules for which destinations are pickable.
+  const moveLibraries = React.useMemo(
+    () =>
+      libraries.length > 0
+        ? libraries.map((entry) => ({
+            id: entry.id,
+            name:
+              entry.name?.trim() ||
+              (entry.id === title.libraryId
+                ? title.libraryName?.trim() || entry.id
+                : entry.id),
+            roots: entry.roots,
+          }))
+        : [
+            {
+              id: title.libraryId,
+              name:
+                libraryName?.trim() ||
+                title.libraryName?.trim() ||
+                title.libraryId,
+              roots: rootFolders,
+            },
+          ],
+    [libraries, libraryName, rootFolders, title.libraryId, title.libraryName],
   );
 
   React.useEffect(() => {
@@ -82,11 +116,46 @@ export function MovieTitleSettingsPanel({
         onUpdateTitleOptions={onUpdateTitleOptions}
         onTitleChanged={onTitleChanged}
         idPrefix="title-overview-settings"
+        currentLibraryName={libraryName ?? title.libraryName ?? null}
+        onRequestMove={setMoveRootId}
+      />
+      <MoveTitlesDialog
+        open={moveRootId !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setMoveRootId(null);
+          }
+        }}
+        titles={[
+          {
+            id: title.id,
+            name: title.name,
+            libraryId: title.libraryId,
+            libraryName: libraryName ?? title.libraryName ?? null,
+            rootFolderId: title.rootFolderId ?? null,
+            rootFolderPath: title.rootFolderPath ?? null,
+          },
+        ]}
+        libraries={moveLibraries}
+        initialRootId={moveRootId}
       />
       <FixTitleMatchSettingsCard
         facet={title.facet}
         idPrefix="title-overview-settings"
         onOpen={onOpenFixMatch}
+      />
+      <ChangeTitleFolderCard
+        title={{
+          id: title.id,
+          name: title.name,
+          libraryId: title.libraryId,
+          libraryName: libraryName ?? title.libraryName ?? null,
+          rootFolderId: title.rootFolderId ?? null,
+          rootFolderPath: title.rootFolderPath ?? null,
+        }}
+        roots={rootFolders}
+        idPrefix="title-overview-settings"
+        onTitleChanged={onTitleChanged}
       />
     </div>
   );

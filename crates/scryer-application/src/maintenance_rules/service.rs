@@ -24,6 +24,9 @@ use scryer_rules::validation::{
     ValidationResult, maintenance_referenced_facts, validate_maintenance_rule,
 };
 
+use crate::maintenance_rules::action_execution::{
+    EXECUTABLE_TITLE_RULE_ACTIONS, title_rule_action_not_executable,
+};
 use crate::maintenance_rules::facts::{
     MaintenanceLibraryRef, MaintenanceTitlePeople, MaintenanceTitleWatch, build_title_input,
 };
@@ -39,6 +42,16 @@ pub const MAINTENANCE_PREVIEW_MAX_TITLES: usize = 50;
 
 /// Selection size used when the caller does not ask for one.
 pub const MAINTENANCE_PREVIEW_DEFAULT_TITLES: usize = 20;
+
+/// Upper bound on a rule's grace period, in days — ten years.
+///
+/// The grace period is materialized into a candidate's `due_at` as
+/// `first_matched_at + Duration::days(grace_days)`, and `chrono` *panics* rather
+/// than saturating once that addition leaves the representable range. A rule
+/// authored with a nonsense grace period would therefore not be a slow rule; it
+/// would take down the evaluation pass. Ten years is far past any real retention
+/// policy and nowhere near the overflow.
+pub const MAINTENANCE_MAX_GRACE_DAYS: i64 = 3650;
 
 // ── Request models ──────────────────────────────────────────────────────────
 
@@ -255,6 +268,21 @@ impl AppUseCase {
 
     /// Appends revision N+1. Revision N is left exactly as it was written, so a
     /// candidate recorded against it stays attributable (RFC 7.1).
+    ///
+    /// Appending a revision also disarms the rule
+    /// ([`MaintenanceEffectArming::None`]), atomically with the append. Arming
+    /// never outlives the revision it was granted against: an operator armed a
+    /// specific matcher plus action after acknowledging *that* matcher's blast
+    /// radius, so a replacement matcher has to be armed again on its own terms.
+    /// Without this, catalog-settings authority alone would be enough to swap an
+    /// armed rule's matcher and have the next handler pass act destructively
+    /// under someone else's acknowledgement.
+    ///
+    /// A mode change or a metadata rename does *not* disarm: neither changes
+    /// what the rule matches or what it does, so the acknowledgement still
+    /// describes the same blast radius.
+    ///
+    /// [`MaintenanceEffectArming::None`]: scryer_domain::MaintenanceEffectArming::None
     pub async fn update_maintenance_rule_matcher(
         &self,
         actor: &User,
@@ -292,6 +320,9 @@ impl AppUseCase {
             .await?;
 
         rule_set.current_revision_number = revision_number;
+        // Mirrors what `add_revision` wrote in the same transaction, so the
+        // detail this returns can never claim an arming the store just cleared.
+        rule_set.effect_arming = scryer_domain::MaintenanceEffectArming::None;
         rule_set.updated_at = now;
         Ok(MaintenanceRuleSetDetail {
             rule_set,
@@ -302,6 +333,21 @@ impl AppUseCase {
 
     /// Renames and re-scopes without touching the matcher, action, or grace
     /// period, so no revision is created.
+    ///
+    /// A *scope* change disarms the rule ([`MaintenanceEffectArming::None`]),
+    /// atomically with the metadata write. Library scope is the rule's blast
+    /// radius: an operator armed one matcher plus action over one set of
+    /// libraries after acknowledging what that would reach, so widening the
+    /// scope would put libraries nobody acknowledged inside an armed rule, and
+    /// narrowing it changes the acknowledged set just as materially. A scope
+    /// change therefore invalidates the acknowledgement exactly like a new
+    /// revision does, and arming has to be granted again on the new terms.
+    ///
+    /// A name or description edit changes neither what the rule matches, what it
+    /// does, nor where it reaches, so it leaves arming alone. The comparison is
+    /// set-based: reordering the same libraries is not a scope change.
+    ///
+    /// [`MaintenanceEffectArming::None`]: scryer_domain::MaintenanceEffectArming::None
     pub async fn update_maintenance_rule_metadata(
         &self,
         actor: &User,
@@ -316,23 +362,47 @@ impl AppUseCase {
         let mut rule_set = self.require_maintenance_rule_set(rule_set_id).await?;
         let name = require_non_empty(&name, "name")?;
         let now = Utc::now();
+        let scope_changed = library_scope_changed(&rule_set.library_ids, &library_ids);
 
         self.services
             .customization
             .maintenance_rule_sets
-            .update_rule_set_metadata(&rule_set.id, &name, &description, &library_ids, now)
+            .update_rule_set_metadata(
+                &rule_set.id,
+                &name,
+                &description,
+                &library_ids,
+                scope_changed,
+                now,
+            )
             .await?;
 
         rule_set.name = name;
         rule_set.description = description;
         rule_set.library_ids = library_ids;
+        if scope_changed {
+            // Mirrors what the store wrote in the same statement, so the rule
+            // this returns can never claim an arming the store just cleared.
+            rule_set.effect_arming = scryer_domain::MaintenanceEffectArming::None;
+        }
         rule_set.updated_at = now;
         Ok(rule_set)
     }
 
-    /// Hard delete is safe only because nothing references a maintenance rule
-    /// yet. Once candidates exist, deleting a rule set would orphan their
-    /// attribution — that path becomes archive-gated instead.
+    /// Delete a rule set that never did anything, and refuse one that did.
+    ///
+    /// The rule set's tables cascade: deleting the row takes its revisions, its
+    /// candidates, *and* its action runs with it. For a rule that has executed,
+    /// those action runs are the only record that the deletion, unmonitor, or
+    /// profile change ever happened and who authorized it — so deleting the rule
+    /// would erase the evidence of what it did. That is refused outright rather
+    /// than archived, because there is no state in which erasing an executed
+    /// action's audit trail is the right answer to "I am done with this rule":
+    /// disabling the rule stops it just as completely and keeps the history.
+    ///
+    /// Non-terminal candidates are refused for the adjacent reason: they are
+    /// live membership the rule is still the authorization for, and cascading
+    /// them away silently drops subjects an operator can currently see.
     pub async fn delete_maintenance_rule_set(
         &self,
         actor: &User,
@@ -340,7 +410,37 @@ impl AppUseCase {
     ) -> AppResult<()> {
         self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
             .await?;
-        self.require_maintenance_rule_set(rule_set_id).await?;
+        let rule_set = self.require_maintenance_rule_set(rule_set_id).await?;
+
+        // Bounded existence reads: one row is enough to answer both questions.
+        let has_history = !self
+            .services
+            .customization
+            .maintenance_evaluation
+            .list_action_runs(Some(&rule_set.id), None, Some(1))
+            .await?
+            .is_empty();
+        if has_history {
+            return Err(AppError::Validation(format!(
+                "\"{}\" has already run actions on your library, and deleting it would erase the \
+                 record of what it did. Set its mode to disabled instead: the rule stops \
+                 immediately and its history is kept.",
+                rule_set.name
+            )));
+        }
+
+        let active_candidates = self
+            .count_active_maintenance_candidates(&rule_set.id)
+            .await?;
+        if active_candidates > 0 {
+            return Err(AppError::Validation(format!(
+                "\"{}\" is currently tracking {active_candidates} title(s), and deleting it would \
+                 drop them without a trace. Set its mode to disabled instead, or clear the \
+                 candidates first.",
+                rule_set.name
+            )));
+        }
+
         self.services
             .customization
             .maintenance_rule_sets
@@ -375,6 +475,14 @@ impl AppUseCase {
             .await?;
 
         let policy = self.resolve_preview_policy(request.matcher).await?;
+        // Preview evaluates against real subjects and reports per-title
+        // outcomes, so an ungated one is a person-fact oracle: ask "did user x
+        // watch this" title by title and read the answers off the results. The
+        // same bar authoring meets applies here, for a stored rule as much as
+        // for a draft.
+        self.require_person_fact_authority(actor, &policy.rego_source, &policy.id)
+            .await?;
+
         let titles = self.select_preview_titles(&request.selection).await?;
         let libraries = self.maintenance_library_refs().await?;
 
@@ -475,15 +583,19 @@ impl AppUseCase {
         })
     }
 
-    /// Gate authoring a matcher that reads person-targeted facts.
+    /// Gate authoring — or previewing — a matcher that reads person-targeted
+    /// facts.
     ///
     /// Catalog-settings management is enough to write a rule about *media*.
     /// Writing one about *people* — who added a title, who asked for it, who
     /// watched it — is a use of the instance's identity records, so it asks for
-    /// the same authority that hands out permissions in the first place. The
-    /// bar is on authoring, deliberately: a stored revision keeps running under
-    /// the system principal, because revoking an author's permission must not
-    /// silently stop a rule an operator armed.
+    /// the same authority that hands out permissions in the first place.
+    /// Preview meets the same bar because it answers the same question against
+    /// real subjects, one title at a time.
+    ///
+    /// The bar is on reaching the facts, not on running: a stored revision
+    /// keeps evaluating under the system principal, because revoking an
+    /// author's permission must not silently stop a rule an operator armed.
     ///
     /// The fact set comes from the same static extraction the engine holds
     /// rules on, so a rule cannot reach a person fact by a path this check
@@ -662,6 +774,11 @@ fn prepare_matcher(
             "grace period must be zero or more days".to_string(),
         ));
     }
+    if grace_days > MAINTENANCE_MAX_GRACE_DAYS {
+        return Err(AppError::Validation(format!(
+            "grace period must be at most {MAINTENANCE_MAX_GRACE_DAYS} days (ten years)"
+        )));
+    }
     validate_title_scope_action(action_spec)?;
 
     let rewritten = rewrite_package_declaration(rego_source, rule_id);
@@ -687,7 +804,20 @@ fn prepare_matcher(
 /// need only be legal for one of them. Which one applies to a given candidate
 /// is decided per title from its facet at evaluation time; rejecting an action
 /// here because it is movie-only would make it unusable in movie libraries.
-fn validate_title_scope_action(spec: &MaintenanceActionSpec) -> AppResult<()> {
+///
+/// Passing the descriptor's subject check is necessary but not sufficient: the
+/// action also has to be one the title executor dispatches. The show-subject
+/// `unmonitor_show_delete_existing_files` used to pass here and then hard-fail
+/// at execution, burning its three attempts into a terminal `Failed` candidate,
+/// so [`EXECUTABLE_TITLE_RULE_ACTIONS`] — the executor's own list — is the gate
+/// on both sides.
+pub(super) fn validate_title_scope_action(spec: &MaintenanceActionSpec) -> AppResult<()> {
+    if !EXECUTABLE_TITLE_RULE_ACTIONS.contains(&spec.kind) {
+        return Err(AppError::Validation(title_rule_action_not_executable(
+            spec.kind,
+        )));
+    }
+
     if spec.validate(ActionSubjectKind::Movie).is_ok()
         || spec.validate(ActionSubjectKind::Show).is_ok()
     {
@@ -711,6 +841,18 @@ fn require_dormant_evaluation_mode(mode: Option<MaintenanceEvaluationMode>) -> A
             "shadow and observe evaluation are not yet available; maintenance rules can only be saved as disabled".to_string(),
         )),
     }
+}
+
+/// Whether two library scopes describe different sets of libraries.
+///
+/// Compared as sets, not as sequences: the stored order is an artifact of how a
+/// client serialized the list, and re-saving the same libraries in a different
+/// order is not a change to what the rule can reach.
+fn library_scope_changed(stored: &[String], replacement: &[String]) -> bool {
+    let stored: std::collections::BTreeSet<&str> = stored.iter().map(String::as_str).collect();
+    let replacement: std::collections::BTreeSet<&str> =
+        replacement.iter().map(String::as_str).collect();
+    stored != replacement
 }
 
 fn require_non_empty(value: &str, field: &str) -> AppResult<String> {

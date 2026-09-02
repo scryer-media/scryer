@@ -7,7 +7,8 @@ use chrono::{DateTime, Utc};
 #[derive(Enum, Copy, Clone, Debug, Eq, PartialEq)]
 #[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
 pub enum MaintenanceEvaluationMode {
-    /// Stored but never evaluated. The only mode this release accepts.
+    /// Stored but never evaluated. A disabled rule opens no candidates and runs
+    /// no actions, and it is the mode every new rule set is created in.
     Disabled,
     /// Evaluate and record candidates, never act.
     Shadow,
@@ -66,9 +67,12 @@ pub enum MaintenanceActionKind {
 
 /// Lifecycle state of one maintenance candidate.
 ///
-/// The whole state machine is exposed now, but the dark evaluator only ever
-/// produces `OBSERVING`, `CANCELED`, and `EXCLUDED`; the rest are written by
-/// the action executor, which is not part of this release.
+/// Two writers move a candidate through these states. The scheduled evaluator
+/// opens and closes membership, writing only `OBSERVING`, `CANCELED`, and
+/// `EXCLUDED`. The action handler owns the rest: it leases a due candidate into
+/// `EXECUTING` and writes the outcome, and it only ever selects candidates of a
+/// rule that is in `OBSERVE` mode, is armed, and whose matching instance effect
+/// gate is on.
 #[derive(Enum, Copy, Clone, Debug, Eq, PartialEq)]
 #[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
 pub enum MaintenanceCandidateState {
@@ -145,8 +149,9 @@ pub struct MaintenanceRuleSet {
     pub name: String,
     /// Rule-set description; empty when the author supplied none.
     pub description: String,
-    /// Whether the rule set is enabled. Always false while maintenance rules
-    /// ship dark.
+    /// Whether the rule set is enabled. Derived from `evaluationMode` rather
+    /// than set independently: false for `DISABLED`, true for `SHADOW` and
+    /// `OBSERVE`.
     pub enabled: bool,
     /// Evaluation mode currently stored for the rule set.
     pub evaluation_mode: MaintenanceEvaluationMode,
@@ -287,8 +292,11 @@ pub struct MaintenancePreviewPayload {
 
 /// One subject's durable membership in one maintenance rule set.
 ///
-/// Nothing here has acted on the subject: a candidate records that a rule
-/// matched it and how long the grace period still has to run.
+/// A candidate records that a rule matched the subject, how long its grace
+/// period still has to run, and, once the handler has acted, what happened.
+/// `state` is the authority on which of those a given row is: opening a
+/// candidate never acts on anything, and only `EXECUTING`, `SUCCEEDED`, and
+/// `FAILED` mean an action was attempted.
 #[derive(SimpleObject, Clone)]
 pub struct MaintenanceCandidate {
     /// Candidate ID.
@@ -313,7 +321,9 @@ pub struct MaintenanceCandidate {
     pub state_reason: String,
     /// Reason codes the matcher emitted on the most recent match.
     pub reason_codes: Vec<String>,
-    /// Action the rule revision authorizes. Nothing executes it in this release.
+    /// Action the rule revision authorizes, and the one the handler will run if
+    /// this candidate becomes due while the rule is in `OBSERVE` mode, armed for
+    /// the action's risk class, and its instance effect gate is on.
     pub action_kind: MaintenanceActionKind,
     /// Days the subject must match continuously before the action is due.
     pub grace_days: i32,
@@ -366,18 +376,34 @@ pub struct MaintenanceEvaluationRun {
 }
 
 /// The five independent instance-wide maintenance gates. Every one of them
-/// defaults off, and only the first two do anything in this release.
+/// defaults off, an unconfigured instance therefore evaluates nothing and acts
+/// on nothing, and each gate is read at the start of every scheduled pass so a
+/// change takes effect on the next run without a restart.
+///
+/// A gate is only ever the instance half of a permission. Executing an action
+/// additionally requires the individual rule to be in `OBSERVE` mode and armed
+/// for that action's risk class, so opening a gate cannot by itself start
+/// anything.
 #[derive(SimpleObject, Clone, Copy)]
 pub struct MaintenanceInstanceGates {
-    /// Whether the scheduled evaluator may run at all.
+    /// Whether the scheduled evaluator may run at all. While this is off no rule
+    /// is evaluated, no candidate is opened or closed, and no evaluation run is
+    /// recorded.
     pub evaluation_enabled: bool,
     /// Whether candidate results are returned to clients.
     pub result_display_enabled: bool,
     /// Reserved for provider collection projection and lifecycle notifications.
+    /// Nothing reads it yet.
     pub presentation_effects_enabled: bool,
-    /// Reserved for low and medium risk actions.
+    /// Whether low and medium risk actions may execute, such as unmonitoring a
+    /// title or changing its quality profile. A rule armed as `REVERSIBLE` or
+    /// `DESTRUCTIVE` starts running those actions on its due candidates while
+    /// this is on.
     pub reversible_effects_enabled: bool,
-    /// Reserved for high risk actions.
+    /// Whether high risk actions may execute, meaning the ones that delete media
+    /// files. Turning this on lets every rule already armed as `DESTRUCTIVE`
+    /// begin deleting its due candidates on the next handler pass, without any
+    /// further confirmation.
     pub destructive_effects_enabled: bool,
 }
 
@@ -537,10 +563,14 @@ pub struct SetMaintenanceInstanceGatesInput {
     /// Whether candidate results are returned to clients.
     pub result_display_enabled: Option<bool>,
     /// Reserved for provider collection projection and lifecycle notifications.
+    /// Nothing reads it yet.
     pub presentation_effects_enabled: Option<bool>,
-    /// Reserved for low and medium risk actions.
+    /// Whether low and medium risk actions may execute for rules that are armed
+    /// and in `OBSERVE` mode.
     pub reversible_effects_enabled: Option<bool>,
-    /// Reserved for high risk actions.
+    /// Whether high risk actions may execute. Setting this to true lets every
+    /// rule already armed as `DESTRUCTIVE` begin deleting media files on the
+    /// next handler pass.
     pub destructive_effects_enabled: Option<bool>,
 }
 

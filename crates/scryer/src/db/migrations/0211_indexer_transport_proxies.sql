@@ -14,7 +14,7 @@
 --   `indexers.api_key_encrypted`, and `remote_dns` records the SOCKS5
 --   `socks5h` choice (resolve the destination at the proxy) as a flag rather
 --   than as a second provider type.
-CREATE TABLE indexer_proxy_configs_0208 (
+CREATE TABLE indexer_proxy_configs_0211 (
     id TEXT PRIMARY KEY NOT NULL,
     name TEXT NOT NULL,
     provider_type TEXT NOT NULL,
@@ -32,7 +32,7 @@ CREATE TABLE indexer_proxy_configs_0208 (
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-INSERT INTO indexer_proxy_configs_0208 (
+INSERT INTO indexer_proxy_configs_0211 (
     id,
     name,
     provider_type,
@@ -62,7 +62,7 @@ SELECT
 FROM indexer_proxy_configs;
 
 DROP TABLE indexer_proxy_configs;
-ALTER TABLE indexer_proxy_configs_0208 RENAME TO indexer_proxy_configs;
+ALTER TABLE indexer_proxy_configs_0211 RENAME TO indexer_proxy_configs;
 
 CREATE INDEX idx_indexer_proxy_configs_provider_type
     ON indexer_proxy_configs(provider_type);

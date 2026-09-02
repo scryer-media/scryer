@@ -2,6 +2,7 @@ use super::{
     ContentScopeValue, DelayProfilePreferredProtocolValue, FillerPolicyValue, ImportModeValue,
     Long, MediaFacetValue, RecapPolicyValue, RenameCollisionPolicyValue,
     RenameMissingMetadataPolicyValue, RootFolderPayload, ScoringPersonaValue,
+    VerificationDepthValue,
 };
 use async_graphql::{Enum, ID, InputObject, SimpleObject};
 use chrono::{DateTime, Utc};
@@ -51,6 +52,16 @@ pub struct SubtitleSettingsPayload {
 pub struct RecycleBinSettingsPayload {
     /// Whether deleted media is moved to the recycle bin.
     pub enabled: bool,
+}
+
+#[derive(SimpleObject, Clone)]
+/// Verification depth applied to download-client completed-download copies.
+/// Location operations (library moves, root changes, consolidations) always
+/// verify in full and ignore this preference: they move the only copy of the
+/// content, so the stronger guarantee is a floor rather than a choice.
+pub struct VerificationSettingsPayload {
+    /// Depth applied when proving a copied file before its source is touched.
+    pub depth: VerificationDepthValue,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -920,6 +931,16 @@ pub struct UpdateSubtitleSettingsInput {
 pub struct UpdateRecycleBinSettingsInput {
     /// Whether deleted media is retained in the recycle bin.
     pub enabled: bool,
+}
+
+#[derive(InputObject, Clone)]
+/// Verification depth applied to download-client completed-download copies.
+/// Location operations (library moves, root changes, consolidations) always
+/// verify in full and ignore this preference: they move the only copy of the
+/// content, so the stronger guarantee is a floor rather than a choice.
+pub struct UpdateVerificationSettingsInput {
+    /// Depth applied when proving a copied file before its source is touched.
+    pub depth: VerificationDepthValue,
 }
 
 #[derive(InputObject, Clone)]

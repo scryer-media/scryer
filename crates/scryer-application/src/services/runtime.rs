@@ -1512,6 +1512,11 @@ pub struct AppRuntimeLibraryState {
         Arc<Mutex<HashMap<String, tokio_util::sync::CancellationToken>>>,
     pub library_scan_title_walk_limit: Arc<Semaphore>,
     pub library_scan_analysis_limit: Arc<Semaphore>,
+    /// In-process fast path for the location ownership guard (FR-084, D7).
+    pub location_ownership: crate::location::ownership_guard::LocationOwnershipRegistry,
+    /// Which location operations have a runner alive in this process, so a
+    /// resume can never start a second one over live checkpoints (FR-033).
+    pub location_runners: crate::location::ownership_guard::LocationRunnerRegistry,
 }
 
 #[derive(Clone)]
@@ -1756,6 +1761,9 @@ impl AppRuntimeState {
                 library_scan_analysis_limit: Arc::new(Semaphore::new(
                     GLOBAL_LIBRARY_SCAN_ANALYSIS_CONCURRENCY,
                 )),
+                location_ownership:
+                    crate::location::ownership_guard::LocationOwnershipRegistry::new(),
+                location_runners: crate::location::ownership_guard::LocationRunnerRegistry::new(),
             },
             jobs: AppRuntimeJobState {
                 job_run_tracker: JobRunTracker::new(),

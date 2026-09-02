@@ -138,6 +138,22 @@ pub struct UpdateRecycleBinSettings {
     pub enabled: bool,
 }
 
+/// How thoroughly a download-client completed-download copy is proven before
+/// its source may be touched (FR-042).
+///
+/// Location operations do not read it: `LOCATION_OPERATION_VERIFICATION_DEPTH`
+/// forces full depth for every library move, root change, and consolidation,
+/// because those relocate the user's only copy.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerificationSettings {
+    pub depth: crate::location::model::VerificationDepth,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UpdateVerificationSettings {
+    pub depth: crate::location::model::VerificationDepth,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RecycledItem {
     pub id: String,
@@ -634,6 +650,10 @@ pub struct TitleMediaFile {
     pub role: crate::MediaFileRole,
     pub source_signature_scheme: Option<String>,
     pub source_signature_value: Option<String>,
+    /// Persisted full-file hashes (migration 0205, FR-041/046/047), separate
+    /// from the sampled head+tail proof above. `None` when nothing has read the
+    /// file end to end yet, or when a scan invalidated the stored values.
+    pub content_hashes: Option<crate::location::model::PersistedContentHashes>,
     pub quality_label: Option<String>,
     pub scan_status: String,
     pub created_at: String,

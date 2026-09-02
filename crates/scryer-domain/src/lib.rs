@@ -155,10 +155,37 @@ pub fn normalize_library_root_path(path: &str) -> String {
     }
 }
 
+/// Prefix marking a library root id as synthetic — allocated, never derived.
+pub const SYNTHETIC_ROOT_ID_PREFIX: &str = "root_";
+
+/// Allocate a fresh identity for a newly configured library root.
+///
+/// A root's id is opaque and permanent: it is minted once, when the root is
+/// first configured, and is never recomputed. That is what lets a root's path be
+/// a mutable attribute — changing where a root points does not change which root
+/// it is, so titles keep valid references across path changes and consolidations
+/// (FR-078). Resolving an *existing* root always means reading its stored id, not
+/// recomputing one from its path.
+pub fn allocate_root_folder_id() -> String {
+    format!(
+        "{SYNTHETIC_ROOT_ID_PREFIX}{}",
+        uuid::Uuid::new_v4().simple()
+    )
+}
+
+/// The pre-0204 path-derived root id.
+///
+/// **Legacy.** Root identity was a pure function of the platform-normalized path
+/// until migration 0204 re-keyed roots onto synthetic ids. This survives for the
+/// migration hooks that have to reproduce the old scheme to recognize and remap
+/// it, and for resolving a legacy id a caller may still be holding through
+/// `library_root_id_remaps`. New code allocates with [`allocate_root_folder_id`]
+/// and resolves existing roots by reading `library_roots.id`.
 pub fn root_folder_id_for_path(path: &str) -> String {
     root_folder_id_for_normalized_path(&normalize_library_root_path(path))
 }
 
+/// See [`root_folder_id_for_path`] — legacy, migration and lookup use only.
 pub fn root_folder_id_for_normalized_path(normalized_path: &str) -> String {
     blake3::hash(normalized_path.as_bytes())
         .to_hex()
@@ -2290,6 +2317,207 @@ pub struct ImportFileResult {
     #[serde(default)]
     pub destination_disposition: ImportDestinationDisposition,
     pub source_cleanup: Option<ImportSourceCleanupGuard>,
+    /// What proving the destination concluded, for the placements that copied
+    /// bytes (FR-045). `None` for a rename, hardlink, or symlink placement:
+    /// nothing was copied, so there is nothing to verify and no hash to
+    /// persist.
+    #[serde(default)]
+    pub verification: Option<ImportVerification>,
+}
+
+// ── Content verification value types (FR-040–047) ───────────────────────────
+//
+// These live in the domain rather than beside the copy machinery because three
+// layers need to name the same values: the application resolves the depth
+// preference and persists the hashes, the workflow importer performs the copy —
+// in a separate worker process, so the values must serialize — and the location
+// operation runner records them per file. Behavior stays where it belongs; only
+// the vocabulary is shared.
+
+/// How thoroughly a copied file is proven before its source may be touched.
+///
+/// FR-042: **full** (default) reads the destination back and compares it against
+/// the CRC streamed during the copy; **quick** uses the sampled head+tail proof
+/// plus size and is the universal floor — full falls back to it, and verification
+/// never drops below it.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum VerificationDepth {
+    /// Full destination read-back compared against the streamed CRC.
+    #[default]
+    Full,
+    /// Sampled head+tail content proof plus size.
+    Quick,
+}
+
+impl VerificationDepth {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::Quick => "quick",
+        }
+    }
+
+    /// Parse a persisted setting value. Unknown values are an error rather than a
+    /// silent downgrade so a corrupt setting cannot quietly weaken verification.
+    pub fn from_setting(value: &str) -> Result<Self, String> {
+        match value.trim() {
+            "full" => Ok(Self::Full),
+            "quick" => Ok(Self::Quick),
+            other => Err(format!("unsupported verification depth: {other}")),
+        }
+    }
+}
+
+/// The depth actually applied to one file, including the fallback case.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub struct AppliedVerificationDepth {
+    /// The depth the operation was configured to apply.
+    pub requested: VerificationDepth,
+    /// The depth actually achieved for this file.
+    pub applied: VerificationDepth,
+    /// True when `requested` was `Full` but only the quick floor could run
+    /// (FR-042 fallback); recorded so the reduced guarantee is auditable.
+    pub fell_back: bool,
+}
+
+impl AppliedVerificationDepth {
+    /// The depth was applied exactly as requested.
+    pub fn exact(depth: VerificationDepth) -> Self {
+        Self {
+            requested: depth,
+            applied: depth,
+            fell_back: false,
+        }
+    }
+
+    /// Full verification was requested but only the quick floor could run.
+    pub fn quick_fallback() -> Self {
+        Self {
+            requested: VerificationDepth::Full,
+            applied: VerificationDepth::Quick,
+            fell_back: true,
+        }
+    }
+
+    /// The FR-043 stamp: "verified (full)" / "verified (quick, fallback)".
+    pub fn label(&self) -> String {
+        if self.fell_back {
+            format!("{} (fallback)", self.applied.as_str())
+        } else {
+            self.applied.as_str().to_string()
+        }
+    }
+}
+
+/// Outcome of verifying one destination file.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum FileVerificationOutcome {
+    /// Destination content matched at the applied depth; source removal is
+    /// unblocked for this file (FR-044).
+    Verified,
+    /// Destination content did not match; the source is never touched.
+    Mismatch,
+    /// Verification could not run at all (unreadable destination, vanished
+    /// mount); treated as a failure, never as a pass.
+    Unavailable,
+}
+
+impl FileVerificationOutcome {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Verified => "verified",
+            Self::Mismatch => "mismatch",
+            Self::Unavailable => "unavailable",
+        }
+    }
+
+    /// Parse a persisted value. An unreadable outcome is never treated as a
+    /// pass (FR-044).
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim() {
+            "verified" => Some(Self::Verified),
+            "mismatch" => Some(Self::Mismatch),
+            "unavailable" => Some(Self::Unavailable),
+            _ => None,
+        }
+    }
+
+    /// Only a verified file may have its source recycled or removed (FR-044).
+    pub fn permits_source_removal(&self) -> bool {
+        matches!(self, Self::Verified)
+    }
+}
+
+/// CRC algorithm identifier persisted alongside a stored CRC so a future default
+/// change cannot be mistaken for a corruption (FR-041 "algorithm-tagged").
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum MoveCrcAlgorithm {
+    /// CRC-64/NVME — the default; see `scryer_application::location::verify`.
+    #[default]
+    Crc64Nvme,
+}
+
+impl MoveCrcAlgorithm {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Crc64Nvme => "crc64_nvme",
+        }
+    }
+
+    pub fn from_setting(value: &str) -> Result<Self, String> {
+        match value.trim() {
+            "crc64_nvme" => Ok(Self::Crc64Nvme),
+            other => Err(format!("unsupported move CRC algorithm: {other}")),
+        }
+    }
+}
+
+/// Hashes produced by one streaming copy pass (D2): read once at the source,
+/// both values persisted with the destination media file.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StreamedContentHashes {
+    /// Bytes streamed through the hashers.
+    pub size_bytes: u64,
+    /// Algorithm tag for `move_crc`.
+    pub crc_algorithm: MoveCrcAlgorithm,
+    /// Streaming CRC over the copied bytes; the move-corruption check.
+    pub move_crc: u64,
+    /// Full-file BLAKE3 (hex); the dedup identity (D4, FR-073).
+    pub full_blake3: String,
+}
+
+/// What an import's copy proved about its destination (FR-045).
+///
+/// The import equivalent of a location operation's per-file verification
+/// record, minus the operation identifiers an import does not have. It crosses
+/// the import worker's process boundary, so everything in it serializes.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ImportVerification {
+    /// Hashes streamed while the bytes were copied.
+    pub hashes: StreamedContentHashes,
+    /// Requested vs applied depth, and whether the quick floor was a fallback.
+    pub depth: AppliedVerificationDepth,
+    pub outcome: FileVerificationOutcome,
+    /// Why the outcome is not a plain pass, or why the depth fell back.
+    pub detail: Option<String>,
+}
+
+impl ImportVerification {
+    /// The FR-044 gate. An import that copied bytes it could not prove must not
+    /// reach source cleanup.
+    pub fn permits_source_removal(&self) -> bool {
+        self.outcome.permits_source_removal()
+    }
+
+    /// The FR-043 stamp: `verified (full)`, `verified (quick)`, or
+    /// `verified (quick (fallback))`.
+    pub fn stamp(&self) -> String {
+        format!("{} ({})", self.outcome.as_str(), self.depth.label())
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

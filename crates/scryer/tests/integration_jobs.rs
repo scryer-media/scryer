@@ -86,6 +86,23 @@ async fn set_media_path(ctx: &TestContext, key_name: &str, value: &str) {
         .expect("update default library root");
 }
 
+/// Root ids are allocated, never derived from a path (FR-078), so a fixture that
+/// wants a title attached to the configured root has to read the stored id.
+async fn default_library_root_id(ctx: &TestContext, facet: &MediaFacet) -> String {
+    let library_id = scryer_domain::default_library_id_for_facet(facet);
+    let library = LibraryRepository::get_by_id(&ctx.libraries, &library_id)
+        .await
+        .expect("default library should load")
+        .expect("default library should exist");
+    library
+        .roots
+        .iter()
+        .find(|root| root.is_default)
+        .or_else(|| library.roots.first())
+        .map(|root| root.id.clone())
+        .expect("default library should have a root")
+}
+
 #[tokio::test]
 async fn background_series_refresh_skips_non_relinked_titles_and_completes_job_run() {
     let ctx = TestContext::new().await;
@@ -97,6 +114,7 @@ async fn background_series_refresh_skips_non_relinked_titles_and_completes_job_r
         media_root.path().to_string_lossy().as_ref(),
     )
     .await;
+    let series_root_id = default_library_root_id(&ctx, &MediaFacet::Series).await;
 
     let title = TitleRepository::create(
         &ctx.titles,
@@ -112,9 +130,7 @@ async fn background_series_refresh_skips_non_relinked_titles_and_completes_job_r
                 source: "tvdb".to_string(),
                 value: "345679".to_string(),
             }],
-            root_folder_id: scryer_domain::root_folder_id_for_path(
-                media_root.path().to_string_lossy().as_ref(),
-            ),
+            root_folder_id: series_root_id,
             created_by: None,
             created_at: Utc::now(),
             year: Some(2024),

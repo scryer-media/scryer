@@ -61,6 +61,15 @@ pub(super) struct InMemoryMaintenanceEvaluationRepo {
     exclusions: Mutex<Vec<MaintenanceRuleExclusion>>,
     runs: Mutex<Vec<MaintenanceEvaluationRun>>,
     action_runs: Mutex<Vec<LifecycleActionRun>>,
+    /// When set to a candidate id, the next [`Self::finish_action_run`] also
+    /// moves that candidate out of `executing`, exactly as a concurrent pass
+    /// reclaiming a stale lease would.
+    ///
+    /// Production has no such hook — only the lease writes that state — but the
+    /// window between a worker finishing its action and recording its result is
+    /// precisely where a lost update would land, so a test needs a way to write
+    /// into it.
+    steal_lease_on_finish: Mutex<Option<String>>,
 }
 
 impl InMemoryMaintenanceEvaluationRepo {
@@ -74,6 +83,26 @@ impl InMemoryMaintenanceEvaluationRepo {
 
     pub(super) async fn all_action_runs(&self) -> Vec<LifecycleActionRun> {
         self.action_runs.lock().await.clone()
+    }
+
+    /// Leave a candidate looking like a crashed worker left it: `executing`,
+    /// with an `updated_at` old enough for the lease to call it abandoned.
+    /// Nothing in production can produce this row deliberately, which is exactly
+    /// why it used to be unrecoverable.
+    pub(super) async fn strand_as_executing(&self, id: &str, updated_at: DateTime<Utc>) {
+        let mut rows = self.candidates.lock().await;
+        let candidate = rows
+            .iter_mut()
+            .find(|candidate| candidate.id == id)
+            .expect("candidate exists");
+        candidate.state = MaintenanceCandidateState::Executing;
+        candidate.state_reason = "execution_leased".to_string();
+        candidate.updated_at = updated_at;
+    }
+
+    /// Arm the lease theft described on [`Self::steal_lease_on_finish`].
+    pub(super) async fn steal_lease_when_the_next_run_finishes(&self, candidate_id: &str) {
+        *self.steal_lease_on_finish.lock().await = Some(candidate_id.to_string());
     }
 }
 
@@ -202,18 +231,30 @@ impl MaintenanceCandidateRepository for InMemoryMaintenanceEvaluationRepo {
         id: &str,
         state: MaintenanceCandidateState,
         state_reason: &str,
+        expected_states: &[MaintenanceCandidateState],
         updated_at: DateTime<Utc>,
-    ) -> AppResult<()> {
+    ) -> AppResult<bool> {
+        if expected_states.is_empty() {
+            return Err(AppError::Validation(
+                "a candidate transition must name the states it expects".to_string(),
+            ));
+        }
         let mut rows = self.candidates.lock().await;
         let candidate = rows
             .iter_mut()
             .find(|candidate| candidate.id == id)
             .ok_or_else(|| AppError::NotFound(id.to_string()))?;
+        // The compare-and-set is the whole point of the method, so the double
+        // enforces it: a permissive fake would let a lost update pass here and
+        // only fail against the real store.
+        if !expected_states.contains(&candidate.state) {
+            return Ok(false);
+        }
         candidate.state = state;
         candidate.state_reason = state_reason.to_string();
         candidate.last_evaluated_at = updated_at;
         candidate.updated_at = updated_at;
-        Ok(())
+        Ok(true)
     }
 
     async fn cancel_active_candidates_for_rule(
@@ -257,6 +298,7 @@ impl MaintenanceCandidateRepository for InMemoryMaintenanceEvaluationRepo {
         &self,
         rule_set_id: &str,
         due_before: DateTime<Utc>,
+        stale_before: DateTime<Utc>,
         limit: usize,
     ) -> AppResult<Vec<LifecycleCandidate>> {
         let mut rows: Vec<LifecycleCandidate> = self
@@ -267,13 +309,14 @@ impl MaintenanceCandidateRepository for InMemoryMaintenanceEvaluationRepo {
             .filter(|candidate| {
                 candidate.rule_set_id == rule_set_id
                     && candidate.due_at <= due_before
-                    && matches!(
+                    && (matches!(
                         candidate.state,
                         MaintenanceCandidateState::Observing
                             | MaintenanceCandidateState::PendingAction
                             | MaintenanceCandidateState::Due
                             | MaintenanceCandidateState::Blocked
-                    )
+                    ) || (candidate.state == MaintenanceCandidateState::Executing
+                        && candidate.updated_at < stale_before))
             })
             .cloned()
             .collect();
@@ -338,12 +381,27 @@ impl LifecycleActionRunRepository for InMemoryMaintenanceEvaluationRepo {
     }
 
     async fn finish_action_run(&self, run: &LifecycleActionRun) -> AppResult<()> {
-        let mut rows = self.action_runs.lock().await;
-        let stored = rows
-            .iter_mut()
-            .find(|stored| stored.id == run.id)
-            .ok_or_else(|| AppError::NotFound(run.id.clone()))?;
-        *stored = run.clone();
+        {
+            let mut rows = self.action_runs.lock().await;
+            let stored = rows
+                .iter_mut()
+                .find(|stored| stored.id == run.id)
+                .ok_or_else(|| AppError::NotFound(run.id.clone()))?;
+            *stored = run.clone();
+        }
+
+        // The armed lease theft, if any: a concurrent pass decided this lease
+        // was stale and took it while the action was still running.
+        if let Some(candidate_id) = self.steal_lease_on_finish.lock().await.take() {
+            let mut rows = self.candidates.lock().await;
+            if let Some(candidate) = rows
+                .iter_mut()
+                .find(|candidate| candidate.id == candidate_id)
+            {
+                candidate.state = MaintenanceCandidateState::Due;
+                candidate.state_reason = "execution_lease_reclaimed".to_string();
+            }
+        }
         Ok(())
     }
 
@@ -979,6 +1037,91 @@ async fn an_exclusion_blocks_creation_and_closes_an_existing_candidate() {
             .filter(|candidate| candidate.title_id == excluded.id && !candidate.state.is_terminal())
             .count(),
         0
+    );
+}
+
+/// Reconciliation only ever visits titles the rule is *currently* scoped to, so
+/// without a sweep a candidate the scope moved away from is never looked at
+/// again: it stays live forever and keeps counting toward the number
+/// destructive arming makes an operator acknowledge.
+#[tokio::test]
+async fn a_candidate_the_scope_no_longer_covers_is_canceled_by_the_next_pass() {
+    let fixture = evaluation_app();
+    let title = seed_title(&fixture.app, &fixture.user, "Monitored", true).await;
+    let rule_set_id = fixture.armed_rule(MONITORED_MATCHER, 7).await;
+    fixture.open_evaluation_gate().await;
+    fixture.evaluate().await;
+    let opened = fixture.only_candidate().await;
+    assert_eq!(opened.state, MaintenanceCandidateState::Observing);
+    assert_eq!(opened.title_id, title.id);
+
+    // Narrow the rule onto a library the subject is not in.
+    fixture
+        .app
+        .update_maintenance_rule_metadata(
+            &fixture.user,
+            &rule_set_id,
+            "Stale movies".to_string(),
+            String::new(),
+            vec!["library-elsewhere".to_string()],
+        )
+        .await
+        .expect("re-scope the rule");
+
+    let report = fixture.evaluate().await;
+    assert_eq!(
+        report.titles_evaluated, 0,
+        "the narrowed scope selects no subjects at all, which is the whole problem"
+    );
+    assert_eq!(
+        report.candidates_canceled, 1,
+        "an out-of-scope cancel is counted with the rule's other cancels: {report:?}"
+    );
+
+    let closed = fixture.only_candidate().await;
+    assert_eq!(closed.state, MaintenanceCandidateState::Canceled);
+    assert_eq!(closed.state_reason, candidate_reason::OUT_OF_SCOPE);
+}
+
+/// The sweep writes through the same compare-and-set every other evaluator
+/// write uses, so a candidate the action handler holds a lease on is left
+/// entirely alone and picked up on a later pass.
+#[tokio::test]
+async fn an_out_of_scope_candidate_under_an_execution_lease_is_left_alone() {
+    let fixture = evaluation_app();
+    seed_title(&fixture.app, &fixture.user, "Monitored", true).await;
+    let rule_set_id = fixture.armed_rule(MONITORED_MATCHER, 7).await;
+    fixture.open_evaluation_gate().await;
+    fixture.evaluate().await;
+    let opened = fixture.only_candidate().await;
+
+    fixture
+        .evaluation
+        .strand_as_executing(&opened.id, Utc::now())
+        .await;
+    fixture
+        .app
+        .update_maintenance_rule_metadata(
+            &fixture.user,
+            &rule_set_id,
+            "Stale movies".to_string(),
+            String::new(),
+            vec!["library-elsewhere".to_string()],
+        )
+        .await
+        .expect("re-scope the rule");
+
+    let report = fixture.evaluate().await;
+    assert_eq!(
+        report.candidates_canceled, 0,
+        "a leased candidate belongs to the handler for the length of its lease: {report:?}"
+    );
+
+    let after = fixture.only_candidate().await;
+    assert_eq!(
+        after.state,
+        MaintenanceCandidateState::Executing,
+        "the evaluator must not cancel a row out from under the executor"
     );
 }
 

@@ -59,6 +59,10 @@ export function wantedItemSearchNowId(wantedItemId: string): string {
   return selectorId("wanted-item-search-now", wantedItemId);
 }
 
+export function titleOverviewSelectId(titleId: string): string {
+  return selectorId("title-overview-select", titleId);
+}
+
 export function titleOverviewSearchButtonId(titleId: string): string {
   return selectorId("title-overview-search", titleId);
 }

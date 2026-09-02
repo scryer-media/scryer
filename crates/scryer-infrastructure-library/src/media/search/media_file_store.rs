@@ -4,7 +4,8 @@ use scryer_application::{
     AppError, AppResult, ClaimedMediaFile, CollectionEpisodeProgressSummary,
     CutoffUnmetQualitySummary, EpisodeMediaAvailability, EpisodeMediaAvailabilityState,
     EpisodeScopedMediaFile, InsertMediaFileInput, MediaFileAnalysis, MediaFileAssociations,
-    MediaFileCatalogDisposition, MediaFileRepository, MissingEpisodeCandidate,
+    MediaFileCatalogDisposition, MediaFileHashCandidate, MediaFileRepository,
+    MissingEpisodeCandidate,
     MissingScopeCandidates, MissingSeriesMovieLinkCandidate, MissingTitleCandidate,
     TitleEpisodeProgressSummary, TitleMediaFile, TitleMediaSizeSummary, TitleMovieMediaSummary,
     TitleQualitySummary, derive_primary_quality_label,
@@ -1477,6 +1478,93 @@ impl MediaFileRepository for MediaFileStore {
         .await?;
         Ok(())
     }
+
+    async fn list_media_files_missing_full_hash(
+        &self,
+        after_id: Option<&str>,
+        limit: u32,
+    ) -> AppResult<Vec<MediaFileHashCandidate>> {
+        // `full_blake3 IS NULL` is exactly migration 0205's partial index
+        // (`idx_media_files_full_hash_missing`), and ordering by id keeps the
+        // cursor a single opaque value that survives a restart.
+        let mut sql = String::from(
+            "SELECT mf.id, mf.title_id, mf.file_path, mf.size_bytes
+               FROM media_files mf
+              WHERE mf.full_blake3 IS NULL",
+        );
+        let mut args = Vec::new();
+        if let Some(after_id) = after_id {
+            sql.push_str(" AND mf.id > {}");
+            args.push(SqlArg::Text(after_id.to_string()));
+        }
+        sql.push_str(" ORDER BY mf.id LIMIT {}");
+        args.push(SqlArg::I64(i64::from(limit)));
+
+        SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args)
+            .await?
+            .iter()
+            .map(|row| {
+                Ok(MediaFileHashCandidate {
+                    id: row.text("id")?,
+                    title_id: row.text("title_id")?,
+                    file_path: row.text("file_path")?,
+                    size_bytes: row.i64("size_bytes")?,
+                })
+            })
+            .collect()
+    }
+
+    async fn update_media_file_content_hashes(
+        &self,
+        file_id: &str,
+        hashes: &scryer_application::location::model::PersistedContentHashes,
+    ) -> AppResult<()> {
+        execute_write(
+            &self.datastore,
+            "update_media_file_content_hashes",
+            "UPDATE media_files SET
+                full_blake3 = {},
+                move_crc = {},
+                move_crc_algorithm = {},
+                hash_computed_at = {}
+             WHERE id = {}",
+            vec![
+                SqlArg::Text(hashes.full_blake3.clone()),
+                // Stored as text: a u64 does not fit either engine's signed
+                // 64-bit integer column without wrapping.
+                SqlArg::OptText(hashes.move_crc.map(|crc| crc.to_string())),
+                SqlArg::OptText(
+                    hashes
+                        .crc_algorithm
+                        .map(|algorithm| algorithm.as_str().to_string()),
+                ),
+                SqlArg::OptTimestamp(hashes.hash_computed_at),
+                SqlArg::Text(file_id.to_string()),
+            ],
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn clear_media_file_content_hashes(&self, file_id: &str) -> AppResult<bool> {
+        // The `full_blake3 IS NOT NULL` guard makes this a no-op write for the
+        // overwhelmingly common case (a scan re-seeing an already-unhashed
+        // file) and makes the returned flag mean "this file just re-entered the
+        // backfill queue".
+        let affected = execute_write(
+            &self.datastore,
+            "clear_media_file_content_hashes",
+            "UPDATE media_files SET
+                full_blake3 = NULL,
+                move_crc = NULL,
+                move_crc_algorithm = NULL,
+                hash_computed_at = NULL
+             WHERE id = {} AND full_blake3 IS NOT NULL",
+            vec![SqlArg::Text(file_id.to_string())],
+        )
+        .await?;
+        Ok(affected > 0)
+    }
 }
 
 /// Paths per batched lookup. Windows spends two binds per path, so the chunk
@@ -1621,6 +1709,7 @@ fn media_file_select_columns(dialect: SqlDialect, episode_expr: &str, role_expr:
             mf.file_path,
             mf.size_bytes, mf.announced_size_bytes, {role_expr} AS role,
             mf.source_signature_scheme, mf.source_signature_value,
+            mf.full_blake3, mf.move_crc, mf.move_crc_algorithm, mf.hash_computed_at,
             mf.quality_id, mf.scan_status, mf.created_at,
             mf.video_codec, mf.video_width, mf.video_height,
             mf.video_bitrate_kbps, mf.video_bit_depth,
@@ -1783,6 +1872,7 @@ fn row_to_title_media_file(row: &SqlRow) -> AppResult<TitleMediaFile> {
             .unwrap_or_default(),
         source_signature_scheme: row.opt_text("source_signature_scheme")?,
         source_signature_value: row.opt_text("source_signature_value")?,
+        content_hashes: row_to_persisted_content_hashes(row)?,
         quality_label: row.opt_text("quality_id")?,
         scan_status: row.text("scan_status")?,
         created_at: timestamp_text(row, "created_at")?,
@@ -1827,6 +1917,42 @@ fn row_to_title_media_file(row: &SqlRow) -> AppResult<TitleMediaFile> {
         original_file_path: row.opt_text("original_file_path")?,
         release_hash: row.opt_text("release_hash")?,
     })
+}
+
+/// Reads the migration-0205 columns off a media file row.
+///
+/// The CRC is stored as text because it is a `u64` and neither engine has an
+/// unsigned 64-bit column; an unparseable or untagged CRC reads back as absent
+/// rather than as a number nothing can compare against. A missing
+/// `full_blake3` means the whole group is absent — that is exactly the state
+/// FR-046 invalidation writes.
+fn row_to_persisted_content_hashes(
+    row: &SqlRow,
+) -> AppResult<Option<scryer_application::location::model::PersistedContentHashes>> {
+    use scryer_application::location::model::{MoveCrcAlgorithm, PersistedContentHashes};
+
+    let Some(full_blake3) = row
+        .opt_text("full_blake3")?
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(None);
+    };
+
+    let crc_algorithm = row
+        .opt_text("move_crc_algorithm")?
+        .and_then(|value| MoveCrcAlgorithm::from_setting(&value).ok());
+    let move_crc = row
+        .opt_text("move_crc")?
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|_| crc_algorithm.is_some());
+
+    Ok(Some(PersistedContentHashes {
+        full_blake3,
+        move_crc,
+        crc_algorithm,
+        hash_computed_at: row.opt_timestamp("hash_computed_at")?,
+    }))
 }
 
 fn string_array_from_json_column(row: &SqlRow, column: &str, context: &str) -> Vec<String> {
@@ -2032,6 +2158,151 @@ mod tests {
 
     fn media_file_store(services: &SqliteServices) -> MediaFileStore {
         MediaFileStore::new(services.datastore())
+    }
+
+    /// FR-047 / FR-046 round trip: the queue predicate, the write, and the
+    /// invalidation, over the real SQL rather than a double.
+    #[tokio::test]
+    async fn full_hash_columns_round_trip_and_drive_the_backfill_queue() {
+        use scryer_application::location::model::{MoveCrcAlgorithm, PersistedContentHashes};
+
+        let db = std::env::temp_dir().join(format!(
+            "scryer_media_file_full_hashes_{}.db",
+            chrono::Utc::now().timestamp_micros()
+        ));
+        let services = SqliteServices::new(db.to_string_lossy())
+            .await
+            .expect("db should initialize");
+        let titles = title_store(&services);
+        let media_files = media_file_store(&services);
+
+        let title = make_test_series_title("title-full-hashes");
+        titles.create(title.clone()).await.expect("insert title");
+
+        let mut ids = Vec::new();
+        for index in 0..3 {
+            ids.push(
+                media_files
+                    .insert_media_file(&InsertMediaFileInput {
+                        title_id: title.id.clone(),
+                        file_path: format!("/library/show/file-{index}.mkv"),
+                        size_bytes: 100 + index,
+                        role: MediaFileRole::Primary,
+                        ..Default::default()
+                    })
+                    .await
+                    .expect("insert media file"),
+            );
+        }
+        ids.sort();
+
+        // Everything starts on the queue: the 0205 columns are nullable exactly
+        // so an existing catalog enters the backfill wholesale.
+        let queued = media_files
+            .list_media_files_missing_full_hash(None, 10)
+            .await
+            .expect("read queue");
+        assert_eq!(
+            queued.iter().map(|row| row.id.clone()).collect::<Vec<_>>(),
+            ids
+        );
+        assert_eq!(queued[0].title_id, title.id);
+
+        // The cursor is "everything after this id", in id order.
+        let after_first = media_files
+            .list_media_files_missing_full_hash(Some(&ids[0]), 10)
+            .await
+            .expect("read queue after cursor");
+        assert_eq!(
+            after_first.iter().map(|row| row.id.clone()).collect::<Vec<_>>(),
+            ids[1..]
+        );
+
+        // The limit is honoured, or a bounded run is not bounded.
+        assert_eq!(
+            media_files
+                .list_media_files_missing_full_hash(None, 2)
+                .await
+                .expect("read limited queue")
+                .len(),
+            2
+        );
+
+        // A CRC is a u64 and is stored as text; a round trip that loses it
+        // would silently disarm the move-corruption check.
+        let computed_at = Utc::now();
+        let hashes = PersistedContentHashes {
+            full_blake3: "ab".repeat(32),
+            move_crc: Some(u64::MAX - 1),
+            crc_algorithm: Some(MoveCrcAlgorithm::Crc64Nvme),
+            hash_computed_at: Some(computed_at),
+        };
+        media_files
+            .update_media_file_content_hashes(&ids[0], &hashes)
+            .await
+            .expect("persist hashes");
+
+        let stored = media_files
+            .get_media_file_by_id(&ids[0])
+            .await
+            .expect("load media file")
+            .expect("media file exists")
+            .content_hashes
+            .expect("persisted hashes");
+        assert_eq!(stored.full_blake3, hashes.full_blake3);
+        assert_eq!(stored.move_crc, Some(u64::MAX - 1));
+        assert_eq!(stored.crc_algorithm, Some(MoveCrcAlgorithm::Crc64Nvme));
+        assert_eq!(
+            stored.hash_computed_at.map(|value| value.timestamp()),
+            Some(computed_at.timestamp())
+        );
+
+        // A hashed row leaves the queue; that is what makes the sweep converge.
+        assert_eq!(
+            media_files
+                .list_media_files_missing_full_hash(None, 10)
+                .await
+                .expect("read queue after hashing")
+                .iter()
+                .map(|row| row.id.clone())
+                .collect::<Vec<_>>(),
+            ids[1..]
+        );
+
+        // FR-046: invalidation clears the whole group and re-queues the row.
+        assert!(
+            media_files
+                .clear_media_file_content_hashes(&ids[0])
+                .await
+                .expect("clear hashes"),
+            "clearing a hashed row reports that it re-entered the queue"
+        );
+        assert!(
+            media_files
+                .get_media_file_by_id(&ids[0])
+                .await
+                .expect("load media file")
+                .expect("media file exists")
+                .content_hashes
+                .is_none()
+        );
+        assert_eq!(
+            media_files
+                .list_media_files_missing_full_hash(None, 10)
+                .await
+                .expect("read queue after invalidation")
+                .len(),
+            3
+        );
+
+        // Clearing an already-unhashed row is a no-op, so a scan that keeps
+        // seeing an unhashed file does not report an invalidation every time.
+        assert!(
+            !media_files
+                .clear_media_file_content_hashes(&ids[0])
+                .await
+                .expect("clear an unhashed row")
+        );
     }
 
     #[tokio::test]

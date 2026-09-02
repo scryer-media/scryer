@@ -3,6 +3,11 @@ use crate::contracts::{
     ClientJobLocator, DownloadClientBindingRecord, DownloadRecord, ObservationResolution,
     ObservedClientJob, TerminalDownloadHistoryRow,
 };
+use crate::location::model::{
+    FileVerificationRecord, LocationOperation, LocationOperationCounters, LocationOperationState,
+    TitleCheckpoint,
+};
+use crate::location::ownership_guard::{OwnedEntity, OwnershipConflict};
 use crate::types::{
     ApiKeyRecord, EpisodeMediaAvailability, IndexerSearchPlanCapability, IndexerSearchPlanRequest,
     IndexerSearchPlanSummary, IndexerSearchStrategyEventSink, LoginVerificationChallengeRecord,
@@ -1289,6 +1294,43 @@ pub trait TitleRepository: Send + Sync {
     ) -> AppResult<Title>;
     async fn delete(&self, id: &str) -> AppResult<()>;
     async fn set_folder_path(&self, id: &str, folder_path: &str) -> AppResult<()>;
+    /// Move a title into another library and onto a root in that library, in one
+    /// transaction, carrying its library projections with it (FR-056).
+    ///
+    /// The title keeps its id, so everything keyed on it — settings and tags on
+    /// the row, monitored state, history, requests, media files, episodes —
+    /// is preserved with no rewrite. What must be written alongside `library_id`
+    /// is every projection of it, `title_external_ids.library_id` above all:
+    /// that column is the key destination-title detection matches on (FR-055),
+    /// and a title that kept its old value there would keep answering identity
+    /// lookups for the library it left.
+    ///
+    /// `facet` is the series↔anime conversion (FR-057), and it belongs to this
+    /// call rather than to a second one: a title's facet and its library's facet
+    /// are one invariant — `AppUseCase::title_root_folder_path` refuses a title
+    /// whose facet does not match its library — so a transfer that wrote the
+    /// library without the facet would leave a row every later path lookup
+    /// rejects. `None` leaves the facet alone, which is every same-facet move.
+    /// `drop_tag_prefixes` names the reserved `scryer:*` prefixes whose values
+    /// were derived under the old facet and must not survive the conversion; the
+    /// caller decides that policy, not the store.
+    ///
+    /// Defaults to an error rather than a silent no-op: a repository that cannot
+    /// perform the transfer must fail the title, never report a move it did not
+    /// make (C4).
+    async fn transfer_to_library(
+        &self,
+        id: &str,
+        library_id: &str,
+        root_folder_id: &str,
+        facet: Option<MediaFacet>,
+        drop_tag_prefixes: &[String],
+    ) -> AppResult<()> {
+        let _ = (library_id, root_folder_id, facet, drop_tag_prefixes);
+        Err(AppError::Repository(format!(
+            "this title repository cannot transfer title {id} between libraries"
+        )))
+    }
     async fn clear_folder_path(&self, id: &str) -> AppResult<()>;
     async fn clear_metadata_language_for_all(&self) -> AppResult<u64>;
     async fn list_page_after_id(
@@ -1608,6 +1650,21 @@ pub trait LibraryRepository: Send + Sync {
         slug: String,
         roots: Vec<LibraryRootDraft>,
     ) -> AppResult<Library>;
+    /// Replace one root's configured path, keeping its identity (FR-021,
+    /// FR-078). Returns the library as it stands afterwards.
+    ///
+    /// # Why this is not [`LibraryRepository::update`]
+    ///
+    /// `update` is a replace-on-write of the whole root list, and it re-keys
+    /// root identity **by normalized path**: a root whose path is absent from
+    /// the submitted list is a *removed* root (refused outright while titles
+    /// reference it), and a path that is not already stored is allocated a
+    /// brand-new synthetic id. A path change submitted through `update` is
+    /// therefore read as "delete root A, create root B" — which is exactly the
+    /// identity change FR-021 forbids, and which the referenced-root guard
+    /// rejects before it can even happen. A root change needs the one write
+    /// `update` cannot express: the same row, a different path.
+    async fn set_root_path(&self, root_id: &str, path: &str) -> AppResult<Library>;
     async fn delete_library(&self, library_id: &str) -> AppResult<bool>;
     async fn app_permission_mask_for_user(&self, user_id: &str) -> AppResult<AppPermissionMask>;
     async fn set_app_permission_mask_for_user(
@@ -2656,6 +2713,27 @@ pub trait ExternalIdentityVerifier: Send + Sync {
         connection: &scryer_domain::MediaServerConnection,
     ) -> AppResult<Vec<MediaServerCatalogItem>> {
         self.scan_media_server_catalog(connection).await
+    }
+
+    /// Ask one connected media server to re-read specific folders (FR-088).
+    ///
+    /// `paths` are already expressed in the *server's* filesystem namespace —
+    /// the caller applies the connection's path mappings before getting here,
+    /// because only the caller knows which side of the mapping it holds.
+    ///
+    /// This is deliberately a targeted refresh and never a full library scan: a
+    /// completed location operation knows exactly which folders changed, and a
+    /// whole-library scan on every move is the behaviour FR-088 exists to
+    /// avoid. Implementations that cannot express "just this folder" for a
+    /// provider skip that path rather than widening it.
+    async fn refresh_media_server_paths(
+        &self,
+        _connection: &scryer_domain::MediaServerConnection,
+        _paths: &[String],
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "media server targeted refresh is not configured".into(),
+        ))
     }
 
     async fn verify_plex(
@@ -4286,6 +4364,161 @@ pub trait StagedNzbStore: Send + Sync {
     fn mark_artifact_inactive(&self, path: &Path) -> AppResult<()>;
 }
 
+/// A live (title, root) ownership claim held by a location operation (FR-084,
+/// D7). Rows stay open until the operation releases them, so the guard survives
+/// a restart.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocationOwnershipClaim {
+    pub operation_id: String,
+    pub entity: OwnedEntity,
+    pub acquired_at: DateTime<Utc>,
+}
+
+/// The state and counters one checkpoint boundary writes back to the operation
+/// row. Grouped so a progress write is one statement, not a field-by-field
+/// scatter.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocationOperationProgress {
+    pub operation_id: String,
+    pub state: LocationOperationState,
+    pub counters: LocationOperationCounters,
+    /// Files that could only be proven at the quick floor (FR-042/043).
+    pub verification_fallback_count: i64,
+    /// Failure or warning explanation for Activity; `None` leaves the stored
+    /// value untouched only when `clear_detail` is false.
+    pub detail: Option<String>,
+    /// Clear a stored detail that no longer applies.
+    pub clear_detail: bool,
+    pub started_at: Option<DateTime<Utc>>,
+    pub completed_at: Option<DateTime<Utc>>,
+}
+
+/// Persistence for location operations (D5, migration 0206): the operation row,
+/// its per-title checkpoints, its per-file verification records, and the
+/// ownership registry the concurrency guard reads.
+///
+/// The runner in [`crate::location::executor`] is the only writer of operation
+/// state; the guard in [`crate::location::ownership_guard`] is the only reader
+/// of the ownership rows outside the runner.
+#[async_trait]
+pub trait LocationOperationRepository: Send + Sync {
+    /// Persists a confirmed operation. `plan_json` is the serialized plan the
+    /// user confirmed, kept so a resumed run does not have to rebuild it.
+    async fn create_location_operation(
+        &self,
+        operation: &LocationOperation,
+        plan_json: Option<&str>,
+    ) -> AppResult<()>;
+
+    async fn get_location_operation(&self, operation_id: &str)
+    -> AppResult<Option<LocationOperation>>;
+
+    async fn get_location_operation_plan_json(
+        &self,
+        operation_id: &str,
+    ) -> AppResult<Option<String>>;
+
+    /// Every operation in a non-terminal state, oldest first: what restart
+    /// resume walks (FR-033).
+    async fn list_active_location_operations(&self) -> AppResult<Vec<LocationOperation>>;
+
+    async fn update_location_operation_progress(
+        &self,
+        progress: &LocationOperationProgress,
+    ) -> AppResult<()>;
+
+    /// Points the operation at the Activity job run for its *current* execution
+    /// (FR-091).
+    ///
+    /// A start writes the column through
+    /// [`LocationOperationRepository::create_location_operation`]; only a resume
+    /// needs this, because every resumed attempt gets its own run and the
+    /// operation names the latest one.
+    async fn set_location_operation_job_run(
+        &self,
+        operation_id: &str,
+        job_run_id: &str,
+    ) -> AppResult<()>;
+
+    /// Records a cancel request (FR-092). Returns false when the operation is
+    /// already terminal, so a late cancel cannot resurrect a finished run.
+    async fn request_location_operation_cancel(&self, operation_id: &str) -> AppResult<bool>;
+
+    /// Whether a cancel has been requested. Read at every title boundary, so a
+    /// cancel issued by another process is honored.
+    async fn location_operation_cancel_requested(&self, operation_id: &str) -> AppResult<bool>;
+
+    /// Writes a title's checkpoint. Called on every title state transition; the
+    /// row is the unit a resume restarts from (FR-092).
+    async fn upsert_location_title_checkpoint(
+        &self,
+        checkpoint: &TitleCheckpoint,
+    ) -> AppResult<()>;
+
+    /// Checkpoints in plan order.
+    async fn list_location_title_checkpoints(
+        &self,
+        operation_id: &str,
+    ) -> AppResult<Vec<TitleCheckpoint>>;
+
+    /// Persists one file's verification outcome. Idempotent on
+    /// (operation, destination path) — the 0206 unique index — so a resumed
+    /// operation re-recording a file cannot duplicate its history.
+    async fn record_location_file_verification(
+        &self,
+        record: &FileVerificationRecord,
+    ) -> AppResult<()>;
+
+    async fn list_location_file_verifications(
+        &self,
+        operation_id: &str,
+        title_id: Option<&str>,
+    ) -> AppResult<Vec<FileVerificationRecord>>;
+
+    /// Destination paths this operation already proved for `title_id`. Resume
+    /// reads this and never re-copies or re-verifies them (FR-092).
+    async fn verified_destination_paths(
+        &self,
+        operation_id: &str,
+        title_id: &str,
+    ) -> AppResult<BTreeSet<String>>;
+
+    /// Claims every entity for the operation, or reports the conflicts and
+    /// claims nothing (FR-084). All-or-nothing: a partially owned operation
+    /// could interleave with the operation holding the rest.
+    async fn claim_location_operation_ownership(
+        &self,
+        operation_id: &str,
+        entities: &[OwnedEntity],
+    ) -> AppResult<LocationOwnershipOutcome>;
+
+    /// Releases every claim the operation holds, returning how many were open.
+    async fn release_location_operation_ownership(&self, operation_id: &str) -> AppResult<u64>;
+
+    /// The operation currently holding `entity`, if any. The choke-point query
+    /// behind the guard (T016).
+    async fn location_ownership_holder(&self, entity: &OwnedEntity)
+    -> AppResult<Option<String>>;
+
+    /// Every open claim, for the in-process guard cache and diagnostics.
+    async fn list_location_ownership_claims(&self) -> AppResult<Vec<LocationOwnershipClaim>>;
+}
+
+/// Result of an ownership claim attempt.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LocationOwnershipOutcome {
+    /// Every requested entity is now owned by the operation.
+    Claimed,
+    /// At least one entity is owned by another operation; nothing was claimed.
+    Conflict(Vec<OwnershipConflict>),
+}
+
+impl LocationOwnershipOutcome {
+    pub fn is_claimed(&self) -> bool {
+        matches!(self, Self::Claimed)
+    }
+}
+
 #[async_trait]
 pub trait ImportRepository: Send + Sync {
     async fn queue_import_request(
@@ -4769,6 +5002,33 @@ pub trait FileImporter: Send + Sync {
         source: &Path,
     ) -> AppResult<scryer_domain::ImportSourceSnapshot>;
 
+    /// Put the operator's configured permissions on a file a *location
+    /// operation* placed (FR-031).
+    ///
+    /// Imports get their modes as part of `import_file_with_…_permissions`,
+    /// but a verified move writes the destination itself, so it needs a way to
+    /// ask for the same treatment afterwards. The default is deliberately a
+    /// no-op: an importer that cannot set modes must never guess at them, and a
+    /// move must not silently change access an operator did not configure.
+    async fn apply_placed_file_permissions(
+        &self,
+        path: &Path,
+        permissions: &ImportFilePermissions,
+    ) -> AppResult<()> {
+        let _ = (path, permissions);
+        Ok(())
+    }
+
+    /// Directory twin of [`FileImporter::apply_placed_file_permissions`].
+    async fn apply_placed_directory_permissions(
+        &self,
+        path: &Path,
+        permissions: &ImportFilePermissions,
+    ) -> AppResult<()> {
+        let _ = (path, permissions);
+        Ok(())
+    }
+
     async fn import_file(
         &self,
         source: &Path,
@@ -4829,6 +5089,43 @@ pub trait FileImporter: Send + Sync {
         .await
     }
 
+    /// [`FileImporter::import_file_with_execution_context`] with the operator's
+    /// verification depth (FR-045).
+    ///
+    /// An importer that copies bytes must compute the streaming CRC + BLAKE3
+    /// during the copy, prove the destination at `depth` before the source
+    /// becomes removable (FR-044), and report both on
+    /// [`ImportFileResult::verification`]. The default ignores the depth and
+    /// delegates: an importer that cannot verify reports no verification rather
+    /// than an unfounded pass.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "file placement keeps transfer, permission, source-snapshot, lane, and verification context explicit"
+    )]
+    async fn import_file_verified_with_execution_context(
+        &self,
+        source: &Path,
+        dest: &Path,
+        mode: scryer_domain::ImportMode,
+        expected_source: Option<&scryer_domain::ImportSourceSnapshot>,
+        progress: Option<ImportFileTransferProgressSender>,
+        permissions: &ImportFilePermissions,
+        context: &ImportFileExecutionContext,
+        depth: crate::location::model::VerificationDepth,
+    ) -> AppResult<ImportFileResult> {
+        let _ = depth;
+        self.import_file_with_execution_context(
+            source,
+            dest,
+            mode,
+            expected_source,
+            progress,
+            permissions,
+            context,
+        )
+        .await
+    }
+
     async fn remove_import_source_after_verified_import(
         &self,
         guard: scryer_domain::ImportSourceCleanupGuard,
@@ -4850,6 +5147,22 @@ pub trait FileImporter: Send + Sync {
 #[async_trait]
 pub trait MediaAnalyzer: Send + Sync {
     async fn analyze_file(&self, path: PathBuf) -> AppResult<MediaAnalysisOutcome>;
+}
+
+/// One row off the full-hash backfill queue (FR-047).
+///
+/// Deliberately narrow: the job hashes a path, so it only needs the identity,
+/// the path, and the recorded size to sanity-check against. Hydrating whole
+/// media-file records to walk a catalog-sized queue would defeat the "low
+/// impact" half of the requirement.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MediaFileHashCandidate {
+    pub id: String,
+    pub title_id: String,
+    /// Stored-path string; the job resolves it through
+    /// [`crate::stored_paths`] like every other path consumer.
+    pub file_path: String,
+    pub size_bytes: i64,
 }
 
 #[async_trait]
@@ -4968,6 +5281,40 @@ pub trait MediaFileRepository: Send + Sync {
         source_signature_scheme: Option<String>,
         source_signature_value: Option<String>,
     ) -> AppResult<()>;
+
+    /// One page of the full-hash backfill queue (FR-047), ordered by id so the
+    /// cursor is a plain "everything after this id" and the ordering survives a
+    /// restart. Rows that already carry a full hash are excluded by the
+    /// migration 0205 partial index, so the queue drains monotonically.
+    ///
+    /// The default is an empty queue: a repository that does not implement the
+    /// backfill simply has no work, never phantom work.
+    async fn list_media_files_missing_full_hash(
+        &self,
+        after_id: Option<&str>,
+        limit: u32,
+    ) -> AppResult<Vec<MediaFileHashCandidate>> {
+        let _ = (after_id, limit);
+        Ok(Vec::new())
+    }
+
+    /// Persist the 0205 columns for one file. Writes all four together so a row
+    /// can never carry a hash whose vintage or CRC algorithm is unknown.
+    async fn update_media_file_content_hashes(
+        &self,
+        file_id: &str,
+        hashes: &crate::location::model::PersistedContentHashes,
+    ) -> AppResult<()> {
+        let _ = (file_id, hashes);
+        Ok(())
+    }
+
+    /// Clear the 0205 columns, putting the file back on the backfill queue
+    /// (FR-046). Returns whether a row actually changed.
+    async fn clear_media_file_content_hashes(&self, file_id: &str) -> AppResult<bool> {
+        let _ = file_id;
+        Ok(false)
+    }
 
     async fn update_media_file_path(&self, file_id: &str, file_path: &str) -> AppResult<()>;
 
@@ -5481,8 +5828,15 @@ pub trait MaintenanceRuleSetRepository: Send + Sync {
         revision: &MaintenanceRuleRevision,
     ) -> AppResult<()>;
 
-    /// Append `revision` and repoint the rule set at it, atomically. Existing
-    /// revisions are never rewritten.
+    /// Append `revision`, repoint the rule set at it, and reset its
+    /// `effect_arming` to [`scryer_domain::MaintenanceEffectArming::None`] — all
+    /// three atomically. Existing revisions are never rewritten.
+    ///
+    /// The disarm is part of the same write on purpose: arming acknowledges the
+    /// blast radius of one specific matcher and action, so it must never outlive
+    /// the revision it was granted against. A new revision that left the rule
+    /// armed would execute destructively under an acknowledgement given for a
+    /// matcher that no longer exists.
     async fn add_revision(
         &self,
         revision: &MaintenanceRuleRevision,
@@ -5500,12 +5854,21 @@ pub trait MaintenanceRuleSetRepository: Send + Sync {
 
     /// Update the fields that carry no evaluation semantics. Never creates a
     /// revision — the matcher, action, and grace period are untouched.
+    ///
+    /// `disarm` resets `effect_arming` to
+    /// [`scryer_domain::MaintenanceEffectArming::None`] in the *same* write. The
+    /// caller sets it when the library scope actually changed: scope is the
+    /// rule's blast radius, so a re-scoped rule is no longer the rule an
+    /// operator acknowledged, exactly as a new revision is not. Writing the two
+    /// separately would leave an instant in which the new scope is in force
+    /// under the old scope's arming.
     async fn update_rule_set_metadata(
         &self,
         id: &str,
         name: &str,
         description: &str,
         library_ids: &[String],
+        disarm: bool,
         updated_at: DateTime<Utc>,
     ) -> AppResult<()>;
 
@@ -5591,13 +5954,26 @@ pub trait MaintenanceCandidateRepository: Send + Sync {
         updated_at: DateTime<Utc>,
     ) -> AppResult<()>;
 
+    /// Compare-and-set the candidate's state: the write lands only while the row
+    /// is still in one of `expected_states`, and the returned flag says whether
+    /// it did.
+    ///
+    /// The evaluator (8h) and the action handler (12h) are independently
+    /// schedulable and both write candidate state, so an unconditional UPDATE
+    /// here is a lost update: the evaluator could overwrite a leased `executing`
+    /// row, or clobber the executor's terminal write and leave a finished action
+    /// looking live. Every caller therefore names the states its decision was
+    /// made against — the executor's terminal writes expect `Executing`, meaning
+    /// they still hold the lease — and treats `false` as "someone else owns this
+    /// row now", never as an error.
     async fn transition_candidate_state(
         &self,
         id: &str,
         state: scryer_domain::MaintenanceCandidateState,
         state_reason: &str,
+        expected_states: &[scryer_domain::MaintenanceCandidateState],
         updated_at: DateTime<Utc>,
-    ) -> AppResult<()>;
+    ) -> AppResult<bool>;
 
     /// Cancel every active candidate of one rule set in a single write. Used
     /// when a whole rule is superseded or retired; returns how many rows moved.
@@ -5616,11 +5992,19 @@ pub trait MaintenanceCandidateRepository: Send + Sync {
 
     /// Candidates of one rule whose materialized `due_at` has passed and whose
     /// state can still reach execution (observing, pending_action, due,
-    /// blocked). Ordered oldest due first.
+    /// blocked), plus any `executing` row abandoned by a crashed worker — one
+    /// untouched since `stale_before`. Ordered oldest due first.
+    ///
+    /// The stale-`executing` arm is what makes
+    /// [`Self::lease_candidate_for_execution`]'s reclaim reachable at all:
+    /// without it a candidate whose worker died mid-run is never selected again,
+    /// so it stays `executing` forever and keeps inflating the count destructive
+    /// arming makes an operator acknowledge.
     async fn list_due_candidates(
         &self,
         rule_set_id: &str,
         due_before: DateTime<Utc>,
+        stale_before: DateTime<Utc>,
         limit: usize,
     ) -> AppResult<Vec<scryer_domain::LifecycleCandidate>>;
 
@@ -5635,7 +6019,14 @@ pub trait MaintenanceCandidateRepository: Send + Sync {
         updated_at: DateTime<Utc>,
     ) -> AppResult<bool>;
 
-    /// Persist the bounded failed-attempt counter for the current generation.
+    /// Persist the bounded attempt counter for the current generation.
+    ///
+    /// The executor writes this as a *reservation*, before the action's external
+    /// side effects begin, not as an after-the-fact tally of failures. That is
+    /// what makes a reclaimed execution compute attempt N+1 instead of colliding
+    /// with the `(idempotency_key, attempt)` row an interrupted attempt already
+    /// wrote — and it is what makes the attempt cap bound a crash loop, which a
+    /// counter only advanced on a *handled* failure never could.
     async fn record_candidate_attempts(
         &self,
         id: &str,

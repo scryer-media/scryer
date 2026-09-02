@@ -1,13 +1,15 @@
 use super::*;
 
+use crate::lib_tests::maintenance_evaluation::InMemoryMaintenanceEvaluationRepo;
 use crate::maintenance_rules::{
-    MaintenanceActionKind, MaintenanceActionSpec, MaintenanceMatcherDraft,
-    MaintenancePreviewMatcher, MaintenancePreviewRequest, MaintenancePreviewSelection,
-    MaintenanceRuleDraft,
+    MAINTENANCE_MAX_GRACE_DAYS, MaintenanceActionKind, MaintenanceActionSpec,
+    MaintenanceMatcherDraft, MaintenancePreviewMatcher, MaintenancePreviewRequest,
+    MaintenancePreviewSelection, MaintenanceRuleDraft,
 };
 use scryer_domain::{
-    MaintenanceEvaluationMode, MaintenanceRuleRevision, MaintenanceRuleSet,
-    MaintenanceRuleSubjectKind,
+    LifecycleActionRun, LifecycleActionRunStatus, LifecycleCandidate, MaintenanceCandidateState,
+    MaintenanceEffectArming, MaintenanceEvaluationMode, MaintenanceRuleRevision,
+    MaintenanceRuleSet, MaintenanceRuleSubjectKind,
 };
 use scryer_rules::maintenance::MaintenanceOutcome;
 
@@ -37,13 +39,55 @@ const NEEDS_UPGRADE_HISTORY_MATCHER: &str = "package whatever\n\
      \tinput.facts.last_upgraded_at != \"\"\n\
      }\n";
 
+/// What a test wants [`InMemoryMaintenanceRuleRepo::get_rule_set`] to answer
+/// instead of reading storage.
+///
+/// The executor's safety recheck is the only caller of that read during a
+/// handler pass, and it has to tell two failures apart: a rule that is genuinely
+/// gone (cancel the candidate — its authorization no longer exists) from a store
+/// it merely could not reach (hold, like every other unresolvable signal).
+/// Deleting the rule for real cannot exercise this, because a deleted rule is
+/// not in the pass's rule listing at all.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum MaintenanceRuleReadFault {
+    /// The rule set is gone.
+    Missing,
+    /// The store could not answer.
+    Unreachable,
+}
+
 #[derive(Default)]
 pub(super) struct InMemoryMaintenanceRuleRepo {
     rule_sets: Mutex<Vec<MaintenanceRuleSet>>,
     revisions: Mutex<Vec<MaintenanceRuleRevision>>,
+    read_fault: Mutex<Option<MaintenanceRuleReadFault>>,
 }
 
 impl InMemoryMaintenanceRuleRepo {
+    /// Make every subsequent single-rule read fail this way.
+    pub(super) async fn fail_rule_set_reads(&self, fault: MaintenanceRuleReadFault) {
+        *self.read_fault.lock().await = Some(fault);
+    }
+}
+
+impl InMemoryMaintenanceRuleRepo {
+    /// Re-point a rule's library scope without the disarm the service writes
+    /// alongside it.
+    ///
+    /// Production cannot do this — `update_maintenance_rule_metadata` disarms in
+    /// the same write — but a test that wants to prove the *executor's* own
+    /// scope recheck has to arrive at the handler with a narrowed scope and an
+    /// arming still in place. Going through the service instead would only
+    /// re-test the disarm.
+    pub(super) async fn re_scope_without_disarming(&self, id: &str, library_ids: Vec<String>) {
+        let mut rule_sets = self.rule_sets.lock().await;
+        let rule_set = rule_sets
+            .iter_mut()
+            .find(|rule_set| rule_set.id == id)
+            .expect("rule set exists");
+        rule_set.library_ids = library_ids;
+    }
+
     /// Rewrite the revision currently in force without appending a new one.
     ///
     /// Production never does this — revisions are immutable — but a test that
@@ -66,6 +110,15 @@ impl MaintenanceRuleSetRepository for InMemoryMaintenanceRuleRepo {
     }
 
     async fn get_rule_set(&self, id: &str) -> AppResult<Option<MaintenanceRuleSet>> {
+        match *self.read_fault.lock().await {
+            Some(MaintenanceRuleReadFault::Missing) => return Ok(None),
+            Some(MaintenanceRuleReadFault::Unreachable) => {
+                return Err(AppError::Repository(
+                    "maintenance rule store is unreachable".to_string(),
+                ));
+            }
+            None => {}
+        }
         Ok(self
             .rule_sets
             .lock()
@@ -96,6 +149,10 @@ impl MaintenanceRuleSetRepository for InMemoryMaintenanceRuleRepo {
             .find(|rule_set| rule_set.id == revision.rule_set_id)
             .ok_or_else(|| AppError::NotFound(revision.rule_set_id.clone()))?;
         rule_set.current_revision_number = revision.revision_number;
+        // The SQL store disarms in the same transaction as the pointer move; a
+        // permissive double here would hide an arming that survived a matcher
+        // swap.
+        rule_set.effect_arming = scryer_domain::MaintenanceEffectArming::None;
         rule_set.updated_at = updated_at;
         self.revisions.lock().await.push(revision.clone());
         Ok(())
@@ -136,6 +193,7 @@ impl MaintenanceRuleSetRepository for InMemoryMaintenanceRuleRepo {
         name: &str,
         description: &str,
         library_ids: &[String],
+        disarm: bool,
         updated_at: DateTime<Utc>,
     ) -> AppResult<()> {
         let mut rule_sets = self.rule_sets.lock().await;
@@ -146,6 +204,11 @@ impl MaintenanceRuleSetRepository for InMemoryMaintenanceRuleRepo {
         rule_set.name = name.to_string();
         rule_set.description = description.to_string();
         rule_set.library_ids = library_ids.to_vec();
+        // The SQL store disarms inside the same UPDATE; a permissive double here
+        // would hide an arming that survived a scope change.
+        if disarm {
+            rule_set.effect_arming = scryer_domain::MaintenanceEffectArming::None;
+        }
         rule_set.updated_at = updated_at;
         Ok(())
     }
@@ -202,15 +265,21 @@ struct MaintenanceFixture {
     user: User,
     rules: Arc<InMemoryMaintenanceRuleRepo>,
     media_files: Arc<MockMediaFileRepo>,
+    /// Authoring reads this store to decide what a delete would destroy, so the
+    /// real double is wired in rather than the null one, whose empty answers
+    /// would make every rule look historyless.
+    evaluation: Arc<InMemoryMaintenanceEvaluationRepo>,
 }
 
 fn maintenance_app() -> MaintenanceFixture {
     let (app, user) = bootstrap();
     let rules = Arc::new(InMemoryMaintenanceRuleRepo::default());
     let media_files = Arc::new(MockMediaFileRepo::default());
+    let evaluation = Arc::new(InMemoryMaintenanceEvaluationRepo::default());
     let app = app.with_test_overrides(|services| {
         services
             .with_maintenance_rule_set_store(rules.clone())
+            .with_maintenance_evaluation_store(evaluation.clone())
             .with_media_files(media_files.clone())
     });
     MaintenanceFixture {
@@ -218,6 +287,65 @@ fn maintenance_app() -> MaintenanceFixture {
         user,
         rules,
         media_files,
+        evaluation,
+    }
+}
+
+/// A finished action run, the evidence a delete must refuse to erase.
+fn action_run(rule_set_id: &str, title_id: &str) -> LifecycleActionRun {
+    let now = Utc::now();
+    LifecycleActionRun {
+        id: Id::new().0,
+        candidate_id: "candidate-1".to_string(),
+        rule_set_id: rule_set_id.to_string(),
+        revision_number: 1,
+        title_id: title_id.to_string(),
+        action_kind: MaintenanceActionKind::DeleteTitleAndFiles
+            .as_wire_str()
+            .to_string(),
+        match_generation: 1,
+        idempotency_key: Id::new().0,
+        attempt: 1,
+        status: LifecycleActionRunStatus::Succeeded,
+        hold_reason: None,
+        error: None,
+        detail: "{}".to_string(),
+        started_at: now,
+        finished_at: Some(now),
+        created_at: now,
+    }
+}
+
+/// A live candidate: membership an operator can currently see.
+fn active_candidate(rule_set_id: &str, title_id: &str) -> LifecycleCandidate {
+    let now = Utc::now();
+    LifecycleCandidate {
+        id: Id::new().0,
+        rule_set_id: rule_set_id.to_string(),
+        revision_number: 1,
+        matcher_content_hash: "hash".to_string(),
+        title_id: title_id.to_string(),
+        library_id: "library-a".to_string(),
+        facet: MediaFacet::Movie.as_str().to_string(),
+        subject_kind: MaintenanceRuleSubjectKind::Title
+            .as_storage_str()
+            .to_string(),
+        match_generation: 1,
+        state: MaintenanceCandidateState::Observing,
+        state_reason: "first_match".to_string(),
+        reason_codes: vec![],
+        action_kind: MaintenanceActionKind::UnmonitorScopeKeepFiles
+            .as_wire_str()
+            .to_string(),
+        grace_days: 7,
+        first_matched_at: now,
+        last_matched_at: now,
+        due_at: now,
+        last_evaluated_at: now,
+        held_since: None,
+        action_attempts: 0,
+        created_at: now,
+        updated_at: now,
     }
 }
 
@@ -405,6 +533,204 @@ async fn metadata_edits_do_not_create_a_revision() {
     );
 }
 
+/// Scope is blast radius, so re-scoping invalidates the acknowledgement that
+/// armed the rule, exactly as appending a revision does.
+#[tokio::test]
+async fn changing_the_library_scope_disarms_the_rule() {
+    let MaintenanceFixture {
+        app, user, rules, ..
+    } = maintenance_app();
+    let created = app
+        .create_maintenance_rule_set(&user, draft(MONITORED_MATCHER))
+        .await
+        .expect("create rule set");
+    app.set_maintenance_rule_arming(
+        &user,
+        &created.rule_set.id,
+        MaintenanceEffectArming::Reversible,
+        None,
+    )
+    .await
+    .expect("arm the rule");
+
+    let updated = app
+        .update_maintenance_rule_metadata(
+            &user,
+            &created.rule_set.id,
+            created.rule_set.name.clone(),
+            created.rule_set.description.clone(),
+            vec!["library-a".to_string()],
+        )
+        .await
+        .expect("re-scope the rule");
+
+    assert_eq!(
+        updated.effect_arming,
+        MaintenanceEffectArming::None,
+        "a scope change must disarm the rule it re-scoped"
+    );
+    // The returned rule must not claim an arming the store no longer holds.
+    let stored = rules
+        .get_rule_set(&created.rule_set.id)
+        .await
+        .unwrap()
+        .expect("rule set exists");
+    assert_eq!(stored.effect_arming, MaintenanceEffectArming::None);
+    assert_eq!(stored.library_ids, vec!["library-a".to_string()]);
+}
+
+/// A rename does not move the matcher, the action, or the scope, so the
+/// acknowledgement still describes the same blast radius. Neither does
+/// re-saving the same libraries in a different order.
+#[tokio::test]
+async fn renaming_or_reordering_the_same_scope_leaves_arming_alone() {
+    let MaintenanceFixture {
+        app, user, rules, ..
+    } = maintenance_app();
+    let created = app
+        .create_maintenance_rule_set(
+            &user,
+            MaintenanceRuleDraft {
+                library_ids: vec!["library-a".to_string(), "library-b".to_string()],
+                ..draft(MONITORED_MATCHER)
+            },
+        )
+        .await
+        .expect("create rule set");
+    app.set_maintenance_rule_arming(
+        &user,
+        &created.rule_set.id,
+        MaintenanceEffectArming::Reversible,
+        None,
+    )
+    .await
+    .expect("arm the rule");
+
+    let updated = app
+        .update_maintenance_rule_metadata(
+            &user,
+            &created.rule_set.id,
+            "Renamed".to_string(),
+            "New description".to_string(),
+            vec!["library-b".to_string(), "library-a".to_string()],
+        )
+        .await
+        .expect("rename the rule");
+
+    assert_eq!(updated.name, "Renamed");
+    assert_eq!(
+        updated.effect_arming,
+        MaintenanceEffectArming::Reversible,
+        "a rename is not a scope change and must not disarm"
+    );
+    let stored = rules
+        .get_rule_set(&created.rule_set.id)
+        .await
+        .unwrap()
+        .expect("rule set exists");
+    assert_eq!(stored.effect_arming, MaintenanceEffectArming::Reversible);
+}
+
+/// The action runs are the only record that the rule ever deleted anything, and
+/// the rule set's tables cascade, so deleting it would erase them.
+#[tokio::test]
+async fn deleting_a_rule_that_has_executed_is_refused() {
+    let MaintenanceFixture {
+        app,
+        user,
+        rules,
+        evaluation,
+        ..
+    } = maintenance_app();
+    let created = app
+        .create_maintenance_rule_set(&user, draft(MONITORED_MATCHER))
+        .await
+        .expect("create rule set");
+    evaluation
+        .start_action_run(&action_run(&created.rule_set.id, "title-1"))
+        .await
+        .expect("record an executed action");
+
+    let error = app
+        .delete_maintenance_rule_set(&user, &created.rule_set.id)
+        .await
+        .expect_err("a rule with an execution history must not be deletable");
+
+    assert!(matches!(error, AppError::Validation(_)), "{error:?}");
+    assert!(
+        error.to_string().contains("disabled"),
+        "the refusal must name the way out: {error}"
+    );
+    assert_eq!(
+        rules.list_rule_sets().await.unwrap().len(),
+        1,
+        "the refused delete must leave the rule in place"
+    );
+}
+
+/// Disabling a rule stops it without touching its history, so a disabled rule
+/// that once executed is refused for exactly the same reason.
+#[tokio::test]
+async fn a_disabled_rule_with_a_history_is_still_refused() {
+    let MaintenanceFixture {
+        app,
+        user,
+        evaluation,
+        ..
+    } = maintenance_app();
+    let created = app
+        .create_maintenance_rule_set(&user, draft(MONITORED_MATCHER))
+        .await
+        .expect("create rule set");
+    evaluation
+        .start_action_run(&action_run(&created.rule_set.id, "title-1"))
+        .await
+        .expect("record an executed action");
+    app.set_maintenance_rule_evaluation_mode(
+        &user,
+        &created.rule_set.id,
+        MaintenanceEvaluationMode::Disabled,
+    )
+    .await
+    .expect("disable the rule");
+
+    let error = app
+        .delete_maintenance_rule_set(&user, &created.rule_set.id)
+        .await
+        .expect_err("disabling a rule does not make its history disposable");
+    assert!(matches!(error, AppError::Validation(_)), "{error:?}");
+}
+
+/// Live candidates are membership an operator can currently see; the cascade
+/// would drop them without a trace.
+#[tokio::test]
+async fn deleting_a_rule_with_live_candidates_is_refused() {
+    let MaintenanceFixture {
+        app,
+        user,
+        rules,
+        evaluation,
+        ..
+    } = maintenance_app();
+    let created = app
+        .create_maintenance_rule_set(&user, draft(MONITORED_MATCHER))
+        .await
+        .expect("create rule set");
+    evaluation
+        .create_candidate(&active_candidate(&created.rule_set.id, "title-1"))
+        .await
+        .expect("open a candidate");
+
+    let error = app
+        .delete_maintenance_rule_set(&user, &created.rule_set.id)
+        .await
+        .expect_err("a rule still tracking subjects must not be deletable");
+
+    assert!(matches!(error, AppError::Validation(_)), "{error:?}");
+    assert!(error.to_string().contains("tracking 1"), "{error}");
+    assert_eq!(rules.list_rule_sets().await.unwrap().len(), 1);
+}
+
 #[tokio::test]
 async fn delete_removes_the_rule_set_and_its_revisions() {
     let MaintenanceFixture {
@@ -490,6 +816,57 @@ async fn an_action_that_supports_neither_movies_nor_shows_is_rejected() {
 }
 
 #[tokio::test]
+async fn an_action_the_title_executor_cannot_run_is_rejected_at_authoring_time() {
+    let MaintenanceFixture { app, user, .. } = maintenance_app();
+
+    // The show-subject delete action passes the descriptor's subject check — a
+    // title-scoped rule covers shows — so it used to save cleanly and then hard
+    // fail at execution, three attempts into a terminal `Failed` candidate that
+    // nothing could rescue. Authoring now refuses it up front.
+    let error = app
+        .create_maintenance_rule_set(
+            &user,
+            MaintenanceRuleDraft {
+                action_spec: MaintenanceActionSpec::new(
+                    MaintenanceActionKind::UnmonitorShowDeleteExistingFiles,
+                ),
+                ..draft(MONITORED_MATCHER)
+            },
+        )
+        .await
+        .expect_err("an action the executor refuses must not be savable");
+
+    assert!(matches!(error, AppError::Validation(_)), "{error:?}");
+    assert!(
+        error
+            .to_string()
+            .contains("cannot run for a title-scoped rule"),
+        "{error}"
+    );
+
+    // The same gate applies to a matcher replacement, not just to creation.
+    let created = app
+        .create_maintenance_rule_set(&user, draft(MONITORED_MATCHER))
+        .await
+        .expect("create a rule with a runnable action");
+    let refused = app
+        .update_maintenance_rule_matcher(
+            &user,
+            &created.rule_set.id,
+            MaintenanceMatcherDraft {
+                rego_source: MONITORED_MATCHER.to_string(),
+                action_spec: MaintenanceActionSpec::new(
+                    MaintenanceActionKind::UnmonitorShowDeleteExistingFiles,
+                ),
+                grace_days: 7,
+            },
+        )
+        .await
+        .expect_err("a revision cannot smuggle in an unrunnable action either");
+    assert!(matches!(refused, AppError::Validation(_)), "{refused:?}");
+}
+
+#[tokio::test]
 async fn a_negative_grace_period_is_rejected() {
     let MaintenanceFixture { app, user, .. } = maintenance_app();
 
@@ -505,6 +882,59 @@ async fn a_negative_grace_period_is_rejected() {
         .expect_err("negative grace must be rejected");
 
     assert!(matches!(error, AppError::Validation(_)), "{error:?}");
+}
+
+/// The grace period is materialized into `due_at` as a date addition, and
+/// `chrono` panics rather than saturating once that leaves its range, so the
+/// bound is a real one and not a style preference.
+#[tokio::test]
+async fn the_grace_period_is_bounded_at_ten_years() {
+    let MaintenanceFixture { app, user, .. } = maintenance_app();
+
+    let accepted = app
+        .create_maintenance_rule_set(
+            &user,
+            MaintenanceRuleDraft {
+                grace_days: MAINTENANCE_MAX_GRACE_DAYS,
+                ..draft(MONITORED_MATCHER)
+            },
+        )
+        .await
+        .expect("the boundary itself must be accepted");
+    assert_eq!(accepted.revision.grace_days, MAINTENANCE_MAX_GRACE_DAYS);
+
+    let error = app
+        .create_maintenance_rule_set(
+            &user,
+            MaintenanceRuleDraft {
+                grace_days: MAINTENANCE_MAX_GRACE_DAYS + 1,
+                ..draft(MONITORED_MATCHER)
+            },
+        )
+        .await
+        .expect_err("one day past the bound must be rejected");
+    assert!(matches!(error, AppError::Validation(_)), "{error:?}");
+    assert!(
+        error.to_string().contains("ten years"),
+        "the refusal should say what the limit is: {error}"
+    );
+
+    // A revision cannot smuggle one past the bound either.
+    let refused = app
+        .update_maintenance_rule_matcher(
+            &user,
+            &accepted.rule_set.id,
+            MaintenanceMatcherDraft {
+                rego_source: MONITORED_MATCHER.to_string(),
+                action_spec: MaintenanceActionSpec::new(
+                    MaintenanceActionKind::UnmonitorScopeKeepFiles,
+                ),
+                grace_days: MAINTENANCE_MAX_GRACE_DAYS + 1,
+            },
+        )
+        .await
+        .expect_err("the bound applies to matcher replacements too");
+    assert!(matches!(refused, AppError::Validation(_)), "{refused:?}");
 }
 
 #[tokio::test]

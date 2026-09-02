@@ -35,7 +35,7 @@ use scryer_rules::maintenance::{
     MaintenanceOutcome, MaintenancePolicy, MaintenanceRulesEngine, MaintenanceRulesEvaluator,
 };
 use serde::Serialize;
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::jobs::{JobKey, JobTriggerSource};
 use crate::maintenance_rules::facts::{
@@ -57,6 +57,21 @@ use crate::{AppError, AppResult, AppUseCase};
 /// and query size rather than to go fast.
 pub const MAINTENANCE_EVALUATION_TITLE_CHUNK: usize = 200;
 
+/// The candidate states the evaluator is allowed to move a row out of.
+///
+/// [`MaintenanceCandidateState::Executing`] is deliberately absent: that state
+/// means the action handler holds a lease, and the two jobs are independently
+/// schedulable. Every evaluator write is a compare-and-set against this set, so
+/// an evaluation pass that runs while an action is executing can neither cancel
+/// the row out from under the executor nor overwrite the terminal state the
+/// executor just wrote.
+const EVALUATOR_WRITABLE_STATES: &[MaintenanceCandidateState] = &[
+    MaintenanceCandidateState::Observing,
+    MaintenanceCandidateState::PendingAction,
+    MaintenanceCandidateState::Due,
+    MaintenanceCandidateState::Blocked,
+];
+
 /// Stable `state_reason` values written by the evaluator. They are part of the
 /// operator-visible contract: a UI filtering on "why did this cancel" compares
 /// against exactly these strings.
@@ -74,6 +89,9 @@ pub mod candidate_reason {
     pub const REVISION_SUPERSEDED: &str = "revision_superseded";
     /// A global or per-rule exclusion now covers the subject.
     pub const EXCLUDED: &str = "excluded";
+    /// The rule's library scope no longer covers the subject — either the scope
+    /// was re-pointed at other libraries, or the subject left the catalog.
+    pub const OUT_OF_SCOPE: &str = "out_of_scope";
 }
 
 // ── Instance gates ──────────────────────────────────────────────────────────
@@ -792,6 +810,7 @@ impl AppUseCase {
 
         let excluded = self.maintenance_excluded_title_ids(&rule_set.id).await?;
         let titles = self.maintenance_scoped_titles(rule_set).await?;
+        let in_scope: HashSet<String> = titles.iter().map(|title| title.id.clone()).collect();
         // Users are read once for the whole rule, not per chunk: the roster is
         // small and bounded, and one snapshot keeps every subject in the run
         // resolving names against the same view, exactly like the clock.
@@ -849,7 +868,68 @@ impl AppUseCase {
             }
         }
 
+        self.cancel_out_of_scope_maintenance_candidates(
+            &rule_set.id,
+            &in_scope,
+            evaluation_time,
+            &mut counts,
+        )
+        .await?;
+
         Ok(counts)
+    }
+
+    /// Close the rule's live candidates whose subject is no longer in its
+    /// selection.
+    ///
+    /// Reconciliation above only ever visits titles the rule is *currently*
+    /// scoped to, so a candidate whose title fell out of that selection — the
+    /// rule was re-scoped away from its library, or the title left the catalog
+    /// — is never looked at again: it stays live forever, keeps inflating the
+    /// count destructive arming makes an operator acknowledge, and (before the
+    /// executor's own scope recheck) was still executable. This is the sweep
+    /// that closes it, with a reason that says why.
+    ///
+    /// The read is bounded by [`EVALUATOR_WRITABLE_STATES`], so a leased
+    /// (`executing`) candidate is not even listed, and each cancel is the same
+    /// compare-and-set every other evaluator write uses: a row another writer
+    /// moved in the meantime is left alone and re-examined next pass. Out-of-
+    /// scope cancels are counted with the rule's other cancels — that is what
+    /// they are.
+    async fn cancel_out_of_scope_maintenance_candidates(
+        &self,
+        rule_set_id: &str,
+        in_scope: &HashSet<String>,
+        evaluation_time: DateTime<Utc>,
+        counts: &mut RuleCounts,
+    ) -> AppResult<()> {
+        let candidates = &self.services.customization.maintenance_evaluation;
+        let live = candidates
+            .list_candidates(&MaintenanceCandidateQuery {
+                rule_set_id: Some(rule_set_id.to_string()),
+                states: EVALUATOR_WRITABLE_STATES.to_vec(),
+                ..Default::default()
+            })
+            .await?;
+
+        for candidate in live {
+            if in_scope.contains(&candidate.title_id) {
+                continue;
+            }
+            if candidates
+                .transition_candidate_state(
+                    &candidate.id,
+                    MaintenanceCandidateState::Canceled,
+                    candidate_reason::OUT_OF_SCOPE,
+                    EVALUATOR_WRITABLE_STATES,
+                    evaluation_time,
+                )
+                .await?
+            {
+                counts.canceled += 1;
+            }
+        }
+        Ok(())
     }
 
     /// Reconcile one subject. Every branch is RFC 7.5 stated literally.
@@ -874,19 +954,40 @@ impl AppUseCase {
             .get_active_candidate(rule_set_id, &title.id)
             .await?;
 
+        // A candidate under an execution lease belongs to the action handler for
+        // the length of that lease, so this pass leaves it entirely alone — no
+        // advance, no cancel, no hold, not even an evaluated tally. The executor
+        // re-evaluates the subject on fresh facts immediately before it acts, so
+        // nothing is lost by not deciding here; deciding anyway is how a cancel
+        // lands on top of a succeeded row, or a succeeded row on top of a
+        // cancel.
+        if let Some(candidate) = active.as_ref()
+            && candidate.state == MaintenanceCandidateState::Executing
+        {
+            debug!(
+                rule_set_id,
+                title_id = title.id.as_str(),
+                candidate_id = candidate.id.as_str(),
+                "skipping a candidate the action handler holds a lease on"
+            );
+            return Ok(());
+        }
+
         // Exclusions are honoured from the first shadow evaluation (RFC 11):
         // an excluded subject is never evaluated, and an existing candidate for
         // it becomes terminal rather than lingering as live membership.
         if excluded.contains(&title.id) {
-            if let Some(candidate) = active {
-                candidates
+            if let Some(candidate) = active
+                && candidates
                     .transition_candidate_state(
                         &candidate.id,
                         MaintenanceCandidateState::Excluded,
                         candidate_reason::EXCLUDED,
+                        EVALUATOR_WRITABLE_STATES,
                         evaluation_time,
                     )
-                    .await?;
+                    .await?
+            {
                 counts.excluded += 1;
             }
             return Ok(());
@@ -899,15 +1000,20 @@ impl AppUseCase {
         if let Some(candidate) = active.as_ref()
             && candidate.revision_number != detail.rule_set.current_revision_number
         {
-            candidates
+            if candidates
                 .transition_candidate_state(
                     &candidate.id,
                     MaintenanceCandidateState::Canceled,
                     candidate_reason::REVISION_SUPERSEDED,
+                    EVALUATOR_WRITABLE_STATES,
                     evaluation_time,
                 )
-                .await?;
-            counts.superseded += 1;
+                .await?
+            {
+                counts.superseded += 1;
+            }
+            // The row is no longer this pass's to continue either way: it either
+            // closed here, or another writer moved it and owns what happens next.
             active = None;
         }
 
@@ -1001,15 +1107,17 @@ impl AppUseCase {
             }
             MaintenanceOutcome::NoMatch => {
                 counts.no_match += 1;
-                if let Some(candidate) = active {
-                    candidates
+                if let Some(candidate) = active
+                    && candidates
                         .transition_candidate_state(
                             &candidate.id,
                             MaintenanceCandidateState::Canceled,
                             candidate_reason::NO_MATCH,
+                            EVALUATOR_WRITABLE_STATES,
                             evaluation_time,
                         )
-                        .await?;
+                        .await?
+                {
                     counts.canceled += 1;
                 }
             }
@@ -1119,6 +1227,10 @@ impl AppUseCase {
     /// for the whole run, because Scryer would otherwise be reporting a partial
     /// watch picture as a complete one. A disabled connection is skipped: an
     /// operator turning a server off is a decision, not a gap.
+    ///
+    /// The roster is part of the gate, not just its payload: a clean sweep with
+    /// nobody linked observes nobody, so it reports unavailable rather than an
+    /// empty — and therefore decisive — watch picture.
     pub(crate) async fn maintenance_watch_context(&self) -> AppResult<MaintenanceWatchContext> {
         let mut connections = Vec::new();
         for provider in SIGNAL_SYNC_PROVIDERS {
@@ -1191,6 +1303,19 @@ impl AppUseCase {
             {
                 linked_user_ids.insert(account.user_id);
             }
+        }
+
+        // A fresh sweep over nobody is not a watch picture. With no verified
+        // link on any enabled connection, every subject would come back "no
+        // plays recorded" — which reads as "nobody watched it" while Scryer is
+        // in fact observing nobody at all.
+        if linked_user_ids.is_empty() {
+            return Ok(MaintenanceWatchContext {
+                freshness: WatchSignalFreshness::Unavailable(
+                    unknown_reason::NO_LINKED_PARTICIPANTS,
+                ),
+                linked_user_ids,
+            });
         }
 
         Ok(MaintenanceWatchContext {

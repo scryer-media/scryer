@@ -286,24 +286,51 @@ impl MaintenanceCandidateRepository for MaintenanceEvaluationStore {
         id: &str,
         state: MaintenanceCandidateState,
         state_reason: &str,
+        expected_states: &[MaintenanceCandidateState],
         updated_at: DateTime<Utc>,
-    ) -> AppResult<()> {
-        let args = vec![
+    ) -> AppResult<bool> {
+        // An empty expectation would degrade this back into the unconditional
+        // UPDATE the compare-and-set exists to remove, so it is refused rather
+        // than silently widened.
+        if expected_states.is_empty() {
+            return Err(AppError::Validation(
+                "a candidate transition must name the states it expects".to_string(),
+            ));
+        }
+        let placeholders = expected_states
+            .iter()
+            .map(|_| "{}")
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "UPDATE lifecycle_candidates
+                SET state = {{}}, state_reason = {{}}, last_evaluated_at = {{}}, updated_at = {{}}
+              WHERE id = {{}} AND state IN ({placeholders})"
+        );
+        let mut args = vec![
             SqlArg::Text(state.as_storage_str().to_string()),
             SqlArg::Text(state_reason.to_string()),
             SqlArg::Timestamp(updated_at),
             SqlArg::Timestamp(updated_at),
             SqlArg::Text(id.to_string()),
         ];
-        execute_write(
+        args.extend(
+            expected_states
+                .iter()
+                .map(|state| SqlArg::Text(state.as_storage_str().to_string())),
+        );
+
+        let affected = SqlRuntime::run_in_transaction(
             &self.datastore,
             "transition_lifecycle_candidate_state",
-            "UPDATE lifecycle_candidates
-                SET state = {}, state_reason = {}, last_evaluated_at = {}, updated_at = {}
-              WHERE id = {}",
-            args,
+            move |tx| {
+                let sql = sql.clone();
+                let args = args.clone();
+                Box::pin(async move { SqlRuntime::execute(SqlExec::Tx(tx), &sql, &args).await })
+            },
         )
-        .await
+        .await?;
+        Ok(affected == 1)
     }
 
     async fn cancel_active_candidates_for_rule(
@@ -375,13 +402,20 @@ impl MaintenanceCandidateRepository for MaintenanceEvaluationStore {
         &self,
         rule_set_id: &str,
         due_before: DateTime<Utc>,
+        stale_before: DateTime<Utc>,
         limit: usize,
     ) -> AppResult<Vec<LifecycleCandidate>> {
+        // `due_at <= due_before` still bounds both arms: a row that reached
+        // `executing` was due when it was leased, so an abandoned lease is
+        // always past its due time too. The second arm is what returns that
+        // abandoned row — without it, the lease's own reclaim branch is
+        // unreachable and the row is stranded for good.
         let sql = format!(
             "SELECT {CANDIDATE_COLUMNS}
                FROM lifecycle_candidates
               WHERE rule_set_id = {{}} AND due_at <= {{}}
-                AND state IN ({{}}, {{}}, {{}}, {{}})
+                AND (state IN ({{}}, {{}}, {{}}, {{}})
+                     OR (state = {{}} AND updated_at < {{}}))
               ORDER BY due_at ASC, id ASC
               LIMIT {{}}"
         );
@@ -404,6 +438,12 @@ impl MaintenanceCandidateRepository for MaintenanceEvaluationStore {
                     .as_storage_str()
                     .to_string(),
             ),
+            SqlArg::Text(
+                MaintenanceCandidateState::Executing
+                    .as_storage_str()
+                    .to_string(),
+            ),
+            SqlArg::Timestamp(stale_before),
             SqlArg::I64(limit as i64),
         ];
         SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args)

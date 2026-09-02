@@ -3398,8 +3398,10 @@ export function MediaContentView({
                     <EyeOff className="h-4 w-4" />
                   </TitleTableActionButton>
                   <TitleTableActionButton
+                    id="title-overview-bulk-edit-inline"
                     tone="edit"
                     label={t("label.edit")}
+                    aria-label={t("title.bulkEditTitle")}
                     onClick={openBulkTitleEdit}
                     disabled={bulkActionBusy}
                     className="rounded-md"
@@ -4025,7 +4027,9 @@ export function MediaContentView({
                           {t("title.unmonitorAction")}
                         </Button>
                         <Button
+                          id="title-overview-bulk-edit"
                           variant="outline"
+                          aria-label={t("title.bulkEditTitle")}
                           onClick={openBulkTitleEdit}
                           disabled={bulkActionBusy}
                           className="justify-center gap-2"

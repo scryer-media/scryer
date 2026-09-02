@@ -3,11 +3,13 @@ use scryer_application::{
     AppError, AppResult, FileImporter, ImportFileExecutionContext, ImportFilePermissions,
     ImportFileTransferProgress, ImportFileTransferProgressSender,
     fs_integrity::import_content_proof,
+    location::verify::{StreamedContentHasher, VerifiedCopier},
 };
 use scryer_domain::{
     ImportDestinationDisposition, ImportFileIdentity, ImportFileResult, ImportMode,
     ImportSourceCleanupGuard, ImportSourceIdentity, ImportSourceIdentityKind, ImportSourceSnapshot,
-    ImportStrategy, ImportTransferPhase,
+    ImportStrategy, ImportTransferPhase, ImportVerification, StreamedContentHashes,
+    VerificationDepth,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -616,6 +618,15 @@ struct ImportFileOptions {
     force_cross_device_move: bool,
     #[cfg(test)]
     force_copy_verification_failure: bool,
+    /// SC-006: flip a byte in the destination after it is written, before it is
+    /// verified. The only way to exercise "a corrupted destination copy is
+    /// detected before source removal" without an unreliable disk.
+    #[cfg(test)]
+    force_destination_corruption: bool,
+    /// Make the full-depth read-back report itself unsupported, as a filesystem
+    /// that refuses the cache-bypassed re-read would (FR-042 quick floor).
+    #[cfg(test)]
+    force_read_back_unsupported: bool,
     #[cfg(test)]
     force_delete_failure: bool,
     #[cfg(test)]
@@ -642,6 +653,40 @@ fn force_cross_device_move(_: &ImportFileOptions) -> bool {
 fn force_copy_verification_failure(options: &ImportFileOptions) -> bool {
     options.force_copy_verification_failure
 }
+
+/// The copier the copy path proves with. Tests substitute a read-back opener to
+/// reach the quick floor; production always uses the real one.
+#[cfg(test)]
+fn verified_copier_for(options: &ImportFileOptions) -> VerifiedCopier {
+    if options.force_read_back_unsupported {
+        return VerifiedCopier::with_read_back_opener(Arc::new(|_: &Path| {
+            scryer_application::location::verify::ReadBackHandle::Unsupported(
+                "forced unsupported read-back".to_string(),
+            )
+        }));
+    }
+    VerifiedCopier::new()
+}
+
+#[cfg(not(test))]
+fn verified_copier_for(_: &ImportFileOptions) -> VerifiedCopier {
+    VerifiedCopier::new()
+}
+
+/// Corrupt the destination between write and verification (SC-006).
+#[cfg(test)]
+fn force_destination_corruption(options: &ImportFileOptions, dest: &Path) {
+    if !options.force_destination_corruption {
+        return;
+    }
+    let mut bytes = std::fs::read(dest).expect("read destination to corrupt");
+    let last = bytes.last_mut().expect("destination has bytes to corrupt");
+    *last ^= 0xff;
+    std::fs::write(dest, bytes).expect("write corrupted destination");
+}
+
+#[cfg(not(test))]
+fn force_destination_corruption(_: &ImportFileOptions, _: &Path) {}
 
 #[cfg(not(test))]
 fn force_copy_verification_failure(_: &ImportFileOptions) -> bool {
@@ -1268,7 +1313,7 @@ fn copy_regular_source_to_destination_once(
     attempt_context: ImportCopyAttempt<'_>,
     options: ImportFileOptions,
     attempt: usize,
-) -> Result<(), ImportCopyAttemptError> {
+) -> Result<StreamedContentHashes, ImportCopyAttemptError> {
     let ImportCopyAttempt {
         source,
         dest,
@@ -1311,6 +1356,11 @@ fn copy_regular_source_to_destination_once(
         .map_err(|error| ImportCopyAttemptError::new("copy", error))?;
     report_import_transfer_progress(progress, ImportTransferPhase::Copying, 0, size);
     let mut copied = 0u64;
+    // FR-045: the same one-pass CRC + BLAKE3 a location operation's copy uses.
+    // The source is read exactly once, so the hashes cost nothing beyond the
+    // arithmetic; a second pass over multi-gigabyte media would not be
+    // affordable and is exactly what D2 exists to avoid.
+    let mut hasher = StreamedContentHasher::new();
     let mut buffer = vec![0u8; IMPORT_COPY_BUFFER_BYTES];
     loop {
         if cancellation.is_some_and(scryer_application::ImportCancellation::is_cancelled) {
@@ -1328,6 +1378,7 @@ fn copy_regular_source_to_destination_once(
         temp_file
             .write_all(&buffer[..read])
             .map_err(|error| ImportCopyAttemptError::new("copy", error))?;
+        hasher.update(&buffer[..read]);
         copied = copied.saturating_add(read as u64);
         report_import_transfer_progress(progress, ImportTransferPhase::Copying, copied, size);
     }
@@ -1347,22 +1398,31 @@ fn copy_regular_source_to_destination_once(
     scryer_application::fs_safety::rename_into_claimed_destination_blocking(temp_dest, dest)
         .map_err(|error| ImportCopyAttemptError::new("final rename", error))?;
 
-    Ok(())
+    Ok(hasher.finalize())
 }
 
+/// Copies one regular file and proves the destination at `depth` (FR-045).
+///
+/// Returns the streamed hashes and what verification concluded. A destination
+/// that cannot be proven is removed and the import fails: that is the FR-044
+/// gate expressed at the only place an import copies bytes — an import that
+/// errors here never reaches source cleanup, so a corrupt copy can never cost
+/// the user the original.
+#[allow(clippy::too_many_arguments)]
 fn copy_regular_source_to_destination(
     source: &Path,
     dest: &Path,
     source_fingerprint: &ImportSourceFingerprint,
     size: u64,
     options: ImportFileOptions,
+    depth: VerificationDepth,
     progress: Option<&ImportFileTransferProgressSender>,
     cancellation: Option<&scryer_application::ImportCancellation>,
-) -> AppResult<()> {
+) -> AppResult<ImportVerification> {
     let temp_dest = dest.with_extension("tmp_import");
     let mut attempt = 1usize;
 
-    loop {
+    let hashes = loop {
         if let Err(error) = remove_import_temp_file(&temp_dest) {
             return Err(AppError::Repository(format!(
                 "import copy failed before attempt {}: {} -> {}: cleanup of temporary destination {} failed: {}",
@@ -1387,7 +1447,7 @@ fn copy_regular_source_to_destination(
             options,
             attempt,
         ) {
-            Ok(()) => break,
+            Ok(hashes) => break hashes,
             Err(error) => {
                 let cancelled = error.is_cancellation();
                 let should_retry =
@@ -1415,7 +1475,7 @@ fn copy_regular_source_to_destination(
                 )));
             }
         }
-    }
+    };
 
     if force_copy_verification_failure(&options) {
         let _ = std::fs::remove_file(dest);
@@ -1436,7 +1496,35 @@ fn copy_regular_source_to_destination(
         )));
     }
 
-    Ok(())
+    force_destination_corruption(&options, dest);
+
+    // Already on a blocking thread, so the blocking twin is the right one.
+    // `Full` degrades to the quick floor by itself when the destination cannot
+    // be read back (FR-042), which is why a filesystem that refuses a
+    // cache-bypassed re-read still imports rather than failing.
+    let assessment = verified_copier_for(&options).verify_blocking(source, dest, &hashes, depth);
+    let verification = ImportVerification {
+        hashes,
+        depth: assessment.depth,
+        outcome: assessment.outcome,
+        detail: assessment.detail,
+    };
+
+    if !verification.permits_source_removal() {
+        let detail = verification
+            .detail
+            .clone()
+            .unwrap_or_else(|| "no detail recorded".to_string());
+        let _ = std::fs::remove_file(dest);
+        return Err(AppError::Repository(format!(
+            "copy verification failed at depth {} for {}: {} ({detail})",
+            verification.depth.label(),
+            dest.display(),
+            verification.outcome.as_str(),
+        )));
+    }
+
+    Ok(verification)
 }
 
 fn remove_import_source_after_verified_import_blocking(
@@ -1533,6 +1621,12 @@ struct PreparedImportPlacement {
     dest: PathBuf,
     #[serde(skip)]
     options: ImportFileOptions,
+    /// The operator's verification depth for this import (FR-042/045).
+    /// Serialized, unlike `options`: the worker process performs the copy, so
+    /// the depth has to survive the handoff. Defaults to `Full` for a request
+    /// written by an older peer — never to the weaker setting.
+    #[serde(default)]
+    verification_depth: VerificationDepth,
     source_cleanup_required: bool,
     #[serde(skip)]
     progress: Option<ImportFileTransferProgressSender>,
@@ -1550,10 +1644,15 @@ enum FastPlacementResult {
     CopyRequired(PreparedImportPlacement),
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "import preparation carries source, destination, transfer, permission, and verification context"
+)]
 fn prepare_import_placement_blocking(
     source: PathBuf,
     dest: PathBuf,
     options: ImportFileOptions,
+    verification_depth: VerificationDepth,
     source_cleanup_required: bool,
     expected_source: Option<ImportSourceSnapshot>,
     progress: Option<ImportFileTransferProgressSender>,
@@ -1567,6 +1666,7 @@ fn prepare_import_placement_blocking(
         source,
         dest,
         options,
+        verification_depth,
         source_cleanup_required,
         progress,
         cancellation: None,
@@ -1630,6 +1730,9 @@ fn finish_prepared_import(
         size_bytes: prepared.size,
         destination_disposition: ImportDestinationDisposition::Created,
         source_cleanup,
+        // A rename, hardlink, or symlink placement copies no bytes (FR-032):
+        // there is nothing to verify and nothing to hash.
+        verification: None,
     })
 }
 
@@ -1796,6 +1899,9 @@ fn reconcile_existing_destination(
         size_bytes: size,
         destination_disposition: ImportDestinationDisposition::AlreadyPresent,
         source_cleanup,
+        // This call copied nothing: the destination was already there and was
+        // proved equal to the source by the sampled proof above.
+        verification: None,
     }))
 }
 
@@ -1803,12 +1909,13 @@ fn copy_prepared_import_blocking(prepared: PreparedImportPlacement) -> AppResult
     ensure_same_source(&prepared.source, &prepared.source_fingerprint)?;
     validate_import_destination_parent(&prepared.destination_guard, &prepared.dest)?;
     ensure_import_destination_absent(&prepared.dest)?;
-    copy_regular_source_to_destination(
+    let verification = copy_regular_source_to_destination(
         &prepared.source,
         &prepared.dest,
         &prepared.source_fingerprint,
         prepared.size,
         prepared.options,
+        prepared.verification_depth,
         prepared.progress.as_ref(),
         prepared.cancellation.as_ref(),
     )?;
@@ -1818,13 +1925,23 @@ fn copy_prepared_import_blocking(prepared: PreparedImportPlacement) -> AppResult
         &prepared.options,
         &prepared.permissions,
     )?;
-    finish_prepared_import(prepared, ImportStrategy::Copy)
+    // The source-cleanup guard is only built once verification passed, so
+    // FR-044 holds structurally: an unproven copy has no guard to remove
+    // anything with.
+    let mut result = finish_prepared_import(prepared, ImportStrategy::Copy)?;
+    result.verification = Some(verification);
+    Ok(result)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "single-process placement carries the same context the worker protocol splits across messages"
+)]
 fn import_hardlink_or_copy_blocking(
     source: PathBuf,
     dest: PathBuf,
     options: ImportFileOptions,
+    verification_depth: VerificationDepth,
     source_cleanup_required: bool,
     expected_source: Option<ImportSourceSnapshot>,
     progress: Option<ImportFileTransferProgressSender>,
@@ -1861,6 +1978,7 @@ fn import_hardlink_or_copy_blocking(
             size_bytes: size,
             destination_disposition: ImportDestinationDisposition::Created,
             source_cleanup,
+            verification: None,
         });
     }
 
@@ -1910,6 +2028,7 @@ fn import_hardlink_or_copy_blocking(
                             size_bytes: size,
                             destination_disposition: ImportDestinationDisposition::Created,
                             source_cleanup,
+                            verification: None,
                         });
                     }
                     Ok(dest_meta) => {
@@ -1946,12 +2065,13 @@ fn import_hardlink_or_copy_blocking(
         }
     }
 
-    copy_regular_source_to_destination(
+    let verification = copy_regular_source_to_destination(
         &source,
         &dest,
         &source_fingerprint,
         size,
         options,
+        verification_depth,
         progress.as_ref(),
         None,
     )?;
@@ -1972,9 +2092,11 @@ fn import_hardlink_or_copy_blocking(
         size_bytes: size,
         destination_disposition: ImportDestinationDisposition::Created,
         source_cleanup,
+        verification: Some(verification),
     })
 }
 
+/// Single-process placement at the default depth, for callers that name none.
 fn import_file_blocking(
     source: PathBuf,
     dest: PathBuf,
@@ -1984,11 +2106,38 @@ fn import_file_blocking(
     progress: Option<ImportFileTransferProgressSender>,
     permissions: ImportFilePermissions,
 ) -> AppResult<ImportFileResult> {
+    import_file_blocking_at_depth(
+        source,
+        dest,
+        mode,
+        options,
+        VerificationDepth::default(),
+        expected_source,
+        progress,
+        permissions,
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "single-process placement carries the same context the worker protocol splits across messages"
+)]
+fn import_file_blocking_at_depth(
+    source: PathBuf,
+    dest: PathBuf,
+    mode: ImportMode,
+    options: ImportFileOptions,
+    verification_depth: VerificationDepth,
+    expected_source: Option<ImportSourceSnapshot>,
+    progress: Option<ImportFileTransferProgressSender>,
+    permissions: ImportFilePermissions,
+) -> AppResult<ImportFileResult> {
     match mode {
         ImportMode::HardlinkOrCopy => import_hardlink_or_copy_blocking(
             source,
             dest,
             options,
+            verification_depth,
             false,
             expected_source,
             progress,
@@ -1998,6 +2147,7 @@ fn import_file_blocking(
             source,
             dest,
             options,
+            verification_depth,
             true,
             expected_source,
             progress,
@@ -2025,6 +2175,10 @@ enum ImportFileWorkerRequest {
         mode: ImportMode,
         expected_source: Option<ImportSourceSnapshot>,
         permissions: ImportFilePermissions,
+        /// FR-042/045. Defaulted rather than required so a request from an
+        /// older peer verifies at full depth, never at the weaker one.
+        #[serde(default)]
+        verification_depth: VerificationDepth,
     },
     FastPlacement {
         version: u16,
@@ -2214,6 +2368,7 @@ pub fn run_import_file_worker() -> i32 {
             mode,
             expected_source,
             permissions,
+            verification_depth,
             ..
         } => {
             let _ = write_import_worker_event(
@@ -2228,6 +2383,7 @@ pub fn run_import_file_worker() -> i32 {
                 source,
                 dest,
                 ImportFileOptions::default(),
+                verification_depth,
                 source_cleanup_required,
                 expected_source,
                 None,
@@ -2605,6 +2761,42 @@ async fn next_import_worker_event(
 
 #[async_trait]
 impl FileImporter for FsFileImporter {
+    /// A location operation writes its own destination, then asks for the same
+    /// modes an import would have applied (FR-031). Best-effort for the same
+    /// reason imports are: a filesystem that refuses a chmod or a chown is not
+    /// a reason to fail a move whose bytes are already verified.
+    async fn apply_placed_file_permissions(
+        &self,
+        path: &Path,
+        permissions: &ImportFilePermissions,
+    ) -> AppResult<()> {
+        let path = path.to_path_buf();
+        let permissions = permissions.clone();
+        tokio::task::spawn_blocking(move || {
+            apply_file_permissions_best_effort(&path, &permissions);
+        })
+        .await
+        .map_err(|error| {
+            AppError::Repository(format!("permission task panicked: {error}"))
+        })
+    }
+
+    async fn apply_placed_directory_permissions(
+        &self,
+        path: &Path,
+        permissions: &ImportFilePermissions,
+    ) -> AppResult<()> {
+        let path = path.to_path_buf();
+        let permissions = permissions.clone();
+        tokio::task::spawn_blocking(move || {
+            apply_directory_permissions_best_effort(&path, &permissions);
+        })
+        .await
+        .map_err(|error| {
+            AppError::Repository(format!("permission task panicked: {error}"))
+        })
+    }
+
     async fn snapshot_import_source(&self, source: &Path) -> AppResult<ImportSourceSnapshot> {
         if let Some(executable) = &self.worker_executable {
             let nonce = IMPORT_FILE_WORKER_NONCE.fetch_add(1, Ordering::Relaxed);
@@ -2708,6 +2900,131 @@ impl FileImporter for FsFileImporter {
         permissions: &ImportFilePermissions,
         context: &ImportFileExecutionContext,
     ) -> AppResult<ImportFileResult> {
+        // No depth was named, so the copy path proves at the default rather
+        // than at the weaker setting (FR-042: never a silent downgrade).
+        self.place_import_file(
+            source,
+            dest,
+            mode,
+            expected_source,
+            progress,
+            permissions,
+            context,
+            VerificationDepth::default(),
+        )
+        .await
+    }
+
+    async fn import_file_verified_with_execution_context(
+        &self,
+        source: &Path,
+        dest: &Path,
+        mode: ImportMode,
+        expected_source: Option<&ImportSourceSnapshot>,
+        progress: Option<ImportFileTransferProgressSender>,
+        permissions: &ImportFilePermissions,
+        context: &ImportFileExecutionContext,
+        depth: VerificationDepth,
+    ) -> AppResult<ImportFileResult> {
+        self.place_import_file(
+            source,
+            dest,
+            mode,
+            expected_source,
+            progress,
+            permissions,
+            context,
+            depth,
+        )
+        .await
+    }
+
+    async fn remove_import_source_after_verified_import(
+        &self,
+        guard: ImportSourceCleanupGuard,
+        final_dest_path: &Path,
+    ) -> AppResult<()> {
+        let final_dest_path = final_dest_path.to_path_buf();
+
+        tokio::task::spawn_blocking(move || {
+            remove_import_source_after_verified_import_blocking(
+                guard,
+                final_dest_path,
+                ImportFileOptions::default(),
+            )
+        })
+        .await
+        .map_err(|e| AppError::Repository(format!("import cleanup task panicked: {}", e)))?
+    }
+
+    async fn remove_import_source_after_verified_import_with_context(
+        &self,
+        guard: ImportSourceCleanupGuard,
+        final_dest_path: &Path,
+        context: &ImportFileExecutionContext,
+    ) -> AppResult<()> {
+        let client_key = context.client_lane_key().to_string();
+        let _fast_permit = self
+            .placement
+            .fast
+            .acquire(&client_key, "move-cleanup")
+            .await;
+        if let Some(executable) = &self.worker_executable {
+            let nonce = IMPORT_FILE_WORKER_NONCE.fetch_add(1, Ordering::Relaxed);
+            let request = ImportFileWorkerRequest::Cleanup {
+                version: IMPORT_FILE_WORKER_PROTOCOL_VERSION,
+                nonce,
+                guard,
+                final_dest_path: final_dest_path.to_path_buf(),
+            };
+            let mut session = spawn_import_file_worker(executable, &request).await?;
+            loop {
+                match next_import_worker_event(&mut session).await? {
+                    ImportFileWorkerEvent::Stage { .. } => {}
+                    ImportFileWorkerEvent::CleanupFinished { .. } => return Ok(()),
+                    ImportFileWorkerEvent::Error { message, .. } => {
+                        return Err(AppError::Repository(message));
+                    }
+                    _ => {
+                        return Err(AppError::ManualReconciliationRequired(
+                            "filesystem worker returned an unexpected cleanup response; inspect source and destination"
+                                .to_string(),
+                        ));
+                    }
+                }
+            }
+        }
+        let final_dest_path = final_dest_path.to_path_buf();
+        tokio::task::spawn_blocking(move || {
+            remove_import_source_after_verified_import_blocking(
+                guard,
+                final_dest_path,
+                ImportFileOptions::default(),
+            )
+        })
+        .await
+        .map_err(|error| AppError::Repository(format!("import cleanup task panicked: {error}")))?
+    }
+}
+
+impl FsFileImporter {
+    /// The one placement implementation. Both trait entry points land here; the
+    /// only thing that varies is the depth the copy path proves at (FR-045).
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "file placement keeps transfer, permission, source-snapshot, lane, and verification context explicit"
+    )]
+    async fn place_import_file(
+        &self,
+        source: &Path,
+        dest: &Path,
+        mode: ImportMode,
+        expected_source: Option<&ImportSourceSnapshot>,
+        progress: Option<ImportFileTransferProgressSender>,
+        permissions: &ImportFilePermissions,
+        context: &ImportFileExecutionContext,
+        verification_depth: VerificationDepth,
+    ) -> AppResult<ImportFileResult> {
         let cancellation = context.cancellation_token();
         if let Some(executable) = &self.worker_executable {
             let preparation_permit = wait_for_import_operation_or_cancel(
@@ -2723,6 +3040,7 @@ impl FileImporter for FsFileImporter {
                 mode,
                 expected_source: expected_source.cloned(),
                 permissions: permissions.clone(),
+                verification_depth,
             };
             let mut session = spawn_import_file_worker(executable, &prepare_request).await?;
             let prepared = loop {
@@ -2865,6 +3183,7 @@ impl FileImporter for FsFileImporter {
                 source,
                 dest,
                 ImportFileOptions::default(),
+                verification_depth,
                 source_cleanup_required,
                 expected_source,
                 progress,
@@ -2917,72 +3236,6 @@ impl FileImporter for FsFileImporter {
         }
     }
 
-    async fn remove_import_source_after_verified_import(
-        &self,
-        guard: ImportSourceCleanupGuard,
-        final_dest_path: &Path,
-    ) -> AppResult<()> {
-        let final_dest_path = final_dest_path.to_path_buf();
-
-        tokio::task::spawn_blocking(move || {
-            remove_import_source_after_verified_import_blocking(
-                guard,
-                final_dest_path,
-                ImportFileOptions::default(),
-            )
-        })
-        .await
-        .map_err(|e| AppError::Repository(format!("import cleanup task panicked: {}", e)))?
-    }
-
-    async fn remove_import_source_after_verified_import_with_context(
-        &self,
-        guard: ImportSourceCleanupGuard,
-        final_dest_path: &Path,
-        context: &ImportFileExecutionContext,
-    ) -> AppResult<()> {
-        let client_key = context.client_lane_key().to_string();
-        let _fast_permit = self
-            .placement
-            .fast
-            .acquire(&client_key, "move-cleanup")
-            .await;
-        if let Some(executable) = &self.worker_executable {
-            let nonce = IMPORT_FILE_WORKER_NONCE.fetch_add(1, Ordering::Relaxed);
-            let request = ImportFileWorkerRequest::Cleanup {
-                version: IMPORT_FILE_WORKER_PROTOCOL_VERSION,
-                nonce,
-                guard,
-                final_dest_path: final_dest_path.to_path_buf(),
-            };
-            let mut session = spawn_import_file_worker(executable, &request).await?;
-            loop {
-                match next_import_worker_event(&mut session).await? {
-                    ImportFileWorkerEvent::Stage { .. } => {}
-                    ImportFileWorkerEvent::CleanupFinished { .. } => return Ok(()),
-                    ImportFileWorkerEvent::Error { message, .. } => {
-                        return Err(AppError::Repository(message));
-                    }
-                    _ => {
-                        return Err(AppError::ManualReconciliationRequired(
-                            "filesystem worker returned an unexpected cleanup response; inspect source and destination"
-                                .to_string(),
-                        ));
-                    }
-                }
-            }
-        }
-        let final_dest_path = final_dest_path.to_path_buf();
-        tokio::task::spawn_blocking(move || {
-            remove_import_source_after_verified_import_blocking(
-                guard,
-                final_dest_path,
-                ImportFileOptions::default(),
-            )
-        })
-        .await
-        .map_err(|error| AppError::Repository(format!("import cleanup task panicked: {error}")))?
-    }
 }
 
 #[cfg(test)]
@@ -3104,6 +3357,7 @@ mod tests {
             source.clone(),
             temp.path().join("library-a/title.mkv"),
             ImportFileOptions::default(),
+            VerificationDepth::default(),
             false,
             None,
             None,
@@ -3114,6 +3368,7 @@ mod tests {
             source,
             temp.path().join("library-b/title.mkv"),
             ImportFileOptions::default(),
+            VerificationDepth::default(),
             false,
             None,
             None,
@@ -3133,6 +3388,7 @@ mod tests {
             source,
             dest.clone(),
             ImportFileOptions::default(),
+            VerificationDepth::default(),
             false,
             None,
             None,
@@ -3162,6 +3418,7 @@ mod tests {
             source,
             dest.clone(),
             ImportFileOptions::default(),
+            VerificationDepth::default(),
             false,
             None,
             None,
@@ -3517,6 +3774,211 @@ mod tests {
             b"fake video bytes"
         );
     }
+
+    // ── FR-045: the download-client copy path proves what it copied ─────────
+
+    /// A cross-device import copy computes both hashes during the copy and
+    /// proves the destination at the configured depth.
+    #[test]
+    fn cross_device_copy_verifies_at_full_depth_and_reports_both_hashes() {
+        let source_dir = tempfile::tempdir().expect("source tempdir");
+        let dest_dir = tempfile::tempdir().expect("dest tempdir");
+        let source = source_dir.path().join("source.mkv");
+        std::fs::write(&source, b"fake video bytes").expect("write source");
+        let dest = dest_dir.path().join("Imported.Movie.mkv");
+
+        let result = import_file_blocking_at_depth(
+            source.clone(),
+            dest.clone(),
+            ImportMode::Move,
+            ImportFileOptions {
+                force_cross_device_move: true,
+                ..Default::default()
+            },
+            VerificationDepth::Full,
+            None,
+            None,
+            ImportFilePermissions::default(),
+        )
+        .expect("cross-device copy");
+
+        let verification = result.verification.expect("a copy is verified");
+        assert_eq!(
+            verification.outcome,
+            scryer_domain::FileVerificationOutcome::Verified
+        );
+        assert_eq!(verification.depth.applied, VerificationDepth::Full);
+        assert!(!verification.depth.fell_back);
+        assert_eq!(verification.stamp(), "verified (full)");
+
+        // The hashes are of the bytes, computed in the same pass that wrote
+        // them (D2) — not a second read. Compared against the same hasher fed
+        // directly, so a copy loop that dropped or double-fed a buffer would
+        // show up here.
+        let mut expected = StreamedContentHasher::new();
+        expected.update(b"fake video bytes");
+        assert_eq!(verification.hashes, expected.finalize());
+        assert_eq!(
+            verification.hashes.size_bytes,
+            b"fake video bytes".len() as u64
+        );
+        assert_eq!(
+            verification.hashes.crc_algorithm,
+            scryer_domain::MoveCrcAlgorithm::Crc64Nvme
+        );
+        assert_eq!(verification.hashes.full_blake3.len(), 64);
+    }
+
+    /// US9 scenario 2: quick check records the reduced guarantee so it is
+    /// auditable, and is not reported as a fallback.
+    #[test]
+    fn cross_device_copy_at_quick_depth_records_the_reduced_guarantee() {
+        let source_dir = tempfile::tempdir().expect("source tempdir");
+        let dest_dir = tempfile::tempdir().expect("dest tempdir");
+        let source = source_dir.path().join("source.mkv");
+        std::fs::write(&source, b"fake video bytes").expect("write source");
+        let dest = dest_dir.path().join("Imported.Movie.mkv");
+
+        let result = import_file_blocking_at_depth(
+            source,
+            dest,
+            ImportMode::Move,
+            ImportFileOptions {
+                force_cross_device_move: true,
+                ..Default::default()
+            },
+            VerificationDepth::Quick,
+            None,
+            None,
+            ImportFilePermissions::default(),
+        )
+        .expect("cross-device copy");
+
+        let verification = result.verification.expect("a copy is verified");
+        assert_eq!(
+            verification.outcome,
+            scryer_domain::FileVerificationOutcome::Verified
+        );
+        assert_eq!(verification.depth.applied, VerificationDepth::Quick);
+        assert!(
+            !verification.depth.fell_back,
+            "quick by preference is not a fallback"
+        );
+        assert_eq!(verification.stamp(), "verified (quick)");
+    }
+
+    /// SC-006: a byte flipped after write is caught before the source is
+    /// touched. The import fails, so there is no cleanup guard and no path to
+    /// source removal (FR-044) — and the source is still there.
+    #[test]
+    fn a_corrupted_destination_fails_the_import_and_leaves_the_source_alone() {
+        let source_dir = tempfile::tempdir().expect("source tempdir");
+        let dest_dir = tempfile::tempdir().expect("dest tempdir");
+        let source = source_dir.path().join("source.mkv");
+        std::fs::write(&source, b"fake video bytes").expect("write source");
+        let dest = dest_dir.path().join("Imported.Movie.mkv");
+
+        let error = import_file_blocking_at_depth(
+            source.clone(),
+            dest.clone(),
+            ImportMode::Move,
+            ImportFileOptions {
+                force_cross_device_move: true,
+                force_destination_corruption: true,
+                ..Default::default()
+            },
+            VerificationDepth::Full,
+            None,
+            None,
+            ImportFilePermissions::default(),
+        )
+        .expect_err("a corrupted destination must not be reported as an import");
+
+        assert!(
+            error.to_string().contains("copy verification failed"),
+            "unexpected error: {error}"
+        );
+        assert!(source.exists(), "the source is never touched on a failure");
+        assert!(
+            !dest.exists(),
+            "the unproven destination is removed rather than left to be imported"
+        );
+    }
+
+    /// FR-042: full is requested, the read-back cannot run, and verification
+    /// lands on the quick floor rather than failing the import. Behavioural
+    /// compatibility — a filesystem that cannot be re-read still imports.
+    #[test]
+    fn a_read_back_that_cannot_run_falls_back_to_the_quick_floor() {
+        let source_dir = tempfile::tempdir().expect("source tempdir");
+        let dest_dir = tempfile::tempdir().expect("dest tempdir");
+        let source = source_dir.path().join("source.mkv");
+        std::fs::write(&source, b"fake video bytes").expect("write source");
+        let dest = dest_dir.path().join("Imported.Movie.mkv");
+
+        let result = import_file_blocking_at_depth(
+            source.clone(),
+            dest.clone(),
+            ImportMode::Move,
+            ImportFileOptions {
+                force_cross_device_move: true,
+                force_read_back_unsupported: true,
+                ..Default::default()
+            },
+            VerificationDepth::Full,
+            None,
+            None,
+            ImportFilePermissions::default(),
+        )
+        .expect("an unsupported read-back must not fail the import");
+
+        let verification = result.verification.expect("a copy is verified");
+        assert_eq!(
+            verification.outcome,
+            scryer_domain::FileVerificationOutcome::Verified
+        );
+        assert_eq!(verification.depth.requested, VerificationDepth::Full);
+        assert_eq!(verification.depth.applied, VerificationDepth::Quick);
+        assert!(
+            verification.depth.fell_back,
+            "the reduced guarantee must be recorded as a fallback"
+        );
+        assert_eq!(verification.stamp(), "verified (quick (fallback))");
+        assert!(
+            result.source_cleanup.is_some(),
+            "the quick floor still unblocks source removal"
+        );
+        assert!(dest.exists());
+    }
+
+    /// FR-032: a same-filesystem placement copies no bytes, so there is nothing
+    /// to hash and nothing to verify. The fast path stays untouched.
+    #[test]
+    fn a_hardlink_placement_carries_no_verification() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source = dir.path().join("source.mkv");
+        std::fs::write(&source, b"fake video bytes").expect("write source");
+        let dest = dir.path().join("library").join("Imported.Movie.mkv");
+
+        let result = import_file_blocking_at_depth(
+            source,
+            dest,
+            ImportMode::HardlinkOrCopy,
+            ImportFileOptions::default(),
+            VerificationDepth::Full,
+            None,
+            None,
+            ImportFilePermissions::default(),
+        )
+        .expect("same-filesystem placement");
+
+        assert_eq!(result.strategy, ImportStrategy::HardLink);
+        assert!(
+            result.verification.is_none(),
+            "a hardlink copies no bytes, so it proves and hashes nothing"
+        );
+    }
+
 
     #[test]
     fn move_mode_cross_device_fallback_copies_then_cleanup_deletes_source() {

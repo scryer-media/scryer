@@ -1,4 +1,4 @@
--- PostgreSQL twin of migrations/0208_indexer_transport_proxies.sql.
+-- PostgreSQL twin of migrations/0211_indexer_transport_proxies.sql.
 -- `protocol` becomes nullable because transport proxies (http, socks5) speak
 -- no challenge-solver protocol, and the proxy gains encrypted credentials plus
 -- the SOCKS5 remote-DNS (`socks5h`) flag.

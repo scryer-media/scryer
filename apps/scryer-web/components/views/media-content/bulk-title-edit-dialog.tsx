@@ -46,6 +46,16 @@ type BulkTitleEditDialogProps = {
   rootFolders: LibraryRootRecord[];
   busy: boolean;
   onSubmit: (changes: TitleOptionUpdates) => Promise<void> | void;
+  /**
+   * Destination library shown beside the destination root (FR-010). Null when
+   * the selection spans libraries, which is the FR-017 disabled case.
+   */
+  destinationLibraryName?: string | null;
+  /**
+   * When set, the root control is a **destination** control: changing it opens
+   * the move workflow rather than staging a root rewrite (FR-011).
+   */
+  onRequestMove?: (rootFolderId: string) => void;
 };
 
 function initialDraftState(): TitleEditDraft {
@@ -61,6 +71,8 @@ export function BulkTitleEditDialog({
   rootFolders,
   busy,
   onSubmit,
+  destinationLibraryName,
+  onRequestMove,
 }: BulkTitleEditDialogProps) {
   const t = useTranslate();
   const initialDraft = React.useMemo(
@@ -178,15 +190,62 @@ export function BulkTitleEditDialog({
             </Select>
           </EditableField>
 
-          <EditableField label={t("title.rootFolder")}>
+          {/* FR-010: the destination library sits beside the destination root.
+              This control only ever names the selection's own library — the
+              destination library is chosen in the move workflow itself, which
+              is where a cross-library transfer is previewed (FR-017). */}
+          {onRequestMove ? (
+            <EditableField label={t("move.destinationLibrary")}>
+              <Select value="__current__" disabled>
+                <SelectTrigger
+                  id="bulk-title-edit-destination-library"
+                  aria-label={t("move.destinationLibrary")}
+                  className="h-9 w-full text-sm"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__current__">
+                    {destinationLibraryName?.trim() ||
+                      t("move.destinationMixedSourceLibraries")}
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                {destinationLibraryName
+                  ? t("move.destinationLibraryInMoveWorkflow")
+                  : t("move.destinationMixedSourceLibraries")}
+              </p>
+            </EditableField>
+          ) : null}
+
+          <EditableField
+            label={
+              onRequestMove ? t("move.destinationRoot") : t("title.rootFolder")
+            }
+          >
             <Select
               value={draft.rootFolderId}
-              onValueChange={(value) =>
-                setDraft((previous) => ({ ...previous, rootFolderId: value }))
-              }
-              disabled={busy}
+              onValueChange={(value) => {
+                if (onRequestMove) {
+                  // Changing the destination opens the move workflow; the bulk
+                  // save never rewrites roots in place (FR-011).
+                  if (value !== UNCHANGED_VALUE) {
+                    onRequestMove(value);
+                  }
+                  return;
+                }
+                setDraft((previous) => ({ ...previous, rootFolderId: value }));
+              }}
+              disabled={busy || (Boolean(onRequestMove) && sortedRootFolders.length === 0)}
             >
-              <SelectTrigger className="h-9 w-full font-[var(--font-code)] text-sm">
+              <SelectTrigger
+                id="bulk-title-edit-destination-root"
+                aria-label={
+                  onRequestMove ? t("move.destinationRoot") : t("title.rootFolder")
+                }
+                className="h-9 w-full font-[var(--font-code)] text-sm"
+              >
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -204,6 +263,11 @@ export function BulkTitleEditDialog({
                 ))}
               </SelectContent>
             </Select>
+            {onRequestMove ? (
+              <p className="text-xs text-muted-foreground">
+                {t("move.destinationRootHelp")}
+              </p>
+            ) : null}
           </EditableField>
 
           <EditableField label={t("search.addConfigMonitorType")}>

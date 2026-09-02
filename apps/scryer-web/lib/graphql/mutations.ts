@@ -1,6 +1,7 @@
 import {
   BACKUP_INFO_FIELDS,
   JOB_RUN_FIELDS,
+  LOCATION_OPERATION_FIELDS,
   MAINTENANCE_EXCLUSION_FIELDS,
   MAINTENANCE_RULE_SET_DETAIL_FIELDS,
   MAINTENANCE_RULE_SET_FIELDS,
@@ -1619,6 +1620,46 @@ export const fixTitleMatchMutation = `mutation FixTitleMatch($input: FixTitleMat
   }
 }`;
 
+// Folder-match correction. Ownership of a folder another title holds is never
+// taken silently: the caller must send SWAP or TAKE_OVER for that case.
+export const applyTitleFolderChangeMutation = `mutation ApplyTitleFolderChange($input: ApplyTitleFolderChangeInput!) {
+  applyTitleFolderChange(input: $input) {
+    outcome
+    title {
+      id
+      name
+      folderPath
+    }
+    previousFolderPath
+    detachedMediaFileCount
+    scan {
+      scanned
+      matched
+      imported
+      skipped
+      unmatched
+    }
+    swappedTitle {
+      id
+      name
+      folderPath
+    }
+    swappedTitleScan {
+      scanned
+      matched
+      imported
+      skipped
+      unmatched
+    }
+    displacedTitle {
+      id
+      name
+      previousFolderPath
+      repairReasonCode
+    }
+  }
+}`;
+
 export const setPrimaryMovieFileMutation = `mutation SetPrimaryMovieFile($input: SetPrimaryMovieFileInput!) {
   setPrimaryMovieFile(input: $input) {
     id
@@ -1972,6 +2013,12 @@ export const emptyRecycleBinMutation = `mutation EmptyRecycleBin($libraryIds: [I
 export const updateRecycleBinSettingsMutation = `mutation UpdateRecycleBinSettings($input: UpdateRecycleBinSettingsInput!) {
   updateRecycleBinSettings(input: $input) {
     enabled
+  }
+}`;
+
+export const updateVerificationSettingsMutation = `mutation UpdateVerificationSettings($input: UpdateVerificationSettingsInput!) {
+  updateVerificationSettings(input: $input) {
+    depth
   }
 }`;
 
@@ -2685,5 +2732,28 @@ export const setMinimumSeedersFloorMutation = `mutation SetMinimumSeedersFloor($
   setMinimumSeedersFloor(input: $input) {
     seedingProfileId
     minimumSeedersFloor
+  }
+}`;
+
+export const startLocationOperationMutation = `mutation StartLocationOperation($input: StartLocationOperationInput!) {
+  startLocationOperation(input: $input) {
+    planFingerprint
+    operation {${LOCATION_OPERATION_FIELDS}
+    }
+  }
+}`;
+
+export const cancelLocationOperationMutation = `mutation CancelLocationOperation($id: ID!) {
+  cancelLocationOperation(id: $id) {
+    id
+    cancelRequested
+  }
+}`;
+
+export const resumeLocationOperationMutation = `mutation ResumeLocationOperation($id: ID!) {
+  resumeLocationOperation(id: $id) {
+    id
+    resumed
+    detail
   }
 }`;

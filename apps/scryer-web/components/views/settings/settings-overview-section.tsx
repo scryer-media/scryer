@@ -17,12 +17,16 @@ import {
   mergeTrustedCertificateEntries,
   readTrustedCertificateEntriesFromFiles,
 } from "@/lib/utils/certificates";
-import { parseUiDateTimeFormat } from "@/lib/utils/settings-mutation-inputs";
+import {
+  parseUiDateTimeFormat,
+  parseVerificationDepth,
+} from "@/lib/utils/settings-mutation-inputs";
 import type {
   GeneralSettings,
   GeneralSettingsUpdate,
   TrustedCertificateEntry,
   UiDateTimeFormat,
+  VerificationDepth,
 } from "@/lib/types/settings";
 
 type SettingsOverviewSectionProps = {
@@ -41,6 +45,10 @@ type SettingsOverviewSectionProps = {
   imageCacheClearing: boolean;
   onClearImageCache: () => void;
   onGeneralSettingsCommit: (update: GeneralSettingsUpdate) => void;
+  verificationDepth: VerificationDepth;
+  verificationLoading: boolean;
+  verificationSaving: boolean;
+  onVerificationDepthChange: (depth: VerificationDepth) => void;
 };
 
 export function SettingsOverviewSection({
@@ -58,6 +66,10 @@ export function SettingsOverviewSection({
   imageCacheClearing,
   onClearImageCache,
   onGeneralSettingsCommit,
+  verificationDepth,
+  verificationLoading,
+  verificationSaving,
+  onVerificationDepthChange,
 }: SettingsOverviewSectionProps) {
   const t = useTranslate();
   const [advancedTrustOpen, setAdvancedTrustOpen] = React.useState(false);
@@ -295,6 +307,46 @@ export function SettingsOverviewSection({
 
           </>
         )}
+      </div>
+
+      <div
+        id="settings-general-verification-depth-section"
+        className="space-y-4 border-t border-border pt-6"
+      >
+        <div className="space-y-1">
+          <h3 className="text-sm font-semibold">{t("settings.verificationDepthTitle")}</h3>
+          <p className="text-muted-foreground">{t("settings.verificationDepthHelp")}</p>
+          <p className="text-muted-foreground">{t("settings.verificationDepthScope")}</p>
+        </div>
+        <SingleSelectField
+          id="settings-general-verification-depth"
+          label={t("settings.verificationDepthLabel")}
+          value={verificationDepth}
+          disabled={verificationLoading || verificationSaving}
+          onValueChange={(value) => {
+            const depth = parseVerificationDepth(value);
+            if (depth) {
+              onVerificationDepthChange(depth);
+            }
+          }}
+          placeholder={t("settings.verificationDepthLabel")}
+          description={
+            verificationDepth === "QUICK"
+              ? t("settings.verificationDepthQuickHelp")
+              : t("settings.verificationDepthFullHelp")
+          }
+          triggerClassName="w-72"
+          options={[
+            {
+              value: "FULL",
+              label: t("settings.verificationDepthFull"),
+            },
+            {
+              value: "QUICK",
+              label: t("settings.verificationDepthQuick"),
+            },
+          ]}
+        />
       </div>
 
       <div

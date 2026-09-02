@@ -584,12 +584,39 @@ async fn finalize_import_source_cleanup(
         return Ok(file_result.strategy);
     }
 
+    // FR-044, at the application-level gate as well as inside the copy. The
+    // importer already refuses to build a cleanup guard for a copy it could not
+    // prove, so this is belt-and-braces — but source removal is irreversible,
+    // and a guard that arrives next to a non-passing verification is a bug this
+    // must not act on.
+    if let Some(verification) = file_result.verification.as_ref()
+        && !verification.permits_source_removal()
+    {
+        return Err(AppError::Repository(format!(
+            "move import source cleanup blocked because the destination copy was not verified: {} ({})",
+            file_result.dest_path.display(),
+            verification.stamp(),
+        )));
+    }
+
     let guard = file_result.source_cleanup.clone().ok_or_else(|| {
         AppError::Repository(format!(
             "move import did not return a source cleanup guard for {}",
             file_result.source_path.display()
         ))
     })?;
+
+    if let Some(verification) = file_result.verification.as_ref() {
+        // FR-043: the applied depth is recorded wherever the import surface can
+        // carry it today. Activity stamping is a later package; the fact is
+        // already persisted on the media file (migration 0205).
+        tracing::info!(
+            dest_path = %file_result.dest_path.display(),
+            verification = %verification.stamp(),
+            bytes = verification.hashes.size_bytes,
+            "verified import copy before removing the source"
+        );
+    }
 
     let execution_context = crate::ImportFileExecutionContext::new(
         completed.map_or("", |item| item.client_id.as_str()),

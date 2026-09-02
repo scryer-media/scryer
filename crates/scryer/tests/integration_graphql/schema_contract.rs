@@ -581,19 +581,105 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // Media-server watch-signal sync adds no GraphQL surface of its own:
     // MEDIA_SERVER_SIGNAL_SYNC joins the existing job key enum, so every count
     // below is unchanged.
+    //
+    // ── The library-location feature line, merged in beside the maintenance
+    // line above. Its paragraphs below narrate that branch's own history, so
+    // their running totals are the location branch's totals; the asserted
+    // numbers at the bottom are the union of both branches over the shared
+    // base (query 134 + 9 maintenance + 7 location = 150; mutation 197 + 13 +
+    // 5 = 215; OBJECT 319 + 16 + 50 = 385; INPUT_OBJECT 173 + 10 + 10 = 193;
+    // ENUM 112 + 8 + 20 = 140; public types 616 + 34 + 80 = 730). ──
+    //
+    // Folder-match correction adds the changeTitleFolderPreview query root and
+    // the applyTitleFolderChange mutation root, four payload objects (preview,
+    // apply, title ref, displaced-title repair), two inputs, and three enums
+    // (ownership state, resolution, outcome): query +1, mutation +1, OBJECT +4,
+    // INPUT_OBJECT +2, ENUM +3, public types +9.
+    // The stated baseline had also drifted one feature behind before this change
+    // — an earlier query root, mutation root, payload object, input object, and
+    // enum landed without updating these numbers — so the totals below absorb
+    // that drift as well: query 134->136, mutation 197->199, OBJECT 319->324,
+    // INPUT_OBJECT 173->176, ENUM 112->116, public types 616->628.
+    // Root-move location operations add the locationOperationPreview and
+    // locationOperation query roots and the startLocationOperation /
+    // cancelLocationOperation / resumeLocationOperation mutation roots, with
+    // seventeen payload objects (preview, plan counts, per-kind count, plan
+    // section, plan item, selection classification, classification group,
+    // classified title, free-space estimate, verification statement, plan
+    // confirmation, operation, operation counters, title checkpoint, start,
+    // cancel, resume), three inputs (destination, preview, start), and seven
+    // enums (operation type, execution mode, operation state, title class, plan
+    // item kind, checkpoint state, confirmation requirement): query 136->138,
+    // mutation 199->202, OBJECT 324->341, INPUT_OBJECT 176->179, ENUM 116->123,
+    // public types 628->655. The LOCATION_OPERATION job key joins the existing
+    // JobKeyValue enum, so it adds no type.
+    // The dedup/rename asset listing (T090, FR-091, US8.1/US8.4) adds the
+    // locationOperationAssets query root and four payload objects (the listing,
+    // one title's assets, one renamed asset, one deduplicated asset): query
+    // 138->139, OBJECT 352->356, public types 673->677. The per-title state
+    // reuses the existing LocationTitleCheckpointStateValue, so ENUM is
+    // unchanged, and nothing is added to the operation payload itself: the
+    // per-file identities live in the stored plan, which a progress poll has no
+    // reason to load.
+    // The two root-scoped workflows (T064, US4 and US5, FR-020 to FR-029) add
+    // the locationRootChangePreview and locationRootConsolidationPreview query
+    // roots, thirteen payload objects (root-change preview, consolidation
+    // preview, title accounting, blocked title, root identity retention,
+    // content inventory, content bucket, content entry, sampled paths,
+    // retirement contract, retirement blocker, consolidation classification,
+    // default-root transfer), four inputs (the two preview inputs and the two
+    // start targets), and one enum for FR-027's three content classes:
+    // query 139->141, OBJECT 356->369, INPUT_OBJECT 179->183, ENUM 131->132,
+    // public types 678->696. No new mutation: both workflows confirm through
+    // the existing startLocationOperation, whose input gained the two
+    // root-scoped destination variants beside the selection it already carried.
     assert_eq!(
-        query_field_count, 143,
+        query_field_count, 150,
         "query fields: {query_field_names:?}"
     );
     assert_eq!(
-        mutation_field_count, 210,
+        mutation_field_count, 215,
         "mutation fields: {mutation_field_names:?}"
     );
+    // Cross-library transfer (T082, FR-055/FR-056) surfaces destination-title
+    // detection on the existing classified-title payload: five additive fields
+    // and one new enum for the match outcome (unique, none, ambiguous,
+    // same-name-without-identity), so ENUM 123->124 and public types 655->656.
+    // No new object, input, query, or mutation.
+    // Series↔anime facet conversion (T083, FR-057/FR-058) adds one field on the
+    // same classified-title payload plus the conversion payload, its per-setting
+    // payload, and the setting-disposition enum (becomes invalid, resets,
+    // changes meaning): OBJECT 341->343, ENUM 124->125, public types 656->659.
+    // The FR-060/FR-062 link and collection dispositions ride the existing plan
+    // items behind new reason codes, so they add no type.
+    // Merging into an existing destination title (T085, US7, FR-063 to FR-071)
+    // adds the FR-071 preview summary on the existing preview payload and the
+    // named candidates behind the ids-only ambiguous list. Nine payload objects
+    // (merge preview, blocked record, destination-wins entry, table
+    // disposition, role change, reserved-tag conflict, media-request repoint,
+    // dropped category, ambiguous candidate) and five enums (disposition,
+    // block reason, media role, role-change reason, post-merge work):
+    // OBJECT 343->352, ENUM 125->130, public types 659->673. No new query,
+    // mutation, or input: `merges` and `ambiguousDestinationCandidates` are
+    // additive fields on payloads that already exist.
+    // Retiring the direct root write (T093, FR-077/SC-009) deprecates the
+    // TitleOptionsInput.rootFolderId input field. Deprecated input fields drop
+    // out of default introspection the way deprecated output fields do, but
+    // this census counts types and root fields only, so every count below is
+    // unchanged.
+    // Reaching the "files are already there" adoption engine (T052, US3,
+    // FR-050 to FR-053) adds one enum, LocationExecutionModeInput, and an
+    // optional `mode` field on each of the two existing location inputs:
+    // ENUM 130->131, public types 677->678. The requestable enum is narrower
+    // than the reported LocationExecutionModeValue on purpose: CATALOG_ONLY is
+    // derived from a fileless selection (FR-076) and is never requestable.
+    // Query, mutation, subscription, OBJECT, and INPUT_OBJECT counts are
+    // unchanged: both fields join input objects that already exist.
     assert_eq!(subscription_field_count, 14);
-    assert_eq!(public_types.len(), 650);
-    assert_eq!(kind_count("OBJECT"), 335);
-    assert_eq!(kind_count("INPUT_OBJECT"), 183);
-    assert_eq!(kind_count("ENUM"), 120);
+    assert_eq!(public_types.len(), 730);
+    assert_eq!(kind_count("OBJECT"), 385);
+    assert_eq!(kind_count("INPUT_OBJECT"), 193);
+    assert_eq!(kind_count("ENUM"), 140);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
     assert!(query_field_names.contains(&"backupSettings"));
@@ -606,6 +692,52 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     assert!(query_field_names.contains(&"canCreateMyApiKeys"));
     assert!(query_field_names.contains(&"applicationUpgradeStatus"));
     assert!(query_field_names.contains(&"activeImportStreams"));
+    assert!(query_field_names.contains(&"changeTitleFolderPreview"));
+    assert!(mutation_field_names.contains(&"applyTitleFolderChange"));
+    assert!(public_type_names.contains(&"ChangeTitleFolderPreviewPayload"));
+    assert!(public_type_names.contains(&"ChangeTitleFolderPayload"));
+    assert!(public_type_names.contains(&"DisplacedTitleRepairPayload"));
+    assert!(query_field_names.contains(&"locationOperationPreview"));
+    assert!(query_field_names.contains(&"locationOperation"));
+    assert!(query_field_names.contains(&"locationOperationAssets"));
+    assert!(public_type_names.contains(&"LocationOperationAssetListingPayload"));
+    assert!(public_type_names.contains(&"LocationOperationTitleAssetsPayload"));
+    assert!(public_type_names.contains(&"LocationOperationRenamedAssetPayload"));
+    assert!(public_type_names.contains(&"LocationOperationDeduplicatedAssetPayload"));
+    assert!(mutation_field_names.contains(&"startLocationOperation"));
+    assert!(mutation_field_names.contains(&"cancelLocationOperation"));
+    assert!(mutation_field_names.contains(&"resumeLocationOperation"));
+    assert!(public_type_names.contains(&"LocationOperationPreviewPayload"));
+    assert!(public_type_names.contains(&"LocationOperationPayload"));
+    assert!(public_type_names.contains(&"LocationTitleCheckpointPayload"));
+    assert!(public_type_names.contains(&"StartLocationOperationInput"));
+    assert!(public_type_names.contains(&"TitleLocationClassValue"));
+    // US3: the requestable mode is its own enum, reachable from both location
+    // inputs, and distinct from the reported LocationExecutionModeValue.
+    assert!(public_type_names.contains(&"LocationExecutionModeInput"));
+    assert!(public_type_names.contains(&"LocationExecutionModeValue"));
+    // US4 and US5: FR-020's one settings action is two queries, because the two
+    // destinations are two different requests with two different payloads.
+    assert!(query_field_names.contains(&"locationRootChangePreview"));
+    assert!(query_field_names.contains(&"locationRootConsolidationPreview"));
+    assert!(public_type_names.contains(&"LocationRootChangePreviewPayload"));
+    assert!(public_type_names.contains(&"LocationRootConsolidationPreviewPayload"));
+    assert!(public_type_names.contains(&"LocationRootChangePreviewInput"));
+    assert!(public_type_names.contains(&"LocationRootConsolidationPreviewInput"));
+    assert!(public_type_names.contains(&"LocationRootChangeTargetInput"));
+    assert!(public_type_names.contains(&"LocationRootConsolidationTargetInput"));
+    assert!(public_type_names.contains(&"LocationTitleAccountingPayload"));
+    assert!(public_type_names.contains(&"LocationBlockedTitlePayload"));
+    assert!(public_type_names.contains(&"LocationRootIdentityRetentionPayload"));
+    assert!(public_type_names.contains(&"LocationRootContentInventoryPayload"));
+    assert!(public_type_names.contains(&"LocationRootContentBucketPayload"));
+    assert!(public_type_names.contains(&"LocationRootContentEntryPayload"));
+    assert!(public_type_names.contains(&"LocationRootContentClassValue"));
+    assert!(public_type_names.contains(&"LocationSampledPathsPayload"));
+    assert!(public_type_names.contains(&"LocationRootRetirementContractPayload"));
+    assert!(public_type_names.contains(&"LocationRootRetirementBlockerPayload"));
+    assert!(public_type_names.contains(&"LocationConsolidationClassificationPayload"));
+    assert!(public_type_names.contains(&"LocationDefaultRootTransferPayload"));
     assert!(mutation_field_names.contains(&"cancelActiveImport"));
     assert!(mutation_field_names.contains(&"startApplicationUpgrade"));
     assert!(mutation_field_names.contains(&"accountSecurityPasswordVerify"));
@@ -743,6 +875,78 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     assert!(!public_type_names.contains(&"ExternalImportLibrarySettingKey"));
     assert!(!public_type_names.contains(&"ExternalImportLibrarySettingConfidence"));
     assert!(!public_type_names.contains(&"ExternalImportLibrarySettingDisposition"));
+}
+
+/// US3/FR-076: a client may ask for a managed move or for adoption, and may not
+/// ask for the catalog-only fast path. That is a schema-level guarantee, not a
+/// resolver check, so it is asserted against the published input enum.
+#[tokio::test]
+async fn graphql_introspection_location_mode_is_requestable_but_never_catalog_only() {
+    let ctx = TestContext::new().await;
+    let body = gql(
+        &ctx,
+        r#"
+        {
+          modeInput: __type(name: "LocationExecutionModeInput") {
+            kind
+            enumValues { name }
+          }
+          modeValue: __type(name: "LocationExecutionModeValue") {
+            enumValues { name }
+          }
+          previewInput: __type(name: "LocationOperationPreviewInput") {
+            inputFields { name type { kind name ofType { kind name } } }
+          }
+          startInput: __type(name: "StartLocationOperationInput") {
+            inputFields { name type { kind name ofType { kind name } } }
+          }
+        }
+        "#,
+        json!({}),
+    )
+    .await;
+    assert_no_errors(&body);
+
+    assert_eq!(body["data"]["modeInput"]["kind"], "ENUM");
+    let requestable = body["data"]["modeInput"]["enumValues"]
+        .as_array()
+        .expect("LocationExecutionModeInput should expose enumValues")
+        .iter()
+        .map(|value| value["name"].as_str().expect("enum value name"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        requestable,
+        vec!["MOVE_WITH_SCRYER", "FILES_ALREADY_THERE"],
+        "only the two modes a caller may ask for: {body}"
+    );
+
+    // The reported enum keeps the derived value the input enum refuses.
+    let reported = body["data"]["modeValue"]["enumValues"]
+        .as_array()
+        .expect("LocationExecutionModeValue should expose enumValues")
+        .iter()
+        .map(|value| value["name"].as_str().expect("enum value name"))
+        .collect::<Vec<_>>();
+    assert!(
+        reported.contains(&"CATALOG_ONLY"),
+        "the fileless fast path is still reported: {body}"
+    );
+
+    // Optional on both inputs: an existing client that never sends the field
+    // keeps asking for the managed move it always asked for.
+    for input_alias in ["previewInput", "startInput"] {
+        let mode = body["data"][input_alias]["inputFields"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{input_alias} should expose inputFields"))
+            .iter()
+            .find(|field| field["name"] == "mode")
+            .unwrap_or_else(|| panic!("{input_alias}.mode should exist: {body}"));
+        assert_eq!(mode["type"]["kind"], "ENUM", "{input_alias}.mode");
+        assert_eq!(
+            mode["type"]["name"], "LocationExecutionModeInput",
+            "{input_alias}.mode"
+        );
+    }
 }
 
 #[tokio::test]

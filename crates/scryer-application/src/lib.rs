@@ -62,6 +62,7 @@ mod library_scan_progress;
 mod library_scan_titles;
 #[path = "library/scan/unmatched.rs"]
 mod library_scan_unmatched;
+pub mod location;
 pub mod maintenance_rules;
 mod media;
 mod media_requests;
@@ -432,6 +433,7 @@ pub use library_scan_progress::{
     LibraryScanMode, LibraryScanPhaseProgress, LibraryScanSession, LibraryScanStatus,
     LibraryScanTracker,
 };
+pub use location::model::VerificationDepth;
 pub use media::analyzer::NativeMediaAnalyzer;
 pub use notifications::dispatcher::start_notification_dispatcher;
 pub use null_repositories::NullIndexerErrorRepository;
@@ -443,8 +445,9 @@ pub use null_repositories::{
     NullImportArtifactRepository, NullImportRepository, NullIndexerProxyConfigRepository,
     NullIndexerSearchLearningRepository, NullIndexerStatsTracker, NullJobRunRepository,
     NullLibraryProbeRepository, NullLibraryRepository, NullLibraryScanUnmatchedItemRepository,
-    NullLogicalBackupExporter, NullMaintenanceEvaluationRepository,
-    NullMaintenanceRuleSetRepository, NullMediaFileRepository, NullMediaRequestRepository,
+    NullLocationOperationRepository, NullLogicalBackupExporter,
+    NullMaintenanceEvaluationRepository, NullMaintenanceRuleSetRepository,
+    NullMediaFileRepository, NullMediaRequestRepository,
     NullMediaServerConnectionRepository, NullNotificationChannelRepository,
     NullNotificationSubscriptionRepository, NullOAuthRepository, NullPendingReleaseRepository,
     NullPluginDescriptorLoader, NullPluginHttpTrustConfigRuntime, NullPluginInstallationRepository,
@@ -480,10 +483,12 @@ pub use ports::{
     IndexerSearchLearningKey, IndexerSearchLearningRecord, IndexerSearchLearningRepository,
     IndexerSearchRunWrite, IndexerStatsTracker, IndexerSystemBackoff, JellyfinServerUser,
     JobRunRepository, LibraryProbeRepository, LibraryRepository,
-    LibraryScanUnmatchedItemRepository, LifecycleActionRunRepository, LogicalBackupExporter,
-    MaintenanceCandidateQuery, MaintenanceCandidateRepository, MaintenanceEvaluationRepository,
-    MaintenanceEvaluationRunRepository, MaintenanceExclusionRepository,
-    MaintenanceRuleSetRepository, MediaAnalyzer, MediaFileRepository, MediaRequestQuery,
+    LibraryScanUnmatchedItemRepository, LifecycleActionRunRepository, LocationOperationProgress,
+    LocationOperationRepository, LocationOwnershipClaim, LocationOwnershipOutcome,
+    LogicalBackupExporter, MaintenanceCandidateQuery, MaintenanceCandidateRepository,
+    MaintenanceEvaluationRepository, MaintenanceEvaluationRunRepository,
+    MaintenanceExclusionRepository, MaintenanceRuleSetRepository, MediaAnalyzer,
+    MediaFileHashCandidate, MediaFileRepository, MediaRequestQuery,
     MediaRequestRepository, MediaServerConnectionRepository, MediaServerUser, MediaServerUserGroup,
     MediaServerUserGroupStatus, NOTIFICATION_REQUEST_SCHEMA_VERSION, NewMediaRequest,
     NormalizedIndexerSearchCandidate, NotificationActorPayload, NotificationAppPayload,
@@ -583,7 +588,7 @@ pub use settings::keys::{
     SKIP_LOGIN_FOR_LOCAL_IPS_KEY, SPECIALS_FOLDER_TEMPLATE_KEY,
     TITLE_METADATA_LANGUAGE_OVERRIDE_KEY, TITLE_REQUIRED_AUDIO_OVERRIDE_KEY, TLS_CERT_PATH_KEY,
     TLS_KEY_PATH_KEY, TOTP_REQUIRE_EMBY_LOGIN_KEY, TOTP_REQUIRE_JELLYFIN_LOGIN_KEY,
-    USE_SEASON_FOLDERS_KEY,
+    USE_SEASON_FOLDERS_KEY, VERIFICATION_DEPTH_KEY,
 };
 pub use settings::runtime::is_bootstrap_default_library_root_set;
 pub(crate) use types::JwtClaims;
@@ -630,9 +635,10 @@ pub use types::{
     TotpEnrollmentComplete, TotpEnrollmentStart, TotpFailedAttemptRecord, TotpRecoveryCodeRecord,
     TotpStatus, UiDateTimeFormat, UiDefaultLandingView, UiDensity, UiSettings, UiSettingsFacet,
     UiSettingsUpdate, UiSidebarMode, UiTableColumnSetting, UiTableViewMode, UiTheme,
-    UpdateRecycleBinSettings, UserAuthFactorStatus, UserLoginSnapshot, VerifiedLocalCredentials,
-    WantedKind, WantedStatusCount, WebauthnChallengePurpose, WebauthnChallengeRecord,
-    WebauthnChallengeStart, WebauthnChallengeType, WebauthnCredentialRecord,
+    UpdateRecycleBinSettings, UpdateVerificationSettings, UserAuthFactorStatus, UserLoginSnapshot,
+    VerificationSettings, VerifiedLocalCredentials, WantedKind, WantedStatusCount,
+    WebauthnChallengePurpose, WebauthnChallengeRecord, WebauthnChallengeStart,
+    WebauthnChallengeType, WebauthnCredentialRecord,
 };
 pub use types::{
     CapturedIndexerHttpHeader, CapturedIndexerHttpResponse, INDEXER_CAPS_REFRESH_ERROR_PREFIX,
@@ -673,6 +679,40 @@ pub enum AppError {
 
     #[error("validation: {0}")]
     Validation(String),
+
+    /// A previewed location plan was refused at confirmation time. A validation
+    /// error in every other respect, but the refusal carries the reason as a
+    /// code so the client can re-preview or unblock without reading prose
+    /// (FR-016, FR-081).
+    #[error("validation: {message}")]
+    LocationPlanRefused {
+        message: String,
+        code: crate::location::preview::PlanConfirmationError,
+    },
+
+    /// A root-scoped workflow (US4 change root, US5 consolidate root) refused
+    /// its request before any plan was built: the destination is not admissible,
+    /// the source root cannot be read, the two paths overlap, or the request
+    /// belongs to the *other* half of FR-020's one control.
+    ///
+    /// The code is application vocabulary (`root_change::refusal_codes`,
+    /// `consolidation::refusal_codes`) and travels typed rather than as a
+    /// bracketed suffix on a sentence, so the API promotes it to
+    /// `extensions.refusalCode` without parsing prose and the web client can
+    /// cross-route FR-020's two halves on it.
+    #[error("validation: {message}")]
+    LocationRootRefused {
+        message: String,
+        code: &'static str,
+    },
+
+    /// A direct `rootFolderId` write on a title that already has tracked files.
+    /// Retired by FR-077: relocating a title with content on disk is the move
+    /// workflow's job, so the refusal carries its own code and the title it
+    /// refused for, and a client routes to the preview without parsing prose
+    /// (FR-077, SC-009).
+    #[error("validation: {message}")]
+    DirectRootWriteRetired { message: String, title_id: String },
 
     #[error("no auto-eligible release found")]
     NoAutoEligibleRelease {
@@ -784,6 +824,20 @@ pub enum AppError {
 impl AppError {
     pub fn canceled(message: impl Into<String>) -> Self {
         Self::Canceled(message.into())
+    }
+
+    /// The FR-077 refusal, worded once so every path that retires a direct root
+    /// write says the same thing: the options update path and the reused-title
+    /// branch of the creation path (SC-009).
+    pub fn direct_root_write_retired(title_name: &str, title_id: &str) -> Self {
+        Self::DirectRootWriteRetired {
+            message: format!(
+                "changing rootFolderId directly is retired for titles with tracked files: \
+                 '{title_name}' already has files on disk, so preview the change with \
+                 locationOperationPreview and run it with startLocationOperation"
+            ),
+            title_id: title_id.to_string(),
+        }
     }
 
     pub fn download_submit_unavailable(message: impl Into<String>) -> Self {

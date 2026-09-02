@@ -15,11 +15,13 @@ use scryer_application::{
     UpdateRecycleBinSettings as AppUpdateRecycleBinSettings,
     UpdateSecuritySettings as AppUpdateSecuritySettings,
     UpdateSubtitleSettings as AppUpdateSubtitleSettings,
+    UpdateVerificationSettings as AppUpdateVerificationSettings,
 };
 
 use super::{
     from_api_key, from_oauth_client_registration, from_plugin_auto_update_settings,
-    from_ui_settings, ui_settings_update_from_input,
+    from_ui_settings, from_verification_settings, to_verification_depth,
+    ui_settings_update_from_input,
 };
 use scryer_interface_core::{
     AuthlessDefaultSession, LoginAttemptPrincipal, LoginErrorClassification,
@@ -938,6 +940,30 @@ impl SettingsMutations {
             .map_err(to_gql_error)?;
 
         Ok(from_recycle_bin_settings(settings))
+    }
+
+    /// Saves the verification depth applied to download-client completed-download copies, after checking the system-settings permission. Location operations always verify in full and ignore it.
+    async fn update_verification_settings(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Verification depth to save.")] input: UpdateVerificationSettingsInput,
+    ) -> GqlResult<VerificationSettingsPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor =
+            require_config_app_permission(ctx, scryer_domain::AppPermission::ManageSystemSettings)
+                .await?;
+
+        let settings = app
+            .update_verification_settings(
+                &actor,
+                AppUpdateVerificationSettings {
+                    depth: to_verification_depth(input.depth),
+                },
+            )
+            .await
+            .map_err(to_gql_error)?;
+
+        Ok(from_verification_settings(settings))
     }
 
     /// Saves the automatic official-plugin patch update setting after checking the system-settings permission.

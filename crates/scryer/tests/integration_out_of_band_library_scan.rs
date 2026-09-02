@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use common::TestContext;
 use scryer_application::{
-    InsertMediaFileInput, LibraryRootDraft, LibraryScanUnmatchedItem,
+    InsertMediaFileInput, LibraryRepository, LibraryRootDraft, LibraryScanUnmatchedItem,
     LibraryScanUnmatchedItemRepository, MediaFileRepository, MediaFileRole, PendingImportStatus,
     ShowRepository, TitleRepository,
 };
@@ -148,15 +148,33 @@ async fn set_default_library_root(ctx: &TestContext, facet: MediaFacet, root: &P
         .expect("update default library root");
 }
 
+/// Root ids are allocated, never derived from a path (FR-078), so a fixture that
+/// wants a title attached to the configured root has to read the stored id.
+async fn default_library_root_id(ctx: &TestContext, facet: &MediaFacet) -> String {
+    let library_id = scryer_domain::default_library_id_for_facet(facet);
+    let library = LibraryRepository::get_by_id(&ctx.libraries, &library_id)
+        .await
+        .expect("default library should load")
+        .expect("default library should exist");
+    library
+        .roots
+        .iter()
+        .find(|root| root.is_default)
+        .or_else(|| library.roots.first())
+        .map(|root| root.id.clone())
+        .expect("default library should have a root")
+}
+
 async fn seed_series_title(
     ctx: &TestContext,
     id: &str,
     name: &str,
     facet: MediaFacet,
-    media_root: &Path,
+    _media_root: &Path,
     folder_path: Option<&Path>,
     tvdb_id: Option<&str>,
 ) -> Title {
+    let root_folder_id = default_library_root_id(ctx, &facet).await;
     let title = Title {
         id: id.to_string(),
         name: name.to_string(),
@@ -173,9 +191,7 @@ async fn seed_series_title(
                 }]
             })
             .unwrap_or_default(),
-        root_folder_id: scryer_domain::root_folder_id_for_path(
-            media_root.to_string_lossy().as_ref(),
-        ),
+        root_folder_id,
         created_by: None,
         created_at: chrono::Utc::now(),
         year: Some(2024),

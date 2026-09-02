@@ -353,6 +353,7 @@ impl IntoApplication<AppJobKey> for JobKeyValue {
             Self::ProwlarrSync => AppJobKey::ProwlarrSync,
             Self::PendingReleaseProcessing => AppJobKey::PendingReleaseProcessing,
             Self::StagedNzbPrune => AppJobKey::StagedNzbPrune,
+            Self::FullHashBackfill => AppJobKey::FullHashBackfill,
             Self::DiscoverySync => AppJobKey::DiscoverySync,
             Self::TitleImageCacheRefresh => AppJobKey::TitleImageCacheRefresh,
             Self::MaintenanceRuleEvaluation => AppJobKey::MaintenanceRuleEvaluation,
@@ -365,6 +366,7 @@ impl IntoApplication<AppJobKey> for JobKeyValue {
             Self::RecycleBinPurge => AppJobKey::RecycleBinPurge,
             Self::AcquisitionSearch => AppJobKey::AcquisitionSearch,
             Self::ApplicationUpgrade => AppJobKey::ApplicationUpgrade,
+            Self::LocationOperation => AppJobKey::LocationOperation,
         }
     }
 }
@@ -387,6 +389,7 @@ impl FromApplication<AppJobKey> for JobKeyValue {
             AppJobKey::ProwlarrSync => Self::ProwlarrSync,
             AppJobKey::PendingReleaseProcessing => Self::PendingReleaseProcessing,
             AppJobKey::StagedNzbPrune => Self::StagedNzbPrune,
+            AppJobKey::FullHashBackfill => Self::FullHashBackfill,
             AppJobKey::DiscoverySync => Self::DiscoverySync,
             AppJobKey::TitleImageCacheRefresh => Self::TitleImageCacheRefresh,
             AppJobKey::MaintenanceRuleEvaluation => Self::MaintenanceRuleEvaluation,
@@ -399,6 +402,7 @@ impl FromApplication<AppJobKey> for JobKeyValue {
             AppJobKey::RecycleBinPurge => Self::RecycleBinPurge,
             AppJobKey::AcquisitionSearch => Self::AcquisitionSearch,
             AppJobKey::ApplicationUpgrade => Self::ApplicationUpgrade,
+            AppJobKey::LocationOperation => Self::LocationOperation,
         }
     }
 }

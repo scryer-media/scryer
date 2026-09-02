@@ -141,6 +141,21 @@ impl AppServicesBuilder {
         integrations.indexer_errors,
         Arc<dyn IndexerErrorRepository>
     );
+    // Optional: an unconfigured location store answers "nothing is owned", so
+    // the ownership guard stays correct before the subsystem is wired up.
+    app_services_builder_setter!(
+        with_location_operation_repository,
+        library.location_operations,
+        Arc<dyn crate::ports::LocationOperationRepository>
+    );
+    // Optional in the same sense, but with the opposite default: an
+    // unconfigured merge store refuses every merge rather than answering with
+    // an empty snapshot the engine would happily plan against (US7, FR-066).
+    app_services_builder_setter!(
+        with_title_merge_repository,
+        library.title_merges,
+        Arc<dyn crate::location::merge::engine::TitleMergeRepository>
+    );
     app_services_builder_runtime_feature_setter!(
         with_plugin_http_trust_runtime,
         config.plugin_http_trust_runtime,

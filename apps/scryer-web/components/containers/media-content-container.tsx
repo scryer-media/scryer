@@ -157,6 +157,7 @@ import { titleMatchesOptionUpdates } from "@/lib/utils/title-edit-dialog";
 import { isTerminalJobRunStatus, normalizeJobRun } from "@/lib/utils/job-runs";
 import { toast } from "sonner";
 import { BulkTitleEditDialog } from "@/components/views/media-content/bulk-title-edit-dialog";
+import { MoveTitlesDialog } from "@/components/dialogs/move-titles-dialog";
 import {
   readStoredContentViewMode,
   writeStoredContentViewMode,
@@ -1639,6 +1640,39 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         ?.roots ?? []
     );
   }, [editDialogTitleLibraryIds, libraries]);
+  // Bulk move workflow (FR-010–FR-011): picking a destination root in the bulk
+  // edit dialog opens the preview instead of staging a root rewrite.
+  const [bulkMoveRootId, setBulkMoveRootId] = React.useState<string | null>(null);
+  const editDialogLibraryName = React.useMemo(() => {
+    if (editDialogTitleLibraryIds.length !== 1) {
+      return null;
+    }
+    return (
+      libraries.find((library) => library.id === editDialogTitleLibraryIds[0])
+        ?.name ?? null
+    );
+  }, [editDialogTitleLibraryIds, libraries]);
+  const bulkMoveLibraries = React.useMemo(
+    () =>
+      libraries.map((library) => ({
+        id: library.id,
+        name: library.name,
+        roots: library.roots,
+      })),
+    [libraries],
+  );
+  const bulkMoveTitles = React.useMemo(
+    () =>
+      editDialogTitles.map((title) => ({
+        id: title.id,
+        name: title.name,
+        libraryId: title.libraryId,
+        libraryName: title.libraryName ?? null,
+        rootFolderId: title.rootFolderId ?? null,
+        rootFolderPath: title.rootFolderPath ?? null,
+      })),
+    [editDialogTitles],
+  );
 
   useOverviewWindowScrollRestoration({
     enabled: shouldLoadCatalogTitles && effectiveViewMode === "poster",
@@ -5479,6 +5513,22 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         rootFolders={editDialogRootFolders}
         busy={bulkActionBusy}
         onSubmit={applyBulkTitleOptions}
+        destinationLibraryName={editDialogLibraryName}
+        onRequestMove={(rootFolderId) => {
+          setBulkEditDialogOpen(false);
+          setBulkMoveRootId(rootFolderId);
+        }}
+      />
+      <MoveTitlesDialog
+        open={bulkMoveRootId !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setBulkMoveRootId(null);
+          }
+        }}
+        titles={bulkMoveTitles}
+        libraries={bulkMoveLibraries}
+        initialRootId={bulkMoveRootId}
       />
       <ConfirmDialog
         open={bulkDeleteDialogOpen}

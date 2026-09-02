@@ -421,6 +421,20 @@ async fn seed_title_for_library(
     library_id: &str,
     root_path: &Path,
 ) -> Title {
+    // Root ids are allocated, not derived from the path (FR-078), so the fixture
+    // has to read the id the library actually stored for `root_path`.
+    let normalized_root = scryer_domain::normalize_library_root_path(
+        root_path.to_string_lossy().as_ref(),
+    );
+    let root_folder_id = scryer_application::LibraryRepository::get_by_id(&ctx.libraries, library_id)
+        .await
+        .expect("library should load")
+        .expect("library should exist")
+        .roots
+        .iter()
+        .find(|root| scryer_domain::normalize_library_root_path(&root.path) == normalized_root)
+        .map(|root| root.id.clone())
+        .expect("library should have a root at the seeded path");
     let title = Title {
         id: id.to_string(),
         name: name.to_string(),
@@ -456,9 +470,7 @@ async fn seed_title_for_library(
         metadata_fetched_at: None,
         min_availability: None,
         digital_release_date: None,
-        root_folder_id: scryer_domain::root_folder_id_for_path(
-            root_path.to_string_lossy().as_ref(),
-        ),
+        root_folder_id,
         folder_path: None,
     };
     ctx.titles.create(title.clone()).await.expect("seed title");
@@ -1641,9 +1653,12 @@ async fn housekeeping_reconciles_same_path_guard_before_db_swap() {
         metadata_fetched_at: None,
         min_availability: None,
         digital_release_date: None,
-        root_folder_id: scryer_domain::root_folder_id_for_path(
-            media_dir.path().to_string_lossy().as_ref(),
-        ),
+        // Root ids are allocated, not derived from the path, so take the library's own.
+        root_folder_id: library
+            .roots
+            .first()
+            .map(|root| root.id.clone())
+            .expect("created library should expose its root"),
         folder_path: None,
     };
     ctx.titles.create(title.clone()).await.expect("seed title");
@@ -1786,9 +1801,12 @@ async fn housekeeping_old_moved_recovery_removes_staged_replacement_file() {
         metadata_fetched_at: None,
         min_availability: None,
         digital_release_date: None,
-        root_folder_id: scryer_domain::root_folder_id_for_path(
-            media_dir.path().to_string_lossy().as_ref(),
-        ),
+        // Root ids are allocated, not derived from the path, so take the library's own.
+        root_folder_id: library
+            .roots
+            .first()
+            .map(|root| root.id.clone())
+            .expect("created library should expose its root"),
         folder_path: None,
     };
     ctx.titles.create(title.clone()).await.expect("seed title");
@@ -1938,9 +1956,12 @@ async fn housekeeping_skips_recent_same_path_guard() {
         metadata_fetched_at: None,
         min_availability: None,
         digital_release_date: None,
-        root_folder_id: scryer_domain::root_folder_id_for_path(
-            media_dir.path().to_string_lossy().as_ref(),
-        ),
+        // Root ids are allocated, not derived from the path, so take the library's own.
+        root_folder_id: library
+            .roots
+            .first()
+            .map(|root| root.id.clone())
+            .expect("created library should expose its root"),
         folder_path: None,
     };
     ctx.titles.create(title.clone()).await.expect("seed title");
@@ -2076,9 +2097,12 @@ async fn housekeeping_disposes_db_swapped_guard_with_encoded_media_root() {
         metadata_fetched_at: None,
         min_availability: None,
         digital_release_date: None,
-        root_folder_id: scryer_domain::root_folder_id_for_path(
-            media_dir.path().to_string_lossy().as_ref(),
-        ),
+        // Root ids are allocated, not derived from the path, so take the library's own.
+        root_folder_id: library
+            .roots
+            .first()
+            .map(|root| root.id.clone())
+            .expect("created library should expose its root"),
         folder_path: None,
     };
     ctx.titles.create(title.clone()).await.expect("seed title");
