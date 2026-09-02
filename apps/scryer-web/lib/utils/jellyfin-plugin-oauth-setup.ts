@@ -138,3 +138,21 @@ export function canCreateJellyfinPluginClient(
 ): boolean {
   return !busy && status !== "ambiguous" && status !== "reconciling";
 }
+
+export function jellyfinPluginClientStatus(
+  matchingClientCount: number,
+  createdClientMatchesCallback: boolean,
+  uncertainCreateMatchesCallback: boolean,
+): "ambiguous" | "ready" | "reconciling" | "not-configured" {
+  if (matchingClientCount > 1) return "ambiguous";
+  if (matchingClientCount === 1) return "ready";
+  return createdClientMatchesCallback || uncertainCreateMatchesCallback
+    ? "reconciling"
+    : "not-configured";
+}
+
+export function jellyfinPluginCreateNeedsReconciliation(
+  registration: { clientId: string } | null | undefined,
+): registration is null | undefined {
+  return !registration;
+}

@@ -7,7 +7,9 @@ import {
   canStartJellyfinPluginClientCreation,
   createdJellyfinPluginClientForCallback,
   jellyfinPluginCallbackUrl,
+  jellyfinPluginClientStatus,
   jellyfinPluginClientCreateDecision,
+  jellyfinPluginCreateNeedsReconciliation,
   normalizedPublicJellyfinBaseUrl,
   prefillJellyfinPublicBaseUrl,
   reconcileCreatedJellyfinPluginClient,
@@ -146,4 +148,15 @@ test("an unreconciled client blocks duplicate creation without blocking list rec
   assert.equal(canCreateJellyfinPluginClient(false, "reconciling"), false);
   assert.equal(canCreateJellyfinPluginClient(false, "ambiguous"), false);
   assert.equal(canCreateJellyfinPluginClient(true, "not-configured"), false);
+});
+
+test("an uncertain create outcome stays reconciling until the client list resolves it", () => {
+  assert.equal(jellyfinPluginCreateNeedsReconciliation(undefined), true);
+  assert.equal(jellyfinPluginCreateNeedsReconciliation(null), true);
+  assert.equal(jellyfinPluginCreateNeedsReconciliation({ clientId: "created" }), false);
+  assert.equal(jellyfinPluginClientStatus(0, false, true), "reconciling");
+  assert.equal(canCreateJellyfinPluginClient(false, "reconciling"), false);
+  assert.equal(jellyfinPluginClientStatus(1, false, true), "ready");
+  assert.equal(jellyfinPluginClientStatus(2, false, true), "ambiguous");
+  assert.equal(jellyfinPluginClientStatus(0, false, false), "not-configured");
 });

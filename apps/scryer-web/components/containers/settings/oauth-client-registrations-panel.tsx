@@ -24,7 +24,9 @@ import {
   createdJellyfinPluginClientForCallback,
   isEligibleJellyfinPluginClient,
   jellyfinPluginCallbackUrl,
+  jellyfinPluginClientStatus,
   jellyfinPluginClientCreateDecision,
+  jellyfinPluginCreateNeedsReconciliation,
   normalizedPublicJellyfinBaseUrl,
   prefillJellyfinPublicBaseUrl,
   reconcileCreatedJellyfinPluginClient,
@@ -85,6 +87,7 @@ export function OAuthClientRegistrationsPanel() {
     clientId: string;
     callbackUrl: string;
   } | null>(null);
+  const [uncertainJellyfinCallbackUrl, setUncertainJellyfinCallbackUrl] = React.useState<string | null>(null);
   const reloadGenerationRef = React.useRef(0);
   const jellyfinCreateKeyRef = React.useRef<string | null>(null);
   const [jellyfinConnections, setJellyfinConnections] = React.useState<
@@ -118,6 +121,7 @@ export function OAuthClientRegistrationsPanel() {
       )) return;
       const nextClients = result.data?.oauthClientRegistrations ?? [];
       setClients(nextClients);
+      setUncertainJellyfinCallbackUrl(null);
       setJellyfinConnections(
         jellyfinResult.error ? null : (jellyfinResult.data?.mediaServerConnections ?? []),
       );
@@ -264,20 +268,29 @@ export function OAuthClientRegistrationsPanel() {
           input: { displayName: JELLYFIN_PLUGIN_DISPLAY_NAME, redirectUris: [callbackUrl] },
         })
         .toPromise();
-      if (result.error || !result.data?.createOAuthClientRegistration) {
-        throw result.error ?? new Error("Jellyfin OAuth client was not created.");
+      const registration = result.data?.createOAuthClientRegistration;
+      if (jellyfinPluginCreateNeedsReconciliation(registration)) {
+        setUncertainJellyfinCallbackUrl(callbackUrl);
+        toast.error("The create result is uncertain. Reloading OAuth applications before another create is allowed.");
+        await reload();
+        return;
       }
       const createdClient = {
-        clientId: result.data.createOAuthClientRegistration.clientId,
+        clientId: registration.clientId,
         callbackUrl,
       };
       setCreatedJellyfinClient(createdClient);
       toast.success("Jellyfin plugin OAuth client created.");
       await reload(createdClient);
     } catch (error) {
+      setUncertainJellyfinCallbackUrl(callbackUrl);
       toast.error(
-        userFacingGraphQlErrorMessage(error, "Unable to create the Jellyfin plugin OAuth client."),
+        userFacingGraphQlErrorMessage(
+          error,
+          "The create result is uncertain. Reload OAuth applications before trying again.",
+        ),
       );
+      await reload();
     } finally {
       if (jellyfinCreateKeyRef.current === callbackUrl) jellyfinCreateKeyRef.current = null;
       setBusy(false);
@@ -325,18 +338,19 @@ export function OAuthClientRegistrationsPanel() {
   const createdClientMatchesCallback = createdJellyfinClient && callbackPreview
     ? createdJellyfinClient.callbackUrl === `${callbackPreview}/Scryer/Auth/Callback`
     : false;
+  const uncertainCreateMatchesCallback = uncertainJellyfinCallbackUrl && callbackPreview
+    ? uncertainJellyfinCallbackUrl === `${callbackPreview}/Scryer/Auth/Callback`
+    : false;
   const jellyfinPluginClient = matchingJellyfinClients.length === 1
     ? { clientId: matchingJellyfinClients[0].clientId, callbackUrl: `${callbackPreview}/Scryer/Auth/Callback` }
     : matchingJellyfinClients.length === 0 && createdClientMatchesCallback
       ? createdJellyfinClient
       : null;
-  const jellyfinClientStatus = matchingJellyfinClients.length > 1
-    ? "ambiguous"
-    : matchingJellyfinClients.length === 1
-      ? "ready"
-      : createdClientMatchesCallback
-        ? "reconciling"
-        : "not-configured";
+  const jellyfinClientStatus = jellyfinPluginClientStatus(
+    matchingJellyfinClients.length,
+    Boolean(createdClientMatchesCallback),
+    Boolean(uncertainCreateMatchesCallback),
+  );
   const linkingStatus = automaticLinkingStatus(callbackPreview, jellyfinConnections);
 
   return (
@@ -443,6 +457,17 @@ export function OAuthClientRegistrationsPanel() {
                 </Button>
               ) : null}
             </div>
+          ) : null}
+          {jellyfinClientStatus === "reconciling" && !jellyfinPluginClient ? (
+            <Button
+              type="button"
+              variant="outline"
+              disabled={loading}
+              onClick={() => void reload()}
+            >
+              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              Retry client list
+            </Button>
           ) : null}
         </section>
         {managedClients.length > 0 ? (
