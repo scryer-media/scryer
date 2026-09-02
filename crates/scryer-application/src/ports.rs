@@ -1634,6 +1634,7 @@ pub struct NewMediaRequest {
     pub runtime_minutes: Option<i32>,
     pub language: Option<String>,
     pub content_status: Option<String>,
+    pub rating_summary: TitleRatingSummary,
     pub requested_quality_profile_id: Option<String>,
     pub requested_quality_profile_name: Option<String>,
     pub requested_monitor_type: Option<String>,

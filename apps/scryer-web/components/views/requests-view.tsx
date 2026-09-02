@@ -25,6 +25,7 @@ import {
   TvdbMovieExternalLink,
   TvdbSeriesExternalLink,
 } from "@/components/common/external-media-links";
+import { TitleRatingsDisplay } from "@/components/common/title-ratings-display";
 import { LibraryMultiSelect } from "@/components/common/library-multi-select";
 import { UnderlineFilterButton } from "@/components/common/underline-filter-button";
 import { TitlePoster } from "@/components/title-poster";
@@ -58,6 +59,7 @@ import {
   mediaRequestStatusId,
 } from "@/lib/utils/dom-ids";
 import { selectPosterVariantUrl } from "@/lib/utils/poster-images";
+import { normalizeTitleExternalRating } from "@/lib/utils/title-ratings";
 import { cn } from "@/lib/utils";
 
 type QualityProfileOption = {
@@ -488,6 +490,7 @@ export function RequestsView({
     const malId = requestExternalIdValue(request, "mal");
     const anilistId = requestExternalIdValue(request, "anilist");
     const anidbId = requestExternalIdValue(request, "anidb");
+    const externalRatings = request.externalRatings.map(normalizeTitleExternalRating);
     const hasExternalLink =
       Boolean(imdbId) ||
       Boolean(tvdbId) ||
@@ -645,11 +648,14 @@ export function RequestsView({
                 ) : null}
               </div>
             </div>
-            {request.overview ? (
-              <p className="line-clamp-4 max-w-[80ch] text-sm leading-6 text-[var(--scry-muted2)]">
-                {request.overview}
-              </p>
-            ) : null}
+            <p className="line-clamp-4 max-w-[80ch] text-sm leading-6 text-[var(--scry-muted2)]">
+              {request.overview || t("title.descriptionUnavailable")}
+            </p>
+            <TitleRatingsDisplay
+              externalRatings={externalRatings}
+              fallbackRating={request.rating ?? null}
+              fallbackSources={request.ratingSources}
+            />
             {hasExternalLink ? (
               <div className="flex flex-wrap items-center gap-2">
                 <ImdbExternalLink imdbId={imdbId} size="compact" />
