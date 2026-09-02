@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build && node scripts/report-build-chunks.mjs",
     "preview": "vite preview",
     "typecheck": "node ./node_modules/@typescript/native/bin/tsc --noEmit",
     "lint": "npm run typecheck && eslint 'src/**/*.{ts,tsx}' 'components/**/*.{ts,tsx}' 'lib/**/*.{ts,tsx}'",

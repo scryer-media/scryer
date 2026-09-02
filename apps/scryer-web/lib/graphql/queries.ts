@@ -2875,10 +2875,11 @@ export const authRuntimeStateQuery = `query AuthRuntimeState {
   }
 }`;
 
-export const oauthAuthorizationClientQuery = `query OAuthAuthorizationClient($clientId: String!, $redirectUri: String!) {
-  oauthAuthorizationClient(clientId: $clientId, redirectUri: $redirectUri) {
+export const oauthAuthorizationClientQuery = `query OAuthAuthorizationClient($clientId: String!, $redirectUri: String!, $scope: String) {
+  oauthAuthorizationClient(clientId: $clientId, redirectUri: $redirectUri, scope: $scope) {
     clientId
     displayName
+    scope
   }
 }`;
 
@@ -3758,6 +3759,16 @@ export const mediaRequestsQuery = `query MediaRequests($facet: MediaFacetValue, 
     runtimeMinutes
     language
     contentStatus
+    rating
+    ratingSources
+    externalRatings {
+      source
+      value
+      score
+      normalized
+      votes
+      url
+    }
     requestedQualityProfileId
     requestedQualityProfileName
     requestedMonitorType
@@ -3798,6 +3809,16 @@ export const myMediaRequestsQuery = `query MyMediaRequests($facet: MediaFacetVal
     runtimeMinutes
     language
     contentStatus
+    rating
+    ratingSources
+    externalRatings {
+      source
+      value
+      score
+      normalized
+      votes
+      url
+    }
     requestedQualityProfileId
     requestedQualityProfileName
     requestedMonitorType

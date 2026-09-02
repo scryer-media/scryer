@@ -422,6 +422,71 @@ impl UserExternalAccountRepository for UserStore {
         .await
     }
 
+    async fn create_or_get_by_provider_identity(
+        &self,
+        account: UserExternalAccount,
+    ) -> AppResult<UserExternalAccount> {
+        if account
+            .external_user_id
+            .as_deref()
+            .is_none_or(|external_user_id| external_user_id.trim().is_empty())
+        {
+            return Err(AppError::Validation(
+                "external account identity must be present when claiming".into(),
+            ));
+        }
+        SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "claim_user_external_account_provider_identity",
+            move |tx| {
+                let account = account.clone();
+                Box::pin(async move {
+                    if insert_external_account_if_provider_identity_absent_tx(tx, &account).await? {
+                        return load_external_account_by_id_tx(tx, &account.id)
+                            .await?
+                            .ok_or_else(|| {
+                                AppError::NotFound(format!("external account {}", account.id))
+                            });
+                    }
+
+                    if let Some(existing) = load_external_account_by_provider_identity_tx(
+                        tx,
+                        &account.provider,
+                        &account.connection_id,
+                        account.external_user_id.as_deref().ok_or_else(|| {
+                            AppError::Validation(
+                                "external account identity must be present when claiming".into(),
+                            )
+                        })?,
+                    )
+                    .await?
+                    {
+                        return Ok(existing);
+                    }
+                    if load_external_account_by_user_binding_tx(
+                        tx,
+                        &account.user_id,
+                        &account.provider,
+                        &account.connection_id,
+                    )
+                    .await?
+                    .is_some()
+                    {
+                        return Err(AppError::Validation(
+                            "external account is already linked to a different provider identity"
+                                .into(),
+                        ));
+                    }
+                    Err(AppError::Repository(
+                        "provider identity claim did not return its current external account"
+                            .into(),
+                    ))
+                })
+            },
+        )
+        .await
+    }
+
     async fn list_by_user_id(&self, user_id: &str) -> AppResult<Vec<UserExternalAccount>> {
         let rows = SqlRuntime::fetch_all(
             self.datastore.read_exec(),
@@ -995,6 +1060,50 @@ async fn load_external_account_by_id_tx(
     load_external_account_by_id(SqlExec::Tx(tx), id).await
 }
 
+async fn load_external_account_by_provider_identity_tx(
+    tx: &mut SqlTx<'_>,
+    provider: &ExternalAccountProvider,
+    connection_id: &str,
+    external_user_id: &str,
+) -> AppResult<Option<UserExternalAccount>> {
+    let row = SqlRuntime::fetch_optional(
+        SqlExec::Tx(tx),
+        "SELECT id, user_id, provider, connection_id, external_user_id, username,
+                display_name, avatar_url, status, verified_at, last_login_at, created_at, updated_at
+           FROM user_external_accounts
+          WHERE provider = {} AND connection_id = {} AND external_user_id = {}",
+        &[
+            SqlArg::Text(provider.as_str().to_string()),
+            SqlArg::Text(connection_id.to_string()),
+            SqlArg::Text(external_user_id.to_string()),
+        ],
+    )
+    .await?;
+    row.as_ref().map(row_to_external_account).transpose()
+}
+
+async fn load_external_account_by_user_binding_tx(
+    tx: &mut SqlTx<'_>,
+    user_id: &str,
+    provider: &ExternalAccountProvider,
+    connection_id: &str,
+) -> AppResult<Option<UserExternalAccount>> {
+    let row = SqlRuntime::fetch_optional(
+        SqlExec::Tx(tx),
+        "SELECT id, user_id, provider, connection_id, external_user_id, username,
+                display_name, avatar_url, status, verified_at, last_login_at, created_at, updated_at
+           FROM user_external_accounts
+          WHERE user_id = {} AND provider = {} AND connection_id = {}",
+        &[
+            SqlArg::Text(user_id.to_string()),
+            SqlArg::Text(provider.as_str().to_string()),
+            SqlArg::Text(connection_id.to_string()),
+        ],
+    )
+    .await?;
+    row.as_ref().map(row_to_external_account).transpose()
+}
+
 async fn insert_external_account_tx(
     tx: &mut SqlTx<'_>,
     account: &UserExternalAccount,
@@ -1023,6 +1132,38 @@ async fn insert_external_account_tx(
     )
     .await?;
     Ok(())
+}
+
+async fn insert_external_account_if_provider_identity_absent_tx(
+    tx: &mut SqlTx<'_>,
+    account: &UserExternalAccount,
+) -> AppResult<bool> {
+    let rows = tx
+        .execute(
+            "INSERT INTO user_external_accounts (
+                 id, user_id, provider, connection_id, external_user_id, username,
+                 display_name, avatar_url, status, verified_at, last_login_at, created_at, updated_at
+              )
+              VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})
+              ON CONFLICT DO NOTHING",
+            &[
+                SqlArg::Text(account.id.clone()),
+                SqlArg::Text(account.user_id.clone()),
+                SqlArg::Text(account.provider.as_str().to_string()),
+                SqlArg::Text(account.connection_id.clone()),
+                SqlArg::OptText(account.external_user_id.clone()),
+                SqlArg::Text(account.username.clone()),
+                SqlArg::OptText(account.display_name.clone()),
+                SqlArg::OptText(account.avatar_url.clone()),
+                SqlArg::Text(account.status.as_str().to_string()),
+                SqlArg::OptTimestamp(account.verified_at),
+                SqlArg::OptTimestamp(account.last_login_at),
+                SqlArg::Timestamp(account.created_at),
+                SqlArg::Timestamp(account.updated_at),
+            ],
+        )
+        .await?;
+    Ok(rows == 1)
 }
 
 fn row_to_external_account(row: &SqlRow) -> AppResult<UserExternalAccount> {
@@ -1374,6 +1515,113 @@ mod tests {
         .await;
 
         assert!(duplicate.is_err());
+    }
+
+    #[tokio::test]
+    async fn claim_external_account_provider_identity_returns_the_existing_owner() {
+        let store = test_store().await;
+        UserRepository::create(&store, test_user("user_a"))
+            .await
+            .expect("create first user");
+        UserRepository::create(&store, test_user("user_b"))
+            .await
+            .expect("create second user");
+
+        let created = UserExternalAccountRepository::create_or_get_by_provider_identity(
+            &store,
+            test_account(
+                "account_a",
+                "user_a",
+                ExternalAccountProvider::Jellyfin,
+                "server_1",
+                "external_1",
+            ),
+        )
+        .await
+        .expect("claim unowned provider identity");
+        let existing = UserExternalAccountRepository::create_or_get_by_provider_identity(
+            &store,
+            test_account(
+                "account_b",
+                "user_b",
+                ExternalAccountProvider::Jellyfin,
+                "server_1",
+                "external_1",
+            ),
+        )
+        .await
+        .expect("return the winner instead of surfacing a unique violation");
+
+        assert_eq!(created.id, "account_a");
+        assert_eq!(existing.id, "account_a");
+        assert_eq!(existing.user_id, "user_a");
+    }
+
+    #[tokio::test]
+    async fn claim_external_account_rejects_a_different_identity_for_the_same_user_binding() {
+        let store = test_store().await;
+        UserRepository::create(&store, test_user("user_a"))
+            .await
+            .expect("create user");
+
+        UserExternalAccountRepository::create_or_get_by_provider_identity(
+            &store,
+            test_account(
+                "account_a",
+                "user_a",
+                ExternalAccountProvider::Jellyfin,
+                "server_1",
+                "external_1",
+            ),
+        )
+        .await
+        .expect("claim first provider identity");
+
+        let conflict = UserExternalAccountRepository::create_or_get_by_provider_identity(
+            &store,
+            test_account(
+                "account_b",
+                "user_a",
+                ExternalAccountProvider::Jellyfin,
+                "server_1",
+                "external_2",
+            ),
+        )
+        .await;
+
+        assert!(matches!(
+            conflict,
+            Err(AppError::Validation(message))
+                if message == "external account is already linked to a different provider identity"
+        ));
+    }
+
+    #[tokio::test]
+    async fn claim_external_account_provider_identity_requires_a_nonempty_identity() {
+        let store = test_store().await;
+        UserRepository::create(&store, test_user("user_a"))
+            .await
+            .expect("create user");
+
+        for external_user_id in [None, Some(String::new()), Some("   ".to_string())] {
+            let mut account = test_account(
+                "account_a",
+                "user_a",
+                ExternalAccountProvider::Jellyfin,
+                "server_1",
+                "external_1",
+            );
+            account.external_user_id = external_user_id;
+            let result =
+                UserExternalAccountRepository::create_or_get_by_provider_identity(&store, account)
+                    .await;
+
+            assert!(matches!(
+                result,
+                Err(AppError::Validation(message))
+                    if message == "external account identity must be present when claiming"
+            ));
+        }
     }
 
     #[tokio::test]

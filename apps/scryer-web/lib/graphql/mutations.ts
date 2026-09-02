@@ -917,7 +917,7 @@ const OAUTH_CLIENT_REGISTRATION_FIELDS = `
     source`;
 
 export const createOAuthClientRegistrationMutation = `mutation CreateOAuthClientRegistration($input: CreateOAuthClientRegistrationInput!) {
-  createOauthClientRegistration(input: $input) {${OAUTH_CLIENT_REGISTRATION_FIELDS}
+  createOAuthClientRegistration: createOauthClientRegistration(input: $input) {${OAUTH_CLIENT_REGISTRATION_FIELDS}
   }
 }`;
 

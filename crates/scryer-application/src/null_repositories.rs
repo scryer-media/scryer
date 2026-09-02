@@ -2795,9 +2795,7 @@ impl OAuthRepository for NullOAuthRepository {
     async fn update_client_registration(
         &self,
         _: OAuthClientRegistrationRecord,
-        _: bool,
         _: chrono::DateTime<chrono::Utc>,
-        _: &str,
     ) -> AppResult<Option<OAuthClientRegistrationRecord>> {
         Ok(None)
     }
@@ -2861,6 +2859,10 @@ impl OAuthRepository for NullOAuthRepository {
         &self,
         _: &str,
     ) -> AppResult<Option<(OAuthRefreshTokenRecord, OAuthRefreshGrantRecord)>> {
+        Ok(None)
+    }
+
+    async fn get_refresh_grant(&self, _: &str) -> AppResult<Option<OAuthRefreshGrantRecord>> {
         Ok(None)
     }
 
@@ -2929,6 +2931,13 @@ pub struct NullUserExternalAccountRepository;
 #[async_trait]
 impl UserExternalAccountRepository for NullUserExternalAccountRepository {
     async fn create(
+        &self,
+        _: scryer_domain::UserExternalAccount,
+    ) -> AppResult<scryer_domain::UserExternalAccount> {
+        Err(AppError::Repository("not configured".into()))
+    }
+
+    async fn create_or_get_by_provider_identity(
         &self,
         _: scryer_domain::UserExternalAccount,
     ) -> AppResult<scryer_domain::UserExternalAccount> {

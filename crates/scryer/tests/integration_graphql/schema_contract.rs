@@ -560,18 +560,20 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // existing config option type: OBJECT 318->319, public types 615->616.
     // Account-security reauthentication adds three mutation roots without
     // changing the established factor-mutation payload contracts: mutation 194->197.
+    // OAuth-bound Jellyfin account linking adds one mutation root and reuses the
+    // existing linked-account payload: mutation 197->198.
     assert_eq!(
         query_field_count, 134,
         "query fields: {query_field_names:?}"
     );
     assert_eq!(
-        mutation_field_count, 197,
+        mutation_field_count, 198,
         "mutation fields: {mutation_field_names:?}"
     );
     assert_eq!(subscription_field_count, 14);
-    assert_eq!(public_types.len(), 616);
-    assert_eq!(kind_count("OBJECT"), 319);
-    assert_eq!(kind_count("INPUT_OBJECT"), 173);
+    assert_eq!(public_types.len(), 618);
+    assert_eq!(kind_count("OBJECT"), 320);
+    assert_eq!(kind_count("INPUT_OBJECT"), 174);
     assert_eq!(kind_count("ENUM"), 112);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
@@ -590,6 +592,7 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     assert!(mutation_field_names.contains(&"accountSecurityPasswordVerify"));
     assert!(mutation_field_names.contains(&"accountSecurityPasskeyStart"));
     assert!(mutation_field_names.contains(&"accountSecurityPasskeyComplete"));
+    assert!(mutation_field_names.contains(&"linkCurrentOAuthJellyfinAccount"));
     assert!(query_field_names.contains(&"episode"));
     assert!(query_field_names.contains(&"titleCatalogFilterOptions"));
     assert!(!query_field_names.contains(&"catalogHasValidRoot"));

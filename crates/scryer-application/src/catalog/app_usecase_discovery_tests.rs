@@ -489,6 +489,7 @@ fn structured_query_collapse_runs_for_nab_only_search_sets() {
     assert!(should_collapse_structured_nab_queries(
         &configs,
         None,
+        None,
         SearchMode::Interactive,
         chrono::Utc::now(),
     ));
@@ -498,6 +499,7 @@ fn structured_query_collapse_runs_for_nab_only_search_sets() {
 fn structured_query_collapse_skips_when_no_configs_are_eligible() {
     assert!(!should_collapse_structured_nab_queries(
         &[],
+        None,
         None,
         SearchMode::Interactive,
         chrono::Utc::now(),
@@ -517,6 +519,7 @@ fn structured_query_collapse_skips_when_auto_mode_is_disabled_in_managed_metadat
     assert!(!should_collapse_structured_nab_queries(
         &[proxy],
         None,
+        None,
         SearchMode::Auto,
         chrono::Utc::now(),
     ));
@@ -531,6 +534,7 @@ fn structured_query_collapse_skips_when_non_nab_indexers_are_eligible() {
 
     assert!(!should_collapse_structured_nab_queries(
         &configs,
+        None,
         None,
         SearchMode::Interactive,
         chrono::Utc::now(),

@@ -751,7 +751,7 @@ jobs:
             variant: portable
             build_lane: portable
             runner: ubuntu-24.04
-            release_runner: linux_release_x86
+            release_runner: ubuntu-24.04
             target: x86_64-unknown-linux-musl
             sccache_lane: pr-linux-x86_64-cpu
             artifact_name: scryer-linux-x86_64-portable
@@ -1314,8 +1314,8 @@ jobs:
             use_lld_link: true
           - arch: arm64
             msi_arch: arm64
-            runner: windows-11-arm
-            release_runner: windows-11-arm
+            runner: windows-11-vs2026-arm
+            release_runner: windows-11-vs2026-arm
             toolchain: 1.97.1-aarch64-pc-windows-msvc
             target: aarch64-pc-windows-msvc
             sccache_lane: scryer-windows-arm64-msvc

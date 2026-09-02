@@ -387,6 +387,7 @@ pub(super) fn media_request_input(
         runtime_minutes: Some(101),
         language: Some("en".to_string()),
         content_status: Some("Released".to_string()),
+        rating_summary: scryer_domain::TitleRatingSummary::default(),
         requested_quality_profile_id: None,
         requested_monitor_type: None,
         external_ids: vec![

@@ -3,12 +3,15 @@ import {
   AVAILABLE_LANGUAGES,
   DEFAULT_LANGUAGE,
   getLanguageLabel,
+  isLocaleLoaded,
+  loadLocaleDictionary,
   normalizeLocale,
   t as translate,
 } from "@/lib/i18n";
 import type { LocaleCode } from "@/lib/i18n";
 import { URL_PARAM_LANGUAGE } from "@/lib/constants/settings";
 import { parseLanguageFromParam } from "@/lib/utils/routing";
+import { toast } from "sonner";
 
 export const UI_LANGUAGE_STORAGE_KEY = "scryer.ui.language";
 
@@ -45,18 +48,20 @@ type UseLanguageOptions = {
 };
 
 export function useLanguage(searchParams: URLSearchParams, options: UseLanguageOptions = {}) {
+  const onLanguageSet = options.onLanguageSet;
   const [queryLanguage] = useState(() => searchParams.get(URL_PARAM_LANGUAGE));
   const initialLanguage = (() => {
     const fromQuery = parseLanguageFromParam(queryLanguage);
-    if (fromQuery) {
+    if (fromQuery && isLocaleLoaded(fromQuery)) {
       return fromQuery;
     }
 
     const stored = readStoredLanguageCode();
-    return isLocaleSupported(stored) ? stored : DEFAULT_LANGUAGE;
+    return isLocaleSupported(stored) && isLocaleLoaded(stored) ? stored : DEFAULT_LANGUAGE;
   })();
 
   const languageMenuRef = useRef<HTMLDivElement>(null);
+  const languageRequestRef = useRef(0);
   const [uiLanguage, setUiLanguage] = useState<LocaleCode>(initialLanguage);
   const [isLanguageMenuOpen, setIsLanguageMenuOpen] = useState(false);
   const t = useCallback(
@@ -70,13 +75,37 @@ export function useLanguage(searchParams: URLSearchParams, options: UseLanguageO
     [uiLanguage],
   );
 
-  const setLanguagePreference = useCallback((code: string) => {
-    const normalized = normalizeLocale(code);
-    setUiLanguage(normalized);
-    writeStoredLanguageCode(normalized);
-    setIsLanguageMenuOpen(false);
-    options.onLanguageSet?.(normalized, getLanguageLabel(normalized));
-  }, [options]);
+  const requestLanguage = useCallback(
+    (code: string, notify: boolean) => {
+      const normalized = normalizeLocale(code);
+      const requestId = ++languageRequestRef.current;
+      setIsLanguageMenuOpen(false);
+
+      void loadLocaleDictionary(normalized)
+        .then(() => {
+          if (requestId !== languageRequestRef.current) {
+            return;
+          }
+          setUiLanguage(normalized);
+          writeStoredLanguageCode(normalized);
+          if (notify) {
+            onLanguageSet?.(normalized, getLanguageLabel(normalized));
+          }
+        })
+        .catch(() => {
+          if (requestId !== languageRequestRef.current) {
+            return;
+          }
+          toast.error(`Failed to load ${getLanguageLabel(normalized)} translations.`);
+        });
+    },
+    [onLanguageSet],
+  );
+
+  const setLanguagePreference = useCallback(
+    (code: string) => requestLanguage(code, true),
+    [requestLanguage],
+  );
 
   const setLanguageFallback = useCallback(() => {
     if (typeof window === "undefined") {
@@ -87,8 +116,8 @@ export function useLanguage(searchParams: URLSearchParams, options: UseLanguageO
     if (stored === uiLanguage) {
       return;
     }
-    setUiLanguage(stored);
-  }, [uiLanguage]);
+    requestLanguage(stored, false);
+  }, [requestLanguage, uiLanguage]);
 
   useEffect(() => {
     const onDocumentPointerDown = (event: PointerEvent) => {
@@ -112,10 +141,18 @@ export function useLanguage(searchParams: URLSearchParams, options: UseLanguageO
 
   useEffect(() => {
     const queryLang = parseLanguageFromParam(searchParams.get(URL_PARAM_LANGUAGE));
+    if (!queryLang) {
+      setLanguageFallback();
+    }
+  }, [searchParams, setLanguageFallback]);
+
+  useEffect(() => {
+    const queryLang = parseLanguageFromParam(searchParams.get(URL_PARAM_LANGUAGE));
     if (queryLang) {
-      writeStoredLanguageCode(queryLang);
       if (queryLang !== uiLanguage) {
-        setUiLanguage(queryLang);
+        requestLanguage(queryLang, false);
+      } else {
+        writeStoredLanguageCode(queryLang);
       }
       return;
     }
@@ -123,16 +160,12 @@ export function useLanguage(searchParams: URLSearchParams, options: UseLanguageO
     if (uiLanguage === DEFAULT_LANGUAGE) {
       writeStoredLanguageCode(DEFAULT_LANGUAGE);
     }
-  }, [searchParams, uiLanguage]);
+  }, [requestLanguage, searchParams, uiLanguage]);
 
   useEffect(() => {
     writeStoredLanguageCode(uiLanguage);
     document.documentElement.lang = uiLanguage;
   }, [uiLanguage]);
-
-  useEffect(() => {
-    setLanguageFallback();
-  }, [setLanguageFallback]);
 
   return {
     uiLanguage,

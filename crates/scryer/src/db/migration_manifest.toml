@@ -1656,6 +1656,40 @@ file = "postgres/migrations/0203_oauth_authorization_code_session_epoch.sql"
 engine = "postgres"
 scope = "all"
 
+[[migration]]
+version = 204
+description = "bind OAuth Jellyfin-link grants to their approved connection"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0204_oauth_jellyfin_link_binding.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0204_oauth_jellyfin_link_binding.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 205
+description = "persist media request metadata snapshots"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0205_media_request_metadata_snapshots.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0205_media_request_metadata_snapshots.sql"
+engine = "postgres"
+scope = "all"
+
 [[baseline]]
 through_version = 140
 file = "baselines/0140_baseline.sql"

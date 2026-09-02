@@ -22,6 +22,7 @@ pub struct SubmitMediaRequestInput {
     pub runtime_minutes: Option<i32>,
     pub language: Option<String>,
     pub content_status: Option<String>,
+    pub rating_summary: TitleRatingSummary,
     pub requested_quality_profile_id: Option<String>,
     pub requested_monitor_type: Option<String>,
     pub external_ids: Vec<ExternalId>,
@@ -120,6 +121,16 @@ impl AppUseCase {
         let requested_monitor_type =
             normalize_requested_monitor_type(&input.facet, input.requested_monitor_type)?;
         let poster_url = metadata_enrichment.poster_url;
+        let overview = metadata_enrichment
+            .overview
+            .or_else(|| normalized_optional_string(input.overview));
+        let rating_summary = metadata_enrichment.rating_summary;
+        let rating_summary =
+            if rating_summary.rating.is_some() || !rating_summary.external_ratings.is_empty() {
+                rating_summary
+            } else {
+                input.rating_summary
+            };
 
         let request = NewMediaRequest {
             id: Id::new().0,
@@ -131,10 +142,11 @@ impl AppUseCase {
             slug: normalized_optional_string(input.slug),
             poster_url,
             year: input.year,
-            overview: normalized_optional_string(input.overview),
+            overview,
             runtime_minutes: input.runtime_minutes,
             language: normalized_optional_string(input.language),
             content_status: normalized_optional_string(input.content_status),
+            rating_summary,
             requested_quality_profile_id: Some(requested_quality_profile_id),
             requested_quality_profile_name: Some(requested_quality_profile_name),
             requested_monitor_type,
@@ -988,6 +1000,8 @@ fn movie_title_ref_from_external_ids(external_ids: &[ExternalId]) -> Option<crat
 struct MediaRequestMetadataEnrichment {
     external_ids: Vec<ExternalId>,
     poster_url: Option<String>,
+    overview: Option<String>,
+    rating_summary: TitleRatingSummary,
 }
 
 impl AppUseCase {
@@ -1003,6 +1017,8 @@ impl AppUseCase {
                     return MediaRequestMetadataEnrichment {
                         external_ids,
                         poster_url: None,
+                        overview: None,
+                        rating_summary: TitleRatingSummary::default(),
                     };
                 };
                 match self
@@ -1031,6 +1047,8 @@ impl AppUseCase {
                             return MediaRequestMetadataEnrichment {
                                 external_ids,
                                 poster_url: None,
+                                overview: None,
+                                rating_summary: TitleRatingSummary::default(),
                             };
                         };
                         self.services
@@ -1056,6 +1074,8 @@ impl AppUseCase {
                     return MediaRequestMetadataEnrichment {
                         external_ids,
                         poster_url: None,
+                        overview: None,
+                        rating_summary: TitleRatingSummary::default(),
                     };
                 };
                 let Some(handler) = self.facet_registry.get(facet) else {
@@ -1067,6 +1087,8 @@ impl AppUseCase {
                     return MediaRequestMetadataEnrichment {
                         external_ids,
                         poster_url: None,
+                        overview: None,
+                        rating_summary: TitleRatingSummary::default(),
                     };
                 };
                 handler
@@ -1080,8 +1102,10 @@ impl AppUseCase {
         };
         match result {
             Ok(result) => {
+                let overview = normalized_optional_string(result.metadata_update.overview.clone());
                 let poster_url =
                     normalized_optional_string(result.metadata_update.poster_url.clone());
+                let rating_summary = result.metadata_update.ratings.clone().unwrap_or_default();
                 let enriched =
                     crate::catalog::facets::handler::external_ids_from_hydration_metadata(
                         external_ids.clone(),
@@ -1091,6 +1115,8 @@ impl AppUseCase {
                     external_ids: normalize_media_request_external_ids(enriched)
                         .unwrap_or(external_ids),
                     poster_url,
+                    overview,
+                    rating_summary,
                 }
             }
             Err(error) => {
@@ -1102,6 +1128,8 @@ impl AppUseCase {
                 MediaRequestMetadataEnrichment {
                     external_ids,
                     poster_url: None,
+                    overview: None,
+                    rating_summary: TitleRatingSummary::default(),
                 }
             }
         }

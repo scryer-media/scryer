@@ -680,32 +680,8 @@ impl AppUseCase {
             .await?;
 
         if let Some(mut existing) = existing {
-            if existing.user_id != actor.id {
-                return Err(AppError::Validation(
-                    "external account is already linked to another Scryer user".into(),
-                ));
-            }
-            if matches!(
-                existing.status,
-                scryer_domain::ExternalAccountStatus::Disabled
-            ) {
-                return Err(AppError::Validation(
-                    "external account is disabled and must be repaired by an administrator".into(),
-                ));
-            }
-            existing.external_user_id = Some(verified.external_user_id);
-            existing.username = verified.username;
-            existing.display_name = verified.display_name;
-            existing.avatar_url = verified.avatar_url;
-            existing.status = scryer_domain::ExternalAccountStatus::Active;
-            let now = Utc::now();
-            existing.verified_at = Some(now);
-            existing.updated_at = now;
             return self
-                .services
-                .identity
-                .external_accounts
-                .update(existing)
+                .refresh_verified_external_account(actor, &mut existing, verified)
                 .await;
         }
 
@@ -713,23 +689,229 @@ impl AppUseCase {
         let account = scryer_domain::UserExternalAccount {
             id: scryer_domain::Id::new().0,
             user_id: actor.id.clone(),
-            provider: verified.provider,
-            connection_id: verified.connection_id,
-            external_user_id: Some(verified.external_user_id),
-            username: verified.username,
-            display_name: verified.display_name,
-            avatar_url: verified.avatar_url,
+            provider: verified.provider.clone(),
+            connection_id: verified.connection_id.clone(),
+            external_user_id: Some(verified.external_user_id.clone()),
+            username: verified.username.clone(),
+            display_name: verified.display_name.clone(),
+            avatar_url: verified.avatar_url.clone(),
             status: scryer_domain::ExternalAccountStatus::Active,
             verified_at: Some(now),
             last_login_at: None,
             created_at: now,
             updated_at: now,
         };
+        let created_account_id = account.id.clone();
+        let mut account = self
+            .services
+            .identity
+            .external_accounts
+            .create_or_get_by_provider_identity(account)
+            .await?;
+        if account.id == created_account_id {
+            return Ok(account);
+        }
+        self.refresh_verified_external_account(actor, &mut account, verified)
+            .await
+    }
+
+    async fn refresh_verified_external_account(
+        &self,
+        actor: &User,
+        existing: &mut scryer_domain::UserExternalAccount,
+        verified: VerifiedExternalIdentity,
+    ) -> AppResult<scryer_domain::UserExternalAccount> {
+        if existing.user_id != actor.id {
+            return Err(AppError::Validation(
+                "external account is already linked to another Scryer user".into(),
+            ));
+        }
+        if matches!(
+            existing.status,
+            scryer_domain::ExternalAccountStatus::Disabled
+        ) {
+            return Err(AppError::Validation(
+                "external account is disabled and must be repaired by an administrator".into(),
+            ));
+        }
+        existing.external_user_id = Some(verified.external_user_id);
+        existing.username = verified.username;
+        existing.display_name = verified.display_name;
+        existing.avatar_url = verified.avatar_url;
+        existing.status = scryer_domain::ExternalAccountStatus::Active;
+        let now = Utc::now();
+        existing.verified_at = Some(now);
+        existing.updated_at = now;
         self.services
             .identity
             .external_accounts
-            .create(account)
+            .update(existing.clone())
             .await
+    }
+
+    /// Links the OAuth caller to the Jellyfin identity bound to that OAuth
+    /// grant. The caller cannot select either a Scryer user or a connection.
+    pub async fn link_current_oauth_jellyfin_account(
+        &self,
+        actor: &User,
+        client_id: &str,
+        grant_id: &str,
+        jellyfin_user_id: &str,
+    ) -> AppResult<scryer_domain::UserExternalAccount> {
+        let canonical_jellyfin_user_id = crate::canonicalize_jellyfin_user_id(jellyfin_user_id)
+            .ok_or_else(|| AppError::Validation("Jellyfin user ID is invalid".into()))?;
+        let grant = self
+            .services
+            .identity
+            .oauth
+            .get_refresh_grant(grant_id)
+            .await?
+            .ok_or_else(|| AppError::Unauthorized("OAuth grant is unavailable".into()))?;
+        if grant.user_id != actor.id
+            || grant.client_id != client_id
+            || grant.revoked_at.is_some()
+            || !grant.authorization_source.is_authenticated()
+            || !crate::oauth::oauth_scope_has_jellyfin_link(&grant.scope)
+        {
+            return Err(AppError::Unauthorized(
+                "OAuth grant is not eligible for Jellyfin linking".into(),
+            ));
+        }
+        let connection_id = grant.jellyfin_connection_id.clone().ok_or_else(|| {
+            AppError::Unauthorized("OAuth grant is not eligible for Jellyfin linking".into())
+        })?;
+        let external_url = grant.jellyfin_external_url.clone().ok_or_else(|| {
+            AppError::Unauthorized("OAuth grant is not eligible for Jellyfin linking".into())
+        })?;
+        let base_url = grant.jellyfin_base_url.clone().ok_or_else(|| {
+            AppError::Unauthorized("OAuth grant is not eligible for Jellyfin linking".into())
+        })?;
+        let api_key_hash = grant.jellyfin_api_key_hash.clone().ok_or_else(|| {
+            AppError::Unauthorized("OAuth grant is not eligible for Jellyfin linking".into())
+        })?;
+        let client = self
+            .oauth_client_info(client_id)
+            .await?
+            .ok_or_else(|| AppError::Unauthorized("OAuth client is unavailable".into()))?;
+        let expected_redirect = format!(
+            "{}/Scryer/Auth/Callback",
+            external_url.trim_end_matches('/')
+        );
+        if client.source != crate::oauth::OAuthClientSource::Custom
+            || !client.enabled
+            || client.redirect_uris.len() != 1
+            || client.redirect_uris.first() != Some(&grant.redirect_uri)
+            || grant.redirect_uri != expected_redirect
+        {
+            return Err(AppError::Unauthorized(
+                "OAuth grant is not eligible for Jellyfin linking".into(),
+            ));
+        }
+        let connection = self
+            .services
+            .integrations
+            .media_server_connections
+            .get_by_id(&connection_id)
+            .await?
+            .ok_or_else(|| AppError::Unauthorized("Jellyfin connection is unavailable".into()))?;
+        if connection.provider != scryer_domain::MediaServerProvider::Jellyfin
+            || !connection.enabled
+            || !connection.linking_enabled
+            || connection.base_url != base_url
+            || connection
+                .external_url
+                .as_deref()
+                .map(|url| url.trim_end_matches('/'))
+                != Some(external_url.trim_end_matches('/'))
+        {
+            return Err(AppError::Unauthorized(
+                "Jellyfin connection is unavailable".into(),
+            ));
+        }
+        let api_key = connection
+            .api_key
+            .as_deref()
+            .filter(|key| !key.trim().is_empty())
+            .ok_or_else(|| AppError::Unauthorized("Jellyfin connection is unavailable".into()))?;
+        if self.oauth_token_hash("jellyfin_link_api_key", api_key) != api_key_hash {
+            return Err(AppError::Unauthorized(
+                "Jellyfin connection authorization changed".into(),
+            ));
+        }
+        let verified = self
+            .services
+            .integrations
+            .external_identity_verifier
+            .verify_jellyfin_user_with_api_key(
+                &connection.id,
+                &connection.base_url,
+                api_key,
+                &canonical_jellyfin_user_id,
+            )
+            .await?;
+        if verified.provider != scryer_domain::ExternalAccountProvider::Jellyfin
+            || verified.connection_id != connection.id
+            || verified.external_user_id != canonical_jellyfin_user_id
+        {
+            return Err(AppError::Unauthorized(
+                "Jellyfin user verification failed".into(),
+            ));
+        }
+        // Re-resolve the immutable grant and live connection after I/O so an
+        // administrator's concurrent disable, redirect change, or revoke wins.
+        let current_grant = self
+            .services
+            .identity
+            .oauth
+            .get_refresh_grant(grant_id)
+            .await?
+            .ok_or_else(|| AppError::Unauthorized("OAuth grant is unavailable".into()))?;
+        let current_client = self
+            .oauth_client_info(client_id)
+            .await?
+            .ok_or_else(|| AppError::Unauthorized("OAuth client is unavailable".into()))?;
+        let current_connection = self
+            .services
+            .integrations
+            .media_server_connections
+            .get_by_id(&connection_id)
+            .await?
+            .ok_or_else(|| AppError::Unauthorized("Jellyfin connection is unavailable".into()))?;
+        if !oauth_jellyfin_link_grant_matches(&current_grant, &grant)
+            || current_client.source != crate::oauth::OAuthClientSource::Custom
+            || !current_client.enabled
+            || current_client.redirect_uris.len() != 1
+            || current_client.redirect_uris.first() != Some(&current_grant.redirect_uri)
+            || current_grant.redirect_uri != expected_redirect
+            || current_connection.provider != scryer_domain::MediaServerProvider::Jellyfin
+            || !current_connection.enabled
+            || !current_connection.linking_enabled
+            || current_connection.base_url != base_url
+            || current_connection
+                .external_url
+                .as_deref()
+                .map(|url| url.trim_end_matches('/'))
+                != Some(external_url.trim_end_matches('/'))
+            || current_connection.api_key.as_deref().is_none_or(|key| {
+                self.oauth_token_hash("jellyfin_link_api_key", key) != api_key_hash
+            })
+        {
+            return Err(AppError::Unauthorized(
+                "Jellyfin link authorization changed".into(),
+            ));
+        }
+        self.link_verified_external_account(actor, verified)
+            .await
+            .map_err(|error| match error {
+                AppError::Validation(message)
+                    if message == "external account is already linked to another Scryer user"
+                        || message
+                            == "external account is already linked to a different provider identity" =>
+                {
+                    AppError::Validation("Jellyfin account could not be linked".into())
+                }
+                other => other,
+            })
     }
 
     pub async fn federated_login_with_plex(
@@ -1078,6 +1260,25 @@ fn normalize_connection_id(value: impl AsRef<str>) -> String {
     value.as_ref().trim().to_string()
 }
 
+fn oauth_jellyfin_link_grant_matches(
+    current: &OAuthRefreshGrantRecord,
+    approved: &OAuthRefreshGrantRecord,
+) -> bool {
+    current.id == approved.id
+        && current.family_id == approved.family_id
+        && current.user_id == approved.user_id
+        && current.client_id == approved.client_id
+        && current.authorization_source == approved.authorization_source
+        && current.auth_session_version == approved.auth_session_version
+        && current.redirect_uri == approved.redirect_uri
+        && current.scope == approved.scope
+        && current.jellyfin_connection_id == approved.jellyfin_connection_id
+        && current.jellyfin_external_url == approved.jellyfin_external_url
+        && current.jellyfin_base_url == approved.jellyfin_base_url
+        && current.jellyfin_api_key_hash == approved.jellyfin_api_key_hash
+        && current.revoked_at == approved.revoked_at
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -1094,7 +1295,10 @@ mod tests {
     use crate::{
         AppServices, ExternalIdentityVerifier, IndexerConfig, IndexerConfigRepository,
         IndexerConfigUpdate, JellyfinServerUser, JwtAuthConfig, MediaServerConnectionRepository,
-        PlexServerUser, SettingsRepository, UserExternalAccountRepository, UserRepository,
+        OAuthAuthorizationCodeRecord, OAuthClientRegistrationRecord, OAuthConnectedAppRecord,
+        OAuthRefreshGrantRecord, OAuthRefreshRotationOutcome, OAuthRefreshTokenRecord,
+        OAuthRepository, PlexServerUser, SettingsRepository, UserExternalAccountRepository,
+        UserRepository,
     };
     use scryer_domain::{
         AppPermission, AppPermissionMask, ExternalAccountProvider, ExternalAccountStatus,
@@ -1112,6 +1316,13 @@ mod tests {
     #[derive(Default)]
     struct TestExternalAccountRepository {
         accounts: Mutex<Vec<UserExternalAccount>>,
+        first_lookup_race: Option<Arc<TestExternalAccountLookupRace>>,
+        claim_winner: Mutex<Option<UserExternalAccount>>,
+    }
+
+    struct TestExternalAccountLookupRace {
+        barrier: tokio::sync::Barrier,
+        remaining_waiters: Mutex<usize>,
     }
 
     #[derive(Default)]
@@ -1122,6 +1333,13 @@ mod tests {
     #[derive(Default)]
     struct TestMediaServerConnectionRepository {
         connections: Mutex<Vec<MediaServerConnection>>,
+        get_by_id_responses: Mutex<Vec<MediaServerConnection>>,
+    }
+
+    struct TestOAuthRepository {
+        grants: Mutex<Vec<OAuthRefreshGrantRecord>>,
+        registration: Option<OAuthClientRegistrationRecord>,
+        registration_responses: Mutex<Vec<OAuthClientRegistrationRecord>>,
     }
 
     #[derive(Default)]
@@ -1139,6 +1357,45 @@ mod tests {
         fn new(accounts: Vec<UserExternalAccount>) -> Self {
             Self {
                 accounts: Mutex::new(accounts),
+                first_lookup_race: None,
+                claim_winner: Mutex::new(None),
+            }
+        }
+
+        fn with_first_lookup_race(accounts: Vec<UserExternalAccount>, waiters: usize) -> Self {
+            Self {
+                accounts: Mutex::new(accounts),
+                first_lookup_race: Some(Arc::new(TestExternalAccountLookupRace {
+                    barrier: tokio::sync::Barrier::new(waiters),
+                    remaining_waiters: Mutex::new(waiters),
+                })),
+                claim_winner: Mutex::new(None),
+            }
+        }
+
+        fn with_claim_winner(winner: UserExternalAccount) -> Self {
+            Self {
+                accounts: Mutex::new(Vec::new()),
+                first_lookup_race: None,
+                claim_winner: Mutex::new(Some(winner)),
+            }
+        }
+
+        async fn wait_for_racing_initial_lookup(&self) {
+            let Some(race) = self.first_lookup_race.as_ref() else {
+                return;
+            };
+            let should_wait = {
+                let mut remaining_waiters = race.remaining_waiters.lock().await;
+                if *remaining_waiters == 0 {
+                    false
+                } else {
+                    *remaining_waiters -= 1;
+                    true
+                }
+            };
+            if should_wait {
+                race.barrier.wait().await;
             }
         }
     }
@@ -1147,7 +1404,47 @@ mod tests {
         fn new(connections: Vec<MediaServerConnection>) -> Self {
             Self {
                 connections: Mutex::new(connections),
+                get_by_id_responses: Mutex::new(Vec::new()),
             }
+        }
+
+        fn with_get_by_id_responses(
+            connections: Vec<MediaServerConnection>,
+            get_by_id_responses: Vec<MediaServerConnection>,
+        ) -> Self {
+            Self {
+                connections: Mutex::new(connections),
+                get_by_id_responses: Mutex::new(get_by_id_responses),
+            }
+        }
+    }
+
+    impl TestOAuthRepository {
+        fn new(
+            grants: Vec<OAuthRefreshGrantRecord>,
+            registration: Option<OAuthClientRegistrationRecord>,
+        ) -> Self {
+            Self {
+                grants: Mutex::new(grants),
+                registration,
+                registration_responses: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn with_registration_responses(
+            grants: Vec<OAuthRefreshGrantRecord>,
+            registration: Option<OAuthClientRegistrationRecord>,
+            registration_responses: Vec<OAuthClientRegistrationRecord>,
+        ) -> Self {
+            Self {
+                grants: Mutex::new(grants),
+                registration,
+                registration_responses: Mutex::new(registration_responses),
+            }
+        }
+
+        async fn replace_grants(&self, grants: Vec<OAuthRefreshGrantRecord>) {
+            *self.grants.lock().await = grants;
         }
     }
 
@@ -1219,6 +1516,26 @@ mod tests {
             Ok(account)
         }
 
+        async fn create_or_get_by_provider_identity(
+            &self,
+            account: UserExternalAccount,
+        ) -> AppResult<UserExternalAccount> {
+            if let Some(winner) = self.claim_winner.lock().await.take() {
+                self.accounts.lock().await.push(winner.clone());
+                return Ok(winner);
+            }
+            let mut accounts = self.accounts.lock().await;
+            if let Some(existing) = accounts.iter().find(|existing| {
+                existing.provider == account.provider
+                    && existing.connection_id == account.connection_id
+                    && existing.external_user_id == account.external_user_id
+            }) {
+                return Ok(existing.clone());
+            }
+            accounts.push(account.clone());
+            Ok(account)
+        }
+
         async fn list_by_user_id(&self, user_id: &str) -> AppResult<Vec<UserExternalAccount>> {
             Ok(self
                 .accounts
@@ -1246,7 +1563,7 @@ mod tests {
             connection_id: &str,
             external_user_id: &str,
         ) -> AppResult<Option<UserExternalAccount>> {
-            Ok(self
+            let account = self
                 .accounts
                 .lock()
                 .await
@@ -1256,7 +1573,11 @@ mod tests {
                         && account.connection_id == connection_id
                         && account.external_user_id.as_deref() == Some(external_user_id)
                 })
-                .cloned())
+                .cloned();
+            if account.is_none() {
+                self.wait_for_racing_initial_lookup().await;
+            }
+            Ok(account)
         }
 
         async fn get_pending_claim_by_provider_username(
@@ -1313,6 +1634,218 @@ mod tests {
     }
 
     #[async_trait::async_trait]
+    impl OAuthRepository for TestOAuthRepository {
+        async fn create_api_key(&self, _: crate::ApiKeyRecord) -> AppResult<crate::ApiKeyRecord> {
+            Err(AppError::Repository("not configured".into()))
+        }
+
+        async fn get_api_key_by_lookup_id(
+            &self,
+            _: &str,
+        ) -> AppResult<Option<crate::ApiKeyRecord>> {
+            Ok(None)
+        }
+
+        async fn list_api_keys(&self, _: &str) -> AppResult<Vec<crate::ApiKeyRecord>> {
+            Ok(Vec::new())
+        }
+
+        async fn list_environment_api_keys(&self) -> AppResult<Vec<crate::ApiKeyRecord>> {
+            Ok(Vec::new())
+        }
+
+        async fn upsert_environment_api_key(
+            &self,
+            _: crate::ApiKeyRecord,
+        ) -> AppResult<crate::ApiKeyRecord> {
+            Err(AppError::Repository("not configured".into()))
+        }
+
+        async fn revoke_api_key(
+            &self,
+            _: &str,
+            _: &str,
+            _: chrono::DateTime<Utc>,
+        ) -> AppResult<bool> {
+            Ok(false)
+        }
+
+        async fn touch_api_key_last_used(
+            &self,
+            _: &str,
+            _: chrono::DateTime<Utc>,
+        ) -> AppResult<bool> {
+            Ok(false)
+        }
+
+        async fn create_client_registration(
+            &self,
+            _: OAuthClientRegistrationRecord,
+        ) -> AppResult<OAuthClientRegistrationRecord> {
+            Err(AppError::Repository("not configured".into()))
+        }
+
+        async fn get_client_registration(
+            &self,
+            client_id: &str,
+        ) -> AppResult<Option<OAuthClientRegistrationRecord>> {
+            let mut responses = self.registration_responses.lock().await;
+            if !responses.is_empty() {
+                let registration = responses.remove(0);
+                return Ok((registration.client_id == client_id).then_some(registration));
+            }
+            drop(responses);
+
+            Ok(self
+                .registration
+                .as_ref()
+                .filter(|registration| registration.client_id == client_id)
+                .cloned())
+        }
+
+        async fn list_client_registrations(&self) -> AppResult<Vec<OAuthClientRegistrationRecord>> {
+            Ok(self.registration.clone().into_iter().collect())
+        }
+
+        async fn update_client_registration(
+            &self,
+            _: OAuthClientRegistrationRecord,
+            _: chrono::DateTime<Utc>,
+        ) -> AppResult<Option<OAuthClientRegistrationRecord>> {
+            Ok(None)
+        }
+
+        async fn delete_client_registration(
+            &self,
+            _: &str,
+            _: chrono::DateTime<Utc>,
+            _: &str,
+        ) -> AppResult<bool> {
+            Ok(false)
+        }
+
+        async fn is_refresh_grant_active(&self, _: &str, _: &str) -> AppResult<bool> {
+            Ok(false)
+        }
+
+        async fn create_authorization_code(
+            &self,
+            _: OAuthAuthorizationCodeRecord,
+        ) -> AppResult<OAuthAuthorizationCodeRecord> {
+            Err(AppError::Repository("not configured".into()))
+        }
+
+        async fn get_authorization_code(
+            &self,
+            _: &str,
+        ) -> AppResult<Option<OAuthAuthorizationCodeRecord>> {
+            Ok(None)
+        }
+
+        async fn consume_authorization_code(
+            &self,
+            _: &str,
+            _: chrono::DateTime<Utc>,
+        ) -> AppResult<bool> {
+            Ok(false)
+        }
+
+        async fn consume_authorization_code_and_create_refresh_grant(
+            &self,
+            _: OAuthAuthorizationCodeRecord,
+            _: chrono::DateTime<Utc>,
+            _: OAuthRefreshGrantRecord,
+            _: OAuthRefreshTokenRecord,
+            _: bool,
+        ) -> AppResult<Option<OAuthRefreshGrantRecord>> {
+            Ok(None)
+        }
+
+        async fn create_refresh_grant(
+            &self,
+            _: OAuthRefreshGrantRecord,
+            _: OAuthRefreshTokenRecord,
+            _: bool,
+        ) -> AppResult<OAuthRefreshGrantRecord> {
+            Err(AppError::Repository("not configured".into()))
+        }
+
+        async fn get_refresh_token(
+            &self,
+            _: &str,
+        ) -> AppResult<Option<(OAuthRefreshTokenRecord, OAuthRefreshGrantRecord)>> {
+            Ok(None)
+        }
+
+        async fn get_refresh_grant(&self, _: &str) -> AppResult<Option<OAuthRefreshGrantRecord>> {
+            let mut grants = self.grants.lock().await;
+            match grants.len() {
+                0 => Ok(None),
+                1 => Ok(grants.first().cloned()),
+                _ => Ok(Some(grants.remove(0))),
+            }
+        }
+
+        async fn rotate_refresh_token(
+            &self,
+            _: &str,
+            _: chrono::DateTime<Utc>,
+            _: OAuthRefreshTokenRecord,
+        ) -> AppResult<OAuthRefreshRotationOutcome> {
+            Ok(OAuthRefreshRotationOutcome::Unavailable)
+        }
+
+        async fn revoke_refresh_grant(
+            &self,
+            _: &str,
+            _: &str,
+            _: chrono::DateTime<Utc>,
+            _: &str,
+        ) -> AppResult<bool> {
+            Ok(false)
+        }
+
+        async fn revoke_refresh_family(
+            &self,
+            _: &str,
+            _: chrono::DateTime<Utc>,
+            _: &str,
+        ) -> AppResult<u64> {
+            Ok(0)
+        }
+
+        async fn revoke_user_refresh_grants(
+            &self,
+            _: &str,
+            _: chrono::DateTime<Utc>,
+            _: &str,
+        ) -> AppResult<u64> {
+            Ok(0)
+        }
+
+        async fn revoke_authless_refresh_grants(
+            &self,
+            _: chrono::DateTime<Utc>,
+            _: &str,
+        ) -> AppResult<u64> {
+            Ok(0)
+        }
+
+        async fn touch_refresh_grant_last_used(
+            &self,
+            _: &str,
+            _: &str,
+            _: chrono::DateTime<Utc>,
+        ) -> AppResult<bool> {
+            Ok(false)
+        }
+
+        async fn list_connected_apps(&self, _: &str) -> AppResult<Vec<OAuthConnectedAppRecord>> {
+            Ok(Vec::new())
+        }
+    }
+
+    #[async_trait::async_trait]
     impl ExternalIdentityVerifier for TestExternalIdentityVerifier {
         async fn verify_plex(
             &self,
@@ -1351,6 +1884,31 @@ mod tests {
                 display_name: user.display_name.clone(),
                 avatar_url: user.avatar_url.clone(),
                 remote_password_configured,
+            })
+        }
+
+        async fn verify_jellyfin_user_with_api_key(
+            &self,
+            connection_id: &str,
+            _: &str,
+            _: &str,
+            canonical_user_id: &str,
+        ) -> AppResult<VerifiedExternalIdentity> {
+            let user = self
+                .jellyfin_users
+                .iter()
+                .find(|user| user.id == canonical_user_id)
+                .ok_or_else(|| {
+                    AppError::Unauthorized("Jellyfin user verification failed".into())
+                })?;
+            Ok(VerifiedExternalIdentity {
+                provider: ExternalAccountProvider::Jellyfin,
+                connection_id: connection_id.to_string(),
+                external_user_id: user.id.clone(),
+                username: user.username.clone(),
+                display_name: user.display_name.clone(),
+                avatar_url: user.avatar_url.clone(),
+                remote_password_configured: None,
             })
         }
 
@@ -1537,6 +2095,12 @@ mod tests {
         }
 
         async fn get_by_id(&self, id: &str) -> AppResult<Option<MediaServerConnection>> {
+            let mut responses = self.get_by_id_responses.lock().await;
+            if !responses.is_empty() {
+                let connection = responses.remove(0);
+                return Ok((connection.id == id).then_some(connection));
+            }
+            drop(responses);
             Ok(self
                 .connections
                 .lock()
@@ -1865,6 +2429,26 @@ mod tests {
         media_server_connections: Vec<MediaServerConnection>,
         external_identity_verifier: Arc<dyn ExternalIdentityVerifier>,
     ) -> AppUseCase {
+        test_app_with_identity_oauth_media_servers_and_verifier(
+            settings,
+            users,
+            external_accounts,
+            Arc::new(TestMediaServerConnectionRepository::new(
+                media_server_connections,
+            )),
+            external_identity_verifier,
+            Arc::new(crate::null_repositories::NullOAuthRepository),
+        )
+    }
+
+    fn test_app_with_identity_oauth_media_servers_and_verifier(
+        settings: Arc<dyn SettingsRepository>,
+        users: Arc<dyn UserRepository>,
+        external_accounts: Arc<dyn UserExternalAccountRepository>,
+        media_server_connections: Arc<dyn MediaServerConnectionRepository>,
+        external_identity_verifier: Arc<dyn ExternalIdentityVerifier>,
+        oauth: Arc<dyn OAuthRepository>,
+    ) -> AppUseCase {
         let assembly = AppServices::builder(
             Arc::new(NullTitleRepository),
             Arc::new(NullShowRepository),
@@ -1879,10 +2463,9 @@ mod tests {
             String::new(),
         )
         .with_external_account_store(external_accounts)
+        .with_oauth_store(oauth)
         .with_external_identity_verifier(external_identity_verifier)
-        .with_media_server_connection_store(Arc::new(TestMediaServerConnectionRepository::new(
-            media_server_connections,
-        )))
+        .with_media_server_connection_store(media_server_connections)
         .build_partial_for_tests();
 
         AppUseCase::new(
@@ -2801,6 +3384,141 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn concurrent_first_links_converge_on_one_owner() {
+        let first_actor = regular_user("first-user");
+        let second_actor = regular_user("second-user");
+        let external_accounts = Arc::new(TestExternalAccountRepository::with_first_lookup_race(
+            Vec::new(),
+            2,
+        ));
+        let app = test_app_with_external_accounts(
+            Arc::new(TestSettingsRepository::default()),
+            external_accounts.clone(),
+        );
+        let verified = || VerifiedExternalIdentity {
+            provider: ExternalAccountProvider::Jellyfin,
+            connection_id: "jellyfin-main".to_string(),
+            external_user_id: "same-remote-user".to_string(),
+            username: "same-user".to_string(),
+            display_name: Some("Same User".to_string()),
+            avatar_url: None,
+            remote_password_configured: None,
+        };
+
+        let (first, second) = tokio::join!(
+            app.link_verified_external_account(&first_actor, verified()),
+            app.link_verified_external_account(&second_actor, verified()),
+        );
+
+        assert_eq!(usize::from(first.is_ok()) + usize::from(second.is_ok()), 1);
+        assert_eq!(
+            usize::from(matches!(
+                &first,
+                Err(AppError::Validation(message))
+                    if message == "external account is already linked to another Scryer user"
+            )) + usize::from(matches!(
+                &second,
+                Err(AppError::Validation(message))
+                    if message == "external account is already linked to another Scryer user"
+            )),
+            1,
+            "the losing first-link attempt must normalize to the ordinary cross-user conflict"
+        );
+
+        let accounts = external_accounts.accounts.lock().await;
+        assert_eq!(accounts.len(), 1);
+        assert_eq!(
+            accounts[0].external_user_id.as_deref(),
+            Some("same-remote-user")
+        );
+        assert!(
+            accounts[0].user_id == first_actor.id || accounts[0].user_id == second_actor.id,
+            "the unique provider identity must have exactly one owner"
+        );
+    }
+
+    #[tokio::test]
+    async fn atomic_claim_same_actor_refreshes_returned_account_metadata() {
+        let actor = regular_user("same-user");
+        let mut winner = active_jellyfin_account(&actor.id);
+        winner.external_user_id = Some("remote-user".to_string());
+        winner.username = "stale-username".to_string();
+        winner.display_name = Some("Stale Name".to_string());
+        winner.avatar_url = Some("https://jellyfin.example.test/stale.png".to_string());
+        let external_accounts = Arc::new(TestExternalAccountRepository::with_claim_winner(winner));
+        let app = test_app_with_external_accounts(
+            Arc::new(TestSettingsRepository::default()),
+            external_accounts.clone(),
+        );
+
+        let linked = app
+            .link_verified_external_account(
+                &actor,
+                VerifiedExternalIdentity {
+                    provider: ExternalAccountProvider::Jellyfin,
+                    connection_id: "jellyfin-main".to_string(),
+                    external_user_id: "remote-user".to_string(),
+                    username: "fresh-username".to_string(),
+                    display_name: Some("Fresh Name".to_string()),
+                    avatar_url: Some("https://jellyfin.example.test/fresh.png".to_string()),
+                    remote_password_configured: None,
+                },
+            )
+            .await
+            .expect("same actor should refresh the account returned by the atomic claim");
+
+        assert_eq!(linked.username, "fresh-username");
+        assert_eq!(linked.display_name.as_deref(), Some("Fresh Name"));
+        assert_eq!(
+            linked.avatar_url.as_deref(),
+            Some("https://jellyfin.example.test/fresh.png")
+        );
+        assert_eq!(linked.status, ExternalAccountStatus::Active);
+        assert!(linked.verified_at.is_some());
+
+        let accounts = external_accounts.accounts.lock().await;
+        assert_eq!(accounts.len(), 1);
+        assert_eq!(accounts[0], linked);
+    }
+
+    #[tokio::test]
+    async fn atomic_claim_rejects_a_disabled_returned_account() {
+        let actor = regular_user("disabled-user");
+        let mut winner = active_jellyfin_account(&actor.id);
+        winner.external_user_id = Some("remote-user".to_string());
+        winner.status = ExternalAccountStatus::Disabled;
+        let external_accounts = Arc::new(TestExternalAccountRepository::with_claim_winner(winner));
+        let app = test_app_with_external_accounts(
+            Arc::new(TestSettingsRepository::default()),
+            external_accounts.clone(),
+        );
+
+        let result = app
+            .link_verified_external_account(
+                &actor,
+                VerifiedExternalIdentity {
+                    provider: ExternalAccountProvider::Jellyfin,
+                    connection_id: "jellyfin-main".to_string(),
+                    external_user_id: "remote-user".to_string(),
+                    username: "attempted-refresh".to_string(),
+                    display_name: None,
+                    avatar_url: None,
+                    remote_password_configured: None,
+                },
+            )
+            .await;
+
+        assert!(
+            matches!(result, Err(AppError::Validation(message)) if message.contains("disabled")),
+            "a disabled account returned by the atomic claim must remain disabled"
+        );
+        let accounts = external_accounts.accounts.lock().await;
+        assert_eq!(accounts.len(), 1);
+        assert_eq!(accounts[0].status, ExternalAccountStatus::Disabled);
+        assert_eq!(accounts[0].username, "disabled-user");
+    }
+
+    #[tokio::test]
     async fn link_jellyfin_does_not_claim_pending_username_invite_without_external_id() {
         let admin = admin_user();
         let now = Utc::now();
@@ -3368,6 +4086,274 @@ mod tests {
         assert_eq!(account.username, "Invitee");
         assert_eq!(account.display_name.as_deref(), Some("Emby Invitee"));
         assert_eq!(account.status, ExternalAccountStatus::PendingClaim);
+    }
+
+    fn oauth_jellyfin_link_connection(api_key: &str) -> MediaServerConnection {
+        let mut connection = test_media_server_connection(
+            scryer_domain::MediaServerProvider::Jellyfin,
+            "jellyfin-main",
+        );
+        connection.external_url = Some("https://jellyfin.example.test".to_string());
+        connection.api_key = Some(api_key.to_string());
+        connection
+    }
+
+    fn oauth_jellyfin_link_registration() -> OAuthClientRegistrationRecord {
+        let now = Utc::now();
+        OAuthClientRegistrationRecord {
+            client_id: "jellyfin-plugin".to_string(),
+            display_name: "Jellyfin plugin".to_string(),
+            redirect_uris: vec!["https://jellyfin.example.test/Scryer/Auth/Callback".to_string()],
+            enabled: true,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    fn oauth_jellyfin_link_grant(
+        user_id: &str,
+        client_id: &str,
+        api_key_hash: String,
+    ) -> OAuthRefreshGrantRecord {
+        let now = Utc::now();
+        OAuthRefreshGrantRecord {
+            id: "jellyfin-link-grant".to_string(),
+            family_id: "jellyfin-link-family".to_string(),
+            user_id: user_id.to_string(),
+            authorization_source: OAuthAuthorizationSource::Authenticated,
+            client_id: client_id.to_string(),
+            redirect_uri: "https://jellyfin.example.test/Scryer/Auth/Callback".to_string(),
+            scope: "library jellyfin-link".to_string(),
+            jellyfin_connection_id: Some("jellyfin-main".to_string()),
+            jellyfin_external_url: Some("https://jellyfin.example.test".to_string()),
+            jellyfin_base_url: Some("https://jellyfin.example.test".to_string()),
+            jellyfin_api_key_hash: Some(api_key_hash),
+            auth_session_version: "1".to_string(),
+            created_at: now,
+            updated_at: now,
+            last_used_at: None,
+            revoked_at: None,
+            revoked_reason: None,
+        }
+    }
+
+    fn oauth_jellyfin_link_verifier(user_id: &str) -> Arc<dyn ExternalIdentityVerifier> {
+        Arc::new(TestExternalIdentityVerifier::with_jellyfin_users(vec![
+            JellyfinServerUser {
+                id: user_id.to_string(),
+                username: "Jellyfin user".to_string(),
+                display_name: Some("Jellyfin User".to_string()),
+                avatar_url: None,
+            },
+        ]))
+    }
+
+    #[tokio::test]
+    async fn oauth_jellyfin_link_rejects_ineligible_grants_before_remote_verification() {
+        let actor = regular_user("oauth-user");
+        let jellyfin_user_id = "0123456789abcdef0123456789abcdef";
+        for (name, mutate) in [
+            (
+                "scope",
+                Box::new(|grant: &mut OAuthRefreshGrantRecord| {
+                    grant.scope = "library".to_string();
+                }) as Box<dyn Fn(&mut OAuthRefreshGrantRecord)>,
+            ),
+            (
+                "actor",
+                Box::new(|grant: &mut OAuthRefreshGrantRecord| {
+                    grant.user_id = "other-user".to_string();
+                }),
+            ),
+            (
+                "client",
+                Box::new(|grant: &mut OAuthRefreshGrantRecord| {
+                    grant.client_id = "other-client".to_string();
+                }),
+            ),
+            (
+                "binding",
+                Box::new(|grant: &mut OAuthRefreshGrantRecord| {
+                    grant.jellyfin_connection_id = None;
+                }),
+            ),
+        ] {
+            let oauth = Arc::new(TestOAuthRepository::new(
+                Vec::new(),
+                Some(oauth_jellyfin_link_registration()),
+            ));
+            let app = test_app_with_identity_oauth_media_servers_and_verifier(
+                Arc::new(TestSettingsRepository::default()),
+                Arc::new(NullUserRepository),
+                Arc::new(TestExternalAccountRepository::default()),
+                Arc::new(TestMediaServerConnectionRepository::new(vec![
+                    oauth_jellyfin_link_connection("admin-key"),
+                ])),
+                oauth_jellyfin_link_verifier(jellyfin_user_id),
+                oauth.clone(),
+            );
+            let mut grant = oauth_jellyfin_link_grant(
+                &actor.id,
+                "jellyfin-plugin",
+                app.oauth_token_hash("jellyfin_link_api_key", "admin-key"),
+            );
+            mutate(&mut grant);
+            oauth.replace_grants(vec![grant]).await;
+
+            let result = app
+                .link_current_oauth_jellyfin_account(
+                    &actor,
+                    "jellyfin-plugin",
+                    "jellyfin-link-grant",
+                    jellyfin_user_id,
+                )
+                .await;
+            assert!(
+                matches!(result, Err(AppError::Unauthorized(_))),
+                "{name} should reject the OAuth grant, got {result:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn oauth_jellyfin_link_rechecks_base_url_and_api_key_after_verification() {
+        let actor = regular_user("oauth-user");
+        let jellyfin_user_id = "0123456789abcdef0123456789abcdef";
+        for (name, mut changed_connection) in [
+            ("base URL", oauth_jellyfin_link_connection("admin-key")),
+            ("API key", oauth_jellyfin_link_connection("rotated-key")),
+        ] {
+            if name == "base URL" {
+                changed_connection.base_url = "https://different-jellyfin.example.test".to_string();
+            }
+            let connection = oauth_jellyfin_link_connection("admin-key");
+            let oauth = Arc::new(TestOAuthRepository::new(
+                Vec::new(),
+                Some(oauth_jellyfin_link_registration()),
+            ));
+            let app = test_app_with_identity_oauth_media_servers_and_verifier(
+                Arc::new(TestSettingsRepository::default()),
+                Arc::new(NullUserRepository),
+                Arc::new(TestExternalAccountRepository::default()),
+                Arc::new(
+                    TestMediaServerConnectionRepository::with_get_by_id_responses(
+                        vec![connection.clone()],
+                        vec![connection, changed_connection],
+                    ),
+                ),
+                oauth_jellyfin_link_verifier(jellyfin_user_id),
+                oauth.clone(),
+            );
+            let grant = oauth_jellyfin_link_grant(
+                &actor.id,
+                "jellyfin-plugin",
+                app.oauth_token_hash("jellyfin_link_api_key", "admin-key"),
+            );
+            oauth.replace_grants(vec![grant]).await;
+
+            let result = app
+                .link_current_oauth_jellyfin_account(
+                    &actor,
+                    "jellyfin-plugin",
+                    "jellyfin-link-grant",
+                    jellyfin_user_id,
+                )
+                .await;
+            assert!(
+                matches!(result, Err(AppError::Unauthorized(ref message))
+                    if message == "Jellyfin link authorization changed"),
+                "changed {name} must reject after verification, got {result:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn oauth_jellyfin_link_rechecks_redirect_allowlist_after_verification() {
+        let actor = regular_user("oauth-user");
+        let jellyfin_user_id = "0123456789abcdef0123456789abcdef";
+        let registration = oauth_jellyfin_link_registration();
+        let mut changed_registration = registration.clone();
+        changed_registration.redirect_uris =
+            vec!["https://jellyfin.example.test/Scryer/Auth/ChangedCallback".to_string()];
+        let oauth = Arc::new(TestOAuthRepository::with_registration_responses(
+            Vec::new(),
+            Some(registration.clone()),
+            vec![registration, changed_registration],
+        ));
+        let app = test_app_with_identity_oauth_media_servers_and_verifier(
+            Arc::new(TestSettingsRepository::default()),
+            Arc::new(NullUserRepository),
+            Arc::new(TestExternalAccountRepository::default()),
+            Arc::new(TestMediaServerConnectionRepository::new(vec![
+                oauth_jellyfin_link_connection("admin-key"),
+            ])),
+            oauth_jellyfin_link_verifier(jellyfin_user_id),
+            oauth.clone(),
+        );
+        let grant = oauth_jellyfin_link_grant(
+            &actor.id,
+            "jellyfin-plugin",
+            app.oauth_token_hash("jellyfin_link_api_key", "admin-key"),
+        );
+        oauth.replace_grants(vec![grant]).await;
+
+        let result = app
+            .link_current_oauth_jellyfin_account(
+                &actor,
+                "jellyfin-plugin",
+                "jellyfin-link-grant",
+                jellyfin_user_id,
+            )
+            .await;
+
+        assert!(
+            matches!(result, Err(AppError::Unauthorized(ref message))
+                if message == "Jellyfin link authorization changed"),
+            "redirect changes during verification must reject before durable linking, got {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn oauth_jellyfin_link_hides_cross_user_identity_conflicts() {
+        let actor = regular_user("oauth-user");
+        let jellyfin_user_id = "0123456789abcdef0123456789abcdef";
+        let mut existing = active_jellyfin_account("other-user");
+        existing.external_user_id = Some(jellyfin_user_id.to_string());
+        let oauth = Arc::new(TestOAuthRepository::new(
+            Vec::new(),
+            Some(oauth_jellyfin_link_registration()),
+        ));
+        let app = test_app_with_identity_oauth_media_servers_and_verifier(
+            Arc::new(TestSettingsRepository::default()),
+            Arc::new(NullUserRepository),
+            Arc::new(TestExternalAccountRepository::new(vec![existing])),
+            Arc::new(TestMediaServerConnectionRepository::new(vec![
+                oauth_jellyfin_link_connection("admin-key"),
+            ])),
+            oauth_jellyfin_link_verifier(jellyfin_user_id),
+            oauth.clone(),
+        );
+        oauth
+            .replace_grants(vec![oauth_jellyfin_link_grant(
+                &actor.id,
+                "jellyfin-plugin",
+                app.oauth_token_hash("jellyfin_link_api_key", "admin-key"),
+            )])
+            .await;
+
+        let result = app
+            .link_current_oauth_jellyfin_account(
+                &actor,
+                "jellyfin-plugin",
+                "jellyfin-link-grant",
+                jellyfin_user_id,
+            )
+            .await;
+        assert!(
+            matches!(result, Err(AppError::Validation(ref message))
+                if message == "Jellyfin account could not be linked"),
+            "cross-user conflict must stay generic, got {result:?}"
+        );
     }
 
     #[tokio::test]

@@ -52,6 +52,7 @@ async fn graphql_typed_security_settings_defaults() {
 #[tokio::test]
 async fn graphql_oauth_client_registration_lifecycle_enforces_admin_access_and_revocation() {
     const REDIRECT_URI: &str = "https://client.example.test/oauth/callback";
+    const NEW_REDIRECT_URI: &str = "https://client.example.test/oauth/new-callback";
     const CODE_VERIFIER: &str = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
     const CODE_CHALLENGE: &str = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
 
@@ -122,9 +123,11 @@ async fn graphql_oauth_client_registration_lifecycle_enforces_admin_access_and_r
               oauthAuthorizationClient(
                 clientId: "{client_id}"
                 redirectUri: "{REDIRECT_URI}"
+                scope: "library jellyfin-link"
               ) {{
                 clientId
                 displayName
+                scope
               }}
             }}
             "#
@@ -140,6 +143,10 @@ async fn graphql_oauth_client_registration_lifecycle_enforces_admin_access_and_r
     assert_eq!(
         lookup["data"]["oauthAuthorizationClient"]["displayName"],
         "Example desktop client"
+    );
+    assert_eq!(
+        lookup["data"]["oauthAuthorizationClient"]["scope"],
+        "library"
     );
 
     let ordinary_user = ctx
@@ -279,6 +286,99 @@ async fn graphql_oauth_client_registration_lifecycle_enforces_admin_access_and_r
         .await
         .expect("refreshed OAuth access token is active");
 
+    let redirect_changed = schema_exec(
+        &ctx,
+        &format!(
+            r#"
+            mutation ChangeOAuthClientRedirectUris {{
+              updateOauthClientRegistration(
+                clientId: "{client_id}"
+                input: {{
+                  displayName: "Example desktop client"
+                  redirectUris: ["{NEW_REDIRECT_URI}"]
+                  enabled: true
+                }}
+              ) {{ enabled redirectUris }}
+            }}
+            "#
+        ),
+        Some(admin.clone()),
+    )
+    .await;
+    assert_no_errors(&redirect_changed);
+    assert_eq!(
+        redirect_changed["data"]["updateOauthClientRegistration"]["redirectUris"],
+        json!([NEW_REDIRECT_URI]),
+        "the committed registration must expose only the replacement allowlist"
+    );
+    assert!(
+        ctx.app
+            .validate_oauth_access_token(&client_id, &grant_id)
+            .await
+            .is_err(),
+        "changing a client's redirect allowlist must revoke its active grants"
+    );
+    assert!(
+        ctx.app
+            .refresh_oauth_token(&client_id, &refreshed.refresh_token, true)
+            .await
+            .is_err(),
+        "a redirect allowlist change must invalidate the refresh-token family"
+    );
+    assert!(
+        ctx.app
+            .create_oauth_authorization_code(
+                &admin,
+                &client_id,
+                REDIRECT_URI,
+                scryer_application::OAUTH_LIBRARY_SCOPE,
+                CODE_CHALLENGE,
+                "S256",
+                scryer_application::OAuthAuthorizationSource::Authenticated,
+                auth_session_version.as_deref(),
+            )
+            .await
+            .is_err(),
+        "the replaced redirect URI must be rejected after the old grant family is revoked"
+    );
+    let replacement_issued = ctx
+        .app
+        .create_oauth_authorization_code(
+            &admin,
+            &client_id,
+            NEW_REDIRECT_URI,
+            scryer_application::OAUTH_LIBRARY_SCOPE,
+            CODE_CHALLENGE,
+            "S256",
+            scryer_application::OAuthAuthorizationSource::Authenticated,
+            auth_session_version.as_deref(),
+        )
+        .await
+        .expect("the replacement redirect URI should issue a new grant after the update commits");
+    let replacement_tokens = ctx
+        .app
+        .exchange_oauth_authorization_code(
+            &client_id,
+            &replacement_issued.code,
+            NEW_REDIRECT_URI,
+            CODE_VERIFIER,
+            true,
+        )
+        .await
+        .expect("the replacement redirect URI should exchange after the update commits");
+    let (_, replacement_claims) = ctx
+        .app
+        .authenticate_token_with_claims(&replacement_tokens.access_token)
+        .await
+        .expect("replacement access token should authenticate");
+    let replacement_grant_id = replacement_claims
+        .oauth_grant_id
+        .expect("replacement OAuth token should carry its grant");
+    ctx.app
+        .validate_oauth_access_token(&client_id, &replacement_grant_id)
+        .await
+        .expect("replacement grant must be active after redirect-update revocation");
+
     let disabled = schema_exec(
         &ctx,
         &format!(
@@ -305,13 +405,13 @@ async fn graphql_oauth_client_registration_lifecycle_enforces_admin_access_and_r
     );
     assert!(
         ctx.app
-            .validate_oauth_access_token(&client_id, &grant_id)
+            .validate_oauth_access_token(&client_id, &replacement_grant_id)
             .await
             .is_err()
     );
     assert!(
         ctx.app
-            .refresh_oauth_token(&client_id, &refreshed.refresh_token, true)
+            .refresh_oauth_token(&client_id, &replacement_tokens.refresh_token, true)
             .await
             .is_err()
     );

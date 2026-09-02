@@ -696,13 +696,21 @@ impl SettingsQueries {
         #[graphql(desc = "OAuth client identifier from the authorization request.")]
         client_id: String,
         #[graphql(desc = "Redirect URI from the authorization request.")] redirect_uri: String,
+        #[graphql(desc = "Requested OAuth scopes, validated and canonicalized before display.")]
+        scope: Option<String>,
     ) -> GqlResult<OAuthAuthorizationClientPayload> {
         let app = app_from_ctx(ctx)?;
+        let form_login_enabled = auth_runtime_from_ctx(ctx)
+            .snapshot()
+            .effective_form_login_enabled;
+        let scope =
+            app.effective_oauth_authorization_scope(scope.as_deref(), form_login_enabled)?;
         app.validate_oauth_redirect_uri(&client_id, &redirect_uri)
             .await
             .map(|client| OAuthAuthorizationClientPayload {
                 client_id: client.client_id,
                 display_name: client.name,
+                scope,
             })
             .map_err(to_gql_error)
     }

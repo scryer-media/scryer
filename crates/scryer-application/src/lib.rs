@@ -164,8 +164,9 @@ pub use notifications::runtime::{
 };
 pub use oauth::{
     CreateOAuthClientRegistration, OAUTH_E2E_CLIENT_ENV, OAUTH_E2E_CLIENT_ID,
-    OAUTH_GENERIC_NATIVE_CLIENT_ID, OAUTH_LIBRARY_SCOPE, OAuthClientInfo, OAuthClientSource,
-    OAuthConnectedAppSummary, OAuthIssuedCode, OAuthTokenPair, UpdateOAuthClientRegistration,
+    OAUTH_GENERIC_NATIVE_CLIENT_ID, OAUTH_JELLYFIN_LINK_SCOPE, OAUTH_LIBRARY_SCOPE,
+    OAuthClientInfo, OAuthClientSource, OAuthConnectedAppSummary, OAuthIssuedCode, OAuthTokenPair,
+    UpdateOAuthClientRegistration,
 };
 pub use plugins::catalog::blake3_digest as plugin_wasm_blake3_digest;
 pub use plugins::catalog::decompress_zstd as plugin_wasm_decompress_zstd;
@@ -182,6 +183,7 @@ pub use services::{
     PluginInstallOperationKind, PluginInstallProgressSnapshot, PluginInstallState, RuntimeFeature,
     RuntimePerformanceClass, RuntimePerformanceSnapshot,
 };
+pub use types::canonicalize_jellyfin_user_id;
 pub use upstream_scheduler::{
     AccountQuotaKey, AdmissionReason, DeferralReason, EstimatedCost, ExpectedValueHint,
     OutboundDestinationCooldownSnapshotEntry, OutboundHostRpsSnapshotEntry,
@@ -277,8 +279,8 @@ pub use contracts::{
     IndexerDownloadClientMappingCatalog, IndexerDownloadClientMappingClient,
     IndexerDownloadClientMappingIndexer, IndexerDownloadClientProviderCompatibility,
     IndexerProxyConfigUpdate, IndexerProxyTestResult, IndexerRoutingEntry, IndexerRoutingPlan,
-    IndexerSyncPlan, IndexerValidationResult, InsertMediaFileInput, ManagedIndexerChildPlan,
-    ManagedIndexerRoutingScope, MediaAnalysisOutcome, MediaFileAnalysis,
+    IndexerSearchEligibility, IndexerSyncPlan, IndexerValidationResult, InsertMediaFileInput,
+    ManagedIndexerChildPlan, ManagedIndexerRoutingScope, MediaAnalysisOutcome, MediaFileAnalysis,
     MediaFileCatalogDisposition, MediaFileRole, NewBlocklistEntry, NewIndexerProxyConfig,
     NewSeedingProfile, NotificationScopeIdUpdate, ObservationResolution, ObservedClientJob,
     PendingReleasePageSort, PendingReleasesPageQuery, PendingStagedNzb, PersistedSeedGoals,
@@ -288,6 +290,7 @@ pub use contracts::{
     SubmissionScopeConflict, SubtitleGenerationInput, SubtitleProviderConfigUpdate,
     SubtitleProviderValidationResult, SubtitleStreamDetail, SuccessfulGrabCommit,
     TerminalDownloadHistoryRow, TitleHistoryFilter, TitleHistoryPage, WantedSearchOutcome,
+    indexer_search_eligibility,
 };
 pub use domain_events::DomainEventActor;
 pub use download_client_path_mappings::{

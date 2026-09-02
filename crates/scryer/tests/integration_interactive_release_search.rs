@@ -1,9 +1,9 @@
 //! Interactive release-search job integration tests (hotfix 0.17.1).
 //!
-//! Scenarios 1–4 drive the app-layer job methods directly against the full
+//! Scenarios 1–5 drive the app-layer job methods directly against the full
 //! production-parity search pipeline — discovery → MultiIndexerSearchClient
 //! with the REAL `InMemoryUpstreamScheduler` (the shared TestContext uses the
-//! Null scheduler) → real WASM newznab plugin → wiremock. Scenario 5 is a
+//! Null scheduler) → real WASM newznab plugin → wiremock. Scenario 6 is a
 //! GraphQL smoke test over the shared TestContext.
 
 #![recursion_limit = "256"]
@@ -133,6 +133,13 @@ fn indexer_config(
 }
 
 async fn setup_app(configs: Vec<IndexerConfig>) -> (AppUseCase, User) {
+    setup_app_with_movie_routing(configs, None).await
+}
+
+async fn setup_app_with_movie_routing(
+    configs: Vec<IndexerConfig>,
+    movie_routing: Option<Value>,
+) -> (AppUseCase, User) {
     disable_platform_keystore_for_tests();
     initialize_wasm_runtime_for_tests();
 
@@ -189,6 +196,19 @@ async fn setup_app(configs: Vec<IndexerConfig>) -> (AppUseCase, User) {
         ])
         .await
         .expect("seed indexer routing setting definition");
+    if let Some(movie_routing) = movie_routing {
+        scryer_application::SettingsRepository::upsert_setting_json(
+            &*settings_store,
+            SETTINGS_SCOPE_SYSTEM,
+            INDEXER_ROUTING_SETTINGS_KEY,
+            Some("movie".to_string()),
+            movie_routing.to_string(),
+            "integration_test",
+            None,
+        )
+        .await
+        .expect("seed movie indexer routing");
+    }
     let quality_profile_store = Arc::new(QualityProfileStore::new(datastore.clone()));
     let domain_event_store = Arc::new(DomainEventStore::new(datastore.clone()));
     let acquisition_store = Arc::new(AcquisitionStore::new(datastore.clone()));
@@ -858,7 +878,91 @@ async fn same_scope_restart_cancels_previous_job() {
     assert!(cancelled);
 }
 
-// ── 5. GraphQL smoke: start → poll → cancel-after-completion ──────────────
+// ── 5. Scope routing and per-search restrictions stay distinct ───────────
+
+#[tokio::test]
+async fn interactive_search_dispatches_all_scope_enabled_indexers_only() {
+    let world = MockServer::start().await;
+    mount_healthy(&world, "Paperman.2012.1080p.WEB-DL-WORLD", "world-1").await;
+    let c411 = MockServer::start().await;
+    mount_healthy(&c411, "Paperman.2012.720p.WEB-DL-C411", "c411-1").await;
+    let parent = MockServer::start().await;
+    mount_healthy(&parent, "Paperman.2012.2160p.WEB-DL-PARENT", "parent-1").await;
+
+    let now = chrono::Utc::now();
+    let routing = json!({
+        "world": { "enabled": true, "categories": ["2000"], "priority": 2 },
+        "c411": { "enabled": true, "categories": ["2000"], "priority": 1 },
+        "parent": { "enabled": false, "categories": ["2000"], "priority": 3 }
+    });
+    let (app, user) = setup_app_with_movie_routing(
+        vec![
+            indexer_config("world", format!("{}/api", world.uri()), "world-key", now),
+            indexer_config("c411", format!("{}/api", c411.uri()), "c411-key", now),
+            indexer_config("parent", format!("{}/api", parent.uri()), "parent-key", now),
+        ],
+        Some(routing),
+    )
+    .await;
+    let title_id = add_movie(&app, &user, "Paperman", "tt2388725").await;
+
+    let start = app
+        .start_interactive_release_search(&user, title_request(&title_id))
+        .await
+        .expect("start job");
+    assert_eq!(start.indexers.len(), 2, "initial dispatch: {start:?}");
+    assert!(
+        start
+            .indexers
+            .iter()
+            .any(|indexer| indexer.indexer_id == "world")
+    );
+    assert!(
+        start
+            .indexers
+            .iter()
+            .any(|indexer| indexer.indexer_id == "c411")
+    );
+    assert!(
+        !start
+            .indexers
+            .iter()
+            .any(|indexer| indexer.indexer_id == "parent")
+    );
+
+    let done = wait_for_snapshot(
+        &app,
+        &user,
+        &start.id,
+        Duration::from_secs(90),
+        |snapshot| snapshot.state != InteractiveReleaseSearchState::Running,
+    )
+    .await;
+    assert_eq!(done.state, InteractiveReleaseSearchState::Completed);
+    assert_eq!(
+        indexer_status(&done, "world").status,
+        InteractiveReleaseSearchIndexerStatus::Completed
+    );
+    assert_eq!(
+        indexer_status(&done, "c411").status,
+        InteractiveReleaseSearchIndexerStatus::Completed
+    );
+    assert!(
+        request_count(&world).await > 0,
+        "World route was not dispatched"
+    );
+    assert!(
+        request_count(&c411).await > 0,
+        "C411 route was not dispatched"
+    );
+    assert_eq!(
+        request_count(&parent).await,
+        0,
+        "scope-disabled parent must not be dispatched"
+    );
+}
+
+// ── 6. GraphQL smoke: start → poll → cancel-after-completion ──────────────
 
 async fn schema_exec(ctx: &TestContext, query: &str, user: &User) -> Value {
     let req = async_graphql::Request::new(query).data(user.clone());
