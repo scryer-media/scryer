@@ -479,6 +479,7 @@ fn dedupe_text_safe_structured_dispatch_queries(
 fn should_collapse_structured_nab_queries(
     configs: &[IndexerConfig],
     routing: Option<&IndexerRoutingPlan>,
+    search_restriction: Option<&HashSet<String>>,
     mode: SearchMode,
     now: chrono::DateTime<chrono::Utc>,
 ) -> bool {
@@ -504,9 +505,9 @@ fn should_collapse_structured_nab_queries(
             continue;
         }
 
-        if routing.is_some_and(|plan| {
-            plan.eligibility_for(&config.id) != crate::contracts::IndexerSearchEligibility::Eligible
-        }) {
+        if crate::contracts::indexer_search_eligibility(routing, search_restriction, &config.id)
+            != crate::contracts::IndexerSearchEligibility::Eligible
+        {
             continue;
         }
 
@@ -517,6 +518,52 @@ fn should_collapse_structured_nab_queries(
     }
 
     saw_nab_transport
+}
+
+fn has_eligible_search_indexer(
+    routing: Option<&IndexerRoutingPlan>,
+    search_restriction: Option<&HashSet<String>>,
+) -> bool {
+    match search_restriction {
+        Some(allowed) => allowed.iter().any(|indexer_id| {
+            crate::contracts::indexer_search_eligibility(routing, Some(allowed), indexer_id)
+                == crate::contracts::IndexerSearchEligibility::Eligible
+        }),
+        None => routing.is_none_or(|plan| plan.entries.values().any(|entry| entry.enabled)),
+    }
+}
+
+fn dispatch_routing_for_search_restriction(
+    configs: &[IndexerConfig],
+    routing: Option<&IndexerRoutingPlan>,
+    search_restriction: Option<&HashSet<String>>,
+) -> Option<IndexerRoutingPlan> {
+    let Some(allowed) = search_restriction else {
+        return routing.cloned();
+    };
+
+    let mut entries = configs
+        .iter()
+        .filter(|config| config.is_enabled)
+        .map(|config| {
+            (
+                config.id.clone(),
+                crate::contracts::IndexerRoutingEntry {
+                    enabled: true,
+                    categories: Vec::new(),
+                    priority: 0,
+                },
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    if let Some(routing) = routing {
+        entries.extend(routing.entries.clone());
+    }
+    for (indexer_id, entry) in &mut entries {
+        entry.enabled &= allowed.contains(indexer_id);
+    }
+
+    Some(IndexerRoutingPlan { entries })
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -1172,38 +1219,6 @@ impl AppUseCase {
         let mut indexer_routing = self
             .resolve_indexer_routing(library_id, scope_id.as_deref())
             .await;
-        // Restrict the search to the requested indexer subset (the convergence
-        // cursor's uncovered indexers). With no routing plan
-        // configured, synthesize one over the enabled indexers so the
-        // restriction still applies.
-        if let Some(allowed) = restrict_to_indexer_ids.as_ref() {
-            let mut plan = match indexer_routing.take() {
-                Some(plan) => plan,
-                None => crate::contracts::IndexerRoutingPlan::new(
-                    self.services
-                        .integrations
-                        .indexer_configs
-                        .list(None)
-                        .await
-                        .unwrap_or_default()
-                        .into_iter()
-                        .filter(|config| config.is_enabled)
-                        .map(|config| {
-                            (
-                                config.id,
-                                crate::contracts::IndexerRoutingEntry {
-                                    enabled: true,
-                                    categories: Vec::new(),
-                                    priority: 0,
-                                },
-                            )
-                        })
-                        .collect(),
-                ),
-            };
-            plan.restrict_to_indexers(allowed.clone());
-            indexer_routing = Some(plan);
-        }
         let newznab_categories = if newznab_categories.is_empty() {
             None
         } else {
@@ -1217,8 +1232,7 @@ impl AppUseCase {
         };
 
         // If routing exists and no indexer is eligible for this search, skip it entirely.
-        if let Some(ref plan) = indexer_routing
-            && !plan.has_eligible_entries()
+        if !has_eligible_search_indexer(indexer_routing.as_ref(), restrict_to_indexer_ids.as_ref())
         {
             info!(
                 caller = caller_label,
@@ -1240,16 +1254,25 @@ impl AppUseCase {
             .list(None)
             .await
             .unwrap_or_else(|error| {
-                warn!(error = %error, "failed to load indexer configs for transport-aware query collapse");
+                warn!(error = %error, "failed to load indexer configs for search planning");
                 vec![]
             });
         let collapse_structured_queries = search_subject_kind == ReleaseSearchSubjectKind::Episode
             && should_collapse_structured_nab_queries(
                 &configured_indexers,
                 indexer_routing.as_ref(),
+                restrict_to_indexer_ids.as_ref(),
                 mode,
                 chrono::Utc::now(),
             );
+        // Keep the restriction on the page sink as the source of truth for
+        // classification, while projecting it into the routing map for
+        // IndexerClient implementations that override only the legacy search method.
+        let dispatch_indexer_routing = dispatch_routing_for_search_restriction(
+            &configured_indexers,
+            indexer_routing.as_ref(),
+            restrict_to_indexer_ids.as_ref(),
+        );
 
         // Auto mode normally conserves API calls by using the first query, but
         // episode acquisition keeps season/title fallbacks so packs and ranges
@@ -1279,7 +1302,8 @@ impl AppUseCase {
 
         let mut set = JoinSet::new();
         let (page_tx, mut page_source) = mpsc::channel(2);
-        let page_sink = crate::IndexerSearchPageSink::new(page_tx, 2);
+        let page_sink = crate::IndexerSearchPageSink::new(page_tx, 2)
+            .with_indexer_restriction(restrict_to_indexer_ids.clone());
         let mut ids = HashMap::new();
         if let Some(imdb_id) = imdb_id.clone() {
             ids.insert("imdb_id".to_string(), imdb_id);
@@ -1330,7 +1354,7 @@ impl AppUseCase {
         let tagged_aliases = tagged_aliases.to_vec();
         let query_cancel_token = cancel_token.child_token();
         let plan_page_sink = page_sink.clone();
-        let plan_indexer_routing = indexer_routing.clone();
+        let plan_indexer_routing = dispatch_indexer_routing;
         set.spawn(async move {
             indexer_client
                 .search_queries_stream(
@@ -2500,7 +2524,7 @@ impl AppUseCase {
             indexer_count = entries.len(),
             "resolved per-indexer routing plan"
         );
-        Some(IndexerRoutingPlan::new(entries))
+        Some(IndexerRoutingPlan { entries })
     }
 }
 

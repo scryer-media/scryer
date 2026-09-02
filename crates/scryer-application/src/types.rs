@@ -2203,6 +2203,7 @@ pub struct IndexerSearchPage {
 pub struct IndexerSearchPageSink {
     sender: tokio::sync::mpsc::Sender<IndexerSearchPage>,
     reservations: std::sync::Arc<tokio::sync::Semaphore>,
+    indexer_restriction: Option<std::sync::Arc<std::collections::HashSet<String>>>,
 }
 
 #[derive(Debug)]
@@ -2216,7 +2217,20 @@ impl IndexerSearchPageSink {
         Self {
             sender,
             reservations: std::sync::Arc::new(tokio::sync::Semaphore::new(max_pages)),
+            indexer_restriction: None,
         }
+    }
+
+    pub fn with_indexer_restriction(
+        mut self,
+        indexer_ids: Option<std::collections::HashSet<String>>,
+    ) -> Self {
+        self.indexer_restriction = indexer_ids.map(std::sync::Arc::new);
+        self
+    }
+
+    pub fn indexer_restriction(&self) -> Option<&std::collections::HashSet<String>> {
+        self.indexer_restriction.as_deref()
     }
 
     pub async fn reserve(&self) -> Option<IndexerSearchPageReservation> {

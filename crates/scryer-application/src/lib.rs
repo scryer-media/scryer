@@ -290,6 +290,7 @@ pub use contracts::{
     SubmissionScopeConflict, SubtitleGenerationInput, SubtitleProviderConfigUpdate,
     SubtitleProviderValidationResult, SubtitleStreamDetail, SuccessfulGrabCommit,
     TerminalDownloadHistoryRow, TitleHistoryFilter, TitleHistoryPage, WantedSearchOutcome,
+    indexer_search_eligibility,
 };
 pub use domain_events::DomainEventActor;
 pub use download_client_path_mappings::{

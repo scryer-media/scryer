@@ -254,9 +254,11 @@ impl AppUseCase {
             if !config.is_enabled || !config.enable_interactive_search {
                 continue;
             }
-            if indexer_routing
-                .as_ref()
-                .is_some_and(|plan| !plan.is_enabled_for_scope(&config.id))
+            if crate::contracts::indexer_search_eligibility(
+                indexer_routing.as_ref(),
+                None,
+                &config.id,
+            ) != crate::contracts::IndexerSearchEligibility::Eligible
             {
                 continue;
             }

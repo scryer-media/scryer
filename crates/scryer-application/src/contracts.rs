@@ -1092,6 +1092,11 @@ pub struct IndexerRoutingEntry {
 /// Per-indexer routing plan for a given facet scope.
 /// When `Some`, indexers not in the map use default behavior; indexers
 /// with `enabled: false` are skipped entirely for this scope.
+#[derive(Clone, Debug)]
+pub struct IndexerRoutingPlan {
+    pub entries: std::collections::HashMap<String, IndexerRoutingEntry>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum IndexerSearchEligibility {
     Eligible,
@@ -1099,52 +1104,21 @@ pub enum IndexerSearchEligibility {
     DisabledForScope,
 }
 
-#[derive(Clone, Debug)]
-pub struct IndexerRoutingPlan {
-    pub entries: std::collections::HashMap<String, IndexerRoutingEntry>,
-    search_restriction: Option<std::collections::HashSet<String>>,
-}
-
-impl IndexerRoutingPlan {
-    pub fn new(entries: std::collections::HashMap<String, IndexerRoutingEntry>) -> Self {
-        Self {
-            entries,
-            search_restriction: None,
-        }
+pub fn indexer_search_eligibility(
+    routing: Option<&IndexerRoutingPlan>,
+    search_restriction: Option<&std::collections::HashSet<String>>,
+    indexer_id: &str,
+) -> IndexerSearchEligibility {
+    if search_restriction.is_some_and(|allowed| !allowed.contains(indexer_id)) {
+        return IndexerSearchEligibility::ExcludedBySearchRestriction;
     }
-
-    pub fn restrict_to_indexers(&mut self, indexer_ids: std::collections::HashSet<String>) {
-        self.search_restriction = Some(indexer_ids);
+    if routing
+        .and_then(|plan| plan.entries.get(indexer_id))
+        .is_some_and(|entry| !entry.enabled)
+    {
+        return IndexerSearchEligibility::DisabledForScope;
     }
-
-    pub fn is_enabled_for_scope(&self, indexer_id: &str) -> bool {
-        self.entries
-            .get(indexer_id)
-            .is_none_or(|entry| entry.enabled)
-    }
-
-    pub fn eligibility_for(&self, indexer_id: &str) -> IndexerSearchEligibility {
-        if self
-            .search_restriction
-            .as_ref()
-            .is_some_and(|allowed| !allowed.contains(indexer_id))
-        {
-            return IndexerSearchEligibility::ExcludedBySearchRestriction;
-        }
-        if !self.is_enabled_for_scope(indexer_id) {
-            return IndexerSearchEligibility::DisabledForScope;
-        }
-        IndexerSearchEligibility::Eligible
-    }
-
-    pub fn has_eligible_entries(&self) -> bool {
-        match self.search_restriction.as_ref() {
-            Some(allowed) => allowed.iter().any(|indexer_id| {
-                self.eligibility_for(indexer_id) == IndexerSearchEligibility::Eligible
-            }),
-            None => self.entries.values().any(|entry| entry.enabled),
-        }
-    }
+    IndexerSearchEligibility::Eligible
 }
 
 #[derive(Clone, Debug)]
@@ -1309,6 +1283,7 @@ mod tests {
 
     use super::{
         ClientJobLocator, IndexerRoutingEntry, IndexerRoutingPlan, IndexerSearchEligibility,
+        indexer_search_eligibility,
     };
 
     fn routing_entry(enabled: bool) -> IndexerRoutingEntry {
@@ -1320,56 +1295,51 @@ mod tests {
     }
 
     #[test]
-    fn search_restriction_does_not_mutate_scope_routing() {
-        let mut plan = IndexerRoutingPlan::new(HashMap::from([
-            ("world".to_string(), routing_entry(true)),
-            ("c411".to_string(), routing_entry(true)),
-            ("parent".to_string(), routing_entry(false)),
-        ]));
-
-        plan.restrict_to_indexers(HashSet::from(["c411".to_string()]));
+    fn search_restriction_is_distinct_from_scope_routing() {
+        let plan = IndexerRoutingPlan {
+            entries: HashMap::from([
+                ("world".to_string(), routing_entry(true)),
+                ("c411".to_string(), routing_entry(true)),
+                ("parent".to_string(), routing_entry(false)),
+            ]),
+        };
+        let c411_only = HashSet::from(["c411".to_string()]);
 
         assert_eq!(
-            plan.eligibility_for("c411"),
+            indexer_search_eligibility(Some(&plan), Some(&c411_only), "c411"),
             IndexerSearchEligibility::Eligible
         );
         assert_eq!(
-            plan.eligibility_for("world"),
+            indexer_search_eligibility(Some(&plan), Some(&c411_only), "world"),
             IndexerSearchEligibility::ExcludedBySearchRestriction
         );
         assert_eq!(
-            plan.eligibility_for("parent"),
+            indexer_search_eligibility(Some(&plan), Some(&c411_only), "parent"),
             IndexerSearchEligibility::ExcludedBySearchRestriction
         );
         assert!(plan.entries["world"].enabled);
         assert!(plan.entries["c411"].enabled);
         assert!(!plan.entries["parent"].enabled);
-        assert!(plan.has_eligible_entries());
     }
 
     #[test]
     fn selected_scope_disabled_and_default_routed_indexers_are_distinct() {
-        let mut disabled_plan = IndexerRoutingPlan::new(HashMap::from([(
-            "parent".to_string(),
-            routing_entry(false),
-        )]));
-        disabled_plan.restrict_to_indexers(HashSet::from(["parent".to_string()]));
+        let disabled_plan = IndexerRoutingPlan {
+            entries: HashMap::from([("parent".to_string(), routing_entry(false))]),
+        };
+        let parent_only = HashSet::from(["parent".to_string()]);
         assert_eq!(
-            disabled_plan.eligibility_for("parent"),
+            indexer_search_eligibility(Some(&disabled_plan), Some(&parent_only), "parent"),
             IndexerSearchEligibility::DisabledForScope
         );
-        assert!(!disabled_plan.has_eligible_entries());
-
-        let mut default_plan = IndexerRoutingPlan::new(HashMap::new());
-        default_plan.restrict_to_indexers(HashSet::from(["new-indexer".to_string()]));
+        let default_plan = IndexerRoutingPlan {
+            entries: HashMap::new(),
+        };
+        let new_indexer_only = HashSet::from(["new-indexer".to_string()]);
         assert_eq!(
-            default_plan.eligibility_for("new-indexer"),
+            indexer_search_eligibility(Some(&default_plan), Some(&new_indexer_only), "new-indexer"),
             IndexerSearchEligibility::Eligible
         );
-        assert!(default_plan.has_eligible_entries());
-
-        default_plan.restrict_to_indexers(HashSet::new());
-        assert!(!default_plan.has_eligible_entries());
     }
 
     #[test]
