@@ -9327,6 +9327,36 @@ type MediaRequestCountsPayload {
 }
 
 """
+One provider-specific rating submitted with a media request.
+"""
+input MediaRequestExternalRatingInput {
+	"""
+	Rating provider name.
+	"""
+	source: String!
+	"""
+	Provider rating value before normalization, or null when absent.
+	"""
+	value: Float
+	"""
+	Provider score on its native scale, or null when absent.
+	"""
+	score: Float
+	"""
+	Score normalized to the shared comparison scale.
+	"""
+	normalized: Float!
+	"""
+	Number of votes reported by the provider, or null when absent.
+	"""
+	votes: Int
+	"""
+	Provider page for this rating.
+	"""
+	url: String!
+}
+
+"""
 One provider-specific rating captured when a media request was submitted.
 """
 type MediaRequestExternalRatingPayload {
@@ -11341,7 +11371,9 @@ type MutationRoot {
 		input: LinkJellyfinAccountInput!
 	): LinkedAccountPayload!
 	"""
-	Links the current OAuth caller to the Jellyfin user bound to the plugin's approved OAuth grant. Neither a Scryer user nor a connection may be selected by the caller.
+	Links the current OAuth caller to the Jellyfin user bound to the
+	plugin's approved OAuth grant. Neither a Scryer user nor a connection
+	may be selected by the caller.
 	"""
 	linkCurrentOAuthJellyfinAccount(
 		"""
@@ -12266,7 +12298,7 @@ type OauthAuthorizationClientPayload {
 	"""
 	displayName: String!
 	"""
-	Server-validated, canonical requested OAuth scope set.
+	Server-validated, canonical requested scope set for this authorization decision.
 	"""
 	scope: String!
 }
@@ -14592,7 +14624,7 @@ type QueryRoot {
 	"""
 	oauthClientRegistrations: [OauthClientRegistrationPayload!]!
 	"""
-	Resolves display information and canonical scope for an OAuth authorization request after validating its callback URL.
+	Resolves the display name for an OAuth authorization request after validating its callback URL.
 	"""
 	oauthAuthorizationClient(
 		"""
@@ -17169,36 +17201,6 @@ type StringConfigValuePayload {
 	String value.
 	"""
 	value: String!
-}
-
-"""
-One provider-specific rating submitted with a media request.
-"""
-input MediaRequestExternalRatingInput {
-	"""
-	Rating provider name.
-	"""
-	source: String!
-	"""
-	Provider rating value before normalization, or null when absent.
-	"""
-	value: Float
-	"""
-	Provider score on its native scale, or null when absent.
-	"""
-	score: Float
-	"""
-	Score normalized to the shared comparison scale.
-	"""
-	normalized: Float!
-	"""
-	Number of votes reported by the provider, or null when absent.
-	"""
-	votes: Int
-	"""
-	Provider page for this rating.
-	"""
-	url: String!
 }
 
 """
