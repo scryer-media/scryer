@@ -47,7 +47,10 @@ import {
   classBlocksStart,
   classificationLabelKey,
   classifiedTitlePlacement,
+  crossLibraryDestinations,
   destinationLibraryDisabledReasonKey,
+  eligibleSameLibraryRoots,
+  initialMoveStep,
   isAmbiguousDestinationBlock,
   isCrossLibraryDestination,
   isSameNameWarning,
@@ -55,12 +58,16 @@ import {
   mergeRoleChangeReasonKey,
   mergeRoleLabelKey,
   mergeSummaryPresentation,
+  movesThroughWizard,
+  moveWizardCanAdvance,
+  nextMoveStep,
   offersModeSelection,
   orderedClassificationGroups,
   orderedPlanKindCounts,
   orderedPlanSections,
   planKindLabelKey,
   previewCanStart,
+  previousMoveStep,
   remainingSelection,
   REQUESTABLE_MOVE_MODES,
   sameNamedDestinationTitle,
@@ -75,6 +82,8 @@ import {
   type LocationOperationPreview,
   type LocationPlanItem,
   type MergeSummaryPresentation,
+  type MoveDestinationKind,
+  type MoveWizardStep,
   type RequestableMoveMode,
   type TitleLocationClass,
 } from "@/lib/location-operations";
@@ -123,6 +132,14 @@ function sortRoots(roots: LibraryRootRecord[]): LibraryRootRecord[] {
  * Move workflow for FR-010–FR-017 and FR-086: pick a destination, read the
  * whole plan (every classification group, including the empty and the
  * no-op ones), deselect what blocks the start, then confirm the fingerprint.
+ *
+ * Two ways in. A caller that already picked a destination root (the overview's
+ * bulk edit) hands `initialRootId` over and the dialog opens straight on the
+ * plan. A caller that only asked to move something (the title panel's
+ * "Move To…" action) opens the wizard instead: what kind of move this is, then
+ * where it goes, then the same plan. The wizard exists because a root picker
+ * alone cannot express a cross-library move — a library with one root offers no
+ * other value to pick, and reselecting the current one fires nothing.
  */
 export function MoveTitlesDialog({
   open,
@@ -142,6 +159,13 @@ export function MoveTitlesDialog({
   const soleSourceLibraryId =
     sourceLibraryIds.length === 1 ? sourceLibraryIds[0] : null;
 
+  // The wizard is the entry point without a pre-picked root; with one, the
+  // dialog is exactly what it was before this step existed.
+  const throughWizard = movesThroughWizard(initialRootId);
+  const [step, setStep] = React.useState<MoveWizardStep>(() =>
+    initialMoveStep(initialRootId),
+  );
+  const [kind, setKind] = React.useState<MoveDestinationKind | null>(null);
   const [libraryId, setLibraryId] = React.useState<string>(
     soleSourceLibraryId ?? "",
   );
@@ -192,6 +216,20 @@ export function MoveTitlesDialog({
     () => sortRoots(libraryById.get(libraryId)?.roots ?? []),
     [libraryById, libraryId],
   );
+  // The wizard's two destination shapes: the source library's other roots, and
+  // every library that is not the source one.
+  const sameLibraryRoots = React.useMemo(
+    () =>
+      eligibleSameLibraryRoots(
+        sortRoots(libraryById.get(soleSourceLibraryId ?? "")?.roots ?? []),
+        titles.map((title) => title.rootFolderId ?? null),
+      ),
+    [libraryById, soleSourceLibraryId, titles],
+  );
+  const otherLibraries = React.useMemo(
+    () => crossLibraryDestinations(libraries, soleSourceLibraryId),
+    [libraries, soleSourceLibraryId],
+  );
   const rootPathById = React.useMemo(() => {
     const paths = new Map<string, string>();
     for (const library of libraries) {
@@ -207,6 +245,8 @@ export function MoveTitlesDialog({
     if (!open) {
       return;
     }
+    setStep(initialMoveStep(initialRootId));
+    setKind(null);
     setLibraryId(soleSourceLibraryId ?? "");
     setRootId(initialRootId ?? "");
     setMode("MOVE_WITH_SCRYER");
@@ -231,7 +271,9 @@ export function MoveTitlesDialog({
   // Every destination or selection change voids the previous fingerprint, so
   // the preview is re-read rather than patched (FR-016, FR-086).
   React.useEffect(() => {
-    if (!open || !rootId || selection.length === 0) {
+    // The wizard's earlier steps are picks, not requests: nothing is planned
+    // until the destination is settled and the plan step is on screen.
+    if (!open || step !== "plan" || !rootId || selection.length === 0) {
       setPreview(null);
       setPreviewLoading(false);
       return undefined;
@@ -300,7 +342,7 @@ export function MoveTitlesDialog({
     // `selectionKey` stands in for `selection`: the identity changes on every
     // render, the contents do not.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [client, libraryId, mode, open, previewNonce, rootId, selectionKey, t]);
+  }, [client, libraryId, mode, open, previewNonce, rootId, selectionKey, step, t]);
 
   const groups = React.useMemo(
     () => orderedClassificationGroups(preview?.classification),
@@ -414,6 +456,49 @@ export function MoveTitlesDialog({
     () => destinationLibraryDisabledReasonKey(sourceLibraryIds),
     [sourceLibraryIds],
   );
+  // A selection spanning several libraries has no single library to stay
+  // inside, so "another root" is not a move it can express (FR-017).
+  const mixedSourceLibraries = sourceLibraryIds.length > 1;
+  // A library with no other root has nowhere to move the selection inside
+  // itself; the kind step says so up front instead of leading to an empty
+  // picker one click later.
+  const noOtherRoots = !mixedSourceLibraries && sameLibraryRoots.length === 0;
+  const rootKindUnavailable = mixedSourceLibraries || noOtherRoots;
+
+  const chooseKind = React.useCallback(
+    (value: MoveDestinationKind) => {
+      setKind(value);
+      // Staying inside the library pins the destination library to the source;
+      // leaving it starts from no library at all, so the picker is a choice.
+      setLibraryId(value === "root" ? soleSourceLibraryId ?? "" : "");
+      setRootId("");
+    },
+    [soleSourceLibraryId],
+  );
+
+  const goNext = React.useCallback(() => {
+    setStep((current) => nextMoveStep(current));
+  }, []);
+
+  const goBack = React.useCallback(() => {
+    setStep((current) => {
+      const previous = previousMoveStep(current);
+      if (previous === "kind") {
+        // Going back past the destination step discards the destination; the
+        // kind itself stays selected, because that is the step's own control.
+        // The library follows the kind the way `chooseKind` set it, so a
+        // transfer never comes back with the source library silently pinned.
+        setLibraryId(kind === "root" ? soleSourceLibraryId ?? "" : "");
+        setRootId("");
+      }
+      return previous;
+    });
+  }, [kind, soleSourceLibraryId]);
+
+  const canAdvance = moveWizardCanAdvance(step, { kind, libraryId, rootId });
+  // The destination step's root list: the source library's other roots for a
+  // same-library move, the chosen library's roots for a transfer.
+  const wizardRoots = kind === "root" ? sameLibraryRoots : destinationRoots;
 
   // Naming the destination library is what makes a cross-library transfer
   // readable: every row otherwise states only paths (FR-016, US6).
@@ -439,7 +524,9 @@ export function MoveTitlesDialog({
         <DialogHeader>
           <DialogTitle>{t("move.dialogTitle")}</DialogTitle>
           <DialogDescription>
-            {t("move.dialogDescription", { count: titles.length })}
+            {step === "kind"
+              ? t("move.wizardKindDescription")
+              : t("move.dialogDescription", { count: titles.length })}
           </DialogDescription>
         </DialogHeader>
 
@@ -451,6 +538,174 @@ export function MoveTitlesDialog({
             viewLabel={t("move.viewInActivity")}
             onNavigated={() => onOpenChange(false)}
           />
+        ) : step === "kind" ? (
+          /* Step 1: which of the two moves this is. The destination controls
+             differ per kind, so the kind is asked first rather than inferred
+             from a picker that can only express one of them. */
+          <div className="space-y-2">
+            <RadioGroup
+              value={kind ?? ""}
+              onValueChange={(value) => chooseKind(value as MoveDestinationKind)}
+              className="space-y-2"
+            >
+              <label
+                className={cn(
+                  "flex items-start gap-3 rounded-lg border border-border px-3 py-3 text-sm",
+                  rootKindUnavailable
+                    ? "opacity-60"
+                    : "cursor-pointer hover:bg-muted/20",
+                )}
+              >
+                <RadioGroupItem
+                  id="move-titles-kind-root"
+                  value="root"
+                  disabled={rootKindUnavailable}
+                  className="mt-0.5"
+                />
+                <span className="min-w-0">
+                  <span className="block font-medium text-foreground">
+                    {t("move.kindRootHeading")}
+                  </span>
+                  <span className="block text-xs text-muted-foreground">
+                    {t("move.kindRootHelp")}
+                  </span>
+                  {mixedSourceLibraries ? (
+                    <span
+                      id="move-titles-mixed-libraries"
+                      className="mt-1 block text-xs text-[var(--scry-warning-text)]"
+                    >
+                      {t("move.destinationMixedSourceLibraries")}
+                    </span>
+                  ) : null}
+                  {noOtherRoots ? (
+                    <span
+                      id="move-titles-no-other-roots"
+                      className="mt-1 block text-xs text-[var(--scry-warning-text)]"
+                    >
+                      {t("move.noOtherRoots")}
+                    </span>
+                  ) : null}
+                </span>
+              </label>
+
+              <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-border px-3 py-3 text-sm hover:bg-muted/20">
+                <RadioGroupItem
+                  id="move-titles-kind-library"
+                  value="library"
+                  className="mt-0.5"
+                />
+                <span className="min-w-0">
+                  <span className="block font-medium text-foreground">
+                    {t("move.kindLibraryHeading")}
+                  </span>
+                  <span className="block text-xs text-muted-foreground">
+                    {t("move.kindLibraryHelp")}
+                  </span>
+                </span>
+              </label>
+            </RadioGroup>
+          </div>
+        ) : step === "destination" ? (
+          /* Step 2: where. Same-library moves pick a root the selection is not
+             already on; cross-library moves pick the library first, because the
+             roots on offer belong to it. */
+          <div className="space-y-3">
+            {kind === "library" ? (
+              <div className="min-w-0">
+                <label
+                  className="mb-1 block text-xs font-medium text-muted-foreground"
+                  htmlFor="move-titles-destination-library"
+                >
+                  {t("move.destinationLibrary")}
+                </label>
+                <Select
+                  value={libraryId}
+                  onValueChange={(value) => {
+                    setLibraryId(value);
+                    setRootId("");
+                  }}
+                >
+                  <SelectTrigger
+                    id="move-titles-destination-library"
+                    className="h-9 w-full"
+                  >
+                    <SelectValue placeholder={t("move.destinationLibrary")} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {otherLibraries.map((library) => (
+                      <SelectItem
+                        key={library.id}
+                        value={library.id}
+                        disabled={destinationDisabledReasonKey !== null}
+                      >
+                        {destinationDisabledReasonKey === null
+                          ? library.name
+                          : `${library.name} — ${t(destinationDisabledReasonKey)}`}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {mixedSourceLibraries ? (
+                  <p
+                    id="move-titles-mixed-libraries"
+                    className="mt-1 text-xs text-[var(--scry-warning-text)]"
+                  >
+                    {t("move.destinationMixedSourceLibraries")}
+                  </p>
+                ) : null}
+                {crossLibrary ? (
+                  <p
+                    id="move-titles-cross-library-notice"
+                    className="mt-1 text-xs text-muted-foreground"
+                  >
+                    {t("move.destinationCrossLibraryNotice", {
+                      library: libraryName(libraryId) ?? libraryId,
+                    })}
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+
+            <div className="min-w-0">
+              <label
+                className="mb-1 block text-xs font-medium text-muted-foreground"
+                htmlFor="move-titles-destination-root"
+              >
+                {t("move.destinationRoot")}
+              </label>
+              <Select
+                value={rootId}
+                onValueChange={setRootId}
+                disabled={wizardRoots.length === 0}
+              >
+                <SelectTrigger
+                  id="move-titles-destination-root"
+                  className="h-9 w-full font-[var(--font-code)] text-sm"
+                >
+                  <SelectValue
+                    placeholder={t("move.destinationRootPlaceholder")}
+                  />
+                </SelectTrigger>
+                <SelectContent>
+                  {wizardRoots.map((root) => (
+                    <SelectItem key={root.id} value={root.id}>
+                      {root.path}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {/* The honest answer when the library has nowhere else to put the
+                  selection, rather than an empty picker that does nothing. */}
+              {kind === "root" && wizardRoots.length === 0 ? (
+                <p
+                  id="move-titles-no-other-roots"
+                  className="mt-1 text-xs text-[var(--scry-warning-text)]"
+                >
+                  {t("move.noOtherRoots")}
+                </p>
+              ) : null}
+            </div>
+          </div>
         ) : (
         <div className="max-h-[65vh] space-y-4 overflow-y-auto pr-1">
           <div className="grid gap-3 sm:grid-cols-2">
@@ -911,13 +1166,42 @@ export function MoveTitlesDialog({
             onDismiss={() => onOpenChange(false)}
           />
           {startedOperationId ? null : (
-            <LocationDialogPrimaryButton
-              id="move-titles-confirm"
-              label={t("move.confirm")}
-              busy={starting}
-              disabled={!canStart}
-              onClick={() => void handleStart()}
-            />
+            <>
+              {/* Back exists wherever there is a step behind this one: always on
+                  the destination step, and on the plan step only when the
+                  wizard is what got us there (a bulk edit opened on the plan). */}
+              {step === "destination" ||
+              (step === "plan" && throughWizard) ? (
+                <Button
+                  id="move-titles-back"
+                  type="button"
+                  variant="outline"
+                  onClick={goBack}
+                  disabled={starting}
+                >
+                  {t("move.back")}
+                </Button>
+              ) : null}
+              {step === "plan" ? (
+                <LocationDialogPrimaryButton
+                  id="move-titles-confirm"
+                  label={t("move.confirm")}
+                  busy={starting}
+                  disabled={!canStart}
+                  onClick={() => void handleStart()}
+                />
+              ) : (
+                <Button
+                  id="move-titles-next"
+                  type="button"
+                  variant="primary"
+                  onClick={goNext}
+                  disabled={!canAdvance}
+                >
+                  {t("move.next")}
+                </Button>
+              )}
+            </>
           )}
         </DialogFooter>
       </DialogContent>

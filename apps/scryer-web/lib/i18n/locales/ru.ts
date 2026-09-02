@@ -5192,6 +5192,21 @@ const ru: LocaleDictionary = {
   "move.destinationLibrary": "Целевая библиотека",
   "move.destinationRoot": "Целевой корневой каталог",
   "move.destinationRootPlaceholder": "Выберите корневой каталог",
+  "move.actionHeading": "Переместить в…",
+  "move.actionDescription":
+    "Переместить файлы этого тайтла в другой корневой каталог или в другую библиотеку.",
+  "move.actionButton": "Переместить…",
+  "move.wizardKindDescription": "Выберите, куда переместить этот тайтл.",
+  "move.kindRootHeading": "Переместить в другой корневой каталог",
+  "move.kindRootHelp":
+    "Тайтл останется в этой библиотеке, а его файлы переедут в другой её корневой каталог.",
+  "move.kindLibraryHeading": "Переместить в другую библиотеку",
+  "move.kindLibraryHelp":
+    "Перенести тайтл в другую библиотеку, в один из её корневых каталогов.",
+  "move.noOtherRoots":
+    "В этой библиотеке нет другого корневого каталога для перемещения. Добавьте его в библиотеку или переместите тайтл в другую библиотеку.",
+  "move.back": "Назад",
+  "move.next": "Далее",
   "move.destinationRootHelp": "Смена назначения открывает процесс перемещения вместо сохранения тайтла.",
   "move.destinationNoSelection": "Тайтлы не выбраны.",
   "move.destinationMixedSourceLibraries": "Выбор охватывает несколько библиотек; перемещайте по одной библиотеке за раз.",

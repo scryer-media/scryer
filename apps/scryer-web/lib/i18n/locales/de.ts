@@ -2122,6 +2122,22 @@ const de: LocaleDictionary = {
   "move.destinationLibrary": "Zielbibliothek",
   "move.destinationRoot": "Ziel-Stammverzeichnis",
   "move.destinationRootPlaceholder": "Stammverzeichnis wählen",
+  "move.actionHeading": "Verschieben nach …",
+  "move.actionDescription":
+    "Die Dateien dieses Titels in einen anderen Stammordner oder in eine andere Bibliothek verschieben.",
+  "move.actionButton": "Verschieben nach …",
+  "move.wizardKindDescription":
+    "Wähle, wohin dieser Titel verschoben werden soll.",
+  "move.kindRootHeading": "In einen anderen Stammordner verschieben",
+  "move.kindRootHelp":
+    "Der Titel bleibt in dieser Bibliothek; seine Dateien wandern in einen ihrer anderen Stammordner.",
+  "move.kindLibraryHeading": "In eine andere Bibliothek verschieben",
+  "move.kindLibraryHelp":
+    "Den Titel in eine andere Bibliothek übertragen, in einen ihrer Stammordner.",
+  "move.noOtherRoots":
+    "Diese Bibliothek hat keinen weiteren Stammordner als Ziel. Füge der Bibliothek einen hinzu oder verschiebe den Titel in eine andere Bibliothek.",
+  "move.back": "Zurück",
+  "move.next": "Weiter",
   "move.destinationRootHelp": "Das Ändern des Ziels öffnet den Verschiebe-Ablauf, statt den Titel zu speichern.",
   "move.destinationNoSelection": "Es sind keine Titel ausgewählt.",
   "move.destinationMixedSourceLibraries": "Die Auswahl umfasst mehrere Bibliotheken; verschiebe jeweils nur eine Bibliothek.",

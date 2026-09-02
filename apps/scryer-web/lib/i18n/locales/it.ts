@@ -2130,6 +2130,21 @@ const it: LocaleDictionary = {
   "move.destinationLibrary": "Libreria di destinazione",
   "move.destinationRoot": "Radice di destinazione",
   "move.destinationRootPlaceholder": "Scegli una radice",
+  "move.actionHeading": "Sposta in…",
+  "move.actionDescription":
+    "Sposta i file di questo titolo in un'altra cartella radice o in un'altra libreria.",
+  "move.actionButton": "Sposta in…",
+  "move.wizardKindDescription": "Scegli dove deve andare questo titolo.",
+  "move.kindRootHeading": "Sposta in un'altra radice",
+  "move.kindRootHelp":
+    "Il titolo resta in questa libreria e i suoi file passano a un'altra delle sue cartelle radice.",
+  "move.kindLibraryHeading": "Sposta in un'altra libreria",
+  "move.kindLibraryHelp":
+    "Trasferisci il titolo in un'altra libreria, in una delle cartelle radice di quella libreria.",
+  "move.noOtherRoots":
+    "Questa libreria non ha altre cartelle radice in cui spostare. Aggiungine una alla libreria oppure sposta il titolo in un'altra libreria.",
+  "move.back": "Indietro",
+  "move.next": "Avanti",
   "move.destinationRootHelp": "Cambiare la destinazione apre il flusso di spostamento invece di salvare il titolo.",
   "move.destinationNoSelection": "Nessun titolo selezionato.",
   "move.destinationMixedSourceLibraries": "La selezione copre più librerie; sposta una libreria alla volta.",

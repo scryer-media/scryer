@@ -24,6 +24,13 @@ import {
   classBlocksStart,
   classifiedTitlePlacement,
   classMovesFiles,
+  crossLibraryDestinations,
+  eligibleSameLibraryRoots,
+  initialMoveStep,
+  moveWizardCanAdvance,
+  movesThroughWizard,
+  nextMoveStep,
+  previousMoveStep,
   isActiveWorkBlock,
   isAmbiguousDestinationBlock,
   isBlockedSelectionMessage,
@@ -1824,4 +1831,106 @@ test("a file the stored plan cannot fully name still says what it can", () => {
       ["DEDUP", "Arrival.nfo", null],
     ],
   );
+});
+
+// --------------------------------------------------------------------------
+// Move wizard steps
+// --------------------------------------------------------------------------
+
+test("the dialog opens on the plan only when the caller already picked a root", () => {
+  assert.equal(initialMoveStep("root-2"), "plan");
+  assert.equal(initialMoveStep(null), "kind");
+  assert.equal(initialMoveStep(undefined), "kind");
+  assert.equal(initialMoveStep(""), "kind");
+  assert.equal(movesThroughWizard("root-2"), false);
+  assert.equal(movesThroughWizard(null), true);
+});
+
+test("a same-library move never offers a root the selection already sits on", () => {
+  const roots = [{ id: "root-1" }, { id: "root-2" }, { id: "root-3" }];
+
+  assert.deepEqual(
+    eligibleSameLibraryRoots(roots, ["root-1"]).map((root) => root.id),
+    ["root-2", "root-3"],
+  );
+  // A blank or missing current root occupies nothing.
+  assert.deepEqual(
+    eligibleSameLibraryRoots(roots, [null, undefined, "  "]).map(
+      (root) => root.id,
+    ),
+    ["root-1", "root-2", "root-3"],
+  );
+  // A selection spread over every root has nowhere else to go in this library.
+  assert.deepEqual(
+    eligibleSameLibraryRoots(roots, ["root-1", "root-2", "root-3"]),
+    [],
+  );
+});
+
+test("a cross-library move never offers the source library", () => {
+  const libraries = [{ id: "lib-1" }, { id: "lib-2" }];
+
+  assert.deepEqual(
+    crossLibraryDestinations(libraries, "lib-1").map((library) => library.id),
+    ["lib-2"],
+  );
+  // No single source library (a mixed selection) rules nothing out here; the
+  // destination control's own disabled reason is what refuses that case.
+  assert.deepEqual(
+    crossLibraryDestinations(libraries, null).map((library) => library.id),
+    ["lib-1", "lib-2"],
+  );
+});
+
+test("each wizard step advances only once its own pick is made", () => {
+  assert.equal(
+    moveWizardCanAdvance("kind", { kind: null, libraryId: "", rootId: "" }),
+    false,
+  );
+  assert.equal(
+    moveWizardCanAdvance("kind", { kind: "root", libraryId: "", rootId: "" }),
+    true,
+  );
+  assert.equal(
+    moveWizardCanAdvance("destination", {
+      kind: "root",
+      libraryId: "lib-1",
+      rootId: "",
+    }),
+    false,
+  );
+  assert.equal(
+    moveWizardCanAdvance("destination", {
+      kind: "root",
+      libraryId: "",
+      rootId: "root-2",
+    }),
+    false,
+  );
+  assert.equal(
+    moveWizardCanAdvance("destination", {
+      kind: "library",
+      libraryId: "lib-2",
+      rootId: "root-9",
+    }),
+    true,
+  );
+  // The plan step confirms rather than advancing.
+  assert.equal(
+    moveWizardCanAdvance("plan", {
+      kind: "library",
+      libraryId: "lib-2",
+      rootId: "root-9",
+    }),
+    false,
+  );
+});
+
+test("wizard navigation walks kind → destination → plan and back again", () => {
+  assert.equal(nextMoveStep("kind"), "destination");
+  assert.equal(nextMoveStep("destination"), "plan");
+  assert.equal(nextMoveStep("plan"), "plan");
+  assert.equal(previousMoveStep("plan"), "destination");
+  assert.equal(previousMoveStep("destination"), "kind");
+  assert.equal(previousMoveStep("kind"), "kind");
 });

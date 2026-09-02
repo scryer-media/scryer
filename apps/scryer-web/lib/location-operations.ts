@@ -1765,3 +1765,103 @@ export function isCrossLibraryDestination(
   }
   return sourceLibraryIds[0] !== candidateLibraryId;
 }
+
+// --------------------------------------------------------------------------
+// Move wizard (title-panel entry point)
+// --------------------------------------------------------------------------
+
+/**
+ * The three states of the move dialog.
+ *
+ * A caller that already picked a destination root (the bulk-edit path) hands
+ * the dialog a plan to read; a caller that only asked to move something (the
+ * title panel's "Move To…" action) has to say what kind of move it is and pick
+ * a destination first, because a library with a single root can never start a
+ * cross-library move from a root picker alone.
+ */
+export type MoveWizardStep = "kind" | "destination" | "plan";
+
+/** What the user said they want to do, before they say where. */
+export type MoveDestinationKind = "root" | "library";
+
+/** Where the dialog opens: a caller-picked root skips the wizard entirely. */
+export function initialMoveStep(
+  initialRootId: string | null | undefined,
+): MoveWizardStep {
+  return initialRootId ? "plan" : "kind";
+}
+
+/** Whether this dialog opening runs the wizard rather than opening on a plan. */
+export function movesThroughWizard(
+  initialRootId: string | null | undefined,
+): boolean {
+  return initialMoveStep(initialRootId) === "kind";
+}
+
+/**
+ * Roots worth offering for a same-library move.
+ *
+ * A root every selected title already sits on is not a destination — picking it
+ * would plan a no-op — so it is left out, and an empty result is the honest
+ * answer that this library has nowhere else to put the selection.
+ */
+export function eligibleSameLibraryRoots<T extends { id: string }>(
+  roots: readonly T[],
+  currentRootIds: readonly (string | null | undefined)[],
+): T[] {
+  const occupied = new Set(
+    currentRootIds
+      .map((rootId) => rootId?.trim() ?? "")
+      .filter((rootId) => rootId.length > 0),
+  );
+  return roots.filter((root) => !occupied.has(root.id));
+}
+
+/** Libraries a cross-library move may land in: every one but the source. */
+export function crossLibraryDestinations<T extends { id: string }>(
+  libraries: readonly T[],
+  sourceLibraryId: string | null,
+): T[] {
+  return libraries.filter((library) => library.id !== sourceLibraryId);
+}
+
+/** Picks the step's Next button enables, per step. */
+export function moveWizardCanAdvance(
+  step: MoveWizardStep,
+  picks: {
+    kind: MoveDestinationKind | null;
+    libraryId: string;
+    rootId: string;
+  },
+): boolean {
+  if (step === "kind") {
+    return picks.kind !== null;
+  }
+  if (step === "destination") {
+    return picks.libraryId.length > 0 && picks.rootId.length > 0;
+  }
+  // The plan step confirms; it never advances.
+  return false;
+}
+
+/** The step Next leads to, or the same step when there is nowhere to go. */
+export function nextMoveStep(step: MoveWizardStep): MoveWizardStep {
+  if (step === "kind") {
+    return "destination";
+  }
+  if (step === "destination") {
+    return "plan";
+  }
+  return "plan";
+}
+
+/** The step Back leads to; "kind" is the first step, so it stays put. */
+export function previousMoveStep(step: MoveWizardStep): MoveWizardStep {
+  if (step === "plan") {
+    return "destination";
+  }
+  if (step === "destination") {
+    return "kind";
+  }
+  return "kind";
+}
