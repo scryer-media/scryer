@@ -412,32 +412,31 @@ async fn reconcile_terminal_download_cleanup(
 
     let host_managed_rtorrent_payload =
         remove_data && client_type.trim().eq_ignore_ascii_case("rtorrent");
-    if host_managed_rtorrent_payload {
-        if let Err(error) = remove_rtorrent_payload_before_entry_cleanup(
+    if host_managed_rtorrent_payload
+        && let Err(error) = remove_rtorrent_payload_before_entry_cleanup(
             app,
             client_id,
             client_type,
             download_client_item_id,
         )
         .await
-        {
-            tracing::warn!(
-                client_id,
-                client_type,
-                download_client_item_id,
-                state = state.as_str(),
-                error = %error,
-                "failed to remove rTorrent payload before removing the client entry"
-            );
-            let seeding = seeding_report.map(|report| SeedingGateReport {
-                action: Some(SeedingReleaseAction::Kept),
-                ..report
-            });
-            return TerminalDownloadCleanup {
-                outcome: TerminalDownloadCleanupOutcome::RetryableFailure,
-                seeding,
-            };
-        }
+    {
+        tracing::warn!(
+            client_id,
+            client_type,
+            download_client_item_id,
+            state = state.as_str(),
+            error = %error,
+            "failed to remove rTorrent payload before removing the client entry"
+        );
+        let seeding = seeding_report.map(|report| SeedingGateReport {
+            action: Some(SeedingReleaseAction::Kept),
+            ..report
+        });
+        return TerminalDownloadCleanup {
+            outcome: TerminalDownloadCleanupOutcome::RetryableFailure,
+            seeding,
+        };
     }
 
     let delete_result = if client_id.is_empty() {
@@ -608,7 +607,6 @@ async fn remove_rtorrent_payload_before_entry_cleanup(
         )));
     }
     crate::fs_safety::resolve_available_root_for_path(&target, &roots)?;
-    ensure_rtorrent_path_has_no_symlink_ancestors(&containing_root).await?;
     ensure_rtorrent_target_parents_are_not_symlinks(&containing_root, &target).await?;
 
     let libraries = app.services.catalog.libraries.list(None).await?;
@@ -641,29 +639,6 @@ async fn remove_rtorrent_payload_before_entry_cleanup(
             target.display()
         ))),
     }
-}
-
-async fn ensure_rtorrent_path_has_no_symlink_ancestors(path: &std::path::Path) -> AppResult<()> {
-    let mut current = Some(path);
-    while let Some(ancestor) = current {
-        let metadata = tokio::fs::symlink_metadata(ancestor)
-            .await
-            .map_err(|error| {
-                AppError::Repository(format!(
-                    "failed to inspect rTorrent output-root ancestor {}: {error}",
-                    ancestor.display()
-                ))
-            })?;
-        if metadata.file_type().is_symlink() {
-            return Err(AppError::Validation(format!(
-                "rTorrent output root {} has symlink ancestor {}",
-                path.display(),
-                ancestor.display()
-            )));
-        }
-        current = ancestor.parent();
-    }
-    Ok(())
 }
 
 async fn ensure_rtorrent_target_parents_are_not_symlinks(
