@@ -1904,6 +1904,12 @@ impl IndexerBackoffTracker {
         }
     }
 
+    /// Forget everything held for one indexer: escalation level and disabled
+    /// window alike. Returns true when there was state to drop.
+    async fn clear(&self, indexer_id: &str) -> bool {
+        self.state.lock().await.remove(indexer_id).is_some()
+    }
+
     /// Check if this indexer is currently in backoff.
     async fn is_disabled(&self, indexer_id: &str) -> Option<chrono::DateTime<chrono::Utc>> {
         let map = self.state.lock().await;
@@ -3221,6 +3227,15 @@ impl MultiIndexerSearchClient {
 
 #[async_trait]
 impl IndexerClient for MultiIndexerSearchClient {
+    async fn reset_indexer_backoff(&self, indexer_id: &str) {
+        if self.backoff_tracker.clear(indexer_id).await {
+            tracing::info!(
+                indexer_id = %indexer_id,
+                "cleared in-memory indexer backoff after a validated config save"
+            );
+        }
+    }
+
     async fn search_stream(
         &self,
         query: String,
@@ -10329,6 +10344,27 @@ mod tests {
             backoff_state(&client, "idx-1").await.is_some(),
             "plain provider failures must still escalate operational backoff"
         );
+    }
+
+    #[tokio::test]
+    async fn clear_forgets_escalation_and_disabled_window() {
+        let tracker = IndexerBackoffTracker::new();
+        tracker.state.lock().await.insert(
+            "idx-1".to_string(),
+            IndexerBackoffState {
+                escalation_level: 3,
+                disabled_until: Some(chrono::Utc::now() + chrono::Duration::minutes(45)),
+            },
+        );
+        assert!(tracker.is_disabled("idx-1").await.is_some());
+
+        assert!(tracker.clear("idx-1").await, "state existed to drop");
+        assert!(tracker.is_disabled("idx-1").await.is_none());
+        assert!(!tracker.clear("idx-1").await, "nothing left to drop");
+
+        // The next failure starts from level zero, not from where it left off.
+        let backoff = tracker.record_failure("idx-1", None).await;
+        assert_eq!(backoff.escalation_level, 1);
     }
 
     #[tokio::test]

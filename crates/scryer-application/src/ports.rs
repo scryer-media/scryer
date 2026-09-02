@@ -6226,6 +6226,12 @@ pub trait IndexerClient: Send + Sync {
         Ok(())
     }
 
+    /// Forget any in-memory backoff held for one indexer. Saving an indexer
+    /// with new credentials or a new endpoint is the operator's "try again":
+    /// the caller clears the persisted backoff row and this drops its mirror,
+    /// so the next search dispatches instead of skipping the indexer.
+    async fn reset_indexer_backoff(&self, _indexer_id: &str) {}
+
     fn search_plan_capability(&self) -> Option<IndexerSearchPlanCapability> {
         None
     }

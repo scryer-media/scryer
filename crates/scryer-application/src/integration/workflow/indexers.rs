@@ -953,7 +953,7 @@ impl AppUseCase {
             )
             .await;
 
-        let updated = self
+        let mut updated = self
             .services
             .integrations
             .indexer_configs
@@ -997,11 +997,18 @@ impl AppUseCase {
             .await;
         }
         if should_validate_connection && caps_refresh.error_message.is_none() {
+            let indexer_configs = &self.services.integrations.indexer_configs;
+            indexer_configs.clear_last_error(&updated.id).await?;
+            // A save that just passed validation is the operator's "try again":
+            // drop the persisted system backoff and its in-memory mirror so the
+            // next search dispatches to this indexer instead of skipping it.
+            indexer_configs.clear_system_backoff(&updated.id).await?;
+            updated.disabled_until = None;
             self.services
                 .integrations
-                .indexer_configs
-                .clear_last_error(&updated.id)
-                .await?;
+                .indexer_client
+                .reset_indexer_backoff(&updated.id)
+                .await;
         }
         if should_sync_managed_children {
             if updated.is_enabled {
