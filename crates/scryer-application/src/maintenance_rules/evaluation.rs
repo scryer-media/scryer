@@ -92,6 +92,10 @@ pub mod candidate_reason {
     /// The rule's library scope no longer covers the subject — either the scope
     /// was re-pointed at other libraries, or the subject left the catalog.
     pub const OUT_OF_SCOPE: &str = "out_of_scope";
+    /// The subject was merged into another title (US7). Its live candidate
+    /// closes and follows the surviving title as history; the survivor is
+    /// re-evaluated on its own facts at the next pass.
+    pub const MERGED_INTO_DESTINATION: &str = "merged_into_destination";
 }
 
 // ── Instance gates ──────────────────────────────────────────────────────────

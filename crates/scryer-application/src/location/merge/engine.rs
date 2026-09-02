@@ -92,6 +92,36 @@ pub const FR067_NO_FK_ASSERTIONS: &[(&str, &str, MergeGateIdKind)] = &[
         "title_id",
         MergeGateIdKind::Title,
     ),
+    // Maintenance rules and watch signals (migrations 0205–0207) landed on
+    // release-NEXT beside this engine and were inventoried after the merge;
+    // every one of them names a title with no foreign key.
+    ("lifecycle_candidates", "title_id", MergeGateIdKind::Title),
+    ("lifecycle_action_runs", "title_id", MergeGateIdKind::Title),
+    (
+        "maintenance_rule_exclusions",
+        "title_id",
+        MergeGateIdKind::Title,
+    ),
+    (
+        "media_server_user_media_signals",
+        "scryer_title_id",
+        MergeGateIdKind::Title,
+    ),
+    (
+        "media_server_user_media_signals",
+        "scryer_episode_id",
+        MergeGateIdKind::Episode,
+    ),
+    // Found by the store's schema walk rather than the T081 sweep: the forward
+    // pointer of an earlier merge into the source title, and unmatched-scan
+    // items scoped to the source title (`title_id` joined the table in 0093,
+    // after §5 called it title-free). Both are repointed in Group 3.
+    (
+        "location_operation_title_checkpoints",
+        "merged_into_title_id",
+        MergeGateIdKind::Title,
+    ),
+    ("library_scan_unmatched_items", "title_id", MergeGateIdKind::Title),
 ];
 
 /// Tables whose foreign key is `ON DELETE SET NULL`. A missed rewrite here does
@@ -128,6 +158,31 @@ pub const FR067_SET_NULL_ASSERTIONS: &[(&str, &str, MergeGateIdKind)] = &[
         "discovery_pending_context_changes",
         "title_id",
         MergeGateIdKind::Title,
+    ),
+];
+
+/// Title-named columns the FR-067 gate deliberately does not assert on, each
+/// with the reason. The store's schema-walk test fails on any title-named
+/// column that is neither cascaded, gated, nor listed here — which is how a
+/// table added on another branch gets classified instead of dangling.
+pub const FR067_TITLE_COLUMN_EXEMPTIONS: &[(&str, &str, &str)] = &[
+    (
+        "location_operation_title_checkpoints",
+        "title_id",
+        "part of the primary key and the record of which title the operation processed; \
+         rewriting it would erase the merge's own audit trail (merge-inventory.md §5)",
+    ),
+    (
+        "title_metadata_tag_sources",
+        "title_id",
+        "cascades through the composite key (title_id, tag_key) → title_metadata_tags, whose \
+         own rows cascade from titles; destination-wins by construction",
+    ),
+    (
+        "title_metadata_tag_source_keys",
+        "title_id",
+        "cascades through the composite key (title_id, tag_key) → title_metadata_tags, whose \
+         own rows cascade from titles; destination-wins by construction",
     ),
 ];
 
@@ -662,6 +717,37 @@ fn disposition_entries(snapshot: &MergeCatalogSnapshot) -> Vec<TableDispositionE
             "titles.tags",
             MergeDisposition::Union,
             "free-form tags union; reserved scryer: tags are destination-wins (OQ9)",
+        ),
+        // Group 3, the maintenance and watch-signal tables that landed beside
+        // this engine (migrations 0205–0207).
+        entry(
+            "lifecycle_candidates",
+            MergeDisposition::Union,
+            "live source candidates close as canceled and every candidate follows the surviving \
+             title; the destination is re-evaluated on its own facts at the next pass",
+        ),
+        entry(
+            "lifecycle_action_runs",
+            MergeDisposition::Union,
+            "the append-only action audit follows the surviving title",
+        ),
+        entry(
+            "maintenance_rule_exclusions",
+            MergeDisposition::Union,
+            "a source exclusion carries onto the destination unless it already holds one for the \
+             same rule; a safety ward is never dropped by a merge",
+        ),
+        entry(
+            "library_scan_unmatched_items",
+            MergeDisposition::Union,
+            "title-scoped unmatched items follow the surviving title so an ignored item stays \
+             ignored; the next scan of the destination reconciles their paths",
+        ),
+        entry(
+            "media_server_user_media_signals",
+            MergeDisposition::Union,
+            "observations follow the surviving title; episode rows are remapped, and the next \
+             sync re-resolves anything the identity map could not",
         ),
         // Group 4/5.
         entry(
