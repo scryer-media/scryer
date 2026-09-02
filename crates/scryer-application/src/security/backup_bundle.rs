@@ -750,13 +750,65 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
         table: "library_roots",
         classification: BackupTableClassification::Export,
     },
+    // Root-id remaps are the durable audit and compatibility bridge for ids
+    // held outside the database; rebuilding them would lose that history.
+    BackupTableCatalogEntry {
+        table: "library_root_id_remaps",
+        classification: BackupTableClassification::Export,
+    },
     BackupTableCatalogEntry {
         table: "library_scan_unmatched_items",
+        classification: BackupTableClassification::Export,
+    },
+    // Location operations are resumable, user-visible Activity records. Their
+    // checkpoints, verification proofs, and ownership history are part of the
+    // same durable operation record.
+    BackupTableCatalogEntry {
+        table: "location_operations",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
+        table: "location_operation_title_checkpoints",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
+        table: "location_operation_verifications",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
+        table: "location_operation_owned_entities",
         classification: BackupTableClassification::Export,
     },
     BackupTableCatalogEntry {
         table: "login_verification_challenges",
         classification: BackupTableClassification::Ignore,
+    },
+    // Maintenance rules and exclusions are user intent. Evaluation,
+    // candidate, and action rows preserve grace periods and the audit trail,
+    // so they cannot be regenerated without changing lifecycle semantics.
+    BackupTableCatalogEntry {
+        table: "maintenance_rule_sets",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
+        table: "maintenance_rule_revisions",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
+        table: "maintenance_rule_exclusions",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
+        table: "maintenance_evaluation_runs",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
+        table: "lifecycle_candidates",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
+        table: "lifecycle_action_runs",
+        classification: BackupTableClassification::Export,
     },
     // A manual-import selection is deliberate user intent — the files a user
     // picked and the targets they mapped them to — held until the import
@@ -817,6 +869,16 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
     BackupTableCatalogEntry {
         table: "emby_media_server_details",
         classification: BackupTableClassification::Export,
+    },
+    // Normalized watch observations are durable user data. Sync health is a
+    // local snapshot that the next provider sweep can regenerate.
+    BackupTableCatalogEntry {
+        table: "media_server_user_media_signals",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
+        table: "media_server_signal_sync_state",
+        classification: BackupTableClassification::ResetOnRestore,
     },
     BackupTableCatalogEntry {
         table: "media_request_external_ids",

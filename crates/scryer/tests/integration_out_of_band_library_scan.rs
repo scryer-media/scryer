@@ -485,6 +485,7 @@ async fn loose_root_series_file_is_skipped_without_claiming_library_root() {
         media_root.path().to_string_lossy().as_ref(),
     )
     .await;
+    set_default_library_root(&ctx, MediaFacet::Series, media_root.path()).await;
 
     let title = seed_series_title(
         &ctx,
@@ -503,7 +504,6 @@ async fn loose_root_series_file_is_skipped_without_claiming_library_root() {
     write_fake_media_file(&loose_file);
 
     let actor = admin();
-    set_default_library_root(&ctx, MediaFacet::Series, media_root.path()).await;
     let summary = ctx
         .app
         .scan_library(&actor, MediaFacet::Series)
@@ -540,6 +540,7 @@ async fn full_rescan_preserves_existing_match_for_loose_series_file() {
         media_root.path().to_string_lossy().as_ref(),
     )
     .await;
+    set_default_library_root(&ctx, MediaFacet::Series, media_root.path()).await;
 
     let title = seed_series_title(
         &ctx,
@@ -594,7 +595,6 @@ async fn full_rescan_preserves_existing_match_for_loose_series_file() {
         .expect("link file to episode");
 
     let actor = admin();
-    set_default_library_root(&ctx, MediaFacet::Series, media_root.path()).await;
     let summary = ctx
         .app
         .scan_library(&actor, MediaFacet::Series)
@@ -639,6 +639,7 @@ async fn full_scan_uses_release_subfolder_when_series_file_name_is_obfuscated() 
         media_root.path().to_string_lossy().as_ref(),
     )
     .await;
+    set_default_library_root(&ctx, MediaFacet::Series, media_root.path()).await;
 
     let title_dir = media_root.path().join("Harbor Pals");
     std::fs::create_dir_all(&title_dir).expect("create title directory");
@@ -661,7 +662,6 @@ async fn full_scan_uses_release_subfolder_when_series_file_name_is_obfuscated() 
     write_fake_media_file(&obfuscated_file);
 
     let actor = admin();
-    set_default_library_root(&ctx, MediaFacet::Series, media_root.path()).await;
     ctx.app
         .scan_library(&actor, MediaFacet::Series)
         .await
@@ -706,6 +706,7 @@ async fn full_scan_does_not_infer_episode_from_parent_when_release_folder_has_mu
         media_root.path().to_string_lossy().as_ref(),
     )
     .await;
+    set_default_library_root(&ctx, MediaFacet::Series, media_root.path()).await;
 
     let title_dir = media_root.path().join("Harbor Pals");
     std::fs::create_dir_all(&title_dir).expect("create title directory");
@@ -731,7 +732,6 @@ async fn full_scan_does_not_infer_episode_from_parent_when_release_folder_has_mu
     write_fake_media_file(&second_file);
 
     let actor = admin();
-    set_default_library_root(&ctx, MediaFacet::Series, media_root.path()).await;
     ctx.app
         .scan_library(&actor, MediaFacet::Series)
         .await
