@@ -256,8 +256,7 @@ impl AppUseCase {
             }
             if indexer_routing
                 .as_ref()
-                .and_then(|plan| plan.entries.get(&config.id))
-                .is_some_and(|entry| !entry.enabled)
+                .is_some_and(|plan| !plan.is_enabled_for_scope(&config.id))
             {
                 continue;
             }

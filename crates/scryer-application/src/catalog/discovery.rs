@@ -504,8 +504,9 @@ fn should_collapse_structured_nab_queries(
             continue;
         }
 
-        let routing_entry = routing.and_then(|plan| plan.entries.get(&config.id));
-        if routing_entry.is_some_and(|entry| !entry.enabled) {
+        if routing.is_some_and(|plan| {
+            plan.eligibility_for(&config.id) != crate::contracts::IndexerSearchEligibility::Eligible
+        }) {
             continue;
         }
 
@@ -1178,9 +1179,8 @@ impl AppUseCase {
         if let Some(allowed) = restrict_to_indexer_ids.as_ref() {
             let mut plan = match indexer_routing.take() {
                 Some(plan) => plan,
-                None => crate::contracts::IndexerRoutingPlan {
-                    entries: self
-                        .services
+                None => crate::contracts::IndexerRoutingPlan::new(
+                    self.services
                         .integrations
                         .indexer_configs
                         .list(None)
@@ -1199,13 +1199,9 @@ impl AppUseCase {
                             )
                         })
                         .collect(),
-                },
+                ),
             };
-            for (indexer_id, entry) in plan.entries.iter_mut() {
-                if !allowed.contains(indexer_id) {
-                    entry.enabled = false;
-                }
-            }
+            plan.restrict_to_indexers(allowed.clone());
             indexer_routing = Some(plan);
         }
         let newznab_categories = if newznab_categories.is_empty() {
@@ -1220,22 +1216,21 @@ impl AppUseCase {
             ))
         };
 
-        // If routing exists and every indexer is disabled, skip the search entirely.
-        if let Some(ref plan) = indexer_routing {
-            let any_enabled = plan.entries.values().any(|e| e.enabled);
-            if !any_enabled {
-                info!(
-                    caller = caller_label,
-                    scope_id = scope_id.as_deref().unwrap_or("none"),
-                    "all indexers disabled for scope, skipping search"
-                );
-                return Ok(ScoredSearchOutcome {
-                    results: Vec::new(),
-                    complete_indexer_ids: Vec::new(),
-                    incomplete_indexer_reasons: HashMap::new(),
-                    search_session_id: Uuid::new_v4().to_string(),
-                });
-            }
+        // If routing exists and no indexer is eligible for this search, skip it entirely.
+        if let Some(ref plan) = indexer_routing
+            && !plan.has_eligible_entries()
+        {
+            info!(
+                caller = caller_label,
+                scope_id = scope_id.as_deref().unwrap_or("none"),
+                "no indexers eligible for search, skipping search"
+            );
+            return Ok(ScoredSearchOutcome {
+                results: Vec::new(),
+                complete_indexer_ids: Vec::new(),
+                incomplete_indexer_reasons: HashMap::new(),
+                search_session_id: Uuid::new_v4().to_string(),
+            });
         }
 
         let configured_indexers = self
@@ -2505,7 +2500,7 @@ impl AppUseCase {
             indexer_count = entries.len(),
             "resolved per-indexer routing plan"
         );
-        Some(IndexerRoutingPlan { entries })
+        Some(IndexerRoutingPlan::new(entries))
     }
 }
 

@@ -11,12 +11,12 @@ use scryer_application::{
     IndexerErrorClassification, IndexerErrorOperation, IndexerErrorRepository,
     IndexerPluginProvider, IndexerProxyConfigRepository, IndexerQueryOutcome,
     IndexerResponseAttributes, IndexerRoutingPlan, IndexerSearchCandidateWrite,
-    IndexerSearchCompletion, IndexerSearchIncompleteReason, IndexerSearchLearningContext,
-    IndexerSearchLearningKey, IndexerSearchLearningRecord, IndexerSearchLearningRepository,
-    IndexerSearchOutcome, IndexerSearchPageSink, IndexerSearchPlanRequest, IndexerSearchResponse,
-    IndexerSearchResult, IndexerSearchRunWrite, IndexerSearchStrategyEvent,
-    IndexerSearchStrategyEventSink, IndexerSearchStrategyRequest, IndexerStatsTracker,
-    IndexerSystemBackoff, NewIndexerError, NormalizedIndexerSearchCandidate,
+    IndexerSearchCompletion, IndexerSearchEligibility, IndexerSearchIncompleteReason,
+    IndexerSearchLearningContext, IndexerSearchLearningKey, IndexerSearchLearningRecord,
+    IndexerSearchLearningRepository, IndexerSearchOutcome, IndexerSearchPageSink,
+    IndexerSearchPlanRequest, IndexerSearchResponse, IndexerSearchResult, IndexerSearchRunWrite,
+    IndexerSearchStrategyEvent, IndexerSearchStrategyEventSink, IndexerSearchStrategyRequest,
+    IndexerStatsTracker, IndexerSystemBackoff, NewIndexerError, NormalizedIndexerSearchCandidate,
     NullIndexerErrorRepository, NullIndexerProxyConfigRepository,
     NullIndexerSearchLearningRepository, NullUpstreamScheduler, RateLimitCooldownAction,
     RateLimitSignal, ReleaseCandidateProvenance, ReleaseSearchSubjectKind,
@@ -3455,20 +3455,27 @@ impl IndexerClient for MultiIndexerSearchClient {
         let mut scheduler_candidates = Vec::new();
         let mut scheduler_eligible = Vec::new();
         for (config, had_persisted_system_backoff) in &enabled {
-            // Apply per-indexer facet scoping: if routing is configured and this
-            // indexer is disabled for the current scope, skip it entirely.
             let routing_entry = indexer_routing
                 .as_ref()
                 .and_then(|plan| plan.entries.get(&config.id));
-
-            if let Some(entry) = routing_entry
-                && !entry.enabled
-            {
-                info!(
-                    indexer = config.name.as_str(),
-                    "skipping indexer: disabled for scope via routing config"
-                );
-                continue;
+            if let Some(plan) = indexer_routing.as_ref() {
+                match plan.eligibility_for(&config.id) {
+                    IndexerSearchEligibility::Eligible => {}
+                    IndexerSearchEligibility::ExcludedBySearchRestriction => {
+                        debug!(
+                            indexer = config.name.as_str(),
+                            "skipping indexer: excluded by per-search restriction"
+                        );
+                        continue;
+                    }
+                    IndexerSearchEligibility::DisabledForScope => {
+                        info!(
+                            indexer = config.name.as_str(),
+                            "skipping indexer: disabled for scope via routing config"
+                        );
+                        continue;
+                    }
+                }
             }
 
             let static_caps = self

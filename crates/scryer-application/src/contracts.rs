@@ -1092,9 +1092,59 @@ pub struct IndexerRoutingEntry {
 /// Per-indexer routing plan for a given facet scope.
 /// When `Some`, indexers not in the map use default behavior; indexers
 /// with `enabled: false` are skipped entirely for this scope.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IndexerSearchEligibility {
+    Eligible,
+    ExcludedBySearchRestriction,
+    DisabledForScope,
+}
+
 #[derive(Clone, Debug)]
 pub struct IndexerRoutingPlan {
     pub entries: std::collections::HashMap<String, IndexerRoutingEntry>,
+    search_restriction: Option<std::collections::HashSet<String>>,
+}
+
+impl IndexerRoutingPlan {
+    pub fn new(entries: std::collections::HashMap<String, IndexerRoutingEntry>) -> Self {
+        Self {
+            entries,
+            search_restriction: None,
+        }
+    }
+
+    pub fn restrict_to_indexers(&mut self, indexer_ids: std::collections::HashSet<String>) {
+        self.search_restriction = Some(indexer_ids);
+    }
+
+    pub fn is_enabled_for_scope(&self, indexer_id: &str) -> bool {
+        self.entries
+            .get(indexer_id)
+            .is_none_or(|entry| entry.enabled)
+    }
+
+    pub fn eligibility_for(&self, indexer_id: &str) -> IndexerSearchEligibility {
+        if self
+            .search_restriction
+            .as_ref()
+            .is_some_and(|allowed| !allowed.contains(indexer_id))
+        {
+            return IndexerSearchEligibility::ExcludedBySearchRestriction;
+        }
+        if !self.is_enabled_for_scope(indexer_id) {
+            return IndexerSearchEligibility::DisabledForScope;
+        }
+        IndexerSearchEligibility::Eligible
+    }
+
+    pub fn has_eligible_entries(&self) -> bool {
+        match self.search_restriction.as_ref() {
+            Some(allowed) => allowed.iter().any(|indexer_id| {
+                self.eligibility_for(indexer_id) == IndexerSearchEligibility::Eligible
+            }),
+            None => self.entries.values().any(|entry| entry.enabled),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1251,9 +1301,76 @@ pub struct IndexerDownloadClientProviderCompatibility {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::Path};
+    use std::{
+        collections::{HashMap, HashSet},
+        fs,
+        path::Path,
+    };
 
-    use super::ClientJobLocator;
+    use super::{
+        ClientJobLocator, IndexerRoutingEntry, IndexerRoutingPlan, IndexerSearchEligibility,
+    };
+
+    fn routing_entry(enabled: bool) -> IndexerRoutingEntry {
+        IndexerRoutingEntry {
+            enabled,
+            categories: Vec::new(),
+            priority: 0,
+        }
+    }
+
+    #[test]
+    fn search_restriction_does_not_mutate_scope_routing() {
+        let mut plan = IndexerRoutingPlan::new(HashMap::from([
+            ("world".to_string(), routing_entry(true)),
+            ("c411".to_string(), routing_entry(true)),
+            ("parent".to_string(), routing_entry(false)),
+        ]));
+
+        plan.restrict_to_indexers(HashSet::from(["c411".to_string()]));
+
+        assert_eq!(
+            plan.eligibility_for("c411"),
+            IndexerSearchEligibility::Eligible
+        );
+        assert_eq!(
+            plan.eligibility_for("world"),
+            IndexerSearchEligibility::ExcludedBySearchRestriction
+        );
+        assert_eq!(
+            plan.eligibility_for("parent"),
+            IndexerSearchEligibility::ExcludedBySearchRestriction
+        );
+        assert!(plan.entries["world"].enabled);
+        assert!(plan.entries["c411"].enabled);
+        assert!(!plan.entries["parent"].enabled);
+        assert!(plan.has_eligible_entries());
+    }
+
+    #[test]
+    fn selected_scope_disabled_and_default_routed_indexers_are_distinct() {
+        let mut disabled_plan = IndexerRoutingPlan::new(HashMap::from([(
+            "parent".to_string(),
+            routing_entry(false),
+        )]));
+        disabled_plan.restrict_to_indexers(HashSet::from(["parent".to_string()]));
+        assert_eq!(
+            disabled_plan.eligibility_for("parent"),
+            IndexerSearchEligibility::DisabledForScope
+        );
+        assert!(!disabled_plan.has_eligible_entries());
+
+        let mut default_plan = IndexerRoutingPlan::new(HashMap::new());
+        default_plan.restrict_to_indexers(HashSet::from(["new-indexer".to_string()]));
+        assert_eq!(
+            default_plan.eligibility_for("new-indexer"),
+            IndexerSearchEligibility::Eligible
+        );
+        assert!(default_plan.has_eligible_entries());
+
+        default_plan.restrict_to_indexers(HashSet::new());
+        assert!(!default_plan.has_eligible_entries());
+    }
 
     #[test]
     fn client_job_locator_new_normalizes_locator_values() {
