@@ -164,6 +164,8 @@ volumes:
 
 Download clients (NZBGet, SABnzbd) and indexers are configured in **Settings** through the web UI after first login. No environment variables needed.
 
+Once at least one indexer is enabled for interactive search, **Settings > Indexers > Search** searches all of them at once from a free-text query and shows one merged table of the results, with each indexer's health, result count and failure reason inline. Results can be narrowed by protocol, quality, source and size without searching again, and only the indexers that failed can be retried. From a result you can either grab and assign it to a library title, which imports and renames it exactly as a title-scoped search would, or grab it unlinked straight to a download client, which then appears in Activity as needing manual import.
+
 ### Environment Variables
 
 | Variable | Required | Default | Description |
