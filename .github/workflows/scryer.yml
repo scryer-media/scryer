@@ -305,7 +305,7 @@ jobs:
         run: sudo apt-get install -y --no-install-recommends musl-tools mold nasm
 
       - name: Add Rust targets
-        run: rustup target add x86_64-unknown-linux-musl wasm32-unknown-unknown
+        run: rustup target add x86_64-unknown-linux-musl wasm32-wasip2
 
       - name: Download embedded web artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
