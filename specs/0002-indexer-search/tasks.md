@@ -72,7 +72,8 @@ Format: `[ID] [WP] Description`. Work packages run sequentially, one agent at a 
       stubbed NZB endpoint.
 - [ ] T702 [WP7] `download_interactive_search_artifacts(actor, search_id, download_urls)` in
       `interactive_release_search.rs`: gate, per-url lookup (D4), sequential fetch, single file
-      or `tar.gz` bundle with deduped names; unit tests over naming, dedupe, and archive contents.
+      or `tar.gz` bundle with deduped names; one `ReleaseGrabbed` history event per release on
+      success; unit tests over naming, dedupe, archive contents, and the emitted events.
 - [ ] T703 [WP7] `POST /api/indexer-search/artifacts` route (new `indexer_search_routes.rs`,
       mounted in `main.rs` beside the avatar proxy); unauthorized / bad body / app-error mapping
       tests in the middleware style.

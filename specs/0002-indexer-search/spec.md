@@ -82,7 +82,9 @@ Grab
 - FR-028 A release can be downloaded to the browser instead of grabbed (operator addition,
   2026-09-02): one release yields its raw `.nzb` / `.torrent`; two or more yield a single
   `.tar.gz` holding every file. Magnet-only releases have no file and are not downloadable.
-  Nothing is queued, tracked, or recorded. Requires the system-settings permission.
+  Nothing is queued or tracked, but each downloaded release is recorded in History as a grab
+  (operator, 2026-09-02: "these are grabs from the indexer's perspective"). Requires the
+  system-settings permission.
 
 Page
 - FR-030 Lives at `/integrations/indexers/search` as a pane of the Indexers page.

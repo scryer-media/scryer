@@ -136,8 +136,10 @@ extends. If a step cannot be expressed as an extension of existing code, it is o
   existing artifact resolution (`prepare_download_request` → `classify_resolved_download_artifact`),
   exposed as one new `DownloadClient` port method that forces the host-side fetch the router
   otherwise skips for NZB URLs. One release ⇒ raw file; several ⇒ `tar.gz` built with the
-  `tar`/`flate2` crates the application crate already uses. Magnets are refused. No history
-  event, no submission row: a file handoff is not a grab. Gate: `ManageSystemSettings` (D13).
+  `tar`/`flate2` crates the application crate already uses. Magnets are refused. Each
+  downloaded release emits the same `ReleaseGrabbed` event the unlinked grab emits (stand-in
+  title, no `download_id`); no submission row, since there is no client item to track. Gate:
+  `ManageSystemSettings` (D13).
 
 ## GraphQL (additive)
 
