@@ -13,6 +13,7 @@ import {
   Inbox,
   LayoutDashboard,
   ListChecks,
+  Network,
   Puzzle,
   Server,
   Settings,
@@ -433,21 +434,40 @@ export function buildRouteCommands({
           label: `${integrationsGroupLabel} / ${t("settings.indexers")}`,
           description: t("settings.indexers"),
           groupLabel: integrationsGroupLabel,
-          // Seeding profiles and indexer proxies are panes of this page, so the
-          // palette has to find it by their names too.
+          // Seeding profiles are a pane of this page, so the palette has to
+          // find it by their names too.
           keywords: [
             "settings",
             "indexers",
             "feeds",
             "search",
             "sources",
-            "proxies",
             "seeding",
             "profiles",
             "ratio",
           ],
           icon: Database,
           onSelect: buildNavigate(onNavigate, "settings", "indexers"),
+        } satisfies RouteCommand, {
+          id: "settings-proxies",
+          label: `${integrationsGroupLabel} / ${t("settings.proxies")}`,
+          description: t("settings.proxies"),
+          groupLabel: integrationsGroupLabel,
+          keywords: [
+            "settings",
+            "proxies",
+            "proxy",
+            "solver",
+            "byparr",
+            "trawl",
+            "socks",
+            "socks5",
+            "http",
+            "tunnel",
+            "ssh",
+          ],
+          icon: Network,
+          onSelect: buildNavigate(onNavigate, "settings", "proxies"),
         } satisfies RouteCommand, {
           id: "settings-media-servers",
           label: `${integrationsGroupLabel} / ${t("settings.mediaServers")}`,

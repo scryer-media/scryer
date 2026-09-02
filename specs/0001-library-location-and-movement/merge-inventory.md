@@ -569,7 +569,8 @@ further code reading.
    construction.
 2. **Postgres divergence.** The Postgres migration set is consolidated
    differently (82 files vs 205). The column sets are documented to mirror, and
-   the location tables (0204–0206) exist in both, but the *unique index* set was
+   the location tables (0208–0210 after the release-NEXT renumber; 0204–0206 on
+   the feature branch) exist in both, but the *unique index* set was
    verified against SQLite only. Before T085 ships, the partial-index hazards
    named in §2 and §3 — particularly
    `idx_file_episode_map_one_primary_per_episode` and the two `blocklist`
@@ -591,3 +592,32 @@ further code reading.
    `event_outboxes`** was read for catalog ids and none were found, but these are
    free-form JSON columns without a single owning Rust type, so the finding is
    "none observed" rather than "none possible."
+
+## 10. Tables that landed beside the engine (release-NEXT 0204–0207)
+
+The maintenance-rules and media-server watch-signal features merged into
+release-NEXT alongside this feature line. Their tables post-date the §9 sweep
+and none of them carries a foreign key to `titles`, so without the entries below
+a merge would leave every one of them naming a title that no longer exists.
+Classified 2026-09-01 at the integration review; the engine
+(`engine.rs` `FR067_NO_FK_ASSERTIONS`) and the store's Group 3 carry the
+dispositions, and the store's schema-walk test
+(`every_title_named_column_in_the_live_schema_is_classified`) now fails on any
+future title-named column that is neither cascaded, gated, nor exempted.
+
+| Table | Referencing columns | Disposition | Notes |
+| --- | --- | --- | --- |
+| `lifecycle_candidates` (0205) | `title_id`, `library_id` | **union** — live source candidates close as `canceled` with `state_reason = merged_into_destination`, then every source candidate follows the surviving title | `idx_lifecycle_candidates_active_subject` allows one non-terminal candidate per `(rule_set_id, title_id)`, and the destination may already hold one, so a live row cannot simply be repointed. The destination is re-evaluated on its own facts at the next evaluator pass. `library_id` is a denormalized snapshot the executor never trusts (it re-reads the fresh title), so it is not rewritten. No FK; in the FR-067 gate. |
+| `lifecycle_action_runs` (0206) | `title_id` | **union** — the append-only audit follows the surviving title | CASCADE from `lifecycle_candidates`, which is why the candidates are repointed rather than deleted. No FK to titles; in the FR-067 gate. |
+| `maintenance_rule_exclusions` (0205) | `title_id` | **union** — a source exclusion carries onto the destination unless the destination already holds one for the same rule (or the same global row); the collided remainder is deleted | An exclusion is a safety ward the operator placed by hand; a merge must never quietly drop it. The two partial unique indexes (`rule_set_id IS NOT NULL` / `IS NULL`) decide the collision. No FK; in the FR-067 gate. |
+| `media_server_user_media_signals` (0207) | `scryer_title_id`, `scryer_episode_id` | **union / map** — title repointed; episode rows follow the identity map, and a source episode the map cannot place is set to NULL | Observations are keyed by `(connection, external user, provider item)`, so the repoint never collides. Both identity columns are nullable by design ("identity may not resolve"), and the sync job re-resolves through `title_external_ids` — which the destination owns after Group 4 — on its next pass. Not in the FR-066 blocking set: an unmappable episode here is a temporary loss of a derived observation, not of banked data. No FK; both columns in the FR-067 gate. |
+| `library_scan_unmatched_items` | `title_id` (nullable; added by 0093 — §5's "no title id" predates it) | **union** — title-scoped items follow the surviving title | Repointing keeps an operator's *ignored* status on an item; the next scan of the destination reconciles the paths the move changed. No FK; in the FR-067 gate. Found by the schema-walk test, not the T081 sweep. |
+| `location_operation_title_checkpoints` | `merged_into_title_id` | **map** (unchanged from §5) — now also in the FR-067 gate, since Group 3 repoints it and the walk would otherwise flag it | `title_id` stays exempt for the §5 reason: it is the audit record of which title the operation processed. |
+| `title_metadata_tag_sources`, `title_metadata_tag_source_keys` | `title_id` inside a composite key | **destination-wins by construction** (exempt from the gate) | `FOREIGN KEY (title_id, tag_key) REFERENCES title_metadata_tags ON DELETE CASCADE`, and `title_metadata_tags` cascades from `titles`; the walk cannot see a two-hop cascade by name. |
+| `maintenance_rule_sets`, `maintenance_rule_revisions`, `maintenance_evaluation_runs`, `media_server_signal_sync_state` (0204–0207) | rule / connection keyed; `maintenance_rule_sets.library_ids` names libraries, not titles | **no-op** | A cross-library transfer (US6) is handled at execution time: the executor re-checks the fresh rule scope against the fresh title's library and cancels an out-of-scope candidate. |
+
+The same review closed the FR-084 half of this seam: the maintenance
+executor's policy delete (`delete_title_by_policy`) now calls the ownership
+choke point, and its pre-action safety recheck holds a destructive candidate
+whose title an operation owns (`execution_reason::LOCATION_OPERATION_HOLD`)
+instead of acting under a running move.

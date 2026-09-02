@@ -11,7 +11,7 @@ use reqwest::{Method, StatusCode};
 use scryer_application::{
     CapturedIndexerHttpHeader, CapturedIndexerHttpResponse, IndexerErrorOperation,
     IndexerErrorRecorder, challenge_solver as solver, classify_indexer_http_response,
-    indexer_response_content_type, unknown_indexer_error,
+    indexer_response_content_type, transport_proxy, unknown_indexer_error,
 };
 
 const DEFAULT_MAX_HTTP_RESPONSE_BYTES: u64 = 50 * 1024 * 1024;
@@ -41,7 +41,7 @@ pub(crate) struct PluginHttpHost {
 struct PluginHttpHostState {
     runtime: PluginHttpRuntime,
     allowed_hosts: Option<Vec<String>>,
-    indexer_proxy_policy: Option<IndexerProxyPolicy>,
+    proxy_policy: Option<ProxyPolicy>,
     destination_cooldown_key: Option<scryer_outbound_http::DestinationKey>,
     max_http_response_bytes: Option<u64>,
     last_responses: HashMap<String, PluginHttpLastResponse>,
@@ -90,11 +90,27 @@ struct PluginHttpWorkerRuntime {
     extra_ca_bundle_pem: String,
     request_clients: HashMap<PluginHttpRequestClientKey, CachedPluginHttpClient>,
     proxy_client: Option<Client>,
+    transport_proxy_client: Option<CachedTransportProxyClient>,
 }
 
 struct CachedPluginHttpClient {
     client: Client,
     created_at: Instant,
+}
+
+/// A transport-proxied egress client plus the proxy revision it was built for.
+///
+/// Invalidation rule: the cached client is dropped when
+/// `transport_proxy::transport_proxy_revision` changes — that is
+/// `(proxy config id, updated_at)` — or when the operator trust bundle changes
+/// (`sync_trust_bundle` clears it alongside the pinned clients). Proxy *health*
+/// writes deliberately do not bump `updated_at`, so a flapping proxy does not
+/// rebuild a client on every request, while an endpoint, credential,
+/// `remote_dns` or reassignment edit does. Only ever one entry: a plugin HTTP
+/// host serves one indexer, which has at most one assigned proxy.
+struct CachedTransportProxyClient {
+    revision: String,
+    client: Client,
 }
 
 impl CachedPluginHttpClient {
@@ -115,10 +131,15 @@ struct PluginHttpRequestClientKey {
 }
 
 #[derive(Clone)]
-pub(crate) struct IndexerProxyPolicy {
-    pub indexer_id: String,
-    pub indexer_name: String,
-    pub config: scryer_domain::IndexerProxyConfig,
+/// A proxy assignment as the HTTP host sees it.
+///
+/// Consumer-neutral on purpose: an indexer and a download client are both just
+/// "the thing whose traffic this proxy carries", and the health ledger and the
+/// error text have to read correctly for either.
+pub(crate) struct ProxyPolicy {
+    pub consumer_id: String,
+    pub consumer_name: String,
+    pub config: scryer_domain::ProxyConfig,
 }
 
 struct ProxiedHttpResponse {
@@ -170,6 +191,7 @@ impl PluginHttpWorkerRuntime {
             // trust bundle also drops every old client off the async runtime.
             self.request_clients.clear();
             self.proxy_client = None;
+            self.transport_proxy_client = None;
         }
         Ok(extra_ca_bundle_pem)
     }
@@ -210,10 +232,38 @@ impl PluginHttpWorkerRuntime {
             return Ok(client.clone());
         }
 
-        let client =
-            scryer_outbound_http::blocking_indexer_proxy_reqwest_client(&extra_ca_bundle_pem)
-                .map_err(|error| error.to_string())?;
+        let client = scryer_outbound_http::blocking_proxy_reqwest_client(&extra_ca_bundle_pem)
+            .map_err(|error| error.to_string())?;
         self.proxy_client = Some(client.clone());
+        Ok(client)
+    }
+
+    /// The egress client for a transport proxy: every request this plugin makes
+    /// for the assigned indexer is carried through it.
+    fn transport_proxy_client(
+        &mut self,
+        runtime: &PluginHttpRuntime,
+        config: &scryer_domain::ProxyConfig,
+    ) -> HostResult<Client> {
+        let extra_ca_bundle_pem = self.sync_trust_bundle(runtime)?;
+        let revision = transport_proxy::transport_proxy_revision(config);
+        if let Some(cached) = &self.transport_proxy_client
+            && cached.revision == revision
+        {
+            return Ok(cached.client.clone());
+        }
+
+        let client = transport_proxy::blocking_transport_proxied_reqwest_client(
+            config,
+            &extra_ca_bundle_pem,
+        )
+        .inspect_err(|message| {
+            transport_proxy::record_transport_proxy_failure(config, message);
+        })?;
+        self.transport_proxy_client = Some(CachedTransportProxyClient {
+            revision,
+            client: client.clone(),
+        });
         Ok(client)
     }
 }
@@ -243,7 +293,7 @@ fn worker_response_timeout(timeout: Duration) -> Duration {
 impl PluginHttpHost {
     pub(crate) fn new(
         allowed_hosts: Vec<String>,
-        indexer_proxy_policy: Option<IndexerProxyPolicy>,
+        proxy_policy: Option<ProxyPolicy>,
         destination_cooldown_key: Option<String>,
         max_http_response_bytes: Option<u64>,
     ) -> Self {
@@ -251,7 +301,7 @@ impl PluginHttpHost {
             state: Arc::new(Mutex::new(PluginHttpHostState {
                 runtime: shared_plugin_http_runtime(),
                 allowed_hosts: Some(allowed_hosts),
-                indexer_proxy_policy,
+                proxy_policy,
                 destination_cooldown_key: destination_cooldown_key
                     .map(scryer_outbound_http::DestinationKey::from),
                 max_http_response_bytes,
@@ -452,7 +502,7 @@ impl PluginHttpHost {
         let (
             runtime,
             allowed_hosts,
-            indexer_proxy_policy,
+            proxy_policy,
             destination_cooldown_key,
             max_http_response_bytes,
         ) = {
@@ -465,7 +515,7 @@ impl PluginHttpHost {
             (
                 host_state.runtime.clone(),
                 host_state.allowed_hosts.clone(),
-                host_state.indexer_proxy_policy.clone(),
+                host_state.proxy_policy.clone(),
                 host_state.destination_cooldown_key.clone(),
                 host_state.max_http_response_bytes,
             )
@@ -473,13 +523,44 @@ impl PluginHttpHost {
 
         enforce_allowed_hosts(allowed_hosts.as_deref(), &request.url)?;
 
-        // The allowlist is the primary boundary; the guarded, DNS-pinned client
-        // is the second layer that keeps a declared host from reaching
-        // link-local / cloud-metadata space.
-        let request_client = worker_runtime
-            .lock()
-            .map_err(|error| format!("plugin HTTP worker runtime lock poisoned: {error}"))?
-            .pinned_request_client(&runtime, &request.url)?;
+        // A transport proxy carries bytes and solves nothing: the only change
+        // it makes to this path is which client dials. Everything downstream —
+        // header capture, set-cookie handling, captured responses, the response
+        // size cap — is the direct path's, unchanged.
+        //
+        // The filter is "not a solver" rather than "is a transport" on purpose:
+        // every non-solver kind has to land in this branch so it either dials
+        // through its proxy or fails. A kind that fell through both filters
+        // would egress directly, which is the one outcome a configured proxy
+        // must never produce.
+        let transport_policy = proxy_policy
+            .as_ref()
+            .filter(|policy| !policy.config.is_challenge_solver());
+
+        let request_client = if let Some(policy) = transport_policy {
+            if !policy.config.is_enabled {
+                return Err(format!("Proxy {} is disabled.", policy.config.name.trim()));
+            }
+            // The DNS-pinning guard cannot apply here: the socket is opened to
+            // the proxy, and with `remote_dns` the destination name is resolved
+            // at the proxy and may not resolve locally at all. The allowlist
+            // above remains the primary boundary, and the operator has
+            // explicitly routed this indexer through a proxy they configured.
+            scryer_outbound_http::validate_operator_http_url(&request.url, "plugin HTTP")
+                .map_err(|error| error.to_string())?;
+            worker_runtime
+                .lock()
+                .map_err(|error| format!("plugin HTTP worker runtime lock poisoned: {error}"))?
+                .transport_proxy_client(&runtime, &policy.config)?
+        } else {
+            // The allowlist is the primary boundary; the guarded, DNS-pinned
+            // client is the second layer that keeps a declared host from
+            // reaching link-local / cloud-metadata space.
+            worker_runtime
+                .lock()
+                .map_err(|error| format!("plugin HTTP worker runtime lock poisoned: {error}"))?
+                .pinned_request_client(&runtime, &request.url)?
+        };
         let started_at = Instant::now();
         let request_is_get = request
             .method
@@ -488,9 +569,10 @@ impl PluginHttpHost {
             .eq_ignore_ascii_case("GET");
         // Reuse a previously solved clearance session for this proxy + origin so
         // repeat requests skip the solver entirely until the session goes stale.
-        let session_headers = indexer_proxy_policy
+        // Transport proxies have no clearance to merge.
+        let session_headers = proxy_policy
             .as_ref()
-            .filter(|_| request_is_get)
+            .filter(|policy| request_is_get && policy.config.is_challenge_solver())
             .map(|policy| {
                 solver::SolvedSessionCache::shared()
                     .session_headers(&policy.config.id, &request.url)
@@ -503,7 +585,11 @@ impl PluginHttpHost {
             Some(timeout),
             &session_headers,
             destination_cooldown_key.as_ref(),
+            transport_policy.map(|policy| &policy.config),
         )?;
+        if let Some(policy) = transport_policy {
+            transport_proxy::record_transport_proxy_success(&policy.config);
+        }
         let status = response.status();
         let status_code = status.as_u16();
         let headers = response_headers(&response);
@@ -528,18 +614,20 @@ impl PluginHttpHost {
                 status = status_code,
                 elapsed_ms = started_at.elapsed().as_millis() as u64,
                 response_bytes,
-                "plugin HTTP request skipped indexer proxy after direct rate limit"
+                "plugin HTTP request skipped proxy after direct rate limit"
             );
             return Ok(direct_body);
         }
 
-        if let Some(policy) = indexer_proxy_policy.as_ref()
+        if let Some(policy) = proxy_policy
+            .as_ref()
+            .filter(|policy| policy.config.is_challenge_solver())
             && solver::looks_like_challenge_response(status_code, &headers, &direct_body)
         {
             let method = request.method.as_deref().unwrap_or("GET");
             if !method.eq_ignore_ascii_case("GET") {
                 return Err(format!(
-                    "indexer proxy only supports GET challenge solving for plugin HTTP requests; got {method}"
+                    "proxy only supports GET challenge solving for plugin HTTP requests; got {method}"
                 ));
             }
             if !session_headers.is_empty() {
@@ -549,8 +637,8 @@ impl PluginHttpHost {
 
             tracing::debug!(
                 plugin_id,
-                indexer_id = policy.indexer_id.as_str(),
-                indexer_name = policy.indexer_name.as_str(),
+                proxy_consumer_id = policy.consumer_id.as_str(),
+                proxy_consumer_name = policy.consumer_name.as_str(),
                 proxy_config_id = policy.config.id.as_str(),
                 status = status_code,
                 request_url = solver::sanitized_url_for_log(&request.url).as_str(),
@@ -593,12 +681,12 @@ impl PluginHttpHost {
             Self::store_last_response(state, plugin_id, solved.status_code, solved.headers)?;
             tracing::debug!(
                 plugin_id,
-                indexer_id = policy.indexer_id.as_str(),
+                proxy_consumer_id = policy.consumer_id.as_str(),
                 proxy_config_id = policy.config.id.as_str(),
                 status = solved.status_code,
                 elapsed_ms = started_at.elapsed().as_millis() as u64,
                 response_bytes,
-                "plugin HTTP request completed through indexer proxy"
+                "plugin HTTP request completed through proxy"
             );
             if let Some(error) = solved.terminal_error {
                 return Err(error);
@@ -852,6 +940,10 @@ fn execute_request_with_extra_headers(
     timeout: Option<Duration>,
     extra_headers: &[(String, String)],
     destination_cooldown_key: Option<&scryer_outbound_http::DestinationKey>,
+    // `Some` only when `client` dials through a transport proxy. It changes
+    // nothing about the request; it only lets a connector failure be reported
+    // as "the proxy is unreachable" rather than "the indexer is down".
+    transport_proxy_config: Option<&scryer_domain::ProxyConfig>,
 ) -> HostResult<reqwest::blocking::Response> {
     let method = Method::from_bytes(
         request
@@ -911,6 +1003,21 @@ fn execute_request_with_extra_headers(
     .map_err(|error| match error {
         scryer_outbound_http::BlockingOutboundHttpError::Request(error) if error.is_timeout() => {
             "timeout".to_string()
+        }
+        scryer_outbound_http::BlockingOutboundHttpError::Request(error) => {
+            match transport_proxy_config
+                .and_then(|config| transport_proxy::transport_proxy_connect_failure(config, &error))
+            {
+                Some(message) => {
+                    // Recorded here because the blocking worker cannot reach a
+                    // repository; the async pass that owns one flushes it.
+                    if let Some(config) = transport_proxy_config {
+                        transport_proxy::record_transport_proxy_failure(config, &message);
+                    }
+                    message
+                }
+                None => scryer_outbound_http::BlockingOutboundHttpError::Request(error).to_string(),
+            }
         }
         other => other.to_string(),
     })
@@ -1034,7 +1141,7 @@ struct ChallengeSolverRequestOptions<'a> {
 fn execute_challenge_solver_request(
     proxy_client: &Client,
     request_client: &Client,
-    policy: &IndexerProxyPolicy,
+    policy: &ProxyPolicy,
     request: &PluginHttpRequest,
     options: ChallengeSolverRequestOptions<'_>,
 ) -> HostResult<ProxiedHttpResponse> {
@@ -1045,19 +1152,19 @@ fn execute_challenge_solver_request(
         destination_cooldown_key,
     } = options;
     if !policy.config.is_enabled {
-        return Err("Indexer proxy is disabled for this indexer.".to_string());
+        return Err(format!("Proxy {} is disabled.", policy.config.name.trim()));
     }
 
     let provider = policy.config.provider_type;
     let provider_name = solver::solver_provider_name(provider);
     let endpoint = solver::solver_solve_endpoint(&policy.config.base_url);
-    let solver_timeout = scryer_outbound_http::effective_indexer_proxy_request_timeout(
+    let solver_timeout = scryer_outbound_http::effective_proxy_request_timeout(
         policy.config.request_timeout_seconds,
     );
     let solver_deadline = Instant::now() + solver_timeout;
     tracing::debug!(
-        indexer_id = policy.indexer_id.as_str(),
-        indexer_name = policy.indexer_name.as_str(),
+        proxy_consumer_id = policy.consumer_id.as_str(),
+        proxy_consumer_name = policy.consumer_name.as_str(),
         proxy_config_id = policy.config.id.as_str(),
         proxy_provider = policy.config.provider_type.as_str(),
         request_url = solver::sanitized_url_for_log(&request.url).as_str(),
@@ -1094,10 +1201,10 @@ fn execute_challenge_solver_request(
     let solver_status = response.status();
     if solver_status == StatusCode::TOO_MANY_REQUESTS || solver_status.is_server_error() {
         tracing::warn!(
-            indexer_id = policy.indexer_id.as_str(),
+            proxy_consumer_id = policy.consumer_id.as_str(),
             proxy_config_id = policy.config.id.as_str(),
             status = solver_status.as_u16(),
-            "challenge solver service unavailable for indexer proxy request"
+            "challenge solver service unavailable for proxy request"
         );
         return Err(
             solver::solver_error_message(provider, solver::SolverErrorKind::Unavailable)
@@ -1126,7 +1233,7 @@ fn execute_challenge_solver_request(
     };
     if solution_status == StatusCode::TOO_MANY_REQUESTS.as_u16() {
         tracing::warn!(
-            indexer_id = policy.indexer_id.as_str(),
+            proxy_consumer_id = policy.consumer_id.as_str(),
             proxy_config_id = policy.config.id.as_str(),
             status = solution_status,
             "challenge solver reported target indexer rate limit"
@@ -1150,7 +1257,7 @@ fn execute_challenge_solver_request(
             &solution,
         );
         tracing::debug!(
-            indexer_id = policy.indexer_id.as_str(),
+            proxy_consumer_id = policy.consumer_id.as_str(),
             proxy_config_id = policy.config.id.as_str(),
             status = solution_status,
             response_bytes = solved_body.len(),
@@ -1173,7 +1280,7 @@ fn execute_challenge_solver_request(
     let retry_headers = solver::solution_retry_headers(&solution);
     if !retry_headers.is_empty() {
         tracing::debug!(
-            indexer_id = policy.indexer_id.as_str(),
+            proxy_consumer_id = policy.consumer_id.as_str(),
             proxy_config_id = policy.config.id.as_str(),
             "retrying original request with challenge solver headers"
         );
@@ -1184,6 +1291,8 @@ fn execute_challenge_solver_request(
             original_timeout,
             &retry_headers,
             destination_cooldown_key,
+            // The solver replay is a direct hop, by construction.
+            None,
         )?;
         let status = retry.status();
         let headers = response_headers(&retry);
@@ -1237,6 +1346,399 @@ fn execute_challenge_solver_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Minimal in-process HTTP proxy built from raw tokio.
+    ///
+    /// It accepts the absolute-form request line a CONNECT-style HTTP proxy
+    /// receives for cleartext destinations, records it, and answers itself. If
+    /// the plugin host ever egressed directly instead, nothing would arrive
+    /// here and the assertion on the recorded request lines would fail.
+    struct RecordingHttpProxy {
+        url: String,
+        seen: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl RecordingHttpProxy {
+        async fn start(body: &'static str) -> Self {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("proxy double should bind");
+            let address = listener.local_addr().expect("proxy double should be bound");
+            let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+            let recorder = Arc::clone(&seen);
+            tokio::spawn(async move {
+                while let Ok((mut stream, _)) = listener.accept().await {
+                    let recorder = Arc::clone(&recorder);
+                    tokio::spawn(async move {
+                        let mut buffer = vec![0u8; 8192];
+                        let mut received = Vec::new();
+                        loop {
+                            let Ok(read) = stream.read(&mut buffer).await else {
+                                return;
+                            };
+                            if read == 0 {
+                                break;
+                            }
+                            received.extend_from_slice(&buffer[..read]);
+                            if received.windows(4).any(|window| window == b"\r\n\r\n") {
+                                break;
+                            }
+                        }
+                        let request = String::from_utf8_lossy(&received).to_string();
+                        if let Some(line) = request.lines().next() {
+                            recorder
+                                .lock()
+                                .expect("proxy recorder lock")
+                                .push(line.to_string());
+                        }
+                        let response = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/rss+xml\r\n\r\n{body}",
+                            body.len()
+                        );
+                        let _ = stream.write_all(response.as_bytes()).await;
+                        let _ = stream.flush().await;
+                    });
+                }
+            });
+            Self {
+                url: format!("http://{address}"),
+                seen,
+            }
+        }
+
+        fn request_lines(&self) -> Vec<String> {
+            self.seen.lock().expect("proxy recorder lock").clone()
+        }
+    }
+
+    fn transport_proxy_policy(
+        provider_type: scryer_domain::ProxyProviderType,
+        base_url: String,
+    ) -> ProxyPolicy {
+        let now = chrono::Utc::now();
+        ProxyPolicy {
+            consumer_id: "indexer-1".into(),
+            consumer_name: "Indexer".into(),
+            config: scryer_domain::ProxyConfig {
+                id: "transport-1".into(),
+                name: "House VPN".into(),
+                provider_type,
+                protocol: None,
+                username_encrypted: None,
+                password_encrypted: None,
+                remote_dns: false,
+                base_url,
+                request_timeout_seconds: 30,
+                is_enabled: true,
+                last_health_status: None,
+                last_error_message: None,
+                last_error_at: None,
+                created_at: now,
+                updated_at: now,
+                host_key_fingerprint: None,
+                host_key_pinned_at: None,
+                private_key_encrypted: None,
+                private_key_passphrase_encrypted: None,
+                peer_public_key: None,
+                preshared_key_encrypted: None,
+                tunnel_public_key: None,
+                tunnel_addresses: Vec::new(),
+                tunnel_dns_servers: Vec::new(),
+                tunnel_mtu: None,
+                tunnel_keepalive_seconds: None,
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn a_transport_proxy_carries_every_plugin_request_for_its_indexer() {
+        let proxy = RecordingHttpProxy::start("<rss>through the proxy</rss>").await;
+        let policy =
+            transport_proxy_policy(scryer_domain::ProxyProviderType::Http, proxy.url.clone());
+
+        let body = tokio::task::spawn_blocking(move || {
+            let host = PluginHttpHost::new(
+                vec!["indexer.example".to_string()],
+                Some(policy),
+                None,
+                Some(64 * 1024),
+            );
+            host.request(
+                "newznab",
+                PluginHttpRequest {
+                    // Deliberately a host that does not resolve: reaching it at
+                    // all proves the hop went through the proxy.
+                    url: "http://indexer.example/api?t=search".to_string(),
+                    method: Some("GET".to_string()),
+                    headers: BTreeMap::new(),
+                },
+                None,
+                Duration::from_secs(5),
+            )
+        })
+        .await
+        .expect("blocking task should join")
+        .expect("the proxied request should succeed");
+
+        assert_eq!(body, b"<rss>through the proxy</rss>");
+        let seen = proxy.request_lines();
+        assert_eq!(
+            seen.len(),
+            1,
+            "expected exactly one proxied request: {seen:?}"
+        );
+        assert!(
+            seen[0].contains("http://indexer.example/api?t=search"),
+            "expected an absolute-form proxied request line, got {}",
+            seen[0]
+        );
+    }
+
+    /// A transport proxy never reaches the solver: no solve POST, no clearance
+    /// merge, and a challenge-looking response is handed to the guest as-is.
+    #[tokio::test]
+    async fn a_transport_proxy_never_takes_the_solver_path() {
+        let proxy = RecordingHttpProxy::start("<html>Just a moment...</html>").await;
+        let policy = transport_proxy_policy(
+            scryer_domain::ProxyProviderType::Socks5,
+            // Never dialled: the request below must fail at the SOCKS hop
+            // rather than fall through to a solve POST.
+            "socks5://127.0.0.1:1".to_string(),
+        );
+        let proxy_url = proxy.url.clone();
+
+        let error = tokio::task::spawn_blocking(move || {
+            let host = PluginHttpHost::new(
+                vec!["indexer.example".to_string()],
+                Some(policy),
+                None,
+                Some(64 * 1024),
+            );
+            host.request(
+                "newznab",
+                PluginHttpRequest {
+                    url: "http://indexer.example/api?t=search".to_string(),
+                    method: Some("GET".to_string()),
+                    headers: BTreeMap::new(),
+                },
+                None,
+                Duration::from_secs(5),
+            )
+        })
+        .await
+        .expect("blocking task should join")
+        .expect_err("an unreachable SOCKS proxy must fail the request");
+
+        assert!(
+            error.starts_with("proxy House VPN unreachable:"),
+            "the failure must name the proxy, got: {error}"
+        );
+        assert!(
+            proxy.request_lines().is_empty(),
+            "nothing may be sent to {proxy_url}: a transport proxy has no solve endpoint"
+        );
+    }
+
+    /// Was `a_tunnel_proxy_fails_closed_instead_of_egressing_directly` while
+    /// there was no engine. The blocking host is the interesting caller: it
+    /// runs on a plain `std::thread` with no tokio runtime, so this also pins
+    /// that a tunnel can be brought up from there.
+    ///
+    /// The origin here is only reachable *through* the SSH double, which
+    /// records every destination it forwards — so this proves the request took
+    /// the tunnel rather than merely that it did not go direct.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_tunnel_proxy_carries_a_blocking_host_request_through_the_tunnel() {
+        let server = scryer_tunnel::test_support::SshServerDouble::start(
+            scryer_tunnel::test_support::SshServerOptions::default(),
+        )
+        .await;
+        let origin =
+            scryer_tunnel::test_support::TunnelledOrigin::start("<rss>tunnelled</rss>").await;
+        let origin_authority = origin.addr().to_string();
+
+        let mut policy = transport_proxy_policy(
+            scryer_domain::ProxyProviderType::SshTunnel,
+            format!("ssh://{}", server.addr()),
+        );
+        policy.config.id = "tunnel-blocking-host".to_string();
+        policy.config.username_encrypted = Some("operator".to_string());
+        policy.config.password_encrypted = Some("s3cret".to_string());
+
+        let host_for_request = origin_authority.clone();
+        let response = tokio::task::spawn_blocking(move || {
+            let host = PluginHttpHost::new(
+                vec!["127.0.0.1".to_string()],
+                Some(policy),
+                None,
+                Some(64 * 1024),
+            );
+            host.request(
+                "newznab",
+                PluginHttpRequest {
+                    url: format!("http://{host_for_request}/api?t=search"),
+                    method: Some("GET".to_string()),
+                    headers: BTreeMap::new(),
+                },
+                None,
+                Duration::from_secs(10),
+            )
+        })
+        .await
+        .expect("blocking task should join")
+        .expect("the tunnel must carry the request");
+
+        assert_eq!(String::from_utf8_lossy(&response), "<rss>tunnelled</rss>");
+        assert_eq!(
+            server.forwarded_targets(),
+            vec![("127.0.0.1".to_string(), origin.addr().port())],
+            "the request must have travelled through the SSH server"
+        );
+        assert_eq!(origin.request_lines().len(), 1);
+
+        scryer_application::tunnel_proxy::stop_tunnel("tunnel-blocking-host");
+    }
+
+    /// The second tunnel family reaches the same blocking caller through the
+    /// same seam, with no branch of its own anywhere below `proxy_egress_url`.
+    /// The origin is addressed **by name**, and the only resolver that knows
+    /// that name lives on the far side of the tunnel — so this proves both
+    /// that the request took the tunnel and that `socks5h` really deferred
+    /// resolution to it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_wireguard_proxy_carries_a_blocking_host_request_through_the_tunnel() {
+        use base64::Engine as _;
+
+        let peer = scryer_tunnel::test_support::WireGuardTestPeer::start().await;
+        let private_key = scryer_tunnel::test_support::test_client_private_key();
+
+        let mut policy = transport_proxy_policy(
+            scryer_domain::ProxyProviderType::WireGuard,
+            format!("wireguard://{}", peer.endpoint()),
+        );
+        policy.config.id = "wireguard-blocking-host".to_string();
+        policy.config.private_key_encrypted =
+            Some(base64::prelude::BASE64_STANDARD.encode(private_key));
+        policy.config.peer_public_key = Some(scryer_tunnel::public_key_of(
+            &scryer_tunnel::test_support::test_peer_private_key(),
+        ));
+        policy.config.tunnel_addresses = vec![format!(
+            "{}/32",
+            scryer_tunnel::test_support::TEST_CLIENT_ADDRESS
+        )];
+        policy.config.tunnel_dns_servers =
+            vec![scryer_tunnel::test_support::TEST_PEER_ADDRESS.to_string()];
+
+        let url = format!(
+            "http://origin.tunnel.test:{}/api?t=search",
+            scryer_tunnel::test_support::TEST_PEER_HTTP_PORT
+        );
+        let response = tokio::task::spawn_blocking(move || {
+            // The allowlist names the host the plugin asks for, which here is
+            // a name only the tunnel can resolve.
+            let host = PluginHttpHost::new(
+                vec!["origin.tunnel.test".to_string()],
+                Some(policy),
+                None,
+                Some(64 * 1024),
+            );
+            host.request(
+                "newznab",
+                PluginHttpRequest {
+                    url,
+                    method: Some("GET".to_string()),
+                    headers: BTreeMap::new(),
+                },
+                None,
+                Duration::from_secs(15),
+            )
+        })
+        .await
+        .expect("blocking task should join")
+        .expect("the wireguard tunnel must carry the request");
+
+        assert_eq!(String::from_utf8_lossy(&response), "through the tunnel");
+        assert_eq!(peer.requests().len(), 1, "{:?}", peer.requests());
+        assert!(
+            peer.dns_queries()
+                .contains(&"origin.tunnel.test".to_string()),
+            "the name must have been resolved on the far side: {:?}",
+            peer.dns_queries()
+        );
+        // The OS resolver cannot see that name at all, so nothing could have
+        // gone direct.
+        assert!(
+            tokio::net::lookup_host("origin.tunnel.test:80")
+                .await
+                .is_err(),
+            "the fixture name must be unresolvable outside the tunnel"
+        );
+
+        scryer_application::tunnel_proxy::stop_tunnel("wireguard-blocking-host");
+    }
+
+    /// The fail-closed half, kept: a tunnel that cannot be established fails
+    /// the request instead of falling back to a direct connection. The origin
+    /// is a real, reachable listener, so a dropped policy would show up as a
+    /// success.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_unreachable_tunnel_still_fails_closed_instead_of_egressing_directly() {
+        let origin = RecordingHttpProxy::start("<html>origin</html>").await;
+        let origin_url = origin.url.clone();
+        let host_port = origin_url
+            .trim_start_matches("http://")
+            .trim_end_matches('/')
+            .to_string();
+        let dead_ssh_port = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+            let port = listener.local_addr().expect("addr").port();
+            drop(listener);
+            port
+        };
+        let mut policy = transport_proxy_policy(
+            scryer_domain::ProxyProviderType::SshTunnel,
+            format!("ssh://127.0.0.1:{dead_ssh_port}"),
+        );
+        policy.config.id = "tunnel-blocking-host-dead".to_string();
+        policy.config.username_encrypted = Some("operator".to_string());
+        policy.config.password_encrypted = Some("s3cret".to_string());
+
+        let host_for_request = host_port.clone();
+        let error = tokio::task::spawn_blocking(move || {
+            let host = PluginHttpHost::new(
+                vec!["127.0.0.1".to_string()],
+                Some(policy),
+                None,
+                Some(64 * 1024),
+            );
+            host.request(
+                "newznab",
+                PluginHttpRequest {
+                    url: format!("http://{host_for_request}/api?t=search"),
+                    method: Some("GET".to_string()),
+                    headers: BTreeMap::new(),
+                },
+                None,
+                Duration::from_secs(10),
+            )
+        })
+        .await
+        .expect("blocking task should join")
+        .expect_err("an unreachable tunnel must fail the request");
+
+        assert!(
+            error.starts_with("proxy House VPN unreachable:"),
+            "the failure must name the proxy, got: {error}"
+        );
+        assert!(
+            origin.request_lines().is_empty(),
+            "nothing may reach {origin_url}: a tunnel-assigned request must not egress directly"
+        );
+
+        scryer_application::tunnel_proxy::stop_tunnel("tunnel-blocking-host-dead");
+    }
 
     #[derive(Default)]
     struct RecordingIndexerErrorRecorder {
@@ -1752,14 +2254,17 @@ mod tests {
             .await;
 
         let now = chrono::Utc::now();
-        let policy = IndexerProxyPolicy {
-            indexer_id: "indexer-1".into(),
-            indexer_name: "Indexer".into(),
-            config: scryer_domain::IndexerProxyConfig {
+        let policy = ProxyPolicy {
+            consumer_id: "indexer-1".into(),
+            consumer_name: "Indexer".into(),
+            config: scryer_domain::ProxyConfig {
                 id: "trawl-1".into(),
                 name: "Trawl".into(),
-                provider_type: scryer_domain::IndexerProxyProviderType::Trawl,
-                protocol: scryer_domain::ChallengeSolverProtocol::RequestSolutionV1,
+                provider_type: scryer_domain::ProxyProviderType::Trawl,
+                protocol: Some(scryer_domain::ChallengeSolverProtocol::RequestSolutionV1),
+                username_encrypted: None,
+                password_encrypted: None,
+                remote_dns: false,
                 base_url: server.uri(),
                 request_timeout_seconds: 60,
                 is_enabled: true,
@@ -1768,6 +2273,17 @@ mod tests {
                 last_error_at: None,
                 created_at: now,
                 updated_at: now,
+                host_key_fingerprint: None,
+                host_key_pinned_at: None,
+                private_key_encrypted: None,
+                private_key_passphrase_encrypted: None,
+                peer_public_key: None,
+                preshared_key_encrypted: None,
+                tunnel_public_key: None,
+                tunnel_addresses: Vec::new(),
+                tunnel_dns_servers: Vec::new(),
+                tunnel_mtu: None,
+                tunnel_keepalive_seconds: None,
             },
         };
         let request = PluginHttpRequest {
@@ -1777,8 +2293,8 @@ mod tests {
         };
 
         let solved = tokio::task::spawn_blocking(move || {
-            let proxy_client = scryer_outbound_http::blocking_indexer_proxy_reqwest_client("")
-                .expect("proxy client");
+            let proxy_client =
+                scryer_outbound_http::blocking_proxy_reqwest_client("").expect("proxy client");
             let request_client =
                 scryer_outbound_http::blocking_plugin_host_client("").expect("request client");
             execute_challenge_solver_request(
@@ -1806,7 +2322,7 @@ mod tests {
                 .headers
                 .get("user-agent")
                 .and_then(|value| value.to_str().ok()),
-            Some(scryer_outbound_http::INDEXER_PROXY_USER_AGENT)
+            Some(scryer_outbound_http::PROXY_USER_AGENT)
         );
     }
 
@@ -1850,14 +2366,17 @@ mod tests {
             .await;
 
         let now = chrono::Utc::now();
-        let policy = IndexerProxyPolicy {
-            indexer_id: "indexer-1".into(),
-            indexer_name: "Indexer".into(),
-            config: scryer_domain::IndexerProxyConfig {
+        let policy = ProxyPolicy {
+            consumer_id: "indexer-1".into(),
+            consumer_name: "Indexer".into(),
+            config: scryer_domain::ProxyConfig {
                 id: "byparr-1".into(),
                 name: "Byparr".into(),
-                provider_type: scryer_domain::IndexerProxyProviderType::Byparr,
-                protocol: scryer_domain::ChallengeSolverProtocol::RequestSolutionV1,
+                provider_type: scryer_domain::ProxyProviderType::Byparr,
+                protocol: Some(scryer_domain::ChallengeSolverProtocol::RequestSolutionV1),
+                username_encrypted: None,
+                password_encrypted: None,
+                remote_dns: false,
                 base_url: server.uri(),
                 request_timeout_seconds: 60,
                 is_enabled: true,
@@ -1866,6 +2385,17 @@ mod tests {
                 last_error_at: None,
                 created_at: now,
                 updated_at: now,
+                host_key_fingerprint: None,
+                host_key_pinned_at: None,
+                private_key_encrypted: None,
+                private_key_passphrase_encrypted: None,
+                peer_public_key: None,
+                preshared_key_encrypted: None,
+                tunnel_public_key: None,
+                tunnel_addresses: Vec::new(),
+                tunnel_dns_servers: Vec::new(),
+                tunnel_mtu: None,
+                tunnel_keepalive_seconds: None,
             },
         };
         let request = PluginHttpRequest {
@@ -1875,8 +2405,8 @@ mod tests {
         };
 
         let solved = tokio::task::spawn_blocking(move || {
-            let proxy_client = scryer_outbound_http::blocking_indexer_proxy_reqwest_client("")
-                .expect("proxy client");
+            let proxy_client =
+                scryer_outbound_http::blocking_proxy_reqwest_client("").expect("proxy client");
             let request_client =
                 scryer_outbound_http::blocking_plugin_host_client("").expect("request client");
             execute_challenge_solver_request(
@@ -1928,14 +2458,17 @@ mod tests {
             .await;
 
         let now = chrono::Utc::now();
-        let policy = IndexerProxyPolicy {
-            indexer_id: "indexer-1".into(),
-            indexer_name: "Indexer".into(),
-            config: scryer_domain::IndexerProxyConfig {
+        let policy = ProxyPolicy {
+            consumer_id: "indexer-1".into(),
+            consumer_name: "Indexer".into(),
+            config: scryer_domain::ProxyConfig {
                 id: "trawl-unavailable".into(),
                 name: "Trawl".into(),
-                provider_type: scryer_domain::IndexerProxyProviderType::Trawl,
-                protocol: scryer_domain::ChallengeSolverProtocol::RequestSolutionV1,
+                provider_type: scryer_domain::ProxyProviderType::Trawl,
+                protocol: Some(scryer_domain::ChallengeSolverProtocol::RequestSolutionV1),
+                username_encrypted: None,
+                password_encrypted: None,
+                remote_dns: false,
                 base_url: server.uri(),
                 request_timeout_seconds: 60,
                 is_enabled: true,
@@ -1944,6 +2477,17 @@ mod tests {
                 last_error_at: None,
                 created_at: now,
                 updated_at: now,
+                host_key_fingerprint: None,
+                host_key_pinned_at: None,
+                private_key_encrypted: None,
+                private_key_passphrase_encrypted: None,
+                peer_public_key: None,
+                preshared_key_encrypted: None,
+                tunnel_public_key: None,
+                tunnel_addresses: Vec::new(),
+                tunnel_dns_servers: Vec::new(),
+                tunnel_mtu: None,
+                tunnel_keepalive_seconds: None,
             },
         };
         let request = PluginHttpRequest {
@@ -1953,8 +2497,8 @@ mod tests {
         };
 
         let result = tokio::task::spawn_blocking(move || {
-            let proxy_client = scryer_outbound_http::blocking_indexer_proxy_reqwest_client("")
-                .expect("proxy client");
+            let proxy_client =
+                scryer_outbound_http::blocking_proxy_reqwest_client("").expect("proxy client");
             let request_client =
                 scryer_outbound_http::blocking_plugin_host_client("").expect("request client");
             execute_challenge_solver_request(

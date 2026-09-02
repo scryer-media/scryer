@@ -37,6 +37,7 @@ function draft(overrides: Partial<DownloadClientDraft>): DownloadClientDraft {
     password: "",
     remotePathMappings: "",
     configValues: {},
+    proxyConfigId: null,
     isEnabled: true,
     ...overrides,
   };

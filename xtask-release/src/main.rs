@@ -70,9 +70,11 @@ const SCRYER_PROD_PACKAGES: &[&str] = &[
     "scryer-infrastructure-workflow",
     "scryer-interface",
     "scryer-mediainfo",
+    "scryer-outbound-http",
     "scryer-plugins",
     "scryer-release-parser",
     "scryer-rules",
+    "scryer-tunnel",
 ];
 const SCRYER_CI_CLIPPY_PACKAGES: &[&str] = &[
     "scryer",
@@ -102,9 +104,11 @@ const SCRYER_CI_CLIPPY_PACKAGES: &[&str] = &[
     "scryer-interface-subscription",
     "scryer-interface-system",
     "scryer-mediainfo",
+    "scryer-outbound-http",
     "scryer-plugins",
     "scryer-release-parser",
     "scryer-rules",
+    "scryer-tunnel",
 ];
 const RELEASE_DRY_RUN_CACHE_FILE: &str = "tmp/xtask-release-dry-run.json";
 const TRASH_GUIDES_SYNC_TIMEOUT: Duration = Duration::from_secs(60);

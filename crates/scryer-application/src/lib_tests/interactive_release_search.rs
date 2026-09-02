@@ -735,6 +735,7 @@ async fn an_unlinked_grab_refuses_unknown_releases_unusable_clients_and_unprivil
         .create_download_client_config(
             &user,
             NewDownloadClientConfig {
+                proxy_config_id: None,
                 name: "Retired".to_string(),
                 client_type: "nzbget".to_string(),
                 config_json: "{}".to_string(),
@@ -793,7 +794,7 @@ async fn an_unlinked_grab_refuses_unknown_releases_unusable_clients_and_unprivil
 
 // ── Download to browser (D17, FR-028) ───────────────────────────────────────
 
-/// Answers `fetch_download_artifact` from a scripted table keyed by download
+/// Answers `fetch_release_artifact` from a scripted table keyed by download
 /// URL; a URL with no entry fails the way an unreachable indexer would.
 #[derive(Default)]
 struct ArtifactDownloadClient {
@@ -811,7 +812,7 @@ impl DownloadClient for ArtifactDownloadClient {
         ))
     }
 
-    async fn fetch_download_artifact(
+    async fn fetch_release_artifact(
         &self,
         request: &DownloadClientAddRequest,
     ) -> AppResult<ResolvedDownloadArtifact> {

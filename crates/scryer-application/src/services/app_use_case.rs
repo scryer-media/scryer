@@ -1188,6 +1188,45 @@ impl AppUseCase {
             .min_by_key(|config| config.client_priority))
     }
 
+    /// The proxy assigned to a download client, for background workers that
+    /// hold no actor.
+    ///
+    /// Fail-closed like the router's own resolution: an assignment that names
+    /// a missing or disabled proxy is an error, so the caller stops rather than
+    /// egressing directly.
+    pub async fn proxy_config_for_download_client(
+        &self,
+        config: &DownloadClientConfig,
+    ) -> AppResult<Option<scryer_domain::ProxyConfig>> {
+        let Some(id) = config
+            .proxy_config_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+        else {
+            return Ok(None);
+        };
+        let proxy = self
+            .services
+            .integrations
+            .proxy_configs
+            .get_by_id(id)
+            .await?
+            .ok_or_else(|| {
+                AppError::Validation(format!(
+                    "download client {} references proxy configuration {id}, which was not found",
+                    config.id
+                ))
+            })?;
+        if !proxy.is_enabled {
+            return Err(AppError::Validation(format!(
+                "download client {} is assigned proxy {id}, which is disabled",
+                config.id
+            )));
+        }
+        Ok(Some(proxy))
+    }
+
     pub async fn active_library_scan_sessions(&self) -> Vec<LibraryScanSession> {
         self.runtime
             .library

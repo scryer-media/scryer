@@ -34,6 +34,48 @@ const MAX_NZB_BYTES: u64 = 32 * 1024 * 1024;
 const STAGED_NZB_ZSTD_LEVEL: i32 = 3;
 const NZB_HEAD_CLOSE_TAG: &[u8] = b"</head>";
 
+/// The HTTP client a native (non-plugin) download client should use.
+///
+/// Native clients — NZBGet, SABnzbd, Weaver — build their own reqwest client
+/// rather than going through the plugin HTTP host, so this is where an assigned
+/// proxy has to be honoured for them.
+///
+/// * No proxy — the ordinary shared client.
+/// * Transport or tunnel — the proxied client. A tunnel currently fails here,
+///   which is deliberate: the client is not constructed at all rather than
+///   constructed unproxied.
+/// * Challenge solver — a documented no-op. The solve/replay flow lives only in
+///   the plugin HTTP host, and a native client has no guest to replay for, so
+///   the assignment carries no transport meaning. It warns rather than failing,
+///   because the operator may legitimately have one proxy row shared between an
+///   indexer (where the solver works) and a client (where it does not).
+pub(crate) fn native_download_client_http_client(
+    client_name: &str,
+    proxy_config: Option<&scryer_domain::ProxyConfig>,
+) -> AppResult<reqwest::Client> {
+    let Some(proxy_config) = proxy_config else {
+        return Ok(scryer_outbound_http::generic_reqwest_client());
+    };
+    if proxy_config.is_challenge_solver() {
+        tracing::warn!(
+            download_client = client_name,
+            proxy_config_id = proxy_config.id.as_str(),
+            proxy = proxy_config.name.as_str(),
+            "challenge-solver proxies do not carry download client traffic; this assignment has no effect"
+        );
+        return Ok(scryer_outbound_http::generic_reqwest_client());
+    }
+    scryer_application::transport_proxy::transport_proxied_reqwest_client(proxy_config, "").map_err(
+        |message| {
+            scryer_application::transport_proxy::record_transport_proxy_failure(
+                proxy_config,
+                &message,
+            );
+            AppError::Validation(message)
+        },
+    )
+}
+
 #[derive(Clone, Default)]
 pub struct BuiltinDownloadClientConnectionTester;
 
@@ -41,19 +83,28 @@ pub struct BuiltinDownloadClientConnectionTester;
 impl scryer_application::BuiltinDownloadClientConnectionTester
     for BuiltinDownloadClientConnectionTester
 {
-    async fn test_connection(&self, client_type: &str, config_json: &str) -> AppResult<()> {
+    async fn test_connection(
+        &self,
+        client_type: &str,
+        config_json: &str,
+        proxy_config: Option<&scryer_domain::ProxyConfig>,
+    ) -> AppResult<()> {
         let client_type = client_type.trim().to_lowercase();
         let config = parse_download_client_config_json(config_json)?;
         let base_url = resolve_download_client_base_url(&config).ok_or_else(|| {
             AppError::Validation("cannot compute base URL from config - host is required".into())
         })?;
         validate_test_flight_url(&base_url)?;
+        // The test has to dial the way live traffic will, or it proves nothing
+        // about a proxied client.
+        let http_client = native_download_client_http_client(&client_type, proxy_config)?;
 
         match client_type.as_str() {
             "nzbget" => {
                 let username = read_config_string(&config, &["username"]);
                 let password = read_config_string(&config, &["password"]);
                 NzbgetDownloadClient::new(base_url, username, password, "SCORE".to_string())
+                    .with_http_client(http_client)
                     .test_connection()
                     .await?;
             }
@@ -67,12 +118,14 @@ impl scryer_application::BuiltinDownloadClientConnectionTester
                     ));
                 }
                 SabnzbdDownloadClient::with_auth(base_url, api_key, username, password)
+                    .with_http_client(http_client)
                     .test_connection()
                     .await?;
             }
             "weaver" => {
                 let api_key = read_config_string(&config, &["api_key", "apiKey", "apikey"]);
                 WeaverDownloadClient::new(base_url, api_key)
+                    .with_http_client(http_client)
                     .test_connection()
                     .await?;
             }

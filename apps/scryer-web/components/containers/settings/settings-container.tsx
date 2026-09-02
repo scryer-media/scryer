@@ -103,6 +103,9 @@ const SettingsPluginsContainer = lazy(async () => ({
 const SettingsNotificationsContainer = lazy(async () => ({
   default: (await import("@/components/containers/settings/settings-notifications-container")).SettingsNotificationsContainer,
 }));
+const SettingsProxiesContainer = lazy(async () => ({
+  default: (await import("@/components/containers/settings/settings-proxies-container")).SettingsProxiesContainer,
+}));
 const SettingsPostProcessingContainer = lazy(async () => ({
   default: (await import("@/components/containers/settings/settings-post-processing-container")).SettingsPostProcessingContainer,
 }));
@@ -159,14 +162,13 @@ const INDEXER_SETTINGS_TABS: {
 }[] = [
   { tab: "indexers", labelKey: "settings.indexers", icon: Database },
   { tab: "search", labelKey: "settings.indexerSearch", icon: ScanSearch },
-  { tab: "proxies", labelKey: "settings.indexerProxies", icon: Network },
   { tab: "seedingProfiles", labelKey: "settings.seedingProfiles", icon: UploadCloud },
 ];
 
-/// Pane switcher for the Indexers page. Indexers, their proxies, and the
-/// seeding profiles they apply are three views of the same subject, so they
-/// share a page instead of scattering across the settings nav. Same shape as
-/// the Wanted view's section rail.
+/// Pane switcher for the Indexers page. An indexer and the seeding profile it
+/// applies are two views of the same subject, so they share a page instead of
+/// scattering across the settings nav. Same shape as the Wanted view's section
+/// rail.
 function IndexerSettingsSubnav({
   activeTab,
   t,
@@ -414,6 +416,8 @@ export const SettingsContainer = memo(function SettingsContainer({
                   ? t("settings.indexers")
                   : settingsSection === "downloadClients"
                     ? t("settings.downloadClients")
+                    : settingsSection === "proxies"
+                      ? t("settings.proxies")
                     : settingsSection === "rules"
                       ? t("settings.rules")
                       : settingsSection === "maintenanceRules"
@@ -475,6 +479,7 @@ export const SettingsContainer = memo(function SettingsContainer({
   const usesIntegrationsHeader =
     settingsSection === "downloadClients" ||
     settingsSection === "indexers" ||
+    settingsSection === "proxies" ||
     settingsSection === "mediaServers" ||
     settingsSection === "notifications";
   const usesAccessHeader = settingsSection === "security" || settingsSection === "users";
@@ -495,6 +500,8 @@ export const SettingsContainer = memo(function SettingsContainer({
         return Database;
       case "downloadClients":
         return Download;
+      case "proxies":
+        return Network;
       case "mediaServers":
         return Server;
       case "notifications":
@@ -759,6 +766,8 @@ export const SettingsContainer = memo(function SettingsContainer({
             <SettingsMaintenanceRulesContainer />
           ) : settingsSection === "plugins" ? (
             <SettingsPluginsContainer />
+          ) : settingsSection === "proxies" ? (
+            <SettingsProxiesContainer />
           ) : settingsSection === "notifications" ? (
             <SettingsNotificationsContainer
               providerCatalogVersion={providerCatalogVersions.NOTIFICATION}

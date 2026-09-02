@@ -978,7 +978,7 @@ pub(super) fn synthetic_direct_nab_indexer_config(id: &str, provider_type: &str)
         is_enabled: true,
         enable_interactive_search: true,
         enable_auto_search: true,
-        indexer_proxy_config_id: None,
+        proxy_config_id: None,
         download_client_id: None,
         seeding_profile_id: None,
         managed_parent_config_id: None,
@@ -1169,6 +1169,7 @@ pub(super) fn bootstrap_with_acquisition_tracking_and_indexer_and_release_attemp
             last_seen_at: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
+            proxy_config_id: None,
         });
     let release_attempts = Arc::new(MockReleaseAttemptRepo::default());
     let settings = Arc::new(StoredSettingsRepo::default());
@@ -1271,6 +1272,7 @@ pub(super) fn bootstrap_with_library_delete_repositories(
             last_seen_at: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
+            proxy_config_id: None,
         });
     let release_attempts = Arc::new(MockReleaseAttemptRepo::default());
     let quality_profiles = Arc::new(MockQualityProfileRepo);
@@ -1925,6 +1927,7 @@ pub(super) async fn create_enabled_download_client_config(
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await

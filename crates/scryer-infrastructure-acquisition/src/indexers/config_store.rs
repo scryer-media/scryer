@@ -18,7 +18,7 @@ use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, StoreData
 const INDEXER_COLUMNS: &str =
     "id, name, provider_type, base_url, api_key_encrypted, rate_limit_seconds,
     rate_limit_burst, disabled_until, is_enabled, enable_interactive_search, enable_auto_search,
-    indexer_proxy_config_id, download_client_id, seeding_profile_id, managed_parent_config_id,
+    proxy_config_id, download_client_id, seeding_profile_id, managed_parent_config_id,
     managed_child_key,
     managed_metadata_json,
     caps_snapshot_json, last_health_status, last_error_message, last_error_at, config_json,
@@ -27,7 +27,7 @@ const INDEXER_COLUMNS: &str =
 const INDEXER_INSERT_SQL: &str = "INSERT INTO indexers (
     id, name, provider_type, base_url, api_key_encrypted, rate_limit_seconds,
     rate_limit_burst, disabled_until, is_enabled, enable_interactive_search,
-    enable_auto_search, indexer_proxy_config_id, download_client_id, seeding_profile_id,
+    enable_auto_search, proxy_config_id, download_client_id, seeding_profile_id,
     managed_parent_config_id, managed_child_key,
     managed_metadata_json, caps_snapshot_json, last_health_status, last_error_message,
     last_error_at, config_json, created_at, updated_at
@@ -387,9 +387,9 @@ impl IndexerConfigRepository for IndexerConfigStore {
             assignments.push("enable_auto_search = {}".to_string());
             args.push(SqlArg::Bool(enable_auto_search));
         }
-        if let Some(indexer_proxy_config_id) = update.indexer_proxy_config_id.as_ref() {
-            assignments.push("indexer_proxy_config_id = {}".to_string());
-            args.push(SqlArg::OptText(indexer_proxy_config_id.clone()));
+        if let Some(proxy_config_id) = update.proxy_config_id.as_ref() {
+            assignments.push("proxy_config_id = {}".to_string());
+            args.push(SqlArg::OptText(proxy_config_id.clone()));
         }
         if let Some(download_client_id) = update.download_client_id.as_ref() {
             assignments.push("download_client_id = {}".to_string());
@@ -496,7 +496,7 @@ fn indexer_insert_args(
         SqlArg::Bool(config.is_enabled),
         SqlArg::Bool(config.enable_interactive_search),
         SqlArg::Bool(config.enable_auto_search),
-        SqlArg::OptText(config.indexer_proxy_config_id.clone()),
+        SqlArg::OptText(config.proxy_config_id.clone()),
         SqlArg::OptText(config.download_client_id.clone()),
         SqlArg::OptText(config.seeding_profile_id.clone()),
         SqlArg::OptText(config.managed_parent_config_id.clone()),
@@ -558,7 +558,7 @@ fn row_to_indexer_config(
         is_enabled: row.bool("is_enabled")?,
         enable_interactive_search: row.bool("enable_interactive_search")?,
         enable_auto_search: row.bool("enable_auto_search")?,
-        indexer_proxy_config_id: row.opt_text("indexer_proxy_config_id")?,
+        proxy_config_id: row.opt_text("proxy_config_id")?,
         download_client_id: row.opt_text("download_client_id")?,
         seeding_profile_id: row.opt_text("seeding_profile_id")?,
         managed_parent_config_id: row.opt_text("managed_parent_config_id")?,
@@ -617,7 +617,7 @@ mod tests {
                 is_enabled INTEGER NOT NULL DEFAULT 1,
                 enable_interactive_search INTEGER NOT NULL DEFAULT 1,
                 enable_auto_search INTEGER NOT NULL DEFAULT 1,
-                indexer_proxy_config_id TEXT,
+                proxy_config_id TEXT,
                 download_client_id TEXT,
                 seeding_profile_id TEXT,
                 managed_parent_config_id TEXT,

@@ -1,0 +1,51 @@
+[package]
+name = "scryer-tunnel"
+version = "0.19.4"
+edition.workspace = true
+
+[features]
+default = []
+# In-process SSH server double. Used by this crate's own tests and, through a
+# dev-dependency, by the consumer-side tests in `scryer-application`,
+# `scryer-plugins` and `scryer-infrastructure-acquisition` that prove their
+# egress really travels through a tunnel. Never enabled in a product build.
+test-support = []
+
+[dependencies]
+# The whole reason this crate exists: russh (and only russh) may depend on the
+# SSH stack. `aws-lc-rs` is the workspace's existing crypto backend (rustls,
+# sqlx and jsonwebtoken all use it), so no second backend enters the tree.
+# Default features are off deliberately: that drops `flate2` (SSH-level
+# compression, useless for proxied HTTPS) and `rsa` (which pulls an RSA
+# release candidate). Ed25519 is the only accepted private-key type.
+russh = { version = "0.63.1", default-features = false, features = ["aws-lc-rs"] }
+# The WireGuard half. `gotatun` owns the protocol — handshakes, encryption,
+# rekeying, keepalives, peers, timers — and the Tokio UDP transport; `smoltcp`
+# owns IP/TCP/UDP/DNS above it. Neither ever touches an OS interface: the two
+# meet in an in-memory `IpSend`/`IpRecv` adapter, so a tunnel needs no `tun`
+# device, no routing table entry and no elevated privileges.
+#
+# `default-features = false` on gotatun exists to name `aws-lc-rs` explicitly
+# rather than inherit it: that keeps the workspace on one crypto backend and
+# keeps `ring` out of the graph entirely (gotatun's `ring` feature is the only
+# path to it). `tun`, `daita`, `pcap` and `windows-gro` stay off.
+#
+# smoltcp is compiled down to exactly what a point-to-point tunnel needs:
+# `medium-ip` (no Ethernet, so no ARP and no neighbour cache), both IP
+# families, and the TCP/UDP/DNS sockets. `async` is what makes the Tokio
+# wrappers real futures — smoltcp registers our task wakers on its sockets and
+# wakes them from the stack pump, so nothing in this crate spins.
+gotatun = { version = "0.9.2", default-features = false, features = ["aws-lc-rs", "device"] }
+smoltcp = { version = "0.13.1", default-features = false, features = ["std", "async", "medium-ip", "proto-ipv4", "proto-ipv6", "proto-dns", "socket-tcp", "socket-udp", "socket-dns"] }
+# gotatun's `Peer::allowed_ips` is `Vec<ipnetwork::IpNetwork>` and gotatun does
+# not re-export the crate, so a peer cannot be built without naming it. Pinned
+# to the version gotatun already resolves, so no second copy enters the tree.
+ipnetwork = "0.21"
+base64 = { workspace = true }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }

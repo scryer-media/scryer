@@ -424,6 +424,7 @@ export function buildDownloadClientDraftFromRecord(record: DownloadClientRecord)
     port,
     urlBase,
     isEnabled: record.isEnabled,
+    proxyConfigId: record.proxyConfigId ?? null,
     apiKey: readConfigStringValue(config, ["api_key", "apiKey", "apikey"]),
     username: readConfigStringValue(config, ["username"]),
     password: "",

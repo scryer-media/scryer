@@ -67,8 +67,16 @@ impl AppUseCase {
         actor: &User,
         client_type: &str,
         config_json: &str,
+        proxy_config_id: Option<&str>,
     ) -> AppResult<()> {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
+            .await?;
+
+        // A connection test that dialled differently from live traffic would
+        // pass for a client that cannot actually be reached, so the assigned
+        // proxy is resolved and used here too.
+        let proxy_config = self
+            .resolve_download_client_test_proxy(proxy_config_id)
             .await?;
 
         let client_type = client_type.trim().to_lowercase();
@@ -77,12 +85,44 @@ impl AppUseCase {
                 .services
                 .integrations
                 .builtin_download_client_connection_tester
-                .test_connection(&client_type, config_json)
+                .test_connection(&client_type, config_json, proxy_config.as_ref())
                 .await;
         }
 
-        self.test_plugin_download_client_connection(actor, &client_type, config_json)
-            .await
+        self.test_plugin_download_client_connection(
+            actor,
+            &client_type,
+            config_json,
+            proxy_config.as_ref(),
+        )
+        .await
+    }
+
+    /// Resolve the proxy a connection test should dial through.
+    ///
+    /// An id that names nothing, or names a disabled proxy, is an error: a test
+    /// that silently ignored the assignment would report a reachability the
+    /// saved client will not have.
+    async fn resolve_download_client_test_proxy(
+        &self,
+        proxy_config_id: Option<&str>,
+    ) -> AppResult<Option<scryer_domain::ProxyConfig>> {
+        let Some(id) = proxy_config_id.map(str::trim).filter(|id| !id.is_empty()) else {
+            return Ok(None);
+        };
+        let config = self
+            .services
+            .integrations
+            .proxy_configs
+            .get_by_id(id)
+            .await?
+            .ok_or_else(|| AppError::Validation("Proxy configuration was not found.".into()))?;
+        if !config.is_enabled {
+            return Err(AppError::Validation(
+                "Proxy is disabled for this download client.".into(),
+            ));
+        }
+        Ok(Some(config))
     }
 }
 impl AppUseCase {
@@ -91,6 +131,7 @@ impl AppUseCase {
         actor: &User,
         client_type: &str,
         config_json: &str,
+        proxy_config: Option<&scryer_domain::ProxyConfig>,
     ) -> AppResult<()> {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
             .await?;
@@ -133,12 +174,15 @@ impl AppUseCase {
             last_seen_at: None,
             created_at: now,
             updated_at: now,
+            proxy_config_id: None,
         };
-        let client = provider.client_for_config(&config).ok_or_else(|| {
-            AppError::Validation(format!(
-                "test connection is not supported for client type '{client_type}'"
-            ))
-        })?;
+        let client = provider
+            .client_for_config_with_proxy(&config, proxy_config)
+            .ok_or_else(|| {
+                AppError::Validation(format!(
+                    "test connection is not supported for client type '{client_type}'"
+                ))
+            })?;
         client.test_connection().await?;
         Ok(())
     }

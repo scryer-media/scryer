@@ -1,5 +1,6 @@
 pub mod downloads;
 pub mod indexers;
+pub mod proxy_config_store;
 pub mod upstream_scheduler;
 
 pub mod config_store {

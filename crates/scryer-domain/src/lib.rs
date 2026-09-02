@@ -1007,7 +1007,7 @@ pub struct IndexerConfig {
     pub is_enabled: bool,
     pub enable_interactive_search: bool,
     pub enable_auto_search: bool,
-    pub indexer_proxy_config_id: Option<String>,
+    pub proxy_config_id: Option<String>,
     pub download_client_id: Option<String>,
     pub seeding_profile_id: Option<String>,
     pub managed_parent_config_id: Option<String>,
@@ -1022,18 +1022,53 @@ pub struct IndexerConfig {
     pub updated_at: DateTime<Utc>,
 }
 
+/// What a proxy actually does to a request.
+///
+/// Derived from the provider type rather than stored: a provider belongs to
+/// exactly one family, so a second persisted column would only be a way for
+/// the two to disagree.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum IndexerProxyProviderType {
-    Byparr,
-    Trawl,
+pub enum ProxyKind {
+    /// The proxy fetches the page itself and hands back a solved response
+    /// (Byparr, Trawl). Requires a `ChallengeSolverProtocol`.
+    ChallengeSolver,
+    /// The proxy only carries bytes: an HTTP CONNECT or SOCKS5 hop that
+    /// Scryer's own HTTP client dials through. Carries no solver protocol.
+    Transport,
+    /// Scryer brings the hop up itself — an SSH session or a userspace
+    /// WireGuard device — and then dials through it. Like a transport it only
+    /// carries bytes, but it owns credentials and a lifecycle that a plain
+    /// transport hop does not have.
+    Tunnel,
 }
 
-impl IndexerProxyProviderType {
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProxyProviderType {
+    Byparr,
+    Trawl,
+    Http,
+    Socks4,
+    Socks5,
+    SshTunnel,
+    /// A userspace WireGuard tunnel Scryer brings up itself. Same family as
+    /// [`Self::SshTunnel`] — it owns credentials and a lifecycle — but it
+    /// authenticates with keys alone and has no trust-on-first-use step, so it
+    /// never pins a host key.
+    WireGuard,
+}
+
+impl ProxyProviderType {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Byparr => "byparr",
             Self::Trawl => "trawl",
+            Self::Http => "http",
+            Self::Socks4 => "socks4",
+            Self::Socks5 => "socks5",
+            Self::SshTunnel => "ssh_tunnel",
+            Self::WireGuard => "wireguard",
         }
     }
 
@@ -1041,8 +1076,36 @@ impl IndexerProxyProviderType {
         match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
             "byparr" => Some(Self::Byparr),
             "trawl" => Some(Self::Trawl),
+            "http" => Some(Self::Http),
+            "socks4" => Some(Self::Socks4),
+            "socks5" => Some(Self::Socks5),
+            "ssh_tunnel" => Some(Self::SshTunnel),
+            // `wire-guard` reaches this arm as `wire_guard` through the same
+            // hyphen rule every other provider gets, so both spellings of the
+            // product's own name are accepted.
+            "wireguard" | "wire_guard" => Some(Self::WireGuard),
             _ => None,
         }
+    }
+
+    pub fn kind(self) -> ProxyKind {
+        match self {
+            Self::Byparr | Self::Trawl => ProxyKind::ChallengeSolver,
+            Self::Http | Self::Socks4 | Self::Socks5 => ProxyKind::Transport,
+            Self::SshTunnel | Self::WireGuard => ProxyKind::Tunnel,
+        }
+    }
+
+    pub fn is_challenge_solver(self) -> bool {
+        matches!(self.kind(), ProxyKind::ChallengeSolver)
+    }
+
+    pub fn is_transport(self) -> bool {
+        matches!(self.kind(), ProxyKind::Transport)
+    }
+
+    pub fn is_tunnel(self) -> bool {
+        matches!(self.kind(), ProxyKind::Tunnel)
     }
 }
 
@@ -1069,13 +1132,13 @@ impl ChallengeSolverProtocol {
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum IndexerProxyHealthStatus {
+pub enum ProxyHealthStatus {
     Unknown,
     Healthy,
     Unhealthy,
 }
 
-impl IndexerProxyHealthStatus {
+impl ProxyHealthStatus {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Unknown => "unknown",
@@ -1095,19 +1158,87 @@ impl IndexerProxyHealthStatus {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct IndexerProxyConfig {
+pub struct ProxyConfig {
     pub id: String,
     pub name: String,
-    pub provider_type: IndexerProxyProviderType,
-    pub protocol: ChallengeSolverProtocol,
+    pub provider_type: ProxyProviderType,
+    /// Solve protocol spoken by challenge-solver providers. `None` for
+    /// transport providers, which speak no application protocol of their own.
+    pub protocol: Option<ChallengeSolverProtocol>,
     pub base_url: String,
     pub request_timeout_seconds: u32,
     pub is_enabled: bool,
-    pub last_health_status: Option<IndexerProxyHealthStatus>,
+    /// Proxy credentials. Named `*_encrypted` for the at-rest column they map
+    /// to; in memory these hold plaintext, exactly like
+    /// `IndexerConfig::api_key_encrypted`. The store encrypts on write and
+    /// decrypts on read.
+    pub username_encrypted: Option<String>,
+    pub password_encrypted: Option<String>,
+    /// SOCKS5 `socks5h` semantics: resolve the destination hostname at the
+    /// proxy rather than locally. Meaningless for the other providers.
+    pub remote_dns: bool,
+    /// Tunnel private key, in PEM form. Same `*_encrypted` convention as the
+    /// credentials above: the column is encrypted, this field is plaintext.
+    pub private_key_encrypted: Option<String>,
+    /// Passphrase protecting `private_key_encrypted`, when the key has one.
+    pub private_key_passphrase_encrypted: Option<String>,
+    /// WireGuard only: the peer's base64 `PublicKey`, from the `[Peer]`
+    /// section. It is the whole of the peer's identity and it is public, so it
+    /// is stored and shown in the clear — unlike everything else on this
+    /// tunnel.
+    pub peer_public_key: Option<String>,
+    /// WireGuard only: the optional symmetric `PresharedKey`. Same
+    /// `*_encrypted` convention as the credentials — the column is ciphertext,
+    /// this field is plaintext base64.
+    pub preshared_key_encrypted: Option<String>,
+    /// WireGuard only: *our* base64 public key, derived from
+    /// `private_key_encrypted` and re-derived whenever it changes. Stored
+    /// rather than computed on read so nothing above the workflow needs the
+    /// tunnel crate to show the operator the line they must paste into the
+    /// server's `[Peer]` section.
+    pub tunnel_public_key: Option<String>,
+    /// WireGuard only: the interface's own addresses inside the tunnel, from
+    /// the `[Interface] Address` line. At least one is required.
+    pub tunnel_addresses: Vec<String>,
+    /// WireGuard only: resolvers to use *through* the tunnel, from the
+    /// `[Interface] DNS` line. May be empty, in which case names cannot be
+    /// resolved through this tunnel at all.
+    pub tunnel_dns_servers: Vec<String>,
+    /// WireGuard only: tunnel MTU. `None` means the engine's default.
+    pub tunnel_mtu: Option<u16>,
+    /// WireGuard only: `PersistentKeepalive`, in seconds. `None` means the
+    /// engine's default; `Some(0)` switches keepalive off.
+    pub tunnel_keepalive_seconds: Option<u16>,
+    /// Host key pinned on the first successful tunnel connect, formatted the
+    /// way OpenSSH prints it (`SHA256:<base64>`). A host key is public, so this
+    /// is stored and exposed in the clear; the tunnel engine hard-fails when a
+    /// server presents a different one.
+    pub host_key_fingerprint: Option<String>,
+    /// When the pin above was taken.
+    pub host_key_pinned_at: Option<DateTime<Utc>>,
+    pub last_health_status: Option<ProxyHealthStatus>,
     pub last_error_message: Option<String>,
     pub last_error_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+impl ProxyConfig {
+    pub fn kind(&self) -> ProxyKind {
+        self.provider_type.kind()
+    }
+
+    pub fn is_challenge_solver(&self) -> bool {
+        self.provider_type.is_challenge_solver()
+    }
+
+    pub fn is_transport(&self) -> bool {
+        self.provider_type.is_transport()
+    }
+
+    pub fn is_tunnel(&self) -> bool {
+        self.provider_type.is_tunnel()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1180,7 +1311,7 @@ pub struct NewIndexerConfig {
     pub is_enabled: bool,
     pub enable_interactive_search: bool,
     pub enable_auto_search: bool,
-    pub indexer_proxy_config_id: Option<String>,
+    pub proxy_config_id: Option<String>,
     pub download_client_id: Option<String>,
     pub config_json: Option<String>,
 }
@@ -1224,6 +1355,10 @@ pub struct DownloadClientConfig {
     pub status: DownloadClientStatus,
     pub last_error: Option<String>,
     pub last_seen_at: Option<DateTime<Utc>>,
+    /// Proxy this client's traffic egresses through, when the operator
+    /// assigned one. Same column name and meaning as
+    /// `IndexerConfig::proxy_config_id`.
+    pub proxy_config_id: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -1235,6 +1370,7 @@ pub struct NewDownloadClientConfig {
     pub config_json: String,
     pub client_priority: i64,
     pub is_enabled: bool,
+    pub proxy_config_id: Option<String>,
 }
 
 /// How a seeding profile treats season packs relative to its own goals.

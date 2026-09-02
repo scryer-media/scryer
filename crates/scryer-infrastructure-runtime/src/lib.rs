@@ -95,9 +95,9 @@ pub(crate) use scryer_infrastructure_acquisition::downloads::{
 };
 pub(crate) use scryer_infrastructure_acquisition::indexers::{
     config_store::IndexerConfigStore, error_store::IndexerErrorStore,
-    proxy_config_store::IndexerProxyConfigStore, search_learning::IndexerSearchLearningStore,
-    stats::InMemoryIndexerStatsTracker,
+    search_learning::IndexerSearchLearningStore, stats::InMemoryIndexerStatsTracker,
 };
+pub(crate) use scryer_infrastructure_acquisition::proxy_config_store::ProxyConfigStore;
 pub(crate) use scryer_infrastructure_configuration::customization::{
     maintenance_evaluation_store::MaintenanceEvaluationStore,
     maintenance_rule_set_store::MaintenanceRuleSetStore, plugin_store::PluginStore,
@@ -123,12 +123,12 @@ pub(crate) use scryer_infrastructure_library::media::{
     libraries::{
         location_operation_store::LocationOperationStore,
         scan_unmatched_store::LibraryScanUnmatchedStore,
-        title_merge_store::TitleMergeStore,
         state_store::{
             BlocklistStore, HousekeepingStore, LibraryProbeStore, PendingReleaseStore,
             SubtitleDownloadStore, WantedStore,
         },
         store::LibraryStore,
+        title_merge_store::TitleMergeStore,
     },
     requests::MediaRequestStore,
     search::media_file_store::MediaFileStore,

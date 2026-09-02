@@ -37,6 +37,7 @@ scryer-release-parser = { path = "../scryer-release-parser" }
 scryer-rules = { path = "../scryer-rules" }
 scryer-mediainfo = { path = "../scryer-mediainfo", optional = true }
 scryer-outbound-http = { path = "../scryer-outbound-http" }
+scryer-tunnel = { path = "../scryer-tunnel" }
 scryer-logging = { path = "../scryer-logging" }
 scryer-runtime-info = { path = "../scryer-runtime-info" }
 jsonwebtoken = { workspace = true }
@@ -90,3 +91,6 @@ windows-sys = { version = "0.61.2", features = ["Win32_Storage_FileSystem"] }
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
 wiremock = { workspace = true }
+# The in-process SSH server double, so the end-to-end tunnel chain is tested
+# against a real SSH peer rather than a mock of one.
+scryer-tunnel = { path = "../scryer-tunnel", features = ["test-support"] }

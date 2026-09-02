@@ -1800,3 +1800,37 @@ kind = "sql"
 file = "postgres/migrations/0210_location_operations.sql"
 engine = "postgres"
 scope = "all"
+
+[[migration]]
+version = 211
+description = "first-class proxies for indexers and download clients"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0211_first_class_proxies.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0211_first_class_proxies.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 212
+description = "wireguard proxy configuration"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0212_wireguard_proxies.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0212_wireguard_proxies.sql"
+engine = "postgres"
+scope = "all"

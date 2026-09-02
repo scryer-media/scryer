@@ -1118,6 +1118,7 @@ async fn movie_title_scan_removes_missing_tracked_movie_file() {
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await

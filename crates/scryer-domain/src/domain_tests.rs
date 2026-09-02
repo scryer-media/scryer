@@ -365,21 +365,75 @@ fn config_field_type_supports_multiline() {
 }
 
 #[test]
-fn indexer_proxy_provider_types_round_trip() {
+fn proxy_provider_types_round_trip() {
     for provider in [
-        IndexerProxyProviderType::Byparr,
-        IndexerProxyProviderType::Trawl,
+        ProxyProviderType::Byparr,
+        ProxyProviderType::Trawl,
+        ProxyProviderType::Http,
+        ProxyProviderType::Socks4,
+        ProxyProviderType::Socks5,
+        ProxyProviderType::SshTunnel,
+        ProxyProviderType::WireGuard,
     ] {
-        assert_eq!(
-            IndexerProxyProviderType::parse(provider.as_str()),
-            Some(provider)
-        );
+        assert_eq!(ProxyProviderType::parse(provider.as_str()), Some(provider));
     }
     assert_eq!(
-        IndexerProxyProviderType::parse("TRAWL"),
-        Some(IndexerProxyProviderType::Trawl)
+        ProxyProviderType::parse(" SSH-Tunnel "),
+        Some(ProxyProviderType::SshTunnel)
     );
-    assert_eq!(IndexerProxyProviderType::parse("unknown"), None);
+    // Both spellings of the product's own name reach the same provider, and
+    // the stored form is the one word `wg` itself uses.
+    assert_eq!(ProxyProviderType::WireGuard.as_str(), "wireguard");
+    assert_eq!(
+        ProxyProviderType::parse(" WireGuard "),
+        Some(ProxyProviderType::WireGuard)
+    );
+    assert_eq!(
+        ProxyProviderType::parse("wire-guard"),
+        Some(ProxyProviderType::WireGuard)
+    );
+    assert_eq!(
+        ProxyProviderType::parse("TRAWL"),
+        Some(ProxyProviderType::Trawl)
+    );
+    assert_eq!(
+        ProxyProviderType::parse(" SOCKS5 "),
+        Some(ProxyProviderType::Socks5)
+    );
+    assert_eq!(
+        ProxyProviderType::parse(" Socks4 "),
+        Some(ProxyProviderType::Socks4)
+    );
+    assert_eq!(ProxyProviderType::parse("unknown"), None);
+    // `socks5h` is not its own provider: it is Socks5 plus remote DNS.
+    assert_eq!(ProxyProviderType::parse("socks5h"), None);
+    // `socks4a` is likewise Socks4 plus remote DNS, not a fifth provider.
+    assert_eq!(ProxyProviderType::parse("socks4a"), None);
+}
+
+#[test]
+fn proxy_provider_types_split_solver_from_transport() {
+    assert_eq!(ProxyProviderType::Byparr.kind(), ProxyKind::ChallengeSolver);
+    assert_eq!(ProxyProviderType::Trawl.kind(), ProxyKind::ChallengeSolver);
+    assert_eq!(ProxyProviderType::Http.kind(), ProxyKind::Transport);
+    assert_eq!(ProxyProviderType::Socks4.kind(), ProxyKind::Transport);
+    assert_eq!(ProxyProviderType::Socks5.kind(), ProxyKind::Transport);
+    assert_eq!(ProxyProviderType::SshTunnel.kind(), ProxyKind::Tunnel);
+    assert!(ProxyProviderType::Trawl.is_challenge_solver());
+    assert!(!ProxyProviderType::Trawl.is_transport());
+    assert!(ProxyProviderType::Socks5.is_transport());
+    assert!(!ProxyProviderType::Socks5.is_challenge_solver());
+    // A tunnel is neither: it is not a solver, and it is not a hop that
+    // already exists for the HTTP client to dial.
+    assert!(ProxyProviderType::SshTunnel.is_tunnel());
+    assert!(!ProxyProviderType::SshTunnel.is_transport());
+    assert!(!ProxyProviderType::SshTunnel.is_challenge_solver());
+    // WireGuard is the second member of that family, so every consumer that
+    // branches on `is_tunnel()` inherits it without a second branch.
+    assert_eq!(ProxyProviderType::WireGuard.kind(), ProxyKind::Tunnel);
+    assert!(ProxyProviderType::WireGuard.is_tunnel());
+    assert!(!ProxyProviderType::WireGuard.is_transport());
+    assert!(!ProxyProviderType::WireGuard.is_challenge_solver());
 }
 
 #[test]

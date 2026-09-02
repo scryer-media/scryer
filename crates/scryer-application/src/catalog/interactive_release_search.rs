@@ -1339,7 +1339,7 @@ impl AppUseCase {
                 .services
                 .integrations
                 .download_client
-                .fetch_download_artifact(&DownloadClientAddRequest {
+                .fetch_release_artifact(&DownloadClientAddRequest {
                     title: stand_in_title.clone(),
                     search_facet: None,
                     purpose: DownloadSubmissionPurpose::OperatorQueued,

@@ -1220,10 +1220,7 @@ fn catalog_v3_release(
     release
 }
 
-fn catalog_entry_with_releases(
-    id: &str,
-    releases: Vec<serde_json::Value>,
-) -> serde_json::Value {
+fn catalog_entry_with_releases(id: &str, releases: Vec<serde_json::Value>) -> serde_json::Value {
     serde_json::json!({
         "id": id,
         "name": format!("{id} Plugin"),
@@ -1414,7 +1411,7 @@ fn make_indexer_config(provider_type: &str) -> IndexerConfig {
         rate_limit_seconds: None,
         rate_limit_burst: None,
         disabled_until: None,
-        indexer_proxy_config_id: None,
+        proxy_config_id: None,
         download_client_id: None,
         seeding_profile_id: None,
         managed_parent_config_id: None,
@@ -2891,7 +2888,8 @@ async fn list_installed_at_latest() {
 
 #[tokio::test]
 async fn list_installed_same_version_portable_updates_to_simd_artifact_on_simd_host() {
-    let h = bootstrap_plugins_with_supported_features(Some(MockPluginProvider::new()), &["simd128"]);
+    let h =
+        bootstrap_plugins_with_supported_features(Some(MockPluginProvider::new()), &["simd128"]);
     h.plugin_repo
         .store_raw_catalog_source(
             CENTRAL_CATALOG_SOURCE_KEY,
@@ -2937,13 +2935,17 @@ async fn list_installed_same_version_portable_does_not_update_without_simd_suppo
     h.plugin_repo.installations.lock().await.push(installation);
 
     let result = h.app.list_available_plugins(&admin()).await.unwrap();
-    assert_eq!(result[0].wasm_url.as_deref(), Some(ALPHA_BASELINE_ARTIFACT_URL));
+    assert_eq!(
+        result[0].wasm_url.as_deref(),
+        Some(ALPHA_BASELINE_ARTIFACT_URL)
+    );
     assert!(!result[0].update_available);
 }
 
 #[tokio::test]
 async fn list_builtin_same_version_counts_as_portable_for_simd_artifact_update() {
-    let h = bootstrap_plugins_with_supported_features(Some(MockPluginProvider::new()), &["simd128"]);
+    let h =
+        bootstrap_plugins_with_supported_features(Some(MockPluginProvider::new()), &["simd128"]);
     h.plugin_repo
         .store_raw_catalog_source(
             CENTRAL_CATALOG_SOURCE_KEY,
@@ -3648,8 +3650,12 @@ async fn nzbgeek_catalog_migration_converts_legacy_builtin_to_downloaded_install
     let runtime_wasm_bytes = runtime_plugin.wasm_bytes.clone();
     h.plugin_descriptor_loader
         .register(&runtime_wasm_bytes, runtime_plugin.descriptor);
-    let mut prepared =
-        prepared_catalog_plugin_install_fixture("nzbgeek", "indexer", "nzbgeek", runtime_wasm_bytes);
+    let mut prepared = prepared_catalog_plugin_install_fixture(
+        "nzbgeek",
+        "indexer",
+        "nzbgeek",
+        runtime_wasm_bytes,
+    );
     prepared.release.version = "0.3.0".to_string();
     let persisted_wasm_bytes = prepared.persisted_wasm_bytes.clone();
     let validated = h
@@ -3671,7 +3677,10 @@ async fn nzbgeek_catalog_migration_converts_legacy_builtin_to_downloaded_install
     assert_eq!(updated.source_kind, PluginSourceKind::Downloaded);
     assert_eq!(updated.support_tier, PluginSupportTier::Official);
     assert_eq!(updated.sdk_version, scryer_plugin_sdk::SDK_VERSION);
-    assert_eq!(updated.sdk_constraint, scryer_plugin_sdk::current_sdk_constraint());
+    assert_eq!(
+        updated.sdk_constraint,
+        scryer_plugin_sdk::current_sdk_constraint()
+    );
     assert_eq!(runtime_plugin.wasm_bytes, vec![1, 2, 3, 4]);
     assert!(updated.descriptor_json.is_some());
 
@@ -4274,13 +4283,17 @@ async fn install_uploaded_plugin_requires_risk_acknowledgement() {
 
 #[tokio::test]
 async fn install_uploaded_plugin_rejects_host_process_capability() {
-    let provider =
-        MockPluginProvider::new().with_provider("host-proc", "Host Proc", Some("https://example.com"));
+    let provider = MockPluginProvider::new().with_provider(
+        "host-proc",
+        "Host Proc",
+        Some("https://example.com"),
+    );
     let h = bootstrap_plugins(Some(provider));
     let wasm_bytes = vec![0x00, 0x61, 0x73, 0x6d];
     let mut descriptor =
         make_runtime_plugin_load("host-proc-plugin", "notification", "host-proc").descriptor;
-    if let scryer_plugin_sdk::ProviderDescriptor::Notification(provider) = &mut descriptor.provider {
+    if let scryer_plugin_sdk::ProviderDescriptor::Notification(provider) = &mut descriptor.provider
+    {
         provider.capabilities.requires_host_process = true;
     }
     h.plugin_descriptor_loader
@@ -4786,7 +4799,8 @@ async fn auto_update_selects_builtins_but_skips_manual_and_unparseable_installat
 
 #[tokio::test]
 async fn auto_update_selects_same_version_optimized_artifact() {
-    let h = bootstrap_plugins_with_supported_features(Some(MockPluginProvider::new()), &["simd128"]);
+    let h =
+        bootstrap_plugins_with_supported_features(Some(MockPluginProvider::new()), &["simd128"]);
     h.plugin_repo
         .store_raw_catalog_source(
             CENTRAL_CATALOG_SOURCE_KEY,

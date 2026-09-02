@@ -22,6 +22,7 @@ export const SETTINGS_SECTION_PATH: Record<SettingsSection, string> = {
   mediaServers: "media-servers",
   indexers: "indexers",
   downloadClients: "download-clients",
+  proxies: "proxies",
   qualityProfiles: "quality-profiles",
   delayProfiles: "delay-profiles",
   acquisition: "acquisition",
@@ -44,6 +45,7 @@ const AUTOMATION_SETTINGS_SECTION_PATH: Partial<Record<SettingsSection, string>>
 const INTEGRATIONS_SETTINGS_SECTION_PATH: Partial<Record<SettingsSection, string>> = {
   indexers: "indexers",
   downloadClients: "download-clients",
+  proxies: "proxies",
   mediaServers: "media-servers",
   notifications: "notifications",
 };
@@ -59,17 +61,19 @@ const SYSTEM_SETTINGS_SECTION_PATH: Partial<Record<SettingsSection, string>> = {
 export const INDEXER_TAB_PATH: Record<IndexerSettingsTab, string> = {
   indexers: "",
   search: "search",
-  proxies: "proxies",
   seedingProfiles: "seeding-profiles",
 };
 
 const INDEXER_TAB_BY_SEGMENT: Record<string, IndexerSettingsTab> = {
   search: "search",
-  proxies: "proxies",
-  "indexer-proxies": "proxies",
   "seeding-profiles": "seedingProfiles",
   seedingprofiles: "seedingProfiles",
 };
+
+/// Segments that used to name the Indexers page's proxies pane. Proxies are a
+/// section of their own now, so these are links people already have rather
+/// than panes, and they redirect instead of resolving.
+const MOVED_INDEXER_PROXY_SEGMENTS = new Set(["proxies", "indexer-proxies"]);
 
 /// Path of one Indexers pane. Seeding profiles used to be a settings section of
 /// its own, so `/settings/seeding-profiles` still redirects here.
@@ -262,6 +266,8 @@ const INTEGRATION_SETTINGS_BY_SEGMENT: Record<string, SettingsSection> = {
   indexers: "indexers",
   "download-clients": "downloadClients",
   downloadclients: "downloadClients",
+  proxies: "proxies",
+  "indexer-proxies": "proxies",
   "media-servers": "mediaServers",
   mediaservers: "mediaServers",
   notifications: "notifications",
@@ -532,10 +538,14 @@ export function resolveAppRoute(
     if (!settingsSection) {
       return { kind: "not-found" };
     }
-    // The Indexers page carries panes (proxies, seeding profiles) as a third
-    // segment; every other integrations section is a bare two-segment path.
+    // The Indexers page carries its seeding-profiles pane as a third segment;
+    // every other integrations section is a bare two-segment path.
     if (settingsSection === "indexers" && rawSegments.length === 3) {
-      const tab = INDEXER_TAB_BY_SEGMENT[normalizedSegments[2] ?? ""];
+      const paneSegment = normalizedSegments[2] ?? "";
+      if (MOVED_INDEXER_PROXY_SEGMENTS.has(paneSegment)) {
+        return redirectTo(buildViewPath("settings", "proxies"), search, hash);
+      }
+      const tab = INDEXER_TAB_BY_SEGMENT[paneSegment];
       if (!tab) {
         return { kind: "not-found" };
       }

@@ -4726,3 +4726,369 @@ async fn migration_0186_postgres_relaxes_the_token_check_and_adds_the_canonical_
     })?;
     result
 }
+
+#[tokio::test]
+async fn migration_0211_makes_proxies_first_class_and_preserves_solver_rows() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .expect("migration test database should open");
+    // The pre-0211 shape, verbatim from the 0198 baseline: the proxy table, the
+    // indexer column that names it, and the download-client table that does not
+    // know about proxies at all yet.
+    sqlx::raw_sql(
+        "CREATE TABLE indexer_proxy_configs (
+             id TEXT PRIMARY KEY NOT NULL,
+             name TEXT NOT NULL,
+             provider_type TEXT NOT NULL,
+             protocol TEXT NOT NULL,
+             base_url TEXT NOT NULL,
+             request_timeout_seconds INTEGER NOT NULL DEFAULT 60,
+             is_enabled INTEGER NOT NULL DEFAULT 1,
+             last_health_status TEXT,
+             last_error_message TEXT,
+             last_error_at TEXT,
+             created_at TEXT NOT NULL DEFAULT (datetime('now')),
+             updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+         );
+         CREATE INDEX idx_indexer_proxy_configs_provider_type
+             ON indexer_proxy_configs(provider_type);
+         CREATE TABLE indexers(
+             id TEXT PRIMARY KEY,
+             name TEXT NOT NULL,
+             provider_type TEXT NOT NULL,
+             base_url TEXT NOT NULL,
+             is_enabled INTEGER NOT NULL DEFAULT 1,
+             created_at TEXT NOT NULL,
+             updated_at TEXT NOT NULL,
+             indexer_proxy_config_id TEXT
+         );
+         CREATE INDEX idx_indexers_indexer_proxy_config_id
+             ON indexers(indexer_proxy_config_id);
+         CREATE TABLE download_clients(
+             id TEXT PRIMARY KEY,
+             name TEXT NOT NULL,
+             client_type TEXT NOT NULL,
+             is_enabled INTEGER NOT NULL DEFAULT 1,
+             status TEXT NOT NULL DEFAULT 'idle',
+             created_at TEXT NOT NULL,
+             updated_at TEXT NOT NULL
+         );
+         INSERT INTO indexer_proxy_configs (
+             id, name, provider_type, protocol, base_url, request_timeout_seconds,
+             is_enabled, last_health_status, last_error_message, last_error_at,
+             created_at, updated_at
+         ) VALUES (
+             'solver-1', 'Trawl', 'trawl', 'request_solution_v1', 'http://trawl:8191',
+             45, 1, 'healthy', NULL, NULL, '2026-01-01T00:00:00Z', '2026-01-02T00:00:00Z'
+         );
+         INSERT INTO indexers (
+             id, name, provider_type, base_url, is_enabled, created_at, updated_at,
+             indexer_proxy_config_id
+         ) VALUES (
+             'indexer-1', 'Nab', 'newznab', 'https://nab.test', 1,
+             '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 'solver-1'
+         );
+         INSERT INTO download_clients (
+             id, name, client_type, is_enabled, status, created_at, updated_at
+         ) VALUES (
+             'client-1', 'Seedbox SAB', 'sabnzbd', 1, 'idle',
+             '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'
+         );",
+    )
+    .execute(&pool)
+    .await
+    .expect("initialize pre-0211 schema");
+
+    run_embedded_migration(
+        &pool,
+        include_str!("../../../scryer/src/db/migrations/0211_first_class_proxies.sql"),
+    )
+    .await;
+
+    let solver: (
+        String,
+        Option<String>,
+        i64,
+        i64,
+        Option<String>,
+        Option<String>,
+        i64,
+    ) = sqlx::query_as(
+        "SELECT provider_type, protocol, request_timeout_seconds, is_enabled,
+                    username_encrypted, password_encrypted, remote_dns
+               FROM proxy_configs
+              WHERE id = 'solver-1'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("the existing solver row must survive the rename and rebuild");
+    assert_eq!(
+        solver,
+        (
+            "trawl".into(),
+            Some("request_solution_v1".into()),
+            45,
+            1,
+            None,
+            None,
+            0,
+        )
+    );
+
+    // The tunnel columns exist and default to unset on every carried-over row.
+    let tunnel_columns: (
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    ) = sqlx::query_as(
+        "SELECT private_key_encrypted, private_key_passphrase_encrypted,
+                        host_key_fingerprint, host_key_pinned_at
+                   FROM proxy_configs
+                  WHERE id = 'solver-1'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("the tunnel columns must exist");
+    assert_eq!(tunnel_columns, (None, None, None, None));
+
+    // The assignment survives under the renamed column.
+    let assigned: Option<String> =
+        sqlx::query_scalar("SELECT proxy_config_id FROM indexers WHERE id = 'indexer-1'")
+            .fetch_one(&pool)
+            .await
+            .expect("the indexer assignment must be readable under the new column name");
+    assert_eq!(assigned.as_deref(), Some("solver-1"));
+
+    // The second consumer family gains its column, unassigned.
+    let client_proxy: Option<String> =
+        sqlx::query_scalar("SELECT proxy_config_id FROM download_clients WHERE id = 'client-1'")
+            .fetch_one(&pool)
+            .await
+            .expect("download clients must gain the assignment column");
+    assert_eq!(client_proxy, None);
+
+    // The point of the rebuild: a transport row with no protocol is now legal.
+    sqlx::query(
+        "INSERT INTO proxy_configs (
+             id, name, provider_type, protocol, base_url, request_timeout_seconds,
+             is_enabled, username_encrypted, password_encrypted, remote_dns,
+             created_at, updated_at
+         ) VALUES (
+             'socks-1', 'Gateway', 'socks5', NULL, 'socks5://gateway:1080', 30,
+             1, 'enc:user', 'enc:pass', 1, '2026-02-01T00:00:00Z', '2026-02-01T00:00:00Z'
+         )",
+    )
+    .execute(&pool)
+    .await
+    .expect("a transport proxy stores no solver protocol");
+
+    // And a tunnel row round-trips its key material and pin.
+    sqlx::query(
+        "INSERT INTO proxy_configs (
+             id, name, provider_type, protocol, base_url, request_timeout_seconds,
+             is_enabled, username_encrypted, private_key_encrypted,
+             private_key_passphrase_encrypted, host_key_fingerprint, host_key_pinned_at,
+             created_at, updated_at
+         ) VALUES (
+             'tunnel-1', 'Seedbox', 'ssh_tunnel', NULL, 'ssh://seedbox.test:22', 30,
+             1, 'enc:user', 'enc:key', 'enc:phrase', 'SHA256:abc',
+             '2026-03-01T00:00:00Z', '2026-03-01T00:00:00Z', '2026-03-01T00:00:00Z'
+         )",
+    )
+    .execute(&pool)
+    .await
+    .expect("a tunnel proxy stores key material and a pinned host key");
+
+    let indexes: Vec<String> = sqlx::query_scalar(
+        "SELECT name FROM sqlite_master
+          WHERE type = 'index' AND name IN (
+              'idx_proxy_configs_provider_type',
+              'idx_indexers_proxy_config_id',
+              'idx_indexer_proxy_configs_provider_type',
+              'idx_indexers_indexer_proxy_config_id'
+          )
+          ORDER BY name",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("read index catalog");
+    assert_eq!(
+        indexes,
+        vec![
+            "idx_indexers_proxy_config_id".to_string(),
+            "idx_proxy_configs_provider_type".to_string(),
+        ],
+        "both indexes must come back under the new names and neither old name may survive"
+    );
+
+    let old_table: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sqlite_master
+          WHERE type = 'table' AND name = 'indexer_proxy_configs'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("read table catalog");
+    assert_eq!(old_table, 0, "the old table must be gone");
+}
+
+#[tokio::test]
+async fn migration_0212_adds_the_wireguard_columns_without_disturbing_existing_rows() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .expect("migration test database should open");
+    // The post-0211 shape, verbatim from that migration, plus one SSH tunnel
+    // row: 0212 must leave it exactly as it found it.
+    sqlx::raw_sql(
+        "CREATE TABLE proxy_configs (
+             id TEXT PRIMARY KEY NOT NULL,
+             name TEXT NOT NULL,
+             provider_type TEXT NOT NULL,
+             protocol TEXT,
+             base_url TEXT NOT NULL,
+             request_timeout_seconds INTEGER NOT NULL DEFAULT 60,
+             is_enabled INTEGER NOT NULL DEFAULT 1,
+             username_encrypted TEXT,
+             password_encrypted TEXT,
+             remote_dns INTEGER NOT NULL DEFAULT 0,
+             private_key_encrypted TEXT,
+             private_key_passphrase_encrypted TEXT,
+             host_key_fingerprint TEXT,
+             host_key_pinned_at TEXT,
+             last_health_status TEXT,
+             last_error_message TEXT,
+             last_error_at TEXT,
+             created_at TEXT NOT NULL DEFAULT (datetime('now')),
+             updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+         );
+         CREATE INDEX idx_proxy_configs_provider_type
+             ON proxy_configs(provider_type);
+         INSERT INTO proxy_configs (
+             id, name, provider_type, protocol, base_url, request_timeout_seconds,
+             is_enabled, username_encrypted, private_key_encrypted,
+             host_key_fingerprint, host_key_pinned_at, created_at, updated_at
+         ) VALUES (
+             'tunnel-ssh', 'Seedbox', 'ssh_tunnel', NULL, 'ssh://seedbox.test:22', 30,
+             1, 'enc:user', 'enc:key', 'SHA256:abc', '2026-03-01T00:00:00Z',
+             '2026-03-01T00:00:00Z', '2026-03-01T00:00:00Z'
+         );",
+    )
+    .execute(&pool)
+    .await
+    .expect("initialize post-0211 schema");
+
+    run_embedded_migration(
+        &pool,
+        include_str!("../../../scryer/src/db/migrations/0212_wireguard_proxies.sql"),
+    )
+    .await;
+
+    // The carried-over SSH row keeps its own columns and gains the new ones
+    // unset. WireGuard adds fields; it takes nothing away.
+    let existing: (
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<i64>,
+        Option<i64>,
+    ) = sqlx::query_as(
+        "SELECT host_key_fingerprint, peer_public_key, preshared_key_encrypted,
+                tunnel_public_key, tunnel_addresses, tunnel_dns_servers,
+                private_key_encrypted, tunnel_mtu, tunnel_keepalive_seconds
+           FROM proxy_configs
+          WHERE id = 'tunnel-ssh'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("the SSH tunnel row must survive with the new columns unset");
+    assert_eq!(
+        existing,
+        (
+            "SHA256:abc".into(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("enc:key".to_string()),
+            None,
+            None,
+        )
+    );
+
+    // And a WireGuard row round-trips everything the family needs: no
+    // username, no passphrase, no host key — a peer key, our derived public
+    // key, the address and DNS lists, and the two link settings.
+    sqlx::query(
+        "INSERT INTO proxy_configs (
+             id, name, provider_type, protocol, base_url, request_timeout_seconds,
+             is_enabled, private_key_encrypted, peer_public_key,
+             preshared_key_encrypted, tunnel_public_key, tunnel_addresses,
+             tunnel_dns_servers, tunnel_mtu, tunnel_keepalive_seconds,
+             created_at, updated_at
+         ) VALUES (
+             'tunnel-wg', 'VPN', 'wireguard', NULL, 'wireguard://vpn.test:51820', 30,
+             1, 'enc:privkey', 'cGVlcg==', 'enc:psk', 'b3Vycw==',
+             '10.6.0.2/32,fd00::2/128', '10.6.0.1,fd00::1', 1420, 0,
+             '2026-04-01T00:00:00Z', '2026-04-01T00:00:00Z'
+         )",
+    )
+    .execute(&pool)
+    .await
+    .expect("a WireGuard proxy stores its keys, addresses and link settings");
+
+    let stored: (
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<i64>,
+        Option<i64>,
+        Option<String>,
+        Option<String>,
+    ) = sqlx::query_as(
+        "SELECT peer_public_key, preshared_key_encrypted, tunnel_public_key,
+                tunnel_addresses, tunnel_dns_servers, tunnel_mtu,
+                tunnel_keepalive_seconds, username_encrypted, host_key_fingerprint
+           FROM proxy_configs
+          WHERE id = 'tunnel-wg'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("the WireGuard row must read back");
+    assert_eq!(
+        stored,
+        (
+            Some("cGVlcg==".to_string()),
+            Some("enc:psk".to_string()),
+            Some("b3Vycw==".to_string()),
+            Some("10.6.0.2/32,fd00::2/128".to_string()),
+            Some("10.6.0.1,fd00::1".to_string()),
+            Some(1420),
+            // A stored 0 keepalive is "switched off", not "unset" — the two
+            // have to stay distinguishable at the column.
+            Some(0),
+            None,
+            None,
+        )
+    );
+
+    // 0211's index is untouched: 0212 only adds columns.
+    let index: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sqlite_master
+          WHERE type = 'index' AND name = 'idx_proxy_configs_provider_type'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("read index catalog");
+    assert_eq!(index, 1);
+}

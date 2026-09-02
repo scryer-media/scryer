@@ -2119,7 +2119,7 @@ export const indexersQuery = `query Indexers($providerType: String) {
     name
     providerType
     baseUrl
-    indexerProxyConfigId
+    proxyConfigId
     downloadClientId
     seedingProfileId
     hasProwlarrSeedCriteria
@@ -2151,13 +2151,25 @@ export const indexerProviderTypesQuery = `query IndexerProviderTypes {
   }
 }`;
 
-const indexerProxyConfigFieldSelection = `
+const proxyConfigFieldSelection = `
     id
     name
     providerType
     protocol
     baseUrl
     requestTimeoutSeconds
+    hasCredentials
+    remoteDns
+    hasPrivateKey
+    peerPublicKey
+    hasPresharedKey
+    tunnelPublicKey
+    tunnelAddresses
+    tunnelDnsServers
+    tunnelMtu
+    tunnelKeepaliveSeconds
+    hostKeyFingerprint
+    hostKeyPinnedAt
     isEnabled
     lastHealthStatus
     lastErrorMessage
@@ -2165,8 +2177,8 @@ const indexerProxyConfigFieldSelection = `
     createdAt
     updatedAt`;
 
-export const indexerProxyConfigsQuery = `query IndexerProxyConfigs {
-  indexerProxyConfigs {${indexerProxyConfigFieldSelection}
+export const proxyConfigsQuery = `query ProxyConfigs {
+  proxyConfigs {${proxyConfigFieldSelection}
   }
 }`;
 
@@ -2309,6 +2321,7 @@ const downloadClientFieldSelection = `
     baseUrl
     config {${PROVIDER_CONFIG_VALUE_FIELDS}
     }
+    proxyConfigId
     isEnabled
     status
     lastError
@@ -2321,7 +2334,7 @@ const indexerFieldSelection = `
     name
     providerType
     baseUrl
-    indexerProxyConfigId
+    proxyConfigId
     downloadClientId
     seedingProfileId
     hasProwlarrSeedCriteria
@@ -2504,6 +2517,8 @@ export const downloadClientsInitQuery = `query DownloadClientsInit {
   }
   downloadClientProviderTypes {${PROVIDER_TYPE_FIELDS}
   }
+  proxyConfigs {${proxyConfigFieldSelection}
+  }
   runtimeInfo {
     runtimePathStyle
   }
@@ -2514,10 +2529,21 @@ export const libraryDownloadClientsQuery = `query LibraryDownloadClients {
   }
 }`;
 
+/**
+ * The settings page's refresh. It reads the same full selection the init query
+ * does, so a save does not blank the columns the list renders (base URL,
+ * status, the assigned proxy); the slim `DownloadClients` document stays for
+ * callers that only need a name for an id.
+ */
+export const settingsDownloadClientsQuery = `query SettingsDownloadClients {
+  downloadClientConfigs {${downloadClientFieldSelection}
+  }
+}`;
+
 export const indexersInitQuery = `query IndexersInit($providerType: String) {
   indexers(providerType: $providerType) {${indexerFieldSelection}
   }
-  indexerProxyConfigs {${indexerProxyConfigFieldSelection}
+  proxyConfigs {${proxyConfigFieldSelection}
   }
   indexerProviderTypes {${PROVIDER_TYPE_FIELDS}
   }

@@ -177,6 +177,15 @@ impl AppUseCase {
             scryer_domain::LibraryPermission::ManageTitles,
         )
         .await?;
+        // A scheduled destructive action is a delete like any other: a title an
+        // operation is mid-move stays out of reach (FR-084). The executor's
+        // safety recheck holds the candidate before it gets here; this is the
+        // choke point's own guarantee for any caller that did not.
+        self.ensure_location_ownership_allows_title(
+            &crate::location::ownership_guard::MAINTENANCE_DELETE_ENTRY,
+            &title.id,
+        )
+        .await?;
 
         self.execute_delete_title_files_by_policy(id, preview_fingerprint, authorization)
             .await?;

@@ -50,10 +50,10 @@ use crate::{
     ExternalImportSetupSecretDraftSaveResult, ExternalImportSetupSecretDraftStatus, FileImporter,
     HousekeepingRepository, ImageProxyCacheControl, ImageProxyCacheEntryRecord,
     ImageProxyRegistration, ImageProxyRepository, ImageProxySourceRecord, ImportArtifact,
-    ImportArtifactRepository, ImportRepository, IndexerProxyConfigRepository, IndexerQueryStats,
-    IndexerSearchLearningKey, IndexerSearchLearningRecord, IndexerSearchLearningRepository,
-    IndexerStatsTracker, JobKey, JobRunRecord, JobRunRepository, LibraryProbeRepository,
-    LibraryProbeSignature, LibraryRepository, LibraryRootDraft, LibraryScanUnmatchedItem,
+    ImportArtifactRepository, ImportRepository, IndexerQueryStats, IndexerSearchLearningKey,
+    IndexerSearchLearningRecord, IndexerSearchLearningRepository, IndexerStatsTracker, JobKey,
+    JobRunRecord, JobRunRepository, LibraryProbeRepository, LibraryProbeSignature,
+    LibraryRepository, LibraryRootDraft, LibraryScanUnmatchedItem,
     LibraryScanUnmatchedItemRepository, MaintenanceRuleSetRepository, MediaFileRepository,
     MediaRequestCounts, MediaRequestQuery, MediaRequestRepository, MediaRequestResolution,
     NewBlocklistEntry, NewMediaRequest, NotificationChannelRepository,
@@ -61,10 +61,10 @@ use crate::{
     OAuthRefreshGrantRecord, OAuthRefreshRotationOutcome, OAuthRefreshTokenRecord, OAuthRepository,
     PendingRelease, PendingReleaseRepository, PendingReleasesPageQuery, PendingStagedNzb,
     PluginDescriptorLoader, PluginInstallationRepository, PostProcessingScriptRepository,
-    ReleaseDecision, RuleSetRepository, SchedulerAdmission, SchedulerBatchDecision,
-    SchedulerBatchRequest, SchedulerFeedback, SchedulerLease, SchedulerSnapshot,
-    SchedulerSnapshotFilter, ScopeIndexerCoverageRepository, SeedingProfileRepository,
-    SettingsRepository, StagedNzbRef, StagedNzbStore, SystemInfoProvider,
+    ProxyConfigRepository, ReleaseDecision, RuleSetRepository, SchedulerAdmission,
+    SchedulerBatchDecision, SchedulerBatchRequest, SchedulerFeedback, SchedulerLease,
+    SchedulerSnapshot, SchedulerSnapshotFilter, ScopeIndexerCoverageRepository,
+    SeedingProfileRepository, SettingsRepository, StagedNzbRef, StagedNzbStore, SystemInfoProvider,
     TitleEpisodeProgressSummary, TitleImageBlob, TitleImageKind, TitleImageProcessor,
     TitleImageRepository, TitleImageSourceResult, TitleImageSyncTask, TitleImageVariantSpec,
     TitleMediaFile, TitleMediaSizeSummary, TitleMovieMediaSummary, TitleQualitySummary, UiSettings,
@@ -109,7 +109,7 @@ impl SeedingProfileRepository for NullSeedingProfileRepository {
 }
 
 #[derive(Default)]
-pub struct NullIndexerProxyConfigRepository;
+pub struct NullProxyConfigRepository;
 
 #[derive(Default)]
 pub struct NullIndexerErrorRepository;
@@ -142,29 +142,29 @@ impl IndexerErrorRepository for NullIndexerErrorRepository {
 }
 
 #[async_trait]
-impl IndexerProxyConfigRepository for NullIndexerProxyConfigRepository {
+impl ProxyConfigRepository for NullProxyConfigRepository {
     async fn list(
         &self,
-        _provider_type: Option<scryer_domain::IndexerProxyProviderType>,
-    ) -> AppResult<Vec<scryer_domain::IndexerProxyConfig>> {
+        _provider_type: Option<scryer_domain::ProxyProviderType>,
+    ) -> AppResult<Vec<scryer_domain::ProxyConfig>> {
         Ok(Vec::new())
     }
 
-    async fn get_by_id(&self, _id: &str) -> AppResult<Option<scryer_domain::IndexerProxyConfig>> {
+    async fn get_by_id(&self, _id: &str) -> AppResult<Option<scryer_domain::ProxyConfig>> {
         Ok(None)
     }
 
     async fn create(
         &self,
-        config: scryer_domain::IndexerProxyConfig,
-    ) -> AppResult<scryer_domain::IndexerProxyConfig> {
+        config: scryer_domain::ProxyConfig,
+    ) -> AppResult<scryer_domain::ProxyConfig> {
         Ok(config)
     }
 
     async fn update(
         &self,
-        config: scryer_domain::IndexerProxyConfig,
-    ) -> AppResult<scryer_domain::IndexerProxyConfig> {
+        config: scryer_domain::ProxyConfig,
+    ) -> AppResult<scryer_domain::ProxyConfig> {
         Ok(config)
     }
 
@@ -175,10 +175,23 @@ impl IndexerProxyConfigRepository for NullIndexerProxyConfigRepository {
     async fn record_health(
         &self,
         _id: &str,
-        _status: scryer_domain::IndexerProxyHealthStatus,
+        _status: scryer_domain::ProxyHealthStatus,
         _error_message: Option<String>,
         _error_at: Option<chrono::DateTime<chrono::Utc>>,
     ) -> AppResult<()> {
+        Ok(())
+    }
+
+    async fn pin_host_key(
+        &self,
+        _id: &str,
+        _fingerprint: &str,
+        _pinned_at: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<()> {
+        Ok(())
+    }
+
+    async fn clear_host_key(&self, _id: &str) -> AppResult<()> {
         Ok(())
     }
 }
@@ -1805,7 +1818,12 @@ pub struct NullBuiltinDownloadClientConnectionTester;
 
 #[async_trait]
 impl BuiltinDownloadClientConnectionTester for NullBuiltinDownloadClientConnectionTester {
-    async fn test_connection(&self, _client_type: &str, _config_json: &str) -> AppResult<()> {
+    async fn test_connection(
+        &self,
+        _client_type: &str,
+        _config_json: &str,
+        _proxy_config: Option<&scryer_domain::ProxyConfig>,
+    ) -> AppResult<()> {
         Err(AppError::Repository(
             "download client connection tester is not configured".to_string(),
         ))
@@ -4051,7 +4069,12 @@ pub mod test_nulls {
 
     #[async_trait]
     impl BuiltinDownloadClientConnectionTester for NullDownloadClient {
-        async fn test_connection(&self, _: &str, _: &str) -> AppResult<()> {
+        async fn test_connection(
+            &self,
+            _: &str,
+            _: &str,
+            _: Option<&scryer_domain::ProxyConfig>,
+        ) -> AppResult<()> {
             Err(AppError::Repository("not configured".into()))
         }
     }

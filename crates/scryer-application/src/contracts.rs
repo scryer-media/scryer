@@ -465,7 +465,7 @@ pub struct IndexerConfigUpdate {
     pub is_enabled: Option<bool>,
     pub enable_interactive_search: Option<bool>,
     pub enable_auto_search: Option<bool>,
-    pub indexer_proxy_config_id: Option<Option<String>>,
+    pub proxy_config_id: Option<Option<String>>,
     pub download_client_id: Option<Option<String>>,
     pub seeding_profile_id: Option<Option<String>>,
     pub managed_parent_config_id: Option<Option<String>>,
@@ -476,36 +476,106 @@ pub struct IndexerConfigUpdate {
 }
 
 #[derive(Clone, Debug)]
-pub struct NewIndexerProxyConfig {
+pub struct NewProxyConfig {
     pub name: String,
-    pub provider_type: scryer_domain::IndexerProxyProviderType,
+    pub provider_type: scryer_domain::ProxyProviderType,
+    /// Only meaningful for challenge-solver providers; supplying one for a
+    /// transport provider is rejected rather than silently dropped. `None` on
+    /// a solver provider takes the single protocol Scryer speaks.
+    pub protocol: Option<scryer_domain::ChallengeSolverProtocol>,
     pub base_url: String,
     pub request_timeout_seconds: Option<u32>,
     pub is_enabled: bool,
+    /// Plaintext proxy credentials. Persisted encrypted at rest.
+    pub username: Option<String>,
+    pub password: Option<String>,
+    /// SOCKS5 only: resolve destination hostnames at the proxy (`socks5h`).
+    pub remote_dns: Option<bool>,
+    /// Tunnel providers only: PEM-encoded private key, pasted by the operator
+    /// and persisted encrypted at rest.
+    pub private_key: Option<String>,
+    /// Passphrase for `private_key`, when the key has one.
+    pub private_key_passphrase: Option<String>,
+    /// WireGuard only: the peer's base64 public key. Required for that
+    /// provider and rejected for every other one. Not a secret — it is stored
+    /// and read back in the clear.
+    pub peer_public_key: Option<String>,
+    /// WireGuard only: the optional symmetric preshared key, write-only like
+    /// the private key.
+    pub preshared_key: Option<String>,
+    /// WireGuard only: the `[Interface] Address` entries. At least one is
+    /// required for that provider.
+    pub tunnel_addresses: Option<Vec<String>>,
+    /// WireGuard only: the `[Interface] DNS` entries. May be empty.
+    pub tunnel_dns_servers: Option<Vec<String>>,
+    /// WireGuard only: tunnel MTU. `None` takes the engine's default.
+    pub tunnel_mtu: Option<u16>,
+    /// WireGuard only: `PersistentKeepalive`. `None` takes the engine's
+    /// default; `Some(0)` switches it off.
+    pub tunnel_keepalive_seconds: Option<u16>,
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct IndexerProxyConfigUpdate {
+pub struct ProxyConfigUpdate {
     pub id: String,
     pub name: Option<String>,
     pub base_url: Option<String>,
     pub request_timeout_seconds: Option<u32>,
     pub is_enabled: Option<bool>,
+    /// Write-only credentials, following the codebase's nested-`Option`
+    /// patch convention: outer `None` leaves the stored secret untouched,
+    /// `Some(None)` clears it, `Some(Some(value))` replaces it.
+    pub username: Option<Option<String>>,
+    pub password: Option<Option<String>>,
+    pub remote_dns: Option<bool>,
+    /// Tunnel key material, same write-only tri-state as the credentials.
+    pub private_key: Option<Option<String>>,
+    pub private_key_passphrase: Option<Option<String>>,
+    /// WireGuard peer public key. A plain `Option` rather than the tri-state,
+    /// because this one is not a secret and not optional: a WireGuard tunnel
+    /// without it cannot exist, so there is no "clear it" to express. Omission
+    /// keeps the stored value.
+    pub peer_public_key: Option<String>,
+    /// WireGuard preshared key, write-only tri-state: it really is optional,
+    /// so clearing it is a thing an operator can mean.
+    pub preshared_key: Option<Option<String>>,
+    /// WireGuard interface addresses. Omission keeps the stored list; an empty
+    /// vector clears it (and is then refused by validation for a WireGuard
+    /// row, which needs at least one).
+    pub tunnel_addresses: Option<Vec<String>>,
+    /// WireGuard resolvers. Omission keeps the stored list; an empty vector
+    /// clears it, which is legal — a tunnel may address destinations by IP.
+    pub tunnel_dns_servers: Option<Vec<String>>,
+    /// WireGuard MTU and keepalive, tri-state: omission keeps the stored
+    /// value, `Some(None)` restores the engine's default.
+    pub tunnel_mtu: Option<Option<u16>>,
+    pub tunnel_keepalive_seconds: Option<Option<u16>>,
 }
 
-impl IndexerProxyConfigUpdate {
+impl ProxyConfigUpdate {
     pub fn has_changes(&self) -> bool {
         self.name.is_some()
             || self.base_url.is_some()
             || self.request_timeout_seconds.is_some()
             || self.is_enabled.is_some()
+            || self.username.is_some()
+            || self.password.is_some()
+            || self.remote_dns.is_some()
+            || self.private_key.is_some()
+            || self.private_key_passphrase.is_some()
+            || self.peer_public_key.is_some()
+            || self.preshared_key.is_some()
+            || self.tunnel_addresses.is_some()
+            || self.tunnel_dns_servers.is_some()
+            || self.tunnel_mtu.is_some()
+            || self.tunnel_keepalive_seconds.is_some()
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct IndexerProxyTestResult {
+pub struct ProxyTestResult {
     pub ok: bool,
-    pub status: scryer_domain::IndexerProxyHealthStatus,
+    pub status: scryer_domain::ProxyHealthStatus,
     pub message: Option<String>,
     pub duration_ms: Option<u64>,
 }
@@ -520,7 +590,7 @@ impl IndexerConfigUpdate {
             || self.is_enabled.is_some()
             || self.enable_interactive_search.is_some()
             || self.enable_auto_search.is_some()
-            || self.indexer_proxy_config_id.is_some()
+            || self.proxy_config_id.is_some()
             || self.download_client_id.is_some()
             || self.seeding_profile_id.is_some()
             || self.managed_parent_config_id.is_some()
@@ -587,6 +657,10 @@ pub struct DownloadClientConfigUpdate {
     pub client_type: Option<String>,
     pub config_json: Option<String>,
     pub is_enabled: Option<bool>,
+    /// Proxy assignment, using the same nested-`Option` patch convention as
+    /// `IndexerConfigUpdate::proxy_config_id`: outer `None` leaves the stored
+    /// assignment alone, `Some(None)` clears it, `Some(Some(id))` sets it.
+    pub proxy_config_id: Option<Option<String>>,
 }
 
 impl DownloadClientConfigUpdate {
@@ -595,6 +669,7 @@ impl DownloadClientConfigUpdate {
             || self.client_type.is_some()
             || self.config_json.is_some()
             || self.is_enabled.is_some()
+            || self.proxy_config_id.is_some()
     }
 }
 

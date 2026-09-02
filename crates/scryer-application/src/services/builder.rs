@@ -341,9 +341,9 @@ impl AppServicesBuilder {
         Arc<dyn BuiltinDownloadClientConnectionTester>
     );
     app_services_builder_setter!(
-        with_indexer_proxy_config_store,
-        integrations.indexer_proxy_configs,
-        Arc<dyn IndexerProxyConfigRepository>
+        with_proxy_config_store,
+        integrations.proxy_configs,
+        Arc<dyn ProxyConfigRepository>
     );
     app_services_builder_setter!(
         with_scope_indexer_coverage_store,

@@ -3196,30 +3196,49 @@ pub trait IndexerConfigRepository: Send + Sync {
 }
 
 #[async_trait]
-pub trait IndexerProxyConfigRepository: Send + Sync {
+pub trait ProxyConfigRepository: Send + Sync {
     async fn list(
         &self,
-        provider_type: Option<scryer_domain::IndexerProxyProviderType>,
-    ) -> AppResult<Vec<scryer_domain::IndexerProxyConfig>>;
-    async fn get_by_id(&self, id: &str) -> AppResult<Option<scryer_domain::IndexerProxyConfig>>;
+        provider_type: Option<scryer_domain::ProxyProviderType>,
+    ) -> AppResult<Vec<scryer_domain::ProxyConfig>>;
+    async fn get_by_id(&self, id: &str) -> AppResult<Option<scryer_domain::ProxyConfig>>;
     async fn create(
         &self,
-        config: scryer_domain::IndexerProxyConfig,
-    ) -> AppResult<scryer_domain::IndexerProxyConfig>;
+        config: scryer_domain::ProxyConfig,
+    ) -> AppResult<scryer_domain::ProxyConfig>;
     async fn update(
         &self,
-        config: scryer_domain::IndexerProxyConfig,
-    ) -> AppResult<scryer_domain::IndexerProxyConfig>;
+        config: scryer_domain::ProxyConfig,
+    ) -> AppResult<scryer_domain::ProxyConfig>;
     async fn delete(&self, id: &str) -> AppResult<()>;
     /// Persist a health observation without bumping `updated_at`, which
     /// doubles as the plugin client cache revision for proxied indexers.
     async fn record_health(
         &self,
         id: &str,
-        status: scryer_domain::IndexerProxyHealthStatus,
+        status: scryer_domain::ProxyHealthStatus,
         error_message: Option<String>,
         error_at: Option<chrono::DateTime<chrono::Utc>>,
     ) -> AppResult<()>;
+    /// Pin a tunnel host key on trust-on-first-use.
+    ///
+    /// Like `record_health` this deliberately leaves `updated_at` alone. The
+    /// tunnel engine pins immediately after the connect that just succeeded;
+    /// bumping the cache revision there would evict the session that did the
+    /// pinning, on every first connect.
+    async fn pin_host_key(
+        &self,
+        id: &str,
+        fingerprint: &str,
+        pinned_at: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<()>;
+    /// Drop the pin so the next connect trusts the server afresh, after a
+    /// legitimate rekey.
+    ///
+    /// This one *does* bump `updated_at`: it is an operator edit whose whole
+    /// purpose is that the next connection be a new one, so any cached client
+    /// or session built on the old pin has to go.
+    async fn clear_host_key(&self, id: &str) -> AppResult<()>;
 }
 
 #[async_trait]
@@ -4410,8 +4429,10 @@ pub trait LocationOperationRepository: Send + Sync {
         plan_json: Option<&str>,
     ) -> AppResult<()>;
 
-    async fn get_location_operation(&self, operation_id: &str)
-    -> AppResult<Option<LocationOperation>>;
+    async fn get_location_operation(
+        &self,
+        operation_id: &str,
+    ) -> AppResult<Option<LocationOperation>>;
 
     async fn get_location_operation_plan_json(
         &self,
@@ -4450,10 +4471,8 @@ pub trait LocationOperationRepository: Send + Sync {
 
     /// Writes a title's checkpoint. Called on every title state transition; the
     /// row is the unit a resume restarts from (FR-092).
-    async fn upsert_location_title_checkpoint(
-        &self,
-        checkpoint: &TitleCheckpoint,
-    ) -> AppResult<()>;
+    async fn upsert_location_title_checkpoint(&self, checkpoint: &TitleCheckpoint)
+    -> AppResult<()>;
 
     /// Checkpoints in plan order.
     async fn list_location_title_checkpoints(
@@ -4497,8 +4516,7 @@ pub trait LocationOperationRepository: Send + Sync {
 
     /// The operation currently holding `entity`, if any. The choke-point query
     /// behind the guard (T016).
-    async fn location_ownership_holder(&self, entity: &OwnedEntity)
-    -> AppResult<Option<String>>;
+    async fn location_ownership_holder(&self, entity: &OwnedEntity) -> AppResult<Option<String>>;
 
     /// Every open claim, for the in-process guard cache and diagnostics.
     async fn list_location_ownership_claims(&self) -> AppResult<Vec<LocationOwnershipClaim>>;
@@ -6477,7 +6495,7 @@ pub trait IndexerPluginProvider: Send + Sync {
     fn client_for_provider_with_proxy(
         &self,
         config: &IndexerConfig,
-        _proxy_config: Option<&scryer_domain::IndexerProxyConfig>,
+        _proxy_config: Option<&scryer_domain::ProxyConfig>,
     ) -> Option<Arc<dyn IndexerClient>> {
         self.client_for_provider(config)
     }
@@ -6621,6 +6639,19 @@ pub struct RuntimePluginLoad {
 
 pub trait DownloadClientPluginProvider: Send + Sync {
     fn client_for_config(&self, config: &DownloadClientConfig) -> Option<Arc<dyn DownloadClient>>;
+    /// Build a client whose egress goes through the operator's assigned proxy.
+    ///
+    /// Mirrors `IndexerPluginProvider::client_for_provider_with_proxy`. The
+    /// default ignores the proxy so test doubles that predate proxy support
+    /// keep compiling; the real provider overrides it and keys its cache on the
+    /// proxy revision.
+    fn client_for_config_with_proxy(
+        &self,
+        config: &DownloadClientConfig,
+        _proxy_config: Option<&scryer_domain::ProxyConfig>,
+    ) -> Option<Arc<dyn DownloadClient>> {
+        self.client_for_config(config)
+    }
     fn available_provider_types(&self) -> Vec<String>;
     fn builtin_provider_types(&self) -> Vec<String> {
         vec![]
@@ -7167,7 +7198,14 @@ pub trait NotificationSubscriptionRepository: Send + Sync {
 
 #[async_trait]
 pub trait BuiltinDownloadClientConnectionTester: Send + Sync {
-    async fn test_connection(&self, client_type: &str, config_json: &str) -> AppResult<()>;
+    /// Probe a native download client, through the assigned proxy when there is
+    /// one, so a connection test exercises the same egress live traffic uses.
+    async fn test_connection(
+        &self,
+        client_type: &str,
+        config_json: &str,
+        proxy_config: Option<&scryer_domain::ProxyConfig>,
+    ) -> AppResult<()>;
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -7198,7 +7236,7 @@ pub trait DownloadClient: Send + Sync {
     /// host-side fetch instead. Only the router implements this — an individual
     /// client has no indexer provenance, proxy or plugin grab flow to resolve
     /// the URL with.
-    async fn fetch_download_artifact(
+    async fn fetch_release_artifact(
         &self,
         _request: &DownloadClientAddRequest,
     ) -> AppResult<ResolvedDownloadArtifact> {

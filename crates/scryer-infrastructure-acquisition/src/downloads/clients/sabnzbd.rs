@@ -204,6 +204,15 @@ impl SabnzbdDownloadClient {
         }
     }
 
+    /// Replace the egress client, so an operator-assigned proxy carries this
+    /// client's traffic. Applied after construction because every existing
+    /// call site builds the default client and only the router knows whether a
+    /// proxy is assigned.
+    pub fn with_http_client(mut self, http_client: reqwest::Client) -> Self {
+        self.outbound_http = OutboundHttpClient::new(http_client, RateLimitRegistry::new());
+        self
+    }
+
     fn sab_nzb_path(staged_nzb: &StagedNzbRef) -> PathBuf {
         staged_nzb
             .compressed_path

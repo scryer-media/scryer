@@ -9,20 +9,19 @@ use scryer_application::{
     AppError, AppResult, DownloadSourceKind, EstimatedCost, ExpectedValueHint, HashDomain,
     INDEXER_CAPS_REFRESH_ERROR_PREFIX, IndexerClient, IndexerConfigRepository,
     IndexerErrorClassification, IndexerErrorOperation, IndexerErrorRepository,
-    IndexerPluginProvider, IndexerProxyConfigRepository, IndexerQueryOutcome,
-    IndexerResponseAttributes, IndexerRoutingPlan, IndexerSearchCandidateWrite,
-    IndexerSearchCompletion, IndexerSearchIncompleteReason, IndexerSearchLearningContext,
-    IndexerSearchLearningKey, IndexerSearchLearningRecord, IndexerSearchLearningRepository,
-    IndexerSearchOutcome, IndexerSearchPageSink, IndexerSearchPlanRequest, IndexerSearchResponse,
-    IndexerSearchResult, IndexerSearchRunWrite, IndexerSearchStrategyEvent,
-    IndexerSearchStrategyEventSink, IndexerSearchStrategyRequest, IndexerStatsTracker,
-    IndexerSystemBackoff, NewIndexerError, NormalizedIndexerSearchCandidate,
-    NullIndexerErrorRepository, NullIndexerProxyConfigRepository,
-    NullIndexerSearchLearningRepository, NullUpstreamScheduler, RateLimitCooldownAction,
-    RateLimitSignal, ReleaseCandidateProvenance, ReleaseSearchSubjectKind,
-    ReusableIndexerSearchCandidate, RssFreshnessContext, SchedulerAdmission, SchedulerBatchRequest,
-    SchedulerCandidate, SchedulerCandidateId, SchedulerFeedback, SchedulerFeedbackOutcome,
-    SchedulerIntent, SchedulerLease, SchedulerOperation, SchedulerPluginKind, SchedulerSnapshot,
+    IndexerPluginProvider, IndexerQueryOutcome, IndexerResponseAttributes, IndexerRoutingPlan,
+    IndexerSearchCandidateWrite, IndexerSearchCompletion, IndexerSearchIncompleteReason,
+    IndexerSearchLearningContext, IndexerSearchLearningKey, IndexerSearchLearningRecord,
+    IndexerSearchLearningRepository, IndexerSearchOutcome, IndexerSearchPageSink,
+    IndexerSearchPlanRequest, IndexerSearchResponse, IndexerSearchResult, IndexerSearchRunWrite,
+    IndexerSearchStrategyEvent, IndexerSearchStrategyEventSink, IndexerSearchStrategyRequest,
+    IndexerStatsTracker, IndexerSystemBackoff, NewIndexerError, NormalizedIndexerSearchCandidate,
+    NullIndexerErrorRepository, NullIndexerSearchLearningRepository, NullProxyConfigRepository,
+    NullUpstreamScheduler, ProxyConfigRepository, RateLimitCooldownAction, RateLimitSignal,
+    ReleaseCandidateProvenance, ReleaseSearchSubjectKind, ReusableIndexerSearchCandidate,
+    RssFreshnessContext, SchedulerAdmission, SchedulerBatchRequest, SchedulerCandidate,
+    SchedulerCandidateId, SchedulerFeedback, SchedulerFeedbackOutcome, SchedulerIntent,
+    SchedulerLease, SchedulerOperation, SchedulerPluginKind, SchedulerSnapshot,
     SearchLearningContext, SearchMode, UpstreamScheduler, blake3_identity_hex,
     indexer_search_identity,
 };
@@ -451,7 +450,7 @@ struct FilterStrategyContext<'a> {
 const MAX_INDEXER_ERROR_MESSAGE_BYTES: usize = 1024;
 
 fn sanitize_indexer_error_message(message: &str) -> String {
-    let redacted = scryer_application::challenge_solver::sanitize_indexer_proxy_error(message);
+    let redacted = scryer_application::challenge_solver::sanitize_proxy_error(message);
     let mut sanitized = redacted.split_whitespace().collect::<Vec<_>>().join(" ");
     if sanitized.len() > MAX_INDEXER_ERROR_MESSAGE_BYTES {
         let mut end = MAX_INDEXER_ERROR_MESSAGE_BYTES;
@@ -1148,7 +1147,7 @@ impl StrategyBatchHealth {
             // out of operational backoff and let proxy health carry the blame.
             warn!(
                 indexer = indexer_name,
-                "indexer proxy solver failure recorded without operational backoff"
+                "proxy solver failure recorded without operational backoff"
             );
         } else if self.any_error && !self.any_success {
             warn!(
@@ -1961,7 +1960,7 @@ impl RssFeedCacheEntry {
 #[derive(Clone)]
 pub struct MultiIndexerSearchClient {
     indexer_configs: Arc<dyn IndexerConfigRepository>,
-    indexer_proxy_configs: Arc<dyn IndexerProxyConfigRepository>,
+    proxy_configs: Arc<dyn ProxyConfigRepository>,
     stats_tracker: Arc<dyn IndexerStatsTracker>,
     search_learning: Arc<dyn IndexerSearchLearningRepository>,
     indexer_errors: Arc<dyn IndexerErrorRepository>,
@@ -1977,7 +1976,7 @@ pub struct MultiIndexerSearchClient {
 
 impl MultiIndexerSearchClient {
     fn effective_indexer_search_timeout(
-        proxy_config: Option<&scryer_domain::IndexerProxyConfig>,
+        proxy_config: Option<&scryer_domain::ProxyConfig>,
     ) -> std::time::Duration {
         effective_indexer_timeout(proxy_config.map(|config| config.request_timeout_seconds))
     }
@@ -1989,7 +1988,7 @@ impl MultiIndexerSearchClient {
     ) -> Self {
         Self {
             indexer_configs,
-            indexer_proxy_configs: Arc::new(NullIndexerProxyConfigRepository),
+            proxy_configs: Arc::new(NullProxyConfigRepository),
             stats_tracker,
             search_learning: Arc::new(NullIndexerSearchLearningRepository),
             indexer_errors: Arc::new(NullIndexerErrorRepository),
@@ -2008,11 +2007,11 @@ impl MultiIndexerSearchClient {
         }
     }
 
-    pub fn with_indexer_proxy_config_repository(
+    pub fn with_proxy_config_repository(
         mut self,
-        indexer_proxy_configs: Arc<dyn IndexerProxyConfigRepository>,
+        proxy_configs: Arc<dyn ProxyConfigRepository>,
     ) -> Self {
-        self.indexer_proxy_configs = indexer_proxy_configs;
+        self.proxy_configs = proxy_configs;
         self
     }
 
@@ -2374,28 +2373,27 @@ impl MultiIndexerSearchClient {
     fn client_from_config(
         config: &IndexerConfig,
         plugin_provider: &Arc<dyn IndexerPluginProvider>,
-        proxy_configs_by_id: &HashMap<String, Option<scryer_domain::IndexerProxyConfig>>,
+        proxy_configs_by_id: &HashMap<String, Option<scryer_domain::ProxyConfig>>,
     ) -> AppResult<(Arc<dyn IndexerClient>, Option<String>, std::time::Duration)> {
         let provider = config.provider_type.trim().to_ascii_lowercase();
-        let (proxy_config, proxy_cache_key) =
-            if let Some(proxy_config_id) = config.indexer_proxy_config_id.as_deref() {
-                let proxy_config = proxy_configs_by_id
-                    .get(proxy_config_id)
-                    .cloned()
-                    .flatten()
-                    .ok_or_else(|| {
-                        AppError::Validation("Indexer proxy configuration was not found.".into())
-                    })?;
-                if !proxy_config.is_enabled {
-                    return Err(AppError::Validation(
-                        "Indexer proxy is disabled for this indexer.".into(),
-                    ));
-                }
-                let proxy_cache_key = format!("{}:{}", proxy_config.id, proxy_config.updated_at);
-                (Some(proxy_config), Some(proxy_cache_key))
-            } else {
-                (None, None)
-            };
+        let (proxy_config, proxy_cache_key) = if let Some(proxy_config_id) =
+            config.proxy_config_id.as_deref()
+        {
+            let proxy_config = proxy_configs_by_id
+                .get(proxy_config_id)
+                .cloned()
+                .flatten()
+                .ok_or_else(|| AppError::Validation("Proxy configuration was not found.".into()))?;
+            if !proxy_config.is_enabled {
+                return Err(AppError::Validation(
+                    "Proxy is disabled for this indexer.".into(),
+                ));
+            }
+            let proxy_cache_key = format!("{}:{}", proxy_config.id, proxy_config.updated_at);
+            (Some(proxy_config), Some(proxy_cache_key))
+        } else {
+            (None, None)
+        };
 
         if let Some(client) =
             plugin_provider.client_for_provider_with_proxy(config, proxy_config.as_ref())
@@ -3477,19 +3475,16 @@ impl IndexerClient for MultiIndexerSearchClient {
         // Resolve each distinct proxy config once per search pass; both the
         // scheduler deadline calculation and client construction read from
         // this map. A missing entry value means the config row is gone.
-        let mut proxy_configs_by_id: HashMap<String, Option<scryer_domain::IndexerProxyConfig>> =
+        let mut proxy_configs_by_id: HashMap<String, Option<scryer_domain::ProxyConfig>> =
             HashMap::new();
         for (config, _) in &enabled {
-            let Some(proxy_config_id) = config.indexer_proxy_config_id.as_deref() else {
+            let Some(proxy_config_id) = config.proxy_config_id.as_deref() else {
                 continue;
             };
             if proxy_configs_by_id.contains_key(proxy_config_id) {
                 continue;
             }
-            let fetched = self
-                .indexer_proxy_configs
-                .get_by_id(proxy_config_id)
-                .await?;
+            let fetched = self.proxy_configs.get_by_id(proxy_config_id).await?;
             proxy_configs_by_id.insert(proxy_config_id.to_string(), fetched);
         }
         let mut scheduler_candidates = Vec::new();
@@ -5279,10 +5274,8 @@ impl IndexerClient for MultiIndexerSearchClient {
 
         // Persist any solver-health observations the plugin HTTP host queued
         // while this pass ran.
-        scryer_application::challenge_solver::flush_solver_health(
-            self.indexer_proxy_configs.as_ref(),
-        )
-        .await;
+        scryer_application::challenge_solver::flush_solver_health(self.proxy_configs.as_ref())
+            .await;
 
         // Dedup by download_url (exact duplicates from parallel strategies).
         // Cross-indexer release-identity dedup happens in the discovery layer
@@ -6581,7 +6574,7 @@ mod tests {
             is_enabled: true,
             enable_interactive_search: true,
             enable_auto_search: true,
-            indexer_proxy_config_id: None,
+            proxy_config_id: None,
             download_client_id: None,
             seeding_profile_id: None,
             managed_parent_config_id: None,
@@ -7428,7 +7421,10 @@ mod tests {
         // The year is a qualifier on the subject, not an id: it must not turn a
         // freetext strategy into an id-backed one.
         assert!(prepared[0].request.ids.is_empty());
-        assert_eq!(prepared[0].title_guard_mode, TitleGuardMode::ExactTitleMatch);
+        assert_eq!(
+            prepared[0].title_guard_mode,
+            TitleGuardMode::ExactTitleMatch
+        );
     }
 
     #[test]
