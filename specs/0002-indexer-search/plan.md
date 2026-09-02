@@ -127,6 +127,17 @@ extends. If a step cannot be expressed as an extension of existing code, it is o
   backoff, so a retry of that indexer may report skipped/backed-off; the web shows the reason.
 - **D16 Download client.** Linked grabs use the existing indexer mapping / facet routing (no
   per-grab override). The client select exists only in unlinked mode.
+- **D17 Download to browser (operator addition, 2026-09-02).** A third grab mode with no
+  dialog. The web `POST`s `{searchId, downloadUrls}` to `/api/indexer-search/artifacts`, an
+  axum route mounted beside the avatar proxy and authenticated the same way (`resolve_actor`,
+  full session scope); the response is the file with `Content-Disposition: attachment`, exactly
+  like the backup download route. The server resolves each `(searchId, downloadUrl)` through
+  `find_interactive_search_result` (D4) and fetches the bytes through the download router's
+  existing artifact resolution (`prepare_download_request` → `classify_resolved_download_artifact`),
+  exposed as one new `DownloadClient` port method that forces the host-side fetch the router
+  otherwise skips for NZB URLs. One release ⇒ raw file; several ⇒ `tar.gz` built with the
+  `tar`/`flate2` crates the application crate already uses. Magnets are refused. No history
+  event, no submission row: a file handoff is not a grab. Gate: `ManageSystemSettings` (D13).
 
 ## GraphQL (additive)
 
@@ -151,6 +162,7 @@ Regenerate `api/graphql/schema.graphql` through the repo's existing mechanism; n
 | WP4 | Web search pane (reusing `runIterativeReleaseSearch`, `Release` type, dom-id helpers) with live per-indexer refinement, client-side facets/sort/filters, retry (D9), saved searches |
 | WP5 | Web grab dialog: title picker (D12), token mutation → existing queue mutations, unlinked mode |
 | WP6 | E2E flow, release notes, docs |
+| WP7 | Download to browser (D17): port method + router fetch policy, app bundle builder, HTTP route, web action + save helper, e2e step |
 | Capstone | Clippy once, targeted suites, web lint/test |
 
 ## Validation policy

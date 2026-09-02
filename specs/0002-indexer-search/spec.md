@@ -79,6 +79,10 @@ Grab
   import. Requires the system-settings permission.
 - FR-027 "Count as an upgrade" is implemented per plan D7 and labelled to match exactly what it
   does.
+- FR-028 A release can be downloaded to the browser instead of grabbed (operator addition,
+  2026-09-02): one release yields its raw `.nzb` / `.torrent`; two or more yield a single
+  `.tar.gz` holding every file. Magnet-only releases have no file and are not downloadable.
+  Nothing is queued, tracked, or recorded. Requires the system-settings permission.
 
 Page
 - FR-030 Lives at `/integrations/indexers/search` as a pane of the Indexers page.

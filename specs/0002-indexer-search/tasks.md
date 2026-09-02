@@ -64,6 +64,24 @@ Format: `[ID] [WP] Description`. Work packages run sequentially, one agent at a 
 - [ ] T602 [WP6] Release-notes draft entry; docs mention under Indexers.
 - [ ] T603 [WP6] Hand the operator the exact run command; do not run the gate.
 
+## WP7 — Download to browser (D17, FR-028)
+
+- [ ] T701 [WP7] `DownloadClient::fetch_download_artifact(&DownloadClientAddRequest) ->
+      ResolvedDownloadArtifact` (default: unsupported); router implementation reuses
+      `prepare_download_request` with a host-side fetch policy for NZB URLs; router test with a
+      stubbed NZB endpoint.
+- [ ] T702 [WP7] `download_interactive_search_artifacts(actor, search_id, download_urls)` in
+      `interactive_release_search.rs`: gate, per-url lookup (D4), sequential fetch, single file
+      or `tar.gz` bundle with deduped names; unit tests over naming, dedupe, and archive contents.
+- [ ] T703 [WP7] `POST /api/indexer-search/artifacts` route (new `indexer_search_routes.rs`,
+      mounted in `main.rs` beside the avatar proxy); unauthorized / bad body / app-error mapping
+      tests in the middleware style.
+- [ ] T704 [WP7] Web: row "Download" + footer "Download selected" (magnet rows excluded),
+      `saveDownloadResponse` lifted to a shared util, filename from `Content-Disposition`;
+      i18n ×10; selector ids; lint/test/react-compiler.
+- [ ] T705 [WP7] e2e: extend `indexer-search.spec.ts` with a single-row `.nzb` download and a
+      two-row `.tar.gz` download (Playwright download events); do not run the flow.
+
 ## Capstone
 
 - [ ] T901 One `cargo clippy` pass over touched crates; targeted suites; web lint/test.
