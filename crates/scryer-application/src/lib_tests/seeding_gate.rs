@@ -1687,7 +1687,7 @@ async fn a_client_that_reports_its_obligation_met_now_releases_the_entry() {
 }
 
 #[tokio::test]
-async fn rtorrent_cleanup_remaps_and_deletes_the_payload_before_erasing_the_torrent() {
+async fn rtorrent_cleanup_deletes_mapped_payload_without_remapping_status_twice() {
     let download_client = Arc::new(StubDownloadClient::default());
     let (app, user, config, mut tracked) = rtorrent_cleanup_fixture(
         download_client.clone(),
@@ -1706,7 +1706,8 @@ async fn rtorrent_cleanup_remaps_and_deletes_the_payload_before_erasing_the_torr
         crate::DownloadClientConfigUpdate {
             id: config.id.clone(),
             config_json: Some(format!(
-                r#"{{"remote_path_mappings":"/remote/downloads => {}"}}"#,
+                r#"{{"remote_path_mappings":"/remote/downloads => {}\n{} => /only-if-remapped-twice"}}"#,
+                local_root.display(),
                 local_root.display()
             )),
             ..Default::default()
@@ -1716,7 +1717,7 @@ async fn rtorrent_cleanup_remaps_and_deletes_the_payload_before_erasing_the_torr
     .expect("configure remote path mapping");
     download_client
         .set_client_status(crate::DownloadClientStatus {
-            remote_output_roots: vec!["/remote/downloads".to_string()],
+            remote_output_roots: vec![local_root.display().to_string()],
             ..Default::default()
         })
         .await;

@@ -545,13 +545,12 @@ async fn remove_rtorrent_payload_before_entry_cleanup(
     let mappings = parse_download_client_remote_path_mappings(&config.config_json)?;
     apply_remote_path_mappings_to_completed_download(&mut completed, &mappings);
 
-    let mut status = app
+    let status = app
         .services
         .integrations
         .download_client
         .get_client_status_for_client_id(client_id)
         .await?;
-    crate::apply_remote_path_mappings_to_status(&mut status, &mappings);
     let roots = status
         .remote_output_roots
         .iter()
