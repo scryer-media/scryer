@@ -1777,6 +1777,7 @@ pub(super) struct StubDownloadClient {
     pub(super) recent_completed_download_calls: Arc<Mutex<Vec<usize>>>,
     pub(super) targeted_completed_downloads: Arc<Mutex<HashMap<String, CompletedDownload>>>,
     pub(super) targeted_completed_download_calls: Arc<Mutex<Vec<String>>>,
+    pub(super) client_status: Arc<Mutex<Option<crate::DownloadClientStatus>>>,
     /// `(client_id, item_id)` for every pause the caller issued. Pause is how a
     /// `StopSeeding` seeding profile stops a finished torrent uploading, so the
     /// gate's non-removal actions are observable.
@@ -1821,6 +1822,10 @@ impl StubDownloadClient {
 
     pub(super) async fn set_grab_info_hash(&self, info_hash: Option<&str>) {
         *self.grab_info_hash.lock().await = info_hash.map(str::to_string);
+    }
+
+    pub(super) async fn set_client_status(&self, status: crate::DownloadClientStatus) {
+        *self.client_status.lock().await = Some(status);
     }
 
     /// Serve `nzb` as the payload every submission would download, gated by the
@@ -2137,6 +2142,15 @@ impl DownloadClient for StubDownloadClient {
             .await
             .push((Some(client_id.to_string()), id.to_string()));
         Ok(())
+    }
+
+    async fn get_client_status_for_client_id(
+        &self,
+        _client_id: &str,
+    ) -> AppResult<crate::DownloadClientStatus> {
+        self.client_status.lock().await.clone().ok_or_else(|| {
+            AppError::Repository("client status was not configured for this test".to_string())
+        })
     }
 }
 
