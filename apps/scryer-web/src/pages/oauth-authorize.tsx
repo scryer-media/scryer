@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Loader2, LogIn, RefreshCw, ShieldCheck, X } from "lucide-react";
+import { CheckCircle2, Loader2, RefreshCw, ShieldCheck, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   authRuntimeStateQuery,
@@ -26,7 +26,6 @@ const OAUTH_ICON_CLASS =
   "flex h-11 w-11 items-center justify-center rounded-[10px] border border-[var(--scry-baccent)] bg-[rgba(var(--scry-accent-rgb),0.14)] text-[var(--scry-accent-text)]";
 const OAUTH_HEADING_CLASS =
   "font-[var(--font-space-grotesk)] text-2xl font-semibold tracking-normal text-[var(--scry-ink)]";
-const OAUTH_MUTED_TEXT_CLASS = "text-sm leading-6 text-[var(--scry-muted)]";
 const OAUTH_URI_CLASS =
   "break-all rounded-[9px] border border-[var(--scry-border3)] bg-[var(--scry-inset)] px-3 py-2 font-[var(--font-code)] text-xs leading-5 text-[var(--scry-muted)]";
 const OAUTH_ERROR_CLASS =
@@ -52,7 +51,6 @@ export default function OAuthAuthorizePage() {
   const request = oauthAuthorizationRequestFromSearch(window.location.search);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [reauthenticationRequired, setReauthenticationRequired] = useState(false);
   const [actorValidationRetry, setActorValidationRetry] = useState(0);
   const [actorValidationRetryAvailable, setActorValidationRetryAvailable] = useState(false);
   const [clientName, setClientName] = useState<string | null>(null);
@@ -63,6 +61,8 @@ export default function OAuthAuthorizePage() {
   const [effectiveFormLoginEnabled, setEffectiveFormLoginEnabled] = useState<boolean | null>(null);
   const token = getAuthToken();
   const authlessAuthorization = effectiveFormLoginEnabled === false;
+  const awaitingAuthenticationCheck =
+    !token && !authlessAuthorization && !requestValidationError;
   const approvalPreviewReady =
     !!clientName && !requestValidationError && (authlessAuthorization || !!actorUsername);
   const denialReady = !!clientName && !requestValidationError;
@@ -73,10 +73,20 @@ export default function OAuthAuthorizePage() {
     (async () => {
       try {
         setActorValidationRetryAvailable(false);
-        const [runtimeResult, clientResult, actorResult] = await Promise.all([
-          backendClient
-            .query<{ authRuntimeState?: AuthRuntimeState | null }>(authRuntimeStateQuery, {})
-            .toPromise(),
+        const runtimeResult = await backendClient
+          .query<{ authRuntimeState?: AuthRuntimeState | null }>(authRuntimeStateQuery, {})
+          .toPromise();
+        if (cancelled) return;
+
+        const runtimeState = runtimeResult.data?.authRuntimeState ?? null;
+        const formLoginEnabled = runtimeState?.effectiveFormLoginEnabled !== false;
+        setEffectiveFormLoginEnabled(formLoginEnabled);
+        if (formLoginEnabled && !token) {
+          window.location.assign(loginUrl());
+          return;
+        }
+
+        const [clientResult, actorResult] = await Promise.all([
           backendClient
             .query<{
               oauthAuthorizationClient?: { clientId: string; displayName: string; scope: string } | null;
@@ -91,12 +101,6 @@ export default function OAuthAuthorizePage() {
             : Promise.resolve(null),
         ]);
         if (!cancelled) {
-          const runtimeState = runtimeResult.data?.authRuntimeState ?? null;
-          setEffectiveFormLoginEnabled(
-            typeof runtimeState?.effectiveFormLoginEnabled === "boolean"
-              ? runtimeState.effectiveFormLoginEnabled
-              : null,
-          );
           const authorizationClient = clientResult.data?.oauthAuthorizationClient ?? null;
           const username = actorResult?.data?.me?.username?.trim() || null;
           const actorVerificationFailed =
@@ -117,7 +121,6 @@ export default function OAuthAuthorizePage() {
           if (actorVerificationFailed) {
             if (token && isOAuthAuthenticationError(actorResult?.error)) {
               clearClientAuthSession();
-              setReauthenticationRequired(true);
               setActorValidationError("Your Scryer session expired. Sign in again to continue.");
             } else {
               setActorValidationError(
@@ -127,7 +130,6 @@ export default function OAuthAuthorizePage() {
             }
           } else {
             setActorValidationError(null);
-            setReauthenticationRequired(false);
           }
         }
       } catch {
@@ -201,7 +203,6 @@ export default function OAuthAuthorizePage() {
       if (!response.ok || !body?.redirectUri) {
         if (body?.error === "reauthentication_required") {
           clearClientAuthSession();
-          setReauthenticationRequired(true);
           setError("Your session is no longer fresh. Sign in again to continue.");
           return;
         }
@@ -220,44 +221,12 @@ export default function OAuthAuthorizePage() {
     }
   };
 
-  if (!authlessAuthorization && !token && clientName) {
+  if (awaitingAuthenticationCheck) {
     return (
       <main className={OAUTH_PAGE_CLASS}>
         <div className={OAUTH_COMPACT_PANEL_CLASS}>
-          <div className="flex items-start gap-4">
-            <span className={OAUTH_ICON_CLASS} aria-hidden="true">
-              <LogIn className="h-5 w-5" />
-            </span>
-            <div className="min-w-0 space-y-1">
-              <h1 id={selectorId("oauth-authorize-heading")} className={OAUTH_HEADING_CLASS}>
-                Authorize {clientName ?? "integration"}
-              </h1>
-              <p className={OAUTH_MUTED_TEXT_CLASS}>
-                {reauthenticationRequired
-                  ? "Your previous session expired. Sign in again to continue OAuth authorization."
-                  : "Sign in to continue OAuth authorization."}
-              </p>
-            </div>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Button
-              id={selectorId("oauth-authorize-sign-in")}
-              className={OAUTH_PRIMARY_BUTTON_CLASS}
-              onClick={() => window.location.assign(loginUrl())}
-            >
-              <LogIn className="h-4 w-4" aria-hidden="true" />
-              {reauthenticationRequired ? "Sign in again" : "Sign in"}
-            </Button>
-            <Button
-              id={selectorId("oauth-authorize-deny")}
-              variant="outline"
-              disabled={busy || !denialReady}
-              className={OAUTH_SECONDARY_BUTTON_CLASS}
-              onClick={() => decide(false)}
-            >
-              <X className="h-4 w-4" aria-hidden="true" />
-              Deny
-            </Button>
+          <div className="flex items-center justify-center py-3">
+            <Loader2 className="h-5 w-5 animate-spin text-[var(--scry-muted)]" aria-label="Preparing authorization" />
           </div>
         </div>
       </main>
@@ -278,60 +247,36 @@ export default function OAuthAuthorizePage() {
             <p className={OAUTH_URI_CLASS}>{request.redirectUri}</p>
           </div>
         </div>
-        <div className="grid gap-2 rounded-[9px] border border-[var(--scry-border3)] bg-[var(--scry-inset)] p-4 text-sm leading-6 text-[var(--scry-ink2)]">
-          <p>
-            Scryer account: {authlessAuthorization ? "Anonymous" : actorUsername ?? "unavailable"}.
-            This client can access Scryer only within your library permissions.
-          </p>
-          <p className="text-[var(--scry-muted)]">
-            Cannot manage users, settings, backups, security, or app configuration.
-          </p>
+        <div className="grid gap-3 rounded-[9px] border border-[var(--scry-border3)] bg-[var(--scry-inset)] p-4 text-sm text-[var(--scry-ink2)]">
+          <h2 className="font-medium text-[var(--scry-ink)]">Scopes</h2>
+          <ul className="grid gap-2" aria-label="Granted scopes">
+            <li className="flex items-center gap-2">
+              <CheckCircle2 className="h-4 w-4 text-emerald-500" aria-hidden="true" />
+              Library access
+            </li>
+            {!authlessAuthorization && authorizationScope?.split(" ").includes("jellyfin-link") ? (
+              <li className="flex items-center gap-2">
+                <CheckCircle2 className="h-4 w-4 text-emerald-500" aria-hidden="true" />
+                Jellyfin account linking
+              </li>
+            ) : null}
+          </ul>
         </div>
-        {authlessAuthorization ? (
-          <div className="grid gap-2 rounded-[9px] border border-[var(--scry-baccent)] bg-[rgba(var(--scry-accent-rgb),0.08)] p-4 text-sm leading-6 text-[var(--scry-ink2)]">
-            <p>
-              Scryer login is disabled, so this approval grants anonymous library access only.
-            </p>
-            <p className="text-[var(--scry-muted)]">
-              Jellyfin account linking is unavailable until Scryer form login is enabled.
-            </p>
-          </div>
-        ) : authorizationScope?.split(" ").includes("jellyfin-link") ? (
-          <div className="grid gap-2 rounded-[9px] border border-[var(--scry-baccent)] bg-[rgba(var(--scry-accent-rgb),0.08)] p-4 text-sm leading-6 text-[var(--scry-ink2)]">
-            <p>
-              This approval separately grants <strong>Jellyfin account linking</strong>.
-            </p>
-            <p className="text-[var(--scry-muted)]">
-              After Scryer verifies your Jellyfin identity, it creates a durable external-account link to the Scryer account shown above. That verified link remains associated with this Scryer account even if you later disconnect the plugin.
-            </p>
-          </div>
-        ) : null}
         {error ?? requestValidationError ?? actorValidationError ? (
           <p className={OAUTH_ERROR_CLASS}>
             {error ?? requestValidationError ?? actorValidationError}
           </p>
         ) : null}
         <div className="flex flex-wrap gap-2">
-          {reauthenticationRequired ? (
-            <Button
-              id={selectorId("oauth-authorize-sign-in-again")}
-              className={OAUTH_PRIMARY_BUTTON_CLASS}
-              onClick={() => window.location.assign(loginUrl())}
-            >
-              <LogIn className="h-4 w-4" aria-hidden="true" />
-              Sign in again
-            </Button>
-          ) : (
-            <Button
-              id={selectorId("oauth-authorize-approve")}
-              disabled={busy || !approvalPreviewReady}
-              className={OAUTH_PRIMARY_BUTTON_CLASS}
-              onClick={() => decide(true)}
-            >
-              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-              {authlessAuthorization ? "Authorize as Anonymous" : "Authorize"}
-            </Button>
-          )}
+          <Button
+            id={selectorId("oauth-authorize-approve")}
+            disabled={busy || !approvalPreviewReady}
+            className={OAUTH_PRIMARY_BUTTON_CLASS}
+            onClick={() => decide(true)}
+          >
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+            {authlessAuthorization ? "Authorize as Anonymous" : "Authorize"}
+          </Button>
           {actorValidationRetryAvailable ? (
             <Button
               id={selectorId("oauth-authorize-retry-validation")}
