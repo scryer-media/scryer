@@ -15445,6 +15445,17 @@ type MutationRoot {
 		"""
 		input: IssueInteractiveReleaseCandidateTokenInput!
 	): IndexerSearchResultPayload!
+	"""
+	Grab one release of an interactive search with no catalog title behind it: it is submitted
+	to the chosen download client and recorded orphan-scoped, so the completed download waits
+	in Activity for a manual import.
+	"""
+	queueUnlinkedRelease(
+		"""
+		Search job, release download URL, and the enabled download client the release is handed to.
+		"""
+		input: QueueUnlinkedReleaseInput!
+	): QueueUnlinkedReleasePayload!
 }
 
 """
@@ -18950,6 +18961,42 @@ input QueueManualImportInput {
 	File mappings to enqueue for import.
 	"""
 	files: [ManualImportCandidateMappingInput!]!
+}
+
+"""
+Names one release of an interactive search to grab without assigning it a title.
+"""
+input QueueUnlinkedReleaseInput {
+	"""
+	Interactive release-search job holding the release.
+	"""
+	searchId: ID!
+	"""
+	Download URL of the release as returned by that search.
+	"""
+	downloadUrl: String!
+	"""
+	Enabled download client the release is handed to.
+	"""
+	downloadClientId: ID!
+}
+
+"""
+Outcome of grabbing a release with no catalog title behind it.
+"""
+type QueueUnlinkedReleasePayload {
+	"""
+	Download client's own item identity for the submitted download.
+	"""
+	downloadId: String!
+	"""
+	Name of the download client that accepted the release.
+	"""
+	clientName: String!
+	"""
+	Release name as the indexer announced it.
+	"""
+	sourceTitle: String!
 }
 
 """

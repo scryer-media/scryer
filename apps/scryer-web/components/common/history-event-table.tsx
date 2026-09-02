@@ -81,7 +81,8 @@ function titleHistoryHref(event: TitleHistoryEvent): string | null {
     ANIME: "anime",
   };
   const view = viewByFacet[event.facet?.trim().toUpperCase() ?? ""];
-  if (!view) {
+  // An unlinked grab (spec 0002, D8) records a facet but no title: nothing to link to.
+  if (!view || !event.titleId.trim()) {
     return null;
   }
 

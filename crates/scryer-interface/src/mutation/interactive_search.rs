@@ -98,6 +98,40 @@ impl InteractiveSearchMutations {
             .map_err(to_gql_error)?;
         Ok(crate::mappers::from_search_result(result))
     }
+
+    /// Grab one release of an interactive search with no catalog title behind it: it is submitted
+    /// to the chosen download client and recorded orphan-scoped, so the completed download waits
+    /// in Activity for a manual import.
+    async fn queue_unlinked_release(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(
+            desc = "Search job, release download URL, and the enabled download client the release is handed to."
+        )]
+        input: QueueUnlinkedReleaseInput,
+    ) -> GqlResult<QueueUnlinkedReleasePayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let QueueUnlinkedReleaseInput {
+            search_id,
+            download_url,
+            download_client_id,
+        } = input;
+        let outcome = app
+            .queue_unlinked_release(
+                &actor,
+                search_id.as_ref(),
+                &download_url,
+                download_client_id.as_ref(),
+            )
+            .await
+            .map_err(to_gql_error)?;
+        Ok(QueueUnlinkedReleasePayload {
+            download_id: outcome.download_id,
+            client_name: outcome.client_name,
+            source_title: outcome.source_title,
+        })
+    }
 }
 
 /// GraphQL search kinds map one-to-one onto the application's.

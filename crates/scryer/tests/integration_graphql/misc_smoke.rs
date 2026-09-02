@@ -409,6 +409,52 @@ async fn graphql_candidate_token_mutation_refuses_a_release_outside_the_search()
 }
 
 #[tokio::test]
+async fn graphql_unlinked_grab_refuses_a_release_outside_the_search() {
+    let ctx = TestContext::new().await;
+
+    let start = gql(
+        &ctx,
+        r#"mutation($input: SearchReleasesInput!) {
+            startInteractiveReleaseSearch(input: $input) { id state }
+        }"#,
+        json!({ "input": { "query": "paperman", "kind": "RAW" } }),
+    )
+    .await;
+    assert_no_errors(&start);
+    let job_id = start["data"]["startInteractiveReleaseSearch"]["id"]
+        .as_str()
+        .expect("job id")
+        .to_string();
+
+    // The release lookup runs before the client is resolved, so a release the
+    // operator never saw is refused whatever download client is named.
+    let grabbed = gql(
+        &ctx,
+        r#"mutation($input: QueueUnlinkedReleaseInput!) {
+            queueUnlinkedRelease(input: $input) { downloadId clientName sourceTitle }
+        }"#,
+        json!({
+            "input": {
+                "searchId": job_id,
+                "downloadUrl": "https://example.invalid/not-in-this-search.nzb",
+                "downloadClientId": "dc-unknown",
+            }
+        }),
+    )
+    .await;
+    let errors = grabbed["errors"]
+        .as_array()
+        .expect("expected graphql errors");
+    assert!(
+        errors[0]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("release is no longer in this search"),
+        "unexpected error: {grabbed}"
+    );
+}
+
+#[tokio::test]
 async fn graphql_one_shot_search_releases_requires_a_title() {
     let ctx = TestContext::new().await;
     let body = gql(

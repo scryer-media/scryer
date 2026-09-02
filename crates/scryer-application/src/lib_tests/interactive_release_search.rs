@@ -612,3 +612,181 @@ async fn a_token_is_issued_for_a_release_still_held_by_the_search() {
         .expect_err("unknown release");
     assert!(matches!(missing, AppError::NotFound(_)), "{missing:?}");
 }
+
+// ── Unlinked grab (D8) ──────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn an_unlinked_grab_records_an_orphan_scoped_submission_and_history() {
+    let client = ScriptedIndexerClient::default()
+        .with_releases(
+            "idx-a",
+            vec![nzb_release("Paperman.2012.1080p.WEB-DL", "g1")],
+        )
+        .await;
+    let (app, user) = bootstrap_search(
+        Arc::new(StoredSettingsRepo::default()),
+        client,
+        vec![synthetic_direct_nab_indexer_config("idx-a", "newznab")],
+    );
+    let submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let app =
+        app.with_test_overrides(|services| services.with_download_submissions(submissions.clone()));
+    let download_client =
+        create_enabled_download_client_config(&app, &user, "Primary", "nzbget").await;
+
+    let start = app
+        .start_interactive_release_search(
+            &user,
+            query_request("paperman", InteractiveSearchKind::Movie),
+        )
+        .await
+        .expect("start");
+    let done = await_completion(&app, &user, &start.id).await;
+    let release = done.results.first().expect("one result").clone();
+    let download_url = release.download_url.clone().expect("release download url");
+
+    let outcome = app
+        .queue_unlinked_release(&user, &start.id, &download_url, &download_client.id)
+        .await
+        .expect("queue unlinked release");
+    assert_eq!(outcome.client_name, download_client.name);
+    assert_eq!(outcome.source_title, release.title);
+
+    let rows = submissions.store.lock().await.clone();
+    assert_eq!(rows.len(), 1, "one submission per grab: {rows:?}");
+    let row = &rows[0];
+    assert!(
+        row.title_id.is_empty(),
+        "an unlinked grab claims no title: {row:?}"
+    );
+    assert_eq!(row.scope, SubmissionScope::Orphan);
+    assert_eq!(row.purpose, DownloadSubmissionPurpose::OperatorQueued);
+    assert_eq!(row.source_title.as_deref(), Some(release.title.as_str()));
+    assert_eq!(
+        row.source_provider_name.as_deref(),
+        Some(release.source.as_str())
+    );
+    assert_eq!(row.source_provider_id.as_deref(), Some("idx-a"));
+    assert_eq!(row.release_size_bytes, release.size_bytes);
+    assert_eq!(row.download_client_item_id, outcome.download_id);
+    assert_eq!(
+        row.facet, "movie",
+        "the search kind stands in for the owner facet"
+    );
+    assert!(
+        !crate::import::parameters::submission_has_scryer_origin(row),
+        "an unlinked grab must stay unowned so the import waits for a manual assignment: {row:?}"
+    );
+
+    let events = app
+        .services
+        .events
+        .domain_events
+        .list(&DomainEventFilter {
+            event_types: Some(vec![DomainEventType::ReleaseGrabbed]),
+            title_id: None,
+            facet: None,
+            after_sequence: Some(0),
+            before_sequence: None,
+            limit: 10,
+        })
+        .await
+        .expect("release grabbed events should load");
+    let grabbed = events
+        .iter()
+        .find_map(|event| match &event.payload {
+            DomainEventPayload::ReleaseGrabbed(data) => Some(data),
+            _ => None,
+        })
+        .expect("release grabbed event");
+    assert_eq!(
+        grabbed.source_title.as_deref(),
+        Some(release.title.as_str())
+    );
+    assert_eq!(
+        grabbed.download_id.as_deref(),
+        Some(outcome.download_id.as_str())
+    );
+    assert_eq!(
+        grabbed.source_provider.as_deref(),
+        Some(release.source.as_str())
+    );
+    assert_eq!(
+        grabbed.title.title_name, release.title,
+        "with no catalog title the release name stands in"
+    );
+}
+
+#[tokio::test]
+async fn an_unlinked_grab_refuses_unknown_releases_unusable_clients_and_unprivileged_actors() {
+    let client = ScriptedIndexerClient::default()
+        .with_releases(
+            "idx-a",
+            vec![nzb_release("Paperman.2012.1080p.WEB-DL", "g1")],
+        )
+        .await;
+    let (app, user) = bootstrap_search(
+        Arc::new(StoredSettingsRepo::default()),
+        client,
+        vec![synthetic_direct_nab_indexer_config("idx-a", "newznab")],
+    );
+    let enabled = create_enabled_download_client_config(&app, &user, "Primary", "nzbget").await;
+    let disabled = app
+        .create_download_client_config(
+            &user,
+            NewDownloadClientConfig {
+                name: "Retired".to_string(),
+                client_type: "nzbget".to_string(),
+                config_json: "{}".to_string(),
+                client_priority: 2,
+                is_enabled: false,
+            },
+        )
+        .await
+        .expect("create disabled download client config");
+
+    let start = app
+        .start_interactive_release_search(
+            &user,
+            query_request("paperman", InteractiveSearchKind::Raw),
+        )
+        .await
+        .expect("start");
+    let done = await_completion(&app, &user, &start.id).await;
+    let download_url = done
+        .results
+        .first()
+        .expect("one result")
+        .download_url
+        .clone()
+        .expect("release download url");
+
+    let missing = app
+        .queue_unlinked_release(
+            &user,
+            &start.id,
+            "https://example.invalid/not-in-this-search.nzb",
+            &enabled.id,
+        )
+        .await
+        .expect_err("unknown release");
+    assert!(matches!(missing, AppError::NotFound(_)), "{missing:?}");
+
+    for (label, client_id) in [("disabled", disabled.id.as_str()), ("unknown", "dc-nope")] {
+        let error = app
+            .queue_unlinked_release(&user, &start.id, &download_url, client_id)
+            .await
+            .expect_err(label);
+        assert!(
+            matches!(error, AppError::Validation(_)),
+            "{label} client should be a validation error, got {error:?}"
+        );
+    }
+
+    let viewer = test_user_with_app_permissions("viewer", AppPermissionMask::default());
+    let denied = app
+        .queue_unlinked_release(&viewer, &start.id, &download_url, &enabled.id)
+        .await
+        .expect_err("permission gate");
+    assert!(matches!(denied, AppError::Unauthorized(_)), "{denied:?}");
+}

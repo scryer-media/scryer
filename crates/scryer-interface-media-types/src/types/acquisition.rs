@@ -667,6 +667,28 @@ pub struct IssueInteractiveReleaseCandidateTokenInput {
 }
 
 #[derive(InputObject)]
+/// Names one release of an interactive search to grab without assigning it a title.
+pub struct QueueUnlinkedReleaseInput {
+    /// Interactive release-search job holding the release.
+    pub search_id: ID,
+    /// Download URL of the release as returned by that search.
+    pub download_url: String,
+    /// Enabled download client the release is handed to.
+    pub download_client_id: ID,
+}
+
+#[derive(SimpleObject, Clone)]
+/// Outcome of grabbing a release with no catalog title behind it.
+pub struct QueueUnlinkedReleasePayload {
+    /// Download client's own item identity for the submitted download.
+    pub download_id: String,
+    /// Name of the download client that accepted the release.
+    pub client_name: String,
+    /// Release name as the indexer announced it.
+    pub source_title: String,
+}
+
+#[derive(InputObject)]
 /// Signed-candidate submission choices for an existing title.
 pub struct QueueDownloadInput {
     /// Title identity receiving the queued release.

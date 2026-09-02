@@ -1834,6 +1834,7 @@ mod tests {
             season_pack_seed_time_minutes: None,
             is_recent: None,
             season_pack: None,
+            pinned_download_client_id: None,
         }
     }
 

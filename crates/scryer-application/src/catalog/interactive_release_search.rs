@@ -15,7 +15,9 @@ use super::discovery::{
     incomplete_indexer_reason,
 };
 use crate::acquisition_release_search::ResolvedReleaseSearchSubject;
+use crate::domain_events::{new_global_domain_event, title_context_snapshot};
 use crate::quality_profile::evaluate_against_profile_for_category;
+use scryer_domain::{DomainEventPayload, ReleaseGrabbedEventData};
 use scryer_logging::{ActorContext, LogContext, ResourceContext, WorkflowContext, context_span};
 use std::sync::Arc;
 use tokio::task::JoinSet;
@@ -125,10 +127,25 @@ pub struct InteractiveReleaseSearchRequest {
     pub categories: Option<Vec<String>>,
 }
 
+/// What an unlinked grab (D8) reports back: the download the client accepted,
+/// the client that took it and the release name Activity will show.
+#[derive(Clone, Debug)]
+pub struct QueueUnlinkedReleaseOutcome {
+    /// The download client's own item id — the key Activity and the
+    /// tracked-download poller surface this download under.
+    pub download_id: String,
+    pub client_name: String,
+    /// Release name exactly as the indexer announced it.
+    pub source_title: String,
+}
+
 pub(crate) struct InteractiveReleaseSearchJobEntry {
     pub(crate) snapshot: InteractiveReleaseSearchSnapshot,
     pub(crate) actor_id: String,
     pub(crate) scope_key: String,
+    /// The query subject's kind, kept because a grab out of this search has no
+    /// title of its own to read a facet from (D8). `None` for a title subject.
+    pub(crate) kind: Option<InteractiveSearchKind>,
     pub(crate) cancel: CancellationToken,
 }
 
@@ -482,6 +499,7 @@ impl AppUseCase {
                     snapshot: snapshot.clone(),
                     actor_id: actor.id.clone(),
                     scope_key,
+                    kind: request.kind,
                     cancel: cancel.clone(),
                 },
             );
@@ -1033,35 +1051,9 @@ impl AppUseCase {
         episode: Option<String>,
     ) -> AppResult<IndexerSearchResult> {
         validate_interactive_search_subject_shape(None, season.as_deref(), episode.as_deref())?;
-        let mut result = {
-            let mut registry = self
-                .runtime
-                .acquisition
-                .interactive_release_searches
-                .lock()
-                .await;
-            evict_stale_entries(&mut registry, self.runtime.environment.now());
-            registry
-                .get(search_id)
-                .filter(|entry| entry.actor_id == actor.id)
-                .ok_or_else(|| {
-                    AppError::NotFound(format!("interactive release search {search_id}"))
-                })?
-                .snapshot
-                .results
-                .iter()
-                .find(|result| {
-                    result
-                        .download_url
-                        .as_deref()
-                        .or(result.link.as_deref())
-                        .is_some_and(|value| value == download_url)
-                })
-                .cloned()
-                .ok_or_else(|| {
-                    AppError::NotFound("release is no longer in this search".to_string())
-                })?
-        };
+        let (mut result, _) = self
+            .find_interactive_search_result(actor, search_id, download_url)
+            .await?;
 
         let title = self
             .services
@@ -1093,6 +1085,197 @@ impl AppUseCase {
         )
         .await;
         Ok(result)
+    }
+
+    /// Grab one release of an existing search with no title at all (D8).
+    ///
+    /// The release is submitted to the client the operator picked and recorded
+    /// the way the tracker records an adopted foreign item: title-less, orphan
+    /// scope. Nothing claims the download for a catalog title, so the completed
+    /// download surfaces in Activity for a manual import instead of being
+    /// auto-imported.
+    pub async fn queue_unlinked_release(
+        &self,
+        actor: &User,
+        search_id: &str,
+        download_url: &str,
+        download_client_id: &str,
+    ) -> AppResult<QueueUnlinkedReleaseOutcome> {
+        // The Indexers page's own gate (D13): an unlinked grab bypasses every
+        // library, so it is gated on system settings rather than a library.
+        self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
+            .await?;
+        let (result, kind) = self
+            .find_interactive_search_result(actor, search_id, download_url)
+            .await?;
+        let client = self
+            .services
+            .integrations
+            .download_client_configs
+            .get_by_id(download_client_id)
+            .await?
+            .ok_or_else(|| {
+                AppError::Validation(format!(
+                    "download client {download_client_id} does not exist"
+                ))
+            })?;
+        if !client.is_enabled {
+            return Err(AppError::Validation(format!(
+                "download client {} is disabled",
+                client.name
+            )));
+        }
+        let Some((source_hint, source_kind)) = result.canonical_download_source() else {
+            return Err(AppError::Validation(
+                "release has no usable download source".to_string(),
+            ));
+        };
+
+        // With no title there is no owner facet. The operator's search kind is
+        // the stated intent; a raw search falls back to what the release parses
+        // as, the same read the tracked-download reconciler makes.
+        let facet = kind
+            .and_then(InteractiveSearchKind::facet)
+            .unwrap_or_else(|| {
+                if result
+                    .parsed_release_metadata
+                    .as_ref()
+                    .is_some_and(|parsed| parsed.episode.is_some())
+                {
+                    MediaFacet::Series
+                } else {
+                    MediaFacet::Movie
+                }
+            });
+        let stand_in_title =
+            unlinked_grab_title(&result.title, facet.clone(), self.runtime.environment.now());
+        let download_id = scryer_domain::download_identity::DownloadId::new();
+        let info_hash_hint = result
+            .extra
+            .get("info_hash")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
+        let grab = self
+            .services
+            .integrations
+            .download_client
+            .submit_download(&DownloadClientAddRequest {
+                title: stand_in_title.clone(),
+                search_facet: None,
+                purpose: DownloadSubmissionPurpose::OperatorQueued,
+                download_id: Some(download_id),
+                source_hint: Some(source_hint.clone()),
+                staged_nzb: None,
+                resolved_download_artifact: None,
+                source_kind: Some(source_kind),
+                source_title: Some(result.title.clone()),
+                source_password: result.password_hint.clone(),
+                // Left to the router's grab-time choke point: the routing entry
+                // for the pinned client decides the category, and "no entry"
+                // means the download client's own default (D16).
+                category: None,
+                queue_priority: None,
+                download_directory: None,
+                release_title: None,
+                indexer_name: Some(result.source.clone()),
+                indexer_id: result.indexer_id.clone(),
+                info_hash_hint: info_hash_hint.clone(),
+                seed_goal_ratio: None,
+                seed_goal_seconds: None,
+                // No title means no quality profile to read tracker-minimum
+                // honouring off, so the release's own minimums are not clamped
+                // in — the same position the manual queue path takes.
+                tracker_min_seed_ratio: None,
+                tracker_min_seed_time_minutes: None,
+                season_pack_seed_ratio: None,
+                season_pack_seed_time_minutes: None,
+                is_recent: None,
+                season_pack: None,
+                pinned_download_client_id: Some(client.id.clone()),
+            })
+            .await?;
+
+        self.services
+            .workflow
+            .download_submissions
+            .record_submission(DownloadSubmission {
+                download_id,
+                title_id: String::new(),
+                facet: facet.as_str().to_string(),
+                download_client_id: grab.client_id.clone(),
+                download_client_type: grab.client_type.clone(),
+                download_client_item_id: grab.job_id.clone(),
+                source_hint: Some(source_hint.clone()),
+                source_provider_id: result.indexer_id.clone(),
+                source_provider_name: Some(result.source.clone()),
+                source_kind: Some(source_kind),
+                source_title: Some(result.title.clone()),
+                info_hash: info_hash_hint,
+                release_size_bytes: result.size_bytes,
+                request_signature: None,
+                purpose: DownloadSubmissionPurpose::OperatorQueued,
+                scope: SubmissionScope::Orphan,
+            })
+            .await?;
+
+        self.append_domain_event(new_global_domain_event(
+            actor,
+            DomainEventPayload::ReleaseGrabbed(ReleaseGrabbedEventData {
+                // No catalog title to snapshot: the release name stands in for
+                // one so history reads as the operator saw it.
+                title: title_context_snapshot(&stand_in_title),
+                source_title: Some(result.title.clone()),
+                source_hint: Some(source_hint),
+                source_provider: Some(result.source.clone()),
+                download_id: Some(grab.job_id.clone()),
+                episode_ids: Vec::new(),
+            }),
+        ))
+        .await?;
+
+        Ok(QueueUnlinkedReleaseOutcome {
+            download_id: grab.job_id,
+            client_name: client.name,
+            source_title: result.title,
+        })
+    }
+
+    /// Locate one release of the actor's own live search by the download URL
+    /// the search payload already handed the browser, with the search's kind.
+    ///
+    /// Shared by candidate-token issuance (D4) and the unlinked grab (D8) so
+    /// neither can act on a release the operator never saw.
+    async fn find_interactive_search_result(
+        &self,
+        actor: &User,
+        search_id: &str,
+        download_url: &str,
+    ) -> AppResult<(IndexerSearchResult, Option<InteractiveSearchKind>)> {
+        let mut registry = self
+            .runtime
+            .acquisition
+            .interactive_release_searches
+            .lock()
+            .await;
+        evict_stale_entries(&mut registry, self.runtime.environment.now());
+        let entry = registry
+            .get(search_id)
+            .filter(|entry| entry.actor_id == actor.id)
+            .ok_or_else(|| AppError::NotFound(format!("interactive release search {search_id}")))?;
+        let result = entry
+            .snapshot
+            .results
+            .iter()
+            .find(|result| {
+                result
+                    .download_url
+                    .as_deref()
+                    .or(result.link.as_deref())
+                    .is_some_and(|value| value == download_url)
+            })
+            .cloned()
+            .ok_or_else(|| AppError::NotFound("release is no longer in this search".to_string()))?;
+        Ok((result, entry.kind))
     }
 
     /// Resolve the title-subject search target for `(series_movie_link_id,
@@ -1139,6 +1322,56 @@ impl AppUseCase {
                 Ok((title.clone(), subject, false))
             }
         }
+    }
+}
+
+/// The title-less stand-in an unlinked grab submits under (D8).
+///
+/// Every download client reads the request's title for its own bookkeeping —
+/// the file name it falls back to when a release name is missing, the
+/// `*scryer_title_id` / `*scryer_facet` parameters, the routing scope the
+/// category is read from. An empty id is what the adopted-foreign-item path
+/// already records for a title-less download, and the tracked-download
+/// reconciler treats an empty `*scryer_title_id` as absent, so the grab stays
+/// unowned end to end and lands in Activity for a manual import.
+fn unlinked_grab_title(release_title: &str, facet: MediaFacet, now: DateTime<Utc>) -> Title {
+    Title {
+        id: String::new(),
+        library_id: String::new(),
+        name: release_title.to_string(),
+        facet,
+        monitored: false,
+        tags: Vec::new(),
+        external_ids: Vec::new(),
+        root_folder_id: String::new(),
+        created_by: None,
+        created_at: now,
+        year: None,
+        overview: None,
+        poster_url: None,
+        poster_source_url: None,
+        background_url: None,
+        background_source_url: None,
+        sort_title: None,
+        catalog_sort_key: String::new(),
+        slug: None,
+        imdb_id: None,
+        runtime_minutes: None,
+        popularity: None,
+        canonical_tags: Vec::new(),
+        content_status: None,
+        language: None,
+        first_aired: None,
+        network: None,
+        studio: None,
+        country: None,
+        aliases: Vec::new(),
+        tagged_aliases: Vec::new(),
+        metadata_language: None,
+        metadata_fetched_at: None,
+        min_availability: None,
+        digital_release_date: None,
+        folder_path: None,
     }
 }
 

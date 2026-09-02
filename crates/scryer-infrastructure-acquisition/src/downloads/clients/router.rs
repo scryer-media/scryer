@@ -2862,7 +2862,37 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
             }
         };
 
-        let mut clients = if let Some(mapped_client_id) = mapped_client_id {
+        let mut clients = if let Some(pinned_client_id) = request
+            .pinned_download_client_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            // An unlinked grab (D8) has no title to route by, so the operator
+            // named the client outright. That choice outranks the indexer
+            // mapping and the routing order; only the client's own routing
+            // entry still applies, for category and queue priority.
+            let Some(config) = selection
+                .all_clients
+                .iter()
+                .find(|config| config.id == pinned_client_id)
+            else {
+                self.delete_staged_nzb(request.staged_nzb.as_ref(), "pinned_client_missing")
+                    .await;
+                return Err(AppError::Validation(format!(
+                    "download client {pinned_client_id} does not exist"
+                )));
+            };
+            if !config.is_enabled {
+                self.delete_staged_nzb(request.staged_nzb.as_ref(), "pinned_client_disabled")
+                    .await;
+                return Err(AppError::Validation(format!(
+                    "download client {} is disabled",
+                    config.name
+                )));
+            }
+            vec![config.clone()]
+        } else if let Some(mapped_client_id) = mapped_client_id {
             let indexer = indexer_config
                 .as_ref()
                 .expect("mapped client requires indexer configuration");
@@ -4563,6 +4593,7 @@ mod tests {
             season_pack_seed_time_minutes: None,
             is_recent: None,
             season_pack: None,
+            pinned_download_client_id: None,
         }
     }
 
@@ -6201,6 +6232,108 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_pinned_client_wins_over_routing_order_and_keeps_its_routing_category() {
+        let primary = Arc::new(MockDownloadClient::default());
+        let secondary = Arc::new(MockDownloadClient::default());
+        let plugin_provider: Arc<dyn DownloadClientPluginProvider> =
+            Arc::new(MockDownloadClientPluginProvider {
+                accepted_inputs: vec!["nzb_url".to_string()],
+                clients: vec![
+                    ("primary".to_string(), primary.clone()),
+                    ("secondary".to_string(), secondary.clone()),
+                ],
+            });
+        let router = PrioritizedDownloadClientRouter::new(
+            Arc::new(MockDownloadClientConfigRepository {
+                configs: vec![
+                    test_config("primary", "Primary", "qbittorrent", 0),
+                    test_config("secondary", "Secondary", "qbittorrent", 10),
+                ],
+            }),
+            Arc::new(MockSettingsRepository {
+                routing_by_scope: HashMap::from([(
+                    "movie".to_string(),
+                    r#"{
+                        "primary": { "enabled": true },
+                        "secondary": { "enabled": true, "category": "Unlinked" }
+                    }"#
+                    .to_string(),
+                )]),
+            }),
+            null_staged_nzb_store(),
+            test_pipeline_limit(),
+            Some(plugin_provider),
+        );
+
+        let mut request = DownloadClientAddRequest::from_legacy(
+            &test_title(),
+            Some("https://indexer.example/release.nzb".to_string()),
+            Some(DownloadSourceKind::NzbUrl),
+            Some("Pinned Release".to_string()),
+            None,
+            None,
+        );
+        request.pinned_download_client_id = Some("secondary".to_string());
+        router
+            .submit_download(&request)
+            .await
+            .expect("pinned client should accept the release");
+
+        assert!(
+            primary.submissions.lock().unwrap().is_empty(),
+            "the higher-priority client must not be routed to"
+        );
+        let submissions = secondary.submissions.lock().unwrap();
+        assert_eq!(submissions.len(), 1);
+        assert_eq!(submissions[0].category.as_deref(), Some("Unlinked"));
+    }
+
+    #[tokio::test]
+    async fn a_pinned_client_that_is_missing_or_disabled_is_refused() {
+        let primary = Arc::new(MockDownloadClient::default());
+        let plugin_provider: Arc<dyn DownloadClientPluginProvider> =
+            Arc::new(MockDownloadClientPluginProvider {
+                accepted_inputs: vec!["nzb_url".to_string()],
+                clients: vec![("primary".to_string(), primary.clone())],
+            });
+        let mut retired = test_config("retired", "Retired", "qbittorrent", 5);
+        retired.is_enabled = false;
+        let router = PrioritizedDownloadClientRouter::new(
+            Arc::new(MockDownloadClientConfigRepository {
+                configs: vec![test_config("primary", "Primary", "qbittorrent", 0), retired],
+            }),
+            Arc::new(MockSettingsRepository::default()),
+            null_staged_nzb_store(),
+            test_pipeline_limit(),
+            Some(plugin_provider),
+        );
+
+        for pinned in ["retired", "does-not-exist"] {
+            let mut request = DownloadClientAddRequest::from_legacy(
+                &test_title(),
+                Some("https://indexer.example/release.nzb".to_string()),
+                Some(DownloadSourceKind::NzbUrl),
+                Some("Pinned Release".to_string()),
+                None,
+                None,
+            );
+            request.pinned_download_client_id = Some(pinned.to_string());
+            let error = router
+                .submit_download(&request)
+                .await
+                .expect_err("an unusable pinned client must not fall back");
+            assert!(
+                matches!(error, AppError::Validation(_)),
+                "{pinned}: {error:?}"
+            );
+        }
+        assert!(
+            primary.submissions.lock().unwrap().is_empty(),
+            "a refused pin must never fall back to another client"
+        );
+    }
+
+    #[tokio::test]
     async fn indexed_submission_without_mapping_preserves_automatic_failover() {
         let primary = Arc::new(MockDownloadClient {
             submit_error: Mutex::new(Some(MockSubmitError::Repository)),
@@ -6961,6 +7094,7 @@ mod tests {
                 season_pack_seed_time_minutes: None,
                 is_recent: None,
                 season_pack: None,
+                pinned_download_client_id: None,
             })
             .await
             .expect_err("no configured clients should make submit unavailable");
@@ -7037,6 +7171,7 @@ mod tests {
                 season_pack_seed_time_minutes: None,
                 is_recent: None,
                 season_pack: None,
+                pinned_download_client_id: None,
             })
             .await
             .expect("torrent request should route to torrent client");
@@ -7104,6 +7239,7 @@ mod tests {
             season_pack_seed_time_minutes: None,
             is_recent: None,
             season_pack: None,
+            pinned_download_client_id: None,
         }
     }
 
@@ -7215,6 +7351,7 @@ mod tests {
                 season_pack_seed_time_minutes: None,
                 is_recent: None,
                 season_pack: None,
+                pinned_download_client_id: None,
             })
             .await
             .expect_err("ambiguous submit errors should stop router failover");
@@ -7282,6 +7419,7 @@ mod tests {
                 season_pack_seed_time_minutes: None,
                 is_recent: None,
                 season_pack: None,
+                pinned_download_client_id: None,
             })
             .await
             .expect_err("rejected submit errors should stop router failover");
@@ -7351,6 +7489,7 @@ mod tests {
                 season_pack_seed_time_minutes: None,
                 is_recent: None,
                 season_pack: None,
+                pinned_download_client_id: None,
             })
             .await
             .expect_err("exhausted failover clients should fail");
@@ -7417,6 +7556,7 @@ mod tests {
                 season_pack_seed_time_minutes: None,
                 is_recent: None,
                 season_pack: None,
+                pinned_download_client_id: None,
             })
             .await
             .expect_err("magnet request should fail when only nzb clients are enabled");
@@ -7490,6 +7630,7 @@ mod tests {
                 season_pack_seed_time_minutes: None,
                 is_recent: None,
                 season_pack: None,
+                pinned_download_client_id: None,
             })
             .await
             .expect("secondary client should be used when primary is disabled for facet");
@@ -7570,6 +7711,7 @@ mod tests {
                 season_pack_seed_time_minutes: None,
                 is_recent: None,
                 season_pack: None,
+                pinned_download_client_id: None,
             })
             .await
             .expect("movie request should use secondary");
@@ -7601,6 +7743,7 @@ mod tests {
                 season_pack_seed_time_minutes: None,
                 is_recent: None,
                 season_pack: None,
+                pinned_download_client_id: None,
             })
             .await
             .expect("anime request should use primary");
@@ -7666,6 +7809,7 @@ mod tests {
                 season_pack_seed_time_minutes: None,
                 is_recent: None,
                 season_pack: None,
+                pinned_download_client_id: None,
             })
             .await
             .expect("secondary client should be used because primary is globally disabled");
@@ -7731,6 +7875,7 @@ mod tests {
                 season_pack_seed_time_minutes: None,
                 is_recent: Some(true),
                 season_pack: None,
+                pinned_download_client_id: None,
             })
             .await
             .expect("request should be routed");
@@ -7873,6 +8018,7 @@ mod tests {
             season_pack_seed_time_minutes: None,
             is_recent: None,
             season_pack: None,
+            pinned_download_client_id: None,
         }
     }
 
@@ -8073,6 +8219,7 @@ mod tests {
                 season_pack_seed_time_minutes: None,
                 is_recent: Some(false),
                 season_pack: None,
+                pinned_download_client_id: None,
             })
             .await
             .expect("request should be routed");
@@ -8133,6 +8280,7 @@ mod tests {
                 season_pack_seed_time_minutes: None,
                 is_recent: None,
                 season_pack: None,
+                pinned_download_client_id: None,
             })
             .await
             .expect_err("facet-disabled clients should fail fast");
@@ -8218,6 +8366,7 @@ mod tests {
                 season_pack_seed_time_minutes: None,
                 is_recent: None,
                 season_pack: None,
+                pinned_download_client_id: None,
             })
             .await
             .expect("library override should use the secondary client");
@@ -8297,6 +8446,7 @@ mod tests {
                 season_pack_seed_time_minutes: None,
                 is_recent: None,
                 season_pack: None,
+                pinned_download_client_id: None,
             })
             .await
             .expect("omitted clients should be treated as disabled for this library");
@@ -8364,6 +8514,7 @@ mod tests {
                 season_pack_seed_time_minutes: None,
                 is_recent: Some(true),
                 season_pack: None,
+                pinned_download_client_id: None,
             })
             .await
             .expect("library override should route the request");
@@ -8426,6 +8577,7 @@ mod tests {
                 season_pack_seed_time_minutes: None,
                 is_recent: None,
                 season_pack: None,
+                pinned_download_client_id: None,
             })
             .await
             .expect_err("library override should fail fast when every client is disabled");
