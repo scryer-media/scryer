@@ -1314,8 +1314,8 @@ jobs:
             use_lld_link: true
           - arch: arm64
             msi_arch: arm64
-            runner: windows-11-arm
-            release_runner: windows-11-arm
+            runner: windows-11-vs2026-arm
+            release_runner: windows-11-vs2026-arm
             toolchain: 1.97.1-aarch64-pc-windows-msvc
             target: aarch64-pc-windows-msvc
             sccache_lane: scryer-windows-arm64-msvc
