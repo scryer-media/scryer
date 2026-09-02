@@ -656,6 +656,10 @@ pub struct AppRuntimeAcquisitionState {
             >,
         >,
     >,
+    /// In-memory registry of title-less indexer-search jobs (spec 0002), keyed
+    /// by job id. Ephemeral by design — see `catalog::indexer_search`.
+    pub(crate) indexer_searches:
+        Arc<Mutex<HashMap<String, crate::catalog::indexer_search::IndexerSearchJobEntry>>>,
 }
 
 impl AppRuntimeAcquisitionState {
@@ -1742,6 +1746,7 @@ impl AppRuntimeState {
                 download_client_category_admission: DownloadClientCategorySnapshotStore::default(),
                 acquisition_search_cancellation_tokens: Arc::new(Mutex::new(HashMap::new())),
                 interactive_release_searches: Arc::new(Mutex::new(HashMap::new())),
+                indexer_searches: Arc::new(Mutex::new(HashMap::new())),
             },
             imports: AppRuntimeImportState {
                 execution_coordinator: ImportExecutionCoordinator::default(),

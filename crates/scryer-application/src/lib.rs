@@ -261,6 +261,12 @@ pub use catalog::facets::handler::{
 pub use catalog::facets::movie::MovieFacetHandler;
 pub use catalog::facets::registry::FacetRegistry;
 pub use catalog::facets::series::SeriesFacetHandler;
+pub use catalog::indexer_search::{
+    DEFAULT_INDEXER_SEARCH_PER_INDEXER_LIMIT, IndexerSearchFacet, IndexerSearchFacetItem,
+    IndexerSearchFacetValues, IndexerSearchIndexerStatus, IndexerSearchIndexerView,
+    IndexerSearchKind, IndexerSearchRelease, IndexerSearchRequest, IndexerSearchSnapshot,
+    IndexerSearchState, IndexerSearchTotals, MAX_INDEXER_SEARCH_PER_INDEXER_LIMIT,
+};
 pub use catalog::interactive_release_search::{
     InteractiveReleaseSearchIndexerStatus, InteractiveReleaseSearchIndexerView,
     InteractiveReleaseSearchRequest, InteractiveReleaseSearchSnapshot,

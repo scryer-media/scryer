@@ -3395,6 +3395,16 @@ impl IndexerClient for MultiIndexerSearchClient {
             "dispatching search to indexers"
         );
 
+        // A title-less operator search (the Indexers page's raw kind) carries a
+        // query and no facet. Capability resolution still needs one to decide
+        // whether the endpoint answers freetext at all, so it borrows the movie
+        // facet, but the strategy omits the facet on the wire so plugins issue
+        // a plain `q=` text query rather than a facet-scoped nab function.
+        let facet_omitted = !is_rss_request
+            && facet
+                .as_deref()
+                .map(str::trim)
+                .is_none_or(|value| value.is_empty());
         let facet = match facet
             .as_deref()
             .map(str::trim)
@@ -3407,6 +3417,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                 )));
             }
             None if is_rss_request => "series".to_string(),
+            None if !query.trim().is_empty() => "movie".to_string(),
             None => {
                 return Err(AppError::Validation("search facet is required".to_string()));
             }
@@ -4200,6 +4211,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                     id_dispatch_mode: resolved_caps.id_dispatch_mode,
                     text_dispatch_mode: resolved_caps.text_dispatch_mode,
                     is_alias_query: false,
+                    facet_omitted,
                 }));
 
                 if facet == "anime"
@@ -4218,6 +4230,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                         id_dispatch_mode: resolved_caps.id_dispatch_mode,
                         text_dispatch_mode: resolved_caps.text_dispatch_mode,
                         is_alias_query: true,
+                        facet_omitted,
                     }));
                 }
             }
@@ -5359,6 +5372,9 @@ struct StrategyParams<'a> {
     id_dispatch_mode: IdDispatchMode,
     text_dispatch_mode: TextDispatchMode,
     is_alias_query: bool,
+    /// The caller asked for a facet-less search: text strategies keep the
+    /// borrowed facet for capability resolution but do not send it.
+    facet_omitted: bool,
 }
 
 /// The query facet controls text-search endpoint shape. The ID facet controls
@@ -5454,7 +5470,7 @@ fn build_strategies(p: &StrategyParams<'_>) -> Vec<SearchStrategy> {
             episode: text_episode,
             absolute_episode: text_absolute_episode,
             generic_query_only,
-            omit_request_facet: false,
+            omit_request_facet: p.facet_omitted,
             label: if is_alias_query {
                 "freetext_alias".into()
             } else {
@@ -5477,7 +5493,7 @@ fn build_strategies(p: &StrategyParams<'_>) -> Vec<SearchStrategy> {
             episode: text_episode,
             absolute_episode: text_absolute_episode,
             generic_query_only,
-            omit_request_facet: false,
+            omit_request_facet: p.facet_omitted,
             label: "fallback".into(),
         });
     }
@@ -8592,6 +8608,7 @@ mod tests {
             id_dispatch_mode: resolved.id_dispatch_mode,
             text_dispatch_mode: resolved.text_dispatch_mode,
             is_alias_query: false,
+            facet_omitted: false,
         });
         assert!(strategies.iter().any(|strategy| {
             strategy.label == "ids_sxex"
@@ -9854,6 +9871,7 @@ mod tests {
             id_dispatch_mode: IdDispatchMode::LegacyAggregate,
             text_dispatch_mode: TextDispatchMode::None,
             is_alias_query: false,
+            facet_omitted: false,
         });
 
         assert_eq!(strategies.len(), 1);
@@ -9888,6 +9906,7 @@ mod tests {
             id_dispatch_mode: IdDispatchMode::LegacyAggregate,
             text_dispatch_mode: TextDispatchMode::None,
             is_alias_query: false,
+            facet_omitted: false,
         });
 
         assert_eq!(strategies.len(), 1);
@@ -10569,6 +10588,7 @@ mod tests {
             id_dispatch_mode: IdDispatchMode::LegacyAggregate,
             text_dispatch_mode: TextDispatchMode::FacetScoped,
             is_alias_query: false,
+            facet_omitted: false,
         });
 
         assert_eq!(strategies.len(), 3);
@@ -10619,6 +10639,7 @@ mod tests {
             id_dispatch_mode: IdDispatchMode::Aggregate,
             text_dispatch_mode: TextDispatchMode::FacetScoped,
             is_alias_query: false,
+            facet_omitted: false,
         });
 
         assert_eq!(strategies.len(), 2);
@@ -11654,6 +11675,7 @@ mod tests {
             id_dispatch_mode: IdDispatchMode::LegacyAggregate,
             text_dispatch_mode: TextDispatchMode::FacetScoped,
             is_alias_query: true,
+            facet_omitted: false,
         });
 
         assert_eq!(strategies.len(), 1);
