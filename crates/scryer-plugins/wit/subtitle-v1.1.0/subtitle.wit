@@ -1,0 +1,67 @@
+package scryer:subtitle@1.1.0;
+
+/// The subtitle-provider contract, revision 1.1.
+///
+/// # What is unchanged from 1.0
+///
+/// The payloads. Both exports still carry UTF-8 JSON: `describe` returns a
+/// `PluginDescriptor` document, and `process` exchanges a
+/// `scryer_plugin_sdk::command::PluginCommandRequest` for a
+/// `PluginCommandResponse` carrying `PluginCommand::Subtitle` and its
+/// `validate-config` / `search` / `download` / `generate` operations. A 1.0
+/// guest's request and response types and its dispatch `match` are the same
+/// here; only the shape of the `process` function moved. Keeping the payload an
+/// opaque byte string is still what lets the SDK add subtitle operations
+/// without a WIT revision.
+///
+/// # Why `process` is async
+///
+/// A subtitle invocation is almost entirely waiting on somebody else's server:
+/// a catalog search, a paced sequence of detail fetches, a download that has to
+/// respect a provider's rate limit. On the 1.0 world that wait had to happen
+/// inside a synchronous export, so a guest could only reach the network through
+/// the encoded `host-call` door — one blocking call at a time, no cancellation
+/// visible to the guest, and no way to run the same pacing code the indexer
+/// world's plugins already use. Lifting `process` into the canonical ABI's
+/// async form lets the guest `await` the runtime's `http` and `sleep`, observe
+/// the invocation deadline, and unwind when the host cancels, while the host
+/// drives other instances on the same worker.
+///
+/// `describe` stays synchronous deliberately. It is a pure function over a
+/// literal descriptor — it performs no host calls at all — and keeping it sync
+/// means the host can answer a catalog listing with a plain blocking call
+/// instead of standing up a concurrent task per plugin.
+///
+/// # Why both imports
+///
+/// `scryer:host/services@1.0.0` is the single door for everything encoded: one
+/// postcard `host-call` covering config, plugin state, HTTP, host-owned archive
+/// extraction, sockets and processes, extensible by adding an SDK variant
+/// rather than revising WIT. `scryer:runtime/host@1.0.0` is the typed,
+/// family-neutral surface that door cannot express — the `async` `http` and
+/// `sleep`, the clocks and the invocation deadline, and the state
+/// compare-and-swap the plugin-owned rate gates and quotas are built on. A
+/// subtitle provider gets both, and its shared engine code (the newznab
+/// protocol engine, the PDK's pacing primitives) is now linkable into it
+/// because the runtime package is family-neutral. See each package for its own
+/// contract.
+///
+/// WASI Preview 2 is imported implicitly: the host links the full p2 surface
+/// (`wasmtime_wasi::p2::add_to_linker_async`), so a guest sees clocks, random,
+/// and its captured stdio through `wasi:*` without those imports appearing in
+/// this world. Subtitle providers receive no filesystem preopens for catalog
+/// operations; a generator invocation is preopened its read-only input root
+/// exactly as the legacy runtime preopened it.
+world subtitle-provider {
+  import scryer:host/services@1.0.0;
+  import scryer:runtime/host@1.0.0;
+
+  enum invocation-error {
+    failed,
+    cancelled,
+    invalid-response,
+  }
+
+  export describe: func() -> list<u8>;
+  export process: async func(request: list<u8>) -> result<list<u8>, invocation-error>;
+}

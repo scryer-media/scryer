@@ -292,15 +292,7 @@ impl CommandHost {
                     .state
                     .lock()
                     .map_err(|error| error.to_string())
-                    .map(|mut state| {
-                        let changed = state.values.remove(&request.key).is_some();
-                        state.bytes = state
-                            .values
-                            .iter()
-                            .map(|(key, value)| key.len() + value.len())
-                            .sum();
-                        changed
-                    });
+                    .map(|mut state| remove_state_value(&mut state, &request.key));
                 PluginHostResponse::StateDelete(result.map_or_else(service_error, |changed| {
                     PluginResult::Ok(PluginStateMutationResponse { changed })
                 }))
@@ -374,6 +366,83 @@ impl CommandHost {
             ),
         }
     }
+
+    /// Atomically compare-and-swap one plugin-state value, returning whether
+    /// the swap happened.
+    ///
+    /// Deliberately NOT a `PluginHostRequest` variant. The encoded door carries
+    /// one request per call, so a CAS expressed there would have to be a
+    /// `StateGet` followed by a `StateSet` with the comparison made in the
+    /// guest — two host calls with a window between them, which is exactly the
+    /// race a compare-and-swap exists to close. The typed
+    /// `scryer:runtime/host@1.0.0` binding calls this instead, and the read,
+    /// the comparison and the write all happen under the one `state` lock that
+    /// `StateGet`, `StateSet` and `StateDelete` already share, against the same
+    /// map and the same `MAX_STATE_BYTES` accounting.
+    ///
+    /// `None` means absent on either side, so this expresses insert-if-absent
+    /// and delete-if-unchanged as well as replace.
+    ///
+    /// A host with no services configured answers `false`: the fail-closed
+    /// reading every other service in this layer gives, rather than reporting a
+    /// swap that never happened.
+    pub(crate) fn state_cas(
+        &self,
+        key: String,
+        expected: Option<Vec<u8>>,
+        replacement: Option<Vec<u8>>,
+    ) -> bool {
+        let Some(services) = &self.services else {
+            return false;
+        };
+        let Ok(mut state) = services.state.lock() else {
+            return false;
+        };
+        if state.values.get(&key).map(Vec::as_slice) != expected.as_deref() {
+            return false;
+        }
+        match replacement {
+            Some(value) => set_state_value(&mut state, key, value).is_ok(),
+            None => {
+                remove_state_value(&mut state, &key);
+                true
+            }
+        }
+    }
+
+    /// Read one plugin-state value, for the typed
+    /// `scryer:runtime/host@1.0.0` binding.
+    ///
+    /// The encoded `StateGet` arm reads the same map under the same lock; this
+    /// exists so the typed binding does not have to encode a postcard envelope
+    /// to answer a `BTreeMap` lookup.
+    pub(crate) fn state_get(&self, key: &str) -> Option<Vec<u8>> {
+        let services = self.services.as_ref()?;
+        let state = services.state.lock().ok()?;
+        state.values.get(key).cloned()
+    }
+
+    /// One descriptor-bound configuration value, for the typed
+    /// `scryer:runtime/host@1.0.0` binding. Same map as the encoded
+    /// `ConfigGet` arm.
+    pub(crate) fn config_get(&self, key: &str) -> Option<String> {
+        self.services.as_ref()?.config.get(key).cloned()
+    }
+}
+
+/// Remove one plugin-state value and re-derive the byte accounting.
+///
+/// The total is recomputed from the surviving entries rather than subtracted,
+/// so a delete can never leave `bytes` above the real footprint and slowly
+/// starve a plugin out of its `MAX_STATE_BYTES` budget.
+fn remove_state_value(state: &mut CommandState, key: &str) -> bool {
+    let changed = state.values.remove(key).is_some();
+    state.bytes = state
+        .values
+        .iter()
+        .map(|(key, value)| key.len() + value.len())
+        .sum();
+    changed
 }
 
 fn set_state_value(state: &mut CommandState, key: String, value: Vec<u8>) -> Result<bool, String> {

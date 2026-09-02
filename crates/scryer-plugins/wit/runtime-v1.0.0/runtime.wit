@@ -1,0 +1,148 @@
+package scryer:runtime@1.0.0;
+
+/// The typed, family-neutral runtime capabilities every plugin world imports
+/// alongside `scryer:host/services@1.0.0`.
+///
+/// # Why a second import exists at all
+///
+/// `scryer:host/services` stays the single door for everything *encoded*: one
+/// `host-call` carrying a postcard `PluginHostRequest`, so a new capability is
+/// a new SDK enum variant and never a WIT revision. That shape cannot express
+/// two things a guest needs from the runtime rather than from a service:
+///
+/// - **Concurrency.** `http` and `sleep` are `async func`s here, so a guest's
+///   `process` export can await them while the host drives other work and
+///   still observe cancellation. An encoded `host-call` is a synchronous WIT
+///   function by construction (see that package for why), so nothing reached
+///   through it can yield.
+/// - **Ambient facts with no request payload.** The monotonic and wall clocks,
+///   the invocation deadline, the descriptor-bound configuration lookup, the
+///   provider profile, plugin state and its compare-and-swap, and logging are
+///   all cheap, typed, and called in loops by the plugin-owned pacing
+///   primitives (start-rate gates, cooldowns, window quotas). Encoding each of
+///   those as postcard round-trips would be pure overhead and would lose the
+///   type-checked shapes below.
+///
+/// So the split is by *kind*, not by family: encoded and extensible on
+/// `scryer:host/services`, typed and concurrent here. A family world imports
+/// both and gets the whole surface.
+///
+/// # Why it is family-neutral
+///
+/// Every member of this interface is copied verbatim from
+/// `scryer:indexer/host@1.1.0`, minus `emit-strategy-event` and its
+/// `strategy-event-error` — the one pair that is genuinely indexer-only,
+/// because it reports progress against a search plan that no other family has.
+/// Everything that is left is what *any* family needs: an HTTP client, a
+/// cancellable sleep, clocks, a deadline, config, a provider profile, state
+/// with CAS, and a log sink.
+///
+/// Naming it `scryer:runtime` rather than reusing the indexer package matters
+/// for a mechanical reason: a guest crate that merely *names* an import keeps
+/// it alive in the component's type metadata, so shared plugin code (the PDK's
+/// pacing primitives, the newznab engine) can only be linked into a subtitle
+/// or download-client component if the import it names is one that component's
+/// world actually declares. A neutral package is what lets one implementation
+/// of that code serve every family.
+///
+/// # Migration
+///
+/// `scryer:indexer/host@1.1.0` is unchanged and keeps serving the indexer
+/// world today; the two interfaces are structurally identical apart from the
+/// strategy-event pair. The indexer world adopts `scryer:runtime/host` at its
+/// next revision, at which point the duplicated definitions go away. Until
+/// then a host serves both, which is exactly what the indexer host's own
+/// 1.0/1.1 dual-contract support already does.
+///
+/// # Availability
+///
+/// Unlike `host-call`, these functions have typed failure channels of their
+/// own: `http` reports `transport-error`, and everything else either returns an
+/// `option` or cannot fail. A capability the host has not been configured with
+/// is therefore an empty `option` or a `transport-error`, never a trap.
+interface host {
+  /// One HTTP header. Names are case-insensitive to the host, which normalizes
+  /// them; a guest should not rely on the casing it sent surviving.
+  record header {
+    name: string,
+    value: string,
+  }
+
+  record http-request {
+    method: string,
+    url: string,
+    headers: list<header>,
+    body: list<u8>,
+  }
+
+  record http-response {
+    status: u16,
+    headers: list<header>,
+    body: list<u8>,
+  }
+
+  /// A failure of the HTTP transport itself.
+  ///
+  /// A response the plugin does not like — a 404, a 429, an error document —
+  /// is a perfectly good `http-response`, not one of these. These mean no
+  /// response exists.
+  enum transport-error {
+    invalid-request,
+    forbidden-origin,
+    timeout,
+    cancelled,
+    response-too-large,
+    capacity,
+    transport,
+  }
+
+  enum log-level {
+    trace,
+    debug,
+    info,
+    warn,
+    error,
+  }
+
+  /// Perform one HTTP request through the host's client, subject to the
+  /// plugin's allowed-host policy, its response cap, and the invocation
+  /// deadline.
+  http: async func(request: http-request) -> result<http-response, transport-error>;
+
+  /// Sleep, cancellably. The host resolves this early when the invocation is
+  /// cancelled, so a guest's pacing loop unwinds instead of holding a worker.
+  sleep: async func(duration-ms: u64);
+
+  /// A monotonic clock in milliseconds, on the host's timebase. Only
+  /// differences are meaningful.
+  monotonic-now-ms: func() -> u64;
+
+  /// The monotonic instant this invocation must finish by, on the same
+  /// timebase as `monotonic-now-ms`.
+  operation-deadline-monotonic-ms: func() -> u64;
+
+  /// Wall-clock milliseconds since the Unix epoch, for bucketing quotas that
+  /// have to agree with a provider's own calendar day.
+  wall-now-ms: func() -> u64;
+
+  /// Read one descriptor-bound configuration value for this instance.
+  config-get: func(key: string) -> option<string>;
+
+  /// The encoded provider profile bound to this instance, when it has one.
+  provider-profile: func() -> option<list<u8>>;
+
+  /// Read one plugin-state value.
+  state-get: func(key: string) -> option<list<u8>>;
+
+  /// Atomically replace one plugin-state value if it currently equals
+  /// `expected`, returning whether the swap happened.
+  ///
+  /// `none` means absent on either side, so this expresses insert-if-absent and
+  /// delete-if-unchanged as well as replace. The host performs the comparison
+  /// and the write under one lock: a guest must never emulate it with a
+  /// `state-get` followed by a write.
+  state-cas: func(key: string, expected: option<list<u8>>, replacement: option<list<u8>>) -> bool;
+
+  /// Emit one log record into the host's tracing subscriber.
+  log: func(level: log-level, message: string);
+}
