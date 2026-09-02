@@ -151,6 +151,9 @@ pub mod execution_reason {
     pub const ACTION_NOT_FULLY_SUPPORTED: &str = "action_not_fully_supported";
     /// The subject no longer exists in the catalog.
     pub const TITLE_MISSING: &str = "title_missing";
+    /// A location operation owns the title (FR-084); the action retries once
+    /// the operation releases it.
+    pub const LOCATION_OPERATION_HOLD: &str = "location_operation_hold";
     /// The action completed.
     pub const ACTION_SUCCEEDED: &str = "action_succeeded";
     /// The postcondition already held; nothing was mutated.
@@ -974,6 +977,27 @@ impl AppUseCase {
             return SafetyDecision::Cancel(
                 crate::maintenance_rules::evaluation::candidate_reason::OUT_OF_SCOPE,
             );
+        }
+        // (3b) A location operation that owns the title (FR-084). Destructive
+        // work waits for it the way it waits for playback and acquisition
+        // activity: the operation releases its claim on every terminal path,
+        // so this is a retry, not a verdict. An unreadable claim store holds
+        // the same way — acting on a claim Scryer could not read is acting on
+        // evidence it never had.
+        if high_risk {
+            match self
+                .location_ownership_denial_for_title(
+                    &crate::location::ownership_guard::MAINTENANCE_ACTION_ENTRY,
+                    &title.id,
+                )
+                .await
+            {
+                Ok(None) => {}
+                Ok(Some(_)) => {
+                    return SafetyDecision::Hold(execution_reason::LOCATION_OPERATION_HOLD);
+                }
+                Err(_) => return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION),
+            }
         }
         let files_by_title = match self
             .maintenance_files_for_titles(std::slice::from_ref(&title))

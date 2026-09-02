@@ -853,3 +853,377 @@ async fn a_second_operation_still_holding_the_source_title_blocks_the_merge() {
         .expect("the Group 0 read should succeed");
     assert!(!plan_merge(&snapshot).is_blocked());
 }
+
+// ── Tables that landed beside the engine (release-NEXT 0204–0207) ───────────
+
+async fn seed_maintenance_rule(datastore: &StoreDatastore, id: &str) {
+    run(
+        datastore,
+        "INSERT INTO maintenance_rule_sets (id, name) VALUES ({}, 'Retire watched')",
+        vec![SqlArg::Text(id.to_string())],
+    )
+    .await;
+}
+
+async fn insert_candidate(datastore: &StoreDatastore, id: &str, title_id: &str, state: &str) {
+    run(
+        datastore,
+        "INSERT INTO lifecycle_candidates (id, rule_set_id, revision_number, title_id, state)
+         VALUES ({}, 'rule-1', 1, {}, {})",
+        vec![
+            SqlArg::Text(id.to_string()),
+            SqlArg::Text(title_id.to_string()),
+            SqlArg::Text(state.to_string()),
+        ],
+    )
+    .await;
+}
+
+async fn insert_exclusion(
+    datastore: &StoreDatastore,
+    id: &str,
+    rule_set_id: Option<&str>,
+    title_id: &str,
+) {
+    run(
+        datastore,
+        "INSERT INTO maintenance_rule_exclusions (id, rule_set_id, title_id)
+         VALUES ({}, {}, {})",
+        vec![
+            SqlArg::Text(id.to_string()),
+            SqlArg::OptText(rule_set_id.map(str::to_string)),
+            SqlArg::Text(title_id.to_string()),
+        ],
+    )
+    .await;
+}
+
+async fn insert_signal(
+    datastore: &StoreDatastore,
+    id: &str,
+    title_id: &str,
+    episode_id: Option<&str>,
+) {
+    run(
+        datastore,
+        "INSERT INTO media_server_user_media_signals
+             (id, connection_id, provider, external_user_id, provider_item_id, kind,
+              scryer_title_id, scryer_episode_id, played)
+         VALUES ({}, 'conn-1', 'jellyfin', 'user-1', {}, 'episode', {}, {}, 1)",
+        vec![
+            SqlArg::Text(id.to_string()),
+            SqlArg::Text(format!("item-{id}")),
+            SqlArg::Text(title_id.to_string()),
+            SqlArg::OptText(episode_id.map(str::to_string)),
+        ],
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn maintenance_and_watch_signal_rows_follow_the_surviving_title() {
+    let (store, datastore) = test_store().await;
+    seed_two_season_series(&datastore).await;
+    seed_maintenance_rule(&datastore, "rule-1").await;
+
+    // Candidates: the source holds a live one and a finished one for rule-1;
+    // the destination already holds its own live one for the same rule, which
+    // `idx_lifecycle_candidates_active_subject` protects.
+    insert_candidate(&datastore, "cand-source-live", SOURCE, "due").await;
+    insert_candidate(&datastore, "cand-source-done", SOURCE, "succeeded").await;
+    insert_candidate(&datastore, "cand-destination-live", DESTINATION, "observing").await;
+    run(
+        &datastore,
+        "INSERT INTO lifecycle_action_runs
+             (id, candidate_id, rule_set_id, revision_number, title_id, action_kind,
+              match_generation, idempotency_key, attempt, status, started_at)
+         VALUES ('run-1', 'cand-source-done', 'rule-1', 1, {}, 'delete_title_and_files',
+                 1, 'key-1', 1, 'succeeded', '2026-01-01T00:00:00Z')",
+        vec![SqlArg::Text(SOURCE.to_string())],
+    )
+    .await;
+
+    // Exclusions: the source carries a global one and a rule-1 one; the
+    // destination already has its own rule-1 exclusion.
+    insert_exclusion(&datastore, "excl-source-global", None, SOURCE).await;
+    insert_exclusion(&datastore, "excl-source-rule", Some("rule-1"), SOURCE).await;
+    insert_exclusion(&datastore, "excl-destination-rule", Some("rule-1"), DESTINATION).await;
+
+    // Watch signals: one on a mapped source episode, one on an unmapped one.
+    run(
+        &datastore,
+        "INSERT INTO media_server_connections (
+             id, provider, display_name, base_url, enabled, login_enabled,
+             linking_enabled, auto_add_enabled, default_app_permissions, created_at, updated_at
+         ) VALUES ('conn-1', 'jellyfin', 'Living room', 'https://jf.example.test', 1, 0, 0, 0, 0,
+                   '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+        vec![],
+    )
+    .await;
+    insert_episode(&datastore, "s-e3", SOURCE, None, "3", "1").await;
+    insert_signal(&datastore, "sig-mapped", SOURCE, Some("s-e1")).await;
+    insert_signal(&datastore, "sig-unmapped", SOURCE, Some("s-e3")).await;
+
+    let mut snapshot = store
+        .load_merge_snapshot(SOURCE, DESTINATION, None)
+        .await
+        .expect("the Group 0 read should succeed");
+    // The preview counts every one of the new tables.
+    for table in [
+        "lifecycle_candidates",
+        "lifecycle_action_runs",
+        "maintenance_rule_exclusions",
+        "media_server_user_media_signals",
+    ] {
+        assert!(
+            snapshot.source_row_counts.get(table).copied().unwrap_or(0) > 0,
+            "{table} should be counted for the FR-071 preview: {:?}",
+            snapshot.source_row_counts
+        );
+    }
+    // `s-e3` has no destination twin. Watch signals are not in the FR-066
+    // blocking set, so the merge proceeds and leaves that row's episode
+    // unresolved; drop the episode from the identity inputs the way an
+    // unmappable-but-unreferenced episode is dropped.
+    snapshot
+        .source_episodes
+        .retain(|episode| episode.id != "s-e3");
+    let plan = plan_merge(&snapshot);
+    assert!(!plan.is_blocked(), "blocked: {:?}", plan.blocked());
+    assert!(
+        plan.summary
+            .dispositions
+            .iter()
+            .any(|entry| entry.table == "maintenance_rule_exclusions"),
+        "the preview names the new tables: {:?}",
+        plan.summary.dispositions
+    );
+
+    let outcome = store
+        .execute_title_merge(&plan)
+        .await
+        .expect("the merge should pass the FR-067 gate");
+    assert_eq!(outcome.rows_affected.get("3:lifecycle_candidates_canceled"), Some(&1));
+    assert_eq!(
+        outcome
+            .rows_affected
+            .get("3:maintenance_rule_exclusions_carried"),
+        Some(&1)
+    );
+    assert_eq!(
+        outcome
+            .rows_affected
+            .get("3:maintenance_rule_exclusions_deduped"),
+        Some(&1)
+    );
+
+    // Candidates: three rows now name the destination; the source's live one
+    // closed as canceled with the merge as its reason, the finished one kept
+    // its state, and the destination's own live one is untouched.
+    assert_eq!(
+        scalar(
+            &datastore,
+            "SELECT COUNT(*) AS row_count FROM lifecycle_candidates WHERE title_id = {}",
+            vec![SqlArg::Text(DESTINATION.to_string())],
+        )
+        .await,
+        3
+    );
+    assert_eq!(
+        text(
+            &datastore,
+            "SELECT state || ':' || state_reason AS value FROM lifecycle_candidates
+              WHERE id = 'cand-source-live'",
+            vec![],
+        )
+        .await
+        .as_deref(),
+        Some("canceled:merged_into_destination")
+    );
+    assert_eq!(
+        text(
+            &datastore,
+            "SELECT state AS value FROM lifecycle_candidates WHERE id = 'cand-source-done'",
+            vec![],
+        )
+        .await
+        .as_deref(),
+        Some("succeeded")
+    );
+    assert_eq!(
+        text(
+            &datastore,
+            "SELECT state AS value FROM lifecycle_candidates
+              WHERE id = 'cand-destination-live'",
+            vec![],
+        )
+        .await
+        .as_deref(),
+        Some("observing")
+    );
+    assert_eq!(
+        text(
+            &datastore,
+            "SELECT title_id AS value FROM lifecycle_action_runs WHERE id = 'run-1'",
+            vec![],
+        )
+        .await
+        .as_deref(),
+        Some(DESTINATION)
+    );
+
+    // Exclusions: the global ward carried over; the rule-1 one lost to the
+    // destination's own; nothing names the source any more.
+    assert_eq!(
+        text(
+            &datastore,
+            "SELECT title_id AS value FROM maintenance_rule_exclusions
+              WHERE id = 'excl-source-global'",
+            vec![],
+        )
+        .await
+        .as_deref(),
+        Some(DESTINATION)
+    );
+    assert_eq!(
+        scalar(
+            &datastore,
+            "SELECT COUNT(*) AS row_count FROM maintenance_rule_exclusions
+              WHERE title_id = {}",
+            vec![SqlArg::Text(DESTINATION.to_string())],
+        )
+        .await,
+        2
+    );
+    assert_eq!(
+        scalar(
+            &datastore,
+            "SELECT COUNT(*) AS row_count FROM maintenance_rule_exclusions
+              WHERE id = 'excl-source-rule'",
+            vec![],
+        )
+        .await,
+        0
+    );
+
+    // Signals: both observations name the destination; the mapped episode
+    // followed the map and the unmapped one was left for the next sync.
+    assert_eq!(
+        text(
+            &datastore,
+            "SELECT scryer_title_id || ':' || scryer_episode_id AS value
+               FROM media_server_user_media_signals WHERE id = 'sig-mapped'",
+            vec![],
+        )
+        .await
+        .as_deref(),
+        Some("title-destination:d-e1")
+    );
+    assert_eq!(
+        text(
+            &datastore,
+            "SELECT scryer_title_id || ':' || COALESCE(scryer_episode_id, 'none') AS value
+               FROM media_server_user_media_signals WHERE id = 'sig-unmapped'",
+            vec![],
+        )
+        .await
+        .as_deref(),
+        Some("title-destination:none")
+    );
+    assert_eq!(
+        scalar(
+            &datastore,
+            "SELECT COUNT(*) AS row_count FROM titles WHERE id = {}",
+            vec![SqlArg::Text(SOURCE.to_string())],
+        )
+        .await,
+        0
+    );
+}
+
+/// Every column that names a title by convention is classified somewhere: the
+/// cascade class (a foreign key to `titles` with `ON DELETE CASCADE`), the
+/// FR-067 SET NULL list, the FR-067 no-FK list, or the exemption list with a
+/// reason. A table added on another branch — release-NEXT's maintenance
+/// tables were — fails here instead of dangling silently after the first
+/// merge. Polymorphic columns (`entity_id`, `stream_id`, `owner_id`) are not
+/// found by name and stay the inventory's responsibility.
+#[tokio::test]
+async fn every_title_named_column_in_the_live_schema_is_classified() {
+    use scryer_application::location::merge::engine::FR067_TITLE_COLUMN_EXEMPTIONS;
+
+    let (_store, datastore) = test_store().await;
+    let tables = SqlRuntime::fetch_all(
+        datastore.read_exec(),
+        "SELECT name FROM sqlite_master
+          WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+        &[],
+    )
+    .await
+    .expect("table listing");
+
+    let listed = |list: &[(&str, &str, MergeGateIdKind)], table: &str, column: &str| {
+        list.iter()
+            .any(|(t, c, _)| *t == table && *c == column)
+    };
+    let mut unclassified = Vec::new();
+    for row in tables {
+        let table = row.text("name").expect("table name");
+        let columns = SqlRuntime::fetch_all(
+            datastore.read_exec(),
+            &format!("SELECT name FROM pragma_table_info('{table}')"),
+            &[],
+        )
+        .await
+        .expect("column listing");
+        let foreign_keys = SqlRuntime::fetch_all(
+            datastore.read_exec(),
+            &format!(
+                "SELECT \"table\" AS target, \"from\" AS source_column, on_delete
+                   FROM pragma_foreign_key_list('{table}')"
+            ),
+            &[],
+        )
+        .await
+        .expect("foreign key listing");
+        for column in columns {
+            let column = column.text("name").expect("column name");
+            if column != "title_id" && !column.ends_with("_title_id") {
+                continue;
+            }
+            // `discovery_title_id` names the discovery catalog's own identity
+            // (`discovery_titles.id`), not a Scryer title. The one bridge from
+            // that namespace to ours is `discovery_titles.resolved_title_id`,
+            // which is gated above.
+            if column.ends_with("discovery_title_id") {
+                continue;
+            }
+            let foreign_key = foreign_keys.iter().find(|fk| {
+                fk.text("source_column").ok().as_deref() == Some(column.as_str())
+                    && fk.text("target").ok().as_deref() == Some("titles")
+            });
+            let on_delete = foreign_key.and_then(|fk| fk.text("on_delete").ok());
+            let classified = match on_delete.as_deref() {
+                Some("CASCADE") => true,
+                Some("SET NULL") => listed(FR067_SET_NULL_ASSERTIONS, &table, &column),
+                _ => {
+                    listed(FR067_NO_FK_ASSERTIONS, &table, &column)
+                        || FR067_TITLE_COLUMN_EXEMPTIONS
+                            .iter()
+                            .any(|(t, c, _)| *t == table && *c == column)
+                }
+            };
+            if !classified {
+                unclassified.push(format!(
+                    "{table}.{column} (on delete: {})",
+                    on_delete.as_deref().unwrap_or("no foreign key")
+                ));
+            }
+        }
+    }
+    assert!(
+        unclassified.is_empty(),
+        "title-named columns the merge engine does not classify — add each to the FR-067 gate \
+         lists, or to FR067_TITLE_COLUMN_EXEMPTIONS with a reason:\n{unclassified:#?}"
+    );
+}

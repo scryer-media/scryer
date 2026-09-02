@@ -65,6 +65,11 @@ const LIVE_CHECKPOINT_STATES: &str = "'pending', 'moving', 'verifying', 'reconci
 /// Tables whose source row counts the FR-071 preview reports.
 const COUNTED_TABLES: &[(&str, &str)] = &[
     ("media_files", "title_id"),
+    ("lifecycle_candidates", "title_id"),
+    ("lifecycle_action_runs", "title_id"),
+    ("maintenance_rule_exclusions", "title_id"),
+    ("media_server_user_media_signals", "scryer_title_id"),
+    ("library_scan_unmatched_items", "title_id"),
     ("wanted_items", "title_id"),
     ("download_submissions", "title_id"),
     ("download_import_artifacts", "title_id"),
@@ -1234,6 +1239,89 @@ async fn group_3_title_scoped(
         .await?;
     record(outcome, "3:blocklist_deduped", deduped);
 
+    // Maintenance rules (migrations 0205/0206). A live source candidate cannot
+    // simply follow the title: `idx_lifecycle_candidates_active_subject` allows
+    // one non-terminal candidate per (rule, title) and the destination may
+    // already hold one. Live source candidates close as canceled — the
+    // destination is re-evaluated on its own facts at the next pass — and then
+    // every source candidate, terminal ones included, follows the surviving
+    // title below, so the audit trail stays attached to something.
+    let now = chrono::Utc::now();
+    let canceled = tx
+        .execute(
+            "UPDATE lifecycle_candidates
+                SET state = 'canceled', state_reason = {},
+                    last_evaluated_at = {}, updated_at = {}
+              WHERE title_id = {}
+                AND state NOT IN ('succeeded', 'failed', 'canceled', 'excluded')",
+            &[
+                SqlArg::Text(
+                    scryer_application::maintenance_rules::evaluation::candidate_reason::MERGED_INTO_DESTINATION
+                        .to_string(),
+                ),
+                SqlArg::Timestamp(now),
+                SqlArg::Timestamp(now),
+                SqlArg::Text(map.source_title_id.clone()),
+            ],
+        )
+        .await?;
+    record(outcome, "3:lifecycle_candidates_canceled", canceled);
+
+    // `maintenance_rule_exclusions` is a safety ward, so it unions: a source
+    // exclusion moves onto the destination unless the destination already
+    // carries one for the same rule (or the same global row), where the two
+    // partial unique indexes make the destination's the one that stands.
+    let carried = tx
+        .execute(
+            "UPDATE maintenance_rule_exclusions SET title_id = {}
+              WHERE title_id = {}
+                AND NOT EXISTS (SELECT 1 FROM maintenance_rule_exclusions AS kept
+                                 WHERE kept.title_id = {}
+                                   AND ((kept.rule_set_id IS NULL
+                                         AND maintenance_rule_exclusions.rule_set_id IS NULL)
+                                        OR kept.rule_set_id
+                                           = maintenance_rule_exclusions.rule_set_id))",
+            &[
+                SqlArg::Text(map.destination_title_id.clone()),
+                SqlArg::Text(map.source_title_id.clone()),
+                SqlArg::Text(map.destination_title_id.clone()),
+            ],
+        )
+        .await?;
+    record(outcome, "3:maintenance_rule_exclusions_carried", carried);
+    let deduped = tx
+        .execute(
+            "DELETE FROM maintenance_rule_exclusions WHERE title_id = {}",
+            &[SqlArg::Text(map.source_title_id.clone())],
+        )
+        .await?;
+    record(outcome, "3:maintenance_rule_exclusions_deduped", deduped);
+
+    // Watch signals (migration 0207) are observations keyed by the provider's
+    // item, so the title repoint below is safe; the episode side follows the
+    // identity map, and a source episode the map could not place is left
+    // unresolved — the schema allows it, and the next sync re-resolves through
+    // `title_external_ids`, which the destination now owns.
+    for (source_episode, destination_episode) in &map.episodes {
+        tx.execute(
+            "UPDATE media_server_user_media_signals SET scryer_episode_id = {}
+              WHERE scryer_episode_id = {}",
+            &[
+                SqlArg::Text(destination_episode.clone()),
+                SqlArg::Text(source_episode.clone()),
+            ],
+        )
+        .await?;
+    }
+    let unresolved = tx
+        .execute(
+            "UPDATE media_server_user_media_signals SET scryer_episode_id = NULL
+              WHERE scryer_episode_id IN (SELECT id FROM episodes WHERE title_id = {})",
+            &[SqlArg::Text(map.source_title_id.clone())],
+        )
+        .await?;
+    record(outcome, "3:media_server_user_media_signals_episode_unresolved", unresolved);
+
     // Plain title-id repoints. `post_processing_script_runs.title_name` and
     // `env_payload_json` are deliberately NOT rewritten: they are historical
     // snapshots of what the script actually saw (migration 0051).
@@ -1248,6 +1336,10 @@ async fn group_3_title_scoped(
         ("location_operation_verifications", "title_id"),
         ("manual_import_selections", "title_id"),
         ("location_operation_title_checkpoints", "merged_into_title_id"),
+        ("lifecycle_candidates", "title_id"),
+        ("lifecycle_action_runs", "title_id"),
+        ("media_server_user_media_signals", "scryer_title_id"),
+        ("library_scan_unmatched_items", "title_id"),
     ] {
         let rows = tx
             .execute(
