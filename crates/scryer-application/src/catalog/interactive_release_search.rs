@@ -198,7 +198,9 @@ enum InteractiveReleaseSearchSubject {
     /// A catalog title: the existing scored, token-attaching path.
     Title {
         /// For series-movie searches this is the synthesized movie search title.
-        title_for_search: Title,
+        /// Boxed: a `Title` dwarfs the query variant, and the subject is moved
+        /// into the job context once and then only borrowed.
+        title_for_search: Box<Title>,
         subject: ResolvedReleaseSearchSubject,
         preserve_subject_scope: bool,
     },
@@ -288,7 +290,7 @@ impl AppUseCase {
                     .await;
                 (
                     InteractiveReleaseSearchSubject::Title {
-                        title_for_search,
+                        title_for_search: Box::new(title_for_search),
                         subject,
                         preserve_subject_scope,
                     },
