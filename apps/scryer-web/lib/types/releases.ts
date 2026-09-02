@@ -10,6 +10,8 @@ export type ReleaseQueueScope =
 
 export type Release = {
   source: string | null;
+  /** Indexer configuration that returned the release; null when the indexer is unknown. */
+  indexerId?: string | null;
   title: string;
   link: string | null;
   downloadUrl: string | null;
@@ -20,6 +22,12 @@ export type Release = {
   publishedAt: string | null;
   thumbsUp?: number | null;
   thumbsDown?: number | null;
+  /** Grab count the indexer reports; usenet's counterpart to seeders/peers. */
+  grabs?: number | null;
+  /** Torrent swarm counts; null for usenet results. Selected by the search documents. */
+  seeders?: number | null;
+  peers?: number | null;
+  freeleech?: boolean | null;
   parsedRelease?: {
     rawTitle: string;
     normalizedTitle: string;

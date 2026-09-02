@@ -15,8 +15,10 @@ function progress(
   return {
     indexerId: name.toLowerCase(),
     name,
+    priority: 0,
     status,
     resultCount: 1,
+    elapsedMs: null,
     failureReason: null,
   };
 }

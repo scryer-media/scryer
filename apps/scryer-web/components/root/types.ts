@@ -37,7 +37,11 @@ export type SettingsSection =
 /// Panes of the Indexers settings page. Seeding profiles live here rather than
 /// in their own settings section because a profile is only ever reached
 /// through the indexer that applies it.
-export type IndexerSettingsTab = "indexers" | "proxies" | "seedingProfiles";
+export type IndexerSettingsTab =
+  | "indexers"
+  | "search"
+  | "proxies"
+  | "seedingProfiles";
 export type ContentSettingsSection =
   | "overview"
   | "import"

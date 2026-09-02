@@ -204,6 +204,7 @@ test("the dashboard route is canonical and takes no subpaths", () => {
 test("the indexers page carries its panes as a third path segment", () => {
   for (const path of [
     "/integrations/indexers",
+    "/integrations/indexers/search",
     "/integrations/indexers/proxies",
     "/integrations/indexers/seeding-profiles",
   ]) {
@@ -227,7 +228,12 @@ test("seeding profiles are no longer a settings section of their own", () => {
 });
 
 test("indexer pane paths round-trip through the tab helpers", () => {
-  for (const tab of ["indexers", "proxies", "seedingProfiles"] as const) {
+  for (const tab of [
+    "indexers",
+    "search",
+    "proxies",
+    "seedingProfiles",
+  ] as const) {
     assert.equal(
       indexerSettingsTabFromPath(buildIndexerSettingsPath(tab)),
       tab,

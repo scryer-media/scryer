@@ -1147,6 +1147,7 @@ export const externalSubtitleBlocklistEntriesQuery = `query ExternalSubtitleBloc
 
 export const RELEASE_SEARCH_RESULT_FIELDS = `
     source
+    indexerId
     title
     link
     downloadUrl
@@ -1210,6 +1211,7 @@ export const RELEASE_SEARCH_RESULT_FIELDS = `
     }
     seeders
     peers
+    grabs
     infoHash
     freeleech
     downloadVolumeFactor
@@ -1250,8 +1252,10 @@ export const interactiveReleaseSearchQuery = `query InteractiveReleaseSearch($id
     indexers {
       indexerId
       name
+      priority
       status
       resultCount
+      elapsedMs
       failureReason
     }
     startedAt

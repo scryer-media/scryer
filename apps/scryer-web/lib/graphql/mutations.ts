@@ -1698,8 +1698,10 @@ export const startInteractiveReleaseSearchMutation = `mutation StartInteractiveR
     indexers {
       indexerId
       name
+      priority
       status
       resultCount
+      elapsedMs
       failureReason
     }
     startedAt

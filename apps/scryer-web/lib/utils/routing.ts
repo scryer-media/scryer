@@ -58,11 +58,13 @@ const SYSTEM_SETTINGS_SECTION_PATH: Partial<Record<SettingsSection, string>> = {
 /// `/integrations/indexers` keeps meaning what it always meant.
 export const INDEXER_TAB_PATH: Record<IndexerSettingsTab, string> = {
   indexers: "",
+  search: "search",
   proxies: "proxies",
   seedingProfiles: "seeding-profiles",
 };
 
 const INDEXER_TAB_BY_SEGMENT: Record<string, IndexerSettingsTab> = {
+  search: "search",
   proxies: "proxies",
   "indexer-proxies": "proxies",
   "seeding-profiles": "seedingProfiles",
