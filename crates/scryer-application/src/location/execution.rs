@@ -363,8 +363,10 @@ impl RootMoveFileMover {
             return;
         };
 
-        let persisted =
-            crate::location::model::PersistedContentHashes::from_streamed(hashes, chrono::Utc::now());
+        let persisted = crate::location::model::PersistedContentHashes::from_streamed(
+            hashes,
+            chrono::Utc::now(),
+        );
         if let Err(error) = catalog
             .set_media_file_content_hashes(media_file_id, &persisted)
             .await
@@ -622,7 +624,12 @@ impl<'a> RootMoveReconciler<'a> {
         source_title_id: &str,
         destination_title_id: &str,
     ) -> AppResult<bool> {
-        if self.catalog.title_placement(source_title_id).await?.is_some() {
+        if self
+            .catalog
+            .title_placement(source_title_id)
+            .await?
+            .is_some()
+        {
             return Ok(false);
         }
         Ok(self
@@ -885,9 +892,7 @@ pub(super) async fn remove_directory_if_empty(path: &Path) -> DirectoryPrune {
     }
     match tokio::fs::remove_dir(path).await {
         Ok(()) => DirectoryPrune::Removed,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            DirectoryPrune::AlreadyAbsent
-        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => DirectoryPrune::AlreadyAbsent,
         Err(error) => DirectoryPrune::Failed(error.to_string()),
     }
 }
@@ -1012,7 +1017,9 @@ impl TitleAdmissionCheck for RootMoveAdmission<'_> {
             && planned
                 .destination_folder_path
                 .as_deref()
-                .is_none_or(|destination| !crate::stored_paths::folder_paths_match(destination, actual))
+                .is_none_or(|destination| {
+                    !crate::stored_paths::folder_paths_match(destination, actual)
+                })
         {
             return Ok(stale(
                 PlanInputChange::CatalogInput,
@@ -1059,7 +1066,10 @@ impl TitleAdmissionCheck for RootMoveAdmission<'_> {
         // this operation already verified its destination is the operation's own
         // footprint (FR-089), not a foreign change.
         for file in &planned.files {
-            if context.verified_destinations.contains(&file.destination_path) {
+            if context
+                .verified_destinations
+                .contains(&file.destination_path)
+            {
                 debug_assert!(!PlanInputChange::VerifiedDestinationFile.is_stale());
                 continue;
             }

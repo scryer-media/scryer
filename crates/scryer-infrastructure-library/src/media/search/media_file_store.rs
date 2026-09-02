@@ -5,10 +5,9 @@ use scryer_application::{
     CutoffUnmetQualitySummary, EpisodeMediaAvailability, EpisodeMediaAvailabilityState,
     EpisodeScopedMediaFile, InsertMediaFileInput, MediaFileAnalysis, MediaFileAssociations,
     MediaFileCatalogDisposition, MediaFileHashCandidate, MediaFileRepository,
-    MissingEpisodeCandidate,
-    MissingScopeCandidates, MissingSeriesMovieLinkCandidate, MissingTitleCandidate,
-    TitleEpisodeProgressSummary, TitleMediaFile, TitleMediaSizeSummary, TitleMovieMediaSummary,
-    TitleQualitySummary, derive_primary_quality_label,
+    MissingEpisodeCandidate, MissingScopeCandidates, MissingSeriesMovieLinkCandidate,
+    MissingTitleCandidate, TitleEpisodeProgressSummary, TitleMediaFile, TitleMediaSizeSummary,
+    TitleMovieMediaSummary, TitleQualitySummary, derive_primary_quality_label,
 };
 use scryer_domain::Id;
 use serde::de::DeserializeOwned;
@@ -2214,7 +2213,10 @@ mod tests {
             .await
             .expect("read queue after cursor");
         assert_eq!(
-            after_first.iter().map(|row| row.id.clone()).collect::<Vec<_>>(),
+            after_first
+                .iter()
+                .map(|row| row.id.clone())
+                .collect::<Vec<_>>(),
             ids[1..]
         );
 

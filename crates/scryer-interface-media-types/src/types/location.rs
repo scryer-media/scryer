@@ -13,7 +13,10 @@ use chrono::{DateTime, Utc};
 
 /// Which location workflow an operation belongs to.
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
-#[graphql(rename_items = "SCREAMING_SNAKE_CASE", remote = "scryer_application::location::model::LocationOperationType")]
+#[graphql(
+    rename_items = "SCREAMING_SNAKE_CASE",
+    remote = "scryer_application::location::model::LocationOperationType"
+)]
 pub enum LocationOperationTypeValue {
     /// Correct which folder a title owns; file content is never touched.
     FolderReassignment,
@@ -31,7 +34,10 @@ pub enum LocationOperationTypeValue {
 
 /// How the filesystem side of an operation is performed.
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
-#[graphql(rename_items = "SCREAMING_SNAKE_CASE", remote = "scryer_application::location::model::LocationExecutionMode")]
+#[graphql(
+    rename_items = "SCREAMING_SNAKE_CASE",
+    remote = "scryer_application::location::model::LocationExecutionMode"
+)]
 pub enum LocationExecutionModeValue {
     /// Scryer performs and verifies the filesystem operation.
     MoveWithScryer,
@@ -60,7 +66,10 @@ pub enum LocationExecutionModeInput {
 
 /// Lifecycle state of a confirmed location operation, as shown in Activity.
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
-#[graphql(rename_items = "SCREAMING_SNAKE_CASE", remote = "scryer_application::location::model::LocationOperationState")]
+#[graphql(
+    rename_items = "SCREAMING_SNAKE_CASE",
+    remote = "scryer_application::location::model::LocationOperationState"
+)]
 pub enum LocationOperationStateValue {
     /// Accepted and persisted; not yet started.
     Queued,
@@ -86,7 +95,10 @@ pub enum LocationOperationStateValue {
 
 /// The single class a selected title falls into for a requested destination.
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
-#[graphql(rename_items = "SCREAMING_SNAKE_CASE", remote = "scryer_application::location::classify::TitleLocationClass")]
+#[graphql(
+    rename_items = "SCREAMING_SNAKE_CASE",
+    remote = "scryer_application::location::classify::TitleLocationClass"
+)]
 pub enum TitleLocationClassValue {
     /// Destination is in another library and the transfer is supported.
     CrossLibraryTransfer,
@@ -105,7 +117,10 @@ pub enum TitleLocationClassValue {
 /// What destination-title detection concluded for a title crossing into another
 /// library. Matching is by stable metadata identity, never by title text.
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
-#[graphql(rename_items = "SCREAMING_SNAKE_CASE", remote = "scryer_application::location::merge::DestinationIdentityMatch")]
+#[graphql(
+    rename_items = "SCREAMING_SNAKE_CASE",
+    remote = "scryer_application::location::merge::DestinationIdentityMatch"
+)]
 pub enum LocationDestinationIdentityMatchValue {
     /// Exactly one destination title shares the identity, so this is a merge.
     Unique,
@@ -120,7 +135,10 @@ pub enum LocationDestinationIdentityMatchValue {
 
 /// Every kind of change a location plan can contain.
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
-#[graphql(rename_items = "SCREAMING_SNAKE_CASE", remote = "scryer_application::location::preview::PlanItemKind")]
+#[graphql(
+    rename_items = "SCREAMING_SNAKE_CASE",
+    remote = "scryer_application::location::preview::PlanItemKind"
+)]
 pub enum LocationPlanItemKindValue {
     /// Content moves from a source path to a destination path.
     Move,
@@ -146,7 +164,10 @@ pub enum LocationPlanItemKindValue {
 
 /// Progress of one title inside an operation.
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
-#[graphql(rename_items = "SCREAMING_SNAKE_CASE", remote = "scryer_application::location::model::TitleCheckpointState")]
+#[graphql(
+    rename_items = "SCREAMING_SNAKE_CASE",
+    remote = "scryer_application::location::model::TitleCheckpointState"
+)]
 pub enum LocationTitleCheckpointStateValue {
     /// Planned but not started.
     Pending,
@@ -172,7 +193,10 @@ pub enum LocationTitleCheckpointStateValue {
 
 /// How much consent an operation demands before it may start.
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
-#[graphql(rename_items = "SCREAMING_SNAKE_CASE", remote = "scryer_application::location::preview::ConfirmationRequirement")]
+#[graphql(
+    rename_items = "SCREAMING_SNAKE_CASE",
+    remote = "scryer_application::location::preview::ConfirmationRequirement"
+)]
 pub enum LocationConfirmationRequirementValue {
     /// Confirming the fingerprinted plan is enough.
     Simple,
@@ -306,7 +330,10 @@ pub struct LocationAmbiguousDestinationCandidatePayload {
 
 /// What a facet conversion does to one title-level setting (FR-057).
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
-#[graphql(rename_items = "SCREAMING_SNAKE_CASE", remote = "scryer_application::location::transfer_effects::SettingDisposition")]
+#[graphql(
+    rename_items = "SCREAMING_SNAKE_CASE",
+    remote = "scryer_application::location::transfer_effects::SettingDisposition"
+)]
 pub enum LocationFacetSettingDispositionValue {
     /// The value stays on the title, but nothing reads it under the new facet.
     BecomesInvalid,
@@ -465,7 +492,10 @@ pub struct LocationOperationPreviewPayload {
 
 /// Why one record stops a merge from running (FR-066).
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
-#[graphql(rename_items = "SCREAMING_SNAKE_CASE", remote = "scryer_application::location::merge::map::MergeBlockReason")]
+#[graphql(
+    rename_items = "SCREAMING_SNAKE_CASE",
+    remote = "scryer_application::location::merge::map::MergeBlockReason"
+)]
 pub enum LocationMergeBlockReasonValue {
     /// No destination episode carries the source episode's identity.
     UnmappedEpisode,
@@ -498,7 +528,10 @@ pub enum LocationMergeBlockReasonValue {
 
 /// The role a media file holds for one logical slot after a merge (FR-068).
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
-#[graphql(rename_items = "SCREAMING_SNAKE_CASE", remote = "scryer_application::location::merge::MergedMediaRole")]
+#[graphql(
+    rename_items = "SCREAMING_SNAKE_CASE",
+    remote = "scryer_application::location::merge::MergedMediaRole"
+)]
 pub enum LocationMergeMediaRoleValue {
     /// The file that represents the slot.
     Primary,
@@ -508,7 +541,10 @@ pub enum LocationMergeMediaRoleValue {
 
 /// Why a media file's role changed in a merge (FR-070).
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
-#[graphql(rename_items = "SCREAMING_SNAKE_CASE", remote = "scryer_application::location::merge::roles::RoleChangeReason")]
+#[graphql(
+    rename_items = "SCREAMING_SNAKE_CASE",
+    remote = "scryer_application::location::merge::roles::RoleChangeReason"
+)]
 pub enum LocationMergeRoleChangeReasonValue {
     /// The destination already had a primary for the slot, and a move never
     /// demotes one.
@@ -927,7 +963,10 @@ pub struct LocationRootScopeTargetInput {
 
 /// What the catalog can say about one entry found beneath a root (FR-027).
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
-#[graphql(rename_items = "SCREAMING_SNAKE_CASE", remote = "scryer_application::location::root_scope::RootContentClass")]
+#[graphql(
+    rename_items = "SCREAMING_SNAKE_CASE",
+    remote = "scryer_application::location::root_scope::RootContentClass"
+)]
 pub enum LocationRootContentClassValue {
     /// A file the catalog tracks as media for a title assigned to this root.
     Managed,

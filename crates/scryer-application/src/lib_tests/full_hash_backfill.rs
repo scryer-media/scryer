@@ -233,11 +233,14 @@ async fn a_bounded_run_resumes_from_its_persisted_cursor() {
         .expect("first bounded run");
     assert_eq!(first.hashed, 2);
     assert!(!first.completed_sweep);
-    assert_eq!(first.resume_after_id.as_deref(), Some(seeded[1].id.as_str()));
-    assert_eq!(hashed_ids(&media_files).await, vec![
-        seeded[0].id.clone(),
-        seeded[1].id.clone()
-    ]);
+    assert_eq!(
+        first.resume_after_id.as_deref(),
+        Some(seeded[1].id.as_str())
+    );
+    assert_eq!(
+        hashed_ids(&media_files).await,
+        vec![seeded[0].id.clone(), seeded[1].id.clone()]
+    );
 
     // A *fresh* use case, as a restart would produce: the cursor has to come
     // back from the settings store, not from in-process state.
@@ -307,12 +310,15 @@ async fn files_on_an_unavailable_mount_are_skipped_and_do_not_stall_the_sweep() 
         .expect("backfill run");
 
     assert_eq!(summary.skipped_unavailable, 1);
-    assert_eq!(summary.failed, 0, "an absent mount is a skip, not a failure");
+    assert_eq!(
+        summary.failed, 0,
+        "an absent mount is a skip, not a failure"
+    );
     assert_eq!(summary.hashed, 2);
-    assert_eq!(hashed_ids(&media_files).await, vec![
-        seeded[1].id.clone(),
-        seeded[2].id.clone()
-    ]);
+    assert_eq!(
+        hashed_ids(&media_files).await,
+        vec![seeded[1].id.clone(), seeded[2].id.clone()]
+    );
 }
 
 /// SC-007: "never touches a file owned by an active operation."
@@ -391,7 +397,10 @@ async fn a_file_hashed_since_the_queue_page_is_skipped() {
         .expect("backfill run");
 
     assert_eq!(summary.hashed, 0);
-    assert_eq!(summary.examined, 0, "the queue predicate already excluded it");
+    assert_eq!(
+        summary.examined, 0,
+        "the queue predicate already excluded it"
+    );
 }
 
 /// The throttle is real work, not a comment: production options carry a pause
@@ -549,7 +558,9 @@ async fn an_unchanged_file_keeps_its_persisted_full_hashes() {
     let tempdir = tempfile::tempdir().expect("tempdir");
     let (app, user, title, movie_path, file_id) =
         seed_scanned_movie_with_hashes(&tempdir, b"stable media bytes").await;
-    let before = content_hashes_of(&app, &file_id).await.expect("seeded hashes");
+    let before = content_hashes_of(&app, &file_id)
+        .await
+        .expect("seeded hashes");
 
     app.scan_title_library_with_discovered_files(
         &user,
@@ -585,8 +596,8 @@ async fn a_scan_never_computes_a_full_hash() {
         Arc::new(EmptySearchMetadataGateway),
     )
     .await;
-    let title = create_movie_title_with_folder(&app, &user, "Never Hashed", title_dir.as_path())
-        .await;
+    let title =
+        create_movie_title_with_folder(&app, &user, "Never Hashed", title_dir.as_path()).await;
 
     app.scan_title_library_with_discovered_files(
         &user,

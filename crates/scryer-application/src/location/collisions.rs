@@ -147,7 +147,9 @@ pub const CANONICAL_SIDECAR_NAMES: &[&str] = &["movie.nfo", "tvshow.nfo", "seaso
 /// artifact as `movie.nfo` to every media server that reads it.
 pub fn is_canonical_sidecar_name(name: &str) -> bool {
     let lowered = name.to_ascii_lowercase();
-    CANONICAL_SIDECAR_NAMES.iter().any(|known| *known == lowered)
+    CANONICAL_SIDECAR_NAMES
+        .iter()
+        .any(|known| *known == lowered)
 }
 
 /// Case-sensitivity rule of the destination filesystem, so previews match what
@@ -195,7 +197,11 @@ impl PathCaseRule {
     /// case-insensitive share on Linux) MUST pass their own rule instead: this
     /// is only the default when nothing better is known.
     pub fn platform_default() -> Self {
-        if cfg!(any(target_os = "macos", target_os = "ios", target_os = "windows")) {
+        if cfg!(any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "windows"
+        )) {
             Self::CaseInsensitive
         } else {
             Self::CaseSensitive
@@ -789,7 +795,11 @@ impl CollisionPlan {
 /// Whether a "collision" between a source path and a destination path is really
 /// the same filesystem entry — the moving title's own folder or file under a
 /// different case (spec Edge Cases, FR-090).
-pub fn is_self_collision(source_path: &str, destination_path: &str, case_rule: PathCaseRule) -> bool {
+pub fn is_self_collision(
+    source_path: &str,
+    destination_path: &str,
+    case_rule: PathCaseRule,
+) -> bool {
     let normalize = |value: &str| {
         let trimmed = value.trim_end_matches(['/', '\\']);
         case_rule.fold(trimmed).into_owned()
@@ -1147,7 +1157,10 @@ mod tests {
 
     #[test]
     fn a_missing_full_hash_is_never_treated_as_identical() {
-        let verdict = dedup_verdict(&facts(100, "sample", None), &facts(100, "sample", Some("x")));
+        let verdict = dedup_verdict(
+            &facts(100, "sample", None),
+            &facts(100, "sample", Some("x")),
+        );
         assert!(!verdict.is_identical());
         assert!(matches!(
             verdict,
@@ -1225,11 +1238,19 @@ mod tests {
         let plan = plan_collisions(
             &request(PathCaseRule::CaseSensitive)
                 .with_destination(vec![
-                    DestinationItem::media("Film.mkv", 100)
-                        .with_content(facts(100, "sample", Some("blake3-aaa"))),
+                    DestinationItem::media("Film.mkv", 100).with_content(facts(
+                        100,
+                        "sample",
+                        Some("blake3-aaa"),
+                    )),
                 ])
-                .with_incoming(vec![IncomingItem::media("m1", "Film.mkv", 100)
-                    .with_content(facts(100, "sample", Some("blake3-aaa")))]),
+                .with_incoming(vec![
+                    IncomingItem::media("m1", "Film.mkv", 100).with_content(facts(
+                        100,
+                        "sample",
+                        Some("blake3-aaa"),
+                    )),
+                ]),
         );
 
         let decision = plan.decision("m1").expect("decision");
@@ -1250,10 +1271,17 @@ mod tests {
     fn a_lookalike_without_a_full_hash_is_renamed_not_deduplicated() {
         let plan = plan_collisions(
             &request(PathCaseRule::CaseSensitive)
-                .with_destination(vec![DestinationItem::media("Film.mkv", 100)
-                    .with_content(facts(100, "sample", Some("blake3-aaa")))])
-                .with_incoming(vec![IncomingItem::media("m1", "Film.mkv", 100)
-                    .with_content(facts(100, "sample", None))]),
+                .with_destination(vec![
+                    DestinationItem::media("Film.mkv", 100).with_content(facts(
+                        100,
+                        "sample",
+                        Some("blake3-aaa"),
+                    )),
+                ])
+                .with_incoming(vec![
+                    IncomingItem::media("m1", "Film.mkv", 100)
+                        .with_content(facts(100, "sample", None)),
+                ]),
         );
 
         let decision = plan.decision("m1").expect("decision");
@@ -1271,10 +1299,20 @@ mod tests {
         let plan = plan_collisions(
             &request(PathCaseRule::CaseSensitive)
                 .with_recycle(RecycleAvailability::Disabled)
-                .with_destination(vec![DestinationItem::media("Film.mkv", 100)
-                    .with_content(facts(100, "sample", Some("blake3-aaa")))])
-                .with_incoming(vec![IncomingItem::media("m1", "Film.mkv", 100)
-                    .with_content(facts(100, "sample", Some("blake3-aaa")))]),
+                .with_destination(vec![
+                    DestinationItem::media("Film.mkv", 100).with_content(facts(
+                        100,
+                        "sample",
+                        Some("blake3-aaa"),
+                    )),
+                ])
+                .with_incoming(vec![
+                    IncomingItem::media("m1", "Film.mkv", 100).with_content(facts(
+                        100,
+                        "sample",
+                        Some("blake3-aaa"),
+                    )),
+                ]),
         );
 
         let decision = plan.decision("m1").expect("decision");
@@ -1295,15 +1333,27 @@ mod tests {
     fn a_rejected_source_also_preserves_rather_than_deletes() {
         for availability in [
             RecycleAvailability::Unavailable("base path is not writable".to_string()),
-            RecycleAvailability::RejectsSource("source is outside the allowlisted roots".to_string()),
+            RecycleAvailability::RejectsSource(
+                "source is outside the allowlisted roots".to_string(),
+            ),
         ] {
             let plan = plan_collisions(
                 &request(PathCaseRule::CaseSensitive)
                     .with_recycle(availability)
-                    .with_destination(vec![DestinationItem::media("Film.mkv", 100)
-                        .with_content(facts(100, "sample", Some("blake3-aaa")))])
-                    .with_incoming(vec![IncomingItem::media("m1", "Film.mkv", 100)
-                        .with_content(facts(100, "sample", Some("blake3-aaa")))]),
+                    .with_destination(vec![
+                        DestinationItem::media("Film.mkv", 100).with_content(facts(
+                            100,
+                            "sample",
+                            Some("blake3-aaa"),
+                        )),
+                    ])
+                    .with_incoming(vec![
+                        IncomingItem::media("m1", "Film.mkv", 100).with_content(facts(
+                            100,
+                            "sample",
+                            Some("blake3-aaa"),
+                        )),
+                    ]),
             );
             let decision = plan.decision("m1").expect("decision");
             assert_eq!(
@@ -1334,10 +1384,20 @@ mod tests {
     fn a_non_identical_media_collision_renames_the_incoming_file() {
         let plan = plan_collisions(
             &request(PathCaseRule::CaseSensitive)
-                .with_destination(vec![DestinationItem::media("Film.mkv", 100)
-                    .with_content(facts(100, "sample-dest", Some("blake3-dest")))])
-                .with_incoming(vec![IncomingItem::media("m1", "Film.mkv", 200)
-                    .with_content(facts(200, "sample-src", Some("blake3-src")))]),
+                .with_destination(vec![
+                    DestinationItem::media("Film.mkv", 100).with_content(facts(
+                        100,
+                        "sample-dest",
+                        Some("blake3-dest"),
+                    )),
+                ])
+                .with_incoming(vec![
+                    IncomingItem::media("m1", "Film.mkv", 200).with_content(facts(
+                        200,
+                        "sample-src",
+                        Some("blake3-src"),
+                    )),
+                ]),
         );
 
         let decision = plan.decision("m1").expect("decision");
@@ -1368,12 +1428,10 @@ mod tests {
 
     #[test]
     fn two_incoming_files_cannot_claim_the_same_name() {
-        let plan = plan_collisions(
-            &request(PathCaseRule::CaseSensitive).with_incoming(vec![
-                IncomingItem::media("m1", "Film.mkv", 100),
-                IncomingItem::media("m2", "Film.mkv", 200),
-            ]),
-        );
+        let plan = plan_collisions(&request(PathCaseRule::CaseSensitive).with_incoming(vec![
+            IncomingItem::media("m1", "Film.mkv", 100),
+            IncomingItem::media("m2", "Film.mkv", 200),
+        ]));
 
         assert_eq!(plan.decision("m1").expect("m1").final_name, "Film.mkv");
         let second = plan.decision("m2").expect("m2");
@@ -1383,12 +1441,10 @@ mod tests {
 
     #[test]
     fn decisions_come_back_in_input_order() {
-        let plan = plan_collisions(
-            &request(PathCaseRule::CaseSensitive).with_incoming(vec![
-                IncomingItem::companion("s1", "Film.en.srt", 1).with_companion_of("m1"),
-                IncomingItem::media("m1", "Film.mkv", 100),
-            ]),
-        );
+        let plan = plan_collisions(&request(PathCaseRule::CaseSensitive).with_incoming(vec![
+            IncomingItem::companion("s1", "Film.en.srt", 1).with_companion_of("m1"),
+            IncomingItem::media("m1", "Film.mkv", 100),
+        ]));
         let ids: Vec<&str> = plan.decisions.iter().map(|d| d.item_id.as_str()).collect();
         assert_eq!(ids, vec!["s1", "m1"]);
     }
@@ -1399,11 +1455,19 @@ mod tests {
     fn a_companion_follows_its_renamed_media_file() {
         let plan = plan_collisions(
             &request(PathCaseRule::CaseSensitive)
-                .with_destination(vec![DestinationItem::media("Film.mkv", 100)
-                    .with_content(facts(100, "dest", Some("blake3-dest")))])
+                .with_destination(vec![
+                    DestinationItem::media("Film.mkv", 100).with_content(facts(
+                        100,
+                        "dest",
+                        Some("blake3-dest"),
+                    )),
+                ])
                 .with_incoming(vec![
-                    IncomingItem::media("m1", "Film.mkv", 200)
-                        .with_content(facts(200, "src", Some("blake3-src"))),
+                    IncomingItem::media("m1", "Film.mkv", 200).with_content(facts(
+                        200,
+                        "src",
+                        Some("blake3-src"),
+                    )),
                     IncomingItem::companion("s1", "Film.en.srt", 10).with_companion_of("m1"),
                     IncomingItem::companion("a1", "Film-thumb.jpg", 20).with_companion_of("m1"),
                 ]),
@@ -1433,12 +1497,10 @@ mod tests {
 
     #[test]
     fn a_companion_stays_put_when_its_media_file_is_not_renamed() {
-        let plan = plan_collisions(
-            &request(PathCaseRule::CaseSensitive).with_incoming(vec![
-                IncomingItem::media("m1", "Film.mkv", 100),
-                IncomingItem::companion("s1", "Film.en.srt", 10).with_companion_of("m1"),
-            ]),
-        );
+        let plan = plan_collisions(&request(PathCaseRule::CaseSensitive).with_incoming(vec![
+            IncomingItem::media("m1", "Film.mkv", 100),
+            IncomingItem::companion("s1", "Film.en.srt", 10).with_companion_of("m1"),
+        ]));
         assert_eq!(plan.decision("s1").expect("s1").final_name, "Film.en.srt");
         assert_eq!(
             plan.decision("s1").expect("s1").disposition,
@@ -1450,10 +1512,20 @@ mod tests {
     fn an_identical_asset_deduplicates_through_the_recycle_rule() {
         let plan = plan_collisions(
             &request(PathCaseRule::CaseSensitive)
-                .with_destination(vec![DestinationItem::companion("poster.jpg", 10)
-                    .with_content(facts(10, "sample", Some("blake3-art")))])
-                .with_incoming(vec![IncomingItem::companion("a1", "poster.jpg", 10)
-                    .with_content(facts(10, "sample", Some("blake3-art")))]),
+                .with_destination(vec![
+                    DestinationItem::companion("poster.jpg", 10).with_content(facts(
+                        10,
+                        "sample",
+                        Some("blake3-art"),
+                    )),
+                ])
+                .with_incoming(vec![
+                    IncomingItem::companion("a1", "poster.jpg", 10).with_content(facts(
+                        10,
+                        "sample",
+                        Some("blake3-art"),
+                    )),
+                ]),
         );
 
         let decision = plan.decision("a1").expect("a1");
@@ -1471,10 +1543,20 @@ mod tests {
     fn a_canonical_sidecar_is_preserved_while_the_destination_stays_authoritative() {
         let plan = plan_collisions(
             &request(PathCaseRule::CaseSensitive)
-                .with_destination(vec![DestinationItem::companion("movie.nfo", 4)
-                    .with_content(facts(4, "dest", Some("blake3-dest")))])
-                .with_incoming(vec![IncomingItem::companion("n1", "movie.nfo", 7)
-                    .with_content(facts(7, "src", Some("blake3-src")))]),
+                .with_destination(vec![
+                    DestinationItem::companion("movie.nfo", 4).with_content(facts(
+                        4,
+                        "dest",
+                        Some("blake3-dest"),
+                    )),
+                ])
+                .with_incoming(vec![
+                    IncomingItem::companion("n1", "movie.nfo", 7).with_content(facts(
+                        7,
+                        "src",
+                        Some("blake3-src"),
+                    )),
+                ]),
         );
 
         let decision = plan.decision("n1").expect("n1");
@@ -1528,10 +1610,12 @@ mod tests {
         let plan = plan_collisions(
             &request(PathCaseRule::CaseInsensitive)
                 .with_destination(vec![
-                    DestinationItem::media("FILM.MKV", 100).with_path("/media/Movies/FILM.MKV")
+                    DestinationItem::media("FILM.MKV", 100).with_path("/media/Movies/FILM.MKV"),
                 ])
-                .with_incoming(vec![IncomingItem::media("m1", "Film.mkv", 100)
-                    .with_source_path("/media/movies/film.mkv")]),
+                .with_incoming(vec![
+                    IncomingItem::media("m1", "Film.mkv", 100)
+                        .with_source_path("/media/movies/film.mkv"),
+                ]),
         );
 
         let decision = plan.decision("m1").expect("m1");
@@ -1546,10 +1630,14 @@ mod tests {
     fn a_different_titles_path_under_the_same_name_is_still_a_collision() {
         let plan = plan_collisions(
             &request(PathCaseRule::CaseInsensitive)
-                .with_destination(vec![DestinationItem::media("FILM.MKV", 100)
-                    .with_path("/media/Movies/Other/FILM.MKV")])
-                .with_incoming(vec![IncomingItem::media("m1", "Film.mkv", 100)
-                    .with_source_path("/media/movies/film.mkv")]),
+                .with_destination(vec![
+                    DestinationItem::media("FILM.MKV", 100)
+                        .with_path("/media/Movies/Other/FILM.MKV"),
+                ])
+                .with_incoming(vec![
+                    IncomingItem::media("m1", "Film.mkv", 100)
+                        .with_source_path("/media/movies/film.mkv"),
+                ]),
         );
         assert_eq!(
             plan.decision("m1").expect("m1").disposition,

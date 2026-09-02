@@ -352,7 +352,10 @@ mod tests {
             &[],
             false,
         );
-        assert_eq!(plan.rows, vec![row("file-in", "d-e1", MergedMediaRole::Primary)]);
+        assert_eq!(
+            plan.rows,
+            vec![row("file-in", "d-e1", MergedMediaRole::Primary)]
+        );
         assert!(plan.role_changes.is_empty());
         assert_eq!(
             plan.newly_covered_episodes,

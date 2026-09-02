@@ -189,13 +189,12 @@ async fn the_upgrade_leaves_roots_that_were_never_path_derived_in_place() {
     );
     // The alias is still recorded, so a caller holding the path-derived id can
     // still find the root.
-    let mapped: String = sqlx::query_scalar(
-        "SELECT root_id FROM library_root_id_remaps WHERE legacy_root_id = ?1",
-    )
-    .bind(path_derived_id("/data/movies"))
-    .fetch_one(&pool)
-    .await
-    .expect("alias row should exist for the seeded root");
+    let mapped: String =
+        sqlx::query_scalar("SELECT root_id FROM library_root_id_remaps WHERE legacy_root_id = ?1")
+            .bind(path_derived_id("/data/movies"))
+            .fetch_one(&pool)
+            .await
+            .expect("alias row should exist for the seeded root");
     assert_eq!(mapped, "canonical_root_for_movie_default_library");
 }
 
@@ -354,10 +353,7 @@ async fn the_upgrade_creates_the_location_operation_tables() {
     .expect("verification should load");
     assert_eq!(plain.get::<Option<String>, _>("fallback_reason"), None);
     assert_eq!(plain.get::<Option<String>, _>("failure_reason"), None);
-    assert_eq!(
-        plain.get::<String, _>("detail"),
-        "verified (full)"
-    );
+    assert_eq!(plain.get::<String, _>("detail"), "verified (full)");
 
     // Likewise a checkpoint's warning note, separate from blocked/failed.
     let checkpoint = sqlx::query(
@@ -574,10 +570,12 @@ async fn postgres_upgrade_rekeys_roots_and_creates_the_location_tables() {
 
         // Upgrade through the real service bootstrap, the same path production
         // takes on boot, rather than reaching into the migration runner.
-        let services =
-            crate::postgres::PostgresServices::new_with_mode(&scoped_url, crate::MigrationMode::Apply)
-                .await
-                .expect("synthetic-root-id postgres upgrade should apply");
+        let services = crate::postgres::PostgresServices::new_with_mode(
+            &scoped_url,
+            crate::MigrationMode::Apply,
+        )
+        .await
+        .expect("synthetic-root-id postgres upgrade should apply");
         drop(services);
 
         let expected_id = synthetic_root_id_from_legacy_id(&legacy_id);
@@ -596,12 +594,13 @@ async fn postgres_upgrade_rekeys_roots_and_creates_the_location_tables() {
                 .expect("legacy id column should load");
         assert_eq!(retained, legacy_id);
 
-        let mapped: String =
-            sqlx::query_scalar("SELECT root_id FROM library_root_id_remaps WHERE legacy_root_id = $1")
-                .bind(&legacy_id)
-                .fetch_one(&pool)
-                .await
-                .expect("remap row should exist");
+        let mapped: String = sqlx::query_scalar(
+            "SELECT root_id FROM library_root_id_remaps WHERE legacy_root_id = $1",
+        )
+        .bind(&legacy_id)
+        .fetch_one(&pool)
+        .await
+        .expect("remap row should exist");
         assert_eq!(mapped, expected_id);
 
         // The seeded canonical root keeps its id on this engine too.
@@ -615,13 +614,12 @@ async fn postgres_upgrade_rekeys_roots_and_creates_the_location_tables() {
         assert_eq!(seeded, 1);
 
         // 0205 columns exist and are nullable.
-        let hashed: Option<String> = sqlx::query_scalar(
-            "SELECT full_blake3 FROM media_files LIMIT 1",
-        )
-        .fetch_optional(&pool)
-        .await
-        .expect("full_blake3 column should exist")
-        .flatten();
+        let hashed: Option<String> =
+            sqlx::query_scalar("SELECT full_blake3 FROM media_files LIMIT 1")
+                .fetch_optional(&pool)
+                .await
+                .expect("full_blake3 column should exist")
+                .flatten();
         assert_eq!(hashed, None);
 
         // 0206 tables exist, including the single-owner registry index.

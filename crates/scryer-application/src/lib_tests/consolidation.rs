@@ -21,10 +21,6 @@
 
 use super::*;
 
-use crate::location::root_scope::{PlannedRootScope, plan_reasons, refusal_codes};
-use crate::location::root_scope_execution::{
-    RootScopeCall, RootScopeCallDestination, StartRootScopeRequest,
-};
 use crate::location::model::{
     LocationExecutionMode, LocationOperation, LocationOperationState, LocationOperationType,
     VerificationDepth,
@@ -34,6 +30,10 @@ use crate::location::preview::{
     LOCATION_TYPED_CONFIRMATION_PHRASE, PlanConfirmationRequest, PlanItemKind,
 };
 use crate::location::root_scope::retirement_blockers;
+use crate::location::root_scope::{PlannedRootScope, plan_reasons, refusal_codes};
+use crate::location::root_scope_execution::{
+    RootScopeCall, RootScopeCallDestination, StartRootScopeRequest,
+};
 use crate::location::test_support::{
     InMemoryLocationOperationStore, InMemoryTitleMergeStore, queued_operation,
     title_boundary_cancel_check,
@@ -743,7 +743,10 @@ async fn an_overlapping_title_merges_into_the_destination_title_it_shares_an_ide
         .destination()
         .join("Arrival (2016)")
         .join("Arrival.2016.720p.mkv");
-    assert!(landed.exists(), "the incoming copy did not reach the merge target");
+    assert!(
+        landed.exists(),
+        "the incoming copy did not reach the merge target"
+    );
     assert!(!fixture.source().join("Arrival (2016)").exists());
     assert!(
         fixture.title_if_present(&source.id).await.is_none(),
@@ -766,7 +769,13 @@ async fn an_overlapping_title_merges_into_the_destination_title_it_shares_an_ide
 async fn consolidating_the_default_root_hands_the_default_to_the_destination() {
     let fixture = ConsolidationFixture::new(true).await;
     fixture
-        .seed_source_title("Moved", 2020, "Moved (2020)", &[("Moved.mkv", b"bytes")], Vec::new())
+        .seed_source_title(
+            "Moved",
+            2020,
+            "Moved (2020)",
+            &[("Moved.mkv", b"bytes")],
+            Vec::new(),
+        )
         .await;
 
     let preview = fixture.preview().await;
@@ -792,13 +801,20 @@ async fn consolidating_the_default_root_hands_the_default_to_the_destination() {
     let roots = fixture.roots().await;
     assert_eq!(roots.len(), 1, "the source root was retired");
     assert_eq!(roots[0].id, fixture.destination_root_id);
-    assert!(roots[0].is_default, "FR-022: the destination became default");
+    assert!(
+        roots[0].is_default,
+        "FR-022: the destination became default"
+    );
 
     // The legacy per-facet mirror follows the surviving roots, or scanning and
     // import would keep pointing at a root the library no longer has.
     let mirrored = fixture
         .app
-        .read_setting_string_value_for_scope(crate::SETTINGS_SCOPE_MEDIA, "movies.root_folders", None)
+        .read_setting_string_value_for_scope(
+            crate::SETTINGS_SCOPE_MEDIA,
+            "movies.root_folders",
+            None,
+        )
         .await
         .expect("read the mirrored setting")
         .expect("the mirror was written");
@@ -812,7 +828,13 @@ async fn consolidating_the_default_root_hands_the_default_to_the_destination() {
 async fn consolidating_a_non_default_root_leaves_the_library_default_alone() {
     let fixture = ConsolidationFixture::new(false).await;
     fixture
-        .seed_source_title("Moved", 2020, "Moved (2020)", &[("Moved.mkv", b"bytes")], Vec::new())
+        .seed_source_title(
+            "Moved",
+            2020,
+            "Moved (2020)",
+            &[("Moved.mkv", b"bytes")],
+            Vec::new(),
+        )
         .await;
 
     let preview = fixture.preview().await;
@@ -854,7 +876,11 @@ async fn the_layout_is_preserved_and_the_source_root_configuration_is_retired_la
 
     let preview = fixture.preview().await;
     assert!(preview.retirement.empty_directories_only);
-    assert!(preview.retirement.requires_verification_before_source_removal);
+    assert!(
+        preview
+            .retirement
+            .requires_verification_before_source_removal
+    );
     assert!(preview.retirement.permits_source_removal());
     assert!(
         preview
@@ -966,7 +992,10 @@ async fn an_identical_file_deduplicates_through_the_recycle_bin() {
     );
     assert_eq!(operation.counters.dedups, 1);
 
-    assert!(!source_file.exists(), "the redundant source copy stayed put");
+    assert!(
+        !source_file.exists(),
+        "the redundant source copy stayed put"
+    );
     assert_eq!(
         std::fs::read(fixture.destination().join("Twin (2015)").join("Twin.mkv"))
             .expect("read the surviving copy"),
@@ -1081,7 +1110,13 @@ async fn an_identical_file_is_preserved_and_renamed_when_the_recycle_bin_is_off(
 async fn unexplained_source_content_keeps_the_source_root_configured() {
     let fixture = ConsolidationFixture::new(true).await;
     let title = fixture
-        .seed_source_title("Tidy", 2018, "Tidy (2018)", &[("Tidy.mkv", b"tidy")], Vec::new())
+        .seed_source_title(
+            "Tidy",
+            2018,
+            "Tidy (2018)",
+            &[("Tidy.mkv", b"tidy")],
+            Vec::new(),
+        )
         .await;
     let stray = fixture.source().join("someone-elses-notes.txt");
     std::fs::write(&stray, b"not Scryer's").expect("write stray file");
@@ -1200,7 +1235,10 @@ async fn a_recycle_bin_under_the_source_root_is_left_where_it_is() {
         "the warning has to name the bin as the reason the root was kept: {detail}"
     );
 
-    assert!(source_bin.exists(), "the bin was moved rather than left alone");
+    assert!(
+        source_bin.exists(),
+        "the bin was moved rather than left alone"
+    );
     assert!(
         !fixture.destination().join(".scryer-recycle").exists(),
         "nothing put a bin under the destination root"
@@ -1216,10 +1254,22 @@ async fn a_recycle_bin_under_the_source_root_is_left_where_it_is() {
 async fn a_restart_resumes_a_consolidation_and_retires_the_root_exactly_once() {
     let fixture = ConsolidationFixture::new(false).await;
     let first = fixture
-        .seed_source_title("Resume One", 2012, "Resume One (2012)", &[("One.mkv", b"one")], Vec::new())
+        .seed_source_title(
+            "Resume One",
+            2012,
+            "Resume One (2012)",
+            &[("One.mkv", b"one")],
+            Vec::new(),
+        )
         .await;
     let second = fixture
-        .seed_source_title("Resume Two", 2011, "Resume Two (2011)", &[("Two.mkv", b"two")], Vec::new())
+        .seed_source_title(
+            "Resume Two",
+            2011,
+            "Resume Two (2011)",
+            &[("Two.mkv", b"two")],
+            Vec::new(),
+        )
         .await;
 
     let preview = fixture.preview().await;
@@ -1366,10 +1416,22 @@ async fn files_already_there_is_refused_as_a_consolidation_mode() {
 async fn a_blocked_title_is_named_and_stops_the_consolidation_until_it_is_repaired() {
     let fixture = ConsolidationFixture::new(false).await;
     let moving = fixture
-        .seed_source_title("Free", 2020, "Free (2020)", &[("Free.mkv", b"free")], Vec::new())
+        .seed_source_title(
+            "Free",
+            2020,
+            "Free (2020)",
+            &[("Free.mkv", b"free")],
+            Vec::new(),
+        )
         .await;
     let blocked = fixture
-        .seed_source_title("Held", 2019, "Held (2019)", &[("Held.mkv", b"held")], Vec::new())
+        .seed_source_title(
+            "Held",
+            2019,
+            "Held (2019)",
+            &[("Held.mkv", b"held")],
+            Vec::new(),
+        )
         .await;
 
     // FR-084: another location operation already owns it.
@@ -1492,7 +1554,9 @@ async fn a_consolidation_owns_both_roots_and_every_title_the_plan_touches() {
             Vec::new(),
         )
         .await;
-    let fileless = fixture.seed_fileless_source_title("No Files Here", 2007).await;
+    let fileless = fixture
+        .seed_fileless_source_title("No Files Here", 2007)
+        .await;
 
     let preview = fixture.preview().await;
     let operation_id = "operation-consolidation-owns-both-sides";
@@ -1581,7 +1645,13 @@ async fn a_consolidation_owns_both_roots_and_every_title_the_plan_touches() {
     // Root reconfiguration underneath the operation is refused too.
     let repointed = fixture
         .app
-        .update_library(&fixture.user, &fixture.library_id, None, Some(Vec::new()), None)
+        .update_library(
+            &fixture.user,
+            &fixture.library_id,
+            None,
+            Some(Vec::new()),
+            None,
+        )
         .await;
     let Err(AppError::Validation(message)) = repointed else {
         panic!("retiring a held root must be refused: {repointed:?}");
@@ -1602,7 +1672,13 @@ async fn a_consolidation_owns_both_roots_and_every_title_the_plan_touches() {
 async fn a_consolidation_requires_the_stronger_typed_confirmation() {
     let fixture = ConsolidationFixture::new(false).await;
     fixture
-        .seed_source_title("Typed", 2016, "Typed (2016)", &[("Typed.mkv", b"typed")], Vec::new())
+        .seed_source_title(
+            "Typed",
+            2016,
+            "Typed (2016)",
+            &[("Typed.mkv", b"typed")],
+            Vec::new(),
+        )
         .await;
 
     let preview = fixture.preview().await;
@@ -1660,7 +1736,13 @@ async fn a_consolidation_verifies_at_full_depth_whatever_the_import_preference_s
         .await
         .expect("choose quick verification");
     fixture
-        .seed_source_title("Depth", 2008, "Depth (2008)", &[("Depth.mkv", b"depth")], Vec::new())
+        .seed_source_title(
+            "Depth",
+            2008,
+            "Depth (2008)",
+            &[("Depth.mkv", b"depth")],
+            Vec::new(),
+        )
         .await;
 
     let preview = fixture.preview().await;

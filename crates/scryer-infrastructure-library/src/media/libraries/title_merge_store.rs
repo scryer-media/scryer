@@ -137,17 +137,15 @@ impl TitleMergeRepository for TitleMergeStore {
             destination_file_episode_rows: load_file_episode_rows(exec(), destination_title_id)
                 .await?,
             source_title_slot_files: load_title_slot_files(exec(), source_title_id).await?,
-            destination_title_slot_has_primary: load_title_slot_files(
-                exec(),
-                destination_title_id,
-            )
-            .await?
-            .iter()
-            .any(|file| file.role == MergedMediaRole::Primary),
+            destination_title_slot_has_primary: load_title_slot_files(exec(), destination_title_id)
+                .await?
+                .iter()
+                .any(|file| file.role == MergedMediaRole::Primary),
             source_file_link_ids: load_file_link_ids(exec(), source_title_id).await?,
             history_episode_ids,
             history_collection_ids,
-            media_file_count: count_rows(exec(), "media_files", "title_id", source_title_id).await?,
+            media_file_count: count_rows(exec(), "media_files", "title_id", source_title_id)
+                .await?,
             history_row_count: count_history_rows(exec(), source_title_id).await?,
             dropped_record_count,
             resumable_operations_holding_source: load_resumable_operations(

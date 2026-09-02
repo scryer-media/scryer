@@ -64,16 +64,16 @@ use crate::location::executor::{
 use crate::location::hardlinks::{HardlinkFact, hardlink_warnings};
 use crate::location::identity::DestinationIdentityOutcome;
 use crate::location::merge::summary::MergePreviewSummary;
-use crate::location::transfer_effects::{
-    FacetConversion, SettingDisposition, TitleAssociationFacts, collection_statement,
-    series_movie_link_statement,
-};
 use crate::location::model::{
     LocationExecutionMode, LocationOperationType, TitleCheckpointPlacement, VerificationDepth,
 };
 use crate::location::preview::{
     FreeSpaceEstimate, LocationPlan, LocationPlanBuilder, LocationPlanHeader, PlanItem,
     PlanItemKind,
+};
+use crate::location::transfer_effects::{
+    FacetConversion, SettingDisposition, TitleAssociationFacts, collection_statement,
+    series_movie_link_statement,
 };
 use crate::stored_paths::path_to_stored_string;
 
@@ -410,11 +410,9 @@ impl RootMoveExecutionPlan {
     /// Bytes this plan will write at the destination, excluding proven
     /// duplicates that are recycled rather than copied.
     pub fn moved_bytes(&self) -> u64 {
-        self.titles
-            .iter()
-            .fold(0_u64, |total, title| {
-                total.saturating_add(title.bytes_total())
-            })
+        self.titles.iter().fold(0_u64, |total, title| {
+            total.saturating_add(title.bytes_total())
+        })
     }
 }
 
@@ -576,15 +574,15 @@ impl PlannedRootMove {
 pub fn build_root_move_plan(request: &RootMovePlanRequest) -> PlannedRootMove {
     let mode = execution_mode_for(request.mode, &request.titles);
     let header = LocationPlanHeader::new(operation_type_for(mode, &request.titles), mode)
-    .with_source(
-        request.source_library_id.clone(),
-        request.source_root_id.clone(),
-    )
-    .with_destination(
-        request.destination_library_id.clone(),
-        request.destination_root_id.clone(),
-    )
-    .with_selection(request.selection.clone());
+        .with_source(
+            request.source_library_id.clone(),
+            request.source_root_id.clone(),
+        )
+        .with_destination(
+            request.destination_library_id.clone(),
+            request.destination_root_id.clone(),
+        )
+        .with_selection(request.selection.clone());
 
     let mut builder = LocationPlanBuilder::new(header);
     builder.classification(request.classification);
@@ -702,10 +700,9 @@ pub(super) fn plan_title(
                 PlanItem::new(PlanItemKind::Blocked)
                     .with_title(draft.title_id.clone())
                     .with_detail(
-                        draft
-                            .blocked_reason
-                            .clone()
-                            .unwrap_or_else(|| format!("\"{}\" needs a decision", draft.title_name)),
+                        draft.blocked_reason.clone().unwrap_or_else(|| {
+                            format!("\"{}\" needs a decision", draft.title_name)
+                        }),
                     ),
             );
             // FR-066: an unmappable merge is refused per *record*, and the
@@ -756,7 +753,10 @@ pub(super) fn plan_title(
                 class: draft.class,
                 source_library_id: draft.source_library_id.clone(),
                 source_root_id: draft.source_root_id.clone(),
-                source_folder_path: draft.source_folder_path.as_deref().map(path_to_stored_string),
+                source_folder_path: draft
+                    .source_folder_path
+                    .as_deref()
+                    .map(path_to_stored_string),
                 destination_library_id: draft.destination_library_id.clone(),
                 destination_root_id: draft.destination_root_id.clone(),
                 // A fileless title keeps no folder: there is nothing on disk to
@@ -938,7 +938,10 @@ pub(super) fn plan_title(
                 renamed_destinations.push(destination_display.clone());
                 let mut renamed = PlanItem::new(PlanItemKind::Rename)
                     .with_title(draft.title_id.clone())
-                    .with_paths(Some(source_display.clone()), Some(destination_display.clone()))
+                    .with_paths(
+                        Some(source_display.clone()),
+                        Some(destination_display.clone()),
+                    )
                     .with_size(file.size_bytes)
                     .with_detail(format!(
                         "renamed to \"{final_name}\" so destination content keeps its name"
@@ -962,7 +965,10 @@ pub(super) fn plan_title(
 
         let mut item = PlanItem::new(PlanItemKind::Move)
             .with_title(draft.title_id.clone())
-            .with_paths(Some(source_display.clone()), Some(destination_display.clone()))
+            .with_paths(
+                Some(source_display.clone()),
+                Some(destination_display.clone()),
+            )
             .with_size(file.size_bytes);
         item.media_file_id = file.media_file_id.clone();
         if let Some(same_volume) = draft.same_volume {
@@ -1545,7 +1551,10 @@ pub(super) fn same_named_destination_warning(
 ) -> Option<String> {
     let outcome = identity?;
     let title_id = outcome.same_name_title_id.as_deref()?;
-    let name = outcome.same_name_title_name.as_deref().unwrap_or(title_name);
+    let name = outcome
+        .same_name_title_name
+        .as_deref()
+        .unwrap_or(title_name);
     Some(format!(
         "the destination {scope} already holds a title called \"{name}\" ({title_id}); it shares no metadata identity with \"{title_name}\", so the two are not merged and both will exist there"
     ))
@@ -1637,7 +1646,9 @@ pub(super) fn rebase(path: &Path, source_root: &Path, destination_root: &Path) -
 
 /// Reduce a selection classification to the per-title classes the planner
 /// consumes, keyed by title id.
-pub fn classes_by_title(classification: &SelectionClassification) -> BTreeMap<String, TitleLocationClass> {
+pub fn classes_by_title(
+    classification: &SelectionClassification,
+) -> BTreeMap<String, TitleLocationClass> {
     classification
         .titles
         .iter()
@@ -1758,7 +1769,10 @@ mod tests {
             item.reason_code.as_deref(),
             Some(plan_reasons::FOLDER_NAME_REPAIR)
         );
-        assert_eq!(item.destination_path.as_deref(), Some("/b/Some Movie (2024)"));
+        assert_eq!(
+            item.destination_path.as_deref(),
+            Some("/b/Some Movie (2024)")
+        );
         assert!(
             item.detail
                 .as_deref()
@@ -1825,7 +1839,10 @@ mod tests {
             execution.files[0].destination_path,
             "/b/Some Show/Season 01/S01E01.mkv"
         );
-        assert_eq!(execution.files[1].destination_path, "/b/Some Show/poster.jpg");
+        assert_eq!(
+            execution.files[1].destination_path,
+            "/b/Some Show/poster.jpg"
+        );
         // Deepest first, so a parent is only pruned after its children.
         assert_eq!(
             execution.prune_directories,
@@ -1947,7 +1964,10 @@ mod tests {
         assert_eq!(planned.plan.counts.for_kind(PlanItemKind::Dedup), 0);
         assert_eq!(planned.plan.counts.for_kind(PlanItemKind::Rename), 1);
         assert!(execution.deduplicated_sources.is_empty());
-        assert_ne!(execution.files[0].destination_path, "/b/Some Movie/movie.mkv");
+        assert_ne!(
+            execution.files[0].destination_path,
+            "/b/Some Movie/movie.mkv"
+        );
         // The rename reaches the runner as an outcome to count (FR-091).
         assert_eq!(
             execution.renamed_destinations,
@@ -2128,8 +2148,7 @@ mod tests {
         let headline = details_for(&planned, plan_reasons::FACET_CONVERSION);
         assert_eq!(headline.len(), 1, "the conversion is stated exactly once");
         assert!(
-            headline[0]
-                .contains(crate::location::transfer_effects::FILES_KEEP_THEIR_NAMES),
+            headline[0].contains(crate::location::transfer_effects::FILES_KEEP_THEIR_NAMES),
             "FR-058's statement rides the conversion item: {}",
             headline[0]
         );
@@ -2242,7 +2261,10 @@ mod tests {
 
         let execution = planned.execution.title("title-1").expect("title planned");
         assert_eq!(execution.converted_facet, Some(MediaFacet::Anime));
-        assert_eq!(details_for(&planned, plan_reasons::FACET_CONVERSION).len(), 1);
+        assert_eq!(
+            details_for(&planned, plan_reasons::FACET_CONVERSION).len(),
+            1
+        );
     }
 
     // ── US7 ─────────────────────────────────────────────────────────────────
@@ -2337,13 +2359,19 @@ mod tests {
         assert_eq!(wins.len(), 1);
         assert!(wins[0].contains("4 media file record(s)"));
         assert!(wins[0].contains("9 history row(s)"));
-        let dropped =
-            details_of(&planned, PlanItemKind::Warning, plan_reasons::MERGE_DROPPED_DATA);
+        let dropped = details_of(
+            &planned,
+            PlanItemKind::Warning,
+            plan_reasons::MERGE_DROPPED_DATA,
+        );
         assert_eq!(dropped.len(), 1);
         assert!(dropped[0].contains("2 record(s)"));
         // FR-070: the demotion is a line item of its own.
-        let roles =
-            details_of(&planned, PlanItemKind::RoleChange, plan_reasons::MERGE_ROLE_CHANGE);
+        let roles = details_of(
+            &planned,
+            PlanItemKind::RoleChange,
+            plan_reasons::MERGE_ROLE_CHANGE,
+        );
         assert_eq!(roles.len(), 1);
         assert!(roles[0].contains("additional"));
 
@@ -2393,8 +2421,11 @@ mod tests {
         assert!(planned.plan.blocks_start());
         assert!(planned.execution.titles.is_empty());
         assert_eq!(planned.execution.unresolved_titles, 1);
-        let named =
-            details_of(&planned, PlanItemKind::Blocked, plan_reasons::MERGE_RECORDS_UNMAPPED);
+        let named = details_of(
+            &planned,
+            PlanItemKind::Blocked,
+            plan_reasons::MERGE_RECORDS_UNMAPPED,
+        );
         assert_eq!(named.len(), 1);
         assert!(named[0].contains("wanted_items"));
         assert!(named[0].contains("s-e2"));

@@ -1176,9 +1176,7 @@ async fn refresh_media_server_paths(
         .as_deref()
         .map(str::trim)
         .filter(|key| !key.is_empty())
-        .ok_or_else(|| {
-            AppError::Validation("media server refresh requires an API key".into())
-        })?;
+        .ok_or_else(|| AppError::Validation("media server refresh requires an API key".into()))?;
 
     match connection.provider {
         MediaServerProvider::Jellyfin | MediaServerProvider::Emby => {
@@ -1223,9 +1221,7 @@ async fn refresh_emby_paths(
         .json(&body)
         .send()
         .await
-        .map_err(|error| {
-            AppError::Repository(format!("media server refresh failed: {error}"))
-        })?;
+        .map_err(|error| AppError::Repository(format!("media server refresh failed: {error}")))?;
     if !response.status().is_success() {
         return Err(AppError::Repository(format!(
             "media server refresh failed with status {}",
@@ -1273,9 +1269,7 @@ async fn refresh_plex_paths(
             .header("X-Plex-Token", token)
             .send()
             .await
-            .map_err(|error| {
-                AppError::Repository(format!("Plex partial scan failed: {error}"))
-            })?;
+            .map_err(|error| AppError::Repository(format!("Plex partial scan failed: {error}")))?;
         if !response.status().is_success() {
             return Err(AppError::Repository(format!(
                 "Plex partial scan failed with status {}",

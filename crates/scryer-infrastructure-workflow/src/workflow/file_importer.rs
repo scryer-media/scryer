@@ -2776,9 +2776,7 @@ impl FileImporter for FsFileImporter {
             apply_file_permissions_best_effort(&path, &permissions);
         })
         .await
-        .map_err(|error| {
-            AppError::Repository(format!("permission task panicked: {error}"))
-        })
+        .map_err(|error| AppError::Repository(format!("permission task panicked: {error}")))
     }
 
     async fn apply_placed_directory_permissions(
@@ -2792,9 +2790,7 @@ impl FileImporter for FsFileImporter {
             apply_directory_permissions_best_effort(&path, &permissions);
         })
         .await
-        .map_err(|error| {
-            AppError::Repository(format!("permission task panicked: {error}"))
-        })
+        .map_err(|error| AppError::Repository(format!("permission task panicked: {error}")))
     }
 
     async fn snapshot_import_source(&self, source: &Path) -> AppResult<ImportSourceSnapshot> {
@@ -3235,7 +3231,6 @@ impl FsFileImporter {
             }
         }
     }
-
 }
 
 #[cfg(test)]
@@ -3978,7 +3973,6 @@ mod tests {
             "a hardlink copies no bytes, so it proves and hashes nothing"
         );
     }
-
 
     #[test]
     fn move_mode_cross_device_fallback_copies_then_cleanup_deletes_source() {

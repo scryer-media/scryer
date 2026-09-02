@@ -103,11 +103,7 @@ impl LocationMutations {
             fingerprint: PlanFingerprint(input.plan_fingerprint),
             typed_confirmation: input.typed_confirmation,
         };
-        let target = start_location_target(
-            input.title_ids,
-            input.destination,
-            input.root_scope,
-        )?;
+        let target = start_location_target(input.title_ids, input.destination, input.root_scope)?;
         let accepted = match target {
             StartLocationTarget::Selection {
                 title_ids,

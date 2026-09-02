@@ -12,6 +12,7 @@ use std::sync::Mutex;
 
 use async_trait::async_trait;
 
+use crate::AppResult;
 use crate::location::model::{
     FileVerificationRecord, LocationOperation, LocationOperationState, TitleCheckpoint,
 };
@@ -20,7 +21,6 @@ use crate::ports::{
     LocationOperationProgress, LocationOperationRepository, LocationOwnershipClaim,
     LocationOwnershipOutcome,
 };
-use crate::AppResult;
 
 #[derive(Default)]
 struct State {
@@ -415,10 +415,7 @@ impl LocationOperationRepository for InMemoryLocationOperationStore {
         Ok((before - state.ownership.len()) as u64)
     }
 
-    async fn location_ownership_holder(
-        &self,
-        entity: &OwnedEntity,
-    ) -> AppResult<Option<String>> {
+    async fn location_ownership_holder(&self, entity: &OwnedEntity) -> AppResult<Option<String>> {
         Ok(self
             .state
             .lock()
@@ -472,7 +469,8 @@ pub(crate) struct InMemoryTitleMergeStore {
     catalog: Mutex<Option<MergeCatalogHandles>>,
     /// Snapshot overrides keyed `(source, destination)`, for a test that needs
     /// the FR-066 refusal without seeding a whole episodic catalog.
-    snapshots: Mutex<BTreeMap<(String, String), crate::location::merge::engine::MergeCatalogSnapshot>>,
+    snapshots:
+        Mutex<BTreeMap<(String, String), crate::location::merge::engine::MergeCatalogSnapshot>>,
     executed: Mutex<Vec<crate::location::merge::engine::MergePlan>>,
     /// Operation ids Group 0 was asked to exclude from the OQ7 check.
     excluded_operations: Mutex<Vec<Option<String>>>,
@@ -508,7 +506,10 @@ impl InMemoryTitleMergeStore {
         snapshot: crate::location::merge::engine::MergeCatalogSnapshot,
     ) {
         self.snapshots.lock().expect("lock").insert(
-            (source_title_id.to_string(), destination_title_id.to_string()),
+            (
+                source_title_id.to_string(),
+                destination_title_id.to_string(),
+            ),
             snapshot,
         );
     }
@@ -574,7 +575,9 @@ impl crate::location::merge::engine::TitleMergeRepository for InMemoryTitleMerge
             .get_by_id(destination_title_id)
             .await?
             .ok_or_else(|| crate::AppError::NotFound(format!("title {destination_title_id}")))?;
-        let source_media = media_files.list_media_files_for_title(source_title_id).await?;
+        let source_media = media_files
+            .list_media_files_for_title(source_title_id)
+            .await?;
 
         Ok(crate::location::merge::engine::MergeCatalogSnapshot {
             source_title_id: source_title_id.to_string(),

@@ -216,7 +216,8 @@ fn renames_for(title: &RootMoveTitleExecution, done: bool) -> Vec<RenamedAsset> 
                 .iter()
                 .find(|file| &file.destination_path == destination_path);
             let destination_name = crate::stored_paths::stored_file_name(destination_path);
-            let source_name = file.map(|file| crate::stored_paths::stored_file_name(&file.source_path));
+            let source_name =
+                file.map(|file| crate::stored_paths::stored_file_name(&file.source_path));
             RenamedAsset {
                 provenance_label: collision_provenance_label(
                     source_name.as_deref(),
@@ -243,7 +244,9 @@ fn dedups_for(title: &RootMoveTitleExecution, done: bool) -> Vec<DeduplicatedAss
             DeduplicatedAsset {
                 source_name: crate::stored_paths::stored_file_name(source_path),
                 source_path: source_path.clone(),
-                surviving_name: surviving_path.as_deref().map(crate::stored_paths::stored_file_name),
+                surviving_name: surviving_path
+                    .as_deref()
+                    .map(crate::stored_paths::stored_file_name),
                 surviving_path,
                 done,
             }

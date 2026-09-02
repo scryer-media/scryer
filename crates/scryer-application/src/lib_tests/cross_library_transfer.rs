@@ -24,17 +24,17 @@
 use super::*;
 
 use crate::location::classify::{DestinationRequest, TitleLocationClass, reason_codes};
+use crate::location::merge::MergedMediaRole;
+use crate::location::merge::engine::MergeCatalogSnapshot;
+use crate::location::merge::map::EpisodeIdentityFacts;
+use crate::location::merge::roles::FileEpisodeRoleRow;
+use crate::location::model::TitleCheckpointState;
 use crate::location::model::{
     LocationExecutionMode, LocationOperation, LocationOperationState, LocationOperationType,
 };
 use crate::location::operations::{RootMovePreviewRequest, StartRootMoveRequest};
 use crate::location::preview::{PlanConfirmationRequest, PlanItemKind};
 use crate::location::root_move::plan_reasons;
-use crate::location::merge::MergedMediaRole;
-use crate::location::merge::engine::MergeCatalogSnapshot;
-use crate::location::merge::map::EpisodeIdentityFacts;
-use crate::location::merge::roles::FileEpisodeRoleRow;
-use crate::location::model::TitleCheckpointState;
 use crate::location::test_support::{
     InMemoryLocationOperationStore, InMemoryTitleMergeStore, queued_operation,
     title_boundary_cancel_check,
@@ -610,7 +610,10 @@ async fn a_transfer_without_a_destination_match_carries_the_title_into_the_desti
     assert!(!preview.classification.blocks_start());
     // FR-055: nothing in the destination relates to this title.
     let classified = classified_titles(&preview);
-    assert_eq!(classified[0].class, TitleLocationClass::CrossLibraryTransfer);
+    assert_eq!(
+        classified[0].class,
+        TitleLocationClass::CrossLibraryTransfer
+    );
     assert_eq!(classified[0].merge_target_title_id(), None);
     assert_eq!(classified[0].same_named_destination_title_id(), None);
     // FR-056, stated before confirmation: the library changes, and inherited
@@ -666,7 +669,12 @@ async fn a_transfer_without_a_destination_match_carries_the_title_into_the_desti
             .join("Transferred.Movie.2019.1080p.mkv")
             .exists()
     );
-    assert!(!fixture.source_root().join("transferred.movie.2019").exists());
+    assert!(
+        !fixture
+            .source_root()
+            .join("transferred.movie.2019")
+            .exists()
+    );
     assert_eq!(
         transferred.folder_path.as_deref(),
         Some(destination_folder.to_string_lossy().as_ref())
@@ -951,7 +959,9 @@ async fn a_unique_identity_match_merges_into_the_destination_title() {
     // The destination title owns the merged media, at its own folder.
     let paths = fixture.media_paths(&destination.id).await;
     assert!(
-        paths.iter().any(|path| path.ends_with("Same.Film.2018.mkv")),
+        paths
+            .iter()
+            .any(|path| path.ends_with("Same.Film.2018.mkv")),
         "the incoming feature followed the merge: {paths:?}"
     );
     assert!(
@@ -1066,9 +1076,11 @@ async fn an_unmappable_episode_blocks_the_merge_before_anything_starts() {
             vec![external_id("tmdb", "5150")],
         )
         .await;
-    fixture
-        .merges
-        .stage_snapshot(&title.id, &destination.id, unmappable_snapshot(&title.id, &destination.id));
+    fixture.merges.stage_snapshot(
+        &title.id,
+        &destination.id,
+        unmappable_snapshot(&title.id, &destination.id),
+    );
 
     let preview = fixture.preview(&[&title.id]).await;
     assert_eq!(preview.classification.counts.needs_resolution, 1);
@@ -1117,7 +1129,10 @@ async fn an_unmappable_episode_blocks_the_merge_before_anything_starts() {
         .await
         .expect_err("a blocked merge cannot start");
     assert!(
-        matches!(error, AppError::LocationPlanRefused { .. } | AppError::Validation(_)),
+        matches!(
+            error,
+            AppError::LocationPlanRefused { .. } | AppError::Validation(_)
+        ),
         "unexpected error: {error:?}"
     );
 
@@ -1187,7 +1202,10 @@ async fn a_merge_that_committed_before_the_crash_settles_idempotently_on_resume(
         .app
         .run_root_move(operation_id, &preview.execution)
         .await;
-    assert!(crashed.is_err(), "the injected store failure aborts the run");
+    assert!(
+        crashed.is_err(),
+        "the injected store failure aborts the run"
+    );
 
     // The merge is committed and the checkpoint is not settled: exactly the
     // window this test exists for.
@@ -1290,7 +1308,11 @@ async fn a_merging_transfer_owns_the_destination_title_and_still_completes() {
         )
         .await;
     let bystander = fixture
-        .seed_destination_title("Untouched Neighbour", 2003, vec![external_id("tmdb", "606")])
+        .seed_destination_title(
+            "Untouched Neighbour",
+            2003,
+            vec![external_id("tmdb", "606")],
+        )
         .await;
     let title = fixture
         .seed_source_title_with_files(
@@ -1553,7 +1575,10 @@ async fn an_interrupted_transfer_resumes_and_converges_on_the_destination_librar
         .app
         .run_root_move(operation_id, &preview.execution)
         .await;
-    assert!(crashed.is_err(), "the injected store failure aborts the run");
+    assert!(
+        crashed.is_err(),
+        "the injected store failure aborts the run"
+    );
 
     // The first title's flip already landed; the second has not started.
     assert_eq!(

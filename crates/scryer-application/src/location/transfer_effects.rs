@@ -75,8 +75,7 @@ pub const FACET_DERIVED_TAG_PREFIXES: &[&str] = &[
 
 /// FR-058's required statement, phrased once so the preview and any later
 /// summary cannot word it differently.
-pub const FILES_KEEP_THEIR_NAMES: &str =
-    "files keep their names; aligning file names with the destination library's policy is a separate rename";
+pub const FILES_KEEP_THEIR_NAMES: &str = "files keep their names; aligning file names with the destination library's policy is a separate rename";
 
 /// What a facet conversion does to one title-level setting (FR-057).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -436,7 +435,11 @@ pub fn series_movie_link_statement(
         "\"{title_name}\" carries {count} series-movie {}; {} into {destination_library_id} with the series and {} linked movie metadata, which no library owns",
         if count == 1 { "link" } else { "links" },
         if count == 1 { "it moves" } else { "they move" },
-        if count == 1 { "keeps its" } else { "keep their" },
+        if count == 1 {
+            "keeps its"
+        } else {
+            "keep their"
+        },
     ))
 }
 
@@ -477,7 +480,10 @@ mod tests {
         values.iter().map(|value| (*value).to_string()).collect()
     }
 
-    fn settings_named<'a>(conversion: &'a FacetConversion, key: &str) -> Option<&'a ConvertedSetting> {
+    fn settings_named<'a>(
+        conversion: &'a FacetConversion,
+        key: &str,
+    ) -> Option<&'a ConvertedSetting> {
         conversion
             .settings
             .iter()
@@ -543,8 +549,8 @@ mod tests {
             "monitor_specials",
             "inter_season_movies",
         ] {
-            let setting = settings_named(&conversion, key)
-                .unwrap_or_else(|| panic!("{key} is enumerated"));
+            let setting =
+                settings_named(&conversion, key).unwrap_or_else(|| panic!("{key} is enumerated"));
             assert_eq!(
                 setting.disposition,
                 SettingDisposition::BecomesInvalid,
@@ -576,8 +582,8 @@ mod tests {
         .expect("series → anime converts");
 
         for key in ["filler_policy", "monitor_specials"] {
-            let setting = settings_named(&conversion, key)
-                .unwrap_or_else(|| panic!("{key} is enumerated"));
+            let setting =
+                settings_named(&conversion, key).unwrap_or_else(|| panic!("{key} is enumerated"));
             assert_eq!(setting.disposition, SettingDisposition::ChangesMeaning);
             assert!(
                 setting.detail.contains("takes effect"),
@@ -647,8 +653,8 @@ mod tests {
         .expect("converts");
 
         for key in ["mal_score", "anime_media_type", "anime_status"] {
-            let setting = settings_named(&conversion, key)
-                .unwrap_or_else(|| panic!("{key} is enumerated"));
+            let setting =
+                settings_named(&conversion, key).unwrap_or_else(|| panic!("{key} is enumerated"));
             assert_eq!(setting.disposition, SettingDisposition::Resets);
         }
 
@@ -703,16 +709,22 @@ mod tests {
             series_movie_link_statement("Show", TitleAssociationFacts::default(), "anime-library")
                 .is_none()
         );
-        let statement =
-            series_movie_link_statement("Show", TitleAssociationFacts::new(1, 0, 0), "anime-library")
-                .expect("stated");
+        let statement = series_movie_link_statement(
+            "Show",
+            TitleAssociationFacts::new(1, 0, 0),
+            "anime-library",
+        )
+        .expect("stated");
         assert!(statement.contains("1 series-movie link"));
         assert!(statement.contains("anime-library"));
         assert!(statement.contains("it moves"));
 
-        let plural =
-            series_movie_link_statement("Show", TitleAssociationFacts::new(3, 0, 0), "anime-library")
-                .expect("stated");
+        let plural = series_movie_link_statement(
+            "Show",
+            TitleAssociationFacts::new(3, 0, 0),
+            "anime-library",
+        )
+        .expect("stated");
         assert!(plural.contains("3 series-movie links"));
         assert!(plural.contains("they move"));
     }

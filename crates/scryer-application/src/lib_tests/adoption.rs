@@ -149,9 +149,7 @@ impl AdoptionFixture {
     /// root B. Scryer is told nothing.
     fn move_folder_externally(&self, title: &Title) -> PathBuf {
         let source = PathBuf::from(title.folder_path.clone().expect("seeded folder"));
-        let destination = self
-            .root_b()
-            .join(source.file_name().expect("folder name"));
+        let destination = self.root_b().join(source.file_name().expect("folder name"));
         std::fs::rename(&source, &destination).expect("external move");
         destination
     }
@@ -160,9 +158,7 @@ impl AdoptionFixture {
     /// the FR-053 cleanup question live.
     fn copy_folder_externally(&self, title: &Title) -> PathBuf {
         let source = PathBuf::from(title.folder_path.clone().expect("seeded folder"));
-        let destination = self
-            .root_b()
-            .join(source.file_name().expect("folder name"));
+        let destination = self.root_b().join(source.file_name().expect("folder name"));
         std::fs::create_dir_all(&destination).expect("create destination folder");
         for entry in std::fs::read_dir(&source).expect("read source folder") {
             let entry = entry.expect("source entry");
@@ -297,8 +293,12 @@ impl AdoptionFixture {
 /// identical content — an adoption test that cannot tell them apart proves
 /// nothing about a matcher whose job is telling them apart.
 fn content_of(file_name: &str, size: usize) -> Vec<u8> {
-    let seed = file_name.bytes().fold(7_u8, |acc, byte| acc.wrapping_add(byte));
-    (0..size).map(|index| seed.wrapping_add(index as u8)).collect()
+    let seed = file_name
+        .bytes()
+        .fold(7_u8, |acc, byte| acc.wrapping_add(byte));
+    (0..size)
+        .map(|index| seed.wrapping_add(index as u8))
+        .collect()
 }
 
 // ── US3.1 ────────────────────────────────────────────────────────────────────
@@ -410,7 +410,10 @@ async fn us3_2_a_tracked_file_missing_at_the_destination_refuses_the_confirmatio
         .seed_title(
             "Half Moved",
             2021,
-            &[("Half.Moved.2021.mkv", 2048), ("Half.Moved.2021.extra.mkv", 1024)],
+            &[
+                ("Half.Moved.2021.mkv", 2048),
+                ("Half.Moved.2021.extra.mkv", 1024),
+            ],
         )
         .await;
     let destination = fixture.move_folder_externally(&title);
@@ -502,7 +505,10 @@ async fn additional_destination_files_are_surfaced_and_left_alone() {
     assert_eq!(unmanaged.items.total, 1);
 
     fixture.start_and_settle(&[&title.id]).await;
-    assert!(stray.exists(), "adoption never removes what it did not adopt");
+    assert!(
+        stray.exists(),
+        "adoption never removes what it did not adopt"
+    );
 }
 
 // ── US3.3 ────────────────────────────────────────────────────────────────────
@@ -514,7 +520,11 @@ async fn additional_destination_files_are_surfaced_and_left_alone() {
 async fn us3_3_a_stale_source_mount_does_not_block_adoption() {
     let fixture = AdoptionFixture::new().await;
     let title = fixture
-        .seed_title("Off A Dead Disk", 2018, &[("Off.A.Dead.Disk.2018.mkv", 2048)])
+        .seed_title(
+            "Off A Dead Disk",
+            2018,
+            &[("Off.A.Dead.Disk.2018.mkv", 2048)],
+        )
         .await;
     let destination = fixture.move_folder_externally(&title);
     // The source root itself is gone, which is what an unmounted share looks
@@ -532,7 +542,10 @@ async fn us3_3_a_stale_source_mount_does_not_block_adoption() {
         operation.state,
         operation.detail
     );
-    assert_eq!(fixture.title(&title.id).await.root_folder_id, fixture.root_b_id);
+    assert_eq!(
+        fixture.title(&title.id).await.root_folder_id,
+        fixture.root_b_id
+    );
     assert_eq!(
         fixture.media_paths(&title.id).await,
         vec![
@@ -550,7 +563,11 @@ async fn us3_3_a_stale_source_mount_does_not_block_adoption() {
 async fn us3_3_a_stale_source_mount_does_not_block_a_resume_either() {
     let fixture = AdoptionFixture::new().await;
     let title = fixture
-        .seed_title("Resumed Off A Dead Disk", 2017, &[("Resumed.2017.mkv", 1024)])
+        .seed_title(
+            "Resumed Off A Dead Disk",
+            2017,
+            &[("Resumed.2017.mkv", 1024)],
+        )
         .await;
     fixture.move_folder_externally(&title);
 
@@ -610,7 +627,10 @@ async fn us3_4_catalog_ownership_changes_only_after_the_destination_is_verified(
             .to_string()
     );
     assert!(records[0].outcome.permits_source_removal());
-    assert_eq!(fixture.title(&title.id).await.root_folder_id, fixture.root_b_id);
+    assert_eq!(
+        fixture.title(&title.id).await.root_folder_id,
+        fixture.root_b_id
+    );
 }
 
 /// US3.4, second half: Scryer recycles a redundant source copy **only** when it
@@ -628,8 +648,8 @@ async fn us3_4_a_full_hash_proven_redundant_source_copy_is_recycled() {
         .await;
     // The user copied rather than moved, so both copies exist.
     fixture.copy_folder_externally(&title);
-    let source = PathBuf::from(title.folder_path.clone().expect("source folder"))
-        .join("Kept.Both.2015.mkv");
+    let source =
+        PathBuf::from(title.folder_path.clone().expect("source folder")).join("Kept.Both.2015.mkv");
     assert!(source.exists());
 
     let operation = fixture.start_and_settle(&[&title.id]).await;
@@ -674,12 +694,18 @@ async fn us3_4_a_source_copy_without_full_hash_proof_is_left_for_the_user() {
         records[0].hashes.is_none(),
         "no full-hash proof means no licence to touch the source"
     );
-    assert!(source.exists(), "source cleanup is left to the user (FR-053)");
+    assert!(
+        source.exists(),
+        "source cleanup is left to the user (FR-053)"
+    );
     assert!(
         source_folder.exists(),
         "adoption never removes the user's source directories"
     );
-    assert_eq!(fixture.title(&title.id).await.root_folder_id, fixture.root_b_id);
+    assert_eq!(
+        fixture.title(&title.id).await.root_folder_id,
+        fixture.root_b_id
+    );
 }
 
 /// FR-042/043 for adoption: with no persisted hash to compare against, full
@@ -745,7 +771,10 @@ async fn an_adoption_stops_when_its_destination_content_disappears_before_it_run
         .await
         .expect("the runner reports rather than panics");
     assert_eq!(outcome.state, LocationOperationState::Failed);
-    assert_eq!(fixture.title(&title.id).await.root_folder_id, fixture.root_a_id);
+    assert_eq!(
+        fixture.title(&title.id).await.root_folder_id,
+        fixture.root_a_id
+    );
 }
 
 // ── Cancel and resume (FR-092, FR-033) ───────────────────────────────────────
@@ -817,10 +846,18 @@ async fn an_adoption_cancels_at_a_title_boundary_and_leaves_finished_titles_alon
 async fn an_interrupted_adoption_resumes_without_reproving_settled_titles() {
     let fixture = AdoptionFixture::new().await;
     let first = fixture
-        .seed_title("Settled Adoption", 2009, &[("Settled.Adoption.2009.mkv", 1500)])
+        .seed_title(
+            "Settled Adoption",
+            2009,
+            &[("Settled.Adoption.2009.mkv", 1500)],
+        )
         .await;
     let second = fixture
-        .seed_title("Interrupted Adoption", 2008, &[("Interrupted.Adoption.2008.mkv", 2500)])
+        .seed_title(
+            "Interrupted Adoption",
+            2008,
+            &[("Interrupted.Adoption.2008.mkv", 2500)],
+        )
         .await;
     fixture.move_folder_externally(&first);
     let second_destination = fixture.move_folder_externally(&second);
@@ -854,8 +891,14 @@ async fn an_interrupted_adoption_resumes_without_reproving_settled_titles() {
     fixture
         .operations
         .crash_on_cancel_check(title_boundary_cancel_check(2, 1));
-    let crashed = fixture.app.run_root_move(operation_id, &preview.execution).await;
-    assert!(crashed.is_err(), "the armed store failure interrupts the run");
+    let crashed = fixture
+        .app
+        .run_root_move(operation_id, &preview.execution)
+        .await;
+    assert!(
+        crashed.is_err(),
+        "the armed store failure interrupts the run"
+    );
 
     let verifications_before = fixture.verifications().len();
     assert_eq!(verifications_before, 1);

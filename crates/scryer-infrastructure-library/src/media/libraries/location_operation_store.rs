@@ -24,14 +24,16 @@
 
 use async_trait::async_trait;
 use chrono::Utc;
-use scryer_application::location::model::{
-    AppliedVerificationDepth, FileVerificationOutcome, FileVerificationRecord, LocationExecutionMode,
-    LocationOperation, LocationOperationCounters, LocationOperationState, LocationOperationType,
-    MoveCrcAlgorithm, StreamedContentHashes, TitleCheckpoint, TitleCheckpointPlacement,
-    TitleCheckpointState, VerificationDepth,
-};
 use scryer_application::location::classify::TitleLocationClass;
-use scryer_application::location::ownership_guard::{GuardedAction, OwnedEntity, OwnershipConflict};
+use scryer_application::location::model::{
+    AppliedVerificationDepth, FileVerificationOutcome, FileVerificationRecord,
+    LocationExecutionMode, LocationOperation, LocationOperationCounters, LocationOperationState,
+    LocationOperationType, MoveCrcAlgorithm, StreamedContentHashes, TitleCheckpoint,
+    TitleCheckpointPlacement, TitleCheckpointState, VerificationDepth,
+};
+use scryer_application::location::ownership_guard::{
+    GuardedAction, OwnedEntity, OwnershipConflict,
+};
 use scryer_application::{
     AppError, AppResult, LocationOperationProgress, LocationOperationRepository,
     LocationOwnershipClaim, LocationOwnershipOutcome,
@@ -49,7 +51,8 @@ const OPERATION_COLUMNS: &str = "id, operation_type, execution_mode, state, init
     job_run_id, workflow_operation_id, cancel_requested, cancel_requested_at,
     failure_reason, confirmed_at, started_at, completed_at, created_at, updated_at";
 
-const CHECKPOINT_COLUMNS: &str = "c.operation_id, c.title_id, c.sequence, c.state, c.classification,
+const CHECKPOINT_COLUMNS: &str =
+    "c.operation_id, c.title_id, c.sequence, c.state, c.classification,
     c.source_library_id, c.source_root_id, c.source_folder_path,
     c.destination_library_id, c.destination_root_id, c.destination_folder_path,
     c.merged_into_title_id, c.file_total, c.file_completed_count, c.bytes_total,
@@ -745,9 +748,8 @@ fn row_to_operation(row: &SqlRow) -> AppResult<LocationOperation> {
         ))
     })?;
     let depth_raw = row.text("verification_depth")?;
-    let verification_depth = VerificationDepth::from_setting(&depth_raw).map_err(|message| {
-        AppError::Repository(format!("location operation {message}"))
-    })?;
+    let verification_depth = VerificationDepth::from_setting(&depth_raw)
+        .map_err(|message| AppError::Repository(format!("location operation {message}")))?;
 
     Ok(LocationOperation {
         id: row.text("id")?,
@@ -865,10 +867,13 @@ fn row_to_verification(row: &SqlRow) -> AppResult<FileVerificationRecord> {
     ) {
         (Some(move_crc), Some(algorithm), Some(full_blake3)) => Some(StreamedContentHashes {
             size_bytes: row.i64("size_bytes")? as u64,
-            crc_algorithm: MoveCrcAlgorithm::from_setting(&algorithm)
-                .map_err(|message| AppError::Repository(format!("verification record {message}")))?,
+            crc_algorithm: MoveCrcAlgorithm::from_setting(&algorithm).map_err(|message| {
+                AppError::Repository(format!("verification record {message}"))
+            })?,
             move_crc: move_crc.parse::<u64>().map_err(|error| {
-                AppError::Repository(format!("verification record has an unreadable CRC: {error}"))
+                AppError::Repository(format!(
+                    "verification record has an unreadable CRC: {error}"
+                ))
             })?,
             full_blake3,
         }),
@@ -1168,7 +1173,10 @@ mod tests {
         );
 
         store
-            .create_location_operation(&operation("op-done", LocationOperationState::Completed), None)
+            .create_location_operation(
+                &operation("op-done", LocationOperationState::Completed),
+                None,
+            )
             .await
             .expect("the operation should persist");
         assert!(
@@ -1562,7 +1570,10 @@ mod tests {
             .await
             .expect("the checkpoint should persist");
 
-        assert_eq!(checkpoint_columns(&store, "title-1").await, (None, None, None));
+        assert_eq!(
+            checkpoint_columns(&store, "title-1").await,
+            (None, None, None)
+        );
         assert_eq!(
             store
                 .list_location_title_checkpoints("op-1")
@@ -1721,7 +1732,11 @@ mod tests {
         );
         assert_eq!(
             verification_columns(&store, "/archive/mismatch.mkv").await,
-            (None, Some("the read-back CRC did not match".to_string()), None)
+            (
+                None,
+                Some("the read-back CRC did not match".to_string()),
+                None
+            )
         );
 
         let details: Vec<Option<String>> = store
@@ -1826,7 +1841,10 @@ mod tests {
             LocationOwnershipOutcome::Conflict(conflicts) => {
                 assert_eq!(conflicts.len(), 1);
                 assert_eq!(conflicts[0].operation_id, "op-1");
-                assert_eq!(conflicts[0].entity, OwnedEntity::Title("title-1".to_string()));
+                assert_eq!(
+                    conflicts[0].entity,
+                    OwnedEntity::Title("title-1".to_string())
+                );
                 assert_eq!(conflicts[0].action, GuardedAction::LocationOperation);
             }
             other => panic!("expected a conflict, got {other:?}"),

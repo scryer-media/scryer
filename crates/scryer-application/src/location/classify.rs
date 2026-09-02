@@ -1211,7 +1211,10 @@ mod tests {
             Some(&destination_library),
         );
 
-        assert_eq!(classification.class, TitleLocationClass::CrossLibraryTransfer);
+        assert_eq!(
+            classification.class,
+            TitleLocationClass::CrossLibraryTransfer
+        );
         assert!(classification.converts_facet());
         let conversion = classification
             .facet_conversion
@@ -1248,7 +1251,10 @@ mod tests {
             Some(&destination_library),
         );
 
-        assert_eq!(classification.class, TitleLocationClass::CrossLibraryTransfer);
+        assert_eq!(
+            classification.class,
+            TitleLocationClass::CrossLibraryTransfer
+        );
         assert!(!classification.converts_facet());
     }
 
@@ -1373,13 +1379,12 @@ mod tests {
     /// groups it rather than parsing the record list out of prose.
     #[test]
     fn an_unmappable_merge_record_blocks_the_title_with_its_own_code() {
-        let facts =
-            TitleClassificationFacts::new("merging", MediaFacet::Movie, "lib-a", "root-a")
-                .with_tracked_files(2)
-                .with_unresolved_reason(
-                    reason_codes::MERGE_RECORDS_UNMAPPED,
-                    "wanted_items (unmapped_episode): e-1",
-                );
+        let facts = TitleClassificationFacts::new("merging", MediaFacet::Movie, "lib-a", "root-a")
+            .with_tracked_files(2)
+            .with_unresolved_reason(
+                reason_codes::MERGE_RECORDS_UNMAPPED,
+                "wanted_items (unmapped_episode): e-1",
+            );
         let destination_library = DestinationLibraryFacts {
             library_id: "lib-b".to_string(),
             library_name: "Movies B".to_string(),

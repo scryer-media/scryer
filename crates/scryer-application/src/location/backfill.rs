@@ -214,9 +214,7 @@ impl AppUseCase {
     /// mount is a normal state for this job, not a job failure. Only a store or
     /// settings failure — something that makes the *queue* unreadable — stops
     /// the run.
-    pub(crate) async fn run_full_hash_backfill_job(
-        &self,
-    ) -> AppResult<FullHashBackfillSummary> {
+    pub(crate) async fn run_full_hash_backfill_job(&self) -> AppResult<FullHashBackfillSummary> {
         self.run_full_hash_backfill_with_options(FullHashBackfillOptions::default())
             .await
     }
@@ -231,7 +229,9 @@ impl AppUseCase {
 
         while summary.examined < options.files_per_run {
             let remaining = options.files_per_run - summary.examined;
-            let page_size = options.page_size.min(u32::try_from(remaining).unwrap_or(u32::MAX));
+            let page_size = options
+                .page_size
+                .min(u32::try_from(remaining).unwrap_or(u32::MAX));
             let page = self
                 .services
                 .library
@@ -251,7 +251,10 @@ impl AppUseCase {
                 cursor = Some(candidate.id.clone());
                 summary.examined += 1;
 
-                match self.backfill_one_media_file(&candidate, &owned, options).await {
+                match self
+                    .backfill_one_media_file(&candidate, &owned, options)
+                    .await
+                {
                     Ok(Some(bytes)) => {
                         summary.hashed += 1;
                         summary.bytes_hashed = summary.bytes_hashed.saturating_add(bytes);

@@ -320,7 +320,10 @@ async fn graphql_apply_title_folder_change_refuses_to_take_an_owned_folder_by_de
     let preview = &preview["data"]["changeTitleFolderPreview"];
     assert_eq!(preview["ownership"], "OWNED_BY_ANOTHER_TITLE");
     assert_eq!(preview["currentOwner"]["id"], owner.id);
-    assert_eq!(preview["availableResolutions"], json!(["SWAP", "TAKE_OVER"]));
+    assert_eq!(
+        preview["availableResolutions"],
+        json!(["SWAP", "TAKE_OVER"])
+    );
 
     let body = gql(
         &ctx,

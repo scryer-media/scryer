@@ -391,9 +391,10 @@ fn http_transport_error(
     let detail = error.debug_message.as_deref().unwrap_or_default();
     if detail.contains("is not allowed") {
         TransportError::ForbiddenOrigin
-    } else if detail.contains("Invalid URL") || detail.contains("only supports GET") {
-        TransportError::InvalidRequest
-    } else if detail.contains("is disabled.") {
+    } else if detail.contains("Invalid URL")
+        || detail.contains("only supports GET")
+        || detail.contains("is disabled.")
+    {
         TransportError::InvalidRequest
     } else if detail.contains("timed out after") || detail.contains("deadline exhausted") {
         TransportError::Timeout

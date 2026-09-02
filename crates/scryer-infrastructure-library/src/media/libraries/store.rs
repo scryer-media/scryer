@@ -309,11 +309,7 @@ async fn update_library_tx(
 /// flag, and every `titles.root_folder_id` reference survive untouched — the
 /// whole point of a root change is that the identity does not move with the
 /// path. Returns the library the root belongs to.
-async fn set_root_path_tx(
-    tx: &mut SqlTx<'_>,
-    root_id: &str,
-    path: String,
-) -> AppResult<String> {
+async fn set_root_path_tx(tx: &mut SqlTx<'_>, root_id: &str, path: String) -> AppResult<String> {
     let library_id = SqlRuntime::fetch_optional(
         SqlExec::Tx(tx),
         "SELECT library_id FROM library_roots WHERE id = {}",
@@ -619,8 +615,7 @@ mod tests {
 
         let root = library.roots.first().expect("library should have a root");
         assert!(
-            root.id
-                .starts_with(scryer_domain::SYNTHETIC_ROOT_ID_PREFIX),
+            root.id.starts_with(scryer_domain::SYNTHETIC_ROOT_ID_PREFIX),
             "root id should be allocated, got {}",
             root.id
         );
@@ -665,7 +660,10 @@ mod tests {
                 "stable-root-library",
                 "Stable Renamed".to_string(),
                 "stable-renamed".to_string(),
-                vec![draft("/mnt/stable", true), draft("/mnt/stable-extra", false)],
+                vec![
+                    draft("/mnt/stable", true),
+                    draft("/mnt/stable-extra", false),
+                ],
             )
             .await
             .expect("library should update");
@@ -738,7 +736,10 @@ mod tests {
             "a path change never moves the library default (FR-021)"
         );
         assert!(
-            !updated.roots.iter().any(|root| root.path == "/mnt/old-disk"),
+            !updated
+                .roots
+                .iter()
+                .any(|root| root.path == "/mnt/old-disk"),
             "the old path is gone rather than left beside the new one"
         );
         assert_eq!(

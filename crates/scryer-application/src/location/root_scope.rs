@@ -217,7 +217,6 @@ impl std::fmt::Display for RootScopeRefusal {
     }
 }
 
-
 // ── Unmanaged-content classification (T062, FR-027) ──────────────────────────
 
 /// What the catalog can say about one entry found beneath the source root.
@@ -420,7 +419,6 @@ pub fn classify_root_content(
     inventory
 }
 
-
 // ── Every-title accounting (T061, FR-021–FR-023) ─────────────────────────────
 
 /// What the root change does with one assigned title.
@@ -448,7 +446,6 @@ impl RootScopeTitleOutcome {
         }
     }
 }
-
 
 /// One title the user has to repair before the root change can run (FR-023).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -596,7 +593,6 @@ impl RootRetirementContract {
     }
 }
 
-
 // ── FR-022: the default-root transfer ────────────────────────────────────────
 
 /// What consolidating does to the library's default root (FR-022, US5.3).
@@ -631,7 +627,10 @@ impl DefaultRootTransfer {
         } else if self.source_was_default {
             None
         } else {
-            Some("this root is not the library default, so the library's default is unchanged".to_string())
+            Some(
+                "this root is not the library default, so the library's default is unchanged"
+                    .to_string(),
+            )
         }
     }
 }
@@ -682,9 +681,7 @@ impl RootScopeClassification {
                 + self.catalog_only
                 + self.blocked
     }
-
 }
-
 
 // ── Folder resolution (FR-025, FR-026) ───────────────────────────────────────
 
@@ -775,7 +772,13 @@ pub fn resolve_root_scope_folders(request: &FolderResolutionRequest) -> Vec<Reso
             let destination_folder = title
                 .merge_target_folder_path
                 .clone()
-                .or_else(|| rebase(source_folder, &request.source_root, &request.destination_root))
+                .or_else(|| {
+                    rebase(
+                        source_folder,
+                        &request.source_root,
+                        &request.destination_root,
+                    )
+                })
                 .unwrap_or_else(|| {
                     request
                         .destination_root
@@ -794,16 +797,20 @@ pub fn resolve_root_scope_folders(request: &FolderResolutionRequest) -> Vec<Reso
         }
 
         // FR-026: preserve the source root's relative folder layout by default.
-        let preserved = rebase(source_folder, &request.source_root, &request.destination_root)
-            .unwrap_or_else(|| {
-                // A folder outside the root cannot be re-anchored; its own
-                // basename directly under the destination root is the only
-                // defensible place. `classify_root_content` already treats such
-                // content as unexplained, so this is the belt to that braces.
-                request
-                    .destination_root
-                    .join(file_name_or(source_folder, &title.title_id))
-            });
+        let preserved = rebase(
+            source_folder,
+            &request.source_root,
+            &request.destination_root,
+        )
+        .unwrap_or_else(|| {
+            // A folder outside the root cannot be re-anchored; its own
+            // basename directly under the destination root is the only
+            // defensible place. `classify_root_content` already treats such
+            // content as unexplained, so this is the belt to that braces.
+            request
+                .destination_root
+                .join(file_name_or(source_folder, &title.title_id))
+        });
 
         let occupant = request
             .destination_occupants
@@ -861,7 +868,10 @@ fn unique_folder_path(
     claimed: &BTreeSet<String>,
     destination_occupants: &BTreeMap<String, Option<String>>,
 ) -> PathBuf {
-    let parent = preserved.parent().map(Path::to_path_buf).unwrap_or_default();
+    let parent = preserved
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_default();
     let base = collision_rename_base(collided_name, label);
 
     for attempt in 0..1_000_u32 {
@@ -1974,15 +1984,14 @@ fn restate_for_root_scope(
             // FR-023: the shared planner leaves a blocked title's reason code
             // open, because only the caller knows which branch it blocks.
             None if item.kind == PlanItemKind::Blocked => {
-                item = item.with_reason_code(draft.blocked_reason_code.clone().unwrap_or_else(
-                    || {
+                item =
+                    item.with_reason_code(draft.blocked_reason_code.clone().unwrap_or_else(|| {
                         if folds {
                             plan_reasons::TITLE_BLOCKED_FOR_CONSOLIDATION.to_string()
                         } else {
                             plan_reasons::TITLE_BLOCKED_FOR_ROOT_CHANGE.to_string()
                         }
-                    },
-                ));
+                    }));
                 if draft.blocked_reason.is_none() {
                     item = item.with_detail(format!(
                         "\"{}\" needs a repair before it can move",
@@ -2002,7 +2011,10 @@ fn restate_for_root_scope(
     // FR-024's first three classifications, stated on the plan the user reads.
     // The collision case states itself: it is the restated folder rename above.
     let mut leading: Vec<PlanItem> = Vec::new();
-    let source_folder_display = draft.source_folder_path.as_deref().map(path_to_stored_string);
+    let source_folder_display = draft
+        .source_folder_path
+        .as_deref()
+        .map(path_to_stored_string);
     let destination_folder_display = destination_folder_for(request, draft)
         .as_deref()
         .map(path_to_stored_string);
@@ -2169,11 +2181,7 @@ mod plan_test_support {
         let files = files
             .into_iter()
             .map(|mut file| {
-                file.relative_path = file
-                    .path
-                    .strip_prefix(&folder)
-                    .ok()
-                    .map(Path::to_path_buf);
+                file.relative_path = file.path.strip_prefix(&folder).ok().map(Path::to_path_buf);
                 file
             })
             .collect();
@@ -2479,7 +2487,10 @@ mod change_path_tests {
             assert_eq!(title.source_library_id, title.destination_library_id);
             assert!(!title.crosses_libraries());
             assert_eq!(title.source_root_path.as_deref(), Some(SOURCE_ROOT));
-            assert_eq!(title.destination_root_path.as_deref(), Some(DESTINATION_ROOT));
+            assert_eq!(
+                title.destination_root_path.as_deref(),
+                Some(DESTINATION_ROOT)
+            );
         }
         assert_eq!(
             planned.plan.header.source_root_id,
@@ -2628,7 +2639,11 @@ mod change_path_tests {
         let planned = build_root_scope_plan(&plan_request);
 
         assert!(planned.retirement.empty_directories_only);
-        assert!(planned.retirement.requires_verification_before_source_removal);
+        assert!(
+            planned
+                .retirement
+                .requires_verification_before_source_removal
+        );
         // A directory outside every title folder that holds nothing unexplained
         // is prunable; nothing else is proposed for removal.
         assert_eq!(
@@ -2701,7 +2716,10 @@ mod change_path_tests {
             confirm(&planned, Some("relocate")),
             Err(PlanConfirmationError::TypedConfirmationMismatch)
         );
-        assert_eq!(confirm(&planned, Some(LOCATION_TYPED_CONFIRMATION_PHRASE)), Ok(()));
+        assert_eq!(
+            confirm(&planned, Some(LOCATION_TYPED_CONFIRMATION_PHRASE)),
+            Ok(())
+        );
     }
 
     // ── Retirement ordering (FR-087) ─────────────────────────────────────────
@@ -2845,7 +2863,10 @@ mod change_path_tests {
         assert!(detail.contains("keeps its identity"));
         assert!(detail.contains("remains the library default"));
         assert_eq!(statement.source_path.as_deref(), Some(SOURCE_ROOT));
-        assert_eq!(statement.destination_path.as_deref(), Some(DESTINATION_ROOT));
+        assert_eq!(
+            statement.destination_path.as_deref(),
+            Some(DESTINATION_ROOT)
+        );
     }
 
     #[test]
@@ -2947,7 +2968,9 @@ mod fold_tests {
         let mut symlinked = facts();
         symlinked.source_root_is_symlink = true;
         assert_eq!(
-            check_root_scope_paths(&symlinked).expect_err("symlink").code,
+            check_root_scope_paths(&symlinked)
+                .expect_err("symlink")
+                .code,
             refusal_codes::FOLD.source_root_is_symlink
         );
 
@@ -3103,10 +3126,8 @@ mod fold_tests {
 
     #[test]
     fn a_fileless_title_resolves_to_no_folder() {
-        let resolved = resolve_root_scope_folders(&resolution(
-            vec![resolution_title("t1", None)],
-            Vec::new(),
-        ));
+        let resolved =
+            resolve_root_scope_folders(&resolution(vec![resolution_title("t1", None)], Vec::new()));
         assert!(resolved[0].destination_folder.is_none());
         assert!(resolved[0].collided_name.is_none());
     }
@@ -3313,7 +3334,12 @@ mod fold_tests {
             "t1",
             "/media/old/Alpha (2020)",
             vec![tracked("/media/old/Alpha (2020)/Alpha.mkv", 50)],
-            resolved_uniqued("t1", "/media/keep/Alpha (2020) (from Old Disk)", "Alpha (2020)", Some("other")),
+            resolved_uniqued(
+                "t1",
+                "/media/keep/Alpha (2020) (from Old Disk)",
+                "Alpha (2020)",
+                Some("other"),
+            ),
         );
         let mut colliding = folded(
             "t2",
@@ -3342,8 +3368,7 @@ mod fold_tests {
             .count();
         assert_eq!(file_renames, 1);
         assert_eq!(
-            planned.plan.counts.files_total,
-            2,
+            planned.plan.counts.files_total, 2,
             "two files move; the folder rename is not a third"
         );
         assert_eq!(
@@ -3395,9 +3420,10 @@ mod fold_tests {
             .iter()
             .any(|item| {
                 item.reason_code.as_deref() == Some(plan_reasons::DEFAULT_ROOT_TRANSFERRED)
-                    && item.detail.as_deref().is_some_and(|detail| {
-                        detail.contains("becomes the default")
-                    })
+                    && item
+                        .detail
+                        .as_deref()
+                        .is_some_and(|detail| detail.contains("becomes the default"))
             });
         assert!(stated, "US5.3 is stated before the user confirms");
     }
@@ -3470,7 +3496,10 @@ mod fold_tests {
             Vec::new(),
             resolved_unused("t1", "/media/keep/Alpha (2020)"),
         )]));
-        assert_eq!(planned.plan.header.source_root_id.as_deref(), Some("root-old"));
+        assert_eq!(
+            planned.plan.header.source_root_id.as_deref(),
+            Some("root-old")
+        );
         assert_eq!(
             planned.plan.header.destination_root_id.as_deref(),
             Some("root-keep")
@@ -3491,7 +3520,12 @@ mod fold_tests {
             "t1",
             "/media/old/Alpha (2020)",
             Vec::new(),
-            resolved_uniqued("t1", "/media/keep/Alpha (2020) (from Old Disk)", "Alpha (2020)", Some("dest")),
+            resolved_uniqued(
+                "t1",
+                "/media/keep/Alpha (2020) (from Old Disk)",
+                "Alpha (2020)",
+                Some("dest"),
+            ),
         );
         title.destination_identity = Some(DestinationIdentityOutcome {
             match_kind: DestinationIdentityMatch::SameNameNoIdentity,
@@ -3555,7 +3589,10 @@ mod variant_tests {
             planned.plan.header.operation_type,
             LocationOperationType::RootChange
         );
-        assert_eq!(planned.plan.header.source_root_id.as_deref(), Some("root-old"));
+        assert_eq!(
+            planned.plan.header.source_root_id.as_deref(),
+            Some("root-old")
+        );
         assert_eq!(
             planned.plan.header.destination_root_id.as_deref(),
             Some("root-old"),
@@ -3597,7 +3634,10 @@ mod variant_tests {
             planned.plan.header.operation_type,
             LocationOperationType::RootConsolidation
         );
-        assert_eq!(planned.plan.header.source_root_id.as_deref(), Some("root-old"));
+        assert_eq!(
+            planned.plan.header.source_root_id.as_deref(),
+            Some("root-old")
+        );
         assert_eq!(
             planned.plan.header.destination_root_id.as_deref(),
             Some("root-keep"),
@@ -3625,7 +3665,9 @@ mod variant_tests {
             "{details:?}"
         );
         assert!(
-            details.iter().any(|detail| detail.contains("becomes the default")),
+            details
+                .iter()
+                .any(|detail| detail.contains("becomes the default")),
             "{details:?}"
         );
         // The retirement contract is the same shape either way; what changes is

@@ -27,9 +27,7 @@ use serde::{Deserialize, Serialize};
 use crate::helpers::{HashDomain, blake3_identity_hex};
 use crate::location::classify::ClassificationCounts;
 use crate::location::merge::summary::MergePreviewSummary;
-use crate::location::model::{
-    LocationExecutionMode, LocationOperationType, VerificationDepth,
-};
+use crate::location::model::{LocationExecutionMode, LocationOperationType, VerificationDepth};
 
 /// How many items of each section a preview returns alongside the complete
 /// count. Mirrors the rename-plan/delete-preview sampling contract (FR-081).
@@ -153,7 +151,10 @@ impl PlanItemKind {
     /// consolidation uniquing (FR-025) renames a whole *folder*. The item, not
     /// the kind, settles that — see [`PlanItem::describes_a_file`].
     pub fn may_describe_a_file(&self) -> bool {
-        matches!(self, Self::Move | Self::Rename | Self::Dedup | Self::RoleChange)
+        matches!(
+            self,
+            Self::Move | Self::Rename | Self::Dedup | Self::RoleChange
+        )
     }
 }
 
@@ -300,21 +301,13 @@ impl LocationPlanHeader {
         }
     }
 
-    pub fn with_source(
-        mut self,
-        library_id: Option<String>,
-        root_id: Option<String>,
-    ) -> Self {
+    pub fn with_source(mut self, library_id: Option<String>, root_id: Option<String>) -> Self {
         self.source_library_id = library_id;
         self.source_root_id = root_id;
         self
     }
 
-    pub fn with_destination(
-        mut self,
-        library_id: Option<String>,
-        root_id: Option<String>,
-    ) -> Self {
+    pub fn with_destination(mut self, library_id: Option<String>, root_id: Option<String>) -> Self {
         self.destination_library_id = library_id;
         self.destination_root_id = root_id;
         self
@@ -953,12 +946,12 @@ impl FreeSpaceEstimate {
             self.destination_available_bytes? >= destination_required
         };
 
-        let recycle_ok = if self.recycle_required_bytes == 0 || self.recycle_shares_destination_volume
-        {
-            true
-        } else {
-            self.recycle_available_bytes? >= self.recycle_required_bytes
-        };
+        let recycle_ok =
+            if self.recycle_required_bytes == 0 || self.recycle_shares_destination_volume {
+                true
+            } else {
+                self.recycle_available_bytes? >= self.recycle_required_bytes
+            };
 
         Some(destination_ok && recycle_ok)
     }
@@ -966,7 +959,10 @@ impl FreeSpaceEstimate {
 
 /// Estimates the free space an operation needs, including the recycle-bin cost
 /// when the bin is on another volume (FR-080).
-pub fn estimate_free_space(request: &FreeSpaceRequest, probe: &dyn VolumeProbe) -> FreeSpaceEstimate {
+pub fn estimate_free_space(
+    request: &FreeSpaceRequest,
+    probe: &dyn VolumeProbe,
+) -> FreeSpaceEstimate {
     let source_volume = probe.volume_id(&request.source_path);
     let destination_volume = probe.volume_id(&request.destination_path);
     let same_volume_move = match (&source_volume, &destination_volume) {
@@ -1371,10 +1367,7 @@ mod tests {
 
     #[test]
     fn a_same_volume_move_needs_no_destination_space() {
-        let probe = fake_probe(
-            &[("/src", "vol-a"), ("/dst", "vol-a")],
-            &[("/dst", 1_000)],
-        );
+        let probe = fake_probe(&[("/src", "vol-a"), ("/dst", "vol-a")], &[("/dst", 1_000)]);
         let estimate = estimate_free_space(
             &FreeSpaceRequest {
                 source_path: PathBuf::from("/src"),
@@ -1393,10 +1386,7 @@ mod tests {
 
     #[test]
     fn a_cross_volume_move_requires_the_moved_bytes_at_the_destination() {
-        let probe = fake_probe(
-            &[("/src", "vol-a"), ("/dst", "vol-b")],
-            &[("/dst", 4_999)],
-        );
+        let probe = fake_probe(&[("/src", "vol-a"), ("/dst", "vol-b")], &[("/dst", 4_999)]);
         let request = FreeSpaceRequest {
             source_path: PathBuf::from("/src"),
             destination_path: PathBuf::from("/dst"),
@@ -1410,10 +1400,7 @@ mod tests {
         assert_eq!(estimate.destination_required_bytes, 5_000);
         assert_eq!(estimate.sufficient(), Some(false));
 
-        let roomy = fake_probe(
-            &[("/src", "vol-a"), ("/dst", "vol-b")],
-            &[("/dst", 5_000)],
-        );
+        let roomy = fake_probe(&[("/src", "vol-a"), ("/dst", "vol-b")], &[("/dst", 5_000)]);
         assert_eq!(
             estimate_free_space(&request, &roomy).sufficient(),
             Some(true)
@@ -1423,11 +1410,7 @@ mod tests {
     #[test]
     fn a_recycle_bin_on_another_volume_adds_a_second_copy_cost() {
         let probe = fake_probe(
-            &[
-                ("/src", "vol-a"),
-                ("/dst", "vol-b"),
-                ("/recycle", "vol-c"),
-            ],
+            &[("/src", "vol-a"), ("/dst", "vol-b"), ("/recycle", "vol-c")],
             &[("/dst", 10_000), ("/recycle", 100)],
         );
         let estimate = estimate_free_space(

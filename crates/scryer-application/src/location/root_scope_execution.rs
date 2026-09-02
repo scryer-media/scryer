@@ -73,9 +73,7 @@ use scryer_domain::{LibraryPermission, Title, User};
 use crate::LibraryRootDraft;
 use crate::library::recycle_bin::RECYCLE_DIR_NAME;
 use crate::location::classify::reason_codes;
-use crate::location::collisions::{
-    CollisionNaming, PathCaseRule, RecycleAvailability,
-};
+use crate::location::collisions::{CollisionNaming, PathCaseRule, RecycleAvailability};
 use crate::location::execution::{DirectoryPrune, remove_directory_if_empty};
 use crate::location::identity::{
     DestinationIdentityOutcome, DestinationTitleCandidate, IdentityRedirects, SourceTitleIdentity,
@@ -83,9 +81,7 @@ use crate::location::identity::{
 };
 use crate::location::merge::engine::plan_merge;
 use crate::location::merge::summary::MergePreviewSummary;
-use crate::location::model::{
-    LocationExecutionMode, LocationOperation, LocationOperationType,
-};
+use crate::location::model::{LocationExecutionMode, LocationOperation, LocationOperationType};
 use crate::location::operations::{
     LOCATION_OPERATION_VERIFICATION_DEPTH, LocationOperationAccepted, LocationOperationAdmission,
     TitleMoveFacts, confirmation_error,
@@ -97,10 +93,9 @@ use crate::location::preview::{
 use crate::location::root_scope::{
     ConsolidationTail, DefaultRootTransfer, DestinationPathState, FolderResolutionRequest,
     FolderResolutionTitle, PlannedRootScope, ResolvedFolder, RootEntry, RootIdentityRetention,
-    RootRetentionFacts,
-    RootScopePathFacts, RootScopePathVariant, RootScopePlanRequest, RootScopeTail,
-    RootScopeTitleDraft, RootScopeVariant, build_root_scope_plan, check_root_scope_paths,
-    resolve_root_scope_folders,
+    RootRetentionFacts, RootScopePathFacts, RootScopePathVariant, RootScopePlanRequest,
+    RootScopeTail, RootScopeTitleDraft, RootScopeVariant, build_root_scope_plan,
+    check_root_scope_paths, resolve_root_scope_folders,
 };
 use crate::location::verify::same_filesystem;
 use crate::services::AppUseCase;
@@ -224,7 +219,10 @@ impl AppUseCase {
             .find(|root| root.id == call.root_id)
             .cloned()
             .ok_or_else(|| {
-                AppError::NotFound(format!("root {} in library {}", call.root_id, call.library_id))
+                AppError::NotFound(format!(
+                    "root {} in library {}",
+                    call.root_id, call.library_id
+                ))
             })?;
 
         // FR-083, before any filesystem work is planned.
@@ -365,8 +363,7 @@ impl AppUseCase {
                             title_name: title.name.clone(),
                             source_folder_path: folder_path_of(title),
                             merge_target_title_id: merge_target.map(str::to_string),
-                            merge_target_title_name: merge_title
-                                .map(|title| title.name.clone()),
+                            merge_target_title_name: merge_title.map(|title| title.name.clone()),
                             merge_target_folder_path: merge_title
                                 .and_then(|title| folder_path_of(title)),
                         }
@@ -408,7 +405,9 @@ impl AppUseCase {
                 .root_scope_title_blockers(title, merge_summaries.get(&title.id))
                 .await?;
 
-            let resolved = resolved_by_title.get(title.id.as_str()).map(|f| (*f).clone());
+            let resolved = resolved_by_title
+                .get(title.id.as_str())
+                .map(|f| (*f).clone());
             // A blocked title never enters the operation, so walking its folder
             // would be work whose only product is a plan item the planner
             // discards. It is still counted and named (FR-023).
@@ -471,8 +470,16 @@ impl AppUseCase {
                 destination_path: destination_root_path.clone(),
                 // A same-volume root-scoped operation renames; nothing is
                 // written twice.
-                moved_bytes: if same_volume == Some(true) { 0 } else { moved_bytes },
-                recycled_bytes: if same_volume == Some(true) { 0 } else { moved_bytes },
+                moved_bytes: if same_volume == Some(true) {
+                    0
+                } else {
+                    moved_bytes
+                },
+                recycled_bytes: if same_volume == Some(true) {
+                    0
+                } else {
+                    moved_bytes
+                },
                 recycle_base_path: recycle_config
                     .enabled
                     .then(|| recycle_config.base_path.clone()),
@@ -1052,9 +1059,8 @@ impl AppUseCase {
         let owners: BTreeMap<String, String> = destination_titles
             .iter()
             .filter_map(|title| {
-                folder_path_of(title).map(|folder| {
-                    (path_to_stored_string(&folder), title.id.clone())
-                })
+                folder_path_of(title)
+                    .map(|folder| (path_to_stored_string(&folder), title.id.clone()))
             })
             .collect();
 
@@ -1157,19 +1163,15 @@ impl AppUseCase {
         //    it refuses the start — so this is the belt to that braces.)
         //  - FR-028: unexplained content at the source blocks removing the root.
         //  - and there is nothing to do at all if it is already gone (resume).
-        let source_present = library
-            .roots
-            .iter()
-            .any(|root| root.id == tail.root_id);
+        let source_present = library.roots.iter().any(|root| root.id == tail.root_id);
         if still_on_source > 0 {
             warnings.push(format!(
                 "{} title(s) still reference {}, so it stays a configured root",
                 still_on_source, tail.source_root_path
             ));
         }
-        let remove_source = source_present
-            && still_on_source == 0
-            && tail.retirement.permits_source_removal();
+        let remove_source =
+            source_present && still_on_source == 0 && tail.retirement.permits_source_removal();
 
         let becomes_default = consolidation.default_transfer.destination_becomes_default();
         let desired: Vec<LibraryRootDraft> = library
@@ -1193,9 +1195,10 @@ impl AppUseCase {
             .collect();
 
         let unchanged = desired.len() == library.roots.len()
-            && desired.iter().zip(library.roots.iter()).all(|(want, has)| {
-                want.path == has.path && want.is_default == has.is_default
-            });
+            && desired
+                .iter()
+                .zip(library.roots.iter())
+                .all(|(want, has)| want.path == has.path && want.is_default == has.is_default);
 
         let library = if unchanged {
             // A resumed run reaching the tail a second time.
@@ -1372,9 +1375,7 @@ pub(super) async fn canonical_or_lexical(path: &Path) -> PathBuf {
 /// A root change resumes through it because it *is* a root move in plan
 /// currency: the same instruction set, the same checkpoints, the same
 /// reconciler — plus a tail that re-runs harmlessly.
-pub(super) fn resumes_through_root_move_runner(
-    operation_type: LocationOperationType,
-) -> bool {
+pub(super) fn resumes_through_root_move_runner(operation_type: LocationOperationType) -> bool {
     matches!(
         operation_type,
         LocationOperationType::RootMove

@@ -364,10 +364,7 @@ pub trait FileVerificationRecorder: Send + Sync {
 /// How the destination was opened for a full-depth read-back.
 pub enum ReadBackHandle {
     /// Open and ready to read.
-    Ready {
-        file: File,
-        bypass: CacheBypass,
-    },
+    Ready { file: File, bypass: CacheBypass },
     /// The read-back cannot run here; verification falls back to the quick floor
     /// with this reason (FR-042).
     Unsupported(String),
@@ -408,7 +405,9 @@ pub struct VerifiedCopier {
 
 impl std::fmt::Debug for VerifiedCopier {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.debug_struct("VerifiedCopier").finish_non_exhaustive()
+        formatter
+            .debug_struct("VerifiedCopier")
+            .finish_non_exhaustive()
     }
 }
 
@@ -451,7 +450,12 @@ impl VerifiedCopier {
             )
             .await?;
         let assessment = self
-            .verify(&request.source, &request.destination, &hashes, request.depth)
+            .verify(
+                &request.source,
+                &request.destination,
+                &hashes,
+                request.depth,
+            )
             .await?;
 
         Ok(VerifiedFile {
@@ -532,12 +536,7 @@ impl VerifiedCopier {
             let partial = partial.clone();
             let progress = progress.clone();
             spawn_verify_blocking(move || {
-                copy_with_streamed_hashes(
-                    &source,
-                    &partial,
-                    DestinationClaim::ClaimHere,
-                    &progress,
-                )
+                copy_with_streamed_hashes(&source, &partial, DestinationClaim::ClaimHere, &progress)
             })
             .await?
         };
@@ -1386,7 +1385,10 @@ mod tests {
             destination.exists(),
             "a mismatched destination is kept for diagnosis"
         );
-        assert!(source.exists(), "the source is never touched by verification");
+        assert!(
+            source.exists(),
+            "the source is never touched by verification"
+        );
     }
 
     /// The quick check covers the sampled head and tail windows.
@@ -1476,7 +1478,9 @@ mod tests {
         let destination = dir.path().join("destination.bin");
 
         let copier = VerifiedCopier::with_read_back_opener(Arc::new(|_path: &Path| {
-            ReadBackHandle::Unsupported("cache bypass is unavailable on this filesystem".to_string())
+            ReadBackHandle::Unsupported(
+                "cache bypass is unavailable on this filesystem".to_string(),
+            )
         }));
         let hashes = copier
             .copy(&source, &destination, DestinationClaim::ClaimHere)

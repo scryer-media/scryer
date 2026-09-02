@@ -176,9 +176,9 @@ pub struct PlannedTitle {
 
 impl PlannedTitle {
     pub fn bytes_total(&self) -> i64 {
-        self.files
-            .iter()
-            .fold(0_i64, |total, file| total.saturating_add(file.size_bytes as i64))
+        self.files.iter().fold(0_i64, |total, file| {
+            total.saturating_add(file.size_bytes as i64)
+        })
     }
 }
 
@@ -265,11 +265,9 @@ impl OperationWorkPlan {
     }
 
     pub fn bytes_total(&self) -> i64 {
-        self.titles
-            .iter()
-            .fold(0_i64, |total, title| {
-                total.saturating_add(title.bytes_total())
-            })
+        self.titles.iter().fold(0_i64, |total, title| {
+            total.saturating_add(title.bytes_total())
+        })
     }
 }
 
@@ -722,7 +720,10 @@ impl<'a> LocationOperationRunner<'a> {
                         &progress,
                         LocationOperationState::Canceled,
                         Some(StopReason::UserCanceled),
-                        Some("canceled at a title checkpoint; completed titles are unchanged".to_string()),
+                        Some(
+                            "canceled at a title checkpoint; completed titles are unchanged"
+                                .to_string(),
+                        ),
                     )
                     .await;
             }
@@ -783,7 +784,13 @@ impl<'a> LocationOperationRunner<'a> {
             }
 
             match self
-                .run_title(&operation, title, &verified_destinations, &mut progress, plan)
+                .run_title(
+                    &operation,
+                    title,
+                    &verified_destinations,
+                    &mut progress,
+                    plan,
+                )
                 .await
             {
                 Ok(TitleRunOutcome::Finished(warnings)) => {
@@ -1168,7 +1175,13 @@ impl<'a> LocationOperationRunner<'a> {
         progress.set_in_flight(&title.title_id, copied.load(Ordering::Relaxed));
 
         if let Err(error) = self
-            .write_title_checkpoint(operation, title, TitleCheckpointState::Moving, None, progress)
+            .write_title_checkpoint(
+                operation,
+                title,
+                TitleCheckpointState::Moving,
+                None,
+                progress,
+            )
             .await
         {
             tracing::warn!(
@@ -1436,9 +1449,8 @@ pub fn owned_entities(operation: &LocationOperation, plan: &OperationWorkPlan) -
     {
         entities.push(OwnedEntity::Root(root_id.clone()));
     }
-    entities.sort_by(|left, right| {
-        (left.kind_str(), left.id()).cmp(&(right.kind_str(), right.id()))
-    });
+    entities
+        .sort_by(|left, right| (left.kind_str(), left.id()).cmp(&(right.kind_str(), right.id())));
     entities.dedup();
     entities
 }
@@ -1511,8 +1523,7 @@ impl RunProgress {
                 progress
                     .bytes_done
                     .insert(title.title_id.clone(), checkpoint.bytes_verified);
-                progress.last_settled_sequence =
-                    progress.last_settled_sequence.max(title.sequence);
+                progress.last_settled_sequence = progress.last_settled_sequence.max(title.sequence);
             }
         }
         progress
@@ -1548,7 +1559,10 @@ impl RunProgress {
     }
 
     fn in_flight_bytes(&self) -> i64 {
-        self.in_flight.as_ref().map(|(_, bytes)| *bytes).unwrap_or(0)
+        self.in_flight
+            .as_ref()
+            .map(|(_, bytes)| *bytes)
+            .unwrap_or(0)
     }
 
     fn files_done(&self, title_id: &str) -> i64 {
@@ -1712,11 +1726,7 @@ mod tests {
         }
 
         fn seed_verification(&self, record: FileVerificationRecord) {
-            self.inner
-                .lock()
-                .expect("lock")
-                .verifications
-                .push(record);
+            self.inner.lock().expect("lock").verifications.push(record);
         }
 
         fn operation_states(&self) -> Vec<LocationOperationState> {
@@ -1741,7 +1751,7 @@ mod tests {
                 .checkpoints
                 .get(&(operation_id.to_string(), title_id.to_string()))
                 .cloned()
-            }
+        }
 
         fn released(&self) -> Vec<String> {
             self.inner.lock().expect("lock").released_operations.clone()
@@ -1858,10 +1868,7 @@ mod tests {
             Ok(true)
         }
 
-        async fn location_operation_cancel_requested(
-            &self,
-            operation_id: &str,
-        ) -> AppResult<bool> {
+        async fn location_operation_cancel_requested(&self, operation_id: &str) -> AppResult<bool> {
             Ok(self
                 .inner
                 .lock()
@@ -1982,10 +1989,7 @@ mod tests {
             Ok(LocationOwnershipOutcome::Claimed)
         }
 
-        async fn release_location_operation_ownership(
-            &self,
-            operation_id: &str,
-        ) -> AppResult<u64> {
+        async fn release_location_operation_ownership(&self, operation_id: &str) -> AppResult<u64> {
             let mut state = self.inner.lock().expect("lock");
             state.released_operations.push(operation_id.to_string());
             let before = state.ownership.len();
@@ -2064,8 +2068,7 @@ mod tests {
                     AppliedVerificationDepth::exact(request.depth)
                 },
                 outcome,
-                detail: fell_back
-                    .then(|| "a cache-bypassed read-back could not run".to_string()),
+                detail: fell_back.then(|| "a cache-bypassed read-back could not run".to_string()),
             })
         }
     }
@@ -2381,8 +2384,14 @@ mod tests {
         );
 
         let operation_states = store.operation_states();
-        assert_eq!(operation_states.first(), Some(&LocationOperationState::Preparing));
-        assert_eq!(operation_states.last(), Some(&LocationOperationState::Completed));
+        assert_eq!(
+            operation_states.first(),
+            Some(&LocationOperationState::Preparing)
+        );
+        assert_eq!(
+            operation_states.last(),
+            Some(&LocationOperationState::Completed)
+        );
         for state in [
             LocationOperationState::Moving,
             LocationOperationState::Verifying,
@@ -2627,7 +2636,10 @@ mod tests {
                 .state,
             TitleCheckpointState::Blocked
         );
-        assert_eq!(mover.moved(), vec!["/destination/title-2/0.mkv".to_string()]);
+        assert_eq!(
+            mover.moved(),
+            vec!["/destination/title-2/0.mkv".to_string()]
+        );
     }
 
     #[tokio::test]
@@ -2763,7 +2775,10 @@ mod tests {
         let checkpoint = store
             .checkpoint("op-1", "title-1")
             .expect("the warned title should have a checkpoint");
-        assert_eq!(checkpoint.state, TitleCheckpointState::CompletedWithWarnings);
+        assert_eq!(
+            checkpoint.state,
+            TitleCheckpointState::CompletedWithWarnings
+        );
         assert_eq!(
             checkpoint.detail.as_deref(),
             Some("one companion asset was renamed"),
@@ -2944,12 +2959,7 @@ mod tests {
             "the catalog never moves for a title that did not finish"
         );
         assert_eq!(
-            store
-                .inner
-                .lock()
-                .expect("lock")
-                .verifications
-                .len(),
+            store.inner.lock().expect("lock").verifications.len(),
             1,
             "the file that was proven before the cancel keeps its record"
         );

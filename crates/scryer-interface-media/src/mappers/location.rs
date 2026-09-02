@@ -22,18 +22,15 @@ use scryer_application::location::model::{
 };
 use scryer_application::location::operations::RootMovePreview;
 use scryer_application::location::preview::{
-    FreeSpaceEstimate, LocationPlan, PLAN_SECTION_SAMPLE_LIMIT,
-    PlanConfirmation, PlanCounts, PlanFingerprint, PlanItem, PlanItemKind, PlanSection,
-    VerificationStatement,
+    FreeSpaceEstimate, LocationPlan, PLAN_SECTION_SAMPLE_LIMIT, PlanConfirmation, PlanCounts,
+    PlanFingerprint, PlanItem, PlanItemKind, PlanSection, VerificationStatement,
 };
-use scryer_application::location::root_scope_execution::RootScopeCallDestination;
 use scryer_application::location::root_scope::{
     BlockedTitle, ClassifiedRootEntry, PlannedRootScope, RootContentClass, RootContentInventory,
     RootIdentityRetention, RootRetirementContract, TitleAccounting,
 };
-use scryer_application::location::transfer_effects::{
-    FILES_KEEP_THEIR_NAMES, FacetConversion,
-};
+use scryer_application::location::root_scope_execution::RootScopeCallDestination;
+use scryer_application::location::transfer_effects::{FILES_KEEP_THEIR_NAMES, FacetConversion};
 
 use crate::types::{
     CancelLocationOperationPayload, LocationAmbiguousDestinationCandidatePayload,
@@ -48,11 +45,10 @@ use crate::types::{
     LocationOperationPreviewPayload, LocationOperationRenamedAssetPayload,
     LocationOperationTitleAssetsPayload, LocationPlanConfirmationPayload,
     LocationPlanCountsPayload, LocationPlanItemPayload, LocationPlanKindCountPayload,
-    LocationPlanSectionPayload,
-    LocationRootContentBucketPayload, LocationRootContentEntryPayload,
-    LocationRootContentInventoryPayload, LocationRootScopePreviewPayload,
-    LocationRootIdentityRetentionPayload, LocationRootRetirementBlockerPayload,
-    LocationRootRetirementContractPayload, LocationSampledPathsPayload,
+    LocationPlanSectionPayload, LocationRootContentBucketPayload, LocationRootContentEntryPayload,
+    LocationRootContentInventoryPayload, LocationRootIdentityRetentionPayload,
+    LocationRootRetirementBlockerPayload, LocationRootRetirementContractPayload,
+    LocationRootScopePreviewPayload, LocationSampledPathsPayload,
     LocationSelectionClassificationPayload, LocationTitleAccountingPayload,
     LocationTitleCheckpointPayload, LocationVerificationStatementPayload, Long, MediaFacetValue,
     ResumeLocationOperationPayload, StartLocationOperationPayload, VerificationDepthValue,
@@ -215,17 +211,14 @@ fn from_classified_title(title: &TitleClassification) -> LocationClassifiedTitle
         reason_code: title.reason_code.clone(),
         reason: title.reason.clone(),
         blocks_start: title.blocks_start(),
-        destination_identity_match: identity
-            .map(|outcome| outcome.match_kind.into()),
+        destination_identity_match: identity.map(|outcome| outcome.match_kind.into()),
         merge_target_title_id: title
             .merge_target_title_id()
             .map(|id| ID::from(id.to_string())),
         // US7: detection already named the title that survives, so the merge
         // statement reads "merges into “X”" instead of quoting an id. Sourced
         // from the same outcome as the id beside it — the two can never disagree.
-        merge_target_title_name: title
-            .merge_target_title_name()
-            .map(ToString::to_string),
+        merge_target_title_name: title.merge_target_title_name().map(ToString::to_string),
         same_named_destination_title_id: title
             .same_named_destination_title_id()
             .map(|id| ID::from(id.to_string())),
@@ -260,10 +253,7 @@ fn from_classified_title(title: &TitleClassification) -> LocationClassifiedTitle
                     .collect()
             })
             .unwrap_or_default(),
-        facet_conversion: title
-            .facet_conversion
-            .as_ref()
-            .map(from_facet_conversion),
+        facet_conversion: title.facet_conversion.as_ref().map(from_facet_conversion),
     }
 }
 
@@ -623,7 +613,7 @@ pub fn from_root_scope_preview(preview: &PlannedRootScope) -> LocationRootScopeP
         ),
         accounting: from_title_accounting(&preview.accounting),
         retention: (!folds).then(|| from_root_identity_retention(&preview.retention)),
-        classification: folds.then(|| LocationConsolidationClassificationPayload {
+        classification: folds.then_some(LocationConsolidationClassificationPayload {
             moving_into_unused_folders: Long(classification.moving_into_unused_folders),
             merging_with_destination_titles: Long(classification.merging_with_destination_titles),
             folder_name_collisions: Long(classification.folder_name_collisions),
@@ -741,9 +731,7 @@ fn from_renamed_asset(asset: &RenamedAsset) -> LocationOperationRenamedAssetPayl
     }
 }
 
-fn from_deduplicated_asset(
-    asset: &DeduplicatedAsset,
-) -> LocationOperationDeduplicatedAssetPayload {
+fn from_deduplicated_asset(asset: &DeduplicatedAsset) -> LocationOperationDeduplicatedAssetPayload {
     LocationOperationDeduplicatedAssetPayload {
         source_path: display_path(&asset.source_path),
         source_name: asset.source_name.clone(),

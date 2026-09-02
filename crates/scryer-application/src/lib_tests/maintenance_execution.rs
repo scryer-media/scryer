@@ -10,9 +10,9 @@
 use super::*;
 
 use crate::lib_tests::maintenance_evaluation::InMemoryMaintenanceEvaluationRepo;
+use crate::lib_tests::maintenance_rules::{InMemoryMaintenanceRuleRepo, MaintenanceRuleReadFault};
 use crate::location::ownership_guard::OwnedEntity;
 use crate::location::test_support::InMemoryLocationOperationStore;
-use crate::lib_tests::maintenance_rules::{InMemoryMaintenanceRuleRepo, MaintenanceRuleReadFault};
 use crate::maintenance_rules::{
     MAINTENANCE_MAX_ACTION_ATTEMPTS, MaintenanceActionKind, MaintenanceActionSpec,
     MaintenanceGatesUpdate, MaintenanceMatcherDraft, MaintenanceRuleDraft, execution_reason,
@@ -1197,10 +1197,7 @@ async fn a_destructive_action_holds_while_a_location_operation_owns_the_title() 
         .arm(&rule_id, MaintenanceEffectArming::Destructive, Some(1))
         .await;
     operations
-        .claim_location_operation_ownership(
-            "operation-1",
-            &[OwnedEntity::Title(title.id.clone())],
-        )
+        .claim_location_operation_ownership("operation-1", &[OwnedEntity::Title(title.id.clone())])
         .await
         .expect("claim the title");
 
@@ -1251,10 +1248,7 @@ async fn the_policy_delete_itself_refuses_a_title_a_location_operation_owns() {
     let fixture = execution_app_with_operations(operations.clone());
     let title = seed_title(&fixture.app, &fixture.user, "Mid-move", true).await;
     operations
-        .claim_location_operation_ownership(
-            "operation-1",
-            &[OwnedEntity::Title(title.id.clone())],
-        )
+        .claim_location_operation_ownership("operation-1", &[OwnedEntity::Title(title.id.clone())])
         .await
         .expect("claim the title");
 

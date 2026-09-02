@@ -326,9 +326,8 @@ mod tests {
 
     #[test]
     fn path_derived_roots_are_rekeyed_and_others_are_left_alone() {
-        let path_derived_id = root_folder_id_for_normalized_path(&normalize_library_root_path(
-            "/data/movies",
-        ));
+        let path_derived_id =
+            root_folder_id_for_normalized_path(&normalize_library_root_path("/data/movies"));
         let remaps = build_remaps(vec![
             root(&path_derived_id, "/data/movies"),
             root("canonical_root_for_series_default_library", "/data/series"),

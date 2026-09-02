@@ -722,10 +722,7 @@ mod tests {
     /// Source of every module that registers a guarded entry point. The audit
     /// test reads these to prove a declared entry is actually wired.
     const GUARDED_ENTRY_SOURCES: &[(&str, &str)] = &[
-        (
-            "location/folder_match.rs",
-            include_str!("folder_match.rs"),
-        ),
+        ("location/folder_match.rs", include_str!("folder_match.rs")),
         ("library/library.rs", include_str!("../library/library.rs")),
         ("library/rename.rs", include_str!("../library/rename.rs")),
         (

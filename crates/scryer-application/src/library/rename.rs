@@ -2523,7 +2523,8 @@ fn resolve_rendered_rename_filename(
 }
 
 fn rename_planning_path_key(stored_path: &str) -> String {
-    let normalized = crate::stored_paths::lexically_normalize(&stored_path_to_path_buf(stored_path));
+    let normalized =
+        crate::stored_paths::lexically_normalize(&stored_path_to_path_buf(stored_path));
     let key = {
         #[cfg(windows)]
         {

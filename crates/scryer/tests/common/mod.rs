@@ -55,7 +55,6 @@ use scryer_infrastructure_library::media::{
     images::{image_proxy_store::ImageProxyStore, title_image_store::TitleImageStore},
     libraries::{
         location_operation_store::LocationOperationStore,
-        title_merge_store::TitleMergeStore,
         scan_unmatched_store::LibraryScanUnmatchedStore,
         scanner::FileSystemLibraryScanner,
         state_store::{
@@ -63,6 +62,7 @@ use scryer_infrastructure_library::media::{
             SubtitleDownloadStore, WantedStore,
         },
         store::LibraryStore,
+        title_merge_store::TitleMergeStore,
     },
     search::media_file_store::MediaFileStore,
     servers::MediaServerConnectionStore,

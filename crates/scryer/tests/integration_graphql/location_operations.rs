@@ -379,7 +379,9 @@ fn planned_collision_title(
         files: vec![RootMoveFileExecution {
             media_file_id: Some(format!("media-{title_id}")),
             source_path: format!("/source/{title_name}/{title_name}.mkv"),
-            destination_path: format!("/destination/{title_name}/{title_name} (from Movies 4K).mkv"),
+            destination_path: format!(
+                "/destination/{title_name}/{title_name} (from Movies 4K).mkv"
+            ),
             size_bytes: 4_096,
         }],
         deduplicated_sources: vec![format!("/source/{title_name}/{title_name}.nfo")],
@@ -809,7 +811,11 @@ async fn graphql_location_operation_assets_split_settled_work_from_planned_work(
         &library_id,
         &root_id,
         &[
-            ("title-settled", 1, TitleCheckpointState::CompletedWithWarnings),
+            (
+                "title-settled",
+                1,
+                TitleCheckpointState::CompletedWithWarnings,
+            ),
             ("title-canceled", 2, TitleCheckpointState::Pending),
         ],
     )
@@ -856,9 +862,8 @@ async fn graphql_location_operation_assets_split_settled_work_from_planned_work(
     assert_eq!(pending["dedups"][0]["done"], false);
 
     // FR-083 governs this read the same way it governs the operation row.
-    let assets_query = format!(
-        r#"query {{ locationOperationAssets(id: "{operation_id}") {{ operationId }} }}"#
-    );
+    let assets_query =
+        format!(r#"query {{ locationOperationAssets(id: "{operation_id}") {{ operationId }} }}"#);
     let denied = schema_exec(&ctx, &assets_query, Some(location_outsider())).await;
     assert_graphql_field_denied(&denied, "locationOperationAssets");
 
@@ -1145,7 +1150,8 @@ async fn title_in_library(
     root_id: &str,
     external_ids: Vec<ExternalId>,
 ) -> Title {
-    let title = create_catalog_title(ctx, name, MediaFacet::Movie, external_ids, vec![], true).await;
+    let title =
+        create_catalog_title(ctx, name, MediaFacet::Movie, external_ids, vec![], true).await;
     ctx.titles
         .transfer_to_library(&title.id, library_id, root_id, None, &[])
         .await
@@ -1228,8 +1234,7 @@ async fn graphql_location_operation_preview_surfaces_the_merge_summary() {
     assert_eq!(transfers["titles"][0]["mergeTargetTitleId"], destination.id);
     // US7: the id is not what the sentence says — the surviving title's name is.
     assert_eq!(
-        transfers["titles"][0]["mergeTargetTitleName"],
-        "Twin Film (Restored)",
+        transfers["titles"][0]["mergeTargetTitleName"], "Twin Film (Restored)",
         "the merge target rides the payload by name, not only by id: {transfers}"
     );
     assert_eq!(transfers["titles"][0]["destinationIdentityMatch"], "UNIQUE");
@@ -1480,7 +1485,10 @@ async fn graphql_adoption_accounts_for_a_folder_the_user_moved_by_hand() {
     assert_eq!(adopted.len(), 1, "{preview}");
     assert_eq!(
         adopted[0]["destinationPath"],
-        moved_folder.join("Adopted.2024.mkv").to_string_lossy().as_ref()
+        moved_folder
+            .join("Adopted.2024.mkv")
+            .to_string_lossy()
+            .as_ref()
     );
 
     // FR-053 is stated before the confirmation, not after it.
@@ -1513,7 +1521,10 @@ async fn graphql_adoption_accounts_for_a_folder_the_user_moved_by_hand() {
     let operation_id = operation["id"].as_str().expect("operation id").to_string();
     let read_back = gql(&ctx, OPERATION_QUERY, json!({ "id": operation_id })).await;
     assert_no_errors(&read_back);
-    assert_eq!(read_back["data"]["locationOperation"]["mode"], "FILES_ALREADY_THERE");
+    assert_eq!(
+        read_back["data"]["locationOperation"]["mode"],
+        "FILES_ALREADY_THERE"
+    );
     assert_eq!(
         read_back["data"]["locationOperation"]["sourceRootId"],
         source_root_id
@@ -1556,10 +1567,11 @@ async fn graphql_adoption_refuses_to_confirm_while_tracked_media_is_unaccounted_
     // clear if the user can see which file it is about.
     let missing = items_with_reason(preview, "BLOCKED", "adoption_media_missing");
     assert!(
-        missing
-            .iter()
-            .any(|item| item["sourcePath"]
-                == folder.join("Half.Moved.2024.mkv").to_string_lossy().as_ref()),
+        missing.iter().any(|item| item["sourcePath"]
+            == folder
+                .join("Half.Moved.2024.mkv")
+                .to_string_lossy()
+                .as_ref()),
         "the blocked items name the tracked file: {preview}"
     );
     // Nothing is adopted while anything is unaccounted for.
@@ -1793,10 +1805,7 @@ async fn graphql_a_root_change_preview_states_what_the_root_keeps_and_accounts_f
             .len(),
         6
     );
-    for group in plan["classification"]["groups"]
-        .as_array()
-        .expect("groups")
-    {
+    for group in plan["classification"]["groups"].as_array().expect("groups") {
         assert_eq!(group["titles"], json!([]), "{preview}");
     }
 
@@ -1991,7 +2000,10 @@ async fn graphql_the_destination_path_decides_the_branch_the_server_previews() {
     // A configured root of this library, named by its path: the fold.
     let folded = preview_for(destination_root.path().to_string_lossy().to_string()).await;
     let folded = &folded["data"]["locationRootScopePreview"];
-    assert_eq!(folded["plan"]["operationType"], "ROOT_CONSOLIDATION", "{folded}");
+    assert_eq!(
+        folded["plan"]["operationType"], "ROOT_CONSOLIDATION",
+        "{folded}"
+    );
     assert_eq!(
         folded["plan"]["destinationRootId"], destination_root_id,
         "the path resolved to the root that already holds it: {folded}"

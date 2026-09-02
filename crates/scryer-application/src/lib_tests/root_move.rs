@@ -17,9 +17,7 @@ use crate::location::model::{
     LocationExecutionMode, LocationOperation, LocationOperationState, LocationOperationType,
     VerificationDepth,
 };
-use crate::location::operations::{
-    RootMovePreviewRequest, StartRootMoveRequest, is_catalog_only,
-};
+use crate::location::operations::{RootMovePreviewRequest, StartRootMoveRequest, is_catalog_only};
 use crate::location::preview::{PlanConfirmationRequest, PlanItemKind};
 use crate::location::test_support::{
     InMemoryLocationOperationStore, queued_operation, title_boundary_cancel_check,
@@ -346,7 +344,9 @@ impl RootMoveFixture {
     }
 }
 
-fn move_items(preview: &crate::location::operations::RootMovePreview) -> Vec<&crate::location::preview::PlanItem> {
+fn move_items(
+    preview: &crate::location::operations::RootMovePreview,
+) -> Vec<&crate::location::preview::PlanItem> {
     preview
         .plan
         .section(PlanItemKind::Move)
@@ -424,7 +424,10 @@ async fn the_preview_states_current_and_destination_folders_with_file_count_and_
     // Nothing has happened yet: a preview is a read.
     assert!(fixture.root_a().join("Preview Subject (2024)").exists());
     assert!(!fixture.root_b().join("Preview Subject (2024)").exists());
-    assert_eq!(fixture.title(&title.id).await.root_folder_id, fixture.root_a_id);
+    assert_eq!(
+        fixture.title(&title.id).await.root_folder_id,
+        fixture.root_a_id
+    );
 }
 
 /// US2.1, second half: on confirm the operation completes and the catalog is
@@ -450,7 +453,11 @@ async fn confirming_a_move_relocates_the_files_and_then_the_catalog() {
     assert_eq!(operation.counters.files_processed, 1);
 
     let destination_folder = fixture.root_b().join("Confirmed Move (2023)");
-    assert!(destination_folder.join("Confirmed.Move.2023.1080p.mkv").exists());
+    assert!(
+        destination_folder
+            .join("Confirmed.Move.2023.1080p.mkv")
+            .exists()
+    );
     assert!(!fixture.root_a().join("Confirmed Move (2023)").exists());
 
     let moved = fixture.title(&title.id).await;
@@ -459,12 +466,15 @@ async fn confirming_a_move_relocates_the_files_and_then_the_catalog() {
         moved.folder_path.as_deref(),
         Some(destination_folder.to_string_lossy().as_ref())
     );
-    assert_eq!(fixture.media_paths(&title.id).await, vec![
-        destination_folder
-            .join("Confirmed.Move.2023.1080p.mkv")
-            .to_string_lossy()
-            .to_string()
-    ]);
+    assert_eq!(
+        fixture.media_paths(&title.id).await,
+        vec![
+            destination_folder
+                .join("Confirmed.Move.2023.1080p.mkv")
+                .to_string_lossy()
+                .to_string()
+        ]
+    );
 
     // Every file has a verification record, and the record is what unblocked
     // touching the source (FR-044).
@@ -567,17 +577,17 @@ async fn a_stale_folder_name_is_repaired_by_the_destination_naming_policy() {
     let preview = fixture.preview(&[&title.id]).await;
     let repaired = fixture.root_b().join("Stale Name (2019)");
     assert_eq!(
-        preview.execution.titles[0].destination_folder_path.as_deref(),
+        preview.execution.titles[0]
+            .destination_folder_path
+            .as_deref(),
         Some(repaired.to_string_lossy().as_ref()),
         "the preview shows the repaired folder name before confirmation (FR-013)"
     );
     assert!(
-        move_items(&preview)
-            .iter()
-            .all(|item| item
-                .destination_path
-                .as_deref()
-                .is_some_and(|path| path.starts_with(&*repaired.to_string_lossy()))),
+        move_items(&preview).iter().all(|item| item
+            .destination_path
+            .as_deref()
+            .is_some_and(|path| path.starts_with(&*repaired.to_string_lossy()))),
         "every previewed destination sits under the repaired folder"
     );
 
@@ -664,8 +674,14 @@ async fn a_bulk_selection_across_both_roots_classifies_every_title_and_omits_non
     );
     assert_eq!(operation.counters.unresolved, 0);
 
-    assert_eq!(fixture.title(&first.id).await.root_folder_id, fixture.root_b_id);
-    assert_eq!(fixture.title(&second.id).await.root_folder_id, fixture.root_b_id);
+    assert_eq!(
+        fixture.title(&first.id).await.root_folder_id,
+        fixture.root_b_id
+    );
+    assert_eq!(
+        fixture.title(&second.id).await.root_folder_id,
+        fixture.root_b_id
+    );
 
     // The B-title was never entered into the operation, and its content sits
     // exactly where it always did.
@@ -697,7 +713,9 @@ async fn a_bulk_selection_across_both_roots_classifies_every_title_and_omits_non
 #[tokio::test]
 async fn a_monitored_title_with_no_files_takes_the_catalog_only_fast_path() {
     let fixture = RootMoveFixture::new().await;
-    let title = fixture.create_title("Nothing On Disk", 2020, &fixture.root_a_id).await;
+    let title = fixture
+        .create_title("Nothing On Disk", 2020, &fixture.root_a_id)
+        .await;
     assert!(title.monitored);
     assert!(fixture.media_paths(&title.id).await.is_empty());
 
@@ -723,7 +741,10 @@ async fn a_monitored_title_with_no_files_takes_the_catalog_only_fast_path() {
     assert_eq!(operation.state, LocationOperationState::Completed);
     assert_eq!(operation.mode, LocationExecutionMode::CatalogOnly);
 
-    assert_eq!(fixture.title(&title.id).await.root_folder_id, fixture.root_b_id);
+    assert_eq!(
+        fixture.title(&title.id).await.root_folder_id,
+        fixture.root_b_id
+    );
     assert!(
         fixture.verifications().is_empty(),
         "a catalog-only reassignment verifies nothing because it moves nothing"
@@ -808,7 +829,10 @@ async fn an_interrupted_operation_resumes_from_its_persisted_plan_without_redoin
         .app
         .run_root_move(operation_id, &preview.execution)
         .await;
-    assert!(crashed.is_err(), "the injected store failure aborts the run");
+    assert!(
+        crashed.is_err(),
+        "the injected store failure aborts the run"
+    );
 
     let interrupted = fixture
         .app
@@ -1079,11 +1103,9 @@ async fn an_operation_whose_root_is_not_available_is_left_interrupted_rather_tha
 async fn an_operation_type_the_root_move_runner_does_not_walk_declines_resume() {
     let fixture = RootMoveFixture::new().await;
 
-    for (index, operation_type) in [
-        LocationOperationType::FolderReassignment,
-    ]
-    .into_iter()
-    .enumerate()
+    for (index, operation_type) in [LocationOperationType::FolderReassignment]
+        .into_iter()
+        .enumerate()
     {
         let operation_id = format!("operation-foreign-type-{index}");
         let operation = queued_operation(
@@ -1250,10 +1272,8 @@ async fn a_bulk_move_spanning_two_source_roots_owns_every_root_it_reads_from() {
         )
     };
 
-    let entities = crate::location::executor::owned_entities(
-        &operation,
-        &preview.execution.to_work_plan(),
-    );
+    let entities =
+        crate::location::executor::owned_entities(&operation, &preview.execution.to_work_plan());
     for root_id in [&fixture.root_a_id, &root_c, &fixture.root_b_id] {
         assert!(
             entities.contains(&crate::location::ownership_guard::OwnedEntity::Root(
@@ -1330,7 +1350,13 @@ async fn a_bulk_move_spanning_two_source_roots_owns_every_root_it_reads_from() {
     // operations: retiring any of these roots is refused while they are held.
     let repointed = fixture
         .app
-        .update_library(&fixture.user, &fixture.library_id(), None, Some(Vec::new()), None)
+        .update_library(
+            &fixture.user,
+            &fixture.library_id(),
+            None,
+            Some(Vec::new()),
+            None,
+        )
         .await;
     let Err(crate::AppError::Validation(message)) = repointed else {
         panic!("retiring a held root must be refused: {repointed:?}");
@@ -1728,7 +1754,10 @@ async fn a_started_move_opens_an_activity_job_run_and_closes_it_when_the_move_fi
     let opened = fixture.job_run(&run_id).await;
     assert_eq!(opened.job_key, crate::JobKey::LocationOperation);
     assert_eq!(opened.trigger_source, crate::JobTriggerSource::Manual);
-    assert_eq!(opened.actor_user_id.as_deref(), Some(fixture.user.id.as_str()));
+    assert_eq!(
+        opened.actor_user_id.as_deref(),
+        Some(fixture.user.id.as_str())
+    );
     assert_eq!(
         opened.operation_type,
         format!("location_operation:{}", accepted.operation.id)
@@ -1755,7 +1784,10 @@ async fn a_started_move_opens_an_activity_job_run_and_closes_it_when_the_move_fi
     assert_eq!(closed.status, crate::JobRunStatus::Completed);
     assert!(closed.completed_at.is_some());
     assert_eq!(closed.error_text, None);
-    let summary = closed.summary_text.clone().expect("a closed run summarizes");
+    let summary = closed
+        .summary_text
+        .clone()
+        .expect("a closed run summarizes");
     assert!(
         summary.contains("1 of 1 title(s)"),
         "the summary reports what moved, got {summary}"
@@ -1832,7 +1864,10 @@ async fn a_canceled_move_closes_its_activity_run_as_a_warning_rather_than_a_fail
         "a user-requested stop is not a job failure"
     );
     assert_eq!(closed.error_text, None);
-    let summary = closed.summary_text.clone().expect("a closed run summarizes");
+    let summary = closed
+        .summary_text
+        .clone()
+        .expect("a closed run summarizes");
     assert!(
         summary.contains("Canceled at a title checkpoint"),
         "the summary explains the stop, got {summary}"
@@ -1909,10 +1944,7 @@ async fn a_resumed_operation_reports_through_a_fresh_activity_run() {
     // itself stays resumable.
     let crashed_run = fixture.settled_job_run(&first_run_id).await;
     assert_eq!(crashed_run.status, crate::JobRunStatus::Failed);
-    assert!(
-        crashed_run.error_text.is_some(),
-        "a run that died says why"
-    );
+    assert!(crashed_run.error_text.is_some(), "a run that died says why");
     let interrupted = fixture
         .app
         .location_operation(&operation_id)

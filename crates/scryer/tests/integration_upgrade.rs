@@ -423,18 +423,18 @@ async fn seed_title_for_library(
 ) -> Title {
     // Root ids are allocated, not derived from the path (FR-078), so the fixture
     // has to read the id the library actually stored for `root_path`.
-    let normalized_root = scryer_domain::normalize_library_root_path(
-        root_path.to_string_lossy().as_ref(),
-    );
-    let root_folder_id = scryer_application::LibraryRepository::get_by_id(&ctx.libraries, library_id)
-        .await
-        .expect("library should load")
-        .expect("library should exist")
-        .roots
-        .iter()
-        .find(|root| scryer_domain::normalize_library_root_path(&root.path) == normalized_root)
-        .map(|root| root.id.clone())
-        .expect("library should have a root at the seeded path");
+    let normalized_root =
+        scryer_domain::normalize_library_root_path(root_path.to_string_lossy().as_ref());
+    let root_folder_id =
+        scryer_application::LibraryRepository::get_by_id(&ctx.libraries, library_id)
+            .await
+            .expect("library should load")
+            .expect("library should exist")
+            .roots
+            .iter()
+            .find(|root| scryer_domain::normalize_library_root_path(&root.path) == normalized_root)
+            .map(|root| root.id.clone())
+            .expect("library should have a root at the seeded path");
     let title = Title {
         id: id.to_string(),
         name: name.to_string(),

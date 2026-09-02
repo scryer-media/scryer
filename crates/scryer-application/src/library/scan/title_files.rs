@@ -752,7 +752,10 @@ mod tests {
             }),
         };
 
-        assert!(!title_media_file_quick_proof_changed(&media_file, &snapshot));
+        assert!(!title_media_file_quick_proof_changed(
+            &media_file,
+            &snapshot
+        ));
     }
 
     /// An unchanged file is left entirely alone.
@@ -772,7 +775,10 @@ mod tests {
             }),
         };
 
-        assert!(!title_media_file_quick_proof_changed(&media_file, &snapshot));
+        assert!(!title_media_file_quick_proof_changed(
+            &media_file,
+            &snapshot
+        ));
     }
 
     /// An unreadable signature is not evidence of anything; FR-046 never
@@ -790,7 +796,10 @@ mod tests {
             signature: None,
         };
 
-        assert!(!title_media_file_quick_proof_changed(&media_file, &snapshot));
+        assert!(!title_media_file_quick_proof_changed(
+            &media_file,
+            &snapshot
+        ));
     }
 
     #[test]

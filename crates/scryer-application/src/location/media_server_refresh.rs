@@ -377,6 +377,9 @@ mod tests {
                 )
             })
             .collect::<Vec<_>>();
-        assert_eq!(refresh_folders(&checkpoints).len(), MAX_TARGETED_FOLDERS + 5);
+        assert_eq!(
+            refresh_folders(&checkpoints).len(),
+            MAX_TARGETED_FOLDERS + 5
+        );
     }
 }

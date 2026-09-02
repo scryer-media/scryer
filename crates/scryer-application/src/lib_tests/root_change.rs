@@ -246,9 +246,7 @@ impl RootChangeFixture {
                     call: self.request(),
                     confirmation: PlanConfirmationRequest {
                         fingerprint: preview.plan.fingerprint.clone(),
-                        typed_confirmation: Some(
-                            LOCATION_TYPED_CONFIRMATION_PHRASE.to_string(),
-                        ),
+                        typed_confirmation: Some(LOCATION_TYPED_CONFIRMATION_PHRASE.to_string()),
                     },
                 },
             )
@@ -358,7 +356,10 @@ async fn every_title_assigned_to_the_root_is_accounted_for_with_no_way_to_exclud
             "Accounted One",
             2021,
             "Accounted One (2021)",
-            &[("Accounted.One.2021.mkv", 512), ("Accounted.One.2021.nfo", 32)],
+            &[
+                ("Accounted.One.2021.mkv", 512),
+                ("Accounted.One.2021.nfo", 32),
+            ],
         )
         .await;
     let also_with_files = fixture
@@ -404,7 +405,10 @@ async fn every_title_assigned_to_the_root_is_accounted_for_with_no_way_to_exclud
 
     // Nothing has happened yet: a preview is a read.
     assert!(!fixture.destination().exists());
-    assert_eq!(fixture.root().await.path, fixture.source().to_string_lossy());
+    assert_eq!(
+        fixture.root().await.path,
+        fixture.source().to_string_lossy()
+    );
 }
 
 /// US4.1, second half + FR-023/FR-086: a blocked title is named in the preview
@@ -413,7 +417,12 @@ async fn every_title_assigned_to_the_root_is_accounted_for_with_no_way_to_exclud
 async fn a_blocked_title_is_named_and_stops_the_root_change_until_it_is_repaired() {
     let fixture = RootChangeFixture::new().await;
     let moving = fixture
-        .seed_title("Free Title", 2020, "Free Title (2020)", &[("Free.mkv", 128)])
+        .seed_title(
+            "Free Title",
+            2020,
+            "Free Title (2020)",
+            &[("Free.mkv", 128)],
+        )
         .await;
     let blocked = fixture
         .seed_title(
@@ -512,7 +521,9 @@ async fn the_root_keeps_its_identity_and_default_status_when_its_path_changes() 
             &[("Relocated.2024.mkv", 1024), ("Relocated.2024.en.srt", 16)],
         )
         .await;
-    let fileless = fixture.seed_fileless_title("Relocated Fileless", 2024).await;
+    let fileless = fixture
+        .seed_fileless_title("Relocated Fileless", 2024)
+        .await;
 
     let before = fixture.root().await;
     assert!(before.is_default);
@@ -527,13 +538,19 @@ async fn the_root_keeps_its_identity_and_default_status_when_its_path_changes() 
     assert_eq!(operation.operation_type, LocationOperationType::RootChange);
 
     let after = fixture.root().await;
-    assert_eq!(after.id, before.id, "the synthetic root id is path-independent");
+    assert_eq!(
+        after.id, before.id,
+        "the synthetic root id is path-independent"
+    );
     assert_eq!(after.path, fixture.destination().to_string_lossy());
     assert!(after.is_default, "a path change never moves the default");
 
     // Both titles still point at the same root, and the one with files points
     // at the new paths.
-    assert_eq!(fixture.title(&title.id).await.root_folder_id, fixture.root_id);
+    assert_eq!(
+        fixture.title(&title.id).await.root_folder_id,
+        fixture.root_id
+    );
     assert_eq!(
         fixture.title(&fileless.id).await.root_folder_id,
         fixture.root_id
@@ -643,7 +660,10 @@ async fn unknown_content_is_listed_separately_and_keeps_the_old_location_standin
             .join("Tidy.2018.mkv")
             .exists()
     );
-    assert_eq!(fixture.title(&title.id).await.root_folder_id, fixture.root_id);
+    assert_eq!(
+        fixture.title(&title.id).await.root_folder_id,
+        fixture.root_id
+    );
     // …and the unexplained file is exactly where it was, in a source location
     // that was not taken away underneath it.
     assert!(stray.exists(), "unknown content was never deleted");
@@ -658,12 +678,7 @@ async fn unknown_content_is_listed_separately_and_keeps_the_old_location_standin
 async fn only_empty_source_directories_are_removed_and_only_after_verification() {
     let fixture = RootChangeFixture::new().await;
     let title = fixture
-        .seed_title(
-            "Nested",
-            2017,
-            "Nested (2017)",
-            &[("Nested.2017.mkv", 300)],
-        )
+        .seed_title("Nested", 2017, "Nested (2017)", &[("Nested.2017.mkv", 300)])
         .await;
     // A root-level directory holding nothing unexplained: cleanup may take it
     // once it is empty.
@@ -672,7 +687,11 @@ async fn only_empty_source_directories_are_removed_and_only_after_verification()
 
     let preview = fixture.preview().await;
     assert!(preview.retirement.empty_directories_only);
-    assert!(preview.retirement.requires_verification_before_source_removal);
+    assert!(
+        preview
+            .retirement
+            .requires_verification_before_source_removal
+    );
     assert!(preview.retirement.permits_source_removal());
     assert!(
         preview
@@ -689,7 +708,10 @@ async fn only_empty_source_directories_are_removed_and_only_after_verification()
     assert_eq!(records.len(), 1);
     assert!(records[0].outcome.permits_source_removal());
 
-    assert!(!empty_root_directory.exists(), "an empty directory is removable");
+    assert!(
+        !empty_root_directory.exists(),
+        "an empty directory is removable"
+    );
     assert!(!fixture.source().join("Nested (2017)").exists());
     assert!(
         !fixture.source().exists(),
@@ -702,7 +724,10 @@ async fn only_empty_source_directories_are_removed_and_only_after_verification()
             .join("Nested.2017.mkv")
             .exists()
     );
-    assert_eq!(fixture.title(&title.id).await.root_folder_id, fixture.root_id);
+    assert_eq!(
+        fixture.title(&title.id).await.root_folder_id,
+        fixture.root_id
+    );
 }
 
 // ── US4.5 ────────────────────────────────────────────────────────────────────
@@ -861,7 +886,10 @@ async fn a_recycle_bin_under_the_source_root_is_left_where_it_is() {
         "the warning has to name the bin as the reason the root was kept: {detail}"
     );
 
-    assert!(source_bin.exists(), "the bin was moved rather than left alone");
+    assert!(
+        source_bin.exists(),
+        "the bin was moved rather than left alone"
+    );
     assert!(
         !fixture.destination().join(".scryer-recycle").exists(),
         "nothing put a bin under the new root"
@@ -941,7 +969,9 @@ async fn a_restart_resumes_a_root_change_and_finishes_the_retirement_exactly_onc
         .resume_location_operation(operation_id)
         .await
         .expect("resume decision");
-    let plan = resumed.plan().expect("a root change resumes through the runner");
+    let plan = resumed
+        .plan()
+        .expect("a root change resumes through the runner");
     assert!(
         plan.root_change.is_some(),
         "the root-scoped tail has to survive the round trip through the plan JSON"
@@ -953,7 +983,10 @@ async fn a_restart_resumes_a_root_change_and_finishes_the_retirement_exactly_onc
         .expect("the resumed run finishes");
     assert_eq!(outcome.state, LocationOperationState::Completed);
 
-    assert_eq!(fixture.root().await.path, fixture.destination().to_string_lossy());
+    assert_eq!(
+        fixture.root().await.path,
+        fixture.destination().to_string_lossy()
+    );
     for title in [&first.id, &second.id] {
         assert_eq!(fixture.title(title).await.root_folder_id, fixture.root_id);
         for path in fixture.media_paths(title).await {
@@ -969,7 +1002,10 @@ async fn a_restart_resumes_a_root_change_and_finishes_the_retirement_exactly_onc
         .await
         .expect("a second run over a settled operation is a read");
     assert_eq!(again.state, LocationOperationState::Completed);
-    assert_eq!(fixture.root().await.path, fixture.destination().to_string_lossy());
+    assert_eq!(
+        fixture.root().await.path,
+        fixture.destination().to_string_lossy()
+    );
 }
 
 // ── FR-084 ───────────────────────────────────────────────────────────────────

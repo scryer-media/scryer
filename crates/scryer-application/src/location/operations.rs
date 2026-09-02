@@ -71,20 +71,20 @@ use crate::location::collisions::{
     CollisionNaming, ContentFacts, DestinationItem, FullHash, PathCaseRule, RecycleAvailability,
 };
 use crate::location::execution::{
-    ImportFilePermissionsApplier, MergedSourceRetirement, MergedSourceRetirer, RootMoveAdmission,
-    RootMoveCatalog, RootMoveFileMover, RootMoveReconciler, RecycleBinSourceRecycler,
-    TitlePlacementSnapshot,
+    ImportFilePermissionsApplier, MergedSourceRetirement, MergedSourceRetirer,
+    RecycleBinSourceRecycler, RootMoveAdmission, RootMoveCatalog, RootMoveFileMover,
+    RootMoveReconciler, TitlePlacementSnapshot,
 };
-use crate::location::media_server_refresh::{
-    LocationMediaServerRefresh, MediaServerRefreshRequest, notify_media_servers_for_operation,
-};
-use crate::location::merge::engine::{MergePlan, plan_merge};
 use crate::location::executor::{LocationOperationRunner, OperationRunOutcome};
 use crate::location::hardlinks::{HardlinkFact, detect_hardlinks};
 use crate::location::identity::{
     DestinationIdentityOutcome, DestinationTitleCandidate, IdentityRedirects, SourceTitleIdentity,
     detect_destination_titles,
 };
+use crate::location::media_server_refresh::{
+    LocationMediaServerRefresh, MediaServerRefreshRequest, notify_media_servers_for_operation,
+};
+use crate::location::merge::engine::{MergePlan, plan_merge};
 use crate::location::model::{
     LocationExecutionMode, LocationOperation, LocationOperationCounters, LocationOperationState,
     VerificationDepth,
@@ -817,13 +817,9 @@ impl AppUseCase {
         // once every title has recycled (FR-087). Bound to the run rather than
         // performed after it, so the operation is never readable as finished
         // before its root has actually moved.
-        let epilogue = plan
-            .root_change
-            .as_ref()
-            .map(|tail| crate::location::root_scope_execution::RootScopeEpilogue {
-                app: self,
-                tail,
-            });
+        let epilogue = plan.root_change.as_ref().map(|tail| {
+            crate::location::root_scope_execution::RootScopeEpilogue { app: self, tail }
+        });
 
         let mut runner = LocationOperationRunner::new(
             self.services.library.location_operations.as_ref(),
@@ -1153,7 +1149,8 @@ impl AppUseCase {
             }
             configs.insert(
                 root_path.to_string(),
-                self.recycle_bin_config_for_media_root(Some(root_path)).await,
+                self.recycle_bin_config_for_media_root(Some(root_path))
+                    .await,
             );
         }
         RecycleBinSourceRecycler::new(configs)
@@ -1354,10 +1351,7 @@ fn describe_location_operation_outcome(outcome: &OperationRunOutcome) -> String 
         summary.push_str(&format!(" {} needed no change.", counters.no_ops));
     }
     if counters.unresolved > 0 {
-        summary.push_str(&format!(
-            " {} still need a decision.",
-            counters.unresolved
-        ));
+        summary.push_str(&format!(" {} still need a decision.", counters.unresolved));
     }
     match outcome.state {
         LocationOperationState::Canceled => {
@@ -1429,9 +1423,7 @@ impl AppUseCase {
                     .libraries
                     .get_by_id(&title.library_id)
                     .await?
-                    .ok_or_else(|| {
-                        AppError::NotFound(format!("library {}", title.library_id))
-                    })?;
+                    .ok_or_else(|| AppError::NotFound(format!("library {}", title.library_id)))?;
                 libraries.insert(library.id.clone(), library);
             }
         }
@@ -1447,8 +1439,10 @@ impl AppUseCase {
                 .await?
                 .ok_or_else(|| AppError::NotFound(format!("library {library_id}")))?,
             None => {
-                let mut ids: Vec<&str> =
-                    titles.iter().map(|title| title.library_id.as_str()).collect();
+                let mut ids: Vec<&str> = titles
+                    .iter()
+                    .map(|title| title.library_id.as_str())
+                    .collect();
                 ids.sort_unstable();
                 ids.dedup();
                 match ids.as_slice() {
@@ -1516,7 +1510,8 @@ impl AppUseCase {
 
         // Classification facts, including the FR-086 blockers.
         let mut facts = Vec::with_capacity(titles.len());
-        let mut media_files_by_title: BTreeMap<String, Vec<crate::TitleMediaFile>> = BTreeMap::new();
+        let mut media_files_by_title: BTreeMap<String, Vec<crate::TitleMediaFile>> =
+            BTreeMap::new();
         for title in &titles {
             let media_files = self
                 .services
@@ -1672,9 +1667,7 @@ impl AppUseCase {
                 destination_identity: classified.destination_identity.clone(),
                 facet_conversion: classified.facet_conversion.clone(),
                 associations: classified.associations,
-                merge_summary: merge_plans
-                    .get(&title.id)
-                    .map(|plan| plan.summary.clone()),
+                merge_summary: merge_plans.get(&title.id).map(|plan| plan.summary.clone()),
                 adoption: None,
             };
 
@@ -1857,8 +1850,9 @@ impl AppUseCase {
                 a_destination_path = Some(destination_root_path.clone());
             }
             if source_root_for_recycle.is_none() {
-                source_root_for_recycle =
-                    source_root_path.as_deref().map(|path| path.to_string_lossy().to_string());
+                source_root_for_recycle = source_root_path
+                    .as_deref()
+                    .map(|path| path.to_string_lossy().to_string());
             }
 
             drafts.push(draft);
@@ -1889,7 +1883,10 @@ impl AppUseCase {
 
         let case_rule = PathCaseRule::platform_default();
         let source_library_id = {
-            let mut ids: Vec<&str> = titles.iter().map(|title| title.library_id.as_str()).collect();
+            let mut ids: Vec<&str> = titles
+                .iter()
+                .map(|title| title.library_id.as_str())
+                .collect();
             ids.sort_unstable();
             ids.dedup();
             match ids.as_slice() {
@@ -2085,8 +2082,7 @@ impl AppUseCase {
         destination_folder: Option<&Path>,
         merge_target_title_id: Option<&str>,
     ) -> AppResult<TitleMoveFacts> {
-        let (files, source_directories) =
-            collect_source_files(source_folder, media_files).await?;
+        let (files, source_directories) = collect_source_files(source_folder, media_files).await?;
         let hardlinks =
             detect_hardlinks(files.iter().map(|file| file.path.clone()).collect()).await?;
         // FR-073 needs a *proven* hash on both sides, and the catalog is the
@@ -2239,7 +2235,10 @@ impl AppUseCase {
     /// client: a preview must not depend on a network round-trip, and a
     /// submission Scryer has accepted but not yet bound to a client item is
     /// just as much an in-flight claim as one that is downloading.
-    pub(super) async fn active_work_blocking_a_move(&self, title: &Title) -> AppResult<Option<String>> {
+    pub(super) async fn active_work_blocking_a_move(
+        &self,
+        title: &Title,
+    ) -> AppResult<Option<String>> {
         let unbound = self
             .services
             .workflow
@@ -2300,7 +2299,10 @@ impl AppUseCase {
 /// A label for collision renames: the single source library's name when the
 /// selection has one, else a neutral fallback (FR-074).
 fn source_library_label(libraries: &BTreeMap<String, scryer_domain::Library>) -> String {
-    let mut names: Vec<&str> = libraries.values().map(|library| library.name.as_str()).collect();
+    let mut names: Vec<&str> = libraries
+        .values()
+        .map(|library| library.name.as_str())
+        .collect();
     names.sort_unstable();
     names.dedup();
     match names.as_slice() {
@@ -2511,11 +2513,8 @@ async fn account_for_adoption(
 
     let mut destination = Vec::with_capacity(destination_files.len());
     for file in destination_files {
-        let mut fact = DestinationFileFact::new(
-            path_to_stored_string(&file.path),
-            file.size_bytes,
-        )
-        .with_signature(file.signature.clone());
+        let mut fact = DestinationFileFact::new(path_to_stored_string(&file.path), file.size_bytes)
+            .with_signature(file.signature.clone());
         if let Some(relative) = file.relative_path.clone() {
             fact = fact.with_relative_path(relative);
         }
@@ -2527,11 +2526,10 @@ async fn account_for_adoption(
                 .copied()
                 .unwrap_or(0)
                 > 1
-            && let Ok(hashes) =
-                crate::location::verify::hash_existing_file(&file.path).await
-            {
-                fact = fact.with_full_blake3(FullHash::known(hashes.full_blake3));
-            }
+            && let Ok(hashes) = crate::location::verify::hash_existing_file(&file.path).await
+        {
+            fact = fact.with_full_blake3(FullHash::known(hashes.full_blake3));
+        }
         destination.push(fact);
     }
 
@@ -2742,10 +2740,7 @@ impl RootMoveCatalog for AppUseCaseRootMoveCatalog {
                 .map(str::trim)
                 .filter(|path| !path.is_empty())
                 .map(str::to_string),
-            media_file_paths: media_files
-                .into_iter()
-                .map(|file| file.file_path)
-                .collect(),
+            media_file_paths: media_files.into_iter().map(|file| file.file_path).collect(),
         }))
     }
 

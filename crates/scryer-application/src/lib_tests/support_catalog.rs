@@ -725,9 +725,11 @@ impl TitleRepository for MockTitleRepo {
         // under the old facet go with it.
         if let Some(facet) = facet {
             title.facet = facet;
-            title
-                .tags
-                .retain(|tag| !drop_tag_prefixes.iter().any(|prefix| tag.starts_with(prefix)));
+            title.tags.retain(|tag| {
+                !drop_tag_prefixes
+                    .iter()
+                    .any(|prefix| tag.starts_with(prefix))
+            });
         }
         Ok(())
     }

@@ -49,13 +49,13 @@ use scryer_domain::{
     AppliedVerificationDepth, FileVerificationOutcome, ImportContentProof, VerificationDepth,
 };
 
+use crate::AppResult;
 use crate::file_source_signature::FileSourceSignature;
 use crate::location::collisions::FullHash;
 use crate::location::execution::RootMoveCatalog;
 use crate::location::executor::{FileMoveRequest, TitleFileMover};
 use crate::location::root_move::RootMoveExecutionPlan;
 use crate::location::verify::{VerifiedFile, hash_existing_file};
-use crate::AppResult;
 
 /// How one file at the destination is accounted for during adoption (FR-051).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -546,7 +546,10 @@ fn evidence_for(
         return None;
     }
 
-    match (fact.full_blake3.as_known(), candidate.full_blake3.as_known()) {
+    match (
+        fact.full_blake3.as_known(),
+        candidate.full_blake3.as_known(),
+    ) {
         (Some(tracked), Some(found)) if tracked.eq_ignore_ascii_case(found) => {
             return Some(AdoptionMatchStrength::FullHash);
         }
@@ -831,7 +834,9 @@ impl TitleFileMover for AdoptionFileVerifier {
                     destination,
                     request.depth,
                     proof,
-                    Some(format!("the destination could not be read in full: {error}")),
+                    Some(format!(
+                        "the destination could not be read in full: {error}"
+                    )),
                 )
                 .await),
             };
@@ -964,9 +969,9 @@ mod tests {
             TrackedMediaFact::new("file-1", "/old/Show/S01E01.mkv", 1000)
                 .with_relative_path("S01E01.mkv"),
         ];
-        let destination =
-            vec![DestinationFileFact::new("/new/Show/S01E01.mkv", 1000)
-                .with_relative_path("S01E01.mkv")];
+        let destination = vec![
+            DestinationFileFact::new("/new/Show/S01E01.mkv", 1000).with_relative_path("S01E01.mkv"),
+        ];
 
         let accounting = match_title_adoption(&tracked, &destination);
 
@@ -1018,7 +1023,12 @@ mod tests {
             accounting.adopted[0].proof.strength,
             AdoptionMatchStrength::SampledProof
         );
-        assert!(!accounting.adopted[0].proof.strength.permits_source_recycle());
+        assert!(
+            !accounting.adopted[0]
+                .proof
+                .strength
+                .permits_source_recycle()
+        );
     }
 
     #[test]

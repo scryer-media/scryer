@@ -3476,13 +3476,11 @@ async fn title_has_tracked_files_tx(tx: &mut SqlTx<'_>, title_id: &str) -> AppRe
           LIMIT 1",
         title_catalog_live_media_file_predicate(dialect, "mf")
     );
-    Ok(SqlRuntime::fetch_optional(
-        SqlExec::Tx(tx),
-        &sql,
-        &[SqlArg::Text(title_id.to_string())],
+    Ok(
+        SqlRuntime::fetch_optional(SqlExec::Tx(tx), &sql, &[SqlArg::Text(title_id.to_string())])
+            .await?
+            .is_some(),
     )
-    .await?
-    .is_some())
 }
 
 /// FR-077/SC-009 on the creation path's reuse branch. Creating a title may pick

@@ -37,9 +37,7 @@ use scryer_domain::{Library, LibraryRoot, MediaFacet, Title, User};
 use serde::{Deserialize, Serialize};
 
 use crate::catalog_workflow::library_path_is_under_root;
-use crate::folder_ownership::{
-    detach_title_media_in_folder, title_folder_path, title_owns_folder,
-};
+use crate::folder_ownership::{detach_title_media_in_folder, title_folder_path, title_owns_folder};
 use crate::library_scan_unmatched::{
     LIBRARY_SCAN_FOLDER_OWNERSHIP_CHANGED_BY_USER, build_title_bound_unmatched_scan_item,
     clear_library_scan_unmatched_item, persist_library_scan_unmatched_item,
@@ -337,7 +335,8 @@ impl AppUseCase {
         });
 
         let owner =
-            crate::folder_ownership::find_other_folder_owner(self, &title, &selected_folder).await?;
+            crate::folder_ownership::find_other_folder_owner(self, &title, &selected_folder)
+                .await?;
 
         Ok(FolderMatchContext {
             title,
@@ -375,14 +374,11 @@ impl AppUseCase {
         // sweeping the whole library would mean loading every media row in it to
         // fill in a dialog.
         let mut selected_folder_tracked_media_count =
-            tracked_media_count_in_folder(self, &context.title.id, &context.selected_folder).await?;
+            tracked_media_count_in_folder(self, &context.title.id, &context.selected_folder)
+                .await?;
         if let Some(owner) = context.owner.as_ref() {
-            selected_folder_tracked_media_count += tracked_media_count_in_folder(
-                self,
-                &owner.id,
-                &context.selected_folder,
-            )
-            .await?;
+            selected_folder_tracked_media_count +=
+                tracked_media_count_in_folder(self, &owner.id, &context.selected_folder).await?;
         }
 
         Ok(ChangeTitleFolderPreview {
@@ -490,7 +486,13 @@ impl AppUseCase {
                     .set_folder_path(title_id, folder)
                     .await
             }
-            None => self.services.catalog.titles.clear_folder_path(title_id).await,
+            None => {
+                self.services
+                    .catalog
+                    .titles
+                    .clear_folder_path(title_id)
+                    .await
+            }
         }
     }
 
@@ -600,7 +602,10 @@ impl AppUseCase {
         // so the two titles never both claim one folder.
         self.commit_title_folder(&title_id, Some(&owner_folder))
             .await?;
-        if let Err(error) = self.commit_title_folder(&owner_id, Some(&title_folder)).await {
+        if let Err(error) = self
+            .commit_title_folder(&owner_id, Some(&title_folder))
+            .await
+        {
             self.restore_title_folder(actor, &title_id, Some(&title_folder))
                 .await;
             return Err(error);
@@ -784,8 +789,8 @@ impl AppUseCase {
         displaced: &Title,
         displaced_folder: &str,
     ) -> AppResult<()> {
-        let display_name = folder_display_name(displaced_folder)
-            .unwrap_or_else(|| displaced.name.clone());
+        let display_name =
+            folder_display_name(displaced_folder).unwrap_or_else(|| displaced.name.clone());
         let item = build_title_bound_unmatched_scan_item(
             &displaced.facet,
             &context.library.id,

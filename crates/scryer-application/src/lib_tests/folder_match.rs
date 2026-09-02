@@ -411,7 +411,10 @@ async fn correcting_a_match_to_an_unowned_folder_reassigns_and_rescans_without_t
         preview.available_resolutions,
         vec![FolderMatchResolution::Assign]
     );
-    assert_eq!(preview.selected_root_path, fixture.root.path().to_string_lossy());
+    assert_eq!(
+        preview.selected_root_path,
+        fixture.root.path().to_string_lossy()
+    );
 
     let result = fixture
         .app
@@ -699,9 +702,13 @@ async fn selecting_the_currently_owned_folder_is_an_explicit_no_op() {
     let fixture = FolderMatchFixture::new().await;
     let folder = fixture.folder("Already Mine (2024)");
 
-    let title =
-        create_movie_title_with_folder(&fixture.app, &fixture.user, "Already Mine", folder.as_path())
-            .await;
+    let title = create_movie_title_with_folder(
+        &fixture.app,
+        &fixture.user,
+        "Already Mine",
+        folder.as_path(),
+    )
+    .await;
 
     let preview = fixture
         .app
@@ -820,9 +827,13 @@ async fn assigning_an_owned_folder_is_refused_and_names_the_owner() {
         first_folder.as_path(),
     )
     .await;
-    let owner =
-        create_movie_title_with_folder(&fixture.app, &fixture.user, "Owner", owned_folder.as_path())
-            .await;
+    let owner = create_movie_title_with_folder(
+        &fixture.app,
+        &fixture.user,
+        "Owner",
+        owned_folder.as_path(),
+    )
+    .await;
 
     let error = fixture
         .app
@@ -859,9 +870,13 @@ async fn taking_over_a_folder_surfaces_the_displaced_title_for_repair() {
     let owned_file = fixture.write_media(&owned_folder, "Displaced.2021.1080p.mkv");
     fixture.scanner.set_files(&[owned_file.as_path()]).await;
 
-    let taker =
-        create_movie_title_with_folder(&fixture.app, &fixture.user, "Taker", taker_folder.as_path())
-            .await;
+    let taker = create_movie_title_with_folder(
+        &fixture.app,
+        &fixture.user,
+        "Taker",
+        taker_folder.as_path(),
+    )
+    .await;
     let displaced = create_movie_title_with_folder(
         &fixture.app,
         &fixture.user,
@@ -927,9 +942,13 @@ async fn folders_outside_the_titles_library_roots_are_rejected() {
     let folder = fixture.folder("Inside Root (2024)");
     let outside = tempfile::tempdir().expect("outside tempdir");
 
-    let title =
-        create_movie_title_with_folder(&fixture.app, &fixture.user, "Inside Root", folder.as_path())
-            .await;
+    let title = create_movie_title_with_folder(
+        &fixture.app,
+        &fixture.user,
+        "Inside Root",
+        folder.as_path(),
+    )
+    .await;
 
     let error = fixture
         .app
@@ -1203,10 +1222,8 @@ async fn a_takeover_that_fails_while_rescanning_restores_both_titles_and_queues_
     // Nothing was displaced, so nothing should be asking the user to repair it.
     let unmatched = fixture.unmatched_items.items().await;
     assert!(
-        unmatched
-            .iter()
-            .all(|item| item.reason_code
-                != crate::library_scan_unmatched::LIBRARY_SCAN_FOLDER_OWNERSHIP_CHANGED_BY_USER),
+        unmatched.iter().all(|item| item.reason_code
+            != crate::library_scan_unmatched::LIBRARY_SCAN_FOLDER_OWNERSHIP_CHANGED_BY_USER),
         "a failed takeover should queue no repair item, got {unmatched:?}"
     );
 }

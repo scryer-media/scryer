@@ -358,7 +358,10 @@ async fn a_two_season_series_carries_its_files_and_history_and_nothing_else() {
         .await
         .expect("the merge transaction should commit");
     assert_eq!(outcome.rows_affected.get("files:media_files"), Some(&2));
-    assert_eq!(outcome.rows_affected.get("history:history_events"), Some(&1));
+    assert_eq!(
+        outcome.rows_affected.get("history:history_events"),
+        Some(&1)
+    );
     assert_eq!(outcome.rows_affected.get("retire:titles"), Some(&1));
 
     // The source title is gone, and its files came with it.
@@ -570,7 +573,10 @@ async fn an_incoming_primary_is_demoted_and_the_demotion_reaches_the_preview() {
         season_one_changes[0].reason,
         RoleChangeReason::DestinationPrimaryRetained
     );
-    assert_eq!(season_one_changes[0].previous_role, MergedMediaRole::Primary);
+    assert_eq!(
+        season_one_changes[0].previous_role,
+        MergedMediaRole::Primary
+    );
     assert_eq!(season_one_changes[0].new_role, MergedMediaRole::Additional);
 
     store

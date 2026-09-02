@@ -101,7 +101,9 @@ impl RootMoveCatalog for FakeCatalog {
 
     async fn set_title_root(&self, title_id: &str, root_folder_id: &str) -> AppResult<()> {
         let mut state = self.state.lock().expect("lock");
-        state.writes.push(format!("root:{title_id}={root_folder_id}"));
+        state
+            .writes
+            .push(format!("root:{title_id}={root_folder_id}"));
         if let Some(placement) = state.placements.get_mut(title_id) {
             placement.root_folder_id = root_folder_id.to_string();
         }
@@ -127,9 +129,9 @@ impl RootMoveCatalog for FakeCatalog {
         } else {
             format!("+drop:{}", drop_tag_prefixes.join(","))
         };
-        state
-            .writes
-            .push(format!("library:{title_id}={library_id}/{root_folder_id}{facet}{dropped}"));
+        state.writes.push(format!(
+            "library:{title_id}={library_id}/{root_folder_id}{facet}{dropped}"
+        ));
         if let Some(placement) = state.placements.get_mut(title_id) {
             placement.library_id = library_id.to_string();
             placement.root_folder_id = root_folder_id.to_string();
@@ -576,10 +578,7 @@ async fn cross_filesystem_moves_copy_verify_then_flip_the_catalog() {
     assert_eq!(
         catalog.writes(),
         vec![
-            format!(
-                "media:mf-1={}",
-                plan.titles[0].files[0].destination_path
-            ),
+            format!("media:mf-1={}", plan.titles[0].files[0].destination_path),
             format!(
                 "folder:title-1={}",
                 plan.titles[0]
@@ -596,7 +595,10 @@ async fn cross_filesystem_moves_copy_verify_then_flip_the_catalog() {
         recycler.recycled(),
         vec![plan.titles[0].files[0].source_path.clone()]
     );
-    assert!(!source_root.join("Movie").exists(), "empty source dir pruned");
+    assert!(
+        !source_root.join("Movie").exists(),
+        "empty source dir pruned"
+    );
 
     // FR-031: configured permissions were applied to the placed content.
     assert_eq!(
@@ -810,7 +812,11 @@ async fn resume_never_recopies_a_verified_file() {
     );
     assert_eq!(store.verifications().len(), 1);
     assert_eq!(catalog.writes().len(), 3);
-    assert_eq!(store.open_claim_count(), 0, "a finished operation owns nothing");
+    assert_eq!(
+        store.open_claim_count(),
+        0,
+        "a finished operation owns nothing"
+    );
 }
 
 /// The edge case FR-033 names: "crash mid-copy → partial destination state is
@@ -1145,8 +1151,8 @@ async fn an_already_verified_destination_is_not_stale() {
     );
     let planned_title = plan.titles[0].to_planned_title();
 
-    let verified: BTreeSet<String> = std::iter::once(plan.titles[0].files[0].destination_path.clone())
-        .collect();
+    let verified: BTreeSet<String> =
+        std::iter::once(plan.titles[0].files[0].destination_path.clone()).collect();
     let admitted = admission
         .admit_title(TitleAdmissionContext {
             operation: &operation,
@@ -1533,7 +1539,11 @@ async fn a_quick_depth_copy_records_the_reduced_guarantee_and_still_settles() {
 
     assert!(records[0].outcome.permits_source_removal());
     assert_eq!(recycler.recycled().len(), 1);
-    assert_eq!(catalog.writes().len(), 3, "catalog flipped after verification");
+    assert_eq!(
+        catalog.writes().len(),
+        3,
+        "catalog flipped after verification"
+    );
     assert!(!plan.titles[0].files[0].source().exists());
 }
 
@@ -1579,14 +1589,22 @@ async fn corruption_in_the_unsampled_middle_needs_full_depth() {
         LocationOperationState::Completed,
         "quick deliberately does not read the middle of the file"
     );
-    assert!(quick_store.verifications()[0].outcome.permits_source_removal());
+    assert!(
+        quick_store.verifications()[0]
+            .outcome
+            .permits_source_removal()
+    );
     assert_eq!(quick_recycler.recycled().len(), 1);
 
     let full_temp = tempfile::tempdir().expect("temp dir");
     let (full, full_plan, full_store, _, full_recycler) =
         run_copy_at_depth(full_temp.path(), VerificationDepth::Full, Some(middle)).await;
     assert_eq!(full.state, LocationOperationState::Failed);
-    assert!(!full_store.verifications()[0].outcome.permits_source_removal());
+    assert!(
+        !full_store.verifications()[0]
+            .outcome
+            .permits_source_removal()
+    );
     assert!(full_recycler.recycled().is_empty());
     assert!(full_plan.titles[0].files[0].source().exists());
 }

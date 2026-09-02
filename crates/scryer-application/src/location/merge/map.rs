@@ -301,7 +301,9 @@ impl MergeIdentityMap {
     }
 
     pub fn collection(&self, source_collection_id: &str) -> Option<&str> {
-        self.collections.get(source_collection_id).map(String::as_str)
+        self.collections
+            .get(source_collection_id)
+            .map(String::as_str)
     }
 
     pub fn series_movie_link(&self, source_link_id: &str) -> Option<&str> {
@@ -541,9 +543,7 @@ fn map_collections(
 
     let mut mapped = BTreeMap::new();
     for collection in &inputs.source_collections {
-        let carries_records = inputs
-            .load_bearing_collection_ids
-            .contains(&collection.id);
+        let carries_records = inputs.load_bearing_collection_ids.contains(&collection.id);
         let mut block = |record: MergeBlockedRecord| {
             if carries_records {
                 blocked.push(record);
@@ -613,9 +613,7 @@ fn map_links(
     let mut mapped = BTreeMap::new();
     let mut legacy_to_clear = Vec::new();
     for link in &inputs.source_links {
-        let carries_records = inputs
-            .load_bearing_series_movie_link_ids
-            .contains(&link.id);
+        let carries_records = inputs.load_bearing_series_movie_link_ids.contains(&link.id);
         let mut block = |record: MergeBlockedRecord| {
             if carries_records {
                 blocked.push(record);
