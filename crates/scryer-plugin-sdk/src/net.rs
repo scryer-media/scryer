@@ -149,13 +149,12 @@ pub type SocketResult<T> = Result<T, SocketError>;
 /// Stub socket entry points retained for source compatibility.
 ///
 /// The types above are the live contract: they are what a guest serializes
-/// into `PluginHostRequest::Socket*` and what the host answers with. The
-/// *transport* that once lived here was the Extism pointer ABI, and Scryer's
-/// host no longer serves it — a component that linked these entry points would
-/// carry an `extism:host/user` import nothing satisfies and fail to
-/// instantiate. Guests reach sockets through `scryer-plugin-pdk`'s host-call
-/// helpers instead, so every call here is answered `Unsupported` on all
-/// targets rather than being wired to a door that is not there.
+/// into `PluginHostRequest::Socket*` and what the host answers with. This
+/// crate carries no socket transport of its own — a component that linked one
+/// would import a door Scryer's host does not serve and fail to instantiate.
+/// Guests reach sockets through `scryer-plugin-pdk`'s host-call helpers, so
+/// every call here is answered `Unsupported` on all targets rather than being
+/// wired to a door that is not there.
 mod guest {
     use super::*;
 
