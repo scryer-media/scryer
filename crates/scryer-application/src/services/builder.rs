@@ -331,6 +331,11 @@ impl AppServicesBuilder {
     }
 
     app_services_builder_setter!(
+        with_download_client,
+        integrations.download_client,
+        Arc<dyn DownloadClient>
+    );
+    app_services_builder_setter!(
         with_builtin_download_client_connection_tester,
         integrations.builtin_download_client_connection_tester,
         Arc<dyn BuiltinDownloadClientConnectionTester>

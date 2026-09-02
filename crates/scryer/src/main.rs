@@ -8,6 +8,7 @@ mod base_path;
 #[cfg(any(debug_assertions, test))]
 mod dev_api_keys;
 mod http_error;
+mod indexer_search_routes;
 mod init;
 mod log_buffer;
 mod middleware;
@@ -104,6 +105,7 @@ use backup_routes::{
     BackupRouteState, download_backup_handler, finalize_pending_restore_if_present,
 };
 use base_path::BasePath;
+use indexer_search_routes::download_indexer_search_artifacts_handler;
 use middleware::{
     AuthState, AuthlessAccessAllowlist, AuthlessAccessGuardState, AuthlessAccessPolicy,
     AuthlessWebClientProofRouteState, AuthlessWebClientProofState, CorsConfig,
@@ -1870,6 +1872,10 @@ async fn bootstrap_application(
         .route(
             "/api/media-server-avatars/{connection_id}/{user_id}/{image_tag}",
             get(emby_avatar_handler).with_state(auth_state.clone()),
+        )
+        .route(
+            "/api/indexer-search/artifacts",
+            post(download_indexer_search_artifacts_handler).with_state(auth_state.clone()),
         )
         .route(
             "/images/titles/{title_id}/{kind}/{variant}",

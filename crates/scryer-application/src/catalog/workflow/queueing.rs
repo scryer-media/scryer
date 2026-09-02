@@ -422,6 +422,7 @@ impl AppUseCase {
                         SubmissionScope::EpisodeSet { .. } | SubmissionScope::Collection { .. }
                     )
                     .then_some(true),
+                    pinned_download_client_id: None,
                 },
                 scope: scope.clone(),
                 conflict_policy,

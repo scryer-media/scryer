@@ -17,22 +17,45 @@ import { isAbortError, makeAbortableFetch } from "./urql-client";
 export type InteractiveSearchIndexerProgress = {
   indexerId: string;
   name: string;
+  /** Routing priority of the indexer; 0 when routing states none. */
+  priority: number;
   status: "PENDING" | "SEARCHING" | "COMPLETED" | "FAILED" | "SKIPPED";
   resultCount: number;
+  /** Wall time of the indexer's own call, or null before it answered. */
+  elapsedMs: number | null;
   failureReason: string | null;
 };
 
 export type InteractiveSearchProgress = {
+  /**
+   * Job the snapshot came from. A grab names its release by
+   * `(searchId, downloadUrl)`, and a retry mints a second job, so callers that
+   * grab from a merged view must remember which job each row arrived on.
+   */
+  searchId: string;
   releases: Release[];
   indexers: InteractiveSearchIndexerProgress[];
   state: "RUNNING" | "COMPLETED" | "CANCELLED";
 };
 
+/** Search kinds a title-less query subject may take (spec 0002 D2). */
+export type InteractiveSearchKind = "MOVIE" | "SERIES" | "ANIME" | "RAW";
+
+/**
+ * The job accepts exactly one subject: a catalog title (`titleId`, optionally
+ * narrowed to a season/episode) or a raw operator query (`query` + `kind`).
+ * `indexerIds` and `categories` restrict either subject.
+ */
 export type InteractiveReleaseSearchInput = {
-  titleId: string;
+  titleId?: string;
   seriesMovieLinkId?: string;
   season?: string;
   episode?: string;
+  query?: string;
+  kind?: InteractiveSearchKind;
+  indexerIds?: string[];
+  categories?: string[];
+  limit?: number;
 };
 
 type InteractiveReleaseSearchJobPayload = {
@@ -90,6 +113,7 @@ export async function runIterativeReleaseSearch(
   const applySnapshot = (job: InteractiveReleaseSearchJobPayload) => {
     releases = job.results ?? [];
     onUpdate?.({
+      searchId: job.id,
       releases,
       indexers: job.indexers ?? [],
       state: job.state,

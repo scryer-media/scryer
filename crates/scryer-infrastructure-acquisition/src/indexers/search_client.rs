@@ -1903,6 +1903,12 @@ impl IndexerBackoffTracker {
         }
     }
 
+    /// Forget everything held for one indexer: escalation level and disabled
+    /// window alike. Returns true when there was state to drop.
+    async fn clear(&self, indexer_id: &str) -> bool {
+        self.state.lock().await.remove(indexer_id).is_some()
+    }
+
     /// Check if this indexer is currently in backoff.
     async fn is_disabled(&self, indexer_id: &str) -> Option<chrono::DateTime<chrono::Utc>> {
         let map = self.state.lock().await;
@@ -3219,6 +3225,15 @@ impl MultiIndexerSearchClient {
 
 #[async_trait]
 impl IndexerClient for MultiIndexerSearchClient {
+    async fn reset_indexer_backoff(&self, indexer_id: &str) {
+        if self.backoff_tracker.clear(indexer_id).await {
+            tracing::info!(
+                indexer_id = %indexer_id,
+                "cleared in-memory indexer backoff after a validated config save"
+            );
+        }
+    }
+
     async fn search_stream(
         &self,
         query: String,
@@ -3393,6 +3408,16 @@ impl IndexerClient for MultiIndexerSearchClient {
             "dispatching search to indexers"
         );
 
+        // A title-less operator search (the Indexers page's raw kind) carries a
+        // query and no facet. Capability resolution still needs one to decide
+        // whether the endpoint answers freetext at all, so it borrows the movie
+        // facet, but the strategy omits the facet on the wire so plugins issue
+        // a plain `q=` text query rather than a facet-scoped nab function.
+        let facet_omitted = !is_rss_request
+            && facet
+                .as_deref()
+                .map(str::trim)
+                .is_none_or(|value| value.is_empty());
         let facet = match facet
             .as_deref()
             .map(str::trim)
@@ -3405,6 +3430,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                 )));
             }
             None if is_rss_request => "series".to_string(),
+            None if !query.trim().is_empty() => "movie".to_string(),
             None => {
                 return Err(AppError::Validation("search facet is required".to_string()));
             }
@@ -4195,6 +4221,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                     id_dispatch_mode: resolved_caps.id_dispatch_mode,
                     text_dispatch_mode: resolved_caps.text_dispatch_mode,
                     is_alias_query: false,
+                    facet_omitted,
                 }));
 
                 if facet == "anime"
@@ -4213,6 +4240,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                         id_dispatch_mode: resolved_caps.id_dispatch_mode,
                         text_dispatch_mode: resolved_caps.text_dispatch_mode,
                         is_alias_query: true,
+                        facet_omitted,
                     }));
                 }
             }
@@ -5352,6 +5380,9 @@ struct StrategyParams<'a> {
     id_dispatch_mode: IdDispatchMode,
     text_dispatch_mode: TextDispatchMode,
     is_alias_query: bool,
+    /// The caller asked for a facet-less search: text strategies keep the
+    /// borrowed facet for capability resolution but do not send it.
+    facet_omitted: bool,
 }
 
 /// The query facet controls text-search endpoint shape. The ID facet controls
@@ -5447,7 +5478,7 @@ fn build_strategies(p: &StrategyParams<'_>) -> Vec<SearchStrategy> {
             episode: text_episode,
             absolute_episode: text_absolute_episode,
             generic_query_only,
-            omit_request_facet: false,
+            omit_request_facet: p.facet_omitted,
             label: if is_alias_query {
                 "freetext_alias".into()
             } else {
@@ -5470,7 +5501,7 @@ fn build_strategies(p: &StrategyParams<'_>) -> Vec<SearchStrategy> {
             episode: text_episode,
             absolute_episode: text_absolute_episode,
             generic_query_only,
-            omit_request_facet: false,
+            omit_request_facet: p.facet_omitted,
             label: "fallback".into(),
         });
     }
@@ -8588,6 +8619,7 @@ mod tests {
             id_dispatch_mode: resolved.id_dispatch_mode,
             text_dispatch_mode: resolved.text_dispatch_mode,
             is_alias_query: false,
+            facet_omitted: false,
         });
         assert!(strategies.iter().any(|strategy| {
             strategy.label == "ids_sxex"
@@ -9850,6 +9882,7 @@ mod tests {
             id_dispatch_mode: IdDispatchMode::LegacyAggregate,
             text_dispatch_mode: TextDispatchMode::None,
             is_alias_query: false,
+            facet_omitted: false,
         });
 
         assert_eq!(strategies.len(), 1);
@@ -9884,6 +9917,7 @@ mod tests {
             id_dispatch_mode: IdDispatchMode::LegacyAggregate,
             text_dispatch_mode: TextDispatchMode::None,
             is_alias_query: false,
+            facet_omitted: false,
         });
 
         assert_eq!(strategies.len(), 1);
@@ -10309,6 +10343,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn clear_forgets_escalation_and_disabled_window() {
+        let tracker = IndexerBackoffTracker::new();
+        tracker.state.lock().await.insert(
+            "idx-1".to_string(),
+            IndexerBackoffState {
+                escalation_level: 3,
+                disabled_until: Some(chrono::Utc::now() + chrono::Duration::minutes(45)),
+            },
+        );
+        assert!(tracker.is_disabled("idx-1").await.is_some());
+
+        assert!(tracker.clear("idx-1").await, "state existed to drop");
+        assert!(tracker.is_disabled("idx-1").await.is_none());
+        assert!(!tracker.clear("idx-1").await, "nothing left to drop");
+
+        // The next failure starts from level zero, not from where it left off.
+        let backoff = tracker.record_failure("idx-1", None).await;
+        assert_eq!(backoff.escalation_level, 1);
+    }
+
+    #[tokio::test]
     async fn record_failure_does_not_extend_active_backoff() {
         let tracker = IndexerBackoffTracker::new();
         let disabled_until = chrono::Utc::now() + chrono::Duration::minutes(45);
@@ -10565,6 +10620,7 @@ mod tests {
             id_dispatch_mode: IdDispatchMode::LegacyAggregate,
             text_dispatch_mode: TextDispatchMode::FacetScoped,
             is_alias_query: false,
+            facet_omitted: false,
         });
 
         assert_eq!(strategies.len(), 3);
@@ -10615,6 +10671,7 @@ mod tests {
             id_dispatch_mode: IdDispatchMode::Aggregate,
             text_dispatch_mode: TextDispatchMode::FacetScoped,
             is_alias_query: false,
+            facet_omitted: false,
         });
 
         assert_eq!(strategies.len(), 2);
@@ -11650,6 +11707,7 @@ mod tests {
             id_dispatch_mode: IdDispatchMode::LegacyAggregate,
             text_dispatch_mode: TextDispatchMode::FacetScoped,
             is_alias_query: true,
+            facet_omitted: false,
         });
 
         assert_eq!(strategies.len(), 1);

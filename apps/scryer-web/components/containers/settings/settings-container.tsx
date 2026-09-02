@@ -12,6 +12,7 @@ import {
   FolderCog,
   Puzzle,
   Rss,
+  ScanSearch,
   Server,
   Settings2,
   ShieldCheck,
@@ -65,6 +66,9 @@ const SettingsUsersContainer = lazy(async () => ({
 }));
 const SettingsIndexersContainer = lazy(async () => ({
   default: (await import("@/components/containers/settings/settings-indexers-container")).SettingsIndexersContainer,
+}));
+const SettingsIndexerSearchContainer = lazy(async () => ({
+  default: (await import("@/components/containers/settings/settings-indexer-search-container")).SettingsIndexerSearchContainer,
 }));
 const SettingsMediaServersContainer = lazy(async () => ({
   default: (await import("@/components/containers/settings/settings-media-servers-container")).SettingsMediaServersContainer,
@@ -157,6 +161,7 @@ const INDEXER_SETTINGS_TABS: {
   icon: LucideIcon;
 }[] = [
   { tab: "indexers", labelKey: "settings.indexers", icon: Database },
+  { tab: "search", labelKey: "settings.indexerSearch", icon: ScanSearch },
   { tab: "seedingProfiles", labelKey: "settings.seedingProfiles", icon: UploadCloud },
 ];
 
@@ -322,9 +327,11 @@ export const SettingsContainer = memo(function SettingsContainer({
     settingsSection !== "downloadClients" &&
     settingsSection !== "notifications" &&
     settingsSection !== "subtitles";
-  // Pages that render an inline plugins rail anchored to the top of the content pane.
+  // Pages that render an inline plugins rail anchored to the top of the content
+  // pane. The Search pane owns its full width (its own refine rail plus a
+  // 1020px table), so the plugins rail stays with the provider panes.
   const showReferenceRail =
-    settingsSection === "indexers" ||
+    (settingsSection === "indexers" && indexerSettingsTab !== "search") ||
     settingsSection === "downloadClients" ||
     settingsSection === "notifications" ||
     settingsSection === "subtitles";
@@ -612,7 +619,9 @@ export const SettingsContainer = memo(function SettingsContainer({
                 ? "max-w-none"
                 : settingsSection === "users"
                   ? "max-w-[1620px]"
-                  : "max-w-[1280px]",
+                  : settingsSection === "indexers"
+                    ? "max-w-[1640px]"
+                    : "max-w-[1280px]",
           )}
         >
           <div
@@ -725,6 +734,8 @@ export const SettingsContainer = memo(function SettingsContainer({
             <>
               {indexerSettingsTab === "seedingProfiles" ? (
                 <SettingsSeedingProfilesContainer />
+              ) : indexerSettingsTab === "search" ? (
+                <SettingsIndexerSearchContainer />
               ) : (
                 <SettingsIndexersContainer
                   indexerSettingsTab={indexerSettingsTab}

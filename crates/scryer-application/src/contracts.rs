@@ -1209,6 +1209,13 @@ pub struct DownloadClientAddRequest {
     pub season_pack_seed_time_minutes: Option<i64>,
     pub is_recent: Option<bool>,
     pub season_pack: Option<bool>,
+    /// Download client the operator picked for this one grab.
+    ///
+    /// The router normally derives the client from the indexer mapping and the
+    /// title's routing scope; an unlinked interactive grab (D8/D16) has no
+    /// title to route by, so the operator names the client instead and it wins
+    /// over both. `None` everywhere else, which leaves routing untouched.
+    pub pinned_download_client_id: Option<String>,
 }
 
 impl DownloadClientAddRequest {
@@ -1246,6 +1253,7 @@ impl DownloadClientAddRequest {
             season_pack_seed_time_minutes: None,
             is_recent: None,
             season_pack: None,
+            pinned_download_client_id: None,
         }
     }
 }

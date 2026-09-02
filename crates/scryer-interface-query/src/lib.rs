@@ -441,6 +441,10 @@ pub fn from_interactive_release_search_snapshot(
                 }
             },
             result_count: indexer.result_count as i32,
+            priority: indexer.priority as i32,
+            elapsed_ms: indexer
+                .elapsed_ms
+                .map(|elapsed| i32::try_from(elapsed).unwrap_or(i32::MAX)),
             failure_reason: indexer.failure_reason,
         })
         .collect();
@@ -1779,7 +1783,16 @@ impl CatalogQueries {
             season,
             episode,
             limit,
+            ..
         } = input;
+
+        // One-shot search is title-anchored only; a query subject is a job
+        // (`startInteractiveReleaseSearch`), never a blocking resolver.
+        let Some(title_id) = title_id else {
+            return Err(to_gql_error(AppError::Validation(
+                "searchReleases requires a title id".to_string(),
+            )));
+        };
 
         let safe_limit = limit.unwrap_or(50).clamp(1, 200) as usize;
         let title_id = title_id.to_string();

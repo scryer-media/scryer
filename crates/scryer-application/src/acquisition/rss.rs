@@ -2484,6 +2484,7 @@ impl AppUseCase {
                     season_pack_seed_time_minutes: seed_minimums.season_pack_seed_time_minutes,
                     is_recent,
                     season_pack: is_season_pack.then_some(true),
+                    pinned_download_client_id: None,
                 },
                 scope: submission_scope.clone(),
                 conflict_policy: SubmissionConflictPolicy::Skip,

@@ -707,6 +707,22 @@ impl IndexerConfigRepository for MockIndexerConfigRepo {
         Ok(entries.iter().find(|entry| entry.id == id).cloned())
     }
 
+    async fn set_system_backoff(&self, id: &str, backoff: IndexerSystemBackoff) -> AppResult<()> {
+        let mut entries = self.store.lock().await;
+        for entry in entries.iter_mut().filter(|entry| entry.id == id) {
+            entry.disabled_until = Some(backoff.disabled_until);
+        }
+        Ok(())
+    }
+
+    async fn clear_system_backoff(&self, id: &str) -> AppResult<()> {
+        let mut entries = self.store.lock().await;
+        for entry in entries.iter_mut().filter(|entry| entry.id == id) {
+            entry.disabled_until = None;
+        }
+        Ok(())
+    }
+
     async fn touch_last_error(&self, id: &str) -> AppResult<()> {
         let mut entries = self.store.lock().await;
         let now = Utc::now();

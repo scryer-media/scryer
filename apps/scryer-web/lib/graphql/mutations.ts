@@ -1721,8 +1721,10 @@ export const startInteractiveReleaseSearchMutation = `mutation StartInteractiveR
     indexers {
       indexerId
       name
+      priority
       status
       resultCount
+      elapsedMs
       failureReason
     }
     startedAt
@@ -1734,6 +1736,25 @@ export const cancelInteractiveReleaseSearchMutation = `mutation CancelInteractiv
   cancelInteractiveReleaseSearch(id: $id) {
     id
     accepted
+  }
+}`;
+
+// Spec 0002 D4: a title-less search row carries no candidate token, so the grab
+// dialog mints one against the title the operator picked and then queues it
+// with the existing queue mutations. The payload is the same release row, now
+// carrying `candidateToken` and the server-resolved `queueScope` (D11).
+export const issueInteractiveReleaseCandidateTokenMutation = `mutation IssueInteractiveReleaseCandidateToken($input: IssueInteractiveReleaseCandidateTokenInput!) {
+  issueInteractiveReleaseCandidateToken(input: $input) {${RELEASE_SEARCH_RESULT_FIELDS}
+  }
+}`;
+
+// Spec 0002 D8: grabs a search row with no catalog title behind it. The client's
+// own routing category applies, so there is no category input here.
+export const queueUnlinkedReleaseMutation = `mutation QueueUnlinkedRelease($input: QueueUnlinkedReleaseInput!) {
+  queueUnlinkedRelease(input: $input) {
+    downloadId
+    clientName
+    sourceTitle
   }
 }`;
 

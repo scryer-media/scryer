@@ -25,6 +25,8 @@ pub struct TitleReleaseBlocklistEntryPayload {
 pub struct IndexerSearchResultPayload {
     /// Indexer source name.
     pub source: String,
+    /// Indexer configuration identity that returned the release, or null when unknown.
+    pub indexer_id: Option<ID>,
     /// Release title shown by the indexer.
     pub title: String,
     /// Informational release link, or null when unavailable.
@@ -41,6 +43,8 @@ pub struct IndexerSearchResultPayload {
     pub thumbs_up: Option<i32>,
     /// Negative vote count, or null when not reported.
     pub thumbs_down: Option<i32>,
+    /// Grab count reported by the indexer, or null when not reported.
+    pub grabs: Option<i32>,
     /// Parsed release fields, or null when parsing did not produce a result.
     pub parsed_release: Option<ParsedReleasePayload>,
     /// Quality-profile decision, or null when no profile was evaluated.
@@ -651,11 +655,27 @@ pub struct SubtitleProviderConfigPayload {
     pub updated_at: DateTime<Utc>,
 }
 
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+/// What a title-less interactive search looks for; picks the search facet and
+/// the default newznab categories.
+pub enum InteractiveSearchKindValue {
+    /// Movie facet search.
+    Movie,
+    /// Series facet search.
+    Series,
+    /// Anime facet search.
+    Anime,
+    /// Plain text search with no facet.
+    Raw,
+}
+
 #[derive(InputObject)]
-/// Filters for an interactive release search.
+/// Filters for an interactive release search. Exactly one of `titleId` and
+/// `query` names the subject.
 pub struct SearchReleasesInput {
-    /// Title identity whose releases are searched.
-    pub title_id: ID,
+    /// Title identity whose releases are searched; required unless `query` is given.
+    pub title_id: Option<ID>,
     /// Optional series/movie link identity for an episodic movie target.
     pub series_movie_link_id: Option<ID>,
     /// Optional season label or number to search.
@@ -664,6 +684,51 @@ pub struct SearchReleasesInput {
     pub episode: Option<String>,
     /// Optional result limit; the resolver applies its own default and cap.
     pub limit: Option<i32>,
+    /// Raw operator query searched without a catalog title.
+    pub query: Option<String>,
+    /// Search kind; required with `query`.
+    pub kind: Option<InteractiveSearchKindValue>,
+    /// Optional indexer configuration identities to restrict the search to.
+    pub indexer_ids: Option<Vec<ID>>,
+    /// Optional newznab categories; the kind's defaults apply when omitted.
+    pub categories: Option<Vec<String>>,
+}
+
+#[derive(InputObject)]
+/// Names one release of an interactive search to mint a candidate token for.
+pub struct IssueInteractiveReleaseCandidateTokenInput {
+    /// Interactive release-search job holding the release.
+    pub search_id: ID,
+    /// Download URL of the release as returned by that search.
+    pub download_url: String,
+    /// Title identity the release is being assigned to.
+    pub title_id: ID,
+    /// Optional season label or number for an episode target.
+    pub season: Option<String>,
+    /// Optional episode label or number for an episode target.
+    pub episode: Option<String>,
+}
+
+#[derive(InputObject)]
+/// Names one release of an interactive search to grab without assigning it a title.
+pub struct QueueUnlinkedReleaseInput {
+    /// Interactive release-search job holding the release.
+    pub search_id: ID,
+    /// Download URL of the release as returned by that search.
+    pub download_url: String,
+    /// Enabled download client the release is handed to.
+    pub download_client_id: ID,
+}
+
+#[derive(SimpleObject, Clone)]
+/// Outcome of grabbing a release with no catalog title behind it.
+pub struct QueueUnlinkedReleasePayload {
+    /// Download client's own item identity for the submitted download.
+    pub download_id: String,
+    /// Name of the download client that accepted the release.
+    pub client_name: String,
+    /// Release name as the indexer announced it.
+    pub source_title: String,
 }
 
 #[derive(InputObject)]
@@ -1474,10 +1539,14 @@ pub struct InteractiveReleaseSearchIndexerPayload {
     pub indexer_id: ID,
     /// Indexer name.
     pub name: String,
+    /// Routing priority for this indexer; 0 when routing states none.
+    pub priority: i32,
     /// Current indexer lifecycle state.
     pub status: InteractiveReleaseSearchIndexerStatusValue,
     /// The indexer's own result count (before cross-indexer dedup).
     pub result_count: i32,
+    /// Wall time of this indexer's own call in milliseconds, or null before it answered.
+    pub elapsed_ms: Option<i32>,
     /// Failure reason, or null when the indexer did not fail.
     pub failure_reason: Option<String>,
 }

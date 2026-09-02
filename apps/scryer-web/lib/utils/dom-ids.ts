@@ -323,6 +323,57 @@ export function releaseSearchResultQueueAdditionalId(
   );
 }
 
+/**
+ * Rows of the Indexers › Search pane. The identity is the one the title-scoped
+ * release rows already use, so the same release keeps the same key wherever it
+ * is rendered — and a retry that returns it again merges onto its own row.
+ */
+export function indexerSearchResultRowId(
+  release: ReleaseSearchSelectorInput,
+): string {
+  return selectorId(
+    "indexer-search-row",
+    ...releaseSearchResultSelectorParts(release),
+  );
+}
+
+export function indexerSearchResultSelectId(
+  release: ReleaseSearchSelectorInput,
+): string {
+  return selectorId(
+    "indexer-search-select",
+    ...releaseSearchResultSelectorParts(release),
+  );
+}
+
+export function indexerSearchResultGrabId(
+  release: ReleaseSearchSelectorInput,
+): string {
+  return selectorId(
+    "indexer-search-grab",
+    ...releaseSearchResultSelectorParts(release),
+  );
+}
+
+/** The row's "download to my browser" button (D17). */
+export function indexerSearchResultDownloadId(
+  release: ReleaseSearchSelectorInput,
+): string {
+  return selectorId(
+    "indexer-search-download",
+    ...releaseSearchResultSelectorParts(release),
+  );
+}
+
+export function indexerSearchResultExpandId(
+  release: ReleaseSearchSelectorInput,
+): string {
+  return selectorId(
+    "indexer-search-expand",
+    ...releaseSearchResultSelectorParts(release),
+  );
+}
+
 export function selectorId(
   ...parts: Array<string | number | false | null | undefined>
 ): string {

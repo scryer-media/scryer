@@ -6244,6 +6244,12 @@ pub trait IndexerClient: Send + Sync {
         Ok(())
     }
 
+    /// Forget any in-memory backoff held for one indexer. Saving an indexer
+    /// with new credentials or a new endpoint is the operator's "try again":
+    /// the caller clears the persisted backoff row and this drops its mirror,
+    /// so the next search dispatches instead of skipping the indexer.
+    async fn reset_indexer_backoff(&self, _indexer_id: &str) {}
+
     fn search_plan_capability(&self) -> Option<IndexerSearchPlanCapability> {
         None
     }
@@ -7222,6 +7228,22 @@ pub trait DownloadClient: Send + Sync {
         &self,
         request: &DownloadClientAddRequest,
     ) -> AppResult<DownloadGrabResult>;
+
+    /// Resolve the release's own file without submitting it anywhere (D17).
+    ///
+    /// The submit path deliberately leaves NZB URLs unfetched so the download
+    /// client pulls them itself; handing the operator the raw file needs the
+    /// host-side fetch instead. Only the router implements this — an individual
+    /// client has no indexer provenance, proxy or plugin grab flow to resolve
+    /// the URL with.
+    async fn fetch_release_artifact(
+        &self,
+        _request: &DownloadClientAddRequest,
+    ) -> AppResult<ResolvedDownloadArtifact> {
+        Err(AppError::Validation(
+            "artifact download is not supported by this client".into(),
+        ))
+    }
 
     async fn submit_to_download_queue(
         &self,

@@ -266,7 +266,8 @@ pub use catalog::facets::series::SeriesFacetHandler;
 pub use catalog::interactive_release_search::{
     InteractiveReleaseSearchIndexerStatus, InteractiveReleaseSearchIndexerView,
     InteractiveReleaseSearchRequest, InteractiveReleaseSearchSnapshot,
-    InteractiveReleaseSearchState,
+    InteractiveReleaseSearchState, InteractiveSearchArtifactBundle,
+    InteractiveSearchArtifactTarget, InteractiveSearchKind, QueueUnlinkedReleaseOutcome,
 };
 pub use catalog::title_hydration::start_background_title_hydration_loop;
 pub use catalog::title_images::start_background_title_image_loop;

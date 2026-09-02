@@ -1871,6 +1871,7 @@ mod tests {
             season_pack_seed_time_minutes: None,
             is_recent: Some(true),
             season_pack: Some(false),
+            pinned_download_client_id: None,
         }
     }
 

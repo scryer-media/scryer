@@ -399,6 +399,7 @@ fn request_with_staged_nzb(
         seed_goal_seconds: None,
         tracker_min_seed_ratio: None,
         tracker_min_seed_time_minutes: None,
+        pinned_download_client_id: None,
         season_pack_seed_ratio: None,
         season_pack_seed_time_minutes: None,
         is_recent: None,

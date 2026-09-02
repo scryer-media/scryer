@@ -655,8 +655,11 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // an explicit operator-driven way to forget the pin. Every other proxy and
     // download-client change in that work package is additive fields on types
     // that already existed. 215->216.
+    // Indexer search (spec 0002) adds two mutations on the interactive-search
+    // job: issueInteractiveReleaseCandidateToken and queueUnlinkedRelease.
+    // 216->218.
     assert_eq!(
-        mutation_field_count, 216,
+        mutation_field_count, 218,
         "mutation fields: {mutation_field_names:?}"
     );
     // Cross-library transfer (T082, FR-055/FR-056) surfaces destination-title
@@ -709,10 +712,15 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // INPUT_OBJECT 193->191 and public types 722->720. Query fields drop by one
     // (150->149) with the second preview root; OBJECT and ENUM are unchanged.
     assert_eq!(subscription_field_count, 14);
-    assert_eq!(public_types.len(), 720);
-    assert_eq!(kind_count("OBJECT"), 379);
-    assert_eq!(kind_count("INPUT_OBJECT"), 191);
-    assert_eq!(kind_count("ENUM"), 138);
+    // Indexer search (spec 0002): the query subject on the interactive-search
+    // job and the unlinked grab add the types below on top of the proxies
+    // census. Combined with the location-surface fold above, the totals are
+    // public types 720->724, OBJECT 379->380, INPUT_OBJECT 191->193, and
+    // ENUM 138->139.
+    assert_eq!(public_types.len(), 724);
+    assert_eq!(kind_count("OBJECT"), 380);
+    assert_eq!(kind_count("INPUT_OBJECT"), 193);
+    assert_eq!(kind_count("ENUM"), 139);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
     assert!(query_field_names.contains(&"backupSettings"));
@@ -4250,7 +4258,6 @@ async fn graphql_introspection_title_acquisition_inputs_use_id_fields() {
     };
 
     for (input_alias, field_name) in [
-        ("searchReleases", "titleId"),
         ("queueDownload", "titleId"),
         ("queueBestRelease", "titleId"),
         ("retryImport", "importId"),
@@ -4277,6 +4284,8 @@ async fn graphql_introspection_title_acquisition_inputs_use_id_fields() {
     }
 
     for (input_alias, field_name) in [
+        // Nullable since spec 0002: a search names either a title or a query.
+        ("searchReleases", "titleId"),
         ("searchReleases", "seriesMovieLinkId"),
         ("pauseDownload", "clientId"),
         ("resumeDownload", "clientId"),
