@@ -19,6 +19,7 @@ import {
 import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
 import {
   automaticLinkingStatus,
+  canCreateJellyfinPluginClient,
   canStartJellyfinPluginClientCreation,
   createdJellyfinPluginClientForCallback,
   isEligibleJellyfinPluginClient,
@@ -403,7 +404,7 @@ export function OAuthClientRegistrationsPanel() {
           </div>
           <Button
             type="button"
-            disabled={busy || jellyfinClientStatus === "ambiguous"}
+            disabled={!canCreateJellyfinPluginClient(busy, jellyfinClientStatus)}
             onClick={() => void createJellyfinPluginClient()}
           >
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
@@ -430,6 +431,17 @@ export function OAuthClientRegistrationsPanel() {
                   <Copy className="h-3.5 w-3.5" aria-hidden="true" />
                 </Button>
               </div>
+              {jellyfinClientStatus === "reconciling" ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={loading}
+                  onClick={() => void reload(jellyfinPluginClient)}
+                >
+                  {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                  Retry client list
+                </Button>
+              ) : null}
             </div>
           ) : null}
         </section>

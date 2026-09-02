@@ -131,3 +131,10 @@ export function shouldApplyJellyfinPluginOAuthReload(
 export function canStartJellyfinPluginClientCreation(inFlightCallbackUrl: string | null): boolean {
   return inFlightCallbackUrl === null;
 }
+
+export function canCreateJellyfinPluginClient(
+  busy: boolean,
+  status: "ambiguous" | "ready" | "reconciling" | "not-configured",
+): boolean {
+  return !busy && status !== "ambiguous" && status !== "reconciling";
+}

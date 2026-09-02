@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   automaticLinkingStatus,
+  canCreateJellyfinPluginClient,
   canStartJellyfinPluginClientCreation,
   createdJellyfinPluginClientForCallback,
   jellyfinPluginCallbackUrl,
@@ -137,4 +138,12 @@ test("an in-flight create blocks a second create until the first operation relea
   assert.equal(canStartJellyfinPluginClientCreation(null), true);
   assert.equal(canStartJellyfinPluginClientCreation(CALLBACK_URL), false);
   assert.equal(canStartJellyfinPluginClientCreation(null), true);
+});
+
+test("an unreconciled client blocks duplicate creation without blocking list recovery", () => {
+  assert.equal(canCreateJellyfinPluginClient(false, "not-configured"), true);
+  assert.equal(canCreateJellyfinPluginClient(false, "ready"), true);
+  assert.equal(canCreateJellyfinPluginClient(false, "reconciling"), false);
+  assert.equal(canCreateJellyfinPluginClient(false, "ambiguous"), false);
+  assert.equal(canCreateJellyfinPluginClient(true, "not-configured"), false);
 });
