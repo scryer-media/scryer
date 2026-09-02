@@ -1687,7 +1687,7 @@ async fn a_client_that_reports_its_obligation_met_now_releases_the_entry() {
 }
 
 #[tokio::test]
-async fn rtorrent_cleanup_deletes_mapped_payload_without_remapping_status_twice() {
+async fn rtorrent_cleanup_retries_entry_removal_after_deleting_the_mapped_payload() {
     let download_client = Arc::new(StubDownloadClient::default());
     let (app, user, config, mut tracked) = rtorrent_cleanup_fixture(
         download_client.clone(),
@@ -1745,7 +1745,35 @@ async fn rtorrent_cleanup_deletes_mapped_payload_without_remapping_status_twice(
         },
         &mut tracked,
     );
+    download_client
+        .history_items
+        .lock()
+        .await
+        .push(tracked.client_item.clone());
 
+    *download_client.delete_error.lock().await = Some("transient delete failure".to_string());
+    let first_outcome = crate::import::import::reconcile_terminal_download_cleanup_for_tracked(
+        &app,
+        &tracked,
+        TrackedDownloadState::Imported,
+        None,
+    )
+    .await;
+
+    assert_eq!(
+        first_outcome,
+        TerminalDownloadCleanupOutcome::RetryableFailure
+    );
+    assert!(!payload.exists(), "the host must delete the mapped payload");
+    assert_eq!(
+        std::fs::read_dir(&local_root)
+            .expect("read output root after payload deletion")
+            .count(),
+        1,
+        "a durable checkpoint must keep the mounted root distinguishable from an empty mountpoint"
+    );
+
+    *download_client.delete_error.lock().await = None;
     let outcome = crate::import::import::reconcile_terminal_download_cleanup_for_tracked(
         &app,
         &tracked,
@@ -1755,7 +1783,13 @@ async fn rtorrent_cleanup_deletes_mapped_payload_without_remapping_status_twice(
     .await;
 
     assert_eq!(outcome, TerminalDownloadCleanupOutcome::Removed);
-    assert!(!payload.exists(), "the host must delete the mapped payload");
+    assert_eq!(
+        std::fs::read_dir(&local_root)
+            .expect("read output root after cleanup completion")
+            .count(),
+        0,
+        "the checkpoint must be removed with the rTorrent entry"
+    );
     assert_eq!(
         download_client.deleted_requests.lock().await.clone(),
         vec![(

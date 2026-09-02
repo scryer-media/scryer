@@ -412,32 +412,38 @@ async fn reconcile_terminal_download_cleanup(
 
     let host_managed_rtorrent_payload =
         remove_data && client_type.trim().eq_ignore_ascii_case("rtorrent");
-    if host_managed_rtorrent_payload
-        && let Err(error) = remove_rtorrent_payload_before_entry_cleanup(
+    let rtorrent_cleanup_checkpoint = if host_managed_rtorrent_payload {
+        match remove_rtorrent_payload_before_entry_cleanup(
             app,
             client_id,
             client_type,
             download_client_item_id,
         )
         .await
-    {
-        tracing::warn!(
-            client_id,
-            client_type,
-            download_client_item_id,
-            state = state.as_str(),
-            error = %error,
-            "failed to remove rTorrent payload before removing the client entry"
-        );
-        let seeding = seeding_report.map(|report| SeedingGateReport {
-            action: Some(SeedingReleaseAction::Kept),
-            ..report
-        });
-        return TerminalDownloadCleanup {
-            outcome: TerminalDownloadCleanupOutcome::RetryableFailure,
-            seeding,
-        };
-    }
+        {
+            Ok(checkpoint) => Some(checkpoint),
+            Err(error) => {
+                tracing::warn!(
+                    client_id,
+                    client_type,
+                    download_client_item_id,
+                    state = state.as_str(),
+                    error = %error,
+                    "failed to remove rTorrent payload before removing the client entry"
+                );
+                let seeding = seeding_report.map(|report| SeedingGateReport {
+                    action: Some(SeedingReleaseAction::Kept),
+                    ..report
+                });
+                return TerminalDownloadCleanup {
+                    outcome: TerminalDownloadCleanupOutcome::RetryableFailure,
+                    seeding,
+                };
+            }
+        }
+    } else {
+        None
+    };
 
     let delete_result = if client_id.is_empty() {
         app.services
@@ -498,6 +504,22 @@ async fn reconcile_terminal_download_cleanup(
         }
     };
 
+    if matches!(
+        outcome,
+        TerminalDownloadCleanupOutcome::Removed | TerminalDownloadCleanupOutcome::AlreadyGone
+    ) && let Some(checkpoint) = rtorrent_cleanup_checkpoint.as_deref()
+        && let Err(error) = clear_rtorrent_payload_cleanup_checkpoint(checkpoint).await
+    {
+        tracing::warn!(
+            client_id,
+            client_type,
+            download_client_item_id,
+            checkpoint = %checkpoint.display(),
+            error = %error,
+            "failed to clear completed rTorrent payload cleanup checkpoint"
+        );
+    }
+
     // The removal may have failed after the gate released the entry; report
     // what actually happened rather than the intent.
     let seeding = seeding_report.map(|report| SeedingGateReport {
@@ -516,7 +538,7 @@ async fn remove_rtorrent_payload_before_entry_cleanup(
     client_id: &str,
     client_type: &str,
     download_client_item_id: &str,
-) -> AppResult<()> {
+) -> AppResult<std::path::PathBuf> {
     let client_id = client_id.trim();
     if client_id.is_empty() {
         return Err(AppError::Validation(
@@ -621,6 +643,15 @@ async fn remove_rtorrent_payload_before_entry_cleanup(
         )));
     }
 
+    let checkpoint = rtorrent_payload_cleanup_checkpoint(
+        &containing_root,
+        client_id,
+        client_type,
+        download_client_item_id,
+        &target,
+    );
+    ensure_rtorrent_payload_cleanup_checkpoint(&checkpoint).await?;
+
     match tokio::fs::symlink_metadata(&target).await {
         Ok(metadata) if metadata.file_type().is_symlink() || metadata.is_file() => {
             crate::fs_safety::remove_file_safely_if_exists(&target).await
@@ -636,6 +667,66 @@ async fn remove_rtorrent_payload_before_entry_cleanup(
         Err(error) => Err(AppError::Repository(format!(
             "failed to inspect rTorrent payload {}: {error}",
             target.display()
+        ))),
+    }?;
+    Ok(checkpoint)
+}
+
+fn rtorrent_payload_cleanup_checkpoint(
+    root: &std::path::Path,
+    client_id: &str,
+    client_type: &str,
+    download_client_item_id: &str,
+    target: &std::path::Path,
+) -> std::path::PathBuf {
+    let mut hasher = blake3::Hasher::new();
+    for value in [client_id, client_type, download_client_item_id] {
+        hasher.update(value.as_bytes());
+        hasher.update(&[0]);
+    }
+    hasher.update(target.to_string_lossy().as_bytes());
+    root.join(format!(
+        ".scryer-rtorrent-cleanup-{}",
+        hasher.finalize().to_hex()
+    ))
+}
+
+async fn ensure_rtorrent_payload_cleanup_checkpoint(
+    checkpoint: &std::path::Path,
+) -> AppResult<()> {
+    match tokio::fs::create_dir(checkpoint).await {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            let metadata = tokio::fs::symlink_metadata(checkpoint).await.map_err(|error| {
+                AppError::Repository(format!(
+                    "failed to inspect rTorrent payload cleanup checkpoint {}: {error}",
+                    checkpoint.display()
+                ))
+            })?;
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                return Err(AppError::Validation(format!(
+                    "rTorrent payload cleanup checkpoint {} is not a directory",
+                    checkpoint.display()
+                )));
+            }
+            Ok(())
+        }
+        Err(error) => Err(AppError::Repository(format!(
+            "failed to create rTorrent payload cleanup checkpoint {}: {error}",
+            checkpoint.display()
+        ))),
+    }
+}
+
+async fn clear_rtorrent_payload_cleanup_checkpoint(
+    checkpoint: &std::path::Path,
+) -> AppResult<()> {
+    match tokio::fs::remove_dir(checkpoint).await {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(AppError::Repository(format!(
+            "failed to remove rTorrent payload cleanup checkpoint {}: {error}",
+            checkpoint.display()
         ))),
     }
 }
