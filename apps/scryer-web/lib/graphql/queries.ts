@@ -4309,17 +4309,7 @@ export const locationOperationPreviewQuery = `query LocationOperationPreview($in
         sourceId
         detail
       }
-      destinationWins {
-        setting
-        destinationValue
-        sourceValue
-      }
-      dispositions {
-        table
-        disposition
-        sourceRowCount
-        note
-      }
+      mediaFilesRepointed
       roleChanges {
         fileId
         sourceEpisodeId
@@ -4329,26 +4319,8 @@ export const locationOperationPreviewQuery = `query LocationOperationPreview($in
         reason
         detail
       }
-      reservedTagConflicts {
-        prefix
-        setting
-        destinationValue
-        sourceValue
-      }
-      freeFormTagsAdded
-      mediaRequestRepoints {
-        requestId
-        previousLibraryId
-        destinationLibraryId
-      }
-      dropped {
-        table
-        sourceRowCount
-        decision
-        reason
-      }
-      postMergeWork
-      notes
+      historyRowsCarried
+      sourceRecordsDropped
     }
   }
 }`;
@@ -4620,13 +4592,18 @@ const LOCATION_ROOT_RETIREMENT_FIELDS = `
     }`;
 
 /**
- * US4: replacing one root's path with a new, unconfigured one. A destination
- * that is already a configured root is refused with
- * `root_change_destination_is_configured_root`, which routes the dialog to the
- * consolidation branch (FR-020).
+ * FR-020's **Change root**, both destinations: replacing one root's path with a
+ * new location, or folding it into another root of the same library.
+ *
+ * One query, because it is one settings action. Name exactly one of
+ * `destinationPath` and `destinationRootId`; a path that is already a root of
+ * this library resolves to that root and is planned as a fold. One payload,
+ * too: `retention` comes back for a path change and `classification` /
+ * `defaultTransfer` for a fold, so the branch the server planned is readable
+ * off the response.
  */
-export const locationRootChangePreviewQuery = `query LocationRootChangePreview($input: LocationRootChangePreviewInput!) {
-  locationRootChangePreview(input: $input) {
+export const locationRootScopePreviewQuery = `query LocationRootScopePreview($input: LocationRootScopePreviewInput!) {
+  locationRootScopePreview(input: $input) {
     plan {${LOCATION_ROOT_PLAN_FIELDS}
     }
     accounting {${LOCATION_TITLE_ACCOUNTING_FIELDS}
@@ -4638,25 +4615,6 @@ export const locationRootChangePreviewQuery = `query LocationRootChangePreview($
       remainsLibraryDefault
       retainedRole
       retainedTitleAssignments
-    }
-    content {${LOCATION_ROOT_CONTENT_FIELDS}
-    }
-    retirement {${LOCATION_ROOT_RETIREMENT_FIELDS}
-    }
-  }
-}`;
-
-/**
- * US5: folding one root into another root of the same library. A destination
- * that is not a configured root is refused with
- * `root_consolidation_destination_not_a_configured_root`, which routes the
- * dialog back to the new-path branch (FR-020).
- */
-export const locationRootConsolidationPreviewQuery = `query LocationRootConsolidationPreview($input: LocationRootConsolidationPreviewInput!) {
-  locationRootConsolidationPreview(input: $input) {
-    plan {${LOCATION_ROOT_PLAN_FIELDS}
-    }
-    accounting {${LOCATION_TITLE_ACCOUNTING_FIELDS}
     }
     classification {
       movingIntoUnusedFolders

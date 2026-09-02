@@ -9384,10 +9384,6 @@ enum LocationMergeBlockReasonValue {
 	"""
 	UNIDENTIFIABLE_EPISODE
 	"""
-	A record references a source episode that is not in the catalog.
-	"""
-	UNKNOWN_EPISODE_REFERENCE
-	"""
 	No destination collection carries the source collection's identity.
 	"""
 	UNMAPPED_COLLECTION
@@ -9419,6 +9415,11 @@ enum LocationMergeBlockReasonValue {
 	An unconsumed manual-import selection is an active import on the source.
 	"""
 	ACTIVE_MANUAL_IMPORT_SELECTION
+	"""
+	A queued or in-flight download on the source title, which the merge would
+	retire along with it.
+	"""
+	ACTIVE_ACQUISITION_WORK
 }
 
 """
@@ -9444,86 +9445,6 @@ type LocationMergeBlockedRecordPayload {
 }
 
 """
-One setting the destination title keeps and the merging title loses (FR-063).
-"""
-type LocationMergeDestinationWinsPayload {
-	"""
-	The setting, in the words the rule states it.
-	"""
-	setting: String!
-	"""
-	The value the destination keeps, when it is a value worth naming.
-	"""
-	destinationValue: String
-	"""
-	The value the merging title loses, when it is a value worth naming.
-	"""
-	sourceValue: String
-}
-
-"""
-How one table's rows are treated when a title merges into another (FR-064).
-"""
-enum LocationMergeDispositionValue {
-	"""
-	Source rows are re-pointed and kept beside the destination's own.
-	"""
-	UNION
-	"""
-	Source rows are rewritten through the source-to-destination identity map.
-	"""
-	MAP
-	"""
-	The destination's value stands and the source's is discarded.
-	"""
-	DESTINATION_WINS
-	"""
-	Source rows are intentionally not carried over.
-	"""
-	DROP
-}
-
-"""
-One category of data the merge deliberately does not carry (FR-071).
-"""
-type LocationMergeDroppedCategoryPayload {
-	"""
-	The table the rows live in.
-	"""
-	table: String!
-	"""
-	How many source rows are dropped.
-	"""
-	sourceRowCount: Long!
-	"""
-	The adjudication that decided it.
-	"""
-	decision: String!
-	"""
-	Why dropping is the right answer.
-	"""
-	reason: String!
-}
-
-"""
-One media request whose library follows the content into the destination.
-"""
-type LocationMergeMediaRequestRepointPayload {
-	"""
-	The request being repointed.
-	"""
-	requestId: ID!
-	"""
-	The library it belonged to.
-	"""
-	previousLibraryId: ID!
-	"""
-	The library it belongs to after the merge.
-	"""
-	destinationLibraryId: ID!
-}
-
-"""
 The role a media file holds for one logical slot after a merge (FR-068).
 """
 enum LocationMergeMediaRoleValue {
@@ -9538,32 +9459,12 @@ enum LocationMergeMediaRoleValue {
 }
 
 """
-Derived-cache work a completed merge leaves behind for Scryer to redo.
-"""
-enum LocationMergePostMergeWorkValue {
-	"""
-	Rebuild the merged title's search projection.
-	"""
-	REINDEX_TITLE_SEARCH_TERMS
-	"""
-	Refresh the merged title's recommendations.
-	"""
-	REGENERATE_RECOMMENDATIONS
-	"""
-	Recompute title and library statistics.
-	"""
-	RECOMPUTE_STATISTICS
-	"""
-	Drop the retired title's indexer coverage rows.
-	"""
-	DROP_SOURCE_INDEXER_COVERAGE
-}
-
-"""
 What merging one title into an existing destination title would do (FR-071).
 
-The same decision the merge itself is built from, so the preview can never
-describe a merge the engine would not perform.
+The destination wins everything except the merging title's media file
+records and its history; every other row recorded against it retires with it.
+This is the same decision the merge itself is built from, so the preview can
+never describe a merge the engine would not perform.
 """
 type LocationMergePreviewPayload {
 	"""
@@ -9596,64 +9497,26 @@ type LocationMergePreviewPayload {
 	"""
 	blockedRecords: [LocationMergeBlockedRecordPayload!]!
 	"""
-	What the destination keeps.
+	Media file records repointed onto the surviving title.
 	"""
-	destinationWins: [LocationMergeDestinationWinsPayload!]!
-	"""
-	What carries forward, per table, with counts.
-	"""
-	dispositions: [LocationMergeTableDispositionPayload!]!
+	mediaFilesRepointed: Long!
 	"""
 	Every media-file role the merge changes.
 	"""
 	roleChanges: [LocationMergeRoleChangePayload!]!
 	"""
-	Reserved settings whose values disagree.
+	How many of those role changes demote an incoming primary.
 	"""
-	reservedTagConflicts: [LocationMergeReservedTagConflictPayload!]!
+	roleDemotions: Long!
 	"""
-	Free-form tags the merging title contributes.
+	History rows carried onto the surviving title.
 	"""
-	freeFormTagsAdded: [String!]!
+	historyRowsCarried: Long!
 	"""
-	Requests whose library follows the content.
+	Everything else recorded against the merging title, as one count. Those
+	rows retire with it.
 	"""
-	mediaRequestRepoints: [LocationMergeMediaRequestRepointPayload!]!
-	"""
-	What is not carried over, and why.
-	"""
-	dropped: [LocationMergeDroppedCategoryPayload!]!
-	"""
-	Derived caches the merge leaves for Scryer to rebuild afterwards.
-	"""
-	postMergeWork: [LocationMergePostMergeWorkValue!]!
-	"""
-	Anything else the operator should read before confirming, including the
-	notes explaining where this schema differs from the merge inventory.
-	"""
-	notes: [String!]!
-}
-
-"""
-One reserved setting whose two sides disagreed; the destination's wins.
-"""
-type LocationMergeReservedTagConflictPayload {
-	"""
-	The reserved tag prefix, for grouping and translation.
-	"""
-	prefix: String!
-	"""
-	Human-readable name of the setting, when the prefix is a known one.
-	"""
-	setting: String
-	"""
-	The value the destination keeps.
-	"""
-	destinationValue: String
-	"""
-	The value the merging title loses.
-	"""
-	sourceValue: String
+	sourceRecordsDropped: Long!
 }
 
 """
@@ -9665,13 +9528,15 @@ type LocationMergeRoleChangePayload {
 	"""
 	fileId: ID!
 	"""
-	The source episode the file was attached to.
+	The source episode the file was attached to. Null for a movie, whose
+	only slot is the title itself.
 	"""
-	sourceEpisodeId: ID!
+	sourceEpisodeId: ID
 	"""
-	The destination episode it is attached to after the merge.
+	The destination episode it is attached to after the merge. Null for a
+	movie.
 	"""
-	destinationEpisodeId: ID!
+	destinationEpisodeId: ID
 	"""
 	The role it held.
 	"""
@@ -9700,35 +9565,13 @@ enum LocationMergeRoleChangeReasonValue {
 	"""
 	DESTINATION_PRIMARY_RETAINED
 	"""
-	Another source file already claimed primary for that destination episode.
+	Another source file already claimed primary for that destination slot.
 	"""
 	SOURCE_PRIMARY_ALREADY_CLAIMED
 	"""
 	Two source episodes collapsed onto one destination episode.
 	"""
 	COLLAPSED_SOURCE_EPISODES
-}
-
-"""
-One table's contribution to the merge, with the rows it applies to (FR-064).
-"""
-type LocationMergeTableDispositionPayload {
-	"""
-	The table.
-	"""
-	table: String!
-	"""
-	How its rows are treated.
-	"""
-	disposition: LocationMergeDispositionValue!
-	"""
-	Source rows the disposition applies to.
-	"""
-	sourceRowCount: Long!
-	"""
-	Why, in one line.
-	"""
-	note: String!
 }
 
 """
@@ -10370,153 +10213,6 @@ type LocationPlanSectionPayload {
 }
 
 """
-The root and the new path a root change would move it to (US4, FR-020).
-"""
-input LocationRootChangePreviewInput {
-	"""
-	Library the root belongs to.
-	"""
-	libraryId: ID!
-	"""
-	The root being changed. Its identity survives the change (FR-021).
-	"""
-	rootId: ID!
-	"""
-	The new, unconfigured path. A path that is already a configured root of
-	this library is refused and routed to consolidation instead.
-	"""
-	destinationPath: String!
-	"""
-	How the files get there; omitted asks Scryer to do the moving.
-	"""
-	mode: LocationExecutionModeInput
-}
-
-"""
-A read-only preview of replacing one root's path (US4, FR-020 to FR-029).
-"""
-type LocationRootChangePreviewPayload {
-	"""
-	The fingerprinted plan, in the vocabulary every location workflow
-	shares. Root-scoped plans have no title selection, so the plan's
-	classification carries per-class counts with no per-title entries; the
-	titles that need naming are in `accounting.blockedTitles`.
-	"""
-	plan: LocationOperationPreviewPayload!
-	"""
-	Every title assigned to the root, with no way to exclude one.
-	"""
-	accounting: LocationTitleAccountingPayload!
-	"""
-	What the root keeps. The first thing the dialog states.
-	"""
-	retention: LocationRootIdentityRetentionPayload!
-	"""
-	Everything found beneath the source root, in three buckets.
-	"""
-	content: LocationRootContentInventoryPayload!
-	"""
-	What happens to the old location afterwards.
-	"""
-	retirement: LocationRootRetirementContractPayload!
-}
-
-"""
-The root being changed and the path it moves to, as confirmed by a start.
-"""
-input LocationRootChangeTargetInput {
-	"""
-	Library the root belongs to.
-	"""
-	libraryId: ID!
-	"""
-	The root being changed.
-	"""
-	rootId: ID!
-	"""
-	The previewed destination path.
-	"""
-	destinationPath: String!
-}
-
-"""
-The two roots a consolidation folds together (US5, FR-020).
-"""
-input LocationRootConsolidationPreviewInput {
-	"""
-	Library both roots belong to. A consolidation never crosses libraries.
-	"""
-	libraryId: ID!
-	"""
-	The root being folded away; its configuration is retired at the end.
-	"""
-	sourceRootId: ID!
-	"""
-	The root that absorbs it. Must already be configured in this library; a
-	destination that is not is refused and routed to a root change instead.
-	"""
-	destinationRootId: ID!
-	"""
-	How the files get there; omitted asks Scryer to do the moving.
-	"""
-	mode: LocationExecutionModeInput
-}
-
-"""
-A read-only preview of folding one root into another (US5, FR-020, FR-022,
-FR-024 to FR-029).
-"""
-type LocationRootConsolidationPreviewPayload {
-	"""
-	The fingerprinted plan, in the vocabulary every location workflow
-	shares. Root-scoped plans have no title selection, so the plan's
-	classification carries per-class counts with no per-title entries; the
-	titles that need naming are in `accounting.blockedTitles`, and every
-	changed folder name is a `RENAME` plan item.
-	"""
-	plan: LocationOperationPreviewPayload!
-	"""
-	Every title assigned to the source root, with no way to exclude one.
-	"""
-	accounting: LocationTitleAccountingPayload!
-	"""
-	FR-024's seven groups with their counts.
-	"""
-	classification: LocationConsolidationClassificationPayload!
-	"""
-	Which root new content lands on afterwards. The destination root keeps
-	its own id either way (FR-078); what can move is the default.
-	"""
-	defaultTransfer: LocationDefaultRootTransferPayload!
-	"""
-	Everything found beneath the source root, in three buckets.
-	"""
-	content: LocationRootContentInventoryPayload!
-	"""
-	What happens to the source root's configuration afterwards.
-	"""
-	retirement: LocationRootRetirementContractPayload!
-}
-
-"""
-The two roots a consolidation folds together, as confirmed by a start.
-"""
-input LocationRootConsolidationTargetInput {
-	"""
-	Library both roots belong to.
-	"""
-	libraryId: ID!
-	"""
-	The root being folded away.
-	"""
-	sourceRootId: ID!
-	"""
-	The root that absorbs it.
-	"""
-	destinationRootId: ID!
-}
-
-"""
 One of FR-027's three content buckets: the complete counts plus a sample.
 """
 type LocationRootContentBucketPayload {
@@ -10723,6 +10419,113 @@ type LocationRootRetirementContractPayload {
 	Every reason it may not be, when there are any.
 	"""
 	blockers: [LocationRootRetirementBlockerPayload!]!
+}
+
+"""
+The root and the destination a **Change root** would move it to (US4 + US5,
+FR-020).
+
+FR-020 is one settings action with two destinations, so it is one input with
+two destinations. Exactly one of `destinationPath` and `destinationRootId`
+is named; the server decides which branch that is.
+"""
+input LocationRootScopePreviewInput {
+	"""
+	Library the root belongs to. A root-scoped operation never crosses
+	libraries.
+	"""
+	libraryId: ID!
+	"""
+	The root being moved. Its synthetic id survives either destination
+	(FR-021, FR-078).
+	"""
+	rootId: ID!
+	"""
+	A new path for the root. A path that lexically matches a configured root
+	of this library is the same request as naming that root below, and is
+	planned as a fold.
+	"""
+	destinationPath: String
+	"""
+	Another configured root of this library, which absorbs the source root's
+	content. Its configuration survives; the source root's is retired.
+	"""
+	destinationRootId: ID
+	"""
+	How the files get there; omitted asks Scryer to do the moving.
+	"""
+	mode: LocationExecutionModeInput
+}
+
+"""
+A read-only preview of a root-scoped operation: replacing one root's path,
+or folding one root into another (US4 + US5, FR-020 to FR-029).
+
+One payload for both branches of **Change root**. The sections both branches
+share are always present; the variant-only ones are null for the other
+branch.
+"""
+type LocationRootScopePreviewPayload {
+	"""
+	The fingerprinted plan, in the vocabulary every location workflow
+	shares. Root-scoped plans have no title selection, so the plan's
+	classification carries per-class counts with no per-title entries; the
+	titles that need naming are in `accounting.blockedTitles`, and every
+	changed folder name is a `RENAME` plan item.
+	"""
+	plan: LocationOperationPreviewPayload!
+	"""
+	Every title assigned to the source root, with no way to exclude one.
+	"""
+	accounting: LocationTitleAccountingPayload!
+	"""
+	What the root keeps when only its path changes. Null when the root is
+	being folded into another root instead.
+	"""
+	retention: LocationRootIdentityRetentionPayload
+	"""
+	FR-024's seven groups with their counts. Null for a change to a new,
+	unconfigured path, whose destination holds nothing to classify against.
+	"""
+	classification: LocationConsolidationClassificationPayload
+	"""
+	Which root new content lands on afterwards. Null for a path change,
+	which never moves the library default.
+	"""
+	defaultTransfer: LocationDefaultRootTransferPayload
+	"""
+	Everything found beneath the source root, in three buckets.
+	"""
+	content: LocationRootContentInventoryPayload!
+	"""
+	What happens to the old location afterwards.
+	"""
+	retirement: LocationRootRetirementContractPayload!
+}
+
+"""
+The root and the destination it moves to, as confirmed by a start.
+
+The same exactly-one-destination shape the preview took, so a confirmation
+says back exactly what was previewed.
+"""
+input LocationRootScopeTargetInput {
+	"""
+	Library the root belongs to.
+	"""
+	libraryId: ID!
+	"""
+	The root being moved.
+	"""
+	rootId: ID!
+	"""
+	The previewed destination path, when the preview named one.
+	"""
+	destinationPath: String
+	"""
+	The previewed destination root, when the preview named one.
+	"""
+	destinationRootId: ID
 }
 
 """
@@ -14650,12 +14453,13 @@ type MutationRoot {
 	here, because its rebuilt plan is blocked (FR-052).
 	
 	A root change (US4) and a root consolidation (US5) confirm through the
-	same mutation and the same typed-confirmation field; only the destination
-	form differs. Exactly one of the three destination forms may be named.
+	same mutation, the same `rootScope` target, and the same
+	typed-confirmation field; only the destination inside that target
+	differs. Exactly one of the two destination forms may be named.
 	"""
 	startLocationOperation(
 		"""
-		Previewed destination form (selection, root change, or root consolidation), mode, plan fingerprint, and typed confirmation when one is required.
+		Previewed destination form (a title selection or a root-scoped target), mode, plan fingerprint, and typed confirmation when one is required.
 		"""
 		input: StartLocationOperationInput!
 	): StartLocationOperationPayload!
@@ -17613,42 +17417,27 @@ type QueryRoot {
 		input: LocationOperationPreviewInput!
 	): LocationOperationPreviewPayload!
 	"""
-	Preview replacing one root's path with a new, unconfigured one (US4).
+	Preview a **Change root** (US4 + US5): moving one root's content to a
+	new path, or folding it into another root of the same library.
+	
+	FR-020 is one settings action with two destinations, so it is one query
+	with two destinations. Name `destinationPath` for a new location, or
+	`destinationRootId` for a root that already exists; a `destinationPath`
+	that resolves to a configured root of this library is the same request
+	as naming that root, and is planned as a fold either way. Naming both,
+	or neither, is refused.
 	
 	Root scoped, so there is no selection: every title assigned to the root
 	goes, and the ledger says so rather than offering a way to exclude one
 	(FR-023). The returned fingerprint is what `startLocationOperation`
-	confirms with its `rootChange` target.
-	
-	A destination that is already a configured root of this library is
-	refused with `refusalCode: root_change_destination_is_configured_root`,
-	because that request is a consolidation and belongs to
-	`locationRootConsolidationPreview` (FR-020).
+	confirms with its `rootScope` target.
 	"""
-	locationRootChangePreview(
+	locationRootScopePreview(
 		"""
-		The root whose path changes, the new path it moves to, and how the files get there.
+		The root being moved, the destination it moves to, and how the files get there.
 		"""
-		input: LocationRootChangePreviewInput!
-	): LocationRootChangePreviewPayload!
-	"""
-	Preview folding one root into another root of the same library (US5).
-	
-	The other half of FR-020's single settings action: the destination is a
-	root id rather than a path, which is exactly what makes this a
-	consolidation. FR-024's seven groups are the preview.
-	
-	A destination that is not a configured root of this library is refused
-	with `refusalCode:
-	root_consolidation_destination_not_a_configured_root`, because that
-	request is a root change and belongs to `locationRootChangePreview`.
-	"""
-	locationRootConsolidationPreview(
-		"""
-		The root being folded away, the root that absorbs it, and how the files get there.
-		"""
-		input: LocationRootConsolidationPreviewInput!
-	): LocationRootConsolidationPreviewPayload!
+		input: LocationRootScopePreviewInput!
+	): LocationRootScopePreviewPayload!
 	"""
 	Read one location operation with its per-title checkpoints.
 	"""
@@ -20859,10 +20648,10 @@ input StartExternalImportProwlarrWarmupInput {
 Confirmation of a previewed location operation.
 
 Exactly one destination form is confirmed: a title selection with its
-destination, a root change, or a root consolidation. `titleIds` and
-`destination` stayed where they were and are still what a selection sends;
-they are nullable only so a root-scoped confirmation does not have to claim
-an empty selection going nowhere.
+destination, or a root-scoped target. `titleIds` and `destination` stayed
+where they were and are still what a selection sends; they are nullable only
+so a root-scoped confirmation does not have to claim an empty selection
+going nowhere.
 """
 input StartLocationOperationInput {
 	"""
@@ -20876,14 +20665,11 @@ input StartLocationOperationInput {
 	"""
 	destination: LocationDestinationInput
 	"""
-	Confirms a previewed root change (US4): one root's path is replaced.
+	Confirms a previewed root-scoped operation (US4 + US5): one root's path
+	is replaced, or one root is folded into another root of the same
+	library.
 	"""
-	rootChange: LocationRootChangeTargetInput
-	"""
-	Confirms a previewed root consolidation (US5): one root is folded into
-	another root of the same library.
-	"""
-	rootConsolidation: LocationRootConsolidationTargetInput
+	rootScope: LocationRootScopeTargetInput
 	"""
 	The mode the plan was previewed under; a different mode is a different
 	plan, so it produces a different fingerprint and is refused.

@@ -2112,12 +2112,10 @@ const ja: LocaleDictionary = {
   "move.mergeNoDetails": "この統合で引き継がれるものは他にありません。",
   "move.mergeBlockedHeading":
     "この統合は実行できません: 次のレコードを引き継げません。",
-  "move.mergeDispositionsHeading": "引き継がれるデータ",
-  "move.mergeRowCount": "{{count}} 行",
-  "move.mergeDisposition.UNION": "移動先のものと並べて保持",
-  "move.mergeDisposition.MAP": "移動先へ付け替え",
-  "move.mergeDisposition.DESTINATION_WINS": "移動先の値を保持",
-  "move.mergeDisposition.DROP": "引き継がない",
+  "move.mergeCarried":
+    "残るタイトルが {{files}} 件のメディアファイル レコードと {{history}} 件の履歴行を引き継ぎます。",
+  "move.mergeDropped":
+    "統合されるタイトルの他の {{count}} 件のレコードは引き継がれず、タイトルとともに失われます。",
   "move.mergeRoleChangesHeading":
     "メディアファイルの役割（{{demotions}} 個のファイルがプライマリでなくなります）",
   "move.mergeRoleChangesHeadingPlain": "メディアファイルの役割",
@@ -2132,16 +2130,6 @@ const ja: LocaleDictionary = {
     "移動中の別のファイルが、その移動先エピソードのプライマリを既に取得しています。",
   "move.mergeRoleReason.COLLAPSED_SOURCE_EPISODES":
     "2 つの移動元エピソードが 1 つの移動先エピソードにまとまりました。",
-  "move.mergeTagConflictsHeading": "値が食い違った設定",
-  "move.mergeTagConflictLine":
-    "{{setting}}: 「{{destination}}」を保持し、「{{source}}」を破棄します。",
-  "move.mergeValueNone": "なし",
-  "move.mergeDestinationWinsHeading": "移動先が保持する設定",
-  "move.mergeDroppedHeading": "引き継がない",
-  "move.mergeFreeFormTags": "移動先タイトルに追加されるタグ: {{tags}}。",
-  "move.mergeRequestRepoint":
-    "{{count}} 件のメディアリクエストがこのタイトルとともに移動先ライブラリへ移ります。",
-  "move.mergeNotesHeading": "備考",
   "move.operationTransferNote": "これらのタイトルは別のライブラリへ移動しています。",
   "move.modeHeading": "ファイルをどのように移しますか？",
   "move.mode.MOVE_WITH_SCRYER": "Scryer で移動",
@@ -2288,8 +2276,6 @@ const ja: LocaleDictionary = {
   "rootChange.destinationExistingRootHelp": "このルートは選んだルートに統合され、その設定は廃止されます。",
   "rootChange.destinationNoOtherRoots": "このライブラリには統合先となる別のルートがありません。",
   "rootChange.destinationPathPlaceholder": "/mnt/new-disk/movies",
-  "rootChange.crossRouteToConsolidation": "そのパスはすでにこのライブラリのルートなので、これは統合です。移動先を切り替えました。",
-  "rootChange.crossRouteToNewPath": "そのルートはこのライブラリに設定されていないため、これはルート変更です。移動先を切り替えました。",
   "rootChange.planChanged": "プレビュー後にプランが変わりました。確定する前にもう一度プレビューしてください。",
   "rootChange.previewFailed": "このルート変更をプレビューできませんでした。",
   "rootChange.previewing": "ルート全体を読み取っています。",
@@ -2360,12 +2346,11 @@ const ja: LocaleDictionary = {
   "rootChange.refusal.root_change_source_root_unavailable": "このルートは現在読み取れないため、内容を計画できません。",
   "rootChange.refusal.root_change_destination_not_empty": "新しいパスにはすでにコンテンツがあります。空のディレクトリか新規のディレクトリを選んでください。",
   "rootChange.refusal.root_change_destination_parent_missing": "新しいパスの親ディレクトリが存在しません。",
-  "rootChange.refusal.root_change_destination_is_configured_root": "そのパスはすでにこのライブラリのルートです。",
+  "rootChange.refusal.root_change_destination_is_configured_root": "そのパスは既に別のライブラリのルートとして設定されています。",
   "rootChange.refusal.root_change_mode_not_supported": "ルートの変更では常にファイルを移動します。「ファイルはすでにそこにある」はここでは選べません。",
   "rootChange.refusal.root_consolidation_path_not_absolute": "絶対パスを指定してください。",
   "rootChange.refusal.root_consolidation_same_root": "ルートを自分自身に統合することはできません。",
   "rootChange.refusal.root_consolidation_paths_overlap": "これらのルートの一方がもう一方の内側にあります。",
-  "rootChange.refusal.root_consolidation_destination_not_a_configured_root": "そのルートはこのライブラリに設定されていません。",
   "rootChange.refusal.root_consolidation_source_root_is_symlink": "このルートはシンボリックリンクです。先に実体のディレクトリを指すようにしてください。",
   "rootChange.refusal.root_consolidation_source_root_unavailable": "このルートは現在読み取れないため、内容を計画できません。",
   "rootChange.refusal.root_consolidation_destination_root_unavailable": "移動先ルートは現在読み取れないため、そこにある内容を踏まえた計画ができません。",

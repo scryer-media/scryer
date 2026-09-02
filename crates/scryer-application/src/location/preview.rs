@@ -1103,10 +1103,10 @@ mod tests {
     #[test]
     fn a_changed_merge_summary_invalidates_the_confirmation() {
         let items = vec![move_item("title-1", "/src/a.mkv", "/dst/a.mkv", 10)];
-        let summary = |free_form: &str| MergePreviewSummary {
+        let summary = |history_rows: i64| MergePreviewSummary {
             source_title_id: "title-1".to_string(),
             destination_title_id: "destination".to_string(),
-            free_form_tags_added: vec![free_form.to_string()],
+            history_rows_carried: history_rows,
             ..MergePreviewSummary::default()
         };
 
@@ -1116,12 +1116,12 @@ mod tests {
 
         let mut with = LocationPlanBuilder::new(header());
         with.extend(items.clone());
-        with.merge(summary("rewatch"));
+        with.merge(summary(9));
         let with = with.build();
 
         let mut changed = LocationPlanBuilder::new(header());
         changed.extend(items);
-        changed.merge(summary("4k"));
+        changed.merge(summary(11));
         let changed = changed.build();
 
         assert_ne!(without.fingerprint, with.fingerprint);

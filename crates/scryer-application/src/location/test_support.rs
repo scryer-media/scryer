@@ -582,12 +582,7 @@ impl crate::location::merge::engine::TitleMergeRepository for InMemoryTitleMerge
             destination_title_name: Some(destination.name.clone()),
             source_library_id: Some(source.library_id.clone()),
             destination_library_id: Some(destination.library_id.clone()),
-            source_tags: source.tags.clone(),
-            destination_tags: destination.tags.clone(),
-            source_row_counts: BTreeMap::from([(
-                "media_files".to_string(),
-                source_media.len() as i64,
-            )]),
+            media_file_count: source_media.len() as i64,
             ..crate::location::merge::engine::MergeCatalogSnapshot::default()
         })
     }
@@ -598,7 +593,7 @@ impl crate::location::merge::engine::TitleMergeRepository for InMemoryTitleMerge
     ) -> AppResult<crate::location::merge::engine::MergeOutcome> {
         let (titles, media_files) = self.handles();
 
-        // Group 1: the source title's media becomes the destination title's.
+        // The source title's media becomes the destination title's.
         // The in-memory media-file repository has no repoint, so the row is
         // re-inserted under the surviving title and the source row removed —
         // the same observable end state the SQL `UPDATE media_files SET
@@ -619,22 +614,12 @@ impl crate::location::merge::engine::TitleMergeRepository for InMemoryTitleMerge
                 .await?;
             media_files.delete_media_file(&file.id).await?;
         }
-        rows_affected.insert("1:media_files".to_string(), source_media.len() as u64);
+        rows_affected.insert("files:media_files".to_string(), source_media.len() as u64);
 
-        // Group 3: the merged tag array lands on the destination title.
-        titles
-            .update_metadata(
-                &plan.destination_title_id,
-                None,
-                None,
-                Some(plan.tags.merged_tags.clone()),
-                None,
-            )
-            .await?;
-
-        // Group 5: the source title row goes, and only now (FR-067).
+        // The source title row goes last, after everything the merge carries has
+        // been repointed away from it.
         titles.delete(&plan.source_title_id).await?;
-        rows_affected.insert("5:titles".to_string(), 1);
+        rows_affected.insert("retire:titles".to_string(), 1);
 
         self.executed.lock().expect("lock").push(plan.clone());
         Ok(crate::location::merge::engine::MergeOutcome {
@@ -642,7 +627,6 @@ impl crate::location::merge::engine::TitleMergeRepository for InMemoryTitleMerge
             destination_title_id: plan.destination_title_id.clone(),
             rows_affected,
             domain_event_payloads_rewritten: 0,
-            post_merge_work: plan.summary.post_merge_work.clone(),
         })
     }
 }

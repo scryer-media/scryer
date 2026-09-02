@@ -1574,6 +1574,21 @@ impl AppUseCase {
             }
         }
 
+        self.purge_title_dependent_records(title_id, actor).await
+    }
+
+    /// The half of [`Self::purge_title_logical_dependents`] that needs nothing
+    /// but the title's id: the rows no foreign key reaches, and the downloads
+    /// that would otherwise keep running for a title that is gone.
+    ///
+    /// Split out so a merged source title — whose `titles` row the merge
+    /// transaction already removed, and whose files were repointed rather than
+    /// deleted — retires through exactly the same cleanup.
+    pub(crate) async fn purge_title_dependent_records(
+        &self,
+        title_id: &str,
+        actor: DomainEventActor,
+    ) -> AppResult<()> {
         let download_submissions = match self
             .services
             .workflow
@@ -1670,7 +1685,7 @@ impl AppUseCase {
         self.services
             .library
             .library_probe_signatures
-            .delete_probe_signatures_for_title_ids(std::slice::from_ref(&title.id))
+            .delete_probe_signatures_for_title_ids(&[title_id.to_string()])
             .await?;
 
         Ok(())

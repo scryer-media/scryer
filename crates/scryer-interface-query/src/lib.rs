@@ -34,9 +34,9 @@ use scryer_interface_media::mappers::{
     from_application_upgrade_status, from_backup_info, from_catalog_discovery, from_collection,
     from_dashboard_activity_stats, from_delete_preview, from_delete_titles_preview,
     from_change_title_folder_preview, from_discovery_home, from_discovery_home_cards,
-    from_location_operation, from_location_operation_asset_listing, from_root_change_preview,
-    from_root_consolidation_preview, from_root_move_preview,
-    location_destination_into_application, location_execution_mode_into_application,
+    from_location_operation, from_location_operation_asset_listing, from_root_move_preview,
+    from_root_scope_preview, location_destination_into_application,
+    location_execution_mode_into_application, root_scope_destination,
     from_discovery_home_filter_options,
     from_discovery_item, from_discovery_items_result, from_domain_event, from_download_queue_item,
     from_episode, from_external_import_monitor_warmup_progress, from_job_definition, from_job_run,
@@ -1569,31 +1569,35 @@ impl CatalogQueries {
         Ok(from_root_move_preview(&preview))
     }
 
-    /// Preview replacing one root's path with a new, unconfigured one (US4).
+    /// Preview a **Change root** (US4 + US5): moving one root's content to a
+    /// new path, or folding it into another root of the same library.
+    ///
+    /// FR-020 is one settings action with two destinations, so it is one query
+    /// with two destinations. Name `destinationPath` for a new location, or
+    /// `destinationRootId` for a root that already exists; a `destinationPath`
+    /// that resolves to a configured root of this library is the same request
+    /// as naming that root, and is planned as a fold either way. Naming both,
+    /// or neither, is refused.
     ///
     /// Root scoped, so there is no selection: every title assigned to the root
     /// goes, and the ledger says so rather than offering a way to exclude one
     /// (FR-023). The returned fingerprint is what `startLocationOperation`
-    /// confirms with its `rootChange` target.
-    ///
-    /// A destination that is already a configured root of this library is
-    /// refused with `refusalCode: root_change_destination_is_configured_root`,
-    /// because that request is a consolidation and belongs to
-    /// `locationRootConsolidationPreview` (FR-020).
-    async fn location_root_change_preview(
+    /// confirms with its `rootScope` target.
+    async fn location_root_scope_preview(
         &self,
         ctx: &Context<'_>,
         #[graphql(
-            desc = "The root whose path changes, the new path it moves to, and how the files get there."
+            desc = "The root being moved, the destination it moves to, and how the files get there."
         )]
-        input: LocationRootChangePreviewInput,
-    ) -> GqlResult<LocationRootChangePreviewPayload> {
+        input: LocationRootScopePreviewInput,
+    ) -> GqlResult<LocationRootScopePreviewPayload> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
-        let request = scryer_application::location::root_change_execution::RootChangePreviewRequest {
+        let call = scryer_application::location::root_scope_execution::RootScopeCall {
             library_id: input.library_id.to_string(),
             root_id: input.root_id.to_string(),
-            destination_path: input.destination_path,
+            destination: root_scope_destination(input.destination_path, input.destination_root_id)
+                .map_err(to_gql_error)?,
             // The planner refuses an unsupported mode itself, by name
             // (`root_change_mode_not_supported`), so the request travels
             // through the shared mapper and the refusal is a routable code
@@ -1601,44 +1605,10 @@ impl CatalogQueries {
             mode: location_execution_mode_into_application(input.mode),
         };
         let preview = app
-            .preview_root_change(&actor, request)
+            .preview_root_scope(&actor, &call)
             .await
             .map_err(to_gql_error)?;
-        Ok(from_root_change_preview(&preview))
-    }
-
-    /// Preview folding one root into another root of the same library (US5).
-    ///
-    /// The other half of FR-020's single settings action: the destination is a
-    /// root id rather than a path, which is exactly what makes this a
-    /// consolidation. FR-024's seven groups are the preview.
-    ///
-    /// A destination that is not a configured root of this library is refused
-    /// with `refusalCode:
-    /// root_consolidation_destination_not_a_configured_root`, because that
-    /// request is a root change and belongs to `locationRootChangePreview`.
-    async fn location_root_consolidation_preview(
-        &self,
-        ctx: &Context<'_>,
-        #[graphql(
-            desc = "The root being folded away, the root that absorbs it, and how the files get there."
-        )]
-        input: LocationRootConsolidationPreviewInput,
-    ) -> GqlResult<LocationRootConsolidationPreviewPayload> {
-        let app = app_from_ctx(ctx)?;
-        let actor = actor_from_ctx(ctx)?;
-        let request =
-            scryer_application::location::consolidation_execution::RootConsolidationPreviewRequest {
-                library_id: input.library_id.to_string(),
-                source_root_id: input.source_root_id.to_string(),
-                destination_root_id: input.destination_root_id.to_string(),
-                mode: location_execution_mode_into_application(input.mode),
-            };
-        let preview = app
-            .preview_root_consolidation(&actor, request)
-            .await
-            .map_err(to_gql_error)?;
-        Ok(from_root_consolidation_preview(&preview))
+        Ok(from_root_scope_preview(&preview))
     }
 
     /// Read one location operation with its per-title checkpoints.

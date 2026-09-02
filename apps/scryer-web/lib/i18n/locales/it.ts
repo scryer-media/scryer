@@ -2148,14 +2148,10 @@ const it: LocaleDictionary = {
   "move.mergeNoDetails": "Questa unione non riporta nient'altro.",
   "move.mergeBlockedHeading":
     "Questa unione non può essere eseguita: questi record non possono essere riportati.",
-  "move.mergeDispositionsHeading": "Dati riportati",
-  "move.mergeRowCount": "{{count}} riga/righe",
-  "move.mergeDisposition.UNION":
-    "Mantenuti accanto a quelli della destinazione",
-  "move.mergeDisposition.MAP": "Ricollegati alla destinazione",
-  "move.mergeDisposition.DESTINATION_WINS":
-    "Resta il valore della destinazione",
-  "move.mergeDisposition.DROP": "Non riportato",
+  "move.mergeCarried":
+    "Il titolo superstite assume {{files}} record di file multimediali e {{history}} riga/righe di cronologia.",
+  "move.mergeDropped":
+    "{{count}} altro/i record del titolo unito non vengono mantenuti e si ritirano con esso.",
   "move.mergeRoleChangesHeading":
     "Ruoli dei file ({{demotions}} file perdono il ruolo principale)",
   "move.mergeRoleChangesHeadingPlain": "Ruoli dei file",
@@ -2170,18 +2166,6 @@ const it: LocaleDictionary = {
     "Un altro file in spostamento ha già preso il ruolo principale per quell'episodio di destinazione.",
   "move.mergeRoleReason.COLLAPSED_SOURCE_EPISODES":
     "Due episodi di origine sono confluiti in un unico episodio di destinazione.",
-  "move.mergeTagConflictsHeading": "Impostazioni in disaccordo",
-  "move.mergeTagConflictLine":
-    "{{setting}}: mantiene «{{destination}}», scarta «{{source}}».",
-  "move.mergeValueNone": "niente",
-  "move.mergeDestinationWinsHeading":
-    "Impostazioni che la destinazione mantiene",
-  "move.mergeDroppedHeading": "Non riportato",
-  "move.mergeFreeFormTags":
-    "Tag aggiunti al titolo di destinazione: {{tags}}.",
-  "move.mergeRequestRepoint":
-    "{{count}} richiesta/e di media seguono questo titolo nella libreria di destinazione.",
-  "move.mergeNotesHeading": "Note",
   "move.operationTransferNote": "Questi titoli si stanno spostando in un'altra libreria.",
   "move.modeHeading": "Come devono arrivare i file?",
   "move.mode.MOVE_WITH_SCRYER": "Sposta con Scryer",
@@ -2328,8 +2312,6 @@ const it: LocaleDictionary = {
   "rootChange.destinationExistingRootHelp": "Questa radice viene unita a quella scelta e la sua configurazione viene ritirata.",
   "rootChange.destinationNoOtherRoots": "Questa libreria non ha un'altra radice in cui confluire.",
   "rootChange.destinationPathPlaceholder": "/mnt/nuovo-disco/film",
-  "rootChange.crossRouteToConsolidation": "Quel percorso è già una radice di questa libreria, quindi si tratta di un consolidamento. La destinazione è stata cambiata per te.",
-  "rootChange.crossRouteToNewPath": "Quella radice non è configurata in questa libreria, quindi si tratta di un cambio di radice. La destinazione è stata cambiata per te.",
   "rootChange.planChanged": "Il piano è cambiato dopo l'anteprima. Rigenera l'anteprima prima di confermare.",
   "rootChange.previewFailed": "Impossibile generare l'anteprima di questo cambio di radice.",
   "rootChange.previewing": "Lettura dell'intera radice.",
@@ -2400,12 +2382,11 @@ const it: LocaleDictionary = {
   "rootChange.refusal.root_change_source_root_unavailable": "Questa radice al momento non è leggibile, quindi il suo contenuto non può essere pianificato.",
   "rootChange.refusal.root_change_destination_not_empty": "Il nuovo percorso contiene già dei dati. Scegli una directory vuota o nuova.",
   "rootChange.refusal.root_change_destination_parent_missing": "La directory superiore del nuovo percorso non esiste.",
-  "rootChange.refusal.root_change_destination_is_configured_root": "Quel percorso è già una radice di questa libreria.",
+  "rootChange.refusal.root_change_destination_is_configured_root": "Quel percorso è già configurato come radice di un'altra libreria.",
   "rootChange.refusal.root_change_mode_not_supported": "Un cambio di radice sposta sempre i file; «i file sono già lì» non è disponibile qui.",
   "rootChange.refusal.root_consolidation_path_not_absolute": "Indica un percorso assoluto.",
   "rootChange.refusal.root_consolidation_same_root": "Una radice non può confluire in se stessa.",
   "rootChange.refusal.root_consolidation_paths_overlap": "Una di queste radici è dentro l'altra.",
-  "rootChange.refusal.root_consolidation_destination_not_a_configured_root": "Quella radice non è configurata in questa libreria.",
   "rootChange.refusal.root_consolidation_source_root_is_symlink": "Questa radice è un collegamento simbolico. Puntala prima alla directory reale.",
   "rootChange.refusal.root_consolidation_source_root_unavailable": "Questa radice al momento non è leggibile, quindi il suo contenuto non può essere pianificato.",
   "rootChange.refusal.root_consolidation_destination_root_unavailable": "La radice di destinazione al momento non è leggibile, quindi non si può pianificare rispetto a ciò che contiene già.",

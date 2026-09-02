@@ -2068,12 +2068,10 @@ const ko: LocaleDictionary = {
   "move.mergeNoDetails": "이 병합에서 그 밖에 옮겨지는 항목은 없습니다.",
   "move.mergeBlockedHeading":
     "이 병합을 실행할 수 없습니다: 다음 레코드를 옮길 수 없습니다.",
-  "move.mergeDispositionsHeading": "옮겨지는 데이터",
-  "move.mergeRowCount": "{{count}}개 행",
-  "move.mergeDisposition.UNION": "대상의 항목과 함께 유지",
-  "move.mergeDisposition.MAP": "대상으로 다시 연결",
-  "move.mergeDisposition.DESTINATION_WINS": "대상의 값 유지",
-  "move.mergeDisposition.DROP": "옮기지 않음",
+  "move.mergeCarried":
+    "남는 제목이 미디어 파일 레코드 {{files}}개와 기록 행 {{history}}개를 넘겨받습니다.",
+  "move.mergeDropped":
+    "병합되는 제목의 다른 레코드 {{count}}개는 넘겨받지 않고 제목과 함께 사라집니다.",
   "move.mergeRoleChangesHeading":
     "미디어 파일 역할 (파일 {{demotions}}개가 기본 역할을 잃음)",
   "move.mergeRoleChangesHeadingPlain": "미디어 파일 역할",
@@ -2088,16 +2086,6 @@ const ko: LocaleDictionary = {
     "이동 중인 다른 파일이 해당 대상 에피소드의 기본 역할을 이미 차지했습니다.",
   "move.mergeRoleReason.COLLAPSED_SOURCE_EPISODES":
     "원본 에피소드 두 개가 대상 에피소드 하나로 합쳐졌습니다.",
-  "move.mergeTagConflictsHeading": "값이 서로 다른 설정",
-  "move.mergeTagConflictLine":
-    "{{setting}}: “{{destination}}”을(를) 유지하고 “{{source}}”을(를) 버립니다.",
-  "move.mergeValueNone": "없음",
-  "move.mergeDestinationWinsHeading": "대상이 유지하는 설정",
-  "move.mergeDroppedHeading": "옮기지 않음",
-  "move.mergeFreeFormTags": "대상 타이틀에 추가된 태그: {{tags}}.",
-  "move.mergeRequestRepoint":
-    "미디어 요청 {{count}}건이 이 타이틀을 따라 대상 라이브러리로 이동합니다.",
-  "move.mergeNotesHeading": "참고",
   "move.operationTransferNote": "이 타이틀들은 다른 라이브러리로 이동하고 있습니다.",
   "move.modeHeading": "파일을 어떻게 옮길까요?",
   "move.mode.MOVE_WITH_SCRYER": "Scryer로 이동",
@@ -2244,8 +2232,6 @@ const ko: LocaleDictionary = {
   "rootChange.destinationExistingRootHelp": "이 루트는 선택한 루트로 통합되고, 그 설정은 폐기됩니다.",
   "rootChange.destinationNoOtherRoots": "이 라이브러리에는 통합할 다른 루트가 없습니다.",
   "rootChange.destinationPathPlaceholder": "/mnt/new-disk/movies",
-  "rootChange.crossRouteToConsolidation": "그 경로는 이미 이 라이브러리의 루트이므로 통합에 해당합니다. 대상이 자동으로 전환되었습니다.",
-  "rootChange.crossRouteToNewPath": "그 루트는 이 라이브러리에 설정되어 있지 않으므로 루트 변경에 해당합니다. 대상이 자동으로 전환되었습니다.",
   "rootChange.planChanged": "미리 보기 이후 계획이 바뀌었습니다. 확정하기 전에 다시 미리 보세요.",
   "rootChange.previewFailed": "이 루트 변경을 미리 볼 수 없습니다.",
   "rootChange.previewing": "루트 전체를 읽는 중입니다.",
@@ -2316,12 +2302,11 @@ const ko: LocaleDictionary = {
   "rootChange.refusal.root_change_source_root_unavailable": "지금 이 루트를 읽을 수 없어 내용을 계획할 수 없습니다.",
   "rootChange.refusal.root_change_destination_not_empty": "새 경로에 이미 콘텐츠가 있습니다. 비어 있거나 새로운 디렉터리를 선택하세요.",
   "rootChange.refusal.root_change_destination_parent_missing": "새 경로의 상위 디렉터리가 없습니다.",
-  "rootChange.refusal.root_change_destination_is_configured_root": "그 경로는 이미 이 라이브러리의 루트입니다.",
+  "rootChange.refusal.root_change_destination_is_configured_root": "그 경로는 이미 다른 라이브러리의 루트로 설정되어 있습니다.",
   "rootChange.refusal.root_change_mode_not_supported": "루트 변경은 항상 파일을 옮깁니다. '파일이 이미 있음'은 여기서 제공되지 않습니다.",
   "rootChange.refusal.root_consolidation_path_not_absolute": "절대 경로를 입력하세요.",
   "rootChange.refusal.root_consolidation_same_root": "루트를 자기 자신으로 통합할 수 없습니다.",
   "rootChange.refusal.root_consolidation_paths_overlap": "이 루트 중 하나가 다른 하나의 안에 있습니다.",
-  "rootChange.refusal.root_consolidation_destination_not_a_configured_root": "그 루트는 이 라이브러리에 설정되어 있지 않습니다.",
   "rootChange.refusal.root_consolidation_source_root_is_symlink": "이 루트는 심볼릭 링크입니다. 먼저 실제 디렉터리를 가리키게 하세요.",
   "rootChange.refusal.root_consolidation_source_root_unavailable": "지금 이 루트를 읽을 수 없어 내용을 계획할 수 없습니다.",
   "rootChange.refusal.root_consolidation_destination_root_unavailable": "지금 대상 루트를 읽을 수 없어 이미 들어 있는 내용을 기준으로 계획할 수 없습니다.",

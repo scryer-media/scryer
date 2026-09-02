@@ -12,7 +12,7 @@ pub const RECYCLE_STATUS_QUARANTINED: &str = "quarantined";
 
 const RECYCLE_ROOT_SENTINEL: &str = ".scryer-recycle-root";
 const DEFAULT_RETENTION_DAYS: u32 = 7;
-const RECYCLE_DIR_NAME: &str = ".scryer-recycle";
+pub(crate) const RECYCLE_DIR_NAME: &str = ".scryer-recycle";
 
 /// Configuration for the recycle bin, resolved from application settings.
 #[derive(Clone, Debug)]
@@ -338,98 +338,6 @@ async fn write_manifest(entry_dir: &Path, manifest: &RecycleManifest) -> AppResu
         })
 }
 
-/// Re-anchor every entry in a relocated bin from `source_root` onto
-/// `destination_root` (US4, FR-087).
-///
-/// A root change moves the bin that lived under the source root to the matching
-/// place under the destination root. The entries inside it still record where
-/// their file *was*, and that path no longer sits under any configured root —
-/// so restore, which validates the recorded original path against the library's
-/// roots, would refuse every one of them. Rewriting the recorded path with the
-/// same rebase the planner applied to the content itself is what makes a file
-/// recycled before the flip restorable after it: it lands where the file would
-/// have been had it never been recycled at all.
-///
-/// Only paths that were genuinely under `source_root` are rewritten; anything
-/// else is left exactly as recorded. Returns how many entries were re-anchored.
-/// A single unreadable entry is logged and skipped rather than failing the
-/// whole pass — one corrupt manifest must not strand the rest of the bin.
-pub(crate) async fn reanchor_recycled_entries(
-    bin_root: &Path,
-    source_root: &Path,
-    destination_root: &Path,
-) -> AppResult<usize> {
-    let mut entries = match tokio::fs::read_dir(bin_root).await {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
-        Err(error) => {
-            return Err(AppError::Repository(format!(
-                "failed to read the relocated recycle bin {}: {error}",
-                bin_root.display()
-            )));
-        }
-    };
-
-    let rebase = |path: &Path| -> Option<PathBuf> {
-        path.strip_prefix(source_root).ok().map(|relative| {
-            if relative.as_os_str().is_empty() {
-                destination_root.to_path_buf()
-            } else {
-                destination_root.join(relative)
-            }
-        })
-    };
-
-    let mut reanchored = 0usize;
-    while let Some(entry) = entries.next_entry().await.map_err(|error| {
-        AppError::Repository(format!(
-            "failed to walk the relocated recycle bin {}: {error}",
-            bin_root.display()
-        ))
-    })? {
-        let entry_dir = entry.path();
-        if !entry_dir.is_dir() {
-            continue;
-        }
-        let mut manifest = match read_manifest(&entry_dir).await {
-            Ok(Some(manifest)) => manifest,
-            Ok(None) => continue,
-            Err(error) => {
-                warn!(
-                    entry_dir = %entry_dir.display(),
-                    error = %error,
-                    "could not read a recycle entry while re-anchoring a changed root; it is left as recorded"
-                );
-                continue;
-            }
-        };
-
-        let Some(rebased) = rebase(&manifest.original_path_buf()) else {
-            continue;
-        };
-        manifest.original_path = crate::stored_paths::path_to_stored_string(&rebased);
-        if let Some(media_root) = manifest.media_root.as_deref() {
-            let media_root = crate::stored_paths::stored_path_to_path_buf(media_root);
-            if let Some(rebased_root) = rebase(&media_root) {
-                manifest.media_root =
-                    Some(crate::stored_paths::path_to_stored_string(&rebased_root));
-            }
-        }
-
-        if let Err(error) = write_manifest(&entry_dir, &manifest).await {
-            warn!(
-                entry_dir = %entry_dir.display(),
-                error = %error,
-                "could not re-anchor a recycle entry onto the changed root; it is left as recorded"
-            );
-            continue;
-        }
-        reanchored += 1;
-    }
-
-    Ok(reanchored)
-}
-
 /// Move a file to the recycle bin instead of deleting it.
 ///
 /// If the recycle bin is disabled or its cleanup path is invalid, returns an error instead
@@ -691,22 +599,6 @@ async fn recycle_source_to_destination(
     }
 }
 
-fn lexically_normalize_for_policy(path: &Path) -> PathBuf {
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            std::path::Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
-            std::path::Component::RootDir => normalized.push(component.as_os_str()),
-            std::path::Component::CurDir => {}
-            std::path::Component::ParentDir => {
-                normalized.pop();
-            }
-            std::path::Component::Normal(segment) => normalized.push(segment),
-        }
-    }
-    normalized
-}
-
 #[cfg(not(windows))]
 fn contains_non_windows_separator_ambiguity(path: &Path) -> bool {
     path.components().any(|component| match component {
@@ -724,8 +616,8 @@ pub(crate) fn path_is_under_configured_root(path: &Path, root: &Path) -> bool {
         return false;
     }
 
-    let normalized_path = lexically_normalize_for_policy(path);
-    let normalized_root = lexically_normalize_for_policy(root);
+    let normalized_path = crate::stored_paths::lexically_normalize(path);
+    let normalized_root = crate::stored_paths::lexically_normalize(root);
     crate::catalog_workflow::library_path_is_under_root(
         normalized_path.to_string_lossy().as_ref(),
         normalized_root.to_string_lossy().as_ref(),

@@ -38,8 +38,7 @@ use crate::location::executor::{
     FileMoveRequest, PlannedTitle, TitleAdmission, TitleAdmissionCheck, TitleAdmissionContext,
     TitleFileMover, TitleReconciler, TitleStepOutcome,
 };
-use crate::location::merge::engine::{MergeOutcome, TitleMergeRepository, execute_merge, plan_merge};
-use crate::location::merge::summary::PostMergeWork;
+use crate::location::merge::engine::{TitleMergeRepository, execute_merge, plan_merge};
 use crate::location::model::{LocationOperation, VerificationDepth};
 use crate::location::preview::PlanInputChange;
 use crate::location::root_move::{RootMoveExecutionPlan, RootMoveTitleExecution};
@@ -209,50 +208,39 @@ pub trait RootMoveCatalog: Send + Sync {
     }
 }
 
-// ── Seam: Group 6 post-merge work ────────────────────────────────────────────
+// ── Seam: retiring the merged source title ───────────────────────────────────
 
-/// What the merge retired, handed to the dispatcher so it can invalidate the
-/// derived caches keyed on ids that no longer exist (OQ4).
+/// A source title whose catalog row the merge transaction has just removed.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct PostMergeWorkRequest {
+pub struct MergedSourceRetirement {
     pub operation_id: String,
     pub source_title_id: String,
     pub destination_title_id: String,
-    pub work: Vec<PostMergeWork>,
-    /// Source episode ids the merge mapped away. Their `episode:` coverage rows
-    /// survive the cascade because coverage is keyed on a composed string, not
-    /// on a foreign key.
-    pub retired_episode_ids: Vec<String>,
-    /// Source collection ids, for the `collection:` and
-    /// `series_pack_collection:` forms.
-    pub retired_collection_ids: Vec<String>,
-    /// Source series-movie link ids, for the `series_movie:` form.
-    pub retired_series_movie_link_ids: Vec<String>,
 }
 
-/// Schedules the Group 6 work [`crate::location::merge::engine::execute_merge`]
-/// hands back.
+/// Runs the ordinary title-delete path's logical cleanup for a merged source
+/// title.
 ///
-/// A seam because Group 6 reaches subsystems the merge engine is deliberately
-/// blind to — the title search projection, the recommendation refresh queue,
-/// the convergence coverage cache — and because every one of them is a derived
-/// cache: losing this call to a crash costs a stale index, never a wrong
-/// catalog. That is why it runs *after* the transaction and why a failure here
-/// is a warning rather than a failed title.
+/// A seam because that cleanup reaches subsystems the merge engine is
+/// deliberately blind to — the download queue, the acquisition ledger, the
+/// probe-signature cache — and because it is *record-only*: the source's files
+/// were repointed, never removed. It runs after the transaction because a
+/// merge that fails must not have already stripped the source title's rows, and
+/// losing this call to a crash leaves rows nothing points at rather than a wrong
+/// catalog — so a failure here is a warning, not a failed title.
 #[async_trait]
-pub trait PostMergeWorkScheduler: Send + Sync {
-    async fn schedule_post_merge_work(&self, request: PostMergeWorkRequest) -> AppResult<()>;
+pub trait MergedSourceRetirer: Send + Sync {
+    async fn retire_merged_source(&self, request: MergedSourceRetirement) -> AppResult<()>;
 }
 
-/// Schedules nothing. The right default for a reconciler wired without the
-/// use-case layer: the caches it would refresh are all derived, so a test that
-/// never asks about them is not lied to.
+/// Retires nothing. The right default for a reconciler wired without the
+/// use-case layer.
 #[derive(Debug, Clone, Copy, Default)]
-pub struct NoPostMergeWork;
+pub struct NoMergedSourceRetirement;
 
 #[async_trait]
-impl PostMergeWorkScheduler for NoPostMergeWork {
-    async fn schedule_post_merge_work(&self, _request: PostMergeWorkRequest) -> AppResult<()> {
+impl MergedSourceRetirer for NoMergedSourceRetirement {
+    async fn retire_merged_source(&self, _request: MergedSourceRetirement) -> AppResult<()> {
         Ok(())
     }
 }
@@ -503,7 +491,7 @@ pub struct RootMoveReconciler<'a> {
     recycler: &'a dyn SourceRecycler,
     permissions: Arc<dyn PlacedContentPermissions>,
     merges: Option<&'a dyn TitleMergeRepository>,
-    post_merge: Arc<dyn PostMergeWorkScheduler>,
+    retirer: Arc<dyn MergedSourceRetirer>,
 }
 
 impl<'a> RootMoveReconciler<'a> {
@@ -520,7 +508,7 @@ impl<'a> RootMoveReconciler<'a> {
             recycler,
             permissions: Arc::new(NoPlacedContentPermissions),
             merges: None,
-            post_merge: Arc::new(NoPostMergeWork),
+            retirer: Arc::new(NoMergedSourceRetirement),
         }
     }
 
@@ -536,8 +524,8 @@ impl<'a> RootMoveReconciler<'a> {
         self
     }
 
-    pub fn with_post_merge_work(mut self, scheduler: Arc<dyn PostMergeWorkScheduler>) -> Self {
-        self.post_merge = scheduler;
+    pub fn with_merged_source_retirer(mut self, retirer: Arc<dyn MergedSourceRetirer>) -> Self {
+        self.retirer = retirer;
         self
     }
 
@@ -549,27 +537,26 @@ impl<'a> RootMoveReconciler<'a> {
         })
     }
 
-    /// US7's catalog step: Groups 1–5 in one transaction, then Group 6 handed
-    /// to the scheduler.
+    /// US7's catalog step: the merge transaction, then the source title's
+    /// logical retirement handed to the delete path.
     ///
     /// # Why the plan is re-derived here rather than read off the confirmed one
     ///
     /// The confirmed plan carries the *preview's* merge summary, which is what
     /// the user agreed to and what the fingerprint covers. The transaction has
     /// to run against the catalog as it is at this instant — this title's media
-    /// files have just been repointed at their new paths, and FR-067's gate
-    /// asserts on rows that exist now. Re-deriving is also what makes the
-    /// FR-081 fingerprint meaningful: if the two disagreed, start would have
-    /// refused the confirmation before reaching here.
+    /// files have just been repointed at their new paths. Re-deriving is also
+    /// what makes the FR-081 fingerprint meaningful: if the two disagreed, start
+    /// would have refused the confirmation before reaching here.
     ///
     /// # Resume idempotence
     ///
     /// `execute_title_merge` is one transaction, so a crash leaves either no
     /// merge or a complete one. A complete merge with an unsettled checkpoint
     /// is handled by the caller, which asks [`Self::merge_already_applied`]
-    /// before doing anything at all. Re-planning would fail anyway — Group 0
-    /// reads the source title and cannot find it — which is exactly the failure
-    /// mode that check avoids turning into a failed title.
+    /// before doing anything at all. Re-planning would fail anyway — the read
+    /// phase reads the source title and cannot find it — which is exactly the
+    /// failure mode that check avoids turning into a failed title.
     async fn merge_title(
         &self,
         operation: &LocationOperation,
@@ -588,9 +575,10 @@ impl<'a> RootMoveReconciler<'a> {
             .load_merge_snapshot(
                 &planned.title_id,
                 destination_title_id,
-                // OQ7 is about a *second* operation still holding the source
-                // title. This one legitimately holds it — it is the operation
-                // performing the merge — so it excludes itself.
+                // The resumable-operation block is about a *second* operation
+                // still holding the source title. This one legitimately holds it
+                // — it is the operation performing the merge — so it excludes
+                // itself.
                 Some(&operation.id),
             )
             .await?;
@@ -609,19 +597,15 @@ impl<'a> RootMoveReconciler<'a> {
             )));
         }
 
-        let merge_outcome = execute_merge(merges, &plan).await?;
-        for conflict in &plan.summary.reserved_tag_conflicts {
+        execute_merge(merges, &plan).await?;
+        if plan.summary.source_records_dropped > 0 {
             outcome.warnings.push(format!(
-                "the destination title keeps its {} and \"{}\" loses \"{}\"",
-                conflict
-                    .setting
-                    .clone()
-                    .unwrap_or_else(|| conflict.prefix.clone()),
-                planned.title_name,
-                conflict.source_value.clone().unwrap_or_default()
+                "\"{}\" merges into the destination title; {} record(s) recorded against it \
+                 (tags, requests, acquisition state, discovery provenance) retire with it",
+                planned.title_name, plan.summary.source_records_dropped
             ));
         }
-        self.schedule_post_merge_work(operation, planned, &plan, &merge_outcome)
+        self.retire_merged_source(operation, planned, destination_title_id)
             .await;
         Ok(())
     }
@@ -648,37 +632,25 @@ impl<'a> RootMoveReconciler<'a> {
             .is_some())
     }
 
-    /// Group 6: derived-cache regeneration, scheduled after the transaction and
-    /// never allowed to fail the title.
-    async fn schedule_post_merge_work(
+    /// The delete path's logical cleanup for the retired source title, run after
+    /// the transaction and never allowed to fail the title.
+    async fn retire_merged_source(
         &self,
         operation: &LocationOperation,
         planned: &RootMoveTitleExecution,
-        plan: &crate::location::merge::engine::MergePlan,
-        merge_outcome: &MergeOutcome,
+        destination_title_id: &str,
     ) {
-        let map = plan.identity_map.as_ref();
-        let request = PostMergeWorkRequest {
+        let request = MergedSourceRetirement {
             operation_id: operation.id.clone(),
             source_title_id: planned.title_id.clone(),
-            destination_title_id: merge_outcome.destination_title_id.clone(),
-            work: merge_outcome.post_merge_work.clone(),
-            retired_episode_ids: map
-                .map(|map| map.episodes.keys().cloned().collect())
-                .unwrap_or_default(),
-            retired_collection_ids: map
-                .map(|map| map.collections.keys().cloned().collect())
-                .unwrap_or_default(),
-            retired_series_movie_link_ids: map
-                .map(|map| map.series_movie_links.keys().cloned().collect())
-                .unwrap_or_default(),
+            destination_title_id: destination_title_id.to_string(),
         };
-        if let Err(error) = self.post_merge.schedule_post_merge_work(request).await {
+        if let Err(error) = self.retirer.retire_merged_source(request).await {
             tracing::warn!(
                 operation_id = %operation.id,
                 title_id = %planned.title_id,
                 error = %error,
-                "the merge committed but its derived-cache refresh could not be scheduled; the caches rebuild on their next natural refresh"
+                "the merge committed but the retired title's logical cleanup could not be completed; its remaining rows reference a title that no longer exists"
             );
         }
     }

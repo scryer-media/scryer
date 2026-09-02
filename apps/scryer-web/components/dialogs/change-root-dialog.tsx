@@ -1,16 +1,7 @@
 import * as React from "react";
 import { useClient } from "urql";
-import { useNavigate } from "react-router";
-import {
-  ArrowRight,
-  CircleCheck,
-  HardDrive,
-  Loader2,
-  ShieldCheck,
-  TriangleAlert,
-} from "lucide-react";
+import { ArrowRight, HardDrive, Loader2, ShieldCheck, TriangleAlert } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -31,36 +22,34 @@ import {
 import type { Translate } from "@/components/root/types";
 import { useTranslate } from "@/lib/context/translate-context";
 import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
-import { startLocationOperationMutation } from "@/lib/graphql/mutations";
+import { locationRootScopePreviewQuery } from "@/lib/graphql/queries";
 import {
-  locationRootChangePreviewQuery,
-  locationRootConsolidationPreviewQuery,
-} from "@/lib/graphql/queries";
-import {
-  recognizeStartRefusal,
-  refusalMessageKey,
-  refusalNeedsFreshPreview,
   toCount,
   typedConfirmationSatisfied,
   type LocationOperationPreview,
 } from "@/lib/location-operations";
 import {
+  LocationDialogDismissButton,
+  LocationDialogPrimaryButton,
+  LocationOperationErrorNotice,
+  LocationOperationStartedPanel,
+  useLocationOperationStart,
+} from "@/components/dialogs/location-operation-start";
+import {
   accountingCloses,
   changedFolderNames,
   changedFolderNamesComplete,
   consolidationGroups,
-  crossRouteDestination,
   rootIdentityStatement,
   rootPlanCanStart,
   rootReasonKey,
   rootRefusalCode,
   rootRefusalMessageKey,
   retirementBlockerKey,
-  type LocationRootChangePreview,
-  type LocationRootConsolidationPreview,
   type LocationRootContentBucket,
   type LocationRootContentInventory,
   type LocationRootRetirementContract,
+  type LocationRootScopePreview,
   type LocationSampledPaths,
   type LocationTitleAccounting,
   type RootDestinationKind,
@@ -92,10 +81,12 @@ type Props = {
  * FR-020's single settings action: change this root to a new, unconfigured path
  * (US4) or to another configured root of the same library (US5).
  *
- * The two destinations are two different requests with two different previews,
- * and the server refuses each one when the other was meant. Those two refusals
- * are the same control seen from either side, so they flip the branch here
- * rather than surfacing as an error the user has to interpret.
+ * One query and one payload for both. The radio below is how the *user*
+ * expresses a destination — type a path, or pick a root — and the server is
+ * what decides which branch that destination actually is: a typed path that is
+ * already a root of this library is planned as a fold, with no notice to read
+ * and no branch to flip. Which branch came back is read off the payload, whose
+ * variant-only sections are null for the other one.
  *
  * There is no selection and no exclude affordance anywhere in this dialog: a
  * root-scoped operation takes every title assigned to the root, and a blocked
@@ -116,31 +107,47 @@ export function ChangeRootDialog({
     React.useState<RootDestinationKind>("NEW_PATH");
   const [destinationPath, setDestinationPath] = React.useState("");
   const [destinationRootId, setDestinationRootId] = React.useState("");
-  const [changePreview, setChangePreview] =
-    React.useState<LocationRootChangePreview | null>(null);
-  const [consolidationPreview, setConsolidationPreview] =
-    React.useState<LocationRootConsolidationPreview | null>(null);
+  const [preview, setPreview] = React.useState<LocationRootScopePreview | null>(
+    null,
+  );
   const [previewing, setPreviewing] = React.useState(false);
   const [previewError, setPreviewError] = React.useState<string | null>(null);
-  const [crossRouteNotice, setCrossRouteNotice] = React.useState<
-    RootDestinationKind | null
-  >(null);
   const [typedConfirmation, setTypedConfirmation] = React.useState("");
-  const [starting, setStarting] = React.useState(false);
-  const [startError, setStartError] = React.useState<string | null>(null);
-  const [planChanged, setPlanChanged] = React.useState(false);
-  const [startedOperationId, setStartedOperationId] = React.useState<
-    string | null
-  >(null);
+
+  // The plan moved between preview and confirm: drop the plan in hand and the
+  // phrase that confirmed it, so nothing here can be re-sent against it.
+  const dropStalePreview = React.useCallback(() => {
+    setPreview(null);
+    setTypedConfirmation("");
+  }, []);
+  const rootRefusalMessage = React.useCallback(
+    (error: unknown) => {
+      const code = rootRefusalCode(error);
+      return code ? t(rootRefusalMessageKey(code)) : null;
+    },
+    [t],
+  );
+  const {
+    starting,
+    startError,
+    planChanged,
+    startedOperationId,
+    start,
+    reset: resetStart,
+    resetAll: resetStartAll,
+  } = useLocationOperationStart({
+    failedMessage: t("rootChange.startFailed"),
+    recognizeOwnRefusal: rootRefusalMessage,
+    onNeedsFreshPreview: dropStalePreview,
+    onStarted,
+  });
 
   const resetPreview = React.useCallback(() => {
-    setChangePreview(null);
-    setConsolidationPreview(null);
+    setPreview(null);
     setPreviewError(null);
-    setStartError(null);
     setTypedConfirmation("");
-    setPlanChanged(false);
-  }, []);
+    resetStart();
+  }, [resetStart]);
 
   // Reopening on a different root must never inherit the previous plan.
   React.useEffect(() => {
@@ -150,62 +157,36 @@ export function ChangeRootDialog({
     setDestinationKind("NEW_PATH");
     setDestinationPath("");
     setDestinationRootId("");
-    setCrossRouteNotice(null);
-    setStartedOperationId(null);
-    setChangePreview(null);
-    setConsolidationPreview(null);
+    setPreview(null);
     setPreviewError(null);
-    setStartError(null);
     setTypedConfirmation("");
-    setPlanChanged(false);
-  }, [open, root.id]);
+    resetStartAll();
+  }, [open, resetStartAll, root.id]);
 
-  const plan: LocationOperationPreview | null =
-    destinationKind === "NEW_PATH"
-      ? (changePreview?.plan ?? null)
-      : (consolidationPreview?.plan ?? null);
-  const accounting: LocationTitleAccounting | null =
-    destinationKind === "NEW_PATH"
-      ? (changePreview?.accounting ?? null)
-      : (consolidationPreview?.accounting ?? null);
-  const content: LocationRootContentInventory | null =
-    destinationKind === "NEW_PATH"
-      ? (changePreview?.content ?? null)
-      : (consolidationPreview?.content ?? null);
-  const retirement: LocationRootRetirementContract | null =
-    destinationKind === "NEW_PATH"
-      ? (changePreview?.retirement ?? null)
-      : (consolidationPreview?.retirement ?? null);
+  const plan: LocationOperationPreview | null = preview?.plan ?? null;
+  const accounting = preview?.accounting ?? null;
+  const content: LocationRootContentInventory | null = preview?.content ?? null;
+  const retirement = preview?.retirement ?? null;
+
+  // Which branch the server planned, read off the payload rather than off the
+  // radio: a typed path that is already a root of this library comes back as a
+  // fold even though the user expressed it as a new path.
+  const changePreview = preview?.retention ? preview : null;
+  const consolidationPreview = preview?.classification ? preview : null;
 
   const destinationNamed =
     destinationKind === "NEW_PATH"
       ? destinationPath.trim().length > 0
       : destinationRootId.length > 0;
 
-  /**
-   * Both refusals of FR-020's pair mean "you asked the other branch". Flipping
-   * the branch is the whole answer; when the user typed a path that turned out
-   * to be a configured root, that root is pre-selected so the flip costs
-   * nothing.
-   */
-  const applyCrossRoute = React.useCallback(
-    (destination: RootDestinationKind) => {
-      setCrossRouteNotice(destination);
-      setDestinationKind(destination);
-      resetPreview();
-      if (destination === "EXISTING_ROOT") {
-        const typed = destinationPath.trim();
-        const matched = otherRoots.find((candidate) => candidate.path === typed);
-        setDestinationRootId(matched?.id ?? "");
-      } else {
-        const selected = otherRoots.find(
-          (candidate) => candidate.id === destinationRootId,
-        );
-        setDestinationPath(selected?.path ?? destinationPath);
-        setDestinationRootId("");
-      }
-    },
-    [destinationPath, destinationRootId, otherRoots, resetPreview],
+  // Exactly one of the two destination forms, for the preview and for the
+  // confirmation that has to say back what was previewed.
+  const destinationInput = React.useMemo(
+    () =>
+      destinationKind === "NEW_PATH"
+        ? { destinationPath: destinationPath.trim() }
+        : { destinationRootId },
+    [destinationKind, destinationPath, destinationRootId],
   );
 
   const handlePreview = React.useCallback(async () => {
@@ -214,70 +195,28 @@ export function ChangeRootDialog({
     }
     setPreviewing(true);
     setPreviewError(null);
-    setStartError(null);
-    setCrossRouteNotice(null);
-    setPlanChanged(false);
+    resetStart();
     try {
-      if (destinationKind === "NEW_PATH") {
-        const { data, error } = await client
-          .query(
-            locationRootChangePreviewQuery,
-            {
-              input: {
-                libraryId,
-                rootId: root.id,
-                destinationPath: destinationPath.trim(),
-              },
-            },
-            { requestPolicy: "network-only" },
-          )
-          .toPromise();
-        if (error) {
-          throw error;
-        }
-        const next = data?.locationRootChangePreview as
-          | LocationRootChangePreview
-          | undefined;
-        if (!next) {
-          throw new Error(t("rootChange.previewFailed"));
-        }
-        setChangePreview(next);
-        setConsolidationPreview(null);
-      } else {
-        const { data, error } = await client
-          .query(
-            locationRootConsolidationPreviewQuery,
-            {
-              input: {
-                libraryId,
-                sourceRootId: root.id,
-                destinationRootId,
-              },
-            },
-            { requestPolicy: "network-only" },
-          )
-          .toPromise();
-        if (error) {
-          throw error;
-        }
-        const next = data?.locationRootConsolidationPreview as
-          | LocationRootConsolidationPreview
-          | undefined;
-        if (!next) {
-          throw new Error(t("rootChange.previewFailed"));
-        }
-        setConsolidationPreview(next);
-        setChangePreview(null);
+      const { data, error } = await client
+        .query(
+          locationRootScopePreviewQuery,
+          { input: { libraryId, rootId: root.id, ...destinationInput } },
+          { requestPolicy: "network-only" },
+        )
+        .toPromise();
+      if (error) {
+        throw error;
       }
+      const next = data?.locationRootScopePreview as
+        | LocationRootScopePreview
+        | undefined;
+      if (!next) {
+        throw new Error(t("rootChange.previewFailed"));
+      }
+      setPreview(next);
     } catch (error: unknown) {
       const code = rootRefusalCode(error);
-      const crossRoute = crossRouteDestination(code);
-      if (crossRoute) {
-        applyCrossRoute(crossRoute);
-        return;
-      }
-      setChangePreview(null);
-      setConsolidationPreview(null);
+      setPreview(null);
       setPreviewError(
         code
           ? t(rootRefusalMessageKey(code))
@@ -287,13 +226,11 @@ export function ChangeRootDialog({
       setPreviewing(false);
     }
   }, [
-    applyCrossRoute,
     client,
-    destinationKind,
+    destinationInput,
     destinationNamed,
-    destinationPath,
-    destinationRootId,
     libraryId,
+    resetStart,
     root.id,
     t,
   ]);
@@ -309,94 +246,13 @@ export function ChangeRootDialog({
     if (!plan) {
       return;
     }
-    setStarting(true);
-    setStartError(null);
-    try {
-      const target =
-        destinationKind === "NEW_PATH"
-          ? {
-              rootChange: {
-                libraryId,
-                rootId: root.id,
-                destinationPath: destinationPath.trim(),
-              },
-            }
-          : {
-              rootConsolidation: {
-                libraryId,
-                sourceRootId: root.id,
-                destinationRootId,
-              },
-            };
-      const { data, error } = await client
-        .mutation(startLocationOperationMutation, {
-          input: {
-            ...target,
-            planFingerprint: plan.planFingerprint,
-            typedConfirmation:
-              plan.confirmation.requirement === "TYPED"
-                ? typedConfirmation
-                : null,
-          },
-        })
-        .toPromise();
-      if (error) {
-        throw error;
-      }
-      const started = data?.startLocationOperation as
-        | { operation: { id: string } }
-        | undefined;
-      if (!started?.operation?.id) {
-        throw new Error(t("rootChange.startFailed"));
-      }
-      setStartedOperationId(started.operation.id);
-      onStarted?.(started.operation.id);
-    } catch (error: unknown) {
-      const rootCode = rootRefusalCode(error);
-      const crossRoute = crossRouteDestination(rootCode);
-      if (crossRoute) {
-        // The configuration moved between preview and confirm. Same answer as
-        // at preview time: this is the other branch.
-        applyCrossRoute(crossRoute);
-        return;
-      }
-      if (rootCode) {
-        setStartError(t(rootRefusalMessageKey(rootCode)));
-        return;
-      }
-      const message = userFacingGraphQlErrorMessage(
-        error,
-        t("rootChange.startFailed"),
-      );
-      const refusal = recognizeStartRefusal(error, message);
-      if (refusalNeedsFreshPreview(refusal)) {
-        // The plan moved under the user, or a title became blocked between
-        // preview and confirm. Either way the answer is a fresh plan.
-        setPlanChanged(true);
-        setChangePreview(null);
-        setConsolidationPreview(null);
-        setTypedConfirmation("");
-        setStartError(null);
-      } else {
-        const key = refusalMessageKey(refusal);
-        setStartError(key ? t(key) : message);
-      }
-    } finally {
-      setStarting(false);
-    }
-  }, [
-    applyCrossRoute,
-    client,
-    destinationKind,
-    destinationPath,
-    destinationRootId,
-    libraryId,
-    onStarted,
-    plan,
-    root.id,
-    t,
-    typedConfirmation,
-  ]);
+    await start({
+      rootScope: { libraryId, rootId: root.id, ...destinationInput },
+      planFingerprint: plan.planFingerprint,
+      typedConfirmation:
+        plan.confirmation.requirement === "TYPED" ? typedConfirmation : null,
+    });
+  }, [destinationInput, libraryId, plan, root.id, start, typedConfirmation]);
 
   const identity = rootIdentityStatement(changePreview?.retention);
   const groups = consolidationGroups(consolidationPreview?.classification);
@@ -416,20 +272,13 @@ export function ChangeRootDialog({
         </DialogHeader>
 
         {startedOperationId ? (
-          <div id="root-change-started" className="space-y-3">
-            <p className="flex items-start gap-2 rounded-lg border border-[var(--scry-success-border)] bg-[var(--scry-success-bg)] px-3 py-3 text-sm text-[var(--scry-success-text)]">
-              <CircleCheck className="mt-0.5 h-4 w-4 shrink-0" />
-              <span>{t("rootChange.startedHeading")}</span>
-            </p>
-            <p className="font-[var(--font-code)] text-xs break-all text-muted-foreground">
-              {startedOperationId}
-            </p>
-            <ViewOperationButton
-              operationId={startedOperationId}
-              label={t("rootChange.viewInActivity")}
-              onNavigated={() => onOpenChange(false)}
-            />
-          </div>
+          <LocationOperationStartedPanel
+            idPrefix="root-change"
+            operationId={startedOperationId}
+            heading={t("rootChange.startedHeading")}
+            viewLabel={t("rootChange.viewInActivity")}
+            onNavigated={() => onOpenChange(false)}
+          />
         ) : (
           <div className="max-h-[65vh] space-y-4 overflow-y-auto pr-1">
             <div className="space-y-2">
@@ -440,7 +289,6 @@ export function ChangeRootDialog({
                 value={destinationKind}
                 onValueChange={(value) => {
                   setDestinationKind(value as RootDestinationKind);
-                  setCrossRouteNotice(null);
                   resetPreview();
                 }}
                 className="space-y-2"
@@ -525,16 +373,6 @@ export function ChangeRootDialog({
                 </Select>
               )}
 
-              {crossRouteNotice ? (
-                <p
-                  id="root-change-cross-route-notice"
-                  className="rounded-lg border border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] px-3 py-2 text-xs text-[var(--scry-warning-text)]"
-                >
-                  {crossRouteNotice === "EXISTING_ROOT"
-                    ? t("rootChange.crossRouteToConsolidation")
-                    : t("rootChange.crossRouteToNewPath")}
-                </p>
-              ) : null}
             </div>
 
             {planChanged ? (
@@ -546,14 +384,10 @@ export function ChangeRootDialog({
               </p>
             ) : null}
 
-            {previewError ? (
-              <p
-                id="root-change-preview-error"
-                className="rounded-lg border border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] px-3 py-3 text-sm text-[var(--scry-danger-text)]"
-              >
-                {previewError}
-              </p>
-            ) : null}
+            <LocationOperationErrorNotice
+              id="root-change-preview-error"
+              message={previewError}
+            />
 
             {previewing ? (
               <p
@@ -628,12 +462,12 @@ export function ChangeRootDialog({
                   id="root-consolidation-default-transfer"
                   className={cn(
                     "text-xs",
-                    consolidationPreview.defaultTransfer.transfersTheDefault
+                    consolidationPreview.defaultTransfer?.transfersTheDefault
                       ? "text-[var(--scry-warning-text)]"
                       : "text-muted-foreground",
                   )}
                 >
-                  {consolidationPreview.defaultTransfer.transfersTheDefault
+                  {consolidationPreview.defaultTransfer?.transfersTheDefault
                     ? t("rootChange.defaultTransfers")
                     : t("rootChange.defaultStays")}
                 </p>
@@ -783,53 +617,36 @@ export function ChangeRootDialog({
               </div>
             ) : null}
 
-            {startError ? (
-              <p
-                id="root-change-start-error"
-                className="rounded-lg border border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] px-3 py-3 text-sm text-[var(--scry-danger-text)]"
-              >
-                {startError}
-              </p>
-            ) : null}
+            <LocationOperationErrorNotice
+              id="root-change-start-error"
+              message={startError}
+            />
           </div>
         )}
 
         <DialogFooter>
-          <Button
-            type="button"
-            variant="outline"
+          <LocationDialogDismissButton
             id="root-change-dismiss"
-            onClick={() => onOpenChange(false)}
+            label={startedOperationId ? t("label.close") : t("label.cancel")}
             disabled={starting}
-          >
-            {startedOperationId ? t("label.close") : t("label.cancel")}
-          </Button>
+            onDismiss={() => onOpenChange(false)}
+          />
           {startedOperationId ? null : plan ? (
-            <Button
-              type="button"
-              variant="primary"
+            <LocationDialogPrimaryButton
               id="root-change-confirm"
-              onClick={() => void handleStart()}
+              label={t("rootChange.confirm")}
+              busy={starting}
               disabled={!canStart}
-            >
-              {starting ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : null}
-              {t("rootChange.confirm")}
-            </Button>
+              onClick={() => void handleStart()}
+            />
           ) : (
-            <Button
-              type="button"
-              variant="primary"
+            <LocationDialogPrimaryButton
               id="root-change-preview"
-              onClick={() => void handlePreview()}
+              label={t("rootChange.preview")}
+              busy={previewing}
               disabled={!destinationNamed || previewing}
-            >
-              {previewing ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : null}
-              {t("rootChange.preview")}
-            </Button>
+              onClick={() => void handlePreview()}
+            />
           )}
         </DialogFooter>
       </DialogContent>
@@ -1140,31 +957,3 @@ function SampledPathList({
   );
 }
 
-/**
- * Router-dependent by design, and mounted only after a start succeeds: the
- * dialog itself must render outside a router, the way the settings panel does.
- */
-function ViewOperationButton({
-  operationId,
-  label,
-  onNavigated,
-}: {
-  operationId: string;
-  label: string;
-  onNavigated: () => void;
-}) {
-  const navigate = useNavigate();
-  return (
-    <Button
-      type="button"
-      variant="primary"
-      id="root-change-view-operation"
-      onClick={() => {
-        onNavigated();
-        void navigate(`/activity?operation=${encodeURIComponent(operationId)}`);
-      }}
-    >
-      {label}
-    </Button>
-  );
-}

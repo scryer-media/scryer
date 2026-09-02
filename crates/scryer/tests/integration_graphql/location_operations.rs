@@ -89,8 +89,7 @@ const PREVIEW_QUERY: &str = r#"
           destinationLibraryId
           blocked
           blockedRecords { table reason sourceId detail }
-          destinationWins { setting destinationValue sourceValue }
-          dispositions { table disposition sourceRowCount note }
+          mediaFilesRepointed
           roleChanges {
             fileId
             sourceEpisodeId
@@ -100,12 +99,9 @@ const PREVIEW_QUERY: &str = r#"
             reason
             detail
           }
-          reservedTagConflicts { prefix setting destinationValue sourceValue }
-          freeFormTagsAdded
-          mediaRequestRepoints { requestId previousLibraryId destinationLibraryId }
-          dropped { table sourceRowCount decision reason }
-          postMergeWork
-          notes
+          roleDemotions
+          historyRowsCarried
+          sourceRecordsDropped
         }
       }
     }
@@ -967,31 +963,24 @@ async fn graphql_location_operation_surface_requires_library_management_permissi
     let denied = schema_exec(&ctx, &start_mutation, Some(location_outsider())).await;
     assert_graphql_field_denied(&denied, "startLocationOperation");
 
-    // The two root-scoped previews are the same surface (FR-020): both plan
-    // against a library the outsider does not manage.
-    let root_change_query = format!(
-        r#"query {{
-            locationRootChangePreview(input: {{
+    // The root-scoped preview is one surface for both of FR-020's destinations,
+    // and each of them plans against a library the outsider does not manage.
+    for destination in [
+        format!(r#"destinationPath: "/somewhere/else""#),
+        format!(r#"destinationRootId: "{destination_root_id}""#),
+    ] {
+        let query = format!(
+            r#"query {{
+            locationRootScopePreview(input: {{
               libraryId: "{library_id}",
               rootId: "{source_root_id}",
-              destinationPath: "/somewhere/else"
+              {destination}
             }}) {{ plan {{ planFingerprint }} }}
         }}"#
-    );
-    let denied = schema_exec(&ctx, &root_change_query, Some(location_outsider())).await;
-    assert_graphql_field_denied(&denied, "locationRootChangePreview");
-
-    let consolidation_query = format!(
-        r#"query {{
-            locationRootConsolidationPreview(input: {{
-              libraryId: "{library_id}",
-              sourceRootId: "{source_root_id}",
-              destinationRootId: "{destination_root_id}"
-            }}) {{ plan {{ planFingerprint }} }}
-        }}"#
-    );
-    let denied = schema_exec(&ctx, &consolidation_query, Some(location_outsider())).await;
-    assert_graphql_field_denied(&denied, "locationRootConsolidationPreview");
+        );
+        let denied = schema_exec(&ctx, &query, Some(location_outsider())).await;
+        assert_graphql_field_denied(&denied, "locationRootScopePreview");
+    }
 
     // FR-083 governs reading an operation too: it names both libraries.
     let operation_query =
@@ -1170,8 +1159,8 @@ async fn title_in_library(
 
 /// FR-071 / US7: a unique canonical identity match in the destination library is
 /// previewed as a merge, and the preview carries the whole decision — what the
-/// destination keeps, what is unioned per table, what is dropped, and the notes
-/// explaining where the live schema differs from the merge inventory.
+/// surviving title takes over, which roles change, and how much retires with
+/// the merging title.
 #[tokio::test]
 async fn graphql_location_operation_preview_surfaces_the_merge_summary() {
     let ctx = TestContext::new().await;
@@ -1263,42 +1252,19 @@ async fn graphql_location_operation_preview_surfaces_the_merge_summary() {
     assert_eq!(merge["blocked"], false);
     assert_eq!(merge["blockedRecords"], json!([]));
 
-    // FR-063: the destination keeps the title id, and the payload says which.
-    let title_id_wins = merge["destinationWins"]
-        .as_array()
-        .expect("destination-wins entries")
-        .iter()
-        .find(|entry| entry["setting"] == "title id")
-        .expect("FR-063 names the title id");
-    assert_eq!(title_id_wins["destinationValue"], destination.id);
-    assert_eq!(title_id_wins["sourceValue"], source.id);
-
-    // FR-064: per-table dispositions, as enums rather than free text.
-    let media_files = merge["dispositions"]
-        .as_array()
-        .expect("dispositions")
-        .iter()
-        .find(|entry| entry["table"] == "media_files")
-        .expect("media_files is inventoried");
-    assert_eq!(media_files["disposition"], "UNION");
-    assert_eq!(media_files["sourceRowCount"], 1);
-
-    // The Group 6 work list is an enum the client can act on.
-    let work = merge["postMergeWork"].as_array().expect("post-merge work");
+    // FR-064: the two things the merge carries, as counts rather than as a
+    // per-table inventory.
+    assert_eq!(merge["mediaFilesRepointed"], 1, "{merge}");
+    assert_eq!(merge["historyRowsCarried"], 0, "{merge}");
+    // The destination title holds no file of its own, so the incoming one keeps
+    // primary and nothing is demoted (FR-068).
+    assert_eq!(merge["roleChanges"], json!([]), "{merge}");
+    assert_eq!(merge["roleDemotions"], 0, "{merge}");
+    // FR-064: everything else on the merging title retires with it, reported as
+    // one count rather than a table list.
     assert!(
-        work.iter()
-            .any(|value| value == "DROP_SOURCE_INDEXER_COVERAGE"),
-        "{merge}"
-    );
-
-    // The live-schema deviations reach the operator rather than reading as an
-    // omission from the inventory.
-    let notes = merge["notes"].as_array().expect("notes");
-    assert!(
-        notes
-            .iter()
-            .any(|note| note.as_str().is_some_and(|note| note.contains("wanted_items"))),
-        "{merge}"
+        merge["sourceRecordsDropped"].as_i64().is_some(),
+        "the retiring record count is always reported: {merge}"
     );
 }
 
@@ -1660,9 +1626,15 @@ async fn graphql_adoption_surfaces_additional_destination_files_without_blocking
 
 // ── US4 and US5: the two root-scoped workflows ───────────────────────────────
 
-const ROOT_CHANGE_PREVIEW_QUERY: &str = r#"
-    query RootChangePreview($input: LocationRootChangePreviewInput!) {
-      locationRootChangePreview(input: $input) {
+/// The one preview document for both of FR-020's destinations.
+///
+/// One query, one payload, so one selection set: the shared sections plus both
+/// variant-only ones, which the server nulls for the branch they do not belong
+/// to. That nulling is itself asserted below — it is how a client tells which
+/// destination it got.
+const ROOT_SCOPE_PREVIEW_QUERY: &str = r#"
+    query RootScopePreview($input: LocationRootScopePreviewInput!) {
+      locationRootScopePreview(input: $input) {
         plan {
           planFingerprint
           operationType
@@ -1681,6 +1653,7 @@ const ROOT_CHANGE_PREVIEW_QUERY: &str = r#"
           classification { titlesTotal blocksStart groups { class count titles { titleId } } }
           confirmation { requirement typedPhrase typedPrompt }
           verification { depth applies }
+          merges { sourceTitleId destinationTitleId blocked }
         }
         accounting {
           assignedTotal
@@ -1698,6 +1671,23 @@ const ROOT_CHANGE_PREVIEW_QUERY: &str = r#"
           remainsLibraryDefault
           retainedRole
           retainedTitleAssignments
+        }
+        classification {
+          movingIntoUnusedFolders
+          mergingWithDestinationTitles
+          folderNameCollisions
+          mediaCollisions
+          dedupEligibleFiles
+          companionCollisions
+          untrackedSourceEntries
+          catalogOnly
+          blocked
+        }
+        defaultTransfer {
+          sourceWasDefault
+          destinationWasDefault
+          destinationBecomesDefault
+          transfersTheDefault
         }
         content {
           managed { class total bytesTotal complete entries { path sizeBytes class canonicalSidecar } }
@@ -1725,78 +1715,12 @@ const ROOT_CHANGE_PREVIEW_QUERY: &str = r#"
     }
 "#;
 
-const ROOT_CONSOLIDATION_PREVIEW_QUERY: &str = r#"
-    query RootConsolidationPreview($input: LocationRootConsolidationPreviewInput!) {
-      locationRootConsolidationPreview(input: $input) {
-        plan {
-          planFingerprint
-          operationType
-          mode
-          sourceRootId
-          destinationRootId
-          blocksStart
-          counts { titlesTotal filesTotal }
-          sections {
-            kind
-            itemsTotal
-            complete
-            items { kind titleId sourcePath destinationPath reasonCode detail }
-          }
-          classification { titlesTotal blocksStart groups { class count titles { titleId } } }
-          confirmation { requirement typedPhrase typedPrompt }
-          merges { sourceTitleId destinationTitleId blocked }
-        }
-        accounting {
-          assignedTotal
-          relocating
-          catalogOnly
-          blocked
-          accountsForEveryTitle
-          blocksStart
-          blockedTitles { titleId titleName reasonCode }
-        }
-        classification {
-          movingIntoUnusedFolders
-          mergingWithDestinationTitles
-          folderNameCollisions
-          mediaCollisions
-          dedupEligibleFiles
-          companionCollisions
-          untrackedSourceEntries
-          catalogOnly
-          blocked
-        }
-        defaultTransfer {
-          sourceWasDefault
-          destinationWasDefault
-          destinationBecomesDefault
-          transfersTheDefault
-        }
-        content { unknown { total complete entries { path } } blocksSourceRemoval entryCount }
-        retirement {
-          sourceRootPath
-          destinationRootPath
-          permitsSourceRemoval
-          emptyDirectoriesOnly
-          blockers { code detail }
-        }
-      }
-    }
-"#;
-
 /// The refusal code the server attached, when it attached one.
 fn refusal_code(body: &Value) -> Option<&str> {
     body["errors"]
         .as_array()?
         .iter()
         .find_map(|error| error["extensions"]["refusalCode"].as_str())
-}
-
-fn error_code(body: &Value) -> Option<&str> {
-    body["errors"]
-        .as_array()?
-        .iter()
-        .find_map(|error| error["extensions"]["code"].as_str())
 }
 
 /// US4.1 through US4.5 in one request: the identity statement, the closed
@@ -1835,7 +1759,7 @@ async fn graphql_a_root_change_preview_states_what_the_root_keeps_and_accounts_f
     let destination_path = destination.path().join("new-disk");
     let body = gql(
         &ctx,
-        ROOT_CHANGE_PREVIEW_QUERY,
+        ROOT_SCOPE_PREVIEW_QUERY,
         json!({ "input": {
             "libraryId": library_id,
             "rootId": source_root_id,
@@ -1844,7 +1768,7 @@ async fn graphql_a_root_change_preview_states_what_the_root_keeps_and_accounts_f
     )
     .await;
     assert_no_errors(&body);
-    let preview = &body["data"]["locationRootChangePreview"];
+    let preview = &body["data"]["locationRootScopePreview"];
 
     let plan = &preview["plan"];
     assert_eq!(plan["operationType"], "ROOT_CHANGE");
@@ -1951,7 +1875,7 @@ async fn graphql_a_root_change_preview_states_what_the_root_keeps_and_accounts_f
     );
 
     // The confirmation goes back through the shared start mutation, with the
-    // root-change target instead of a selection.
+    // root-scoped target instead of a selection.
     let fingerprint = plan["planFingerprint"]
         .as_str()
         .expect("preview fingerprint")
@@ -1960,7 +1884,7 @@ async fn graphql_a_root_change_preview_states_what_the_root_keeps_and_accounts_f
         &ctx,
         START_MUTATION,
         json!({ "input": {
-            "rootChange": {
+            "rootScope": {
                 "libraryId": library_id,
                 "rootId": source_root_id,
                 "destinationPath": destination_path.to_string_lossy(),
@@ -1996,7 +1920,7 @@ async fn graphql_a_root_change_without_the_typed_phrase_is_refused() {
 
     let body = gql(
         &ctx,
-        ROOT_CHANGE_PREVIEW_QUERY,
+        ROOT_SCOPE_PREVIEW_QUERY,
         json!({ "input": {
             "libraryId": library_id,
             "rootId": source_root_id,
@@ -2005,7 +1929,7 @@ async fn graphql_a_root_change_without_the_typed_phrase_is_refused() {
     )
     .await;
     assert_no_errors(&body);
-    let fingerprint = body["data"]["locationRootChangePreview"]["plan"]["planFingerprint"]
+    let fingerprint = body["data"]["locationRootScopePreview"]["plan"]["planFingerprint"]
         .as_str()
         .expect("preview fingerprint")
         .to_string();
@@ -2014,7 +1938,7 @@ async fn graphql_a_root_change_without_the_typed_phrase_is_refused() {
         &ctx,
         START_MUTATION,
         json!({ "input": {
-            "rootChange": {
+            "rootScope": {
                 "libraryId": library_id,
                 "rootId": source_root_id,
                 "destinationPath": destination_path.to_string_lossy(),
@@ -2034,74 +1958,76 @@ async fn graphql_a_root_change_without_the_typed_phrase_is_refused() {
     );
 }
 
-/// FR-020, first half: a "new path" that is already a configured root of this
-/// library is a consolidation. The refusal says so with a code the dialog can
-/// route on, not with a sentence it would have to parse.
+/// FR-020 is one settings action with two destinations, and the server decides
+/// which one a request named. A path that is already a root of this library is
+/// the same request as naming that root, so it previews as a fold; any other
+/// path previews as a path change. The client tells them apart by which
+/// variant-only section came back non-null — there is nothing to route.
 #[tokio::test]
-async fn graphql_a_root_change_onto_a_configured_root_routes_to_consolidation() {
+async fn graphql_the_destination_path_decides_the_branch_the_server_previews() {
     let ctx = TestContext::new().await;
     let source_root = tempfile::tempdir().expect("source root tempdir");
     let destination_root = tempfile::tempdir().expect("destination root tempdir");
-    let (source_root_id, _destination_root_id) =
+    let unconfigured = tempfile::tempdir().expect("unconfigured destination tempdir");
+    let (source_root_id, destination_root_id) =
         configure_two_movie_roots(&ctx, source_root.path(), destination_root.path()).await;
     let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
 
-    let body = gql(
-        &ctx,
-        ROOT_CHANGE_PREVIEW_QUERY,
-        json!({ "input": {
-            "libraryId": library_id,
-            "rootId": source_root_id,
-            "destinationPath": destination_root.path().to_string_lossy(),
-        }}),
-    )
-    .await;
-    assert!(body["errors"].is_array(), "{body}");
-    assert_eq!(error_code(&body), Some("LOCATION_ROOT_REFUSED"), "{body}");
+    let preview_for = async |destination_path: String| {
+        let body = gql(
+            &ctx,
+            ROOT_SCOPE_PREVIEW_QUERY,
+            json!({ "input": {
+                "libraryId": library_id,
+                "rootId": source_root_id,
+                "destinationPath": destination_path,
+            }}),
+        )
+        .await;
+        assert_no_errors(&body);
+        body
+    };
+
+    // A configured root of this library, named by its path: the fold.
+    let folded = preview_for(destination_root.path().to_string_lossy().to_string()).await;
+    let folded = &folded["data"]["locationRootScopePreview"];
+    assert_eq!(folded["plan"]["operationType"], "ROOT_CONSOLIDATION", "{folded}");
     assert_eq!(
-        refusal_code(&body),
-        Some("root_change_destination_is_configured_root"),
-        "{body}"
+        folded["plan"]["destinationRootId"], destination_root_id,
+        "the path resolved to the root that already holds it: {folded}"
     );
-    // The bracketed code is promoted onto the extensions, never left in the
-    // sentence the user reads.
-    let message = body["errors"][0]["message"]
-        .as_str()
-        .expect("refusal message");
     assert!(
-        !message.contains("[root_change_destination_is_configured_root]"),
-        "the machine-readable tail is stripped: {message}"
+        !folded["classification"].is_null(),
+        "FR-024's groups are the fold's section: {folded}"
     );
-}
+    assert!(
+        !folded["defaultTransfer"].is_null(),
+        "and so is FR-022's default statement: {folded}"
+    );
+    assert!(
+        folded["retention"].is_null(),
+        "a fold retires the source root rather than retaining it: {folded}"
+    );
 
-/// FR-020, second half: the mirror image. A consolidation destination that is
-/// not a configured root of this library is a root change, and the refusal
-/// routes there.
-#[tokio::test]
-async fn graphql_a_consolidation_onto_an_unconfigured_root_routes_to_a_root_change() {
-    let ctx = TestContext::new().await;
-    let source_root = tempfile::tempdir().expect("source root tempdir");
-    let other_root = tempfile::tempdir().expect("other root tempdir");
-    let (source_root_id, _other_root_id) =
-        configure_two_movie_roots(&ctx, source_root.path(), other_root.path()).await;
-    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
-
-    let body = gql(
-        &ctx,
-        ROOT_CONSOLIDATION_PREVIEW_QUERY,
-        json!({ "input": {
-            "libraryId": library_id,
-            "sourceRootId": source_root_id,
-            "destinationRootId": "00000000-0000-0000-0000-0000000000ff",
-        }}),
+    // Anything else: the path change, with the same root on both sides.
+    let changed = preview_for(
+        unconfigured
+            .path()
+            .join("new-disk")
+            .to_string_lossy()
+            .to_string(),
     )
     .await;
-    assert!(body["errors"].is_array(), "{body}");
-    assert_eq!(error_code(&body), Some("LOCATION_ROOT_REFUSED"), "{body}");
+    let changed = &changed["data"]["locationRootScopePreview"];
+    assert_eq!(changed["plan"]["operationType"], "ROOT_CHANGE", "{changed}");
     assert_eq!(
-        refusal_code(&body),
-        Some("root_consolidation_destination_not_a_configured_root"),
-        "{body}"
+        changed["plan"]["destinationRootId"], source_root_id,
+        "FR-021: the root keeps its identity: {changed}"
+    );
+    assert!(!changed["retention"].is_null(), "{changed}");
+    assert!(
+        changed["classification"].is_null() && changed["defaultTransfer"].is_null(),
+        "a new path holds nothing to classify against and moves no default: {changed}"
     );
 }
 
@@ -2144,16 +2070,16 @@ async fn graphql_a_root_consolidation_preview_carries_the_seven_groups_and_the_d
 
     let body = gql(
         &ctx,
-        ROOT_CONSOLIDATION_PREVIEW_QUERY,
+        ROOT_SCOPE_PREVIEW_QUERY,
         json!({ "input": {
             "libraryId": library_id,
-            "sourceRootId": source_root_id,
+            "rootId": source_root_id,
             "destinationRootId": destination_root_id,
         }}),
     )
     .await;
     assert_no_errors(&body);
-    let preview = &body["data"]["locationRootConsolidationPreview"];
+    let preview = &body["data"]["locationRootScopePreview"];
     let plan = &preview["plan"];
 
     assert_eq!(plan["operationType"], "ROOT_CONSOLIDATION");
@@ -2246,9 +2172,9 @@ async fn graphql_a_root_consolidation_preview_carries_the_seven_groups_and_the_d
         &ctx,
         START_MUTATION,
         json!({ "input": {
-            "rootConsolidation": {
+            "rootScope": {
                 "libraryId": library_id,
-                "sourceRootId": source_root_id,
+                "rootId": source_root_id,
                 "destinationRootId": destination_root_id,
             },
             "planFingerprint": fingerprint,
@@ -2268,98 +2194,73 @@ async fn graphql_a_root_consolidation_preview_carries_the_seven_groups_and_the_d
     );
 }
 
-/// The mirror of the consolidation's CHK003 refusal, for the other branch of
-/// FR-020: a root change's destination has to be empty or absent, so the files
-/// can never already be there. The *planner* refuses the mode by name, so the
-/// client gets a routable code it can translate rather than an interface
-/// sentence it cannot.
+/// CHK003, for both of FR-020's destinations: **Change root** is a managed move
+/// either way. "Files are already there" adopts content at a destination folder
+/// (US3) and has no meaning for a whole root, so the *planner* refuses it by
+/// name — the client gets a routable code it can translate rather than an
+/// interface sentence it cannot.
+///
+/// The confirmation is guarded the same way, so a client cannot preview one
+/// workflow and start the other.
 #[tokio::test]
-async fn graphql_a_root_change_refuses_the_files_already_there_mode() {
-    let ctx = TestContext::new().await;
-    let source_root = tempfile::tempdir().expect("source root tempdir");
-    let other_root = tempfile::tempdir().expect("other root tempdir");
-    let destination = tempfile::tempdir().expect("destination tempdir");
-    let (source_root_id, _other) =
-        configure_two_movie_roots(&ctx, source_root.path(), other_root.path()).await;
-    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
-
-    let body = gql(
-        &ctx,
-        ROOT_CHANGE_PREVIEW_QUERY,
-        json!({ "input": {
-            "libraryId": library_id,
-            "rootId": source_root_id,
-            "destinationPath": destination.path().join("new-disk").to_string_lossy(),
-            "mode": "FILES_ALREADY_THERE",
-        }}),
-    )
-    .await;
-    assert!(body["errors"].is_array(), "{body}");
-    assert_eq!(
-        refusal_code(&body),
-        Some("root_change_mode_not_supported"),
-        "{body}"
-    );
-
-    // And the same guard on the confirmation, so a client cannot preview one
-    // workflow and start the other.
-    let refused = gql(
-        &ctx,
-        START_MUTATION,
-        json!({ "input": {
-            "rootChange": {
-                "libraryId": library_id,
-                "rootId": source_root_id,
-                "destinationPath": destination.path().join("new-disk").to_string_lossy(),
-            },
-            "mode": "FILES_ALREADY_THERE",
-            "planFingerprint": "whatever",
-            "typedConfirmation": "MOVE",
-        }}),
-    )
-    .await;
-    assert!(refused["errors"].is_array(), "{refused}");
-    assert_eq!(
-        refusal_code(&refused),
-        Some("root_change_mode_not_supported"),
-        "{refused}"
-    );
-}
-
-/// CHK003: a consolidation is a managed move between two configured roots.
-/// "Files are already there" adopts content at a destination folder and has no
-/// meaning for a whole root, so it is refused by name rather than half-run.
-#[tokio::test]
-async fn graphql_a_consolidation_refuses_the_files_already_there_mode() {
+async fn graphql_a_root_scoped_preview_refuses_the_files_already_there_mode() {
     let ctx = TestContext::new().await;
     let source_root = tempfile::tempdir().expect("source root tempdir");
     let destination_root = tempfile::tempdir().expect("destination root tempdir");
+    let unconfigured = tempfile::tempdir().expect("unconfigured destination tempdir");
     let (source_root_id, destination_root_id) =
         configure_two_movie_roots(&ctx, source_root.path(), destination_root.path()).await;
     let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let new_disk = unconfigured
+        .path()
+        .join("new-disk")
+        .to_string_lossy()
+        .to_string();
 
-    let body = gql(
-        &ctx,
-        ROOT_CONSOLIDATION_PREVIEW_QUERY,
-        json!({ "input": {
-            "libraryId": library_id,
-            "sourceRootId": source_root_id,
-            "destinationRootId": destination_root_id,
-            "mode": "FILES_ALREADY_THERE",
-        }}),
-    )
-    .await;
-    assert!(body["errors"].is_array(), "{body}");
-    assert_eq!(
-        refusal_code(&body),
-        Some("root_consolidation_mode_not_supported"),
-        "{body}"
-    );
+    // The one target the preview and the confirmation both carry, per branch.
+    for (target, expected) in [
+        (
+            json!({
+                "libraryId": library_id,
+                "rootId": source_root_id,
+                "destinationPath": new_disk,
+            }),
+            "root_change_mode_not_supported",
+        ),
+        (
+            json!({
+                "libraryId": library_id,
+                "rootId": source_root_id,
+                "destinationRootId": destination_root_id,
+            }),
+            "root_consolidation_mode_not_supported",
+        ),
+    ] {
+        let mut input = target.clone();
+        input["mode"] = json!("FILES_ALREADY_THERE");
+        let body = gql(&ctx, ROOT_SCOPE_PREVIEW_QUERY, json!({ "input": input })).await;
+        assert!(body["errors"].is_array(), "{body}");
+        assert_eq!(refusal_code(&body), Some(expected), "{body}");
+
+        let refused = gql(
+            &ctx,
+            START_MUTATION,
+            json!({ "input": {
+                "rootScope": target,
+                "mode": "FILES_ALREADY_THERE",
+                "planFingerprint": "whatever",
+                "typedConfirmation": "MOVE",
+            }}),
+        )
+        .await;
+        assert!(refused["errors"].is_array(), "{refused}");
+        assert_eq!(refusal_code(&refused), Some(expected), "{refused}");
+    }
 }
 
-/// The start mutation carries three destination forms and exactly one of them
-/// describes a plan. Naming two, or none, is refused before anything is
-/// rebuilt.
+/// The start mutation carries two destination forms and exactly one of them
+/// describes a plan; so does the root-scoped target inside one of them. Naming
+/// two, or none, is refused before anything is rebuilt.
 #[tokio::test]
 async fn graphql_a_start_naming_two_destination_forms_is_refused() {
     let ctx = TestContext::new().await;
@@ -2369,68 +2270,61 @@ async fn graphql_a_start_naming_two_destination_forms_is_refused() {
         configure_two_movie_roots(&ctx, source_root.path(), destination_root.path()).await;
     let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
 
-    let body = gql(
-        &ctx,
-        START_MUTATION,
-        json!({ "input": {
-            "titleIds": [],
-            "destination": { "rootId": destination_root_id },
-            "rootChange": {
-                "libraryId": library_id,
-                "rootId": source_root_id,
-                "destinationPath": "/somewhere/else",
-            },
-            "planFingerprint": "whatever",
-            "typedConfirmation": "MOVE",
-        }}),
-    )
-    .await;
-    assert!(body["errors"].is_array(), "{body}");
-    assert!(
-        body["errors"][0]["message"]
-            .as_str()
-            .is_some_and(|message| message.contains("exactly one")),
-        "{body}"
-    );
+    let refused_for = async |input: Value| {
+        let body = gql(&ctx, START_MUTATION, json!({ "input": input })).await;
+        assert!(body["errors"].is_array(), "{body}");
+        assert!(
+            body["errors"][0]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("exactly one")),
+            "{body}"
+        );
+    };
 
-    // Both root-scoped forms at once is the same mistake.
-    let both = gql(
-        &ctx,
-        START_MUTATION,
-        json!({ "input": {
-            "rootChange": {
-                "libraryId": library_id,
-                "rootId": source_root_id,
-                "destinationPath": "/somewhere/else",
-            },
-            "rootConsolidation": {
-                "libraryId": library_id,
-                "sourceRootId": source_root_id,
-                "destinationRootId": destination_root_id,
-            },
-            "planFingerprint": "whatever",
-            "typedConfirmation": "MOVE",
-        }}),
-    )
+    // A selection and a root-scoped target at once.
+    refused_for(json!({
+        "titleIds": [],
+        "destination": { "rootId": destination_root_id },
+        "rootScope": {
+            "libraryId": library_id,
+            "rootId": source_root_id,
+            "destinationPath": "/somewhere/else",
+        },
+        "planFingerprint": "whatever",
+        "typedConfirmation": "MOVE",
+    }))
     .await;
-    assert!(both["errors"].is_array(), "{both}");
 
-    // And so is naming none of them: with the selection fields nullable, a
-    // confirmation carrying only a fingerprint describes no plan at all.
-    let none = gql(
-        &ctx,
-        START_MUTATION,
-        json!({ "input": {
-            "planFingerprint": "whatever",
-            "typedConfirmation": "MOVE",
-        }}),
-    )
+    // Both of the root-scoped target's own destination forms at once is the
+    // same mistake, one level down.
+    refused_for(json!({
+        "rootScope": {
+            "libraryId": library_id,
+            "rootId": source_root_id,
+            "destinationPath": "/somewhere/else",
+            "destinationRootId": destination_root_id,
+        },
+        "planFingerprint": "whatever",
+        "typedConfirmation": "MOVE",
+    }))
     .await;
-    assert!(none["errors"].is_array(), "{none}");
-    assert!(
-        none["errors"][0]["message"]
-            .as_str()
-            .is_some_and(|message| message.contains("exactly one")),
-        "{none}"
-    );
+
+    // Naming neither of them is the same mistake again.
+    refused_for(json!({
+        "rootScope": {
+            "libraryId": library_id,
+            "rootId": source_root_id,
+        },
+        "planFingerprint": "whatever",
+        "typedConfirmation": "MOVE",
+    }))
+    .await;
+
+    // And so is naming no destination form at all: with the selection fields
+    // nullable, a confirmation carrying only a fingerprint describes no plan.
+    refused_for(json!({
+        "planFingerprint": "whatever",
+        "typedConfirmation": "MOVE",
+    }))
+    .await;
 }

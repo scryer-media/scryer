@@ -8,50 +8,45 @@
 use async_graphql::{Context, ID, Object, Result as GqlResult};
 use scryer_application::AppError;
 use scryer_application::location::classify::DestinationRequest;
-use scryer_application::location::consolidation_execution::StartRootConsolidationRequest;
 use scryer_application::location::model::LocationExecutionMode;
 use scryer_application::location::operations::{LocationResumeDecision, StartRootMoveRequest};
 use scryer_application::location::preview::{PlanConfirmationRequest, PlanFingerprint};
-use scryer_application::location::root_change_execution::StartRootChangeRequest;
+use scryer_application::location::root_scope_execution::{RootScopeCall, StartRootScopeRequest};
 
 use crate::context::{actor_from_ctx, app_from_ctx, to_gql_error};
 use crate::mappers::{
     from_canceled_location_operation, from_resumed_location_operation,
     from_started_location_operation, location_destination_into_application,
-    location_execution_mode_into_application,
+    location_execution_mode_into_application, root_scope_destination,
 };
 use crate::types::{
-    CancelLocationOperationPayload, LocationDestinationInput, LocationRootChangeTargetInput,
-    LocationRootConsolidationTargetInput, ResumeLocationOperationPayload,
-    StartLocationOperationInput, StartLocationOperationPayload,
+    CancelLocationOperationPayload, LocationDestinationInput, LocationRootScopeTargetInput,
+    ResumeLocationOperationPayload, StartLocationOperationInput, StartLocationOperationPayload,
 };
 
 /// The one destination form a start confirms.
 ///
-/// `StartLocationOperationInput` offers three and the schema cannot say "pick
-/// exactly one", so this is where that is said. Sending none, or more than one,
-/// is a request that does not describe a plan, and it is refused before the
+/// `StartLocationOperationInput` offers two and the schema cannot say "pick
+/// exactly one", so this is where that is said. Sending none, or both, is a
+/// request that does not describe a plan, and it is refused before the
 /// application is asked to rebuild anything.
 enum StartLocationTarget {
     Selection {
         title_ids: Vec<String>,
         destination: DestinationRequest,
     },
-    RootChange(LocationRootChangeTargetInput),
-    RootConsolidation(LocationRootConsolidationTargetInput),
+    RootScope(LocationRootScopeTargetInput),
 }
 
 fn start_location_target(
     title_ids: Option<Vec<ID>>,
     destination: Option<LocationDestinationInput>,
-    root_change: Option<LocationRootChangeTargetInput>,
-    root_consolidation: Option<LocationRootConsolidationTargetInput>,
+    root_scope: Option<LocationRootScopeTargetInput>,
 ) -> GqlResult<StartLocationTarget> {
     let names_a_selection = title_ids.is_some() || destination.is_some();
-    match (names_a_selection, root_change, root_consolidation) {
-        (false, Some(target), None) => Ok(StartLocationTarget::RootChange(target)),
-        (false, None, Some(target)) => Ok(StartLocationTarget::RootConsolidation(target)),
-        (true, None, None) => Ok(StartLocationTarget::Selection {
+    match (names_a_selection, root_scope) {
+        (false, Some(target)) => Ok(StartLocationTarget::RootScope(target)),
+        (true, None) => Ok(StartLocationTarget::Selection {
             // A client that predates the root-scoped variants always sends
             // both, so it lands here with exactly the request it always sent.
             title_ids: title_ids
@@ -67,8 +62,7 @@ fn start_location_target(
             )),
         }),
         _ => Err(to_gql_error(AppError::Validation(
-            "name exactly one of a title selection, a root change, or a root consolidation"
-                .to_string(),
+            "name exactly one of a title selection or a root-scoped target".to_string(),
         ))),
     }
 }
@@ -91,13 +85,14 @@ impl LocationMutations {
     /// here, because its rebuilt plan is blocked (FR-052).
     ///
     /// A root change (US4) and a root consolidation (US5) confirm through the
-    /// same mutation and the same typed-confirmation field; only the destination
-    /// form differs. Exactly one of the three destination forms may be named.
+    /// same mutation, the same `rootScope` target, and the same
+    /// typed-confirmation field; only the destination inside that target
+    /// differs. Exactly one of the two destination forms may be named.
     async fn start_location_operation(
         &self,
         ctx: &Context<'_>,
         #[graphql(
-            desc = "Previewed destination form (selection, root change, or root consolidation), mode, plan fingerprint, and typed confirmation when one is required."
+            desc = "Previewed destination form (a title selection or a root-scoped target), mode, plan fingerprint, and typed confirmation when one is required."
         )]
         input: StartLocationOperationInput,
     ) -> GqlResult<StartLocationOperationPayload> {
@@ -111,8 +106,7 @@ impl LocationMutations {
         let target = start_location_target(
             input.title_ids,
             input.destination,
-            input.root_change,
-            input.root_consolidation,
+            input.root_scope,
         )?;
         let accepted = match target {
             StartLocationTarget::Selection {
@@ -132,35 +126,28 @@ impl LocationMutations {
                 }
                 .map_err(to_gql_error)
             }
-            // Both root-scoped planners refuse an unsupported mode themselves,
-            // by name, so the mode travels through the shared mapper and the
+            // The root-scoped planner refuses an unsupported mode itself, by
+            // name, so the mode travels through the shared mapper and the
             // refusal reaches the client as a routable code.
-            StartLocationTarget::RootChange(target) => app
-                .start_root_change(
+            StartLocationTarget::RootScope(target) => {
+                let destination =
+                    root_scope_destination(target.destination_path, target.destination_root_id)
+                        .map_err(to_gql_error)?;
+                app.start_root_scope(
                     &actor,
-                    StartRootChangeRequest {
-                        library_id: target.library_id.to_string(),
-                        root_id: target.root_id.to_string(),
-                        destination_path: target.destination_path,
-                        mode,
+                    StartRootScopeRequest {
+                        call: RootScopeCall {
+                            library_id: target.library_id.to_string(),
+                            root_id: target.root_id.to_string(),
+                            destination,
+                            mode,
+                        },
                         confirmation,
                     },
                 )
                 .await
-                .map_err(to_gql_error),
-            StartLocationTarget::RootConsolidation(target) => app
-                .start_root_consolidation(
-                    &actor,
-                    StartRootConsolidationRequest {
-                        library_id: target.library_id.to_string(),
-                        source_root_id: target.source_root_id.to_string(),
-                        destination_root_id: target.destination_root_id.to_string(),
-                        mode,
-                        confirmation,
-                    },
-                )
-                .await
-                .map_err(to_gql_error),
+                .map_err(to_gql_error)
+            }
         }?;
         // A just-accepted operation has no checkpoints yet; they are written as
         // each title enters the run.

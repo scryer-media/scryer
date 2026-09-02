@@ -124,8 +124,7 @@ pub mod plan_reasons {
     pub const TITLE_MERGE: &str = "title_merge";
     /// One setting the destination keeps and the source loses (FR-063).
     pub const MERGE_DESTINATION_WINS: &str = "merge_destination_wins";
-    /// One reserved `scryer:` setting whose two sides disagreed (OQ9, FR-071).
-    pub const MERGE_RESERVED_TAG_CONFLICT: &str = "merge_reserved_tag_conflict";
+    /// One reserved `scryer:` setting whose two sides disagreed (FR-071).
     /// One category the merge deliberately does not carry (FR-071).
     pub const MERGE_DROPPED_DATA: &str = "merge_dropped_data";
     /// One media-file role the merge resolves per logical slot; never silent
@@ -335,7 +334,7 @@ pub struct RootMoveExecutionPlan {
     /// operation type, and defaulted so an operation persisted before root
     /// change existed still resumes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub root_change: Option<crate::location::root_change::RootChangeTail>,
+    pub root_change: Option<crate::location::root_scope::RootScopeTail>,
 }
 
 impl RootMoveExecutionPlan {
@@ -681,7 +680,13 @@ fn execution_mode_for(
     }
 }
 
-fn plan_title(
+/// One title's plan and instructions.
+///
+/// Shared with the root-scoped planner (US4/US5), which adapts its own drafts
+/// onto [`RootMoveTitleDraft`] rather than re-deriving the same per-file rules:
+/// a root-scoped title is a root move whose destination folder is decided by
+/// FR-025/FR-026 instead of by the naming policy (D1).
+pub(super) fn plan_title(
     request: &RootMovePlanRequest,
     draft: &RootMoveTitleDraft,
     sequence: i64,
@@ -841,7 +846,14 @@ fn plan_title(
 
     // Collisions are only possible where the destination folder already holds
     // something (FR-072–075).
-    let collisions = plan_title_collisions(request, draft, &destination_folder);
+    let collisions = plan_collisions_for_files(
+        request.case_rule,
+        &request.naming,
+        &draft.recycle,
+        &draft.destination_entries,
+        &draft.files,
+        &draft.title_id,
+    );
     if !draft.destination_entries.is_empty() {
         items.push(
             PlanItem::new(PlanItemKind::Warning)
@@ -867,7 +879,7 @@ fn plan_title(
         let final_name = decision
             .as_ref()
             .map(|decision| decision.final_name.clone())
-            .unwrap_or_else(|| file_name_of(&file.path));
+            .unwrap_or_else(|| file_name_or(&file.path, &draft.title_id));
 
         let destination_path = match file.relative_path.as_ref() {
             Some(relative) => match relative.parent() {
@@ -924,15 +936,18 @@ fn plan_title(
             }
             Some(disposition) if disposition.is_rename() => {
                 renamed_destinations.push(destination_display.clone());
-                items.push(
-                    PlanItem::new(PlanItemKind::Rename)
-                        .with_title(draft.title_id.clone())
-                        .with_paths(Some(source_display.clone()), Some(destination_display.clone()))
-                        .with_size(file.size_bytes)
-                        .with_detail(format!(
-                            "renamed to \"{final_name}\" so destination content keeps its name"
-                        )),
-                );
+                let mut renamed = PlanItem::new(PlanItemKind::Rename)
+                    .with_title(draft.title_id.clone())
+                    .with_paths(Some(source_display.clone()), Some(destination_display.clone()))
+                    .with_size(file.size_bytes)
+                    .with_detail(format!(
+                        "renamed to \"{final_name}\" so destination content keeps its name"
+                    ));
+                // FR-075 counts renamed media apart from renamed companions, and
+                // the item is the only place that distinction survives once the
+                // plan is serialized.
+                renamed.media_file_id = file.media_file_id.clone();
+                items.push(renamed);
             }
             _ => {}
         }
@@ -1268,7 +1283,11 @@ fn transfer_items(draft: &RootMoveTitleDraft) -> Vec<PlanItem> {
         ]
     };
 
-    if let Some(warning) = same_named_destination_warning(draft) {
+    if let Some(warning) = same_named_destination_warning(
+        draft.destination_identity.as_ref(),
+        &draft.title_name,
+        "library",
+    ) {
         items.push(
             PlanItem::new(PlanItemKind::Warning)
                 .with_title(draft.title_id.clone())
@@ -1369,48 +1388,17 @@ pub(super) fn merge_summary_items(
 
     let mut items = Vec::new();
 
-    for entry in &summary.destination_wins {
-        let detail = match (entry.destination_value.as_deref(), entry.source_value.as_deref()) {
-            (Some(destination), Some(source)) => format!(
-                "the destination's {} ({destination}) wins; \"{}\" loses its own ({source})",
-                entry.setting, draft.title_name
-            ),
-            _ => format!(
-                "the destination title's {} wins for the merged title",
-                entry.setting
-            ),
-        };
-        items.push(
-            PlanItem::new(PlanItemKind::CatalogChange)
-                .with_title(draft.title_id)
-                .with_reason_code(plan_reasons::MERGE_DESTINATION_WINS)
-                .with_detail(detail),
-        );
-    }
-
-    for conflict in &summary.reserved_tag_conflicts {
-        let setting = conflict
-            .setting
-            .clone()
-            .unwrap_or_else(|| conflict.prefix.clone());
-        items.push(
-            PlanItem::new(PlanItemKind::Warning)
-                .with_title(draft.title_id)
-                .with_reason_code(plan_reasons::MERGE_RESERVED_TAG_CONFLICT)
-                .with_detail(match conflict.destination_value.as_deref() {
-                    Some(destination) => format!(
-                        "{setting}: the destination keeps \"{destination}\" and \"{}\" loses \"{}\"",
-                        draft.title_name,
-                        conflict.source_value.clone().unwrap_or_default()
-                    ),
-                    None => format!(
-                        "{setting}: the destination has no value, so \"{}\" loses \"{}\"",
-                        draft.title_name,
-                        conflict.source_value.clone().unwrap_or_default()
-                    ),
-                }),
-        );
-    }
+    // FR-063: the destination title's own configuration stands, whole.
+    items.push(
+        PlanItem::new(PlanItemKind::CatalogChange)
+            .with_title(draft.title_id)
+            .with_reason_code(plan_reasons::MERGE_DESTINATION_WINS)
+            .with_detail(format!(
+                "the destination title's settings, metadata identity, and library win; \"{}\" \
+                 contributes {} media file record(s) and {} history row(s)",
+                draft.title_name, summary.media_files_repointed, summary.history_rows_carried
+            )),
+    );
 
     // FR-070: every role change appears, and none of them is silent.
     for change in &summary.role_changes {
@@ -1422,17 +1410,17 @@ pub(super) fn merge_summary_items(
         );
     }
 
-    for dropped in &summary.dropped {
-        if dropped.source_row_count == 0 {
-            continue;
-        }
+    // FR-064: one line for everything that retires with the source title, not
+    // one per table — the delete path owns them all the same way.
+    if summary.source_records_dropped > 0 {
         items.push(
             PlanItem::new(PlanItemKind::Warning)
                 .with_title(draft.title_id)
                 .with_reason_code(plan_reasons::MERGE_DROPPED_DATA)
                 .with_detail(format!(
-                    "{} row(s) in {} are not carried over ({}): {}",
-                    dropped.source_row_count, dropped.table, dropped.decision, dropped.reason
+                    "{} record(s) recorded against \"{}\" — tags, requests, acquisition state, \
+                     discovery provenance — retire with it",
+                    summary.source_records_dropped, draft.title_name
                 )),
         );
     }
@@ -1521,7 +1509,13 @@ fn transfer_warnings(draft: &RootMoveTitleDraft) -> Vec<String> {
     if !draft.crosses_libraries() {
         return Vec::new();
     }
-    same_named_destination_warning(draft).into_iter().collect()
+    same_named_destination_warning(
+        draft.destination_identity.as_ref(),
+        &draft.title_name,
+        "library",
+    )
+    .into_iter()
+    .collect()
 }
 
 /// The facet the catalog flip writes, or `None` to leave it alone.
@@ -1541,17 +1535,19 @@ fn dropped_tag_prefixes(draft: &RootMoveTitleDraft) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// FR-055's same-name-without-identity statement, phrased once.
-fn same_named_destination_warning(draft: &RootMoveTitleDraft) -> Option<String> {
-    let outcome = draft.destination_identity.as_ref()?;
+/// FR-055's same-name-without-identity statement, phrased once for every
+/// planner that has to make it. `scope` is the noun the destination is named by
+/// ("library" for a cross-library transfer, "root" for a root-scoped fold).
+pub(super) fn same_named_destination_warning(
+    identity: Option<&DestinationIdentityOutcome>,
+    title_name: &str,
+    scope: &str,
+) -> Option<String> {
+    let outcome = identity?;
     let title_id = outcome.same_name_title_id.as_deref()?;
-    let name = outcome
-        .same_name_title_name
-        .as_deref()
-        .unwrap_or(&draft.title_name);
+    let name = outcome.same_name_title_name.as_deref().unwrap_or(title_name);
     Some(format!(
-        "the destination library already holds a title called \"{name}\" ({title_id}); it shares no metadata identity with \"{}\", so the two are not merged and both will exist there",
-        draft.title_name
+        "the destination {scope} already holds a title called \"{name}\" ({title_id}); it shares no metadata identity with \"{title_name}\", so the two are not merged and both will exist there"
     ))
 }
 
@@ -1571,18 +1567,27 @@ fn prune_directories_for(draft: &RootMoveTitleDraft) -> Vec<String> {
     directories.iter().map(path_to_stored_string).collect()
 }
 
-fn plan_title_collisions(
-    request: &RootMovePlanRequest,
-    draft: &RootMoveTitleDraft,
-    destination_folder: &Path,
+/// FR-072's collision plan for one title's incoming files, or `None` when the
+/// destination folder is empty and nothing can collide.
+///
+/// Shared by every planner that lands files on a destination that already holds
+/// content, so an incoming file is named by one rule rather than by one rule per
+/// workflow (FR-074/FR-075).
+pub(super) fn plan_collisions_for_files(
+    case_rule: PathCaseRule,
+    naming: &CollisionNaming,
+    recycle: &RecycleAvailability,
+    destination_entries: &[DestinationItem],
+    files: &[SourceFile],
+    fallback_name: &str,
 ) -> Option<CollisionPlan> {
-    if draft.destination_entries.is_empty() {
+    if destination_entries.is_empty() {
         return None;
     }
 
-    let mut incoming = Vec::with_capacity(draft.files.len());
-    for file in &draft.files {
-        let name = file_name_of(&file.path);
+    let mut incoming = Vec::with_capacity(files.len());
+    for file in files {
+        let name = file_name_or(&file.path, fallback_name);
         let id = collision_item_id(file);
         let item = if file.media_file_id.is_some() {
             IncomingItem::media(id, name, file.size_bytes)
@@ -1597,28 +1602,37 @@ fn plan_title_collisions(
         );
     }
 
-    let _ = destination_folder;
     Some(plan_collisions(
-        &CollisionPlanRequest::new(request.case_rule, request.naming.clone())
-            .with_recycle(draft.recycle.clone())
-            .with_destination(draft.destination_entries.clone())
+        &CollisionPlanRequest::new(case_rule, naming.clone())
+            .with_recycle(recycle.clone())
+            .with_destination(destination_entries.to_vec())
             .with_incoming(incoming),
     ))
 }
 
 /// Stable, collision-free id for one source file inside one title's collision
 /// plan: the media file id when there is one, else the stored source path.
-fn collision_item_id(file: &SourceFile) -> String {
+pub(super) fn collision_item_id(file: &SourceFile) -> String {
     match file.media_file_id.as_deref() {
         Some(id) => format!("media:{id}"),
         None => format!("asset:{}", path_to_stored_string(&file.path)),
     }
 }
 
-fn file_name_of(path: &Path) -> String {
+/// A path's file name, or `fallback` when it has none. One definition for every
+/// caller that needs it.
+pub(super) fn file_name_or(path: &Path, fallback: &str) -> String {
     path.file_name()
         .map(|name| name.to_string_lossy().to_string())
-        .unwrap_or_else(|| "untitled".to_string())
+        .unwrap_or_else(|| fallback.to_string())
+}
+
+/// Re-anchor `path` from `source_root` onto `destination_root`, preserving its
+/// relative position (FR-026). `None` when `path` is not under `source_root`.
+pub(super) fn rebase(path: &Path, source_root: &Path, destination_root: &Path) -> Option<PathBuf> {
+    path.strip_prefix(source_root)
+        .ok()
+        .map(|relative| destination_root.join(relative))
 }
 
 /// Reduce a selection classification to the per-title classes the planner
@@ -2258,36 +2272,22 @@ mod tests {
     fn merge_summary() -> MergePreviewSummary {
         use crate::location::merge::MergedMediaRole;
         use crate::location::merge::roles::{MediaRoleChange, RoleChangeReason};
-        use crate::location::merge::summary::{DestinationWinsEntry, DroppedCategory, ReservedTagConflict};
 
         MergePreviewSummary {
             source_title_id: "title-1".to_string(),
             destination_title_id: "destination".to_string(),
-            destination_wins: vec![DestinationWinsEntry {
-                setting: "title id".to_string(),
-                destination_value: Some("destination".to_string()),
-                source_value: Some("title-1".to_string()),
-            }],
+            media_files_repointed: 4,
+            history_rows_carried: 9,
+            source_records_dropped: 2,
             role_changes: vec![MediaRoleChange {
                 file_id: "file-in".to_string(),
-                source_episode_id: "s-e1".to_string(),
-                destination_episode_id: "d-e1".to_string(),
+                source_episode_id: Some("s-e1".to_string()),
+                destination_episode_id: Some("d-e1".to_string()),
                 previous_role: MergedMediaRole::Primary,
                 new_role: MergedMediaRole::Additional,
                 reason: RoleChangeReason::DestinationPrimaryRetained,
             }],
-            reserved_tag_conflicts: vec![ReservedTagConflict {
-                prefix: "scryer:quality-profile:".to_string(),
-                setting: Some("quality profile".to_string()),
-                destination_value: Some("dest-profile".to_string()),
-                source_value: Some("source-profile".to_string()),
-            }],
-            dropped: vec![DroppedCategory {
-                table: "pending_releases".to_string(),
-                source_row_count: 2,
-                decision: "OQ5".to_string(),
-                reason: "the delay queue re-derives against the destination profile".to_string(),
-            }],
+            role_demotions: 1,
             ..MergePreviewSummary::default()
         }
     }
@@ -2327,23 +2327,20 @@ mod tests {
         // statement must not be there.
         assert!(details_for(&planned, plan_reasons::LIBRARY_TRANSFER).is_empty());
 
-        // FR-071: what wins, what disagreed, what is dropped, which roles move.
-        assert_eq!(
-            details_of(&planned, PlanItemKind::CatalogChange, plan_reasons::MERGE_DESTINATION_WINS)
-                .len(),
-            1
-        );
-        let conflicts = details_of(
+        // FR-071: what the destination keeps, what it gains, what retires, and
+        // which roles move.
+        let wins = details_of(
             &planned,
-            PlanItemKind::Warning,
-            plan_reasons::MERGE_RESERVED_TAG_CONFLICT,
+            PlanItemKind::CatalogChange,
+            plan_reasons::MERGE_DESTINATION_WINS,
         );
-        assert_eq!(conflicts.len(), 1);
-        assert!(conflicts[0].contains("quality profile"));
+        assert_eq!(wins.len(), 1);
+        assert!(wins[0].contains("4 media file record(s)"));
+        assert!(wins[0].contains("9 history row(s)"));
         let dropped =
             details_of(&planned, PlanItemKind::Warning, plan_reasons::MERGE_DROPPED_DATA);
         assert_eq!(dropped.len(), 1);
-        assert!(dropped[0].contains("pending_releases"));
+        assert!(dropped[0].contains("2 record(s)"));
         // FR-070: the demotion is a line item of its own.
         let roles =
             details_of(&planned, PlanItemKind::RoleChange, plan_reasons::MERGE_ROLE_CHANGE);

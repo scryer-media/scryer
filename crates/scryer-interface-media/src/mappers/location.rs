@@ -7,69 +7,55 @@
 //! encoding to the real filesystem spelling on the way out.
 
 use async_graphql::ID;
+use scryer_application::AppError;
 use scryer_application::location::asset_listing::{
     DeduplicatedAsset, LocationOperationAssetListing, RenamedAsset, TitleAssetListing,
 };
 use scryer_application::location::classify::{
     DestinationRequest, SelectionClassification, TitleClassification, TitleLocationClass,
 };
-use scryer_application::location::consolidation_execution::RootConsolidationPreview;
 use scryer_application::location::identity::{DestinationIdentityOutcome, MetadataIdentity};
-use scryer_application::location::merge::map::{MergeBlockReason};
-use scryer_application::location::merge::roles::RoleChangeReason;
-use scryer_application::location::merge::summary::{MergePreviewSummary, PostMergeWork};
-use scryer_application::location::merge::{
-    DestinationIdentityMatch, MergeDisposition, MergedMediaRole,
-};
+use scryer_application::location::merge::summary::MergePreviewSummary;
 use scryer_application::location::model::{
-    LocationExecutionMode, LocationOperation, LocationOperationCounters, LocationOperationState,
-    LocationOperationType, TitleCheckpoint, TitleCheckpointState, VerificationDepth,
+    LocationExecutionMode, LocationOperation, LocationOperationCounters, LocationOperationType,
+    TitleCheckpoint, VerificationDepth,
 };
 use scryer_application::location::operations::RootMovePreview;
 use scryer_application::location::preview::{
-    ConfirmationRequirement, FreeSpaceEstimate, LocationPlan, PLAN_SECTION_SAMPLE_LIMIT,
+    FreeSpaceEstimate, LocationPlan, PLAN_SECTION_SAMPLE_LIMIT,
     PlanConfirmation, PlanCounts, PlanFingerprint, PlanItem, PlanItemKind, PlanSection,
     VerificationStatement,
 };
-use scryer_application::location::root_change::{
-    BlockedTitle, ClassifiedRootEntry, RootContentClass, RootContentInventory,
+use scryer_application::location::root_scope_execution::RootScopeCallDestination;
+use scryer_application::location::root_scope::{
+    BlockedTitle, ClassifiedRootEntry, PlannedRootScope, RootContentClass, RootContentInventory,
     RootIdentityRetention, RootRetirementContract, TitleAccounting,
 };
-use scryer_application::location::root_change_execution::RootChangePreview;
 use scryer_application::location::transfer_effects::{
-    FILES_KEEP_THEIR_NAMES, FacetConversion, SettingDisposition,
+    FILES_KEEP_THEIR_NAMES, FacetConversion,
 };
 
 use crate::types::{
     CancelLocationOperationPayload, LocationAmbiguousDestinationCandidatePayload,
     LocationBlockedTitlePayload, LocationClassificationGroupPayload,
-    LocationClassifiedTitlePayload, LocationConfirmationRequirementValue,
-    LocationConsolidationClassificationPayload, LocationDefaultRootTransferPayload,
-    LocationDestinationIdentityMatchValue, LocationDestinationInput, LocationExecutionModeInput,
-    LocationExecutionModeValue, LocationFacetConversionPayload,
-    LocationFacetConvertedSettingPayload, LocationFacetSettingDispositionValue,
-    LocationFreeSpaceEstimatePayload, LocationMergeBlockReasonValue,
-    LocationMergeBlockedRecordPayload, LocationMergeDestinationWinsPayload,
-    LocationMergeDispositionValue, LocationMergeDroppedCategoryPayload,
-    LocationMergeMediaRequestRepointPayload, LocationMergeMediaRoleValue,
-    LocationMergePostMergeWorkValue, LocationMergePreviewPayload,
-    LocationMergeReservedTagConflictPayload, LocationMergeRoleChangePayload,
-    LocationMergeRoleChangeReasonValue, LocationMergeTableDispositionPayload,
+    LocationClassifiedTitlePayload, LocationConsolidationClassificationPayload,
+    LocationDefaultRootTransferPayload, LocationDestinationInput, LocationExecutionModeInput,
+    LocationFacetConversionPayload, LocationFacetConvertedSettingPayload,
+    LocationFreeSpaceEstimatePayload, LocationMergeBlockedRecordPayload,
+    LocationMergePreviewPayload, LocationMergeRoleChangePayload,
     LocationOperationAssetListingPayload, LocationOperationCountersPayload,
     LocationOperationDeduplicatedAssetPayload, LocationOperationPayload,
     LocationOperationPreviewPayload, LocationOperationRenamedAssetPayload,
-    LocationOperationStateValue, LocationOperationTitleAssetsPayload, LocationOperationTypeValue,
-    LocationPlanConfirmationPayload, LocationPlanCountsPayload, LocationPlanItemKindValue,
-    LocationPlanItemPayload, LocationPlanKindCountPayload, LocationPlanSectionPayload,
-    LocationRootChangePreviewPayload, LocationRootConsolidationPreviewPayload,
-    LocationRootContentBucketPayload, LocationRootContentClassValue,
-    LocationRootContentEntryPayload, LocationRootContentInventoryPayload,
+    LocationOperationTitleAssetsPayload, LocationPlanConfirmationPayload,
+    LocationPlanCountsPayload, LocationPlanItemPayload, LocationPlanKindCountPayload,
+    LocationPlanSectionPayload,
+    LocationRootContentBucketPayload, LocationRootContentEntryPayload,
+    LocationRootContentInventoryPayload, LocationRootScopePreviewPayload,
     LocationRootIdentityRetentionPayload, LocationRootRetirementBlockerPayload,
     LocationRootRetirementContractPayload, LocationSampledPathsPayload,
     LocationSelectionClassificationPayload, LocationTitleAccountingPayload,
-    LocationTitleCheckpointPayload, LocationTitleCheckpointStateValue,
-    LocationVerificationStatementPayload, Long, MediaFacetValue, ResumeLocationOperationPayload,
-    StartLocationOperationPayload, TitleLocationClassValue, VerificationDepthValue,
+    LocationTitleCheckpointPayload, LocationVerificationStatementPayload, Long, MediaFacetValue,
+    ResumeLocationOperationPayload, StartLocationOperationPayload, VerificationDepthValue,
 };
 
 /// Plan-item kinds in the order the preview presents them; the same order the
@@ -110,100 +96,10 @@ fn bytes(value: u64) -> Long {
     Long::from_u64_saturating(value)
 }
 
-pub fn from_location_operation_type(value: LocationOperationType) -> LocationOperationTypeValue {
-    match value {
-        LocationOperationType::FolderReassignment => LocationOperationTypeValue::FolderReassignment,
-        LocationOperationType::RootMove => LocationOperationTypeValue::RootMove,
-        LocationOperationType::RootChange => LocationOperationTypeValue::RootChange,
-        LocationOperationType::RootConsolidation => LocationOperationTypeValue::RootConsolidation,
-        LocationOperationType::CrossLibraryTransfer => {
-            LocationOperationTypeValue::CrossLibraryTransfer
-        }
-        LocationOperationType::Adoption => LocationOperationTypeValue::Adoption,
-    }
-}
-
-pub fn from_location_execution_mode(value: LocationExecutionMode) -> LocationExecutionModeValue {
-    match value {
-        LocationExecutionMode::MoveWithScryer => LocationExecutionModeValue::MoveWithScryer,
-        LocationExecutionMode::FilesAlreadyThere => LocationExecutionModeValue::FilesAlreadyThere,
-        LocationExecutionMode::CatalogOnly => LocationExecutionModeValue::CatalogOnly,
-    }
-}
-
-pub fn from_location_operation_state(value: LocationOperationState) -> LocationOperationStateValue {
-    match value {
-        LocationOperationState::Queued => LocationOperationStateValue::Queued,
-        LocationOperationState::Preparing => LocationOperationStateValue::Preparing,
-        LocationOperationState::Moving => LocationOperationStateValue::Moving,
-        LocationOperationState::Verifying => LocationOperationStateValue::Verifying,
-        LocationOperationState::Reconciling => LocationOperationStateValue::Reconciling,
-        LocationOperationState::CleaningUp => LocationOperationStateValue::CleaningUp,
-        LocationOperationState::Completed => LocationOperationStateValue::Completed,
-        LocationOperationState::CompletedWithWarnings => {
-            LocationOperationStateValue::CompletedWithWarnings
-        }
-        LocationOperationState::Canceled => LocationOperationStateValue::Canceled,
-        LocationOperationState::Failed => LocationOperationStateValue::Failed,
-    }
-}
-
-fn from_title_location_class(value: TitleLocationClass) -> TitleLocationClassValue {
-    match value {
-        TitleLocationClass::CrossLibraryTransfer => TitleLocationClassValue::CrossLibraryTransfer,
-        TitleLocationClass::RootMove => TitleLocationClassValue::RootMove,
-        TitleLocationClass::NoOp => TitleLocationClassValue::NoOp,
-        TitleLocationClass::CatalogOnly => TitleLocationClassValue::CatalogOnly,
-        TitleLocationClass::Incompatible => TitleLocationClassValue::Incompatible,
-        TitleLocationClass::NeedsResolution => TitleLocationClassValue::NeedsResolution,
-    }
-}
-
-fn from_plan_item_kind(value: PlanItemKind) -> LocationPlanItemKindValue {
-    match value {
-        PlanItemKind::Move => LocationPlanItemKindValue::Move,
-        PlanItemKind::Rename => LocationPlanItemKindValue::Rename,
-        PlanItemKind::Merge => LocationPlanItemKindValue::Merge,
-        PlanItemKind::Dedup => LocationPlanItemKindValue::Dedup,
-        PlanItemKind::CatalogChange => LocationPlanItemKindValue::CatalogChange,
-        PlanItemKind::RoleChange => LocationPlanItemKindValue::RoleChange,
-        PlanItemKind::NoOp => LocationPlanItemKindValue::NoOp,
-        PlanItemKind::Blocked => LocationPlanItemKindValue::Blocked,
-        PlanItemKind::UnmanagedContent => LocationPlanItemKindValue::UnmanagedContent,
-        PlanItemKind::Warning => LocationPlanItemKindValue::Warning,
-    }
-}
-
-fn from_title_checkpoint_state(value: TitleCheckpointState) -> LocationTitleCheckpointStateValue {
-    match value {
-        TitleCheckpointState::Pending => LocationTitleCheckpointStateValue::Pending,
-        TitleCheckpointState::Moving => LocationTitleCheckpointStateValue::Moving,
-        TitleCheckpointState::Verifying => LocationTitleCheckpointStateValue::Verifying,
-        TitleCheckpointState::Reconciling => LocationTitleCheckpointStateValue::Reconciling,
-        TitleCheckpointState::CleaningUp => LocationTitleCheckpointStateValue::CleaningUp,
-        TitleCheckpointState::Completed => LocationTitleCheckpointStateValue::Completed,
-        TitleCheckpointState::CompletedWithWarnings => {
-            LocationTitleCheckpointStateValue::CompletedWithWarnings
-        }
-        TitleCheckpointState::Skipped => LocationTitleCheckpointStateValue::Skipped,
-        TitleCheckpointState::Blocked => LocationTitleCheckpointStateValue::Blocked,
-        TitleCheckpointState::Failed => LocationTitleCheckpointStateValue::Failed,
-    }
-}
-
 fn from_verification_depth(value: VerificationDepth) -> VerificationDepthValue {
     match value {
         VerificationDepth::Full => VerificationDepthValue::Full,
         VerificationDepth::Quick => VerificationDepthValue::Quick,
-    }
-}
-
-fn from_confirmation_requirement(
-    value: ConfirmationRequirement,
-) -> LocationConfirmationRequirementValue {
-    match value {
-        ConfirmationRequirement::Simple => LocationConfirmationRequirementValue::Simple,
-        ConfirmationRequirement::Typed => LocationConfirmationRequirementValue::Typed,
     }
 }
 
@@ -228,14 +124,34 @@ pub fn location_execution_mode_into_application(
     }
 }
 
-// The root-scoped workflows once had a second mapper here that refused
-// `FILES_ALREADY_THERE` with an untranslatable interface sentence. Both
-// planners now refuse it by name — `root_change::refusal_codes::
-// MODE_NOT_SUPPORTED` and `consolidation::refusal_codes::MODE_NOT_SUPPORTED` —
+// The root-scoped workflow once had a second mapper here that refused
+// `FILES_ALREADY_THERE` with an untranslatable interface sentence. The planner
+// now refuses it by name — `root_scope::refusal_codes::…mode_not_supported` —
 // so the request travels through the shared mapper above and the refusal is
 // application vocabulary the client can route and translate. `CATALOG_ONLY`
 // stays unrequestable everywhere: it is the server's own conclusion about a
 // root with no files on it (FR-076).
+
+/// FR-020's one destination, in the two forms a client may name it.
+///
+/// The schema cannot say "exactly one of these two", so this is where that is
+/// said — for the preview query and the start mutation alike, so a confirmation
+/// is refused for the same reason and in the same words as the preview it
+/// claims to confirm. Which of the two forms it is does **not** decide the
+/// branch: a path that resolves to a configured root of the library is planned
+/// as a fold, which is the application's call to make, not the interface's.
+pub fn root_scope_destination(
+    destination_path: Option<String>,
+    destination_root_id: Option<ID>,
+) -> Result<RootScopeCallDestination, AppError> {
+    match (destination_path, destination_root_id) {
+        (Some(path), None) => Ok(RootScopeCallDestination::Path(path)),
+        (None, Some(root_id)) => Ok(RootScopeCallDestination::Root(root_id.to_string())),
+        _ => Err(AppError::Validation(
+            "name exactly one of a destination path or a destination root".to_string(),
+        )),
+    }
+}
 
 pub fn location_destination_into_application(
     input: LocationDestinationInput,
@@ -248,7 +164,7 @@ pub fn location_destination_into_application(
 
 fn from_plan_item(item: &PlanItem) -> LocationPlanItemPayload {
     LocationPlanItemPayload {
-        kind: from_plan_item_kind(item.kind),
+        kind: item.kind.into(),
         title_id: item.title_id.clone().map(ID::from),
         media_file_id: item.media_file_id.clone().map(ID::from),
         source_path: item.source_path.as_deref().map(display_path),
@@ -262,7 +178,7 @@ fn from_plan_item(item: &PlanItem) -> LocationPlanItemPayload {
 
 fn from_plan_section(section: &PlanSection) -> LocationPlanSectionPayload {
     LocationPlanSectionPayload {
-        kind: from_plan_item_kind(section.kind),
+        kind: section.kind.into(),
         items_total: Long(section.items.total),
         bytes_total: Long(section.bytes_total),
         complete: section.items.is_complete(),
@@ -279,7 +195,7 @@ fn from_plan_counts(counts: &PlanCounts) -> LocationPlanCountsPayload {
         by_kind: PLAN_ITEM_KINDS
             .iter()
             .map(|kind| LocationPlanKindCountPayload {
-                kind: from_plan_item_kind(*kind),
+                kind: (*kind).into(),
                 count: Long(counts.for_kind(*kind)),
             })
             .collect(),
@@ -290,7 +206,7 @@ fn from_classified_title(title: &TitleClassification) -> LocationClassifiedTitle
     let identity = title.destination_identity.as_ref();
     LocationClassifiedTitlePayload {
         title_id: ID::from(title.title_id.clone()),
-        class: from_title_location_class(title.class),
+        class: title.class.into(),
         source_library_id: ID::from(title.source_library_id.clone()),
         source_root_id: ID::from(title.source_root_id.clone()),
         source_folder_path: title.source_folder_path.as_deref().map(display_path),
@@ -300,7 +216,7 @@ fn from_classified_title(title: &TitleClassification) -> LocationClassifiedTitle
         reason: title.reason.clone(),
         blocks_start: title.blocks_start(),
         destination_identity_match: identity
-            .map(|outcome| from_destination_identity_match(outcome.match_kind)),
+            .map(|outcome| outcome.match_kind.into()),
         merge_target_title_id: title
             .merge_target_title_id()
             .map(|id| ID::from(id.to_string())),
@@ -364,38 +280,11 @@ fn from_facet_conversion(conversion: &FacetConversion) -> LocationFacetConversio
                 setting: setting.setting.clone(),
                 label: setting.label.clone(),
                 value: setting.value.clone(),
-                disposition: from_setting_disposition(setting.disposition),
+                disposition: setting.disposition.into(),
                 detail: setting.detail.clone(),
             })
             .collect(),
         files_keep_their_names: FILES_KEEP_THEIR_NAMES.to_string(),
-    }
-}
-
-fn from_setting_disposition(
-    value: SettingDisposition,
-) -> LocationFacetSettingDispositionValue {
-    match value {
-        SettingDisposition::BecomesInvalid => {
-            LocationFacetSettingDispositionValue::BecomesInvalid
-        }
-        SettingDisposition::Resets => LocationFacetSettingDispositionValue::Resets,
-        SettingDisposition::ChangesMeaning => {
-            LocationFacetSettingDispositionValue::ChangesMeaning
-        }
-    }
-}
-
-fn from_destination_identity_match(
-    value: DestinationIdentityMatch,
-) -> LocationDestinationIdentityMatchValue {
-    match value {
-        DestinationIdentityMatch::Unique => LocationDestinationIdentityMatchValue::Unique,
-        DestinationIdentityMatch::None => LocationDestinationIdentityMatchValue::None,
-        DestinationIdentityMatch::Ambiguous => LocationDestinationIdentityMatchValue::Ambiguous,
-        DestinationIdentityMatch::SameNameNoIdentity => {
-            LocationDestinationIdentityMatchValue::SameNameNoIdentity
-        }
     }
 }
 
@@ -414,7 +303,7 @@ fn from_selection_classification(
                 .map(from_classified_title)
                 .collect();
             LocationClassificationGroupPayload {
-                class: from_title_location_class(*class),
+                class: (*class).into(),
                 count: Long(titles.len() as i64),
                 titles,
             }
@@ -456,7 +345,7 @@ fn from_verification_statement(
 
 fn from_plan_confirmation(confirmation: &PlanConfirmation) -> LocationPlanConfirmationPayload {
     LocationPlanConfirmationPayload {
-        requirement: from_confirmation_requirement(confirmation.requirement),
+        requirement: confirmation.requirement.into(),
         typed_phrase: confirmation.typed_phrase.clone(),
         typed_prompt: confirmation.typed_prompt.clone(),
     }
@@ -469,8 +358,8 @@ fn from_location_plan(
 ) -> LocationOperationPreviewPayload {
     LocationOperationPreviewPayload {
         plan_fingerprint: plan.fingerprint.0.clone(),
-        operation_type: from_location_operation_type(plan.header.operation_type),
-        mode: from_location_execution_mode(plan.header.mode),
+        operation_type: plan.header.operation_type.into(),
+        mode: plan.header.mode.into(),
         source_library_id: plan.header.source_library_id.clone().map(ID::from),
         destination_library_id: plan.header.destination_library_id.clone().map(ID::from),
         source_root_id: plan.header.source_root_id.clone().map(ID::from),
@@ -511,166 +400,30 @@ fn from_merge_summary(summary: &MergePreviewSummary) -> LocationMergePreviewPayl
             .iter()
             .map(|record| LocationMergeBlockedRecordPayload {
                 table: record.table.clone(),
-                reason: from_merge_block_reason(record.reason),
+                reason: record.reason.into(),
                 source_id: ID::from(record.source_id.clone()),
                 detail: record.detail.clone(),
             })
             .collect(),
-        destination_wins: summary
-            .destination_wins
-            .iter()
-            .map(|entry| LocationMergeDestinationWinsPayload {
-                setting: entry.setting.clone(),
-                destination_value: entry.destination_value.clone(),
-                source_value: entry.source_value.clone(),
-            })
-            .collect(),
-        dispositions: summary
-            .dispositions
-            .iter()
-            .map(|entry| LocationMergeTableDispositionPayload {
-                table: entry.table.clone(),
-                disposition: from_merge_disposition(entry.disposition),
-                source_row_count: Long(entry.source_row_count),
-                note: entry.note.clone(),
-            })
-            .collect(),
+        media_files_repointed: Long(summary.media_files_repointed),
         role_changes: summary
             .role_changes
             .iter()
             .map(|change| LocationMergeRoleChangePayload {
                 file_id: ID::from(change.file_id.clone()),
-                source_episode_id: ID::from(change.source_episode_id.clone()),
-                destination_episode_id: ID::from(change.destination_episode_id.clone()),
-                previous_role: from_merged_media_role(change.previous_role),
-                new_role: from_merged_media_role(change.new_role),
-                reason: from_role_change_reason(change.reason),
+                source_episode_id: change.source_episode_id.clone().map(ID::from),
+                destination_episode_id: change.destination_episode_id.clone().map(ID::from),
+                previous_role: change.previous_role.into(),
+                new_role: change.new_role.into(),
+                reason: change.reason.into(),
                 // Phrased by the application, not here: the plan item and this
                 // payload have to say the same thing about the same demotion.
                 detail: change.describe(),
             })
             .collect(),
-        reserved_tag_conflicts: summary
-            .reserved_tag_conflicts
-            .iter()
-            .map(|conflict| LocationMergeReservedTagConflictPayload {
-                prefix: conflict.prefix.clone(),
-                setting: conflict.setting.clone(),
-                destination_value: conflict.destination_value.clone(),
-                source_value: conflict.source_value.clone(),
-            })
-            .collect(),
-        free_form_tags_added: summary.free_form_tags_added.clone(),
-        media_request_repoints: summary
-            .media_request_repoints
-            .iter()
-            .map(|repoint| LocationMergeMediaRequestRepointPayload {
-                request_id: ID::from(repoint.request_id.clone()),
-                previous_library_id: ID::from(repoint.previous_library_id.clone()),
-                destination_library_id: ID::from(repoint.destination_library_id.clone()),
-            })
-            .collect(),
-        dropped: summary
-            .dropped
-            .iter()
-            .map(|dropped| LocationMergeDroppedCategoryPayload {
-                table: dropped.table.clone(),
-                source_row_count: Long(dropped.source_row_count),
-                decision: dropped.decision.clone(),
-                reason: dropped.reason.clone(),
-            })
-            .collect(),
-        post_merge_work: summary
-            .post_merge_work
-            .iter()
-            .map(|work| from_post_merge_work(*work))
-            .collect(),
-        notes: summary.notes.clone(),
-    }
-}
-
-fn from_merge_disposition(value: MergeDisposition) -> LocationMergeDispositionValue {
-    match value {
-        MergeDisposition::Union => LocationMergeDispositionValue::Union,
-        MergeDisposition::Map => LocationMergeDispositionValue::Map,
-        MergeDisposition::DestinationWins => LocationMergeDispositionValue::DestinationWins,
-        MergeDisposition::Drop => LocationMergeDispositionValue::Drop,
-    }
-}
-
-fn from_merged_media_role(value: MergedMediaRole) -> LocationMergeMediaRoleValue {
-    match value {
-        MergedMediaRole::Primary => LocationMergeMediaRoleValue::Primary,
-        MergedMediaRole::Additional => LocationMergeMediaRoleValue::Additional,
-    }
-}
-
-fn from_role_change_reason(value: RoleChangeReason) -> LocationMergeRoleChangeReasonValue {
-    match value {
-        RoleChangeReason::DestinationPrimaryRetained => {
-            LocationMergeRoleChangeReasonValue::DestinationPrimaryRetained
-        }
-        RoleChangeReason::SourcePrimaryAlreadyClaimed => {
-            LocationMergeRoleChangeReasonValue::SourcePrimaryAlreadyClaimed
-        }
-        RoleChangeReason::CollapsedSourceEpisodes => {
-            LocationMergeRoleChangeReasonValue::CollapsedSourceEpisodes
-        }
-    }
-}
-
-fn from_post_merge_work(value: PostMergeWork) -> LocationMergePostMergeWorkValue {
-    match value {
-        PostMergeWork::ReindexTitleSearchTerms => {
-            LocationMergePostMergeWorkValue::ReindexTitleSearchTerms
-        }
-        PostMergeWork::RegenerateRecommendations => {
-            LocationMergePostMergeWorkValue::RegenerateRecommendations
-        }
-        PostMergeWork::RecomputeStatistics => LocationMergePostMergeWorkValue::RecomputeStatistics,
-        PostMergeWork::DropSourceIndexerCoverage => {
-            LocationMergePostMergeWorkValue::DropSourceIndexerCoverage
-        }
-    }
-}
-
-fn from_merge_block_reason(value: MergeBlockReason) -> LocationMergeBlockReasonValue {
-    match value {
-        MergeBlockReason::UnmappedEpisode => LocationMergeBlockReasonValue::UnmappedEpisode,
-        MergeBlockReason::AmbiguousDestinationEpisode => {
-            LocationMergeBlockReasonValue::AmbiguousDestinationEpisode
-        }
-        MergeBlockReason::AmbiguousSourceEpisode => {
-            LocationMergeBlockReasonValue::AmbiguousSourceEpisode
-        }
-        MergeBlockReason::UnidentifiableEpisode => {
-            LocationMergeBlockReasonValue::UnidentifiableEpisode
-        }
-        MergeBlockReason::UnknownEpisodeReference => {
-            LocationMergeBlockReasonValue::UnknownEpisodeReference
-        }
-        MergeBlockReason::UnmappedCollection => LocationMergeBlockReasonValue::UnmappedCollection,
-        MergeBlockReason::AmbiguousDestinationCollection => {
-            LocationMergeBlockReasonValue::AmbiguousDestinationCollection
-        }
-        MergeBlockReason::AmbiguousSourceCollection => {
-            LocationMergeBlockReasonValue::AmbiguousSourceCollection
-        }
-        MergeBlockReason::UnmappedSeriesMovieLink => {
-            LocationMergeBlockReasonValue::UnmappedSeriesMovieLink
-        }
-        MergeBlockReason::AmbiguousDestinationSeriesMovieLink => {
-            LocationMergeBlockReasonValue::AmbiguousDestinationSeriesMovieLink
-        }
-        MergeBlockReason::AmbiguousSourceSeriesMovieLink => {
-            LocationMergeBlockReasonValue::AmbiguousSourceSeriesMovieLink
-        }
-        MergeBlockReason::ResumableOperationHoldsSource => {
-            LocationMergeBlockReasonValue::ResumableOperationHoldsSource
-        }
-        MergeBlockReason::ActiveManualImportSelection => {
-            LocationMergeBlockReasonValue::ActiveManualImportSelection
-        }
+        role_demotions: Long(summary.role_demotions),
+        history_rows_carried: Long(summary.history_rows_carried),
+        source_records_dropped: Long(summary.source_records_dropped),
     }
 }
 
@@ -709,7 +462,7 @@ fn from_classification_counts(
         groups: TITLE_LOCATION_CLASSES
             .iter()
             .map(|class| LocationClassificationGroupPayload {
-                class: from_title_location_class(*class),
+                class: (*class).into(),
                 count: Long(count_for(*class)),
                 titles: Vec::new(),
             })
@@ -719,19 +472,11 @@ fn from_classification_counts(
     }
 }
 
-fn from_root_content_class(value: RootContentClass) -> LocationRootContentClassValue {
-    match value {
-        RootContentClass::Managed => LocationRootContentClassValue::Managed,
-        RootContentClass::Companion => LocationRootContentClassValue::Companion,
-        RootContentClass::Unknown => LocationRootContentClassValue::Unknown,
-    }
-}
-
 fn from_root_content_entry(entry: &ClassifiedRootEntry) -> LocationRootContentEntryPayload {
     LocationRootContentEntryPayload {
         path: display_path(&entry.path),
         size_bytes: bytes(entry.size_bytes),
-        class: from_root_content_class(entry.class),
+        class: entry.class.into(),
         canonical_sidecar: entry.canonical_sidecar,
     }
 }
@@ -746,7 +491,7 @@ fn from_root_content_bucket(
         .iter()
         .fold(0_u64, |total, entry| total.saturating_add(entry.size_bytes));
     LocationRootContentBucketPayload {
-        class: from_root_content_class(class),
+        class: class.into(),
         total: Long(entries.len() as i64),
         bytes_total: bytes(bytes_total),
         complete: entries.len() <= PLAN_SECTION_SAMPLE_LIMIT,
@@ -851,46 +596,34 @@ fn from_root_retirement_contract(
     }
 }
 
-/// The complete root-change preview (US4): the shared plan payload plus the
-/// four blocks a root-scoped operation adds.
+/// The complete root-scoped preview, for either of FR-020's destinations.
 ///
-/// `RootChangePreview.execution` is deliberately not projected. The start path
+/// One payload, two shapes: a path change fills the retention block and leaves
+/// the fold-only blocks null; a fold fills FR-024's seven groups and FR-022's
+/// default statement instead. The plan header already says which destination
+/// was planned, so the variant is read off the plan rather than passed beside
+/// it.
+///
+/// `PlannedRootScope.execution` is deliberately not projected. The start path
 /// rebuilds the plan from current state rather than trusting a round trip
 /// (FR-081), so handing the client the instruction set would be shipping
 /// something it must never send back.
-pub fn from_root_change_preview(preview: &RootChangePreview) -> LocationRootChangePreviewPayload {
-    LocationRootChangePreviewPayload {
-        plan: from_location_plan(
-            &preview.plan,
-            from_classification_counts(&preview.plan.classification),
-            preview.warnings.clone(),
-        ),
-        accounting: from_title_accounting(&preview.accounting),
-        retention: from_root_identity_retention(&preview.retention),
-        content: from_root_content_inventory(&preview.content),
-        retirement: from_root_retirement_contract(&preview.retirement),
-    }
-}
-
-/// The complete consolidation preview (US5): the shared plan payload, FR-024's
-/// seven groups, FR-022's default statement, and the two blocks it shares with
-/// a root change.
-///
-/// `RootConsolidationPreview.execution` is not projected, for the same reason a
-/// root change's is not.
-pub fn from_root_consolidation_preview(
-    preview: &RootConsolidationPreview,
-) -> LocationRootConsolidationPreviewPayload {
+pub fn from_root_scope_preview(preview: &PlannedRootScope) -> LocationRootScopePreviewPayload {
+    let folds = matches!(
+        preview.plan.header.operation_type,
+        LocationOperationType::RootConsolidation
+    );
     let classification = &preview.classification;
     let transfer = &preview.default_transfer;
-    LocationRootConsolidationPreviewPayload {
+    LocationRootScopePreviewPayload {
         plan: from_location_plan(
             &preview.plan,
             from_classification_counts(&preview.plan.classification),
             preview.warnings.clone(),
         ),
         accounting: from_title_accounting(&preview.accounting),
-        classification: LocationConsolidationClassificationPayload {
+        retention: (!folds).then(|| from_root_identity_retention(&preview.retention)),
+        classification: folds.then(|| LocationConsolidationClassificationPayload {
             moving_into_unused_folders: Long(classification.moving_into_unused_folders),
             merging_with_destination_titles: Long(classification.merging_with_destination_titles),
             folder_name_collisions: Long(classification.folder_name_collisions),
@@ -900,15 +633,15 @@ pub fn from_root_consolidation_preview(
             untracked_source_entries: Long(classification.untracked_source_entries),
             catalog_only: Long(classification.catalog_only),
             blocked: Long(classification.blocked),
-        },
-        default_transfer: LocationDefaultRootTransferPayload {
+        }),
+        default_transfer: folds.then(|| LocationDefaultRootTransferPayload {
             source_was_default: transfer.source_was_default,
             destination_was_default: transfer.destination_was_default,
             // Both are methods on the application type, resolved here so the
             // client reads a fact rather than re-deriving the rule (FR-022).
             destination_becomes_default: transfer.destination_becomes_default(),
             transfers_the_default: transfer.transfers_the_default(),
-        },
+        }),
         content: from_root_content_inventory(&preview.content),
         retirement: from_root_retirement_contract(&preview.retirement),
     }
@@ -938,8 +671,8 @@ fn from_title_checkpoint(checkpoint: &TitleCheckpoint) -> LocationTitleCheckpoin
     LocationTitleCheckpointPayload {
         title_id: ID::from(checkpoint.title_id.clone()),
         sequence: Long(checkpoint.sequence),
-        state: from_title_checkpoint_state(checkpoint.state),
-        classification: checkpoint.classification.map(from_title_location_class),
+        state: checkpoint.state.into(),
+        classification: checkpoint.classification.map(Into::into),
         source_library_id: placement.source_library_id.clone().map(ID::from),
         source_root_id: placement.source_root_id.clone().map(ID::from),
         source_folder_path: placement.source_folder_path.as_deref().map(display_path),
@@ -969,9 +702,9 @@ pub fn from_location_operation(
 ) -> LocationOperationPayload {
     LocationOperationPayload {
         id: ID::from(operation.id.clone()),
-        operation_type: from_location_operation_type(operation.operation_type),
-        mode: from_location_execution_mode(operation.mode),
-        state: from_location_operation_state(operation.state),
+        operation_type: operation.operation_type.into(),
+        mode: operation.mode.into(),
+        state: operation.state.into(),
         initiated_by_user_id: operation.initiated_by_user_id.clone().map(ID::from),
         source_library_id: operation.source_library_id.clone().map(ID::from),
         destination_library_id: operation.destination_library_id.clone().map(ID::from),
@@ -1026,7 +759,7 @@ fn from_title_asset_listing(title: &TitleAssetListing) -> LocationOperationTitle
         title_name: title.title_name.clone(),
         sequence: Long(title.sequence),
         settled: title.settled,
-        checkpoint_state: title.checkpoint_state.map(from_title_checkpoint_state),
+        checkpoint_state: title.checkpoint_state.map(Into::into),
         renames: title.renames.iter().map(from_renamed_asset).collect(),
         dedups: title.dedups.iter().map(from_deduplicated_asset).collect(),
     }

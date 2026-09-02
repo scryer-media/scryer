@@ -268,19 +268,20 @@ via the preview and the post-merge catalog.
    the job starts.
 2. **Given** a merge, **Then** the destination title id, metadata identity,
    monitoring, explicit settings, quality configuration, naming behavior, and
-   library inheritance win; additive data (tags, history, requests, import records,
-   acquisition history, compatible title-linked records) is unioned; the preview
-   summarizes which settings win, what carries forward, what is unioned, and what is
-   dropped or converted.
+   library inheritance win; the merging title's media file records and its history
+   carry across; everything else recorded against it retires with it; the preview
+   states what carries across, which roles change, and how much retires.
 3. **Given** both titles have a primary file for the same logical slot, **Then** the
    destination primary remains primary and the incoming primary becomes additional;
    an incoming primary fills a slot with no destination primary; the preview shows
    every role change.
-4. **Given** episode or special identities that cannot be mapped unambiguously,
-   **Then** the operation blocks rather than attaching files or episode-scoped
-   records to guessed identities (FR-066).
-5. **Given** the merge completes, **Then** the source title is removed only when
-   every required relationship has been transferred or intentionally resolved.
+4. **Given** an episode, collection, or series-movie slot that carries a source
+   media file or a history row and cannot be mapped unambiguously, **Then** the
+   operation blocks rather than attaching a record to a guessed identity (FR-066);
+   a source slot carrying nothing the merge moves does not block.
+5. **Given** the merge completes, **Then** the merging title's catalog row is gone,
+   removed in the same transaction that repointed its files and its history, and
+   its remaining rows retired through the ordinary title-delete path.
 
 ### User Story 8 — Monitor, cancel, and resume operations (Priority: P3)
 
@@ -542,19 +543,30 @@ convergence, throttling, and skip rules.
 - **FR-063**: On merge, the destination wins: title id, metadata identity,
   monitoring, explicit settings, quality configuration, naming behavior, and
   destination-library inheritance are kept.
-- **FR-064**: Additive data is unioned: tags, history, requests, import records,
-  acquisition history, and other compatible title-linked records. Source-only
-  compatible records are retained when they can be mapped safely.
+- **FR-064**: Exactly two things carry across: the merging title's **media file
+  records** and its **history**. Media files are repointed onto the destination
+  title, episode, or series-movie slot, and the rows that belong to a file travel
+  with it. History means `history_events` and `domain_events`, unioned onto the
+  destination with episode ids remapped. Every other row recorded against the
+  merging title (tags, requests, acquisition state, blocklist entries, discovery
+  provenance, external ids, images, credits) retires with it and is not carried.
 - **FR-065**: Source media MUST be mapped onto destination movie, episode, or
   series-movie identities. Destination episode and collection metadata wins for
   duplicate records.
-- **FR-066**: Episode-identity mapping applies to **every episode-scoped record
-  being unioned** (media files, history rows, import records, and any other record
-  referencing source episode ids), not only media. Ambiguous episode or special
-  identities block the operation rather than attaching records to guessed
-  identities.
-- **FR-067**: The source title is removed only when every required relationship has
-  been transferred or intentionally resolved.
+- **FR-066**: Episode, collection, and series-movie-link identity mapping applies
+  to the slots the merge is actually carrying something onto: a slot named by a
+  source media file record or by a history row. An unmapped or ambiguous slot of
+  that kind blocks the operation rather than attaching a record to a guessed
+  identity. A source slot carrying nothing the merge moves is simply not mapped;
+  it retires with the title. A merge is also refused while the merging title has
+  active acquisition work (a queued or in-flight download, an unconsumed
+  manual-import selection) or while another resumable location operation holds
+  it.
+- **FR-067**: The merging title's catalog row is removed in the same transaction
+  that repoints its media files and its history, and only after both — so no
+  cascade can take a row the merge has already moved. Its remaining rows are then
+  retired through the ordinary title-delete path; the merge performs no
+  filesystem deletion, because the files were repointed rather than removed.
 - **FR-068**: Media roles resolve per logical slot (movie title / linked series
   movie / mapped episode), not per filename: destination primary stays primary;
   incoming primary becomes additional where a destination primary exists, and stays
@@ -565,9 +577,10 @@ convergence, throttling, and skip rules.
 - **FR-070**: No destination primary is ever silently demoted by a library move;
   role changes appear in the preview; users may re-promote later via existing
   media-file controls.
-- **FR-071**: The merge preview summarizes which destination settings win, which
-  source values carry forward, which data is unioned, and which values are dropped
-  or converted.
+- **FR-071**: The merge preview states the surviving title, how many media file
+  records and history rows carry across, every media-file role change (with the
+  demotion count), how many records retire with the merging title as one figure,
+  and any record that blocks the merge with its reason.
 
 ### Filesystem collision and deduplication rules
 

@@ -1,7 +1,7 @@
 //! Store-level tests for the US7 merge engine, against a real sqlite database
-//! with the full migration set replayed — so the cascades, the partial unique
-//! indexes, and the FR-067 gate are exercised as they will behave in
-//! production, not against a mock.
+//! with the full migration set replayed — so the cascades and the partial
+//! unique indexes are exercised as they will behave in production, not against
+//! a mock.
 
 use super::*;
 
@@ -56,6 +56,16 @@ async fn text(datastore: &StoreDatastore, sql: &str, args: Vec<SqlArg>) -> Optio
 }
 
 async fn insert_title(datastore: &StoreDatastore, id: &str, library_id: &str, tags: &[&str]) {
+    insert_title_with_facet(datastore, id, library_id, tags, "series").await;
+}
+
+async fn insert_title_with_facet(
+    datastore: &StoreDatastore,
+    id: &str,
+    library_id: &str,
+    tags: &[&str],
+    facet: &str,
+) {
     let tags = serde_json::to_string(&tags.iter().map(|t| t.to_string()).collect::<Vec<_>>())
         .expect("tags encode");
     run(
@@ -63,11 +73,12 @@ async fn insert_title(datastore: &StoreDatastore, id: &str, library_id: &str, ta
         // `root_folder_id` is non-null by trigger since migration 0136.
         "INSERT INTO titles (id, name, name_normalized, facet, monitored, status, tags,
                              external_ids, created_at, library_id, root_folder_id)
-         VALUES ({}, {}, {}, 'series', 1, 'active', {}, '[]', '2026-01-01T00:00:00Z', {}, {})",
+         VALUES ({}, {}, {}, {}, 1, 'active', {}, '[]', '2026-01-01T00:00:00Z', {}, {})",
         vec![
             SqlArg::Text(id.to_string()),
             SqlArg::Text(format!("Title {id}")),
             SqlArg::Text(id.to_string()),
+            SqlArg::Text(facet.to_string()),
             SqlArg::Text(tags),
             SqlArg::Text(library_id.to_string()),
             SqlArg::Text(format!("root-{library_id}")),
@@ -117,8 +128,9 @@ async fn insert_episode(
 async fn insert_media_file(datastore: &StoreDatastore, id: &str, title_id: &str, path: &str) {
     run(
         datastore,
-        "INSERT INTO media_files (id, title_id, file_path, size_bytes, scan_status, created_at)
-         VALUES ({}, {}, {}, 100, 'complete', '2026-01-01T00:00:00Z')",
+        "INSERT INTO media_files (id, title_id, file_path, size_bytes, scan_status, role,
+                                  created_at)
+         VALUES ({}, {}, {}, 100, 'complete', 'primary', '2026-01-01T00:00:00Z')",
         vec![
             SqlArg::Text(id.to_string()),
             SqlArg::Text(title_id.to_string()),
@@ -184,6 +196,20 @@ async fn insert_external_id(datastore: &StoreDatastore, id: &str, title_id: &str
     .await;
 }
 
+async fn insert_history_event(datastore: &StoreDatastore, id: &str, title_id: &str) {
+    run(
+        datastore,
+        "INSERT INTO history_events (id, event_type, title_id, message, occurred_at, created_at)
+         VALUES ({}, 'grabbed', {}, 'grabbed a release', '2026-01-01T00:00:00Z',
+                 '2026-01-01T00:00:00Z')",
+        vec![
+            SqlArg::Text(id.to_string()),
+            SqlArg::Text(title_id.to_string()),
+        ],
+    )
+    .await;
+}
+
 async fn insert_release_grabbed_event(
     datastore: &StoreDatastore,
     event_id: &str,
@@ -225,6 +251,23 @@ async fn insert_release_grabbed_event(
     .await;
 }
 
+/// The episode ids inside a decoded payload, for the tests that assert on the
+/// remap.
+fn payload_episode_ids(payload: &Value) -> Vec<String> {
+    payload
+        .get("data")
+        .and_then(|data| data.get("episode_ids"))
+        .and_then(Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// A two-season series on both sides: seasons 1–2, one episode each, one file
 /// per episode on each side.
 async fn seed_two_season_series(datastore: &StoreDatastore) {
@@ -233,13 +276,7 @@ async fn seed_two_season_series(datastore: &StoreDatastore) {
 
     for (title, prefix) in [(SOURCE, "s"), (DESTINATION, "d")] {
         for season in ["1", "2"] {
-            insert_collection(
-                datastore,
-                &format!("{prefix}-c{season}"),
-                title,
-                season,
-            )
-            .await;
+            insert_collection(datastore, &format!("{prefix}-c{season}"), title, season).await;
             insert_episode(
                 datastore,
                 &format!("{prefix}-e{season}"),
@@ -273,26 +310,44 @@ async fn plan_for(
     let snapshot = store
         .load_merge_snapshot(SOURCE, DESTINATION, None)
         .await
-        .expect("the Group 0 read should succeed");
+        .expect("the read phase should succeed");
     plan_merge(&snapshot)
 }
 
+async fn rows_referencing_source(datastore: &StoreDatastore, table: &str, column: &str) -> i64 {
+    scalar(
+        datastore,
+        &format!("SELECT COUNT(*) AS row_count FROM {table} WHERE {column} = {{}}"),
+        vec![SqlArg::Text(SOURCE.to_string())],
+    )
+    .await
+}
+
 #[tokio::test]
-async fn a_two_season_series_merges_files_history_and_tags_into_the_destination() {
+async fn a_two_season_series_carries_its_files_and_history_and_nothing_else() {
     let (store, datastore) = test_store().await;
     seed_two_season_series(&datastore).await;
     insert_external_id(&datastore, "xid-source", SOURCE, "library-a").await;
     insert_external_id(&datastore, "xid-destination", DESTINATION, "library-b").await;
     insert_release_grabbed_event(&datastore, "event-1", SOURCE, &["s-e1", "s-e2"]).await;
+    insert_history_event(&datastore, "history-1", SOURCE).await;
+    // A row the old per-table disposition list unioned. It retires with the
+    // title now.
+    insert_wanted_item(&datastore, "wanted-1", SOURCE, "s-e1", "wanted").await;
 
     let plan = plan_for(&store).await;
     assert!(!plan.is_blocked(), "blocked: {:?}", plan.blocked());
-    // FR-071: Group 0 reads the surviving title's name along with the rest of
-    // its row, so the preview can name it instead of quoting its id.
+    // FR-071: the read phase reads the surviving title's name along with the
+    // rest of its row, so the preview can name it instead of quoting its id.
     assert_eq!(
         plan.summary.destination_title_name.as_deref(),
         Some("Title title-destination")
     );
+    assert_eq!(plan.summary.media_files_repointed, 2);
+    // One `history_events` row plus one `domain_events` row.
+    assert_eq!(plan.summary.history_rows_carried, 2);
+    // The wanted item and the source external id.
+    assert_eq!(plan.summary.source_records_dropped, 2);
     let map = plan.require_identity_map().expect("a complete map");
     assert_eq!(map.episode("s-e1"), Some("d-e1"));
     assert_eq!(map.episode("s-e2"), Some("d-e2"));
@@ -302,19 +357,12 @@ async fn a_two_season_series_merges_files_history_and_tags_into_the_destination(
         .execute_title_merge(&plan)
         .await
         .expect("the merge transaction should commit");
-    assert_eq!(outcome.rows_affected.get("1:media_files"), Some(&2));
-    assert_eq!(outcome.rows_affected.get("5:titles"), Some(&1));
+    assert_eq!(outcome.rows_affected.get("files:media_files"), Some(&2));
+    assert_eq!(outcome.rows_affected.get("history:history_events"), Some(&1));
+    assert_eq!(outcome.rows_affected.get("retire:titles"), Some(&1));
 
-    // FR-067: the source title is gone, and its files came with it.
-    assert_eq!(
-        scalar(
-            &datastore,
-            "SELECT COUNT(*) AS row_count FROM titles WHERE id = {}",
-            vec![SqlArg::Text(SOURCE.to_string())],
-        )
-        .await,
-        0
-    );
+    // The source title is gone, and its files came with it.
+    assert_eq!(rows_referencing_source(&datastore, "titles", "id").await, 0);
     assert_eq!(
         scalar(
             &datastore,
@@ -335,7 +383,32 @@ async fn a_two_season_series_merges_files_history_and_tags_into_the_destination(
         .await,
         2
     );
-    // OQ9: the free-form tag unions onto the destination's array.
+    // Nothing points at the retired title in any of the tables the merge is
+    // responsible for.
+    for (table, column) in [
+        ("history_events", "title_id"),
+        ("domain_events", "title_id"),
+        ("media_files", "title_id"),
+        ("wanted_items", "title_id"),
+    ] {
+        assert_eq!(
+            rows_referencing_source(&datastore, table, column).await,
+            0,
+            "{table}.{column} still references the retired title"
+        );
+    }
+    assert_eq!(
+        scalar(
+            &datastore,
+            "SELECT COUNT(*) AS row_count FROM file_episode_map
+              WHERE episode_id IN ('s-e1', 's-e2')",
+            vec![],
+        )
+        .await,
+        0
+    );
+
+    // FR-063: the destination keeps its own tags. Nothing unions.
     let tags = text(
         &datastore,
         "SELECT tags AS value FROM titles WHERE id = {}",
@@ -343,28 +416,118 @@ async fn a_two_season_series_merges_files_history_and_tags_into_the_destination(
     )
     .await
     .expect("the destination title survives");
-    assert_eq!(tags, r#"["4k","rewatch"]"#);
+    assert_eq!(tags, r#"["4k"]"#);
 }
 
 #[tokio::test]
-async fn an_unmappable_episode_blocks_the_plan_and_names_the_referencing_table() {
+async fn a_movie_file_lands_as_additional_beside_a_destination_primary() {
+    let (store, datastore) = test_store().await;
+    insert_title_with_facet(&datastore, SOURCE, "library-a", &[], "movie").await;
+    insert_title_with_facet(&datastore, DESTINATION, "library-b", &[], "movie").await;
+    insert_media_file(&datastore, "s-movie", SOURCE, "/s/Film.mkv").await;
+    insert_media_file(&datastore, "d-movie", DESTINATION, "/d/Film.mkv").await;
+
+    let plan = plan_for(&store).await;
+    assert!(!plan.is_blocked(), "blocked: {:?}", plan.blocked());
+    assert_eq!(plan.summary.role_demotions, 1);
+    assert_eq!(plan.summary.role_changes.len(), 1);
+    assert_eq!(plan.summary.role_changes[0].file_id, "s-movie");
+    assert_eq!(
+        plan.summary.role_changes[0].reason,
+        RoleChangeReason::DestinationPrimaryRetained
+    );
+
+    store
+        .execute_title_merge(&plan)
+        .await
+        .expect("the merge should commit");
+
+    assert_eq!(
+        text(
+            &datastore,
+            "SELECT role AS value FROM media_files WHERE id = 's-movie'",
+            vec![],
+        )
+        .await
+        .as_deref(),
+        Some("additional")
+    );
+    assert_eq!(
+        text(
+            &datastore,
+            "SELECT role AS value FROM media_files WHERE id = 'd-movie'",
+            vec![],
+        )
+        .await
+        .as_deref(),
+        Some("primary")
+    );
+}
+
+#[tokio::test]
+async fn a_movie_file_stays_primary_when_the_destination_has_no_file() {
+    let (store, datastore) = test_store().await;
+    insert_title_with_facet(&datastore, SOURCE, "library-a", &[], "movie").await;
+    insert_title_with_facet(&datastore, DESTINATION, "library-b", &[], "movie").await;
+    insert_media_file(&datastore, "s-movie", SOURCE, "/s/Film.mkv").await;
+
+    let plan = plan_for(&store).await;
+    assert!(plan.summary.role_changes.is_empty());
+    store
+        .execute_title_merge(&plan)
+        .await
+        .expect("the merge should commit");
+
+    assert_eq!(
+        text(
+            &datastore,
+            "SELECT role AS value FROM media_files WHERE id = 's-movie'",
+            vec![],
+        )
+        .await
+        .as_deref(),
+        Some("primary")
+    );
+    assert_eq!(
+        text(
+            &datastore,
+            "SELECT title_id AS value FROM media_files WHERE id = 's-movie'",
+            vec![],
+        )
+        .await
+        .as_deref(),
+        Some(DESTINATION)
+    );
+}
+
+/// FR-066: a slot the merge is carrying something onto has to map. A slot it is
+/// carrying nothing onto retires with the title, so it never blocks.
+#[tokio::test]
+async fn an_unmapped_episode_blocks_only_when_it_carries_a_file() {
     let (store, datastore) = test_store().await;
     seed_two_season_series(&datastore).await;
     // A third source season the destination does not have, wanted by the
-    // acquisition loop.
+    // acquisition loop but carrying nothing the merge moves.
     insert_episode(&datastore, "s-e3", SOURCE, None, "3", "1").await;
     insert_wanted_item(&datastore, "wanted-orphan", SOURCE, "s-e3", "wanted").await;
 
     let plan = plan_for(&store).await;
+    assert!(!plan.is_blocked(), "blocked: {:?}", plan.blocked());
+    assert!(
+        plan.require_identity_map()
+            .expect("a map")
+            .episode("s-e3")
+            .is_none()
+    );
+
+    // Now put a file on it: the merge is carrying something onto a slot it
+    // cannot place, so it refuses.
+    insert_media_file(&datastore, "s-f3", SOURCE, "/s/S3E01.mkv").await;
+    insert_file_episode(&datastore, "s-f3", "s-e3", MergedMediaRole::Primary).await;
+
+    let plan = plan_for(&store).await;
     assert!(plan.is_blocked());
     assert!(plan.identity_map.is_none());
-    let tables: Vec<&str> = plan
-        .blocked()
-        .iter()
-        .map(|record| record.table.as_str())
-        .collect();
-    assert!(tables.contains(&"episodes"));
-    assert!(tables.contains(&"wanted_items"));
     assert!(
         plan.blocked()
             .iter()
@@ -372,21 +535,13 @@ async fn an_unmappable_episode_blocks_the_plan_and_names_the_referencing_table()
                 && record.reason == MergeBlockReason::UnmappedEpisode)
     );
 
-    // FR-066's block costs no rollback: the execution refuses before it writes.
+    // The block costs no rollback: the execution refuses before it writes.
     let error = store
         .execute_title_merge(&plan)
         .await
         .expect_err("a blocked plan must not execute");
     assert!(error.to_string().contains("s-e3"), "{error}");
-    assert_eq!(
-        scalar(
-            &datastore,
-            "SELECT COUNT(*) AS row_count FROM titles WHERE id = {}",
-            vec![SqlArg::Text(SOURCE.to_string())],
-        )
-        .await,
-        1
-    );
+    assert_eq!(rows_referencing_source(&datastore, "titles", "id").await, 1);
 }
 
 #[tokio::test]
@@ -401,13 +556,13 @@ async fn an_incoming_primary_is_demoted_and_the_demotion_reaches_the_preview() {
     insert_file_episode(&datastore, "s-f1b", "s-e1", MergedMediaRole::Additional).await;
 
     let plan = plan_for(&store).await;
-    // Exactly one demotion: the incoming primary. The additional is not a
-    // change, so it is not a preview line item.
+    // Exactly one demotion for the contested slot: the incoming primary. The
+    // additional is not a change, so it is not a preview line item.
     let season_one_changes: Vec<&_> = plan
         .summary
         .role_changes
         .iter()
-        .filter(|change| change.destination_episode_id == "d-e1")
+        .filter(|change| change.destination_episode_id.as_deref() == Some("d-e1"))
         .collect();
     assert_eq!(season_one_changes.len(), 1);
     assert_eq!(season_one_changes[0].file_id, "s-f1");
@@ -460,7 +615,7 @@ async fn an_incoming_primary_is_demoted_and_the_demotion_reaches_the_preview() {
 }
 
 #[tokio::test]
-async fn title_external_ids_cascade_rather_than_repoint_and_the_unique_index_survives() {
+async fn title_external_ids_are_deleted_rather_than_repointed() {
     let (store, datastore) = test_store().await;
     seed_two_season_series(&datastore).await;
     insert_external_id(&datastore, "xid-source", SOURCE, "library-a").await;
@@ -492,9 +647,8 @@ async fn title_external_ids_cascade_rather_than_repoint_and_the_unique_index_sur
         0
     );
 
-    // `idx_title_external_ids_library_lookup` is the one unique index that
-    // survived migrations 0079/0104/0105, and it is why the repoint is
-    // impossible: a second (library_id, source, external_id) is rejected.
+    // `idx_title_external_ids_library_lookup` is why the repoint is impossible:
+    // a second (library_id, source, external_id) is rejected.
     let duplicate = SqlRuntime::execute_write(
         &datastore,
         "merge_test_duplicate_external_id",
@@ -512,121 +666,12 @@ async fn title_external_ids_cascade_rather_than_repoint_and_the_unique_index_sur
 }
 
 #[tokio::test]
-async fn reserved_tags_are_destination_wins_and_the_conflict_is_previewed() {
-    let (store, datastore) = test_store().await;
-    insert_title(
-        &datastore,
-        SOURCE,
-        "library-a",
-        &["scryer:quality-profile:profile-source", "anime"],
-    )
-    .await;
-    insert_title(
-        &datastore,
-        DESTINATION,
-        "library-b",
-        &["scryer:quality-profile:profile-destination", "Anime", "4k"],
-    )
-    .await;
-
-    let plan = plan_for(&store).await;
-    assert_eq!(plan.summary.reserved_tag_conflicts.len(), 1);
-    assert_eq!(
-        plan.summary.reserved_tag_conflicts[0].prefix,
-        "scryer:quality-profile:"
-    );
-    // "anime" already exists on the destination in a different case, so nothing
-    // is added.
-    assert!(plan.summary.free_form_tags_added.is_empty());
-
-    store
-        .execute_title_merge(&plan)
-        .await
-        .expect("the merge should commit");
-
-    let tags = text(
-        &datastore,
-        "SELECT tags AS value FROM titles WHERE id = {}",
-        vec![SqlArg::Text(DESTINATION.to_string())],
-    )
-    .await
-    .expect("the destination title survives");
-    assert_eq!(
-        tags,
-        r#"["scryer:quality-profile:profile-destination","Anime","4k"]"#
-    );
-    // Exactly one quality-profile tag, so `find_map(strip_prefix(..))` cannot
-    // resolve FR-063's setting by array order.
-    assert_eq!(tags.matches("scryer:quality-profile:").count(), 1);
-}
-
-#[tokio::test]
-async fn wanted_items_keep_the_destination_row_and_carry_the_source_only_one() {
-    let (store, datastore) = test_store().await;
-    seed_two_season_series(&datastore).await;
-    // Both sides want season 1; only the source wants season 2.
-    insert_wanted_item(&datastore, "wanted-source-1", SOURCE, "s-e1", "grabbed").await;
-    insert_wanted_item(&datastore, "wanted-destination-1", DESTINATION, "d-e1", "wanted").await;
-    insert_wanted_item(&datastore, "wanted-source-2", SOURCE, "s-e2", "wanted").await;
-
-    let plan = plan_for(&store).await;
-    store
-        .execute_title_merge(&plan)
-        .await
-        .expect("the merge should commit");
-
-    // Destination-wins on UNIQUE(title_id, episode_id): the source's colliding
-    // row is dropped, not adopted.
-    assert_eq!(
-        scalar(
-            &datastore,
-            "SELECT COUNT(*) AS row_count FROM wanted_items WHERE id = 'wanted-source-1'",
-            vec![],
-        )
-        .await,
-        0
-    );
-    assert_eq!(
-        text(
-            &datastore,
-            "SELECT status AS value FROM wanted_items WHERE episode_id = 'd-e1'",
-            vec![],
-        )
-        .await
-        .as_deref(),
-        Some("wanted")
-    );
-    // The source-only row carries, remapped onto the destination episode.
-    assert_eq!(
-        text(
-            &datastore,
-            "SELECT episode_id AS value FROM wanted_items WHERE id = 'wanted-source-2'",
-            vec![],
-        )
-        .await
-        .as_deref(),
-        Some("d-e2")
-    );
-    assert_eq!(
-        text(
-            &datastore,
-            "SELECT title_id AS value FROM wanted_items WHERE id = 'wanted-source-2'",
-            vec![],
-        )
-        .await
-        .as_deref(),
-        Some(DESTINATION)
-    );
-}
-
-#[tokio::test]
-async fn domain_events_keep_their_title_and_their_episode_ids_are_remapped() {
+async fn history_keeps_its_title_and_its_episode_ids_are_remapped() {
     let (store, datastore) = test_store().await;
     seed_two_season_series(&datastore).await;
     insert_release_grabbed_event(&datastore, "event-1", SOURCE, &["s-e1", "s-e2"]).await;
-    // An event type outside the OQ8 list: its columns are rewritten, its
-    // payload is not decompressed at all.
     insert_release_grabbed_event(&datastore, "event-2", DESTINATION, &["d-e1"]).await;
+    insert_history_event(&datastore, "history-1", SOURCE).await;
 
     let plan = plan_for(&store).await;
     let outcome = store
@@ -635,7 +680,8 @@ async fn domain_events_keep_their_title_and_their_episode_ids_are_remapped() {
         .expect("the merge should commit");
     assert_eq!(outcome.domain_event_payloads_rewritten, 1);
 
-    // The column rewrite: both `title_id` and the title `stream_id`.
+    // The column rewrite: `history_events.title_id`, and `domain_events`'
+    // `title_id` and title `stream_id`.
     assert_eq!(
         scalar(
             &datastore,
@@ -662,6 +708,18 @@ async fn domain_events_keep_their_title_and_their_episode_ids_are_remapped() {
         .await,
         2
     );
+    // `history_events.title_id` is ON DELETE SET NULL, so a missed repoint would
+    // read as an orphan rather than dangle.
+    assert_eq!(
+        text(
+            &datastore,
+            "SELECT title_id AS value FROM history_events WHERE id = 'history-1'",
+            vec![],
+        )
+        .await
+        .as_deref(),
+        Some(DESTINATION)
+    );
 
     // The payload rewrite: `$.data.episode_ids[]` now names destination
     // episodes, and the row still round-trips through the zstd codec.
@@ -687,125 +745,82 @@ async fn domain_events_keep_their_title_and_their_episode_ids_are_remapped() {
     );
 }
 
+/// FR-086 for the merge: a plain move leaves the source title's acquisition rows
+/// alone, but a merge retires the source through the delete path, which drops
+/// them. So a live download refuses the merge instead.
 #[tokio::test]
-async fn the_fr067_gate_aborts_the_transaction_when_a_no_fk_row_is_left_behind() {
+async fn a_queued_download_on_the_source_blocks_the_merge() {
     let (store, datastore) = test_store().await;
     seed_two_season_series(&datastore).await;
-    // A third source episode carrying a `subtitle_downloads` row.
-    // `subtitle_downloads.episode_id` has no foreign key, so nothing in the
-    // database would ever complain about it dangling.
-    insert_episode(&datastore, "s-e3", SOURCE, None, "3", "1").await;
     run(
         &datastore,
-        "INSERT INTO subtitle_downloads (id, media_file_id, title_id, episode_id, language,
-                                         provider, file_path, downloaded_at)
-         VALUES ('subtitle-1', 's-f1', {}, 's-e3', 'en', 'opensubtitles', '/s/S3E01.en.srt',
+        "INSERT INTO downloads (id, origin, created_at)
+         VALUES ('submission-1', 'scryer_submission', '2026-01-01T00:00:00Z')",
+        vec![],
+    )
+    .await;
+    run(
+        &datastore,
+        "INSERT INTO download_submissions (id, title_id, facet, download_client_type,
+                                           download_client_item_id, tracked_state, submitted_at)
+         VALUES ('submission-1', {}, 'series', 'sabnzbd', 'item-1', 'downloading',
                  '2026-01-01T00:00:00Z')",
         vec![SqlArg::Text(SOURCE.to_string())],
     )
     .await;
 
-    // Group 0 would block on `s-e3`. This test is about what happens when a
-    // reference sweep misses one, so the plan is built from a snapshot that
-    // does not know the episode exists — exactly the failure the gate is for.
-    let mut snapshot = store
-        .load_merge_snapshot(SOURCE, DESTINATION, None)
-        .await
-        .expect("the Group 0 read should succeed");
-    snapshot
-        .source_episodes
-        .retain(|episode| episode.id != "s-e3");
-    snapshot.episode_references.remove("subtitle_downloads");
-    let plan = plan_merge(&snapshot);
-    assert!(!plan.is_blocked(), "blocked: {:?}", plan.blocked());
-
-    let error = store
-        .execute_title_merge(&plan)
-        .await
-        .expect_err("the FR-067 gate should refuse the delete");
-    let message = error.to_string();
-    assert!(message.contains("FR-067 gate"), "{message}");
-    assert!(message.contains("subtitle_downloads.episode_id"), "{message}");
-
-    // The whole transaction rolled back: the source title, its files, and its
-    // episodes are all still where they were.
+    let plan = plan_for(&store).await;
+    assert!(plan.is_blocked());
     assert_eq!(
-        scalar(
-            &datastore,
-            "SELECT COUNT(*) AS row_count FROM titles WHERE id = {}",
-            vec![SqlArg::Text(SOURCE.to_string())],
-        )
-        .await,
-        1
+        plan.blocked()[0].reason,
+        MergeBlockReason::ActiveAcquisitionWork
     );
-    assert_eq!(
-        scalar(
-            &datastore,
-            "SELECT COUNT(*) AS row_count FROM media_files WHERE title_id = {}",
-            vec![SqlArg::Text(SOURCE.to_string())],
-        )
-        .await,
-        2
-    );
-}
+    assert_eq!(plan.blocked()[0].source_id, "submission-1");
 
-#[tokio::test]
-async fn the_merging_operations_own_claims_collapse_onto_the_surviving_title() {
-    let (store, datastore) = test_store().await;
-    seed_two_season_series(&datastore).await;
+    // A finished download is not a claim.
     run(
         &datastore,
-        "INSERT INTO location_operations (id, operation_type, execution_mode, state,
-                                          plan_fingerprint, verification_depth, created_at,
-                                          updated_at)
-         VALUES ('op-self', 'cross_library_transfer', 'move_with_scryer', 'moving',
-                 'fingerprint', 'quick', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+        "UPDATE download_submissions SET tracked_state = 'imported' WHERE id = 'submission-1'",
         vec![],
     )
     .await;
-    // The operation running the merge holds both titles, which is the common
-    // case: `idx_location_operation_owned_entities_active` is unique on
-    // `(entity_type, entity_id)` across every operation, so the source claim
-    // cannot simply be repointed.
-    for title in [SOURCE, DESTINATION] {
-        run(
-            &datastore,
-            "INSERT INTO location_operation_owned_entities (operation_id, entity_type, entity_id)
-             VALUES ('op-self', 'title', {})",
-            vec![SqlArg::Text(title.to_string())],
-        )
-        .await;
-    }
+    assert!(!plan_for(&store).await.is_blocked());
+}
 
-    let snapshot = store
-        .load_merge_snapshot(SOURCE, DESTINATION, Some("op-self"))
-        .await
-        .expect("the Group 0 read should succeed");
-    let plan = plan_merge(&snapshot);
+/// A failure after the repoint and before the delete leaves the source title
+/// whole: one transaction, all or nothing.
+#[tokio::test]
+async fn a_failure_after_the_repoint_leaves_the_source_intact() {
+    let (store, datastore) = test_store().await;
+    seed_two_season_series(&datastore).await;
+    insert_history_event(&datastore, "history-1", SOURCE).await;
+
+    let mut plan = plan_for(&store).await;
     assert!(!plan.is_blocked(), "blocked: {:?}", plan.blocked());
+    // Force a failure between the repoint and the delete: a role row naming a
+    // file that does not exist fails the `file_episode_map` foreign key after
+    // `media_files` has already moved.
+    plan.role_plan.rows.push(FileEpisodeRoleRow {
+        file_id: "no-such-file".to_string(),
+        episode_id: "d-e1".to_string(),
+        role: MergedMediaRole::Additional,
+        is_filler: false,
+    });
+
     store
         .execute_title_merge(&plan)
         .await
-        .expect("the merge should commit");
+        .expect_err("the transaction should abort");
 
+    // Nothing moved: the source title, its files, and its history are all where
+    // they were.
+    assert_eq!(rows_referencing_source(&datastore, "titles", "id").await, 1);
     assert_eq!(
-        scalar(
-            &datastore,
-            "SELECT COUNT(*) AS row_count FROM location_operation_owned_entities
-              WHERE entity_type = 'title' AND entity_id = {}",
-            vec![SqlArg::Text(SOURCE.to_string())],
-        )
-        .await,
-        0
+        rows_referencing_source(&datastore, "media_files", "title_id").await,
+        2
     );
     assert_eq!(
-        scalar(
-            &datastore,
-            "SELECT COUNT(*) AS row_count FROM location_operation_owned_entities
-              WHERE entity_type = 'title' AND entity_id = {}",
-            vec![SqlArg::Text(DESTINATION.to_string())],
-        )
-        .await,
+        rows_referencing_source(&datastore, "history_events", "title_id").await,
         1
     );
 }
@@ -832,11 +847,10 @@ async fn a_second_operation_still_holding_the_source_title_blocks_the_merge() {
     )
     .await;
 
-    // OQ7(a): the second operation is a hard block.
     let snapshot = store
         .load_merge_snapshot(SOURCE, DESTINATION, None)
         .await
-        .expect("the Group 0 read should succeed");
+        .expect("the read phase should succeed");
     let plan = plan_merge(&snapshot);
     assert!(plan.is_blocked());
     assert_eq!(
@@ -850,380 +864,6 @@ async fn a_second_operation_still_holding_the_source_title_blocks_the_merge() {
     let snapshot = store
         .load_merge_snapshot(SOURCE, DESTINATION, Some("op-other"))
         .await
-        .expect("the Group 0 read should succeed");
+        .expect("the read phase should succeed");
     assert!(!plan_merge(&snapshot).is_blocked());
-}
-
-// ── Tables that landed beside the engine (release-NEXT 0204–0207) ───────────
-
-async fn seed_maintenance_rule(datastore: &StoreDatastore, id: &str) {
-    run(
-        datastore,
-        "INSERT INTO maintenance_rule_sets (id, name) VALUES ({}, 'Retire watched')",
-        vec![SqlArg::Text(id.to_string())],
-    )
-    .await;
-}
-
-async fn insert_candidate(datastore: &StoreDatastore, id: &str, title_id: &str, state: &str) {
-    run(
-        datastore,
-        "INSERT INTO lifecycle_candidates (id, rule_set_id, revision_number, title_id, state)
-         VALUES ({}, 'rule-1', 1, {}, {})",
-        vec![
-            SqlArg::Text(id.to_string()),
-            SqlArg::Text(title_id.to_string()),
-            SqlArg::Text(state.to_string()),
-        ],
-    )
-    .await;
-}
-
-async fn insert_exclusion(
-    datastore: &StoreDatastore,
-    id: &str,
-    rule_set_id: Option<&str>,
-    title_id: &str,
-) {
-    run(
-        datastore,
-        "INSERT INTO maintenance_rule_exclusions (id, rule_set_id, title_id)
-         VALUES ({}, {}, {})",
-        vec![
-            SqlArg::Text(id.to_string()),
-            SqlArg::OptText(rule_set_id.map(str::to_string)),
-            SqlArg::Text(title_id.to_string()),
-        ],
-    )
-    .await;
-}
-
-async fn insert_signal(
-    datastore: &StoreDatastore,
-    id: &str,
-    title_id: &str,
-    episode_id: Option<&str>,
-) {
-    run(
-        datastore,
-        "INSERT INTO media_server_user_media_signals
-             (id, connection_id, provider, external_user_id, provider_item_id, kind,
-              scryer_title_id, scryer_episode_id, played)
-         VALUES ({}, 'conn-1', 'jellyfin', 'user-1', {}, 'episode', {}, {}, 1)",
-        vec![
-            SqlArg::Text(id.to_string()),
-            SqlArg::Text(format!("item-{id}")),
-            SqlArg::Text(title_id.to_string()),
-            SqlArg::OptText(episode_id.map(str::to_string)),
-        ],
-    )
-    .await;
-}
-
-#[tokio::test]
-async fn maintenance_and_watch_signal_rows_follow_the_surviving_title() {
-    let (store, datastore) = test_store().await;
-    seed_two_season_series(&datastore).await;
-    seed_maintenance_rule(&datastore, "rule-1").await;
-
-    // Candidates: the source holds a live one and a finished one for rule-1;
-    // the destination already holds its own live one for the same rule, which
-    // `idx_lifecycle_candidates_active_subject` protects.
-    insert_candidate(&datastore, "cand-source-live", SOURCE, "due").await;
-    insert_candidate(&datastore, "cand-source-done", SOURCE, "succeeded").await;
-    insert_candidate(&datastore, "cand-destination-live", DESTINATION, "observing").await;
-    run(
-        &datastore,
-        "INSERT INTO lifecycle_action_runs
-             (id, candidate_id, rule_set_id, revision_number, title_id, action_kind,
-              match_generation, idempotency_key, attempt, status, started_at)
-         VALUES ('run-1', 'cand-source-done', 'rule-1', 1, {}, 'delete_title_and_files',
-                 1, 'key-1', 1, 'succeeded', '2026-01-01T00:00:00Z')",
-        vec![SqlArg::Text(SOURCE.to_string())],
-    )
-    .await;
-
-    // Exclusions: the source carries a global one and a rule-1 one; the
-    // destination already has its own rule-1 exclusion.
-    insert_exclusion(&datastore, "excl-source-global", None, SOURCE).await;
-    insert_exclusion(&datastore, "excl-source-rule", Some("rule-1"), SOURCE).await;
-    insert_exclusion(&datastore, "excl-destination-rule", Some("rule-1"), DESTINATION).await;
-
-    // Watch signals: one on a mapped source episode, one on an unmapped one.
-    run(
-        &datastore,
-        "INSERT INTO media_server_connections (
-             id, provider, display_name, base_url, enabled, login_enabled,
-             linking_enabled, auto_add_enabled, default_app_permissions, created_at, updated_at
-         ) VALUES ('conn-1', 'jellyfin', 'Living room', 'https://jf.example.test', 1, 0, 0, 0, 0,
-                   '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
-        vec![],
-    )
-    .await;
-    insert_episode(&datastore, "s-e3", SOURCE, None, "3", "1").await;
-    insert_signal(&datastore, "sig-mapped", SOURCE, Some("s-e1")).await;
-    insert_signal(&datastore, "sig-unmapped", SOURCE, Some("s-e3")).await;
-
-    let mut snapshot = store
-        .load_merge_snapshot(SOURCE, DESTINATION, None)
-        .await
-        .expect("the Group 0 read should succeed");
-    // The preview counts every one of the new tables.
-    for table in [
-        "lifecycle_candidates",
-        "lifecycle_action_runs",
-        "maintenance_rule_exclusions",
-        "media_server_user_media_signals",
-    ] {
-        assert!(
-            snapshot.source_row_counts.get(table).copied().unwrap_or(0) > 0,
-            "{table} should be counted for the FR-071 preview: {:?}",
-            snapshot.source_row_counts
-        );
-    }
-    // `s-e3` has no destination twin. Watch signals are not in the FR-066
-    // blocking set, so the merge proceeds and leaves that row's episode
-    // unresolved; drop the episode from the identity inputs the way an
-    // unmappable-but-unreferenced episode is dropped.
-    snapshot
-        .source_episodes
-        .retain(|episode| episode.id != "s-e3");
-    let plan = plan_merge(&snapshot);
-    assert!(!plan.is_blocked(), "blocked: {:?}", plan.blocked());
-    assert!(
-        plan.summary
-            .dispositions
-            .iter()
-            .any(|entry| entry.table == "maintenance_rule_exclusions"),
-        "the preview names the new tables: {:?}",
-        plan.summary.dispositions
-    );
-
-    let outcome = store
-        .execute_title_merge(&plan)
-        .await
-        .expect("the merge should pass the FR-067 gate");
-    assert_eq!(outcome.rows_affected.get("3:lifecycle_candidates_canceled"), Some(&1));
-    assert_eq!(
-        outcome
-            .rows_affected
-            .get("3:maintenance_rule_exclusions_carried"),
-        Some(&1)
-    );
-    assert_eq!(
-        outcome
-            .rows_affected
-            .get("3:maintenance_rule_exclusions_deduped"),
-        Some(&1)
-    );
-
-    // Candidates: three rows now name the destination; the source's live one
-    // closed as canceled with the merge as its reason, the finished one kept
-    // its state, and the destination's own live one is untouched.
-    assert_eq!(
-        scalar(
-            &datastore,
-            "SELECT COUNT(*) AS row_count FROM lifecycle_candidates WHERE title_id = {}",
-            vec![SqlArg::Text(DESTINATION.to_string())],
-        )
-        .await,
-        3
-    );
-    assert_eq!(
-        text(
-            &datastore,
-            "SELECT state || ':' || state_reason AS value FROM lifecycle_candidates
-              WHERE id = 'cand-source-live'",
-            vec![],
-        )
-        .await
-        .as_deref(),
-        Some("canceled:merged_into_destination")
-    );
-    assert_eq!(
-        text(
-            &datastore,
-            "SELECT state AS value FROM lifecycle_candidates WHERE id = 'cand-source-done'",
-            vec![],
-        )
-        .await
-        .as_deref(),
-        Some("succeeded")
-    );
-    assert_eq!(
-        text(
-            &datastore,
-            "SELECT state AS value FROM lifecycle_candidates
-              WHERE id = 'cand-destination-live'",
-            vec![],
-        )
-        .await
-        .as_deref(),
-        Some("observing")
-    );
-    assert_eq!(
-        text(
-            &datastore,
-            "SELECT title_id AS value FROM lifecycle_action_runs WHERE id = 'run-1'",
-            vec![],
-        )
-        .await
-        .as_deref(),
-        Some(DESTINATION)
-    );
-
-    // Exclusions: the global ward carried over; the rule-1 one lost to the
-    // destination's own; nothing names the source any more.
-    assert_eq!(
-        text(
-            &datastore,
-            "SELECT title_id AS value FROM maintenance_rule_exclusions
-              WHERE id = 'excl-source-global'",
-            vec![],
-        )
-        .await
-        .as_deref(),
-        Some(DESTINATION)
-    );
-    assert_eq!(
-        scalar(
-            &datastore,
-            "SELECT COUNT(*) AS row_count FROM maintenance_rule_exclusions
-              WHERE title_id = {}",
-            vec![SqlArg::Text(DESTINATION.to_string())],
-        )
-        .await,
-        2
-    );
-    assert_eq!(
-        scalar(
-            &datastore,
-            "SELECT COUNT(*) AS row_count FROM maintenance_rule_exclusions
-              WHERE id = 'excl-source-rule'",
-            vec![],
-        )
-        .await,
-        0
-    );
-
-    // Signals: both observations name the destination; the mapped episode
-    // followed the map and the unmapped one was left for the next sync.
-    assert_eq!(
-        text(
-            &datastore,
-            "SELECT scryer_title_id || ':' || scryer_episode_id AS value
-               FROM media_server_user_media_signals WHERE id = 'sig-mapped'",
-            vec![],
-        )
-        .await
-        .as_deref(),
-        Some("title-destination:d-e1")
-    );
-    assert_eq!(
-        text(
-            &datastore,
-            "SELECT scryer_title_id || ':' || COALESCE(scryer_episode_id, 'none') AS value
-               FROM media_server_user_media_signals WHERE id = 'sig-unmapped'",
-            vec![],
-        )
-        .await
-        .as_deref(),
-        Some("title-destination:none")
-    );
-    assert_eq!(
-        scalar(
-            &datastore,
-            "SELECT COUNT(*) AS row_count FROM titles WHERE id = {}",
-            vec![SqlArg::Text(SOURCE.to_string())],
-        )
-        .await,
-        0
-    );
-}
-
-/// Every column that names a title by convention is classified somewhere: the
-/// cascade class (a foreign key to `titles` with `ON DELETE CASCADE`), the
-/// FR-067 SET NULL list, the FR-067 no-FK list, or the exemption list with a
-/// reason. A table added on another branch — release-NEXT's maintenance
-/// tables were — fails here instead of dangling silently after the first
-/// merge. Polymorphic columns (`entity_id`, `stream_id`, `owner_id`) are not
-/// found by name and stay the inventory's responsibility.
-#[tokio::test]
-async fn every_title_named_column_in_the_live_schema_is_classified() {
-    use scryer_application::location::merge::engine::FR067_TITLE_COLUMN_EXEMPTIONS;
-
-    let (_store, datastore) = test_store().await;
-    let tables = SqlRuntime::fetch_all(
-        datastore.read_exec(),
-        "SELECT name FROM sqlite_master
-          WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
-        &[],
-    )
-    .await
-    .expect("table listing");
-
-    let listed = |list: &[(&str, &str, MergeGateIdKind)], table: &str, column: &str| {
-        list.iter()
-            .any(|(t, c, _)| *t == table && *c == column)
-    };
-    let mut unclassified = Vec::new();
-    for row in tables {
-        let table = row.text("name").expect("table name");
-        let columns = SqlRuntime::fetch_all(
-            datastore.read_exec(),
-            &format!("SELECT name FROM pragma_table_info('{table}')"),
-            &[],
-        )
-        .await
-        .expect("column listing");
-        let foreign_keys = SqlRuntime::fetch_all(
-            datastore.read_exec(),
-            &format!(
-                "SELECT \"table\" AS target, \"from\" AS source_column, on_delete
-                   FROM pragma_foreign_key_list('{table}')"
-            ),
-            &[],
-        )
-        .await
-        .expect("foreign key listing");
-        for column in columns {
-            let column = column.text("name").expect("column name");
-            if column != "title_id" && !column.ends_with("_title_id") {
-                continue;
-            }
-            // `discovery_title_id` names the discovery catalog's own identity
-            // (`discovery_titles.id`), not a Scryer title. The one bridge from
-            // that namespace to ours is `discovery_titles.resolved_title_id`,
-            // which is gated above.
-            if column.ends_with("discovery_title_id") {
-                continue;
-            }
-            let foreign_key = foreign_keys.iter().find(|fk| {
-                fk.text("source_column").ok().as_deref() == Some(column.as_str())
-                    && fk.text("target").ok().as_deref() == Some("titles")
-            });
-            let on_delete = foreign_key.and_then(|fk| fk.text("on_delete").ok());
-            let classified = match on_delete.as_deref() {
-                Some("CASCADE") => true,
-                Some("SET NULL") => listed(FR067_SET_NULL_ASSERTIONS, &table, &column),
-                _ => {
-                    listed(FR067_NO_FK_ASSERTIONS, &table, &column)
-                        || FR067_TITLE_COLUMN_EXEMPTIONS
-                            .iter()
-                            .any(|(t, c, _)| *t == table && *c == column)
-                }
-            };
-            if !classified {
-                unclassified.push(format!(
-                    "{table}.{column} (on delete: {})",
-                    on_delete.as_deref().unwrap_or("no foreign key")
-                ));
-            }
-        }
-    }
-    assert!(
-        unclassified.is_empty(),
-        "title-named columns the merge engine does not classify — add each to the FR-067 gate \
-         lists, or to FR067_TITLE_COLUMN_EXEMPTIONS with a reason:\n{unclassified:#?}"
-    );
 }

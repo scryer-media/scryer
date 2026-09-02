@@ -788,9 +788,9 @@ fn contested_slot_snapshot(
     }
 }
 
-/// The FR-066 refusal, staged as a Group 0 snapshot: the source has an episode
-/// no destination episode can be mapped onto, and a `wanted_items` row refers
-/// to it.
+/// The FR-066 refusal, staged as a read-phase snapshot: the source has an
+/// episode no destination episode can be mapped onto, and a source media file
+/// sits on it.
 fn unmappable_snapshot(source_title_id: &str, destination_title_id: &str) -> MergeCatalogSnapshot {
     let episode = merge_episode;
     MergeCatalogSnapshot {
@@ -798,10 +798,12 @@ fn unmappable_snapshot(source_title_id: &str, destination_title_id: &str) -> Mer
         destination_title_id: destination_title_id.to_string(),
         source_episodes: vec![episode("s-e1", "1", "1"), episode("s-e2", "1", "2")],
         destination_episodes: vec![episode("d-e1", "1", "1")],
-        episode_references: std::collections::BTreeMap::from([(
-            "wanted_items".to_string(),
-            std::collections::BTreeSet::from(["s-e2".to_string()]),
-        )]),
+        source_file_episode_rows: vec![FileEpisodeRoleRow {
+            file_id: "stranded-file".to_string(),
+            episode_id: "s-e2".to_string(),
+            role: MergedMediaRole::Primary,
+            is_filler: false,
+        }],
         ..MergeCatalogSnapshot::default()
     }
 }
@@ -1034,7 +1036,7 @@ async fn an_incoming_primary_is_demoted_and_the_preview_says_so_first() {
     let change = &summary.role_changes[0];
     assert_eq!(change.previous_role, MergedMediaRole::Primary);
     assert_eq!(change.new_role, MergedMediaRole::Additional);
-    assert_eq!(change.destination_episode_id, "d-e1");
+    assert_eq!(change.destination_episode_id.as_deref(), Some("d-e1"));
 
     let stated = items_of(&preview, PlanItemKind::RoleChange)
         .into_iter()
@@ -1079,12 +1081,11 @@ async fn an_unmappable_episode_blocks_the_merge_before_anything_starts() {
         Some(reason_codes::MERGE_RECORDS_UNMAPPED)
     );
     let reason = classified[0].reason.as_deref().expect("reason");
-    assert!(reason.contains("wanted_items"), "{reason}");
+    assert!(reason.contains("episodes"), "{reason}");
     assert!(reason.contains("s-e2"), "{reason}");
 
     // The refusal is on the plan too, one item per blocked record: FR-066
-    // blocks on the episode itself *and* on every table whose rows reference
-    // it, because each is a separate thing the user can act on.
+    // blocks on the slot the merge is carrying a file onto, and names it.
     let blocked: Vec<&str> = items_of(&preview, PlanItemKind::Blocked)
         .into_iter()
         .filter(|item| item.reason_code.as_deref() == Some(plan_reasons::MERGE_RECORDS_UNMAPPED))
@@ -1095,8 +1096,8 @@ async fn an_unmappable_episode_blocks_the_merge_before_anything_starts() {
         "the unmappable episode itself is named: {blocked:?}"
     );
     assert!(
-        blocked.iter().any(|detail| detail.contains("wanted_items")),
-        "so is the table whose rows reference it: {blocked:?}"
+        blocked.iter().any(|detail| detail.contains("s-e2")),
+        "so is the slot that cannot be placed: {blocked:?}"
     );
     assert!(preview.plan.merges[0].is_blocked());
 

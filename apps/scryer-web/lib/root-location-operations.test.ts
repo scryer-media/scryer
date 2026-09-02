@@ -11,7 +11,6 @@ import {
   changedFolderNamesComplete,
   consolidationGroups,
   CONSOLIDATION_GROUP_KEYS,
-  crossRouteDestination,
   retirementBlockerKey,
   rootIdentityStatement,
   rootPlanCanStart,
@@ -105,24 +104,6 @@ function renameSection(
 }
 
 // ── FR-020: one control, two destinations ───────────────────────────────────
-
-test("the two halves of FR-020 route to each other and nothing else does", () => {
-  assert.equal(
-    crossRouteDestination("root_change_destination_is_configured_root"),
-    "EXISTING_ROOT",
-  );
-  assert.equal(
-    crossRouteDestination(
-      "root_consolidation_destination_not_a_configured_root",
-    ),
-    "NEW_PATH",
-  );
-  // Every other refusal is the user's to fix where they are; switching the
-  // branch under them would hide what actually went wrong.
-  assert.equal(crossRouteDestination("root_change_destination_not_empty"), null);
-  assert.equal(crossRouteDestination("root_consolidation_same_root"), null);
-  assert.equal(crossRouteDestination(null), null);
-});
 
 test("a refusal code is read off the extensions, never off the sentence", () => {
   assert.equal(

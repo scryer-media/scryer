@@ -1,8 +1,8 @@
 //! US5 — "fold one root into another root of the same library" — at the story
 //! level (T071).
 //!
-//! Everything here drives the use-case API (`preview_root_consolidation`,
-//! `start_root_consolidation`, `resume_location_operation`, `run_root_move`)
+//! Everything here drives the use-case API (`preview_root_scope`,
+//! `start_root_scope`, `resume_location_operation`, `run_root_move`)
 //! against real directories and real files, so the assertions are about what
 //! ends up on disk, in the catalog, and in the library's root configuration.
 //!
@@ -21,9 +21,9 @@
 
 use super::*;
 
-use crate::location::consolidation::{plan_reasons, refusal_codes};
-use crate::location::consolidation_execution::{
-    RootConsolidationPreview, RootConsolidationPreviewRequest, StartRootConsolidationRequest,
+use crate::location::root_scope::{PlannedRootScope, plan_reasons, refusal_codes};
+use crate::location::root_scope_execution::{
+    RootScopeCall, RootScopeCallDestination, StartRootScopeRequest,
 };
 use crate::location::model::{
     LocationExecutionMode, LocationOperation, LocationOperationState, LocationOperationType,
@@ -33,7 +33,7 @@ use crate::location::operations::LOCATION_OPERATION_VERIFICATION_DEPTH;
 use crate::location::preview::{
     LOCATION_TYPED_CONFIRMATION_PHRASE, PlanConfirmationRequest, PlanItemKind,
 };
-use crate::location::root_change::retirement_blockers;
+use crate::location::root_scope::retirement_blockers;
 use crate::location::test_support::{
     InMemoryLocationOperationStore, InMemoryTitleMergeStore, queued_operation,
     title_boundary_cancel_check,
@@ -327,18 +327,18 @@ impl ConsolidationFixture {
         paths
     }
 
-    fn request(&self) -> RootConsolidationPreviewRequest {
-        RootConsolidationPreviewRequest {
+    fn request(&self) -> RootScopeCall {
+        RootScopeCall {
             library_id: self.library_id.clone(),
-            source_root_id: self.source_root_id.clone(),
-            destination_root_id: self.destination_root_id.clone(),
+            root_id: self.source_root_id.clone(),
+            destination: RootScopeCallDestination::Root(self.destination_root_id.clone()),
             mode: LocationExecutionMode::MoveWithScryer,
         }
     }
 
-    async fn preview(&self) -> RootConsolidationPreview {
+    async fn preview(&self) -> PlannedRootScope {
         self.app
-            .preview_root_consolidation(&self.user, self.request())
+            .preview_root_scope(&self.user, &self.request())
             .await
             .expect("preview consolidation")
     }
@@ -347,13 +347,10 @@ impl ConsolidationFixture {
         let preview = self.preview().await;
         let accepted = self
             .app
-            .start_root_consolidation(
+            .start_root_scope(
                 &self.user,
-                StartRootConsolidationRequest {
-                    library_id: self.library_id.clone(),
-                    source_root_id: self.source_root_id.clone(),
-                    destination_root_id: self.destination_root_id.clone(),
-                    mode: LocationExecutionMode::MoveWithScryer,
+                StartRootScopeRequest {
+                    call: self.request(),
                     confirmation: PlanConfirmationRequest {
                         fingerprint: preview.plan.fingerprint.clone(),
                         typed_confirmation: Some(LOCATION_TYPED_CONFIRMATION_PHRASE.to_string()),
@@ -454,7 +451,7 @@ fn external_id(source: &str, value: &str) -> ExternalId {
 }
 
 fn plan_items(
-    preview: &RootConsolidationPreview,
+    preview: &PlannedRootScope,
     kind: PlanItemKind,
 ) -> Vec<&crate::location::preview::PlanItem> {
     preview
@@ -959,9 +956,11 @@ async fn an_identical_file_deduplicates_through_the_recycle_bin() {
     assert_eq!(preview.plan.counts.for_kind(PlanItemKind::Dedup), 1);
 
     let operation = fixture.start_and_settle().await;
+    // Recycling during the run creates the bin under the source root, and the
+    // bin never moves — so the source directory is left standing and named.
     assert_eq!(
         operation.state,
-        LocationOperationState::Completed,
+        LocationOperationState::CompletedWithWarnings,
         "detail: {:?}",
         operation.detail
     );
@@ -973,13 +972,16 @@ async fn an_identical_file_deduplicates_through_the_recycle_bin() {
             .expect("read the surviving copy"),
         b"identical content".to_vec()
     );
-    // SC-003: recycled, never deleted.
-    let listed = fixture
-        .app
-        .list_recycled_items(&fixture.user, None)
-        .await
-        .expect("list recycled items");
-    assert_eq!(listed.len(), 1, "the duplicate was not recycled: {listed:?}");
+    // SC-003: recycled, never deleted. The bin stays under the source root,
+    // which the fold retires from the configuration — so housekeeping no longer
+    // enumerates it and the proof is the bin on disk.
+    let bin = fixture.source().join(".scryer-recycle");
+    let entries = std::fs::read_dir(&bin)
+        .expect("the source root's bin")
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().is_dir())
+        .count();
+    assert_eq!(entries, 1, "the duplicate was not recycled");
     let _ = (source, destination);
 }
 
@@ -1144,14 +1146,14 @@ async fn unexplained_source_content_keeps_the_source_root_configured() {
     assert!(destination_root.is_default);
 }
 
-// ── The recycle bin travels ──────────────────────────────────────────────────
+// ── The recycle bin never moves ──────────────────────────────────────────────
 
-/// The operator decision: the bin that lived under the source root lands in the
-/// destination root's bin, re-anchored, so housekeeping — which finds bins by
-/// enumerating *configured* library roots — still sees its entries once the
-/// source root has left the configuration.
+/// The operator decision, on the fold branch: the bin under the source root
+/// stays where it is. It is still excluded from unexplained content, and the
+/// source directory it keeps standing is named in the warnings rather than
+/// failing the operation.
 #[tokio::test]
-async fn the_source_root_recycle_bin_lands_in_the_destination_roots_bin() {
+async fn a_recycle_bin_under_the_source_root_is_left_where_it_is() {
     let fixture = ConsolidationFixture::new(false).await;
     let title = fixture
         .seed_source_title(
@@ -1170,8 +1172,7 @@ async fn the_source_root_recycle_bin_lands_in_the_destination_roots_bin() {
     assert!(source_bin.exists(), "the fixture put an entry in the bin");
 
     // The bin is Scryer's own storage, not content the catalog failed to
-    // explain, so it must not show up as unknown and must not block the
-    // retirement of the source root.
+    // explain, so it must not show up as unknown and must not block the plan.
     let preview = fixture.preview().await;
     assert!(
         preview.content.unknown.is_empty(),
@@ -1183,29 +1184,26 @@ async fn the_source_root_recycle_bin_lands_in_the_destination_roots_bin() {
     let operation = fixture.start_and_settle().await;
     assert_eq!(
         operation.state,
-        LocationOperationState::Completed,
+        LocationOperationState::CompletedWithWarnings,
         "detail: {:?}",
         operation.detail
     );
-
-    let destination_bin = fixture.destination().join(".scryer-recycle");
-    assert!(destination_bin.exists(), "the bin did not reach the destination root");
-    assert!(!source_bin.exists(), "and it did not stay behind as well");
-
-    // Housekeeping's own enumeration is the proof that matters: it lists bins by
-    // walking the configured library roots, which no longer include the source.
-    let listed = fixture
-        .app
-        .list_recycled_items(&fixture.user, None)
-        .await
-        .expect("list recycled items");
-    assert_eq!(listed.len(), 1, "the relocated bin is invisible to housekeeping");
+    let detail = operation.detail.clone().unwrap_or_default();
     assert!(
-        listed[0]
-            .original_path
-            .starts_with(&*fixture.destination().to_string_lossy()),
-        "the entry still records the retired root: {}",
-        listed[0].original_path
+        detail.contains(&*fixture.source().to_string_lossy()),
+        "the warning has to name the source directory left standing: {detail}"
+    );
+    // D6: the bin is the only thing left, so the warning says so rather than
+    // sending the user looking for content that is not there.
+    assert!(
+        detail.contains("was kept because it holds Scryer's recycle bin"),
+        "the warning has to name the bin as the reason the root was kept: {detail}"
+    );
+
+    assert!(source_bin.exists(), "the bin was moved rather than left alone");
+    assert!(
+        !fixture.destination().join(".scryer-recycle").exists(),
+        "nothing put a bin under the destination root"
     );
 }
 
@@ -1310,38 +1308,29 @@ async fn a_restart_resumes_a_consolidation_and_retires_the_root_exactly_once() {
 
 // ── FR-020, FR-023, FR-029, verification depth ───────────────────────────────
 
-/// FR-020, the mirror of the root-change refusal: a destination that is not
-/// already a configured root of this library is a **root change**, and the user
-/// is routed there by name.
+/// FR-020: a destination root id that names no root of this library describes
+/// no plan at all. There is no other query to route the user to any more, so it
+/// is the same "that does not exist" the source root gets.
 #[tokio::test]
-async fn a_destination_that_is_not_a_configured_root_is_refused_as_a_root_change() {
+async fn a_destination_root_that_is_not_configured_here_is_not_found() {
     let fixture = ConsolidationFixture::new(false).await;
     let error = fixture
         .app
-        .preview_root_consolidation(
+        .preview_root_scope(
             &fixture.user,
-            RootConsolidationPreviewRequest {
-                library_id: fixture.library_id.clone(),
-                source_root_id: fixture.source_root_id.clone(),
-                destination_root_id: "not-a-root-of-this-library".to_string(),
-                mode: LocationExecutionMode::MoveWithScryer,
+            &RootScopeCall {
+                destination: RootScopeCallDestination::Root(
+                    "not-a-root-of-this-library".to_string(),
+                ),
+                ..fixture.request()
             },
         )
         .await
-        .expect_err("a destination that is not a root is not a consolidation");
-    // The code travels typed, beside the sentence, so the client routes on it
-    // without parsing prose.
-    let AppError::LocationRootRefused { message, code } = &error else {
-        panic!("the refusal has to carry a code the client can route on: {error:?}");
-    };
-    assert_eq!(*code, refusal_codes::DESTINATION_NOT_A_CONFIGURED_ROOT);
+        .expect_err("a destination that is not a root of this library does not exist");
     assert!(
-        !message.contains('['),
-        "and the code is not smuggled into the sentence: {message}"
-    );
-    assert!(
-        message.contains("root change"),
-        "and it has to say which workflow this is: {message}"
+        matches!(&error, AppError::NotFound(message)
+            if message.contains("not-a-root-of-this-library")),
+        "got {error:?}"
     );
 }
 
@@ -1352,9 +1341,9 @@ async fn files_already_there_is_refused_as_a_consolidation_mode() {
     let fixture = ConsolidationFixture::new(false).await;
     let error = fixture
         .app
-        .preview_root_consolidation(
+        .preview_root_scope(
             &fixture.user,
-            RootConsolidationPreviewRequest {
+            &RootScopeCall {
                 mode: LocationExecutionMode::FilesAlreadyThere,
                 ..fixture.request()
             },
@@ -1365,7 +1354,7 @@ async fn files_already_there_is_refused_as_a_consolidation_mode() {
         matches!(
             &error,
             AppError::LocationRootRefused { code, .. }
-                if *code == refusal_codes::MODE_NOT_SUPPORTED
+                if *code == refusal_codes::FOLD.mode_not_supported
         ),
         "got {error:?}"
     );
@@ -1411,13 +1400,10 @@ async fn a_blocked_title_is_named_and_stops_the_consolidation_until_it_is_repair
 
     let error = fixture
         .app
-        .start_root_consolidation(
+        .start_root_scope(
             &fixture.user,
-            StartRootConsolidationRequest {
-                library_id: fixture.library_id.clone(),
-                source_root_id: fixture.source_root_id.clone(),
-                destination_root_id: fixture.destination_root_id.clone(),
-                mode: LocationExecutionMode::MoveWithScryer,
+            StartRootScopeRequest {
+                call: fixture.request(),
                 confirmation: PlanConfirmationRequest {
                     fingerprint: preview.plan.fingerprint.clone(),
                     typed_confirmation: Some(LOCATION_TYPED_CONFIRMATION_PHRASE.to_string()),
@@ -1633,13 +1619,10 @@ async fn a_consolidation_requires_the_stronger_typed_confirmation() {
     let start = async |typed: Option<&str>| {
         fixture
             .app
-            .start_root_consolidation(
+            .start_root_scope(
                 &fixture.user,
-                StartRootConsolidationRequest {
-                    library_id: fixture.library_id.clone(),
-                    source_root_id: fixture.source_root_id.clone(),
-                    destination_root_id: fixture.destination_root_id.clone(),
-                    mode: LocationExecutionMode::MoveWithScryer,
+                StartRootScopeRequest {
+                    call: fixture.request(),
                     confirmation: PlanConfirmationRequest {
                         fingerprint: preview.plan.fingerprint.clone(),
                         typed_confirmation: typed.map(str::to_string),

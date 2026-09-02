@@ -307,11 +307,12 @@ gradually fills in full-file hashes for content that was already in your library
 New GraphQL surface: `locationOperationPreview`, `startLocationOperation`,
 `cancelLocationOperation`, `resumeLocationOperation`, and a `locationOperation`
 query for Activity, with `locationOperationAssets` for the per-file listing of
-a finished operation; `locationRootChangePreview` and
-`locationRootConsolidationPreview` for the two root-scoped workflows (both
-confirm through `startLocationOperation`, whose input gained `rootChange` and
-`rootConsolidation` target forms — `titleIds` and `destination` are now
-nullable, which is backwards-compatible for existing callers); a refused
+a finished operation; `locationRootScopePreview` for **Change root**, whose
+one input takes either a `destinationPath` or a `destinationRootId` and whose
+one payload covers both destinations (it confirms through
+`startLocationOperation`, whose input gained a `rootScope` target of the same
+shape — `titleIds` and `destination` are now nullable, which is
+backwards-compatible for existing callers); a refused
 root-scoped request carries `extensions.code = "LOCATION_ROOT_REFUSED"` with a
 machine-readable `extensions.refusalCode`; `changeTitleFolderPreview` and
 `applyTitleFolderChange` (including the swap and take-over variants);

@@ -24,21 +24,16 @@ import {
   classBlocksStart,
   classifiedTitlePlacement,
   classMovesFiles,
-  destinationIdentityPresentation,
   isActiveWorkBlock,
   isAmbiguousDestinationBlock,
   isBlockedSelectionMessage,
   isCrossLibraryDestination,
   isSameNameWarning,
   mergeDestinationTitleId,
-  mergeDispositionLines,
-  mergeDroppedCategoryLines,
-  mergeMediaRequestRepointCount,
   mergePreviewsBySourceTitle,
   mergeRoleChangeLines,
   mergeStatement,
   mergeSummaryPresentation,
-  mergeTagConflictLines,
   isInsufficientSpaceMessage,
   isStalePlanMessage,
   isTerminalOperationState,
@@ -1240,18 +1235,14 @@ function crossLibraryEntry(
 
 test("no destination match transfers, naming the library it lands in", () => {
   const entry = crossLibraryEntry({ destinationIdentityMatch: "NONE" });
-  const presentation = destinationIdentityPresentation(entry, {
-    resolveLibraryName: (id) => (id === "lib-4k" ? "4K Movies" : null),
-  });
-
-  assert.deepEqual(presentation.transfer, {
-    destinationLibraryId: "lib-4k",
-    destinationLibraryName: "4K Movies",
-  });
+  assert.deepEqual(
+    transferStatement(entry, (id) => (id === "lib-4k" ? "4K Movies" : null)),
+    { destinationLibraryId: "lib-4k", destinationLibraryName: "4K Movies" },
+  );
   // NONE is the plain transfer: nothing to warn about, nothing to resolve.
-  assert.equal(presentation.sameNameWarning, null);
-  assert.deepEqual(presentation.ambiguous, []);
-  assert.equal(presentation.merge, null);
+  assert.equal(sameNamedDestinationTitle(entry), null);
+  assert.deepEqual(ambiguousCandidates(entry), []);
+  assert.equal(mergeStatement(entry), null);
 
   // An unnamable library still states the transfer; the caller falls back to
   // the identity rather than dropping the sentence.
@@ -1280,10 +1271,9 @@ test("a same-named destination title warns instead of merging (FR-055)", () => {
   });
   // The warning is not a block: the transfer still happens, and it still
   // states the library it lands in.
-  const presentation = destinationIdentityPresentation(entry);
-  assert.notEqual(presentation.transfer, null);
-  assert.deepEqual(presentation.ambiguous, []);
-  assert.equal(presentation.merge, null);
+  assert.notEqual(transferStatement(entry), null);
+  assert.deepEqual(ambiguousCandidates(entry), []);
+  assert.equal(mergeStatement(entry), null);
 
   // The match kind is what makes it a warning; a row that lost the name still
   // warns, because the user must see the second same-named title coming.
@@ -1365,12 +1355,10 @@ test("an ambiguous identity names the candidates and what they share", () => {
     [],
   );
 
-  const presentation = destinationIdentityPresentation(entry);
-  assert.equal(presentation.ambiguous.length, 2);
   // A blocked row is not a transfer statement: it never starts.
-  assert.equal(presentation.transfer, null);
-  assert.equal(presentation.sameNameWarning, null);
-  assert.equal(presentation.merge, null);
+  assert.equal(transferStatement({ ...entry, class: "NEEDS_RESOLUTION" }), null);
+  assert.equal(sameNamedDestinationTitle(entry), null);
+  assert.equal(mergeStatement(entry), null);
 });
 
 /** A row that merges into an existing destination title (FR-055 UNIQUE). */
@@ -1444,10 +1432,9 @@ test("a unique identity merges and says so, naming the surviving title", () => {
     true,
   );
 
-  const presentation = destinationIdentityPresentation(entry);
-  assert.equal(presentation.merge?.destinationTitleId, "destination-title");
+  assert.equal(mergeStatement(entry)?.destinationTitleId, "destination-title");
   // It is still a cross-library transfer, so it still names the library.
-  assert.notEqual(presentation.transfer, null);
+  assert.notEqual(transferStatement(entry), null);
 });
 
 test("the merge statement takes the surviving title's name from the payload", () => {
@@ -1520,46 +1507,6 @@ test("merge summaries are indexed by the title that merges away", () => {
   assert.equal(mergePreviewsBySourceTitle(null).size, 0);
 });
 
-test("merge dispositions read carried-over first, discarded last (FR-064)", () => {
-  const merge = mergePreview({
-    dispositions: [
-      { table: "history", disposition: "DROP", sourceRowCount: "12", note: "" },
-      {
-        table: "media_files",
-        disposition: "MAP",
-        sourceRowCount: 8,
-        note: "Re-pointed to the destination's episodes.",
-      },
-      { table: "tags", disposition: "UNION", sourceRowCount: 3, note: "" },
-      {
-        table: "quality_profile",
-        disposition: "DESTINATION_WINS",
-        sourceRowCount: 1,
-        note: "",
-      },
-      { table: "aliases", disposition: "UNION", sourceRowCount: 2, note: "" },
-    ],
-  });
-
-  assert.deepEqual(
-    mergeDispositionLines(merge).map((line) => [
-      line.table,
-      line.disposition,
-      line.sourceRowCount,
-    ]),
-    [
-      // UNION, then MAP, then DESTINATION_WINS, then DROP; ties by table name.
-      ["aliases", "UNION", 2],
-      ["tags", "UNION", 3],
-      ["media_files", "MAP", 8],
-      ["quality_profile", "DESTINATION_WINS", 1],
-      // A `Long` that arrived as a string still counts.
-      ["history", "DROP", 12],
-    ],
-  );
-  assert.deepEqual(mergeDispositionLines(mergePreview()), []);
-});
-
 test("every media-role change is named, and demotions are flagged (FR-070)", () => {
   const merge = mergePreview({
     roleChanges: [
@@ -1581,104 +1528,35 @@ test("every media-role change is named, and demotions are flagged (FR-070)", () 
         reason: "COLLAPSED_SOURCE_EPISODES",
         detail: "Two source episodes collapsed onto S01E02.",
       },
+      // A movie has one slot and it is the title, so it carries no episode ids.
+      {
+        fileId: "file-movie",
+        previousRole: "PRIMARY",
+        newRole: "ADDITIONAL",
+        reason: "DESTINATION_PRIMARY_RETAINED",
+        detail: "The destination already has a primary file.",
+      },
     ],
   });
 
   const lines = mergeRoleChangeLines(merge);
-  // Neither line is summarised away: FR-070 wants each change readable.
+  // No line is summarised away: FR-070 wants each change readable.
   assert.deepEqual(
     lines.map((line) => [line.fileId, line.demotion]),
     [
       ["file-demoted", true],
       ["file-kept", false],
+      ["file-movie", true],
     ],
   );
-  assert.equal(lines[0].detail, "The destination already had a primary for S01E01.");
+  assert.equal(
+    lines[0].detail,
+    "The destination already had a primary for S01E01.",
+  );
+  // The movie line reads with nulls rather than empty strings.
+  assert.equal(lines[2].sourceEpisodeId, null);
+  assert.equal(lines[2].destinationEpisodeId, null);
   assert.deepEqual(mergeRoleChangeLines(mergePreview()), []);
-});
-
-test("reserved-tag conflicts state the setting, the keep, and the drop (OQ9)", () => {
-  const merge = mergePreview({
-    reservedTagConflicts: [
-      {
-        prefix: "scryer:quality",
-        setting: "Quality profile",
-        destinationValue: "HD-1080p",
-        sourceValue: "Any",
-      },
-      // No readable name and no source value: the prefix carries the line and
-      // the missing side is left for the renderer to word.
-      {
-        prefix: "scryer:monitor",
-        setting: "  ",
-        destinationValue: null,
-        sourceValue: "  ",
-      },
-    ],
-  });
-
-  assert.deepEqual(mergeTagConflictLines(merge), [
-    {
-      prefix: "scryer:quality",
-      setting: "Quality profile",
-      destinationValue: "HD-1080p",
-      sourceValue: "Any",
-    },
-    {
-      prefix: "scryer:monitor",
-      setting: "scryer:monitor",
-      destinationValue: null,
-      sourceValue: null,
-    },
-  ]);
-  assert.deepEqual(mergeTagConflictLines(mergePreview()), []);
-});
-
-test("dropped categories lead with the heaviest loss (FR-071)", () => {
-  const merge = mergePreview({
-    dropped: [
-      {
-        table: "blocklist",
-        sourceRowCount: 2,
-        decision: "drop",
-        reason: "Release blocks belong to the retired title.",
-      },
-      {
-        table: "history",
-        sourceRowCount: "40",
-        decision: "drop",
-        reason: "History cannot be re-pointed without guessing.",
-      },
-      {
-        table: "artwork",
-        sourceRowCount: 2,
-        decision: "drop",
-        reason: "The destination keeps its own artwork.",
-      },
-    ],
-    mediaRequestRepoints: [
-      {
-        requestId: "req-1",
-        previousLibraryId: "lib-movies",
-        destinationLibraryId: "lib-4k",
-      },
-    ],
-  });
-
-  assert.deepEqual(
-    mergeDroppedCategoryLines(merge).map((line) => [
-      line.table,
-      line.sourceRowCount,
-    ]),
-    // Heaviest first, then ties resolved by table so the order is stable.
-    [
-      ["history", 40],
-      ["artwork", 2],
-      ["blocklist", 2],
-    ],
-  );
-  assert.equal(mergeMediaRequestRepointCount(merge), 1);
-  assert.equal(mergeMediaRequestRepointCount(mergePreview()), 0);
 });
 
 test("a merge summary is one pass, and an empty one says so (FR-071)", () => {
@@ -1689,15 +1567,14 @@ test("a merge summary is one pass, and an empty one says so (FR-071)", () => {
       blocked: true,
       blockedRecords: [
         {
-          table: "history",
-          reason: "UNMAPPABLE_EPISODE",
+          table: "file_episode_map",
+          reason: "UNMAPPED_EPISODE",
           sourceId: "ep-9",
           detail: "S01E09 has no destination episode.",
         },
       ],
-      dispositions: [
-        { table: "tags", disposition: "UNION", sourceRowCount: 3, note: "" },
-      ],
+      // A `Long` that arrived as a string still counts.
+      mediaFilesRepointed: "8",
       roleChanges: [
         {
           fileId: "file-demoted",
@@ -1709,38 +1586,8 @@ test("a merge summary is one pass, and an empty one says so (FR-071)", () => {
           detail: "Another moving file already claimed primary.",
         },
       ],
-      reservedTagConflicts: [
-        {
-          prefix: "scryer:quality",
-          setting: "Quality profile",
-          destinationValue: "HD-1080p",
-          sourceValue: "Any",
-        },
-      ],
-      destinationWins: [
-        {
-          setting: "Monitored",
-          destinationValue: "yes",
-          sourceValue: "no",
-        },
-      ],
-      dropped: [
-        {
-          table: "history",
-          sourceRowCount: 40,
-          decision: "drop",
-          reason: "History cannot be re-pointed without guessing.",
-        },
-      ],
-      freeFormTagsAdded: ["favourite"],
-      mediaRequestRepoints: [
-        {
-          requestId: "req-1",
-          previousLibraryId: "lib-movies",
-          destinationLibraryId: "lib-4k",
-        },
-      ],
-      notes: ["Recommendations are regenerated after the merge."],
+      historyRowsCarried: 40,
+      sourceRecordsDropped: 12,
     }),
     { resolveTitleName: () => "Moving (2024)" },
   );
@@ -1749,20 +1596,13 @@ test("a merge summary is one pass, and an empty one says so (FR-071)", () => {
   assert.equal(summary.statement.destinationTitleName, "Moving (2024)");
   assert.equal(summary.blocked, true);
   assert.equal(summary.blockedRecords.length, 1);
-  assert.equal(summary.dispositions.length, 1);
+  assert.equal(summary.mediaFilesRepointed, 8);
+  assert.equal(summary.historyRowsCarried, 40);
+  assert.equal(summary.sourceRecordsDropped, 12);
   assert.equal(summary.roleChanges.length, 1);
   // The demotion count is what the heading warns with; FR-070 forbids a
   // silent one, so it is counted rather than inferred by the renderer.
   assert.equal(summary.demotionCount, 1);
-  assert.equal(summary.tagConflicts.length, 1);
-  assert.equal(summary.destinationWins.length, 1);
-  assert.equal(summary.dropped.length, 1);
-  assert.deepEqual(summary.freeFormTagsAdded, ["favourite"]);
-  assert.equal(summary.mediaRequestRepointCount, 1);
-  // Notes are carried verbatim, in payload order.
-  assert.deepEqual(summary.notes, [
-    "Recommendations are regenerated after the merge.",
-  ]);
   assert.equal(summary.empty, false);
 
   // A merge with nothing beyond the statement still states the statement, and
