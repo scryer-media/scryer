@@ -42,21 +42,19 @@ const LOCALE_ALIASES: Record<string, LocaleCode> = {
   "ru-ru": "rus",
 };
 
-const localeLoaders = {
-  spa: () => import("./locales/es.ts"),
-  fra: () => import("./locales/fr.ts"),
-  deu: () => import("./locales/de.ts"),
-  ita: () => import("./locales/it.ts"),
-  por: () => import("./locales/pt_BR.ts"),
-  kor: () => import("./locales/ko.ts"),
-  zho: () => import("./locales/zh_CN.ts"),
-  jpn: () => import("./locales/ja.ts"),
-  rus: () => import("./locales/ru.ts"),
-} satisfies Record<DeferredLocaleCode, LocaleLoader>;
+const localeLoaders = new Map<DeferredLocaleCode, LocaleLoader>([
+  ["spa", () => import("./locales/es.ts")],
+  ["fra", () => import("./locales/fr.ts")],
+  ["deu", () => import("./locales/de.ts")],
+  ["ita", () => import("./locales/it.ts")],
+  ["por", () => import("./locales/pt_BR.ts")],
+  ["kor", () => import("./locales/ko.ts")],
+  ["zho", () => import("./locales/zh_CN.ts")],
+  ["jpn", () => import("./locales/ja.ts")],
+  ["rus", () => import("./locales/ru.ts")],
+]);
 
-const locales: Partial<Record<LocaleCode, LocaleDictionary>> = {
-  eng: en,
-};
+const locales = new Map<LocaleCode, LocaleDictionary>([["eng", en]]);
 const localeLoads = new Map<LocaleCode, Promise<LocaleDictionary>>();
 
 export const AVAILABLE_LANGUAGES: LanguageOption[] = [
@@ -84,21 +82,21 @@ export function getLocaleDictionary(code: string | null | undefined): LocaleDict
     return FALLBACK;
   }
   const key = normalizeLocale(code);
-  return locales[key] ?? FALLBACK;
+  return locales.get(key) ?? FALLBACK;
 }
 
 export function isLocaleLoaded(code: string | null | undefined): boolean {
   if (!code) {
     return true;
   }
-  return locales[normalizeLocale(code)] !== undefined;
+  return locales.has(normalizeLocale(code));
 }
 
 export function loadLocaleDictionary(
   code: string | null | undefined,
 ): Promise<LocaleDictionary> {
   const key = normalizeLocale(code);
-  const loaded = locales[key];
+  const loaded = locales.get(key);
   if (loaded) {
     return Promise.resolve(loaded);
   }
@@ -108,10 +106,16 @@ export function loadLocaleDictionary(
     return pending;
   }
 
-  const loader = localeLoaders[key as DeferredLocaleCode];
+  if (key === "eng") {
+    return Promise.resolve(FALLBACK);
+  }
+  const loader = localeLoaders.get(key);
+  if (!loader) {
+    return Promise.reject(new Error(`No locale loader configured for ${key}.`));
+  }
   const load = loader()
     .then(({ default: dictionary }) => {
-      locales[key] = dictionary;
+      locales.set(key, dictionary);
       localeLoads.delete(key);
       return dictionary;
     })

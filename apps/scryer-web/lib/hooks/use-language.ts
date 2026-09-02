@@ -3,6 +3,7 @@ import {
   AVAILABLE_LANGUAGES,
   DEFAULT_LANGUAGE,
   getLanguageLabel,
+  isLocaleLoaded,
   loadLocaleDictionary,
   normalizeLocale,
   t as translate,
@@ -51,12 +52,12 @@ export function useLanguage(searchParams: URLSearchParams, options: UseLanguageO
   const [queryLanguage] = useState(() => searchParams.get(URL_PARAM_LANGUAGE));
   const initialLanguage = (() => {
     const fromQuery = parseLanguageFromParam(queryLanguage);
-    if (fromQuery) {
+    if (fromQuery && isLocaleLoaded(fromQuery)) {
       return fromQuery;
     }
 
     const stored = readStoredLanguageCode();
-    return isLocaleSupported(stored) ? stored : DEFAULT_LANGUAGE;
+    return isLocaleSupported(stored) && isLocaleLoaded(stored) ? stored : DEFAULT_LANGUAGE;
   })();
 
   const languageMenuRef = useRef<HTMLDivElement>(null);
@@ -140,6 +141,13 @@ export function useLanguage(searchParams: URLSearchParams, options: UseLanguageO
 
   useEffect(() => {
     const queryLang = parseLanguageFromParam(searchParams.get(URL_PARAM_LANGUAGE));
+    if (!queryLang) {
+      setLanguageFallback();
+    }
+  }, [searchParams, setLanguageFallback]);
+
+  useEffect(() => {
+    const queryLang = parseLanguageFromParam(searchParams.get(URL_PARAM_LANGUAGE));
     if (queryLang) {
       if (queryLang !== uiLanguage) {
         requestLanguage(queryLang, false);
@@ -158,10 +166,6 @@ export function useLanguage(searchParams: URLSearchParams, options: UseLanguageO
     writeStoredLanguageCode(uiLanguage);
     document.documentElement.lang = uiLanguage;
   }, [uiLanguage]);
-
-  useEffect(() => {
-    setLanguageFallback();
-  }, [setLanguageFallback]);
 
   return {
     uiLanguage,

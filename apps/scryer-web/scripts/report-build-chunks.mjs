@@ -9,6 +9,23 @@ const manifestPath = path.join(distRoot, ".vite", "manifest.json");
 const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
 const records = Object.values(manifest);
 
+function readRegularFile(filePath) {
+  let descriptor;
+  try {
+    descriptor = fs.openSync(filePath, "r");
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
+
+  try {
+    if (!fs.fstatSync(descriptor).isFile()) return null;
+    return fs.readFileSync(descriptor);
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
 function staticClosure(entry) {
   const files = new Set();
   const visit = (record) => {
@@ -23,12 +40,16 @@ function staticClosure(entry) {
 }
 
 function assetSizes(relativePath) {
-  const bytes = fs.readFileSync(path.join(distRoot, relativePath));
+  const bytes = readRegularFile(path.join(distRoot, relativePath));
+  if (bytes === null) {
+    throw new Error(`Missing build asset: ${relativePath}`);
+  }
   const brotliPath = path.join(distRoot, `${relativePath}.br`);
+  const brotli = readRegularFile(brotliPath);
   return {
     raw: bytes.length,
     gzip: gzipSync(bytes, { level: 9 }).length,
-    brotli: fs.existsSync(brotliPath) ? fs.statSync(brotliPath).size : null,
+    brotli: brotli?.length ?? null,
   };
 }
 
@@ -98,15 +119,16 @@ for (const relativePath of fs.readdirSync(distRoot, { recursive: true })) {
   }
 
   const sourcePath = path.join(distRoot, relativePath);
-  if (!fs.statSync(sourcePath).isFile()) continue;
+  const source = readRegularFile(sourcePath);
+  if (source === null) continue;
   const brotliPath = `${sourcePath}.br`;
-  if (!fs.existsSync(brotliPath) || fs.statSync(brotliPath).size === 0) {
+  const brotli = readRegularFile(brotliPath);
+  if (brotli === null || brotli.length === 0) {
     brotliErrors.push(`${relativePath}: missing or empty .br sibling`);
     continue;
   }
 
-  const source = fs.readFileSync(sourcePath);
-  const decoded = brotliDecompressSync(fs.readFileSync(brotliPath));
+  const decoded = brotliDecompressSync(brotli);
   if (!source.equals(decoded)) {
     brotliErrors.push(`${relativePath}: .br content does not match source`);
   }
