@@ -142,13 +142,37 @@ server / grabs reference server-held results", is preserved by construction).
   manual queue path). Unlinked grab: `manageSystemSettings`.
 - **D14 Sorting** is client-side (newest, size, age, seeders, indexer priority) over the full
   set. Server returns the full merged set; no pagination (bounded by per-indexer limit × indexers).
-- **D15 Limits.** Per-indexer limit default 100, cap 250, passed through the plugin `Limit`
-  input when the indexer supports it, truncated otherwise. Advanced size/seeders/age filters are
-  applied server-side before merge; `matched` counts survivors.
+- **D15 Limits.** Per-indexer limit default 100, cap 250. *Amended after WP1:* the search port
+  has no `limit` parameter, so the limit is applied by truncation of each indexer's batch; a real
+  pass-through would touch the plugin SDK contract and is deferred. Advanced size/seeders/age
+  filters are applied server-side before merge; `matched` counts survivors.
 - **D16 Download client override.** The dialog's client select sends `downloadClientId`. If the
   manual queue path cannot take a per-grab client override today, thread a narrow
   `download_client_override: Option<String>` from `queue_manual_release_for_title` into the
   submission intent. The indexer→client mapping remains the default.
+
+## Established by WP1 (2026-09-02, commit 485ae0a01)
+
+- Application API: `AppUseCase::{start_indexer_search, indexer_search, retry_indexer_search,
+  cancel_indexer_search}`; types `IndexerSearchRequest`, `IndexerSearchKind`,
+  `IndexerSearchSnapshot` (request echo, totals, indexers, facets, releases),
+  `IndexerSearchIndexerView` (status `Pending|Searching|Ok|Failed|Skipped`, `elapsed_ms`,
+  `failure_reason`), `IndexerSearchRelease` (+ `facet_values`, `rejections`, parsed
+  season/episode/is_season_pack, and the full server-held `result`), `IndexerSearchTotals`
+  (`matched`, `indexers_queried`, `indexers_responded`, `truncated`). All re-exported from
+  `scryer_application`.
+- **No `Slow` status in the app.** "Slow" is a presentation threshold: the web derives it from
+  `elapsedMs` (> 1 000 ms per the handoff). The GraphQL enum therefore has no `SLOW`.
+- Facet keys: `protocol`, `indexer`, `resolution`, `source`, `audio_hdr`, `flags`; item labels
+  are English values — the web keys i18n off `key`/`value`.
+- A Raw search still passes the client's freetext title guard, so a query that is not a title
+  (`2160p remux`) returns nothing even when the indexer answered. Kept on purpose for now; the
+  web's empty state must say "no releases whose name matches this query". Lifting the guard for
+  Raw is a separate decision.
+- A 5xx arms the client's 5-minute system backoff, so "Retry failed" on such an indexer reports
+  `Skipped · temporarily backed off` rather than healing. The web shows that reason honestly.
+- Search and retry are gated on `ManageSystemSettings` in the application layer; the resolver
+  gate is a consistent second check.
 
 ## GraphQL contract (additive)
 
@@ -165,7 +189,7 @@ type IndexerSearchPayload {
   id: ID!  state: IndexerSearchStateValue!  # RUNNING | COMPLETED | CANCELLED
   request: IndexerSearchRequestPayload!      # echo of the effective request
   totals: IndexerSearchTotalsPayload!        # matched, indexersQueried, indexersResponded, elapsedMs, ageSeconds
-  indexers: [IndexerSearchIndexerPayload!]!  # id, name, priority, state(PENDING|SEARCHING|OK|SLOW|FAILED|SKIPPED), count, elapsedMs, error
+  indexers: [IndexerSearchIndexerPayload!]!  # id, name, priority, state(PENDING|SEARCHING|OK|FAILED|SKIPPED), count, elapsedMs, error
   facets: [IndexerSearchFacetPayload!]!      # key, label, items{value,label,count}
   releases: [IndexerSearchReleasePayload!]!  # id, title, protocol, indexer{id,name,priority}, sizeBytes,
                                              # publishedAt, categoryLabel, fileSummary, releaseGroup,
