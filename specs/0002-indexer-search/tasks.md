@@ -4,55 +4,30 @@
 web lint before handoff; C9 isolated worktree, gitflow branch, signed commits by the reviewer).
 Format: `[ID] [WP] Description`. Work packages run sequentially, one agent at a time.
 
-## WP1 — Application search job
+## WP1b — Fold the query subject into the interactive-search job
 
-- [ ] T101 [WP1] `catalog/indexer_search.rs`: request model (`IndexerSearchRequest` {query, kind,
-      indexer_ids, categories, limits}), kind→facet/id-facet/default-categories mapping (D2),
-      input validation (non-empty query, limit cap 250, size/age sanity).
-- [ ] T102 [WP1] Registry (`runtime.acquisition.indexer_searches`): entries with actor, cancel
-      token, TTLs (completed 30 min, running 10 min), per-actor cap 8, eviction on every access.
-- [ ] T103 [WP1] Dispatch resolution: enabled + interactive-enabled indexers, minus backoff
-      (`disabled_until`), intersected with requested ids; skipped ones recorded with reason.
-- [ ] T104 [WP1] Runner: JoinSet, one task per indexer through the multi-indexer client with a
-      single-indexer restriction, `SearchMode::Interactive`, per-indexer started/elapsed, outcome
-      mapping (ok / failed + short error word / timed out on deadline), overall deadline.
-- [ ] T105 [WP1] Merge: parse each result (`parse_release_metadata`), apply advanced limits,
-      derive facet values + flags + file summary + category label + protocol, assign job-scoped
-      release id (D4), dedupe within indexer on id, cap 5 000 total, recompute facet counts.
-- [ ] T106 [WP1] Context-free rejections (D6): facet default profile block codes + user rules with
-      empty title context + minimum-seeders floor. Raw kind: seeders only.
-- [ ] T107 [WP1] `retry_indexer_search(actor, id)` (D9), `cancel_indexer_search`,
-      `indexer_search(actor, id)` snapshot read (actor-scoped).
-- [ ] T108 [WP1] Unit tests in `lib_tests/indexer_search.rs` with the test indexer client:
-      kind mapping, restriction, merge/facets/ids, rejections, retry-only-failed, TTL eviction,
-      actor scoping, cap.
-- [ ] T109 [WP1] Integration test `crates/scryer/tests/integration_indexer_search.rs` (copy the
-      interactive one's bootstrap): two wiremock newznab indexers, one healthy one 500 → health
-      line states; retry heals; raw text query reaches the plugin as `TextQuery`.
-
-## WP2 — GraphQL search surface
-
-- [ ] T201 [WP2] Payload/input types in `scryer-interface-media-types` (plan contract), enums.
-- [ ] T202 [WP2] Mutations `startIndexerSearch`, `retryIndexerSearch`, `cancelIndexerSearch`;
-      query `indexerSearch(id)`; permission gate D13.
-- [ ] T203 [WP2] Regenerate `api/graphql/schema.graphql`; `npm run test:graphql-compat`.
-- [ ] T204 [WP2] `integration_graphql` tests: start→poll→complete, cancel, retry, actor isolation,
-      permission denial, expired id → null.
+- [ ] T111 [WP1b] Delete the sibling module (`catalog/indexer_search.rs`), its tests, registry
+      field and hash-domain variant; keep the search-client facet-less dispatch.
+- [ ] T112 [WP1b] `InteractiveReleaseSearchRequest` gains `query`/`kind`/`indexer_ids`/`categories`;
+      exactly one of title/query; `indexer_ids` restricts dispatch for both subjects.
+- [ ] T113 [WP1b] Job context subject enum; query branch calls the indexer client with the
+      single-indexer routing plan; results get parsed metadata + default-profile block codes (D6).
+- [ ] T114 [WP1b] Indexer view: `elapsed_ms`, `priority` (D15).
+- [ ] T115 [WP1b] `issue_interactive_release_candidate_token` (D4) reusing the start path's
+      subject resolution and `attach_candidate_tokens`.
+- [ ] T116 [WP1b] GraphQL additive fields + `issueInteractiveReleaseCandidateToken`; schema regen;
+      graphql-compat.
+- [ ] T117 [WP1b] Tests extended in the existing interactive-search modules (unit, integration,
+      integration_graphql).
 
 ## WP3 — Grab
 
-- [ ] T301 [WP3] Linked grab: resolve snapshot release → `QueuedReleaseSelection` (mirror
-      `attach_candidate_tokens`), target → `SubmissionScope` (movie Title; episode → episode id;
-      season → the scope the season-pack path uses today; series → Title), purpose (D7), client
-      override (D16), batch loop with per-release outcomes, expired-job typed error.
-- [ ] T302 [WP3] Unlinked grab (D8): add-request title optionality, orphan submission row,
-      history event, category resolution, permission.
-- [ ] T303 [WP3] `indexerSearchGrabTargets` (D12): ranking, gap label, profile name, root path,
-      default client id, seasons with missing counts.
-- [ ] T304 [WP3] GraphQL: `grabIndexerSearchReleases`, `indexerSearchGrabTargets`; schema regen.
-- [ ] T305 [WP3] Tests: unit (scope resolution, purpose mapping, ranking), integration
-      (linked grab writes the same submission/history as interactive queue; unlinked grab writes an
-      orphan submission and a history event; override flag semantics documented and tested).
+- [ ] T301 [WP3] Unlinked grab (D8): smallest add-request change that reaches every client,
+      orphan submission row, `ReleaseGrabbed` event, category from routing, permission.
+- [ ] T302 [WP3] GraphQL `queueUnlinkedRelease(input: {searchId, downloadUrl, downloadClientId})`;
+      schema regen.
+- [ ] T303 [WP3] Tests: orphan submission + event written; tracked-download poller surfaces it
+      for manual import; unknown url ⇒ NotFound; permission denial.
 
 ## WP4 — Web search pane
 
