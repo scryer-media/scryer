@@ -685,6 +685,13 @@ mod tests {
             host_key_pinned_at: None,
             private_key_encrypted: None,
             private_key_passphrase_encrypted: None,
+            peer_public_key: None,
+            preshared_key_encrypted: None,
+            tunnel_public_key: None,
+            tunnel_addresses: Vec::new(),
+            tunnel_dns_servers: Vec::new(),
+            tunnel_mtu: None,
+            tunnel_keepalive_seconds: None,
         }
     }
 
@@ -733,5 +740,71 @@ mod tests {
         assert_eq!(payload.provider_type, "trawl");
         assert_eq!(payload.protocol.as_deref(), Some("request_solution_v1"));
         assert!(!payload.has_credentials);
+    }
+
+    /// The WireGuard payload splits three ways: two public keys shown in full,
+    /// one secret reduced to a flag, and the link settings passed through.
+    #[test]
+    fn proxy_payload_shows_the_wireguard_public_keys_and_masks_the_preshared_one() {
+        let mut config = proxy_config(ProxyProviderType::WireGuard, None, None);
+        config.base_url = "wireguard://vpn.test:51820".to_string();
+        config.private_key_encrypted = Some("cHJpdmF0ZQ==".to_string());
+        config.peer_public_key = Some("cGVlci1wdWJsaWM=".to_string());
+        config.preshared_key_encrypted = Some("cHJlc2hhcmVk".to_string());
+        config.tunnel_public_key = Some("b3VyLXB1YmxpYw==".to_string());
+        config.tunnel_addresses = vec!["10.6.0.2/32".to_string()];
+        config.tunnel_dns_servers = vec!["10.6.0.1".to_string()];
+        config.tunnel_mtu = Some(1420);
+        config.tunnel_keepalive_seconds = Some(0);
+
+        let payload = from_proxy_config(config);
+
+        assert_eq!(payload.provider_type, "wireguard");
+        // Both public keys are readable: they are the only values an operator
+        // can compare against their server.
+        assert_eq!(payload.peer_public_key.as_deref(), Some("cGVlci1wdWJsaWM="));
+        assert_eq!(
+            payload.tunnel_public_key.as_deref(),
+            Some("b3VyLXB1YmxpYw==")
+        );
+        assert_eq!(payload.tunnel_addresses, vec!["10.6.0.2/32".to_string()]);
+        assert_eq!(payload.tunnel_dns_servers, vec!["10.6.0.1".to_string()]);
+        assert_eq!(payload.tunnel_mtu, Some(1420));
+        // Zero survives as zero: "keepalive off" must not read back as "use
+        // the engine's default".
+        assert_eq!(payload.tunnel_keepalive_seconds, Some(0));
+
+        // The two secrets are flags, and neither value appears anywhere in the
+        // payload's strings.
+        assert!(payload.has_private_key);
+        assert!(payload.has_preshared_key);
+        let rendered = format!(
+            "{}|{}|{:?}|{:?}|{:?}|{:?}",
+            payload.provider_type,
+            payload.base_url,
+            payload.peer_public_key,
+            payload.tunnel_public_key,
+            payload.tunnel_addresses,
+            payload.tunnel_dns_servers
+        );
+        assert!(!rendered.contains("cHJpdmF0ZQ=="));
+        assert!(!rendered.contains("cHJlc2hhcmVk"));
+    }
+
+    /// The WireGuard fields are inert for every other provider.
+    #[test]
+    fn proxy_payload_leaves_the_wireguard_fields_empty_elsewhere() {
+        let payload = from_proxy_config(proxy_config(
+            ProxyProviderType::Socks5,
+            Some("operator"),
+            None,
+        ));
+        assert_eq!(payload.peer_public_key, None);
+        assert!(!payload.has_preshared_key);
+        assert_eq!(payload.tunnel_public_key, None);
+        assert!(payload.tunnel_addresses.is_empty());
+        assert!(payload.tunnel_dns_servers.is_empty());
+        assert_eq!(payload.tunnel_mtu, None);
+        assert_eq!(payload.tunnel_keepalive_seconds, None);
     }
 }

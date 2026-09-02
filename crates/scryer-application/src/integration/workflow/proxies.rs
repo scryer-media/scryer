@@ -27,13 +27,27 @@ impl AppUseCase {
         validate_proxy_credentials(provider_type, username.as_deref(), password.as_deref())?;
         let private_key = normalize_proxy_private_key(input.private_key);
         let private_key_passphrase = normalize_proxy_credential(input.private_key_passphrase);
+        let peer_public_key = normalize_proxy_credential(input.peer_public_key);
+        let preshared_key = normalize_proxy_credential(input.preshared_key);
+        let tunnel_addresses = normalize_tunnel_list(input.tunnel_addresses).unwrap_or_default();
+        let tunnel_dns_servers =
+            normalize_tunnel_list(input.tunnel_dns_servers).unwrap_or_default();
         validate_tunnel_auth(
             provider_type,
-            username.as_deref(),
-            password.as_deref(),
-            private_key.as_deref(),
-            private_key_passphrase.as_deref(),
+            &TunnelAuthFields {
+                username: username.as_deref(),
+                password: password.as_deref(),
+                private_key: private_key.as_deref(),
+                private_key_passphrase: private_key_passphrase.as_deref(),
+                peer_public_key: peer_public_key.as_deref(),
+                preshared_key: preshared_key.as_deref(),
+                tunnel_addresses: &tunnel_addresses,
+                tunnel_dns_servers: &tunnel_dns_servers,
+                tunnel_mtu: input.tunnel_mtu,
+                tunnel_keepalive_seconds: input.tunnel_keepalive_seconds,
+            },
         )?;
+        let tunnel_public_key = derive_tunnel_public_key(provider_type, private_key.as_deref())?;
         let remote_dns =
             resolve_remote_dns(provider_type, input.remote_dns, endpoint.scheme_remote_dns)?;
         let now = Utc::now();
@@ -59,6 +73,13 @@ impl AppUseCase {
             host_key_pinned_at: None,
             private_key_encrypted: private_key,
             private_key_passphrase_encrypted: private_key_passphrase,
+            peer_public_key,
+            preshared_key_encrypted: preshared_key,
+            tunnel_public_key,
+            tunnel_addresses,
+            tunnel_dns_servers,
+            tunnel_mtu: input.tunnel_mtu,
+            tunnel_keepalive_seconds: input.tunnel_keepalive_seconds,
         };
         self.services
             .integrations
@@ -113,11 +134,32 @@ impl AppUseCase {
         if let Some(password) = update.password {
             config.password_encrypted = normalize_proxy_credential(password);
         }
+        let private_key_changed = update.private_key.is_some();
         if let Some(private_key) = update.private_key {
             config.private_key_encrypted = normalize_proxy_private_key(private_key);
         }
         if let Some(passphrase) = update.private_key_passphrase {
             config.private_key_passphrase_encrypted = normalize_proxy_credential(passphrase);
+        }
+        // The peer's public key is not a secret and not optional, so it has no
+        // "clear it" state: omission keeps what is stored.
+        if let Some(peer_public_key) = update.peer_public_key {
+            config.peer_public_key = normalize_proxy_credential(Some(peer_public_key));
+        }
+        if let Some(preshared_key) = update.preshared_key {
+            config.preshared_key_encrypted = normalize_proxy_credential(preshared_key);
+        }
+        if let Some(addresses) = normalize_tunnel_list(update.tunnel_addresses) {
+            config.tunnel_addresses = addresses;
+        }
+        if let Some(dns_servers) = normalize_tunnel_list(update.tunnel_dns_servers) {
+            config.tunnel_dns_servers = dns_servers;
+        }
+        if let Some(mtu) = update.tunnel_mtu {
+            config.tunnel_mtu = mtu;
+        }
+        if let Some(keepalive) = update.tunnel_keepalive_seconds {
+            config.tunnel_keepalive_seconds = keepalive;
         }
         validate_proxy_credentials(
             config.provider_type,
@@ -126,11 +168,29 @@ impl AppUseCase {
         )?;
         validate_tunnel_auth(
             config.provider_type,
-            config.username_encrypted.as_deref(),
-            config.password_encrypted.as_deref(),
-            config.private_key_encrypted.as_deref(),
-            config.private_key_passphrase_encrypted.as_deref(),
+            &TunnelAuthFields {
+                username: config.username_encrypted.as_deref(),
+                password: config.password_encrypted.as_deref(),
+                private_key: config.private_key_encrypted.as_deref(),
+                private_key_passphrase: config.private_key_passphrase_encrypted.as_deref(),
+                peer_public_key: config.peer_public_key.as_deref(),
+                preshared_key: config.preshared_key_encrypted.as_deref(),
+                tunnel_addresses: &config.tunnel_addresses,
+                tunnel_dns_servers: &config.tunnel_dns_servers,
+                tunnel_mtu: config.tunnel_mtu,
+                tunnel_keepalive_seconds: config.tunnel_keepalive_seconds,
+            },
         )?;
+        // Our own public key is derived, never supplied. Re-deriving it on
+        // every private-key write is what stops the operator-visible value
+        // drifting away from the key it belongs to; a patch that leaves the
+        // key alone leaves the derived value alone too.
+        if private_key_changed {
+            config.tunnel_public_key = derive_tunnel_public_key(
+                config.provider_type,
+                config.private_key_encrypted.as_deref(),
+            )?;
+        }
         if update.remote_dns.is_some() || scheme_remote_dns.is_some() {
             config.remote_dns =
                 resolve_remote_dns(config.provider_type, update.remote_dns, scheme_remote_dns)?;
@@ -218,7 +278,12 @@ impl AppUseCase {
                 "proxy config is assigned to one or more download clients".into(),
             ));
         }
-        self.services.integrations.proxy_configs.delete(id).await
+        self.services.integrations.proxy_configs.delete(id).await?;
+        // A deleted tunnel has no configuration left to justify its session.
+        // (An *edited* one needs no help: the revision moves, so the next
+        // request restarts it.) No-op for every other kind.
+        crate::tunnel_proxy::stop_tunnel(id);
+        Ok(())
     }
 
     /// Forget the pinned tunnel host key so the next connect trusts the server
@@ -249,6 +314,14 @@ impl AppUseCase {
         if !config.is_tunnel() {
             return Err(AppError::Validation(
                 "only tunnel proxies pin a host key".into(),
+            ));
+        }
+        // WireGuard is a tunnel with no trust-on-first-use step: the peer's
+        // public key *is* its identity and the operator configured it, so
+        // there is nothing learned to forget.
+        if config.provider_type == scryer_domain::ProxyProviderType::WireGuard {
+            return Err(AppError::Validation(
+                "WireGuard tunnels have no host key to reset".into(),
             ));
         }
         self.services
@@ -286,12 +359,11 @@ impl AppUseCase {
                 let destination = self.transport_proxy_probe_destination(&config).await;
                 probe_transport_proxy_health(&config, destination.as_deref()).await
             }
-            // No fake pass. There is no tunnel to probe until the engine that
-            // builds one exists; WP6 replaces this arm with a handshake plus
-            // the same assigned-destination fetch the transport arm does.
-            scryer_domain::ProxyKind::Tunnel => Err(AppError::Validation(
-                crate::tunnel_proxy::TUNNEL_PROBE_UNAVAILABLE_MESSAGE.to_string(),
-            )),
+            scryer_domain::ProxyKind::Tunnel => {
+                let destination = self.transport_proxy_probe_destination(&config).await;
+                self.probe_tunnel_proxy_health(&config, destination.as_deref())
+                    .await
+            }
         };
         let duration_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
         let test_result = match result {
@@ -332,6 +404,131 @@ impl AppUseCase {
         }
 
         Ok(test_result)
+    }
+
+    /// Probe a tunnel: establish an SSH session, authenticate, settle the host
+    /// key, and — when a consumer is assigned — fetch its base URL through the
+    /// tunnel, exactly as the transport probe does.
+    ///
+    /// The handshake is deliberately its own connection rather than a reuse of
+    /// a running tunnel: a probe must report the *real* reason a tunnel will
+    /// not come up (bad password, changed host key, unsupported key type)
+    /// rather than the generic "proxy unreachable" an egress site would see.
+    async fn probe_tunnel_proxy_health(
+        &self,
+        config: &scryer_domain::ProxyConfig,
+        destination: Option<&str>,
+    ) -> AppResult<String> {
+        // The handshake differs per family; everything after it does not.
+        let (config, mut message) =
+            if config.provider_type == scryer_domain::ProxyProviderType::WireGuard {
+                (
+                    config.clone(),
+                    self.probe_wireguard_handshake(config).await?,
+                )
+            } else {
+                self.probe_ssh_handshake(config).await?
+            };
+
+        let Some(destination) = destination else {
+            message.push_str("; assign an indexer to this proxy to test a request through it");
+            return Ok(message);
+        };
+
+        let request_timeout =
+            scryer_outbound_http::effective_proxy_request_timeout(config.request_timeout_seconds);
+        // The same factory live traffic uses, so this exercises the loopback
+        // SOCKS5 front and the tunnel, not a probe-only code path.
+        let client = crate::transport_proxy::transport_proxied_reqwest_client(&config, "")
+            .map_err(AppError::Repository)?;
+        let response = tokio::time::timeout(request_timeout, client.get(destination).send())
+            .await
+            .map_err(|_| {
+                AppError::Repository(format!(
+                    "{TRANSPORT_PROXY_DOWNSTREAM_MESSAGE}: {destination} timed out"
+                ))
+            })?
+            .map_err(|error| {
+                AppError::Repository(format!(
+                    "{TRANSPORT_PROXY_DOWNSTREAM_MESSAGE}: {destination}: {error}"
+                ))
+            })?;
+        message.push_str(&format!(
+            "; carried a request to {destination} (HTTP {})",
+            response.status().as_u16()
+        ));
+        Ok(message)
+    }
+
+    /// The WireGuard half of the probe: bring a tunnel up, report what the
+    /// handshake established, and tear it down.
+    ///
+    /// There is nothing to pin — WireGuard has no trust-on-first-use step — so
+    /// this touches no repository. What it does report is *our* public key,
+    /// because "the handshake did not complete" is almost always the server's
+    /// `[Peer]` section naming a different one, and that is the only value the
+    /// operator can go and compare.
+    async fn probe_wireguard_handshake(
+        &self,
+        config: &scryer_domain::ProxyConfig,
+    ) -> AppResult<String> {
+        let handshake = crate::tunnel_proxy::probe_wireguard_handshake(config)
+            .await
+            .map_err(AppError::Repository)?;
+        let peer = handshake
+            .peer_public_key
+            .chars()
+            .take(8)
+            .collect::<String>();
+        Ok(format!(
+            "WireGuard handshake with {peer}… at {} completed in {} ms; this tunnel's public key \
+             is {}",
+            handshake.endpoint,
+            handshake.handshake_at.as_millis(),
+            handshake.our_public_key
+        ))
+    }
+
+    /// The SSH half of the probe, including the trust-on-first-use pin.
+    ///
+    /// Returns the configuration the through-request should use: on a first
+    /// use that is a clone carrying the pin just written, so the tunnel this
+    /// probe then starts does not TOFU a second time.
+    async fn probe_ssh_handshake(
+        &self,
+        config: &scryer_domain::ProxyConfig,
+    ) -> AppResult<(scryer_domain::ProxyConfig, String)> {
+        let handshake = crate::tunnel_proxy::probe_tunnel_handshake(config)
+            .await
+            .map_err(AppError::Repository)?;
+
+        // Trust on first use: the probe owns a repository handle, so it pins
+        // directly instead of queueing on the ledger the egress paths use.
+        let mut config = config.clone();
+        let message = if handshake.newly_pinned {
+            let pinned_at = Utc::now();
+            self.services
+                .integrations
+                .proxy_configs
+                .pin_host_key(&config.id, &handshake.fingerprint, pinned_at)
+                .await?;
+            // The handshake also queued this pin on the ledger the egress paths
+            // use; take it back rather than leave a duplicate write for the
+            // next flush.
+            crate::tunnel_proxy::TunnelHostKeyLedger::shared().take(&config.id);
+            config.host_key_fingerprint = Some(handshake.fingerprint.clone());
+            config.host_key_pinned_at = Some(pinned_at);
+            format!(
+                "SSH tunnel authenticated as {}; pinned host key {} on first use",
+                handshake.endpoint, handshake.fingerprint
+            )
+        } else {
+            format!(
+                "SSH tunnel authenticated as {}; host key {} matches the pinned fingerprint",
+                handshake.endpoint, handshake.fingerprint
+            )
+        };
+        Ok((config, message))
     }
 
     /// The URL a transport-proxy test should fetch *through* the proxy.
@@ -473,6 +670,25 @@ fn normalize_proxy_endpoint(
                 scheme_remote_dns: None,
             })
         }
+        // A WireGuard endpoint is the peer's UDP `Endpoint` line and nothing
+        // else, so the same rule as SSH: host, optional port, no resource.
+        (Provider::WireGuard, "wireguard") => {
+            if !matches!(parsed.path(), "" | "/") {
+                return Err(AppError::Validation(
+                    "WireGuard base URL must be wireguard://host[:port] with no path".into(),
+                ));
+            }
+            if parsed.query().is_some() || parsed.fragment().is_some() {
+                return Err(AppError::Validation(
+                    "WireGuard base URL must be wireguard://host[:port] with no query or fragment"
+                        .into(),
+                ));
+            }
+            Ok(NormalizedProxyEndpoint {
+                base_url: trimmed.to_string(),
+                scheme_remote_dns: None,
+            })
+        }
         (Provider::Socks4, "socks4") | (Provider::Socks5, "socks5") => {
             Ok(NormalizedProxyEndpoint {
                 base_url: trimmed.to_string(),
@@ -508,6 +724,9 @@ fn normalize_proxy_endpoint(
         )),
         (Provider::SshTunnel, _) => Err(AppError::Validation(
             "SSH tunnel base URL must use ssh".into(),
+        )),
+        (Provider::WireGuard, _) => Err(AppError::Validation(
+            "WireGuard base URL must use wireguard".into(),
         )),
         (Provider::Byparr | Provider::Trawl, _) => unreachable!("handled by the solver branch"),
     }
@@ -578,12 +797,11 @@ fn normalize_proxy_private_key(raw: Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-/// Structural PEM check only.
+/// Structural PEM check, ahead of the real parse in `validate_tunnel_auth`.
 ///
-/// Real key parsing belongs to the tunnel engine (WP6, russh-keys); rejecting
-/// something that is plainly not a PEM block here just keeps an obvious paste
-/// mistake from being stored encrypted and failing much later with a worse
-/// message.
+/// Rejecting something that is plainly not a PEM block first keeps the message
+/// for an obvious paste mistake simple; the engine's parser then decides
+/// whether what was pasted is a usable Ed25519 key.
 fn validate_private_key_pem(pem: &str) -> AppResult<()> {
     let trimmed = pem.trim();
     let malformed = || {
@@ -602,48 +820,198 @@ fn validate_private_key_pem(pem: &str) -> AppResult<()> {
     Ok(())
 }
 
-/// Authentication rules for the tunnel family, and the rejection that keeps
-/// key material off every other family.
+/// Every field the two tunnel families draw on, gathered so the rules can be
+/// stated in one place instead of spread across a ten-argument call.
+///
+/// The two families overlap in what they *reject*, not in what they use: an
+/// SSH tunnel has a user and may have a passphrase; a WireGuard tunnel has
+/// neither and instead carries a peer key, addresses and link settings. Every
+/// field belonging to one is refused by the other, and all of them are refused
+/// by the non-tunnel providers.
+#[derive(Default)]
+struct TunnelAuthFields<'a> {
+    username: Option<&'a str>,
+    password: Option<&'a str>,
+    private_key: Option<&'a str>,
+    private_key_passphrase: Option<&'a str>,
+    peer_public_key: Option<&'a str>,
+    preshared_key: Option<&'a str>,
+    tunnel_addresses: &'a [String],
+    tunnel_dns_servers: &'a [String],
+    tunnel_mtu: Option<u16>,
+    tunnel_keepalive_seconds: Option<u16>,
+}
+
+impl TunnelAuthFields<'_> {
+    /// True when any WireGuard-only field carries a value.
+    fn has_wireguard_fields(&self) -> bool {
+        self.peer_public_key.is_some()
+            || self.preshared_key.is_some()
+            || !self.tunnel_addresses.is_empty()
+            || !self.tunnel_dns_servers.is_empty()
+            || self.tunnel_mtu.is_some()
+            || self.tunnel_keepalive_seconds.is_some()
+    }
+}
+
+/// Authentication rules for the tunnel family, and the rejections that keep
+/// each family's fields off every other family.
 fn validate_tunnel_auth(
     provider_type: scryer_domain::ProxyProviderType,
-    username: Option<&str>,
-    password: Option<&str>,
-    private_key: Option<&str>,
-    private_key_passphrase: Option<&str>,
+    fields: &TunnelAuthFields<'_>,
 ) -> AppResult<()> {
-    if !provider_type.is_tunnel() {
-        if private_key.is_some() {
-            return Err(AppError::Validation(
-                "only SSH tunnels take a private key".into(),
-            ));
-        }
-        if private_key_passphrase.is_some() {
-            return Err(AppError::Validation(
-                "only SSH tunnels take a private key passphrase".into(),
-            ));
-        }
-        return Ok(());
+    use scryer_domain::ProxyProviderType as Provider;
+
+    // Fields that belong to exactly one provider, refused everywhere else.
+    // Stated before the per-family rules so a value in the wrong field is
+    // always reported as the wrong field rather than as a missing one.
+    if provider_type != Provider::WireGuard && fields.has_wireguard_fields() {
+        return Err(AppError::Validation(
+            "only WireGuard tunnels take a peer public key, preshared key, tunnel addresses, \
+             DNS servers, MTU or keepalive"
+                .into(),
+        ));
+    }
+    if provider_type != Provider::SshTunnel && fields.private_key_passphrase.is_some() {
+        return Err(AppError::Validation(
+            "only SSH tunnels take a private key passphrase".into(),
+        ));
+    }
+    if !provider_type.is_tunnel() && fields.private_key.is_some() {
+        return Err(AppError::Validation(
+            "only tunnels take a private key".into(),
+        ));
     }
 
-    if username.is_none() {
+    match provider_type {
+        Provider::SshTunnel => validate_ssh_tunnel_auth(fields),
+        Provider::WireGuard => validate_wireguard_auth(fields),
+        _ => Ok(()),
+    }
+}
+
+fn validate_ssh_tunnel_auth(fields: &TunnelAuthFields<'_>) -> AppResult<()> {
+    if fields.username.is_none() {
         return Err(AppError::Validation(
             "SSH tunnels require a username".into(),
         ));
     }
-    if password.is_none() && private_key.is_none() {
+    if fields.password.is_none() && fields.private_key.is_none() {
         return Err(AppError::Validation(
             "SSH tunnels require a password or a private key".into(),
         ));
     }
-    if private_key_passphrase.is_some() && private_key.is_none() {
+    if fields.private_key_passphrase.is_some() && fields.private_key.is_none() {
         return Err(AppError::Validation(
             "a private key passphrase requires a private key".into(),
         ));
     }
-    if let Some(private_key) = private_key {
+    if let Some(private_key) = fields.private_key {
         validate_private_key_pem(private_key)?;
+        // Then parse it the way the engine will, so a non-Ed25519 key, an
+        // unreadable paste or a wrong passphrase is refused at save time rather
+        // than on the first connect.
+        scryer_tunnel::validate_private_key(private_key, fields.private_key_passphrase)
+            .map_err(|error| AppError::Validation(error.to_string()))?;
     }
     Ok(())
+}
+
+/// WireGuard has no user and no password: both halves of a key pair are the
+/// whole of the authentication, so both are required and the SSH-shaped fields
+/// are refused rather than ignored.
+fn validate_wireguard_auth(fields: &TunnelAuthFields<'_>) -> AppResult<()> {
+    if fields.username.is_some() || fields.password.is_some() {
+        return Err(AppError::Validation(
+            "WireGuard tunnels authenticate with keys, not a username or password".into(),
+        ));
+    }
+    let Some(private_key) = fields.private_key else {
+        return Err(AppError::Validation(format!(
+            "WireGuard tunnels require a private key; {}",
+            crate::tunnel_proxy::WIREGUARD_KEY_MESSAGE
+        )));
+    };
+    let Some(peer_public_key) = fields.peer_public_key else {
+        return Err(AppError::Validation(
+            "WireGuard tunnels require the peer's public key from the `[Peer]` section".into(),
+        ));
+    };
+    // The same parser the connect path uses, so a key refused here is refused
+    // for exactly the reason it would have failed later, and the message names
+    // which of the three keys is wrong.
+    scryer_tunnel::validate_wireguard_keys(private_key, peer_public_key, fields.preshared_key)
+        .map_err(|error| AppError::Validation(error.to_string()))?;
+
+    if fields.tunnel_addresses.is_empty() {
+        return Err(AppError::Validation(
+            "WireGuard tunnels require at least one interface address; copy the `Address` line \
+             from the WireGuard configuration (for example `10.6.0.2/32`)"
+                .into(),
+        ));
+    }
+    for address in fields.tunnel_addresses {
+        address
+            .parse::<scryer_tunnel::IpCidr>()
+            .map_err(|error| AppError::Validation(error.to_string()))?;
+    }
+    for server in fields.tunnel_dns_servers {
+        server.parse::<std::net::IpAddr>().map_err(|_| {
+            AppError::Validation(format!(
+                "`{server}` is not a DNS server address; the `DNS` line takes IP addresses"
+            ))
+        })?;
+    }
+    if let Some(mtu) = fields.tunnel_mtu
+        && !(scryer_tunnel::MIN_WIREGUARD_MTU..=scryer_tunnel::MAX_WIREGUARD_MTU).contains(&mtu)
+    {
+        return Err(AppError::Validation(format!(
+            "the tunnel MTU must be between {} and {}; {mtu} is outside that range",
+            scryer_tunnel::MIN_WIREGUARD_MTU,
+            scryer_tunnel::MAX_WIREGUARD_MTU
+        )));
+    }
+    // Keepalive needs no range check beyond the type: 0 switches it off and
+    // 65535 is the widest interval the protocol field can express, so every
+    // `u16` is a legal setting.
+    Ok(())
+}
+
+/// Trim an operator-supplied address or DNS list into its individual entries.
+///
+/// A `wg` config writes these as one comma-separated line, and an operator
+/// pasting one line into one field is at least as likely as filling a repeated
+/// input, so commas split here as well. That also makes the comma-separated
+/// storage lossless: nothing that survives this can contain a comma.
+fn normalize_tunnel_list(raw: Option<Vec<String>>) -> Option<Vec<String>> {
+    raw.map(|values| {
+        values
+            .iter()
+            .flat_map(|value| value.split(','))
+            .map(str::trim)
+            .filter(|entry| !entry.is_empty())
+            .map(str::to_string)
+            .collect()
+    })
+}
+
+/// Derive the public half of a WireGuard private key, for the
+/// `tunnel_public_key` column.
+///
+/// Computed on every write of the private key rather than on read, so nothing
+/// above this layer needs the tunnel crate to show an operator the line they
+/// must paste into their server's `[Peer]` section. `None` for every other
+/// provider, and for a WireGuard row with no key yet.
+fn derive_tunnel_public_key(
+    provider_type: scryer_domain::ProxyProviderType,
+    private_key: Option<&str>,
+) -> AppResult<Option<String>> {
+    if provider_type != scryer_domain::ProxyProviderType::WireGuard {
+        return Ok(None);
+    }
+    private_key
+        .map(|key| crate::tunnel_proxy::wireguard_public_key(key).map_err(AppError::Validation))
+        .transpose()
 }
 
 /// Resolve the stored remote-DNS flag from what the operator asked for and
@@ -870,6 +1238,7 @@ fn transport_proxy_name(provider_type: scryer_domain::ProxyProviderType) -> &'st
         scryer_domain::ProxyProviderType::Socks4 => "SOCKS4 proxy",
         scryer_domain::ProxyProviderType::Socks5 => "SOCKS5 proxy",
         scryer_domain::ProxyProviderType::SshTunnel => "SSH tunnel",
+        scryer_domain::ProxyProviderType::WireGuard => "WireGuard tunnel",
         scryer_domain::ProxyProviderType::Byparr | scryer_domain::ProxyProviderType::Trawl => {
             "challenge solver"
         }
@@ -884,6 +1253,9 @@ fn proxy_default_port(provider_type: scryer_domain::ProxyProviderType) -> Option
             Some(1080)
         }
         scryer_domain::ProxyProviderType::SshTunnel => Some(22),
+        // WireGuard's own default listen port, and what every `wg-quick`
+        // server config uses unless the operator changed it.
+        scryer_domain::ProxyProviderType::WireGuard => Some(51820),
         // http/https already have a known default, and a solver is addressed
         // as an ordinary URL.
         scryer_domain::ProxyProviderType::Http
@@ -893,7 +1265,9 @@ fn proxy_default_port(provider_type: scryer_domain::ProxyProviderType) -> Option
 }
 
 /// Split a stored transport-proxy base URL into the host and port to dial.
-fn transport_proxy_endpoint(config: &scryer_domain::ProxyConfig) -> AppResult<(String, u16)> {
+pub(crate) fn transport_proxy_endpoint(
+    config: &scryer_domain::ProxyConfig,
+) -> AppResult<(String, u16)> {
     let parsed = url::Url::parse(config.base_url.trim())
         .map_err(|error| AppError::Validation(format!("invalid proxy base URL: {error}")))?;
     let host = parsed
@@ -1131,42 +1505,83 @@ mod proxy_tests {
         );
     }
 
+    /// The SSH-shaped subset of the tunnel fields, so a test about SSH
+    /// authentication does not have to spell out six WireGuard fields it has
+    /// no opinion about.
+    fn ssh_auth<'a>(
+        username: Option<&'a str>,
+        password: Option<&'a str>,
+        private_key: Option<&'a str>,
+        private_key_passphrase: Option<&'a str>,
+    ) -> TunnelAuthFields<'a> {
+        TunnelAuthFields {
+            username,
+            password,
+            private_key,
+            private_key_passphrase,
+            ..TunnelAuthFields::default()
+        }
+    }
+
+    /// The WireGuard-shaped subset, with the two required keys up front.
+    fn wireguard_auth<'a>(
+        private_key: Option<&'a str>,
+        peer_public_key: Option<&'a str>,
+        tunnel_addresses: &'a [String],
+    ) -> TunnelAuthFields<'a> {
+        TunnelAuthFields {
+            private_key,
+            peer_public_key,
+            tunnel_addresses,
+            ..TunnelAuthFields::default()
+        }
+    }
+
     #[test]
     fn ssh_tunnels_require_a_username_and_one_form_of_authentication() {
-        const PEM: &str =
-            "-----BEGIN OPENSSH PRIVATE KEY-----\nbody\n-----END OPENSSH PRIVATE KEY-----";
+        const PEM: &str = scryer_tunnel::test_support::CLIENT_ED25519_PEM;
 
         // Username is not optional: there is no "current user" to fall back to.
         assert!(
-            validate_tunnel_auth(Provider::SshTunnel, None, Some("s3cret"), None, None).is_err()
+            validate_tunnel_auth(
+                Provider::SshTunnel,
+                &ssh_auth(None, Some("s3cret"), None, None)
+            )
+            .is_err()
         );
         // Neither a password nor a key means nothing to authenticate with.
         assert!(
-            validate_tunnel_auth(Provider::SshTunnel, Some("operator"), None, None, None).is_err()
+            validate_tunnel_auth(
+                Provider::SshTunnel,
+                &ssh_auth(Some("operator"), None, None, None)
+            )
+            .is_err()
         );
         // Either alone is enough, and both together is allowed (WP6 prefers the
         // key).
         assert!(
             validate_tunnel_auth(
                 Provider::SshTunnel,
-                Some("operator"),
-                Some("s3cret"),
-                None,
-                None
+                &ssh_auth(Some("operator"), Some("s3cret"), None, None)
             )
             .is_ok()
         );
         assert!(
-            validate_tunnel_auth(Provider::SshTunnel, Some("operator"), None, Some(PEM), None)
-                .is_ok()
+            validate_tunnel_auth(
+                Provider::SshTunnel,
+                &ssh_auth(Some("operator"), None, Some(PEM), None)
+            )
+            .is_ok()
         );
         assert!(
             validate_tunnel_auth(
                 Provider::SshTunnel,
-                Some("operator"),
-                Some("s3cret"),
-                Some(PEM),
-                Some("phrase")
+                &ssh_auth(
+                    Some("operator"),
+                    Some("s3cret"),
+                    Some(scryer_tunnel::test_support::CLIENT_ED25519_PEM_WITH_PASSPHRASE),
+                    Some(scryer_tunnel::test_support::CLIENT_ED25519_PEM_PASSPHRASE)
+                )
             )
             .is_ok()
         );
@@ -1174,32 +1589,56 @@ mod proxy_tests {
         assert!(
             validate_tunnel_auth(
                 Provider::SshTunnel,
-                Some("operator"),
-                Some("s3cret"),
-                None,
-                Some("phrase")
+                &ssh_auth(Some("operator"), Some("s3cret"), None, Some("phrase"))
             )
             .is_err()
         );
-        // Structural PEM check only; real parsing is the tunnel engine's job.
+        // Not a PEM block at all: the structural check names the shape.
         assert!(
             validate_tunnel_auth(
                 Provider::SshTunnel,
-                Some("operator"),
-                None,
-                Some("not a key"),
-                None
+                &ssh_auth(Some("operator"), None, Some("not a key"), None)
             )
             .is_err()
         );
         assert!(validate_private_key_pem(PEM).is_ok());
         assert!(validate_private_key_pem("-----BEGIN X-----\nbody").is_err());
+        // A well-formed PEM that is not an Ed25519 key is refused at save time
+        // with the same sentence the connect path and the probe use.
+        let error = validate_tunnel_auth(
+            Provider::SshTunnel,
+            &ssh_auth(
+                Some("operator"),
+                None,
+                Some(scryer_tunnel::test_support::ECDSA_P256_PEM),
+                None,
+            ),
+        )
+        .expect_err("only Ed25519 keys are accepted");
+        assert!(
+            error
+                .to_string()
+                .contains(crate::tunnel_proxy::ED25519_ONLY_PRIVATE_KEY_MESSAGE),
+            "{error}"
+        );
+        // A passphrase-protected key needs its passphrase to be usable.
+        assert!(
+            validate_tunnel_auth(
+                Provider::SshTunnel,
+                &ssh_auth(
+                    Some("operator"),
+                    None,
+                    Some(scryer_tunnel::test_support::CLIENT_ED25519_PEM_WITH_PASSPHRASE),
+                    None
+                )
+            )
+            .is_err()
+        );
     }
 
     #[test]
     fn only_tunnels_take_key_material() {
-        const PEM: &str =
-            "-----BEGIN OPENSSH PRIVATE KEY-----\nbody\n-----END OPENSSH PRIVATE KEY-----";
+        const PEM: &str = scryer_tunnel::test_support::CLIENT_ED25519_PEM;
         for provider in [
             Provider::Http,
             Provider::Socks4,
@@ -1207,16 +1646,306 @@ mod proxy_tests {
             Provider::Trawl,
         ] {
             assert!(
-                validate_tunnel_auth(provider, Some("operator"), None, Some(PEM), None).is_err(),
+                validate_tunnel_auth(provider, &ssh_auth(Some("operator"), None, Some(PEM), None))
+                    .is_err(),
                 "{provider:?} must reject a private key"
             );
             assert!(
-                validate_tunnel_auth(provider, Some("operator"), None, None, Some("phrase"))
-                    .is_err(),
+                validate_tunnel_auth(
+                    provider,
+                    &ssh_auth(Some("operator"), None, None, Some("phrase"))
+                )
+                .is_err(),
                 "{provider:?} must reject a passphrase"
             );
-            assert!(validate_tunnel_auth(provider, Some("operator"), None, None, None).is_ok());
+            assert!(
+                validate_tunnel_auth(provider, &ssh_auth(Some("operator"), None, None, None))
+                    .is_ok()
+            );
         }
+    }
+
+    /// Deterministic base64 key material for the WireGuard rules below. Any 32
+    /// bytes is a valid X25519 key, so a public key printed from a fixed seed
+    /// is as good a private key as any and nothing real is committed.
+    fn wg_key(seed: u8) -> String {
+        scryer_tunnel::public_key_of(&scryer_tunnel::test_support::test_key(seed))
+    }
+
+    #[test]
+    fn wireguard_endpoints_take_their_own_scheme_and_default_port() {
+        let endpoint = normalize_proxy_endpoint(Provider::WireGuard, "wireguard://vpn.test:51820/")
+            .expect("a wireguard endpoint");
+        assert_eq!(endpoint.base_url, "wireguard://vpn.test:51820");
+        assert_eq!(endpoint.scheme_remote_dns, None);
+
+        // An endpoint is a host and a port and nothing else.
+        assert!(normalize_proxy_endpoint(Provider::WireGuard, "wireguard://vpn.test/wg0").is_err());
+        assert!(normalize_proxy_endpoint(Provider::WireGuard, "wireguard://vpn.test?a=1").is_err());
+        assert!(
+            normalize_proxy_endpoint(Provider::WireGuard, "wireguard://vpn.test#peer").is_err()
+        );
+        assert!(
+            normalize_proxy_endpoint(Provider::WireGuard, "wireguard://user:pw@vpn.test").is_err()
+        );
+        // The scheme has to match the provider, both ways round.
+        assert!(normalize_proxy_endpoint(Provider::WireGuard, "ssh://vpn.test").is_err());
+        assert!(normalize_proxy_endpoint(Provider::SshTunnel, "wireguard://vpn.test").is_err());
+
+        let mut config = transport_config(Provider::WireGuard, "wireguard://vpn.test");
+        assert_eq!(
+            transport_proxy_endpoint(&config).expect("wireguard default port"),
+            ("vpn.test".to_string(), 51820)
+        );
+        config.base_url = "wireguard://vpn.test:51821".to_string();
+        assert_eq!(
+            transport_proxy_endpoint(&config).expect("explicit port"),
+            ("vpn.test".to_string(), 51821)
+        );
+    }
+
+    #[test]
+    fn wireguard_tunnels_require_both_keys_and_an_interface_address() {
+        let private_key = wg_key(1);
+        let peer = wg_key(2);
+        let addresses = vec!["10.6.0.2/32".to_string()];
+
+        assert!(
+            validate_tunnel_auth(
+                Provider::WireGuard,
+                &wireguard_auth(Some(&private_key), Some(&peer), &addresses)
+            )
+            .is_ok()
+        );
+        // Each of the three is individually required.
+        assert!(
+            validate_tunnel_auth(
+                Provider::WireGuard,
+                &wireguard_auth(None, Some(&peer), &addresses)
+            )
+            .is_err()
+        );
+        assert!(
+            validate_tunnel_auth(
+                Provider::WireGuard,
+                &wireguard_auth(Some(&private_key), None, &addresses)
+            )
+            .is_err()
+        );
+        assert!(
+            validate_tunnel_auth(
+                Provider::WireGuard,
+                &wireguard_auth(Some(&private_key), Some(&peer), &[])
+            )
+            .is_err()
+        );
+
+        // The key parser is the engine's own, so a bad paste is refused here
+        // with the same words it would have failed with at connect time, and
+        // the message says *which* key.
+        let error = validate_tunnel_auth(
+            Provider::WireGuard,
+            &wireguard_auth(Some("not base64"), Some(&peer), &addresses),
+        )
+        .expect_err("an unreadable private key");
+        assert!(error.to_string().contains("private key"), "{error}");
+        let error = validate_tunnel_auth(
+            Provider::WireGuard,
+            &wireguard_auth(Some(&private_key), Some("not base64"), &addresses),
+        )
+        .expect_err("an unreadable peer key");
+        assert!(error.to_string().contains("peer public key"), "{error}");
+
+        // Pasting our own public key into the peer field is the common
+        // mistake, and it can never handshake.
+        let own_public = scryer_tunnel::public_key_of(
+            &scryer_tunnel::parse_key(&private_key).expect("valid key"),
+        );
+        assert!(
+            validate_tunnel_auth(
+                Provider::WireGuard,
+                &wireguard_auth(Some(&private_key), Some(&own_public), &addresses)
+            )
+            .is_err()
+        );
+
+        // Addresses and DNS servers are parsed the way the engine will.
+        assert!(
+            validate_tunnel_auth(
+                Provider::WireGuard,
+                &wireguard_auth(
+                    Some(&private_key),
+                    Some(&peer),
+                    &["not-an-address".to_string()]
+                )
+            )
+            .is_err()
+        );
+        let dns = vec!["10.6.0.1".to_string()];
+        assert!(
+            validate_tunnel_auth(
+                Provider::WireGuard,
+                &TunnelAuthFields {
+                    tunnel_dns_servers: &dns,
+                    ..wireguard_auth(Some(&private_key), Some(&peer), &addresses)
+                }
+            )
+            .is_ok()
+        );
+        let bad_dns = vec!["resolver.test".to_string()];
+        assert!(
+            validate_tunnel_auth(
+                Provider::WireGuard,
+                &TunnelAuthFields {
+                    tunnel_dns_servers: &bad_dns,
+                    ..wireguard_auth(Some(&private_key), Some(&peer), &addresses)
+                }
+            )
+            .is_err(),
+            "the `DNS` line takes addresses, not names"
+        );
+    }
+
+    #[test]
+    fn wireguard_link_settings_are_range_checked_and_keepalive_zero_is_legal() {
+        let private_key = wg_key(3);
+        let peer = wg_key(4);
+        let addresses = vec!["10.6.0.2/32".to_string()];
+        let with = |mtu: Option<u16>, keepalive: Option<u16>| {
+            validate_tunnel_auth(
+                Provider::WireGuard,
+                &TunnelAuthFields {
+                    tunnel_mtu: mtu,
+                    tunnel_keepalive_seconds: keepalive,
+                    ..wireguard_auth(Some(&private_key), Some(&peer), &addresses)
+                },
+            )
+        };
+        assert!(with(None, None).is_ok(), "both may be left to the engine");
+        assert!(with(Some(scryer_tunnel::MIN_WIREGUARD_MTU), None).is_ok());
+        assert!(with(Some(scryer_tunnel::MAX_WIREGUARD_MTU), None).is_ok());
+        assert!(with(Some(scryer_tunnel::MIN_WIREGUARD_MTU - 1), None).is_err());
+        assert!(with(Some(scryer_tunnel::MAX_WIREGUARD_MTU + 1), None).is_err());
+        // Zero is not out of range: it is how an operator switches keepalive
+        // off, and it has to survive validation to reach the column.
+        assert!(with(None, Some(0)).is_ok());
+        assert!(with(None, Some(u16::MAX)).is_ok());
+    }
+
+    #[test]
+    fn each_tunnel_family_rejects_the_other_families_fields() {
+        const PEM: &str = scryer_tunnel::test_support::CLIENT_ED25519_PEM;
+        let private_key = wg_key(5);
+        let peer = wg_key(6);
+        let addresses = vec!["10.6.0.2/32".to_string()];
+
+        // WireGuard has no user, no password and no passphrase.
+        for fields in [
+            TunnelAuthFields {
+                username: Some("operator"),
+                ..wireguard_auth(Some(&private_key), Some(&peer), &addresses)
+            },
+            TunnelAuthFields {
+                password: Some("s3cret"),
+                ..wireguard_auth(Some(&private_key), Some(&peer), &addresses)
+            },
+            TunnelAuthFields {
+                private_key_passphrase: Some("phrase"),
+                ..wireguard_auth(Some(&private_key), Some(&peer), &addresses)
+            },
+        ] {
+            assert!(validate_tunnel_auth(Provider::WireGuard, &fields).is_err());
+        }
+        // And remote DNS is a SOCKS concept, so it is refused for WireGuard by
+        // the same rule that refuses it for SSH.
+        assert!(resolve_remote_dns(Provider::WireGuard, Some(true), None).is_err());
+
+        // Every other provider — SSH included — refuses the WireGuard fields.
+        for provider in [
+            Provider::Http,
+            Provider::Socks4,
+            Provider::Socks5,
+            Provider::Trawl,
+            Provider::SshTunnel,
+        ] {
+            let base = TunnelAuthFields {
+                username: Some("operator"),
+                private_key: (provider == Provider::SshTunnel).then_some(PEM),
+                ..TunnelAuthFields::default()
+            };
+            for fields in [
+                TunnelAuthFields {
+                    peer_public_key: Some(&peer),
+                    ..TunnelAuthFields { ..base }
+                },
+                TunnelAuthFields {
+                    preshared_key: Some(&peer),
+                    ..TunnelAuthFields { ..base }
+                },
+                TunnelAuthFields {
+                    tunnel_addresses: &addresses,
+                    ..TunnelAuthFields { ..base }
+                },
+                TunnelAuthFields {
+                    tunnel_mtu: Some(1420),
+                    ..TunnelAuthFields { ..base }
+                },
+                TunnelAuthFields {
+                    tunnel_keepalive_seconds: Some(25),
+                    ..TunnelAuthFields { ..base }
+                },
+            ] {
+                assert!(
+                    validate_tunnel_auth(provider, &fields).is_err(),
+                    "{provider:?} must reject the WireGuard-only fields"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_tunnel_public_key_is_derived_from_the_private_key_and_only_for_wireguard() {
+        let private_key = wg_key(7);
+        assert_eq!(
+            derive_tunnel_public_key(Provider::WireGuard, Some(&private_key)).expect("derives"),
+            Some(scryer_tunnel::public_key_of(
+                &scryer_tunnel::parse_key(&private_key).expect("valid key")
+            ))
+        );
+        // No key yet, nothing to derive.
+        assert_eq!(
+            derive_tunnel_public_key(Provider::WireGuard, None).expect("no key"),
+            None
+        );
+        // An SSH private key is a PEM block, not a WireGuard key, so this
+        // column stays empty for every other provider.
+        assert_eq!(
+            derive_tunnel_public_key(
+                Provider::SshTunnel,
+                Some(scryer_tunnel::test_support::CLIENT_ED25519_PEM)
+            )
+            .expect("not a wireguard row"),
+            None
+        );
+    }
+
+    #[test]
+    fn a_pasted_address_line_splits_on_its_commas() {
+        // `wg` writes `Address = 10.6.0.2/32, fd00::2/128` on one line, and an
+        // operator pasting that whole line into one field is at least as likely
+        // as filling a repeated input.
+        assert_eq!(
+            normalize_tunnel_list(Some(vec!["10.6.0.2/32, fd00::2/128".to_string()])),
+            Some(vec!["10.6.0.2/32".to_string(), "fd00::2/128".to_string()])
+        );
+        // Blank entries are dropped, so a trailing comma is not an address.
+        assert_eq!(
+            normalize_tunnel_list(Some(vec!["10.6.0.2/32,".to_string(), "  ".to_string()])),
+            Some(vec!["10.6.0.2/32".to_string()])
+        );
+        // Omission and clearing stay distinguishable.
+        assert_eq!(normalize_tunnel_list(None), None);
+        assert_eq!(normalize_tunnel_list(Some(Vec::new())), Some(Vec::new()));
     }
 
     #[test]
@@ -1290,6 +2019,13 @@ mod proxy_tests {
             host_key_pinned_at: None,
             private_key_encrypted: None,
             private_key_passphrase_encrypted: None,
+            peer_public_key: None,
+            preshared_key_encrypted: None,
+            tunnel_public_key: None,
+            tunnel_addresses: Vec::new(),
+            tunnel_dns_servers: Vec::new(),
+            tunnel_mtu: None,
+            tunnel_keepalive_seconds: None,
         }
     }
 
@@ -1318,6 +2054,89 @@ mod proxy_tests {
         assert_eq!(
             transport_proxy_endpoint(&config).expect("http default port"),
             ("gateway".to_string(), 80)
+        );
+    }
+
+    fn tunnel_probe_config(id: &str, base_url: String) -> scryer_domain::ProxyConfig {
+        let mut config = crate::tunnel_proxy::tests::tunnel_config();
+        config.id = id.to_string();
+        config.base_url = base_url;
+        config
+    }
+
+    /// The probe replaces WP4's "arrives with the tunnel engine" refusal: it
+    /// really handshakes, and it reports the fingerprint it learned so the
+    /// operator can compare it against their server.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_tunnel_probe_handshakes_and_reports_a_first_use_pin() {
+        let server = scryer_tunnel::test_support::SshServerDouble::start(
+            scryer_tunnel::test_support::SshServerOptions::default(),
+        )
+        .await;
+        let config = tunnel_probe_config("probe-tunnel", format!("ssh://{}", server.addr()));
+
+        let handshake = crate::tunnel_proxy::probe_tunnel_handshake(&config)
+            .await
+            .expect("the probe should complete a handshake");
+        assert_eq!(
+            handshake.fingerprint,
+            scryer_tunnel::test_support::HOST_KEY_FINGERPRINT
+        );
+        assert!(handshake.newly_pinned, "the first handshake pins");
+        assert_eq!(handshake.endpoint, format!("operator@{}", server.addr()));
+
+        // Take back what the handshake queued, as the workflow does after it
+        // pins directly.
+        assert!(
+            crate::tunnel_proxy::TunnelHostKeyLedger::shared()
+                .take("probe-tunnel")
+                .is_some()
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_tunnel_probe_names_both_fingerprints_when_the_host_key_changed() {
+        let server = scryer_tunnel::test_support::SshServerDouble::start(
+            scryer_tunnel::test_support::SshServerOptions {
+                host_key_pem: scryer_tunnel::test_support::OTHER_HOST_ED25519_PEM,
+                ..scryer_tunnel::test_support::SshServerOptions::default()
+            },
+        )
+        .await;
+        let mut config =
+            tunnel_probe_config("probe-tunnel-mitm", format!("ssh://{}", server.addr()));
+        config.host_key_fingerprint =
+            Some(scryer_tunnel::test_support::HOST_KEY_FINGERPRINT.to_string());
+
+        let error = crate::tunnel_proxy::probe_tunnel_handshake(&config)
+            .await
+            .expect_err("a changed host key must fail the probe");
+        assert!(
+            error.contains(scryer_tunnel::test_support::HOST_KEY_FINGERPRINT)
+                && error.contains(scryer_tunnel::test_support::OTHER_HOST_KEY_FINGERPRINT),
+            "the operator needs both fingerprints: {error}"
+        );
+        assert!(error.contains("reset the pinned host key"), "{error}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_tunnel_probe_rejects_a_private_key_that_is_not_ed25519() {
+        let server = scryer_tunnel::test_support::SshServerDouble::start(
+            scryer_tunnel::test_support::SshServerOptions::default(),
+        )
+        .await;
+        let mut config =
+            tunnel_probe_config("probe-tunnel-ecdsa", format!("ssh://{}", server.addr()));
+        config.password_encrypted = None;
+        config.private_key_encrypted =
+            Some(scryer_tunnel::test_support::ECDSA_P256_PEM.to_string());
+
+        let error = crate::tunnel_proxy::probe_tunnel_handshake(&config)
+            .await
+            .expect_err("only Ed25519 keys are supported");
+        assert!(
+            error.starts_with(crate::tunnel_proxy::ED25519_ONLY_PRIVATE_KEY_MESSAGE),
+            "{error}"
         );
     }
 
@@ -1439,6 +2258,13 @@ mod proxy_tests {
             host_key_pinned_at: None,
             private_key_encrypted: None,
             private_key_passphrase_encrypted: None,
+            peer_public_key: None,
+            preshared_key_encrypted: None,
+            tunnel_public_key: None,
+            tunnel_addresses: Vec::new(),
+            tunnel_dns_servers: Vec::new(),
+            tunnel_mtu: None,
+            tunnel_keepalive_seconds: None,
         }
     }
 
@@ -1551,6 +2377,13 @@ mod proxy_tests {
             host_key_pinned_at: None,
             private_key_encrypted: None,
             private_key_passphrase_encrypted: None,
+            peer_public_key: None,
+            preshared_key_encrypted: None,
+            tunnel_public_key: None,
+            tunnel_addresses: Vec::new(),
+            tunnel_dns_servers: Vec::new(),
+            tunnel_mtu: None,
+            tunnel_keepalive_seconds: None,
         };
 
         let error = probe_solver_health(&config)

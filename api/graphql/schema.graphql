@@ -2241,16 +2241,50 @@ input CreateProxyConfigInput {
 	"""
 	remoteDns: Boolean
 	"""
-	PEM-encoded private key for a tunnel provider. Write-only: stored
-	encrypted and never read back. Only SSH tunnels accept it, and a tunnel
-	needs either this or a password.
+	Private key for a tunnel provider: PEM for an SSH tunnel, base64 for
+	WireGuard. Write-only: stored encrypted and never read back. An SSH
+	tunnel needs either this or a password; WireGuard requires it.
 	"""
 	privateKey: String
 	"""
 	Passphrase protecting the private key above. Write-only: stored
-	encrypted and never read back. Requires a private key.
+	encrypted and never read back. Requires a private key, and only SSH
+	tunnels accept one.
 	"""
 	privateKeyPassphrase: String
+	"""
+	WireGuard peer public key, from the `[Peer]` section. Required for
+	WireGuard and rejected by every other provider. Not a secret: it is
+	read back in full.
+	"""
+	peerPublicKey: String
+	"""
+	Optional WireGuard preshared key. Write-only: stored encrypted and
+	never read back. Only WireGuard accepts it.
+	"""
+	presharedKey: String
+	"""
+	WireGuard interface addresses, from the `[Interface] Address` line.
+	At least one is required for WireGuard; a single comma-separated entry
+	is also accepted. Only WireGuard accepts them.
+	"""
+	tunnelAddresses: [String!]
+	"""
+	WireGuard resolvers, from the `[Interface] DNS` line. Optional; without
+	them a destination must be addressed by IP. Only WireGuard accepts
+	them.
+	"""
+	tunnelDnsServers: [String!]
+	"""
+	WireGuard tunnel MTU. Omit to use the engine's default. Only WireGuard
+	accepts it.
+	"""
+	tunnelMtu: Int
+	"""
+	WireGuard persistent keepalive in seconds. Omit to use the engine's
+	default; zero switches keepalive off. Only WireGuard accepts it.
+	"""
+	tunnelKeepaliveSeconds: Int
 	"""
 	Whether the proxy is enabled.
 	"""
@@ -16955,6 +16989,42 @@ type ProxyConfigPayload {
 	"""
 	hasPrivateKey: Boolean!
 	"""
+	WireGuard peer public key, from the `[Peer]` section, or null outside
+	WireGuard. A public key is public, so this value is shown rather than
+	masked.
+	"""
+	peerPublicKey: String
+	"""
+	Whether a WireGuard preshared key is stored, without exposing it.
+	Always false outside WireGuard.
+	"""
+	hasPresharedKey: Boolean!
+	"""
+	This tunnel's own public key, derived from its private key, or null
+	when no private key is stored. It is the line the operator must paste
+	into the server's `[Peer]` section, so it is shown rather than masked.
+	"""
+	tunnelPublicKey: String
+	"""
+	WireGuard interface addresses, from the `[Interface] Address` line.
+	Empty outside WireGuard.
+	"""
+	tunnelAddresses: [String!]!
+	"""
+	WireGuard resolvers reached through the tunnel, from the
+	`[Interface] DNS` line. Empty when none are configured.
+	"""
+	tunnelDnsServers: [String!]!
+	"""
+	WireGuard tunnel MTU, or null to use the engine's default.
+	"""
+	tunnelMtu: Int
+	"""
+	WireGuard persistent keepalive in seconds, or null to use the engine's
+	default. Zero means keepalive is switched off.
+	"""
+	tunnelKeepaliveSeconds: Int
+	"""
 	Host key pinned on the first successful tunnel connect, formatted as
 	OpenSSH prints it, or null before the first connect. A host key is
 	public, so this value is shown rather than masked.
@@ -23895,8 +23965,9 @@ input UpdateProxyConfigInput {
 	"""
 	remoteDns: Boolean
 	"""
-	Replacement PEM-encoded tunnel private key. Write-only: omission
-	preserves the stored value, null clears it, and it is never read back.
+	Replacement tunnel private key: PEM for an SSH tunnel, base64 for
+	WireGuard. Write-only: omission preserves the stored value, null clears
+	it, and it is never read back. Writing it re-derives `tunnelPublicKey`.
 	"""
 	privateKey: String
 	"""
@@ -23904,6 +23975,36 @@ input UpdateProxyConfigInput {
 	stored value, null clears it, and it is never read back.
 	"""
 	privateKeyPassphrase: String
+	"""
+	Replacement WireGuard peer public key; omission preserves it. It has no
+	cleared state: a WireGuard tunnel cannot exist without one.
+	"""
+	peerPublicKey: String
+	"""
+	Replacement WireGuard preshared key. Write-only: omission preserves the
+	stored value, null clears it, and it is never read back.
+	"""
+	presharedKey: String
+	"""
+	Replacement WireGuard interface addresses; omission preserves them, and
+	an empty list clears them.
+	"""
+	tunnelAddresses: [String!]
+	"""
+	Replacement WireGuard resolvers; omission preserves them, and an empty
+	list clears them.
+	"""
+	tunnelDnsServers: [String!]
+	"""
+	Replacement WireGuard MTU; omission preserves it and null restores the
+	engine's default.
+	"""
+	tunnelMtu: Int
+	"""
+	Replacement WireGuard keepalive in seconds; omission preserves it, null
+	restores the engine's default, and zero switches keepalive off.
+	"""
+	tunnelKeepaliveSeconds: Int
 	"""
 	Replacement enabled state; omission preserves it.
 	"""

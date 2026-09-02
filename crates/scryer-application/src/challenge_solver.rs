@@ -69,6 +69,7 @@ pub fn solver_provider_name(provider: scryer_domain::ProxyProviderType) -> &'sta
         scryer_domain::ProxyProviderType::Socks4 => "SOCKS4 proxy",
         scryer_domain::ProxyProviderType::Socks5 => "SOCKS5 proxy",
         scryer_domain::ProxyProviderType::SshTunnel => "SSH tunnel",
+        scryer_domain::ProxyProviderType::WireGuard => "WireGuard tunnel",
     }
 }
 
@@ -76,10 +77,12 @@ pub fn solver_error_message(
     provider: scryer_domain::ProxyProviderType,
     kind: SolverErrorKind,
 ) -> &'static str {
-    use scryer_domain::ProxyProviderType::{Byparr, Http, Socks4, Socks5, SshTunnel, Trawl};
+    use scryer_domain::ProxyProviderType::{
+        Byparr, Http, Socks4, Socks5, SshTunnel, Trawl, WireGuard,
+    };
 
     match (provider, kind) {
-        (Http | Socks4 | Socks5 | SshTunnel, _) => TRANSPORT_PROXY_NOT_A_SOLVER_MESSAGE,
+        (Http | Socks4 | Socks5 | SshTunnel | WireGuard, _) => TRANSPORT_PROXY_NOT_A_SOLVER_MESSAGE,
         (Byparr, SolverErrorKind::Unreachable) => BYPARR_UNREACHABLE_MESSAGE,
         (Byparr, SolverErrorKind::Timeout) => BYPARR_TIMEOUT_MESSAGE,
         (Byparr, SolverErrorKind::Unavailable) => BYPARR_UNAVAILABLE_MESSAGE,
@@ -143,7 +146,8 @@ pub fn solver_solve_request(
         | scryer_domain::ProxyProviderType::Http
         | scryer_domain::ProxyProviderType::Socks4
         | scryer_domain::ProxyProviderType::Socks5
-        | scryer_domain::ProxyProviderType::SshTunnel => request_timeout_seconds,
+        | scryer_domain::ProxyProviderType::SshTunnel
+        | scryer_domain::ProxyProviderType::WireGuard => request_timeout_seconds,
         scryer_domain::ProxyProviderType::Trawl => request_timeout_seconds.saturating_mul(1_000),
     };
     ChallengeSolverRequest {
@@ -613,10 +617,16 @@ impl SolverHealthLedger {
     }
 }
 
-/// Persist any pending solver-health observations. Health writes go through
-/// the dedicated repository method so they never bump `updated_at`, which
-/// doubles as the plugin client cache revision.
+/// Persist any pending proxy observations. Health writes go through the
+/// dedicated repository method so they never bump `updated_at`, which doubles
+/// as the plugin client cache revision.
+///
+/// Two ledgers drain here, for the same reason and at the same two call sites:
+/// solver/transport health, and host keys the tunnel engine learned on first
+/// use. Neither the blocking plugin host nor the tunnel engine can reach a
+/// repository from where they observe these things.
 pub async fn flush_solver_health(repo: &dyn ProxyConfigRepository) {
+    flush_tunnel_host_key_pins(repo).await;
     for event in SolverHealthLedger::shared().drain() {
         let status = if event.healthy {
             ProxyHealthStatus::Healthy
@@ -654,6 +664,45 @@ pub async fn flush_solver_health(repo: &dyn ProxyConfigRepository) {
                 proxy_config_id = event.proxy_config_id.as_str(),
                 error = %error,
                 "failed to record proxy runtime health"
+            );
+        }
+    }
+}
+
+/// Persist host keys the tunnel engine learned on first use.
+///
+/// `pin_host_key` deliberately does not bump `updated_at`: pinning happens
+/// immediately after the connect that just succeeded, and bumping the revision
+/// there would evict the very session that did the pinning on every first
+/// connect. A trust-on-first-use pin is not an operator edit.
+async fn flush_tunnel_host_key_pins(repo: &dyn ProxyConfigRepository) {
+    for pin in crate::tunnel_proxy::TunnelHostKeyLedger::shared().drain() {
+        match repo.get_by_id(&pin.proxy_config_id).await {
+            // Already pinned — by the health probe, which owns a repository
+            // handle and writes directly, or by an earlier flush. Trust on
+            // *first* use means a queued observation never overwrites an
+            // existing pin: once the row has one, the row is the authority.
+            Ok(Some(existing)) if existing.host_key_fingerprint.is_some() => continue,
+            Ok(Some(_)) => {}
+            // The row was deleted between the handshake and the flush.
+            Ok(None) => continue,
+            Err(error) => {
+                tracing::warn!(
+                    proxy_config_id = pin.proxy_config_id.as_str(),
+                    error = %error,
+                    "failed to load proxy config for a host key pin"
+                );
+                continue;
+            }
+        }
+        if let Err(error) = repo
+            .pin_host_key(&pin.proxy_config_id, &pin.fingerprint, pin.pinned_at)
+            .await
+        {
+            tracing::warn!(
+                proxy_config_id = pin.proxy_config_id.as_str(),
+                error = %error,
+                "failed to persist a tunnel host key pin"
             );
         }
     }

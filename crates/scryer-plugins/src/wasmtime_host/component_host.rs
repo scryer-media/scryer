@@ -1670,6 +1670,13 @@ mod tests {
                     host_key_pinned_at: None,
                     private_key_encrypted: None,
                     private_key_passphrase_encrypted: None,
+                    peer_public_key: None,
+                    preshared_key_encrypted: None,
+                    tunnel_public_key: None,
+                    tunnel_addresses: Vec::new(),
+                    tunnel_dns_servers: Vec::new(),
+                    tunnel_mtu: None,
+                    tunnel_keepalive_seconds: None,
                 },
             }),
             timeout,
@@ -1718,6 +1725,13 @@ mod tests {
                     host_key_pinned_at: None,
                     private_key_encrypted: None,
                     private_key_passphrase_encrypted: None,
+                    peer_public_key: None,
+                    preshared_key_encrypted: None,
+                    tunnel_public_key: None,
+                    tunnel_addresses: Vec::new(),
+                    tunnel_dns_servers: Vec::new(),
+                    tunnel_mtu: None,
+                    tunnel_keepalive_seconds: None,
                 },
             }),
             Duration::from_secs(30),
@@ -1830,11 +1844,96 @@ mod tests {
         );
     }
 
-    /// The live WASI p2 egress path must not degrade a tunnel assignment into
-    /// a direct connection. The destination here is a real listener, so a
-    /// dropped policy would show up as a success rather than as an error.
+    fn tunnel_policy(id: &str, base_url: String) -> ProxyPolicy {
+        let now = chrono::Utc::now();
+        ProxyPolicy {
+            consumer_id: "component-indexer".to_string(),
+            consumer_name: "Component indexer".to_string(),
+            config: scryer_domain::ProxyConfig {
+                id: id.to_string(),
+                name: "Seedbox".to_string(),
+                provider_type: scryer_domain::ProxyProviderType::SshTunnel,
+                protocol: None,
+                username_encrypted: Some("operator".to_string()),
+                password_encrypted: Some("s3cret".to_string()),
+                remote_dns: false,
+                base_url,
+                request_timeout_seconds: 30,
+                is_enabled: true,
+                last_health_status: None,
+                last_error_message: None,
+                last_error_at: None,
+                created_at: now,
+                updated_at: now,
+                host_key_fingerprint: None,
+                host_key_pinned_at: None,
+                private_key_encrypted: None,
+                private_key_passphrase_encrypted: None,
+                peer_public_key: None,
+                preshared_key_encrypted: None,
+                tunnel_public_key: None,
+                tunnel_addresses: Vec::new(),
+                tunnel_dns_servers: Vec::new(),
+                tunnel_mtu: None,
+                tunnel_keepalive_seconds: None,
+            },
+        }
+    }
+
+    /// Was `component_http_fails_closed_for_a_tunnel_proxy` while there was no
+    /// engine. The live WASI p2 egress path now *takes* the tunnel: the SSH
+    /// double records the destination it forwarded, so this proves the request
+    /// travelled through it rather than merely that it did not go direct.
     #[tokio::test(flavor = "multi_thread")]
-    async fn component_http_fails_closed_for_a_tunnel_proxy() {
+    async fn component_http_egresses_through_an_assigned_tunnel_proxy() {
+        let server = scryer_tunnel::test_support::SshServerDouble::start(
+            scryer_tunnel::test_support::SshServerOptions::default(),
+        )
+        .await;
+        let origin =
+            scryer_tunnel::test_support::TunnelledOrigin::start("<rss>tunnelled</rss>").await;
+
+        let host = ComponentHost::for_indexer(
+            BTreeMap::new(),
+            vec!["127.0.0.1".to_string()],
+            Some(tunnel_policy(
+                "component-tunnel",
+                format!("ssh://{}", server.addr()),
+            )),
+            Duration::from_secs(30),
+            Some(1024 * 1024),
+        )
+        .expect("component host should accept a configured tunnel proxy");
+
+        let response = host
+            .http(HttpRequest {
+                method: "GET".to_string(),
+                url: format!("http://{}/api?t=search", origin.addr()),
+                headers: Vec::new(),
+                body: Vec::new(),
+            })
+            .await
+            .expect("the tunnel must carry the request");
+        assert_eq!(response.status, 200);
+        assert_eq!(
+            String::from_utf8_lossy(&response.body),
+            "<rss>tunnelled</rss>"
+        );
+        assert_eq!(
+            server.forwarded_targets(),
+            vec![("127.0.0.1".to_string(), origin.addr().port())],
+            "the request must have travelled through the SSH server"
+        );
+        assert_eq!(origin.request_lines().len(), 1);
+
+        scryer_application::tunnel_proxy::stop_tunnel("component-tunnel");
+    }
+
+    /// The fail-closed half, kept: a tunnel that will not come up must not
+    /// degrade into a direct connection. The destination is a real listener, so
+    /// a dropped policy would show up as a success rather than as an error.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn component_http_fails_closed_when_a_tunnel_cannot_be_established() {
         use wiremock::matchers::method;
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -1850,36 +1949,20 @@ mod tests {
             .next()
             .expect("origin host")
             .to_string();
+        let dead_ssh_port = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+            let port = listener.local_addr().expect("addr").port();
+            drop(listener);
+            port
+        };
 
-        let now = chrono::Utc::now();
         let host = ComponentHost::for_indexer(
             BTreeMap::new(),
             vec![origin_host],
-            Some(ProxyPolicy {
-                consumer_id: "component-indexer".to_string(),
-                consumer_name: "Component indexer".to_string(),
-                config: scryer_domain::ProxyConfig {
-                    id: "component-tunnel".to_string(),
-                    name: "Seedbox".to_string(),
-                    provider_type: scryer_domain::ProxyProviderType::SshTunnel,
-                    protocol: None,
-                    username_encrypted: Some("operator".to_string()),
-                    password_encrypted: Some("s3cret".to_string()),
-                    remote_dns: false,
-                    base_url: "ssh://seedbox.test:22".to_string(),
-                    request_timeout_seconds: 30,
-                    is_enabled: true,
-                    last_health_status: None,
-                    last_error_message: None,
-                    last_error_at: None,
-                    created_at: now,
-                    updated_at: now,
-                    host_key_fingerprint: None,
-                    host_key_pinned_at: None,
-                    private_key_encrypted: None,
-                    private_key_passphrase_encrypted: None,
-                },
-            }),
+            Some(tunnel_policy(
+                "component-tunnel-dead",
+                format!("ssh://127.0.0.1:{dead_ssh_port}"),
+            )),
             Duration::from_secs(30),
             Some(1024 * 1024),
         )
@@ -1893,7 +1976,7 @@ mod tests {
                 body: Vec::new(),
             })
             .await
-            .expect_err("a tunnel with no engine must fail the request");
+            .expect_err("an unreachable tunnel must fail the request");
         assert!(matches!(error, TransportError::Transport), "{error:?}");
         assert!(
             origin
@@ -1903,6 +1986,8 @@ mod tests {
                 .is_empty(),
             "a tunnel-assigned request must never reach the origin directly"
         );
+
+        scryer_application::tunnel_proxy::stop_tunnel("component-tunnel-dead");
     }
 
     #[tokio::test(flavor = "multi_thread")]

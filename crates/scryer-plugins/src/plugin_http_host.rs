@@ -1441,6 +1441,13 @@ mod tests {
                 host_key_pinned_at: None,
                 private_key_encrypted: None,
                 private_key_passphrase_encrypted: None,
+                peer_public_key: None,
+                preshared_key_encrypted: None,
+                tunnel_public_key: None,
+                tunnel_addresses: Vec::new(),
+                tunnel_dns_servers: Vec::new(),
+                tunnel_mtu: None,
+                tunnel_keepalive_seconds: None,
             },
         }
     }
@@ -1534,22 +1541,169 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn a_tunnel_proxy_fails_closed_instead_of_egressing_directly() {
-        // The destination is a real, reachable listener. If the tunnel policy
-        // were dropped instead of honoured, the request would succeed against
-        // it — which is exactly the silent direct egress this pins against.
+    /// Was `a_tunnel_proxy_fails_closed_instead_of_egressing_directly` while
+    /// there was no engine. The blocking host is the interesting caller: it
+    /// runs on a plain `std::thread` with no tokio runtime, so this also pins
+    /// that a tunnel can be brought up from there.
+    ///
+    /// The origin here is only reachable *through* the SSH double, which
+    /// records every destination it forwards — so this proves the request took
+    /// the tunnel rather than merely that it did not go direct.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_tunnel_proxy_carries_a_blocking_host_request_through_the_tunnel() {
+        let server = scryer_tunnel::test_support::SshServerDouble::start(
+            scryer_tunnel::test_support::SshServerOptions::default(),
+        )
+        .await;
+        let origin =
+            scryer_tunnel::test_support::TunnelledOrigin::start("<rss>tunnelled</rss>").await;
+        let origin_authority = origin.addr().to_string();
+
+        let mut policy = transport_proxy_policy(
+            scryer_domain::ProxyProviderType::SshTunnel,
+            format!("ssh://{}", server.addr()),
+        );
+        policy.config.id = "tunnel-blocking-host".to_string();
+        policy.config.username_encrypted = Some("operator".to_string());
+        policy.config.password_encrypted = Some("s3cret".to_string());
+
+        let host_for_request = origin_authority.clone();
+        let response = tokio::task::spawn_blocking(move || {
+            let host = PluginHttpHost::new(
+                vec!["127.0.0.1".to_string()],
+                Some(policy),
+                None,
+                Some(64 * 1024),
+            );
+            host.request(
+                "newznab",
+                PluginHttpRequest {
+                    url: format!("http://{host_for_request}/api?t=search"),
+                    method: Some("GET".to_string()),
+                    headers: BTreeMap::new(),
+                },
+                None,
+                Duration::from_secs(10),
+            )
+        })
+        .await
+        .expect("blocking task should join")
+        .expect("the tunnel must carry the request");
+
+        assert_eq!(String::from_utf8_lossy(&response), "<rss>tunnelled</rss>");
+        assert_eq!(
+            server.forwarded_targets(),
+            vec![("127.0.0.1".to_string(), origin.addr().port())],
+            "the request must have travelled through the SSH server"
+        );
+        assert_eq!(origin.request_lines().len(), 1);
+
+        scryer_application::tunnel_proxy::stop_tunnel("tunnel-blocking-host");
+    }
+
+    /// The second tunnel family reaches the same blocking caller through the
+    /// same seam, with no branch of its own anywhere below `proxy_egress_url`.
+    /// The origin is addressed **by name**, and the only resolver that knows
+    /// that name lives on the far side of the tunnel — so this proves both
+    /// that the request took the tunnel and that `socks5h` really deferred
+    /// resolution to it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_wireguard_proxy_carries_a_blocking_host_request_through_the_tunnel() {
+        use base64::Engine as _;
+
+        let peer = scryer_tunnel::test_support::WireGuardTestPeer::start().await;
+        let private_key = scryer_tunnel::test_support::test_client_private_key();
+
+        let mut policy = transport_proxy_policy(
+            scryer_domain::ProxyProviderType::WireGuard,
+            format!("wireguard://{}", peer.endpoint()),
+        );
+        policy.config.id = "wireguard-blocking-host".to_string();
+        policy.config.private_key_encrypted =
+            Some(base64::prelude::BASE64_STANDARD.encode(private_key));
+        policy.config.peer_public_key = Some(scryer_tunnel::public_key_of(
+            &scryer_tunnel::test_support::test_peer_private_key(),
+        ));
+        policy.config.tunnel_addresses = vec![format!(
+            "{}/32",
+            scryer_tunnel::test_support::TEST_CLIENT_ADDRESS
+        )];
+        policy.config.tunnel_dns_servers =
+            vec![scryer_tunnel::test_support::TEST_PEER_ADDRESS.to_string()];
+
+        let url = format!(
+            "http://origin.tunnel.test:{}/api?t=search",
+            scryer_tunnel::test_support::TEST_PEER_HTTP_PORT
+        );
+        let response = tokio::task::spawn_blocking(move || {
+            // The allowlist names the host the plugin asks for, which here is
+            // a name only the tunnel can resolve.
+            let host = PluginHttpHost::new(
+                vec!["origin.tunnel.test".to_string()],
+                Some(policy),
+                None,
+                Some(64 * 1024),
+            );
+            host.request(
+                "newznab",
+                PluginHttpRequest {
+                    url,
+                    method: Some("GET".to_string()),
+                    headers: BTreeMap::new(),
+                },
+                None,
+                Duration::from_secs(15),
+            )
+        })
+        .await
+        .expect("blocking task should join")
+        .expect("the wireguard tunnel must carry the request");
+
+        assert_eq!(String::from_utf8_lossy(&response), "through the tunnel");
+        assert_eq!(peer.requests().len(), 1, "{:?}", peer.requests());
+        assert!(
+            peer.dns_queries()
+                .contains(&"origin.tunnel.test".to_string()),
+            "the name must have been resolved on the far side: {:?}",
+            peer.dns_queries()
+        );
+        // The OS resolver cannot see that name at all, so nothing could have
+        // gone direct.
+        assert!(
+            tokio::net::lookup_host("origin.tunnel.test:80")
+                .await
+                .is_err(),
+            "the fixture name must be unresolvable outside the tunnel"
+        );
+
+        scryer_application::tunnel_proxy::stop_tunnel("wireguard-blocking-host");
+    }
+
+    /// The fail-closed half, kept: a tunnel that cannot be established fails
+    /// the request instead of falling back to a direct connection. The origin
+    /// is a real, reachable listener, so a dropped policy would show up as a
+    /// success.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_unreachable_tunnel_still_fails_closed_instead_of_egressing_directly() {
         let origin = RecordingHttpProxy::start("<html>origin</html>").await;
         let origin_url = origin.url.clone();
         let host_port = origin_url
             .trim_start_matches("http://")
             .trim_end_matches('/')
             .to_string();
+        let dead_ssh_port = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+            let port = listener.local_addr().expect("addr").port();
+            drop(listener);
+            port
+        };
         let mut policy = transport_proxy_policy(
             scryer_domain::ProxyProviderType::SshTunnel,
-            "ssh://seedbox.test:22".to_string(),
+            format!("ssh://127.0.0.1:{dead_ssh_port}"),
         );
+        policy.config.id = "tunnel-blocking-host-dead".to_string();
         policy.config.username_encrypted = Some("operator".to_string());
+        policy.config.password_encrypted = Some("s3cret".to_string());
 
         let host_for_request = host_port.clone();
         let error = tokio::task::spawn_blocking(move || {
@@ -1567,21 +1721,23 @@ mod tests {
                     headers: BTreeMap::new(),
                 },
                 None,
-                Duration::from_secs(5),
+                Duration::from_secs(10),
             )
         })
         .await
         .expect("blocking task should join")
-        .expect_err("a tunnel with no engine must fail the request");
+        .expect_err("an unreachable tunnel must fail the request");
 
-        assert_eq!(
-            error,
-            "proxy House VPN unreachable: tunnel engine not available"
+        assert!(
+            error.starts_with("proxy House VPN unreachable:"),
+            "the failure must name the proxy, got: {error}"
         );
         assert!(
             origin.request_lines().is_empty(),
             "nothing may reach {origin_url}: a tunnel-assigned request must not egress directly"
         );
+
+        scryer_application::tunnel_proxy::stop_tunnel("tunnel-blocking-host-dead");
     }
 
     #[derive(Default)]
@@ -2121,6 +2277,13 @@ mod tests {
                 host_key_pinned_at: None,
                 private_key_encrypted: None,
                 private_key_passphrase_encrypted: None,
+                peer_public_key: None,
+                preshared_key_encrypted: None,
+                tunnel_public_key: None,
+                tunnel_addresses: Vec::new(),
+                tunnel_dns_servers: Vec::new(),
+                tunnel_mtu: None,
+                tunnel_keepalive_seconds: None,
             },
         };
         let request = PluginHttpRequest {
@@ -2226,6 +2389,13 @@ mod tests {
                 host_key_pinned_at: None,
                 private_key_encrypted: None,
                 private_key_passphrase_encrypted: None,
+                peer_public_key: None,
+                preshared_key_encrypted: None,
+                tunnel_public_key: None,
+                tunnel_addresses: Vec::new(),
+                tunnel_dns_servers: Vec::new(),
+                tunnel_mtu: None,
+                tunnel_keepalive_seconds: None,
             },
         };
         let request = PluginHttpRequest {
@@ -2311,6 +2481,13 @@ mod tests {
                 host_key_pinned_at: None,
                 private_key_encrypted: None,
                 private_key_passphrase_encrypted: None,
+                peer_public_key: None,
+                preshared_key_encrypted: None,
+                tunnel_public_key: None,
+                tunnel_addresses: Vec::new(),
+                tunnel_dns_servers: Vec::new(),
+                tunnel_mtu: None,
+                tunnel_keepalive_seconds: None,
             },
         };
         let request = PluginHttpRequest {

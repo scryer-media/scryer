@@ -303,6 +303,13 @@ search:
         host_key_pinned_at: None,
         private_key_encrypted: None,
         private_key_passphrase_encrypted: None,
+        peer_public_key: None,
+        preshared_key_encrypted: None,
+        tunnel_public_key: None,
+        tunnel_addresses: Vec::new(),
+        tunnel_dns_servers: Vec::new(),
+        tunnel_mtu: None,
+        tunnel_keepalive_seconds: None,
     };
 
     let client = provider

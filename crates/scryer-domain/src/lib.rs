@@ -1036,10 +1036,10 @@ pub enum ProxyKind {
     /// The proxy only carries bytes: an HTTP CONNECT or SOCKS5 hop that
     /// Scryer's own HTTP client dials through. Carries no solver protocol.
     Transport,
-    /// Scryer brings the hop up itself (SSH today; WireGuard is the planned
-    /// second implementation) and then dials through it. Like a transport it
-    /// only carries bytes, but it owns credentials and a lifecycle that a
-    /// plain transport hop does not have.
+    /// Scryer brings the hop up itself — an SSH session or a userspace
+    /// WireGuard device — and then dials through it. Like a transport it only
+    /// carries bytes, but it owns credentials and a lifecycle that a plain
+    /// transport hop does not have.
     Tunnel,
 }
 
@@ -1052,6 +1052,11 @@ pub enum ProxyProviderType {
     Socks4,
     Socks5,
     SshTunnel,
+    /// A userspace WireGuard tunnel Scryer brings up itself. Same family as
+    /// [`Self::SshTunnel`] — it owns credentials and a lifecycle — but it
+    /// authenticates with keys alone and has no trust-on-first-use step, so it
+    /// never pins a host key.
+    WireGuard,
 }
 
 impl ProxyProviderType {
@@ -1063,6 +1068,7 @@ impl ProxyProviderType {
             Self::Socks4 => "socks4",
             Self::Socks5 => "socks5",
             Self::SshTunnel => "ssh_tunnel",
+            Self::WireGuard => "wireguard",
         }
     }
 
@@ -1074,6 +1080,10 @@ impl ProxyProviderType {
             "socks4" => Some(Self::Socks4),
             "socks5" => Some(Self::Socks5),
             "ssh_tunnel" => Some(Self::SshTunnel),
+            // `wire-guard` reaches this arm as `wire_guard` through the same
+            // hyphen rule every other provider gets, so both spellings of the
+            // product's own name are accepted.
+            "wireguard" | "wire_guard" => Some(Self::WireGuard),
             _ => None,
         }
     }
@@ -1082,7 +1092,7 @@ impl ProxyProviderType {
         match self {
             Self::Byparr | Self::Trawl => ProxyKind::ChallengeSolver,
             Self::Http | Self::Socks4 | Self::Socks5 => ProxyKind::Transport,
-            Self::SshTunnel => ProxyKind::Tunnel,
+            Self::SshTunnel | Self::WireGuard => ProxyKind::Tunnel,
         }
     }
 
@@ -1172,6 +1182,33 @@ pub struct ProxyConfig {
     pub private_key_encrypted: Option<String>,
     /// Passphrase protecting `private_key_encrypted`, when the key has one.
     pub private_key_passphrase_encrypted: Option<String>,
+    /// WireGuard only: the peer's base64 `PublicKey`, from the `[Peer]`
+    /// section. It is the whole of the peer's identity and it is public, so it
+    /// is stored and shown in the clear — unlike everything else on this
+    /// tunnel.
+    pub peer_public_key: Option<String>,
+    /// WireGuard only: the optional symmetric `PresharedKey`. Same
+    /// `*_encrypted` convention as the credentials — the column is ciphertext,
+    /// this field is plaintext base64.
+    pub preshared_key_encrypted: Option<String>,
+    /// WireGuard only: *our* base64 public key, derived from
+    /// `private_key_encrypted` and re-derived whenever it changes. Stored
+    /// rather than computed on read so nothing above the workflow needs the
+    /// tunnel crate to show the operator the line they must paste into the
+    /// server's `[Peer]` section.
+    pub tunnel_public_key: Option<String>,
+    /// WireGuard only: the interface's own addresses inside the tunnel, from
+    /// the `[Interface] Address` line. At least one is required.
+    pub tunnel_addresses: Vec<String>,
+    /// WireGuard only: resolvers to use *through* the tunnel, from the
+    /// `[Interface] DNS` line. May be empty, in which case names cannot be
+    /// resolved through this tunnel at all.
+    pub tunnel_dns_servers: Vec<String>,
+    /// WireGuard only: tunnel MTU. `None` means the engine's default.
+    pub tunnel_mtu: Option<u16>,
+    /// WireGuard only: `PersistentKeepalive`, in seconds. `None` means the
+    /// engine's default; `Some(0)` switches keepalive off.
+    pub tunnel_keepalive_seconds: Option<u16>,
     /// Host key pinned on the first successful tunnel connect, formatted the
     /// way OpenSSH prints it (`SHA256:<base64>`). A host key is public, so this
     /// is stored and exposed in the clear; the tunnel engine hard-fails when a

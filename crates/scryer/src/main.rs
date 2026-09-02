@@ -889,6 +889,10 @@ async fn run_application() {
             }
         }
     }
+
+    // Close any SSH tunnels a proxy configuration brought up, so their sessions
+    // do not outlive the server that needed them.
+    scryer_application::tunnel_proxy::stop_all_tunnels();
 }
 
 /// Runs the full application bootstrap: DB init, migrations, service construction, and router

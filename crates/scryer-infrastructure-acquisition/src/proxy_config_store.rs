@@ -13,6 +13,8 @@ use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, StoreData
 const PROXY_COLUMNS: &str = "id, name, provider_type, protocol, base_url,
     request_timeout_seconds, is_enabled, username_encrypted, password_encrypted, remote_dns,
     private_key_encrypted, private_key_passphrase_encrypted,
+    peer_public_key, preshared_key_encrypted, tunnel_public_key,
+    tunnel_addresses, tunnel_dns_servers, tunnel_mtu, tunnel_keepalive_seconds,
     host_key_fingerprint, host_key_pinned_at,
     last_health_status, last_error_message, last_error_at, created_at, updated_at";
 
@@ -20,10 +22,13 @@ const PROXY_INSERT_SQL: &str = "INSERT INTO proxy_configs (
     id, name, provider_type, protocol, base_url, request_timeout_seconds, is_enabled,
     username_encrypted, password_encrypted, remote_dns,
     private_key_encrypted, private_key_passphrase_encrypted,
+    peer_public_key, preshared_key_encrypted, tunnel_public_key,
+    tunnel_addresses, tunnel_dns_servers, tunnel_mtu, tunnel_keepalive_seconds,
     host_key_fingerprint, host_key_pinned_at,
     last_health_status, last_error_message, last_error_at, created_at, updated_at
 ) VALUES (
-    {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}
+    {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {},
+    {}, {}, {}
 )";
 
 /// Label used by the shared at-rest encryption helpers for proxy credentials.
@@ -31,6 +36,11 @@ const PROXY_CREDENTIAL_LABEL: &str = "proxy credential";
 
 /// Separate label so a key failure is not reported as a credential failure.
 const PROXY_PRIVATE_KEY_LABEL: &str = "proxy private key";
+
+/// A WireGuard preshared key is a symmetric secret and is encrypted at rest
+/// like the private key, under its own label so a decrypt failure names the
+/// field the operator has to go and fix.
+const PROXY_PRESHARED_KEY_LABEL: &str = "proxy preshared key";
 
 #[derive(Clone)]
 pub struct ProxyConfigStore {
@@ -134,6 +144,16 @@ impl ProxyConfigRepository for ProxyConfigStore {
                 encryption_key.as_ref(),
                 config.private_key_passphrase_encrypted.as_ref(),
             )?),
+            SqlArg::OptText(config.peer_public_key.clone()),
+            SqlArg::OptText(encrypt_preshared_key(
+                encryption_key.as_ref(),
+                config.preshared_key_encrypted.as_ref(),
+            )?),
+            SqlArg::OptText(config.tunnel_public_key.clone()),
+            SqlArg::OptText(join_tunnel_list(&config.tunnel_addresses)),
+            SqlArg::OptText(join_tunnel_list(&config.tunnel_dns_servers)),
+            SqlArg::OptI64(config.tunnel_mtu.map(i64::from)),
+            SqlArg::OptI64(config.tunnel_keepalive_seconds.map(i64::from)),
             SqlArg::OptText(config.host_key_fingerprint.clone()),
             SqlArg::OptTimestamp(config.host_key_pinned_at),
             SqlArg::OptText(
@@ -158,6 +178,10 @@ impl ProxyConfigRepository for ProxyConfigStore {
                             username_encrypted = {}, password_encrypted = {}, remote_dns = {},
                             private_key_encrypted = {},
                             private_key_passphrase_encrypted = {},
+                            peer_public_key = {}, preshared_key_encrypted = {},
+                            tunnel_public_key = {}, tunnel_addresses = {},
+                            tunnel_dns_servers = {}, tunnel_mtu = {},
+                            tunnel_keepalive_seconds = {},
                             host_key_fingerprint = {}, host_key_pinned_at = {},
                             last_health_status = {}, last_error_message = {},
                             last_error_at = {}, updated_at = {}
@@ -309,6 +333,58 @@ fn decrypt_private_key(
     decrypt_optional_value(key, value, PROXY_PRIVATE_KEY_LABEL, false)
 }
 
+fn encrypt_preshared_key(
+    key: Option<&EncryptionKey>,
+    value: Option<&String>,
+) -> AppResult<Option<String>> {
+    encrypt_optional_value(key, value, PROXY_PRESHARED_KEY_LABEL, false)
+}
+
+fn decrypt_preshared_key(
+    key: Option<&EncryptionKey>,
+    value: Option<String>,
+) -> AppResult<Option<String>> {
+    decrypt_optional_value(key, value, PROXY_PRESHARED_KEY_LABEL, false)
+}
+
+/// Store an address or DNS list as the comma-separated text the column holds.
+///
+/// An empty list is NULL rather than an empty string, so "the operator cleared
+/// this" and "this row predates WireGuard" read the same way — which they
+/// should, because neither carries a list.
+fn join_tunnel_list(values: &[String]) -> Option<String> {
+    let joined = values
+        .iter()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>()
+        .join(",");
+    (!joined.is_empty()).then_some(joined)
+}
+
+/// The inverse. Tolerant on read: blank entries are dropped rather than
+/// rejected, because a stored list is only ever as good as what was pasted and
+/// an unloadable row is the worse failure.
+fn split_tunnel_list(stored: Option<String>) -> Vec<String> {
+    stored
+        .as_deref()
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// Read a stored MTU or keepalive back into the `u16` the domain carries.
+///
+/// Out-of-range values are read as "no opinion" rather than as an error: the
+/// engine's own validation owns the range, and a nonsense integer must not make
+/// the row unloadable.
+fn opt_u16_from_stored(stored: Option<i64>) -> Option<u16> {
+    stored.and_then(|value| u16::try_from(value).ok())
+}
+
 fn proxy_insert_args(
     config: &ProxyConfig,
     encryption_key: Option<&EncryptionKey>,
@@ -342,6 +418,16 @@ fn proxy_insert_args(
             encryption_key,
             config.private_key_passphrase_encrypted.as_ref(),
         )?),
+        SqlArg::OptText(config.peer_public_key.clone()),
+        SqlArg::OptText(encrypt_preshared_key(
+            encryption_key,
+            config.preshared_key_encrypted.as_ref(),
+        )?),
+        SqlArg::OptText(config.tunnel_public_key.clone()),
+        SqlArg::OptText(join_tunnel_list(&config.tunnel_addresses)),
+        SqlArg::OptText(join_tunnel_list(&config.tunnel_dns_servers)),
+        SqlArg::OptI64(config.tunnel_mtu.map(i64::from)),
+        SqlArg::OptI64(config.tunnel_keepalive_seconds.map(i64::from)),
         SqlArg::OptText(config.host_key_fingerprint.clone()),
         SqlArg::OptTimestamp(config.host_key_pinned_at),
         SqlArg::OptText(
@@ -445,6 +531,16 @@ fn row_to_proxy_config(
             encryption_key,
             row.opt_text("private_key_passphrase_encrypted")?,
         )?,
+        peer_public_key: row.opt_text("peer_public_key")?,
+        preshared_key_encrypted: decrypt_preshared_key(
+            encryption_key,
+            row.opt_text("preshared_key_encrypted")?,
+        )?,
+        tunnel_public_key: row.opt_text("tunnel_public_key")?,
+        tunnel_addresses: split_tunnel_list(row.opt_text("tunnel_addresses")?),
+        tunnel_dns_servers: split_tunnel_list(row.opt_text("tunnel_dns_servers")?),
+        tunnel_mtu: opt_u16_from_stored(row.opt_i64("tunnel_mtu")?),
+        tunnel_keepalive_seconds: opt_u16_from_stored(row.opt_i64("tunnel_keepalive_seconds")?),
         host_key_fingerprint: row.opt_text("host_key_fingerprint")?,
         host_key_pinned_at: row.opt_timestamp("host_key_pinned_at")?,
         last_health_status,
@@ -532,6 +628,13 @@ mod tests {
                  remote_dns INTEGER NOT NULL DEFAULT 0,
                  private_key_encrypted TEXT,
                  private_key_passphrase_encrypted TEXT,
+                 peer_public_key TEXT,
+                 preshared_key_encrypted TEXT,
+                 tunnel_public_key TEXT,
+                 tunnel_addresses TEXT,
+                 tunnel_dns_servers TEXT,
+                 tunnel_mtu INTEGER,
+                 tunnel_keepalive_seconds INTEGER,
                  host_key_fingerprint TEXT,
                  host_key_pinned_at TEXT,
                  last_health_status TEXT,
@@ -572,6 +675,13 @@ mod tests {
                     .to_string(),
             ),
             private_key_passphrase_encrypted: Some("phrase".to_string()),
+            peer_public_key: None,
+            preshared_key_encrypted: None,
+            tunnel_public_key: None,
+            tunnel_addresses: Vec::new(),
+            tunnel_dns_servers: Vec::new(),
+            tunnel_mtu: None,
+            tunnel_keepalive_seconds: None,
             host_key_fingerprint: None,
             host_key_pinned_at: None,
             last_health_status: Some(ProxyHealthStatus::Unknown),
@@ -636,5 +746,135 @@ mod tests {
         assert_eq!(cleared.host_key_fingerprint, None);
         assert_eq!(cleared.host_key_pinned_at, None);
         assert!(cleared.updated_at > loaded.updated_at);
+    }
+
+    fn wireguard_config() -> ProxyConfig {
+        let now = chrono::Utc::now();
+        ProxyConfig {
+            id: "wireguard-1".to_string(),
+            name: "VPN".to_string(),
+            provider_type: ProxyProviderType::WireGuard,
+            protocol: None,
+            base_url: "wireguard://vpn.test:51820".to_string(),
+            request_timeout_seconds: 30,
+            is_enabled: true,
+            // WireGuard has no user and no password, and no passphrase format.
+            username_encrypted: None,
+            password_encrypted: None,
+            remote_dns: false,
+            private_key_encrypted: Some("cHJpdmF0ZS1rZXktYmFzZTY0LXBsYWNlaG9sZGVy".to_string()),
+            private_key_passphrase_encrypted: None,
+            peer_public_key: Some("cGVlci1wdWJsaWMta2V5LWJhc2U2NC1wbGFjZWhvbGRlcg==".to_string()),
+            preshared_key_encrypted: Some("cHJlc2hhcmVkLWtleQ==".to_string()),
+            tunnel_public_key: Some("b3VyLXB1YmxpYy1rZXk=".to_string()),
+            tunnel_addresses: vec!["10.6.0.2/32".to_string(), "fd00::2/128".to_string()],
+            tunnel_dns_servers: vec!["10.6.0.1".to_string()],
+            tunnel_mtu: Some(1420),
+            tunnel_keepalive_seconds: Some(0),
+            host_key_fingerprint: None,
+            host_key_pinned_at: None,
+            last_health_status: Some(ProxyHealthStatus::Unknown),
+            last_error_message: None,
+            last_error_at: None,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    #[tokio::test]
+    async fn wireguard_key_material_and_link_settings_round_trip() {
+        let (store, pool) = proxy_store().await;
+        let config = wireguard_config();
+        store
+            .create(config.clone())
+            .await
+            .expect("wireguard row should insert");
+
+        let loaded = store
+            .get_by_id("wireguard-1")
+            .await
+            .expect("row should load")
+            .expect("row should exist");
+        assert_eq!(loaded.private_key_encrypted, config.private_key_encrypted);
+        assert_eq!(
+            loaded.preshared_key_encrypted,
+            config.preshared_key_encrypted
+        );
+        assert_eq!(loaded.peer_public_key, config.peer_public_key);
+        assert_eq!(loaded.tunnel_public_key, config.tunnel_public_key);
+        // The lists survive their comma-separated storage in order.
+        assert_eq!(loaded.tunnel_addresses, config.tunnel_addresses);
+        assert_eq!(loaded.tunnel_dns_servers, config.tunnel_dns_servers);
+        assert_eq!(loaded.tunnel_mtu, Some(1420));
+        // Zero is "keepalive off", which must not read back as "unset".
+        assert_eq!(loaded.tunnel_keepalive_seconds, Some(0));
+
+        // Both public keys are stored in the clear, because an operator has to
+        // read them to compare them against their server. The two secrets are
+        // not — and with no encryption key configured this store writes them
+        // through, so the check that matters is which *column* holds which
+        // value, not the ciphertext.
+        let stored: (Option<String>, Option<String>, Option<String>) = sqlx::query_as(
+            "SELECT peer_public_key, tunnel_public_key, tunnel_addresses
+               FROM proxy_configs WHERE id = 'wireguard-1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("read the raw row");
+        assert_eq!(
+            stored,
+            (
+                config.peer_public_key.clone(),
+                config.tunnel_public_key.clone(),
+                Some("10.6.0.2/32,fd00::2/128".to_string()),
+            )
+        );
+
+        // An update rewrites all seven, including clearing the lists.
+        let mut edited = loaded.clone();
+        edited.tunnel_dns_servers = Vec::new();
+        edited.tunnel_mtu = None;
+        edited.tunnel_keepalive_seconds = None;
+        edited.preshared_key_encrypted = None;
+        edited.updated_at = chrono::Utc::now();
+        store.update(edited).await.expect("update should succeed");
+        let reloaded = store
+            .get_by_id("wireguard-1")
+            .await
+            .expect("row should load")
+            .expect("row should exist");
+        assert!(reloaded.tunnel_dns_servers.is_empty());
+        assert_eq!(reloaded.tunnel_mtu, None);
+        assert_eq!(reloaded.tunnel_keepalive_seconds, None);
+        assert_eq!(reloaded.preshared_key_encrypted, None);
+        assert_eq!(reloaded.tunnel_addresses, config.tunnel_addresses);
+    }
+
+    #[test]
+    fn tunnel_lists_survive_the_comma_separated_column() {
+        assert_eq!(join_tunnel_list(&[]), None);
+        assert_eq!(
+            join_tunnel_list(&["10.6.0.2/32".to_string(), " fd00::2/128 ".to_string()]),
+            Some("10.6.0.2/32,fd00::2/128".to_string())
+        );
+        assert_eq!(split_tunnel_list(None), Vec::<String>::new());
+        // A blank entry is dropped rather than made into an empty address: a
+        // stored list is only ever as good as what was pasted, and an
+        // unloadable row is the worse failure.
+        assert_eq!(
+            split_tunnel_list(Some("10.6.0.2/32, ,fd00::2/128".to_string())),
+            vec!["10.6.0.2/32".to_string(), "fd00::2/128".to_string()]
+        );
+    }
+
+    #[test]
+    fn out_of_range_link_settings_read_as_no_opinion() {
+        assert_eq!(opt_u16_from_stored(Some(1420)), Some(1420));
+        assert_eq!(opt_u16_from_stored(Some(0)), Some(0));
+        assert_eq!(opt_u16_from_stored(None), None);
+        // The engine owns the real range; a nonsense integer must not make the
+        // row unloadable.
+        assert_eq!(opt_u16_from_stored(Some(-1)), None);
+        assert_eq!(opt_u16_from_stored(Some(100_000)), None);
     }
 }

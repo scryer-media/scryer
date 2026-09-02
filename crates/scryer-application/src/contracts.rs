@@ -496,6 +496,23 @@ pub struct NewProxyConfig {
     pub private_key: Option<String>,
     /// Passphrase for `private_key`, when the key has one.
     pub private_key_passphrase: Option<String>,
+    /// WireGuard only: the peer's base64 public key. Required for that
+    /// provider and rejected for every other one. Not a secret — it is stored
+    /// and read back in the clear.
+    pub peer_public_key: Option<String>,
+    /// WireGuard only: the optional symmetric preshared key, write-only like
+    /// the private key.
+    pub preshared_key: Option<String>,
+    /// WireGuard only: the `[Interface] Address` entries. At least one is
+    /// required for that provider.
+    pub tunnel_addresses: Option<Vec<String>>,
+    /// WireGuard only: the `[Interface] DNS` entries. May be empty.
+    pub tunnel_dns_servers: Option<Vec<String>>,
+    /// WireGuard only: tunnel MTU. `None` takes the engine's default.
+    pub tunnel_mtu: Option<u16>,
+    /// WireGuard only: `PersistentKeepalive`. `None` takes the engine's
+    /// default; `Some(0)` switches it off.
+    pub tunnel_keepalive_seconds: Option<u16>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -514,6 +531,25 @@ pub struct ProxyConfigUpdate {
     /// Tunnel key material, same write-only tri-state as the credentials.
     pub private_key: Option<Option<String>>,
     pub private_key_passphrase: Option<Option<String>>,
+    /// WireGuard peer public key. A plain `Option` rather than the tri-state,
+    /// because this one is not a secret and not optional: a WireGuard tunnel
+    /// without it cannot exist, so there is no "clear it" to express. Omission
+    /// keeps the stored value.
+    pub peer_public_key: Option<String>,
+    /// WireGuard preshared key, write-only tri-state: it really is optional,
+    /// so clearing it is a thing an operator can mean.
+    pub preshared_key: Option<Option<String>>,
+    /// WireGuard interface addresses. Omission keeps the stored list; an empty
+    /// vector clears it (and is then refused by validation for a WireGuard
+    /// row, which needs at least one).
+    pub tunnel_addresses: Option<Vec<String>>,
+    /// WireGuard resolvers. Omission keeps the stored list; an empty vector
+    /// clears it, which is legal — a tunnel may address destinations by IP.
+    pub tunnel_dns_servers: Option<Vec<String>>,
+    /// WireGuard MTU and keepalive, tri-state: omission keeps the stored
+    /// value, `Some(None)` restores the engine's default.
+    pub tunnel_mtu: Option<Option<u16>>,
+    pub tunnel_keepalive_seconds: Option<Option<u16>>,
 }
 
 impl ProxyConfigUpdate {
@@ -527,6 +563,12 @@ impl ProxyConfigUpdate {
             || self.remote_dns.is_some()
             || self.private_key.is_some()
             || self.private_key_passphrase.is_some()
+            || self.peer_public_key.is_some()
+            || self.preshared_key.is_some()
+            || self.tunnel_addresses.is_some()
+            || self.tunnel_dns_servers.is_some()
+            || self.tunnel_mtu.is_some()
+            || self.tunnel_keepalive_seconds.is_some()
     }
 }
 

@@ -454,6 +454,28 @@ pub struct ProxyConfigPayload {
     /// Whether a private key is stored for this tunnel, without exposing it.
     /// Always false outside the tunnel providers.
     pub has_private_key: bool,
+    /// WireGuard peer public key, from the `[Peer]` section, or null outside
+    /// WireGuard. A public key is public, so this value is shown rather than
+    /// masked.
+    pub peer_public_key: Option<String>,
+    /// Whether a WireGuard preshared key is stored, without exposing it.
+    /// Always false outside WireGuard.
+    pub has_preshared_key: bool,
+    /// This tunnel's own public key, derived from its private key, or null
+    /// when no private key is stored. It is the line the operator must paste
+    /// into the server's `[Peer]` section, so it is shown rather than masked.
+    pub tunnel_public_key: Option<String>,
+    /// WireGuard interface addresses, from the `[Interface] Address` line.
+    /// Empty outside WireGuard.
+    pub tunnel_addresses: Vec<String>,
+    /// WireGuard resolvers reached through the tunnel, from the
+    /// `[Interface] DNS` line. Empty when none are configured.
+    pub tunnel_dns_servers: Vec<String>,
+    /// WireGuard tunnel MTU, or null to use the engine's default.
+    pub tunnel_mtu: Option<i32>,
+    /// WireGuard persistent keepalive in seconds, or null to use the engine's
+    /// default. Zero means keepalive is switched off.
+    pub tunnel_keepalive_seconds: Option<i32>,
     /// Host key pinned on the first successful tunnel connect, formatted as
     /// OpenSSH prints it, or null before the first connect. A host key is
     /// public, so this value is shown rather than masked.
@@ -858,13 +880,35 @@ pub struct CreateProxyConfigInput {
     /// SOCKS5 only: resolve destination hostnames at the proxy. A `socks5h://`
     /// base URL implies true.
     pub remote_dns: Option<bool>,
-    /// PEM-encoded private key for a tunnel provider. Write-only: stored
-    /// encrypted and never read back. Only SSH tunnels accept it, and a tunnel
-    /// needs either this or a password.
+    /// Private key for a tunnel provider: PEM for an SSH tunnel, base64 for
+    /// WireGuard. Write-only: stored encrypted and never read back. An SSH
+    /// tunnel needs either this or a password; WireGuard requires it.
     pub private_key: Option<String>,
     /// Passphrase protecting the private key above. Write-only: stored
-    /// encrypted and never read back. Requires a private key.
+    /// encrypted and never read back. Requires a private key, and only SSH
+    /// tunnels accept one.
     pub private_key_passphrase: Option<String>,
+    /// WireGuard peer public key, from the `[Peer]` section. Required for
+    /// WireGuard and rejected by every other provider. Not a secret: it is
+    /// read back in full.
+    pub peer_public_key: Option<String>,
+    /// Optional WireGuard preshared key. Write-only: stored encrypted and
+    /// never read back. Only WireGuard accepts it.
+    pub preshared_key: Option<String>,
+    /// WireGuard interface addresses, from the `[Interface] Address` line.
+    /// At least one is required for WireGuard; a single comma-separated entry
+    /// is also accepted. Only WireGuard accepts them.
+    pub tunnel_addresses: Option<Vec<String>>,
+    /// WireGuard resolvers, from the `[Interface] DNS` line. Optional; without
+    /// them a destination must be addressed by IP. Only WireGuard accepts
+    /// them.
+    pub tunnel_dns_servers: Option<Vec<String>>,
+    /// WireGuard tunnel MTU. Omit to use the engine's default. Only WireGuard
+    /// accepts it.
+    pub tunnel_mtu: Option<i32>,
+    /// WireGuard persistent keepalive in seconds. Omit to use the engine's
+    /// default; zero switches keepalive off. Only WireGuard accepts it.
+    pub tunnel_keepalive_seconds: Option<i32>,
     /// Whether the proxy is enabled.
     pub is_enabled: Option<bool>,
 }
@@ -888,12 +932,31 @@ pub struct UpdateProxyConfigInput {
     pub password: MaybeUndefined<String>,
     /// Replacement SOCKS5 remote-DNS state; omission preserves it.
     pub remote_dns: Option<bool>,
-    /// Replacement PEM-encoded tunnel private key. Write-only: omission
-    /// preserves the stored value, null clears it, and it is never read back.
+    /// Replacement tunnel private key: PEM for an SSH tunnel, base64 for
+    /// WireGuard. Write-only: omission preserves the stored value, null clears
+    /// it, and it is never read back. Writing it re-derives `tunnelPublicKey`.
     pub private_key: MaybeUndefined<String>,
     /// Replacement private key passphrase. Write-only: omission preserves the
     /// stored value, null clears it, and it is never read back.
     pub private_key_passphrase: MaybeUndefined<String>,
+    /// Replacement WireGuard peer public key; omission preserves it. It has no
+    /// cleared state: a WireGuard tunnel cannot exist without one.
+    pub peer_public_key: Option<String>,
+    /// Replacement WireGuard preshared key. Write-only: omission preserves the
+    /// stored value, null clears it, and it is never read back.
+    pub preshared_key: MaybeUndefined<String>,
+    /// Replacement WireGuard interface addresses; omission preserves them, and
+    /// an empty list clears them.
+    pub tunnel_addresses: Option<Vec<String>>,
+    /// Replacement WireGuard resolvers; omission preserves them, and an empty
+    /// list clears them.
+    pub tunnel_dns_servers: Option<Vec<String>>,
+    /// Replacement WireGuard MTU; omission preserves it and null restores the
+    /// engine's default.
+    pub tunnel_mtu: MaybeUndefined<i32>,
+    /// Replacement WireGuard keepalive in seconds; omission preserves it, null
+    /// restores the engine's default, and zero switches keepalive off.
+    pub tunnel_keepalive_seconds: MaybeUndefined<i32>,
     /// Replacement enabled state; omission preserves it.
     pub is_enabled: Option<bool>,
 }

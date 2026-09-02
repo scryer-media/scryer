@@ -4902,6 +4902,13 @@ mod tests {
             host_key_pinned_at: None,
             private_key_encrypted: None,
             private_key_passphrase_encrypted: None,
+            peer_public_key: None,
+            preshared_key_encrypted: None,
+            tunnel_public_key: None,
+            tunnel_addresses: Vec::new(),
+            tunnel_dns_servers: Vec::new(),
+            tunnel_mtu: None,
+            tunnel_keepalive_seconds: None,
         }
     }
 
@@ -5008,11 +5015,59 @@ mod tests {
         );
     }
 
-    /// A tunnel-assigned artifact fetch must fail, not fall back to a direct
-    /// one. The destination is a live server here, so a dropped assignment
-    /// would show up as a successful download.
-    #[tokio::test]
-    async fn a_tunnel_proxy_fails_closed_on_an_artifact_fetch() {
+    /// Was `a_tunnel_proxy_fails_closed_on_an_artifact_fetch` while there was
+    /// no engine. The artifact fetch now travels through the tunnel: the SSH
+    /// double records the destination it forwarded, so this proves the grab
+    /// took the tunnel rather than merely that it did not go direct.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_tunnel_proxy_carries_an_artifact_fetch() {
+        let server = scryer_tunnel::test_support::SshServerDouble::start(
+            scryer_tunnel::test_support::SshServerOptions::default(),
+        )
+        .await;
+        let origin = scryer_tunnel::test_support::TunnelledOrigin::start_with_content_type(
+            "application/x-bittorrent",
+            "d4:infod4:name4:testee",
+        )
+        .await;
+
+        let mut proxy_config = transport_proxy_config(
+            scryer_domain::ProxyProviderType::SshTunnel,
+            format!("ssh://{}", server.addr()),
+        );
+        proxy_config.id = "router-tunnel".to_string();
+        proxy_config.username_encrypted = Some("operator".to_string());
+        proxy_config.password_encrypted = Some("s3cret".to_string());
+
+        let resolved = no_client_router()
+            .resolve_download_artifact_via_transport_proxy(
+                &proxy_config,
+                &format!("http://{}/download?id=1", origin.addr()),
+                None,
+            )
+            .await
+            .expect("the tunnel must carry the artifact fetch");
+        assert!(
+            matches!(resolved, ResolvedDownloadArtifact::TorrentFile { .. }),
+            "the artifact must come back classified through the tunnel: {resolved:?}"
+        );
+
+        assert_eq!(
+            server.forwarded_targets(),
+            vec![("127.0.0.1".to_string(), origin.addr().port())],
+            "the artifact must have been fetched through the SSH server"
+        );
+        assert_eq!(origin.request_lines().len(), 1);
+
+        scryer_application::tunnel_proxy::stop_tunnel("router-tunnel");
+    }
+
+    /// The fail-closed half, kept: a tunnel that will not come up fails the
+    /// fetch instead of falling back to a direct one. The destination is a live
+    /// server here, so a dropped assignment would show up as a successful
+    /// download.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_unreachable_tunnel_fails_closed_on_an_artifact_fetch() {
         use wiremock::matchers::method;
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -5025,11 +5080,18 @@ mod tests {
             )
             .mount(&origin)
             .await;
+        let dead_ssh_port = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+            let port = listener.local_addr().expect("addr").port();
+            drop(listener);
+            port
+        };
 
         let mut proxy_config = transport_proxy_config(
             scryer_domain::ProxyProviderType::SshTunnel,
-            "ssh://seedbox.test:22".to_string(),
+            format!("ssh://127.0.0.1:{dead_ssh_port}"),
         );
+        proxy_config.id = "router-tunnel-dead".to_string();
         proxy_config.username_encrypted = Some("operator".to_string());
         proxy_config.password_encrypted = Some("s3cret".to_string());
 
@@ -5040,12 +5102,12 @@ mod tests {
                 None,
             )
             .await
-            .expect_err("a tunnel with no engine must fail the fetch");
+            .expect_err("an unreachable tunnel must fail the fetch");
 
         let message = error.to_string();
         assert!(
-            message.contains("proxy House VPN unreachable: tunnel engine not available"),
-            "the failure must name the proxy and the missing engine, got: {message}"
+            message.contains("proxy House VPN unreachable:"),
+            "the failure must name the proxy, got: {message}"
         );
         assert!(
             origin
@@ -5055,6 +5117,8 @@ mod tests {
                 .is_empty(),
             "the artifact must never be fetched directly when a tunnel is assigned"
         );
+
+        scryer_application::tunnel_proxy::stop_tunnel("router-tunnel-dead");
     }
 
     #[tokio::test]
@@ -5384,6 +5448,13 @@ mod tests {
             host_key_pinned_at: None,
             private_key_encrypted: None,
             private_key_passphrase_encrypted: None,
+            peer_public_key: None,
+            preshared_key_encrypted: None,
+            tunnel_public_key: None,
+            tunnel_addresses: Vec::new(),
+            tunnel_dns_servers: Vec::new(),
+            tunnel_mtu: None,
+            tunnel_keepalive_seconds: None,
         };
 
         let artifact = no_client_router()
@@ -5449,6 +5520,13 @@ mod tests {
             host_key_pinned_at: None,
             private_key_encrypted: None,
             private_key_passphrase_encrypted: None,
+            peer_public_key: None,
+            preshared_key_encrypted: None,
+            tunnel_public_key: None,
+            tunnel_addresses: Vec::new(),
+            tunnel_dns_servers: Vec::new(),
+            tunnel_mtu: None,
+            tunnel_keepalive_seconds: None,
         };
 
         let artifact = no_client_router()
@@ -5530,6 +5608,13 @@ mod tests {
             host_key_pinned_at: None,
             private_key_encrypted: None,
             private_key_passphrase_encrypted: None,
+            peer_public_key: None,
+            preshared_key_encrypted: None,
+            tunnel_public_key: None,
+            tunnel_addresses: Vec::new(),
+            tunnel_dns_servers: Vec::new(),
+            tunnel_mtu: None,
+            tunnel_keepalive_seconds: None,
         };
 
         let artifact = no_client_router()
@@ -5606,6 +5691,13 @@ mod tests {
             host_key_pinned_at: None,
             private_key_encrypted: None,
             private_key_passphrase_encrypted: None,
+            peer_public_key: None,
+            preshared_key_encrypted: None,
+            tunnel_public_key: None,
+            tunnel_addresses: Vec::new(),
+            tunnel_dns_servers: Vec::new(),
+            tunnel_mtu: None,
+            tunnel_keepalive_seconds: None,
         };
 
         let artifact = no_client_router()
@@ -5669,6 +5761,13 @@ mod tests {
             host_key_pinned_at: None,
             private_key_encrypted: None,
             private_key_passphrase_encrypted: None,
+            peer_public_key: None,
+            preshared_key_encrypted: None,
+            tunnel_public_key: None,
+            tunnel_addresses: Vec::new(),
+            tunnel_dns_servers: Vec::new(),
+            tunnel_mtu: None,
+            tunnel_keepalive_seconds: None,
         };
 
         let error = no_client_router()
@@ -5743,6 +5842,13 @@ mod tests {
                 host_key_pinned_at: None,
                 private_key_encrypted: None,
                 private_key_passphrase_encrypted: None,
+                peer_public_key: None,
+                preshared_key_encrypted: None,
+                tunnel_public_key: None,
+                tunnel_addresses: Vec::new(),
+                tunnel_dns_servers: Vec::new(),
+                tunnel_mtu: None,
+                tunnel_keepalive_seconds: None,
             };
             for target in [
                 "http://169.254.169.254/latest/meta-data/",

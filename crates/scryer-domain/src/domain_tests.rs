@@ -373,12 +373,24 @@ fn proxy_provider_types_round_trip() {
         ProxyProviderType::Socks4,
         ProxyProviderType::Socks5,
         ProxyProviderType::SshTunnel,
+        ProxyProviderType::WireGuard,
     ] {
         assert_eq!(ProxyProviderType::parse(provider.as_str()), Some(provider));
     }
     assert_eq!(
         ProxyProviderType::parse(" SSH-Tunnel "),
         Some(ProxyProviderType::SshTunnel)
+    );
+    // Both spellings of the product's own name reach the same provider, and
+    // the stored form is the one word `wg` itself uses.
+    assert_eq!(ProxyProviderType::WireGuard.as_str(), "wireguard");
+    assert_eq!(
+        ProxyProviderType::parse(" WireGuard "),
+        Some(ProxyProviderType::WireGuard)
+    );
+    assert_eq!(
+        ProxyProviderType::parse("wire-guard"),
+        Some(ProxyProviderType::WireGuard)
     );
     assert_eq!(
         ProxyProviderType::parse("TRAWL"),
@@ -416,6 +428,12 @@ fn proxy_provider_types_split_solver_from_transport() {
     assert!(ProxyProviderType::SshTunnel.is_tunnel());
     assert!(!ProxyProviderType::SshTunnel.is_transport());
     assert!(!ProxyProviderType::SshTunnel.is_challenge_solver());
+    // WireGuard is the second member of that family, so every consumer that
+    // branches on `is_tunnel()` inherits it without a second branch.
+    assert_eq!(ProxyProviderType::WireGuard.kind(), ProxyKind::Tunnel);
+    assert!(ProxyProviderType::WireGuard.is_tunnel());
+    assert!(!ProxyProviderType::WireGuard.is_transport());
+    assert!(!ProxyProviderType::WireGuard.is_challenge_solver());
 }
 
 #[test]

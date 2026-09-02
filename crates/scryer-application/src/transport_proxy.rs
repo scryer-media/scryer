@@ -39,6 +39,14 @@ pub fn transport_proxy_egress_url(config: &ProxyConfig) -> String {
 /// username is the presence test; a username without a password authenticates
 /// with an empty one.
 pub fn transport_proxy_credentials(config: &ProxyConfig) -> Option<TransportProxyCredentials<'_>> {
+    // A tunnel's username and password are *SSH* credentials, consumed by the
+    // engine when it establishes the session. What the HTTP client dials is our
+    // own loopback SOCKS5 front, which accepts no authentication at all —
+    // offering it these would put the SSH password on a socket with no use for
+    // it.
+    if config.is_tunnel() {
+        return None;
+    }
     let username = config.username_encrypted.as_deref()?;
     Some(TransportProxyCredentials {
         username,
@@ -74,9 +82,10 @@ pub fn transport_proxy_revision(config: &ProxyConfig) -> String {
 /// instead of a direct, unproxied connection.
 ///
 /// * **Transport** — the stored endpoint, with the `remote_dns` mapping.
-/// * **Tunnel** — fails until the tunnel engine lands. Resolution goes through
-///   [`crate::tunnel_proxy::resolve_tunnel_endpoint`], which is the single
-///   place a real engine gets wired in.
+/// * **Tunnel** — the loopback SOCKS5 front of a tunnel this process brings up,
+///   started on demand by [`crate::tunnel_proxy::resolve_tunnel_endpoint`]. A
+///   tunnel that cannot be established errors here rather than degrading into a
+///   direct connection.
 /// * **Challenge solver** — reaching here at all is a routing bug: a solver is
 ///   an application protocol, not a hop to dial. Say so rather than inventing
 ///   an endpoint.
@@ -194,6 +203,13 @@ mod tests {
             host_key_pinned_at: None,
             private_key_encrypted: None,
             private_key_passphrase_encrypted: None,
+            peer_public_key: None,
+            preshared_key_encrypted: None,
+            tunnel_public_key: None,
+            tunnel_addresses: Vec::new(),
+            tunnel_dns_servers: Vec::new(),
+            tunnel_mtu: None,
+            tunnel_keepalive_seconds: None,
         }
     }
 
@@ -263,17 +279,49 @@ mod tests {
         );
     }
 
+    /// Was `a_tunnel_proxy_fails_closed_instead_of_egressing_directly` while
+    /// there was no engine. The guarantee is unchanged — a tunnel-assigned
+    /// request never takes the default route — but it is now met by *taking the
+    /// tunnel* rather than by refusing: the gate hands out a loopback SOCKS5
+    /// front, and both client factories build a proxied client for it.
     #[test]
-    fn a_tunnel_proxy_fails_closed_instead_of_egressing_directly() {
-        let config = crate::tunnel_proxy::tests::tunnel_config();
+    fn a_tunnel_proxy_egresses_through_its_own_loopback_socks5_front() {
+        let mut config = crate::tunnel_proxy::tests::tunnel_config();
+        config.id = "proxy-transport-front".to_string();
 
-        // No egress URL can be produced, so no client can be built. The
-        // alternative — returning an unproxied client — would put the traffic
-        // an operator explicitly tunnelled onto the default route.
-        let error = proxy_egress_url(&config).expect_err("a tunnel has no endpoint yet");
+        let egress = proxy_egress_url(&config).expect("the engine publishes an endpoint");
+        let port = egress
+            .strip_prefix("socks5h://127.0.0.1:")
+            .unwrap_or_else(|| panic!("expected a loopback socks5h front, got {egress}"))
+            .parse::<u16>()
+            .expect("front port");
+        // `socks5h`, not `socks5`: the destination name must resolve on the far
+        // side of the tunnel.
+        assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_ok());
+
+        // Both factories build against it, and neither is a direct client.
+        transport_proxied_reqwest_client(&config, "").expect("async client");
+        blocking_transport_proxied_reqwest_client(&config, "").expect("blocking client");
+
+        // The SSH credentials are not SOCKS credentials; the front takes none.
+        assert!(transport_proxy_credentials(&config).is_none());
+
+        crate::tunnel_proxy::stop_tunnel(&config.id);
+    }
+
+    /// The other half of the fail-closed contract: when the engine cannot even
+    /// build a tunnel from the stored configuration, the caller still gets an
+    /// error rather than an unproxied client.
+    #[test]
+    fn an_unusable_tunnel_configuration_still_fails_closed() {
+        let mut config = crate::tunnel_proxy::tests::tunnel_config();
+        config.id = "proxy-transport-unusable".to_string();
+        config.username_encrypted = None;
+
+        let error = proxy_egress_url(&config).expect_err("no username, no tunnel");
         assert_eq!(
             error,
-            "proxy Seedbox unreachable: tunnel engine not available"
+            "proxy Seedbox unreachable: the tunnel has no username"
         );
         assert_eq!(
             transport_proxied_reqwest_client(&config, "").expect_err("async client"),
@@ -283,6 +331,96 @@ mod tests {
             blocking_transport_proxied_reqwest_client(&config, "").expect_err("blocking client"),
             error
         );
+    }
+
+    /// The whole chain, against a real SSH peer: the transport client factory
+    /// every consumer uses → the loopback SOCKS5 front → a `direct-tcpip`
+    /// channel on a real SSH session → an HTTP origin. The SSH double records
+    /// what it was asked to forward, so "the origin was reached" and "the
+    /// origin was reached *through the tunnel*" are separate assertions.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_tunnel_carries_a_real_request_built_by_the_transport_client_factory() {
+        let server = scryer_tunnel::test_support::SshServerDouble::start(
+            scryer_tunnel::test_support::SshServerOptions::default(),
+        )
+        .await;
+        let origin =
+            scryer_tunnel::test_support::TunnelledOrigin::start("through the tunnel").await;
+
+        let mut config = crate::tunnel_proxy::tests::tunnel_config();
+        config.id = "proxy-chain".to_string();
+        config.base_url = format!("ssh://{}", server.addr());
+
+        let client = transport_proxied_reqwest_client(&config, "").expect("client");
+        let response = client.get(origin.url()).send().await.expect("response");
+        assert_eq!(response.status().as_u16(), 200);
+        assert_eq!(response.text().await.expect("body"), "through the tunnel");
+
+        assert_eq!(
+            server.forwarded_targets(),
+            vec![("127.0.0.1".to_string(), origin.addr().port())],
+            "the request must have been forwarded by the SSH server"
+        );
+        assert_eq!(origin.request_lines().len(), 1);
+
+        // First use pinned the host key, ready for the repository flush.
+        let pin = crate::tunnel_proxy::TunnelHostKeyLedger::shared()
+            .take("proxy-chain")
+            .expect("first use must queue a host key pin");
+        assert_eq!(
+            pin.fingerprint,
+            scryer_tunnel::test_support::HOST_KEY_FINGERPRINT
+        );
+
+        crate::tunnel_proxy::stop_tunnel(&config.id);
+    }
+
+    /// A tunnel that cannot be established fails the request and records the
+    /// proxy — not the destination — as unhealthy.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_unreachable_tunnel_fails_the_request_and_records_the_proxy() {
+        let dead_ssh_port = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+            let port = listener.local_addr().expect("addr").port();
+            drop(listener);
+            port
+        };
+        let origin =
+            scryer_tunnel::test_support::TunnelledOrigin::start("must not be reached").await;
+
+        let mut config = crate::tunnel_proxy::tests::tunnel_config();
+        config.id = "proxy-chain-dead".to_string();
+        config.base_url = format!("ssh://127.0.0.1:{dead_ssh_port}");
+
+        let client = transport_proxied_reqwest_client(&config, "").expect("client");
+        let error = client
+            .get(origin.url())
+            .send()
+            .await
+            .expect_err("an unreachable tunnel must fail the request");
+        assert!(
+            transport_proxy_connect_failure(&config, &error).is_some(),
+            "a tunnel failure must classify as a proxy-hop failure: {error}"
+        );
+        assert!(
+            origin.request_lines().is_empty(),
+            "nothing may reach the origin when the tunnel is down"
+        );
+
+        let recorded: Vec<_> = crate::challenge_solver::SolverHealthLedger::shared()
+            .drain()
+            .into_iter()
+            .filter(|event| event.proxy_config_id == "proxy-chain-dead")
+            .collect();
+        assert_eq!(recorded.len(), 1, "{recorded:?}");
+        assert!(!recorded[0].healthy);
+        let message = recorded[0].message.clone().unwrap_or_default();
+        assert!(
+            message.starts_with("proxy Seedbox unreachable:"),
+            "the health row must name the proxy: {message}"
+        );
+
+        crate::tunnel_proxy::stop_tunnel(&config.id);
     }
 
     #[test]

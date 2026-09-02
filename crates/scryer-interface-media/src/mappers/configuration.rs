@@ -638,6 +638,22 @@ pub fn from_proxy_config(config: ProxyConfig) -> ProxyConfigPayload {
             .private_key_encrypted
             .as_deref()
             .is_some_and(|value| !value.is_empty()),
+        // Both WireGuard public keys are shown in full, for the same reason
+        // the host key is: the peer's is what the operator pasted out of their
+        // server, ours is what they must paste back into it, and masking
+        // either would hide the only two values that make a key mistake
+        // diagnosable. The preshared key *is* a secret and gets the write-only
+        // treatment.
+        peer_public_key: config.peer_public_key,
+        has_preshared_key: config
+            .preshared_key_encrypted
+            .as_deref()
+            .is_some_and(|value| !value.is_empty()),
+        tunnel_public_key: config.tunnel_public_key,
+        tunnel_addresses: config.tunnel_addresses,
+        tunnel_dns_servers: config.tunnel_dns_servers,
+        tunnel_mtu: config.tunnel_mtu.map(i32::from),
+        tunnel_keepalive_seconds: config.tunnel_keepalive_seconds.map(i32::from),
         host_key_fingerprint: config.host_key_fingerprint,
         host_key_pinned_at: config.host_key_pinned_at,
         is_enabled: config.is_enabled,

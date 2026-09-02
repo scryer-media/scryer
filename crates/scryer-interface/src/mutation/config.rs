@@ -47,6 +47,38 @@ fn optional_scalar_input<T>(value: MaybeUndefined<T>) -> Option<Option<T>> {
     }
 }
 
+/// Narrow a GraphQL `Int` onto the `u16` a WireGuard link setting is.
+///
+/// GraphQL has no unsigned type, so a negative or oversized MTU or keepalive
+/// arrives as a perfectly valid `Int` and has to be refused here. The range
+/// itself belongs to the workflow; this only rejects what cannot be a link
+/// setting at all.
+fn proxy_link_setting(value: Option<i32>, field: &str) -> GqlResult<Option<u16>> {
+    value
+        .map(|value| {
+            u16::try_from(value).map_err(|_| {
+                to_gql_error(AppError::Validation(format!(
+                    "{field} must be between 0 and {}",
+                    u16::MAX
+                )))
+            })
+        })
+        .transpose()
+}
+
+/// The patch form of [`proxy_link_setting`]: omission preserves, null restores
+/// the engine's default.
+fn optional_proxy_link_setting(
+    value: MaybeUndefined<i32>,
+    field: &str,
+) -> GqlResult<Option<Option<u16>>> {
+    match value {
+        MaybeUndefined::Undefined => Ok(None),
+        MaybeUndefined::Null => Ok(Some(None)),
+        MaybeUndefined::Value(value) => proxy_link_setting(Some(value), field).map(Some),
+    }
+}
+
 /// Parse an optional challenge-solver protocol from GraphQL input.
 ///
 /// Whether a protocol is *allowed* for the provider is the workflow's call —
@@ -482,6 +514,15 @@ impl ConfigMutations {
                     remote_dns: input.remote_dns,
                     private_key: input.private_key,
                     private_key_passphrase: input.private_key_passphrase,
+                    peer_public_key: input.peer_public_key,
+                    preshared_key: input.preshared_key,
+                    tunnel_addresses: input.tunnel_addresses,
+                    tunnel_dns_servers: input.tunnel_dns_servers,
+                    tunnel_mtu: proxy_link_setting(input.tunnel_mtu, "tunnel MTU")?,
+                    tunnel_keepalive_seconds: proxy_link_setting(
+                        input.tunnel_keepalive_seconds,
+                        "tunnel keepalive seconds",
+                    )?,
                 },
             )
             .await
@@ -524,6 +565,19 @@ impl ConfigMutations {
                     remote_dns: input.remote_dns,
                     private_key: optional_scalar_input(input.private_key),
                     private_key_passphrase: optional_scalar_input(input.private_key_passphrase),
+                    // The peer key is public and not optional, so it has no
+                    // cleared state: omission keeps what is stored.
+                    peer_public_key: input.peer_public_key,
+                    preshared_key: optional_scalar_input(input.preshared_key),
+                    tunnel_addresses: input.tunnel_addresses,
+                    tunnel_dns_servers: input.tunnel_dns_servers,
+                    // Tri-state, but the inner value is a link setting rather
+                    // than a secret: null restores the engine's default.
+                    tunnel_mtu: optional_proxy_link_setting(input.tunnel_mtu, "tunnel MTU")?,
+                    tunnel_keepalive_seconds: optional_proxy_link_setting(
+                        input.tunnel_keepalive_seconds,
+                        "tunnel keepalive seconds",
+                    )?,
                 },
             )
             .await
