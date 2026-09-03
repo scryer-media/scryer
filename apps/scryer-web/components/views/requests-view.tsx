@@ -638,7 +638,7 @@ export function RequestsView({
         />
         <div className="relative z-10 flex flex-col sm:flex-row">
           <div className="w-full shrink-0 bg-[var(--scry-inset)] sm:w-[150px]">
-            <div className="aspect-[2/3] w-full overflow-hidden sm:h-full sm:min-h-[225px]">
+            <div className="aspect-[2/3] w-full overflow-hidden">
               {posterUrl ? (
                 <TitlePoster
                   src={posterUrl}

@@ -617,6 +617,20 @@ impl NzbgetDownloadClient {
     }
 
     async fn edit_queue(&self, command: &str, ids: Vec<i64>) -> AppResult<()> {
+        if self.try_edit_queue(command, ids).await? {
+            Ok(())
+        } else {
+            Err(AppError::Repository(format!(
+                "nzbget editqueue {command} matched no items"
+            )))
+        }
+    }
+
+    /// Runs one `editqueue` command and reports whether NZBGet applied it.
+    /// NZBGet answers `false` when none of the ids matched the list the
+    /// command targets (queue vs history), which callers may want to recover
+    /// from rather than treat as a failure.
+    async fn try_edit_queue(&self, command: &str, ids: Vec<i64>) -> AppResult<bool> {
         let result = self
             .rpc_call_with_policy(
                 "editqueue",
@@ -624,12 +638,11 @@ impl NzbgetDownloadClient {
                 self.mutation_policy(format!("nzbget_editqueue_{command}")),
             )
             .await?;
-        if result.as_bool() == Some(true) {
-            Ok(())
-        } else {
-            Err(AppError::Repository(format!(
+        match result.as_bool() {
+            Some(applied) => Ok(applied),
+            None => Err(AppError::Repository(format!(
                 "nzbget editqueue {command} returned unexpected result: {result}"
-            )))
+            ))),
         }
     }
 
@@ -1325,6 +1338,11 @@ impl DownloadClient for NzbgetDownloadClient {
     /// NZBGet has no per-call file-deletion option for history entries.
     /// Scryer deletes a burned download's job data itself (see
     /// `import_workflow::delete_burned_download_data`) before issuing this delete.
+    ///
+    /// `is_history` is only a hint derived from the last polled state. NZBGet
+    /// answers `false` when the id is not in the list the command targets, so
+    /// a wrong hint in either direction falls through to the other command
+    /// instead of leaving the item behind to be re-adopted on the next poll.
     async fn delete_queue_item(
         &self,
         id: &str,
@@ -1334,12 +1352,21 @@ impl DownloadClient for NzbgetDownloadClient {
         let nzb_id: i64 = id
             .parse()
             .map_err(|_| AppError::Validation(format!("invalid nzbget queue id: {id}")))?;
-        let command = if is_history {
-            "HistoryDelete"
-        } else {
-            "GroupDelete"
-        };
-        self.edit_queue(command, vec![nzb_id]).await
+        let (hinted, fallback) = nzbget_delete_commands(is_history);
+        if self.try_edit_queue(hinted, vec![nzb_id]).await? {
+            return Ok(());
+        }
+        debug!(
+            nzb_id,
+            hinted_history = is_history,
+            "nzbget {hinted} matched nothing; retrying with {fallback}"
+        );
+        if self.try_edit_queue(fallback, vec![nzb_id]).await? {
+            return Ok(());
+        }
+        Err(AppError::Repository(format!(
+            "nzbget editqueue {hinted} and {fallback} both matched no items for id {nzb_id}"
+        )))
     }
 
     async fn list_completed_downloads(&self) -> AppResult<Vec<scryer_domain::CompletedDownload>> {
@@ -1607,6 +1634,16 @@ fn extract_result_array(value: Value, preferred_key: &str) -> Option<Vec<Value>>
             })
             .or_else(|| container.get("items").and_then(Value::as_array).cloned()),
         _ => None,
+    }
+}
+
+/// The `editqueue` command a delete should try first for the hinted list, and
+/// the one to fall back to when NZBGet reports that nothing matched.
+fn nzbget_delete_commands(is_history: bool) -> (&'static str, &'static str) {
+    if is_history {
+        ("HistoryDelete", "GroupDelete")
+    } else {
+        ("GroupDelete", "HistoryDelete")
     }
 }
 
@@ -2134,6 +2171,99 @@ fn derive_nzb_filename(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wiremock::matchers::{body_partial_json, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    async fn mount_editqueue(
+        server: &MockServer,
+        command: &str,
+        nzb_id: i64,
+        result: bool,
+        expected: u64,
+    ) {
+        Mock::given(method("POST"))
+            .and(path("/jsonrpc"))
+            .and(body_partial_json(json!({
+                "method": "editqueue",
+                "params": [command, "", [nzb_id]],
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "version": "2.0",
+                "result": result,
+                "id": "scryer-rpc",
+            })))
+            .expect(expected)
+            .mount(server)
+            .await;
+    }
+
+    #[test]
+    fn nzbget_delete_commands_fall_back_to_the_other_list() {
+        assert_eq!(
+            nzbget_delete_commands(false),
+            ("GroupDelete", "HistoryDelete")
+        );
+        assert_eq!(
+            nzbget_delete_commands(true),
+            ("HistoryDelete", "GroupDelete")
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_queue_hint_falls_back_to_history_when_group_delete_matches_nothing() {
+        let server = MockServer::start().await;
+        mount_editqueue(&server, "GroupDelete", 42, false, 1).await;
+        mount_editqueue(&server, "HistoryDelete", 42, true, 1).await;
+
+        let client = NzbgetDownloadClient::new(server.uri(), None, None, "SCORE".to_string());
+        client
+            .delete_queue_item("42", false, false)
+            .await
+            .expect("history fallback should remove the item");
+    }
+
+    #[tokio::test]
+    async fn delete_history_hint_falls_back_to_queue_when_history_delete_matches_nothing() {
+        let server = MockServer::start().await;
+        mount_editqueue(&server, "HistoryDelete", 42, false, 1).await;
+        mount_editqueue(&server, "GroupDelete", 42, true, 1).await;
+
+        let client = NzbgetDownloadClient::new(server.uri(), None, None, "SCORE".to_string());
+        client
+            .delete_queue_item("42", true, false)
+            .await
+            .expect("queue fallback should remove the item");
+    }
+
+    #[tokio::test]
+    async fn delete_with_correct_hint_issues_exactly_one_command() {
+        let server = MockServer::start().await;
+        mount_editqueue(&server, "GroupDelete", 42, true, 1).await;
+        mount_editqueue(&server, "HistoryDelete", 42, true, 0).await;
+
+        let client = NzbgetDownloadClient::new(server.uri(), None, None, "SCORE".to_string());
+        client
+            .delete_queue_item("42", false, false)
+            .await
+            .expect("queue delete should succeed on the first command");
+    }
+
+    #[tokio::test]
+    async fn delete_fails_when_neither_list_holds_the_item() {
+        let server = MockServer::start().await;
+        mount_editqueue(&server, "GroupDelete", 42, false, 1).await;
+        mount_editqueue(&server, "HistoryDelete", 42, false, 1).await;
+
+        let client = NzbgetDownloadClient::new(server.uri(), None, None, "SCORE".to_string());
+        let error = client
+            .delete_queue_item("42", false, false)
+            .await
+            .expect_err("an item in neither list should surface as an error");
+        assert!(
+            error.to_string().contains("matched no items"),
+            "unexpected error: {error}"
+        );
+    }
 
     #[test]
     fn outbound_rate_limit_preserves_retry_after() {

@@ -552,6 +552,42 @@ pub struct DeleteTitlesPreviewPayload {
 }
 
 #[derive(SimpleObject, Clone)]
+/// Per-file result within a multi-episode media-file deletion preview.
+pub struct DeleteEpisodeFilePreviewResultPayload {
+    /// Media-file identity that would be deleted.
+    pub file_id: ID,
+    /// Episode identity the media file is linked to.
+    pub episode_id: ID,
+    /// Deletion preview for this file, or null when preview generation failed.
+    pub preview: Option<DeletePreviewPayload>,
+    /// Error message, or null when preview generation succeeded.
+    pub error: Option<String>,
+}
+
+#[derive(SimpleObject, Clone)]
+/// Combined deletion preview for the media files of several episodes of one title.
+pub struct DeleteEpisodeFilesPreviewPayload {
+    /// Aggregate preview across all resolved media files.
+    pub preview: DeletePreviewPayload,
+    /// Per-file results, ordered by media-file identity.
+    pub items: Vec<DeleteEpisodeFilePreviewResultPayload>,
+    /// Number of media files resolved from the requested episodes.
+    pub file_count: i32,
+    /// Number of media files that failed preview generation.
+    pub failed_count: i32,
+}
+
+#[derive(SimpleObject, Clone)]
+/// Accepted media-file IDs and background job information for a multi-episode
+/// media-file deletion request.
+pub struct DeleteEpisodeFilesPayload {
+    /// Background job run tracking the deletion work.
+    pub job_run: JobRunPayload,
+    /// Media-file identities accepted for processing.
+    pub accepted_file_ids: Vec<ID>,
+}
+
+#[derive(SimpleObject, Clone)]
 /// Accepted title IDs and background job information for a deletion request.
 pub struct DeleteTitlesPayload {
     /// Background job run tracking the deletion work.
@@ -885,6 +921,30 @@ pub struct ClearTitleReleaseBlocklistEntryPayload {
 pub struct DeleteTitlesPreviewInput {
     /// Title identities to include in the preview.
     pub title_ids: Vec<ID>,
+}
+
+#[derive(InputObject)]
+/// Input for previewing deletion of the media files of selected episodes.
+pub struct DeleteEpisodeFilesPreviewInput {
+    /// Title identity owning the episodes.
+    pub title_id: ID,
+    /// Episode identities whose media files would be deleted.
+    pub episode_ids: Vec<ID>,
+}
+
+#[derive(InputObject)]
+/// Destructive deletion request for the media files of selected episodes.
+pub struct DeleteEpisodeFilesInput {
+    /// Title identity owning the episodes.
+    pub title_id: ID,
+    /// Episode identities whose media files are deleted.
+    pub episode_ids: Vec<ID>,
+    /// Whether the files are removed from disk.
+    pub delete_from_disk: Option<bool>,
+    /// Aggregate preview fingerprint required to confirm the current deletion target.
+    pub preview_fingerprint: Option<String>,
+    /// Required typed confirmation for large destructive deletions.
+    pub typed_confirmation: Option<String>,
 }
 
 #[derive(InputObject)]

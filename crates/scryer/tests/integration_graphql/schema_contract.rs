@@ -562,23 +562,27 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // changing the established factor-mutation payload contracts: mutation 194->197.
     // OAuth-bound Jellyfin account linking adds one mutation root and reuses the
     // existing linked-account payload: mutation 197->198.
+    // Multi-episode file deletion adds the deleteEpisodeFilesPreview query and
+    // the deleteEpisodeFiles mutation, three payload objects, and two inputs:
+    // query 134->135, mutation 198->199, OBJECT 320->323,
+    // INPUT_OBJECT 174->176, public types 618->623.
     // Advanced monitoring adds the season/series-movie selection payload pair,
     // its input pair, and the anime-movie metadata payload behind the existing
-    // metadata series type: OBJECT 320->323, INPUT_OBJECT 174->176,
-    // public types 618->623. Query, mutation, and subscription roots are
+    // metadata series type: OBJECT 323->326, INPUT_OBJECT 176->178,
+    // public types 623->628. Query, mutation, and subscription roots are
     // unchanged; ADVANCED joins the existing MonitorTypeValue enum.
     assert_eq!(
-        query_field_count, 134,
+        query_field_count, 135,
         "query fields: {query_field_names:?}"
     );
     assert_eq!(
-        mutation_field_count, 198,
+        mutation_field_count, 199,
         "mutation fields: {mutation_field_names:?}"
     );
     assert_eq!(subscription_field_count, 14);
-    assert_eq!(public_types.len(), 623);
-    assert_eq!(kind_count("OBJECT"), 323);
-    assert_eq!(kind_count("INPUT_OBJECT"), 176);
+    assert_eq!(public_types.len(), 628);
+    assert_eq!(kind_count("OBJECT"), 326);
+    assert_eq!(kind_count("INPUT_OBJECT"), 178);
     assert_eq!(kind_count("ENUM"), 112);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
@@ -3873,6 +3877,8 @@ async fn graphql_introspection_title_acquisition_inputs_use_id_fields() {
           deleteTitle: __type(name: "DeleteTitleInput") { inputFields { name type { ...TypeRef } } }
           deleteTitlesItem: __type(name: "DeleteTitlesItemInput") { inputFields { name type { ...TypeRef } } }
           deleteTitlesPreview: __type(name: "DeleteTitlesPreviewInput") { inputFields { name type { ...TypeRef } } }
+          deleteEpisodeFiles: __type(name: "DeleteEpisodeFilesInput") { inputFields { name type { ...TypeRef } } }
+          deleteEpisodeFilesPreview: __type(name: "DeleteEpisodeFilesPreviewInput") { inputFields { name type { ...TypeRef } } }
           setTitleMonitored: __type(name: "SetTitleMonitoredInput") { inputFields { name type { ...TypeRef } } }
           updateTitle: __type(name: "UpdateTitleInput") { inputFields { name type { ...TypeRef } } }
           setPrimaryMovieFile: __type(name: "SetPrimaryMovieFileInput") { inputFields { name type { ...TypeRef } } }
@@ -3992,6 +3998,8 @@ async fn graphql_introspection_title_acquisition_inputs_use_id_fields() {
         ("setEpisodeMonitored", "episodeId"),
         ("setSeriesMovieMonitored", "seriesMovieLinkId"),
         ("deleteMediaFile", "fileId"),
+        ("deleteEpisodeFiles", "titleId"),
+        ("deleteEpisodeFilesPreview", "titleId"),
         ("beginManualImportSelection", "clientId"),
         ("beginManualImportSelection", "titleId"),
         ("queueManualImport", "selectionId"),
@@ -4020,6 +4028,8 @@ async fn graphql_introspection_title_acquisition_inputs_use_id_fields() {
     }
 
     assert_non_null_id_list("deleteTitlesPreview", "titleIds");
+    assert_non_null_id_list("deleteEpisodeFiles", "episodeIds");
+    assert_non_null_id_list("deleteEpisodeFilesPreview", "episodeIds");
     assert_non_null_id_list("bindPendingImport", "episodeIds");
     assert_nullable_id_list("queueDownloadScope", "episodeSet");
 
