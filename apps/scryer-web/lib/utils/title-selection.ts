@@ -6,8 +6,8 @@ import type { TitleRecord } from "@/lib/types/titles";
 // identity, or a background scan restarts them on every refresh.
 const SELECTED_TITLE_IDS_SEPARATOR = "\n";
 
-/// A stable key for the SET of selected title ids: order and object identity do
-/// not affect it, so it only changes when the selection really changes.
+// A stable key for the SET of selected title ids: order and object identity do
+// not affect it, so it only changes when the selection really changes.
 export function selectedTitleIdsKey(
   titles: readonly Pick<TitleRecord, "id">[],
 ): string {
