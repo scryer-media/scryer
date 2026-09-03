@@ -59,10 +59,16 @@ export type MetadataCatalogMonitorType =
   | "FUTURE_EPISODES"
   | "MISSING_AND_FUTURE_EPISODES"
   | "ALL_EPISODES"
-  | "NONE";
+  | "NONE"
+  | "ADVANCED";
 
 export type { RootFolderOption } from "@/lib/types/titles";
-import type { LibraryRecord, RootFolderOption } from "@/lib/types/titles";
+import type {
+  LibraryRecord,
+  MonitorSelectionDraft,
+  RootFolderOption,
+} from "@/lib/types/titles";
+import { monitorSelectionInput } from "@/lib/utils/monitor-selection";
 
 export type MetadataCatalogAddOptions = {
   libraryId?: string;
@@ -73,6 +79,8 @@ export type MetadataCatalogAddOptions = {
   monitorSpecials?: boolean;
   interSeasonMovies?: boolean;
   rootFolderId?: string;
+  /** Only sent under `ADVANCED`, which the API rejects without one. */
+  monitorSelection?: MonitorSelectionDraft;
 };
 
 export type CatalogAddFeedback = {
@@ -88,6 +96,7 @@ export type MetadataCatalogRequestOptions = {
   libraryId: string;
   requestedQualityProfileId?: string;
   requestedMonitorType?: MetadataCatalogMonitorType;
+  requestedMonitorSelection?: MonitorSelectionDraft;
 };
 
 export type AnimeCatalogDefaults = {
@@ -333,6 +342,7 @@ export interface UseGlobalSearchResult {
 }
 
 function monitorTypeToMonitored(monitorType: MetadataCatalogMonitorType): boolean {
+  // ADVANCED monitors the title and lets the selection decide the seasons.
   return monitorType !== "UNMONITORED" && monitorType !== "NONE";
 }
 
@@ -1463,6 +1473,9 @@ export function useGlobalSearch({
                     interSeasonMovies: options.interSeasonMovies !== false,
                   }
                 : {}),
+              ...(options.monitorType === "ADVANCED"
+                ? { monitorSelection: monitorSelectionInput(options.monitorSelection) }
+                : {}),
             },
             externalIds,
             smgId: result.smgId ?? undefined,
@@ -1566,6 +1579,10 @@ export function useGlobalSearch({
             externalRatings: result.externalRatings,
             requestedQualityProfileId: options.requestedQualityProfileId || undefined,
             requestedMonitorType: options.requestedMonitorType || undefined,
+            requestedMonitorSelection:
+              options.requestedMonitorType === "ADVANCED"
+                ? monitorSelectionInput(options.requestedMonitorSelection)
+                : undefined,
           },
         }).toPromise();
         if (error) throw error;

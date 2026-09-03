@@ -490,7 +490,7 @@ impl AppUseCase {
         .await
     }
 
-    async fn create_title_without_hydration_with_options_patch_after_library_authorization(
+    pub(crate) async fn create_title_without_hydration_with_options_patch_after_library_authorization(
         &self,
         actor: &User,
         request: NewTitle,
@@ -525,7 +525,11 @@ impl AppUseCase {
             .services
             .catalog
             .titles
-            .create_or_get_existing_with_options_patch(title, options_patch)
+            .create_or_get_existing_with_options_patch(title, options_patch.clone())
+            .await?;
+        // Must land before the caller notifies the hydration worker: season and
+        // episode monitoring is decided from this selection.
+        self.apply_title_monitor_selection_patch(&created.title, &options_patch)
             .await?;
         if !created.reused_existing {
             self.append_domain_event(new_title_domain_event(

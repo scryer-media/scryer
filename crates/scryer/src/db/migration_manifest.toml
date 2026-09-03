@@ -1690,6 +1690,23 @@ file = "postgres/migrations/0205_media_request_metadata_snapshots.sql"
 engine = "postgres"
 scope = "all"
 
+[[migration]]
+version = 206
+description = "monitor selections for advanced monitoring"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0206_monitor_selections.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0206_monitor_selections.sql"
+engine = "postgres"
+scope = "all"
+
 [[baseline]]
 through_version = 140
 file = "baselines/0140_baseline.sql"

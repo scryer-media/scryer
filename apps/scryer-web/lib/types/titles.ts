@@ -12,6 +12,22 @@ export type ExternalId = {
   value: string;
 };
 
+/**
+ * Advanced monitoring: the seasons (and, for anime, the canon series movies)
+ * the user asked to have monitored. Anything absent stays unmonitored. The
+ * shape matches the `MonitorSelectionInput`/`MonitorSelectionPayload` pair, so
+ * records and drafts are the same thing on the wire.
+ */
+export type MonitorSelectionMovieDraft = {
+  name: string;
+  externalIds: ExternalId[];
+};
+
+export type MonitorSelectionDraft = {
+  seasonNumbers: number[];
+  seriesMovies: MonitorSelectionMovieDraft[];
+};
+
 export type TitleExternalRatingRecord = {
   source: string;
   value?: number | null;
@@ -286,6 +302,7 @@ export type MediaRequestRecord = {
   requestedQualityProfileId?: string | null;
   requestedQualityProfileName?: string | null;
   requestedMonitorType?: string | null;
+  requestedMonitorSelection?: MonitorSelectionDraft | null;
   resolvedByUserId?: string | null;
   resolvedAt?: string | null;
   createdTitleId?: string | null;

@@ -52,10 +52,55 @@ impl AppUseCase {
         Ok(title)
     }
 }
+/// External ids used to match a stored series-movie selection against a link.
+fn monitor_selection_external_ids_from_movie_entity(
+    movie: &scryer_domain::MovieEntity,
+) -> Vec<ExternalId> {
+    [
+        ("tvdb", movie.tvdb_id.as_deref()),
+        ("tmdb", movie.tmdb_id.as_deref()),
+        ("imdb", movie.imdb_id.as_deref()),
+        ("anidb", movie.anidb_id.as_deref()),
+        ("mal", movie.mal_id.as_deref()),
+    ]
+    .into_iter()
+    .filter_map(|(source, value)| {
+        let value = value?.trim();
+        (!value.is_empty()).then(|| ExternalId {
+            source: source.to_string(),
+            value: value.to_string(),
+        })
+    })
+    .collect()
+}
+
+/// External ids used to match a stored series-movie selection against the
+/// metadata form of the same movie.
+fn monitor_selection_external_ids_from_anime_movie(movie: &AnimeMovie) -> Vec<ExternalId> {
+    [
+        ("tvdb", movie.movie_tvdb_id.map(|id| id.to_string())),
+        ("tmdb", movie.movie_tmdb_id.map(|id| id.to_string())),
+        ("imdb", movie.movie_imdb_id.clone()),
+        ("anidb", movie.movie_anidb_id.map(|id| id.to_string())),
+        ("mal", movie.movie_mal_id.map(|id| id.to_string())),
+    ]
+    .into_iter()
+    .filter_map(|(source, value)| {
+        let value = value?.trim().to_string();
+        (!value.is_empty()).then(|| ExternalId {
+            source: source.to_string(),
+            value,
+        })
+    })
+    .collect()
+}
+
 fn title_policy_monitors_series_movie(
     title: &Title,
     continuity_status: &str,
     metadata_active: bool,
+    monitor_selection: Option<&MonitorSelection>,
+    movie_external_ids: &[ExternalId],
 ) -> bool {
     if title.facet != MediaFacet::Anime || !title.monitored || !metadata_active {
         return false;
@@ -63,15 +108,23 @@ fn title_policy_monitors_series_movie(
     if !continuity_status.eq_ignore_ascii_case("canon") {
         return false;
     }
-    title.tags.iter().any(|tag| {
-        tag.strip_prefix("scryer:monitor-type:")
-            .is_some_and(|value| {
-                matches!(
-                    value.trim().to_ascii_lowercase().as_str(),
-                    "allepisodes" | "monitored" | "missing" | "missingandfutureepisodes"
-                )
-            })
-    })
+    let monitor_type = title
+        .tags
+        .iter()
+        .find_map(|tag| tag.strip_prefix("scryer:monitor-type:"))
+        .map(|value| value.trim().to_ascii_lowercase())
+        .unwrap_or_default();
+    if monitor_type == MONITOR_TYPE_ADVANCED {
+        // Advanced monitoring monitors exactly the movies the user picked; a
+        // movie that only shows up in a later metadata refresh is not in the
+        // stored selection and therefore stays unmonitored.
+        return monitor_selection
+            .is_some_and(|selection| selection.monitors_series_movie(movie_external_ids));
+    }
+    matches!(
+        monitor_type.as_str(),
+        "allepisodes" | "monitored" | "missing" | "missingandfutureepisodes"
+    )
 }
 
 impl AppUseCase {
@@ -82,6 +135,8 @@ impl AppUseCase {
         if title.facet != MediaFacet::Anime {
             return Ok(());
         }
+
+        let monitor_selection = self.load_advanced_monitor_selection(title).await?;
 
         for mut link in self
             .services
@@ -97,6 +152,8 @@ impl AppUseCase {
                 title,
                 link.continuity_status.as_deref().unwrap_or_default(),
                 link.metadata_active,
+                monitor_selection.as_ref(),
+                &monitor_selection_external_ids_from_movie_entity(&link.movie),
             );
             if link.monitored == monitored {
                 continue;
@@ -1198,7 +1255,20 @@ fn extract_monitor_type(tags: &[String]) -> String {
 /// NOTE: All values are lowercase because tags go through `normalize_tag`
 /// which calls `.to_lowercase()`. The frontend sends camelCase values like
 /// "futureEpisodes" which become "futureepisodes" after normalization.
-fn should_monitor_season(monitor_type: &str, season_number: i32, monitor_specials: bool) -> bool {
+fn should_monitor_season(
+    monitor_type: &str,
+    season_number: i32,
+    monitor_specials: bool,
+    monitor_selection: Option<&MonitorSelection>,
+) -> bool {
+    if monitor_type == MONITOR_TYPE_ADVANCED {
+        // Everything the user did not pick is unmonitored, specials included:
+        // under advanced the selection list replaces the monitor-specials rule.
+        // Seasons that only appear in a later metadata refresh are absent from
+        // the stored selection and are therefore created unmonitored.
+        return monitor_selection.is_some_and(|selection| selection.monitors_season(season_number));
+    }
+
     if season_number == 0 {
         return monitor_specials;
     }
@@ -1211,7 +1281,14 @@ fn should_monitor_episode(
     air_date: Option<&str>,
     today: &str,
     monitor_specials: bool,
+    monitor_selection: Option<&MonitorSelection>,
 ) -> bool {
+    if monitor_type == MONITOR_TYPE_ADVANCED {
+        // Every episode of a selected season is monitored regardless of air
+        // date; filler/recap policies are applied by the caller.
+        return monitor_selection.is_some_and(|selection| selection.monitors_season(season_number));
+    }
+
     if season_number == 0 {
         return monitor_specials;
     }
@@ -1232,5 +1309,85 @@ fn should_monitor_episode(
             true
         }
         _ => true,
+    }
+}
+
+impl AppUseCase {
+    /// The stored season/series-movie picks, but only when the title actually
+    /// uses the `advanced` monitor type. Every other monitor type ignores the
+    /// selection entirely.
+    pub(crate) async fn load_advanced_monitor_selection(
+        &self,
+        title: &Title,
+    ) -> AppResult<Option<MonitorSelection>> {
+        if extract_monitor_type(&title.tags) != MONITOR_TYPE_ADVANCED {
+            return Ok(None);
+        }
+        self.services
+            .catalog
+            .titles
+            .get_title_monitor_selection(&title.id)
+            .await
+    }
+
+    /// Apply an advanced-monitoring selection change to an existing title.
+    /// The update-title path turns options into tags rather than a
+    /// `TitleOptionsPatch`, so the selection is applied here against the tags
+    /// that were just stored — including the clear that a move away from
+    /// `advanced` implies.
+    pub async fn set_title_monitor_selection(
+        &self,
+        actor: &User,
+        title_id: &str,
+        monitor_selection: Option<Option<MonitorSelection>>,
+    ) -> AppResult<()> {
+        let title = self
+            .services
+            .catalog
+            .titles
+            .get_by_id(title_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
+        self.require_library_permission(
+            actor,
+            &title.library_id,
+            scryer_domain::LibraryPermission::ManageTitles,
+        )
+        .await?;
+        self.apply_title_monitor_selection_patch(
+            &title,
+            &TitleOptionsPatch {
+                monitor_selection,
+                ..TitleOptionsPatch::default()
+            },
+        )
+        .await
+    }
+
+    /// Persist the advanced-monitoring selection carried by a title options
+    /// patch. Titles that are not on the `advanced` monitor type never keep a
+    /// selection, so a monitor-type change away from advanced clears it.
+    pub(crate) async fn apply_title_monitor_selection_patch(
+        &self,
+        title: &Title,
+        options_patch: &TitleOptionsPatch,
+    ) -> AppResult<()> {
+        if extract_monitor_type(&title.tags) != MONITOR_TYPE_ADVANCED {
+            return self
+                .services
+                .catalog
+                .titles
+                .replace_title_monitor_selection(&title.id, None)
+                .await;
+        }
+        // `None` preserves whatever is already stored.
+        let Some(selection) = options_patch.monitor_selection.clone() else {
+            return Ok(());
+        };
+        self.services
+            .catalog
+            .titles
+            .replace_title_monitor_selection(&title.id, selection)
+            .await
     }
 }

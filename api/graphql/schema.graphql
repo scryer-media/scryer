@@ -773,6 +773,11 @@ input ApproveMediaRequestInput {
 	Optional monitoring policy to apply to the approved title.
 	"""
 	monitorType: MonitorTypeValue
+	"""
+	Optional approver override for the requested advanced selection; when
+	omitted the request's stored selection is applied.
+	"""
+	monitorSelection: MonitorSelectionInput
 }
 
 """
@@ -9471,6 +9476,10 @@ type MediaRequestPayload {
 	"""
 	requestedMonitorType: MonitorTypeValue
 	"""
+	Seasons and series movies requested under `ADVANCED` monitoring, or null.
+	"""
+	requestedMonitorSelection: MonitorSelectionPayload
+	"""
 	ID of the user who resolved the request, or null while unresolved.
 	"""
 	resolvedByUserId: ID
@@ -9917,6 +9926,36 @@ type MediaSettingsPayload {
 }
 
 """
+Metadata gateway companion-movie record for an anime series.
+"""
+type MetadataAnimeMoviePayload {
+	"""
+	Movie name.
+	"""
+	name: String!
+	"""
+	Release year, or null when unavailable.
+	"""
+	year: Int
+	"""
+	How confidently the provider associates the movie with the series.
+	"""
+	associationConfidence: String!
+	"""
+	Whether the movie is canon to the series.
+	"""
+	continuityStatus: String!
+	"""
+	Where the movie sits relative to the series seasons.
+	"""
+	placement: String!
+	"""
+	Provider identifiers for the movie.
+	"""
+	externalIds: [ExternalIdPayload!]!
+}
+
+"""
 Metadata gateway episode record.
 """
 type MetadataEpisodePayload {
@@ -10242,6 +10281,67 @@ type MetadataSeriesPayload {
 	Episode metadata; empty when not requested or unavailable.
 	"""
 	episodes: [MetadataEpisodePayload!]!
+	"""
+	Companion movies reported for an anime series; empty for other series.
+	"""
+	animeMovies: [MetadataAnimeMoviePayload!]!
+}
+
+"""
+Seasons and canon series movies chosen under the `ADVANCED` monitor type.
+"""
+input MonitorSelectionInput {
+	"""
+	Season numbers to monitor; 0 is specials.
+	"""
+	seasonNumbers: [Int!]!
+	"""
+	Canon series movies to monitor.
+	"""
+	seriesMovies: [MonitorSelectionMovieInput!]
+}
+
+"""
+One canon series movie inside an advanced monitoring selection.
+"""
+input MonitorSelectionMovieInput {
+	"""
+	Movie name to show back to the approver.
+	"""
+	name: String!
+	"""
+	Provider identifiers for the selected movie.
+	"""
+	externalIds: [ExternalIdInput!]!
+}
+
+"""
+One canon series movie inside an advanced monitoring selection.
+"""
+type MonitorSelectionMoviePayload {
+	"""
+	Movie name as it was presented when the selection was made.
+	"""
+	name: String!
+	"""
+	Provider identifiers for the selected movie.
+	"""
+	externalIds: [ExternalIdPayload!]!
+}
+
+"""
+Seasons and canon series movies chosen under the `ADVANCED` monitor type.
+Anything absent from the selection stays unmonitored.
+"""
+type MonitorSelectionPayload {
+	"""
+	Season numbers to monitor; 0 is specials.
+	"""
+	seasonNumbers: [Int!]!
+	"""
+	Canon series movies to monitor.
+	"""
+	seriesMovies: [MonitorSelectionMoviePayload!]!
 }
 
 """
@@ -10268,6 +10368,10 @@ enum MonitorTypeValue {
 	Monitor every episode, including already released episodes.
 	"""
 	ALL_EPISODES
+	"""
+	Monitor exactly the seasons and canon series movies the user selected.
+	"""
+	ADVANCED
 	"""
 	Explicitly select no episodes; exposed as `NONE` in GraphQL.
 	"""
@@ -17271,6 +17375,10 @@ input SubmitMediaRequestInput {
 	Monitoring policy requested for approval.
 	"""
 	requestedMonitorType: MonitorTypeValue
+	"""
+	Seasons and series movies to monitor; required with `ADVANCED`.
+	"""
+	requestedMonitorSelection: MonitorSelectionInput
 }
 
 """
@@ -18590,6 +18698,10 @@ input TitleOptionsInput {
 	Recap policy; omission preserves the current value, null clears it, and a value replaces it.
 	"""
 	recapPolicy: RecapPolicyValue
+	"""
+	Seasons and series movies to monitor under `ADVANCED`; omission preserves the current selection, null clears it, and a value replaces it. Required with `ADVANCED`, and rejected for movies.
+	"""
+	monitorSelection: MonitorSelectionInput
 }
 
 """
@@ -19752,6 +19864,10 @@ input UpdateMediaRequestInput {
 	Optional monitoring policy requested for the title.
 	"""
 	requestedMonitorType: MonitorTypeValue
+	"""
+	Seasons and series movies to monitor; required with `ADVANCED`.
+	"""
+	requestedMonitorSelection: MonitorSelectionInput
 }
 
 """

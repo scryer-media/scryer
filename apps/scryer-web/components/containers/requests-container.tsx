@@ -16,6 +16,7 @@ import {
   qualityProfileOptionsQuery,
 } from "@/lib/graphql/queries";
 import type { Facet, LibraryRecord, MediaRequestRecord } from "@/lib/types";
+import type { MonitorSelectionDraft } from "@/lib/types/titles";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { useTranslate } from "@/lib/context/translate-context";
 import {
@@ -46,11 +47,13 @@ type QualityProfileOption = {
 type UpdateRequestValues = {
   requestedQualityProfileId: string;
   requestedMonitorType?: string;
+  requestedMonitorSelection?: MonitorSelectionDraft;
 };
 
 type ApproveRequestValues = {
   qualityProfileId: string;
   monitorType?: string;
+  monitorSelection?: MonitorSelectionDraft;
 };
 
 function sameStringArray(left: string[], right: string[]): boolean {
@@ -357,6 +360,7 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
               requestId: request.id,
               qualityProfileId: values.qualityProfileId,
               monitorType: values.monitorType ?? null,
+              monitorSelection: values.monitorSelection ?? null,
             },
           })
           .toPromise();
@@ -419,6 +423,7 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
               requestId: request.id,
               requestedQualityProfileId: values.requestedQualityProfileId,
               requestedMonitorType: values.requestedMonitorType ?? null,
+              requestedMonitorSelection: values.requestedMonitorSelection ?? null,
             },
           })
           .toPromise();

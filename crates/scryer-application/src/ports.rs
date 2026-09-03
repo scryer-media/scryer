@@ -12,7 +12,7 @@ use crate::types::{
 use async_trait::async_trait;
 use scryer_domain::download_identity::DownloadId;
 use scryer_domain::{
-    CanonicalMediaTag, ImportTransferPhase, ImportType, IndexerCapsSnapshot,
+    CanonicalMediaTag, ImportTransferPhase, ImportType, IndexerCapsSnapshot, MonitorSelection,
     PersistedPluginWasmPayload, title_catalog_name_tie_key, title_catalog_sort_key_for_title,
 };
 use scryer_plugin_sdk::{
@@ -39,6 +39,9 @@ pub struct TitleOptionsPatch {
     pub inter_season_movies: Option<Option<bool>>,
     pub filler_policy: Option<Option<String>>,
     pub recap_policy: Option<Option<String>>,
+    /// Explicit season/series-movie picks for the `advanced` monitor type.
+    /// `Some(None)` clears the stored selection.
+    pub monitor_selection: Option<Option<MonitorSelection>>,
 }
 
 #[derive(Clone, Debug)]
@@ -1194,6 +1197,22 @@ pub trait TitleRepository: Send + Sync {
                 })
             }))
     }
+    /// Replace the title's advanced-monitoring selection. `None` deletes it.
+    /// Defaulted so null/in-memory repositories keep compiling; the SQL store
+    /// overrides both halves.
+    async fn replace_title_monitor_selection(
+        &self,
+        _title_id: &str,
+        _selection: Option<MonitorSelection>,
+    ) -> AppResult<()> {
+        Ok(())
+    }
+    async fn get_title_monitor_selection(
+        &self,
+        _title_id: &str,
+    ) -> AppResult<Option<MonitorSelection>> {
+        Ok(None)
+    }
     async fn create_or_get_existing(&self, title: Title) -> AppResult<CreateTitleOutcome>;
     async fn create_or_get_existing_with_options_patch(
         &self,
@@ -1638,6 +1657,8 @@ pub struct NewMediaRequest {
     pub requested_quality_profile_id: Option<String>,
     pub requested_quality_profile_name: Option<String>,
     pub requested_monitor_type: Option<String>,
+    /// Season/series-movie picks captured for the `advanced` monitor type.
+    pub requested_monitor_selection: Option<MonitorSelection>,
     pub external_ids: Vec<ExternalId>,
     pub created_by_user_id: String,
 }
@@ -1716,6 +1737,7 @@ pub trait MediaRequestRepository: Send + Sync {
         requested_quality_profile_id: String,
         requested_quality_profile_name: String,
         requested_monitor_type: Option<String>,
+        requested_monitor_selection: Option<MonitorSelection>,
         updated_event: NewDomainEvent,
     ) -> AppResult<MediaRequestUpdateResult>;
 

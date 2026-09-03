@@ -308,6 +308,10 @@ pub fn from_media_request(app: &AppUseCase, request: MediaRequest) -> MediaReque
             .requested_monitor_type
             .as_deref()
             .and_then(monitor_type_value_from_normalized),
+        requested_monitor_selection: request
+            .requested_monitor_selection
+            .as_ref()
+            .map(monitor_selection_payload),
         resolved_by_user_id: request.resolved_by_user_id.map(Into::into),
         resolved_at: request.resolved_at,
         created_title_id: request.created_title_id.map(Into::into),
@@ -956,5 +960,55 @@ pub fn from_import_record(record: scryer_domain::ImportRecord) -> ImportRecordPa
         started_at: parse_optional_datetime(record.started_at, "import history started_at"),
         finished_at: parse_optional_datetime(record.finished_at, "import history finished_at"),
         created_at: parse_required_datetime(&record.created_at, "import history created_at"),
+    }
+}
+
+/// Domain selection -> GraphQL payload.
+pub fn monitor_selection_payload(
+    selection: &scryer_domain::MonitorSelection,
+) -> MonitorSelectionPayload {
+    MonitorSelectionPayload {
+        season_numbers: selection.seasons.clone(),
+        series_movies: selection
+            .series_movies
+            .iter()
+            .map(|movie| MonitorSelectionMoviePayload {
+                name: movie.name.clone(),
+                external_ids: movie
+                    .external_ids
+                    .iter()
+                    .map(|external_id| ExternalIdPayload {
+                        source: external_id.source.clone(),
+                        value: external_id.value.clone(),
+                    })
+                    .collect(),
+            })
+            .collect(),
+    }
+}
+
+/// GraphQL input -> domain selection. Normalization (dedupe, dropping movies
+/// with no usable identifier) happens in the application layer.
+pub fn monitor_selection_from_input(
+    input: MonitorSelectionInput,
+) -> scryer_domain::MonitorSelection {
+    scryer_domain::MonitorSelection {
+        seasons: input.season_numbers,
+        series_movies: input
+            .series_movies
+            .unwrap_or_default()
+            .into_iter()
+            .map(|movie| scryer_domain::MonitorSelectionMovie {
+                name: movie.name,
+                external_ids: movie
+                    .external_ids
+                    .into_iter()
+                    .map(|external_id| scryer_domain::ExternalId {
+                        source: external_id.source,
+                        value: external_id.value,
+                    })
+                    .collect(),
+            })
+            .collect(),
     }
 }

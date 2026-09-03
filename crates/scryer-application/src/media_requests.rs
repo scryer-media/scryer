@@ -3,7 +3,8 @@ use crate::domain_events::new_global_domain_event;
 use crate::ports::MediaRequestResolution;
 use scryer_domain::{
     DomainEvent, DomainEventFilter, DomainEventPayload, DomainEventType, LibraryPermission,
-    MediaRequestResolvedEventData, MediaRequestStatus, MediaRequestSubmittedEventData,
+    MONITOR_TYPE_ADVANCED, MediaRequestResolvedEventData, MediaRequestStatus,
+    MediaRequestSubmittedEventData, MonitorSelection,
 };
 use std::collections::BTreeSet;
 
@@ -25,6 +26,8 @@ pub struct SubmitMediaRequestInput {
     pub rating_summary: TitleRatingSummary,
     pub requested_quality_profile_id: Option<String>,
     pub requested_monitor_type: Option<String>,
+    /// Season/series-movie picks; only meaningful with the `advanced` monitor type.
+    pub requested_monitor_selection: Option<MonitorSelection>,
     pub external_ids: Vec<ExternalId>,
 }
 
@@ -52,6 +55,7 @@ pub struct UpdateMediaRequestInput {
     pub request_id: String,
     pub requested_quality_profile_id: String,
     pub requested_monitor_type: Option<String>,
+    pub requested_monitor_selection: Option<MonitorSelection>,
 }
 
 impl AppUseCase {
@@ -120,6 +124,10 @@ impl AppUseCase {
             .await?;
         let requested_monitor_type =
             normalize_requested_monitor_type(&input.facet, input.requested_monitor_type)?;
+        let requested_monitor_selection = normalize_requested_monitor_selection(
+            requested_monitor_type.as_deref(),
+            input.requested_monitor_selection,
+        )?;
         let poster_url = metadata_enrichment.poster_url;
         let overview = metadata_enrichment
             .overview
@@ -150,6 +158,7 @@ impl AppUseCase {
             requested_quality_profile_id: Some(requested_quality_profile_id),
             requested_quality_profile_name: Some(requested_quality_profile_name),
             requested_monitor_type,
+            requested_monitor_selection,
             external_ids,
             created_by_user_id: actor.id.clone(),
         };
@@ -277,6 +286,7 @@ impl AppUseCase {
         request_id: &str,
         quality_profile_id: &str,
         monitor_type: Option<String>,
+        monitor_selection: Option<MonitorSelection>,
     ) -> AppResult<ApproveMediaRequestOutcome> {
         let request = self
             .load_manageable_pending_media_request(actor, request_id)
@@ -302,8 +312,14 @@ impl AppUseCase {
                 request.requested_monitor_type.clone(),
             )?,
         };
+        // An approver override replaces the requester's picks; without one the
+        // request's stored selection is what gets applied.
+        let approved_monitor_selection = normalize_requested_monitor_selection(
+            approved_monitor_type.as_deref(),
+            monitor_selection.or_else(|| request.requested_monitor_selection.clone()),
+        )?;
         let outcome = self
-            .add_title_with_outcome_after_library_authorization_profile_lock_held(
+            .add_title_with_options_patch_outcome_after_library_authorization_profile_lock_held(
                 actor,
                 media_request_to_new_title(
                     &request,
@@ -311,6 +327,10 @@ impl AppUseCase {
                     approved_monitor_type.as_deref(),
                 ),
                 request.library_id.clone(),
+                TitleOptionsPatch {
+                    monitor_selection: Some(approved_monitor_selection),
+                    ..TitleOptionsPatch::default()
+                },
             )
             .await?;
         let resolved_event = new_global_domain_event(
@@ -431,6 +451,10 @@ impl AppUseCase {
             .await?;
         let requested_monitor_type =
             normalize_requested_monitor_type(&request.facet, input.requested_monitor_type)?;
+        let requested_monitor_selection = normalize_requested_monitor_selection(
+            requested_monitor_type.as_deref(),
+            input.requested_monitor_selection,
+        )?;
         let updated_event = new_global_domain_event(
             actor,
             DomainEventPayload::MediaRequestUpdated(media_request_submitted_event_data(
@@ -450,6 +474,7 @@ impl AppUseCase {
                 requested_quality_profile_id,
                 requested_quality_profile_name,
                 requested_monitor_type,
+                requested_monitor_selection,
                 updated_event,
             )
             .await?;
@@ -516,8 +541,12 @@ impl AppUseCase {
             &request.facet,
             request.requested_monitor_type.clone(),
         )?;
+        let approved_monitor_selection = normalize_requested_monitor_selection(
+            approved_monitor_type.as_deref(),
+            request.requested_monitor_selection.clone(),
+        )?;
         let outcome = self
-            .add_title_with_outcome_after_library_authorization(
+            .add_title_with_options_patch_outcome_after_library_authorization(
                 actor,
                 media_request_to_new_title(
                     &request,
@@ -525,6 +554,10 @@ impl AppUseCase {
                     approved_monitor_type.as_deref(),
                 ),
                 request.library_id.clone(),
+                TitleOptionsPatch {
+                    monitor_selection: Some(approved_monitor_selection),
+                    ..TitleOptionsPatch::default()
+                },
             )
             .await?;
         let resolved_event = new_global_domain_event(
@@ -1226,16 +1259,40 @@ fn normalize_requested_monitor_type(
         .collect::<String>()
         .to_ascii_lowercase();
     match normalized.as_str() {
+        MONITOR_TYPE_ADVANCED if *facet == MediaFacet::Movie => Err(AppError::Validation(
+            "advanced monitoring is only valid for series and anime titles".into(),
+        )),
         "monitored"
         | "unmonitored"
         | "futureepisodes"
         | "missingandfutureepisodes"
         | "allepisodes"
-        | "none" => Ok(Some(normalized)),
+        | "none"
+        | MONITOR_TYPE_ADVANCED => Ok(Some(normalized)),
         _ => Err(AppError::Validation(format!(
             "unsupported request monitor type {value}"
         ))),
     }
+}
+
+/// Advanced monitoring requires an explicit, non-empty selection; every other
+/// monitor type drops whatever selection was supplied.
+pub(crate) fn normalize_requested_monitor_selection(
+    monitor_type: Option<&str>,
+    selection: Option<MonitorSelection>,
+) -> AppResult<Option<MonitorSelection>> {
+    if monitor_type != Some(MONITOR_TYPE_ADVANCED) {
+        return Ok(None);
+    }
+    let selection = selection
+        .map(|selection| selection.normalized())
+        .filter(|selection| !selection.is_empty())
+        .ok_or_else(|| {
+            AppError::Validation(
+                "advanced monitoring requires at least one season or series movie".into(),
+            )
+        })?;
+    Ok(Some(selection))
 }
 
 fn monitor_type_to_monitored(value: &str) -> bool {

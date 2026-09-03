@@ -1782,3 +1782,241 @@ async fn update_episode_changes_fields() {
     assert!(updated.has_multi_audio);
     assert!(!updated.has_subtitle);
 }
+
+async fn advanced_title(
+    app: &AppUseCase,
+    user: &User,
+    name: &str,
+    facet: MediaFacet,
+    selection: scryer_domain::MonitorSelection,
+) -> Title {
+    let library_id = scryer_domain::default_library_id_for_facet(&facet);
+    app.add_title_with_options_patch_outcome_in_library(
+        user,
+        NewTitle {
+            name: name.into(),
+            facet,
+            monitored: true,
+            tags: vec!["scryer:monitor-type:advanced".into()],
+            external_ids: vec![],
+            min_availability: None,
+            ..Default::default()
+        },
+        library_id,
+        TitleOptionsPatch {
+            monitor_selection: Some(Some(selection)),
+            ..TitleOptionsPatch::default()
+        },
+    )
+    .await
+    .expect("create advanced title")
+    .title
+}
+
+#[tokio::test]
+async fn advanced_monitoring_only_monitors_selected_seasons_and_their_episodes() {
+    let (app, user) = bootstrap();
+    let title = advanced_title(
+        &app,
+        &user,
+        "Advanced Show",
+        MediaFacet::Series,
+        scryer_domain::MonitorSelection {
+            seasons: vec![2],
+            series_movies: vec![],
+        },
+    )
+    .await;
+
+    let seasons = vec![
+        SeasonMetadata {
+            tvdb_id: 101,
+            number: 1,
+            label: "Season 1".into(),
+            episode_type: "official".into(),
+        },
+        SeasonMetadata {
+            tvdb_id: 102,
+            number: 2,
+            label: "Season 2".into(),
+            episode_type: "official".into(),
+        },
+    ];
+    let episodes = vec![
+        EpisodeMetadata {
+            tvdb_id: 10101,
+            episode_number: 1,
+            name: "S1E1".into(),
+            // Already aired: proves advanced ignores air-date policy entirely.
+            aired: "2001-01-01".into(),
+            runtime_minutes: 22,
+            is_filler: false,
+            is_recap: false,
+            overview: String::new(),
+            absolute_number: "1".into(),
+            season_number: 1,
+            image_url: String::new(),
+        },
+        EpisodeMetadata {
+            tvdb_id: 10201,
+            episode_number: 1,
+            name: "S2E1".into(),
+            aired: "2002-01-01".into(),
+            runtime_minutes: 22,
+            is_filler: false,
+            is_recap: false,
+            overview: String::new(),
+            absolute_number: "2".into(),
+            season_number: 2,
+            image_url: String::new(),
+        },
+    ];
+
+    app.create_series_seasons_and_episodes(&title, &seasons, &episodes, &[], &[])
+        .await;
+
+    let collections = app
+        .list_collections(&user, &title.id)
+        .await
+        .expect("list collections");
+    let season_one = collections
+        .iter()
+        .find(|collection| collection.collection_index == "1")
+        .expect("season 1 collection");
+    let season_two = collections
+        .iter()
+        .find(|collection| collection.collection_index == "2")
+        .expect("season 2 collection");
+    assert!(!season_one.monitored, "unselected season stays unmonitored");
+    assert!(season_two.monitored, "selected season is monitored");
+
+    let season_one_episodes = app
+        .list_episodes(&user, &season_one.id)
+        .await
+        .expect("list season 1 episodes");
+    let season_two_episodes = app
+        .list_episodes(&user, &season_two.id)
+        .await
+        .expect("list season 2 episodes");
+    assert!(season_one_episodes.iter().all(|episode| !episode.monitored));
+    assert!(
+        !season_two_episodes.is_empty()
+            && season_two_episodes.iter().all(|episode| episode.monitored)
+    );
+}
+
+#[tokio::test]
+async fn advanced_monitoring_monitors_only_the_selected_series_movies() {
+    let (app, user) = bootstrap();
+    let title = advanced_title(
+        &app,
+        &user,
+        "Advanced Anime",
+        MediaFacet::Anime,
+        scryer_domain::MonitorSelection {
+            seasons: vec![1],
+            series_movies: vec![scryer_domain::MonitorSelectionMovie {
+                name: "Iron Rail".into(),
+                external_ids: vec![ExternalId {
+                    source: "tvdb".into(),
+                    value: "131963".into(),
+                }],
+            }],
+        },
+    )
+    .await;
+
+    let seasons = vec![SeasonMetadata {
+        tvdb_id: 201,
+        number: 1,
+        label: "Season 1".into(),
+        episode_type: "official".into(),
+    }];
+    let episodes = vec![EpisodeMetadata {
+        tvdb_id: 20101,
+        episode_number: 1,
+        name: "S1E1".into(),
+        aired: "2013-04-07".into(),
+        runtime_minutes: 24,
+        is_filler: false,
+        is_recap: false,
+        overview: String::new(),
+        absolute_number: "1".into(),
+        season_number: 1,
+        image_url: String::new(),
+    }];
+    let anime_movies = vec![
+        AnimeMovie {
+            movie_tvdb_id: Some(131963),
+            movie_tmdb_id: Some(438759),
+            movie_imdb_id: Some("tt11032374".into()),
+            movie_mal_id: Some(40456),
+            movie_anidb_id: None,
+            name: "Iron Rail".into(),
+            slug: "iron-rail".into(),
+            year: Some(2020),
+            content_status: "released".into(),
+            overview: "Canon bridge movie".into(),
+            poster_url: "poster-ds".into(),
+            language: "eng".into(),
+            runtime_minutes: 117,
+            sort_title: "Iron Rail".into(),
+            imdb_id: "tt11032374".into(),
+            studio: "ufotable".into(),
+            digital_release_date: Some("2020-10-16".into()),
+            association_confidence: "high".into(),
+            continuity_status: "canon".into(),
+            movie_form: "movie".into(),
+            placement: "ordered".into(),
+            confidence: "high".into(),
+            signal_summary: "canon".into(),
+        },
+        AnimeMovie {
+            movie_tvdb_id: Some(222222),
+            movie_tmdb_id: Some(222222),
+            movie_imdb_id: Some("tt2222222".into()),
+            movie_mal_id: Some(2222),
+            movie_anidb_id: None,
+            name: "Unselected Canon Movie".into(),
+            slug: "unselected".into(),
+            year: Some(2021),
+            content_status: "released".into(),
+            overview: "Also canon, but not picked".into(),
+            poster_url: "poster-unselected".into(),
+            language: "eng".into(),
+            runtime_minutes: 100,
+            sort_title: "Unselected Canon Movie".into(),
+            imdb_id: "tt2222222".into(),
+            studio: "ufotable".into(),
+            digital_release_date: Some("2021-10-16".into()),
+            association_confidence: "high".into(),
+            continuity_status: "canon".into(),
+            movie_form: "movie".into(),
+            placement: "ordered".into(),
+            confidence: "high".into(),
+            signal_summary: "canon".into(),
+        },
+    ];
+
+    app.create_series_seasons_and_episodes(&title, &seasons, &episodes, &[], &anime_movies)
+        .await;
+
+    let links = app
+        .list_series_movie_links(&user, &title.id)
+        .await
+        .expect("list series movie links");
+    assert_eq!(links.len(), 2);
+    let selected = links
+        .iter()
+        .find(|link| link.movie.title == "Iron Rail")
+        .expect("selected movie link");
+    let unselected = links
+        .iter()
+        .find(|link| link.movie.title == "Unselected Canon Movie")
+        .expect("unselected movie link");
+    assert!(selected.monitored, "selected canon movie is monitored");
+    assert!(
+        !unselected.monitored,
+        "canon movies outside the selection stay unmonitored"
+    );
+}

@@ -3576,6 +3576,17 @@ export const metadataSeriesQuery = `query MetadataSeries($input: MetadataSeriesI
       label
       episodeType
     }
+    animeMovies {
+      name
+      year
+      associationConfidence
+      continuityStatus
+      placement
+      externalIds {
+        source
+        value
+      }
+    }
     episodes {
       tvdbId
       episodeNumber
@@ -3772,6 +3783,16 @@ export const mediaRequestsQuery = `query MediaRequests($facet: MediaFacetValue, 
     requestedQualityProfileId
     requestedQualityProfileName
     requestedMonitorType
+    requestedMonitorSelection {
+      seasonNumbers
+      seriesMovies {
+        name
+        externalIds {
+          source
+          value
+        }
+      }
+    }
     resolvedByUserId
     resolvedAt
     createdTitleId
@@ -3822,6 +3843,16 @@ export const myMediaRequestsQuery = `query MyMediaRequests($facet: MediaFacetVal
     requestedQualityProfileId
     requestedQualityProfileName
     requestedMonitorType
+    requestedMonitorSelection {
+      seasonNumbers
+      seriesMovies {
+        name
+        externalIds {
+          source
+          value
+        }
+      }
+    }
     resolvedByUserId
     resolvedAt
     createdTitleId

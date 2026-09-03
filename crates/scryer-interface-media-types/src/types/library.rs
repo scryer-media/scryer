@@ -2,7 +2,8 @@ use super::{
     DownloadClientRoutingEntryInput, DownloadClientRoutingEntryPayload, DownloadSourceKindValue,
     FillerPolicyValue, ImportDecisionValue, ImportModeValue, ImportSkipReasonValue,
     ImportStatusValue, ImportTypeValue, IndexerRoutingEntryInput, IndexerRoutingEntryPayload,
-    JobRunPayload, Long, ManualImportCandidateMappingInput, MediaFacetValue, MonitorTypeValue,
+    JobRunPayload, Long, ManualImportCandidateMappingInput, MediaFacetValue,
+    MonitorSelectionInput, MonitorTypeValue,
     PendingImportStatusValue, RecapPolicyValue, RenameCollisionPolicyValue,
     RenameMissingMetadataPolicyValue, ScoringPersonaValue,
 };
@@ -683,6 +684,8 @@ pub struct TitleOptionsInput {
     pub filler_policy: MaybeUndefined<FillerPolicyValue>,
     /// Recap policy; omission preserves the current value, null clears it, and a value replaces it.
     pub recap_policy: MaybeUndefined<RecapPolicyValue>,
+    /// Seasons and series movies to monitor under `ADVANCED`; omission preserves the current selection, null clears it, and a value replaces it. Required with `ADVANCED`, and rejected for movies.
+    pub monitor_selection: MaybeUndefined<MonitorSelectionInput>,
 }
 
 #[derive(InputObject, Clone)]
