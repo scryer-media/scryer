@@ -102,6 +102,7 @@ impl CommandHost {
     /// per child. Everything else — descriptor-bound config, plugin state, the
     /// timeout — is identical, so this mirrors `for_download_client` rather
     /// than growing it another two arguments that every caller passes `None` to.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn for_indexer(
         plugin_id: String,
         config: BTreeMap<String, String>,

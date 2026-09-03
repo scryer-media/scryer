@@ -3749,6 +3749,24 @@ mod tests {
         .execute(&pool)
         .await
         .expect("indexer_search_learning table should be created");
+        // Mirrors migration 0206: title delete clears the title's monitor
+        // selections explicitly, so the table has to exist here too.
+        sqlx::query(
+            "CREATE TABLE monitor_selections (
+                owner_kind TEXT NOT NULL,
+                owner_id TEXT NOT NULL,
+                entry_kind TEXT NOT NULL,
+                entry_key TEXT NOT NULL,
+                label TEXT,
+                external_ids_json TEXT NOT NULL DEFAULT '[]',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (owner_kind, owner_id, entry_kind, entry_key)
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("monitor_selections table should be created");
 
         let store = TitleStore::new(StoreDatastore::Sqlite {
             pool: pool.clone(),
