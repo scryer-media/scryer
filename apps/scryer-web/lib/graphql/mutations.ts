@@ -935,7 +935,8 @@ const OAUTH_CLIENT_REGISTRATION_FIELDS = `
     displayName
     redirectUris
     enabled
-    source`;
+    source
+    kind`;
 
 export const createOAuthClientRegistrationMutation = `mutation CreateOAuthClientRegistration($input: CreateOAuthClientRegistrationInput!) {
   createOAuthClientRegistration: createOauthClientRegistration(input: $input) {${OAUTH_CLIENT_REGISTRATION_FIELDS}

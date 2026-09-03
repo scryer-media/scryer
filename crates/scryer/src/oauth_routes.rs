@@ -137,7 +137,13 @@ async fn oauth_authorize_decision_inner(
     }
     let scope = match state
         .app
-        .effective_oauth_authorization_scope(input.scope.as_deref(), form_login_enabled)
+        .effective_oauth_authorization_scope(
+            &input.client_id,
+            &input.redirect_uri,
+            input.scope.as_deref(),
+            form_login_enabled,
+        )
+        .await
     {
         Ok(scope) => scope,
         Err(err) => {

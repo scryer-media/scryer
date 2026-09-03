@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { CheckCircle2, Loader2, RefreshCw, ShieldCheck, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -12,8 +12,12 @@ import { getRuntimeBackendUrl, getRuntimeBasePath } from "@/lib/runtime-config";
 import type { AuthRuntimeState } from "@/lib/types/settings";
 import { selectorId } from "@/lib/utils/dom-ids";
 import {
+  clearPendingOAuthDecision,
   isOAuthAuthenticationError,
   oauthAuthorizationRequestFromSearch,
+  storePendingOAuthDecision,
+  takePendingOAuthDecision,
+  type OAuthAuthorizationRequest,
 } from "@/lib/utils/oauth-authorization-request";
 
 const OAUTH_PAGE_CLASS =
@@ -35,6 +39,53 @@ const OAUTH_PRIMARY_BUTTON_CLASS =
 const OAUTH_SECONDARY_BUTTON_CLASS =
   "h-10 rounded-[9px] border border-[var(--scry-border2)] bg-[var(--scry-inset)] px-4 text-sm font-semibold text-[var(--scry-ink2)] shadow-none hover:bg-[var(--scry-hover)]";
 
+type OAuthDecisionOutcome =
+  | { kind: "redirect"; redirectUri: string }
+  | { kind: "reauthenticate" }
+  | { kind: "error"; message: string };
+
+async function submitOAuthDecision(
+  request: OAuthAuthorizationRequest,
+  token: string | null,
+  approved: boolean,
+): Promise<OAuthDecisionOutcome> {
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  if (token) headers.authorization = `Bearer ${token}`;
+  const response = await fetch(getRuntimeBackendUrl("/oauth/authorize/decision"), {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      approved,
+      responseType: request.responseType,
+      clientId: request.clientId,
+      redirectUri: request.redirectUri,
+      codeChallenge: request.codeChallenge,
+      codeChallengeMethod: request.codeChallengeMethod,
+      scope: request.scope,
+      state: request.state,
+    }),
+  });
+  const body = (await response.json().catch(() => null)) as
+    | {
+        redirectUri?: string;
+        error?: string;
+        errorDescription?: string;
+        error_description?: string;
+      }
+    | null;
+  if (response.ok && body?.redirectUri) {
+    return { kind: "redirect", redirectUri: body.redirectUri };
+  }
+  if (body?.error === "reauthentication_required") return { kind: "reauthenticate" };
+  return {
+    kind: "error",
+    message:
+      body?.error_description
+      ?? body?.errorDescription
+      ?? "Unable to authorize this integration.",
+  };
+}
+
 function loginUrl() {
   const basePath = getRuntimeBasePath();
   const loginPath = basePath === "/" ? "/login" : `${basePath}/login`;
@@ -48,7 +99,8 @@ function loginUrl() {
 }
 
 export default function OAuthAuthorizePage() {
-  const request = oauthAuthorizationRequestFromSearch(window.location.search);
+  const search = window.location.search;
+  const request = useMemo(() => oauthAuthorizationRequestFromSearch(search), [search]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [actorValidationRetry, setActorValidationRetry] = useState(0);
@@ -59,6 +111,7 @@ export default function OAuthAuthorizePage() {
   const [requestValidationError, setRequestValidationError] = useState<string | null>(null);
   const [actorValidationError, setActorValidationError] = useState<string | null>(null);
   const [effectiveFormLoginEnabled, setEffectiveFormLoginEnabled] = useState<boolean | null>(null);
+  const [completingAuthorization, setCompletingAuthorization] = useState(false);
   const token = getAuthToken();
   const authlessAuthorization = effectiveFormLoginEnabled === false;
   const awaitingAuthenticationCheck =
@@ -66,6 +119,14 @@ export default function OAuthAuthorizePage() {
   const approvalPreviewReady =
     !!clientName && !requestValidationError && (authlessAuthorization || !!actorUsername);
   const denialReady = !!clientName && !requestValidationError;
+  const grantedScopes = authorizationScope?.split(" ") ?? [];
+  // The backend narrows an unbacked jellyfin-link request to library-only, so the consent card
+  // reports the scope that will actually be granted and says why it shrank.
+  const jellyfinLinkScopeDropped =
+    !authlessAuthorization
+    && !!authorizationScope
+    && (request.scope?.split(" ").includes("jellyfin-link") ?? false)
+    && !grantedScopes.includes("jellyfin-link");
 
   useEffect(() => {
     let cancelled = false;
@@ -100,40 +161,77 @@ export default function OAuthAuthorizePage() {
             ? backendClient.query<{ me?: { username?: string | null } | null }>(meQuery, {}).toPromise()
             : Promise.resolve(null),
         ]);
-        if (!cancelled) {
-          const authorizationClient = clientResult.data?.oauthAuthorizationClient ?? null;
-          const username = actorResult?.data?.me?.username?.trim() || null;
-          const actorVerificationFailed =
-            runtimeState?.effectiveFormLoginEnabled !== false && (!username || actorResult?.error);
-          if (authorizationClient?.displayName) {
-            setClientName(authorizationClient.displayName);
-            setAuthorizationScope(authorizationClient.scope);
-            setActorUsername(username);
-            setRequestValidationError(null);
-          } else {
-            setClientName(null);
-            setAuthorizationScope(null);
-            setActorUsername(null);
-            setRequestValidationError(
-              clientResult.error?.message ?? "This OAuth request has an invalid client or redirect URI.",
-            );
-          }
-          if (actorVerificationFailed) {
-            if (token && isOAuthAuthenticationError(actorResult?.error)) {
-              clearClientAuthSession();
-              setActorValidationError("Your Scryer session expired. Sign in again to continue.");
-            } else {
-              setActorValidationError(
-                "Unable to verify the signed-in Scryer account for this OAuth request.",
-              );
-              setActorValidationRetryAvailable(!!token);
-            }
-          } else {
-            setActorValidationError(null);
-          }
+        if (cancelled) return;
+        const authorizationClient = clientResult.data?.oauthAuthorizationClient ?? null;
+        const username = actorResult?.data?.me?.username?.trim() || null;
+        const actorVerificationFailed =
+          runtimeState?.effectiveFormLoginEnabled !== false && (!username || actorResult?.error);
+        if (authorizationClient?.displayName) {
+          setClientName(authorizationClient.displayName);
+          setAuthorizationScope(authorizationClient.scope);
+          setActorUsername(username);
+          setRequestValidationError(null);
+        } else {
+          setClientName(null);
+          setAuthorizationScope(null);
+          setActorUsername(null);
+          setRequestValidationError(
+            clientResult.error?.message ?? "This OAuth request has an invalid client or redirect URI.",
+          );
         }
+        if (actorVerificationFailed) {
+          if (token && isOAuthAuthenticationError(actorResult?.error)) {
+            clearClientAuthSession();
+            setActorValidationError("Your Scryer session expired. Sign in again to continue.");
+          } else {
+            setActorValidationError(
+              "Unable to verify the signed-in Scryer account for this OAuth request.",
+            );
+            setActorValidationRetryAvailable(!!token);
+          }
+        } else {
+          setActorValidationError(null);
+        }
+
+        // A step-up sign-in already collected consent before the redirect to /login. Finish that
+        // approval here rather than showing the same consent card a second time.
+        const replayApproval =
+          !!token
+          && !actorVerificationFailed
+          && !!authorizationClient?.displayName
+          && takePendingOAuthDecision(request);
+        if (!replayApproval) return;
+        setCompletingAuthorization(true);
+        // A replay that cannot complete falls back to the ordinary consent card with an error,
+        // never to another sign-in round trip.
+        let outcome: OAuthDecisionOutcome;
+        try {
+          outcome = await submitOAuthDecision(request, token, true);
+        } catch (replayError) {
+          if (cancelled) return;
+          setCompletingAuthorization(false);
+          setError(
+            replayError instanceof Error
+              ? replayError.message
+              : "Unable to authorize this integration.",
+          );
+          return;
+        }
+        if (cancelled) return;
+        if (outcome.kind === "redirect") {
+          window.location.assign(outcome.redirectUri);
+          return;
+        }
+        setCompletingAuthorization(false);
+        if (outcome.kind === "reauthenticate") {
+          clearClientAuthSession();
+          setError("Your session is no longer fresh. Sign in again to continue.");
+          return;
+        }
+        setError(outcome.message);
       } catch {
         if (!cancelled) {
+          setCompletingAuthorization(false);
           setEffectiveFormLoginEnabled(null);
           setClientName(null);
           setAuthorizationScope(null);
@@ -148,13 +246,7 @@ export default function OAuthAuthorizePage() {
     return () => {
       cancelled = true;
     };
-  }, [
-    actorValidationRetry,
-    request.clientId,
-    request.redirectUri,
-    request.scope,
-    token,
-  ]);
+  }, [actorValidationRetry, request, token]);
 
   const decide = async (approved: boolean) => {
     setBusy(true);
@@ -172,54 +264,51 @@ export default function OAuthAuthorizePage() {
         window.location.assign(loginUrl());
         return;
       }
-      const headers: Record<string, string> = {
-        "content-type": "application/json",
-      };
-      if (!authlessAuthorization && token) {
-        headers.authorization = `Bearer ${token}`;
-      }
-      const response = await fetch(getRuntimeBackendUrl("/oauth/authorize/decision"), {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          approved,
-          responseType: request.responseType,
-          clientId: request.clientId,
-          redirectUri: request.redirectUri,
-          codeChallenge: request.codeChallenge,
-          codeChallengeMethod: request.codeChallengeMethod,
-          scope: request.scope,
-          state: request.state,
-        }),
-      });
-      const body = (await response.json().catch(() => null)) as
-        | {
-            redirectUri?: string;
-            error?: string;
-            errorDescription?: string;
-            error_description?: string;
-          }
-        | null;
-      if (!response.ok || !body?.redirectUri) {
-        if (body?.error === "reauthentication_required") {
-          clearClientAuthSession();
-          setError("Your session is no longer fresh. Sign in again to continue.");
-          return;
-        }
-        setError(
-          body?.error_description ??
-            body?.errorDescription ??
-            "Unable to authorize this integration.",
-        );
+      const outcome = await submitOAuthDecision(
+        request,
+        authlessAuthorization ? null : token,
+        approved,
+      );
+      if (outcome.kind === "redirect") {
+        window.location.assign(outcome.redirectUri);
         return;
       }
-      window.location.assign(body.redirectUri);
+      if (outcome.kind === "reauthenticate") {
+        clearClientAuthSession();
+        // Carry the approval across the sign-in so the user is not asked to consent twice.
+        // A denial is never carried: it is not replayed on the user's behalf.
+        if (approved) {
+          storePendingOAuthDecision(request);
+          window.location.assign(loginUrl());
+          return;
+        }
+        setError("Your session is no longer fresh. Sign in again to continue.");
+        return;
+      }
+      setError(outcome.message);
     } catch (err) {
+      clearPendingOAuthDecision();
       setError(err instanceof Error ? err.message : "Unable to authorize this integration.");
     } finally {
       setBusy(false);
     }
   };
+
+  if (completingAuthorization) {
+    return (
+      <main className={OAUTH_PAGE_CLASS}>
+        <div className={OAUTH_COMPACT_PANEL_CLASS}>
+          <div
+            id={selectorId("oauth-authorize-completing")}
+            className="flex items-center justify-center gap-2 py-3 text-sm text-[var(--scry-muted)]"
+          >
+            <Loader2 className="h-5 w-5 animate-spin" aria-hidden="true" />
+            Completing authorization…
+          </div>
+        </div>
+      </main>
+    );
+  }
 
   if (awaitingAuthenticationCheck) {
     return (
@@ -254,13 +343,21 @@ export default function OAuthAuthorizePage() {
               <CheckCircle2 className="h-4 w-4 text-emerald-500" aria-hidden="true" />
               Library access
             </li>
-            {!authlessAuthorization && authorizationScope?.split(" ").includes("jellyfin-link") ? (
+            {!authlessAuthorization && grantedScopes.includes("jellyfin-link") ? (
               <li className="flex items-center gap-2">
                 <CheckCircle2 className="h-4 w-4 text-emerald-500" aria-hidden="true" />
                 Jellyfin account linking
               </li>
             ) : null}
           </ul>
+          {jellyfinLinkScopeDropped ? (
+            <p
+              id={selectorId("oauth-authorize-link-scope-dropped")}
+              className="text-xs text-[var(--scry-muted)]"
+            >
+              Account linking not granted: no eligible Jellyfin connection.
+            </p>
+          ) : null}
         </div>
         {error ?? requestValidationError ?? actorValidationError ? (
           <p className={OAUTH_ERROR_CLASS}>

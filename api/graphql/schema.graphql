@@ -1990,6 +1990,10 @@ input CreateOAuthClientRegistrationInput {
 	Exact HTTPS callback URLs permitted for this application.
 	"""
 	redirectUris: [String!]!
+	"""
+	What the application is for. Omission registers a generic `CUSTOM` application.
+	"""
+	kind: OauthClientKindValue
 }
 
 """
@@ -12525,6 +12529,20 @@ type OauthAuthorizationClientPayload {
 }
 
 """
+What a registered OAuth client is for. Set at creation and immutable afterwards.
+"""
+enum OauthClientKindValue {
+	"""
+	A generic third-party application an administrator registered by hand.
+	"""
+	CUSTOM
+	"""
+	The Jellyfin Scryer plugin. Only this kind can be granted the `jellyfin-link` scope.
+	"""
+	JELLYFIN_PLUGIN
+}
+
+"""
 An OAuth application allowed to receive Scryer authorization codes.
 """
 type OauthClientRegistrationPayload {
@@ -12548,6 +12566,10 @@ type OauthClientRegistrationPayload {
 	Whether the application is managed by Scryer or an administrator.
 	"""
 	source: OauthClientSourceValue!
+	"""
+	What the application is for. Immutable after creation.
+	"""
+	kind: OauthClientKindValue!
 }
 
 """

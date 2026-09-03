@@ -165,8 +165,8 @@ pub use notifications::runtime::{
 pub use oauth::{
     CreateOAuthClientRegistration, OAUTH_E2E_CLIENT_ENV, OAUTH_E2E_CLIENT_ID,
     OAUTH_GENERIC_NATIVE_CLIENT_ID, OAUTH_JELLYFIN_LINK_SCOPE, OAUTH_LIBRARY_SCOPE,
-    OAuthClientInfo, OAuthClientSource, OAuthConnectedAppSummary, OAuthIssuedCode, OAuthTokenPair,
-    UpdateOAuthClientRegistration,
+    OAuthClientInfo, OAuthClientKind, OAuthClientSource, OAuthConnectedAppSummary, OAuthIssuedCode,
+    OAuthTokenPair, UpdateOAuthClientRegistration,
 };
 pub use plugins::catalog::blake3_digest as plugin_wasm_blake3_digest;
 pub use plugins::catalog::decompress_zstd as plugin_wasm_decompress_zstd;

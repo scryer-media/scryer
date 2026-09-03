@@ -2693,6 +2693,7 @@ export const oauthClientRegistrationsQuery = `query OAuthClientRegistrations {
     redirectUris
     enabled
     source
+    kind
   }
 }`;
 
