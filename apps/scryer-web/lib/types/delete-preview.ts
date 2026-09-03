@@ -23,3 +23,16 @@ export type DeleteTitlesPreview = {
   items: DeleteTitlePreviewResult[];
   failedCount: number;
 };
+
+export type DeleteEpisodeFilePreviewResult = {
+  fileId: string;
+  episodeId: string;
+  error: string | null;
+};
+
+export type DeleteEpisodeFilesPreview = {
+  preview: DeletePreview;
+  items: DeleteEpisodeFilePreviewResult[];
+  fileCount: number;
+  failedCount: number;
+};

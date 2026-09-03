@@ -2203,6 +2203,18 @@ const en: LocaleDictionary = {
   "episode.alternate": "Alternate",
   "seasonSection.seasonPackResults": "Season pack results",
   "seasonSection.noEpisodeRecords": "No episode records for this season.",
+  "seriesOverview.selectColumn": "Select",
+  "seriesOverview.selectEpisodeForDelete": "Select {{name}}",
+  "seriesOverview.selectSeasonForDelete": "Select all episodes in {{name}}",
+  "seriesOverview.clearEpisodeSelection": "Clear selection",
+  "seriesOverview.deleteSelectedEpisodeFiles": "Delete {{count}} selected",
+  "seriesOverview.deleteEpisodeFilesTitle": "Delete selected episode files",
+  "seriesOverview.deleteEpisodeFilesDescription":
+    "This permanently deletes the files on disk for the selected episodes. Episode records are kept.",
+  "seriesOverview.deleteEpisodeFilesSummary":
+    "{{files}} files across {{episodes}} episodes",
+  "seriesOverview.deleteEpisodeFilesPreviewFailures":
+    "{{count}} files could not be previewed and may fail to delete.",
   "mediaFile.pendingScan": "Pending Scan",
   "mediaFile.scanFailed": "Scan Failed",
   "mediaFile.score": "Score {{score}}",
@@ -2302,6 +2314,8 @@ const en: LocaleDictionary = {
   "status.requestSubmitted": "Request submitted for {{name}}.",
   "status.queueSuccess": "Queued {{name}}",
   "status.primaryMovieFileUpdated": "Primary movie file updated",
+  "status.episodeFilesDeleteQueued": "Queued deletion of {{count}} episode files",
+  "status.episodeFilesDeleted": "Deleted {{count}} episode files",
   "status.queuedLatest": "Queued latest release for {{name}}",
   "status.nothingFound": "No results found.",
   "status.searchingTvdb": 'Searching TVDB metadata for "{{query}}".',

@@ -32,7 +32,8 @@ use scryer_interface_media::mappers::{
     discovery_home_query_from_input, discovery_item_detail_query_from_input,
     discovery_items_query_from_input, from_active_import_stream, from_activity_event,
     from_application_upgrade_status, from_backup_info, from_catalog_discovery, from_collection,
-    from_dashboard_activity_stats, from_delete_preview, from_delete_titles_preview,
+    from_dashboard_activity_stats, from_delete_episode_files_preview, from_delete_preview,
+    from_delete_titles_preview,
     from_discovery_home, from_discovery_home_cards, from_discovery_home_filter_options,
     from_discovery_item, from_discovery_items_result, from_domain_event, from_download_queue_item,
     from_episode, from_external_import_monitor_warmup_progress, from_job_definition, from_job_run,
@@ -1545,6 +1546,30 @@ impl CatalogQueries {
             .await
             .map_err(to_gql_error)?;
         Ok(from_delete_titles_preview(preview))
+    }
+
+    /// Preview deleting the media files of the supplied episodes without changing files.
+    async fn delete_episode_files_preview(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(
+            desc = "Title and episode IDs whose linked media files would be deleted; no files are changed."
+        )]
+        input: DeleteEpisodeFilesPreviewInput,
+    ) -> GqlResult<DeleteEpisodeFilesPreviewPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let title_id = String::from(input.title_id);
+        let episode_ids = input
+            .episode_ids
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<_>>();
+        let preview = app
+            .preview_delete_episode_files(&actor, &title_id, &episode_ids)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(from_delete_episode_files_preview(preview))
     }
 
     /// Preview deleting one media file without changing files.

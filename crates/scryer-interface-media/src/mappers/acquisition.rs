@@ -39,6 +39,44 @@ pub fn from_delete_titles_preview(
     }
 }
 
+pub fn from_delete_episode_files_preview(
+    preview: scryer_application::DeleteEpisodeFilesPreview,
+) -> DeleteEpisodeFilesPreviewPayload {
+    let failed_count = preview
+        .items
+        .iter()
+        .filter(|item| item.error.is_some())
+        .count() as i32;
+    DeleteEpisodeFilesPreviewPayload {
+        preview: from_delete_preview(preview.preview),
+        items: preview
+            .items
+            .into_iter()
+            .map(|item| DeleteEpisodeFilePreviewResultPayload {
+                file_id: item.file_id.into(),
+                episode_id: item.episode_id.into(),
+                preview: item.preview.map(from_delete_preview),
+                error: item.error,
+            })
+            .collect(),
+        file_count: preview.file_count,
+        failed_count,
+    }
+}
+
+pub fn from_delete_episode_files_job_accepted(
+    accepted: scryer_application::DeleteEpisodeFilesJobAccepted,
+) -> DeleteEpisodeFilesPayload {
+    DeleteEpisodeFilesPayload {
+        job_run: crate::mappers::from_job_run(accepted.job_run),
+        accepted_file_ids: accepted
+            .accepted_file_ids
+            .into_iter()
+            .map(Into::into)
+            .collect(),
+    }
+}
+
 pub fn from_search_result(result: IndexerSearchResult) -> IndexerSearchResultPayload {
     let seeders = result
         .extra

@@ -1104,6 +1104,20 @@ export const deleteMediaFilePreviewQuery = `query DeleteMediaFilePreview($fileId
   }
 }`;
 
+export const deleteEpisodeFilesPreviewQuery = `query DeleteEpisodeFilesPreview($input: DeleteEpisodeFilesPreviewInput!) {
+  deleteEpisodeFilesPreview(input: $input) {
+    preview {${DELETE_PREVIEW_FIELDS}
+    }
+    items {
+      fileId
+      episodeId
+      error
+    }
+    fileCount
+    failedCount
+  }
+}`;
+
 export const deleteExternalSubtitlePreviewQuery = `query DeleteExternalSubtitlePreview($externalSubtitleId: ID!) {
   deleteExternalSubtitlePreview(externalSubtitleId: $externalSubtitleId) {${DELETE_PREVIEW_FIELDS}
   }
