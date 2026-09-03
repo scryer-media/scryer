@@ -39,6 +39,7 @@ import type {
 import {
   downloadQueueItemIdentityKey,
   IMPORT_ATTENTION_STATUSES,
+  isHistoryQueueState,
   matchesImportStatuses,
 } from "@/lib/utils/download-queue";
 import {
@@ -612,7 +613,7 @@ export const ActivityContainer = memo(function ActivityContainer({
           clientId: item.clientId,
           clientType: item.clientType,
           downloadClientItemId: item.downloadClientItemId,
-          isHistory: false,
+          isHistory: isHistoryQueueState(item.state),
         },
       });
       if (result.error) {
@@ -655,7 +656,7 @@ export const ActivityContainer = memo(function ActivityContainer({
             clientId: item.clientId,
             clientType: item.clientType,
             downloadClientItemId: item.downloadClientItemId,
-            isHistory: false,
+            isHistory: isHistoryQueueState(item.state),
           },
         ]),
       );
