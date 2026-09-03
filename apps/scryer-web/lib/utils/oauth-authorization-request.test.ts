@@ -37,9 +37,13 @@ test("OAuth authentication errors are distinct from transient preview failures",
   assert.equal(isOAuthAuthenticationError(new Error("offline")), false);
 });
 
-test("a pending approval is bound to every parameter of the request it was given for", () => {
+test("a pending approval is bound to every parameter of the request it was given for", async () => {
   const request = oauthAuthorizationRequestFromSearch(AUTHORIZATION_SEARCH);
-  const fingerprint = oauthAuthorizationRequestFingerprint(request);
+  const fingerprint = await oauthAuthorizationRequestFingerprint(request);
+
+  assert.match(fingerprint, /^[a-f0-9]{64}$/);
+  assert.equal(fingerprint.includes("state-a"), false);
+  assert.equal(fingerprint.includes("challenge"), false);
 
   for (const changedSearch of [
     AUTHORIZATION_SEARCH.replace("client_id=client-a", "client_id=client-b"),
@@ -54,7 +58,7 @@ test("a pending approval is bound to every parameter of the request it was given
     ),
   ]) {
     assert.notEqual(
-      oauthAuthorizationRequestFingerprint(
+      await oauthAuthorizationRequestFingerprint(
         oauthAuthorizationRequestFromSearch(changedSearch),
       ),
       fingerprint,
@@ -63,10 +67,10 @@ test("a pending approval is bound to every parameter of the request it was given
   }
 });
 
-test("a stored approval replays only while it is unexpired, approved, and an exact match", () => {
+test("a stored approval replays only while it is unexpired, approved, and an exact match", async () => {
   const request = oauthAuthorizationRequestFromSearch(AUTHORIZATION_SEARCH);
-  const fingerprint = oauthAuthorizationRequestFingerprint(request);
-  const decision = pendingOAuthDecisionFor(request, 1_000);
+  const fingerprint = await oauthAuthorizationRequestFingerprint(request);
+  const decision = await pendingOAuthDecisionFor(request, 1_000);
 
   assert.equal(decision.expiresAt, 1_000 + PENDING_OAUTH_DECISION_TTL_MS);
   assert.equal(isReplayablePendingOAuthDecision(decision, fingerprint, 1_000), true);

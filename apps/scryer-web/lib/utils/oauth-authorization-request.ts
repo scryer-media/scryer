@@ -41,13 +41,18 @@ export type PendingOAuthDecision = {
 };
 
 /**
- * Identifies the exact authorization request an approval was given for. A stored approval is
- * replayed only when every request parameter still matches.
+ * Identifies the exact authorization request an approval was given for without persisting its
+ * OAuth correlation values in recoverable form. A stored approval is replayed only when every
+ * request parameter still matches.
  */
-export function oauthAuthorizationRequestFingerprint(
+export async function oauthAuthorizationRequestFingerprint(
   request: OAuthAuthorizationRequest,
-): string {
-  return JSON.stringify([
+): Promise<string> {
+  const subtle = globalThis.crypto?.subtle;
+  if (!subtle) {
+    throw new Error("Secure browser hashing is required to retain OAuth approval.");
+  }
+  const input = new TextEncoder().encode(JSON.stringify([
     request.responseType,
     request.clientId,
     request.redirectUri,
@@ -55,7 +60,12 @@ export function oauthAuthorizationRequestFingerprint(
     request.state ?? "",
     request.codeChallenge,
     request.codeChallengeMethod,
-  ]);
+  ]));
+  const digest = await subtle.digest("SHA-256", input.slice());
+  return Array.from(
+    new Uint8Array(digest),
+    (byte) => byte.toString(16).padStart(2, "0"),
+  ).join("");
 }
 
 export function isReplayablePendingOAuthDecision(
@@ -73,25 +83,25 @@ export function isReplayablePendingOAuthDecision(
   );
 }
 
-export function pendingOAuthDecisionFor(
+export async function pendingOAuthDecisionFor(
   request: OAuthAuthorizationRequest,
   now: number = Date.now(),
-): PendingOAuthDecision {
+): Promise<PendingOAuthDecision> {
   return {
     approved: true,
-    fingerprint: oauthAuthorizationRequestFingerprint(request),
+    fingerprint: await oauthAuthorizationRequestFingerprint(request),
     expiresAt: now + PENDING_OAUTH_DECISION_TTL_MS,
   };
 }
 
-export function storePendingOAuthDecision(
+export async function storePendingOAuthDecision(
   request: OAuthAuthorizationRequest,
   now: number = Date.now(),
-): void {
+): Promise<void> {
   try {
     window.sessionStorage.setItem(
       PENDING_OAUTH_DECISION_KEY,
-      JSON.stringify(pendingOAuthDecisionFor(request, now)),
+      JSON.stringify(await pendingOAuthDecisionFor(request, now)),
     );
   } catch {
     // A blocked session store just means the consent card is shown again after sign-in.
@@ -110,10 +120,10 @@ export function clearPendingOAuthDecision(): void {
  * Consumes any stored approval. It is removed whether or not it matches, so a mismatched, expired,
  * or failing decision can never be replayed twice.
  */
-export function takePendingOAuthDecision(
+export async function takePendingOAuthDecision(
   request: OAuthAuthorizationRequest,
   now: number = Date.now(),
-): boolean {
+): Promise<boolean> {
   let raw: string | null;
   try {
     raw = window.sessionStorage.getItem(PENDING_OAUTH_DECISION_KEY);
@@ -125,7 +135,7 @@ export function takePendingOAuthDecision(
   try {
     return isReplayablePendingOAuthDecision(
       JSON.parse(raw),
-      oauthAuthorizationRequestFingerprint(request),
+      await oauthAuthorizationRequestFingerprint(request),
       now,
     );
   } catch {

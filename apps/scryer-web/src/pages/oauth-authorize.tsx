@@ -199,7 +199,7 @@ export default function OAuthAuthorizePage() {
           !!token
           && !actorVerificationFailed
           && !!authorizationClient?.displayName
-          && takePendingOAuthDecision(request);
+          && await takePendingOAuthDecision(request);
         if (!replayApproval) return;
         setCompletingAuthorization(true);
         // A replay that cannot complete falls back to the ordinary consent card with an error,
@@ -278,7 +278,7 @@ export default function OAuthAuthorizePage() {
         // Carry the approval across the sign-in so the user is not asked to consent twice.
         // A denial is never carried: it is not replayed on the user's behalf.
         if (approved) {
-          storePendingOAuthDecision(request);
+          await storePendingOAuthDecision(request);
           window.location.assign(loginUrl());
           return;
         }
