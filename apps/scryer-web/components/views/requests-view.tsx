@@ -578,8 +578,11 @@ export function RequestsView({
       Boolean(anilistId) ||
       Boolean(anidbId);
     const isResolving = actionRequestId === request.id;
-    const actionsDisabled = loading || actionRequestId !== null;
-    const approveDisabled = loading || actionRequestId !== null;
+    // Only an in-flight action locks the buttons. Background refreshes (focus
+    // and poll pulses) must not, or a click that lands while one is running
+    // hits a disabled button and is silently dropped.
+    const actionsDisabled = actionRequestId !== null;
+    const approveDisabled = actionRequestId !== null;
     const statusMeta = requestStatusTone(t, request.status);
     const StatusIcon = statusMeta.Icon;
     const canResolveRequest = mode === "admin" && request.status === "PENDING";
@@ -963,7 +966,7 @@ export function RequestsView({
             <Select
               value={approvalProfileId}
               onValueChange={setApprovalProfileId}
-              disabled={loading || actionRequestId !== null}
+              disabled={actionRequestId !== null}
             >
               <SelectTrigger id="approve-media-request-quality-profile">
                 <SelectValue />
@@ -995,7 +998,7 @@ export function RequestsView({
                     setApprovalMonitorSelection(EMPTY_MONITOR_SELECTION);
                   }
                 }}
-                disabled={loading || actionRequestId !== null}
+                disabled={actionRequestId !== null}
               >
                 <SelectTrigger
                   id="approve-media-request-monitor-type"
@@ -1024,7 +1027,7 @@ export function RequestsView({
               value={approvalMonitorSelection}
               onChange={setApprovalMonitorSelection}
               onLoadingChange={setApprovalSelectionLoading}
-              disabled={loading || actionRequestId !== null}
+              disabled={actionRequestId !== null}
               idPrefix="approve-media-request"
             />
           ) : null}
@@ -1038,7 +1041,6 @@ export function RequestsView({
               onClick={confirmApproval}
               disabled={
                 !approvalProfileId ||
-                loading ||
                 actionRequestId !== null ||
                 approvalBlocksConfirm
               }
@@ -1061,7 +1063,7 @@ export function RequestsView({
             <Select
               value={editProfileId}
               onValueChange={setEditProfileId}
-              disabled={loading || actionRequestId !== null || editProfileOptions.length === 0}
+              disabled={actionRequestId !== null || editProfileOptions.length === 0}
             >
               <SelectTrigger id="edit-media-request-quality-profile">
                 <SelectValue />
@@ -1093,7 +1095,7 @@ export function RequestsView({
                     setEditMonitorSelection(EMPTY_MONITOR_SELECTION);
                   }
                 }}
-                disabled={loading || actionRequestId !== null}
+                disabled={actionRequestId !== null}
               >
                 <SelectTrigger id="edit-media-request-monitor-type">
                   <SelectValue />
@@ -1119,7 +1121,7 @@ export function RequestsView({
               value={editMonitorSelection}
               onChange={setEditMonitorSelection}
               onLoadingChange={setEditSelectionLoading}
-              disabled={loading || actionRequestId !== null}
+              disabled={actionRequestId !== null}
               idPrefix="edit-media-request"
             />
           ) : null}
@@ -1133,7 +1135,6 @@ export function RequestsView({
               onClick={confirmUpdate}
               disabled={
                 !editProfileId ||
-                loading ||
                 actionRequestId !== null ||
                 editBlocksConfirm
               }

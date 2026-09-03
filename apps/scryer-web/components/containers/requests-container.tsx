@@ -142,6 +142,8 @@ function collapseMediaRequests(requests: MediaRequestRecord[]): MediaRequestReco
     .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
 }
 
+const RECENT_ACTION_EVENT_WINDOW_MS = 10_000;
+
 export function RequestsContainer({ facet }: RequestsContainerProps) {
   const client = useClient();
   const setGlobalStatus = useGlobalStatus();
@@ -165,9 +167,20 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
   const [actionRequestId, setActionRequestId] = React.useState<string | null>(null);
   const refreshSeqRef = React.useRef(0);
   const librariesRef = React.useRef<LibraryRecord[]>([]);
+  const adminLibrariesRef = React.useRef<LibraryRecord[]>([]);
+  const requesterLibrariesRef = React.useRef<LibraryRecord[]>([]);
   const requestFacet = facet ?? null;
   const refreshContextKey = `${user?.id ?? ""}|${requestFacet ?? "all"}|${mode}|${statusFilter}`;
   const refreshContextRef = React.useRef(refreshContextKey);
+  // Libraries only change with the viewer or the facet, so they are fetched
+  // once per key and every other refresh (pulses, subscription events, filter
+  // changes, post-action reloads) only re-reads the request list.
+  const librariesKey = `${user?.id ?? ""}|${requestFacet ?? "all"}|${canManageAnyTitle}`;
+  const loadedLibrariesKeyRef = React.useRef<string | null>(null);
+  // Requests this container just acted on. The mutation handler already
+  // refreshes the list, so the subscription echo for the same request is
+  // redundant and skipped.
+  const recentlyActedRequestIdsRef = React.useRef(new Map<string, number>());
   const libraries = mode === "admin" ? adminLibraries : requesterLibraries;
   const canShowAdminMode = adminLibraries.length > 0;
   const canShowRequesterMode = requesterLibraries.length > 0;
@@ -185,42 +198,77 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
     setStatusFilter(canManageAnyTitle ? "PENDING" : "all");
     setAdminLibraries([]);
     setRequesterLibraries([]);
+    adminLibrariesRef.current = [];
+    requesterLibrariesRef.current = [];
+    loadedLibrariesKeyRef.current = null;
     setRequests([]);
   }, [canManageAnyTitle, facet, user?.id]);
 
-  const refresh = React.useCallback(async () => {
+  const markRecentlyActed = React.useCallback((requestId: string) => {
+    const now = Date.now();
+    const recent = recentlyActedRequestIdsRef.current;
+    for (const [id, actedAt] of recent) {
+      if (now - actedAt > RECENT_ACTION_EVENT_WINDOW_MS) {
+        recent.delete(id);
+      }
+    }
+    recent.set(requestId, now);
+  }, []);
+
+  const wasRecentlyActed = React.useCallback((requestId: string) => {
+    const actedAt = recentlyActedRequestIdsRef.current.get(requestId);
+    if (actedAt === undefined) {
+      return false;
+    }
+    if (Date.now() - actedAt > RECENT_ACTION_EVENT_WINDOW_MS) {
+      recentlyActedRequestIdsRef.current.delete(requestId);
+      return false;
+    }
+    return true;
+  }, []);
+
+  const refresh = React.useCallback(async (options?: { includeLibraries?: boolean }) => {
     const refreshSeq = ++refreshSeqRef.current;
     const refreshContext = refreshContextKey;
+    const includeLibraries =
+      options?.includeLibraries === true || loadedLibrariesKeyRef.current !== librariesKey;
     setLoading(true);
     try {
-      const [adminLibrariesResult, requesterLibrariesResult] = await Promise.all([
-        client.query(mediaRequestAdminLibrariesQuery, {
-          facet: requestFacet,
-        }).toPromise(),
-        client.query(mediaRequestRequesterLibrariesQuery, {
-          facet: requestFacet,
-        }).toPromise(),
-      ]);
-      if (
-        refreshSeq !== refreshSeqRef.current ||
-        refreshContext !== refreshContextRef.current
-      ) {
-        return;
-      }
+      let nextAdminLibraries = adminLibrariesRef.current;
+      let nextRequesterLibraries = requesterLibrariesRef.current;
+      if (includeLibraries) {
+        const [adminLibrariesResult, requesterLibrariesResult] = await Promise.all([
+          client.query(mediaRequestAdminLibrariesQuery, {
+            facet: requestFacet,
+          }).toPromise(),
+          client.query(mediaRequestRequesterLibrariesQuery, {
+            facet: requestFacet,
+          }).toPromise(),
+        ]);
+        if (
+          refreshSeq !== refreshSeqRef.current ||
+          refreshContext !== refreshContextRef.current
+        ) {
+          return;
+        }
 
-      if (adminLibrariesResult.error || requesterLibrariesResult.error) {
-        setGlobalStatus(
-          adminLibrariesResult.error?.message ||
-            requesterLibrariesResult.error?.message ||
-            t("status.apiError"),
-        );
-        return;
-      }
+        if (adminLibrariesResult.error || requesterLibrariesResult.error) {
+          setGlobalStatus(
+            adminLibrariesResult.error?.message ||
+              requesterLibrariesResult.error?.message ||
+              t("status.apiError"),
+          );
+          return;
+        }
 
-      const nextAdminLibraries = (adminLibrariesResult.data?.libraries ?? []) as LibraryRecord[];
-      const nextRequesterLibraries = (requesterLibrariesResult.data?.libraries ?? []) as LibraryRecord[];
-      setAdminLibraries(nextAdminLibraries);
-      setRequesterLibraries(nextRequesterLibraries);
+        nextAdminLibraries = (adminLibrariesResult.data?.libraries ?? []) as LibraryRecord[];
+        nextRequesterLibraries = (requesterLibrariesResult.data?.libraries ?? []) as LibraryRecord[];
+        adminLibrariesRef.current = nextAdminLibraries;
+        requesterLibrariesRef.current = nextRequesterLibraries;
+        loadedLibrariesKeyRef.current = librariesKey;
+        setAdminLibraries(nextAdminLibraries);
+        setRequesterLibraries(nextRequesterLibraries);
+      }
 
       const nextMode =
         mode === "admin" && nextAdminLibraries.length === 0 && nextRequesterLibraries.length > 0
@@ -283,7 +331,7 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
         setLoading(false);
       }
     }
-  }, [client, mode, refreshContextKey, requestFacet, selectedLibraryIds, setGlobalStatus, statusFilter, t]);
+  }, [client, librariesKey, mode, refreshContextKey, requestFacet, selectedLibraryIds, setGlobalStatus, statusFilter, t]);
 
   const refreshQualityProfileOptions = React.useCallback(async () => {
     try {
@@ -308,8 +356,10 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
     void refresh();
   }, [refresh]);
 
-  useMediaRequestsSubscription(() => {
-    dispatchNavigationBadgesRefresh();
+  useMediaRequestsSubscription((event) => {
+    if (event?.requestId && wasRecentlyActed(event.requestId)) {
+      return;
+    }
     void refresh();
   });
 
@@ -353,6 +403,7 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
       }
 
       setActionRequestId(request.id);
+      markRecentlyActed(request.id);
       try {
         const { data, error } = await client
           .mutation(approveMediaRequestMutation, {
@@ -382,7 +433,7 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
         setActionRequestId(null);
       }
     },
-    [actionRequestId, client, refresh, setGlobalStatus, t],
+    [actionRequestId, client, markRecentlyActed, refresh, setGlobalStatus, t],
   );
 
   const dismissRequest = React.useCallback(
@@ -392,6 +443,7 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
       }
 
       setActionRequestId(request.id);
+      markRecentlyActed(request.id);
       try {
         const { error } = await client
           .mutation(dismissMediaRequestMutation, { requestId: request.id })
@@ -406,7 +458,7 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
         setActionRequestId(null);
       }
     },
-    [actionRequestId, client, refresh, setGlobalStatus, t],
+    [actionRequestId, client, markRecentlyActed, refresh, setGlobalStatus, t],
   );
 
   const updateRequest = React.useCallback(
@@ -416,6 +468,7 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
       }
 
       setActionRequestId(request.id);
+      markRecentlyActed(request.id);
       try {
         const { error } = await client
           .mutation(updateMyMediaRequestMutation, {
@@ -437,7 +490,7 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
         setActionRequestId(null);
       }
     },
-    [actionRequestId, client, refresh, setGlobalStatus, t],
+    [actionRequestId, client, markRecentlyActed, refresh, setGlobalStatus, t],
   );
 
   const cancelRequest = React.useCallback(
@@ -447,6 +500,7 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
       }
 
       setActionRequestId(request.id);
+      markRecentlyActed(request.id);
       try {
         const { error } = await client
           .mutation(cancelMyMediaRequestMutation, { requestId: request.id })
@@ -461,7 +515,7 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
         setActionRequestId(null);
       }
     },
-    [actionRequestId, client, refresh, setGlobalStatus, t],
+    [actionRequestId, client, markRecentlyActed, refresh, setGlobalStatus, t],
   );
 
   return (
@@ -479,7 +533,7 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
       qualityProfileOptions={qualityProfileOptions}
       loading={loading}
       actionRequestId={actionRequestId}
-      onRefresh={() => void refresh()}
+      onRefresh={() => void refresh({ includeLibraries: true })}
       onLoadQualityProfileOptions={() => void refreshQualityProfileOptions()}
       onApprove={(request, values) =>
         void approveRequest(request, values)
