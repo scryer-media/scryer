@@ -10,7 +10,7 @@
 
 use super::*;
 
-use super::discovery::{
+use super::release_search::{
     QualityProfileLookup, compare_release_search_results, dedupe_cross_indexer_release_results,
 };
 use crate::acquisition_release_search::ResolvedReleaseSearchSubject;

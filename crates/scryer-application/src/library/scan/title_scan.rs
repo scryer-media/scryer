@@ -374,7 +374,7 @@ async fn normalize_movie_file_roles_after_scan(
     }
     let selected_primary_id = if should_rank_primary {
         let category = crate::post_download_gate::facet_to_category_hint(&title.facet);
-        let profile_lookup = crate::catalog::discovery::QualityProfileLookup {
+        let profile_lookup = crate::catalog::release_search::QualityProfileLookup {
             title_tags: &title.tags,
             library_id: Some(title.library_id.as_str()),
             imdb_id: title_external_id(title, "imdb"),
