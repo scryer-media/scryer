@@ -39,6 +39,7 @@ pub(crate) struct PluginHttpHost {
 struct PluginHttpHostState {
     runtime: PluginHttpRuntime,
     allowed_hosts: Option<Vec<String>>,
+    egress_policy: scryer_outbound_http::PluginEgressPolicy,
     indexer_proxy_policy: Option<IndexerProxyPolicy>,
     destination_cooldown_key: Option<scryer_outbound_http::DestinationKey>,
     max_http_response_bytes: Option<u64>,
@@ -160,6 +161,7 @@ impl PluginHttpWorkerRuntime {
         &mut self,
         runtime: &PluginHttpRuntime,
         request_url: &str,
+        egress_policy: &scryer_outbound_http::PluginEgressPolicy,
     ) -> HostResult<Client> {
         let key = plugin_http_request_client_key(request_url)?;
         let extra_ca_bundle_pem = self.sync_trust_bundle(runtime)?;
@@ -169,10 +171,11 @@ impl PluginHttpWorkerRuntime {
             return Ok(cached.client.clone());
         }
 
-        let client = scryer_outbound_http::prepare_plugin_blocking_http_target(
+        let client = scryer_outbound_http::prepare_plugin_blocking_http_target_with_policy(
             request_url,
             &extra_ca_bundle_pem,
             "plugin HTTP",
+            egress_policy,
         )
         .map(scryer_outbound_http::PinnedPluginBlockingHttpTarget::into_client)
         .map_err(|error| error.to_string())?;
@@ -231,10 +234,27 @@ impl PluginHttpHost {
         destination_cooldown_key: Option<String>,
         max_http_response_bytes: Option<u64>,
     ) -> Self {
+        Self::new_with_egress_policy(
+            allowed_hosts,
+            scryer_outbound_http::PluginEgressPolicy::default(),
+            indexer_proxy_policy,
+            destination_cooldown_key,
+            max_http_response_bytes,
+        )
+    }
+
+    pub(crate) fn new_with_egress_policy(
+        allowed_hosts: Vec<String>,
+        egress_policy: scryer_outbound_http::PluginEgressPolicy,
+        indexer_proxy_policy: Option<IndexerProxyPolicy>,
+        destination_cooldown_key: Option<String>,
+        max_http_response_bytes: Option<u64>,
+    ) -> Self {
         Self {
             state: Arc::new(Mutex::new(PluginHttpHostState {
                 runtime: shared_plugin_http_runtime(),
                 allowed_hosts: Some(allowed_hosts),
+                egress_policy,
                 indexer_proxy_policy,
                 destination_cooldown_key: destination_cooldown_key
                     .map(scryer_outbound_http::DestinationKey::from),
@@ -385,6 +405,7 @@ impl PluginHttpHost {
         let (
             runtime,
             allowed_hosts,
+            egress_policy,
             indexer_proxy_policy,
             destination_cooldown_key,
             max_http_response_bytes,
@@ -398,6 +419,7 @@ impl PluginHttpHost {
             (
                 host_state.runtime.clone(),
                 host_state.allowed_hosts.clone(),
+                host_state.egress_policy.clone(),
                 host_state.indexer_proxy_policy.clone(),
                 host_state.destination_cooldown_key.clone(),
                 host_state.max_http_response_bytes,
@@ -412,7 +434,7 @@ impl PluginHttpHost {
         let request_client = worker_runtime
             .lock()
             .map_err(|error| format!("plugin HTTP worker runtime lock poisoned: {error}"))?
-            .pinned_request_client(&runtime, &request.url)?;
+            .pinned_request_client(&runtime, &request.url, &egress_policy)?;
         let started_at = Instant::now();
         let request_is_get = request
             .method

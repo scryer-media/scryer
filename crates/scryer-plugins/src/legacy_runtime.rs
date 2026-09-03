@@ -28,6 +28,7 @@ pub(crate) struct LegacyPluginSpec {
     pub(crate) var_store_max_bytes: Option<usize>,
     pub(crate) preopens: Vec<PreopenSpec>,
     pub(crate) allowed_hosts: Vec<String>,
+    pub(crate) egress_policy: scryer_outbound_http::PluginEgressPolicy,
     pub(crate) config: BTreeMap<String, String>,
     pub(crate) indexer_proxy_policy: Option<IndexerProxyPolicy>,
     pub(crate) destination_cooldown_key: Option<String>,
@@ -46,6 +47,7 @@ impl LegacyPluginSpec {
             var_store_max_bytes: None,
             preopens: Vec::new(),
             allowed_hosts: Vec::new(),
+            egress_policy: scryer_outbound_http::PluginEgressPolicy::default(),
             config: BTreeMap::new(),
             indexer_proxy_policy: None,
             destination_cooldown_key: None,
@@ -279,8 +281,9 @@ impl LegacyHostState {
             var_store_bytes: 0,
             var_store_max_bytes,
             config: spec.config,
-            http: PluginHttpHost::new(
+            http: PluginHttpHost::new_with_egress_policy(
                 spec.allowed_hosts,
+                spec.egress_policy,
                 spec.indexer_proxy_policy,
                 spec.destination_cooldown_key,
                 spec.memory_max_bytes.map(|value| value as u64),

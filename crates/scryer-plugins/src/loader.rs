@@ -1274,6 +1274,10 @@ impl WasmDownloadClientPluginProvider {
         };
 
         let computed_base_url = compute_base_url_from_config_json(&config.config_json);
+        let egress_policy = computed_base_url
+            .as_deref()
+            .map(scryer_outbound_http::PluginEgressPolicy::for_operator_download_client_base_url)
+            .unwrap_or_default();
         let backing = match PluginRuntimeBacking::for_artifact(&loaded.descriptor, &wasm_bytes) {
             Ok(backing) => backing,
             Err(error) => {
@@ -1316,6 +1320,7 @@ impl WasmDownloadClientPluginProvider {
                     loaded.descriptor.id.clone(),
                     command_config,
                     allowed_hosts,
+                    egress_policy.clone(),
                     crate::download_client_adapter::DOWNLOAD_CLIENT_PLUGIN_TIMEOUT,
                     None,
                 ),
@@ -1335,6 +1340,7 @@ impl WasmDownloadClientPluginProvider {
             computed_base_url.as_deref(),
             Some(&config.config_json),
         );
+        spec.egress_policy = egress_policy;
         spec.timeout = crate::download_client_adapter::DOWNLOAD_CLIENT_PLUGIN_TIMEOUT;
 
         if let Some(ref base_url) = computed_base_url {
