@@ -417,18 +417,28 @@ function SeasonSectionImpl({
         >
           <div className="flex items-center gap-2">
             {selectionEnabled ? (
-              <Checkbox
-                id={seriesOverviewSeasonSelectId(collection.id)}
-                size="table"
-                className="shrink-0"
-                checked={seasonSelectionState}
-                disabled={!episodesReady || selectableEpisodeIds.length === 0}
-                aria-label={t("seriesOverview.selectSeasonForDelete", {
-                  name: seasonHeading(collection, t),
-                })}
-                onClick={(event) => event.stopPropagation()}
-                onCheckedChange={handleToggleSeasonSelection}
-              />
+              // On desktop this mirrors the table's 40px selection column
+              // (pulled back through the header's px-4) so the season and
+              // episode checkboxes share one vertical line.
+              <div
+                className={cn(
+                  "flex shrink-0 items-center justify-center",
+                  !isMobile && "-ml-4 mr-2 w-10",
+                )}
+              >
+                <Checkbox
+                  id={seriesOverviewSeasonSelectId(collection.id)}
+                  size="table"
+                  className="shrink-0"
+                  checked={seasonSelectionState}
+                  disabled={!episodesReady || selectableEpisodeIds.length === 0}
+                  aria-label={t("seriesOverview.selectSeasonForDelete", {
+                    name: seasonHeading(collection, t),
+                  })}
+                  onClick={(event) => event.stopPropagation()}
+                  onCheckedChange={handleToggleSeasonSelection}
+                />
+              </div>
             ) : null}
             <button
               id={seriesOverviewSeasonMonitorId(collection.id)}
