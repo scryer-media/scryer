@@ -1184,45 +1184,46 @@ function SeriesOverviewViewImpl({
                 <FolderOpen className="h-4 w-4" />
                 {t("title.seasonsAndEpisodes")}
               </CardTitle>
-              {canManageTitle && onOpenManualImport && completedDownloads && completedDownloads.length > 0 ? (
-                <Button
-                  className="w-full sm:w-auto"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => onOpenManualImport(completedDownloads[0])}
-                >
-                  <FileInput className="mr-1.5 h-4 w-4" />
-                  {t("queue.manualImport")}
-                </Button>
-              ) : null}
+              <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+                {episodeSelectionEnabled && selectedEpisodeIds.size > 0 ? (
+                  <>
+                    <Button
+                      id={SERIES_OVERVIEW_CLEAR_EPISODE_SELECTION_ID}
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={handleClearEpisodeSelection}
+                    >
+                      {t("seriesOverview.clearEpisodeSelection")}
+                    </Button>
+                    <Button
+                      id={SERIES_OVERVIEW_DELETE_SELECTED_EPISODES_ID}
+                      type="button"
+                      variant="destructive"
+                      size="sm"
+                      onClick={handleDeleteSelectedEpisodeFiles}
+                    >
+                      <Trash2 className="mr-1.5 h-4 w-4" />
+                      {t("seriesOverview.deleteSelectedEpisodeFiles", {
+                        count: selectedEpisodeIds.size,
+                      })}
+                    </Button>
+                  </>
+                ) : null}
+                {canManageTitle && onOpenManualImport && completedDownloads && completedDownloads.length > 0 ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => onOpenManualImport(completedDownloads[0])}
+                  >
+                    <FileInput className="mr-1.5 h-4 w-4" />
+                    {t("queue.manualImport")}
+                  </Button>
+                ) : null}
+              </div>
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
-            {episodeSelectionEnabled && selectedEpisodeIds.size > 0 ? (
-              <div className="flex flex-wrap items-center justify-end gap-2">
-                <Button
-                  id={SERIES_OVERVIEW_CLEAR_EPISODE_SELECTION_ID}
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={handleClearEpisodeSelection}
-                >
-                  {t("seriesOverview.clearEpisodeSelection")}
-                </Button>
-                <Button
-                  id={SERIES_OVERVIEW_DELETE_SELECTED_EPISODES_ID}
-                  type="button"
-                  variant="destructive"
-                  size="sm"
-                  onClick={handleDeleteSelectedEpisodeFiles}
-                >
-                  <Trash2 className="mr-1.5 h-4 w-4" />
-                  {t("seriesOverview.deleteSelectedEpisodeFiles", {
-                    count: selectedEpisodeIds.size,
-                  })}
-                </Button>
-              </div>
-            ) : null}
             {timelineItems.length > 0 ? (
               <>
               {timelineItems.map((item) => {
